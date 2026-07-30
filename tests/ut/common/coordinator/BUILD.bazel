@@ -62,8 +62,10 @@ ds_cc_test(
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/rpc:rpc_server",
         "//src/datasystem/coordinator/raft:coordinator_raft_node",
+        "//src/datasystem/coordinator/raft:coordinator_raft_service",
         "//src/datasystem/coordinator/raft:coordinator_raft_state_machine",
         "//src/datasystem/coordinator/raft:coordinator_raft_types",
+        "//tests/st/cluster:test_port_allocator",
         "//tests/ut:ut_common",
         "@braft//:braft",
         "@com_github_apache_brpc//:brpc",
@@ -80,6 +82,23 @@ ds_cc_test(
         "//src/datasystem/common/util:thread",
         "//src/datasystem/coordinator/raft:coordinator_membership_manager",
         "//src/datasystem/coordinator/raft:coordinator_raft_node",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "coordinator_election_manager_test",
+    srcs = ["coordinator_election_manager_test.cpp"],
+    timeout = "short",
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/coordinator/raft:coordinator_election_manager",
+        "//src/datasystem/coordinator/raft:coordinator_membership_manager",
+        "//src/datasystem/coordinator/raft:coordinator_raft_node",
+        "//src/datasystem/coordinator/raft:coordinator_raft_state_machine",
+        "//src/datasystem/coordinator/raft:coordinator_raft_types",
         "//tests/ut:ut_common",
     ],
 )

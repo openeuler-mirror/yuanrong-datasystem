@@ -550,9 +550,12 @@ endmacro()
 #
 #   TEST_ENVIRONMENTS <var1> <var2> ...
 #       Specify the test environments variables when running test executable.
+#
+#   TIMEOUT <seconds>
+#       Specify the CTest timeout for each discovered test case.
 function(ADD_DATASYSTEM_TEST TARGET)
   set(options)
-  set(one_value_args WORKING_DIR)
+  set(one_value_args WORKING_DIR TIMEOUT)
   set(multi_value_args TEST_ENVIRONMENTS)
   cmake_parse_arguments(ARG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
@@ -578,6 +581,7 @@ function(ADD_DATASYSTEM_TEST TARGET)
             -D "TEST_EXECUTABLE=$<TARGET_FILE:${TARGET}>"
             -D "TEST_WORKING_DIR=${ARG_TEST_ENVIRONMENTS}"
             -D "TEST_ENVIRONMENTS=${ARG_TEST_ENVIRONMENTS}"
+            -D "TEST_TIMEOUT=${ARG_TIMEOUT}"
             -D "CTEST_FILE=${_CTEST_TEST_FILE}"
             -P "${_CTEST_GEN_SCRIPT}"
     VERBATIM

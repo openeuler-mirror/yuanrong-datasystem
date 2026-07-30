@@ -293,6 +293,7 @@ TEST_F(CoordinatorIdTest, RawSnapshotReturnsMembershipWithoutTopology)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", RAW_SNAPSHOT_TEST_PORT));
     DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     coordinator::PutReqPb putReq;
     putReq.set_key("/datasystem/cluster/127.0.0.1:31501");
     putReq.set_value("raw-membership");
@@ -319,7 +320,7 @@ TEST_F(CoordinatorIdTest, ReservesControllerCapacityBeforeMembershipCommit)
     FLAGS_coordinator_topology_max_active_clusters = 2;
     Raii restoreLimit([previousLimit] { FLAGS_coordinator_topology_max_active_clusters = previousLimit; });
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18489));
-    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Init(true));
     auto putMembership = [&service](const std::string &clusterName, const std::string &address,
                                     coordinator::PutRspPb &response) {
         coordinator::PutReqPb request;
@@ -356,6 +357,7 @@ TEST_F(CoordinatorIdTest, AddsStableCoordinatorIdToResponses)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18482));
     DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
 
     coordinator::PutReqPb putReq;
     putReq.set_key("/coordinator/id/key");
@@ -381,6 +383,7 @@ TEST_F(CoordinatorIdTest, PutRejectsAStaleCoordinatorIdBeforeMutation)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18483));
     DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     coordinator::GetCoordinatorIdReqPb idReq;
     coordinator::GetCoordinatorIdRspPb idRsp;
     DS_ASSERT_OK(service.GetCoordinatorId(idReq, idRsp));
@@ -400,7 +403,7 @@ TEST_F(CoordinatorIdTest, PutRejectsAStaleCoordinatorIdBeforeMutation)
 TEST_F(CoordinatorIdTest, MembershipPutRejectsAStaleModificationRevision)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18491));
-    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Init(true));
     coordinator::PutReqPb request;
     request.set_key("/datasystem/incarnation/cluster/127.0.0.1:31501");
     request.set_value("first");
@@ -431,7 +434,7 @@ TEST_F(CoordinatorIdTest, MembershipPutRejectsAStaleModificationRevision)
 TEST_F(CoordinatorIdTest, KeepAliveRejectsAStaleMembershipIncarnation)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18492));
-    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Init(true));
     coordinator::PutReqPb put;
     put.set_key("/datasystem/keepalive-incarnation/cluster/127.0.0.1:31501");
     put.set_value("first");
@@ -461,7 +464,7 @@ TEST_F(CoordinatorIdTest, KeepAliveRejectsAStaleMembershipIncarnation)
 TEST_F(CoordinatorIdTest, DeleteRejectsAStaleMembershipIncarnation)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18493));
-    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Init(true));
     coordinator::PutReqPb put;
     put.set_key("/datasystem/delete-incarnation/cluster/127.0.0.1:31501");
     put.set_value("first");
@@ -495,6 +498,7 @@ TEST_F(CoordinatorIdTest, DeleteRejectsAStaleCoordinatorIdBeforeMutation)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18484));
     DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     coordinator::PutReqPb putReq;
     putReq.set_key("/coordinator/fenced-delete");
     putReq.set_value("value");
@@ -516,6 +520,7 @@ TEST_F(CoordinatorIdTest, RejectsOversizedRecoveryPayloadAtServiceBoundary)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", OVERSIZED_RECOVERY_TEST_PORT));
     DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     coordinator::ReportTopologyRecoveryCandidateReqPb request;
     request.set_result(coordinator::TOPOLOGY_RECOVERY_SNAPSHOT);
     request.mutable_canonical_topology()->assign(coordinator::MAX_TOPOLOGY_RECOVERY_PAYLOAD_BYTES + 1, 'x');
@@ -529,6 +534,7 @@ TEST_F(CoordinatorIdTest, WatchRejectsADeletedTopologyMember)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18485));
     DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     coordinator::PutReqPb putReq;
     putReq.set_key("/datasystem/watch-race/cluster/127.0.0.1:31501");
     putReq.set_value("membership");
@@ -553,6 +559,7 @@ TEST_F(CoordinatorIdTest, WatchRangeCannotCrossClusterOrTopologyRoot)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", WATCH_RANGE_VALIDATION_TEST_PORT));
     DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     coordinator::PutReqPb putReq;
     putReq.set_key("/datasystem/a/cluster/127.0.0.1:31502");
     putReq.set_value("membership");

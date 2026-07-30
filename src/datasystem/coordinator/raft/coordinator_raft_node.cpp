@@ -21,13 +21,12 @@
 #include <exception>
 #include <unordered_set>
 #include <utility>
-#include <variant>
 
-#include <brpc/server.h>
+#include <gflags/gflags.h>
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/coordinator/raft/coordinator_raft_operation.h"
@@ -35,11 +34,6 @@
 
 namespace datasystem::coordinator {
 namespace {
-RaftMetadataState RegistrationValidationMetadataState(const RaftStartPlan &startPlan)
-{
-    return std::holds_alternative<RecoverPlan>(startPlan) ? RaftMetadataState::VALID : RaftMetadataState::ABSENT;
-}
-
 Status NotReadyStatus(const char *operation)
 {
     return Status(K_NOT_READY, FormatString("Coordinator raft node cannot %s before raft startup", operation));
@@ -133,48 +127,6 @@ void detail::CoordinatorRaftNodeTestAccessor::SetOperationDrainEntryObserver(Coo
     node.operationDrainState_->SetDrainEntryObserverForTest(std::move(observer));
 }
 
-Status CoordinatorRaftNode::RegisterBrpcServices(RpcServer &rpcServer)
-{
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
-    if (state_ != LifecycleState::CONSTRUCTED) {
-        return Status(K_INVALID, "Coordinator raft services can only be registered once before startup");
-    }
-    if (!rpcServer.IsBrpc()) {
-        return Status(K_INVALID, "Coordinator raft services require an RpcServer configured for brpc");
-    }
-
-    const auto validationStatus =
-        ValidateCoordinatorRaftOptions(options_, RegistrationValidationMetadataState(options_.startPlan));
-    if (validationStatus.IsError()) {
-        return validationStatus;
-    }
-    const auto peerStatus = ParseCoordinatorRaftPeer(options_.localPeer, localPeer_);
-    if (peerStatus.IsError()) {
-        return peerStatus;
-    }
-
-    const auto registrationStatus = rpcServer.AddBrpcServices([this](brpc::Server &server) {
-        const int rc = braft::add_service(&server, localPeer_.addr);
-        if (rc != 0) {
-            return Status(K_RUNTIME_ERROR,
-                          FormatString("Failed to register braft services for group %s, local peer %s, rc=%d",
-                                       kCoordinatorRaftGroupId, options_.localPeer, rc));
-        }
-        return Status::OK();
-    });
-    if (registrationStatus.IsError()) {
-        state_ = LifecycleState::STOPPED;
-        return Status(
-            registrationStatus.GetCode(),
-            FormatString("Failed to register braft services for group %s, local peer %s; underlying status: %s; "
-                         "must discard and recreate the shared brpc server generation",
-                         kCoordinatorRaftGroupId, options_.localPeer, registrationStatus.ToString()));
-    }
-
-    state_ = LifecycleState::SERVICES_REGISTERED;
-    return Status::OK();
-}
-
 CoordinatorRaftEventCallbacks CoordinatorRaftNode::MakeStateMachineCallbacks()
 {
     const auto onConfigurationCommitted = callbacks_.onConfigurationCommitted;
@@ -210,8 +162,8 @@ void CoordinatorRaftNode::HandleConfigurationCommitted(
         }
     };
 
-    if (index <= 0) {
-        reportError("the committed index must be greater than zero");
+    if (index < 0) {
+        reportError("the committed index must not be negative");
         return;
     }
     if (peers.empty()) {
@@ -264,14 +216,12 @@ void CoordinatorRaftNode::HandleConfigurationCommitted(
 Status CoordinatorRaftNode::Start(RaftMetadataState metadataState)
 {
     std::unique_lock<std::mutex> lock(lifecycleMutex_);
-    if (state_ == LifecycleState::CONSTRUCTED) {
-        return Status(K_NOT_READY, "Coordinator raft services must be registered before startup");
-    }
-    if (state_ != LifecycleState::SERVICES_REGISTERED) {
+    if (state_ != LifecycleState::CONSTRUCTED) {
         return Status(K_INVALID, "Coordinator raft node cannot be started more than once or after shutdown");
     }
 
     RETURN_IF_NOT_OK(ValidateCoordinatorRaftOptions(options_, metadataState));
+    RETURN_IF_NOT_OK(ParseCoordinatorRaftPeer(options_.localPeer, localPeer_));
     RETURN_IF_NOT_OK(CreateDir(options_.dataDir, true));
 
     braft::Configuration initialConfiguration;
@@ -279,6 +229,9 @@ Status CoordinatorRaftNode::Start(RaftMetadataState metadataState)
 
     auto stateMachine = std::make_unique<CoordinatorRaftStateMachine>(MakeStateMachineCallbacks());
     braft::NodeOptions nodeOptions;
+    // braft v1.1.2 derives heartbeat from election_timeout_ms and the global heartbeat factor.
+    const auto heartbeatFactor = std::to_string(options_.electionTimeoutMs / options_.heartbeatIntervalMs);
+    (void)gflags::SetCommandLineOption("raft_election_heartbeat_factor", heartbeatFactor.c_str());
     nodeOptions.election_timeout_ms = options_.electionTimeoutMs;
     nodeOptions.initial_conf = std::move(initialConfiguration);
     nodeOptions.fsm = stateMachine.get();
@@ -310,9 +263,28 @@ Status CoordinatorRaftNode::Start(RaftMetadataState metadataState)
         return status;
     }
 
+    const bool publishBootstrapConfiguration = std::holds_alternative<BootstrapPlan>(options_.startPlan);
+    CoordinatorRaftStateMachine *publishedStateMachine = nullptr;
     stateMachine_ = std::move(stateMachine);
     node_ = std::move(node);
     state_ = LifecycleState::STARTED;
+    if (publishBootstrapConfiguration) {
+        publishedStateMachine = stateMachine_.get();
+        std::lock_guard<std::mutex> publishLock(configurationPublishMutex_);
+        configurationPublishInProgress_ = true;
+    }
+    lock.unlock();
+
+    if (publishBootstrapConfiguration) {
+        Raii publishComplete([this] {
+            {
+                std::lock_guard<std::mutex> publishLock(configurationPublishMutex_);
+                configurationPublishInProgress_ = false;
+            }
+            configurationPublishCv_.notify_all();
+        });
+        publishedStateMachine->on_configuration_committed(nodeOptions.initial_conf, 0);
+    }
     return Status::OK();
 }
 
@@ -321,12 +293,18 @@ void CoordinatorRaftNode::ShutdownInternal() noexcept
     std::unique_ptr<CoordinatorRaftStateMachine> stateMachine;
     std::unique_ptr<braft::Node> node;
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::unique_lock<std::mutex> lock(lifecycleMutex_);
         operationDrainState_->StopAcceptingNewTokens();
         if (state_ == LifecycleState::STOPPED) {
             return;
         }
         state_ = LifecycleState::STOPPING;
+        lock.unlock();
+        {
+            std::unique_lock<std::mutex> publishLock(configurationPublishMutex_);
+            configurationPublishCv_.wait(publishLock, [this] { return !configurationPublishInProgress_; });
+        }
+        lock.lock();
         node = std::move(node_);
         stateMachine = std::move(stateMachine_);
     }

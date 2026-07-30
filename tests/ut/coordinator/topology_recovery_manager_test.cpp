@@ -206,7 +206,7 @@ TEST_F(TopologyRecoveryManagerTest, ParsesScaleInMetadataDoneMarkersInDefaultAnd
 {
     constexpr char taskId[] = "m-e7-0123456789abcdef0123456789abcdef";
     constexpr char sourceId[] = "source-member-id";
-    for (const std::string clusterName : { std::string(), std::string("blue") }) {
+    for (const std::string &clusterName : { std::string(), std::string("blue") }) {
         std::unique_ptr<cluster::TopologyKeyHelper> keys;
         DS_ASSERT_OK(cluster::TopologyKeyHelper::Create(clusterName, keys));
         std::string relativeKey;

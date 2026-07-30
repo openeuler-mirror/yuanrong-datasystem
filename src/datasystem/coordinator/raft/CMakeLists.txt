@@ -26,6 +26,18 @@ target_link_libraries(coordinator_raft_state_machine
         PRIVATE
         common_log)
 
+add_library(coordinator_raft_service STATIC coordinator_raft_service.cpp)
+target_include_directories(coordinator_raft_service PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>)
+target_link_libraries(coordinator_raft_service
+        PUBLIC common_util
+        PRIVATE
+        coordinator_raft_peer
+        coordinator_raft_types
+        common_rpc_zmq
+        datasystem_braft)
+
 add_library(coordinator_raft_node STATIC coordinator_raft_node.cpp)
 target_include_directories(coordinator_raft_node PUBLIC
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
@@ -38,7 +50,6 @@ target_link_libraries(coordinator_raft_node
         PRIVATE
         coordinator_raft_peer
         common_log
-        common_rpc_zmq
         common_util)
 
 add_library(coordinator_membership_manager STATIC coordinator_membership_manager.cpp)
@@ -52,3 +63,22 @@ target_link_libraries(coordinator_membership_manager
         coordinator_raft_node
         coordinator_raft_peer
         common_log)
+
+add_library(coordinator_election_manager STATIC coordinator_election_manager.cpp)
+target_include_directories(coordinator_election_manager PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>)
+target_link_libraries(coordinator_election_manager
+        PUBLIC
+        coordinator_raft_node
+        coordinator_raft_state_machine
+        coordinator_raft_types
+        coordinator_membership_manager
+        common_util
+        PRIVATE
+        coordinator_raft_peer
+        coordinator_protos
+        common_ak_sk
+        common_log
+        common_rpc_zmq)
+add_dependencies(coordinator_election_manager coordinator_protos)

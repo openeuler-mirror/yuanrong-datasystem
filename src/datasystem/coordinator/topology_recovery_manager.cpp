@@ -244,7 +244,7 @@ TopologyRecoveryManager::TopologyRecoveryManager(std::string coordinatorId, Coor
                                                  "TopologyRecovery", true);
 }
 
-TopologyRecoveryManager::~TopologyRecoveryManager()
+TopologyRecoveryManager::~TopologyRecoveryManager() noexcept
 {
     LOG_IF_ERROR(Shutdown(), "CLUSTER_RECOVERY_MANAGER_SHUTDOWN_FAILED");
 }

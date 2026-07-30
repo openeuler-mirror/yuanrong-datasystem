@@ -118,6 +118,12 @@ foreach(_TEST_LINE ${_OUTPUT})
       "${_PRETTY_SUITE}${_PRETTY_NAME}"
       ${_COMMAND_PREFIX} ${TEST_EXECUTABLE} "--gtest_filter=${_TEST_SUITE}${_TEST_NAME}" "--gtest_also_run_disabled_tests")
 
+    if (DEFINED TEST_TIMEOUT AND NOT TEST_TIMEOUT STREQUAL "")
+      _command_append(set_tests_properties
+        "${_PRETTY_SUITE}${_PRETTY_NAME}"
+        PROPERTIES TIMEOUT "${TEST_TIMEOUT}")
+    endif()
+
     if (NOT _TEST_SUITE MATCHES "^DISABLED_" AND NOT _TEST_NAME MATCHES "^DISABLED_")
       # If test suite or name contain "LEVEL1_"/"LEVEL2_", we need to set "level1"/"level2" label, otherwise, set "level0".
       if (_TEST_SUITE MATCHES "LEVEL1_" OR _TEST_NAME MATCHES "LEVEL1_")

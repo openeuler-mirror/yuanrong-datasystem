@@ -29,6 +29,7 @@ TEST(StaticCoordinatorDiscoveryTest, ReturnsConfiguredAddressAndReplacesExisting
 
     ASSERT_EQ(coordinators.size(), 1UL);
     EXPECT_EQ(coordinators.front(), "127.0.0.1:31501");
+    EXPECT_EQ(discovery.GetCount(), 1UL);
 }
 
 TEST(StaticCoordinatorDiscoveryTest, EmptyAddressReturnsEmptyOutput)
@@ -39,6 +40,33 @@ TEST(StaticCoordinatorDiscoveryTest, EmptyAddressReturnsEmptyOutput)
     DS_ASSERT_OK(discovery.GetCoordinators(coordinators));
 
     EXPECT_TRUE(coordinators.empty());
+    EXPECT_EQ(discovery.GetCount(), 0UL);
+}
+
+TEST(StaticCoordinatorDiscoveryTest, ReturnsCommaSeparatedAddressesAndCount)
+{
+    StaticCoordinatorDiscovery discovery("127.0.0.1:31502,127.0.0.1:31501,127.0.0.1:31502");
+    std::vector<std::string> coordinators{ "stale-address" };
+
+    DS_ASSERT_OK(discovery.GetCoordinators(coordinators));
+
+    ASSERT_EQ(coordinators.size(), 2UL);
+    EXPECT_EQ(coordinators[0], "127.0.0.1:31501");
+    EXPECT_EQ(coordinators[1], "127.0.0.1:31502");
+    EXPECT_EQ(discovery.GetCount(), 2UL);
+}
+
+TEST(StaticCoordinatorDiscoveryTest, TrimsAsciiWhitespaceDropsEmptyEntriesAndDeduplicates)
+{
+    StaticCoordinatorDiscovery discovery(" 127.0.0.1:31502,\t127.0.0.1:31501\n,, 127.0.0.1:31502 , ");
+    std::vector<std::string> coordinators{ "stale-address" };
+
+    DS_ASSERT_OK(discovery.GetCoordinators(coordinators));
+
+    ASSERT_EQ(coordinators.size(), 2UL);
+    EXPECT_EQ(coordinators[0], "127.0.0.1:31501");
+    EXPECT_EQ(coordinators[1], "127.0.0.1:31502");
+    EXPECT_EQ(discovery.GetCount(), 2UL);
 }
 
 TEST(StaticCoordinatorDiscoveryTest, RepeatedCallsReturnTheSameAddress)

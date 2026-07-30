@@ -110,7 +110,7 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 | --- | --- | --- | --- |
 | `-d` / `-r` | `CMAKE_BUILD_TYPE` | `Release` | Selects Debug or Release flag set. |
 | `-S address/thread/undefined/off` | `USE_SANITIZER` | `off` | Adds Google sanitizer flags to project and selected third-party builds. |
-| `-t != off` | `WITH_TESTS` | `off` | Adds test subdirectories and the `WITH_TESTS` define. In CMake, braft, all Coordinator Raft adapter targets, the focused Raft UT linkage, the Coordinator Node ST, and the raw braft cluster/replay ST are built only in this mode. |
+| `-t != off` | `WITH_TESTS` | `off` | Adds GTest, test subdirectories/targets, CTest registration, and the `WITH_TESTS` define. braft and the Coordinator Raft product targets are unconditional. |
 | `-c on/html` | `BUILD_COVERAGE` | `off` | Adds gcov flags and `BUILD_COVERAGE` define. |
 | `-p on` | `ENABLE_PERF` | `off` | Adds `ENABLE_PERF`, perf service/client sources, and perf proto targets. |
 | `-P on/off/path` | `BUILD_PYTHON_API` | `on` from script | Adds `pybind_api`, pybind11 dependency, and wheel packaging. |
@@ -169,12 +169,10 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 | Go SDK | `BUILD_GO_API=on` | `datasystem/sdk/go`, C API headers under `datasystem/sdk/go/include/datasystem/c_api`, Go libs under `datasystem/sdk/go/lib`; post-install validation builds example/client packages | `src/datasystem/c_api/CMakeLists.txt`, `cmake/package.cmake`, `scripts/package_go_sdk.sh` |
 | Final tarball | always after install | `yr-datasystem-v$(cat VERSION).tar.gz`; the script removes the installed `datasystem/` tree while creating the tarball | `scripts/build_cmake.sh` |
 
-At the current stage, braft and every Coordinator Raft adapter target are built by CMake only when `WITH_TESTS` is
-enabled. The checked-in validation now includes Raft types/StateMachine/Node UT coverage, a standalone real-Node ST, and
-`braft_cluster_test` coverage for both first application and restart/replay of an unsupported management log. These are
-test-build integrations only: `CoordinatorServiceImpl` still has no `CoordinatorRaftNode` consumer, and there is no braft
-install or package rule. braft becomes a production dependency only when product lifecycle and configuration wiring are
-added.
+braft 1.1.2 and every Coordinator Raft adapter target are built unconditionally by CMake. The static PIC
+`libbraft.a` enters the product closure through `coordinator_service_impl` -> `coordinator_election_manager` ->
+`coordinator_raft_node`; Bazel mirrors the same product dependency. There is no standalone braft shared library or direct
+braft install/package rule. `WITH_TESTS` only adds GTest and test targets/CTest registration.
 
 ### Package Manifest Baselines
 

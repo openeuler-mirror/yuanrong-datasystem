@@ -37,8 +37,19 @@ ds_cc_test(
 ds_cc_test(
     name = "coordinator_server_options_test",
     srcs = ["coordinator_server_options_test.cpp"],
+    timeout = "short",
     deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/flags:dynamic_flag_config",
+        "//src/datasystem/common/flags:dynamic_flag_config_header",
+        "//src/datasystem/common/rpc:brpc_factory",
+        "//src/datasystem/common/signal:signal",
         "//src/datasystem/coordinator:coordinator_server",
+        "//src/datasystem/coordinator:coordinator_runtime",
+        "//src/datasystem/coordinator:coordinator_service_impl",
+        "//src/datasystem/coordinator/raft:coordinator_election_manager",
+        "//src/datasystem/protos:coordinator_brpc",
+        "//tests/st/cluster:test_port_allocator",
         "//tests/ut:ut_common",
     ],
 )

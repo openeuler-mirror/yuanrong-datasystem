@@ -670,8 +670,6 @@ TEST(CoordinatorMembershipManagerTest, RejectsEveryInvalidOptionFieldAndRelation
           [](auto &options) { options.memberFailureGrace = options.healthCheckInterval; } },
         { "health exceeds failure grace", "healthCheckInterval must be less than memberFailureGrace",
           [](auto &options) { options.memberFailureGrace = kHealthCheckInterval / 2; } },
-        { "health exceeds discovery retry", "healthCheckInterval must not exceed discoveryRetryInterval",
-          [](auto &options) { options.discoveryRetryInterval = kHealthCheckInterval / 2; } },
     };
 
     for (const auto &testCase : cases) {
@@ -689,6 +687,14 @@ TEST(CoordinatorMembershipManagerTest, RejectsEveryInvalidOptionFieldAndRelation
         EXPECT_EQ(dependencies.GetStatusCalls(), 0);
         ExpectNoMembershipCalls(dependencies, *discovery);
     }
+}
+
+TEST(CoordinatorMembershipManagerTest, AcceptsDiscoveryRetryBelowHealthCheckInterval)
+{
+    auto options = ValidOptions();
+    options.discoveryRetryInterval = options.healthCheckInterval / 2;
+
+    EXPECT_TRUE(options.IsValid());
 }
 
 TEST(CoordinatorMembershipManagerTest, RejectsNullDiscovery)

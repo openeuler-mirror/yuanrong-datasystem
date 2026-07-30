@@ -15,11 +15,16 @@
  */
 
 /**
-  * Description: Coordinator RPC service implementation skeleton.
+ * Description: Coordinator RPC service implementation skeleton.
  */
 #ifndef DATASYSTEM_COORDINATOR_COORDINATOR_SERVICE_IMPL_H
 #define DATASYSTEM_COORDINATOR_COORDINATOR_SERVICE_IMPL_H
 
+#include <atomic>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -31,11 +36,17 @@
 #include "datasystem/common/coordinator/watch_registry.h"
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/coordinator/raft/coordinator_election_manager.h"
+#include "datasystem/coordinator/raft/coordinator_raft_types.h"
 #include "datasystem/coordinator/watch_dispatcher_impl.h"
+#include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/protos/coordinator.brpc.pb.h"
 #include "datasystem/protos/coordinator.service.rpc.pb.h"
 
 namespace datasystem {
+namespace st {
+class CoordinatorServiceElectionTestBase;
+}
 namespace coordinator {
 class TopologyControlHost;
 class TopologyRecoveryManager;
@@ -43,31 +54,62 @@ class TopologyRecoveryManager;
 class CoordinatorServiceImpl : public CoordinatorService, public ICoordinatorService {
 public:
     /**
-     * @brief Construct an in-memory Coordinator RPC service.
+     * @brief Construct an in-memory Coordinator RPC service. Only `(nullptr, 0)` disables election; otherwise,
+     *        coordinatorDiscovery must be non-null and expectedMemberCount must be greater than zero.
      * @param[in] localAddress Coordinator listen address.
+     * @param[in] coordinatorDiscovery Election candidate provider.
+     * @param[in] expectedMemberCount Fixed election voting-member target.
+     * @param[in] raftFlags Immutable Raft identity and timing snapshot for this service generation.
      */
-    explicit CoordinatorServiceImpl(const HostPort &localAddress);
+    explicit CoordinatorServiceImpl(const HostPort &localAddress,
+                                    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery = nullptr,
+                                    size_t expectedMemberCount = 0, CoordinatorRaftFlags raftFlags = {});
 
     /**
-     * @brief Invoke idempotent Shutdown before releasing owned components.
+     * @brief Invoke best-effort Shutdown without allowing exceptions to escape destruction.
      */
-    ~CoordinatorServiceImpl() override;
+    ~CoordinatorServiceImpl() noexcept override;
 
     /**
-     * @brief Load authentication and construct the in-memory service component tree.
-     * @return Operation status.
+     * @brief Initialize a newly created service and publish INITIALIZED only after all initialization succeeds.
+     * @return Operation status. Initialization failures preserve the original status and leave the service STOPPED.
      */
-    Status Init();
+    Status Init() override;
 
     /**
-     * @brief Start the configured RPC server and bind its endpoints.
-     * @return Operation status.
+     * @brief Initialize a newly created service and optionally publish STARTING for in-process direct-call tests.
+     * @param[in] publishStarting Whether to publish STARTING instead of INITIALIZED after successful initialization.
+     * @return Operation status. Initialization failures preserve the original status and leave the service STOPPED.
+     */
+    Status Init(bool publishStarting);
+
+    /**
+     * @brief Start RPC services. No-election mode publishes RUNNING; election mode remains STARTING.
+     * @return Operation status. Startup failures preserve the original status and leave the service STOPPED.
      */
     Status Start();
 
     /**
-     * @brief Stop RPC and destroy all components in reverse dependency order.
-     * @return Operation status.
+     * @brief Publish the election owner and start its background bootstrap worker after external registration succeeds.
+     * @return Operation status. A synchronous failure detaches and cleans up the Manager, leaves the service STARTING,
+     *         and cannot be retried.
+     */
+    Status StartElectionManager();
+
+    /**
+     * @brief Report whether the running election-enabled service owns Raft leadership.
+     */
+    bool IsLeader() const;
+
+    /**
+     * @brief Report the current normalized Raft leader address.
+     */
+    Status GetLeader(std::string &leaderAddress) const;
+
+    /**
+     * @brief Best-effort stop RPC and destroy all components in reverse dependency order.
+     * @return The first public cleanup owner's saved status for concurrent or repeated callers, K_OK if already STOPPED
+     *         before public cleanup starts, or fixed K_RUNTIME_ERROR for an unexpected coordination exception.
      */
     Status Shutdown();
 
@@ -128,6 +170,14 @@ public:
     Status GetCoordinatorId(const GetCoordinatorIdReqPb &req, GetCoordinatorIdRspPb &rsp) override;
 
     /**
+     * @brief Forward the published election Manager's bootstrap snapshot without applying the business serving gate.
+     * @param[in] req Fixed Coordinator Raft group identity.
+     * @param[out] rsp Current Manager-owned bootstrap observation.
+     * @return Validation, lifecycle, or snapshot status.
+     */
+    Status GetRaftBootstrapState(const GetRaftBootstrapStateReqPb &req, GetRaftBootstrapStateRspPb &rsp) override;
+
+    /**
      * @brief Accept one Worker-initiated topology recovery candidate report.
      * @param[in] req Cluster, CoordinatorId, reporter, and candidate evidence or payload.
      * @param[out] rsp Admission decision, recovery state, and payload request.
@@ -142,10 +192,13 @@ public:
      * @param[out] rsp Raw key/value groups including each entry's modification revision.
      * @return Store, validation, or response-size status.
      */
-    Status GetClusterRawSnapshot(const GetClusterRawSnapshotReqPb &req,
-                                 GetClusterRawSnapshotRspPb &rsp) override;
+    Status GetClusterRawSnapshot(const GetClusterRawSnapshotReqPb &req, GetClusterRawSnapshotRspPb &rsp) override;
 
 private:
+    friend class ::datasystem::st::CoordinatorServiceElectionTestBase;
+
+    enum class ServingState : uint8_t { CREATED, INITIALIZED, STARTING, RUNNING, STOPPING, STOPPED };
+
     /**
      * @brief Construct and start the Store, recovery, and topology control component tree.
      * @return Component construction or Host startup status.
@@ -192,13 +245,23 @@ private:
      */
     void FillResponseHeader(ResponseHeader *header) const;
 
+    bool IsElectionConfigured() const noexcept;
+    Status ValidateElectionConfiguration() const;
+    Status BuildElectionStartupContext(CoordinatorElectionOptions &options) const;
+    CoordinatorRaftEventCallbacks BuildRaftEventCallbacks();
+    Status CheckServing() const;
+    Status InitInternal();
+    Status FinishSuccessfulStart();
+    Status StartInternal();
+    Status ShutdownElectionManager(std::unique_ptr<CoordinatorElectionManager> electionManager);
+    Status ShutdownRemainingComponents(Status firstError);
+    Status ShutdownInternal(std::unique_lock<std::mutex> &lifecycleLock);
+
     HostPort coordinatorAddr_;
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
+    size_t expectedMemberCount_{ 0 };
+    CoordinatorRaftFlags raftFlags_;
     RpcServer::Builder builder_;
-    // brpc mode — MUST be declared before rpcServer_: the brpc adapter holds a
-    // reference to *this and is registered with the brpc::Server inside rpcServer_.
-    // On destruction, rpcServer_ (~RpcServer → StopBrpcServer) must outlive the adapter.
-    std::unique_ptr<CoordinatorServiceBrpcAdapter> brpcAdapter_;
-    std::unique_ptr<RpcServer> rpcServer_;
     std::shared_ptr<MemoryKvStore> memStore_;
     std::shared_ptr<WatchRegistry> watchRegistry_;
     std::shared_ptr<WatchDispatcherImpl> watchDispatcher_;
@@ -213,6 +276,35 @@ private:
     std::string brpcAddr_;
     int brpcPort_ = 0;
     std::string coordinatorId_;
+    // Serializes one-way lifecycle state transitions and leader/bootstrap queries. Election startup reserves one
+    // attempt, publishes Manager ownership before starting its background worker, then publishes completion under this
+    // mutex. Shutdown publishes STOPPING and transfers Manager ownership under this mutex, then performs every blocking
+    // cleanup stage without the lock before reacquiring it only to publish the shared result.
+    mutable std::mutex lifecycleMutex_;
+    std::condition_variable lifecycleCv_;
+    bool electionStartInProgress_{ false };
+    bool electionStartAttempted_{ false };
+    bool shutdownInProgress_{ false };
+    bool shutdownComplete_{ false };
+    Status shutdownStatus_;
+    std::atomic<ServingState> servingState_{ ServingState::CREATED };
+    std::atomic<bool> raftServing_{ false };
+
+#ifdef WITH_TESTS
+    // Narrow deterministic seams for lifecycle publication, real brpc handler/server ordering, snapshot-copy, and
+    // Manager cleanup ordering.
+    std::function<void()> electionManagerPublishedHook_;
+    std::function<void()> raftBootstrapHandlerEnteredHook_;
+    std::function<void()> raftBootstrapSnapshotCopiedHook_;
+    std::function<Status()> electionManagerShutdownHook_;
+    std::function<void()> rpcServerShutdownHook_;
+#endif
+
+    // Declaration order is the reverse-destruction fallback. Explicit Shutdown remains authoritative:
+    // gate closed -> ElectionManager (Membership then Node) -> RpcServer -> business brpc adapter.
+    std::unique_ptr<CoordinatorServiceBrpcAdapter> brpcAdapter_;
+    std::unique_ptr<RpcServer> rpcServer_;
+    std::unique_ptr<CoordinatorElectionManager> electionManager_;
 };
 }  // namespace coordinator
 }  // namespace datasystem

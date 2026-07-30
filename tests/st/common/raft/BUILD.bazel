@@ -15,6 +15,46 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "coordinator_service_election_test",
+    srcs = ["coordinator_service_election_test.cpp"],
+    timeout = "short",
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/flags:dynamic_flag_config_header",
+        "//src/datasystem/common/rpc:brpc_factory",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/coordinator:coordinator_service_impl",
+        "//src/datasystem/coordinator/raft:coordinator_raft_types",
+        "//src/datasystem/protos:coordinator_brpc",
+        "//tests/st:common_test",
+        "//tests/st/cluster:test_port_allocator",
+        "@com_github_apache_brpc//:brpc",
+        "@com_github_apache_brpc//:butil",
+    ],
+)
+
+ds_cc_test(
+    name = "coordinator_runtime_election_test",
+    srcs = ["coordinator_runtime_election_test.cpp"],
+    timeout = "short",
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/flags:dynamic_flag_config",
+        "//src/datasystem/common/flags:dynamic_flag_config_header",
+        "//src/datasystem/common/rpc:brpc_factory",
+        "//src/datasystem/common/signal:signal",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/coordinator:coordinator_runtime",
+        "//src/datasystem/coordinator/raft:coordinator_raft_types",
+        "//src/datasystem/protos:coordinator_brpc",
+        "//tests/st:common_test",
+        "//tests/st/cluster:test_port_allocator",
+        "@com_github_apache_brpc//:brpc",
+        "@com_github_apache_brpc//:butil",
+    ],
+)
+
+ds_cc_test(
     name = "coordinator_raft_node_test",
     srcs = ["coordinator_raft_node_test.cpp"],
     deps = [
@@ -22,6 +62,7 @@ ds_cc_test(
         "//src/datasystem/common/rpc:rpc_server",
         "//src/datasystem/coordinator/raft:coordinator_membership_manager",
         "//src/datasystem/coordinator/raft:coordinator_raft_node",
+        "//src/datasystem/coordinator/raft:coordinator_raft_service",
         "//src/datasystem/coordinator/raft:coordinator_raft_state_machine",
         "//src/datasystem/coordinator/raft:coordinator_raft_types",
         "//tests/st:common_test",

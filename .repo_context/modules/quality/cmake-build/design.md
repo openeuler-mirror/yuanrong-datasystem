@@ -113,7 +113,7 @@
 | libsodium | `1.0.18` | always through `libzmq.cmake` | Built before ZeroMQ. |
 | ZeroMQ | `4.3.5` | always | Provides main RPC transport library. |
 | brpc | `1.15.0` | always | Built as shared brpc with `WITH_GLOG=OFF` against project gflags, leveldb, protobuf, and OpenSSL; applies `avoid-glog-flag-conflicts.patch` so brpc's built-in logging path registers `brpc_*` verbosity flags instead of glog-owned names. |
-| braft | `1.1.2` | `WITH_TESTS=on` | Reuses the existing brpc, gflags, leveldb, protobuf, OpenSSL, and zlib builds. `modern-toolchain-compat.patch` backports modern compiler/architecture compatibility, fixes the revision to the release tag supplied by DataSystem, and disables unused tools. It builds a static PIC `libbraft.a` for the test-only Coordinator Raft adapter, focused UT linkage, real-Node ST, and raw cluster/replay ST; there is no production consumer yet. |
+| braft | `1.1.2` | always | Reuses the existing brpc, gflags, leveldb, protobuf, OpenSSL, and zlib builds. `modern-toolchain-compat.patch` backports modern compiler/architecture compatibility, fixes the revision to the release tag supplied by DataSystem, and disables unused tools. It builds static PIC `libbraft.a`, which enters the product closure through `coordinator_service_impl` -> `coordinator_election_manager` -> `coordinator_raft_node`. There is no standalone shared braft library or direct braft install/package rule. |
 | jemalloc | `5.3.0` | always | Shared jemalloc is linked into `datasystem_worker_bin`; profiling controlled by `SUPPORT_JEPROF`. |
 | RocksDB | `7.10.2` | always | Used by metadata/replica storage code. |
 | SecureC / libboundscheck | `v1.1.16` | always | Also passed into p2p-transfer build. |
@@ -152,16 +152,15 @@
     `grpc:protobuf:openssl:zlib:re2`.
 - `DS_OPENSOURCE_DIR` controls third-party cache root. If not set, `cmake/util.cmake` hashes `CMAKE_BINARY_DIR` and
   uses `/tmp/<sha256>`.
-- `DS_PACKAGE` switches dependency sources to local packages/source trees and generates package hashes; when braft is
-  enabled by `WITH_TESTS=on`, it follows the same source-selection rule.
+- `DS_PACKAGE` switches dependency sources to local packages/source trees and generates package hashes; braft follows the
+  same source-selection rule.
 - `DS_LOCAL_LIBS_DIR` switches many open-source URLs to local tarballs under `opensource_third_party`.
 - Cache keys include dependency name, package hash, version, components, toolchain, configure options, compiler
   versions, flags, link flags, patches, and extra dependency roots.
-- braft is prepared only for `WITH_TESTS=on` builds. Its CMake build pins `BRAFT_REVISION` to `v1.1.2`, builds static PIC
-  `libbraft.a`, applies SSE flags only on x86_64, uses C++17, and links the repository's zlib instead of an ambient system
-  copy. The Coordinator Raft adapter, its focused UT linkage, the real-Node ST, and `braft_cluster_test` raw
-  first-apply/restart-replay validation are all present under the CMake test gate. They remain test-build consumers, not
-  production integration: no product target consumes `CoordinatorRaftNode`, and no braft install or package rule exists.
+- braft is prepared unconditionally. Its CMake build pins `BRAFT_REVISION` to `v1.1.2`, builds static PIC `libbraft.a`,
+  applies SSE flags only on x86_64, uses C++17, and links the repository's zlib instead of an ambient system copy.
+  `coordinator_service_impl` pulls `coordinator_election_manager`, `coordinator_raft_node`, and braft into the product CMake
+  closure; Bazel mirrors that dependency. There is no standalone braft shared library or direct braft install/package rule.
 
 ## CMake Target Graph Summary
 
@@ -198,6 +197,18 @@ root
 
 ### Product Targets
 
+The Coordinator product closure is unconditional in CMake, with Bazel mirroring the same edges through
+`@braft//:braft`:
+
+```text
+datasystem_coordinator -> coordinator_server -> coordinator_service_impl
+datasystem_coordinator_shared ----------------> coordinator_service_impl
+coordinator_service_impl -> coordinator_election_manager -> coordinator_raft_node -> datasystem_braft -> libbraft.a
+                         -> coordinator_raft_peer -------------------------------> datasystem_braft
+```
+
+`libbraft.a` is linked into the product closure; there is no separately installed shared braft target.
+
 | Target | Kind | Main dependencies | Compile-speed notes |
 | --- | --- | --- | --- |
 | `datasystem` | shared C++ SDK | client sources, `common_*`, `common_device`, `common_rdma`, `common_etcd_client`, generated client protos, `worker_transport_api`, gRPC, protobuf, TBB, SecureC | High fan-in user-facing library; avoid linking service-only code into it. |
@@ -209,8 +220,9 @@ root
 | `datasystem_worker_shared` | service shared lib | `common_*`, `ds_master`, `ds_server`, `worker_object_cache`, `worker_stream_cache`, `cluster_manager`, `worker_client_manager`, generated protos | Biggest service fan-in target. |
 | `datasystem_worker_static` | static worker target | same worker sources/deps; adds ST implementation when `WITH_TESTS` | Test-only sources make test builds structurally different. |
 | `datasystem_worker_bin` | executable `datasystem_worker` | `datasystem_worker_shared`, `jemalloc`, `nlohmann_json` | Package-critical service binary. |
-| `datasystem_coordinator_shared` | service shared lib | `coordinator_service_impl`, common log/util/signal | Installed into service and both SDK library layouts; retained in CMake and Bazel wheels. |
-| `datasystem_coordinator` | executable `datasystem_coordinator` | `coordinator_server`, common log/util/flags | Package-critical service binary installed beside `coordinator_config.json`. |
+| `coordinator_service_impl` | static product service implementation | Coordinator business dependencies, `coordinator_election_manager`, `coordinator_raft_peer` | Unconditionally pulls ElectionManager/Node and static PIC braft into the Coordinator product closure. |
+| `datasystem_coordinator_shared` | service shared lib | `coordinator_service_impl`, including its ElectionManager/Node/braft closure; common log/util/signal | Installed into service and both SDK library layouts; retained in CMake and Bazel wheels. |
+| `datasystem_coordinator` | executable `datasystem_coordinator` | `coordinator_server` -> `coordinator_service_impl` -> ElectionManager/Node/braft; common log/util/flags | Package-critical service binary installed beside `coordinator_config.json`. |
 | `ds_master` | static | object/stream master cache, common RPC/log/util/rocksdb, cluster/client manager, `ds_server` | Pulled into worker shared lib. |
 | `ds_server` | static | common event loop/log/perf/metrics/RPC/util; `generic_service_protos` only in tests | Test builds add generic service implementation. |
 | `common_rpc_zmq` / `_client` | static | ZeroMQ, protobuf, common log/perf/util/event loop/encrypt, proto targets | Core RPC fan-out; client variant links client proto targets. |
@@ -225,7 +237,7 @@ root
 
 | Flag | Added work | Source |
 | --- | --- | --- |
-| `WITH_TESTS` | `tests` subtree, GTest, braft, Coordinator Raft adapter plus its UT/Node ST/raw replay ST, test-only protos, test-only worker/server sources, CTest registration | `cmake/dependency.cmake`, `CMakeLists.txt`, `src/datasystem/coordinator/CMakeLists.txt`, `tests/ut/CMakeLists.txt`, `tests/st/CMakeLists.txt`, `src/datasystem/protos/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt` |
+| `WITH_TESTS` | GTest and test targets, including test-only protos/sources and CTest registration; braft and Coordinator Raft product targets remain unconditional | `cmake/dependency.cmake`, `CMakeLists.txt`, `tests/ut/CMakeLists.txt`, `tests/st/CMakeLists.txt`, `src/datasystem/protos/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt` |
 | `ENABLE_PERF` | perf client source, perf service source, perf proto targets, `perf_client.h` included in SDK headers | `src/datasystem/client/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt`, `cmake/package.cmake` |
 | `BUILD_HETERO_NPU` | Ascend find, optional p2p-transfer, `acl_plugin`, transfer_engine subproject, plugin hash generation; TransferEngine links the repository-private `ds_spdlog` target and installs a process-local callback into the bundled P2P DSO | `cmake/dependency.cmake`, `CMakeLists.txt`, device CMake files, `transfer_engine/CMakeLists.txt` |
 | `TRANSFER_ENGINE_ENABLE_HIXL` | Adds `transfer_engine/src/internal/backend/ascend/hixl_d2d_backend.cpp`, defines `TRANSFER_ENGINE_ENABLE_HIXL=1`, and links `cann_hixl`, `metadef`, `ascendcl` only after CANN/HIXL `8.5.2+` is detected; `protocol=hixl` returns `kNotSupported` when this is off | `build.sh`, `scripts/build_cmake.sh`, `transfer_engine/CMakeLists.txt`, `transfer_engine/cmake/options.cmake` |

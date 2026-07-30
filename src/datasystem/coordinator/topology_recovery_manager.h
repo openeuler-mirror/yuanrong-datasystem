@@ -83,7 +83,7 @@ public:
     /**
      * @brief Stop and drain started recovery work.
      */
-    ~TopologyRecoveryManager();
+    ~TopologyRecoveryManager() noexcept;
 
     TopologyRecoveryManager(const TopologyRecoveryManager &) = delete;
     TopologyRecoveryManager &operator=(const TopologyRecoveryManager &) = delete;

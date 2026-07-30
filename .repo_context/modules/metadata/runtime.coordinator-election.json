@@ -19,14 +19,19 @@
     ]
   },
   "source_roots": [
-    "src/datasystem/coordinator/raft"
+    "src/datasystem/coordinator/raft",
+    "src/datasystem/coordinator/coordinator_service_impl.h",
+    "src/datasystem/coordinator/coordinator_service_impl.cpp"
   ],
   "key_tests": [
     "tests/ut/common/coordinator/coordinator_raft_types_test.cpp",
     "tests/ut/common/coordinator/coordinator_raft_state_machine_test.cpp",
     "tests/ut/common/coordinator/coordinator_raft_node_test.cpp",
     "tests/ut/common/coordinator/coordinator_membership_manager_test.cpp",
+    "tests/ut/common/coordinator/coordinator_election_manager_test.cpp",
+    "tests/ut/coordinator/coordinator_server_options_test.cpp",
     "tests/st/common/raft/coordinator_raft_node_test.cpp",
+    "tests/st/common/raft/coordinator_service_election_test.cpp",
     "tests/st/common/raft/braft_cluster_test.cpp"
   ],
   "module_boundary": {
@@ -42,7 +47,8 @@
       "membership_configuration",
       "recovery_lifecycle",
       "shared_brpc_server",
-      "test_gated_integration"
+      "product_lifecycle_integration",
+      "structured_metadata_probe"
     ]
   },
   "retrieval": {
@@ -60,6 +66,12 @@
       "AddPeer",
       "RemovePeer",
       "CoordinatorMembershipManager",
+      "CoordinatorElectionManager",
+      "CoordinatorServiceImpl",
+      "parameterized election path",
+      "legacy no-election path",
+      "brpc-only election",
+      "structured metadata probe",
       "GetMembershipStatus",
       "stable_followers",
       "consecutive_error_times",
@@ -67,7 +79,9 @@
       "dynamic Discovery",
       "add-before-remove",
       "membership manager shutdown",
-      "unsupported management log"
+      "unsupported management log",
+      "generated braft restart",
+      "shared business raft endpoint"
     ],
     "intent_examples": [
       "understand Coordinator braft election and shared brpc lifecycle",
@@ -78,7 +92,9 @@
       "validate Coordinator membership health, continuous failure grace, single-flight changes, or add-before-remove",
       "review Manager-before-Node shutdown and term-scoped policy recovery",
       "validate unsupported management log restart and replay behavior",
-      "plan CoordinatorServiceImpl product integration without claiming current flag wiring"
+      "understand the parameterized CoordinatorServiceImpl election path and legacy no-election defaults",
+      "validate shared brpc endpoint startup, original-error cleanup, graceful drain, or same-root recovery",
+      "review current limits around serving gate, Worker reconciliation, waiting-to-join product startup, bootstrap digest, codec, or snapshot"
     ]
   }
 }

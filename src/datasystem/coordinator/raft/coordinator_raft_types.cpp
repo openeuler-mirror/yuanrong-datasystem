@@ -33,12 +33,30 @@ Status ValidateCoordinatorRaftOptions(const CoordinatorRaftOptions &options, Raf
     if (options.dataDir.empty()) {
         return Status(K_INVALID, "dataDir must not be empty");
     }
+    if (options.heartbeatIntervalMs < kCoordinatorRaftMinHeartbeatIntervalMs
+        || options.heartbeatIntervalMs > kCoordinatorRaftMaxHeartbeatIntervalMs) {
+        return Status(K_INVALID, "heartbeatIntervalMs=" + std::to_string(options.heartbeatIntervalMs)
+                                     + " is outside the valid inclusive range ["
+                                     + std::to_string(kCoordinatorRaftMinHeartbeatIntervalMs) + ", "
+                                     + std::to_string(kCoordinatorRaftMaxHeartbeatIntervalMs) + "]");
+    }
     if (options.electionTimeoutMs < kCoordinatorRaftMinElectionTimeoutMs
         || options.electionTimeoutMs > kCoordinatorRaftMaxElectionTimeoutMs) {
         return Status(K_INVALID, "electionTimeoutMs=" + std::to_string(options.electionTimeoutMs)
                                      + " is outside the valid inclusive range ["
                                      + std::to_string(kCoordinatorRaftMinElectionTimeoutMs) + ", "
                                      + std::to_string(kCoordinatorRaftMaxElectionTimeoutMs) + "]");
+    }
+    if (options.electionTimeoutMs % options.heartbeatIntervalMs != 0) {
+        return Status(K_INVALID, "electionTimeoutMs must be an integer multiple of heartbeatIntervalMs");
+    }
+    const int electionHeartbeatRatio = options.electionTimeoutMs / options.heartbeatIntervalMs;
+    if (electionHeartbeatRatio < kCoordinatorRaftMinElectionHeartbeatRatio
+        || electionHeartbeatRatio > kCoordinatorRaftMaxElectionHeartbeatRatio) {
+        return Status(K_INVALID, "electionTimeoutMs must be between "
+                                     + std::to_string(kCoordinatorRaftMinElectionHeartbeatRatio)
+                                     + " and " + std::to_string(kCoordinatorRaftMaxElectionHeartbeatRatio)
+                                     + " times heartbeatIntervalMs");
     }
 
     if (metadataState == RaftMetadataState::CORRUPT) {

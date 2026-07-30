@@ -18,6 +18,7 @@
 #ifndef DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_NODE_H
 #define DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_NODE_H
 
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -31,10 +32,6 @@
 #include "datasystem/coordinator/raft/coordinator_raft_state_machine.h"
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
 #include "datasystem/utils/status.h"
-
-namespace datasystem {
-class RpcServer;
-}
 
 namespace datasystem::coordinator {
 
@@ -75,7 +72,6 @@ public:
     CoordinatorRaftNode(CoordinatorRaftNode &&) = delete;
     CoordinatorRaftNode &operator=(CoordinatorRaftNode &&) = delete;
 
-    Status RegisterBrpcServices(RpcServer &rpcServer);
     Status Start(RaftMetadataState metadataState);
 
     bool IsLeader() const;
@@ -89,7 +85,7 @@ public:
 private:
     friend class detail::CoordinatorRaftNodeTestAccessor;
 
-    enum class LifecycleState { CONSTRUCTED, SERVICES_REGISTERED, STARTED, STOPPING, STOPPED };
+    enum class LifecycleState { CONSTRUCTED, STARTED, STOPPING, STOPPED };
     enum class PeerMembershipOperation : uint8_t { ADD, REMOVE };
 
     struct CommittedConfigurationSnapshot {
@@ -114,6 +110,9 @@ private:
     LifecycleState state_{ LifecycleState::CONSTRUCTED };
     mutable std::mutex committedConfigurationMutex_;
     std::optional<CommittedConfigurationSnapshot> committedConfiguration_;
+    std::mutex configurationPublishMutex_;
+    std::condition_variable configurationPublishCv_;
+    bool configurationPublishInProgress_{ false };
     // Wrapped FSM callbacks borrow this and the Node borrows the FSM; declaration order destroys the Node first.
     std::unique_ptr<CoordinatorRaftStateMachine> stateMachine_;
     std::unique_ptr<braft::Node> node_;

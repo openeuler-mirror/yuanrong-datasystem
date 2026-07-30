@@ -24,6 +24,7 @@ include(${CMAKE_SOURCE_DIR}/cmake/external_libs/spdlog.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/gflags.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/leveldb.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/brpc.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/external_libs/braft.cmake)
 
 if (BUILD_WITH_URMA)
     message(STATUS "Build with urma")
@@ -53,7 +54,6 @@ if (BUILD_JAVA_API)
 endif()
 
 if (WITH_TESTS)
-    include(${CMAKE_SOURCE_DIR}/cmake/external_libs/braft.cmake)
     include(${CMAKE_SOURCE_DIR}/cmake/external_libs/gtest.cmake)
 endif()
 
