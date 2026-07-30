@@ -44,7 +44,11 @@ void ThreadWorkers::Join()
     for (auto &workerPair : *this) {
         auto thread = &workerPair.second;
         if (thread->joinable()) {
-            thread->join();
+            try {
+                thread->join();
+            } catch (const std::system_error &e) {
+                LOG(WARNING) << "Thread join failed: " << e.what() << ", skip";
+            }
         }
     }
 }
@@ -265,7 +269,23 @@ ThreadPool::~ThreadPool()
 
 void ThreadPool::Join()
 {
-    workers_.Join();
+    std::vector<Thread> threads;
+    {
+        std::lock_guard<std::shared_timed_mutex> lock(workersMtx_);
+        for (auto &workerPair : workers_) {
+            if (workerPair.second.joinable()) {
+                threads.emplace_back(std::move(workerPair.second));
+            }
+        }
+        workers_.clear();
+    }
+    for (auto &thread : threads) {
+        try {
+            thread.join();
+        } catch (const std::system_error &e) {
+            LOG(WARNING) << "Thread join failed: " << e.what() << ", skip";
+        }
+    }
     joined_ = true;
 }
 
