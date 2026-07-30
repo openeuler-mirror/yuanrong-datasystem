@@ -21,6 +21,7 @@ set(DS_UT_DEPEND_LIBS
         coordinator_raft_types
         coordinator_raft_state_machine
         coordinator_raft_node
+        coordinator_raft_service
         coordinator_membership_manager
         coordinator_store_backend
         coordinator_topology_control_host
@@ -77,6 +78,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/l2cache/slot_store_test\.cpp
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_store_perf_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/coordinator_server_options_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/topology_control_perf_test\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_election_manager_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/data_worker_options_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/test_main\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common\\.cpp$)
@@ -197,6 +199,9 @@ add_executable(topology_control_perf_test
 add_ds_ut_executable(coordinator_server_options_test
         coordinator/coordinator_server_options_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
+add_ds_ut_executable(coordinator_election_manager_test
+        common/coordinator/coordinator_election_manager_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
 add_ds_ut_executable(data_worker_options_test
         worker/data_worker_options_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>
@@ -242,6 +247,7 @@ target_link_libraries(ds_ut PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        test_port_allocator
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_ut_stream PRIVATE
@@ -303,7 +309,21 @@ target_link_libraries(topology_control_perf_test PRIVATE
         cluster_topology
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
 target_link_libraries(coordinator_server_options_test PRIVATE
+        test_port_allocator
         coordinator_server
+        coordinator_runtime
+        coordinator_service_impl
+        coordinator_election_manager
+        GTest::gtest
+        GTest::gmock
+        common_flags
+        common_log
+        common_rpc_zmq
+        common_signal
+        common_util
+        coordinator_protos)
+target_link_libraries(coordinator_election_manager_test PRIVATE
+        coordinator_election_manager
         GTest::gtest
         GTest::gmock
         common_log
@@ -343,7 +363,8 @@ add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_store_perf_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
-add_datasystem_test(coordinator_server_options_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(coordinator_server_options_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(coordinator_election_manager_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(data_worker_options_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(cluster_topology_contract_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 

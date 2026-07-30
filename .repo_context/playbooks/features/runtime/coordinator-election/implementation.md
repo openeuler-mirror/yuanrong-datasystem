@@ -1,277 +1,165 @@
-# Coordinator Raft Node Current Implementation Record
+# Coordinator Election Current Implementation Record
 
-> **Status:** Canonical current implementation and checked-in test-coverage record. Source code and the module `design.md` remain the final authority. This document is not an active implementation plan and contains no pending development sequence.
+> **Status:** Current source-backed implementation and test-path record. This file documents checked-in behavior, not a future design plan.
 
-## Implemented Goal
+## Implemented Architecture
 
-The standalone `CoordinatorRaftNode` owns braft registration, startup, recovery, leader/configuration observation, health observation, asynchronous single-peer membership operations, synchronous destructor drain, and callback exception containment while sharing the Coordinator brpc server. The standalone `CoordinatorMembershipManager` owns dynamic-Discovery vacancy filling and add-before-remove failed-member replacement above the Node. Product integration remains future work.
+- `CoordinatorRuntime` is non-singleton and owns at most one active blocking attempt, one Service per attempt, one committed lifecycle, callbacks, leader observation, and instance-local event-loop/`Stop()` state.
+- `CoordinatorServer` is the singleton public façade and owns one `CoordinatorRuntime` for compatibility.
+- `CoordinatorOptions` contains a config path, Discovery provider, expected member count, and paired `onStart`/`onStop` callbacks.
+- `CoordinatorServer` is the production singleton façade, owns one Runtime, and rejects an empty parameterized `configFilePath` before delegation. Production supports one Coordinator Runtime per process.
+- `CoordinatorRuntime` passes a non-empty path directly to `FlagManager::ParseConfigFile`; parse failures return the `K_INVALID` error built from the configured path and parser message.
+- An empty path skips parsing and consumes process flags prepared by the caller. This direct Runtime path is internal and used by in-process tests only.
+- After parsing succeeds or is skipped, `CoordinatorRuntime::GetRaftFlags()` is called exactly once for that attempt and supplies the local endpoint, exclusive data root, election timeout, and membership timing.
+- In-process multi-Runtime fixtures set common flags before launch, keep them unchanged while any Runtime is active, and restore them only after every Runtime stops and joins.
+- `CoordinatorServiceImpl` owns the shared business/braft brpc server and a two-stage election startup.
+- `RegisterCoordinatorRaftServices` is called by the Service/shared-server owner. Registration is not a Node or Manager API.
+- `CoordinatorElectionManager` is the sole owner of bootstrap state/control. Its worker first collects every Discovery-visible bootstrap observation, then selects Bootstrap, Recover, or WaitingToJoin before starting Node then Membership; shutdown requests worker stop and joins bootstrap control before Membership-before-Node destruction.
 
-## Architecture Summary
+## Current Startup Path
 
-- `coordinator_raft_peer.*` owns stable numeric IPv4/VIP parsing and normalized public formatting.
-- `coordinator_raft_types.*` owns fixed GroupId, startup-plan types, and exact metadata/start-plan validation.
-- `CoordinatorRaftNode` solely owns `braft::Node` and `CoordinatorRaftStateMachine`.
-- The external integration owner solely owns Node lifetime. Node destruction is the only synchronous Node close entry and calls private `ShutdownInternal()`.
-- FSM and Add/Remove callbacks may notify the external owner but must not destroy the Node or retain a strong reference that could become its final owner.
-- `RaftOperationSubmissionGate` handles inline completion deferral, first-result-wins, outside-lock user callback dispatch, catch-all exception containment, and one wrapper-owned callback drain token; callback invocation holds neither the Gate mutex nor `lifecycleMutex_`.
-- The committed-configuration callback publishes an immutable normalized snapshot; policy consumes that snapshot rather than transient braft configuration.
-- `CoordinatorMembershipManager` owns dynamic membership policy, one background thread, one operation at a time, a callback-safe completion mailbox, and a fresh status/policy gate immediately before every Add/Remove submission.
+```text
+Service Init
+-> Service Start: register business and braft services, listen, state STARTING
+-> Runtime onStart: register endpoint
+-> Service StartElectionManager: construct/publish Manager, start its bootstrap worker, publish lifecycle RUNNING
+-> Manager worker: recover locally or collect all visible Discovery/peer states and decide, then start Node and Membership
+-> braft Leader callback: open business gate only on the Leader
+-> Runtime event loop
+```
+
+Detailed order:
+
+1. `CoordinatorServer::InitAndRun(options)` rejects an empty `configFilePath` and delegates to its owned Runtime.
+2. `CoordinatorRuntime::InitAndRun(options)` validates required Discovery/member-count inputs and paired callbacks. A Runtime instance is one-shot by interface contract; callers must not invoke `InitAndRun` concurrently or more than once on the same instance.
+3. Runtime calls `FlagManager::ParseConfigFile` when the path is non-empty. It skips parsing when the path is empty. Parse failure returns the parser error with the configured path before a Raft snapshot is requested.
+4. After parse success or skip, Runtime captures one Raft snapshot plus the config-log snapshot, parses its local address, constructs one `CoordinatorServiceImpl`, and completes `Service::Init()` plus `Service::Start()`.
+5. `Service::Start()` builds the RPC server, registers the business adapter, registers braft services through `RegisterCoordinatorRaftServices`, starts listening, and leaves election-enabled startup in `STARTING`.
+6. Runtime publishes Service ownership, invokes `onStart` without its mutex held, and emits the captured config log snapshot before election startup.
+7. `Service::StartElectionManager()` reserves one attempt, constructs and publishes the Manager under its lifecycle mutex, starts the Manager bootstrap worker without that mutex, then publishes Service `RUNNING`. The worker owns local metadata probing, complete Discovery-visible peer observation, startup-plan selection, and eventual Node/Membership startup.
+8. After Service startup, Runtime enters its condition-variable event loop until that Runtime's `Stop()` or a process termination signal. `RUNNING` does not imply Raft leadership or business readiness.
+9. Cleanup invokes `onStop` after an attempted `onStart` and destroys the Service after its shutdown attempt. Retry requires a new Runtime instance.
+
+All election-enabled business RPCs return `K_NOT_READY` until the local Node is the current braft Leader. `GetRaftBootstrapState` remains available independently of that business gate once the Manager is published. `StartElectionManager()` publishes lifecycle `RUNNING` after bootstrap control starts, so one-candidate shortage, peer/digest disagreement, and WaitingToJoin are normal asynchronous non-serving states rather than synchronous `InitAndRun` failures. A synchronous Manager-start failure retains the listening endpoint until Runtime invokes `onStop` and explicit Service shutdown. Concurrent Shutdown waits for an in-progress attempt to publish completion before teardown.
+
+For valid local metadata, the worker directly starts `RecoverPlan` and never queries first-bootstrap Discovery. After braft successfully initializes a non-empty `BootstrapPlan`, the Node publishes lifecycle `STARTED`, releases its lifecycle mutex, and then feeds the same normalized `initial_conf` through the existing FSM wrapped configuration callback and `HandleConfigurationCommitted` as index 0; the snapshot is visible before the external Manager callback, and Recover/Waiting do not synthesize an empty configuration. For local `ABSENT`, one bootstrap round probes every normalized Discovery-visible candidate with the bounded peer RPC, including candidates after the deterministic first `N` and views below bootstrap quorum. The Manager decides from the complete observation set: one converged valid non-empty committed configuration takes priority, becomes `BootstrapPlan` when it includes local so braft can rebuild local election/membership metadata, and becomes `WaitingToJoinPlan` when it excludes local. Conflicting normalized full lists, including an `N` view versus a transitional `N + 1` view, return retryable `K_NOT_READY` and create no Node until they converge. A successful remote observation of `UNKNOWN` or `CORRUPT` metadata is non-authoritative and retryable; local `UNKNOWN`/`CORRUPT` remains terminal. Only when no authoritative configuration exists, every candidate is verifiable, all full-view count/digests agree, at least `floor(N / 2) + 1` candidates are present, and local is in the deterministic first `min(N, count)` may first bootstrap proceed. Counts from quorum through `N` use every candidate; counts above `N` select the first `N` only after the full probe.
+
+`ICoordinatorDiscovery::GetCoordinators` remains a synchronous provider API whose implementations must return within a finite provider-controlled bound. Manager shutdown observes its stop request only between calls and joins after an in-flight call returns; a provider that violates the bounded-return contract can block Manager and Service shutdown.
+
+## Current Shutdown Path
+
+```text
+Runtime onStop: provider callback records delayed 10-second unregister
+-> Service Shutdown waits for election startup under lifecycle mutex
+-> first caller publishes STOPPING and moves Manager ownership under lifecycle mutex
+-> Service unlocks; Manager joins bootstrap control, shuts down Membership, and drains Node
+-> shared server Stop/Join without Service lifecycle mutex
+-> brpc adapter and remaining components without Service lifecycle mutex
+-> relock only to publish STOPPED/the saved first cleanup status and notify concurrent Shutdown callers
+```
+
+`CoordinatorRuntime::Stop()` sets only that Runtime's `stopRequested_` and notifies only its `stopCv_`; it does not change `g_exitFlag`. The process signal handler only sets `g_exitFlag`, and each bounded Runtime event loop observes it. After the event loop exits, Runtime invokes `onStop` once when `onStart` was attempted, then shuts down its Service and completes the lifecycle future/thread.
+
+The unregister delay belongs to provider callback semantics. The in-process Discovery mock records an expiration deadline and returns immediately. It retains the endpoint for 10 seconds and removes it lazily on a later query; test-only virtual time avoids a real 10-second sleep.
+
+Public `CoordinatorServiceImpl::Shutdown()` serializes cleanup ownership with the Service lifecycle mutex and condition variable. It waits for `electionStartInProgress_` to clear before taking the published Manager, then release-stores `STOPPING` and moves `electionManager_` to owner-local storage before unlocking. Manager bootstrap stop/join, Membership shutdown, Node drain, shared-server Stop/Join, adapter destruction, and remaining component cleanup all run without the Service lifecycle mutex. A Discovery callback or accepted bootstrap RPC can therefore enter the Service, acquire the mutex, observe `STOPPING`, and return `K_SHUTTING_DOWN` while brpc Join drains it. The owner reacquires the mutex only to publish `STOPPED`, save the first cleanup status, and wake waiters. Concurrent or repeated public shutdown callers wait and return that same status without touching the server. `Init()`/RPC `Start()` failure cleanup uses the same lock-free cleanup execution while keeping the original startup status authoritative.
+
+## Bootstrap RPC And Serving Contract
+
+The Manager snapshot publishes these source-backed states:
+
+| Event | Phase | Status code |
+| --- | --- | ---: |
+| worker starts observing | `OBSERVING` | `K_OK` |
+| retryable Discovery, peer, or conflicting-configuration observation | `RETRYING` | `K_NOT_READY` |
+| Node and Membership start successfully | `STARTED` | `K_OK` |
+| first terminal local inconsistency or startup failure | `TERMINAL` | original stable `StatusCode` |
+
+`TERMINAL` is a one-way Manager state. Generic bootstrap publication ignores later non-terminal phases, Node and Membership startup recheck terminal state after external calls return, and final ownership plus `STARTED` publication is decided with lifecycle mutex before bootstrap mutex. Cleanup of unpublished Membership/Node instances runs after both locks are released; ownership already published before a later error remains available to `Shutdown()` while the business gate is closed.
+
+`CoordinatorServiceImpl::GetRaftBootstrapState` copies the Manager value snapshot under the lifecycle lock, releases that lock, then encodes protobuf fields. The response includes phase and numeric `status_code`; it has no raw Status text or Raft data-directory field. The custom ZMQ transport depends on protobuf method indexes, so `ReportTopologyRecoveryCandidate` remains index 7, `GetClusterRawSnapshot` remains index 8, and the appended `GetRaftBootstrapState` is index 9.
+
+Service `RUNNING` and Runtime startup mean the endpoint is active and the background Manager worker started. They do not mean election completion or business readiness. `CoordinatorServiceImpl::CheckServing()` opens business access only while the local serving gate is open and the election manager still reports the local Node as current braft Leader.
+
+## Replication Boundary
+
+The current `CoordinatorRaftStateMachine::on_apply` rejects management-log apply, and `CoordinatorRaftNode` exposes braft operations only for voting-member `AddPeer` and `RemovePeer`. This Raft group therefore persists election and committed voting-membership state; it does not replicate Coordinator business key/value or topology payloads. Business RPC admission is determined by the local current-Leader gate.
 
 ## Current File Responsibilities
 
 | Path | Responsibility |
 | --- | --- |
-| `src/datasystem/coordinator/raft/coordinator_raft_peer.h/.cpp` | Parse and normalize stable numeric IPv4/VIP peers; hide braft index `0`. |
-| `src/datasystem/coordinator/raft/coordinator_raft_types.h/.cpp` | Fixed GroupId, startup-plan types, inclusive election-timeout bounds, and metadata/start-plan validation. |
-| `src/datasystem/coordinator/raft/coordinator_raft_node.h/.cpp` | Shared brpc registration, Node/FSM ownership, destructor drain, lifecycle queries, health projection, committed snapshots, and async peer operations. |
-| `src/datasystem/coordinator/raft/coordinator_raft_operation.h` | Submission Gate, inline-result deferral, duplicate-result suppression, outside-lock callback dispatch, and catch-all operation callback boundary. |
-| `src/datasystem/coordinator/raft/coordinator_raft_state_machine.h/.cpp` | Synchronous FSM event forwarding and catch-all user-exception boundaries. |
-| `src/datasystem/coordinator/raft/coordinator_membership_manager.h/.cpp` | Dynamic-Discovery policy, health/grace tracking, serialized operations, term rebuild, bounded replacement intent, and fail-closed recovery. |
-| `src/datasystem/coordinator/raft/CMakeLists.txt` | Test-gated CMake libraries; no product package wiring. |
-| `src/datasystem/coordinator/raft/BUILD.bazel` | Mirrored direct Bazel dependencies for Node and Manager. |
-| `tests/ut/common/coordinator/*` | Focused deterministic codec, FSM, Node/Gate, and Manager tests. |
-| `tests/st/common/raft/coordinator_raft_node_test.cpp` | Real braft Node and Manager scenarios. |
-| `tests/st/common/raft/braft_cluster_test.cpp` | Raw braft election and unsupported-log replay regression. |
+| `include/datasystem/coordinator_server.h` | Public `CoordinatorOptions` and singleton `CoordinatorServer` façade. |
+| `src/datasystem/coordinator/coordinator_runtime.h/.cpp` | Non-singleton lifecycle, optional config parsing, per-attempt flag snapshot, callbacks, event loop, Stop, and leader forwarding. |
+| `src/datasystem/coordinator/coordinator_server.cpp` | Singleton façade delegation to one Runtime. |
+| `src/datasystem/coordinator/coordinator_service_impl.h/.cpp` | Business components, two-stage startup, shared-server ownership, readiness, election construction, and ordered shutdown. |
+| `src/datasystem/coordinator/raft/coordinator_raft_service.h/.cpp` | Service-owned braft service registrar. |
+| `src/datasystem/coordinator/raft/coordinator_election_manager.h/.cpp` | Sole bootstrap-state/control owner, startup-plan convergence, Node/Membership ownership, and lifecycle order. |
+| `src/datasystem/coordinator/raft/coordinator_raft_node.h/.cpp` | braft Node/FSM mechanism, observation, operations, and drain. |
+| `src/datasystem/coordinator/raft/coordinator_membership_manager.h/.cpp` | Discovery-backed membership reconciliation. |
+| `tests/st/common/raft/coordinator_runtime_election_test.cpp` | Real in-process multi-Runtime bootstrap, serving-gate, membership, failure, and recovery integration tests. |
 
-## Peer Codec And Stable Identity
+## In-Process Runtime Election ST
 
-The implementation fixes `kCoordinatorRaftGroupId` to `datasystem-coordinator`. `CoordinatorRaftOptions` does not accept a caller-supplied group.
+`tests/st/common/raft/coordinator_runtime_election_test.cpp` uses real in-process Runtime lifecycles with empty config paths and real shared brpc/braft endpoints. Its fixture sets `FLAGS_use_brpc=true` before launch, keeps common flags stable until every Runtime stops and joins, reserves four loopback endpoints, supplies exclusive Raft roots and short per-Runtime timing snapshots, and mocks only `ICoordinatorDiscovery` behavior. Bootstrap and membership are observed through the existing Coordinator bootstrap RPC; business readiness is observed through `GetCoordinatorId`.
 
-`ParseCoordinatorRaftPeer`:
+| Test | Source-backed contract |
+| --- | --- |
+| `OneOfThreeCandidateWaitsWithoutSynchronousStartupFailure` | One fresh candidate remains lifecycle-active for three election timeouts, publishes a diagnosable absent/no-configuration bootstrap snapshot, has no Leader, and returns `K_NOT_READY` from business RPC. |
+| `TwoOfThreeCandidatesBootstrapAtTargetQuorum` | Two of target three commit the same two-peer initial configuration, elect one Leader, and open only that Leader's business gate. |
+| `LaterCandidateFillsBootstrapVacancyWithoutRemoval` | A third fresh Runtime is added to the two-peer cluster; every observed configuration preserves both bootstrap peers and the final configuration reaches target three. |
+| `ExtraCandidateWaitsOutsideFirstExpectedPeers` | Four candidates with target three select the first three normalized endpoints independent of launch order; all three selected peers converge on the same committed configuration, while the fourth has valid waiting metadata, no committed peers, no leadership, and a closed gate. |
+| `WaitingCandidateReplacesFailedFollowerAddBeforeRemove` | After one selected follower stops, polling must never observe removal before waiting-candidate admission, and the final unique-Leader configuration must contain the waiting peer and exclude the failed peer. The ST does not require sampling the transient `N + 1` configuration; deterministic Add-before-Remove ordering is covered by Membership Manager UTs. |
+| `InconsistentBootstrapDigestsNeverCreateConfiguration` | Caller-specific two-peer views produce three distinct digests; all lifecycles remain active and non-serving with no committed configuration through a three-election-timeout isolation window. |
+| `RunningClusterSurvivesDiscoveryFailureWithoutMembershipChange` | A follower failure forces a candidate query; injected Discovery failure leaves the original three-peer committed configuration and healthy Leader gate unchanged and does not remove the failed voter. |
+| `LeaderFailoverRestartsOldLeaderAsPersistedFollower` | Relaunches generation 2 on the old Leader's exact endpoint/data root, requires recovery as follower with the valid committed configuration, and asserts zero queries on that generation's provider while sharing cluster registration/delayed-unregister state. |
+| `FollowerWithDeletedRaftDataRebuildsFromAuthoritativePeers` | Fully stops a follower, deletes only its real Raft data root, relaunches generation 2 on the same endpoint/root before failure grace, requires a positive generation-local Discovery query count, rebuilds the original three-peer committed configuration from authoritative peers, observes `STARTED`, and keeps the node a gated follower under the unique serving Leader. |
+| `PersistedFollowerRestartMaintainsUniqueServingLeader` | Relaunches generation 2 on the follower's exact endpoint/data root, asserts zero queries on that generation's provider while sharing cluster registration/delayed-unregister state, requires the original Leader to keep serving during follower downtime, then permits any unique Leader after restart while checking only its gate is open and all members expose the committed configuration. |
+| `QuorumLossClosesServingGateUntilOriginalMemberRestarts` | Records monotonic time immediately after the second member Stop/join, derives an independent deadline from the surviving Leader generation's configured election timeout, and requires `IsLeader() == false`, `GetLeader() == K_NOT_READY` with no endpoint, and business RPC `K_NOT_READY` within at most two election timeouts before recovery. |
 
-1. accepts one stable numeric IPv4 and one decimal port;
-2. rejects empty, whitespace-modified, malformed, domain, IPv6, wildcard, zero/out-of-range port, and nonzero-index identities;
-3. calls braft parsing only after Coordinator validation;
-4. requires a non-empty `PeerId` with index `0`;
-5. normalizes accepted output through `CoordinatorRaftPeerAddress`.
-
-Bootstrap validation normalizes every initial peer, rejects duplicates after normalization, and requires the local peer to be present. Diagnostics avoid logging raw rejected identity payloads.
-
-Stable deployment identity remains `IPv4/VIP ↔ PeerId ↔ exclusive data root/PVC`. The same identity and persisted data must not be active in two processes.
-
-## Startup And Shared Service Registration
-
-Registration and startup are separate:
-
-1. owner creates a brpc `RpcServer` generation and registers business services;
-2. Node registers braft services through `RpcServer::AddBrpcServices`;
-3. owner starts the shared server;
-4. owner calls `Start` with verified metadata state.
-
-Validation failures before `AddBrpcServices` leave the Node `CONSTRUCTED`. If `AddBrpcServices` fails after server mutation begins, the Node becomes `STOPPED` and the complete server generation must be discarded. The implementation does not attempt braft service rollback or retry against the same server.
-
-Startup mapping is exact:
-
-| Plan | Metadata | Initial configuration |
-| --- | --- | --- |
-| `BOOTSTRAP` | `ABSENT` | full normalized bootstrap peers |
-| `RECOVER` | `VALID` | empty |
-| `WAITING_TO_JOIN` | `ABSENT` | empty |
-
-Corrupt metadata returns `K_DATA_INCONSISTENCY`; unknown metadata returns `K_NOT_READY`. Recovery never falls back to bootstrap.
-
-braft options use local log, raft-meta, and snapshot directories under the supplied data root; CLI is disabled and periodic snapshots are disabled.
-
-## Node Lifetime And Destruction
-
-`CoordinatorRaftNode` has no public synchronous close method. One external owner destroys it only after stopping upper-layer submissions and fully destroying the Manager that borrows it.
-
-Required owner order:
-
-1. revoke business serving and stop new work;
-2. call Manager `Shutdown()` when explicit control is needed and destroy `CoordinatorMembershipManager`;
-3. destroy `CoordinatorRaftNode`;
-4. after the Node destructor returns, stop and destroy the shared brpc server.
-
-The Node destructor calls private `ShutdownInternal()`:
-
-1. lock `lifecycleMutex_`;
-2. return immediately if already `STOPPED`;
-3. stop accepting Add/Remove completion tokens, publish `STOPPING`, and move Node/FSM ownership to locals;
-4. release `lifecycleMutex_`;
-5. call `braft::Node::shutdown(nullptr)` and `join()`;
-6. wait for all admitted wrapper-owned completion callbacks to return and release their tokens;
-7. reset the Node;
-8. reset the borrowed FSM;
-9. clear committed configuration under its dedicated mutex;
-10. publish `STOPPED` under `lifecycleMutex_`.
-
-The shared server remains alive through this sequence. A failed `braft::Node::init` uses braft v1.1.2 Node destruction as canonical partial-init cleanup, then resets the local FSM and snapshot before publishing `STOPPED`.
-
-Destruction is not supported concurrently with `Start`, any query, `AddPeer`, or `RemovePeer`. The external owner must serialize those calls. This is a lifetime contract, not an operation for callbacks to coordinate.
-
-All Node callbacks are notification-only for lifetime. They must not destroy the Node and must not retain a strong owner that can become the final owner. In particular, braft's `onShutdown` callback can execute while the destructor is joining the FSM queue, so it may only signal an already-independent owner path.
-
-## Committed Configuration And Health Projection
-
-`CoordinatorRaftNode` wraps the StateMachine configuration callback to:
-
-1. require a positive committed index and non-empty peer list;
-2. validate exact internal PeerId shape and index `0`;
-3. normalize peers through the Coordinator codec;
-4. reject duplicate normalized identities;
-5. sort and publish an immutable snapshot under `committedConfigurationMutex_`;
-6. release the mutex before invoking the user callback.
-
-`GetCommittedConfiguration` returns `K_NOT_READY` before the first valid snapshot. `braft::Node::list_peers()` is not used as committed authority.
-
-`GetMembershipStatus` holds Node lifetime through `lifecycleMutex_`, reads `braft::NodeStatus`, copies the committed snapshot under `committedConfigurationMutex_`, converts `stable_followers` to Coordinator DTOs, intersects them with committed B, sorts them, and ignores `unstable_followers` as membership authority.
-
-## FSM Callback Boundaries
-
-The five StateMachine callback entries are:
-
-- `onLeaderStart`;
-- `onLeaderStop`;
-- `onConfigurationCommitted`;
-- `onShutdown`;
-- `onError`.
-
-Ordinary callback exceptions are converted to one generic `K_RUNTIME_ERROR` report. A throwing `onError` is swallowed and does not recurse. Standard and non-standard exceptions are caught. Diagnostics use the fixed `Coordinator raft callback failure` marker, append `exception.what()` for standard exceptions, retain only the marker for non-standard exceptions, and omit user callback payloads.
-
-Committed-configuration validation has an independent catch-all report boundary so invalid internal configuration never reaches the user configuration callback and a throwing `onError` cannot escape back into braft.
-
-Callbacks execute without `lifecycleMutex_`, `committedConfigurationMutex_`, or the operation Gate mutex held.
-
-## AddPeer, RemovePeer, And Submission Gate
-
-Each membership API submits exactly one braft operation after checking:
-
-- Node state is `STARTED` and the owned braft Node exists;
-- callback is non-empty;
-- target peer is valid and normalized;
-- `RemovePeer` is not removing the sole committed voter;
-- local Node reports Leader state.
-
-Submission remains under `lifecycleMutex_` until the braft call returns. braft normally completes on a completion bthread but may run the closure inline if bthread creation fails.
-
-`RaftOperationSubmissionGate` implements the ordering boundary:
-
-1. if completion arrives before submission finishes, store one callback/result pair;
-2. after Node submission releases `lifecycleMutex_`, `MarkSubmissionComplete` dispatches any pending result;
-3. if submission was already marked complete, dispatch completion directly;
-4. `resultReceived_` accepts only the first completion;
-5. both paths release the Gate mutex before invoking user code;
-6. the callback invocation helper catches all exceptions, logging the fixed marker plus `exception.what()` for standard exceptions and only the fixed marker for non-standard exceptions.
-
-The self-deleting braft closure owns operation metadata and the Gate. It captures no Node wrapper pointer. The Gate-owned tracked callback retains the drain token through user callback return. `Run` converts braft status, moves the Gate to a local, deletes the closure, then calls `DispatchOrDefer`.
-
-## Recovery And Unsupported Logs
-
-braft owns term, vote, log, and committed configuration under the configured data root. The adapter does not rewrite or repair metadata.
-
-- `RECOVER` supplies empty initial configuration and loads persisted state.
-- `WAITING_TO_JOIN` also supplies empty initial configuration but requires absent metadata and cannot self-elect.
-- directory creation, permissions, corrupt metadata, and braft init failures leave the Node not ready or terminally stopped.
-- `CoordinatorRaftStateMachine::on_apply` has no management-record codec. Unsupported records fail with `ESTATEMACHINE`.
-- restart replays an unsupported record and remains fail closed rather than silently advancing to a usable Leader.
-- periodic snapshots stay disabled until codec and snapshot support are implemented.
-
-## Membership Manager
-
-The standalone Manager is constructed only for dynamic Discovery. Fixed target count N is supplied by its owner. Committed configuration B is voting authority; Discovery A is candidate input only.
-
-Implemented policy:
-
-1. only a current Leader submits membership changes;
-2. `consecutive_error_times > 5` starts suspected-failure observation;
-3. the observation must remain continuous for `memberFailureGrace`;
-4. a new term or new Leader restarts the complete grace interval;
-5. healthy full B performs no Discovery call;
-6. `B.size() < N` fills one vacancy with Add only;
-7. full B with a confirmed failure adds a candidate, verifies committed `N+1`, then removes the exact failed peer and verifies final `N`;
-8. callback result is never membership authority; later committed state is always checked;
-9. one Manager permits one operation at a time;
-10. no candidate, Discovery failure, unknown health, loss of quorum, stale term, or failed Add cannot authorize Remove;
-11. immediately before every Add/Remove submission, fetch fresh status and reject stale leadership, term, configuration index, committed peers, quorum, failed-member state, or rollback policy with `K_TRY_AGAIN`;
-12. unexplained over-target B fails closed unless an exact safe target is proven;
-13. Manager policy state is not persisted and is rebuilt from committed B.
-
-The Manager's Node reference is non-owned. The Node must outlive complete Manager destruction, whether shutdown was requested explicitly or initiated by the Manager destructor. Manager destruction completes before Node destruction begins.
-
-## Real All-Node Manager Leader Failover
-
-`CoordinatorRaftMembershipTest.ManagersOnAllNodesReplaceFailedLeaderWithDiscoveredCandidate` covers the realistic ownership and policy topology:
-
-1. four Nodes are running: three bootstrap voters and one waiting candidate;
-2. all four Nodes run `CoordinatorMembershipManager` with target `N=3`;
-3. healthy full membership keeps Discovery call count at zero;
-4. the old Leader's Manager is stopped and destroyed, then the old Leader Node is destroyed;
-5. a surviving Node becomes the new Leader;
-6. the new Leader observes the old Leader above the braft error threshold but performs no Discovery before a complete new grace interval;
-7. Discovery supplies the waiting candidate;
-8. committed history proves candidate membership at `N+1` before removal;
-9. removal targets the destroyed old Leader and final committed membership is `N`.
-
-This supplements single-Leader Manager scenarios by proving term-local grace rebuilding and policy activation when Managers already run on every Node.
+Polling is deadline-based with a bounded 20ms interval; there is no wall-clock 10-second unregister wait. Runtime replacement polling intentionally does not require observing the transient `N + 1` configuration because the deterministic ordering contract is exercised directly by Membership Manager UTs. Every case body has one 6-second deadline, while mandatory teardown Stop/join cleanup is not claimed to be inside that body budget; the quorum-loss observation has the stricter relative deadline described above, and each complete case is bounded by the CTest 8-second timeout. Failure diagnostics include registered candidates, Discovery status/query count, per-Runtime lifecycle/Leader state, bootstrap metadata/count/digest/committed peers, and last business/bootstrap RPC status.
 
 ## Build Declaration Record
 
-The CMake adapter and Manager remain under `WITH_TESTS`; there is no production consumer or package output. Existing CMake dependencies already match the implementation's direct includes, so no CMake declaration update is required.
+CMake:
 
-The Bazel `coordinator_raft_node` target directly depends on:
+- excludes the new source from generic `DS_TEST_ST_SRCS`;
+- builds `coordinator_runtime_election_test` with `_ds_st_main_obj`;
+- directly links the Runtime, test harness, port allocator, Raft types, flags/signal/util, braft, and brpc closure;
+- registers concrete gtest cases with `TIMEOUT 8`;
+- includes `coordinator_raft_service` in `DS_UT_DEPEND_LIBS`; the Node UT calls the registrar and links `test_port_allocator` through `ds_ut` for collision-safe real brpc/braft startup coverage;
+- directly links `test_port_allocator`, `common_flags`, `common_rpc_zmq`, `common_signal`, and `coordinator_protos` into the focused `coordinator_server_options_test` executable;
+- registers both `coordinator_server_options_test` and `coordinator_election_manager_test` with `TIMEOUT 8`.
 
-- `coordinator_raft_peer`;
-- `coordinator_raft_state_machine`;
-- `coordinator_raft_types`;
-- DataSystem utility/status/logging/filesystem/string targets;
-- `rpc_server`;
-- braft and brpc.
+Bazel:
 
-## Current Checked-In Test Coverage
+- declares `//tests/st/common/raft:coordinator_runtime_election_test` as a dedicated short `ds_cc_test`;
+- the focused Coordinator options UT uses `timeout = "short"`, directly depends on `//tests/st/cluster:test_port_allocator`, and retains dynamic-flags/signal, `brpc_factory`, and Coordinator brpc dependencies for real-server lifecycle regressions;
+- `coordinator_election_manager_test` uses `timeout = "short"`;
+- `coordinator_raft_node_test` directly depends on `coordinator_raft_service` and `test_port_allocator` for collision-safe real brpc/braft startup coverage;
+- the Runtime election ST directly depends on `coordinator_runtime`, `coordinator_raft_types`, `common_test`, `test_port_allocator`, DataSystem dynamic-flags/signal/status targets, and butil.
 
-| Test source | Contract encoded by checked-in tests |
-| --- | --- |
-| `coordinator_raft_types_test.cpp` | peer normalization/rejection, fixed identity, exact startup metadata mapping, and election-timeout lower/upper boundaries plus adjacent invalid values |
-| `coordinator_raft_state_machine_test.cpp` | five FSM event paths, catch-all containment, one-time reporting, standard-exception detail logging, non-standard exception fallback, empty callbacks |
-| `coordinator_raft_node_test.cpp` UT | Gate defer/direct/first-result/reentry/catch-all, registration failure, committed-state validation |
-| `coordinator_membership_manager_test.cpp` | options, lifecycle, grace, Discovery cadence, fresh submission snapshot/policy gates, quorum, Add/Remove ordering, term rebuild, ambiguity, and Manager shutdown races |
-| `coordinator_raft_node_test.cpp` ST | election, wrapper completion-callback drain, sole-voter guard and recovery, failed Start, waiting node, direct membership, follower health, vacancy/replacement, Discovery failure, all-node Manager leader failover |
-| `braft_cluster_test.cpp` | raw braft election and unsupported-log first-apply/restart-replay fail closed; multi-stage waits share one absolute case deadline |
-
-Notable current tests:
-
-- `RaftOperationSubmissionGateTest.DefersResultUntilSubmissionCompletes`
-- `RaftOperationSubmissionGateTest.DispatchesImmediatelyAfterSubmissionCompletes`
-- `RaftOperationSubmissionGateTest.InvokesReentrantCallbacksOutsideGateMutex`
-- `RaftOperationSubmissionGateTest.ContainsThrowingCallbacks`
-- `CoordinatorRaftNodeTest.DestructionWaitsForSharedDrainCompletion`
-- `CoordinatorRaftNodeTest.FailedStartLeavesNodeStoppedAndDestructible`
-- `CoordinatorRaftMembershipTest.ManagersOnAllNodesReplaceFailedLeaderWithDiscoveredCandidate`
-- `BraftReplayTest.UnsupportedUserLogReplayFailsClosedAfterRestart`
-
-Focused verification commands for a configured test build are:
+Focused CMake selection:
 
 ```bash
 make -j30
 ctest --output-on-failure --timeout 8 \
-  -R 'RaftOperationSubmissionGateTest|CoordinatorRaftTypesTest|CoordinatorRaftStateMachineTest|CoordinatorRaftNodeTest|CoordinatorMembershipManagerTest|CoordinatorRaftMembershipTest|BraftReplayTest|BraftClusterTest'
+  -R 'RaftOperationSubmissionGateTest|CoordinatorRaftTypesTest|CoordinatorRaftStateMachineTest|CoordinatorRaftNodeTest|CoordinatorMembershipManagerTest|CoordinatorElectionManagerTest|CoordinatorElectionServiceTest|CoordinatorServerOptionsTest|CoordinatorRaftMembershipTest|CoordinatorServiceElectionTest|CoordinatorRuntimeElectionTest|BraftReplayTest|BraftClusterTest'
 ```
 
-Bazel closure checks should include the Node, StateMachine, Manager, and focused UT/ST targets after the required full CMake build. Validation commands require fresh execution before claiming runtime results; this documentation update does not itself provide new compile or test evidence.
-
-## Risk And Integration Boundaries
+## Risk And Ownership Record
 
 | Surface | Current conclusion |
 | --- | --- |
-| Hot path | Coordinator control path only; no request-path change |
-| Ownership | one external Node owner; Manager borrows Node; callbacks cannot become final owner; Node destruction waits for wrapper-owned Add/Remove callback tokens |
-| Locking | lifecycle before committed snapshot; no callback or braft drain under Node locks |
-| Persistence | no new format; braft owns durable state; unsupported records fail closed |
-| Recovery | exact plan mapping; no recover-to-bootstrap fallback |
-| Membership safety | no sole-voter Remove; no policy Remove without committed spare, fresh status/policy, and exact safe target |
-| Failover | new term rebuilds from committed B and restarts full grace |
-| Build | CMake remains test-gated; Bazel direct dependency closure mirrors actual includes |
-| Rollback | remove test-gated adapter/Manager integration; no persisted migration needed |
+| Common process flags | Production starts one Runtime per process through the façade and parses its non-empty path before the per-attempt snapshot. Internal multi-Runtime tests prepare common flags before launch, never mutate them while any Runtime is active, and restore them after all threads join. Concurrent mutation is outside the supported contract; parse failures are sanitized. |
+| Runtime isolation | Service, stop state, condition variable, callbacks, lifecycle thread, and one `GetRaftFlags()` snapshot belong to one Runtime instance. `InitAndRun` is one-shot by interface contract; retry requires a new Runtime instance. |
+| Callback lifetime | Runtime moves each owned callback exactly once before invocation; test callbacks capture shared Discovery and endpoint values. |
+| Discovery shared state | The no-argument mock can share one mutex-protected registration/generation/expiration/barrier/callback state across provider instances while retaining per-provider failure, fixed-snapshot, and query observation. Lifecycle callbacks and Manager queries use the same provider instance for every Runtime. Caller-specific fixed views are explicit digest-mismatch fault injection and do not claim normal global convergence. No external callback runs under the shared mock mutex. `GetCoordinators` is synchronous and must return within a provider-controlled finite bound; contract violations can block shutdown. |
+| Service readiness | Election-enabled `Start()` leaves `STARTING`; `StartElectionManager()` publishes Manager/bootstrap observability and lifecycle `RUNNING`, while the atomic Raft gate opens only for the braft Leader. Bootstrap waiters, WaitingToJoin nodes, followers, quorum-lost nodes, and asynchronous bootstrap errors remain non-serving. |
+| Server ownership and shutdown | The first public Shutdown caller release-publishes `STOPPING` and transfers Manager ownership under the Service lifecycle mutex, then drains Manager/Membership/Node and stops/joins the shared server without that mutex. Adapter/components remain alive through active RPC drain; the owner relocks only to publish `STOPPED` and the saved first cleanup status. Concurrent callers wait and receive that status. |
+| Persistent identity | Each Runtime snapshot binds one endpoint to one exclusive data root for the lifecycle. Valid metadata recovers locally; peer-assisted rebuild is restricted to local `ABSENT`, while local `CORRUPT`/`UNKNOWN` is terminal. Persisted restart STs use a generation-local provider query count of zero to prove local recovery; persisted-follower downtime preserves the original serving Leader, while post-restart role selection is unconstrained beyond one serving Leader and gated followers. The deleted-root follower ST requires a positive count and the original authoritative three-peer configuration. |
+| RPC compatibility | Bootstrap diagnostics expose only phase and stable numeric status code. Coordinator ZMQ method indexes remain 7/8 for legacy methods and 9 for the appended bootstrap RPC. |
+| Business boundary | The Raft state machine does not apply business logs; business access is determined by the local current-Leader gate, and Coordinator Raft does not replicate business data. |
+| Test bound | Manager and Server-options focused UTs have CTest `TIMEOUT 8` and Bazel short timeouts; the Server-options fixture uses allocator-held ports through real brpc teardown. Each Runtime ST body deadline is 6 seconds; quorum-loss stepdown/gate closure is additionally bounded from the second Stop/join by at most `2 * GetRaftFlags().electionTimeoutMs`; each concrete CTest timeout is 8 seconds. |
 
-## Product Integration Follow-Up
-
-Future integration must:
-
-1. define Coordinator options and require brpc mode;
-2. create one owner that stores Manager before Node before shared server in destruction order;
-3. revoke serving and stop upper-layer submissions before Manager destruction;
-4. destroy Manager completely before Node destruction;
-5. let Node destructor drain before stopping the shared server;
-6. add serving gates, Worker reconciliation, deployment configuration, observability, packaging, and product scenarios;
-7. preserve callback notification-only lifetime semantics.
+No context directory or module boundary changed, so module metadata and generated repository indexes are unchanged.

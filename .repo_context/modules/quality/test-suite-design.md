@@ -78,8 +78,8 @@
 | ST CMake | Builds system-test binaries and runtime helpers | `tests/st/CMakeLists.txt` | Splits stream, object, KV, embedded-client, device, and standalone tests; `ds_st_coordinator_backend_manual` is built for explicit execution but is not registered with CTest. |
 | Perf CMake | Builds ZMQ performance helpers | `tests/perf/zmq/CMakeLists.txt` | Produces client, server, and agent binaries. |
 | Common helpers | Provides binmock support | `tests/common/binmock` | Builds `binmock` and `binmock_spec`. |
-| Test registration function | Converts gtest binaries into CTest cases | `cmake/util.cmake` | `ADD_DATASYSTEM_TEST` writes include files and invokes `GoogleTestToCTest.cmake`. |
-| GTest-to-CTest script | Derives CTest names, labels, disabled state, and serial state | `cmake/scripts/GoogleTestToCTest.cmake` | Runs each binary with `--gtest_list_tests`. |
+| Test registration function | Converts gtest binaries into CTest cases | `cmake/util.cmake` | `ADD_DATASYSTEM_TEST` writes include files and invokes `GoogleTestToCTest.cmake`; optional `TIMEOUT` sets a CTest hard timeout on every discovered case. |
+| GTest-to-CTest script | Derives CTest names, labels, disabled state, serial state, and optional timeout | `cmake/scripts/GoogleTestToCTest.cmake` | Runs each binary with `--gtest_list_tests`; omitting `TIMEOUT` preserves the existing generated properties. |
 | CMake test runner | Runs examples, Python tests, and CTest | `scripts/build_cmake.sh` | Retries failed CTest cases with lower parallelism. |
 | Bazel test runner | Runs Bazel tests | `scripts/build_bazel.sh` | Uses `bazel test --config=test //...`. |
 | ST port allocator | Coordinates service ports across concurrent ST processes | `tests/st/cluster/test_port_allocator.*`, `scripts/modules/llt_util.sh` | Uses per-port `flock`, bind probing, lease metadata, and bounded stale cleanup. |
@@ -101,7 +101,8 @@
 7. `ADD_DATASYSTEM_TEST` creates a post-build command that runs `cmake/scripts/GoogleTestToCTest.cmake`.
 8. The script executes the binary with `--gtest_list_tests`.
 9. The script writes generated CTest `add_test` and `set_tests_properties` commands.
-10. CTest includes the generated files through directory `TEST_INCLUDE_FILES`.
+10. When optional `TIMEOUT` is present, every discovered gtest case receives that CTest hard timeout; when omitted, no timeout property is added.
+11. CTest includes the generated files through directory `TEST_INCLUDE_FILES`.
 
 Failure-sensitive steps:
 
@@ -175,6 +176,10 @@ Failure-sensitive steps:
   globs; `common_test.cpp` is the current ST example.
 - `braft_cluster_test` is intentionally standalone in both CMake and Bazel so it does not pull the full ST worker/master
   dependency graph.
+- `coordinator_election_manager_test` is intentionally standalone in both CMake and Bazel so its new lifecycle archive does
+  not perturb the link or logging behavior of the existing aggregate `ds_ut` binary.
+- `coordinator_service_election_test` is a dedicated CMake/Bazel real-brpc+braft ST target. CMake registers each discovered
+  case with an eight-second CTest timeout; the Bazel target uses the `short` timeout category.
 - Fixtures that can run concurrently under the same suite/test name must use the `CommonTest` path-suffix constructor
   before any cleanup occurs. `BraftClusterTest` supplies its PID and cleans only that process-specific top-level path.
 - Cluster-backed ST fixtures inherit an 80-second watchdog. A fixture may override `GetTestCaseTimeoutSecs()` when its

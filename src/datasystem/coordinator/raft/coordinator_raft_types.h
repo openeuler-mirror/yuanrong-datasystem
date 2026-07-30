@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_TYPES_H
 #define DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_TYPES_H
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -31,12 +32,19 @@
 namespace datasystem::coordinator {
 
 inline constexpr char kCoordinatorRaftGroupId[] = "datasystem-coordinator";
-inline constexpr int kCoordinatorRaftMinElectionTimeoutMs = 100;
+inline constexpr int kCoordinatorRaftMinHeartbeatIntervalMs = 10;
+inline constexpr int kCoordinatorRaftMaxHeartbeatIntervalMs = 10'000;
+inline constexpr int kCoordinatorRaftMinElectionHeartbeatRatio = 5;
+inline constexpr int kCoordinatorRaftMaxElectionHeartbeatRatio = 10;
+inline constexpr int kCoordinatorRaftMinElectionTimeoutMs =
+    kCoordinatorRaftMinHeartbeatIntervalMs * kCoordinatorRaftMinElectionHeartbeatRatio;
+inline constexpr int kCoordinatorRaftMaxElectionTimeoutMs =
+    kCoordinatorRaftMaxHeartbeatIntervalMs * kCoordinatorRaftMaxElectionHeartbeatRatio;
+inline constexpr uint32_t kDefaultCoordinatorElectionHealthCheckIntervalMs = 3'000;
+inline constexpr uint32_t kDefaultCoordinatorElectionOperationWarningTimeoutMs = 3'000;
+inline constexpr uint32_t kDefaultCoordinatorElectionCandidateRetryCooldownMs = 10'000;
 inline constexpr int64_t kBraftDefaultMaxClockDriftMs = 1'000;
 inline constexpr int64_t kBraftIntTimerMaxMs = std::numeric_limits<int>::max();
-inline constexpr int64_t kBraftMaxSafeVoteTimerBaseMs = kBraftIntTimerMaxMs / 2;
-inline constexpr int kCoordinatorRaftMaxElectionTimeoutMs =
-    static_cast<int>(kBraftMaxSafeVoteTimerBaseMs - kBraftDefaultMaxClockDriftMs);
 inline constexpr int64_t kCoordinatorRaftMaxVoteTimerBaseMs =
     static_cast<int64_t>(kCoordinatorRaftMaxElectionTimeoutMs) + kBraftDefaultMaxClockDriftMs;
 static_assert(kCoordinatorRaftMaxVoteTimerBaseMs <= kBraftIntTimerMaxMs, "braft vote timer base must fit in int");
@@ -44,6 +52,33 @@ static_assert(kCoordinatorRaftMaxVoteTimerBaseMs + kCoordinatorRaftMaxVoteTimerB
               "braft random_timeout must fit after adding at most one vote timer base");
 
 enum class RaftMetadataState { ABSENT, VALID, CORRUPT, UNKNOWN };
+
+enum class RaftBootstrapPhase : uint8_t { OBSERVING = 0, RETRYING = 1, STARTED = 2, TERMINAL = 3 };
+
+struct RaftBootstrapState {
+    bool probeReady{ false };
+    std::string groupId{ kCoordinatorRaftGroupId };
+    std::string localPeer;
+    size_t expectedMemberCount{ 0 };
+    RaftMetadataState metadataState{ RaftMetadataState::UNKNOWN };
+    size_t candidateCount{ 0 };
+    std::string candidateDigest;
+    std::vector<std::string> committedPeers;
+    RaftBootstrapPhase phase{ RaftBootstrapPhase::OBSERVING };
+    int32_t statusCode{ K_OK };
+};
+
+struct CoordinatorRaftFlags {
+    std::string localAddress;
+    std::string dataDir;
+    int32_t heartbeatIntervalMs{ 0 };
+    int32_t electionTimeoutMs{ 0 };
+    uint32_t discoveryRetryIntervalMs{ 0 };
+    uint32_t memberFailureGraceMs{ 0 };
+    uint32_t healthCheckIntervalMs{ kDefaultCoordinatorElectionHealthCheckIntervalMs };
+    uint32_t operationWarningTimeoutMs{ kDefaultCoordinatorElectionOperationWarningTimeoutMs };
+    uint32_t candidateRetryCooldownMs{ kDefaultCoordinatorElectionCandidateRetryCooldownMs };
+};
 
 struct BootstrapPlan {
     std::vector<std::string> initialPeers;
@@ -60,6 +95,7 @@ using RaftStartPlan = std::variant<BootstrapPlan, RecoverPlan, WaitingToJoinPlan
 struct CoordinatorRaftOptions {
     std::string localPeer;
     std::string dataDir;
+    int heartbeatIntervalMs{ 0 };
     int electionTimeoutMs{ 0 };
     RaftStartPlan startPlan;
 };

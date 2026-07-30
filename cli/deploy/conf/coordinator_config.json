@@ -15,6 +15,26 @@
     "value": "8",
     "description": "Maximum active topology clusters in [2, 32]. Restart Coordinator after changing it."
   },
+  "coordinator_raft_data_dir": {
+    "value": "./datasystem/coordinator_raft",
+    "description": "Exclusive local data root for Coordinator Raft term, vote, log, and snapshot state."
+  },
+  "coordinator_raft_heartbeat_interval_ms": {
+    "value": "100",
+    "description": "Coordinator Raft heartbeat interval in milliseconds. Must be in [10, 10000]."
+  },
+  "coordinator_raft_election_timeout_ms": {
+    "value": "1000",
+    "description": "Coordinator Raft election timeout in milliseconds. Must be an integer multiple of coordinator_raft_heartbeat_interval_ms with a ratio in [5, 10]."
+  },
+  "coordinator_member_failure_grace_ms": {
+    "value": "10000",
+    "description": "Continuous voting-member failure grace period in milliseconds. Must be greater than the internal health-check interval."
+  },
+  "coordinator_discovery_retry_interval_ms": {
+    "value": "5000",
+    "description": "Minimum interval between Coordinator candidate Discovery retries in milliseconds. Must be greater than 0."
+  },
   "watch_event_dispatch_thread": {
     "value": "4",
     "description": "Number of coordinator watch event dispatch threads."

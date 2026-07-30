@@ -20,21 +20,24 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <future>
 #include <memory>
 #include <mutex>
-#include <optional>
+
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <braft/raft.h>
 #include <brpc/server.h>
-#include <butil/endpoint.h>
+#include <braft/raft.h>
+#include <butil/at_exit.h>
 
+#include "cluster/test_port_allocator.h"
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/coordinator/raft/coordinator_raft_operation.h"
+#include "datasystem/coordinator/raft/coordinator_raft_service.h"
 #include "datasystem/coordinator/raft/coordinator_raft_state_machine.h"
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
 #include "datasystem/utils/status.h"
@@ -45,13 +48,12 @@
 
 namespace datasystem::coordinator {
 namespace {
-constexpr char kLoopbackIp[] = "127.0.0.1";
+
 constexpr char kLocalPeer[] = "127.0.0.1:18480";
 constexpr char kDataDir[] = "coordinator-raft-node-test-data";
-constexpr char kDiscardServerGenerationDiagnostic[] =
-    "must discard and recreate the shared brpc server generation";
+constexpr int kHeartbeatIntervalMs = 100;
 constexpr int kElectionTimeoutMs = 1'000;
-constexpr int kConflictingPeerPort = 18'481;
+
 constexpr int64_t kValidConfigurationIndex = 1;
 constexpr std::chrono::seconds kCoordinationDeadline{ 2 };
 constexpr char kInternalLocalPeer[] = "127.0.0.1:18480:0";
@@ -70,6 +72,28 @@ struct ConfigurationErrorState {
     std::atomic<int> configurationCallbackCount{ 0 };
     std::atomic<int> errorCount{ 0 };
     Status reportedStatus;
+};
+
+struct InitialConfigurationCallbackState {
+    std::mutex mutex;
+    bool observed{ false };
+    Status reentrantStatus;
+    std::vector<std::string> callbackPeers;
+    std::vector<std::string> reentrantPeers;
+    int64_t callbackIndex{ -1 };
+    int64_t reentrantIndex{ -1 };
+};
+
+struct CommittedConfigurationRecord {
+    std::vector<std::string> peers;
+    int64_t index;
+};
+
+struct NonBootstrapCallbackState {
+    std::atomic<int> configurationCallbackCount{ 0 };
+    std::atomic<int> errorCount{ 0 };
+    std::mutex mutex;
+    std::vector<CommittedConfigurationRecord> records;
 };
 
 struct RaftOperationGateCallbackState {
@@ -98,7 +122,7 @@ size_t CountOccurrences(const std::string &text, const std::string &needle)
 
 CoordinatorRaftOptions MakeOneNodeOptions()
 {
-    return CoordinatorRaftOptions{ kLocalPeer, kDataDir, kElectionTimeoutMs,
+    return CoordinatorRaftOptions{ kLocalPeer, kDataDir, kHeartbeatIntervalMs, kElectionTimeoutMs,
                                    RaftStartPlan{ BootstrapPlan{ { kLocalPeer } } } };
 }
 
@@ -111,6 +135,72 @@ detail::RaftOperationCallback MakeGateCallback(const std::shared_ptr<RaftOperati
                            state->completion.set_value(std::move(status));
                        });
     };
+}
+
+class CoordinatorRaftNodeStartTest : public datasystem::ut::CommonTest {
+protected:
+    void SetUp() override
+    {
+        datasystem::ut::CommonTest::SetUp();
+        rootDir_ = datasystem::ut::GetTestCaseDataDir() + "/coordinator-raft-node";
+        std::error_code error;
+        ASSERT_TRUE(std::filesystem::create_directories(rootDir_, error)) << error.message();
+
+        const auto *testInfo = testing::UnitTest::GetInstance()->current_test_info();
+        const std::string testName =
+            testInfo == nullptr ? "unknown" : std::string(testInfo->test_case_name()) + "." + testInfo->name();
+        auto &allocator = datasystem::st::TestPortAllocator::Instance();
+        allocator.SetOwnerInfo("ds_ut", testName, rootDir_);
+        const auto reserveStatus = allocator.Reserve("coordinator_raft_node", portLease_);
+        ASSERT_TRUE(reserveStatus.IsOk()) << reserveStatus.ToString();
+        localPeer_ = "127.0.0.1:" + std::to_string(portLease_.Port());
+
+        auto status = RpcServer::Builder().SetUseBrpc(true).Init(rpcServer_);
+        ASSERT_TRUE(status.IsOk()) << status.ToString();
+        status = RegisterCoordinatorRaftServices(*rpcServer_, localPeer_);
+        ASSERT_TRUE(status.IsOk()) << status.ToString();
+        status = rpcServer_->StartBrpcServer("127.0.0.1", portLease_.Port());
+        ASSERT_TRUE(status.IsOk()) << status.ToString();
+    }
+
+    void TearDown() override
+    {
+        node_.reset();
+        if (rpcServer_ != nullptr) {
+            rpcServer_->Shutdown();
+            rpcServer_.reset();
+        }
+        datasystem::st::TestPortAllocator::Instance().ReleaseAll();
+        std::error_code error;
+        std::filesystem::remove_all(rootDir_, error);
+        EXPECT_FALSE(error) << error.message();
+        datasystem::ut::CommonTest::TearDown();
+    }
+
+    CoordinatorRaftOptions MakeOptions(RaftStartPlan startPlan, const std::string &dataDir) const
+    {
+        return CoordinatorRaftOptions{ localPeer_, dataDir, kHeartbeatIntervalMs, kElectionTimeoutMs,
+                                       std::move(startPlan) };
+    }
+
+    butil::AtExitManager atExitManager_;
+    datasystem::st::TestPortLease portLease_;
+    std::string rootDir_;
+    std::string localPeer_;
+    std::unique_ptr<RpcServer> rpcServer_;
+    std::unique_ptr<CoordinatorRaftNode> node_;
+};
+
+CoordinatorRaftEventCallbacks MakeNonBootstrapCallbacks(const std::shared_ptr<NonBootstrapCallbackState> &state)
+{
+    CoordinatorRaftEventCallbacks callbacks;
+    callbacks.onConfigurationCommitted = [state](std::vector<std::string> peers, int64_t index) {
+        state->configurationCallbackCount.fetch_add(1, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->records.emplace_back(CommittedConfigurationRecord{ std::move(peers), index });
+    };
+    callbacks.onError = [state](Status) { state->errorCount.fetch_add(1, std::memory_order_relaxed); };
+    return callbacks;
 }
 
 }  // namespace
@@ -234,60 +324,105 @@ TEST(RaftOperationSubmissionGateTest, ContainsThrowingCallbacks)
     }
 }
 
-TEST(CoordinatorRaftNodeTest, StartRequiresRegisteredSharedBrpcServices)
+TEST(CoordinatorRaftNodeTest, StartFromConstructedValidatesOptionsWithoutRegistration)
 {
-    CoordinatorRaftNode node(MakeOneNodeOptions(), {});
+    auto options = MakeOneNodeOptions();
+    options.dataDir.clear();
+    CoordinatorRaftNode node(std::move(options), {});
 
-    EXPECT_EQ(node.Start(RaftMetadataState::ABSENT).GetCode(), K_NOT_READY);
+    EXPECT_EQ(node.Start(RaftMetadataState::ABSENT).GetCode(), K_INVALID);
+    EXPECT_EQ(node.state_, CoordinatorRaftNode::LifecycleState::CONSTRUCTED);
 }
 
-TEST(CoordinatorRaftNodeTest, RegistrationRequiresBrpcRpcServer)
+TEST_F(CoordinatorRaftNodeStartTest, BootstrapPublishesInitialConfigurationBeforeStartReturns)
+{
+    auto callbackState = std::make_shared<InitialConfigurationCallbackState>();
+    auto nodeAddress = std::make_shared<CoordinatorRaftNode *>(nullptr);
+    CoordinatorRaftEventCallbacks callbacks;
+    callbacks.onConfigurationCommitted = [callbackState, nodeAddress](std::vector<std::string> peers, int64_t index) {
+        if (index != 0) {
+            return;
+        }
+        std::vector<std::string> reentrantPeers;
+        int64_t reentrantIndex = -1;
+        auto reentrantStatus = (*nodeAddress)->GetCommittedConfiguration(reentrantPeers, reentrantIndex);
+        std::lock_guard<std::mutex> lock(callbackState->mutex);
+        callbackState->observed = true;
+        callbackState->reentrantStatus = std::move(reentrantStatus);
+        callbackState->callbackPeers = std::move(peers);
+        callbackState->reentrantPeers = std::move(reentrantPeers);
+        callbackState->callbackIndex = index;
+        callbackState->reentrantIndex = reentrantIndex;
+    };
+
+    const auto dataDir = rootDir_ + "/bootstrap";
+    node_ = std::make_unique<CoordinatorRaftNode>(
+        MakeOptions(RaftStartPlan{ BootstrapPlan{ { localPeer_ } } }, dataDir), std::move(callbacks));
+    *nodeAddress = node_.get();
+    DS_ASSERT_OK(node_->Start(RaftMetadataState::ABSENT));
+
+    std::vector<std::string> peers;
+    int64_t index = -1;
+    DS_ASSERT_OK(node_->GetCommittedConfiguration(peers, index));
+    EXPECT_EQ(peers, std::vector<std::string>{ localPeer_ });
+    EXPECT_EQ(index, 0);
+
+    std::lock_guard<std::mutex> lock(callbackState->mutex);
+    ASSERT_TRUE(callbackState->observed);
+    EXPECT_TRUE(callbackState->reentrantStatus.IsOk()) << callbackState->reentrantStatus.ToString();
+    EXPECT_EQ(callbackState->callbackPeers, peers);
+    EXPECT_EQ(callbackState->reentrantPeers, peers);
+    EXPECT_EQ(callbackState->callbackIndex, 0);
+    EXPECT_EQ(callbackState->reentrantIndex, 0);
+}
+
+TEST_F(CoordinatorRaftNodeStartTest, RecoverAndWaitingDoNotPublishEmptyInitialConfiguration)
+{
+    const auto persistedDataDir = rootDir_ + "/persisted";
+    node_ = std::make_unique<CoordinatorRaftNode>(
+        MakeOptions(RaftStartPlan{ BootstrapPlan{ { localPeer_ } } }, persistedDataDir),
+        CoordinatorRaftEventCallbacks{});
+    DS_ASSERT_OK(node_->Start(RaftMetadataState::ABSENT));
+    node_.reset();
+
+    auto recoverState = std::make_shared<NonBootstrapCallbackState>();
+    node_ = std::make_unique<CoordinatorRaftNode>(
+        MakeOptions(RaftStartPlan{ RecoverPlan{} }, persistedDataDir), MakeNonBootstrapCallbacks(recoverState));
+    DS_ASSERT_OK(node_->Start(RaftMetadataState::VALID));
+    node_.reset();
+    EXPECT_EQ(recoverState->errorCount.load(std::memory_order_relaxed), 0);
+    {
+        std::lock_guard<std::mutex> lock(recoverState->mutex);
+        EXPECT_TRUE(std::all_of(recoverState->records.begin(), recoverState->records.end(),
+                                [](const auto &record) { return !record.peers.empty(); }));
+    }
+
+    auto waitingState = std::make_shared<NonBootstrapCallbackState>();
+    node_ = std::make_unique<CoordinatorRaftNode>(
+        MakeOptions(RaftStartPlan{ WaitingToJoinPlan{} }, rootDir_ + "/waiting"),
+        MakeNonBootstrapCallbacks(waitingState));
+    DS_ASSERT_OK(node_->Start(RaftMetadataState::ABSENT));
+    std::vector<std::string> waitingPeers;
+    int64_t waitingIndex = -1;
+    EXPECT_EQ(node_->GetCommittedConfiguration(waitingPeers, waitingIndex).GetCode(), K_NOT_READY);
+    node_.reset();
+    EXPECT_EQ(waitingState->configurationCallbackCount.load(std::memory_order_relaxed), 0);
+    EXPECT_EQ(waitingState->errorCount.load(std::memory_order_relaxed), 0);
+}
+
+TEST(CoordinatorRaftServiceTest, RegistrationRequiresBrpcRpcServer)
 {
     std::unique_ptr<RpcServer> server;
     DS_ASSERT_OK(RpcServer::Builder().Init(server));
-    CoordinatorRaftNode node(MakeOneNodeOptions(), {});
 
-    EXPECT_EQ(node.RegisterBrpcServices(*server).GetCode(), K_INVALID);
+    EXPECT_EQ(RegisterCoordinatorRaftServices(*server, kLocalPeer).GetCode(), K_INVALID);
 }
 
-TEST(CoordinatorRaftNodeTest, DuplicateRegistrationIsRejected)
-{
-    std::unique_ptr<RpcServer> server;
-    DS_ASSERT_OK(RpcServer::Builder().SetUseBrpc(true).Init(server));
-    CoordinatorRaftNode node(MakeOneNodeOptions(), {});
-
-    DS_ASSERT_OK(node.RegisterBrpcServices(*server));
-    EXPECT_EQ(node.RegisterBrpcServices(*server).GetCode(), K_INVALID);
-}
-
-TEST(CoordinatorRaftNodeTest, RegistrationFailureStopsNodeAndRequiresNewServerGeneration)
-{
-    std::unique_ptr<RpcServer> server;
-    DS_ASSERT_OK(RpcServer::Builder().SetUseBrpc(true).Init(server));
-
-    butil::EndPoint conflictingEndpoint;
-    ASSERT_EQ(butil::str2endpoint(kLoopbackIp, kConflictingPeerPort, &conflictingEndpoint), 0);
-    std::optional<int> conflictingRegistrationRc;
-    DS_ASSERT_OK(server->AddBrpcServices([&conflictingEndpoint, &conflictingRegistrationRc](brpc::Server &brpcServer) {
-        conflictingRegistrationRc = braft::add_service(&brpcServer, conflictingEndpoint);
-        return Status::OK();
-    }));
-    ASSERT_TRUE(conflictingRegistrationRc.has_value());
-    ASSERT_EQ(*conflictingRegistrationRc, 0);
-
-    CoordinatorRaftNode node(MakeOneNodeOptions(), {});
-    const auto registrationStatus = node.RegisterBrpcServices(*server);
-
-    ASSERT_EQ(registrationStatus.GetCode(), K_RUNTIME_ERROR);
-    EXPECT_NE(registrationStatus.GetMsg().find(kDiscardServerGenerationDiagnostic), std::string::npos);
-    EXPECT_EQ(node.RegisterBrpcServices(*server).GetCode(), K_INVALID);
-    EXPECT_EQ(node.Start(RaftMetadataState::ABSENT).GetCode(), K_INVALID);
-}
 
 TEST(CoordinatorRaftNodeTest, InvalidCommittedConfigurationLogsStandardOnErrorExceptionDetails)
 {
     const std::array<InvalidConfigurationCase, 4> cases{
-        InvalidConfigurationCase{ "invalid index", { kInternalLocalPeer }, 0,
+        InvalidConfigurationCase{ "negative index", { kInternalLocalPeer }, -1,
                                   OnErrorThrowKind::NON_STANDARD },
         InvalidConfigurationCase{ "malformed peer", { kMalformedPeerPayload }, kValidConfigurationIndex,
                                   OnErrorThrowKind::RUNTIME_ERROR },

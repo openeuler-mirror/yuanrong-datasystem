@@ -58,6 +58,10 @@ ds_cc_library(
         ":coordinator_watch_dispatcher_impl",
         ":coordinator_topology_control_host",
         ":coordinator_topology_recovery_manager",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/coordinator/raft:coordinator_election_manager",
+        "//src/datasystem/coordinator/raft:coordinator_raft_service",
+        "//src/datasystem/coordinator/raft:coordinator_raft_types",
         "//src/datasystem/cluster:cluster_topology_keyspace",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/flags:ds_flags",
@@ -70,6 +74,7 @@ ds_cc_library(
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:validator",
         "//src/datasystem/server:common_server",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
         "//src/datasystem/protos:coordinator_brpc",
@@ -92,16 +97,31 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "coordinator_server",
-    srcs = ["coordinator_server.cpp"],
+    name = "coordinator_runtime",
+    srcs = ["coordinator_runtime.cpp"],
+    hdrs = ["coordinator_runtime.h"],
     deps = [
         ":coordinator_service_impl",
         "//include/datasystem:headers",
-        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/coordinator:static_coordinator_discovery",
+        "//src/datasystem/coordinator/raft:coordinator_raft_types",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log:operation_logger",
         "//src/datasystem/common/signal:signal",
+        "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "coordinator_server",
+    srcs = ["coordinator_server.cpp"],
+    deps = [
+        ":coordinator_runtime",
+        "//include/datasystem:headers",
+        "//src/datasystem/common/signal:signal",
     ],
 )
 

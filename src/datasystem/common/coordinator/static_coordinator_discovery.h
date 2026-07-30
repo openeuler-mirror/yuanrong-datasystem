@@ -23,13 +23,14 @@ namespace datasystem {
 
 class StaticCoordinatorDiscovery final : public ICoordinatorDiscovery {
 public:
-    explicit StaticCoordinatorDiscovery(std::string serviceAddress);
+    explicit StaticCoordinatorDiscovery(const std::string &serviceAddress);
     ~StaticCoordinatorDiscovery() override = default;
 
     Status GetCoordinators(std::vector<std::string> &serviceList) override;
+    size_t GetCount() const;
 
 private:
-    const std::string serviceAddress_;
+    const std::vector<std::string> addresses_;
 };
 
 }  // namespace datasystem

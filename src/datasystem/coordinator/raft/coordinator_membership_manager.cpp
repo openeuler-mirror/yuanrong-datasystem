@@ -68,9 +68,7 @@ const char *InvalidCoordinatorMembershipOptionsReason(const CoordinatorMembershi
     if (options.healthCheckInterval >= options.memberFailureGrace) {
         return "Coordinator membership healthCheckInterval must be less than memberFailureGrace";
     }
-    if (options.healthCheckInterval > options.discoveryRetryInterval) {
-        return "Coordinator membership healthCheckInterval must not exceed discoveryRetryInterval";
-    }
+
     return nullptr;
 }
 

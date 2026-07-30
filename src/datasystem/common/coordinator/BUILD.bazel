@@ -14,7 +14,10 @@ ds_cc_library(
         "//tests/st/worker/object_cache:__pkg__",
         "//tests/ut/common/coordinator:__pkg__",
     ],
-    deps = ["//include/datasystem/utils:utils_headers"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:strings_util",
+    ],
 )
 
 ds_cc_library(

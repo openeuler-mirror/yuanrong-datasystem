@@ -1084,6 +1084,11 @@ dscli query route \
 | coordinator_address | string | `"127.0.0.1:31511"` | 否 | Coordinator 服务地址，格式为 `host:port`，不能为空 |
 | coordinator_rpc_stub_cache_size | int | `4096` | 否 | Coordinator RPC Stub 缓存数量上限 |
 | coordinator_topology_max_active_clusters | int | `8` | 否 | Coordinator 同时承载的集群拓扑上限，取值范围为 `[2, 32]`；超限时拒绝新集群准入，修改后需重启 Coordinator |
+| coordinator_raft_data_dir | string | `"./datasystem/coordinator_raft"` | 否 | Coordinator本地braft状态目录；参数化入口启用选举时不能为空，且每个Coordinator节点必须独占一个目录 |
+| coordinator_raft_heartbeat_interval_ms | int | `100` | 否 | Raft Leader发送心跳的时间间隔，单位为毫秒；取值范围为`[10, 10000]` |
+| coordinator_raft_election_timeout_ms | int | `1000` | 否 | Raft选举超时时间，单位为毫秒；必须是`coordinator_raft_heartbeat_interval_ms`的整数倍，且倍数在`[5, 10]`范围内 |
+| coordinator_member_failure_grace_ms | uint32 | `10000` | 否 | 成员持续失败宽限时间，单位为毫秒；必须大于内部健康检查间隔 |
+| coordinator_discovery_retry_interval_ms | uint32 | `5000` | 否 | Discovery候选重试的最小间隔，单位为毫秒；必须大于`0` |
 | watch_event_dispatch_thread | int | `4` | 否 | Coordinator 分发 Watch 事件的线程数 |
 | rpc_thread_num | int | `64` | 否 | Coordinator RPC 服务线程数 |
 | log_dir | string | `"./datasystem/logs"` | 否 | Coordinator 日志目录 |
@@ -1098,7 +1103,7 @@ dscli query route \
 | logbufsecs | int | `0` | 否 | 日志消息最大缓冲时长，单位为秒 |
 | logfile_mode | int | `416` | 否 | 日志文件模式/权限 |
 | log_only_write_info_file | bool | `true` | 否 | 是否只生成 INFO 日志文件；INFO 文件始终包含所有级别的日志 |
-| use_brpc | bool | `false` | 否 | 是否使用 brpc 进行 RPC 通信；也可通过环境变量 `DATASYSTEM_USE_BRPC` 设置 |
+| use_brpc | bool | `true` | 否 | 是否使用 brpc 进行 RPC 通信；配置文件中的显式值或环境变量 `DATASYSTEM_USE_BRPC` 可覆盖默认值；参数化入口启用选举时必须为`true` |
 | brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
 | brpc_max_concurrency | int | `128` | 否 | 每个 brpc Server 允许的最大并发 RPC 数；为 `0` 时不限制，且不能小于 `brpc_server_num_threads` |
 | request_sample_rate | double | `1.0` | 是 | 请求日志主采样率，取值范围为 `[0.0, 1.0]` |
@@ -1106,6 +1111,29 @@ dscli query route \
 | diagnostic_sample_rate | double | `1.0` | 是 | Diagnostic 日志补采样率，取值范围为 `[0.0, 1.0]` |
 
 Coordinator 日志和采样配置的详细语义参见[日志与可观测相关配置](#日志与可观测相关配置)。
+
+当前`dscli`通过单例`CoordinatorServer`façade调用无参`InitAndRun()`兼容入口，因此不启用Coordinator选举；
+实际生命周期实现由非单例`CoordinatorRuntime`承担。上表中的7个`coordinator_raft_*`/
+`coordinator_election_*`参数在使用`CoordinatorOptions`的参数化嵌入式入口启用选举时生效。仅在
+`coordinator_config.json`中填写这些参数或设置`use_brpc=true`，不会让当前`dscli`入口启用选举。
+
+生产部署每个进程只运行一个Coordinator Runtime。参数化`CoordinatorServer::InitAndRun(options)`要求
+`configFilePath`非空；文件访问、JSON解析和flag校验由`FlagManager`及Runtime启动流程负责。Runtime在路径非空时
+解析配置文件，随后调用一次`GetRaftFlags()`取得本机地址、独占Raft数据目录和选举时序快照。文件解析失败统一
+返回不包含路径和parser原文的错误。达到`RUNNING`前的失败完成回调和Service清理后可重试；达到`RUNNING`后该
+Runtime保持one-shot。
+
+直接使用空`configFilePath`启动`CoordinatorRuntime`仅用于内部同进程测试：Runtime跳过文件解析并使用调用方
+预先设置的进程flags。测试fixture必须在启动任何Runtime前设置公共flags，在任一Runtime活动期间保持这些flags
+不变，并在所有Runtime停止和线程join后恢复；各实例的endpoint、Raft数据目录和选举时序通过各自的
+`GetRaftFlags()`快照隔离。
+
+参数化入口的当前顺序为：解析非空配置路径并取得Raft快照；Service `Init`；Service `Start`注册业务和braft
+services、开始监听并保持`STARTING`；Runtime `onStart`注册endpoint；Service `StartElectionManager`启动后台
+Manager并发布`RUNNING`；进入event loop。`STARTING`窗口内业务RPC返回`K_NOT_READY`。Manager随后异步执行
+Discovery/bootstrap或recover，启动Node再启动Membership。同步启动失败时，Runtime先调用`onStop`，再由
+Service shutdown依次停止Membership、drain Node、关闭shared server并释放其余components。进程signal handler
+只设置`g_exitFlag`；显式Runtime `Stop`只唤醒本实例。
 
 `worker_config.json` 包含 datasystem_worker 的命令行参数相关配置项。启动 Worker 时，必须在
 `coordinator_address`、`etcd_address`、`metastore_address` 中配置且仅配置一个集群管理后端。

@@ -38,6 +38,7 @@ static_assert(std::string_view(kCoordinatorRaftGroupId) == "datasystem-coordinat
 constexpr char kLocalPeer[] = "127.0.0.1:18480";
 constexpr char kRemotePeer[] = "127.0.0.1:18481";
 constexpr char kDataDir[] = "/raft-data";
+constexpr int kHeartbeatIntervalMs = 100;
 constexpr int kElectionTimeoutMs = 1'000;
 constexpr int64_t kElectionTimeoutBelowMinimumMs =
     static_cast<int64_t>(kCoordinatorRaftMinElectionTimeoutMs) - 1;
@@ -48,7 +49,8 @@ static_assert(kElectionTimeoutAboveMaximumMs <= std::numeric_limits<int>::max())
 
 CoordinatorRaftOptions MakeOptions(RaftStartPlan startPlan)
 {
-    return CoordinatorRaftOptions{ kLocalPeer, kDataDir, kElectionTimeoutMs, std::move(startPlan) };
+    return CoordinatorRaftOptions{ kLocalPeer, kDataDir, kHeartbeatIntervalMs, kElectionTimeoutMs,
+                                   std::move(startPlan) };
 }
 
 CoordinatorRaftOptions MakeBootstrapOptions(std::vector<std::string> initialPeers)
@@ -195,14 +197,35 @@ TEST(CoordinatorRaftTypesTest, RejectsEmptyCommonFields)
     ExpectInvalid(options, RaftMetadataState::ABSENT);
 }
 
-TEST(CoordinatorRaftTypesTest, AcceptsInclusiveElectionTimeoutBounds)
+TEST(CoordinatorRaftTypesTest, AcceptsInclusiveHeartbeatAndElectionRatioBounds)
 {
-    for (const int electionTimeoutMs : { kCoordinatorRaftMinElectionTimeoutMs,
-                                         kCoordinatorRaftMaxElectionTimeoutMs }) {
-        SCOPED_TRACE(electionTimeoutMs);
+    {
         auto options = MakeValidBootstrapOptions();
-        options.electionTimeoutMs = electionTimeoutMs;
+        options.heartbeatIntervalMs = kCoordinatorRaftMinHeartbeatIntervalMs;
+        options.electionTimeoutMs = options.heartbeatIntervalMs * kCoordinatorRaftMinElectionHeartbeatRatio;
         DS_ASSERT_OK(ValidateCoordinatorRaftOptions(options, RaftMetadataState::ABSENT));
+    }
+    {
+        auto options = MakeValidBootstrapOptions();
+        options.heartbeatIntervalMs = kCoordinatorRaftMaxHeartbeatIntervalMs;
+        options.electionTimeoutMs = options.heartbeatIntervalMs * kCoordinatorRaftMaxElectionHeartbeatRatio;
+        DS_ASSERT_OK(ValidateCoordinatorRaftOptions(options, RaftMetadataState::ABSENT));
+    }
+}
+
+TEST(CoordinatorRaftTypesTest, RejectsHeartbeatOutsideInclusiveBounds)
+{
+    for (const int heartbeatIntervalMs : { kCoordinatorRaftMinHeartbeatIntervalMs - 1,
+                                           kCoordinatorRaftMaxHeartbeatIntervalMs + 1 }) {
+        SCOPED_TRACE(heartbeatIntervalMs);
+        auto options = MakeValidBootstrapOptions();
+        options.heartbeatIntervalMs = heartbeatIntervalMs;
+
+        const auto status = ValidateCoordinatorRaftOptions(options, RaftMetadataState::ABSENT);
+
+        EXPECT_EQ(status.GetCode(), K_INVALID);
+        EXPECT_NE(status.GetMsg().find("heartbeatIntervalMs=" + std::to_string(heartbeatIntervalMs)),
+                  std::string::npos);
     }
 }
 
@@ -223,6 +246,32 @@ TEST(CoordinatorRaftTypesTest, RejectsElectionTimeoutOutsideInclusiveBounds)
                                        + std::to_string(kCoordinatorRaftMaxElectionTimeoutMs) + "]"),
                   std::string::npos);
     }
+}
+
+TEST(CoordinatorRaftTypesTest, RejectsElectionTimeoutOutsideHeartbeatRatio)
+{
+    for (const int electionTimeoutMs : { kHeartbeatIntervalMs * (kCoordinatorRaftMinElectionHeartbeatRatio - 1),
+                                         kHeartbeatIntervalMs * (kCoordinatorRaftMaxElectionHeartbeatRatio + 1) }) {
+        SCOPED_TRACE(electionTimeoutMs);
+        auto options = MakeValidBootstrapOptions();
+        options.electionTimeoutMs = electionTimeoutMs;
+
+        const auto status = ValidateCoordinatorRaftOptions(options, RaftMetadataState::ABSENT);
+
+        EXPECT_EQ(status.GetCode(), K_INVALID);
+        EXPECT_NE(status.GetMsg().find("times heartbeatIntervalMs"), std::string::npos);
+    }
+}
+
+TEST(CoordinatorRaftTypesTest, RejectsElectionTimeoutNotIntegerMultipleOfHeartbeat)
+{
+    auto options = MakeValidBootstrapOptions();
+    options.electionTimeoutMs = kElectionTimeoutMs - 1;
+
+    const auto status = ValidateCoordinatorRaftOptions(options, RaftMetadataState::ABSENT);
+
+    EXPECT_EQ(status.GetCode(), K_INVALID);
+    EXPECT_NE(status.GetMsg().find("integer multiple"), std::string::npos);
 }
 
 TEST(CoordinatorRaftTypesTest, RejectsUnsupportedOrUnstablePeerAddresses)

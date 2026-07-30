@@ -38,6 +38,7 @@
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/coordinator/raft/coordinator_membership_manager.h"
 #include "datasystem/coordinator/raft/coordinator_raft_node.h"
+#include "datasystem/coordinator/raft/coordinator_raft_service.h"
 #include "datasystem/coordinator/raft/coordinator_raft_state_machine.h"
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
 #include "datasystem/utils/service_discovery.h"
@@ -48,6 +49,7 @@ namespace {
 using TimePoint = std::chrono::steady_clock::time_point;
 
 constexpr char kLoopbackIp[] = "127.0.0.1";
+constexpr int kHeartbeatIntervalMs = 50;
 constexpr int kElectionTimeoutMs = 300;
 constexpr int kMinimumObservedElectionTimeouts = 3;
 constexpr std::chrono::milliseconds kBootstrapCaseBudget{ 6'000 };
@@ -378,8 +380,8 @@ protected:
             coordinator::RaftStartPlan startPlan =
                 i < kBootstrapNodeCount ? coordinator::RaftStartPlan{ coordinator::BootstrapPlan{ bootstrapPeers } }
                                         : coordinator::RaftStartPlan{ coordinator::WaitingToJoinPlan{} };
-            coordinator::CoordinatorRaftOptions options{ addresses_[i], dataDirs_[i], kElectionTimeoutMs,
-                                                         std::move(startPlan) };
+            coordinator::CoordinatorRaftOptions options{ addresses_[i], dataDirs_[i], kHeartbeatIntervalMs,
+                                                         kElectionTimeoutMs, std::move(startPlan) };
             coordinator::CoordinatorRaftEventCallbacks callbacks;
             if (recordCommittedConfigurationHistory) {
                 auto history = configurationHistory_;
@@ -388,7 +390,7 @@ protected:
                 };
             }
             nodes_[i] = std::make_unique<coordinator::CoordinatorRaftNode>(std::move(options), std::move(callbacks));
-            status = nodes_[i]->RegisterBrpcServices(*rpcServers_[i]);
+            status = coordinator::RegisterCoordinatorRaftServices(*rpcServers_[i], addresses_[i]);
             ASSERT_TRUE(status.IsOk()) << status.ToString();
         }
 
@@ -617,11 +619,11 @@ protected:
         auto effectiveStartPlan = startPlan.has_value()
                                       ? std::move(*startPlan)
                                       : coordinator::RaftStartPlan{ coordinator::BootstrapPlan{ { localAddress_ } } };
-        coordinator::CoordinatorRaftOptions options{ localAddress_, dataDir_, kElectionTimeoutMs,
-                                                     std::move(effectiveStartPlan) };
+        coordinator::CoordinatorRaftOptions options{ localAddress_, dataDir_, kHeartbeatIntervalMs,
+                                                     kElectionTimeoutMs, std::move(effectiveStartPlan) };
         node_ = std::make_unique<coordinator::CoordinatorRaftNode>(std::move(options), std::move(callbacks));
 
-        status = node_->RegisterBrpcServices(*rpcServer_);
+        status = coordinator::RegisterCoordinatorRaftServices(*rpcServer_, localAddress_);
         ASSERT_TRUE(status.IsOk()) << status.ToString();
         status = rpcServer_->StartBrpcServer(kLoopbackIp, portLease_.Port());
         ASSERT_TRUE(status.IsOk()) << status.ToString();
@@ -1121,7 +1123,7 @@ TEST_F(CoordinatorRaftMembershipTest, MembershipStatusReportsLeaderAndFollowerSe
         [this, followerIndex, &expectedPeers, &followerStatus] {
             const auto status = nodes_[followerIndex]->GetMembershipStatus(followerStatus);
             return status.IsOk() && !followerStatus.isLeader && followerStatus.committedPeers == expectedPeers
-                   && followerStatus.stableFollowers.empty();
+                   && followerStatus.configurationIndex > 0 && followerStatus.stableFollowers.empty();
         },
         caseDeadline))
         << "follower did not expose committed membership with an empty Leader-only follower map";
@@ -1152,9 +1154,11 @@ TEST_F(CoordinatorRaftNodeTest, BootstrapOneNodePublishesLeaderAndCommittedConfi
     std::vector<std::string> peers;
     int64_t configurationIndex = 0;
     ASSERT_TRUE(
-        WaitUntil([this, &peers,
-                   &configurationIndex] { return node_->GetCommittedConfiguration(peers, configurationIndex).IsOk(); },
-                  caseDeadline))
+        WaitUntil(
+            [this, &peers, &configurationIndex] {
+                return node_->GetCommittedConfiguration(peers, configurationIndex).IsOk() && configurationIndex > 0;
+            },
+            caseDeadline))
         << "one-node raft did not publish a committed configuration before the case deadline";
     ASSERT_EQ(peers.size(), 1U);
     EXPECT_EQ(peers.front(), localAddress_);
@@ -1221,7 +1225,8 @@ TEST_F(CoordinatorRaftNodeTest, RecoverUsesPersistedConfigurationWithoutBootstra
     int64_t bootstrapConfigurationIndex = 0;
     ASSERT_TRUE(WaitUntil(
         [this, &bootstrapPeers, &bootstrapConfigurationIndex] {
-            return node_->GetCommittedConfiguration(bootstrapPeers, bootstrapConfigurationIndex).IsOk();
+            return node_->GetCommittedConfiguration(bootstrapPeers, bootstrapConfigurationIndex).IsOk()
+                   && bootstrapConfigurationIndex > 0;
         },
         recoveryCaseDeadline))
         << "bootstrap node did not publish a committed configuration";

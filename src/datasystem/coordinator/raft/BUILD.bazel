@@ -39,6 +39,22 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "coordinator_raft_service",
+    srcs = ["coordinator_raft_service.cpp"],
+    hdrs = ["coordinator_raft_service.h"],
+    deps = [
+        ":coordinator_raft_peer",
+        ":coordinator_raft_types",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "@braft//:braft",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_library(
     name = "coordinator_raft_node",
     srcs = ["coordinator_raft_node.cpp"],
     hdrs = [
@@ -51,12 +67,10 @@ ds_cc_library(
         ":coordinator_raft_types",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/log:common_log_header",
-        "//src/datasystem/common/rpc:rpc_server",
         "//src/datasystem/common/util:file_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "@braft//:braft",
-        "@com_github_apache_brpc//:brpc",
     ],
 )
 
@@ -72,5 +86,27 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread",
+    ],
+)
+
+ds_cc_library(
+    name = "coordinator_election_manager",
+    srcs = ["coordinator_election_manager.cpp"],
+    hdrs = ["coordinator_election_manager.h"],
+    deps = [
+        ":coordinator_membership_manager",
+        ":coordinator_raft_node",
+        ":coordinator_raft_peer",
+        ":coordinator_raft_state_machine",
+        ":coordinator_raft_types",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/rpc:brpc_factory",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/protos:coordinator_brpc",
+        "//src/datasystem/protos:coordinator_cc_proto",
+        "@com_github_apache_brpc//:brpc",
     ],
 )
