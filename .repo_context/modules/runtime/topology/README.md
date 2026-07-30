@@ -223,6 +223,9 @@
   coordinator crash before final topology CAS may repeat it.
 - Scale-out and scale-in callbacks use bounded retries. Exhausted scale-out removes the joining member so it can restart
   and re-enter as `INITIAL`; exhausted scale-in proceeds through external bounded termination and Failure handling.
+  Callback window exhaustion advances `attemptsByOperation_` and re-arms via `ScheduleRetryLocked` (bounded backoff)
+  rather than blindly resetting `nextAttempt` through `PreserveDueOperation`; the operation stays pending so the
+  controller's failure-confirmation / lease-expiry path can still finalize it.
   Object and stream callbacks treat per-item migration failures as retryable task failures, so a successful RPC status
   alone cannot advance the batch while selected metadata is still missing at the target. Object metadata success
   includes durable nested relationships and nested reference counts; target persistence failure keeps the source-side

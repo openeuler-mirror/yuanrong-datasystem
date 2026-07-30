@@ -25,6 +25,8 @@
 #include <thread>
 #include <vector>
 
+#include <sys/wait.h>
+
 #include <gtest/gtest.h>
 
 #include "client/kv_cache/kv_client_common.h"
@@ -61,6 +63,7 @@ constexpr char SCALE_UP_CASE_NAME[] = "ScaleUpNewWorkerParticipatesInRebalance";
 constexpr char USAGE_GAP_BELOW_THRESHOLD_CASE_NAME[] = "UsageGapBelowThresholdDoesNotDispatchTask";
 constexpr char MEMORY_LIMIT_SOURCE_THRESHOLD_CASE_NAME[] = "UsageRateUsesMemoryLimitForSourceThreshold";
 constexpr char SOURCE_CLOCK_OFFSET_CASE_NAME[] = "SourceClockOffsetUsesRelativeTaskTimeout";
+constexpr char STUCK_PROBE_CASE_NAME[] = "RebalanceTargetStuckProbeExitsWithinDeadline";
 constexpr char DISABLED_TEST_PREFIX[] = "DISABLED_";
 const std::string SOURCE_SEND_POINT = "TcpMigrateTransport.MigrateDataToRemote.delay";
 const std::string FAST_MIGRATE_SEND_POINT = "FastMigrateTransport2.MigrateDataToRemote.delay";
@@ -120,6 +123,11 @@ bool IsSourceClockOffsetCase()
 bool IsUrmaScaleInCase()
 {
     return IsCurrentTestName("RebalanceTargetActiveScaleInUrmaDoesNotLoseData");
+}
+
+bool IsStuckProbeCase()
+{
+    return IsCurrentTestName(STUCK_PROBE_CASE_NAME);
 }
 
 bool IsCoordinatorRebalanceCase()
@@ -184,6 +192,9 @@ public:
             // Worker binary not built with URMA framework; test will GTEST_SKIP in the body.
             opts.workerGflagParams += " -enable_urma=false";
 #endif
+        }
+        if (IsStuckProbeCase()) {
+            opts.workerGflagParams += " -enable_lossless_data_exit_mode=true -node_timeout_s=5 -node_dead_timeout_s=10";
         }
        opts.injectActions = BuildRebalanceInjectActions();
    }
@@ -805,6 +816,90 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceTargetActiveScaleInUrmaDoesN
     WaitAllNodesActiveInHashRing(2);
     AssertReadable(client0_, sourceBatch);
     AssertReadable(client2_, sourceBatch);
+}
+
+// Regression for issue #853: during memory rebalance the Target's voluntary
+// scale-in (lossless exit) hung forever because RetryUntilSuccessDuringGracefulExit
+// had no deadline (F1) and AdmitCallbackLocked never advanced the attempt counter on
+// window exhaustion (F2), while PreShutDown early-returned before cleanup (F5).
+//
+// To reproduce the stuck graceful exit, WORKER1 must own primary metadata that the
+// SCALE_IN callback migrates (otherwise the callback returns OK instantly and F1 is
+// never exercised). WORKER2 is pre-loaded so WORKER1 (0%) is the unambiguous lowest-usage
+// rebalance target; the rebalance migrates WORKER0's objects to WORKER1 and ReplacePrimary
+// switches primary ownership to WORKER1. During WORKER1's voluntary scale-in the SCALE_IN
+// metadata callback runs OnScaleIn -> MigrateMetadata -> BatchMigrateMetadata (it does NOT
+// call GetClusterState, which is only used by the periodic ReevaluateFailureScope probe).
+// Injecting BatchMigrateMetadata.rpc.error with return(K_TRY_AGAIN) (unlimited) makes every
+// metadata migration RPC fail with a retryable error, so the SCALE_IN callback retries every
+// ~1s. Because the F2 callback window (ordinaryMemberWindow = 3min) far exceeds F1's test
+// grace (LOSSLESS_EXIT_GRACE = 10s under WITH_TESTS, 120s in production), the callback is
+// still within its window when F1's graceful-exit grace expires and gives up on
+// WaitForTopologyRemoval; PreShutDown (F5) then runs best-effort cleanup and the process
+// exits. The ring re-stabilizes at the two survivors once WORKER1's membership lease
+// (node_timeout_s=5 + node_dead_timeout_s=10) expires after the process is gone.
+// NOTE: F2's window-exhaustion branch (advance attemptsByOperation_ + ScheduleRetryLocked)
+// is not exercised here — it would need a UT that pre-exhausts the 3min window. This ST
+// case only proves F1's bounded grace unblocks the stuck Target.
+// Data readability is not asserted here (SPILL data-loss is tracked by #869).
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceTargetStuckProbeExitsWithinDeadline)
+{
+    SetInjectActionForAll(REPLACE_PRIMARY_POINT, "100000*call()");
+    auto sourceSendBaseline = GetInjectCount(WORKER0, SOURCE_SEND_POINT);
+    auto replacePrimaryBaseline = GetTotalInjectCount(REPLACE_PRIMARY_POINT);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    // Pre-load WORKER2 so WORKER1 (0%) is the unambiguous lowest-usage rebalance target;
+    // the rebalance then makes WORKER1 the new primary for the migrated objects, so the
+    // SCALE_IN metadata callback has metadata to migrate and reaches BatchMigrateMetadata.
+    constexpr size_t ONE_MB = 1024UL * 1024UL;
+    WaitAllNodesActiveInHashRing(3);
+    auto pressureBatch = WriteObjects(client2_, "rebalance_stuck_probe_pressure", 1, 'p', ONE_MB);
+    SleepMs(WORKER_RECEIVE_RING_DELAY_MS);
+    auto sourceBatch = WriteObjects(client0_, "rebalance_stuck_probe", 9, 't');
+    (void)sourceBatch;
+    (void)pressureBatch;
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+    WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 1);
+    WaitForTotalInjectCount(REPLACE_PRIMARY_POINT, replacePrimaryBaseline + 1);
+
+    // The SCALE_IN metadata callback on the leaving Target (WORKER1) calls
+    // BatchMigrateMetadata; fail its RPC with a retryable K_TRY_AGAIN (unlimited) so the
+    // callback retries every ~1s until F1's grace gives up (the F2 window is 3min, far
+    // longer than the 10s test grace, so it never exhausts here).
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, WORKER1, "BatchMigrateMetadata.rpc.error",
+                                           "return(K_TRY_AGAIN)"));
+
+    client1_.reset();
+    VoluntaryScaleDownInject(static_cast<int>(WORKER1));
+
+    // Assert the SCALE_IN callback actually reached BatchMigrateMetadata and failed — this
+    // distinguishes an F1 give-up exit from a happy-path exit where the inject never fired.
+    // inject fired + exit-within-deadline together prove F1 give-up: the process keeps
+    // heartbeating while alive, so the membership lease cannot expire before the process,
+    // and the only bounded exit path is F1's grace expiry.
+    ASSERT_TRUE(WaitFor([&] { return GetInjectCountIfAlive(WORKER1, "BatchMigrateMetadata.rpc.error") > 0; },
+                        15000))
+        << "BatchMigrateMetadata.rpc.error never fired; SCALE_IN callback did not reach metadata migration";
+
+    // F1 bound: the Target must exit within the graceful-exit grace (10s in test builds)
+    // plus process-exit and lease-expiry margin.
+    const pid_t targetPid = cluster_->GetWorkerPid(WORKER1);
+    ASSERT_TRUE(WaitFor(
+        [&] {
+            int status = 0;
+            return waitpid(targetPid, &status, WNOHANG) != 0;
+        },
+        45000))
+        << "WORKER1 did not exit within 45s after voluntary scale-down";
+
+    // The Target's membership lease (node_timeout_s=5 + node_dead_timeout_s=10) expires
+    // after the process is gone; the hash ring must re-stabilize at the two survivors.
+    WaitAllNodesActiveInHashRing(2, 120000);
+
+    // Best-effort cleanup; the Target process is gone so a failure here is expected.
+    (void)cluster_->ClearInjectAction(WORKER, WORKER1, "BatchMigrateMetadata.rpc.error");
 }
 
 // Verifies that an admitted MigrateData whose drain times out returns

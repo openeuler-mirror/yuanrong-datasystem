@@ -598,6 +598,20 @@ Status TopologyTaskExecutor::AdmitCallbackLocked(const TopologyTask &task, const
         RETURN_IF_NOT_OK(ScaleInMetadataGateKey(fence, gate));
         scaleInMetadataGateByOperation_[operation] = gate;
     }
+    // Validate the callback window before admitting. On window exhaustion advance the
+    // attempt counter and re-arm via ScheduleRetryLocked (bounded backoff); returning OK
+    // avoids PreserveDueOperation blindly resetting nextAttempt, which previously caused an
+    // infinite spin because attemptsByOperation_ never advanced. The operation stays pending
+    // so the controller's failure-confirmation / lease-expiry path can still finalize it.
+    auto windowRc = ValidateCallbackWindowLocked(fence, now);
+    if (windowRc.IsError()) {
+        ++attemptsByOperation_[operation];
+        pendingByOperation_[operation] = task;
+        if (!ScheduleRetryLocked(fence.phase, operation)) {
+            nextAttemptByOperation_.erase(operation);
+        }
+        return Status::OK();
+    }
     pendingByOperation_[operation] = task;
     if (progressReadyByOperation_.count(operation) > 0) {
         nextAttemptByOperation_[operation] = now;
@@ -607,7 +621,6 @@ Status TopologyTaskExecutor::AdmitCallbackLocked(const TopologyTask &task, const
         nextAttemptByOperation_[operation] = now;
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(ValidateCallbackWindowLocked(fence, now));
     const size_t capacity = options_.callbackThreads + options_.callbackQueueCapacity;
     CHECK_FAIL_RETURN_STATUS(inFlightByOperation_.size() < capacity, K_TRY_AGAIN, "topology callback queue is full");
     cancellation = std::make_shared<CancellationToken>();
