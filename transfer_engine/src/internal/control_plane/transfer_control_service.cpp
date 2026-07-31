@@ -26,7 +26,7 @@ constexpr uint64_t K_DECIMAL_BASE = 10;
 
 std::string NormalizeBackendKind(const std::string &backendKind)
 {
-    return backendKind.empty() ? "p2p" : backendKind;
+    return backendKind.empty() ? "hixl" : backendKind;
 }
 
 uint64_t GetReadLeaseTtlMs()

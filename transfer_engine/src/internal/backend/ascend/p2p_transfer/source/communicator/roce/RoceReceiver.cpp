@@ -70,6 +70,9 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
     CHECK_STATUS(RdmaDev::GetInstance(phyId, rdmaDev));
     union hccp_ip_addr ipv4Addr;
     CHECK_STATUS(rdmaDev->getIpv4(&ipv4Addr));
+    p2p::LogInfo(std::string("RoceReceiver::Initialize NPU network ready, recv_device_id=") +
+                 std::to_string(recvDeviceId) + ", phy_id=" + std::to_string(phyId) +
+                 ", local_npu_ip=" + in_addr_to_string(ipv4Addr.addr));
 
     rdmaSocket = std::make_unique<RdmaSocket>(phyId, ipv4Addr, SERVER);
     CHECK_STATUS(rdmaSocket->init());
@@ -99,7 +102,11 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
         CHECK_STATUS(client->SendObject(receiverData));
     }
 
+    p2p::LogInfo(std::string("RoceReceiver::Initialize wait RoCE socket, local_npu_ip=") +
+                 in_addr_to_string(ipv4Addr.addr) + ", listen_port=" + std::to_string(listenPort) +
+                 ", remote_npu_ip=" + in_addr_to_string(remoteIp.addr) + ", timeout_disabled=true");
     CHECK_STATUS(rdmaSocket->waitReady(0));
+    p2p::LogInfo("RoceReceiver::Initialize RoCE socket connected");
 
     void *rdmaHandle;
     void *fdHandle;
@@ -133,7 +140,10 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
         }
 
         CHECK_STATUS(qp->connect(fdHandle));
+        p2p::LogInfo(std::string("RoceReceiver::Initialize wait RoCE QP, qp_index=") + std::to_string(q) +
+                     ", qp_count=" + std::to_string(qpNum) + ", timeout_disabled=true");
         CHECK_STATUS(qp->waitReady(0));
+        p2p::LogInfo(std::string("RoceReceiver::Initialize RoCE QP connected, qp_index=") + std::to_string(q));
         qps.push_back(std::move(qp));
     }
 

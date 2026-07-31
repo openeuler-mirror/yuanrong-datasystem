@@ -3,6 +3,7 @@
  */
 #include "npu/RdmaQp.h"
 #include "npu/RaWrapper.h"
+#include "tools/logging.h"
 #include <chrono>
 #include <thread>
 #include <unistd.h>
@@ -77,7 +78,13 @@ Status RdmaQp::registerMemoryRegion(void *addr, uint32_t size)
     inMrInfo.addr = addr;
     inMrInfo.size = size;
     inMrInfo.access = RA_ACCESS_LOCAL_WRITE | RA_ACCESS_REMOTE_WRITE | RA_ACCESS_REMOTE_READ;
-    CHECK_STATUS(RaMrRegWrapper(qpHandle, &inMrInfo));
+    Status registerRc = RaMrRegWrapper(qpHandle, &inMrInfo);
+    if (!registerRc.IsSuccess()) {
+        p2p::LogError(std::string("RdmaQp::registerMemoryRegion failed, size=") + std::to_string(size) +
+                      ", reason=" + registerRc.ToString() +
+                      ", hint: verify NPU RoCE configuration, device permissions, and RDMA memory registration limits");
+        return registerRc;
+    }
 
     registeredMrs[addr] = inMrInfo;
 
@@ -150,6 +157,8 @@ Status RdmaQp::waitReady(uint32_t timeOutMs)
         return Status::Error(ErrorCode::NOT_SUPPORTED, "qp has not been initialized yet");
     }
 
+    p2p::LogInfo(std::string("RdmaQp::waitReady begin, timeout_ms=") + std::to_string(timeOutMs) +
+                 (timeOutMs == 0 ? ", timeout_disabled=true" : ""));
     auto startTime = std::chrono::steady_clock::now();
     auto timeOutDuration = std::chrono::milliseconds(timeOutMs);
 
@@ -157,16 +166,25 @@ Status RdmaQp::waitReady(uint32_t timeOutMs)
     while (qpStatus == RA_QP_STATUS_CONNECTING) {
         auto currentTime = std::chrono::steady_clock::now();
         if (timeOutMs > 0 && currentTime - startTime >= timeOutDuration) {
-            return Status::Error(ErrorCode::TIMEOUT, "Timeout waiting for socket to connect.");
+            std::string msg = "Timeout waiting for RoCE QP to connect, timeout_ms=" + std::to_string(timeOutMs);
+            p2p::LogError(std::string("RdmaQp::waitReady failed, reason=") + msg);
+            return Status::Error(ErrorCode::TIMEOUT, msg);
         }
 
-        CHECK_STATUS(this->getStatus(&qpStatus));
+        Status statusRc = this->getStatus(&qpStatus);
+        if (!statusRc.IsSuccess()) {
+            p2p::LogError(std::string("RdmaQp::waitReady query status failed, reason=") + statusRc.ToString());
+            return statusRc;
+        }
     }
 
     if (qpStatus != RA_QP_STATUS_CONNECTED) {
-        return Status::Error(ErrorCode::INTERNAL_ERROR, "qp failed to connect " + ra_qp_status_to_string(qpStatus));
+        std::string msg = "RoCE QP failed to connect, status=" + ra_qp_status_to_string(qpStatus);
+        p2p::LogError(std::string("RdmaQp::waitReady failed, reason=") + msg);
+        return Status::Error(ErrorCode::INTERNAL_ERROR, msg);
     }
 
+    p2p::LogInfo("RdmaQp::waitReady success");
     return Status::Success();
 }
 

@@ -5,6 +5,7 @@
 #ifndef TRANSFER_ENGINE_INTERNAL_HIXL_D2D_BACKEND_H
 #define TRANSFER_ENGINE_INTERNAL_HIXL_D2D_BACKEND_H
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -67,6 +68,8 @@ private:
     Result UnregisterOneLocked(uint64_t addr, uint64_t length, bool failIfMissing, bool *unregistered = nullptr);
     void DisconnectAllLocked();
     Result ConnectLocked(const std::string &connectionKey, const std::string &endpoint);
+    Result TransferReadBatchLocked(const ConnectionSpec &spec, const std::vector<TransferReadOp> &ops, size_t base,
+                                   size_t end, const std::string &endpoint, uint64_t timeoutMs);
 
     std::unique_ptr<Impl> impl_;
     mutable std::mutex mutex_;

@@ -60,7 +60,7 @@ scripts/run_cross_node_smoke_cases.sh concurrent requester \
 
 ```cpp
 TransferEngine owner;
-owner.Initialize("127.0.0.1:65051", "ascend", "npu:0");
+owner.Initialize("127.0.0.1:65051", "p2p", "npu:0");
 
 std::vector<uintptr_t> bufferAddrs = {
   reinterpret_cast<uintptr_t>(src0),

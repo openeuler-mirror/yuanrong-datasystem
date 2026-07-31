@@ -83,12 +83,12 @@ Result ResolveBackendKind(const std::string &protocol, std::string &backendKind)
     }
 
     const std::string protocolLower = ToLowerAscii(protocol);
-    if (protocolLower.empty() || protocolLower == "ascend" || protocolLower == "p2p") {
-        backendKind = "p2p";
+    if (protocolLower.empty() || protocolLower == "ascend" || protocolLower == "hixl") {
+        backendKind = "hixl";
         return Result::OK();
     }
-    if (protocolLower == "hixl" || protocolLower == "d2d_hixl" || protocolLower == "hccs_hixl") {
-        backendKind = "hixl";
+    if (protocolLower == "p2p") {
+        backendKind = "p2p";
         return Result::OK();
     }
     return TE_MAKE_STATUS(ErrorCode::kInvalid, "unsupported transfer engine protocol: " + protocol);

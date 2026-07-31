@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <iostream>
 #include <random>
+#include <string>
 #include <arpa/inet.h>
 
 constexpr int MIN_CHAR = 0;
@@ -39,6 +40,13 @@ inline void FillRandom(std::string &str)
 inline uint32_t in_addr_to_uint32(const struct in_addr &addr)
 {
     return ntohl(addr.s_addr);  // Network to host long
+}
+
+inline std::string in_addr_to_string(const struct in_addr &addr)
+{
+    char buffer[INET_ADDRSTRLEN] = { 0 };
+    const char *result = inet_ntop(AF_INET, &addr, buffer, sizeof(buffer));
+    return result == nullptr ? "<invalid>" : std::string(result);
 }
 
 // Function to convert uint32 to in_addr

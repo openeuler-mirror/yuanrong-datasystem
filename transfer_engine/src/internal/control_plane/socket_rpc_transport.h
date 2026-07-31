@@ -28,7 +28,9 @@ private:
 };
 
 Result ConnectTo(const std::string &host, uint16_t port, int *fd);
-Result CreateListenSocket(const std::string &host, uint16_t port, int backlog, int *listenFd);
+enum class ListenSocketFailureLogLevel { kError, kVlog1 };
+Result CreateListenSocket(const std::string &host, uint16_t port, int backlog, int &listenFd,
+                          ListenSocketFailureLogLevel failureLogLevel = ListenSocketFailureLogLevel::kError);
 Result SetSocketTimeoutSec(int fd, int timeoutSec);
 
 Result SendFrame(int fd, RpcMethod method, const std::vector<uint8_t> &payload);

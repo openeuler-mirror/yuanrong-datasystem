@@ -113,7 +113,8 @@ Initializes the transfer engine control plane and binds the engine instance to a
 Parameters:
 
 - `local_hostname` (`str`): Local endpoint in `host:port` format, for example `"127.0.0.1:60551"`
-- `protocol` (`str`): Transport protocol name. The current implementation accepts the value and does not validate it. Existing examples use `"ascend"`.
+- `protocol` (`str`): Backend selector. `"p2p"` selects P2P-Transfer; `"hixl"`, `"ascend"`, and the empty
+  string select HIXL. When set, `TRANSFER_ENGINE_BACKEND` (`p2p` or `hixl`) takes precedence.
 - `device_name` (`str`): Device identifier string. It must match `npu:${device_id}`, for example `"npu:0"` or `"npu:1"`.
 
 Returns:
@@ -476,7 +477,10 @@ Typical failure cases:
 ## Notes and Limitations
 
 - The current Python binding only exposes synchronous read operations. It does not expose write APIs or async transfer APIs.
-- `protocol` is currently accepted but not checked by the engine implementation.
+- `protocol` accepts `"ascend"`, `"p2p"`, and `"hixl"` (case-insensitive). Empty protocol and `"ascend"`
+  select HIXL.
+- HIXL `auto` route selection and the settings for deterministic HCCS or RoCE behavior are documented in
+  [Backend and HIXL Route Selection](README.md#backend-and-hixl-route-selection).
 - `device_name` must use the `npu:${device_id}` format.
 - The loader in `yr.datasystem` preloads several runtime shared libraries when available.
 - The transfer_engine wheel is no longer published separately, and the installed Python import path remains `yr.datasystem`.

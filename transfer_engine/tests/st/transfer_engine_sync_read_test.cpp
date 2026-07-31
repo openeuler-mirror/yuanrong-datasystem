@@ -36,8 +36,8 @@ TEST(TransferEngineSyncReadTest, SyncReadCopyMockOk)
     TransferEngine owner(ownerBackend);
     TransferEngine requester(requesterBackend);
 
-    ASSERT_TRUE(owner.Initialize("127.0.0.1:61051", "ascend", "npu:0").IsOk());
-    ASSERT_TRUE(requester.Initialize("127.0.0.1:61052", "ascend", "npu:1").IsOk());
+    ASSERT_TRUE(owner.Initialize("127.0.0.1:61051", "p2p", "npu:0").IsOk());
+    ASSERT_TRUE(requester.Initialize("127.0.0.1:61052", "p2p", "npu:1").IsOk());
 
     std::vector<uint8_t> src(256);
     std::vector<uint8_t> dst(256, 0);
@@ -63,8 +63,8 @@ TEST(TransferEngineSyncReadTest, SyncReadRejectUnregistered)
     TransferEngine owner(ownerBackend);
     TransferEngine requester(requesterBackend);
 
-    ASSERT_TRUE(owner.Initialize("127.0.0.1:62051", "ascend", "npu:0").IsOk());
-    ASSERT_TRUE(requester.Initialize("127.0.0.1:62052", "ascend", "npu:1").IsOk());
+    ASSERT_TRUE(owner.Initialize("127.0.0.1:62051", "p2p", "npu:0").IsOk());
+    ASSERT_TRUE(requester.Initialize("127.0.0.1:62052", "p2p", "npu:1").IsOk());
 
     std::vector<uint8_t> src(64, 1);
     std::vector<uint8_t> dst(64, 0);
@@ -83,7 +83,7 @@ TEST(TransferEngineSyncReadTest, ConcurrentRequestersMockOk)
     auto sharedState = std::make_shared<MockDataPlaneBackend::SharedState>();
     auto ownerBackend = std::make_shared<MockDataPlaneBackend>(sharedState);
     TransferEngine owner(ownerBackend);
-    ASSERT_TRUE(owner.Initialize("127.0.0.1:63051", "ascend", "npu:0").IsOk());
+    ASSERT_TRUE(owner.Initialize("127.0.0.1:63051", "p2p", "npu:0").IsOk());
 
     std::vector<std::vector<uint8_t>> srcBuffers(kRequesterCount, std::vector<uint8_t>(kPayloadSize, 0));
     for (int i = 0; i < kRequesterCount; ++i) {
@@ -100,7 +100,7 @@ TEST(TransferEngineSyncReadTest, ConcurrentRequestersMockOk)
             TransferEngine requester(requesterBackend);
             const uint16_t requesterPort = static_cast<uint16_t>(63052 + i);
             const int32_t requesterDeviceId = 1 + i;
-            if (!requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "ascend",
+            if (!requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "p2p",
                                       "npu:" + std::to_string(requesterDeviceId)).IsOk()) {
                 return;
             }
@@ -133,8 +133,8 @@ TEST(TransferEngineSyncReadTest, MultiNpuRegisteredReadOk)
     TransferEngine owner(ownerBackend);
     TransferEngine requester(requesterBackend);
 
-    ASSERT_TRUE(owner.Initialize("127.0.0.1:64051", "ascend", "npu:0").IsOk());
-    ASSERT_TRUE(requester.Initialize("127.0.0.1:64052", "ascend", "npu:1").IsOk());
+    ASSERT_TRUE(owner.Initialize("127.0.0.1:64051", "p2p", "npu:0").IsOk());
+    ASSERT_TRUE(requester.Initialize("127.0.0.1:64052", "p2p", "npu:1").IsOk());
 
     std::vector<uint8_t> srcA(128, 0x1A);
     std::vector<uint8_t> srcB(128, 0x2B);
@@ -164,8 +164,8 @@ TEST(TransferEngineSyncReadTest, BatchMultiRangeMockOk)
     TransferEngine owner(ownerBackend);
     TransferEngine requester(requesterBackend);
 
-    ASSERT_TRUE(owner.Initialize("127.0.0.1:64151", "ascend", "npu:0").IsOk());
-    ASSERT_TRUE(requester.Initialize("127.0.0.1:64152", "ascend", "npu:1").IsOk());
+    ASSERT_TRUE(owner.Initialize("127.0.0.1:64151", "p2p", "npu:0").IsOk());
+    ASSERT_TRUE(requester.Initialize("127.0.0.1:64152", "p2p", "npu:1").IsOk());
 
     std::vector<uint8_t> src0(64, 0x31);
     std::vector<uint8_t> src1(64, 0x42);

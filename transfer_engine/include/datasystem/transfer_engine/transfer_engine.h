@@ -28,6 +28,8 @@ public:
     explicit TransferEngine(std::shared_ptr<IDataPlaneBackend> backend);
     ~TransferEngine();
 
+    /// @param[in] protocol Empty, "ascend", or "hixl" selects HIXL. Use "p2p" to select P2P explicitly;
+    /// TRANSFER_ENGINE_BACKEND=p2p|hixl overrides this value.
     Result Initialize(const std::string &localHostname, const std::string &protocol, const std::string &deviceName);
     int32_t GetRpcPort();
     Result RegisterMemory(uintptr_t bufferAddrRegisrterch, size_t length);
