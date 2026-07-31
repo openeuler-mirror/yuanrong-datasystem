@@ -177,11 +177,11 @@ void MigrateDataHandler::CollectObjectForMigration(const std::string &objectKey,
 std::string MigrateDataHandler::ResultToString(const MigrateResult &result)
 {
     std::stringstream ss;
-    ss << "[Migrate Data] Migrate to remmote node [" << result.address << "] result: [\n"
-       << "\treturn code: " << result.status.ToString() << "\n"
-       << "\tsuccess objects count: " << result.successIds.size() << "\n"
-       << "\tskip objects count: " << result.skipIds.size() << "\n"
-       << "\tfail objects count: " << result.failedIds.size() << "\n"
+    ss << "[Migrate Data] Migrate to remmote node [" << result.address << "] result: ["
+       << "return code: " << result.status.ToString() << ", "
+       << "success objects count: " << result.successIds.size() << ", "
+       << "skip objects count: " << result.skipIds.size() << ", "
+       << "fail objects count: " << result.failedIds.size()
        << "]";
     return ss.str();
 }

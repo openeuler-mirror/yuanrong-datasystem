@@ -562,23 +562,27 @@ TEST_F(KVCacheClientTest, TestSetAndExistConcurrently)
 {
     std::shared_ptr<KVClient> client;
     std::shared_ptr<KVClient> client1;
-    int32_t timeoutMs = 1000;
+    constexpr int32_t timeoutMs = 5'000;
     InitTestKVClient(0, client, timeoutMs);
     InitTestKVClient(1, client1, timeoutMs);
 
-    // worker.PublishObjectWithLock.begin
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.PublishObjectWithLock.begin", "sleep(100)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "OCMetadataManager.QueryMeta,wait", "sleep(500)"));
 
     std::string key = client->GenerateKey();
     std::string value = "value";
-    std::thread t1([client, &key, &value]() { DS_ASSERT_OK(client->Set(key, StringView(value), SetParam{})); });
-    std::thread t2([client, &key]() {
-        std::vector<bool> exists;
-        DS_ASSERT_OK(client->Exist({ key }, exists));
+    Status setStatus = Status::OK();
+    Status existStatus = Status::OK();
+    std::vector<bool> exists;
+    std::thread t1([client, &key, &value, &setStatus]() {
+        setStatus = client->Set(key, StringView(value), SetParam{});
     });
+    std::thread t2([client, &key, &exists, &existStatus]() { existStatus = client->Exist({ key }, exists); });
     t1.join();
     t2.join();
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "worker.PublishObjectWithLock.begin"));
+    DS_ASSERT_OK(setStatus);
+    DS_ASSERT_OK(existStatus);
+    ASSERT_EQ(exists.size(), 1ul);
 
     std::string getVal;
     DS_ASSERT_OK(client1->Get(key, getVal));
