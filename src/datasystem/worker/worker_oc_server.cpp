@@ -215,6 +215,11 @@ constexpr int32_t MASTER_RPC_WARMUP_THREAD_NUM = 4;
 constexpr auto TOPOLOGY_CALLBACK_POLL_INTERVAL = std::chrono::milliseconds(100);
 constexpr auto TOPOLOGY_MEMBERSHIP_POLL_INTERVAL = std::chrono::milliseconds(100);
 constexpr auto TOPOLOGY_STOP_GRACE = std::chrono::seconds(10);
+#ifdef WITH_TESTS
+constexpr auto LOSSLESS_EXIT_GRACE = std::chrono::seconds(10);
+#else
+constexpr auto LOSSLESS_EXIT_GRACE = std::chrono::seconds(120);
+#endif
 static const std::string WORKER_OC_SERVER = "WorkerOcServer";
 static const std::string URMA_WARMUP_KEY_PREFIX = "_urma_";
 constexpr char TOPOLOGY_READINESS_PROBE_KEY[] = "topology-readiness-probe";
@@ -2307,25 +2312,29 @@ void WorkerOCServer::WaitClientsExit()
 
 Status WorkerOCServer::PublishExitingMembership()
 {
-    return RetryUntilSuccessDuringGracefulExit([this] {
-        CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_RUNTIME_ERROR, "Topology Engine is null");
-        return topologyEngine_->MarkExiting();
-    });
+    return RetryUntilSuccessDuringGracefulExit(
+        [this] {
+            CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_RUNTIME_ERROR, "Topology Engine is null");
+            return topologyEngine_->MarkExiting();
+        },
+        LOSSLESS_EXIT_GRACE);
 }
 
 Status WorkerOCServer::WaitForTopologyRemoval()
 {
-    return RetryUntilSuccessDuringGracefulExit([this] {
-        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
-        RETURN_IF_NOT_OK(topologyEngine_->GetSnapshot(snapshot));
-        const cluster::Member *local = nullptr;
-        auto rc = snapshot->FindMemberByAddress(hostPort_.ToString(), local);
-        if (rc.GetCode() == K_NOT_FOUND) {
-            return Status::OK();
-        }
-        RETURN_IF_NOT_OK(rc);
-        RETURN_STATUS(K_NOT_READY, "local member is still present in the authoritative topology");
-    });
+    return RetryUntilSuccessDuringGracefulExit(
+        [this] {
+            std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+            RETURN_IF_NOT_OK(topologyEngine_->GetSnapshot(snapshot));
+            const cluster::Member *local = nullptr;
+            auto rc = snapshot->FindMemberByAddress(hostPort_.ToString(), local);
+            if (rc.GetCode() == K_NOT_FOUND) {
+                return Status::OK();
+            }
+            RETURN_IF_NOT_OK(rc);
+            RETURN_STATUS(K_NOT_READY, "local member is still present in the authoritative topology");
+        },
+        LOSSLESS_EXIT_GRACE);
 }
 
 Status WorkerOCServer::PreShutDown()
@@ -2336,14 +2345,20 @@ Status WorkerOCServer::PreShutDown()
     auto traceId = Trace::Instance().GetTraceID();
     RETURN_IF_NOT_OK(StartPreShutdownWorkers(scaleIn, traceId));
     WaitForPreShutdownTasks(scaleIn);
+    auto topoRc = Status::OK();
     if (scaleIn) {
-        RETURN_IF_NOT_OK(PublishExitingMembership());
-        RETURN_IF_NOT_OK(WaitForTopologyRemoval());
+        LOG_IF_ERROR(PublishExitingMembership(),
+                     "[Graceful exit] local_address=" + hostPort_.ToString()
+                         + " PublishExitingMembership failed; continuing to WaitForTopologyRemoval");
+        topoRc = WaitForTopologyRemoval();
+        LOG_IF_ERROR(topoRc,
+                     "[Graceful exit] local_address=" + hostPort_.ToString()
+                         + " WaitForTopologyRemoval failed; proceeding to cleanup");
     }
     if (objCacheClientWorkerSvc_ != nullptr) {
         LOG_IF_ERROR(objCacheClientWorkerSvc_->RemoveWriteBackIdsLocation(), "RemoveWriteBackIdsLocation failed");
     }
-    return Status::OK();
+    return topoRc;
 }
 
 Status WorkerOCServer::StartPreShutdownWorkers(bool scaleIn, const std::string &traceId)

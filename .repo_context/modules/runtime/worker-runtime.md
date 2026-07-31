@@ -143,6 +143,15 @@
     alive until a current immutable snapshot no longer contains the local member; only then may process shutdown begin.
     This preserves the source for the whole ScaleIn task barrier. The external process manager remains the bounded final
     termination authority when the control plane cannot complete the transition.
+  - the graceful-exit topology retries (`PublishExitingMembership` -> `TopologyEngine::MarkExiting`, and
+    `WaitForTopologyRemoval` -> poll until the local member is gone from the authoritative snapshot) are bounded by the
+    worker-owned constexpr `LOSSLESS_EXIT_GRACE` (worker_oc_server.cpp; 120s in production, 10s under `WITH_TESTS` so
+    the lossless-exit ST case finishes in tens of seconds) through the
+    `RetryUntilSuccessDuringGracefulExit(func, grace)` overload in `common/util/rpc_util.h`; on grace expiry it logs
+    "Graceful-exit retry gave up before success" once and returns the last error. `PreShutDown` runs both topology
+    steps best-effort (`LOG_IF_ERROR`, never early-return) and always reaches `RemoveWriteBackIdsLocation` cleanup
+    before returning the topology status. `WaitClientsExit` still uses the unbounded overload because its own health
+    check breaks the loop.
   - ordinary metadata mutations remain rejected after the local ScaleIn admission gate closes, but the fenced callback
     propagates its non-empty `businessOperationId` as `RemoveMetaReqPb.topology_operation_id`. Metadata owners use that
     marker only to allow the callback's own idempotent remove/give-up-primary effects. The data phase, final source

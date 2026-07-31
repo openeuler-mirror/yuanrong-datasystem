@@ -203,6 +203,9 @@ void SetToken(ReqType &req, const SensitiveValue &token)
     }
 }
 
+/// Retry func until it returns OK. NO DEADLINE — the caller's func MUST self-terminate
+/// (e.g. via a health check or topology-removal signal). For bounded graceful-exit retry,
+/// use the overload below with a std::chrono::seconds grace argument.
 template <class Function, class... Args>
 Status RetryUntilSuccessDuringGracefulExit(Function &&func, Args &&...args)
 {
@@ -213,6 +216,29 @@ Status RetryUntilSuccessDuringGracefulExit(Function &&func, Args &&...args)
         if (status.IsError()) {
             LOG_FIRST_N(WARNING, 1) << "Execute failed with error: " << status.ToString()
                                     << ". Will be executed repeatedly until successful";
+            std::this_thread::sleep_for(std::chrono::seconds(retryIntervalSecs));
+        }
+    } while (status.IsError());
+    LOG(INFO) << "Execute success";
+    return status;
+}
+
+template <class Function, class... Args>
+Status RetryUntilSuccessDuringGracefulExit(Function &&func, std::chrono::seconds grace, Args &&...args)
+{
+    const int retryIntervalSecs = 1;
+    const auto start = std::chrono::steady_clock::now();
+    Status status;
+    do {
+        status = func(std::forward<Args>(args)...);
+        if (status.IsError()) {
+            LOG_FIRST_N(WARNING, 1) << "Execute failed with error: " << status.ToString()
+                                    << ". Will be executed repeatedly until successful or grace expires";
+            if (std::chrono::steady_clock::now() - start >= grace) {
+                LOG(WARNING) << "Graceful-exit retry gave up before success. last_error=" << status.ToString()
+                             << ", grace_secs=" << grace.count();
+                return status;
+            }
             std::this_thread::sleep_for(std::chrono::seconds(retryIntervalSecs));
         }
     } while (status.IsError());
