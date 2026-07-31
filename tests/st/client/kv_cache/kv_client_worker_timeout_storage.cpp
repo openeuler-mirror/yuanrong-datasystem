@@ -42,7 +42,8 @@ public:
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.enableDistributedMaster = "true";
-        opts.workerGflagParams = "-shared_memory_size_mb=5120 -node_timeout_s=1 -heartbeat_interval_ms=500 -v=2 ";
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=5120 -node_timeout_s=1 -node_dead_timeout_s=2 -heartbeat_interval_ms=500 -v=2 ";
         opts.waitWorkerReady = false;
     }
     void SetUp() override
@@ -101,7 +102,7 @@ TEST_F(KVClientWorkerTimeoutStorage, LEVEL1_WorkerTimeoutAndMetaGetFromEtcd)
 
     // 2. Primary worker timeout, get data from l2cache.
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    sleep(5);  // sleep 5s
+    sleep(5);  // Wait for the 2-second dead confirmation budget plus processing margin.
     std::string getValue;
     DS_ASSERT_OK(client1_->Get(objectKey, getValue));
     ASSERT_EQ(data, getValue);

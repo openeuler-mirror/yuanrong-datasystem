@@ -348,6 +348,7 @@ TEST(UrmaSendJettyFaultTest, InFlightWaitTimeoutStatusIncludesPeerContext)
     ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
     const auto status = manager.WaitToFinish(kRequestId, 0);
     EXPECT_EQ(status.GetCode(), K_URMA_WAIT_TIMEOUT);
+    EXPECT_EQ(status.GetMsg().find("RPC deadline exceeded"), std::string::npos) << status.ToString();
     ExpectStatusContains(status, { "requestId=1003", "srcAddress=", "targetAddress=127.0.0.1:29100",
                                    "dataSize=4096", "op=WRITE" });
     EXPECT_FALSE(timedOutJetty->IsValid());

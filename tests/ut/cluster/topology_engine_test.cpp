@@ -518,8 +518,14 @@ TEST(TopologyEngineTest, BuilderRejectsInvalidAddressAndTimeout)
 
     TopologyEngine::Builder invalidTimeout;
     ConfigureBuilder(invalidTimeout, proxy, ingress, callbacks, "invalid-timeout");
-    invalidTimeout.SetNodeDeadTimeout(std::chrono::seconds(0));
+    invalidTimeout.SetNodeDeadTimeout(std::chrono::seconds(-1));
     EXPECT_EQ(invalidTimeout.Build(output).GetCode(), K_INVALID);
+
+    TopologyEngine::Builder zeroTimeout;
+    ConfigureBuilder(zeroTimeout, proxy, ingress, callbacks, "zero-timeout");
+    zeroTimeout.SetNodeDeadTimeout(std::chrono::seconds(0));
+    DS_ASSERT_OK(zeroTimeout.Build(output));
+    ASSERT_NE(output, nullptr);
 }
 
 TEST(TopologyEngineTest, RecoveryReporterExportsCanonicalRuntimeSnapshot)

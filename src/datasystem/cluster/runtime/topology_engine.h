@@ -145,8 +145,8 @@ public:
             std::function<void(std::shared_ptr<const TopologySnapshot>)> handler);
 
         /**
-         * @brief Bind the configured confirmed-failure timeout.
-         * @param[in] timeout Existing node-dead timeout.
+         * @brief Bind the confirmed-failure timeout after membership key deletion.
+         * @param[in] timeout Continuous absence required before confirm; zero confirms immediately.
          * @return This Builder.
          */
         Builder &SetNodeDeadTimeout(std::chrono::seconds timeout);
