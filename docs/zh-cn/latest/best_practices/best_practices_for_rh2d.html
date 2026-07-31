@@ -629,7 +629,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p>同一个 RH2D 通信链路两端必须使用相同的 <code class="docutils literal notranslate"><span class="pre">remote_h2d_link_type</span></code>；HCCS 场景的 buffer-pool 参数也应保持一致。</p></li>
 <li><p>链路类型是进程级配置，必须在 Worker 启动前或 Client 第一次 RH2D 操作前设置，运行期间不能动态切换。</p></li>
 <li><p>Client 进程仅使用一个 NPU device id。Worker 可以配置多个 device id，并按 Client 连接轮询分配。</p></li>
-<li><p>HCCS 场景要求构建产物包含 HIXL 支持。构建时未发现 HIXL 头文件、<code class="docutils literal notranslate"><span class="pre">libcann_hixl.so</span></code> 或 <code class="docutils literal notranslate"><span class="pre">libmetadef.so</span></code>，将无法使用 <code class="docutils literal notranslate"><span class="pre">HCCS</span></code> 链路。</p></li>
+<li><p>HCCS 场景要求构建产物包含 HIXL 支持，且使用的 <code class="docutils literal notranslate"><span class="pre">cann_hixl</span></code> 需支持 <code class="docutils literal notranslate"><span class="pre">comm_resource_config.listen_port</span></code>。构建时未发现 HIXL 头文件、<code class="docutils literal notranslate"><span class="pre">libcann_hixl.so</span></code> 或 <code class="docutils literal notranslate"><span class="pre">libmetadef.so</span></code>，将无法使用 <code class="docutils literal notranslate"><span class="pre">HCCS</span></code> 链路。</p></li>
 <li><p>HCCS 使用 Worker 地址以及 Client 所连接本地 Worker 的地址作为 HIXL endpoint IP。请配置 HCCS 环境中可达的实际 IP，避免使用 <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> 或 <code class="docutils literal notranslate"><span class="pre">0.0.0.0</span></code>。</p></li>
 <li><p>HIXL HCCS 在未设置 <code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE</span></code> 时使用 buffer-pool relay。如需启用 HIXL RoCE 直连模式，Worker 和 Client 进程均需在启动前设置 <code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE=1</span></code>，并确保 RoCE 网络可达。</p></li>
 <li><p>HCCS 当前在单个进程内串行执行 HIXL <code class="docutils literal notranslate"><span class="pre">TransferSync()</span></code>；需要提高并发度时，建议使用多个 Client 进程。</p></li>
@@ -701,6 +701,13 @@ document.addEventListener('DOMContentLoaded', function() {
 </pre></div>
 </div>
 <p>构建 HIXL HCCS 能力时，CANN 安装目录中必须包含 <code class="docutils literal notranslate"><span class="pre">include/hixl/hixl.h</span></code>、<code class="docutils literal notranslate"><span class="pre">include/hixl/hixl_types.h</span></code>、<code class="docutils literal notranslate"><span class="pre">lib64/libcann_hixl.so</span></code> 和 <code class="docutils literal notranslate"><span class="pre">lib64/libmetadef.so</span></code>。缺少任一依赖时，构建产物不会包含 HCCS transport，只能使用默认 P2P-Transfer RoCE 链路。</p>
+<blockquote>
+<div><p>注意：RH2D over HIXL HCCS 的 Worker 侧会通过 HIXL <code class="docutils literal notranslate"><span class="pre">OPTION_GLOBAL_RESOURCE_CONFIG</span></code> 设置 <code class="docutils literal notranslate"><span class="pre">comm_resource_config.listen_port</span></code>，因此仅满足 CANN toolkit 版本要求并不代表在复杂场景可用。已知 CANN 9.0.0 自带的 <code class="docutils literal notranslate"><span class="pre">cann_hixl</span></code> 仍不支持该配置项，使用 HCCS 链路前需手动编译并安装支持该配置项的新版本 HIXL，并确保编译期和运行期加载的都是升级后的 <code class="docutils literal notranslate"><span class="pre">libcann_hixl.so</span></code>。以 aarch64 run 包为例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>cann-hixl-9.1.0_linux-aarch64.run<span class="w"> </span>--upgrade<span class="w"> </span>--quiet<span class="w"> </span>--pylocal
+</pre></div>
+</div>
+<p>安装后重新执行 <code class="docutils literal notranslate"><span class="pre">bash</span> <span class="pre">build.sh</span></code>，让构建过程重新探测新版本 HIXL。若在容器中运行，也需要挂载升级后的 CANN/HIXL 安装目录，避免运行期仍加载旧版本 <code class="docutils literal notranslate"><span class="pre">libcann_hixl.so</span></code>。</p>
+</div></blockquote>
 <p>编译成功后，会在output目录下产生如下编译产物：</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>output/
 ├── openyuanrong_datasystem-x.x.x-cp311-cp311-manylinux_2_34_x86_64.whl

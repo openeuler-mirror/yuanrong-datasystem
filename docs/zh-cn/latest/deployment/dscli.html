@@ -1719,7 +1719,8 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">query</span></code> 通过只读接口查询协调后端，并在命令行进程本地完成拓扑解码、健康状态派生、
 哈希区间计算和 key 路由。命令不会读取 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code>，也不会自动探测后端类型；
 用户必须显式传入 ETCD 或 Coordinator 地址。
-Coordinator 地址使用 ZMQ 服务端口。整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
+Coordinator 使用与服务部署相同的基础地址，查询客户端按 <code class="docutils literal notranslate"><span class="pre">use_brpc</span></code> 配置选择 BRPC 或 ZMQ 传输。
+整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
 当前 ETCD 查询仅支持未启用认证和 TLS 的集群。</p>
 <p>查询 ETCD 集群节点：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>query<span class="w"> </span>cluster<span class="w"> </span><span class="se">\</span>
@@ -1876,9 +1877,45 @@ Coordinator 地址使用 ZMQ 服务端口。整条命令使用固定 5 秒超时
 </tr>
 <tr class="row-even"><td><p>coordinator_rpc_stub_cache_size</p></td>
 <td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">4096</span></code></p></td>
 <td><p>否</p></td>
 <td><p>Coordinator RPC Stub 缓存数量上限</p></td>
+</tr>
+<tr class="row-odd"><td><p>coordinator_topology_max_active_clusters</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
+<td><p>否</p></td>
+<td><p>Coordinator 同时承载的集群拓扑上限，取值范围为 <code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">32]</span></code>；超限时拒绝新集群准入，修改后需重启 Coordinator</p></td>
+</tr>
+<tr class="row-even"><td><p>coordinator_raft_data_dir</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;./datasystem/coordinator_raft&quot;</span></code></p></td>
+<td><p>否</p></td>
+<td><p>Coordinator本地braft状态目录；参数化入口启用选举时不能为空，且每个Coordinator节点必须独占一个目录</p></td>
+</tr>
+<tr class="row-odd"><td><p>coordinator_raft_heartbeat_interval_ms</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">100</span></code></p></td>
+<td><p>否</p></td>
+<td><p>Raft Leader发送心跳的时间间隔，单位为毫秒；取值范围为<code class="docutils literal notranslate"><span class="pre">[10,</span> <span class="pre">10000]</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>coordinator_raft_election_timeout_ms</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1000</span></code></p></td>
+<td><p>否</p></td>
+<td><p>Raft选举超时时间，单位为毫秒；必须是<code class="docutils literal notranslate"><span class="pre">coordinator_raft_heartbeat_interval_ms</span></code>的整数倍，且倍数在<code class="docutils literal notranslate"><span class="pre">[5,</span> <span class="pre">10]</span></code>范围内</p></td>
+</tr>
+<tr class="row-odd"><td><p>coordinator_member_failure_grace_ms</p></td>
+<td><p>uint32</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">10000</span></code></p></td>
+<td><p>否</p></td>
+<td><p>成员持续失败宽限时间，单位为毫秒；必须大于内部健康检查间隔</p></td>
+</tr>
+<tr class="row-even"><td><p>coordinator_discovery_retry_interval_ms</p></td>
+<td><p>uint32</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5000</span></code></p></td>
+<td><p>否</p></td>
+<td><p>Discovery候选重试的最小间隔，单位为毫秒；必须大于<code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>watch_event_dispatch_thread</p></td>
 <td><p>int</p></td>
@@ -1966,9 +2003,9 @@ Coordinator 地址使用 ZMQ 服务端口。整条命令使用固定 5 秒超时
 </tr>
 <tr class="row-odd"><td><p>use_brpc</p></td>
 <td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>否</p></td>
-<td><p>是否使用 brpc 进行 RPC 通信；也可通过环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_USE_BRPC</span></code> 设置</p></td>
+<td><p>是否使用 brpc 进行 RPC 通信；配置文件中的显式值或环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_USE_BRPC</span></code> 可覆盖默认值；参数化入口启用选举时必须为<code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>brpc_server_num_threads</p></td>
 <td><p>int</p></td>
@@ -2004,6 +2041,25 @@ Coordinator 地址使用 ZMQ 服务端口。整条命令使用固定 5 秒超时
 </table>
 </div>
 <p>Coordinator 日志和采样配置的详细语义参见<a class="reference internal" href="#id25">日志与可观测相关配置</a>。</p>
+<p>当前<code class="docutils literal notranslate"><span class="pre">dscli</span></code>通过单例<code class="docutils literal notranslate"><span class="pre">CoordinatorServer</span></code>façade调用无参<code class="docutils literal notranslate"><span class="pre">InitAndRun()</span></code>兼容入口，因此不启用Coordinator选举；
+实际生命周期实现由非单例<code class="docutils literal notranslate"><span class="pre">CoordinatorRuntime</span></code>承担。上表中的7个<code class="docutils literal notranslate"><span class="pre">coordinator_raft_*</span></code>/
+<code class="docutils literal notranslate"><span class="pre">coordinator_election_*</span></code>参数在使用<code class="docutils literal notranslate"><span class="pre">CoordinatorOptions</span></code>的参数化嵌入式入口启用选举时生效。仅在
+<code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code>中填写这些参数或设置<code class="docutils literal notranslate"><span class="pre">use_brpc=true</span></code>，不会让当前<code class="docutils literal notranslate"><span class="pre">dscli</span></code>入口启用选举。</p>
+<p>生产部署每个进程只运行一个Coordinator Runtime。参数化<code class="docutils literal notranslate"><span class="pre">CoordinatorServer::InitAndRun(options)</span></code>要求
+<code class="docutils literal notranslate"><span class="pre">configFilePath</span></code>非空；文件访问、JSON解析和flag校验由<code class="docutils literal notranslate"><span class="pre">FlagManager</span></code>及Runtime启动流程负责。Runtime在路径非空时
+解析配置文件，随后调用一次<code class="docutils literal notranslate"><span class="pre">GetRaftFlags()</span></code>取得本机地址、独占Raft数据目录和选举时序快照。文件解析失败统一
+返回不包含路径和parser原文的错误。达到<code class="docutils literal notranslate"><span class="pre">RUNNING</span></code>前的失败完成回调和Service清理后可重试；达到<code class="docutils literal notranslate"><span class="pre">RUNNING</span></code>后该
+Runtime保持one-shot。</p>
+<p>直接使用空<code class="docutils literal notranslate"><span class="pre">configFilePath</span></code>启动<code class="docutils literal notranslate"><span class="pre">CoordinatorRuntime</span></code>仅用于内部同进程测试：Runtime跳过文件解析并使用调用方
+预先设置的进程flags。测试fixture必须在启动任何Runtime前设置公共flags，在任一Runtime活动期间保持这些flags
+不变，并在所有Runtime停止和线程join后恢复；各实例的endpoint、Raft数据目录和选举时序通过各自的
+<code class="docutils literal notranslate"><span class="pre">GetRaftFlags()</span></code>快照隔离。</p>
+<p>参数化入口的当前顺序为：解析非空配置路径并取得Raft快照；Service <code class="docutils literal notranslate"><span class="pre">Init</span></code>；Service <code class="docutils literal notranslate"><span class="pre">Start</span></code>注册业务和braft
+services、开始监听并保持<code class="docutils literal notranslate"><span class="pre">STARTING</span></code>；Runtime <code class="docutils literal notranslate"><span class="pre">onStart</span></code>注册endpoint；Service <code class="docutils literal notranslate"><span class="pre">StartElectionManager</span></code>启动后台
+Manager并发布<code class="docutils literal notranslate"><span class="pre">RUNNING</span></code>；进入event loop。<code class="docutils literal notranslate"><span class="pre">STARTING</span></code>窗口内业务RPC返回<code class="docutils literal notranslate"><span class="pre">K_NOT_READY</span></code>。Manager随后异步执行
+Discovery/bootstrap或recover，启动Node再启动Membership。同步启动失败时，Runtime先调用<code class="docutils literal notranslate"><span class="pre">onStop</span></code>，再由
+Service shutdown依次停止Membership、drain Node、关闭shared server并释放其余components。进程signal handler
+只设置<code class="docutils literal notranslate"><span class="pre">g_exitFlag</span></code>；显式Runtime <code class="docutils literal notranslate"><span class="pre">Stop</span></code>只唤醒本实例。</p>
 <p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 包含 datasystem_worker 的命令行参数相关配置项。启动 Worker 时，必须在
 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>、<code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>、<code class="docutils literal notranslate"><span class="pre">metastore_address</span></code> 中配置且仅配置一个集群管理后端。</p>
 <blockquote>
