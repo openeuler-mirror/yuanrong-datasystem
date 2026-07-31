@@ -1,0 +1,4 @@
+interface:
+  display_name: "DS Resolve Issue"
+  short_description: "Resolve a GitCode issue and open a verified PR"
+  default_prompt: "Use $ds-resolve-issue to resolve this GitCode issue and open a PR."

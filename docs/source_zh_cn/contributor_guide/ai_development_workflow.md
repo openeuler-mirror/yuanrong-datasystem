@@ -1,6 +1,6 @@
 # AI 开发流程
 
-openYuanrong datasystem 在 `.skills/` 中配置了 10 个 AI 辅助开发 skill，覆盖从 issue 拉取到 PR 创建的完整开发流程。本文档面向希望了解或参与 AI 辅助开发的贡献者。
+openYuanrong datasystem 在 `.skills/` 中配置了多项 AI 辅助开发 skill，覆盖从 issue 接收、代码修改到 PR 创建的完整开发流程。本文档面向希望了解或参与 AI 辅助开发的贡献者。
 
 ---
 
@@ -10,7 +10,7 @@ openYuanrong datasystem 在 `.skills/` 中配置了 10 个 AI 辅助开发 skill
 
 | Skill | 触发示例 | 用途 |
 |-------|---------|------|
-| **ds-issue-intake** | "拉取 issue 572"、"分析这个 issue" | 从 GitCode 拉取 issue，脱敏敏感信息，生成结构化任务 spec |
+| **ds-resolve-issue** | "解决 issue 572"、"修复这个 issue 并提 PR" | 统一编排 issue 接收、脱敏、源码分析、实现、检视、验证和 PR 创建 |
 | **ds-infra-engineering** | "修改 worker client cache 逻辑"、"分析 datasystem 代码" | 实现前的工程门控——变更分解、高风险面识别、API 审查、性能/并发/恢复评估 |
 | **ds-pr-review** | "检视 1031"、"review this diff" | 多轮深入代码检视——正确性、API 设计、性能、并发、C++ 安全、敏感信息，发布 finding 到 PR 页面 |
 | **ds-test** | "跑远端验证"、"验证这个改动" | 规划并运行本地/远端验证（build.sh / CMake / Bazel / CTest） |
@@ -32,15 +32,15 @@ openYuanrong datasystem 在 `.skills/` 中配置了 10 个 AI 辅助开发 skill
 
 标准的 issue → PR 流程：
 
-1. **ds-issue-intake**：拉取 issue，脱敏，生成结构化任务 spec
+1. **ds-resolve-issue**：接收 issue，脱敏并生成 task spec，统一编排后续步骤
 2. **ds-infra-engineering**：分析代码路径，识别高风险面，选择验证策略 → 实施最小改动
 3. **ds-pr-review**：多轮深入检视——正确性、性能、并发、C++ 安全，发布 finding
 4. **ds-test**：规划验证命令 → 跑本地/远端编译和测试 → 产出验证报告
 5. **ds-self-verify**：diff 审查 → 工程门控 → 上下文更新，确认 PR 就绪
 6. **ds-create-pr**：模板合规校验 + 敏感信息扫描 + 创建 PR
-7. **ds-pr-comment-proc**：处理 review 反馈，回复/resolve discussion
+7. **ds-pr-comment-proc**：PR 创建后按需处理 review 反馈，回复/resolve discussion
 
-对于 "帮我解决 issue#572 并提 PR" 这样的组合请求，AI 会自动串联上述 skills，无需手动逐个调用。
+对于 "帮我解决 issue#572 并提 PR" 这样的组合请求，只需调用 `ds-resolve-issue`，由它自动编排上述主链步骤，无需手动逐个调用。
 
 ---
 
