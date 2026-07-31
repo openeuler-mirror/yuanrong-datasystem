@@ -19,10 +19,12 @@
 
 #include "rh2d_transport_strategy.h"
 
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace datasystem {
@@ -43,6 +45,11 @@ public:
                         std::shared_ptr<aclrtStream> stream) override;
     P2pLink LinkType() const override;
 
+protected:
+    // Separated from Connect so connection coordination can be tested without invoking the NPU runtime.
+    virtual Status InitializeP2PComm(const std::string &remoteIdentity, P2pKind kind,
+                                     std::function<int()> *heartbeatCallback, P2PComm &p2pComm, int32_t &devId);
+
 private:
     struct P2PCommContext {
         P2PCommContext(P2PComm p2pComm, int32_t deviceId) : comm(p2pComm), devId(deviceId)
@@ -56,17 +63,29 @@ private:
         int32_t devId = -1;
     };
 
+    struct ConnectionInitState {
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool done = false;
+        Status status;
+    };
+
+    Status WaitForConnectionInit(const std::shared_ptr<ConnectionInitState> &initState);
+    void PublishConnectionInitResult(const std::string &remoteIdentity,
+                                     const std::shared_ptr<ConnectionInitState> &initState, const Status &status);
     Status GetP2PCommContext(const std::string &remoteEndpoint, std::shared_ptr<P2PCommContext> &ctx);
     Status SubmitScatterBatch(P2pScatterEntry *entries, P2PComm p2pComm, aclrtStream stream, uint32_t start,
                               uint32_t size, uint32_t blobCount, bool isFinal);
 
-    // Map from remote endpoint (base64 rootInfo) to P2PComm handle and its device context.
-    // Uses std::shared_ptr on P2PCommContext to manage connection lifetime:
-    //   - ScatterBatch copies the shared_ptr, keeping the connection alive after releasing the lock.
-    //   - Disconnect simply removes the map entry; the underlying P2PComm is destroyed when the last
-    //     shared_ptr reference is released (via ~P2PCommContext()).
+    // connMutex_ only protects these maps and disconnect gates. The blocking NPU/TCP handshake is deliberately outside
+    // this mutex. connectionInits_ provides single-flight initialization per remote identity, so duplicate calls share
+    // one result while unrelated identities initialize concurrently.
     std::unordered_map<std::string, std::shared_ptr<P2PCommContext>> endpointToComm_;
+    std::unordered_map<std::string, std::shared_ptr<ConnectionInitState>> connectionInits_;
+    std::unordered_set<std::string> disconnectingEndpoints_;
     std::mutex connMutex_;
+    std::condition_variable connCv_;
+    bool disconnectAllInProgress_ = false;
 };
 
 }  // namespace datasystem

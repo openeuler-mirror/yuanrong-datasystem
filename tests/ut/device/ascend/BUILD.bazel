@@ -18,3 +18,13 @@ ds_cc_test(
         "@local_ascend//:hixl",
     ],
 )
+
+ds_cc_test(
+    name = "roce_transport_test",
+    srcs = ["roce_transport_test.cpp"],
+    tags = ["npu"],
+    deps = [
+        "//src/datasystem/common/rdma/npu:remote_h2d_manager",
+        "@com_google_googletest//:gtest",
+    ],
+)

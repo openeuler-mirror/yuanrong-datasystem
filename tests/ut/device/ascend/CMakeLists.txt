@@ -1,3 +1,16 @@
+add_ds_ut_executable(roce_transport_ut
+        roce_transport_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
+
+target_link_libraries(roce_transport_ut PRIVATE
+        GTest::gtest
+        GTest::gmock
+        common_rdma
+        common_ak_sk
+        pthread)
+
+add_datasystem_test(roce_transport_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+
 # HIXL one-sided RH2D smoke test. Builds only when HIXL C++ API dependencies are discovered.
 
 if (NOT ASCEND_HIXL_FOUND)
