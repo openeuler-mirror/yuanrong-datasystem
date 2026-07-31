@@ -32,8 +32,12 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-refresh-docs/scripts/refresh_online_docs.py`
   - `.skills/ds-log-analysis/SKILL.md`
   - `.skills/rdma-ucx-perf-debug/SKILL.md`
+  - `.skills/ds-design/SKILL.md`
+  - `.skills/ds-design/scripts/self_check.py`
+  - `.skills/ds-design/scripts/mermaid_lint.py`
+  - `.skills/ds-design/scripts/scope_check.py`
 - Last verified against source:
-  - `2026-06-25`
+  - `2026-07-22`
 
 ## Purpose
 
@@ -59,6 +63,7 @@ when a natural-language request should invoke one of them.
 | `ds-refresh-docs` | rebuild and publish online Chinese docs from the latest upstream `master` into `doc_pages`, then automatically open the GitCode PR | “更新在线文档”, “刷新在线文档”, “发布在线文档”, “refresh online docs”, “update zh-cn latest docs” | mentions of online docs, docs publishing, or `doc_pages` without clearly asking to refresh or publish |
 | `ds-log-analysis` | analyze KVCache access/resource logs and generate HTML reports | “日志分析”, “access log 分析”, “resource log 报告”, “QPS/延迟/错误率趋势”, “KVCache report” | asking what the log format means without requesting report generation |
 | `rdma-ucx-perf-debug` | diagnose RDMA/UCX throughput, latency, flush, submit, batch get, or resource lifetime problems | “RDMA 性能”, “UCX 延迟”, “UCP flush”, “BatchGet 远端拉取慢”, “P2P/RDMA crash” | generic mention of RDMA code ownership without a performance/debugging task |
+| `ds-design` | author, revise, or review overview design (概要设计) and detailed design (子模块详细设计) documents for features, refactors, or submodules in yuanrong-datasystem, including requirement clarification when the entry point is vague, source-backed current-state investigation via subagent, chapter-by-chapter writing with per-section human gate, and structural self-check plus Mermaid lint and scope check | “写设计”, “设计文档”, “概要设计”, “详细设计”, “子模块设计”, “做个设计”, “改设计”, “修订设计文档”, “design doc” | discussion of design philosophy without asking to produce a design doc; already inside ds-infra-engineering coding flow |
 
 ## Skill Package Structure
 
