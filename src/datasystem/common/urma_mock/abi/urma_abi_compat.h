@@ -709,8 +709,7 @@ struct urma_jfs_wr_flag_t {
             uint32_t inline_flag : 1;
             uint32_t fence : 1;
             uint32_t signaled : 1;
-            uint32_t has_drv_ext : 1;
-            uint32_t reserved : 27;
+            uint32_t reserved : 28;
         } bs;
         uint32_t value;
     };
