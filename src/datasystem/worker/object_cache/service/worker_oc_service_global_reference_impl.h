@@ -18,6 +18,14 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GLOBAL_REFERENCE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GLOBAL_REFERENCE_IMPL_H
 
+// Same CHECK_EQ << "..." constraint as worker_oc_service_crud_common_api.h:
+// request_context.h (included below) pulls log.h (via time_cost.h) which
+// redefines CHECK_EQ as a do{}while(0) that breaks brpc's versioned_ref_with_id.h
+// CHECK_EQ << "..." usage. This .h includes request_context.h BEFORE
+// worker_oc_service_crud_common_api.h, so the shared fix there is not enough;
+// include brpc/controller.h here first.
+#include <brpc/controller.h>
+
 #include <unordered_set>
 
 #include "datasystem/common/util/net_util.h"
