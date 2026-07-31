@@ -79,6 +79,7 @@ struct RecoveryGeneration {
           store(std::make_unique<CoordinatorStore>(memoryStore, registry, dispatcher, ttlManager)),
           manager(std::make_unique<coordinator::TopologyRecoveryManager>(coordinatorId, *store, clock, Options()))
     {
+        manager->BeginLeaderRound({ 0, coordinatorId });
     }
 
     static coordinator::TopologyRecoveryOptions Options()
@@ -204,7 +205,7 @@ public:
         report.canonicalDigest = request.topology_digest();
         report.canonicalTopology = request.canonical_topology();
         coordinator::TopologyRecoveryReportDecision decision;
-        auto status = manager->ReportCandidate(request.cluster_name(), request.coordinator_id(), std::move(report),
+        auto status = manager->ReportCandidate(request.cluster_name(), 0, request.coordinator_id(), std::move(report),
                                                decision);
         if (status.IsOk()) {
             FillResponse(decision, response);
@@ -339,7 +340,7 @@ TEST(CoordinatorTopologyRecoveryComponentTest, WorkerRebuildsTwoFreshCoordinator
     RecoveryGeneration first(COORDINATOR_A);
     first.manager->ObserveMembershipChange(MembershipKey(), true);
     proxy.SetTarget(COORDINATOR_A, *first.manager);
-    reporter.NotifyMembershipReady(COORDINATOR_A);
+    reporter.NotifyMembershipReady(CoordinatorLeaderIdentity{ HostPort(), COORDINATOR_A, 0, 1, true });
     ASSERT_TRUE(proxy.WaitForAttempts(2));
     ASSERT_TRUE(DriveReady(first));
     ExpectInstalled(first, canonical);
@@ -347,7 +348,7 @@ TEST(CoordinatorTopologyRecoveryComponentTest, WorkerRebuildsTwoFreshCoordinator
     RecoveryGeneration second(COORDINATOR_B);
     second.manager->ObserveMembershipChange(MembershipKey(), true);
     proxy.SetTarget(COORDINATOR_B, *second.manager);
-    reporter.NotifyMembershipReady(COORDINATOR_B);
+    reporter.NotifyMembershipReady(CoordinatorLeaderIdentity{ HostPort(), COORDINATOR_B, 0, 1, true });
     ASSERT_TRUE(proxy.WaitForAttempts(4));
     ASSERT_TRUE(DriveReady(second));
     ExpectInstalled(second, canonical);
@@ -377,7 +378,7 @@ TEST(CoordinatorTopologyRecoveryComponentTest, CoordinatorSwitchBetweenEvidenceA
     first.manager->ObserveMembershipChange(MembershipKey(), true);
     proxy.SetTarget(COORDINATOR_A, *first.manager);
     proxy.BlockNextResponse();
-    reporter.NotifyMembershipReady(COORDINATOR_A);
+    reporter.NotifyMembershipReady(CoordinatorLeaderIdentity{ HostPort(), COORDINATOR_A, 0, 1, true });
     if (!proxy.WaitUntilResponseBlocked()) {
         ADD_FAILURE() << "evidence response was not blocked";
         proxy.ReleaseBlockedResponse();
@@ -388,7 +389,7 @@ TEST(CoordinatorTopologyRecoveryComponentTest, CoordinatorSwitchBetweenEvidenceA
     RecoveryGeneration second(COORDINATOR_B);
     second.manager->ObserveMembershipChange(MembershipKey(), true);
     proxy.SetTarget(COORDINATOR_B, *second.manager);
-    reporter.NotifyMembershipReady(COORDINATOR_B);
+    reporter.NotifyMembershipReady(CoordinatorLeaderIdentity{ HostPort(), COORDINATOR_B, 0, 1, true });
     proxy.ReleaseBlockedResponse();
 
     ASSERT_TRUE(proxy.WaitForAttempts(3));

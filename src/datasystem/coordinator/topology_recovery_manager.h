@@ -9,8 +9,11 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 
@@ -20,11 +23,19 @@ namespace datasystem {
 class CoordinatorStore;
 class SteadyClock;
 class ThreadPool;
+namespace cluster {
+struct TopologyState;
+}
 
 namespace coordinator {
 
 enum class TopologyRecoveryState : uint8_t { RECOVERING, INSTALLING, READY, BLOCKED };
-enum class TopologyRecoveryReportResult : uint8_t { ACCEPTED, COORDINATOR_ID_MISMATCH, MEMBERSHIP_NOT_READY };
+enum class TopologyRecoveryReportResult : uint8_t {
+    ACCEPTED,
+    COORDINATOR_ID_MISMATCH,
+    MEMBERSHIP_NOT_READY,
+    STALE_LEADER_TERM,
+};
 enum class TopologyCoordinationKeyKind : uint8_t {
     OTHER,
     TOPOLOGY,
@@ -53,6 +64,34 @@ struct TopologyRecoveryReportDecision {
     TopologyRecoveryState state{ TopologyRecoveryState::RECOVERING };
     TopologyRecoveryReportResult result{ TopologyRecoveryReportResult::ACCEPTED };
     bool payloadRequired{ false };
+};
+
+struct TopologyRecoveryRoundIdentity {
+    uint64_t leaderTerm{ 0 };
+    std::string coordinatorId;
+
+    bool operator==(const TopologyRecoveryRoundIdentity &other) const
+    {
+        return leaderTerm == other.leaderTerm && coordinatorId == other.coordinatorId;
+    }
+
+    bool operator!=(const TopologyRecoveryRoundIdentity &other) const
+    {
+        return !(*this == other);
+    }
+};
+
+struct TopologyRecoveryRoundSummary {
+    size_t contextCount{ 0 };
+    size_t recoveringCount{ 0 };
+    size_t installingCount{ 0 };
+    size_t readyCount{ 0 };
+    size_t blockedCount{ 0 };
+
+    bool AllDiscoveredClustersReady() const
+    {
+        return recoveringCount == 0 && installingCount == 0 && blockedCount == 0;
+    }
 };
 
 constexpr size_t DEFAULT_MAX_CANDIDATE_MEMORY_BYTES = 64 * 1'024 * 1'024;
@@ -133,6 +172,12 @@ public:
      */
     void NotifyMembershipActivity(const std::string &physicalKey);
 
+    void BeginLeaderRound(TopologyRecoveryRoundIdentity identity);
+    void EndLeaderRound(const TopologyRecoveryRoundIdentity &identity);
+
+    void SetLeaderRoundFence(std::shared_mutex *fenceMutex,
+                             std::function<bool(const TopologyRecoveryRoundIdentity &)> isCurrent);
+
     /**
      * @brief Validate and record Worker-initiated evidence or payload.
      * @param[in] clusterName Cluster scope; empty is valid.
@@ -141,8 +186,11 @@ public:
      * @param[out] decision Control result and payload request.
      * @return Validation, admission or shutdown status.
      */
-    Status ReportCandidate(const std::string &clusterName, const std::string &requestCoordinatorId,
+    Status ReportCandidate(const std::string &clusterName, uint64_t requestLeaderTerm,
+                           const std::string &requestCoordinatorId,
                            TopologyRecoveryCandidateReport report, TopologyRecoveryReportDecision &decision);
+
+    TopologyRecoveryRoundSummary GetRoundSummary() const;
 
     /**
      * @brief Read one cluster state without creating a context.
@@ -206,7 +254,8 @@ private:
      * @param[out] decision Recovery decision.
      * @return Recording status.
      */
-    Status RecordEvidence(const std::string &clusterName, TopologyRecoveryCandidateReport report,
+    Status RecordEvidence(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity,
+                          TopologyRecoveryCandidateReport report,
                           TopologyRecoveryReportDecision &decision);
 
     /**
@@ -227,7 +276,8 @@ private:
      * @param[out] decision Recovery decision.
      * @return Submission or validation status.
      */
-    Status SubmitPayload(const std::string &clusterName, TopologyRecoveryCandidateReport report,
+    Status SubmitPayload(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity,
+                         TopologyRecoveryCandidateReport report,
                          TopologyRecoveryReportDecision &decision);
 
     /**
@@ -237,7 +287,8 @@ private:
      * @param[in] report Validated payload to consume.
      * @return Recording status.
      */
-    Status RecordPayload(const std::string &clusterName, uint64_t contextGeneration,
+    Status RecordPayload(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity,
+                         uint64_t contextGeneration,
                          TopologyRecoveryCandidateReport report);
 
     /**
@@ -249,9 +300,9 @@ private:
      * @param[in] validationStatus Payload validation result.
      * @return Original validation status.
      */
-    Status RejectPayload(const std::string &clusterName, uint64_t contextGeneration,
-                         const TopologyRecoveryCandidateReport &report, size_t payloadBytes,
-                         const Status &validationStatus);
+    Status RejectPayload(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity,
+                         uint64_t contextGeneration, const TopologyRecoveryCandidateReport &report,
+                         size_t payloadBytes, const Status &validationStatus);
 
     /**
      * @brief Drop a retained payload that is no longer selected.
@@ -271,14 +322,22 @@ private:
      * @param[out] resolved True when an existing authority made recovery READY or BLOCKED.
      * @return Store status.
      */
-    Status AdoptStoredAuthorityIfPresent(const std::string &clusterName, bool &resolved);
+    Status AdoptStoredAuthorityIfPresent(const std::string &clusterName,
+                                         const TopologyRecoveryRoundIdentity &identity, bool &resolved);
+
+    /**
+     * @brief Apply an existing Store authority while mutex_ is held and the recovery round remains current.
+     */
+    void ApplyStoredAuthorityLocked(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity,
+                                    uint64_t contextGeneration, int64_t revision, const Status &decodeStatus,
+                                    const cluster::TopologyState &topology, bool &resolved);
 
     /**
      * @brief Advance one cluster after its discovery deadline.
      * @param[in] clusterName Cluster scope.
      * @return Arbitration or Store status.
      */
-    Status MaybeFinalize(const std::string &clusterName);
+    Status MaybeFinalize(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity);
 
     /**
      * @brief Freeze an eligible candidate for installation while mutex_ is held.
@@ -287,7 +346,7 @@ private:
      * @param[out] version Frozen topology version; zero means no installation is ready.
      * @return Arbitration status.
      */
-    Status PrepareInstallationLocked(const std::string &clusterName,
+    Status PrepareInstallationLocked(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity,
                                      std::shared_ptr<const std::string> &payload, uint64_t &version);
 
     /**
@@ -296,7 +355,8 @@ private:
      * @param[in] version Installed topology version.
      * @param[in] installStatus Store installation result.
      */
-    void CompleteInstallationLocked(const std::string &clusterName, uint64_t version,
+    void CompleteInstallationLocked(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity,
+                                    uint64_t version,
                                     const Status &installStatus);
 
     /**
@@ -328,6 +388,10 @@ private:
     size_t retainedCandidateBytes_{ 0 };
     size_t admittedReportBytes_{ 0 };
     uint64_t nextContextGeneration_{ 1 };
+    std::optional<TopologyRecoveryRoundIdentity> activeRound_;
+    // Owned by CoordinatorServiceImpl; serializes a Store installation with leader-stop revocation.
+    std::shared_mutex *leaderRoundFenceMutex_{ nullptr };
+    std::function<bool(const TopologyRecoveryRoundIdentity &)> isLeaderRoundCurrent_;
     std::unordered_map<std::string, std::unique_ptr<ClusterRecoveryContext>> contexts_;
 };
 

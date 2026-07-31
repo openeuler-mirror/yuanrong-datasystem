@@ -21,6 +21,7 @@
 #include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 #include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/cluster/coordination_backend/topology_recovery_reporter.h"
+#include "datasystem/cluster/coordination_backend/worker_leader_reconciler.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
@@ -430,12 +431,26 @@ Status TopologyEngine::InitializeOwnedComponents(std::chrono::seconds nodeDeadTi
         RETURN_IF_NOT_OK(TopologyControllerRuntime::Create(
             std::move(runtimeOptions), *controllerBackend_, *algorithm_, controllerRuntime_));
     }
-    if (coordinatorProxy_ != nullptr) {
-        recoveryReporter_ = std::make_unique<TopologyRecoveryReporter>(
-            *coordinatorProxy_, options_.clusterName, options_.localAddress,
-            [this](uint64_t &version, std::string &canonical) { return GetRecoveryTopology(version, canonical); });
-    }
+    InitializeCoordinatorComponents();
     return Status::OK();
+}
+
+void TopologyEngine::InitializeCoordinatorComponents()
+{
+    if (coordinatorProxy_ == nullptr) {
+        return;
+    }
+    recoveryReporter_ = std::make_unique<TopologyRecoveryReporter>(
+        *coordinatorProxy_, options_.clusterName, options_.localAddress,
+        [this](uint64_t &version, std::string &canonical) { return GetRecoveryTopology(version, canonical); });
+    if (coordinatorProxy_->GetLeaderRouteProvider() == nullptr) {
+        return;
+    }
+    auto *member = static_cast<DsCoordinationBackend *>(memberBackend_.get());
+    workerLeaderReconciler_ =
+        std::make_unique<WorkerLeaderReconciler>(*coordinatorProxy_, *member, *recoveryReporter_, options_.clusterName);
+    member->SetMembershipReconcileHandler(
+        [this](bool waitForCompletion) { return workerLeaderReconciler_->Reconcile(waitForCompletion); });
 }
 
 TopologyEngine::~TopologyEngine()
@@ -552,7 +567,12 @@ Status TopologyEngine::Start()
     if (coordinatorProxy_ != nullptr) {
         auto *member = static_cast<DsCoordinationBackend *>(memberBackend_.get());
         member->SetMembershipReadyHandler([this](const std::string &coordinatorId, bool) {
-            if (recoveryReporter_ != nullptr) {
+            if (recoveryReporter_ == nullptr) {
+                return;
+            }
+            if (workerLeaderReconciler_ != nullptr) {
+                workerLeaderReconciler_->NotifyLegacyMembershipReady(coordinatorId);
+            } else {
                 recoveryReporter_->NotifyMembershipReady(coordinatorId);
             }
         });
@@ -727,7 +747,17 @@ Status TopologyEngine::ShutdownComponents(std::chrono::steady_clock::time_point 
 {
     Status firstError;
     PreserveFirstError(UnbindCoordinatorIngress(deadline), firstError);
+    if (coordinatorProxy_ != nullptr) {
+        auto *member = static_cast<DsCoordinationBackend *>(memberBackend_.get());
+        // Keepalive can complete while its event sources drain; it must not enter engine-owned callbacks then.
+        member->SetMembershipReadyHandler({});
+        member->SetMembershipReconcileHandler({});
+    }
+    if (workerLeaderReconciler_ != nullptr) {
+        workerLeaderReconciler_->Shutdown();
+    }
     PreserveFirstError(memberBackend_->ShutdownEventSources(), firstError);
+    workerLeaderReconciler_.reset();
     if (recoveryReporter_ != nullptr) {
         PreserveFirstError(recoveryReporter_->Shutdown(), firstError);
     }

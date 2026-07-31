@@ -352,6 +352,9 @@ Status TopologyRecoveryManager::ValidateWatchRange(const std::string &key, const
 void TopologyRecoveryManager::UpdateMembership(const ParsedTopologyCoordinationKey &parsed, bool present)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!activeRound_.has_value()) {
+        return;
+    }
     ClusterRecoveryContext *context = nullptr;
     auto found = contexts_.find(parsed.clusterName);
     auto ensureStatus = present ? EnsureContext(parsed.clusterName, context) : Status::OK();
@@ -439,6 +442,41 @@ void TopologyRecoveryManager::NotifyMembershipActivity(const std::string &physic
     ScheduleReconcile(parsed.clusterName);
 }
 
+void TopologyRecoveryManager::BeginLeaderRound(TopologyRecoveryRoundIdentity identity)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopping_ || identity.coordinatorId != coordinatorId_) {
+        return;
+    }
+    for (auto &[clusterName, context] : contexts_) {
+        static_cast<void>(clusterName);
+        ReleaseSelectedPayload(*context);
+    }
+    contexts_.clear();
+    // Counters belong to the active round. Old closures leave them untouched once
+    // their identity fence no longer matches.
+    pendingRecoveryWork_ = 0;
+    retainedCandidateBytes_ = 0;
+    admittedReportBytes_ = 0;
+    activeRound_ = std::move(identity);
+}
+
+void TopologyRecoveryManager::EndLeaderRound(const TopologyRecoveryRoundIdentity &identity)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (activeRound_.has_value() && *activeRound_ == identity) {
+        activeRound_.reset();
+    }
+}
+
+void TopologyRecoveryManager::SetLeaderRoundFence(
+    std::shared_mutex *fenceMutex, std::function<bool(const TopologyRecoveryRoundIdentity &)> isCurrent)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    leaderRoundFenceMutex_ = fenceMutex;
+    isLeaderRoundCurrent_ = std::move(isCurrent);
+}
+
 Status TopologyRecoveryManager::ValidateEvidence(const std::string &clusterName,
                                                  const TopologyRecoveryCandidateReport &report) const
 {
@@ -480,24 +518,34 @@ Status TopologyRecoveryManager::ValidatePayload(const TopologyRecoveryCandidateR
     return Status::OK();
 }
 
-Status TopologyRecoveryManager::ReportCandidate(const std::string &clusterName,
+Status TopologyRecoveryManager::ReportCandidate(const std::string &clusterName, uint64_t requestLeaderTerm,
                                                 const std::string &requestCoordinatorId,
                                                 TopologyRecoveryCandidateReport report,
                                                 TopologyRecoveryReportDecision &decision)
 {
     decision = TopologyRecoveryReportDecision{};
+    TopologyRecoveryRoundIdentity identity;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         CHECK_FAIL_RETURN_STATUS(!stopping_, K_SHUTTING_DOWN, "topology recovery manager is shutting down");
-        if (requestCoordinatorId != coordinatorId_) {
+        if (!activeRound_.has_value() || activeRound_->coordinatorId != requestCoordinatorId) {
             decision.result = TopologyRecoveryReportResult::COORDINATOR_ID_MISMATCH;
             return Status::OK();
         }
+        if (activeRound_->leaderTerm != requestLeaderTerm) {
+            decision.result = TopologyRecoveryReportResult::STALE_LEADER_TERM;
+            return Status::OK();
+        }
+        identity = *activeRound_;
     }
     RETURN_IF_NOT_OK(ValidateEvidence(clusterName, report));
     {
         std::lock_guard<std::mutex> lock(mutex_);
         CHECK_FAIL_RETURN_STATUS(!stopping_, K_SHUTTING_DOWN, "topology recovery manager is shutting down");
+        if (!activeRound_.has_value() || *activeRound_ != identity) {
+            decision.result = TopologyRecoveryReportResult::STALE_LEADER_TERM;
+            return Status::OK();
+        }
         auto found = contexts_.find(clusterName);
         if (found == contexts_.end()) {
             decision.result = TopologyRecoveryReportResult::MEMBERSHIP_NOT_READY;
@@ -520,12 +568,38 @@ Status TopologyRecoveryManager::ReportCandidate(const std::string &clusterName,
             << ", version=" << report.topologyVersion << ", has_snapshot=" << report.hasSnapshot
             << ", payload_bytes=" << report.canonicalTopology.size();
     if (report.canonicalTopology.empty()) {
-        return RecordEvidence(clusterName, std::move(report), decision);
+        return RecordEvidence(clusterName, identity, std::move(report), decision);
     }
-    return SubmitPayload(clusterName, std::move(report), decision);
+    return SubmitPayload(clusterName, identity, std::move(report), decision);
+}
+
+TopologyRecoveryRoundSummary TopologyRecoveryManager::GetRoundSummary() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    TopologyRecoveryRoundSummary summary;
+    for (const auto &[clusterName, context] : contexts_) {
+        static_cast<void>(clusterName);
+        ++summary.contextCount;
+        switch (context->state) {
+            case TopologyRecoveryState::RECOVERING:
+                ++summary.recoveringCount;
+                break;
+            case TopologyRecoveryState::INSTALLING:
+                ++summary.installingCount;
+                break;
+            case TopologyRecoveryState::READY:
+                ++summary.readyCount;
+                break;
+            case TopologyRecoveryState::BLOCKED:
+                ++summary.blockedCount;
+                break;
+        }
+    }
+    return summary;
 }
 
 Status TopologyRecoveryManager::RecordEvidence(const std::string &clusterName,
+                                               const TopologyRecoveryRoundIdentity &identity,
                                                TopologyRecoveryCandidateReport report,
                                                TopologyRecoveryReportDecision &decision)
 {
@@ -533,6 +607,8 @@ Status TopologyRecoveryManager::RecordEvidence(const std::string &clusterName,
     {
         std::lock_guard<std::mutex> lock(mutex_);
         CHECK_FAIL_RETURN_STATUS(!stopping_, K_SHUTTING_DOWN, "topology recovery manager is shutting down");
+        CHECK_FAIL_RETURN_STATUS(activeRound_.has_value() && *activeRound_ == identity, K_TRY_AGAIN,
+                                 "leader round changed during evidence admission");
         auto found = contexts_.find(clusterName);
         CHECK_FAIL_RETURN_STATUS(found != contexts_.end(), K_TRY_AGAIN, "recovery context disappeared");
         RETURN_IF_NOT_OK(UpdateEvidenceLocked(*found->second, std::move(report), decision, schedule));
@@ -606,6 +682,7 @@ Status TopologyRecoveryManager::UpdateEvidenceLocked(ClusterRecoveryContext &con
 }
 
 Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
+                                              const TopologyRecoveryRoundIdentity &identity,
                                               TopologyRecoveryCandidateReport report,
                                               TopologyRecoveryReportDecision &decision)
 {
@@ -616,6 +693,8 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
     {
         std::lock_guard<std::mutex> lock(mutex_);
         CHECK_FAIL_RETURN_STATUS(!stopping_, K_SHUTTING_DOWN, "topology recovery manager is shutting down");
+        CHECK_FAIL_RETURN_STATUS(activeRound_.has_value() && *activeRound_ == identity, K_TRY_AGAIN,
+                                 "leader round changed before payload admission");
         auto found = contexts_.find(clusterName);
         CHECK_FAIL_RETURN_STATUS(found != contexts_.end(), K_TRY_AGAIN, "recovery context disappeared");
         auto &context = *found->second;
@@ -637,7 +716,7 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
         contextGeneration = context.generation;
         try {
             result = recoveryPool_->Submit(
-                [this, clusterName, contextGeneration, payloadBytes, report = std::move(report),
+                [this, clusterName, identity, contextGeneration, payloadBytes, report = std::move(report),
                  traceContext]() mutable {
                     TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
                     Status status;
@@ -649,9 +728,9 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
                         status = Status(K_RUNTIME_ERROR, "candidate validation failed with an unknown exception");
                     }
                     if (status.IsOk()) {
-                        return RecordPayload(clusterName, contextGeneration, std::move(report));
+                        return RecordPayload(clusterName, identity, contextGeneration, std::move(report));
                     }
-                    return RejectPayload(clusterName, contextGeneration, report, payloadBytes, status);
+                    return RejectPayload(clusterName, identity, contextGeneration, report, payloadBytes, status);
                 });
         } catch (const std::exception &error) {
             --pendingRecoveryWork_;
@@ -666,13 +745,18 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
     return Status::OK();
 }
 
-Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName, uint64_t contextGeneration,
+Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName,
+                                              const TopologyRecoveryRoundIdentity &identity,
+                                              uint64_t contextGeneration,
                                               TopologyRecoveryCandidateReport report)
 {
     const size_t payloadBytes = report.canonicalTopology.size();
     bool schedule = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!activeRound_.has_value() || *activeRound_ != identity) {
+            return Status(K_TRY_AGAIN, "leader round changed during payload validation");
+        }
         --pendingRecoveryWork_;
         admittedReportBytes_ -= payloadBytes;
         auto found = contexts_.find(clusterName);
@@ -712,11 +796,16 @@ Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName, ui
     return Status::OK();
 }
 
-Status TopologyRecoveryManager::RejectPayload(const std::string &clusterName, uint64_t contextGeneration,
+Status TopologyRecoveryManager::RejectPayload(const std::string &clusterName,
+                                              const TopologyRecoveryRoundIdentity &identity,
+                                              uint64_t contextGeneration,
                                               const TopologyRecoveryCandidateReport &report,
                                               size_t payloadBytes, const Status &validationStatus)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!activeRound_.has_value() || *activeRound_ != identity) {
+        return Status(K_TRY_AGAIN, "leader round changed during payload validation");
+    }
     --pendingRecoveryWork_;
     admittedReportBytes_ -= payloadBytes;
     auto found = contexts_.find(clusterName);
@@ -770,7 +859,8 @@ void TopologyRecoveryManager::ScheduleReconcile(const std::string &clusterName)
     const auto traceContext = GetRecoveryTraceContext();
     std::lock_guard<std::mutex> lock(mutex_);
     auto found = contexts_.find(clusterName);
-    if (stopping_ || found == contexts_.end() || found->second->state != TopologyRecoveryState::RECOVERING
+    if (stopping_ || !activeRound_.has_value() || found == contexts_.end()
+        || found->second->state != TopologyRecoveryState::RECOVERING
         || found->second->reconcileQueued
         || pendingRecoveryWork_ >= options_.maxPendingRecoveryWork) {
         return;
@@ -779,10 +869,11 @@ void TopologyRecoveryManager::ScheduleReconcile(const std::string &clusterName)
     ++pendingRecoveryWork_;
     bool accepted = false;
     try {
-        accepted = recoveryPool_->ExecuteNoWait([this, clusterName, traceContext] {
+        const auto identity = *activeRound_;
+        accepted = recoveryPool_->ExecuteNoWait([this, clusterName, identity, traceContext] {
             TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             try {
-                auto status = MaybeFinalize(clusterName);
+                auto status = MaybeFinalize(clusterName, identity);
                 if (status.IsError()) {
                     LOG(WARNING) << "CLUSTER_RECOVERY_RECONCILE_FAILED, cluster=" << clusterName
                                  << ", status=" << status.ToString();
@@ -795,6 +886,9 @@ void TopologyRecoveryManager::ScheduleReconcile(const std::string &clusterName)
                            << ", unknown error";
             }
             std::lock_guard<std::mutex> finishLock(mutex_);
+            if (!activeRound_.has_value() || *activeRound_ != identity) {
+                return;
+            }
             --pendingRecoveryWork_;
             auto current = contexts_.find(clusterName);
             if (current != contexts_.end()) {
@@ -811,10 +905,11 @@ void TopologyRecoveryManager::ScheduleReconcile(const std::string &clusterName)
     }
 }
 
-Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName)
+Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName,
+                                              const TopologyRecoveryRoundIdentity &identity)
 {
     bool resolved = false;
-    RETURN_IF_NOT_OK(AdoptStoredAuthorityIfPresent(clusterName, resolved));
+    RETURN_IF_NOT_OK(AdoptStoredAuthorityIfPresent(clusterName, identity, resolved));
     if (resolved) {
         return Status::OK();
     }
@@ -822,32 +917,58 @@ Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName)
     uint64_t version = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        RETURN_IF_NOT_OK(PrepareInstallationLocked(clusterName, payload, version));
+        if (!activeRound_.has_value() || *activeRound_ != identity) {
+            return Status(K_TRY_AGAIN, "leader round changed before installation");
+        }
+        RETURN_IF_NOT_OK(PrepareInstallationLocked(clusterName, identity, payload, version));
     }
     if (version == 0) {
         return Status::OK();
     }
     Status installStatus;
     try {
-        installStatus = InstallSelected(clusterName, version, *payload);
+        if (leaderRoundFenceMutex_ != nullptr) {
+            std::shared_lock<std::shared_mutex> fenceLock(*leaderRoundFenceMutex_);
+            if (isLeaderRoundCurrent_ != nullptr && !isLeaderRoundCurrent_(identity)) {
+                return Status(K_TRY_AGAIN, "leader round changed before Store installation");
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!activeRound_.has_value() || *activeRound_ != identity) {
+                    return Status(K_TRY_AGAIN, "leader round changed before Store installation");
+                }
+            }
+            installStatus = InstallSelected(clusterName, version, *payload);
+        } else {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!activeRound_.has_value() || *activeRound_ != identity) {
+                    return Status(K_TRY_AGAIN, "leader round changed before Store installation");
+                }
+            }
+            installStatus = InstallSelected(clusterName, version, *payload);
+        }
     } catch (const std::exception &error) {
         installStatus = Status(K_RUNTIME_ERROR, std::string("topology installation failed: ") + error.what());
     } catch (...) {
         installStatus = Status(K_RUNTIME_ERROR, "topology installation failed with an unknown exception");
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    CompleteInstallationLocked(clusterName, version, installStatus);
+    CompleteInstallationLocked(clusterName, identity, version, installStatus);
     return installStatus;
 }
 
-Status TopologyRecoveryManager::AdoptStoredAuthorityIfPresent(const std::string &clusterName, bool &resolved)
+Status TopologyRecoveryManager::AdoptStoredAuthorityIfPresent(const std::string &clusterName,
+                                                              const TopologyRecoveryRoundIdentity &identity,
+                                                              bool &resolved)
 {
     resolved = false;
     uint64_t contextGeneration = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto found = contexts_.find(clusterName);
-        if (found == contexts_.end() || found->second->state != TopologyRecoveryState::RECOVERING
+        if (!activeRound_.has_value() || *activeRound_ != identity || found == contexts_.end()
+            || found->second->state != TopologyRecoveryState::RECOVERING
             || found->second->storedAuthorityChecked) {
             return Status::OK();
         }
@@ -864,7 +985,8 @@ Status TopologyRecoveryManager::AdoptStoredAuthorityIfPresent(const std::string 
     if (rangeStatus.IsError()) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto found = contexts_.find(clusterName);
-        if (found != contexts_.end() && found->second->generation == contextGeneration
+        if (activeRound_.has_value() && *activeRound_ == identity && found != contexts_.end()
+            && found->second->generation == contextGeneration
             && found->second->state == TopologyRecoveryState::RECOVERING) {
             found->second->storedAuthorityChecked = false;
         }
@@ -877,10 +999,21 @@ Status TopologyRecoveryManager::AdoptStoredAuthorityIfPresent(const std::string 
     cluster::TopologyState topology;
     const auto decodeStatus = cluster::TopologyRepositoryCodec::DecodeTopology(entries.front().value, topology);
     std::lock_guard<std::mutex> lock(mutex_);
+    ApplyStoredAuthorityLocked(clusterName, identity, contextGeneration, revision, decodeStatus, topology, resolved);
+    return Status::OK();
+}
+
+void TopologyRecoveryManager::ApplyStoredAuthorityLocked(const std::string &clusterName,
+                                                         const TopologyRecoveryRoundIdentity &identity,
+                                                         uint64_t contextGeneration, int64_t revision,
+                                                         const Status &decodeStatus,
+                                                         const cluster::TopologyState &topology, bool &resolved)
+{
     auto found = contexts_.find(clusterName);
-    if (found == contexts_.end() || found->second->generation != contextGeneration
+    if (!activeRound_.has_value() || *activeRound_ != identity || found == contexts_.end()
+        || found->second->generation != contextGeneration
         || found->second->state != TopologyRecoveryState::RECOVERING) {
-        return Status::OK();
+        return;
     }
     auto &context = *found->second;
     resolved = true;
@@ -892,20 +1025,23 @@ Status TopologyRecoveryManager::AdoptStoredAuthorityIfPresent(const std::string 
         LOG(ERROR) << "CLUSTER_RECOVERY_STORED_AUTHORITY_INVALID cluster=" << clusterName
                    << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
                    << ", revision=" << revision << ", status=" << decodeStatus.ToString();
-        return Status::OK();
+        return;
     }
     context.state = TopologyRecoveryState::READY;
     LOG(INFO) << "CLUSTER_RECOVERY_READY_STORED_AUTHORITY cluster=" << clusterName
               << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
               << ", topology_version=" << topology.version << ", store_revision=" << revision
               << ", members=" << context.observedMembers.size();
-    return Status::OK();
 }
 
 Status TopologyRecoveryManager::PrepareInstallationLocked(const std::string &clusterName,
+                                                          const TopologyRecoveryRoundIdentity &identity,
                                                           std::shared_ptr<const std::string> &payload,
                                                           uint64_t &version)
 {
+    if (!activeRound_.has_value() || *activeRound_ != identity) {
+        return Status(K_TRY_AGAIN, "leader round changed before preparation");
+    }
     auto found = contexts_.find(clusterName);
     if (found == contexts_.end() || found->second->state != TopologyRecoveryState::RECOVERING) {
         return Status::OK();
@@ -952,9 +1088,14 @@ Status TopologyRecoveryManager::PrepareInstallationLocked(const std::string &clu
     return Status::OK();
 }
 
-void TopologyRecoveryManager::CompleteInstallationLocked(const std::string &clusterName, uint64_t version,
+void TopologyRecoveryManager::CompleteInstallationLocked(const std::string &clusterName,
+                                                         const TopologyRecoveryRoundIdentity &identity,
+                                                         uint64_t version,
                                                          const Status &installStatus)
 {
+    if (!activeRound_.has_value() || *activeRound_ != identity) {
+        return;
+    }
     auto found = contexts_.find(clusterName);
     if (found == contexts_.end() || found->second->state != TopologyRecoveryState::INSTALLING
         || found->second->selectedVersion != version) {

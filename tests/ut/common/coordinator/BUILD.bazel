@@ -12,6 +12,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "coordinator_leader_router_test",
+    srcs = ["coordinator_leader_router_test.cpp"],
+    deps = [
+        "//src/datasystem/common/coordinator:coordinator_leader_router",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "coordinator_service_proxy_test",
     srcs = ["coordinator_service_proxy_test.cpp"],
     deps = [

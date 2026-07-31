@@ -31,6 +31,13 @@ namespace datasystem::cluster {
 class DsCoordinationBackend final : public ICoordinationBackend {
 public:
     using MembershipReadyHandler = std::function<void(const std::string &, bool)>;
+    using MembershipReconcileHandler = std::function<Status(bool waitForCompletion)>;
+
+    struct MembershipRenewalPayload {
+        std::string reporterAddress;
+        std::string encodedValue;
+        int64_t ttlMs{ 0 };
+    };
 
     /**
      * @brief Construct a Coordinator-backed coordination backend.
@@ -213,6 +220,21 @@ public:
      * @param[in] handler Callback invoked outside backend locks with identity and watch-invalidation state.
      */
     void SetMembershipReadyHandler(MembershipReadyHandler handler);
+
+    /**
+     * @brief Copy the current membership lease value for the restricted Ensure RPC.
+     */
+    Status GetMembershipRenewalPayload(MembershipRenewalPayload &payload) const;
+
+    /**
+     * @brief Install or remove the recovering-Leader membership reconciliation path.
+     */
+    void SetMembershipReconcileHandler(MembershipReconcileHandler handler);
+
+    /**
+     * @brief Commit the local effects after a successful EnsureLeaderMembership RPC.
+     */
+    void OnMembershipEnsured(const std::string &coordinatorId, int64_t membershipModRevision);
 
     /**
      * @brief Check whether this backend owns one CoordinatorId/watch identity.
@@ -410,15 +432,17 @@ private:
     std::chrono::milliseconds identityProbeBackoff_{ INITIAL_IDENTITY_PROBE_BACKOFF };
     std::chrono::steady_clock::time_point nextIdentityProbeAt_;
 
-    // Protects event handlers, store-state callback, last membership identity and activeEventHandlers_.
+    // Protects event handlers, store-state callback, last membership identity and active callback copies.
     std::mutex eventHandlerMutex_;
     // Uses eventHandlerMutex_ to drain handler copies before their consumer is destroyed.
     std::condition_variable eventHandlerCv_;
     EventHandler eventHandler_;
     MembershipReadyHandler membershipReadyHandler_;
+    MembershipReconcileHandler membershipReconcileHandler_;
     std::string lastMembershipCoordinatorId_;
     std::function<bool()> checkStoreStateWhenNetworkFailedHandler_;
     size_t activeEventHandlers_{ 0 };
+    size_t activeMembershipReadyHandlers_{ 0 };
 
     std::string keepAliveTableName_;
     std::string keepAliveKey_;
@@ -426,7 +450,7 @@ private:
     std::mutex membershipMutationMutex_;
     int64_t keepAliveModRevision_{ COORDINATOR_NO_MOD_REVISION_CHECK };
     // Protects keepAliveValue_; also used by keepAliveCv_ to interrupt its wait.
-    std::mutex keepAliveMutex_;
+    mutable std::mutex keepAliveMutex_;
     MembershipValue keepAliveValue_;
     std::condition_variable keepAliveCv_;
     Thread keepAliveThread_;

@@ -120,6 +120,7 @@ ds_cc_library(
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/cluster/coordination_backend:coordination_backend",
         "//src/datasystem/cluster/coordination_backend:topology_recovery_reporter",
+        "//src/datasystem/cluster/coordination_backend:worker_leader_reconciler",
         "//src/datasystem/common/ak_sk:hasher",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/kvstore:kv_store",

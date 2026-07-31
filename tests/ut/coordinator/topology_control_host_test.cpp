@@ -74,6 +74,7 @@ protected:
         recoveryOptions.maxClusters = TEST_CLUSTER_LIMIT;
         recovery_ =
             std::make_unique<TopologyRecoveryManager>(COORDINATOR_ID, *store_, clock_, recoveryOptions);
+        recovery_->BeginLeaderRound({ 0, COORDINATOR_ID });
     }
 
     void TearDown() override
@@ -141,7 +142,7 @@ protected:
         TopologyRecoveryCandidateReport report;
         report.reporterAddress = MEMBER_A;
         TopologyRecoveryReportDecision decision;
-        DS_ASSERT_OK(recovery_->ReportCandidate(clusterName, COORDINATOR_ID, std::move(report), decision));
+        DS_ASSERT_OK(recovery_->ReportCandidate(clusterName, 0, COORDINATOR_ID, std::move(report), decision));
         clock_->AdvanceMs(TEST_DISCOVERY_WINDOW.count());
         ASSERT_TRUE(WaitUntil([&] {
             recovery_->NotifyMembershipActivity(PhysicalMembershipKey(clusterName));

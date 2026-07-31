@@ -13,12 +13,30 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "coordinator_service_impl_test",
+    srcs = ["coordinator_service_impl_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_membership_codec",
+        "//src/datasystem/coordinator:coordinator_service_impl",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "topology_control_host_test",
     srcs = ["topology_control_host_test.cpp"],
     deps = [
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/coordinator:coordinator_topology_control_host",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_recovery_manager_test",
+    srcs = ["topology_recovery_manager_test.cpp"],
+    deps = [
         "//src/datasystem/coordinator:coordinator_topology_recovery_manager",
         "//tests/ut:ut_common",
     ],

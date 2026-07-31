@@ -31,8 +31,7 @@ constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
  * @param[in] options Reporter timing options containing the jitter bound.
  * @return Deterministic initial report delay.
  */
-std::chrono::milliseconds InitialJitter(const std::string &reporter,
-                                        const TopologyRecoveryReporterOptions &options)
+std::chrono::milliseconds InitialJitter(const std::string &reporter, const TopologyRecoveryReporterOptions &options)
 {
     const auto bound = options.maxInitialJitter.count();
     if (bound <= 0) {
@@ -49,9 +48,8 @@ std::chrono::milliseconds InitialJitter(const std::string &reporter,
  */
 bool IsRetryableReportStatus(const Status &status)
 {
-    return status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_READY
-           || status.GetCode() == K_RPC_UNAVAILABLE || status.GetCode() == K_RPC_DEADLINE_EXCEEDED
-           || status.GetCode() == K_RPC_CANCELLED;
+    return status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_READY || status.GetCode() == K_RPC_UNAVAILABLE
+           || status.GetCode() == K_RPC_DEADLINE_EXCEEDED || status.GetCode() == K_RPC_CANCELLED;
 }
 
 /**
@@ -67,8 +65,7 @@ void LogReportRetry(const std::string &cluster, const std::string &reporter, uin
                     const std::string &coordinatorId, std::chrono::milliseconds backoff, const Status &status)
 {
     VLOG(1) << "CLUSTER_RECOVERY_REPORT_RETRY cluster=" << cluster << ", reporter=" << reporter
-            << ", version=" << version
-            << ", coordinator_id=" << coordinatorId.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+            << ", version=" << version << ", coordinator_id=" << coordinatorId.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
             << ", backoff_ms=" << backoff.count() << ", status=" << status.ToString();
 }
 
@@ -79,8 +76,7 @@ void LogReportRetry(const std::string &cluster, const std::string &reporter, uin
  * @param[in] coordinatorId Coordinator generation that owns the report round.
  * @param[in] response Coordinator recovery decision.
  */
-void LogReportDeferred(const std::string &cluster, const std::string &reporter,
-                       const std::string &coordinatorId,
+void LogReportDeferred(const std::string &cluster, const std::string &reporter, const std::string &coordinatorId,
                        const coordinator::ReportTopologyRecoveryCandidateRspPb &response)
 {
     VLOG(1) << "CLUSTER_RECOVERY_REPORT_DEFERRED cluster=" << cluster << ", reporter=" << reporter
@@ -89,7 +85,7 @@ void LogReportDeferred(const std::string &cluster, const std::string &reporter,
 }
 
 /**
- * @brief Emit successful completion for one CoordinatorId-bound report round.
+ * @brief Emit successful completion for one Leader identity-bound report round.
  * @param[in] cluster Cluster scope of the report.
  * @param[in] reporter Canonical reporter address.
  * @param[in] version Reported topology version.
@@ -115,9 +111,8 @@ TopologyRecoveryReporter::TopologyRecoveryReporter(ICoordinatorServiceProxy &pro
       reportPool_(std::make_unique<ThreadPool>(REPORT_POOL_SIZE, REPORT_POOL_SIZE, "TopologyRecoveryReporter", true))
 {
     if (reporterAddress_.empty() || snapshotProvider_ == nullptr || options_.reportTimeout.count() <= 0
-        || options_.reportTimeout.count() > std::numeric_limits<int32_t>::max()
-        || options_.minRetryBackoff.count() <= 0 || options_.maxRetryBackoff < options_.minRetryBackoff
-        || options_.maxInitialJitter.count() < 0) {
+        || options_.reportTimeout.count() > std::numeric_limits<int32_t>::max() || options_.minRetryBackoff.count() <= 0
+        || options_.maxRetryBackoff < options_.minRetryBackoff || options_.maxInitialJitter.count() < 0) {
         throw std::invalid_argument("invalid topology recovery reporter options");
     }
 }
@@ -129,21 +124,32 @@ TopologyRecoveryReporter::~TopologyRecoveryReporter()
 
 bool TopologyRecoveryReporter::CanReportLocked() const
 {
-    return !stopping_ && runtimeReady_ && !membershipCoordinatorId_.empty()
-           && membershipCoordinatorId_ != completedCoordinatorId_;
+    return !stopping_ && runtimeReady_ && membershipIdentity_.hasLeader
+           && !SameRound(membershipIdentity_, completedIdentity_);
+}
+
+bool TopologyRecoveryReporter::SameRound(const CoordinatorLeaderIdentity &left, const CoordinatorLeaderIdentity &right)
+{
+    return left.hasLeader == right.hasLeader && left.routeEpoch == right.routeEpoch
+           && left.leaderTerm == right.leaderTerm && left.coordinatorId == right.coordinatorId;
+}
+
+void TopologyRecoveryReporter::NotifyMembershipReady(const CoordinatorLeaderIdentity &identity)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_ || !identity.hasLeader || identity.coordinatorId.empty()) {
+            return;
+        }
+        membershipIdentity_ = identity;
+    }
+    retryCv_.notify_all();
+    ScheduleReport();
 }
 
 void TopologyRecoveryReporter::NotifyMembershipReady(const std::string &coordinatorId)
 {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (stopping_ || coordinatorId.empty()) {
-            return;
-        }
-        membershipCoordinatorId_ = coordinatorId;
-    }
-    retryCv_.notify_all();
-    ScheduleReport();
+    NotifyMembershipReady(CoordinatorLeaderIdentity{ HostPort(), coordinatorId, 0, 0, !coordinatorId.empty() });
 }
 
 void TopologyRecoveryReporter::NotifyRuntimeReady()
@@ -165,10 +171,10 @@ void TopologyRecoveryReporter::ScheduleReport()
     try {
         // scheduled_ bounds the single-thread pool to the current round plus at most one successor round.
         reportPool_->Execute([this] {
-            std::string coordinatorId;
+            CoordinatorLeaderIdentity identity;
             bool completed = false;
             try {
-                RunReportLoop(coordinatorId, completed);
+                RunReportLoop(identity, completed);
             } catch (const std::exception &error) {
                 LOG(ERROR) << "CLUSTER_RECOVERY_REPORT_FAILED cluster=" << clusterName_
                            << " reporter=" << reporterAddress_ << " reason=exception error=" << error.what();
@@ -176,7 +182,7 @@ void TopologyRecoveryReporter::ScheduleReport()
                 LOG(ERROR) << "CLUSTER_RECOVERY_REPORT_FAILED cluster=" << clusterName_
                            << " reporter=" << reporterAddress_ << " reason=unknown_exception";
             }
-            FinishRound(coordinatorId, completed);
+            FinishRound(identity, completed);
         });
     } catch (const std::exception &error) {
         scheduled_ = false;
@@ -185,25 +191,23 @@ void TopologyRecoveryReporter::ScheduleReport()
     }
 }
 
-bool TopologyRecoveryReporter::WaitRetry(const std::string &coordinatorId, std::chrono::milliseconds delay)
+bool TopologyRecoveryReporter::WaitRetry(const CoordinatorLeaderIdentity &identity, std::chrono::milliseconds delay)
 {
     std::unique_lock<std::mutex> lock(mutex_);
-    retryCv_.wait_for(lock, delay, [&] {
-        return stopping_ || membershipCoordinatorId_ != coordinatorId;
-    });
-    return !stopping_ && membershipCoordinatorId_ == coordinatorId;
+    retryCv_.wait_for(lock, delay, [&] { return stopping_ || !SameRound(membershipIdentity_, identity); });
+    return !stopping_ && SameRound(membershipIdentity_, identity);
 }
 
-void TopologyRecoveryReporter::FinishRound(const std::string &coordinatorId, bool completed)
+void TopologyRecoveryReporter::FinishRound(const CoordinatorLeaderIdentity &identity, bool completed)
 {
     bool reschedule = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (completed && membershipCoordinatorId_ == coordinatorId) {
-            completedCoordinatorId_ = coordinatorId;
+        if (completed && SameRound(membershipIdentity_, identity)) {
+            completedIdentity_ = identity;
         }
         scheduled_ = false;
-        reschedule = CanReportLocked() && membershipCoordinatorId_ != coordinatorId;
+        reschedule = CanReportLocked() && !SameRound(membershipIdentity_, identity);
     }
     if (reschedule) {
         ScheduleReport();
@@ -222,13 +226,15 @@ Status TopologyRecoveryReporter::LoadCandidate(uint64_t &version, std::string &c
     return hasher.GetSha256Hex(canonical, digest);
 }
 
-Status TopologyRecoveryReporter::SendCandidate(
-    const std::string &coordinatorId, uint64_t version, const std::string &canonical, const std::string &digest,
-    bool hasSnapshot, bool includePayload, coordinator::ReportTopologyRecoveryCandidateRspPb &response)
+Status TopologyRecoveryReporter::SendCandidate(const CoordinatorLeaderIdentity &identity, uint64_t version,
+                                               const std::string &canonical, const std::string &digest,
+                                               bool hasSnapshot, bool includePayload,
+                                               coordinator::ReportTopologyRecoveryCandidateRspPb &response)
 {
     coordinator::ReportTopologyRecoveryCandidateReqPb request;
     request.set_cluster_name(clusterName_);
-    request.set_coordinator_id(coordinatorId);
+    request.set_coordinator_id(identity.coordinatorId);
+    request.set_leader_term(identity.leaderTerm);
     request.set_reporter_address(reporterAddress_);
     request.set_result(hasSnapshot ? coordinator::TOPOLOGY_RECOVERY_SNAPSHOT
                                    : coordinator::TOPOLOGY_RECOVERY_NO_SNAPSHOT);
@@ -241,17 +247,17 @@ Status TopologyRecoveryReporter::SendCandidate(
                                                   static_cast<int32_t>(options_.reportTimeout.count()));
 }
 
-void TopologyRecoveryReporter::RunReportLoop(std::string &coordinatorId, bool &completed)
+void TopologyRecoveryReporter::RunReportLoop(CoordinatorLeaderIdentity &identity, bool &completed)
 {
     bool applyJitter = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        coordinatorId = membershipCoordinatorId_;
-        applyJitter = jitteredCoordinatorId_ != coordinatorId;
-        jitteredCoordinatorId_ = coordinatorId;
+        identity = membershipIdentity_;
+        applyJitter = !SameRound(jitteredIdentity_, identity);
+        jitteredIdentity_ = identity;
     }
     const auto jitter = applyJitter ? InitialJitter(reporterAddress_, options_) : std::chrono::milliseconds::zero();
-    if (!WaitRetry(coordinatorId, jitter)) {
+    if (!WaitRetry(identity, jitter)) {
         return;
     }
     uint64_t version = 0;
@@ -260,15 +266,15 @@ void TopologyRecoveryReporter::RunReportLoop(std::string &coordinatorId, bool &c
     bool hasSnapshot = false;
     auto loadStatus = LoadCandidate(version, canonical, digest, hasSnapshot);
     if (loadStatus.IsError()) {
-        LOG(WARNING) << "CLUSTER_RECOVERY_EXPORT_FAILED, cluster=" << clusterName_
-                     << ", reporter=" << reporterAddress_ << ", status=" << loadStatus.ToString();
+        LOG(WARNING) << "CLUSTER_RECOVERY_EXPORT_FAILED, cluster=" << clusterName_ << ", reporter=" << reporterAddress_
+                     << ", status=" << loadStatus.ToString();
         return;
     }
     bool includePayload = false;
     auto backoff = options_.minRetryBackoff;
-    while (WaitRetry(coordinatorId, std::chrono::milliseconds::zero())) {
+    while (WaitRetry(identity, std::chrono::milliseconds::zero())) {
         coordinator::ReportTopologyRecoveryCandidateRspPb response;
-        auto rc = SendCandidate(coordinatorId, version, canonical, digest, hasSnapshot, includePayload, response);
+        auto rc = SendCandidate(identity, version, canonical, digest, hasSnapshot, includePayload, response);
         if (rc.IsError()) {
             if (!IsRetryableReportStatus(rc)) {
                 LOG(ERROR) << "CLUSTER_RECOVERY_REPORT_REJECTED, cluster=" << clusterName_
@@ -276,19 +282,19 @@ void TopologyRecoveryReporter::RunReportLoop(std::string &coordinatorId, bool &c
                            << ", status=" << rc.ToString();
                 return;
             }
-            LogReportRetry(clusterName_, reporterAddress_, version, coordinatorId, backoff, rc);
-            if (!WaitRetry(coordinatorId, backoff)) {
+            LogReportRetry(clusterName_, reporterAddress_, version, identity.coordinatorId, backoff, rc);
+            if (!WaitRetry(identity, backoff)) {
                 return;
             }
             backoff = std::min(backoff * RETRY_BACKOFF_MULTIPLIER, options_.maxRetryBackoff);
             continue;
         }
         if (response.result() != coordinator::ReportTopologyRecoveryCandidateRspPb::ACCEPTED) {
-            LogReportDeferred(clusterName_, reporterAddress_, coordinatorId, response);
+            LogReportDeferred(clusterName_, reporterAddress_, identity.coordinatorId, response);
             return;
         }
         if (response.recovery_state() == coordinator::COORDINATOR_READY) {
-            LogReportComplete(clusterName_, reporterAddress_, version, coordinatorId);
+            LogReportComplete(clusterName_, reporterAddress_, version, identity.coordinatorId);
             completed = true;
             return;
         }

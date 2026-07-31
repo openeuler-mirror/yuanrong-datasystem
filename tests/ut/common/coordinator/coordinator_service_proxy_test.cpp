@@ -45,7 +45,7 @@ struct DiscoveryReply {
     std::string exceptionMessage;
 };
 
-class ScriptedCoordinatorDiscovery final : public ICoordinatorDiscovery {
+class ScriptedCoordinatorDiscovery final : public IDeadlineAwareCoordinatorDiscovery {
 public:
     explicit ScriptedCoordinatorDiscovery(std::vector<DiscoveryReply> replies) : replies_(std::move(replies))
     {
@@ -64,6 +64,11 @@ public:
         }
         serviceList = reply.coordinators;
         return reply.status;
+    }
+
+    Status GetCoordinators(std::chrono::steady_clock::time_point, std::vector<std::string> &serviceList) override
+    {
+        return GetCoordinators(serviceList);
     }
 
     size_t GetCallCount() const
@@ -164,14 +169,14 @@ TEST(CoordinatorServiceProxyTest, AcceptsMultipleCoordinatorCandidates)
     EXPECT_EQ(discovery->GetCallCount(), 1UL);
 }
 
-TEST(CoordinatorServiceProxyTest, RejectsMalformedFrontEvenWhenLaterCoordinatorIsValid)
+TEST(CoordinatorServiceProxyTest, SkipsMalformedCandidateWhenLaterCoordinatorIsValid)
 {
     auto discovery = MakeDiscovery(Status::OK(), { "malformed-address", ADDRESS_A });
     CoordinatorServiceProxyZmqImpl proxy(discovery);
 
     Status status = proxy.Init();
 
-    EXPECT_EQ(status.GetCode(), K_INVALID) << status.ToString();
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
     EXPECT_EQ(discovery->GetCallCount(), 1UL);
 }
 

@@ -3,6 +3,20 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility=["//visibility:public"])
 
 ds_cc_library(
+    name = "coordinator_leader_router",
+    srcs = ["coordinator_leader_router.cpp"],
+    hdrs = ["coordinator_leader_router.h"],
+    copts = ["-std=c++17"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/protos:coordinator_cc_proto",
+    ],
+)
+
+ds_cc_library(
     name = "static_coordinator_discovery",
     srcs = ["static_coordinator_discovery.cpp"],
     hdrs = ["static_coordinator_discovery.h"],
@@ -15,7 +29,9 @@ ds_cc_library(
         "//tests/ut/common/coordinator:__pkg__",
     ],
     deps = [
+        ":coordinator_leader_router",
         "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
     ],
 )
@@ -32,6 +48,7 @@ ds_cc_library(
     ],
     hdrs=[
         "coordinator_service_proxy.h",
+        "coordinator_leader_router.h",
         "key_value_entry.h",
         "coordinator_store.h",
         "memory_kv_store.h",
@@ -43,6 +60,7 @@ ds_cc_library(
     ],
     copts=["-std=c++17"],
     deps=[
+        ":coordinator_leader_router",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log:common_log",

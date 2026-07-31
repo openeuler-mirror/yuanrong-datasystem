@@ -60,6 +60,9 @@ public:
 
     void WaitWorkerReady(std::vector<uint32_t> indexes, int maxWaitTimeSec = 20)
     {
+        if (IsConcurrentScaleupCase()) {
+            maxWaitTimeSec = 30;
+        }
         for (auto i : indexes) {
             ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;
         }

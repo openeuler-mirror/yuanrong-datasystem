@@ -71,8 +71,12 @@ public:
     TopologyRecoveryReporter &operator=(const TopologyRecoveryReporter &) = delete;
 
     /**
-     * @brief Mark membership committed for the exact response CoordinatorId.
-     * @param[in] coordinatorId Exact membership operation response CoordinatorId.
+     * @brief Mark membership ensured for one exact Leader route identity.
+     */
+    void NotifyMembershipReady(const CoordinatorLeaderIdentity &identity);
+
+    /**
+     * @brief Compatibility gate for backends that have no Router identity provider.
      */
     void NotifyMembershipReady(const std::string &coordinatorId);
 
@@ -120,31 +124,33 @@ private:
      * @param[out] response Coordinator recovery decision.
      * @return RPC or response status.
      */
-    Status SendCandidate(const std::string &coordinatorId, uint64_t version, const std::string &canonical,
+    Status SendCandidate(const CoordinatorLeaderIdentity &identity, uint64_t version, const std::string &canonical,
                          const std::string &digest, bool hasSnapshot, bool includePayload,
                          coordinator::ReportTopologyRecoveryCandidateRspPb &response);
 
     /**
-     * @brief Run one CoordinatorId-bound report round.
-     * @param[out] coordinatorId Identity used by this round.
+     * @brief Run one Leader identity-bound report round.
+     * @param[out] identity Leader identity used by this round.
      * @param[out] completed True when the Coordinator reached READY.
      */
-    void RunReportLoop(std::string &coordinatorId, bool &completed);
+    void RunReportLoop(CoordinatorLeaderIdentity &identity, bool &completed);
 
     /**
      * @brief Interruptibly wait for a retry deadline.
-     * @param[in] coordinatorId Identity that owns the current round.
+     * @param[in] identity Leader identity that owns the current round.
      * @param[in] delay Bounded retry delay.
      * @return False after shutdown or identity change.
      */
-    bool WaitRetry(const std::string &coordinatorId, std::chrono::milliseconds delay);
+    bool WaitRetry(const CoordinatorLeaderIdentity &identity, std::chrono::milliseconds delay);
 
     /**
-     * @brief Commit or discard one completed CoordinatorId round.
-     * @param[in] coordinatorId Identity used by the completed round.
+     * @brief Commit or discard one completed Leader identity round.
+     * @param[in] identity Leader identity used by the completed round.
      * @param[in] completed True when Coordinator reported READY.
      */
-    void FinishRound(const std::string &coordinatorId, bool completed);
+    void FinishRound(const CoordinatorLeaderIdentity &identity, bool completed);
+
+    static bool SameRound(const CoordinatorLeaderIdentity &left, const CoordinatorLeaderIdentity &right);
 
     ICoordinatorServiceProxy &proxy_;
     const std::string clusterName_;
@@ -152,17 +158,16 @@ private:
     const SnapshotProvider snapshotProvider_;
     const TopologyRecoveryReporterOptions options_;
     std::unique_ptr<ThreadPool> reportPool_;
-    // Protects lifecycle, readiness, scheduling and CoordinatorId-bound report state.
+    // Protects lifecycle, readiness, scheduling and Leader identity-bound report state.
     std::mutex mutex_;
     // Uses mutex_ to interrupt jitter/backoff during identity change or shutdown.
     std::condition_variable retryCv_;
     bool stopping_{ false };
     bool runtimeReady_{ false };
     bool scheduled_{ false };
-    // Exact CoordinatorId returned by the successful membership operation that opens the report gate.
-    std::string membershipCoordinatorId_;
-    std::string completedCoordinatorId_;
-    std::string jitteredCoordinatorId_;
+    CoordinatorLeaderIdentity membershipIdentity_;
+    CoordinatorLeaderIdentity completedIdentity_;
+    CoordinatorLeaderIdentity jitteredIdentity_;
 };
 
 }  // namespace datasystem::cluster

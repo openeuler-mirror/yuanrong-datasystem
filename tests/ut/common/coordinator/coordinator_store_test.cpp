@@ -320,7 +320,8 @@ TEST_F(CoordinatorIdTest, ReservesControllerCapacityBeforeMembershipCommit)
     FLAGS_coordinator_topology_max_active_clusters = 2;
     Raii restoreLimit([previousLimit] { FLAGS_coordinator_topology_max_active_clusters = previousLimit; });
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18489));
-    DS_ASSERT_OK(service.Init(true));
+    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     auto putMembership = [&service](const std::string &clusterName, const std::string &address,
                                     coordinator::PutRspPb &response) {
         coordinator::PutReqPb request;
@@ -403,7 +404,8 @@ TEST_F(CoordinatorIdTest, PutRejectsAStaleCoordinatorIdBeforeMutation)
 TEST_F(CoordinatorIdTest, MembershipPutRejectsAStaleModificationRevision)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18491));
-    DS_ASSERT_OK(service.Init(true));
+    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     coordinator::PutReqPb request;
     request.set_key("/datasystem/incarnation/cluster/127.0.0.1:31501");
     request.set_value("first");
@@ -434,7 +436,8 @@ TEST_F(CoordinatorIdTest, MembershipPutRejectsAStaleModificationRevision)
 TEST_F(CoordinatorIdTest, KeepAliveRejectsAStaleMembershipIncarnation)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18492));
-    DS_ASSERT_OK(service.Init(true));
+    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     coordinator::PutReqPb put;
     put.set_key("/datasystem/keepalive-incarnation/cluster/127.0.0.1:31501");
     put.set_value("first");
@@ -464,7 +467,8 @@ TEST_F(CoordinatorIdTest, KeepAliveRejectsAStaleMembershipIncarnation)
 TEST_F(CoordinatorIdTest, DeleteRejectsAStaleMembershipIncarnation)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18493));
-    DS_ASSERT_OK(service.Init(true));
+    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
     coordinator::PutReqPb put;
     put.set_key("/datasystem/delete-incarnation/cluster/127.0.0.1:31501");
     put.set_value("first");

@@ -300,13 +300,17 @@ protected:
 
     bool IsRaftServingGateOpen() const
     {
-        return service_ != nullptr && service_->raftServing_.load(std::memory_order_acquire);
+        return service_ != nullptr
+               && service_->servingState_.load(std::memory_order_acquire)
+                      == coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING;
     }
 
     void SetRaftServingGate(bool serving)
     {
         ASSERT_NE(service_, nullptr);
-        service_->raftServing_.store(serving, std::memory_order_release);
+        service_->servingState_.store(serving ? coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING
+                                              : coordinator::CoordinatorServiceImpl::ServingState::FOLLOWER_SERVING,
+                                      std::memory_order_release);
     }
 
     Status GetRaftLeader(std::string &leader) const
@@ -416,7 +420,7 @@ TEST_P(CoordinatorServiceElectionTest, SingleExpectedMemberServesBusinessRpcWith
     EXPECT_NE(duplicateStartStatus.GetMsg().find("already starting or running"), std::string::npos)
         << duplicateStartStatus.ToString();
     EXPECT_FALSE(IsLocalRaftLeader());
-    EXPECT_FALSE(IsRaftServingGateOpen());
+    EXPECT_TRUE(IsRaftServingGateOpen());
 
     std::string leader = "stale";
     const auto leaderStatus = GetRaftLeader(leader);

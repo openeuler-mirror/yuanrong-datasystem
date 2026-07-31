@@ -420,15 +420,25 @@ Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const 
     keepAliveValue_.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
     keepAliveValue_.hostId = hostId;
     keepAliveValue_.compatibilityVersion = CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString();
-    if (!isStoreAvailableWhenStart) {
-        keepAliveValue_.lifecycleState = MemberLifecycleState::DOWNGRADE_RESTARTING;
-    } else if (isRestart) {
-        keepAliveValue_.lifecycleState = MemberLifecycleState::RESTARTING;
-    } else {
-        keepAliveValue_.lifecycleState = MemberLifecycleState::STARTING;
-    }
+    keepAliveValue_.lifecycleState = !isStoreAvailableWhenStart ? MemberLifecycleState::DOWNGRADE_RESTARTING
+                                     : isRestart                ? MemberLifecycleState::RESTARTING
+                                                                : MemberLifecycleState::STARTING;
     // Publishing the lease can race the previous lease's TTL delete, which also removes this address's watch channels.
-    RETURN_IF_NOT_OK(AutoCreateKeepAliveKey(true));
+    const auto createStatus = AutoCreateKeepAliveKey(true);
+    MembershipReconcileHandler reconcile;
+    if (createStatus.GetCode() == K_NOT_READY) {
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        reconcile = membershipReconcileHandler_;
+    }
+    if (createStatus.GetCode() == K_NOT_READY) {
+        if (reconcile != nullptr) {
+            RETURN_IF_NOT_OK(reconcile(true));
+        } else {
+            RETURN_IF_NOT_OK(createStatus);
+        }
+    } else {
+        RETURN_IF_NOT_OK(createStatus);
+    }
     LaunchKeepAliveThread();
     return Status::OK();
 }
@@ -507,6 +517,10 @@ Status DsCoordinationBackend::RenewKeepAliveOnce()
                                 keepAliveModRevision_);
     if (rc.IsOk()) {
         HandleMembershipSuccess(coordinatorId);
+    } else {
+        // This write shares membershipMutationMutex_ with OnMembershipEnsured(), so a completed Ensure cannot be
+        // overwritten by an earlier renewal failure after it installed the replacement revision.
+        keepAliveTimeout_ = true;
     }
     return rc;
 }
@@ -558,6 +572,9 @@ void DsCoordinationBackend::HandleMembershipSuccess(const std::string &coordinat
         identityChanged = !coordinatorId.empty() && lastMembershipCoordinatorId_ != coordinatorId;
         lastMembershipCoordinatorId_ = coordinatorId;
         handler = membershipReadyHandler_;
+        if (handler != nullptr) {
+            ++activeMembershipReadyHandlers_;
+        }
     }
     bool invalidated = false;
     {
@@ -576,7 +593,16 @@ void DsCoordinationBackend::HandleMembershipSuccess(const std::string &coordinat
                   << ", membership_recreated=" << recreated << ", watches_invalidated=" << invalidated;
     }
     if (handler != nullptr) {
-        handler(coordinatorId, invalidated);
+        try {
+            handler(coordinatorId, invalidated);
+        } catch (const std::exception &error) {
+            LOG(ERROR) << "Coordinator membership-ready handler threw: " << error.what();
+        } catch (...) {
+            LOG(ERROR) << "Coordinator membership-ready handler threw an unknown exception";
+        }
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        --activeMembershipReadyHandlers_;
+        eventHandlerCv_.notify_all();
     }
 }
 
@@ -600,7 +626,6 @@ bool DsCoordinationBackend::CheckStoreAvailableAfterKeepAliveFailure(KeepAliveFa
 void DsCoordinationBackend::HandleKeepAliveFailure(const Status &status, const std::string &realKey,
                                                    KeepAliveFailureState &state)
 {
-    keepAliveTimeout_ = true;
     const bool storeAvailable = CheckStoreAvailableAfterKeepAliveFailure(state);
     if (storeAvailable && ++state.confirmTimes >= state.confirmMinTimes) {
         HandleKeepAliveFailed(realKey);
@@ -608,7 +633,16 @@ void DsCoordinationBackend::HandleKeepAliveFailure(const Status &status, const s
         LOG(WARNING) << "Confirmed local Coordinator network isolation; keep the process alive and report the "
                         "membership deletion event.";
     } else if (status.GetCode() == K_NOT_FOUND || status.GetCode() == K_TRY_AGAIN) {
-        (void)AutoCreateKeepAliveKey(true);
+        MembershipReconcileHandler reconcile;
+        {
+            std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+            reconcile = membershipReconcileHandler_;
+        }
+        if (reconcile != nullptr) {
+            LOG_IF_ERROR(reconcile(false), "CLUSTER_MEMBERSHIP_RECONCILE_SCHEDULE_FAILED");
+        } else {
+            (void)AutoCreateKeepAliveKey(true);
+        }
     }
 }
 
@@ -658,6 +692,7 @@ Status DsCoordinationBackend::ShutdownEventSources()
         std::lock_guard<std::mutex> lock(eventHandlerMutex_);
         eventHandler_ = {};
         membershipReadyHandler_ = {};
+        membershipReconcileHandler_ = {};
     }
     {
         std::lock_guard<std::mutex> rewatchLock(rewatchMutex_);
@@ -667,7 +702,9 @@ Status DsCoordinationBackend::ShutdownEventSources()
     ShutdownKeepAliveThread();
     CancelWatches();
     std::unique_lock<std::mutex> lock(eventHandlerMutex_);
-    eventHandlerCv_.wait(lock, [this] { return activeEventHandlers_ == 0; });
+    eventHandlerCv_.wait(lock, [this] {
+        return activeEventHandlers_ == 0 && activeMembershipReadyHandlers_ == 0;
+    });
     return Status::OK();
 }
 
@@ -792,6 +829,45 @@ void DsCoordinationBackend::SetMembershipReadyHandler(MembershipReadyHandler han
     }
     if (handler != nullptr && !coordinatorId.empty()) {
         handler(coordinatorId, false);
+    }
+}
+
+Status DsCoordinationBackend::GetMembershipRenewalPayload(MembershipRenewalPayload &payload) const
+{
+    payload = MembershipRenewalPayload{};
+    MembershipValue value;
+    {
+        std::lock_guard<std::mutex> lock(keepAliveMutex_);
+        CHECK_FAIL_RETURN_STATUS(!keepAliveKey_.empty() && keepAliveTtlMs_ > 0
+                                     && keepAliveValue_.lifecycleState != MemberLifecycleState::UNKNOWN,
+                                 K_NOT_READY, "membership lease is not initialized");
+        value = keepAliveValue_;
+        payload.reporterAddress = keepAliveKey_;
+        payload.ttlMs = keepAliveTtlMs_;
+    }
+    return MembershipValueCodec::Encode(value, payload.encodedValue);
+}
+
+void DsCoordinationBackend::SetMembershipReconcileHandler(MembershipReconcileHandler handler)
+{
+    std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+    membershipReconcileHandler_ = std::move(handler);
+}
+
+void DsCoordinationBackend::OnMembershipEnsured(const std::string &coordinatorId, int64_t membershipModRevision)
+{
+    std::lock_guard<std::mutex> mutationLock(membershipMutationMutex_);
+    // Ensure can return after a newer local membership mutation completed. Revisions are globally monotonic.
+    if (membershipModRevision > keepAliveModRevision_) {
+        keepAliveModRevision_ = membershipModRevision;
+    }
+    keepAliveTimeout_ = false;
+    firstKeepAliveSent_.store(true, std::memory_order_release);
+    HandleMembershipSuccess(coordinatorId, true);
+    std::lock_guard<std::mutex> lock(keepAliveMutex_);
+    if (keepAliveValue_.lifecycleState == MemberLifecycleState::STARTING
+        || keepAliveValue_.lifecycleState == MemberLifecycleState::RESTARTING) {
+        keepAliveValue_.lifecycleState = MemberLifecycleState::RECOVERING;
     }
 }
 

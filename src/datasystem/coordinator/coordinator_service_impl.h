@@ -27,7 +27,9 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
+#include <string_view>
 
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/coordinator/memory_kv_store.h"
@@ -36,6 +38,7 @@
 #include "datasystem/common/coordinator/watch_registry.h"
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/thread.h"
 #include "datasystem/coordinator/raft/coordinator_election_manager.h"
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
 #include "datasystem/coordinator/watch_dispatcher_impl.h"
@@ -95,6 +98,10 @@ public:
      *         and cannot be retried.
      */
     Status StartElectionManager();
+
+    // Raft state-machine callbacks enter the recovery gate through these two methods.
+    void OnLeaderStart(int64_t term);
+    void OnLeaderStop(const Status &status);
 
     /**
      * @brief Report whether the running election-enabled service owns Raft leadership.
@@ -187,6 +194,12 @@ public:
                                            ReportTopologyRecoveryCandidateRspPb &rsp) override;
 
     /**
+     * @brief Recreate exactly one Worker's membership while the elected Leader recovers its memory state.
+     */
+    Status EnsureLeaderMembership(const EnsureLeaderMembershipReqPb &req,
+                                  EnsureLeaderMembershipRspPb &rsp) override;
+
+    /**
      * @brief Read raw topology and membership facts without recovery gating or domain projection.
      * @param[in] req Validated logical cluster name.
      * @param[out] rsp Raw key/value groups including each entry's modification revision.
@@ -197,7 +210,16 @@ public:
 private:
     friend class ::datasystem::st::CoordinatorServiceElectionTestBase;
 
-    enum class ServingState : uint8_t { CREATED, INITIALIZED, STARTING, RUNNING, STOPPING, STOPPED };
+    enum class ServingState : uint8_t {
+        CREATED,      // Constructed but not initialized.
+        INITIALIZED,  // Components are initialized but the RPC service is not started.
+        STARTING,     // RPC and Raft startup are in progress.
+        FOLLOWER_SERVING,   // Running with Raft enabled, but this Coordinator is not the Leader.
+        LEADER_RECOVERING,  // Elected Leader rebuilding topology state; only recovery control RPCs are admitted.
+        LEADER_SERVING,     // Business RPCs are admitted; non-Raft mode is always in this state after startup.
+        STOPPING,     // Shutdown has started and no new work may be admitted.
+        STOPPED,      // Shutdown has completed.
+    };
 
     /**
      * @brief Construct and start the Store, recovery, and topology control component tree.
@@ -244,6 +266,19 @@ private:
      * @param[out] header Response header to fill.
      */
     void FillResponseHeader(ResponseHeader *header) const;
+    /**
+     * @brief Fill response metadata and apply the serving gate for one RPC class.
+     * @param[out] header Response header to fill.
+     * @param[out] businessAllowed True only when this request may execute against local business state.
+     * @return K_OK with a routeable envelope for Followers, recovering Leaders, or the current serving Leader;
+     *         lifecycle and stale-local-leadership gate status otherwise.
+     */
+    Status PrepareRpcResponse(ResponseHeader *header, bool &businessAllowed) const;
+    Status RequireRecoveryLeader(uint64_t term, std::string_view coordinatorId) const;
+    void RunRecoveryGate();
+    void StopRecoveryGate();
+    void CompleteRecoveryWindow(uint64_t term);
+    bool IsCurrentLeaderRound(uint64_t term, std::string_view coordinatorId) const;
 
     bool IsElectionConfigured() const noexcept;
     Status ValidateElectionConfiguration() const;
@@ -288,7 +323,15 @@ private:
     bool shutdownComplete_{ false };
     Status shutdownStatus_;
     std::atomic<ServingState> servingState_{ ServingState::CREATED };
-    std::atomic<bool> raftServing_{ false };
+    // This fence linearizes RPC admission with Raft Leader transitions; CoordinatorElectionManager remains the
+    // Raft source of truth.
+    mutable std::shared_mutex leaderOperationMutex_;
+    // Wakes the recovery timer on state changes. ServingState is the single service/admission state machine.
+    mutable std::mutex recoveryGateMutex_;
+    std::condition_variable recoveryGateCv_;
+    std::atomic<uint64_t> leaderTerm_{ 0 };
+    bool recoveryGateStopping_{ false };
+    Thread recoveryGateThread_;
 
 #ifdef WITH_TESTS
     // Narrow deterministic seams for lifecycle publication, real brpc handler/server ordering, snapshot-copy, and

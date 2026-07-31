@@ -67,6 +67,9 @@ public:
                int64_t expectedModRevision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (putStatus_.IsError()) {
+            return putStatus_;
+        }
         lastExpectedCoordinatorId_ = expectedCoordinatorId;
         lastExpectedModRevision_ = expectedModRevision;
         if (expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK && expectedModRevision != putRevision_) {
@@ -152,11 +155,11 @@ public:
                      int64_t expectedModRevision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!keepAliveSucceeds_) {
-            return Status(K_RUNTIME_ERROR, "unused fake KeepAlive");
-        }
         lastKeepAliveCoordinatorId_ = expectedCoordinatorId;
         lastKeepAliveModRevision_ = expectedModRevision;
+        if (keepAliveStatus_.IsError()) {
+            return keepAliveStatus_;
+        }
         if (putRevision_ == 0) {
             return Status(K_NOT_FOUND, "membership does not exist");
         }
@@ -212,10 +215,16 @@ public:
         putCoordinatorId_ = std::move(coordinatorId);
     }
 
-    void SetKeepAliveSucceeds()
+    void SetPutStatus(Status status)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        keepAliveSucceeds_ = true;
+        putStatus_ = std::move(status);
+    }
+
+    void SetKeepAliveStatus(Status status)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        keepAliveStatus_ = std::move(status);
     }
 
     void SetBeforeWatchReturn(std::function<void()> hook)
@@ -287,6 +296,12 @@ public:
         ++putRevision_;
     }
 
+    void SetMembershipRevision(int64_t revision)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        putRevision_ = revision;
+    }
+
 private:
     // Protects every fake response, observation and deterministic watch barrier below.
     mutable std::mutex mutex_;
@@ -304,8 +319,9 @@ private:
     int64_t lastDeleteModRevision_{ 0 };
     int64_t putVersion_{ 0 };
     int64_t putRevision_{ 0 };
-    bool keepAliveSucceeds_{ false };
     std::string putCoordinatorId_{ COORDINATOR_A };
+    Status putStatus_{ Status::OK() };
+    Status keepAliveStatus_{ Status(K_RUNTIME_ERROR, "unused fake KeepAlive") };
     std::function<void()> beforeWatchReturn_;
     bool blockWatch_{ false };
     bool watchEntered_{ false };
@@ -477,7 +493,7 @@ TEST(DsCoordinationBackendSessionTest, MembershipIdentityChangeRewatchesAndDrops
 TEST(DsCoordinationBackendSessionTest, InitialLeaseFactSurvivesReadyLifecycleTransition)
 {
     DeterministicCoordinatorProxy proxy;
-    proxy.SetKeepAliveSucceeds();
+    proxy.SetKeepAliveStatus(Status::OK());
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
 
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
@@ -486,11 +502,29 @@ TEST(DsCoordinationBackendSessionTest, InitialLeaseFactSurvivesReadyLifecycleTra
     EXPECT_TRUE(backend.IsFirstKeepAliveSent());
 }
 
+TEST(DsCoordinationBackendSessionTest, InitialSuccessfulLeaseDoesNotReconcileBeforeReady)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    int reconcileCalls = 0;
+    backend.SetMembershipReconcileHandler([&reconcileCalls](bool) {
+        ++reconcileCalls;
+        return Status::OK();
+    });
+
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    EXPECT_EQ(reconcileCalls, 0);
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 1);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
 TEST(DsCoordinationBackendSessionTest, MembershipWritesCarryObservedCoordinatorFence)
 {
     DeterministicCoordinatorProxy proxy;
     AddSuccessfulBatch(proxy, COORDINATOR_A);
-    proxy.SetKeepAliveSucceeds();
+    proxy.SetKeepAliveStatus(Status::OK());
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
     ASSERT_TRUE(backend.WatchEvents(TwoWatchPlan()).IsOk());
 
@@ -507,10 +541,11 @@ TEST(DsCoordinationBackendSessionTest, MembershipWritesCarryObservedCoordinatorF
 TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotOverwriteReplacement)
 {
     DeterministicCoordinatorProxy proxy;
-    proxy.SetKeepAliveSucceeds();
+    proxy.SetKeepAliveStatus(Status::OK());
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
     ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
 
     proxy.ReplaceMembershipIncarnation();
     EXPECT_EQ(backend.UpdateNodeState(MemberLifecycleState::EXITING).GetCode(), K_TRY_AGAIN);
@@ -520,7 +555,7 @@ TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotOverwrite
 TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotDeleteReplacement)
 {
     DeterministicCoordinatorProxy proxy;
-    proxy.SetKeepAliveSucceeds();
+    proxy.SetKeepAliveStatus(Status::OK());
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
     ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
@@ -528,6 +563,81 @@ TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotDeleteRep
     proxy.ReplaceMembershipIncarnation();
     EXPECT_EQ(backend.Delete("/datasystem/c/cluster", WATCHER_ADDRESS).GetCode(), K_TRY_AGAIN);
     EXPECT_EQ(proxy.LastDeleteModRevision(), 2);
+}
+
+TEST(DsCoordinationBackendSessionTest, RecoveringLeaderInitialLeaseUsesReconcileHandlerBeforeStartingRenewal)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetPutStatus(Status(K_NOT_READY, "leader recovering"));
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    int reconciled = 0;
+    backend.SetMembershipReconcileHandler([&backend, &reconciled](bool waitForCompletion) {
+        EXPECT_TRUE(waitForCompletion);
+        ++reconciled;
+        backend.OnMembershipEnsured(COORDINATOR_A, 17);
+        return Status::OK();
+    });
+
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    EXPECT_EQ(reconciled, 1);
+    EXPECT_TRUE(backend.IsFirstKeepAliveSent());
+    proxy.SetPutStatus(Status::OK());
+    proxy.SetMembershipRevision(17);
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 17);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, EnsuredMembershipClearsEarlierRenewalFailure)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status(K_RPC_UNAVAILABLE, "injected renewal failure"));
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    for (int retry = 0; retry < 100 && !backend.IsKeepAliveTimeout(); ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(backend.IsKeepAliveTimeout());
+
+    proxy.SetKeepAliveStatus(Status::OK());
+    proxy.SetMembershipRevision(17);
+    backend.OnMembershipEnsured(COORDINATOR_A, 17);
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 17);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, StaleEnsuredRevisionCannotRollbackNewerMembershipMutation)
+{
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+
+    proxy.SetMembershipRevision(17);
+    backend.OnMembershipEnsured(COORDINATOR_A, 17);
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 17);
+
+    // A delayed Ensure response must not replace the revision produced by the newer state mutation.
+    backend.OnMembershipEnsured(COORDINATOR_A, 17);
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 18);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, RenewalPayloadDoesNotExposePhysicalMembershipKey)
+{
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+
+    DsCoordinationBackend::MembershipRenewalPayload payload;
+    ASSERT_TRUE(backend.GetMembershipRenewalPayload(payload).IsOk());
+    EXPECT_EQ(payload.reporterAddress, WATCHER_ADDRESS);
+    EXPECT_GT(payload.ttlMs, 0);
+    EXPECT_FALSE(payload.encodedValue.empty());
+    EXPECT_EQ(payload.reporterAddress.find("/datasystem/"), std::string::npos);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
 TEST(DsCoordinationBackendSessionTest, InvalidatedPlansRebuildOnTheNextExactRead)

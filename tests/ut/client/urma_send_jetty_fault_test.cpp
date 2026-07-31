@@ -314,7 +314,7 @@ TEST(UrmaSendJettyFaultTest, CleanupWaitPreservesEarlierCqe4WithLaterPostFailure
     accessor.release();
     event->SetFailed(4);
     event->NotifyAll();
-    UrmaWriteFailure failure{ .providerStatus = 5 };
+    UrmaWriteFailure failure{ .providerStatus = 5, .cqeStatus = std::nullopt };
     std::vector<uint64_t> eventKeys{ kRequestId };
     auto remainingTime = []() { return 1000; };
     auto preserveError = [](Status &status) { return status; };

@@ -422,6 +422,7 @@ struct LeaderObservation {
 struct BusinessRpcObservation {
     Status status;
     std::string coordinatorId;
+    coordinator::ResponseHeader header;
 };
 
 struct BootstrapRpcObservation {
@@ -657,8 +658,8 @@ protected:
     {
         auto channel = CreateBusinessChannel(index, deadline);
         if (channel == nullptr) {
-            BusinessRpcObservation observation{ Status(K_RUNTIME_ERROR, "Failed to create Coordinator business channel"),
-                                                {} };
+            BusinessRpcObservation observation;
+            observation.status = Status(K_RUNTIME_ERROR, "Failed to create Coordinator business channel");
             lastBusinessStatus_[index] = observation.status.ToString();
             return observation;
         }
@@ -670,9 +671,16 @@ protected:
         observation.status = stub.GetCoordinatorId(request, response);
         if (observation.status.IsOk()) {
             observation.coordinatorId = response.header().coordinator_id();
+            observation.header = response.header();
         }
         lastBusinessStatus_[index] = observation.status.ToString();
         return observation;
+    }
+
+    bool IsBusinessServing(const BusinessRpcObservation &observation) const
+    {
+        return observation.status.IsOk() && observation.header.is_leader()
+               && observation.header.serving_state() == coordinator::ResponseHeader::LEADER_SERVING;
     }
 
     bool BusinessGatesMatchLeader(const std::vector<size_t> &indexes, size_t leaderIndex, Deadline deadline) const
@@ -680,13 +688,15 @@ protected:
         for (const auto index : indexes) {
             const auto observation = CallBusinessRpc(index, deadline);
             if (index == leaderIndex) {
-                if (observation.status.IsError() || observation.coordinatorId.empty()) {
+                if (!IsBusinessServing(observation) || observation.coordinatorId.empty()) {
                     return false;
                 }
                 continue;
             }
             if (observation.status.IsOk()) {
-                if (observation.coordinatorId.empty()) {
+                if (observation.coordinatorId.empty() || observation.header.is_leader()
+                    || observation.header.serving_state() != coordinator::ResponseHeader::FOLLOWER_SERVING
+                    || observation.header.leader_address().empty()) {
                     return false;
                 }
                 continue;
@@ -1458,7 +1468,11 @@ TEST_F(CoordinatorRuntimeElectionTest, LeaderFailoverRestartsOldLeaderAsPersiste
     ASSERT_NE(runtimes_[initial.leaderIndex].active, nullptr);
     EXPECT_FALSE(runtimes_[initial.leaderIndex].active->runtime->IsLeader());
     const auto restartedGate = CallBusinessRpc(initial.leaderIndex, caseDeadline);
-    EXPECT_EQ(restartedGate.status.GetCode(), K_NOT_READY) << restartedGate.status.ToString();
+    EXPECT_TRUE(restartedGate.status.IsOk()) << restartedGate.status.ToString();
+    EXPECT_FALSE(IsBusinessServing(restartedGate));
+    EXPECT_FALSE(restartedGate.header.is_leader());
+    EXPECT_EQ(restartedGate.header.serving_state(), coordinator::ResponseHeader::FOLLOWER_SERVING);
+    EXPECT_EQ(restartedGate.header.leader_address(), failover.endpoint);
     EXPECT_TRUE(HasCommittedConfiguration(initial.leaderIndex, BaselineEndpointSet(), caseDeadline));
     EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
 }
@@ -1529,7 +1543,7 @@ TEST_F(CoordinatorRuntimeElectionTest, FollowerWithDeletedRaftDataRebuildsFromAu
                 return true;
             }
             const auto rebuildingGate = CallBusinessRpc(stoppedFollower, caseDeadline);
-            if (rebuildingGate.status.IsOk()) {
+            if (IsBusinessServing(rebuildingGate)) {
                 servingInvariantViolated = true;
                 return true;
             }
@@ -1550,7 +1564,11 @@ TEST_F(CoordinatorRuntimeElectionTest, FollowerWithDeletedRaftDataRebuildsFromAu
     ASSERT_NE(runtimes_[stoppedFollower].active, nullptr);
     EXPECT_FALSE(runtimes_[stoppedFollower].active->runtime->IsLeader());
     const auto restartedGate = CallBusinessRpc(stoppedFollower, caseDeadline);
-    EXPECT_EQ(restartedGate.status.GetCode(), K_NOT_READY) << restartedGate.status.ToString();
+    EXPECT_TRUE(restartedGate.status.IsOk()) << restartedGate.status.ToString();
+    EXPECT_FALSE(IsBusinessServing(restartedGate));
+    EXPECT_FALSE(restartedGate.header.is_leader());
+    EXPECT_EQ(restartedGate.header.serving_state(), coordinator::ResponseHeader::FOLLOWER_SERVING);
+    EXPECT_EQ(restartedGate.header.leader_address(), initial.endpoint);
     const auto bootstrap = CallBootstrapRpc(stoppedFollower, caseDeadline);
     ASSERT_TRUE(bootstrap.status.IsOk()) << bootstrap.status.ToString();
     EXPECT_EQ(bootstrap.response.phase(), coordinator::RAFT_BOOTSTRAP_STARTED);
