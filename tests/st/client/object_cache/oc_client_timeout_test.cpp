@@ -274,9 +274,10 @@ TEST_F(OCClientTimeoutSingleRpcThreadTest, AdmissionRejectConsumesMessageThenNex
 
     // Second Get (same worker): should return data normally.
     // Since the first request's p was already consumed by WorkerEntry, the queue has no orphan
-    // and the second request will not be mismatched.
+    // and the second request will not be mismatched. Reuse the long-timeout adminClient to avoid
+    // the 5ms requestTimeout budget being exceeded by normal RPC latency under -u16 load.
     std::vector<Optional<Buffer>> result2;
-    Status rc2 = client->Get({ objKey }, 0, result2);
+    Status rc2 = adminClient->Get({ objKey }, 0, result2);
 
     EXPECT_TRUE(rc2.IsOk()) << "Second request should succeed — no orphan left in queue";
     ASSERT_EQ(result2.size(), 1u);
