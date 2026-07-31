@@ -1190,6 +1190,10 @@ Status WorkerOCServer::ConstructTopologyRuntime()
             return HandleMembershipRestarts(restartFacts, mode == cluster::RestartEffectMode::WAIT_FOR_COMPLETION);
         })
         .SetSnapshotPublishedHandler([this](std::shared_ptr<const cluster::TopologySnapshot> snapshot) {
+            if (EnableOCService() && objCacheClientWorkerSvc_ != nullptr) {
+                LOG_IF_ERROR(objCacheClientWorkerSvc_->GiveUpReconciliation(),
+                             "Try to finish restart reconciliation after topology snapshot published failed");
+            }
             ScheduleTopologySnapshotWarmup(std::move(snapshot));
         })
         .SetControlBackendProbe(
