@@ -395,8 +395,10 @@ Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const 
         auto envFilePath = GetWorkerEnvFilePath(FLAGS_log_dir);
         hostId = GetStringFromEnvOrFile(FLAGS_host_id_env_name.c_str(), envFilePath, FLAGS_host_id_env_name, "");
         if (hostId.empty()) {
-            LOG(WARNING) << FormatString("host_id env [%s] is empty when worker registers to etcd.",
-                                         FLAGS_host_id_env_name);
+            LOG(WARNING) << FormatString(
+                "host_id env [%s] is empty when worker registers to coordinator. "
+                "Check --host_id_env_name config or the worker env file in --log_dir.",
+                FLAGS_host_id_env_name);
         } else if (envHostId.empty()) {
             LOG(INFO) << "Host id is " << hostId << " from persisted worker env file " << envFilePath;
         } else {
