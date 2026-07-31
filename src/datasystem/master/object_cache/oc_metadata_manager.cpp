@@ -4112,6 +4112,14 @@ bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &s
         return false;
     }
     const std::string &objectKey = metaPb.object_key();
+    // Skip saving metadata for keys being deleted to prevent re-creating metadata after Delete
+    {
+        std::shared_lock<std::shared_mutex> lck(isDeletingObjMutex_);
+        if (isDeletingObjs_.count(objectKey) > 0) {
+            LOG(INFO) << "Skip saving migration data for object being deleted: " << objectKey;
+            return false;
+        }
+    }
     VLOG(1) << "receive migrate object meta:" << objectKey;
     ObjectMeta metaCache;
     metaCache.meta = metaPb;
@@ -4289,6 +4297,15 @@ Status OCMetadataManager::FillMetadataForMigration(
     std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap)
 {
     {
+        // Skip keys being deleted to prevent migration from re-creating metadata after Delete
+        {
+            std::shared_lock<std::shared_mutex> lck(isDeletingObjMutex_);
+            if (isDeletingObjs_.count(objectKey) > 0) {
+                LOG(INFO) << "Skip migrating object being deleted: " << objectKey;
+                RETURN_STATUS(StatusCode::K_TRY_AGAIN,
+                              FormatString("Object %s is being deleted, skip migration", objectKey));
+            }
+        }
         INJECT_POINT("check.expiredObject", [this, &objectKey, &meta] {
             uint32_t time = 0;
             if (expiredObjectManager_->GetObjectRemainTimeAndRemove(objectKey, time).IsOk()) {
