@@ -752,6 +752,9 @@ Status CoordinatorElectionManager::DecideStartPlan(const RaftBootstrapState &loc
     }
 
     Status firstRetryableError;
+    Status firstBlockingObservationError;
+    std::vector<std::string> bootstrappableCandidates;
+    bootstrappableCandidates.reserve(normalizedCandidates.size());
     for (const auto &observation : observations) {
         if (observation.status.IsError()) {
             if (firstRetryableError.IsOk()) {
@@ -765,16 +768,16 @@ Status CoordinatorElectionManager::DecideStartPlan(const RaftBootstrapState &loc
         const auto &peerState = observation.state;
         if (peerState.metadataState == RaftMetadataState::CORRUPT
             || peerState.metadataState == RaftMetadataState::UNKNOWN) {
-            if (firstRetryableError.IsOk()) {
-                firstRetryableError =
+            if (firstBlockingObservationError.IsOk()) {
+                firstBlockingObservationError =
                     Status(K_NOT_READY, "Coordinator bootstrap peer metadata state is not ready for first bootstrap: "
                                             + observation.peer);
             }
             continue;
         }
         if (peerState.metadataState == RaftMetadataState::VALID) {
-            if (peerState.committedPeers.empty() && firstRetryableError.IsOk()) {
-                firstRetryableError =
+            if (peerState.committedPeers.empty() && firstBlockingObservationError.IsOk()) {
+                firstBlockingObservationError =
                     Status(K_NOT_READY, "Coordinator bootstrap peer has valid metadata but no committed configuration: "
                                             + observation.peer);
             }
@@ -782,22 +785,22 @@ Status CoordinatorElectionManager::DecideStartPlan(const RaftBootstrapState &loc
         }
         if (!IsSha256Hex(peerState.candidateDigest) || peerState.candidateCount != localState.candidateCount
             || peerState.candidateDigest != localState.candidateDigest) {
-            if (firstRetryableError.IsOk()) {
-                firstRetryableError =
+            if (firstBlockingObservationError.IsOk()) {
+                firstBlockingObservationError =
                     Status(K_NOT_READY,
                            "Coordinator bootstrap candidate observation digest does not match: " + observation.peer);
             }
+            continue;
         }
+        bootstrappableCandidates.emplace_back(observation.peer);
     }
 
-    if (firstRetryableError.IsError()) {
-        return firstRetryableError;
-    }
-
+    const size_t target = options_.membershipOptions.expectedMemberCount;
     if (observedCommittedConfiguration) {
         for (const auto &vote : committedConfigVotes) {
-            if (normalizedCandidates.size() < options_.membershipOptions.expectedMemberCount
-                && vote.peers == normalizedCandidates
+            if (vote.peers.size() < target
+                && std::includes(normalizedCandidates.begin(), normalizedCandidates.end(), vote.peers.begin(),
+                                 vote.peers.end())
                 && std::binary_search(vote.peers.begin(), vote.peers.end(), localState.localPeer)) {
                 startPlan = BootstrapPlan{ vote.peers };
                 return Status::OK();
@@ -807,17 +810,23 @@ Status CoordinatorElectionManager::DecideStartPlan(const RaftBootstrapState &loc
                       "Coordinator bootstrap observed committed configuration but no configuration reached quorum");
     }
 
-    const size_t target = options_.membershipOptions.expectedMemberCount;
-    const size_t bootstrapQuorum = (target / 2) + 1;
-    if (normalizedCandidates.size() < bootstrapQuorum) {
-        return Status(K_NOT_READY, FormatString("Coordinator bootstrap has %zu candidates but requires quorum %zu",
-                                                normalizedCandidates.size(), bootstrapQuorum));
+    if (firstBlockingObservationError.IsError()) {
+        return firstBlockingObservationError;
+    }
+    const size_t bootstrapQuorum = QuorumSize(target);
+    if (bootstrappableCandidates.size() < bootstrapQuorum) {
+        if (firstRetryableError.IsError()) {
+            return firstRetryableError;
+        }
+        return Status(K_NOT_READY,
+                      FormatString("Coordinator bootstrap has %zu bootstrappable candidates but requires quorum %zu",
+                                   bootstrappableCandidates.size(), bootstrapQuorum));
     }
 
-    const size_t selectedCount = std::min(target, normalizedCandidates.size());
+    const size_t selectedCount = std::min(target, bootstrappableCandidates.size());
     std::vector<std::string> selected(
-        normalizedCandidates.begin(),
-        normalizedCandidates.begin() + static_cast<std::vector<std::string>::difference_type>(selectedCount));
+        bootstrappableCandidates.begin(),
+        bootstrappableCandidates.begin() + static_cast<std::vector<std::string>::difference_type>(selectedCount));
     if (!std::binary_search(selected.begin(), selected.end(), localState.localPeer)) {
         startPlan = WaitingToJoinPlan{};
         return Status::OK();

@@ -211,7 +211,7 @@ def kill_process(pod, namespace, process_name, timeout=DEFAULT_TIMEOUT):
 def stop_service(pod, namespace, remote_config, timeout=DEFAULT_TIMEOUT):
     """Stop a service gracefully using dscli stop -f <config>.
 
-    dscli reads service_type from the config and stops the matching
+    dscli uses service address fields in the config to stop the matching
     datasystem_worker or datasystem_coordinator process.
     """
     pod_name = pod['name']

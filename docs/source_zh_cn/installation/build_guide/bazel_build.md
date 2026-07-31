@@ -579,7 +579,7 @@ int main(int argc, char **argv) {
 }
 ```
 
-上述无参`InitAndRun()`是兼容入口，不启用Coordinator选举。需要启用选举时应使用下一节的参数化入口。
+上述无参`InitAndRun()`是兼容入口。默认 `coordinator_raft_initial_peers` 为空时按单节点无选主模式启动；如果通过进程 flag 配置了多个静态 peers，则会使用该列表启动 Raft 选主。需要自定义 Discovery、成员注册回调或配置文件解析流程时，应使用下一节的参数化入口。
 
 ### 5. 配置文件启动方式
 

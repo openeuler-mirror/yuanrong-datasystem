@@ -482,6 +482,57 @@ TEST(CoordinatorElectionManagerTest, TwoOfThreeCandidatesCreateTwoPeerBootstrapP
     DS_ASSERT_OK(manager->Shutdown());
 }
 
+TEST(CoordinatorElectionManagerTest, TwoReachableStaticCandidatesBootstrapDespiteUnavailablePeer)
+{
+    auto state = std::make_shared<DependencyState>();
+    state->discoveredCandidates = { kPeer3, kPeer2, kPeer1 };
+    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
+    auto unavailable = MakePeerState(kPeer3, RaftMetadataState::UNKNOWN);
+    unavailable.result = Status(K_RPC_UNAVAILABLE, "scripted unavailable peer");
+    state->peers.emplace(kPeer3, std::move(unavailable));
+    auto manager = MakeManager(state);
+
+    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
+    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
+              (std::vector<std::string>{ kPeer1, kPeer2 }));
+    EXPECT_EQ(state->peerProbeCalls, 2U);
+    DS_ASSERT_OK(manager->Shutdown());
+}
+
+TEST(CoordinatorElectionManagerTest, OneReachableStaticCandidateWaitsForBootstrapQuorum)
+{
+    auto state = std::make_shared<DependencyState>();
+    state->discoveredCandidates = { kPeer3, kPeer2, kPeer1 };
+    auto unavailablePeer2 = MakePeerState(kPeer2, RaftMetadataState::UNKNOWN);
+    unavailablePeer2.result = Status(K_RPC_UNAVAILABLE, "scripted unavailable peer2");
+    auto unavailablePeer3 = MakePeerState(kPeer3, RaftMetadataState::UNKNOWN);
+    unavailablePeer3.result = Status(K_RPC_UNAVAILABLE, "scripted unavailable peer3");
+    state->peers.emplace(kPeer2, std::move(unavailablePeer2));
+    state->peers.emplace(kPeer3, std::move(unavailablePeer3));
+    auto manager = MakeManager(state);
+
+    DS_ASSERT_OK(manager->Start());
+    ASSERT_TRUE(WaitForRetry(*manager));
+    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
+    EXPECT_EQ(state->peerProbeCalls, 2U);
+    DS_ASSERT_OK(manager->Shutdown());
+}
+
+TEST(CoordinatorElectionManagerTest, ReachableUnknownStaticCandidateBlocksFreshBootstrap)
+{
+    auto state = std::make_shared<DependencyState>();
+    state->discoveredCandidates = { kPeer3, kPeer2, kPeer1 };
+    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
+    state->peers.emplace(kPeer3, MakePeerState(kPeer3, RaftMetadataState::UNKNOWN));
+    auto manager = MakeManager(state);
+
+    DS_ASSERT_OK(manager->Start());
+    ASSERT_TRUE(WaitForRetry(*manager));
+    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
+    EXPECT_EQ(state->peerProbeCalls, 2U);
+    DS_ASSERT_OK(manager->Shutdown());
+}
+
 TEST(CoordinatorElectionManagerTest, MoreThanTargetCandidatesSelectFirstSortedPeers)
 {
     auto state = std::make_shared<DependencyState>();
