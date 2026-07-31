@@ -29,9 +29,8 @@ from yr.datasystem import TransferEngine, Result, ErrorCode
 TransferEngine selects the data-plane backend in this order:
 
 1. `TRANSFER_ENGINE_BACKEND=p2p|hixl`, when set.
-2. An explicit `protocol` value: `"p2p"` selects P2P-Transfer; `"hixl"`, `"d2d_hixl"`, or `"hccs_hixl"`
-   selects HIXL.
-3. An empty `protocol` or `"ascend"` selects HIXL when that backend was compiled, otherwise P2P.
+2. An explicit `protocol` value: `"p2p"` selects P2P-Transfer; `"hixl"` selects HIXL.
+3. An empty `protocol` or `"ascend"` selects HIXL.
 
 When HIXL is selected, `TRANSFER_ENGINE_HIXL_ROUTE` accepts `auto`, `hccs`, or `roce` and defaults to `auto`.
 This value is a TransferEngine peer-consistency policy: both peers must use the same value. TransferEngine does not pass
@@ -73,9 +72,8 @@ engine = TransferEngine()
 Methods:
 
 1. `initialize(local_hostname: str, protocol: str, device_name: str) -> Result`
-   An empty `protocol` or `"ascend"` selects HIXL by default when the HIXL backend is compiled; builds without HIXL
-   fall back to P2P. Use `"p2p"` or `"hixl"` to select a backend explicitly. `TRANSFER_ENGINE_BACKEND=p2p|hixl`
-   overrides `protocol`. `device_name` must match `npu:${device_id}`.
+   `protocol` accepts `"p2p"` for P2P-Transfer and `"hixl"`, `"ascend"`, or an empty string for HIXL.
+   `TRANSFER_ENGINE_BACKEND=p2p|hixl` overrides `protocol`. `device_name` must match `npu:${device_id}`.
 2. `register_memory(buffer_addr_regisrterch: int, length: int) -> Result`
 3. `batch_register_memory(buffer_addrs: list[int], lengths: list[int]) -> Result`
 4. `unregister_memory(buffer_addr_regisrterch: int) -> Result`

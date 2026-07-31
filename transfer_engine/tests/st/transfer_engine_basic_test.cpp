@@ -275,7 +275,7 @@ void OwnerProcessMain(bool registerOwnerMemory, const std::vector<uint8_t> &src,
     close(pipes->addr[0]);
 
     TransferEngine owner;
-    Result initRc = owner.Initialize("127.0.0.1:" + std::to_string(ownerPort), "ascend",
+    Result initRc = owner.Initialize("127.0.0.1:" + std::to_string(ownerPort), "p2p",
                                      "npu:" + std::to_string(ownerDeviceId));
     if (initRc.IsError()) {
         WriteOwnerFailAndExit(pipes->ready[1], 100, initRc);
@@ -416,7 +416,7 @@ Result RunForkedTransferCase(bool registerOwnerMemory, ErrorCode *requesterCode,
     TE_RETURN_IF_ERROR(WaitOwnerReadyAndReadAddr(pid, &pipes, &ownerSrcDevAddr));
 
     TransferEngine requester;
-    Result initRc = requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "ascend",
+    Result initRc = requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "p2p",
                                          "npu:" + std::to_string(requesterDeviceId));
     if (initRc.IsError()) {
         (void)WriteByte(pipes.done[1], 1);
@@ -510,7 +510,7 @@ Result RunForkedTransferCaseWithRtAscendVisibleDevices(ErrorCode *requesterCode,
     TE_RETURN_IF_ERROR(WaitOwnerReadyAndReadAddr(pid, &pipes, &ownerSrcDevAddr));
 
     TransferEngine requester;
-    Result initRc = requester.Initialize("127.0.0.1:" + std::to_string(kRequesterPort), "ascend",
+    Result initRc = requester.Initialize("127.0.0.1:" + std::to_string(kRequesterPort), "p2p",
                                          "npu:" + std::to_string(kRequesterLogicalDeviceId));
     if (initRc.IsError()) {
         (void)WriteByte(pipes.done[1], 1);
@@ -597,7 +597,7 @@ Result RunForkedConcurrentNpuReadCase()
         }
 
         TransferEngine owner;
-        rc = owner.Initialize("127.0.0.1:" + std::to_string(kOwnerPort), "ascend",
+        rc = owner.Initialize("127.0.0.1:" + std::to_string(kOwnerPort), "p2p",
                               "npu:" + std::to_string(kOwnerDeviceId));
         if (rc.IsError()) {
             (void)WriteByte(readyPipe[1], 0);
@@ -671,7 +671,7 @@ Result RunForkedConcurrentNpuReadCase()
             ExitWithShutdown(20);
         }
         TransferEngine requester;
-        if (!requester.Initialize("127.0.0.1:" + std::to_string(port), "ascend",
+        if (!requester.Initialize("127.0.0.1:" + std::to_string(port), "p2p",
                                   "npu:" + std::to_string(kRequesterDeviceId)).IsOk()) {
             ExitWithShutdown(21);
         }
@@ -775,7 +775,7 @@ Result RunForkedMultiNpuOwnerReadCase()
         if (!SetAclDeviceForTest(kOwnerDevice0).IsOk()) {
             failAndExit(31);
         }
-        if (!owner0.Initialize("127.0.0.1:" + std::to_string(kOwnerPort0), "ascend",
+        if (!owner0.Initialize("127.0.0.1:" + std::to_string(kOwnerPort0), "p2p",
                                "npu:" + std::to_string(kOwnerDevice0)).IsOk()) {
             failAndExit(32);
         }
@@ -793,7 +793,7 @@ Result RunForkedMultiNpuOwnerReadCase()
         if (!SetAclDeviceForTest(kOwnerDevice1).IsOk()) {
             failAndExit(36);
         }
-        if (!owner1.Initialize("127.0.0.1:" + std::to_string(kOwnerPort1), "ascend",
+        if (!owner1.Initialize("127.0.0.1:" + std::to_string(kOwnerPort1), "p2p",
                                "npu:" + std::to_string(kOwnerDevice1)).IsOk()) {
             failAndExit(37);
         }
@@ -856,7 +856,7 @@ Result RunForkedMultiNpuOwnerReadCase()
         TE_RETURN_IF_ERROR(EnsureAclInitializedForTest());
         TE_RETURN_IF_ERROR(SetAclDeviceForTest(requesterDeviceId));
         TransferEngine requester;
-        TE_RETURN_IF_ERROR(requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "ascend",
+        TE_RETURN_IF_ERROR(requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "p2p",
                                                 "npu:" + std::to_string(requesterDeviceId)));
 
         void *dstDev = nullptr;
@@ -920,7 +920,7 @@ Result RunRequesterReadTask(const std::string &visibleDevices, int32_t requester
     TE_RETURN_IF_ERROR(SetAclDeviceForTest(requesterDeviceId));
 
     TransferEngine requester;
-    TE_RETURN_IF_ERROR(requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "ascend",
+    TE_RETURN_IF_ERROR(requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "p2p",
                                             "npu:" + std::to_string(requesterDeviceId)));
 
     void *dstDev = nullptr;
@@ -1212,10 +1212,10 @@ TEST(TransferEngineBasicTest, SyncReadArgsInvalid)
     std::vector<uint8_t> src(64, 1);
     std::vector<uint8_t> dst(64, 0);
 
-    Result initInvalidRc = requester.Initialize("127.0.0.1:57051", "ascend", "npu:x");
+    Result initInvalidRc = requester.Initialize("127.0.0.1:57051", "p2p", "npu:x");
     EXPECT_EQ(initInvalidRc.GetCode(), ErrorCode::kInvalid);
 
-    ASSERT_TRUE(requester.Initialize("127.0.0.1:57052", "ascend", "npu:2").IsOk());
+    ASSERT_TRUE(requester.Initialize("127.0.0.1:57052", "p2p", "npu:2").IsOk());
 
     Result status = BatchReadOne(&requester, "", 57051, reinterpret_cast<uintptr_t>(src.data()),
                                  reinterpret_cast<uint64_t>(dst.data()), dst.size());
@@ -1366,6 +1366,20 @@ TEST(TransferEngineBasicTest, Tp2CrossGroupReadOk)
 #else
     GTEST_SKIP() << "skip because p2p backend is disabled";
 #endif
+}
+
+TEST(TransferEngineBasicTest, HixlProtocolSelection)
+{
+    auto initializeWithProtocol = [](const std::string &protocol) {
+        ScopedEnvVar backendOverride("TRANSFER_ENGINE_BACKEND", "");
+        auto backend = std::make_shared<MockDataPlaneBackend>();
+        TransferEngine engine(backend);
+        return engine.Initialize("127.0.0.1:59951", protocol, "npu:0");
+    };
+
+    EXPECT_EQ(initializeWithProtocol("").GetCode(), ErrorCode::kNotSupported);
+    EXPECT_EQ(initializeWithProtocol("ascend").GetCode(), ErrorCode::kNotSupported);
+    EXPECT_EQ(initializeWithProtocol("hixl").GetCode(), ErrorCode::kNotSupported);
 }
 
 }  // namespace

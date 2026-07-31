@@ -513,7 +513,7 @@ Result RunOwner(const Options &opt)
     }
 
     TransferEngine engine;
-    rc = engine.Initialize(opt.localIp + ":" + std::to_string(opt.localPort), "ascend",
+    rc = engine.Initialize(opt.localIp + ":" + std::to_string(opt.localPort), "p2p",
                            "npu:" + std::to_string(opt.deviceId));
     if (rc.IsError()) {
         return rc;
@@ -639,7 +639,7 @@ Result RunRequester(const Options &opt)
     }
 
     TransferEngine engine;
-    rc = engine.Initialize(opt.localIp + ":" + std::to_string(opt.localPort), "ascend",
+    rc = engine.Initialize(opt.localIp + ":" + std::to_string(opt.localPort), "p2p",
                            "npu:" + std::to_string(opt.deviceId));
     if (rc.IsError()) {
         return rc;

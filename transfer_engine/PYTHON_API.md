@@ -113,9 +113,8 @@ Initializes the transfer engine control plane and binds the engine instance to a
 Parameters:
 
 - `local_hostname` (`str`): Local endpoint in `host:port` format, for example `"127.0.0.1:60551"`
-- `protocol` (`str`): Transport protocol name. An empty value or `"ascend"` selects HIXL by default when the HIXL
-  backend is compiled; builds without HIXL fall back to P2P. Use `"p2p"` or `"hixl"` to select explicitly.
-  `TRANSFER_ENGINE_BACKEND=p2p|hixl` overrides this argument.
+- `protocol` (`str`): Backend selector. `"p2p"` selects P2P-Transfer; `"hixl"`, `"ascend"`, and the empty
+  string select HIXL. When set, `TRANSFER_ENGINE_BACKEND` (`p2p` or `hixl`) takes precedence.
 - `device_name` (`str`): Device identifier string. It must match `npu:${device_id}`, for example `"npu:0"` or `"npu:1"`.
 
 Returns:
@@ -478,8 +477,8 @@ Typical failure cases:
 ## Notes and Limitations
 
 - The current Python binding only exposes synchronous read operations. It does not expose write APIs or async transfer APIs.
-- `protocol` accepts `"ascend"`, `"p2p"`, `"hixl"`, `"d2d_hixl"`, and `"hccs_hixl"` (case-insensitive).
-  `"ascend"` selects the compiled default backend: HIXL when available, otherwise P2P.
+- `protocol` accepts `"ascend"`, `"p2p"`, and `"hixl"` (case-insensitive). Empty protocol and `"ascend"`
+  select HIXL.
 - HIXL `auto` route selection and the settings for deterministic HCCS or RoCE behavior are documented in
   [Backend and HIXL Route Selection](README.md#backend-and-hixl-route-selection).
 - `device_name` must use the `npu:${device_id}` format.
