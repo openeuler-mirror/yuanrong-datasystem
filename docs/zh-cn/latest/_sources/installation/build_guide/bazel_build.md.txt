@@ -579,6 +579,8 @@ int main(int argc, char **argv) {
 }
 ```
 
+上述无参`InitAndRun()`是兼容入口，不启用Coordinator选举。需要启用选举时应使用下一节的参数化入口。
+
 ### 5. 配置文件启动方式
 
 ```cpp
@@ -594,7 +596,7 @@ class UserCoordinatorDiscovery final : public datasystem::ICoordinatorDiscovery 
 public:
     datasystem::Status GetCoordinators(std::vector<std::string> &addresses) override
     {
-        addresses = { "coordinator.example.com:31501" };
+        addresses = { "127.0.0.1:31511" };
         return datasystem::Status::OK();
     }
 };
@@ -615,8 +617,65 @@ int main() {
 }
 ```
 
-`CoordinatorServer`只能通过`GetInstance()`获取。带参数启动要求`coordinatorDiscovery`非空且
-`expectedMemberCount > 0`；`onStart`和`onStop`必须同时配置或同时留空。
+`CoordinatorServer`只能通过`GetInstance()`获取，它是生产单例façade，并拥有一个`CoordinatorRuntime`。
+参数化入口启用Coordinator选举，要求`configFilePath`非空、`coordinatorDiscovery`非空、
+`expectedMemberCount > 0`，并在`coordinator_config.json`中设置`use_brpc=true`。文件访问、JSON解析和flag校验
+由`FlagManager`及Runtime启动流程负责。`expectedMemberCount = N`
+表示目标voting成员数，不表示首次bootstrap时Discovery必须精确返回N个候选。Discovery必须来自同一个全局
+收敛的部署控制域，返回值必须是数字IPv4 `host:port`；同步`GetCoordinators`实现必须在provider自身控制的
+有限时间内返回。
+
+本地Raft data root和权威配置按以下规则处理：
+
+- 本地metadata为`VALID`：直接从本地braft状态recover，不调用Discovery。
+- 本地metadata为`ABSENT`（目录不存在或为空）：规范化、去重并排序Discovery候选，探测所有可见候选后，
+  按下表决定首次bootstrap或等待。
+- 本地metadata为`ABSENT`且观察到一致的、非空的权威committed configuration：配置包含本机endpoint时，
+  使用该配置重建本机的选举/成员关系metadata；配置不包含本机时保持waiting，等待后续成员关系接纳。
+- 本地metadata为`CORRUPT`或`UNKNOWN`：进入terminal状态，不自动bootstrap或从peer修复。运维时不要通过
+  自动删除Raft data root强行启动；应先备份并恢复与稳定`coordinator_address`匹配的完整目录。
+- 多个权威配置不一致（例如成员变更期间同时观察到N和N+1）时返回可重试状态，持续探测，直到全量配置一致。
+
+首次bootstrap阈值为`Q = floor(N / 2) + 1`：
+
+| 规范化候选数 | 行为 |
+|---:|---|
+| `< Q` | endpoint保持监听，bootstrap phase进入`RETRYING`，不创建Raft配置，业务gate关闭 |
+| `Q ... N` | 在所有可见候选均可验证且无权威配置时，使用全部候选作为初始配置 |
+| `> N` | 先探测全部候选，再按规范化地址排序选择前N个；未选节点等待权威committed configuration |
+| 已观察到一致权威配置 | 本地`ABSENT`且配置包含本机时重建选举/成员关系metadata；不包含本机时等待加入 |
+
+生产部署每个进程只运行一个Coordinator Runtime。参数化façade将非空`configFilePath`交给Runtime解析，解析
+成功后Runtime恰好调用一次`GetRaftFlags()`，取得本机地址、独占Raft数据目录和选举时序快照。每个Coordinator
+节点必须独占自己的`coordinator_raft_data_dir`。配置文件解析失败统一返回不包含路径和parser原文的错误。
+`onStart`和`onStop`必须同时配置或同时留空。
+
+参数化生命周期按以下顺序执行：Service完成`Init`；Service `Start`注册业务和braft services并开始监听，
+状态保持`STARTING`；Runtime通过`onStart`注册endpoint；Service `StartElectionManager`启动后台Manager worker
+并发布`RUNNING`；Manager随后异步执行本地recover或Discovery/peer探测、创建Node和Membership；Runtime进入
+event loop。`InitAndRun(options)`提交以及Service `RUNNING`只表示后台Manager已经启动且endpoint可访问，不表示
+选主完成或业务ready。只有当前braft Leader的回调打开业务gate；follower、waiting节点、bootstrap重试节点和
+丢失quorum的节点均对业务RPC返回`K_NOT_READY`。`GetRaftBootstrapState`用于观察`OBSERVING`、`RETRYING`、
+`STARTED`、`TERMINAL` phase及稳定的数值status code，不返回原始Status文本或数据目录。
+
+直接调用`CoordinatorRuntime`并传入空`configFilePath`是内部同进程测试能力，不是生产façade契约。此时Runtime
+跳过文件解析，使用调用方预先设置的进程flags，并为每个实例调用一次`GetRaftFlags()`。测试fixture必须在启动
+任何Runtime前设置公共flags，在任一Runtime活动期间保持它们不变，并在所有Runtime停止和线程join后恢复；
+endpoint、Raft数据目录和选举时序由实例快照隔离。达到`RUNNING`前的失败完成回调和Service清理后可重试；提交
+后即使正常`Stop`退出也保持one-shot。进程signal handler只设置`g_exitFlag`；显式Runtime `Stop`只唤醒本实例。
+
+当前Coordinator Raft管理选举和voting membership，不复制Coordinator业务键值或拓扑数据。业务准入由当前
+本地braft Leader gate决定；Raft `STARTED`和Service `RUNNING`仅表示对应生命周期阶段，不表示业务ready。
+
+仓库内同进程集成测试目标为：
+
+```bash
+bazel test //tests/st/common/raft:coordinator_runtime_election_test --config=test --config=release
+```
+
+该测试使用fixture预设且保持稳定的公共flags，以空配置路径在同一进程启动三个真实
+`CoordinatorRuntime::InitAndRun(options)`；每个实例通过`GetRaftFlags()`隔离endpoint、Raft数据目录和选举时序，
+与多进程Coordinator选举ST互补。
 
 ### 6. 编译命令
 
