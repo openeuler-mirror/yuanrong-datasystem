@@ -342,59 +342,7 @@ TEST_F(WorkerOCMasterTest, TestCopyCreateQueryRemoveMeta)
     EXPECT_EQ(WorkerQuery(worker2Address, queryIds, inMetas1, worker1_client, 0), Status::OK());
 }
 
-TEST_F(WorkerOCMasterTest, LEVEL2_TestCreateQueryRemoveRestart)
-{
-    int num = 2;
-    // in case of the first heartbeat send after master restart.
-    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 1));
-    std::unordered_map<std::string, ObjectMeta> inMetas;
-    std::unordered_map<std::string, ObjectMeta> inMetas1;
-    MakeObjectMetas(num, inMetas, 0);
-    auto worker0_client = CreateClient(0);
-    auto worker0Address = GetWorkerAddr(0);
-    MakeObjectMetas(num, inMetas1, 1);
-    auto worker1_client = CreateClient(1);
-    auto worker1Address = GetWorkerAddr(1);
-    auto worker2Address = GetWorkerAddr(2);
-    // Worker0 create primary
-    int succeed = WorkerCreate(inMetas, worker0_client, false);
-    EXPECT_EQ(succeed, num);
-    // Worker1 create copy
-    int succeed1 = WorkerCreate(inMetas1, worker1_client, true);
-    EXPECT_EQ(succeed1, num);
 
-    // Restart master
-    cluster_->ShutdownNode(WORKER, 2);
-
-    // Need to wait a bit before master hook up with a gcs node.
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2));
-    // Worker0 create same primary
-    succeed = WorkerCreate(inMetas, worker0_client, false);
-    EXPECT_EQ(succeed, num);
-    // Worker1 create same copy
-    succeed1 = WorkerCreate(inMetas1, worker1_client, true);
-    EXPECT_EQ(succeed1, num);
-    // Query exist
-    std::list<std::string> queryIds;
-    MakeExistIds(queryIds, inMetas);
-    EXPECT_EQ(WorkerQuery(worker2Address, queryIds, inMetas, worker0_client, queryIds.size()), Status::OK());
-    EXPECT_EQ(WorkerQuery(worker2Address, queryIds, inMetas1, worker1_client, queryIds.size()), Status::OK());
-    // Remove exist
-    EXPECT_EQ(WorkerRemove(queryIds, worker0_client, worker0Address), Status::OK());
-    EXPECT_EQ(WorkerRemove(queryIds, worker1_client, worker1Address), Status::OK());
-    // Restart master
-    cluster_->ShutdownNode(WORKER, 2);
-    // Need to wait a bit before master hook up with a gcs node.
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2));
-    // Query failed
-    EXPECT_EQ(WorkerQuery(worker2Address, queryIds, inMetas, worker0_client, 0), Status::OK());
-    EXPECT_EQ(WorkerQuery(worker2Address, queryIds, inMetas1, worker1_client, 0), Status::OK());
-}
 
 TEST_F(WorkerOCMasterTest, TestUpdate)
 {

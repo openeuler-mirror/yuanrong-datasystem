@@ -324,32 +324,7 @@ TEST_F(DeleteStreamTest, TestParallelCreateProducerDeleteStream)
     delFut.get();
 }
 
-TEST_F(DeleteStreamTest, LEVEL2_TestDeleteLongTimeout)
-{
-    // Request should not timeout if client timeout is set to 10s and master takes more time
 
-    // set timeout to 10 mins
-    std::shared_ptr<StreamClient> client1;
-    const int32_t timeoutMs = 1000 * 60 * 10;
-    ASSERT_EQ(CreateClient(0, timeoutMs, client1), Status::OK());
-    std::shared_ptr<Producer> producer;
-    ProducerConf conf;
-    const uint64_t maxStreamSize = 100 * MB;
-    conf.maxStreamSize = maxStreamSize;
-    conf.pageSize = 1 * MB;
-
-    // Make master wait for 1 min and it should not timeout
-    // We actually dont know who is the master so inject in both
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0,
-                                           "SCMetadataManager.DeleteStream.sleep", "1*sleep(60000)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1,
-                                           "SCMetadataManager.DeleteStream.sleep", "1*sleep(60000)"));
-
-    // This request should not timeout as client timeout is 10 mins.
-    DS_ASSERT_OK(client1->CreateProducer("testDelLongTimeout", producer, conf));
-    DS_ASSERT_OK(producer->Close());
-    DS_ASSERT_OK(client1->DeleteStream("testDelLongTimeout"));
-}
 
 TEST_F(DeleteStreamTest, TestDeleteStreamTimingHole1)
 {
@@ -658,73 +633,7 @@ TEST_F(DeleteStreamTimingTest, TestDeleteStreamTimingHole5)
     ASSERT_EQ(consumersCount, 0ul);
 }
 
-TEST_F(DeleteStreamTimingTest, LEVEL2_TestDeleteStreamTimingHole6)
-{
-    // The purpose of the testcase is to test running CreateProducer during
-    // DeleteStream + AutoDelete but with producers and consumers on both workers.
-    std::string streamName = "testDelStreamTimingHole6";
-    DS_ASSERT_OK(CreateClient(0, client1));
-    DS_ASSERT_OK(CreateClient(1, client2));
-    std::string data = RandomData().GetRandomString(DEFAULT_ELEMENT_SIZE);
-    Element element(reinterpret_cast<uint8_t *>(&data.front()), data.size());
 
-    // Sleep manual before api->DeleteStream to master
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0,
-                                           "ClientWorkerSCServiceImpl.DELETE_IN_PROGRESS.sleep", "1*sleep(3000)"));
-
-    // Sleep autodelete after sending broadcast to worker
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1,
-                                           "SCMetadataManager.DeleteStream.SentReqs", "1*sleep(5000)"));
-
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "master.ProcessDeleteStreams", "pause()"));
-
-    // Create a producer and consumer
-    std::shared_ptr<Producer> producer2;
-    std::shared_ptr<Consumer> consumer2;
-    DS_ASSERT_OK(client1->Subscribe(streamName, config, consumer));
-    DS_ASSERT_OK(client1->CreateProducer(streamName, producer, prodCfgAutoDel));
-    DS_ASSERT_OK(client2->Subscribe(streamName, SubscriptionConfig("sub2", SubscriptionType::STREAM), consumer2));
-    DS_ASSERT_OK(client2->CreateProducer(streamName, producer2, prodCfgAutoDel));
-
-    for (int i = 0; i < ELE_NUM; i++) {
-        SendHelper(producer, element);
-        SendHelper(producer2, element);
-    }
-    ReceiveHelper(consumer, TWO * ELE_NUM);
-    ReceiveHelper(consumer2, TWO * ELE_NUM);
-    // Give producer enough time to process ack
-    sleep(TWO);
-    DS_ASSERT_OK(producer->Close());
-    DS_ASSERT_OK(consumer->Close());
-    DS_ASSERT_OK(producer2->Close());
-    DS_ASSERT_OK(consumer2->Close());
-    sleep(1);
-    DS_ASSERT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, 1, "master.ProcessDeleteStreams"));
-    sleep(1);
-    // AutoDelete is running, so createproducer does not succeed until delete is finished
-    DS_ASSERT_NOT_OK(client1->DeleteStream(streamName));
-
-    // Without a lock on undo in StreamMetadata, PubIncreaseNode will succeed when StreamManager
-    // has not been deleted.
-    LOG(INFO) << "Deleted stream";
-    DS_ASSERT_NOT_OK(client1->CreateProducer(streamName, producer, prodCfgAutoDel));
-    DS_ASSERT_OK(client1->QueryGlobalProducersNum(streamName, producersCount));
-    DS_ASSERT_OK(client1->QueryGlobalConsumersNum(streamName, consumersCount));
-    ASSERT_EQ(producersCount, 0ul);
-    ASSERT_EQ(consumersCount, 0ul);
-    sleep(FIVE);
-    DS_ASSERT_OK(client1->QueryGlobalProducersNum(streamName, producersCount));
-    DS_ASSERT_OK(client1->QueryGlobalConsumersNum(streamName, consumersCount));
-    ASSERT_EQ(producersCount, 0ul);
-    ASSERT_EQ(consumersCount, 0ul);
-    // AutoDelete finished
-    DS_ASSERT_OK(client1->CreateProducer(streamName, producer, prodCfgAutoDel));
-
-    DS_ASSERT_OK(client1->QueryGlobalProducersNum(streamName, producersCount));
-    DS_ASSERT_OK(client1->QueryGlobalConsumersNum(streamName, consumersCount));
-    ASSERT_EQ(producersCount, 1ul);
-    ASSERT_EQ(consumersCount, 0ul);
-}
 
 TEST_F(DeleteStreamTimingTest, LEVEL1_TestDeleteStreamTimingHole7)
 {

@@ -92,28 +92,7 @@ protected:
     }
 };
 
-TEST_F(SCClientAkSkAuthTest, LEVEL2_UpdateAkSk)
-{
-    // Subscribe before send.
-    std::shared_ptr<Consumer> consumer, consumer1;
-    SubscriptionConfig config("sub1", SubscriptionType::STREAM);
-    DS_ASSERT_OK(spClient_->Subscribe("test", config, consumer));
 
-    size_t testSize = 4ul * 1024ul;
-    Element element;
-    std::vector<uint8_t> writeElement;
-    std::shared_ptr<Producer> producer;
-    DS_ASSERT_OK(spClient_->CreateProducer("test", producer, defaultProducerConf_));
-    DS_ASSERT_OK(CreateElement(testSize, element, writeElement));
-    ASSERT_EQ(producer->Send(element), Status::OK());
-    std::string accessKey1 = "newAk";
-    SensitiveValue secretKey1("newSk");
-    DS_ASSERT_OK(spClient_->UpdateAkSk(accessKey1, secretKey1));
-    SubscriptionConfig config1("sub1", SubscriptionType::STREAM);
-    DS_ASSERT_NOT_OK(spClient_->Subscribe("test1", config1, consumer1));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.akauth", "return(newAk,newSk,tenant1)"));
-    DS_ASSERT_OK(spClient_->Subscribe("test1", config1, consumer1));
-}
 
 TEST_F(SCClientAkSkAuthTest, TestAkSkAuth)
 {

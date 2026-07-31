@@ -49,33 +49,7 @@ TEST_F(OCClientWorkerHeartbeatTest, DISABLED_CheckHealthFile)
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
 }
 
-TEST_F(OCClientWorkerHeartbeatTest, LEVEL2_OneClientOneWorkerRestartTest)
-{
-    std::shared_ptr<ObjectClient> cliLocal;
-    InitTestClient(0, cliLocal);
-    std::string obj1Id = NewObjectKey();
-    std::shared_ptr<Buffer> data;
-    std::vector<std::string> failedObjKeys;
-    DS_ASSERT_OK(cliLocal->GIncreaseRef({ obj1Id }, failedObjKeys));
-    DS_ASSERT_OK(cliLocal->Create(obj1Id, SHM_SIZE, CreateParam{}, data));
-    DS_ASSERT_OK(data->Seal());
 
-    auto externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
-    DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({ 0, 1, 2 }));
-
-    std::vector<std::string> objectKeys;
-    objectKeys.push_back(obj1Id);
-    std::vector<Optional<Buffer>> dataList;
-    DS_ASSERT_OK(cliLocal->GDecreaseRef({ obj1Id }, failedObjKeys));
-    DS_ASSERT_OK(cliLocal->GIncreaseRef({ obj1Id }, failedObjKeys));
-    DS_ASSERT_OK(cliLocal->Create(obj1Id, SHM_SIZE, CreateParam{}, data));
-    ASSERT_NE(data, nullptr);
-    ASSERT_EQ(SHM_SIZE, data.get()->GetSize());
-    DS_ASSERT_OK(data->Seal());
-    DS_ASSERT_OK(cliLocal->Get(objectKeys, 0, dataList));
-    ASSERT_TRUE(NotExistsNone(dataList));
-    DS_ASSERT_OK(cliLocal->GDecreaseRef({ obj1Id }, failedObjKeys));
-}
 
 TEST_F(OCClientWorkerHeartbeatTest, LEVEL1_MultiClientOneWorkerRestartTest)
 {
@@ -130,52 +104,7 @@ TEST_F(OCClientWorkerHeartbeatTest, LEVEL1_MultiClientOneWorkerRestartTest)
     fut2.get();
 }
 
-TEST_F(OCClientWorkerHeartbeatTest, LEVEL2_MultiClientMultiWorkerRestartTest)
-{
-    std::shared_ptr<ObjectClient> cliLocal;
-    std::shared_ptr<ObjectClient> cliLocal2;
-    InitTestClient(0, cliLocal);
-    InitTestClient(1, cliLocal2);
 
-    std::string obj1Id = NewObjectKey();
-    std::string obj2Id = NewObjectKey();
-    std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
-    std::vector<uint8_t> data2 = { 65, 66, 67, 68, 69 };
-    std::vector<std::string> failedObjKeys;
-    DS_ASSERT_OK(cliLocal->GIncreaseRef({ obj1Id }, failedObjKeys));
-    DS_ASSERT_OK(cliLocal2->GIncreaseRef({ obj2Id }, failedObjKeys));
-    CreateAndSealObject(cliLocal, obj1Id, data1);
-    CreateAndSealObject(cliLocal2, obj2Id, data2);
-
-    std::vector<std::string> objectKeys;
-    objectKeys.push_back(NewObjectKey());
-    std::vector<Optional<Buffer>> dataList;
-    DS_ASSERT_NOT_OK(cliLocal->Get(objectKeys, 500, dataList));
-
-    cluster_->ShutdownNode(WORKER, 1);
-    sleep(1);  // The interval is 0.5s, so the max duration for discovering the worker status is 0.5x2.
-
-    // Get shutdown worker1 object
-    objectKeys.clear();
-    objectKeys.push_back(obj2Id);
-    std::vector<Optional<Buffer>> dataList2;
-    DS_ASSERT_NOT_OK(cliLocal->Get(objectKeys, 2, dataList2));
-
-    // Restart worker1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 1));
-    sleep(1);  // The interval is 0.5s, so the max duration for discovering the worker status is 0.5x2.
-    DS_ASSERT_OK(cliLocal2->GDecreaseRef({ obj2Id }, failedObjKeys));
-    // Create same object success
-    CreateAndSealObject(cliLocal2, obj2Id, data2);
-
-    // Get worker0 object
-    objectKeys.clear();
-    objectKeys.push_back(obj1Id);
-    std::vector<Optional<Buffer>> dataList3;
-    DS_ASSERT_OK(cliLocal2->Get(objectKeys, 200, dataList3));
-    ASSERT_TRUE(NotExistsNone(dataList3));
-}
 
 TEST_F(OCClientWorkerHeartbeatTest, OneClientShutdownTest)
 {

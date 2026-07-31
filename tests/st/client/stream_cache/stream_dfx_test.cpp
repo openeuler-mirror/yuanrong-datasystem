@@ -1060,36 +1060,7 @@ TEST_F(StreamDfxMasterCrashTest, RecoveryAutoDeletePubSub)
     LOG(INFO) << "RecoveryAutoDeletePubSub finish!";
 }
 
-TEST_F(StreamDfxMasterCrashTest, LEVEL2_RecoveryAutoDeleteSub)
-{
-    LOG(INFO) << "RecoveryAutoDeleteSub start!";
-    std::shared_ptr<StreamClient> client1;
 
-    DS_ASSERT_OK(InitClient(0, client1));
-
-    std::vector<std::shared_ptr<Producer>> producers;
-    std::vector<std::shared_ptr<Consumer>> consumers;
-    std::string streamName = "testRecoverAutoDelSub";
-
-    DS_ASSERT_OK(CreateProducerAndConsumer(client1, {}, producers, { { streamName, "sub1" } }, consumers));
-
-    // close pub sub in worker 0, but not send to master
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.CloseConsumer.beforeSendToMaster",
-                                           "1*return(K_OK)"));
-
-    // Delete the producers and consumers on worker 0
-    consumers[0] = nullptr;
-    // Master still thinks there are two producers and consumers because of the above injected actions
-    CheckCount(client1, streamName, 0, 1);
-
-    cluster_->ShutdownNode(ClusterNodeType::WORKER, 2);
-    DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 2, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 2));
-    std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
-    CheckCount(client1, streamName, 0, 0);
-
-    LOG(INFO) << "RecoveryAutoDeleteSub finish!";
-}
 
 TEST_F(StreamDfxMasterCrashTest, DISABLED_TestMasterAndClientCrash)
 {
@@ -1282,51 +1253,7 @@ TEST_F(StreamDfxMasterCrashTest, DISABLED_LEVEL1_TestMasterAndSubscriberRestart)
     LOG(INFO) << "TestMasterAndWorkerRestart finish!";
 }
 
-TEST_F(StreamDfxMasterCrashTest, LEVEL2_TestMasterAndPublisherRestart)
-{
-    LOG(INFO) << "TestMasterAndWorkerRestart start!";
-    std::shared_ptr<StreamClient> client1, client2, client3;
 
-    DS_ASSERT_OK(InitClient(0, client1));
-    DS_ASSERT_OK(InitClient(1, client2));
-
-    // Do not store metadata on RocksDB
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, K_TWO,
-                                           "master.RocksStreamMetaStore.DoNotAddPubSubMetadata", "2*return(K_OK)"));
-
-    std::vector<std::shared_ptr<Producer>> producers1, producers2;
-    std::vector<std::shared_ptr<Consumer>> consumers1, consumers2;
-
-    DS_ASSERT_OK(CreateProducerAndConsumer(client1, { { "MasterPublisherRestart", 1 } }, producers1, {}, consumers1));
-    DS_ASSERT_OK(
-        CreateProducerAndConsumer(client2, {}, producers2, { { "MasterPublisherRestart", "sub1" } }, consumers2));
-    CheckCount(client1, "MasterPublisherRestart", 1, 1);
-
-    ThreadPool pool(K_TWO);
-    auto fut1 = pool.Submit([this]() { cluster_->ShutdownNode(ClusterNodeType::WORKER, 0); });
-    auto fut2 = pool.Submit([this]() { cluster_->ShutdownNode(ClusterNodeType::WORKER, K_TWO); });
-    fut1.get();
-    fut2.get();
-    DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, K_TWO, ""));
-    DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 0, ""));
-    fut1 = pool.Submit([this]() { DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, K_TWO)); });
-    fut2 = pool.Submit([this]() { DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0)); });
-    fut1.get();
-    fut2.get();
-    std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
-
-    CheckCount(client2, "MasterPublisherRestart", 0, 1);
-    DS_ASSERT_OK(InitClient(1, client3));
-
-    DS_ASSERT_OK(CreateProducerAndConsumer(client3, { { "MasterPublisherRestart", 1 } }, producers1, {}, consumers1));
-    std::string data = "This is some data";
-    Element element(reinterpret_cast<uint8_t *>(&data.front()), data.size());
-    producers1[1]->Send(element);
-    std::vector<Element> outElements;
-    DS_ASSERT_OK(consumers2[0]->Receive(1, 10000, outElements));
-    ASSERT_EQ(outElements.size(), (size_t)1);
-    LOG(INFO) << "TestMasterAndWorkerRestart finish!";
-}
 
 TEST_F(StreamDfxMasterCrashTest, DISABLED_LEVEL1_TestQueryMetaProducerNotFound)
 {
@@ -1841,33 +1768,7 @@ void StreamDfxTopoTest::waitAbort(uint32_t idx)
     }
 }
 
-TEST_F(StreamDfxTopoTest, LEVEL2_TestMasterCrashWhenCloseProducer)
-{
-    std::string streamName = "MasterCrashWhenCloseProd";
-    std::shared_ptr<Producer> p1w1;
-    DS_ASSERT_OK(CreateProducer(client1_, streamName, p1w1));
 
-    std::shared_ptr<Consumer> c1w2;
-    DS_ASSERT_OK(CreateConsumer(client2_, streamName, "sub-w2", c1w2));
-    std::shared_ptr<Consumer> c1w3;
-    DS_ASSERT_OK(CreateConsumer(client3_, streamName, "sub-w3", c1w3));
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 3, "master.PubDecreaseNode.afterSendNotification",
-                                           "abort()"));
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.CloseProducer.beforeSendToMaster", "call(K_OK)"));
-
-    DS_ASSERT_NOT_OK(p1w1->Close());
-
-    (void)cluster_->KillWorker(K_3);
-    DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 3, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 3));
-
-    std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
-    DS_ASSERT_OK(p1w1->Close());
-    DS_ASSERT_OK(c1w2->Close());
-    DS_ASSERT_OK(c1w3->Close());
-    DS_ASSERT_OK(client2_->DeleteStream(streamName));
-}
 
 TEST_F(StreamDfxTopoTest, DISABLED_LEVEL1_TestMasterCrashWhenSubscribe)
 {

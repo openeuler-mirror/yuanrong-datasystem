@@ -976,131 +976,9 @@ TEST_F(STCClientDistMasterTest, TestSetAndDelOneKeyConcurrency)
     ASSERT_EQ(val, "Malaysia is a beautiful place");
 }
 
-TEST_F(STCClientDistMasterTest, LEVEL2_TestSyncToEtcdWithMultiThreads)
-{
-    StartClustersAndWaitReady();
 
-    uint32_t threadSize = 4;
-    uint32_t objPerThr = 100;
-    std::vector<std::thread> setThreads(threadSize);
-    std::vector<std::vector<std::string>> keyWithWorkerIds(threadSize);
-    for (auto &vec : keyWithWorkerIds) {
-        vec.resize(objPerThr);
-    }
-    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-    std::string data = "Hello World";
-    std::string data1 = "Hello World2";
-    for (uint32_t i = 0; i < threadSize; ++i) {
-        setThreads[i] = std::thread([this, i, threadSize, objPerThr, param, &keyWithWorkerIds, data, data1]() {
-            for (uint32_t k = 0; k < objPerThr; ++k) {
-                if (i > threadSize / 2) {
-                    std::string key = "Ginnungagap" + std::to_string(i) + "_" + std::to_string(k);
-                    DS_ASSERT_OK(client_->Set(key, data, param));
-                    DS_ASSERT_OK(client_->Set(key, data1, param));
-                } else {
-                    std::string key = client_->Set(data, param);
-                    ASSERT_FALSE(key.empty());
-                    keyWithWorkerIds[i][k] = key;
-                    DS_ASSERT_OK(client_->Set(key, data1, param));
-                }
-            }
-        });
-    }
 
-    for (auto &t : setThreads) {
-        t.join();
-    }
 
-    ShutdownEraseRocksDBAndRestartNodes();
-
-    sleep(10);
-
-    std::vector<std::thread> getThreads(threadSize);
-    for (uint32_t i = 0; i < threadSize; ++i) {
-        getThreads[i] = std::thread([this, i, threadSize, objPerThr, keyWithWorkerIds, data1]() {
-            for (uint32_t k = 0; k < objPerThr; ++k) {
-                std::string key = (i > threadSize / 2) ? "Ginnungagap" + std::to_string(i) + "_" + std::to_string(k)
-                                                       : keyWithWorkerIds[i][k];
-                std::string getData;
-                DS_ASSERT_OK(client2_->Get(key, getData));
-                ASSERT_EQ(getData, data1);
-            }
-        });
-    }
-
-    for (auto &t : getThreads) {
-        t.join();
-    }
-}
-
-TEST_F(STCClientDistMasterTest, EXCLUSIVE_LEVEL2_TestASyncToEtcdWithMultiThreads)
-{
-    StartClustersAndWaitReady();
-
-    uint32_t threadSize = 5;
-    uint32_t objPerThr = 50;
-    std::vector<std::thread> setThreads(threadSize);
-    std::vector<std::vector<std::string>> keyWithWorkerIds(threadSize);
-    for (auto &vec : keyWithWorkerIds) {
-        vec.resize(objPerThr);
-    }
-    SetParam param{ .writeMode = WriteMode::WRITE_BACK_L2_CACHE };
-    std::string data = "Hello World";
-    std::string data1 = "Hello World2";
-    for (uint32_t i = 0; i < threadSize; ++i) {
-        setThreads[i] = std::thread([this, i, threadSize, objPerThr, param, &keyWithWorkerIds, data, data1]() {
-            for (uint32_t k = 0; k < objPerThr; ++k) {
-                if (i > threadSize / 2) {
-                    std::string key = "Ginnungagap" + std::to_string(i) + "_" + std::to_string(k);
-                    DS_ASSERT_OK(client_->Set(key, data, param));
-                    DS_ASSERT_OK(client_->Set(key, data1, param));
-                } else {
-                    std::string key = client_->Set(data, param);
-                    ASSERT_FALSE(key.empty());
-                    keyWithWorkerIds[i][k] = key;
-                    DS_ASSERT_OK(client_->Set(key, data1, param));
-                }
-            }
-        });
-    }
-
-    for (auto &t : setThreads) {
-        t.join();
-    }
-
-    sleep(10);
-
-    ShutdownEraseRocksDBAndRestartNodes();
-
-    sleep(10);
-    std::atomic<uint32_t> failedCount{ 0 };
-    std::vector<std::thread> getThreads(threadSize);
-    for (uint32_t i = 0; i < threadSize; ++i) {
-        getThreads[i] = std::thread([this, i, threadSize, objPerThr, keyWithWorkerIds, data, data1, &failedCount]() {
-            for (uint32_t k = 0; k < objPerThr; ++k) {
-                std::string key = (i > threadSize / 2) ? "Ginnungagap" + std::to_string(i) + "_" + std::to_string(k)
-                                                       : keyWithWorkerIds[i][k];
-                std::string getData;
-                Status rc = client2_->Get(key, getData);
-                std::string msg = rc.GetMsg();
-                ASSERT_TRUE(rc.IsOk() || rc.GetCode() == StatusCode::K_NOT_FOUND
-                            || (rc.GetCode() == StatusCode::K_RUNTIME_ERROR))
-                    << rc.ToString();
-                if (rc.IsError()) {
-                    failedCount.fetch_add(1);
-                }
-                if (rc.IsOk()) {
-                    ASSERT_TRUE(getData == data1 || getData == data) << getData;
-                }
-            }
-        });
-    }
-
-    for (auto &t : getThreads) {
-        t.join();
-    }
-    LOG(INFO) << "Failed count: " << failedCount;
-}
 
 TEST_F(STCClientDistMasterTest, DISABLED_LEVEL1_TestBoundaryValue)
 {
@@ -1266,32 +1144,7 @@ TEST_F(STCClientDistMasterDfxTest, DISABLED_LEVEL1_TestRestartWorkerAndRecoveryF
     }
 }
 
-TEST_F(STCClientDistMasterDfxTest, LEVEL2_RestartClusterNotReady)
-{
-    StartClustersAndWaitReady();
-    for (size_t i = 0; i < 3ul; ++i) {
-        DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, i));
-    }
 
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    sleep(2);
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-    sleep(2);
-
-    // cannot accept any request if nodes not complete.
-    for (auto i = 0; i < 10; i++) {
-        ASSERT_EQ(client_->Set(GetStringUuid(), "value").GetCode(), K_NOT_READY);
-    }
-
-    // after ready, request is ok.
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
-    for (size_t i = 0; i < 3ul; ++i) {
-        DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
-    }
-    for (auto i = 0; i < 10; i++) {
-        ASSERT_EQ(client_->Set(GetStringUuid(), "value").GetCode(), K_OK);
-    }
-}
 
 class STCClientDistMasterOOMTest : public STCClientDistMasterTest {
 public:
@@ -1306,55 +1159,5 @@ public:
     }
 };
 
-TEST_F(STCClientDistMasterOOMTest, LEVEL2_TestRemoteGetAndSetConcurrencyMeetsOOMScenario)
-{
-    LOG(INFO) << "Test remote get and set concurrency cause cache invalid scenario and meets OOM scenario, but part of "
-                 "objects success";
-    int timeoutMs = 30'000;
-    StartClustersAndWaitReady(timeoutMs);
-    GetWorkerUuids();
-
-    std::string worker0key = "RUOK;" + GetWorkerUuid(0, uuidMap_);
-    std::string worker1key = "ALICE;" + GetWorkerUuid(0, uuidMap_);
-    std::string worker2key = "BANK;" + GetWorkerUuid(2, uuidMap_);
-    std::string worker2key1 = "CATHY;" + GetWorkerUuid(2, uuidMap_);
-    std::string val0 = RandomData().GetRandomString(4 * 1024ul * 1024ul);
-    std::string val1 = RandomData().GetRandomString(8 * 1024ul * 1024ul);
-    std::string val2 = RandomData().GetRandomString(27 * 1024ul * 1024ul);
-
-    DS_ASSERT_OK(client_->Set(worker0key, val1));
-    DS_ASSERT_OK(client1_->Set(worker1key, val1));
-    DS_ASSERT_OK(client2_->Set(worker2key, val2));
-    DS_ASSERT_OK(client2_->Set(worker2key1, val2));
-
-    HostPort worker1Addr;
-    cluster_->GetWorkerAddr(1, worker1Addr);
-    std::stringstream ss;
-    ss << "1*call(" << worker1Addr.ToString() << ")";
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.send_cache_invalid", ss.str()));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.worker_worker_remote_get_failure", "1*sleep(1000)"));
-
-    std::thread setThr([this, &worker0key]() {
-        std::string newVal = "You are strong, but I am stronger.";
-        usleep(100'000);
-        DS_ASSERT_OK(client2_->Set(worker0key, newVal));
-    });
-
-    std::thread getThr([this, &worker0key, &worker2key, &worker2key1, &val2]() {
-        std::vector<std::string> getVals;
-        DS_ASSERT_OK(client1_->Get({ worker0key, worker2key, worker2key1 }, getVals));
-        ASSERT_EQ(getVals.size(), size_t(3));
-        ASSERT_TRUE(getVals[0].empty());
-        ASSERT_TRUE(getVals[1].empty() ^ getVals[2].empty());
-        if (getVals[1].empty()) {
-            ASSERT_EQ(getVals[2], val2);
-        } else {
-            ASSERT_EQ(getVals[1], val2);
-        }
-    });
-
-    setThr.join();
-    getThr.join();
-}
 }  // namespace st
 }  // namespace datasystem

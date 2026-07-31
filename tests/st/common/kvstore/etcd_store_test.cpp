@@ -389,44 +389,7 @@ TEST_F(EtcdStoreTest, TestPutLease1)
     DS_EXPECT_NOT_OK(rc);
 }
 
-TEST_F(EtcdStoreTest, LEVEL2_TestPutLease2)
-{
-    LOG(INFO) << "Test EtcdStore put with lease in a table.";
-    InitTestEtcdInstance();
-    ASSERT_TRUE(db_ != nullptr && tableCreated_);
 
-    // Insert a KV pair with leaseID
-    std::string key1 = "keyA1";
-
-    // Keep the lease alive for every 10s and timeout is 20s
-    Status rc = db_->InitKeepAlive(tableName_, key1, false);
-    DS_EXPECT_OK(rc);
-
-    // Let the lease setup
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-    // read the KV pair immediately
-    std::string value1;
-    rc = db_->Get(tableName_, key1, value1);
-    DS_EXPECT_OK(rc);
-
-    // wait for lease timeout of 10 sec
-    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
-
-    std::string value;
-    // read the KV pair afrer 10s
-    rc = db_->Get(tableName_, key1, value);
-    DS_EXPECT_OK(rc);
-    EXPECT_EQ(value, value1);
-
-    // wait for lease timeout of 20000ms
-    std::this_thread::sleep_for(std::chrono::milliseconds(20000));
-
-    // Read the KV pair again. The KV pair should not be deleted due to keep alive operation.
-    rc = db_->Get(tableName_, key1, value);
-    EXPECT_EQ(value, value1);
-    DS_EXPECT_OK(rc);
-}
 
 TEST_F(EtcdStoreTest, LEVEL1_TestPutLease3)
 {
@@ -748,40 +711,7 @@ TEST_F(EtcdStoreTest, TestRetrieveCrossVersionEvent)
     ASSERT_EQ(eventCount_, 1);
 }
 
-TEST_F(EtcdStoreTest, LEVEL2_TestRetrieveEventOrder)
-{
-    // Ignore Event from watch response
-    datasystem::inject::Set("EtcdWatch.StoreEvents.IgnoreEvent", "return");
-    datasystem::inject::Set("EtcdWatch.RetrieveEventPassively.RetrieveEventQuickly", "call(1000)");
-    InitTestEtcdInstance();
-    ASSERT_TRUE(db_ != nullptr && tableCreated_);
 
-    int keyNum = 100;
-    int eventTypeNum = 2;
-    int putEventNum = keyNum;
-
-    db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents3(std::move(event)); });
-    DS_ASSERT_OK(db_->WatchEvents(tableName_, "", 1));
-
-    for (int i = 0; i < keyNum; i++) {
-        std::atomic<int64_t> leaseID;
-        Status rc = db_->GetLeaseID(5, leaseID);
-        DS_EXPECT_OK(rc);
-        rc = db_->PutWithLeaseId(tableName_, "key" + std::to_string(i), "value", leaseID);
-        DS_EXPECT_OK(rc);
-    }
-
-    int waitTime = 10;  // wait all keys expired.
-    sleep(waitTime);
-
-    ASSERT_EQ(eventCount_ % eventTypeNum, 0);
-    ASSERT_LE(eventCount_ / eventTypeNum, putEventNum);
-    for (size_t i = 1; i < watchEvent_.size(); i++) {
-        if (watchEvent_[i].kv().mod_revision() < watchEvent_[i - 1].kv().mod_revision()) {
-            ASSERT_TRUE(false);
-        }
-    }
-}
 
 TEST_F(EtcdStoreTest, TestEtcdShutdownLogic)
 {

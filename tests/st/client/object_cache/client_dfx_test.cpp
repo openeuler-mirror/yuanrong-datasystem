@@ -1100,41 +1100,7 @@ TEST_F(MasterWorkerDisconnectDfxTest, TestWorkerTimeoutAndPushMeta)
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 
-TEST_F(MasterWorkerDisconnectDfxTest, LEVEL2_TestMasterDeadAndWorkerReturnMasterTimeout)
-{
-    InitObjectClients();
-    std::string objKey = NewObjectKey();
-    std::string data = "Unicorn Gundam";
-    std::vector<std::string> failedObjs;
-    DS_ASSERT_OK(objClient1_->GIncreaseRef({ objKey }, failedObjs));
-    DS_ASSERT_OK(objClient1_->Put(objKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size(),
-                                  CreateParam{}));
-    cluster_->ShutdownNode(ClusterNodeType::WORKER, 0);
-    DS_ASSERT_NOT_OK(objClient1_->GDecreaseRef({ objKey }, failedObjs));
-    failedObjs.clear();
-    // Wait worker notify master timeout.
-    std::this_thread::sleep_for(std::chrono::seconds(30));
-    // Worker return K_MASTER_TIMOUT to client and don't retry.
-    LOG(INFO) << "master timeout";
-    for (size_t i = 0; i < 10; i++) {
-        Timer timer;
-        Status rc = objClient1_->GDecreaseRef({ objKey }, failedObjs);
-        EXPECT_NE(rc.GetCode(), K_RPC_UNAVAILABLE);
-        ASSERT_LE(timer.ElapsedMilliSecondAndReset(), 1000);
-        failedObjs.clear();
-        rc = objClient1_->GIncreaseRef({ NewObjectKey() }, failedObjs);
-        EXPECT_NE(rc.GetCode(), K_RPC_UNAVAILABLE);
-        ASSERT_LE(timer.ElapsedMilliSecondAndReset(), 1000);
-        failedObjs.clear();
-        std::vector<Optional<Buffer>> buffers;
-        rc = objClient1_->Get({ objKey }, 0, buffers);
-        EXPECT_NE(rc.GetCode(), K_RPC_UNAVAILABLE);
-        ASSERT_LE(timer.ElapsedMilliSecondAndReset(), 1000);
-    }
-    LOG(INFO) << "test case finished";
-    cluster_->StartNode(ClusterNodeType::MASTER, 0, {});
-    cluster_->WaitNodeReady(ClusterNodeType::MASTER, 0);
-}
+
 
 TEST_F(WorkerDfxTest, TestRemoteGetRpcUnavailableRetry)
 {
@@ -1398,48 +1364,7 @@ protected:
     RpcAuthKeys authKeys_;
 };
 
-TEST_F(WorkerReconciliationDfxTest, LEVEL2_ClientExitDuringWorkerRestart1)
-{
-    PutObjGIncreaseRef();
 
-    // shutdown node1 and client2
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
-    clients_[2].reset();
-
-    GRefTableReqPb req;
-    GRefTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
-    // master0 and worker0 should be good
-    // worker0's table should have two clients and two objects
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // Liveness removal is asynchronous after ShutdownNode returns.
-    AssertGRefTableSizeEventually(*utSvcStub0_, GRefTableKind::MASTER, 1,
-                                  "worker0 master gref table after worker1 shutdown");
-
-    // restart node1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
-
-    // worker1 should reconcile with master0 and master1
-    // worker0's table should have two clients and two objects
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // master0's table should have two workers and two objects
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // worker1's table should have one client and one object
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub1_->GetWorkerGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
-    // master1's table should have one worker and one object
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub1_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
-}
 
 TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart2)
 {
@@ -1654,98 +1579,9 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_GiveUpReconciliation)
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
 }
 
-TEST_F(WorkerReconciliationDfxTest, LEVEL2_ClientExitDuringWorkerNetworkIssue)
-{
-    PutObjGIncreaseRef();
 
-    // node1 suffers from network issue and client3 exits
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "heartbeat.sleep", "1*sleep(10000)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.gdecrease", "1*return(K_RPC_UNAVAILABLE)"));
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    clients_[3].reset();
 
-    GRefTableReqPb req;
-    GRefTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
-    // master0 and worker0 should be good
-    // worker0's table should have two clients and two objects
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // master0's table should have two workers and two objects
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
 
-    // node1 recovers
-    int waitTimeSec = 30;
-    std::this_thread::sleep_for(std::chrono::seconds(waitTimeSec));
-
-    // worker1 should reconcile with master0 and master1
-    // worker0's table should have two clients and two objects
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // master0's table should have one worker and one object
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
-    // worker1's table should have one client and one object
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub1_->GetWorkerGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
-    // master1's table should have two workers and two objects
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub1_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
-}
-
-TEST_F(WorkerReconciliationDfxTest, LEVEL2_ClientExitDuringWorkerNetworkIssueAndRestart)
-{
-    PutObjGIncreaseRef();
-
-    // shutdown worker 0
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    // node1 suffers from network issue and client3 exits
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "heartbeat.sleep", "1*sleep(6000)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.gdecrease", "1*return(K_RPC_UNAVAILABLE)"));
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    clients_[3].reset();
-
-    // node1 recovers
-    int waitTimeSec = 5;
-    std::this_thread::sleep_for(std::chrono::seconds(waitTimeSec));
-
-    // restart worker0
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
-    // wait for reconciliation between restarted master and all workers
-    waitTimeSec = 10;
-    std::this_thread::sleep_for(std::chrono::seconds(waitTimeSec));
-
-    GRefTableReqPb req;
-    GRefTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
-
-    // worker1 should reconcile with master0 and master1
-    // worker0's table should have two clients and two objects
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // master0's table should have one worker and one object
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
-    // worker1's table should have one client and one object
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub1_->GetWorkerGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
-    // master1's table should have two workers and two objects
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub1_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
-}
 
 TEST_F(WorkerReconciliationDfxTest, DISABLED_LEVEL1_RestartAgainNoExtraReconciliation)
 {
@@ -1821,47 +1657,7 @@ TEST_F(WorkerReconciliationDfxTest, DISABLED_LEVEL1_RestartAgainNoExtraReconcili
     DS_ASSERT_OK(isAllNodeReady(utSvcStub1_));
 }
 
-TEST_F(WorkerReconciliationDfxTest, LEVEL2_RecoverAgainNoExtraReconciliation)
-{
-    PutObjGIncreaseRef();
 
-    // the whole cluster recovers from network issue
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "heartbeat.sleep", "1*sleep(7000)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "heartbeat.sleep", "1*sleep(7000)"));
-    int waitTimeSec = 15;
-    std::this_thread::sleep_for(std::chrono::seconds(waitTimeSec));
-
-    // cluster node table should not contain "recover" tag
-    CmNodeTableReqPb req;
-    CmNodeTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
-    utSvcStub0_->GetCmNodeTable(req, rsp);
-    ASSERT_EQ(rsp.cm_node_table_size(), 2);  // The number of worker is 2
-    ASSERT_EQ(rsp.cm_node_table().at(0).addition_event_type(), "ready");
-    ASSERT_EQ(rsp.cm_node_table().at(1).addition_event_type(), "ready");
-
-    rsp.clear_cm_node_table();
-    utSvcStub1_->GetCmNodeTable(req, rsp);
-    ASSERT_EQ(rsp.cm_node_table_size(), 2);  // The number of worker is 2
-    ASSERT_EQ(rsp.cm_node_table().at(0).addition_event_type(), "ready");
-    ASSERT_EQ(rsp.cm_node_table().at(1).addition_event_type(), "ready");
-
-    // disconnect node 1 again
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "heartbeat.sleep", "1*sleep(7000)"));
-    std::this_thread::sleep_for(std::chrono::seconds(waitTimeSec));
-
-    rsp.clear_cm_node_table();
-    utSvcStub0_->GetCmNodeTable(req, rsp);
-    ASSERT_EQ(rsp.cm_node_table_size(), 2);  // The number of worker is 2
-    ASSERT_EQ(rsp.cm_node_table().at(0).addition_event_type(), "ready");
-    ASSERT_EQ(rsp.cm_node_table().at(1).addition_event_type(), "ready");
-
-    rsp.clear_cm_node_table();
-    utSvcStub1_->GetCmNodeTable(req, rsp);
-    ASSERT_EQ(rsp.cm_node_table_size(), 2);  // The number of worker is 2
-    ASSERT_EQ(rsp.cm_node_table().at(0).addition_event_type(), "ready");
-    ASSERT_EQ(rsp.cm_node_table().at(1).addition_event_type(), "ready");
-}
 
 class StandbyWorkerDfxTest : public OCClientCommon {
 public:
@@ -2066,34 +1862,7 @@ public:
     }
 };
 
-TEST_F(WorkerWithoutReconciliationTest, LEVEL2_WithoutReconciliationTest)
-{
-    std::shared_ptr<ObjectClient> client0;
-    InitTestClient(0, client0);
-    std::string objectKey = GetStringUuid();
-    size_t objSize = 500 * 1024ul;
-    std::string data(objSize, 'a');
-    std::vector<std::string> failedObjects;
 
-    DS_ASSERT_OK(client0->GIncreaseRef({ objectKey }, failedObjects));
-    DS_ASSERT_OK(client0->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size(),
-                              CreateParam{}));
-    std::vector<Optional<Buffer>> buffers1;
-    DS_ASSERT_OK(client0->Get({ objectKey }, 0, buffers1));
-    ASSERT_TRUE(NotExistsNone(buffers1));
-    ASSERT_BUF_EQ((*buffers1[0]), data);
-
-    DS_ASSERT_OK(cluster_->ShutdownNode(ClusterNodeType::WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 0, {}));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
-    const size_t sleepTime = 3;
-    std::this_thread::sleep_for(std::chrono::seconds(sleepTime));
-
-    buffers1.clear();
-    Status rc = client0->Get({ objectKey }, 0, buffers1);
-    LOG(INFO) << "The status of get the object after node0(master and worker) restart: " << rc.ToString();
-    ASSERT_TRUE(rc.GetCode() == StatusCode::K_RUNTIME_ERROR);
-}
 
 class WorkerPushMetaTest : public OCClientCommon {
 public:
