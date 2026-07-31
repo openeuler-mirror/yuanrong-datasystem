@@ -56,7 +56,7 @@
   - non-request/background work uses `Trace::Instance().SetTraceUUID()` or imported trace IDs without request markers;
   - asynchronous or cross-thread request flows capture and reapply full `TraceContext` explicitly;
   - ZMQ `MetaPb` carries one request-log sampling state (`NONE`, `UNDECIDED`, `ADMIT`, `REJECT`) and callsites restore both `trace_id` and request-sampling context when importing request context;
-  - BRPC request attachments preserve an existing caller trace ID and create a request-scoped UUID when the caller has no active trace, matching ZMQ's non-empty outbound trace behavior;
+  - BRPC request attachments carry the same request-log sampling state as a 1-byte `LogSampleState` appended after the `TRCID:V1` traceID frame; `AttachTraceIDToAttachment()` encodes traceID + state from the caller's `Trace`, and the generated `CallMethod` prologue (`ExtractTraceIDAndSampleState()` + `ScopedRequestContext` + `ApplyLogSampleState()`) restores both on the worker so the handler participates in `LogSampler` instead of being bypassed. Wire format and the transport-neutral helpers live in `src/datasystem/common/rpc/trace_attachment.h` and `src/datasystem/common/log/log_sample_state.h`;
   - coordinator startup establishes a `CoordMain` lifecycle trace before logging initialization, coordinator TTL/watch threads establish bounded component-scoped traces at thread entry, and topology recovery tasks capture and restore the submitting `TraceContext`;
   - request sampling decisions live in `Trace` rather than a process-wide trace-decision table; `LogSampler`
     owns the sampling decision and precomputed threshold; no per-second counter is used;

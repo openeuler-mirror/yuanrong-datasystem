@@ -64,6 +64,17 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "brpc_trace_attachment_sampling_test",
+    srcs = ["brpc_trace_attachment_sampling_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//src/datasystem/common/log:log_sampler",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "brpc_stream_close_helper_test",
     srcs = ["brpc_stream_close_helper_test.cpp"],
     deps = [

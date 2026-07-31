@@ -34,6 +34,7 @@
 #include <zmq.h>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/log_sample_state.h"
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -370,58 +371,6 @@ inline uint64_t GetTotalTime(MetaPb &meta)
     (void)meta;
 #endif
     return 0;
-}
-
-inline LogSampleState GetOrCreateLogSampleState()
-{
-    if (!Trace::Instance().IsRequestLogTrace()) {
-        return LOG_SAMPLE_NONE;
-    }
-
-    if (LogSampler::Instance().IsSamplerEnabledFast()) {
-        bool sampledIn = LogSampler::Instance().IsCurrentRequestSampledIn();
-        bool admitted = false;
-        bool hasDecision = Trace::Instance().GetRequestSampleDecision(admitted);
-        if (hasDecision) {
-            return admitted ? LOG_SAMPLE_ADMIT : LOG_SAMPLE_REJECT;
-        }
-
-        if (sampledIn) {
-            return LOG_SAMPLE_UNDECIDED;
-        } else {
-            Trace::Instance().SetRequestSampleDecision(true, false);
-            return LOG_SAMPLE_REJECT;
-        }
-    }
-
-    return LOG_SAMPLE_UNDECIDED;
-}
-
-inline void ApplyLogSampleState(LogSampleState state)
-{
-    switch (state) {
-        case LOG_SAMPLE_UNDECIDED: {
-            Trace::Instance().SetRequestLogTrace(true);
-            Trace::Instance().SetRequestSampleDecision(false, false);
-            if (LogSampler::Instance().IsSamplerEnabledFast()) {
-                (void)LogSampler::Instance().IsCurrentRequestSampledIn();
-            }
-            break;
-        }
-        case LOG_SAMPLE_ADMIT:
-            Trace::Instance().SetRequestLogTrace(true);
-            Trace::Instance().SetRequestSampleDecision(true, true);
-            break;
-        case LOG_SAMPLE_REJECT:
-            Trace::Instance().SetRequestLogTrace(true);
-            Trace::Instance().SetRequestSampleDecision(true, false);
-            break;
-        case LOG_SAMPLE_NONE:
-        default:
-            Trace::Instance().SetRequestLogTrace(false);
-            Trace::Instance().SetRequestSampleDecision(false, false);
-            break;
-    }
 }
 
 inline void UpdateMetaByThreadLocalValue(MetaPb &meta)

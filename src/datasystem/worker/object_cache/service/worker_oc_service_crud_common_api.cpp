@@ -15,6 +15,13 @@
  * Description: Defines the worker service common CRUD function.
  */
 
+// brpc/controller.h pulls brpc/versioned_ref_with_id.h, which uses
+// CHECK_EQ(...) << "...". That CHECK_EQ must be butil's (supports <<), not
+// ours (log.h redefines it as a do{}while(0) that breaks the <<). So this
+// brpc header must be parsed before any datasystem header that pulls log.h
+// (e.g. via request_context.h -> time_cost.h). Keep it first.
+#include <brpc/controller.h>
+
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 #include <chrono>
