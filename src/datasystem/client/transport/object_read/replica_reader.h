@@ -34,6 +34,7 @@ namespace client {
 struct ReplicaReadRequest {
     const master::ObjectLocationInfoPb *location = nullptr;
     ObjectReadItemResult *result = nullptr;
+    std::shared_ptr<const TransportReadContext> context;
 };
 
 using ReplicaReadBatch = std::vector<ReplicaReadRequest>;
@@ -49,7 +50,8 @@ public:
     virtual ~ReplicaReader() = default;
 
     /** @brief Poll the fixed metadata locations until one read succeeds or the API deadline expires. */
-    virtual Status Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result);
+    virtual Status Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result,
+                        std::shared_ptr<const TransportReadContext> context);
 
     /**
      * @brief Synchronously read objects in replica waves.
@@ -64,7 +66,8 @@ protected:
 private:
     bool IsRetryableLocationError(const Status &status) const;
     Status ReadReplicaOnce(const master::ObjectLocationInfoPb &location, int replicaIndex, size_t round,
-                           ObjectReadItemResult &result, const HostPort &workerAddr);
+                           ObjectReadItemResult &result, const HostPort &workerAddr,
+                           const std::shared_ptr<const TransportReadContext> &context);
 
     std::shared_ptr<DataPlaneExecutor> executor_;
     std::shared_ptr<DeadlineRetry> retry_;

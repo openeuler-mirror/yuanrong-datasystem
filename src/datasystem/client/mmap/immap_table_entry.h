@@ -31,7 +31,7 @@ namespace client {
 class IMmapTableEntry {
 public:
     explicit IMmapTableEntry(int fd, size_t mmapSize) : fd_(fd), size_(mmapSize), pointer_(nullptr) {};
-    ~IMmapTableEntry() = default;
+    virtual ~IMmapTableEntry() = default;
 
     /**
      * @brief Mmap the client fd.
@@ -67,6 +67,11 @@ public:
     int GetFd() const
     {
         return fd_;
+    }
+
+    size_t GetMmapSize() const
+    {
+        return size_;
     }
 
 protected:

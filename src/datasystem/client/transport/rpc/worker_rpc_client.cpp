@@ -71,16 +71,19 @@ Status WorkerRpcClient::Init()
     auto channel = std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(channelConfig_));
     CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE,
                              "Failed to create routed worker brpc channel");
+    auto workerStub = std::make_shared<WorkerService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
     auto controlStub = std::make_shared<WorkerOCService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
     auto transportStub = std::make_shared<WorkerWorkerTransportService_BrpcGenericStub>(
         channel.get(), channelConfig_.timeout_ms);
     auto dataStub = std::make_shared<WorkerWorkerOCService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
     auto masterStub =
         std::make_shared<master::MasterOCService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
-    CHECK_FAIL_RETURN_STATUS(controlStub != nullptr && transportStub != nullptr && dataStub != nullptr
+    CHECK_FAIL_RETURN_STATUS(workerStub != nullptr && controlStub != nullptr && transportStub != nullptr
+                                 && dataStub != nullptr
                                  && masterStub != nullptr,
                              K_RUNTIME_ERROR, "Failed to create routed worker RPC stubs");
     channel_ = std::move(channel);
+    workerStub_ = std::move(workerStub);
     controlStub_ = std::move(controlStub);
     transportStub_ = std::move(transportStub);
     dataStub_ = std::move(dataStub);
@@ -94,6 +97,12 @@ Status WorkerRpcClient::DoInvokeGetObject(const RpcOptions &options, const GetOb
                                           GetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads)
 {
     return dataStub_->GetObjectRemote(options, request, response, payloads);
+}
+
+Status WorkerRpcClient::DoInvokeClientGet(const RpcOptions &options, const GetReqPb &request, GetRspPb &response,
+                                          std::vector<RpcMessage> &payloads)
+{
+    return controlStub_->Get(options, request, response, payloads);
 }
 
 Status WorkerRpcClient::DoInvokeBatchGetObject(const RpcOptions &options, const BatchGetObjectRemoteReqPb &request,
@@ -117,6 +126,36 @@ Status WorkerRpcClient::DoInvokeGetHashRing(const RpcOptions &options, const Get
                                             GetHashRingRspPb &response)
 {
     return controlStub_->GetHashRing(options, request, response);
+}
+
+Status WorkerRpcClient::DoInvokeGetSocketPath(const RpcOptions &options, const GetSocketPathReqPb &request,
+                                              GetSocketPathRspPb &response)
+{
+    return workerStub_->GetSocketPath(options, request, response);
+}
+
+Status WorkerRpcClient::DoInvokeRegisterShmClient(const RpcOptions &options, const RegisterClientReqPb &request,
+                                                  RegisterClientRspPb &response)
+{
+    return workerStub_->RegisterClient(options, request, response);
+}
+
+Status WorkerRpcClient::DoInvokeGetClientFd(const RpcOptions &options, const GetClientFdReqPb &request,
+                                            GetClientFdRspPb &response)
+{
+    return workerStub_->GetClientFd(options, request, response);
+}
+
+Status WorkerRpcClient::DoInvokeShmHeartbeat(const RpcOptions &options, const HeartbeatReqPb &request,
+                                             HeartbeatRspPb &response)
+{
+    return workerStub_->Heartbeat(options, request, response);
+}
+
+Status WorkerRpcClient::DoInvokeDisconnectShmClient(const RpcOptions &options, const DisconnectClientReqPb &request,
+                                                    DisconnectClientRspPb &response)
+{
+    return workerStub_->DisconnectClient(options, request, response);
 }
 
 Status WorkerRpcClient::DoInvokeCreate(const RpcOptions &options, const CreateReqPb &request,
@@ -163,6 +202,20 @@ Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObject
     INJECT_POINT("client.transport.get_object_remote", []() { return Status::OK(); });
     Status rc = DoInvokeGetObject(options, request, response, payloads);
     return rc.IsError() ? WithRpcDiag(rc, "GetObjectRemote", workerAddress_) : Status::OK();
+}
+
+Status WorkerRpcClient::InvokeClientGet(GetReqPb &request, GetRspPb &response, std::vector<RpcMessage> &payloads)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerOCService client is not initialized");
+    CHECK_FAIL_RETURN_STATUS(!request.client_id().empty(), K_INVALID, "WorkerOCService Get client ID is empty");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    INJECT_POINT("client.transport.worker_oc_get", []() { return Status::OK(); });
+    Status rc = DoInvokeClientGet(options, request, response, payloads);
+    return rc.IsError() ? WithRpcDiag(rc, "WorkerOCService.Get", workerAddress_) : Status::OK();
 }
 
 Status WorkerRpcClient::InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
@@ -229,6 +282,62 @@ Status WorkerRpcClient::InvokeGetHashRing(uint64_t currentVersion, GetHashRingRs
     RpcOptions options;
     options.SetTimeout(channelConfig_.timeout_ms);
     return WithRpcDiag(DoInvokeGetHashRing(options, request, response), "GetHashRing", workerAddress_);
+}
+
+Status WorkerRpcClient::InvokeGetSocketPath(GetSocketPathReqPb &request, GetSocketPathRspPb &response)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    return WithRpcDiag(DoInvokeGetSocketPath(options, request, response), "GetSocketPath", workerAddress_);
+}
+
+Status WorkerRpcClient::InvokeRegisterShmClient(RegisterClientReqPb &request, RegisterClientRspPb &response)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    INJECT_POINT("client.transport.register_shm_client", []() { return Status::OK(); });
+    return WithRpcDiag(DoInvokeRegisterShmClient(options, request, response), "RegisterClient", workerAddress_);
+}
+
+Status WorkerRpcClient::InvokeGetClientFd(GetClientFdReqPb &request, GetClientFdRspPb &response)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    INJECT_POINT("client.transport.get_client_fd", []() { return Status::OK(); });
+    return WithRpcDiag(DoInvokeGetClientFd(options, request, response), "GetClientFd", workerAddress_);
+}
+
+Status WorkerRpcClient::InvokeShmHeartbeat(HeartbeatReqPb &request, HeartbeatRspPb &response)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    constexpr int32_t SHM_MAINTENANCE_TIMEOUT_MS = 1000;
+    options.SetTimeout(std::clamp<int64_t>(channelConfig_.timeout_ms, 1, SHM_MAINTENANCE_TIMEOUT_MS));
+    INJECT_POINT("client.transport.shm_heartbeat", []() { return Status::OK(); });
+    return WithRpcDiag(DoInvokeShmHeartbeat(options, request, response), "Heartbeat", workerAddress_);
+}
+
+Status WorkerRpcClient::InvokeDisconnectShmClient(DisconnectClientReqPb &request, DisconnectClientRspPb &response)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    constexpr int32_t SHM_DISCONNECT_TIMEOUT_MS = 1000;
+    options.SetTimeout(std::clamp<int64_t>(channelConfig_.timeout_ms, 1, SHM_DISCONNECT_TIMEOUT_MS));
+    return WithRpcDiag(DoInvokeDisconnectShmClient(options, request, response), "DisconnectClient", workerAddress_);
 }
 
 Status WorkerRpcClient::InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request, CreateRspPb &response,
@@ -362,7 +471,8 @@ Status WorkerRpcClient::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response)
 
 bool WorkerRpcClient::IsAlive() const
 {
-    return alive_.load(std::memory_order_acquire) && channel_ != nullptr && controlStub_ != nullptr
+    return alive_.load(std::memory_order_acquire) && channel_ != nullptr && workerStub_ != nullptr
+           && controlStub_ != nullptr
            && transportStub_ != nullptr && dataStub_ != nullptr && masterStub_ != nullptr;
 }
 
@@ -372,6 +482,7 @@ void WorkerRpcClient::Close()
     masterStub_.reset();
     dataStub_.reset();
     controlStub_.reset();
+    workerStub_.reset();
     transportStub_.reset();
     channel_.reset();
 }

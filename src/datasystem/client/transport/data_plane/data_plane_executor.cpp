@@ -57,6 +57,34 @@ DataPlaneExecutor::DataPlaneExecutor(std::shared_ptr<DataPlaneManager> manager,
 {
 }
 
+bool DataPlaneExecutor::PrepareRetry(const HostPort &workerAddr, const std::shared_ptr<IDataTransporter> &transporter,
+                                     const Status &rc, TransportHint hint, TransportHint &retryHint)
+{
+    retryHint = hint;
+    auto logRebuild = [&](const char *what) {
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE) << "[TransportGet][Connection] " << what << ", worker: "
+                                                       << workerAddr.ToString() << ", transport: "
+                                                       << AccessTransportTracker::KindToName(transporter->Kind())
+                                                       << ", status: " << rc.ToString();
+    };
+    if (rc.GetCode() == K_URMA_NEED_CONNECT) {
+        logRebuild("Rebuild data plane");
+        manager_->ResetDataPlane(workerAddr);
+    } else if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+        logRebuild("Rebuild RPC connection");
+        manager_->Teardown(workerAddr);
+    } else if (rc.GetCode() == K_NOT_SUPPORTED && hint == TransportHint::SHM_CANDIDATE) {
+        // SHM fd-passing endpoint unavailable (target Worker has SHM disabled). GetOrCreate re-arms
+        // the entry with a TcpTransporter because the cached SHM transporter does not match the TCP
+        // kind, so a same-host Get still succeeds instead of surfacing K_NOT_SUPPORTED.
+        logRebuild("SHM fd-passing endpoint unavailable, fall back to TCP");
+        retryHint = TransportHint::TCP_ONLY;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &operation)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
@@ -76,22 +104,11 @@ Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &o
             << ", attempt: " << INITIAL_ATTEMPT;
     Status rc = operation(*transporter);
     LogDataPlaneOperation(workerAddr, transporter->Kind(), INITIAL_ATTEMPT, rc);
-    if (rc.GetCode() == K_URMA_NEED_CONNECT) {
-        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "[TransportGet][Connection] Rebuild data plane, worker: " << workerAddr.ToString()
-            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
-            << ", status: " << rc.ToString();
-        manager_->ResetDataPlane(workerAddr);
-    } else if (rc.GetCode() == K_RPC_UNAVAILABLE) {
-        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "[TransportGet][Connection] Rebuild RPC connection, worker: " << workerAddr.ToString()
-            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
-            << ", status: " << rc.ToString();
-        manager_->Teardown(workerAddr);
-    } else {
+    TransportHint retryHint = hint;
+    if (!PrepareRetry(workerAddr, transporter, rc, hint, retryHint)) {
         return rc;
     }
-    connectionStatus = manager_->GetOrCreate(workerAddr, hint, transporter);
+    connectionStatus = manager_->GetOrCreate(workerAddr, retryHint, transporter);
     if (connectionStatus.IsError()) {
         LOG(ERROR) << "[TransportGet][Connection] Rebuild data plane failed, worker: " << workerAddr.ToString()
                    << ", attempt: " << REBUILD_ATTEMPT << ", status: " << connectionStatus.ToString();

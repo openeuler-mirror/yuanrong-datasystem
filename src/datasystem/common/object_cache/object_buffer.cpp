@@ -56,7 +56,7 @@ ObjectBufferInfo &GetMutableInfo(std::shared_ptr<void> &state)
 }  // namespace
 
 ObjectBuffer::ObjectBuffer(std::shared_ptr<void> state)
-    : state_(std::move(state)), isShm_(false)
+    : state_(std::move(state)), isShm_(false), ownsLocalMemory_(false)
 {
 }
 
@@ -78,8 +78,7 @@ ObjectBuffer::~ObjectBuffer()
 {
     if (state_ != nullptr) {
         auto &info = GetMutableInfo(state_);
-        // Release malloc'd memory: owned when NOT shm and NOT UB pool handle
-        if (!isShm_ && info.ubGetBufferHandle == nullptr && info.pointer != nullptr) {
+        if (ownsLocalMemory_ && info.pointer != nullptr) {
             free(info.pointer);
             info.pointer = nullptr;
         }
@@ -90,9 +89,13 @@ ObjectBuffer::~ObjectBuffer()
 }
 
 ObjectBuffer::ObjectBuffer(ObjectBuffer &&other) noexcept
-    : state_(std::move(other.state_)), latch_(std::move(other.latch_)), isShm_(other.isShm_)
+    : state_(std::move(other.state_)),
+      latch_(std::move(other.latch_)),
+      isShm_(other.isShm_),
+      ownsLocalMemory_(other.ownsLocalMemory_)
 {
     other.isShm_ = false;
+    other.ownsLocalMemory_ = false;
 }
 
 ObjectBuffer &ObjectBuffer::operator=(ObjectBuffer &&other) noexcept
@@ -102,6 +105,7 @@ ObjectBuffer &ObjectBuffer::operator=(ObjectBuffer &&other) noexcept
         std::swap(state_, moved.state_);
         std::swap(latch_, moved.latch_);
         std::swap(isShm_, moved.isShm_);
+        std::swap(ownsLocalMemory_, moved.ownsLocalMemory_);
     }
     return *this;
 }
@@ -123,6 +127,12 @@ Status ObjectBuffer::Init()
     // Step 2: allocate if still no pointer
     if (info.pointer == nullptr) {
         RETURN_IF_NOT_OK(MallocBufferHelper());
+        ownsLocalMemory_ = true;
+    } else if (info.mmapEntry == nullptr && info.payloadPointer == nullptr && info.ubGetBufferHandle == nullptr) {
+        // A plain pointer handed to ObjectBuffer follows the existing ownership contract. Keep
+        // allocation ownership independent from shmId: routed Create carries a worker shmId for
+        // DecreaseReference, but its payload still lives in client-local malloc memory.
+        ownsLocalMemory_ = true;
     }
     // Step 3: determine latch type based on shmId
     if (!info.shmId.Empty()) {

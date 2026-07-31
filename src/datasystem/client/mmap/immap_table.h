@@ -21,7 +21,6 @@
 #define DATASYSTEM_CLIENT_MMAP_IMMAP_TABLE_H
 
 #include <memory>
-#include <shared_mutex>
 #include <string>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -32,13 +31,15 @@
 #include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/utils/status.h"
 
+#include <bthread/rwlock.h>
+
 namespace datasystem {
 namespace client {
 class IMmapTable {
 public:
     IMmapTable() = delete;
 
-    ~IMmapTable() = default;
+    virtual ~IMmapTable() = default;
 
     explicit IMmapTable(bool enableHugeTlb);
     /**
@@ -130,7 +131,7 @@ public:
 
 protected:
     // Protects 'mmapTable_' and 'shmIdToWorkerFd_'.
-    std::shared_timed_mutex mutex_;
+    bthread::RWLock mutex_;
 
     // The mmap fd table. The key is worker fd, value is mmap entry.
     std::unordered_map<int, std::shared_ptr<IMmapTableEntry>> mmapTable_;

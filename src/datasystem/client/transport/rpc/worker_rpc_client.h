@@ -34,6 +34,7 @@
 #include "datasystem/protos/master_object.brpc.stub.pb.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/protos/object_posix.brpc.stub.pb.h"
+#include "datasystem/protos/share_memory.brpc.stub.pb.h"
 #include "datasystem/protos/worker_object.brpc.stub.pb.h"
 #include "datasystem/utils/status.h"
 
@@ -52,6 +53,9 @@ public:
     /** @brief Sign and invoke a direct object read on this worker. */
     virtual Status InvokeGetObject(GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &response,
                                    std::vector<RpcMessage> &payloads);
+
+    /** @brief Invoke client-to-worker Get through WorkerOCService with a registered endpoint client ID. */
+    virtual Status InvokeClientGet(GetReqPb &request, GetRspPb &response, std::vector<RpcMessage> &payloads);
 
     /** @brief Sign and invoke an ordered direct object batch read on this worker. */
     virtual Status InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
@@ -91,6 +95,16 @@ public:
     /** @brief Fetch the versioned routing hash ring through the cached worker channel. */
     virtual Status InvokeGetHashRing(uint64_t currentVersion, GetHashRingRspPb &response);
 
+    virtual Status InvokeGetSocketPath(GetSocketPathReqPb &request, GetSocketPathRspPb &response);
+
+    virtual Status InvokeRegisterShmClient(RegisterClientReqPb &request, RegisterClientRspPb &response);
+
+    virtual Status InvokeGetClientFd(GetClientFdReqPb &request, GetClientFdRspPb &response);
+
+    virtual Status InvokeShmHeartbeat(HeartbeatReqPb &request, HeartbeatRspPb &response);
+
+    virtual Status InvokeDisconnectShmClient(DisconnectClientReqPb &request, DisconnectClientRspPb &response);
+
     /** @return Whether this client still owns an initialized channel and all required stubs. */
     virtual bool IsAlive() const;
 
@@ -103,6 +117,9 @@ public:
 protected:
     virtual Status DoInvokeGetObject(const RpcOptions &options, const GetObjectRemoteReqPb &request,
                                      GetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads);
+
+    virtual Status DoInvokeClientGet(const RpcOptions &options, const GetReqPb &request, GetRspPb &response,
+                                     std::vector<RpcMessage> &payloads);
 
     virtual Status DoInvokeBatchGetObject(const RpcOptions &options, const BatchGetObjectRemoteReqPb &request,
                                           BatchGetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads);
@@ -130,6 +147,21 @@ protected:
     virtual Status DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
                                        GetHashRingRspPb &response);
 
+    virtual Status DoInvokeGetSocketPath(const RpcOptions &options, const GetSocketPathReqPb &request,
+                                         GetSocketPathRspPb &response);
+
+    virtual Status DoInvokeRegisterShmClient(const RpcOptions &options, const RegisterClientReqPb &request,
+                                             RegisterClientRspPb &response);
+
+    virtual Status DoInvokeGetClientFd(const RpcOptions &options, const GetClientFdReqPb &request,
+                                       GetClientFdRspPb &response);
+
+    virtual Status DoInvokeShmHeartbeat(const RpcOptions &options, const HeartbeatReqPb &request,
+                                        HeartbeatRspPb &response);
+
+    virtual Status DoInvokeDisconnectShmClient(const RpcOptions &options, const DisconnectClientReqPb &request,
+                                               DisconnectClientRspPb &response);
+
     /** @brief Release the channel and stubs during object destruction. */
     virtual void Close();
 
@@ -138,6 +170,7 @@ private:
     std::shared_ptr<Signature> signature_;
     BrpcChannelConfig channelConfig_;
     std::shared_ptr<brpc::Channel> channel_;
+    std::shared_ptr<WorkerService_BrpcGenericStub> workerStub_;
     std::shared_ptr<WorkerOCService_BrpcGenericStub> controlStub_;
     std::shared_ptr<WorkerWorkerTransportService_BrpcGenericStub> transportStub_;
     std::shared_ptr<WorkerWorkerOCService_BrpcGenericStub> dataStub_;

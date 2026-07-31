@@ -43,6 +43,13 @@ public:
     Status Execute(const HostPort &workerAddr, const Operation &operation);
 
 private:
+    // Decide whether a failed operation should be retried after a transporter rebuild, perform the
+    // rebuild pre-step (ResetDataPlane/Teardown), and set the retry hint. Returns false (no retry)
+    // for non-retryable errors. On a same-host SHM-off target the fd-passing negotiation returns
+    // K_NOT_SUPPORTED and the hint is switched to TCP_ONLY so the entry rebuilds as a TcpTransporter.
+    bool PrepareRetry(const HostPort &workerAddr, const std::shared_ptr<IDataTransporter> &transporter,
+                      const Status &rc, TransportHint hint, TransportHint &retryHint);
+
     std::shared_ptr<DataPlaneManager> manager_;
     std::shared_ptr<TransportAdvisor> advisor_;
 };

@@ -21,7 +21,6 @@
 
 #include <atomic>
 #include <cstddef>
-#include <shared_mutex>
 
 #include "datasystem/client/mmap/embedded_mmap_table_entry.h"
 #include "datasystem/common/util/status_helper.h"
@@ -34,7 +33,7 @@ Status EmbeddedMmapTable::MmapAndStoreFd(const int &clientFd, const int &workerF
 {
     (void)clientFd;
     (void)clientId;
-    std::lock_guard<std::shared_timed_mutex> l(mutex_);
+    bthread::RWLockWrGuard l(mutex_);
     auto entry = mmapTable_.find(workerFd);
     if (entry == mmapTable_.end()) {
         // Check the workerFd whether is valid.

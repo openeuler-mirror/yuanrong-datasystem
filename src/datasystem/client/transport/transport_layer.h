@@ -36,8 +36,6 @@
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/transport_advisor.h"
-#include "datasystem/client/client_worker_common_api.h"
-#include "datasystem/client/mmap_manager.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/util/net_util.h"
@@ -46,6 +44,9 @@
 #include "datasystem/object/object_buffer.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/utils/status.h"
+
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
 
 namespace datasystem {
 namespace client {
@@ -60,19 +61,6 @@ struct TransportLayerOptions {
 
 class TransportLayer {
 public:
-    void SetShmDependencies(std::shared_ptr<IClientWorkerCommonApi> workerApi,
-                           std::shared_ptr<MmapManager> mmapManager)
-    {
-        workerApi_ = std::move(workerApi);
-        mmapManager_ = std::move(mmapManager);
-        // Forward to the DataPlaneManager so ShmTransporter instances built by BuildTransporter
-        // receive non-null workerApi_/mmapManager_. Without this, ShmTransporter::Create's mmap
-        // (zero-copy) branch is never taken and Set degrades to RPC payload inline.
-        if (manager_ != nullptr) {
-            manager_->SetShmDependencies(workerApi_, mmapManager_);
-        }
-    }
-
     explicit TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
                             uint64_t fastTransportMemSize, TransportLayerOptions options = {});
     ~TransportLayer();
@@ -167,6 +155,10 @@ private:
     std::optional<std::chrono::steady_clock::time_point> GetLocalUbProbeDeadline() const;
     void TryRecoverLocalUbSender();
     void ReconcileLoop();
+    // Waits (under reconcileMutex_) for a published snapshot, a stop signal, or the local UB probe deadline.
+    // Returns true if the caller should process/apply a snapshot, false if it should stop or re-loop.
+    // Extracted from ReconcileLoop to keep that function within the codecheck nesting-depth limit.
+    bool WaitForSnapshotOrStop(std::unique_lock<bthread::Mutex> &lock);
     Status RetrySet(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
                     TransportHint hint);
     Status RetryMSet(const HostPort &workerAddr, const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
@@ -190,8 +182,6 @@ private:
 
     std::shared_ptr<DataPlaneManager> manager_;
     std::shared_ptr<TransportAdvisor> advisor_;
-    std::shared_ptr<IClientWorkerCommonApi> workerApi_;
-    std::shared_ptr<MmapManager> mmapManager_;
     std::shared_ptr<ThreadPool> releasePool_;
     std::unique_ptr<ObjectReadFlow> objectRead_;
     mutable std::shared_mutex localUbSenderMutex_;
@@ -203,15 +193,15 @@ private:
     std::chrono::steady_clock::time_point localUbProbeDeadline_;
     std::chrono::milliseconds localUbProbeBaseDelay_{ std::chrono::seconds(1) };
     // ApplyWorkerSnapshot serializes admission publication with shutdown through reconcileMutex_.
-    std::mutex reconcileMutex_;
-    std::condition_variable reconcileCv_;
+    bthread::Mutex reconcileMutex_;
+    bthread::ConditionVariable reconcileCv_;
     std::optional<WorkerSnapshot> pendingSnapshot_;
     Thread reconcileThread_;
     bool reconcileStarted_{ false };
     bool reconcileStopping_{ false };
     std::atomic<bool> shutdownRequested_{ false };
     // Serializes complete Shutdown calls while reconcileMutex_ remains available to the worker.
-    std::mutex shutdownMutex_;
+    bthread::Mutex shutdownMutex_;
 };
 
 }  // namespace client

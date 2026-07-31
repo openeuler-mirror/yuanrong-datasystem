@@ -72,6 +72,7 @@ private:
     std::shared_ptr<void> state_;
     std::shared_ptr<void> latch_;
     bool isShm_ = false;
+    bool ownsLocalMemory_ = false;
 };
 
 }  // namespace datasystem

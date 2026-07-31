@@ -21,7 +21,6 @@
 
 #include <atomic>
 #include <cstddef>
-#include <shared_mutex>
 
 #include "datasystem/client/mmap/shm_mmap_table_entry.h"
 #include "datasystem/common/util/status_helper.h"
@@ -32,7 +31,7 @@ namespace client {
 Status ShmMmapTable::MmapAndStoreFd(const int &clientFd, const int &workerFd, const uint64_t &mmapSize,
                                     const std::string &tenantId, const std::string &clientId)
 {
-    std::lock_guard<std::shared_timed_mutex> l(mutex_);
+    bthread::RWLockWrGuard l(mutex_);
     auto entry = mmapTable_.find(workerFd);
     if (entry == mmapTable_.end()) {
         // Check the workerFd and clientFd whether is valid.

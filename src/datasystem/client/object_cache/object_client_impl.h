@@ -952,10 +952,12 @@ private:
     Status InitTransportLayer();
 
     void BuildTransportReadRequest(const std::vector<std::string> &objectKeys, client::ObjectReadRequest &request,
-                                   std::vector<Status> &itemStatuses) const;
+                                   std::vector<Status> &itemStatuses, int64_t subTimeoutMs,
+                                   bool queryL2Cache);
 
     Status GetFromTransportLayer(const std::vector<std::string> &objectKeys,
-                                 std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled);
+                                 std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled,
+                                 int64_t subTimeoutMs, bool queryL2Cache);
 
     // Routed same-host Get: split keys by routing into same-host (shm, GetBuffersFromWorker) and
     // cross-host (GetFromTransportLayer) groups, with index-based mapping for duplicate keys and a
@@ -983,8 +985,8 @@ private:
     // Execute the cross-host transport fallback for remoteIdx, writing results into objectBuffers
     // and aggregating the transport status into rc (preserving a prior shm error if transport is OK).
     void ExecuteTransportFallback(const std::vector<std::pair<std::string, size_t>> &remoteIdx,
-                                  bool traceEnabled, std::vector<std::shared_ptr<Buffer>> &objectBuffers,
-                                  Status &rc);
+                                  bool traceEnabled, int64_t subTimeoutMs, bool queryL2Cache,
+                                  std::vector<std::shared_ptr<Buffer>> &objectBuffers, Status &rc);
 
     Status BuildTransportGetResponse(
         client::ObjectReadItemResult &item, GetRspPb &response,

@@ -23,7 +23,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -37,10 +36,12 @@
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/transport_kind.h"
 #include "datasystem/client/transport/worker_snapshot.h"
-#include "datasystem/client/client_worker_common_api.h"
-#include "datasystem/client/mmap_manager.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/thread_pool.h"
+
+#include <bthread/mutex.h>
+#include <bthread/rwlock.h>
 
 namespace datasystem {
 namespace client {
@@ -50,18 +51,12 @@ public:
     explicit DataPlaneManager(std::shared_ptr<Signature> signature, uint64_t fastTransportMemSize,
                               BrpcChannelConfig channelConfig = {},
                               std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider = nullptr,
-                              bool enableClientDirectPipelineH2D = false, int32_t pipelineThreadNum = 64);
+                              bool enableClientDirectPipelineH2D = false, int32_t pipelineThreadNum = 64,
+                              std::shared_ptr<ThreadPool> releasePool = nullptr);
     virtual ~DataPlaneManager();
 
     /** @brief Initialize process-level resources required by UB data-plane transport. */
     Status Init();
-
-    void SetShmDependencies(std::shared_ptr<IClientWorkerCommonApi> workerApi,
-                            std::shared_ptr<MmapManager> mmapManager)
-    {
-        workerApi_ = std::move(workerApi);
-        mmapManager_ = std::move(mmapManager);
-    }
 
     /**
      * @brief Get or lazily create a transporter for the worker.
@@ -142,7 +137,7 @@ private:
         void ResetDataPlaneLocked();
         void ResetDataPlane();
 
-        std::shared_mutex mutex;
+        bthread::RWLock mutex;
         std::shared_ptr<WorkerRpcClient> rpcClient;
         std::shared_ptr<IDataTransporter> transporter;
         AccessTransportKind kind = AccessTransportKind::TCP;
@@ -166,7 +161,7 @@ private:
 
     EntryMap entries_;
     // Protects entries_, the published worker admission set, and its version.
-    std::shared_mutex mutex_;
+    bthread::RWLock mutex_;
     std::unordered_set<std::string> liveWorkers_;
     std::vector<std::string> writeProbeWorkers_;
     std::unordered_map<std::string, size_t> writeProbeWorkerIndices_;
@@ -181,11 +176,10 @@ private:
     uint64_t fastTransportMemSize_ = 0;
     bool enableClientDirectPipelineH2D_ = false;
     int32_t pipelineThreadNum_ = 64;
-    std::mutex lifecycleMutex_;
+    bthread::Mutex lifecycleMutex_;
     bool h2dMemoryRegistered_ = false;
     std::atomic<bool> initialized_{ false };
-    std::shared_ptr<IClientWorkerCommonApi> workerApi_;
-    std::shared_ptr<MmapManager> mmapManager_;
+    std::weak_ptr<ThreadPool> releasePool_;
 };
 }  // namespace client
 }  // namespace datasystem

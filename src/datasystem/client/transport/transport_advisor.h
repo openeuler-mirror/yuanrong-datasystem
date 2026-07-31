@@ -18,13 +18,14 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_ADVISOR_H
 #define DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_ADVISOR_H
 
-#include <shared_mutex>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
 #include "datasystem/client/transport/transport_kind.h"
 #include "datasystem/common/util/net_util.h"
+
+#include <bthread/rwlock.h>
 
 namespace datasystem {
 namespace client {
@@ -47,7 +48,7 @@ public:
     void SetSameHostWorkers(const std::vector<HostPort> &workers);
 
 private:
-    mutable std::shared_mutex mtx_;
+    mutable bthread::RWLock mtx_;
     std::unordered_set<HostPort> sameHostWorkers_;
 };
 }  // namespace client
