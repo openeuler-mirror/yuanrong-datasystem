@@ -31,6 +31,7 @@
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/shm_fd.h"
+#include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/util/thread_pool.h"
 
 // Keep bthread headers after project RPC headers so brpc logging macros are established before project overrides.
@@ -81,6 +82,13 @@ public:
 
     Status BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGetRequest &input, DataGetResult &result);
 
+    /** Maps the shared-memory region allocated by a routed Create into the client address space (PROT_WRITE)
+     * so the caller can write zero-copy, registers the worker reference, and attaches a send-side owner that
+     * gates Publish on session liveness (K_BUFFER_DEPRECATED) and releases the worker reference on buffer
+     * destruction. Mirrors BuildResult for the write direction (fd still worker->client). */
+    Status MmapWriteRegion(const CreateRspPb &createRsp, const TransportRequestContext &context, uint64_t size,
+                           ObjectBufferInfo &info);
+
     bool IsAlive() const;
 
     const std::string &ClientId() const;
@@ -90,6 +98,12 @@ public:
     void Close(bool notifyWorker);
 
     Status DecreaseReference(const TransportRequestContext &context, const ShmKey &shmId);
+    // Releases a reference registered under the request context's OWN clientId (the SDK global clientId),
+    // NOT the session clientId. Used by routed Create, which registers the create-time worker reference
+    // under the global clientId (req.client_id) — so the release must use the same identity or the worker
+    // cannot match it and the region leaks until client-lost. (DecreaseReference above overrides the
+    // clientId with the session UUID, which is correct for Get but wrong for routed Create.)
+    Status DecreaseReferenceByRequestClient(const TransportRequestContext &context, const ShmKey &shmId);
 
 private:
     ShmSession(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpcClient,

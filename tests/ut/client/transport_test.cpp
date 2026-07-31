@@ -3989,25 +3989,15 @@ TEST(ShmTransporterTest, CreateFallsBackToPayloadWhenNoStoreFd)
     const auto &info = ObjectBufferInternal::GetInfo(*buffer);
     EXPECT_EQ(info.mmapEntry, nullptr);  // no mmap → fallback payload inline
     EXPECT_NE(info.pointer, nullptr);    // ObjectBuffer::Init mallocs a local buffer for the payload
-    EXPECT_FALSE(info.shmId.Empty());
+    EXPECT_TRUE(info.shmId.Empty());     // store_fd<=0 = no shm region; pure inline payload, no shm_id (#7)
     EXPECT_EQ(rpc->createInvokeCount, 1);
 }
 
-TEST(ShmTransporterTest, CreateDoesNotResolveTargetFdThroughBoundWorkerState)
-{
-    auto rpc = std::make_shared<FakeWorkerRpcClient>();
-    rpc->createResponseStoreFd = 11;
-    rpc->createResponseMmapSize = 4096;
-    rpc->createResponseMetadataSize = 64;
-    ShmTransporter transporter(MakeAddress(9100), rpc);
-    std::shared_ptr<ObjectBuffer> buffer;
-    ASSERT_TRUE(transporter.Create(MakeAddress(9100), "target-fd", 1024, MakeCreateParam(), buffer).IsOk());
-    ASSERT_NE(buffer, nullptr);
-    const auto &info = ObjectBufferInternal::GetInfo(*buffer);
-    EXPECT_EQ(info.mmapEntry, nullptr);
-    EXPECT_EQ(info.metadataSize, 0u);
-    EXPECT_NE(info.pointer, nullptr);
-}
+// CreateDoesNotResolveTargetFdThroughBoundWorkerState was removed: it asserted the *placeholder* semantics
+// (store_fd>0 yet Create does not mmap). Under Component B, store_fd>0 now mmaps the worker region via the
+// endpoint-scoped ShmSession (target worker, not the bound worker). That zero-copy path needs a real fd-passing
+// session and is covered end-to-end by KVClientTransportSetWithShmTest.RoutedSetUsesShmZeroCopy (ST), not the
+// UT mock. The store_fd<=0 fallback (no mmap) is covered by CreateFallsBackToPayloadWhenNoStoreFd above.
 
 // Set on a fallback (non-mmap) buffer sends payload inline (InvokeSet called with non-empty payloads).
 TEST(ShmTransporterTest, SetSendsPayloadInlineForFallbackBuffer)
@@ -4120,8 +4110,9 @@ TEST(ShmTransporterTest, MSetUsesSingleInvokeMultiSetNotSerialSet)
     EXPECT_EQ(rpc->setInvokeCount, 0);
     ASSERT_EQ(rpc->invokedMultiSetRequests.size(), 1u);
     EXPECT_TRUE(result.lastRc.IsOk());
-    // Routed MSet publishes local payload buffers through an inline RPC payload (plain TCP), so the
-    // access kind is TCP; the SHM transporter kind is reserved for Get/BatchGet fd-passing.
+    // The mock Create returns store_fd=0 (no shm region), so Create falls back to a local payload buffer
+    // (mmapEntry null) and MSet publishes inline (TCP). The SHM zero-copy kind is covered by the
+    // KVClientTransportSetWithShmTest ST (store_fd>0 + fd-passing).
     EXPECT_EQ(result.actualKind, AccessTransportKind::TCP);
     EXPECT_TRUE(result.publishAttempted);
 }
@@ -4139,7 +4130,10 @@ TEST(ShmTransporterTest, MSetPartialFailureReturnsOkWithFailedKeys)
         std::shared_ptr<ObjectBuffer> buf;
         ASSERT_TRUE(
             transporter.Create(MakeAddress(9201), "mset-p" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
-        ObjectBufferInternal::GetMutableInfo(*buf).mmapEntry = std::make_shared<FakeMmapTableEntry>();
+        // Simulate a SHM-backed buffer: both mmapEntry and shmId must be present for the auto_release path.
+        auto &mutableInfo = ObjectBufferInternal::GetMutableInfo(*buf);
+        mutableInfo.mmapEntry = std::make_shared<FakeMmapTableEntry>();
+        mutableInfo.shmId = ShmKey::Intern("mset-shm-" + std::to_string(i));
         buffers.push_back(buf);
     }
     TransportSetParam sp = MakeSetParam();
@@ -4199,6 +4193,48 @@ TEST(ShmTransporterTest, MSetFullFailureWithoutFailedKeysKeepsClientCleanup)
     EXPECT_TRUE(rpc->invokedMultiSetRequests[0].auto_release_memory_ref());
     EXPECT_TRUE(result.failedKeys.empty());
     EXPECT_FALSE(result.workerAutoRelease);
+}
+
+// Owner-managed (routed SHM zero-copy) MSet buffers must NOT set auto_release_memory_ref: the
+// send-side owner releases the worker ref on destruction, so asking the worker to auto-release too
+// would double-release and flood worker "shmId not exists" warnings. Guards the routed-MSet
+// double-release regression (anyOwnerManaged branch in BuildMultiPublishRequest).
+TEST(ShmTransporterTest, MSetOwnerManagedBuffersDoNotAutoRelease)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    const HostPort workerAddr = MakeAddress(9204);
+    ShmTransporter transporter(workerAddr, rpc);
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    for (int i = 0; i < 2; ++i) {
+        auto buf = MakeTransportBuffer(workerAddr, "mset-own" + std::to_string(i), "data",
+                                       "shm-own" + std::to_string(i));
+        ASSERT_NE(buf, nullptr);
+        auto &mutableInfo = ObjectBufferInternal::GetMutableInfo(*buf);
+        // Routed SHM zero-copy buffer: mmapEntry present + a send-side owner that manages the worker ref.
+        mutableInfo.mmapEntry = std::make_shared<FakeMmapTableEntry>();
+        mutableInfo.receiveBufferOwner = std::make_shared<FakeBufferOwner>(static_cast<uint64_t>(buf->GetSize()), true);
+        buffers.push_back(buf);
+    }
+    TransportMSetResult result;
+    ASSERT_TRUE(transporter.MSet(buffers, MakeSetParam(), result).IsOk());
+    ASSERT_EQ(rpc->invokedMultiSetRequests.size(), 1u);
+    EXPECT_FALSE(rpc->invokedMultiSetRequests[0].auto_release_memory_ref());
+    EXPECT_FALSE(result.workerAutoRelease);
+}
+
+// A store_fd<=0 Create fallback (worker did not allocate an shm region) must build a pure inline
+// payload buffer that carries no worker shm_id. Sending inline payload + a stale shm_id would risk the
+// worker dual-path attaching an uninitialized region. Guards the routed-Set fallback regression.
+TEST(ShmTransporterTest, CreateFallbackBufferCarriesNoShmId)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    ShmTransporter transporter(MakeAddress(9205), rpc);
+    std::shared_ptr<ObjectBuffer> buf;
+    ASSERT_TRUE(transporter.Create(MakeAddress(9205), "fb-k", 64, MakeCreateParam(), buf).IsOk());
+    const auto &info = ObjectBufferInternal::GetInfo(*buf);
+    EXPECT_TRUE(info.shmId.Empty());              // no worker region -> no shm_id carried
+    EXPECT_EQ(info.mmapEntry, nullptr);           // fallback local buffer, no mmap
+    EXPECT_EQ(info.receiveBufferOwner, nullptr);  // not owner-managed
 }
 
 // The 5 new shm metrics must register without ID collision (InitKvMetrics returns OK). This guards
@@ -5829,19 +5865,22 @@ TEST(TransportLayerTest, SetDoesNotRetrySecondFailure)
     EXPECT_EQ(releaseCount, 1);
 }
 
-TEST(TransportLayerTest, MCreateDoesNotReplayAmbiguousRpcFailure)
+// MCreate replays an ambiguous (K_RPC_UNAVAILABLE, response lost) failure: it rebuilds the RPC +
+// data plane and retries once, consistent with Create and Set (Component C). A lost response may
+// leave the worker with partial allocations, reclaimed by the expired-fds reconciler (the same
+// fallback Create relies on). MCreate has no publish step, so unlike MSet it always replays.
+TEST(TransportLayerTest, MCreateReplaysAmbiguousRpcFailure)
 {
     auto manager = std::make_shared<FakeDataPlaneManager>();
     manager->transporterMCreateStatuses = { { Status(K_RPC_UNAVAILABLE, "response lost") } };
     TestTransportLayer layer(manager);
     std::vector<std::shared_ptr<ObjectBuffer>> buffers;
 
-    EXPECT_EQ(layer.MCreate(MakeAddress(40), { "key-a", "key-b" }, { 4, 4 }, MakeCreateParam(), buffers).GetCode(),
-              K_RPC_UNAVAILABLE);
-    EXPECT_TRUE(buffers.empty());
-    EXPECT_EQ(manager->transportBuildCount, 1);
-    ASSERT_EQ(manager->builtTransporters.size(), 1u);
-    EXPECT_EQ(manager->builtTransporters[0]->mCreateCount, 1);
+    EXPECT_TRUE(layer.MCreate(MakeAddress(40), { "key-a", "key-b" }, { 4, 4 }, MakeCreateParam(), buffers).IsOk());
+    EXPECT_FALSE(buffers.empty());
+    EXPECT_EQ(manager->transportBuildCount, 2);  // initial build + rebuild after Teardown
+    ASSERT_EQ(manager->builtTransporters.size(), 2u);
+    EXPECT_EQ(manager->builtTransporters[0]->mCreateCount, 1);  // first attempt on the original transporter
 }
 
 TEST(TransportLayerTest, MSetDoesNotReplayAmbiguousRpcFailure)

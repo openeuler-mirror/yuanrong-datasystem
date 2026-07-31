@@ -50,6 +50,7 @@ list(APPEND CLIENT_SRCS
         transport/data_plane/data_plane_manager.cpp
         transport/data_plane/shm_connection.cpp
         transport/data_plane/shm_receive_buffer_owner.cpp
+        transport/data_plane/shm_send_buffer_owner.cpp
         transport/data_plane/tcp_transporter.cpp
         transport/data_plane/ub_connection.cpp
         transport/data_plane/ub_transporter.cpp

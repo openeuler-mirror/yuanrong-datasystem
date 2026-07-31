@@ -159,8 +159,23 @@ private:
     // Returns true if the caller should process/apply a snapshot, false if it should stop or re-loop.
     // Extracted from ReconcileLoop to keep that function within the codecheck nesting-depth limit.
     bool WaitForSnapshotOrStop(std::unique_lock<bthread::Mutex> &lock);
+    // Post-publish Set processing: UB failure reporting + sender quarantine, routed SHM owner-managed
+    // release decision, rebuild/retry, and async reference release. Extracted from Set to keep Set within
+    // the codecheck function-size limit.
+    Status FinalizeSetPublish(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
+                              TransportHint hint, std::shared_ptr<IDataTransporter> &transporter,
+                              const Status &publishRc, std::shared_lock<std::shared_mutex> &admission,
+                              std::chrono::steady_clock::time_point setStart);
     Status RetrySet(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
                     TransportHint hint);
+    // Rebuilds the data plane after a Set failure (K_URMA_NEED_CONNECT -> ResetDataPlane;
+    // K_RPC_UNAVAILABLE -> Teardown). Returns true if rebuilt (caller retries), false otherwise.
+    bool RebuildPlaneOnSetFailure(const Status &rc, const HostPort &workerAddr);
+    // Sampled triage log for the routed Set hot path: transport kind (SHM/UB/TCP) + result + latency,
+    // so operators can localize which transport a write used and how long it took. Sampled (every N) to
+    // avoid flooding; aggregate kind/byte counters are in the metrics.
+    void LogSetResult(const HostPort &workerAddr, TransportHint hint, const Status &rc,
+                      std::chrono::steady_clock::time_point start);
     Status RetryMSet(const HostPort &workerAddr, const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
                      const TransportSetParam &param, TransportHint hint, TransportMSetResult &result);
 

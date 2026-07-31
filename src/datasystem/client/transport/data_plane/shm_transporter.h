@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-/** Description: Shared-memory transporter for same-host workers. Routed Get/BatchGet use
- * WorkerOCService and an endpoint-scoped fd-passing session. Create/Publish retain the existing
- * transport implementation until their ownership model is migrated independently. */
+/** Description: Shared-memory transporter for same-host workers. Routed Get/BatchGet and
+ * Create/Publish all use WorkerOCService and an endpoint-scoped fd-passing session: Get mmaps a
+ * worker-passed fd to read zero-copy, Create mmaps a worker-allocated region to write zero-copy
+ * (fd direction is worker->client in both cases), and Set/Publish send only metadata + shm_id. */
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_SHM_TRANSPORTER_H
 #define DATASYSTEM_CLIENT_TRANSPORT_SHM_TRANSPORTER_H
 
@@ -173,19 +174,39 @@ public:
                   const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override
     {
         RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+        RETURN_RUNTIME_ERROR_IF_NULL(shmConnection_);
         RETURN_IF_NOT_OK(ValidateCreateRequest(key, size, param));
         CreateReqPb createReq;
         RETURN_IF_NOT_OK(BuildCreateRequest(key, size, param, createReq));
         CreateRspPb createRsp;
         uint32_t workerVersion = 0;
         RETURN_IF_NOT_OK(rpcClient_->InvokeCreate(param.subTimeoutMs, createReq, createRsp, workerVersion));
-        // Routed writes are outside the endpoint-scoped fd-passing scope. A Worker fd returned by
-        // this target must never be resolved through the initially bound Worker's fd channel or mmap
-        // namespace, so ObjectBuffer allocates a local payload buffer here.
-        Status rc = BuildLocalBuffer(workerAddr, key, size, param, createRsp.shm_id(), workerVersion, buffer);
+        // If the worker did not allocate an shm region (store_fd <= 0, e.g. an inline/small object that
+        // did not meet the shm threshold), fall back to a local payload buffer published inline (TCP) —
+        // there is no region to mmap. This preserves the legacy placeholder semantics for the no-fd case.
+        if (createRsp.store_fd() <= 0) {
+            Status localRc = BuildLocalBuffer(workerAddr, key, size, param, workerVersion, buffer);
+            if (localRc.IsError()) {
+                ReleaseAllocation(createRsp.shm_id(), param.requestContext,
+                                  "Create allocation after local buffer setup failure");
+            }
+            return localRc;
+        }
+        // The worker allocated an shm region; acquire the endpoint-scoped fd-passing session and mmap it
+        // (fd passed worker->client via GetClientFd) so the caller writes zero-copy.
+        std::shared_ptr<ShmSession> session;
+        Status rc = shmConnection_->Acquire(param.requestContext, session);
+        if (rc.IsOk()) {
+            rc = BuildShmBuffer(workerAddr, key, size, param, createRsp, workerVersion, session, buffer);
+            if (rc.IsError()) {
+                shmConnection_->Invalidate(session);
+            }
+        }
         if (rc.IsError()) {
+            // fd-passing unavailable (K_NOT_SUPPORTED) or mmap failed; release the worker allocation.
+            // TransportLayer escalates K_NOT_SUPPORTED to UB/TCP for the write.
             ReleaseAllocation(createRsp.shm_id(), param.requestContext,
-                              "Create allocation after local buffer setup failure");
+                              "Create allocation after write-region mmap failure");
         }
         return rc;
     }
@@ -194,6 +215,11 @@ public:
     {
         RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
         const ObjectBufferInfo &info = ObjectBufferInternal::GetInfo(buffer);
+        // UC6: gate on session liveness for routed SHM zero-copy buffers. If the fd-passing session died
+        // between Create and Set, fail fast (K_BUFFER_DEPRECATED) instead of publishing a stale shm_id.
+        if (info.receiveBufferOwner != nullptr) {
+            RETURN_IF_NOT_OK(info.receiveBufferOwner->CheckAlive());
+        }
         PublishReqPb pubReq;
         RETURN_IF_NOT_OK(BuildSetRequest(info, param, pubReq));
         // If pointer is from shm mmap, data is already visible to worker — send empty payload.
@@ -216,11 +242,10 @@ public:
         } else {
             METRIC_INC(metrics::KvMetricId::CLIENT_SHM_PAYLOAD_FALLBACK_SET_TOTAL);
         }
-        // Routed writes stay off the endpoint-scoped fd-passing channel: Create allocates a local payload
-        // buffer and Set publishes it through an inline RPC payload, which is plain TCP. Tag TCP so
-        // KVClientTransportSetTest's ExpectedTransport()=="TCP" contract holds; the SHM transporter kind is
-        // reserved for Get/BatchGet fd-passing, recorded on the read path.
-        return SetTransportResponseStatus(rsp, AccessTransportKind::TCP, param.isSeal, param.isRetry);
+        // Zero-copy when data lives in the mmap'd worker region (mmapEntry set by Create); TCP when it
+        // fell back to an inline payload. mmapEntry is the real zero-copy discriminator.
+        const auto kind = (info.mmapEntry != nullptr) ? AccessTransportKind::SHM : AccessTransportKind::TCP;
+        return SetTransportResponseStatus(rsp, kind, param.isSeal, param.isRetry);
     }
 
     Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
@@ -228,6 +253,7 @@ public:
                    std::vector<std::shared_ptr<ObjectBuffer>> &buffers) override
     {
         RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+        RETURN_RUNTIME_ERROR_IF_NULL(shmConnection_);
         RETURN_IF_NOT_OK(ValidateMultiCreateRequest(keys, sizes, param));
         buffers.clear();
         MultiCreateReqPb multiReq;
@@ -245,27 +271,15 @@ public:
                                "MCreate allocations after response count mismatch");
             RETURN_STATUS(K_RUNTIME_ERROR, "ShmTransporter MCreate response count does not match request count");
         }
-        std::vector<std::shared_ptr<ObjectBuffer>> created;
-        try {
-            created.reserve(keys.size());
-        } catch (const std::bad_alloc &e) {
-            ReleaseAllocations(multiRsp, param.requestContext,
-                               "MCreate allocations after local result reservation failure");
-            RETURN_STATUS(K_OUT_OF_MEMORY, e.what());
+        // Only acquire the fd-passing session if at least one result carries an shm region (store_fd > 0);
+        // an all-store_fd<=0 MCreate (e.g. inline/small objects) needs no session.
+        std::shared_ptr<ShmSession> session;
+        Status acquireRc = AcquireSessionIfNeeded(multiRsp, param, session);
+        if (acquireRc.IsError()) {
+            ReleaseAllocations(multiRsp, param.requestContext, "MCreate allocations after session acquire failure");
+            return acquireRc;
         }
-        for (size_t i = 0; i < keys.size(); i++) {
-            const auto &result = multiRsp.results(i);
-            std::shared_ptr<ObjectBuffer> buf;
-            Status rc = BuildLocalBuffer(workerAddr, keys[i], sizes[i], param, result.shm_id(), workerVersion, buf);
-            if (rc.IsError()) {
-                ReleaseAllocations(multiRsp, param.requestContext,
-                                   "MCreate allocations after local buffer setup failure");
-                return rc;
-            }
-            created.push_back(std::move(buf));
-        }
-        buffers = std::move(created);
-        return Status::OK();
+        return BuildMCreateBuffers(workerAddr, keys, sizes, param, multiRsp, workerVersion, session, buffers);
     }
 
     Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
@@ -277,6 +291,11 @@ public:
         tcpPayload.reserve(buffers.size());
         for (const auto &buf : buffers) {
             const auto &info = ObjectBufferInternal::GetInfo(*buf);
+            // UC6: gate on session liveness for routed SHM zero-copy buffers (fail fast with
+            // K_BUFFER_DEPRECATED instead of publishing a stale shm_id after the session died).
+            if (info.receiveBufferOwner != nullptr) {
+                RETURN_IF_NOT_OK(info.receiveBufferOwner->CheckAlive());
+            }
             tcpPayload.push_back(info.mmapEntry == nullptr);
         }
         int64_t zeroCopyCount = 0;
@@ -295,9 +314,12 @@ public:
         MultiPublishRspPb response;
         uint32_t workerVersion = 0;
         RETURN_IF_NOT_OK(rpcClient_->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion));
-        // Routed MSet publishes local payload buffers through inline RPC payloads (plain TCP), so tag TCP;
-        // see Set() above. The SHM transporter kind is reserved for Get/BatchGet fd-passing.
-        Status msetRc = SetMSetResponseResult(response, buffers.size(), AccessTransportKind::TCP, result);
+        // Tag SHM only when every buffer is zero-copy (data in mmap'd worker regions). A same-host
+        // same-worker MSet is uniform, so this is all-or-nothing; mixed (some inline) falls back to TCP.
+        const auto kind = (zeroCopyCount == static_cast<int64_t>(buffers.size()))
+                              ? AccessTransportKind::SHM
+                              : AccessTransportKind::TCP;
+        Status msetRc = SetMSetResponseResult(response, buffers.size(), kind, result);
         // SetMSetResponseResult calls result.Clear() which resets publishAttempted; re-set it like
         // TcpTransporter::MSet (tcp_transporter.cpp) so the caller's retry logic (retryUnsentPublish)
         // does not re-publish data the worker already received.
@@ -313,9 +335,68 @@ public:
     }
 
 private:
+    // Acquires the endpoint-scoped fd-passing session only if some MultiCreate result has an shm region
+    // (store_fd > 0); otherwise leaves session null (no fd channel needed for inline/small objects).
+    Status AcquireSessionIfNeeded(const MultiCreateRspPb &multiRsp, const TransportCreateParam &param,
+                                  std::shared_ptr<ShmSession> &session)
+    {
+        for (const auto &res : multiRsp.results()) {
+            if (res.store_fd() > 0) {
+                return shmConnection_->Acquire(param.requestContext, session);
+            }
+        }
+        return Status::OK();
+    }
+
+    // Builds one buffer per MultiCreate result (per-key store_fd<=0 -> local buffer; >0 -> mmap zero-copy).
+    // On per-key failure releases the unbuilt worker allocations [i, n); built buffers [0, i) release their
+    // own refs via their send-side owners when the local `created` destructs. Extracted to keep MCreate
+    // within the codecheck function-size limit.
+    Status BuildMCreateBuffers(const HostPort &workerAddr, const std::vector<std::string> &keys,
+                               const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
+                               const MultiCreateRspPb &multiRsp, uint32_t workerVersion,
+                               const std::shared_ptr<ShmSession> &session,
+                               std::vector<std::shared_ptr<ObjectBuffer>> &buffers)
+    {
+        std::vector<std::shared_ptr<ObjectBuffer>> created;
+        try {
+            created.reserve(keys.size());
+        } catch (const std::bad_alloc &e) {
+            ReleaseAllocations(multiRsp, param.requestContext,
+                               "MCreate allocations after local result reservation failure");
+            if (session != nullptr) {
+                shmConnection_->Invalidate(session);
+            }
+            RETURN_STATUS(K_OUT_OF_MEMORY, e.what());
+        }
+        for (size_t i = 0; i < keys.size(); i++) {
+            const auto &result = multiRsp.results(i);
+            std::shared_ptr<ObjectBuffer> buf;
+            Status rc = (result.store_fd() <= 0)
+                            ? BuildLocalBuffer(workerAddr, keys[i], sizes[i], param, workerVersion, buf)
+                            : BuildShmBuffer(workerAddr, keys[i], sizes[i], param, result, workerVersion, session,
+                                             buf);
+            if (rc.IsError()) {
+                for (size_t j = i; j < keys.size(); j++) {
+                    ReleaseAllocation(multiRsp.results(j).shm_id(), param.requestContext,
+                                      "MCreate unbuilt allocation cleanup after write-region mmap failure");
+                }
+                if (session != nullptr) {
+                    shmConnection_->Invalidate(session);
+                }
+                return rc;
+            }
+            created.push_back(std::move(buf));
+        }
+        buffers = std::move(created);
+        return Status::OK();
+    }
+
+    // Builds a local payload buffer (no mmap) for the fallback case where the worker did not allocate an
+    // shm region (store_fd <= 0). Data is later published inline (TCP). Mirrors the legacy placeholder.
     static Status BuildLocalBuffer(const HostPort &workerAddr, const std::string &key, uint64_t size,
-                                   const TransportCreateParam &param, const std::string &shmId,
-                                   uint32_t workerVersion, std::shared_ptr<ObjectBuffer> &buffer)
+                                   const TransportCreateParam &param, uint32_t workerVersion,
+                                   std::shared_ptr<ObjectBuffer> &buffer)
     {
         INJECT_POINT("ShmTransporter.BuildLocalBuffer");
         try {
@@ -325,11 +406,32 @@ private:
             info->metadataSize = 0;  // SHM payload-only path: metadata sent inline with data
             info->workerAddr = workerAddr;
             info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
-            info->pointer = nullptr;  // routed writes use a local payload buffer
-            if (!shmId.empty()) {
-                info->shmId = ShmKey::Intern(shmId);
-            }
+            info->pointer = nullptr;  // local payload buffer, allocated by ObjectBuffer::Init
+            // Do not carry the worker shm_id: this is a pure inline-payload (TCP) buffer with no shm region
+            // on the worker side. Sending both payload + shm_id would risk the worker dual-path attaching
+            // an uninitialized region (review #7). Cleanup on failure still uses createRsp.shm_id() directly.
             info->version = workerVersion;
+            return ObjectBufferInternal::Create(std::move(info), buffer);
+        } catch (const std::bad_alloc &e) {
+            RETURN_STATUS(K_OUT_OF_MEMORY, e.what());
+        }
+    }
+
+    // Builds a routed SHM write buffer: mmaps the worker-allocated region so the caller writes zero-copy
+    // and attaches the send-side owner (gates Publish on session liveness, releases the worker ref).
+    static Status BuildShmBuffer(const HostPort &workerAddr, const std::string &key, uint64_t size,
+                                 const TransportCreateParam &param, const CreateRspPb &createRsp,
+                                 uint32_t workerVersion, const std::shared_ptr<ShmSession> &session,
+                                 std::shared_ptr<ObjectBuffer> &buffer)
+    {
+        INJECT_POINT("ShmTransporter.BuildShmBuffer");
+        try {
+            auto info = std::make_shared<ObjectBufferInfo>();
+            info->objectKey = key;
+            info->workerAddr = workerAddr;
+            info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
+            info->version = workerVersion;
+            RETURN_IF_NOT_OK(session->MmapWriteRegion(createRsp, param.requestContext, size, *info));
             return ObjectBufferInternal::Create(std::move(info), buffer);
         } catch (const std::bad_alloc &e) {
             RETURN_STATUS(K_OUT_OF_MEMORY, e.what());
@@ -342,8 +444,15 @@ private:
         if (rpcClient_ == nullptr || shmId.empty()) {
             return;
         }
-        Status rc = rpcClient_->InvokeDecreaseReference(context, ShmKey::Intern(shmId));
-        LOG_IF_ERROR(rc, reason);
+        // Intern (tbb hash insert) can throw bad_alloc; this runs on failure-cleanup paths where OOM is
+        // most likely — catch so the cleanup path never throws through to std::terminate (coredump).
+        // A skipped release is reclaimed by the worker client-lost fallback.
+        try {
+            Status rc = rpcClient_->InvokeDecreaseReference(context, ShmKey::Intern(shmId));
+            LOG_IF_ERROR(rc, reason);
+        } catch (const std::bad_alloc &e) {
+            LOG(WARNING) << reason << ", release skipped on OOM: " << e.what();
+        }
     }
 
     void ReleaseAllocations(const MultiCreateRspPb &response, const TransportRequestContext &context,
