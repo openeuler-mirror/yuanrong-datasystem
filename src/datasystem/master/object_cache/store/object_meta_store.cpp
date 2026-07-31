@@ -33,7 +33,6 @@
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/rocksdb/replica.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
-#include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/file_util.h"
@@ -48,6 +47,7 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/common/log/log.h"
 
 DS_DEFINE_uint32(etcd_meta_pool_size, 8, "ETCD metadata async pool size");
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);

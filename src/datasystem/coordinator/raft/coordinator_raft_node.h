@@ -101,6 +101,7 @@ private:
         std::vector<std::string> peers, int64_t index,
         const std::function<void(std::vector<std::string>, int64_t)> &onConfigurationCommitted,
         const std::function<void(Status)> &onError);
+    bool UpdateObservedLeaderLocked(const std::string &leaderAddress, std::string &previousLeader) const;
 
     CoordinatorRaftOptions options_;
     CoordinatorRaftEventCallbacks callbacks_;
@@ -108,6 +109,7 @@ private:
     braft::PeerId localPeer_;
     mutable std::mutex lifecycleMutex_;
     LifecycleState state_{ LifecycleState::CONSTRUCTED };
+    mutable std::string lastObservedLeader_;
     mutable std::mutex committedConfigurationMutex_;
     std::optional<CommittedConfigurationSnapshot> committedConfiguration_;
     std::mutex configurationPublishMutex_;

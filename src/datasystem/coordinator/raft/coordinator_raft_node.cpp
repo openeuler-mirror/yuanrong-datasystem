@@ -332,10 +332,21 @@ bool CoordinatorRaftNode::IsLeader() const
     return state_ == LifecycleState::STARTED && node_ != nullptr && node_->is_leader();
 }
 
+bool CoordinatorRaftNode::UpdateObservedLeaderLocked(const std::string &leaderAddress,
+                                                     std::string &previousLeader) const
+{
+    if (leaderAddress == lastObservedLeader_) {
+        return false;
+    }
+    previousLeader = lastObservedLeader_;
+    lastObservedLeader_ = leaderAddress;
+    return true;
+}
+
 Status CoordinatorRaftNode::GetLeader(std::string &leaderAddress) const
 {
     leaderAddress.clear();
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::unique_lock<std::mutex> lock(lifecycleMutex_);
     if (state_ != LifecycleState::STARTED || node_ == nullptr) {
         return NotReadyStatus("report a leader");
     }
@@ -348,7 +359,15 @@ Status CoordinatorRaftNode::GetLeader(std::string &leaderAddress) const
     if (normalizedAddress.empty()) {
         return Status(K_DATA_INCONSISTENCY, "Coordinator raft leader has an invalid internal identity");
     }
+    std::string previousLeader;
+    const bool leaderChanged = UpdateObservedLeaderLocked(normalizedAddress, previousLeader);
     leaderAddress = std::move(normalizedAddress);
+    const auto currentLeader = leaderAddress;
+    lock.unlock();
+    if (leaderChanged) {
+        LOG(INFO) << "COORDINATOR_RAFT_LEADER_CHANGED current_addr=" << options_.localPeer
+                  << " old_leader=" << previousLeader << " new_leader=" << currentLeader << " reason=get_leader";
+    }
     return Status::OK();
 }
 
@@ -373,13 +392,23 @@ Status CoordinatorRaftNode::GetCommittedConfiguration(std::vector<std::string> &
 Status CoordinatorRaftNode::GetMembershipStatus(CoordinatorRaftMembershipStatus &status) const
 {
     status = {};
-    std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex_);
+    std::unique_lock<std::mutex> lifecycleLock(lifecycleMutex_);
     if (state_ != LifecycleState::STARTED || node_ == nullptr) {
         return NotReadyStatus("report membership status");
     }
 
     braft::NodeStatus raftStatus;
     node_->get_status(&raftStatus);
+    const auto leader = node_->leader_id();
+    std::string currentLeader;
+    bool leaderObserveFailed = false;
+    if (!leader.is_empty()) {
+        currentLeader = CoordinatorRaftPeerAddress(leader);
+        leaderObserveFailed = currentLeader.empty();
+    }
+    std::string previousLeader;
+    const bool leaderChanged =
+        !leader.is_empty() && !currentLeader.empty() && UpdateObservedLeaderLocked(currentLeader, previousLeader);
 
     CommittedConfigurationSnapshot committedConfiguration;
     {
@@ -417,6 +446,15 @@ Status CoordinatorRaftNode::GetMembershipStatus(CoordinatorRaftMembershipStatus 
         observedStatus.stableFollowers.begin(), observedStatus.stableFollowers.end(),
         [](const CoordinatorFollowerStatus &lhs, const CoordinatorFollowerStatus &rhs) { return lhs.peer < rhs.peer; });
     status = std::move(observedStatus);
+    lifecycleLock.unlock();
+    if (leaderObserveFailed) {
+        LOG(WARNING) << "COORDINATOR_RAFT_LEADER_OBSERVE_FAILED current_addr=" << options_.localPeer
+                     << " reason=membership_status";
+    }
+    if (leaderChanged) {
+        LOG(INFO) << "COORDINATOR_RAFT_LEADER_CHANGED current_addr=" << options_.localPeer
+                  << " old_leader=" << previousLeader << " new_leader=" << currentLeader << " reason=membership_status";
+    }
     return Status::OK();
 }
 

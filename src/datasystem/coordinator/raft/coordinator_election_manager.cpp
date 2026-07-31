@@ -106,6 +106,38 @@ bool IsFixedWidthCoordinatorRaftLogIndex(std::string_view value)
            });
 }
 
+const char *RaftMetadataStateName(RaftMetadataState state) noexcept
+{
+    switch (state) {
+        case RaftMetadataState::ABSENT:
+            return "ABSENT";
+        case RaftMetadataState::VALID:
+            return "VALID";
+        case RaftMetadataState::CORRUPT:
+            return "CORRUPT";
+        case RaftMetadataState::UNKNOWN:
+            return "UNKNOWN";
+    }
+    return "UNKNOWN";
+}
+
+const char *RaftStartPlanName(const RaftStartPlan &plan) noexcept
+{
+    if (std::holds_alternative<BootstrapPlan>(plan)) {
+        return "BootstrapPlan";
+    }
+    if (std::holds_alternative<RecoverPlan>(plan)) {
+        return "RecoverPlan";
+    }
+    return "WaitingToJoinPlan";
+}
+
+std::vector<std::string> RaftStartPlanPeers(const RaftStartPlan &plan)
+{
+    const auto *bootstrap = std::get_if<BootstrapPlan>(&plan);
+    return bootstrap == nullptr ? std::vector<std::string>{} : bootstrap->initialPeers;
+}
+
 bool IsCoordinatorRaftLogSegment(std::string_view entryName)
 {
     const std::string_view inProgressPrefix = kCoordinatorRaftInProgressLogSegmentPrefix;
@@ -690,9 +722,7 @@ Status CoordinatorElectionManager::DecideStartPlan(const RaftBootstrapState &loc
             continue;
         }
         auto vote = std::find_if(committedConfigVotes.begin(), committedConfigVotes.end(),
-                                 [&observation](const auto &v) {
-                                     return v.peers == observation.state.committedPeers;
-                                 });
+                                 [&observation](const auto &v) { return v.peers == observation.state.committedPeers; });
         if (vote == committedConfigVotes.end()) {
             committedConfigVotes.emplace_back(CommittedConfigVote{ observation.state.committedPeers, 1 });
         } else {
@@ -824,13 +854,23 @@ Status CoordinatorElectionManager::ProbePeerBootstrapState(const std::string &pe
 CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks()
 {
     CoordinatorRaftEventCallbacks managed;
-    managed.onLeaderStart = [callback = callbacks_.onLeaderStart](int64_t term) {
+    managed.onLeaderStart = [this, callback = callbacks_.onLeaderStart](int64_t term) {
+        std::vector<std::string> committedPeers;
+        {
+            std::lock_guard<std::mutex> lock(bootstrapMutex_);
+            committedPeers = bootstrapState_.committedPeers;
+        }
+        LOG(INFO) << "COORDINATOR_RAFT_LEADER_ELECTED current_addr=" << options_.raftFlags.localAddress
+                  << " leader=" << options_.raftFlags.localAddress << " term=" << term
+                  << " peers=" << VectorToString(committedPeers);
         if (!callback) {
             return;
         }
         InvokeCallback([callback, term] { callback(term); });
     };
-    managed.onLeaderStop = [callback = callbacks_.onLeaderStop](Status status) {
+    managed.onLeaderStop = [this, callback = callbacks_.onLeaderStop](Status status) {
+        LOG(WARNING) << "COORDINATOR_RAFT_LEADER_STOPPED current_addr=" << options_.raftFlags.localAddress
+                     << " status=" << status.ToString();
         if (!callback) {
             return;
         }
@@ -845,6 +885,8 @@ CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks(
                 Status(K_DATA_INCONSISTENCY, "Coordinator committed configuration callback is invalid"));
             return;
         }
+        LOG(INFO) << "COORDINATOR_RAFT_CONFIGURATION_COMMITTED current_addr=" << options_.raftFlags.localAddress
+                  << " peers=" << VectorToString(normalizedPeers) << " index=" << index;
         {
             std::lock_guard<std::mutex> lock(bootstrapMutex_);
             bootstrapState_.committedPeers = normalizedPeers;
@@ -875,6 +917,15 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
     }
     RaftBootstrapState snapshot;
     RETURN_IF_NOT_OK(GetBootstrapState(snapshot));
+    const auto planName = RaftStartPlanName(startPlan);
+    const auto planPeers = RaftStartPlanPeers(startPlan);
+    LOG(INFO) << "COORDINATOR_RAFT_START_PLAN current_addr=" << options_.raftFlags.localAddress
+              << " local_peer=" << snapshot.localPeer << " plan=" << planName
+              << " metadata_state=" << RaftMetadataStateName(metadataState)
+              << " expected_member_count=" << options_.membershipOptions.expectedMemberCount
+              << " candidate_count=" << snapshot.candidateCount << " candidate_digest=" << snapshot.candidateDigest
+              << " committed_peers=" << VectorToString(snapshot.committedPeers)
+              << " plan_peers=" << VectorToString(planPeers);
     CoordinatorRaftOptions raftOptions{ snapshot.localPeer, options_.raftFlags.dataDir,
                                         options_.raftFlags.heartbeatIntervalMs, options_.raftFlags.electionTimeoutMs,
                                         std::move(startPlan) };

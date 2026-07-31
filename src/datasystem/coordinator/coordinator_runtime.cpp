@@ -22,6 +22,7 @@
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/signal/signal.h"
@@ -101,9 +102,7 @@ Status CoordinatorRuntime::InitAndRun(const CoordinatorOptions &options)
 
 Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
 {
-    DynamicFlagConfig flags;
-    OperationLogger::Instance().LogConfigInit(flags.GetAllFlagsStr());
-
+    Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR);
     Status firstError;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery;
     int expectedMemberCount = 0;
@@ -119,6 +118,7 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
                     FlagManager::GetInstance()->ParseConfigFile(options->configFilePath, errMsg), K_INVALID,
                     FormatString("Parse config file %s error: %s", options->configFilePath, errMsg));
             }
+            LOG(INFO) << "Coordinator expect " << expectedMemberCount << " peers from CoordinatorDiscovery";
         } else {
             onStart_ = [] { return Status::OK(); };
             onStop_ = [] { return Status::OK(); };
@@ -127,8 +127,12 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
             auto staticCoordinatorDiscovery = std::make_shared<StaticCoordinatorDiscovery>(peers);
             expectedMemberCount = static_cast<int>(staticCoordinatorDiscovery->GetCount());
             coordinatorDiscovery = std::move(staticCoordinatorDiscovery);
+            LOG(INFO) << "Coordinator initialize with static peers:" << peers;
         }
         callbackState_ = LifecycleCallbackState::READY;
+
+        DynamicFlagConfig flags;
+        OperationLogger::Instance().LogConfigInit(flags.GetAllFlagsStr());
 
         auto raftFlags = GetRaftFlags();
         HostPort localAddress;
@@ -136,7 +140,6 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
 
         service_ = std::make_unique<coordinator::CoordinatorServiceImpl>(localAddress, std::move(coordinatorDiscovery),
                                                                          expectedMemberCount, std::move(raftFlags));
-
         firstError = service_->Init();
         if (firstError.IsError()) {
             break;

@@ -288,7 +288,6 @@ Status CoordinatorServiceImpl::InitInternal()
     CHECK_FAIL_RETURN_STATUS(!IsElectionConfigured() || raftFlags_.localAddress == coordinatorAddr_.ToString(),
                              K_INVALID,
                              "Coordinator Raft snapshot localAddress must match the Coordinator service address");
-    Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR);
     coordinatorId_ = GetBytesUuid();
     LOG(INFO) << "CLUSTER_COORDINATOR_ID role=coordinator id="
               << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE) << " state=created";
@@ -897,8 +896,7 @@ Status CoordinatorServiceImpl::GetRaftBootstrapState(const GetRaftBootstrapState
         }
     }
     CHECK_FAIL_RETURN_STATUS(IsElectionConfigured(), K_INVALID, "Coordinator election is disabled");
-    CHECK_FAIL_RETURN_STATUS(electionManager_ != nullptr, K_NOT_READY,
-                             "Coordinator election manager is not published");
+    CHECK_FAIL_RETURN_STATUS(electionManager_ != nullptr, K_NOT_READY, "Coordinator election manager is not published");
     RETURN_IF_NOT_OK(electionManager_->GetBootstrapState(bootstrapState));
 #ifdef WITH_TESTS
     if (raftBootstrapSnapshotCopiedHook_) {
