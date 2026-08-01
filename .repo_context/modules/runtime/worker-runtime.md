@@ -130,6 +130,16 @@
   - manage shared-memory or socket-based FD passing for client-worker IPC
   - serve object-cache and stream-cache requests
   - tick perf manager, drive lightweight metrics summary emission, and monitor config changes
+  - after either ETCD or Coordinator becomes unreachable, a Worker with a last-good committed Snapshot keeps business
+    admission open in `CONTROL_DEGRADED` while periodic authoritative exact reads continue. The Engine reuses the
+    bounded Worker-to-Worker control-backend probe against every committed peer: a peer quorum reporting the same fresh
+    `UNAVAILABLE` authority stamp confirms a cluster-wide backend outage, while any matching `AVAILABLE` report confirms
+    the local Worker's backend path is isolated only after three consecutive probe rounds. Peer transport failures alone
+    remain inconclusive to avoid correlated all-Worker isolation. Confirmed local isolation closes admission and arms
+    the full node-dead timeout before `SIGKILL`; an authoritative exact read clears the confirmation/death state and is
+    the only path back to `NORMAL`. A Coordinator keepalive that explicitly observes a stale or missing membership key
+    queues one forced same-Leader Ensure; concurrent in-flight completion cannot consume that signal, while repeated
+    pending signals coalesce on the existing single-thread ensure loop.
   - memory-rebalance scheduling cross-checks ResourceManager candidates against one current immutable topology
     Snapshot and assigns only `ACTIVE` sources and targets. Before the first Snapshot is available, it preserves the
     legacy resource-readiness fallback instead of blocking scheduling.

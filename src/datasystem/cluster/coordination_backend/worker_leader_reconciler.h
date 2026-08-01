@@ -45,7 +45,8 @@ public:
     void Shutdown();
 
 private:
-    Status ReconcileIdentity(const CoordinatorLeaderIdentity &identity);
+    void ScheduleEnsure(const CoordinatorLeaderIdentity &identity, bool forceEnsure);
+    Status ReconcileIdentity(const CoordinatorLeaderIdentity &identity, bool forceEnsure);
     void RunEnsureLoop(CoordinatorLeaderIdentity identity);
     bool IsCurrentIdentityLocked(const CoordinatorLeaderIdentity &identity) const;
     static bool SameIdentity(const CoordinatorLeaderIdentity &left, const CoordinatorLeaderIdentity &right);
@@ -59,6 +60,7 @@ private:
     std::condition_variable retryCv_;
     CoordinatorLeaderIdentity pendingIdentity_;
     CoordinatorLeaderIdentity lastEnsuredIdentity_;
+    bool forceEnsurePending_{ false };  // Protected by mutex_; coalesces explicit membership-loss signals.
     bool ensureScheduled_{ false };
     std::unique_ptr<ICoordinatorLeaderRouteProvider::Subscription> subscription_;
     std::unique_ptr<ThreadPool> ensurePool_;

@@ -304,6 +304,53 @@ TEST(WorkerLeaderReconcilerTest, SameLeaderIdentityDoesNotSubmitSecondEnsure)
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
+TEST(WorkerLeaderReconcilerTest, ExplicitMembershipLossResubmitsEnsureForSameLeader)
+{
+    FakeProxy proxy;
+    DsCoordinationBackend backend(&proxy, kWorkerAddress);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
+    TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
+                                      [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
+                                      ReporterOptions());
+    reporter.NotifyRuntimeReady();
+    proxy.routes_.Set(Identity(9, 2));
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    ASSERT_TRUE(proxy.WaitForEnsures(1));
+    ASSERT_TRUE(proxy.WaitForReports(1));
+
+    ASSERT_TRUE(reconciler.Reconcile(false).IsOk());
+    ASSERT_TRUE(proxy.WaitForEnsures(2));
+    EXPECT_EQ(proxy.EnsureAt(1).leader_term(), 9UL);
+
+    reconciler.Shutdown();
+    EXPECT_TRUE(reporter.Shutdown().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(WorkerLeaderReconcilerTest, ExplicitMembershipLossDuringInflightEnsureResubmitsForSameLeader)
+{
+    FakeProxy proxy;
+    DsCoordinationBackend backend(&proxy, kWorkerAddress);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
+    TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
+                                      [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
+                                      ReporterOptions());
+    reporter.NotifyRuntimeReady();
+    proxy.BlockEnsure();
+    proxy.routes_.Set(Identity(9, 2));
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    ASSERT_TRUE(proxy.WaitForEnsures(1));
+
+    ASSERT_TRUE(reconciler.Reconcile(false).IsOk());
+    proxy.ReleaseEnsure();
+    ASSERT_TRUE(proxy.WaitForEnsures(2));
+    EXPECT_EQ(proxy.EnsureAt(1).leader_term(), 9UL);
+
+    reconciler.Shutdown();
+    EXPECT_TRUE(reporter.Shutdown().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
 TEST(WorkerLeaderReconcilerTest, InitialMembershipPublicationDoesNotTriggerEnsure)
 {
     FakeProxy proxy;
