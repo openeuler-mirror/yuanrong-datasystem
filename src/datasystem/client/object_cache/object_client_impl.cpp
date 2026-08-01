@@ -3193,7 +3193,13 @@ Status ObjectClientImpl::ExecuteSetFlow(
         VLOG(1) << FormatString("[Set] attempt: %zu, objectKey: %s, clientId: %s, worker: %s", attempt + 1,
                                 objectKey, routeContext.clientApi->clientId_, routeContext.worker.ToString());
         SetFailureStage failureStage = SetFailureStage::CREATE;
-        if (routeContext.directWorkerApi != nullptr && routeContext.directWorkerApi->ShmCreateable(size)) {
+        // Branch 1 is a local-cache shortcut that writes via the bound worker's SHM. In routed mode
+        // (enableLocalCache_ == false) every write must go through the transport layer (Branch 3) for
+        // uniform placement and shm lifecycle, so gate this shortcut on enableLocalCache_. Without the
+        // gate, a key whose route lands on the bound worker over a SHM-capable connection with
+        // size >= threshold would wrongly take ProcessShmPut.
+        if (enableLocalCache_ && routeContext.directWorkerApi != nullptr
+            && routeContext.directWorkerApi->ShmCreateable(size)) {
             rc = ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
                                routeContext.directWorkerApi, existence, failureStage);
             if (rc.IsOk() || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers)) {

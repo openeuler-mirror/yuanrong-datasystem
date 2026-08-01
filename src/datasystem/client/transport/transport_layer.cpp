@@ -41,6 +41,9 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/ub_failure_classifier.h"
+#ifdef USE_URMA
+#include "datasystem/common/rdma/urma_manager.h"
+#endif
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -52,6 +55,9 @@ namespace datasystem {
 namespace client {
 namespace {
 constexpr uint32_t MAX_LOCAL_UB_PROBE_BACKOFF_LEVEL = 6;
+// SHM-off fallback is a steady-state path (every write on a SHM-disabled same-host worker); throttle the
+// diagnostic so it does not flood the log. Matches the read-path/DataPlaneExecutor convention.
+constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 
 uint64_t GetConfiguredUbInlineBufferSize()
 {
@@ -71,6 +77,38 @@ uint64_t GetConfiguredUbInlineBufferSize()
         return 0;
     }
     return size;
+}
+
+const char *TransportHintName(TransportHint hint)
+{
+    switch (hint) {
+        case TransportHint::SHM_CANDIDATE:
+            return "SHM";
+        case TransportHint::UB_CANDIDATE:
+            return "UB";
+        case TransportHint::TCP_ONLY:
+            return "TCP";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+// Write-path fallback order when a same-host SHM candidate cannot establish its fd-passing endpoint
+// (K_NOT_SUPPORTED): try UB (if URMA is enabled) for an RDMA zero-copy write, then plain TCP. Read path
+// stays SHM->TCP (handled in DataPlaneExecutor); writes prefer UB in between.
+std::vector<TransportHint> CreateFallbackHints(TransportHint initial)
+{
+    std::vector<TransportHint> hints;
+    if (initial != TransportHint::SHM_CANDIDATE) {
+        return hints;
+    }
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        hints.push_back(TransportHint::UB_CANDIDATE);
+    }
+#endif
+    hints.push_back(TransportHint::TCP_ONLY);
+    return hints;
 }
 }  // namespace
 
@@ -348,32 +386,73 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
     INJECT_POINT("TransportLayer.Create.beforeTransport");
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
-    const TransportHint hint = advisor_->GetTransportHint(workerAddr);
-    std::shared_lock<std::shared_mutex> admission;
-    RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
-    std::shared_ptr<IDataTransporter> transporter;
-    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
-    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
-    Status rc = transporter->Create(workerAddr, objectKey, dataSize, param, buffer);
-    if (admission.owns_lock()) {
-        admission.unlock();
+    TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    auto runCreate = [&](TransportHint h) -> Status {
+        std::shared_lock<std::shared_mutex> admission;
+        RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(h));
+        std::shared_ptr<IDataTransporter> transporter;
+        RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, h, transporter));
+        RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(h, admission));
+        Status r = transporter->Create(workerAddr, objectKey, dataSize, param, buffer);
+        if (admission.owns_lock()) {
+            admission.unlock();
+        }
+        return r;
+    };
+    Status rc = runCreate(hint);
+    if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+        LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
+                     << " after Create failed: " << rc;
+        manager_->Teardown(workerAddr);
+        rc = runCreate(hint);
     }
-    if (rc.GetCode() != K_RPC_UNAVAILABLE) {
-        return rc;
-    }
-    LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString() << " after Create failed: " << rc;
-    manager_->Teardown(workerAddr);
-    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
-    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
-    rc = transporter->Create(workerAddr, objectKey, dataSize, param, buffer);
-    if (admission.owns_lock()) {
-        admission.unlock();
+    if (rc.GetCode() == K_NOT_SUPPORTED) {
+        // SHM fd-passing endpoint unavailable on this worker; escalate UB then TCP for the write.
+        for (const auto &fallbackHint : CreateFallbackHints(hint)) {
+            LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+                << "Create SHM unavailable on worker " << workerAddr.ToString() << ", fall back to "
+                << TransportHintName(fallbackHint);
+            rc = runCreate(fallbackHint);
+            if (rc.IsOk()) {
+                return rc;
+            }
+        }
     }
     if (rc.IsError()) {
-        LOG(WARNING) << "Create still failed after rebuilding transport for worker " << workerAddr.ToString() << ": "
-                     << rc;
+        LOG(WARNING) << "Create still failed for worker " << workerAddr.ToString() << ": " << rc;
     }
     return rc;
+}
+
+bool TransportLayer::RebuildPlaneOnSetFailure(const Status &rc, const HostPort &workerAddr)
+{
+    if (rc.GetCode() == K_URMA_NEED_CONNECT) {
+        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString() << " after Set failed: " << rc;
+        manager_->ResetDataPlane(workerAddr);
+        return true;
+    }
+    if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+        LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
+                     << " after Set failed: " << rc;
+        manager_->Teardown(workerAddr);
+        return true;
+    }
+    return false;
+}
+
+namespace {
+// Sampling interval for the routed Set triage log below: one line per N publish attempts so the Set
+// hot path is not flooded; aggregate transport-kind/byte counters live in the metrics.
+constexpr int ROUTED_SET_TRIAGE_LOG_RATE = 1000;
+}  // namespace
+
+void TransportLayer::LogSetResult(const HostPort &workerAddr, TransportHint hint, const Status &rc,
+                                  std::chrono::steady_clock::time_point start)
+{
+    LOG_EVERY_N(INFO, ROUTED_SET_TRIAGE_LOG_RATE) << "[TransportSet] worker=" << workerAddr.ToString()
+                            << " transport=" << TransportHintName(hint) << " rc=" << rc.GetCode()
+                            << " latency_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+                                   std::chrono::steady_clock::now() - start).count();
 }
 
 Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
@@ -382,6 +461,7 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const HostPort workerAddr = ObjectBufferInternal::GetInfo(buffer).workerAddr;
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    const auto setStart = std::chrono::steady_clock::now();
     std::shared_lock<std::shared_mutex> admission;
     RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
     std::shared_ptr<IDataTransporter> transporter;
@@ -392,38 +472,51 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     mutableBufferInfo.ubProviderStatus.reset();
     mutableBufferInfo.ubCqeStatus.reset();
     Status rc = transporter->Set(buffer, param);
+    return FinalizeSetPublish(workerAddr, buffer, param, hint, transporter, rc, admission, setStart);
+}
+
+Status TransportLayer::FinalizeSetPublish(const HostPort &workerAddr, ObjectBuffer &buffer,
+                                          const TransportSetParam &param, TransportHint hint,
+                                          std::shared_ptr<IDataTransporter> &transporter, const Status &publishRc,
+                                          std::shared_lock<std::shared_mutex> &admission,
+                                          std::chrono::steady_clock::time_point setStart)
+{
     const auto &ubFailureReport = ObjectBufferInternal::GetInfo(buffer).ubFailureReportRc;
     const auto &bufferInfo = ObjectBufferInternal::GetInfo(buffer);
+    // Routed SHM zero-copy buffers carry a send-side owner (ManagesWorkerReference) that releases the
+    // worker reference on buffer destruction, so skip ScheduleRelease for them to avoid a double decrement.
+    const bool ownerManagesRef = bufferInfo.receiveBufferOwner != nullptr
+                                 && bufferInfo.receiveBufferOwner->ManagesWorkerReference();
     bool senderQuarantined = ReportLocalUbSenderFailure(
         { workerAddr, transporter->Kind(), ubFailureReport, bufferInfo.ubProviderStatus, bufferInfo.ubCqeStatus },
         admission);
     std::optional<Status> firstPublishRc;
-    if (rc.GetCode() == K_RPC_UNAVAILABLE && !IsBrpcRequestDefinitelyNotSent(rc)) {
-        firstPublishRc = rc;
+    if (publishRc.GetCode() == K_RPC_UNAVAILABLE && !IsBrpcRequestDefinitelyNotSent(publishRc)) {
+        firstPublishRc = publishRc;
     }
+    // Skip ScheduleRelease when the buffer's owner manages the worker reference (routed SHM zero-copy);
+    // otherwise schedule an async DecreaseReference (optionally forcing a fallback hint).
+    auto releaseRef = [&](std::optional<TransportHint> releaseHint = std::nullopt) {
+        if (!ownerManagesRef) {
+            ScheduleRelease(workerAddr, ObjectBufferInternal::GetInfo(buffer).shmId, param.requestContext,
+                            releaseHint);
+        }
+    };
+    Status rc = publishRc;
     if (senderQuarantined) {
-        const auto &info = ObjectBufferInternal::GetInfo(buffer);
-        ScheduleRelease(workerAddr, info.shmId, param.requestContext, TransportHint::TCP_ONLY);
+        releaseRef(TransportHint::TCP_ONLY);
         return rc.GetCode() == K_URMA_NEED_CONNECT ? ubFailureReport : rc;
     }
-    if (rc.GetCode() == K_URMA_NEED_CONNECT) {
-        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString() << " after Set failed: " << rc;
-        manager_->ResetDataPlane(workerAddr);
-    } else if (rc.GetCode() == K_RPC_UNAVAILABLE) {
-        LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
-                     << " after Set failed: " << rc;
-        manager_->Teardown(workerAddr);
-    } else {
-        const auto &info = ObjectBufferInternal::GetInfo(buffer);
-        ScheduleRelease(workerAddr, info.shmId, param.requestContext);
+    if (!RebuildPlaneOnSetFailure(rc, workerAddr)) {
+        releaseRef();
         return rc;
     }
     rc = RetrySet(workerAddr, buffer, param, hint);
     if (rc.IsError() && firstPublishRc.has_value()) {
         rc = *firstPublishRc;
     }
-    const auto &info = ObjectBufferInternal::GetInfo(buffer);
-    ScheduleRelease(workerAddr, info.shmId, param.requestContext);
+    releaseRef();
+    LogSetResult(workerAddr, hint, rc, setStart);
     return rc;
 }
 
@@ -461,21 +554,42 @@ Status TransportLayer::MCreate(const HostPort &workerAddr, const std::vector<std
     INJECT_POINT("TransportLayer.MCreate.beforeTransport");
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
-    const TransportHint hint = advisor_->GetTransportHint(workerAddr);
-    std::shared_lock<std::shared_mutex> admission;
-    RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
-    std::shared_ptr<IDataTransporter> transporter;
-    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
-    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
-    Status rc = transporter->MCreate(workerAddr, objectKeys, dataSizes, param, buffers);
-    if (admission.owns_lock()) {
-        admission.unlock();
-    }
+    TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    auto runMCreate = [&](TransportHint h) -> Status {
+        std::shared_lock<std::shared_mutex> admission;
+        RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(h));
+        std::shared_ptr<IDataTransporter> transporter;
+        RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, h, transporter));
+        RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(h, admission));
+        Status r = transporter->MCreate(workerAddr, objectKeys, dataSizes, param, buffers);
+        if (admission.owns_lock()) {
+            admission.unlock();
+        }
+        return r;
+    };
+    Status rc = runMCreate(hint);
     if (rc.GetCode() == K_RPC_UNAVAILABLE) {
-        // MultiCreate has no idempotency marker. The worker may have allocated memory even when the response is lost.
-        LOG(WARNING) << "Tear down RPC and data plane for worker " << workerAddr.ToString()
-                     << " after ambiguous MCreate failure without replay: " << rc;
+        // Rebuild once and retry, consistent with the Create path. MultiCreate has no idempotency marker,
+        // so a lost response may leave the worker holding partial allocations; those are reclaimed by the
+        // expired-fds reconciler (same fallback Create relies on).
+        LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
+                     << " after ambiguous MCreate failure, retrying once: " << rc;
         manager_->Teardown(workerAddr);
+        rc = runMCreate(hint);
+        if (rc.GetCode() != K_NOT_SUPPORTED) {
+            return rc;
+        }
+    }
+    if (rc.GetCode() == K_NOT_SUPPORTED) {
+        for (const auto &fallbackHint : CreateFallbackHints(hint)) {
+            LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+                << "MCreate SHM unavailable on worker " << workerAddr.ToString() << ", fall back to "
+                << TransportHintName(fallbackHint);
+            rc = runMCreate(fallbackHint);
+            if (rc.IsOk()) {
+                return rc;
+            }
+        }
     }
     return rc;
 }
@@ -656,6 +770,10 @@ void TransportLayer::ScheduleMSetReleases(const std::vector<std::shared_ptr<Obje
     }
     for (const auto &buffer : buffers) {
         const auto &info = ObjectBufferInternal::GetInfo(*buffer);
+        // Owner-managed (routed SHM zero-copy) buffers release via their send-side owner on destruction.
+        if (info.receiveBufferOwner != nullptr && info.receiveBufferOwner->ManagesWorkerReference()) {
+            continue;
+        }
         if (result.workerAutoRelease && failedKeys.find(info.objectKey) == failedKeys.end()) {
             continue;
         }

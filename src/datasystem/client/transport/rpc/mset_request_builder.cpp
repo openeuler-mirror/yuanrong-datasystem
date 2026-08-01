@@ -146,7 +146,15 @@ Status BuildMultiPublishRequest(const std::vector<std::shared_ptr<ObjectBuffer>>
         std::all_of(buffers.begin(), buffers.end(), [](const std::shared_ptr<ObjectBuffer> &buffer) {
             return !ObjectBufferInternal::GetInfo(*buffer).shmId.Empty();
         });
-    request.set_auto_release_memory_ref(!hasTcpPayload && allShmIdsPresent);
+    // Routed SHM zero-copy buffers carry a send-side owner that releases the worker ref on destruction,
+    // so do NOT also ask the worker to auto-release (would double-release + flood "shmId not exists"
+    // warnings). Let the owner be the sole release for owner-managed buffers.
+    const bool anyOwnerManaged =
+        std::any_of(buffers.begin(), buffers.end(), [](const std::shared_ptr<ObjectBuffer> &buffer) {
+            const auto &owner = ObjectBufferInternal::GetInfo(*buffer).receiveBufferOwner;
+            return owner != nullptr && owner->ManagesWorkerReference();
+        });
+    request.set_auto_release_memory_ref(!hasTcpPayload && allShmIdsPresent && !anyOwnerManaged);
     request.set_is_routed(true);
 
     const auto &first = ObjectBufferInternal::GetInfo(*buffers.front());

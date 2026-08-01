@@ -769,5 +769,32 @@ TEST_F(KVClientTransportSetTest, AmbiguousPublishFailureIsNotReplayedOnAnotherWo
     ASSERT_NE(retryWorker, firstWorker);
     AssertValue(key, value);
 }
+
+class KVClientTransportSetWithShmTest : public KVClientTransportSetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientTransportSetTest::SetClusterSetupOptions(opts);
+        // Enable same-host SHM fd-passing so a routed Set can mmap the worker-allocated region zero-copy.
+        constexpr char DISABLED_SHM_OPTION[] = "-ipc_through_shared_memory=false";
+        const auto pos = opts.workerGflagParams.find(DISABLED_SHM_OPTION);
+        ASSERT_NE(pos, std::string::npos);
+        opts.workerGflagParams.replace(pos, sizeof(DISABLED_SHM_OPTION) - 1, "-ipc_through_shared_memory=true");
+    }
+};
+
+// A routed Set whose target is a same-host SHM-enabled worker must take the SHM zero-copy path
+// (worker allocates the region, passes the fd worker->client, client mmaps and writes), recording
+// AccessTransportKind::SHM rather than TCP. Also covers the enableLocalCache=false routing fix: the
+// Set goes through the transport layer even when the route lands on the bound worker.
+TEST_F(KVClientTransportSetWithShmTest, RoutedSetUsesShmZeroCopy)
+{
+    std::string key;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_set_shm_zc_", key));
+    const std::string value(VALUE_SIZE, 's');
+    DS_ASSERT_OK(routedClient_->Set(key, value));
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    AssertValue(key, value);
+}
 }  // namespace st
 }  // namespace datasystem

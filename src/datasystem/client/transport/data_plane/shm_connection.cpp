@@ -19,6 +19,7 @@
 #include "datasystem/client/transport/data_plane/shm_connection.h"
 
 #include "datasystem/client/transport/data_plane/shm_receive_buffer_owner.h"
+#include "datasystem/client/transport/data_plane/shm_send_buffer_owner.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -37,6 +38,7 @@
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
+#include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"
 #include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/fd_pass.h"
@@ -411,6 +413,68 @@ Status ShmSession::BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGet
     return Status::OK();
 }
 
+Status ShmSession::MmapWriteRegion(const CreateRspPb &createRsp, const TransportRequestContext &context,
+                                   uint64_t size, ObjectBufferInfo &info)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Shared-memory session is closed");
+    CHECK_FAIL_RETURN_STATUS(createRsp.store_fd() > 0, K_RUNTIME_ERROR,
+                             "WorkerOCService Create did not return shared memory");
+    CHECK_FAIL_RETURN_STATUS(createRsp.store_fd() <= std::numeric_limits<int>::max(), K_RUNTIME_ERROR,
+                             "WorkerOCService Create shared-memory fd exceeds local limits");
+    // createRsp.offset() is uint64 (always >= 0); the offset <= mmapSize bounds check below covers it.
+    CHECK_FAIL_RETURN_STATUS(createRsp.mmap_size() > 0, K_RUNTIME_ERROR,
+                             "WorkerOCService Create returned invalid shared-memory bounds");
+    const uint64_t offset = static_cast<uint64_t>(createRsp.offset());
+    const uint64_t mmapSize = static_cast<uint64_t>(createRsp.mmap_size());
+    const uint64_t metadataSize = static_cast<uint64_t>(createRsp.metadata_size());
+    CHECK_FAIL_RETURN_STATUS(
+        offset <= mmapSize && metadataSize <= mmapSize - offset && size <= mmapSize - offset - metadataSize,
+        K_RUNTIME_ERROR, "WorkerOCService Create shared-memory range exceeds mmap size");
+    // Defensive upper bounds (aligned with the read path ValidateObjectInfo): the subsequent
+    // static_cast<ptrdiff_t>(offset) and unit->pointer + offset pointer arithmetic are UB on overflow.
+    CHECK_FAIL_RETURN_STATUS(offset <= static_cast<uint64_t>(std::numeric_limits<ptrdiff_t>::max())
+                                 && mmapSize <= std::numeric_limits<size_t>::max()
+                                 && metadataSize <= std::numeric_limits<uint32_t>::max(),
+                             K_RUNTIME_ERROR, "WorkerOCService Create shared-memory metadata exceeds local limits");
+    CHECK_FAIL_RETURN_STATUS(!createRsp.shm_id().empty(), K_RUNTIME_ERROR,
+                             "WorkerOCService Create returned an empty shm ID");
+
+    auto unit = std::make_shared<ShmUnitInfo>();
+    unit->fd = static_cast<int>(createRsp.store_fd());
+    unit->mmapSize = mmapSize;
+    unit->offset = static_cast<ptrdiff_t>(createRsp.offset());
+    unit->size = size;
+    unit->id = ShmKey::Intern(createRsp.shm_id());
+    RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd(context.tenantId, unit));
+    auto mmapEntry = mmapManager_->GetMmapEntryByFd(unit->fd);
+    CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr && unit->pointer != nullptr, K_RUNTIME_ERROR,
+                             "Shared-memory mmap entry is unavailable");
+    CHECK_FAIL_RETURN_STATUS(mmapEntry->GetMmapSize() == mmapSize, K_RUNTIME_ERROR,
+                             "WorkerOCService Create mmap size does not match the cached fd");
+    RETURN_IF_NOT_OK(RegisterReference(unit->id));
+    info.pointer = static_cast<uint8_t *>(unit->pointer) + offset;
+    info.metadataSize = metadataSize;
+    info.dataSize = size;
+    info.mmapEntry = mmapEntry;
+    info.shmId = unit->id;
+    info.sessionLockId = lockId_;
+    info.useSessionLockId = true;
+    try {
+        // Owner holds its own mmapEntry ref so the mapping outlives until the queued DecreaseReference
+        // completes (defense against unmap-before-worker-ack), and gates Publish on session liveness.
+        info.receiveBufferOwner =
+            std::make_shared<ShmSendBufferOwner>(shared_from_this(), mmapEntry, unit->id, context, releasePool_);
+    } catch (const std::bad_alloc &e) {
+        // RegisterReference already incremented the worker ref; release it on OOM to avoid a leak.
+        LOG_IF_ERROR(DecreaseReferenceByRequestClient(context, unit->id),
+                     "DecreaseReference after ShmSendBufferOwner OOM");
+        RETURN_STATUS(K_RUNTIME_ERROR, e.what());
+    }
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Shared-memory session closed while mapping the write region");
+    return Status::OK();
+}
+
 bool ShmSession::IsAlive() const
 {
     return alive_.load(std::memory_order_acquire) && rpcClient_ != nullptr && rpcClient_->IsAlive()
@@ -495,6 +559,14 @@ Status ShmSession::DecreaseReference(const TransportRequestContext &context, con
     TransportRequestContext requestContext = context;
     requestContext.clientId = clientId_;
     return rpcClient_->InvokeDecreaseReference(requestContext, shmId);
+}
+
+Status ShmSession::DecreaseReferenceByRequestClient(const TransportRequestContext &context, const ShmKey &shmId)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Shared-memory session is closed");
+    // Use the request context's own clientId (the SDK global clientId that routed Create registered the
+    // reference under). Do NOT override with the session UUID — the worker would not match the release.
+    return rpcClient_->InvokeDecreaseReference(context, shmId);
 }
 
 Status ShmSession::RegisterReference(const ShmKey &shmId)
