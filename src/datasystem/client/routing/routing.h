@@ -77,6 +77,8 @@ public:
 
     void UpdateState(const HostPort &addr, StatusCode status);
 
+    void ForceRefresh();
+
     void Shutdown();
 
 private:

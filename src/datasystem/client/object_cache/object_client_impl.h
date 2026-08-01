@@ -1000,6 +1000,11 @@ private:
                                     const Status &transportStatus, std::vector<std::shared_ptr<Buffer>> &buffers,
                                     std::vector<Status> &itemStatuses, AccessTransportKind &actualKind);
 
+    Status ReadTransportRound(const std::vector<std::string> &objectKeys, bool traceEnabled, int64_t subTimeoutMs,
+                              bool queryL2Cache, std::vector<std::shared_ptr<Buffer>> &buffers,
+                              std::vector<Status> &itemStatuses, AccessTransportKind &actualKind,
+                              Status &transportStatus);
+
     Status FinishTransportRead(const std::vector<Status> &itemStatuses, AccessTransportKind actualKind,
                                const Status &transportStatus);
 

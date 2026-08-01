@@ -53,6 +53,8 @@ struct ReadState {
     bool hasAttempt = false;
     bool completed = false;
     bool exhausted = false;
+    bool hasStaleLocation = false;
+    Status staleLocationStatus;
 };
 
 struct ReadChunk {
@@ -175,6 +177,9 @@ ReplicaReader::ReplicaReader(std::shared_ptr<DataPlaneExecutor> executor, std::s
 
 bool ReplicaReader::IsRetryableLocationError(const Status &status) const
 {
+    if (IsTransportSnapshotStaleLocation(status)) {
+        return true;
+    }
     if (retry_->IsRetryableRpcError(status)) {
         return true;
     }
@@ -247,6 +252,8 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
     Status lastError(K_NOT_FOUND, "Cannot get objects from worker");
     while (true) {
         ++round;
+        bool hasStaleLocation = false;
+        Status staleLocationStatus;
         for (int replicaIndex = 0; replicaIndex < location.object_locations_size(); ++replicaIndex) {
             Status deadlineStatus = retry_->CheckDeadline();
             if (deadlineStatus.IsError()) {
@@ -267,12 +274,19 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
                 return rc;
             }
             lastError = rc;
+            if (IsTransportSnapshotStaleLocation(rc)) {
+                hasStaleLocation = true;
+                staleLocationStatus = rc;
+            }
             if (IsLastUnavailableReplica(rc, replicaIndex, location.object_locations_size())) {
-                return rc;
+                return hasStaleLocation ? staleLocationStatus : rc;
             }
             if (rc.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE) {
                 continue;
             }
+        }
+        if (hasStaleLocation) {
+            return staleLocationStatus;
         }
         Status backoffRc = retry_->Backoff(backoffMs);
         if (backoffRc.IsError()) {
@@ -454,8 +468,23 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
                     }
 
                     state.lastStatus = itemStatus;
+                    if (IsTransportSnapshotStaleLocation(itemStatus)) {
+                        state.hasStaleLocation = true;
+                        state.staleLocationStatus = itemStatus;
+                        ++state.replicaIndex;
+                        if (state.replicaIndex >= static_cast<size_t>(state.location->object_locations_size())) {
+                            state.result->status = itemStatus;
+                            state.completed = true;
+                        } else {
+                            METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL);
+                        }
+                        continue;
+                    }
                     if (itemStatus.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE) {
                         AdvanceUnavailableReplica(state, itemStatus);
+                        if (state.completed && state.hasStaleLocation) {
+                            state.result->status = state.staleLocationStatus;
+                        }
                         continue;
                     }
                     if (itemStatus.GetCode() == K_OC_REMOTE_GET_NOT_ENOUGH && data != nullptr) {
@@ -473,7 +502,12 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
                     }
                     ++state.replicaIndex;
                     if (state.replicaIndex >= static_cast<size_t>(state.location->object_locations_size())) {
-                        state.exhausted = true;
+                        if (state.hasStaleLocation) {
+                            state.result->status = state.staleLocationStatus;
+                            state.completed = true;
+                        } else {
+                            state.exhausted = true;
+                        }
                     } else {
                         METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL);
                     }

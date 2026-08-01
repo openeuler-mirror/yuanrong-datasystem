@@ -304,8 +304,13 @@
 - Common change risks:
   - `ConnectOptions` can affect multiple language bindings and shared backend initialization at once; `serviceDiscovery` is intentionally typed as `std::shared_ptr<IServiceDiscovery>` so SDK clients do not depend on the ETCD implementation;
   - `ObjectClientImpl` is shared by both KV and Object API families, so “KV-only” changes may regress object behavior;
-  - direct-read metadata and replica retries share the caller's API deadline; the data phase reuses the fixed location
-    snapshot and does not query metadata again between replica rounds;
+  - direct-read metadata and replica retries share the caller's API deadline. The data phase first polls replicas from
+    the fixed metadata location snapshot, but `K_NOT_READY` with `Worker endpoint is absent from latest transport
+    snapshot` is treated as a stale topology/location signal: the reader tries remaining replicas, and
+    `ObjectClientImpl::GetFromTransportLayer` forces the existing hash-ring refresher before it re-routes and re-queries
+    metadata only for affected keys with deadline-bounded backoff. The transport round must still apply structured
+    per-item results before deciding which keys are affected, so mixed batches do not turn object-level failures such as
+    `K_NOT_FOUND` into stale-location retries.
   - Python-facing behavior can differ from C++ because pybind wrappers convert statuses into exceptions and sometimes rename methods;
   - context propagation changes can affect tracing and multi-tenant behavior across all client operations.
 - Important invariants:
@@ -362,6 +367,9 @@
     master call is attempted; only route-resolution failures before that call may refresh the route and retry.
   - A worker absent from the latest transport snapshot returns `K_NOT_READY`, not object-level `K_NOT_FOUND`. Because
     no RPC was sent, routed Set and MSet may safely exclude that worker and rebuild the request on a current route.
+    Routed direct Get uses the same narrow signal to recover from topology/metadata skew during scale or rolling
+    changes; do not broaden this to all `K_NOT_READY` statuses, because SDK startup, shutdown, and non-snapshot
+    readiness failures are different conditions.
   - Transport MSet preserves worker-reported partial failures and performs at most one same-worker UB recovery attempt.
     Routed `MultiCreateReqPb` and `MultiPublishReqPb` requests carry `is_routed=true`; target workers authenticate their
     signatures and tenant IDs without requiring the client to register separately on every metadata-owner worker.

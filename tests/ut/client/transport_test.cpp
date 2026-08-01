@@ -216,6 +216,29 @@ master::ObjectLocationInfoPb MakeReplicaLocation(const std::string &key, uint64_
     return location;
 }
 
+Status MakeStaleSnapshotStatus(const HostPort &address)
+{
+    return Status(K_NOT_READY, "Worker endpoint is absent from latest transport snapshot: " + address.ToString());
+}
+
+std::shared_ptr<Routing> MakeSingleWorkerRouting(const HostPort &address)
+{
+    auto router = std::make_shared<WorkerRouter>("");
+    auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    auto &worker = (*ring->mutable_members())[address.ToString()];
+    worker.set_state(::datasystem::MembershipPb::ACTIVE);
+    worker.add_tokens(0u);
+    auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
+    router->UpdateHashRing(ring, hostIdMap);
+
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+                    std::unordered_map<std::string, std::string> &) { return Status::OK(); };
+    auto refresher = std::make_shared<HashRingRefresher>(router, fetch);
+    auto routing = std::make_shared<Routing>(router, refresher);
+    routing->initialized_.store(true);
+    return routing;
+}
+
 std::vector<ObjectMetadataItem> MakeMetadataItems(const std::vector<ObjectReadItem> &inputs)
 {
     std::vector<ObjectMetadataItem> items;
@@ -1274,6 +1297,11 @@ public:
     explicit TestTransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager)
         : TransportLayer(std::move(dataPlaneManager), std::make_shared<TransportAdvisor>())
     {
+    }
+
+    void SetObjectRead(std::unique_ptr<ObjectReadFlow> objectRead)
+    {
+        objectRead_ = std::move(objectRead);
     }
 };
 
@@ -2697,6 +2725,49 @@ TEST(ObjectReadFlowTest, BatchMixedDataOutcomesKeepInputOrderAndPartialSuccess)
     EXPECT_TRUE(result.items[1].status.IsOk());
     EXPECT_EQ(result.items[2].requestIndex, 8u);
     EXPECT_EQ(result.items[2].status.GetCode(), K_INVALID);
+}
+
+TEST(ObjectClientTransportTest, ReadTransportRoundPreservesMixedItemStatusesWhenAggregateIsStale)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto ownerAddress = MakeAddress(41);
+    const auto staleReplicaAddress = MakeAddress(90);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    replicas->itemStatuses.emplace("stale", MakeStaleSnapshotStatus(staleReplicaAddress));
+    replicas->itemStatuses.emplace("missing", Status(K_NOT_FOUND, "missing"));
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "transport-round-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "stale", "missing" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    std::vector<Status> itemStatuses(objectKeys.size(), Status(K_NOT_READY, "pending"));
+    AccessTransportKind actualKind = AccessTransportKind::SHM;
+    Status transportStatus;
+
+    ASSERT_TRUE(client
+                    ->ReadTransportRound(objectKeys, false, 1000, false, buffers, itemStatuses, actualKind,
+                                         transportStatus)
+                    .IsOk());
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(transportStatus));
+    ASSERT_EQ(itemStatuses.size(), 2u);
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(itemStatuses[0]));
+    EXPECT_EQ(itemStatuses[1].GetCode(), K_NOT_FOUND);
+    ASSERT_EQ(metadata->keyGroups.size(), 1u);
+    EXPECT_EQ(metadata->keyGroups[0], objectKeys);
+    ASSERT_EQ(replicas->batchKeys.size(), 1u);
+    EXPECT_EQ(replicas->batchKeys[0], objectKeys);
 }
 
 TEST(ObjectClientTransportTest, BatchExternalOwnersMaterializeIntoIndependentSdkBuffers)
@@ -4350,6 +4421,49 @@ TEST(ReplicaReaderTest, TriesNextLocationWithoutRefreshingMetadata)
     EXPECT_EQ(manager->transportBuildCount, 2);
 }
 
+TEST(ReplicaReaderTest, StaleTransportSnapshotTriesNextReplica)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto staleAddress = MakeAddress(80);
+    const auto healthyAddress = MakeAddress(81);
+    std::unordered_map<HostPort, size_t> admissionChecks;
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(
+        executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
+        [&admissionChecks, staleAddress](const HostPort &address) {
+            ++admissionChecks[address];
+            return address == staleAddress ? MakeStaleSnapshotStatus(address) : Status::OK();
+        });
+    auto location = MakeReplicaLocation("key", 4, { staleAddress, healthyAddress });
+    ObjectReadItemResult result;
+
+    ASSERT_TRUE(reader.Read(location, result, MakeReadContext()).IsOk());
+    EXPECT_EQ(result.objectKey, "key");
+    EXPECT_EQ(admissionChecks[staleAddress], 1u);
+    EXPECT_EQ(admissionChecks[healthyAddress], 1u);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+}
+
+TEST(ReplicaReaderTest, StaleTransportSnapshotReturnsForMetadataRefreshAfterAllReplicas)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto staleAddress = MakeAddress(82);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(
+        executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
+        [staleAddress](const HostPort &address) {
+            return address == staleAddress ? MakeStaleSnapshotStatus(address) : Status::OK();
+        });
+    auto location = MakeReplicaLocation("key", 4, { staleAddress });
+    ObjectReadItemResult result;
+
+    Status rc = reader.Read(location, result, MakeReadContext());
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc));
+    EXPECT_EQ(manager->transportBuildCount, 0);
+}
+
 TEST(ReplicaReaderTest, StopsOnNonRetryableLocationError)
 {
     ApiDeadlineGuard deadline(1000);
@@ -4767,6 +4881,50 @@ TEST(ReplicaReaderTest, BatchNonRetryableItemTerminatesWithoutTryingNextReplica)
     EXPECT_EQ(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).GetCode(), K_INVALID);
     EXPECT_EQ(result.status.GetCode(), K_INVALID);
     EXPECT_EQ(manager->transportBuildCount, 1);
+}
+
+TEST(ReplicaReaderTest, BatchStaleTransportSnapshotAdvancesReplica)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto staleAddress = MakeAddress(83);
+    const auto healthyAddress = MakeAddress(84);
+    std::unordered_map<HostPort, size_t> admissionChecks;
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(
+        executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
+        [&admissionChecks, staleAddress](const HostPort &address) {
+            ++admissionChecks[address];
+            return address == staleAddress ? MakeStaleSnapshotStatus(address) : Status::OK();
+        });
+    auto location = MakeReplicaLocation("key", 1, { staleAddress, healthyAddress });
+    ObjectReadItemResult result;
+
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).IsOk());
+    EXPECT_TRUE(result.status.IsOk());
+    EXPECT_EQ(admissionChecks[staleAddress], 1u);
+    EXPECT_EQ(admissionChecks[healthyAddress], 1u);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+}
+
+TEST(ReplicaReaderTest, BatchStaleTransportSnapshotCompletesForMetadataRefreshAfterAllReplicas)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto staleAddress = MakeAddress(85);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(
+        executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
+        [staleAddress](const HostPort &address) {
+            return address == staleAddress ? MakeStaleSnapshotStatus(address) : Status::OK();
+        });
+    auto location = MakeReplicaLocation("key", 1, { staleAddress });
+    ObjectReadItemResult result;
+
+    Status rc = reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) });
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc));
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(result.status));
+    EXPECT_EQ(manager->transportBuildCount, 0);
 }
 
 TEST(ReplicaReaderTest, BatchBacksOffOnceAfterAllUnresolvedItemsCompleteReplicaRound)
