@@ -4762,7 +4762,6 @@ Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &o
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(transportLayer_ != nullptr, K_NOT_READY, "Object service is not ready");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() == buffers.size(), K_RUNTIME_ERROR,
                                          "Failed to prepare object Get request");
-    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     client::ObjectReadRequest request;
     request.traceEnabled = traceEnabled;
     std::vector<Status> itemStatuses(objectKeys.size(), Status(K_NOT_READY, "Object Get has not completed"));
@@ -4790,6 +4789,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     auto config = GetClientLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
     if (traceEnabled) {
@@ -4847,6 +4847,7 @@ Status ObjectClientImpl::Read(const std::vector<ReadParam> &readParams, std::vec
         objectKeys.emplace_back(param.key);
     }
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     GetParam getParam{ .objectKeys = objectKeys, .subTimeoutMs = 0, .readParams = readParams };
     Status rc = GetBuffersFromWorker(workerApi, getParam, objectBuffers);
     buffers.clear();
@@ -4956,7 +4957,6 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     getParam.actualTransportKind = nullptr;
     auto config = GetClientLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
-    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
 
 #ifdef USE_URMA
     // Happy path: use pre-configured data size to skip GetObjMetaInfo RPC.

@@ -53,6 +53,7 @@ namespace {
 constexpr uint32_t META_OWNER_INDEX = 0;
 constexpr uint32_t TRANSPORT_CLIENT_WORKER_INDEX = 1;
 constexpr int32_t CLIENT_TIMEOUT_MS = 3'000;
+constexpr int32_t SHM_LATCH_TIMEOUT_MS = 1'000;
 constexpr size_t VALUE_SIZE = 128 * 1024;
 constexpr size_t INLINE_DATA_LIMIT = 512 * 1024;
 constexpr size_t LARGE_VALUE_SIZE = 8 * 1024 * 1024;
@@ -1370,6 +1371,7 @@ protected:
     {
         ConnectOptions options;
         InitConnectOpt(TRANSPORT_CLIENT_WORKER_INDEX, options, CLIENT_TIMEOUT_MS);
+        options.requestTimeoutMs = SHM_LATCH_TIMEOUT_MS;
         options.enableLocalCache = false;
         reader_ = std::make_shared<KVClient>(options);
         DS_ASSERT_OK(reader_->Init());
@@ -1422,14 +1424,7 @@ TEST_F(KVClientTransportGetShmLatchTest, LatchFailureIsRetryableNotRuntimeError)
     const std::string value(VALUE_SIZE, 'y');
     DS_ASSERT_OK(writer_->Set(key, value));
 
-    // Sanity check that the object is readable before injecting contention.
-    {
-        std::vector<Optional<Buffer>> buffers;
-        DS_ASSERT_OK(reader_->Get({ key }, buffers));
-        ASSERT_TRUE(buffers[0]);
-        AssertBufferEqual(*buffers[0], value);
-    }
-
+    // Inject before the first read so the target worker cannot cache a remote copy during a sanity Get.
     PinShmLatchFailureEverywhere();
     // Single-key Get is required for the K_RPC_DEADLINE_EXCEEDED assertion: ObjectReadFlow::ReadObjects
     // takes its ready.size()==1 branch (ReplicaReader::Read), where K_TRY_AGAIN stays retryable until
@@ -1448,11 +1443,9 @@ TEST_F(KVClientTransportGetShmLatchTest, LatchFailureIsRetryableNotRuntimeError)
         << "direct Get must not surface SHM latch contention as K_RUNTIME_ERROR";
     ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED)
         << "expected deadline exhaustion after latch-contention retries, got: " << rc.ToString();
-    // Wall-clock guard: the contention Get must exhaust around the API deadline (sourced from
-    // requestTimeoutMs_, bounded by CLIENT_TIMEOUT_MS), and must not run far longer if the deadline is
-    // ever raised. Cap at 3x CLIENT_TIMEOUT_MS to catch regressions while tolerating sleep_for
-    // over-sleep and scheduling jitter on slow runners (the logical deadline is still CLIENT_TIMEOUT_MS).
-    ASSERT_LT(elapsedMs, 3 * CLIENT_TIMEOUT_MS)
+    // Wall-clock guard: the SHM attempt and transport fallback must share one API deadline. Allow one
+    // extra deadline for scheduling jitter while rejecting a fallback that reinitializes the full budget.
+    ASSERT_LT(elapsedMs, 2 * SHM_LATCH_TIMEOUT_MS)
         << "latch-contention Get ran " << elapsedMs << "ms, expected near the API deadline";
 
     ClearShmLatchFailureEverywhere();

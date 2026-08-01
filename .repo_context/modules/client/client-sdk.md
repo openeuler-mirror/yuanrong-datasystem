@@ -397,6 +397,8 @@
     `client.process.direct_materialize` to the request `latencySummary`. The two RPC-class phases are parent-thread wall
     times, so they intentionally include connection setup, lifecycle-lock contention, task dispatch/wait, and bounded
     retries around the nested RPC or data-plane operation.
+  - public full-object `Get` installs one API deadline before choosing the local-cache or direct-read path. A same-host
+    SHM attempt and its TransportLayer fallback share that deadline instead of restarting the configured request timeout.
   - `QueryAndGet` returns at most five copy locations per object. The primary address from object metadata is returned
     first, followed by non-primary locations, so replica retry always starts with the primary copy.
   - `tests/st/client/kv_cache/kv_client_transport_get_test.cpp` covers single-key and same-owner multi-key transport
