@@ -566,6 +566,7 @@ Status DataMigrator::WaitBeforeRetry() const
 std::future<MigrateDataHandler::MigrateResult> DataMigrator::RedirectMigrateData(
     MigrateDataHandler::MigrateResult &result, uint64_t totalSize)
 {
+    INJECT_POINT_NO_RETURN("DataMigrator.RedirectMigrationSubmitted");
     const auto &originAddr = result.address;
     const auto &needRetryIds = result.failedIds;
     auto &strategy = result.strategy;
@@ -622,6 +623,9 @@ bool DataMigrator::LearnStructuredUbFailure(const MigrateDataHandler::MigrateRes
     }
     ubAdmission_->ReportOutcome(*outcome);
     localOperator = operatorWorker == localAddress_;
+    if (!localOperator) {
+        INJECT_POINT_NO_RETURN("DataMigrator.RemoteOperatorUnavailable");
+    }
     return true;
 }
 

@@ -105,6 +105,7 @@ public:
     std::optional<HostPort> NextProbeCandidate(uint64_t nowMs) const;
     void ReconcileTopologyWorkers(const std::unordered_set<HostPort> &workers, uint64_t nowMs,
                                   uint64_t cleanupGraceMs);
+    void PruneExpiredTopologyState(uint64_t nowMs);
     UbHealthSummary BuildSelfHealthSummary(const HostPort &self) const;
     std::optional<UbPathState> GetState(const HostPort &peer) const;
     PeerUbAdmissionStats GetStats() const;
@@ -137,6 +138,7 @@ private:
     std::unordered_set<HostPort> topologyWorkers_;
     std::unordered_map<HostPort, uint64_t> departedWorkers_;
     std::unordered_map<HostPort, RetiredWorkerTombstone> replayTombstones_;
+    uint64_t nextTombstoneExpiryMs_ = 0;
     bool topologyInitialized_ = false;
     UbFailureClassifier classifier_;
 };

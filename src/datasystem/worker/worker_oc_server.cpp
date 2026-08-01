@@ -2002,13 +2002,18 @@ void WorkerOCServer::ContinueUbLifecycleCleanup()
     if (objCacheClientWorkerSvc_ == nullptr || topologyEngine_ == nullptr) {
         return;
     }
-    if (objCacheClientWorkerSvc_->GetUbAdmission()->GetStats().pendingDepartures == 0) {
+    auto *admission = objCacheClientWorkerSvc_->GetUbAdmission();
+    const auto stats = admission->GetStats();
+    if (stats.pendingDepartures == 0 && stats.replayTombstones == 0) {
         return;
     }
-    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
-    if (topologyEngine_->GetSnapshot(snapshot).IsOk() && snapshot != nullptr) {
-        ReconcileUbAdmissionTopology(*snapshot);
+    if (stats.pendingDepartures != 0) {
+        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+        if (topologyEngine_->GetSnapshot(snapshot).IsOk() && snapshot != nullptr) {
+            ReconcileUbAdmissionTopology(*snapshot);
+        }
     }
+    admission->PruneExpiredTopologyState(GetSteadyClockTimeStampMs());
 }
 
 Status WorkerOCServer::ResolveUbProbeEndpoint(const HostPort &subject, HostPort &endpoint) const

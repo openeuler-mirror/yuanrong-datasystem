@@ -331,6 +331,15 @@ public:
     Status GetRecoveryProbeSegmentInfo(uint64_t &segmentAddress, uint64_t &dataOffset);
 
     /**
+     * @brief Get the manager-owned source segment used to issue UB recovery probes.
+     * @param[out] segmentAddress Starting virtual address of the segment.
+     * @param[out] segmentSize Registered size of the segment.
+     * @param[out] dataAddress Address of the immutable probe byte.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status GetRecoveryProbeSourceInfo(uint64_t &segmentAddress, uint64_t &segmentSize, uint64_t &dataAddress);
+
+    /**
      * @brief Fill segment info into request
      * @param[out] handshakeReq The protobuf to fill with segment info
      * @return Status of the call.
@@ -567,6 +576,8 @@ private:
      * @return Status of the call.
      */
     Status UrmaUninit();
+
+    Status GetOrCreateRecoveryProbeBuffer(void *&probeBuffer, std::mutex &mutex, const std::string &purpose);
 
     /**
      * @brief Register log for urma.
@@ -817,6 +828,8 @@ private:
     std::mutex clientTransportMemoryPinMutex_;
     std::mutex recoveryProbeMutex_;
     void *recoveryProbeBuffer_ = nullptr;
+    std::mutex recoveryProbeSourceMutex_;
+    void *recoveryProbeSourceBuffer_ = nullptr;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
     static std::atomic<uint64_t> ubTransportMemSize_;  // 256 MB

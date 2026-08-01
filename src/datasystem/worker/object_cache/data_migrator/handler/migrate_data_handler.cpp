@@ -379,6 +379,8 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
                                    .slotId = slotId_ };
     MigrateTransport::Response rsp;
     PerfPoint point(PerfKey::WORKER_MIGRATE_TRANSPORT_SEND_DATA);
+    INJECT_POINT_NO_RETURN("MigrateDataHandler.BeforeTransportSend");
+    INJECT_POINT_NO_RETURN("MigrateDataHandler.TransportBatchStarted");
     Status s = transport_->MigrateDataToRemote(req, rsp);
     point.Record();
     HandleMigrationTransportResponse(s, rsp);

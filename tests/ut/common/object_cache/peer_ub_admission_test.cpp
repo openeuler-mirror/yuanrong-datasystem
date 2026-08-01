@@ -288,6 +288,9 @@ TEST(PeerUbAdmissionTest, AuthoritativeRemovalBoundsStateAndRejectsOldReplay)
     oldSummary.incarnation = "worker-new";
     admission.ReplaceGlobalSummaries({ oldSummary });
     EXPECT_EQ(admission.CheckReadSource(PEER).GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE);
+
+    admission.PruneExpiredTopologyState(121);
+    EXPECT_EQ(admission.GetStats().replayTombstones, 0u);
 }
 
 TEST(UbHealthSummaryCacheTest, TopologyReconcileDropsRemovedWorkerBuckets)

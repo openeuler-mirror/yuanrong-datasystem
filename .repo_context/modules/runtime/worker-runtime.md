@@ -141,10 +141,13 @@
     topology ScaleIn sources may remain `ACTIVE/PRE_LEAVING/LEAVING`, while `JOINING/PRE_LEAVING/LEAVING/FAILED`
     members cannot receive new migration. Rebalance rechecks before candidate selection and every bounded batch.
     FastMigration read failures preserve target-local raw CQE evidence; NotifyRemoteGet write failures preserve the
-    source Provider operator, so source failure stops retries instead of being misattributed to a target.
+    source Provider operator, so source failure stops retries instead of being misattributed to a target. Recovery
+    probes use a manager-owned, independently registered 4 KiB source segment; Worker startup does not initialize the
+    client `UB_TRANSPORT` allocation pool solely for the one-byte probe.
   - Published full topology snapshots drive UB-state lifecycle reconciliation. Explicitly removed Worker addresses
     enter a `2 * node_timeout_s` grace period, after which local/global/incarnation buckets are removed and a bounded
-    TTL tombstone rejects old incarnation replay. Lease-empty UB snapshots still clear only Global Fact. Client routing
+    TTL tombstone rejects old incarnation replay. The warmup background loop prunes expired tombstones even when no
+    later topology snapshot is published. Lease-empty UB snapshots still clear only Global Fact. Client routing
     filters immediately remove trusted/global/local-observation buckets for addresses absent from authoritative routing
     topology.
 - Shutdown:

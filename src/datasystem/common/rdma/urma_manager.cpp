@@ -193,6 +193,10 @@ UrmaManager::~UrmaManager()
         munmap(recoveryProbeBuffer_, URMA_RECOVERY_PROBE_SEGMENT_SIZE);
         recoveryProbeBuffer_ = nullptr;
     }
+    if (recoveryProbeSourceBuffer_ != nullptr) {
+        munmap(recoveryProbeSourceBuffer_, URMA_RECOVERY_PROBE_SEGMENT_SIZE);
+        recoveryProbeSourceBuffer_ = nullptr;
+    }
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager() done";
 }
 
@@ -273,11 +277,8 @@ Status UrmaManager::Init(const HostPort &hostport)
     aeHandler_.Init(urmaResource_.get());
     aeHandler_.Start(serverStop_);
 
-    // Initialize the UB transport memory buffer pool for both client and server:
-    // server-side recovery probes allocate UB_TRANSPORT memory through
-    // GetMemoryBufferHandle, which requires ubTransportStats_ to be created.
-    RETURN_IF_NOT_OK(InitMemoryBufferPool());
     if (UrmaManager::clientMode_) {
+        RETURN_IF_NOT_OK(InitMemoryBufferPool());
         clientId_ = GetStringUuid();
         RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(MAX_STUB_CACHE_NUM, hostport));
     }
@@ -709,22 +710,39 @@ Status UrmaManager::RegisterSegment(const uint64_t &segAddress, const uint64_t &
 
 Status UrmaManager::GetRecoveryProbeSegmentInfo(uint64_t &segmentAddress, uint64_t &dataOffset)
 {
-    constexpr uint64_t probeSegmentSize = URMA_RECOVERY_PROBE_SEGMENT_SIZE;
-    std::lock_guard<std::mutex> lock(recoveryProbeMutex_);
-    if (recoveryProbeBuffer_ == nullptr) {
-        void *buffer = mmap(nullptr, probeSegmentSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        CHECK_FAIL_RETURN_STATUS(buffer != MAP_FAILED, K_OUT_OF_MEMORY,
-                                 "Failed to allocate Worker URMA recovery probe segment");
-        Status rc = RegisterSegment(reinterpret_cast<uint64_t>(buffer), probeSegmentSize);
-        if (rc.IsError()) {
-            LOG_IF(ERROR, munmap(buffer, probeSegmentSize) != 0)
-                << "Failed to unmap Worker URMA recovery probe segment: " << StrErr(errno);
-            return rc;
-        }
-        recoveryProbeBuffer_ = buffer;
-    }
+    RETURN_IF_NOT_OK(GetOrCreateRecoveryProbeBuffer(recoveryProbeBuffer_, recoveryProbeMutex_, "destination"));
     segmentAddress = reinterpret_cast<uint64_t>(recoveryProbeBuffer_);
     dataOffset = 0;
+    return Status::OK();
+}
+
+Status UrmaManager::GetRecoveryProbeSourceInfo(uint64_t &segmentAddress, uint64_t &segmentSize,
+                                               uint64_t &dataAddress)
+{
+    RETURN_IF_NOT_OK(
+        GetOrCreateRecoveryProbeBuffer(recoveryProbeSourceBuffer_, recoveryProbeSourceMutex_, "source"));
+    segmentAddress = reinterpret_cast<uint64_t>(recoveryProbeSourceBuffer_);
+    segmentSize = URMA_RECOVERY_PROBE_SEGMENT_SIZE;
+    dataAddress = segmentAddress;
+    return Status::OK();
+}
+
+Status UrmaManager::GetOrCreateRecoveryProbeBuffer(void *&probeBuffer, std::mutex &mutex,
+                                                   const std::string &purpose)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    RETURN_OK_IF_TRUE(probeBuffer != nullptr);
+    void *buffer = mmap(nullptr, URMA_RECOVERY_PROBE_SEGMENT_SIZE, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK_FAIL_RETURN_STATUS(buffer != MAP_FAILED, K_OUT_OF_MEMORY,
+                             FormatString("Failed to allocate Worker URMA recovery probe %s segment", purpose));
+    Status rc = RegisterSegment(reinterpret_cast<uint64_t>(buffer), URMA_RECOVERY_PROBE_SEGMENT_SIZE);
+    if (rc.IsError()) {
+        LOG_IF(ERROR, munmap(buffer, URMA_RECOVERY_PROBE_SEGMENT_SIZE) != 0)
+            << "Failed to unmap Worker URMA recovery probe " << purpose << " segment: " << StrErr(errno);
+        return rc;
+    }
+    probeBuffer = buffer;
     return Status::OK();
 }
 
