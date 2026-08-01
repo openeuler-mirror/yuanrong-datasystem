@@ -717,6 +717,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | shared_memory_worker_port | int | `0` | 指定用于共享内存 FD 传输的 SCMTCP 监听端口；当值为非 0 时，datasystem-worker 会在该端口监听连接 ，要求内核支持 SCMTCP 且端口未被占用，否则 worker 启动失败。客户端与 worker 在同一节点时，客户端会使用该通道传递共享内存描述符。 |
 | unix_domain_socket_dir | string | `"./datasystem/uds"` | 配置 Unix Domain Socket (UDS) 文件的存储目录。UDS 路径总长度受内核限制，建议目录路径不超过80个字符。该目录将挂载到宿主机同名目录，请确保容器具备宿主机同名目录的操作权限 |
 | worker_address | string | `"127.0.0.1:31501"` | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
+| kv_events_config | string | `""` | KV event publisher JSON 配置。为空表示关闭该功能；非空时需要填写 JSON 对象字符串，字段说明参见[表1](#table_kv_events_config)。例如：`{"bind_endpoint":"tcp://0.0.0.0:5557","backend_id":"worker-0"}` |
 | enable_curve_zmq | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
 | curve_key_dir | string | `""` | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
 | oc_worker_worker_direct_port | int | `0` | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
@@ -732,6 +733,23 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | max_rpc_session_num | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | remote_send_thread_num | int | `8` | 配置服务端用于将元素发送到远程工作线程的线程数量 |
 | stream_idle_time_s | int | `300` | 配置流的空闲时间。默认值为300秒（5分钟） |
+
+**表1** `kv_events_config` JSON 字段说明<a id="table_kv_events_config"></a>
+
+| JSON 字段 | 类型 | 默认值 | 是否必填 | 描述 |
+|---|---|---|---|---|
+| bind_endpoint | string | `""` | 是 | ZMQ PUB 套接字的绑定地址，必须为非空字符串，例如 `tcp://0.0.0.0:5557`。 |
+| model_name | string | `""` | 否 | 事件中的模型名称；空字符串在事件中编码为 `null`。 |
+| backend_id | string | `""` | 是 | 事件中的后端实例标识，必须为非空字符串。 |
+| tenant_id | string | `"default"` | 否 | 事件中的租户标识；当对象 key 未携带租户前缀时使用该值。 |
+| additional_salt | string | `""` | 否 | 事件中的附加 salt；空字符串在事件中编码为 `null`。 |
+| lora_name | string | `""` | 否 | 事件中的 LoRA 名称；空字符串在事件中编码为 `null`。 |
+| block_size | uint32 | `0` | 否 | 事件中的 KV block 大小；值为 `0` 时在事件中编码为 `null`。 |
+| dp_rank | uint32 | `0` | 否 | 数据并行 rank，同时写入事件和批次载荷。 |
+| emit_legacy_compat_fields | bool | `true` | 否 | 是否输出兼容字段 `type`、`block_hashes` 和 `parent_block_hash`。 |
+| queue_capacity | uint32 | `65536` | 否 | 待发布事件队列的最大事件数，必须大于 `0`；队列满时新增事件会被丢弃。 |
+
+`kv_events_config` 为空时 KV event publisher 保持关闭。配置为非空 JSON 对象时，字段类型、必填字段和取值校验全部通过后自动启用；校验失败时保持关闭并记录错误日志。`enabled` 是内部派生状态，不是 JSON 配置字段。
 
 #### ETCD相关配置
 

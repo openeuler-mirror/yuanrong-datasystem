@@ -45,6 +45,7 @@
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
+#include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
@@ -383,6 +384,7 @@ Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextActio
 {
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &entry = objectKV.GetObjEntry();
+    const bool hadCpuCopy = entry.Get() != nullptr && !entry->stateInfo.IsCacheInvalid();
     (void)memEvictionList_.Erase(objectKey);
     if (nextAction == Action::DELETE) {
         PerfPoint point(PerfKey::WORKER_EVICT_DELETE);
@@ -397,11 +399,17 @@ Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextActio
         }
         point.Record();
         VLOG(1) << FormatString("[ObjectKey %s] Object delete success", objectKey);
+        if (hadCpuCopy) {
+            PublishKvRemovedEvent(kvEventPublisher_, objectKey, kKvEventMediumCpu);
+        }
     } else if (nextAction == Action::FREE_MEMORY) {
         PerfPoint point(PerfKey::WORKER_EVICT_FREE);
         RETURN_IF_NOT_OK(entry->FreeResources());
         point.Record();
         VLOG(1) << FormatString("[ObjectKey %s] Object free success", objectKey);
+        if (hadCpuCopy) {
+            PublishKvRemovedEvent(kvEventPublisher_, objectKey, kKvEventMediumCpu);
+        }
     } else if (nextAction == Action::MIGRATE) {
         VLOG(1) << FormatString("[ObjectKey %s] Object will be migrated", objectKey);
     } else if (nextAction == Action::SPILL) {
@@ -878,6 +886,8 @@ bool WorkerOcEvictionManager::IsSpilledObjectEvictable(const std::shared_ptr<Saf
 Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV &objectKV)
 {
     const auto &objectKey = objectKV.GetObjKey();
+    const bool hadCpuCopy = objectKV.GetObjEntry().Get() != nullptr
+                            && !objectKV.GetObjEntry()->stateInfo.IsCacheInvalid();
     VLOG(DEBUG_LOG_LEVEL) << "DeleteNoneL2CacheEvictableObject start. ObjectKey: " << objectKey;
     // Get Master address from objectKey
     if (etcdCM_ == nullptr) {
@@ -907,9 +917,32 @@ Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV 
     objectKV.GetObjEntry()->stateInfo.SetSpillState(false);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectTable_->Erase(objectKey, objectKV.GetObjEntry()),
                                      FormatString("Failed to erase object %s from object table", objectKey));
+    if (hadCpuCopy) {
+        PublishKvRemovedEvent(kvEventPublisher_, objectKey, kKvEventMediumCpu);
+    }
     VLOG(DEBUG_LOG_LEVEL) << "DeleteNoneL2CacheEvictableObject end. ObjectKey: " << objectKey;
     return Status::OK();
 }
+
+#ifdef WITH_TESTS
+Status WorkerOcEvictionManager::DeletePrimaryEndLifeLocalForTest(const std::string &objectKey,
+                                                                 const std::shared_ptr<SafeObjType> &entry)
+{
+    auto &safeEntry = *entry;
+    const bool hadCpuCopy = safeEntry.Get() != nullptr && !safeEntry->stateInfo.IsCacheInvalid();
+    if (safeEntry->IsSpilled()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Delete(objectKey),
+                                         FormatString("[ObjectKey %s] Delete from disk failed", objectKey));
+    }
+    safeEntry->stateInfo.SetSpillState(false);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectTable_->Erase(objectKey, safeEntry),
+                                     FormatString("Failed to erase object %s from object table", objectKey));
+    if (hadCpuCopy) {
+        PublishKvRemovedEvent(kvEventPublisher_, objectKey, kKvEventMediumCpu);
+    }
+    return Status::OK();
+}
+#endif
 
 Status WorkerOcEvictionManager::DeleteL2CacheEvictableObject(const ObjectKV &objectKV)
 {

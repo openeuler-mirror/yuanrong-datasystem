@@ -99,6 +99,10 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 70, "worker_get_post_query_meta_phase_latency", MetricType::HISTOGRAM, "us" },
     { 71, "worker_inflight_remote_get_request", MetricType::GAUGE, "count" },
     { 72, "zmq_server_poll_handle_latency", MetricType::HISTOGRAM, "us" },
+    { 73, "worker_kv_event_published_batches_total", MetricType::COUNTER, "count" },
+    { 74, "worker_kv_event_published_events_total", MetricType::COUNTER, "count" },
+    { 75, "worker_kv_event_dropped_total", MetricType::COUNTER, "count" },
+    { 76, "worker_kv_event_skipped_unparsed_keys_total", MetricType::COUNTER, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 

@@ -63,6 +63,10 @@
         "value": "",
         "description": "cluster_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, allowing different clusters to be distinguished by the cluster_name."
     },
+    "kv_events_config": {
+        "value": "",
+        "description": "KV event publisher JSON config. Empty means disabled. Example: {\"bind_endpoint\":\"tcp://0.0.0.0:5557\",\"backend_id\":\"worker-0\"}"
+    },
     "host_id_env_name": {
         "value": "",
         "description": "Environment variable name used to obtain the current host_id. Worker reports this host_id to ETCD for same-node worker affinity."

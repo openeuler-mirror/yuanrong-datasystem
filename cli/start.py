@@ -37,6 +37,7 @@ class Command(BaseCommand):
     _REQUIRED_PARAMS = ["etcd_address"]
     _DEFAULT_WORKER_ADDRESS = "127.0.0.1:31501"
     _DEFAULT_TIMEOUT = 90
+    _KV_EVENTS_CONFIG_PARAM = "kv_events_config"
 
     def __init__(self):
         """Initialize command instance."""
@@ -408,9 +409,23 @@ class Command(BaseCommand):
         for k, v in params.items():
             if str(v).strip():
                 k = util.validate_no_injection(k)
-                v = util.validate_no_injection(v)
+                v = self.validate_worker_param_value(k, v)
                 cmd.append(f"--{k}={v}")
         cmd_str = " ".join(cmd)
         if use_numactl:
             self.logger.info(f"Starting with numactl command: {cmd_str}")
         return cmd
+
+    def validate_worker_param_value(self, key: str, value: str) -> str:
+        if key != self._KV_EVENTS_CONFIG_PARAM:
+            return util.validate_no_injection(value)
+        try:
+            config = json.loads(value)
+        except json.JSONDecodeError as e:
+            raise ValueError("kv_events_config must be a valid JSON object string") from e
+        if not isinstance(config, dict):
+            raise ValueError("kv_events_config must be a JSON object")
+        for item in config.values():
+            if isinstance(item, str):
+                util.validate_no_injection(item)
+        return value
