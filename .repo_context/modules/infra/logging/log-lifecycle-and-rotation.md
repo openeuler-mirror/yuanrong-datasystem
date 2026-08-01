@@ -54,6 +54,8 @@
     `LogProcessRole::COORDINATOR` respectively.
   - it sets `log_filename`, initializes the provider, starts `LogManager`, initializes `AccessRecorderManager`, and starts
     the operation logger with an explicit `client`, `worker`, or `coordinator` role.
+  - worker startup logs the Git commit/branch and non-default flag snapshot immediately after `Logging::Start()` so
+    these process-identity signals stay near the beginning of the worker log.
   - operation records use the same source, pod, PID/TID, trace, and cluster context field layout as ordinary INFO logs;
     multiline event payloads such as `CONFIG_INIT` keep one prefix on the first physical line.
   - worker and coordinator startup paths write an effective-flag `CONFIG_INIT` snapshot after successful service startup;
@@ -145,7 +147,11 @@
 
 - Verified from `failure_handler.cpp`:
   - absl symbolizer and failure signal handler are installed through `InstallFailureSignalHandler`.
-  - `FailureWriter` flushes normal logs on null input and writes failure text to `<resolved log dir>/container.log`.
+  - `InstallFailureSignalHandler` preserves the previously installed `SIGTERM` action after absl installs its failure
+    handlers, so graceful termination can continue through the process's normal signal handler instead of writing a
+    crash-style stack to `container.log`.
+  - `FailureWriter` ignores null flush hints from the signal handler and writes non-null failure text to
+    `<resolved log dir>/container.log`.
 - Review note:
   - crash-path logging bypasses some normal logging paths by writing directly through `Logging::WriteLogToFile`.
 - Pending verification:

@@ -349,7 +349,7 @@ Status DataWorker::UpdateConfig(const std::string &configJson)
     return worker_->UpdateConfig(configJson);
 }
 
-Status DataWorker::InitWorker(DynamicFlagConfig &flags, const bool isEmbeddedClient)
+Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDefaultFlags, const bool isEmbeddedClient)
 {
     InitWorkerLogConfig();
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_log_dir, DEFAULT_LOG_DIR, "/worker"));
@@ -358,6 +358,7 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const bool isEmbeddedCli
                                   isEmbeddedClient);
 
     LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
+    LOG(INFO) << "Worker non-default flags:\n" << nonDefaultFlags;
 
 #ifdef SUPPORT_JEPROF
     LOG(WARNING) << "Worker support jeprof.";
@@ -428,13 +429,12 @@ Status DataWorker::InitEmbeddedWorker(const EmbeddedConfig &config)
     onStart_ = {};
     onStop_ = {};
     callbackState_ = LifecycleCallbackState::NOT_CONFIGURED;
-    auto rc = InitWorker(flags, true);
+    auto rc = InitWorker(flags, flags.GetNonDefaultFlags(defaultGflagMap), true);
     if (rc.IsError()) {
         return FinishShutdown(rc);
     }
     worker::WorkerServiceAccessor::Instance().Register(worker_.get());
     started_.store(true);
-    LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultGflagMap);
     return Status::OK();
 }
 
@@ -475,9 +475,9 @@ Status DataWorker::RunEventLoopAndShutdown(DynamicFlagConfig &flags)
     return FinishShutdown(Status::OK());
 }
 
-Status DataWorker::DoInit(DynamicFlagConfig &flags, const char *crashReporterLabel)
+Status DataWorker::DoInit(DynamicFlagConfig &flags, const std::string &nonDefaultFlags, const char *crashReporterLabel)
 {
-    auto rc = InitWorker(flags, false);
+    auto rc = InitWorker(flags, nonDefaultFlags, false);
     if (rc.IsError()) {
         LOG(ERROR) << "Worker runtime error:" << rc.ToString();
         LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
@@ -523,11 +523,10 @@ Status DataWorker::InitAndRun(int argc, char **argv)
         onStart_ = {};
         onStop_ = {};
         callbackState_ = LifecycleCallbackState::NOT_CONFIGURED;
-        auto rc = DoInit(flags, argv[0]);
+        auto rc = DoInit(flags, flags.GetNonDefaultFlags(defaultGflagMap), argv[0]);
         if (rc.IsError()) {
             return FinishShutdown(rc);
         }
-        LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultGflagMap);
     }  // initMutex_ released here; subsequent threads will see started_==true
 
     Status callbackStatus = Status::OK();
@@ -573,11 +572,10 @@ Status DataWorker::InitAndRun(const DataWorkerOptions &options)
         onStart_ = options.onStart;
         onStop_ = options.onStop;
         callbackState_ = onStart_ ? LifecycleCallbackState::READY : LifecycleCallbackState::NOT_CONFIGURED;
-        auto rc = DoInit(flags, "datasystem_worker");
+        auto rc = DoInit(flags, flags.GetNonDefaultFlags(defaultGflagMap), "datasystem_worker");
         if (rc.IsError()) {
             return FinishShutdown(rc);
         }
-        LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultGflagMap);
     }  // initMutex_ released here; subsequent threads will see started_==true
 
     Status callbackStatus = Status::OK();

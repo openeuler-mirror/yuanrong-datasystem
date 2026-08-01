@@ -92,7 +92,8 @@
 
 - Startup:
   - parse and validate worker/master/bind addresses
-  - initialize logs and worker flags
+  - initialize logs and worker flags; the Git commit/branch and non-default flag snapshot are emitted immediately after
+    `Logging::Start()` and before `WorkerOCServer` construction
   - pre-initialize RocksDB storage
   - set up runtime services and signal handling
   - `DataWorker` selects the coordination backend before constructing `WorkerOCServer`: parameterized startup always passes its required injected Discovery and therefore selects Coordinator mode, while command-line and embedded static startup wrap a non-empty `coordinator_address` in internal `StaticCoordinatorDiscovery` or pass null for ETCD/metastore.

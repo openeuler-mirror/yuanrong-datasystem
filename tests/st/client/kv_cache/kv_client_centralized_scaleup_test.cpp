@@ -20,14 +20,16 @@
 #include "datasystem/utils/status.h"
 
 #include "common.h"
-#include "client/object_cache/oc_client_common.h"
+#include "client/kv_cache/kv_client_scale_common.h"
 
 namespace datasystem {
 namespace st {
 
 const std::string HOST_IP_PREFIX = "127.0.0.1";
 constexpr size_t DEFAULT_WORKER_NUM = 4;
-class KVClientCentralizedScaleupTest : public OCClientCommon {
+constexpr int WORKER_READY_TIMEOUT_SEC = 60;
+constexpr int SCALEUP_TEST_TIMEOUT_SEC = 120;
+class KVClientCentralizedScaleupTest : public KVClientScaleCommon {
 public:
     static bool IsConcurrentScaleupCase()
     {
@@ -58,22 +60,26 @@ public:
         }
     }
 
-    void WaitWorkerReady(std::vector<uint32_t> indexes, int maxWaitTimeSec = 20)
+    void WaitWorkerReady(const std::vector<uint32_t> &indexes, int maxWaitTimeSec = WORKER_READY_TIMEOUT_SEC)
     {
-        if (IsConcurrentScaleupCase()) {
-            maxWaitTimeSec = 30;
-        }
         for (auto i : indexes) {
             ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;
         }
     }
 
-    void StartWorkerAndWaitReady(std::vector<uint32_t> indexes, std::string gFlag = "")
+    void WaitTopologyReady(int expectedWorkerNum)
+    {
+        WaitAllMembersJoinClusterTopology(expectedWorkerNum);
+        WaitTopologyTasksDrained({});
+    }
+
+    void StartWorkerAndWaitReady(const std::vector<uint32_t> &indexes, int expectedWorkerNum, std::string gFlag = "")
     {
         for (auto i : indexes) {
             ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort(), gFlag).IsOk());
         }
         WaitWorkerReady(indexes);
+        WaitTopologyReady(expectedWorkerNum);
     }
 
     void SetUp() override
@@ -90,14 +96,20 @@ public:
         DS_ASSERT_OK(cluster_->StartCoordinatorCluster());
     }
 
+    int GetTestCaseTimeoutSecs() const override
+    {
+        return SCALEUP_TEST_TIMEOUT_SEC;
+    }
+
     void InitCluster(bool withConcurrently = false)
     {
         if (withConcurrently) {
             DS_ASSERT_OK(externalCluster_->StartWorkerByForkProcess(0));
             DS_ASSERT_OK(externalCluster_->StartWorkerByForkProcess(1));
             WaitWorkerReady({ 0, 1 });
+            WaitTopologyReady(2);
         } else {
-            StartWorkerAndWaitReady(std::vector<uint32_t>{ 0, 1 });
+            StartWorkerAndWaitReady(std::vector<uint32_t>{ 0, 1 }, 2);
         }
 
         InitTestKVClient(0, client0_);
@@ -124,7 +136,7 @@ TEST_F(KVClientCentralizedScaleupTest, LEVEL1_ScaleUpWorkerSequentially)
 {
     InitCluster();
 
-    StartWorkerAndWaitReady(std::vector<uint32_t>{ 2 });
+    StartWorkerAndWaitReady(std::vector<uint32_t>{ 2 }, 3);
     InitTestKVClient(2, client2_);  // Connect client to worker 2
     std::string getValue;
     DS_ASSERT_OK(client1_->Set("key2", "value2"));
@@ -133,7 +145,7 @@ TEST_F(KVClientCentralizedScaleupTest, LEVEL1_ScaleUpWorkerSequentially)
     DS_ASSERT_OK(client0_->Del("key2"));
     DS_ASSERT_NOT_OK(client1_->Get("key2", getValue));
 
-    StartWorkerAndWaitReady(std::vector<uint32_t>{ 3 });
+    StartWorkerAndWaitReady(std::vector<uint32_t>{ 3 }, 4);
     InitTestKVClient(3, client3_);  // Connect client to worker 3
     DS_ASSERT_OK(client3_->Set("key3", "value3"));
     DS_ASSERT_OK(client0_->Get("key3", getValue));

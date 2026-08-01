@@ -101,7 +101,7 @@ private:
     enum class LifecycleCallbackState : uint8_t { NOT_CONFIGURED, READY, START_ATTEMPTED, STOP_INVOKED };
 
     /// @brief Initialize WorkerOCServer and start all services.
-    Status InitWorker(DynamicFlagConfig &flags, bool isEmbeddedClient);
+    Status InitWorker(DynamicFlagConfig &flags, const std::string &nonDefaultFlags, bool isEmbeddedClient);
 
     /// @brief Shutdown Worker.
     Status ShutDown();
@@ -125,7 +125,7 @@ private:
     Status FinishShutdown(Status firstError);
 
     /// @brief InitWorker + Register + signal handler. Caller must hold initMutex_.
-    Status DoInit(DynamicFlagConfig &flags, const char *crashReporterLabel);
+    Status DoInit(DynamicFlagConfig &flags, const std::string &nonDefaultFlags, const char *crashReporterLabel);
 
     DataWorker() = default;
     std::unique_ptr<worker::WorkerOCServer> worker_{ nullptr };

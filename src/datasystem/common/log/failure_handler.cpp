@@ -19,6 +19,7 @@
  */
 #include "datasystem/common/log/failure_handler.h"
 
+#include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -71,6 +72,9 @@ void FailureWriter(const char *data)
 void InstallFailureSignalHandler(const char *arg0)
 {
     absl::InitializeSymbolizer(arg0);
+    // SIGTERM is a graceful-shutdown signal for datasystem processes, not a crash signal.
+    struct sigaction previousTermAction {};
+    bool hasPreviousTermAction = sigaction(SIGTERM, nullptr, &previousTermAction) == 0;
 
     absl::FailureSignalHandlerOptions options;
     options.call_previous_handler = true;
@@ -78,6 +82,9 @@ void InstallFailureSignalHandler(const char *arg0)
     options.alarm_on_failure_secs = 0;
 
     absl::InstallFailureSignalHandler(options);
+    if (hasPreviousTermAction) {
+        (void)sigaction(SIGTERM, &previousTermAction, nullptr);
+    }
 }
 
 }  // namespace datasystem

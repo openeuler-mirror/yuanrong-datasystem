@@ -75,6 +75,13 @@ public:
         for (size_t i = 0; i < 2; i++) {
             DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
         }
+        std::shared_ptr<KVClient> warmupClient;
+        InitTestKVClient(1, warmupClient, 60000);
+        datasystem::SetParam param;
+        param.writeMode = datasystem::WriteMode::NONE_L2_CACHE;
+        DS_ASSERT_OK(warmupClient->Set("deadline_diag_warmup_" + RandomData().GetRandomString(10), "v", param));
+        warmupClient.reset();
+
         // Client on worker 1, request budget 20ms (mirrors production config).
         // FLAGS_use_brpc was set true in SetClusterSetupOptions (called by Init),
         // so the KVClient picks up brpc transport.
@@ -109,6 +116,7 @@ TEST_F(WorkerCreateMetaDeadlineDiagTest, SlowMasterSetTimesOutAtClientBudget)
     datasystem::SetParam param;
     param.writeMode = datasystem::WriteMode::NONE_L2_CACHE;
     Status rc = client_->Set(key, val, param);
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "master.CreateMeta.begin"));
     LOG(INFO) << "Set with 20ms budget against 300ms master delay: rc=" << rc.ToString();
 
     // If deadline propagation works (brpc_service_generator fix +
@@ -120,9 +128,6 @@ TEST_F(WorkerCreateMetaDeadlineDiagTest, SlowMasterSetTimesOutAtClientBudget)
         << ". The client deadline may not have propagated to the master RPC "
            "(brpc_service_generator.cntl->timeout_ms() still UNSET_MAGIC_NUM? "
            "baidu_std_protocol_deliver_timeout_ms not enabled?).";
-
-    // Clear the inject so teardown is clean.
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "master.CreateMeta.begin"));
 }
 
 }  // namespace st
