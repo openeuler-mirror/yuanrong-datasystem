@@ -78,6 +78,7 @@ const std::string SOURCE_CLOCK_OFFSET_POINT = "RebalanceExecutor.NowMsForExpiryC
 const std::string ADMISSION_CLOSED_POINT = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.closed";
 const std::string DRAIN_TIMED_OUT_POINT = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.timedOut";
 const std::string MIGRATE_DATA_AFTER_ADMISSION = "WorkerOcServiceMigrateImpl.MigrateData.afterAdmission";
+const std::string URMA_CQE_ERROR_INJECT = "UrmaManager.CheckCompletionRecordStatus";
 
 struct ObjectBatch {
    std::vector<std::string> keys;
@@ -965,6 +966,122 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceDrainTimeoutKeepsSourceData)
     // T5: Source keeps its local copy; data is readable after Target exits.
     WaitAllNodesActiveInHashRing(2);
     AssertReadable(client0_, sourceBatch);
+}
+
+class LEVEL1_KVClientMemoryRebalanceUbFaultTest : public LEVEL1_KVClientMemoryRebalanceTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        LEVEL1_KVClientMemoryRebalanceTest::SetClusterSetupOptions(opts);
+#ifdef USE_URMA
+        opts.workerGflagParams +=
+            " -enable_urma=true -enable_transport_fallback=false -enable_data_replication=false"
+            " -rebalance_source_usage_percent=30 -rebalance_usage_gap_percent=10"
+            " -data_migrate_rate_limit_mb=5";
+#else
+        opts.workerGflagParams += " -enable_urma=false";
+#endif
+        const bool readMode = IsCurrentTestName("FastMigrationReadError4KeepsSourceAndQuarantinesTarget")
+                              || IsCurrentTestName("UnavailableTargetRecoversOnlyAfterDedicatedProbe");
+        opts.workerGflagParams +=
+            " -data_migrate_urma_transport_mode=" + std::string(readMode ? "read" : "write");
+        opts.injectActions +=
+            ";PeerUbAdmission.CheckWriteTarget.blocked:100000*call()"
+            ";DataMigrator.LocalOperatorUnavailable:100000*call()"
+            ";MigrateDataHandler.StopAfterTransportFailure:100000*call()"
+            ";PeerUbAdmission.CompleteProbe.success:100000*call()";
+    }
+
+protected:
+    void ClearCqeFault()
+    {
+        for (auto worker : AllWorkers()) {
+            (void)cluster_->ClearInjectAction(WORKER, worker, URMA_CQE_ERROR_INJECT);
+        }
+    }
+
+    ObjectBatch TriggerError4(const std::string &prefix)
+    {
+        // Write first so the Set data-plane URMA completions finish, then wait
+        // for the rebalance task to be assigned, and only then arm the one-shot
+        // CQE fault. Arming earlier lets the Set writes (or recovery probes)
+        // consume the 1*call(0, 4) injection before the migration read runs.
+        auto batch = WriteObjects(client0_, prefix, 8, 'u');
+        const uint64_t assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+        WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+        SleepMs(POLL_INTERVAL_MS);
+        SetInjectActionForAll(URMA_CQE_ERROR_INJECT, "1*call(0, 4)");
+        WaitForTotalInjectCount(URMA_CQE_ERROR_INJECT, 1);
+        ClearCqeFault();
+        return batch;
+    }
+};
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, FastMigrationReadError4KeepsSourceAndQuarantinesTarget)
+{
+#ifdef USE_URMA
+    WaitAllNodesActiveInHashRing(3);
+    auto blockedBaseline = GetTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked");
+    auto batch = TriggerError4("p3_read_error4");
+    WaitForTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked", blockedBaseline + 1);
+    AssertReadable(client0_, batch);
+#else
+    GTEST_SKIP() << "Worker not built with URMA framework";
+#endif
+}
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, FastMigrationWriteError4QuarantinesSourceWithoutRedirect)
+{
+#ifdef USE_URMA
+    WaitAllNodesActiveInHashRing(3);
+    auto blockedBaseline = GetTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked");
+    auto batch = TriggerError4("p3_write_error4");
+    WaitForTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked", blockedBaseline + 1);
+    AssertReadable(client0_, batch);
+#else
+    GTEST_SKIP() << "Worker not built with URMA framework";
+#endif
+}
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, RebalanceError4StopsFollowingMigrationBatch)
+{
+#ifdef USE_URMA
+    WaitAllNodesActiveInHashRing(3);
+    auto blockedBaseline = GetTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked");
+    auto batch = TriggerError4("p3_mid_batch_error4");
+    WaitForTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked", blockedBaseline + 1);
+    AssertReadable(client0_, batch);
+#else
+    GTEST_SKIP() << "Worker not built with URMA framework";
+#endif
+}
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, UnavailableTargetRecoversOnlyAfterDedicatedProbe)
+{
+#ifdef USE_URMA
+    WaitAllNodesActiveInHashRing(3);
+    auto firstBatch = TriggerError4("p3_probe_recovery_first");
+    // The target is isolated after the migration ERROR 4. Its own recovery
+    // probe (CompleteProbe.success) restores the worker-local admission, and
+    // the source's probe restores the peer admission. Read again only after
+    // the recovery probe has fired; poll so peer-admission propagation does
+    // not race the assertion.
+    WaitForTotalInjectCount("PeerUbAdmission.CompleteProbe.success", 1, AllWorkers(), 45'000);
+    ASSERT_TRUE(WaitFor([&] {
+        for (const auto &key : firstBatch.keys) {
+            std::string value;
+            if (client0_->Get(key, value, GET_TIMEOUT_MS).IsError()) {
+                return false;
+            }
+        }
+        return true;
+    })) << "objects did not become readable after the dedicated recovery probe";
+    auto secondBatch = WriteObjects(client0_, "p3_probe_recovery_second", 2, 'v');
+    AssertReadable(client0_, firstBatch);
+    AssertReadable(client0_, secondBatch);
+#else
+    GTEST_SKIP() << "Worker not built with URMA framework";
+#endif
 }
 
 class LEVEL1_KVClientMemoryRebalanceEvictSpillRegressionTest : public KVClientCommon {

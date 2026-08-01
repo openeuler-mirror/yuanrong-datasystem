@@ -16,6 +16,8 @@
  */
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
 
+#include <vector>
+
 #include "gtest/gtest.h"
 
 #include "ut/common.h"
@@ -24,12 +26,20 @@ namespace datasystem::object_cache {
 namespace {
 constexpr char MEMBER_ADDRESS[] = "127.0.0.1:19001";
 
-std::shared_ptr<const cluster::TopologySnapshot> MakeSnapshot()
+std::shared_ptr<const cluster::TopologySnapshot> MakeSnapshot(
+    cluster::MemberState memberState = cluster::MemberState::ACTIVE)
 {
     cluster::TopologyState state;
     state.version = 1;
-    state.members = { cluster::Member{ { std::string(16, 'a'), MEMBER_ADDRESS }, cluster::MemberState::ACTIVE,
+    state.members = { cluster::Member{ { std::string(16, 'a'), MEMBER_ADDRESS }, memberState,
                                        { 1 } } };
+    // Transitional members require a matching activeBatch, otherwise
+    // TopologySnapshot::Create rejects the snapshot as an unstable topology.
+    if (memberState == cluster::MemberState::LEAVING) {
+        state.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_IN, 1 };
+    } else if (memberState == cluster::MemberState::JOINING) {
+        state.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, 1 };
+    }
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     EXPECT_TRUE(cluster::TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot).IsOk());
     return snapshot;
@@ -105,6 +115,36 @@ TEST(ObjectEndpointPolicyTest, AppendsRouteFailuresWithoutCreatingAnEmptyGroup)
     EXPECT_EQ(grouped.failures.at("key-a").GetMsg(), "not ready");
     EXPECT_EQ(grouped.failures.at("key-b").GetCode(), K_NOT_FOUND);
     EXPECT_EQ(grouped.failures.at("key-b").GetMsg(), "not found");
+}
+
+TEST(ObjectEndpointPolicyTest, AppliesMigrationSourceAndTargetRoleMatrix)
+{
+    struct Case {
+        cluster::MemberState state;
+        DataPlaneAdmissionRole role;
+        bool allowed;
+    };
+    const std::vector<Case> cases{
+        { cluster::MemberState::ACTIVE, DataPlaneAdmissionRole::ORDINARY_SOURCE, true },
+        { cluster::MemberState::PRE_LEAVING, DataPlaneAdmissionRole::ORDINARY_SOURCE, false },
+        { cluster::MemberState::PRE_LEAVING, DataPlaneAdmissionRole::TOPOLOGY_SCALE_IN_SOURCE, true },
+        { cluster::MemberState::LEAVING, DataPlaneAdmissionRole::TOPOLOGY_SCALE_IN_SOURCE, true },
+        { cluster::MemberState::JOINING, DataPlaneAdmissionRole::INCOMING_TARGET, false },
+        { cluster::MemberState::LEAVING, DataPlaneAdmissionRole::REBALANCE_TARGET, false },
+        { cluster::MemberState::ACTIVE, DataPlaneAdmissionRole::REDIRECT_TARGET, true },
+    };
+    HostPort address;
+    DS_ASSERT_OK(address.ParseString(MEMBER_ADDRESS));
+    for (const auto &testCase : cases) {
+        cluster::TopologySnapshotState snapshots;
+        cluster::SnapshotUpdateOutcome outcome;
+        DS_ASSERT_OK(snapshots.Publish(MakeSnapshot(testCase.state), outcome));
+        cluster::MembershipEndpointView membership(snapshots);
+        worker::MetadataRouteOptions options;
+        worker::MetadataRouteResolver resolver(nullptr, options);
+        ObjectEndpointPolicy policy(resolver, membership);
+        EXPECT_EQ(policy.CheckDataPlaneAdmission(address, testCase.role).IsOk(), testCase.allowed);
+    }
 }
 }  // namespace
 }  // namespace datasystem::object_cache

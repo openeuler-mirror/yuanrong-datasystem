@@ -16,6 +16,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -25,6 +26,7 @@
 #include "ut/common.h"
 
 #include "../../../common/binmock/binmock.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
@@ -76,6 +78,7 @@ public:
             .metadataRouteResolver = &GetTestMetadataRoute(),
             .endpointPolicy = nullptr,
             .exitRequested = nullptr,
+            .ubAdmission = &ubAdmission_,
             .allowDirectoryLag = false,
         };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
@@ -169,14 +172,27 @@ public:
 
     void MockWaitFastTransportEventOnce(const Status &rc)
     {
-        BINEXPECT_CALL(&datasystem::WaitFastTransportEvent, (_, _, _)).Times(1).WillOnce(Return(rc));
+        BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _))
+            .Times(1)
+            .WillOnce(Return(rc));
     }
 
     void MockWaitFastTransportEventOkTimes(int times)
     {
-        BINEXPECT_CALL(&datasystem::WaitFastTransportEvent, (_, _, _))
+        BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _))
             .Times(times)
             .WillRepeatedly(Return(Status::OK()));
+    }
+
+    void MockWaitFastTransportError4()
+    {
+        BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _))
+            .Times(1)
+            .WillOnce(Invoke([](std::vector<uint64_t> &, std::function<int64_t(void)>,
+                                std::function<Status(Status &)>, UrmaWriteFailure *failure) {
+                failure->cqeStatus = 4;
+                return Status(K_URMA_ERROR, "migration read CQE status 4");
+            }));
     }
 
     void MockReplacePrimaryOk(int expectedNeedSendMasterSize = -1)
@@ -228,6 +244,7 @@ public:
     std::shared_ptr<WorkerOcServiceMigrateImpl> impl_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     WorkerRequestManager requestManager_;
+    PeerUbAdmission ubAdmission_;
 };
 
 TEST_F(MigrateDataDirectTest, TestMigrateDataDirectUrmaNotEnabled)
@@ -288,6 +305,29 @@ TEST_F(MigrateDataDirectTest, TestMigrateDataDirectWaitEventFail)
     ASSERT_EQ(rsp.failed_object_keys(0), "obj1");
 }
 
+TEST_F(MigrateDataDirectTest, Error4ReturnsStructuredDetailAndQuarantinesLocalReadOperator)
+{
+    EnableUrma(true);
+    MockQueryMasterMetadataOk(1, defaultDataSize_);
+    MockUrmaReadReturnOnce(Status::OK(), { waitEventKey_ });
+    MockWaitFastTransportError4();
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerOcEvictionManager::Erase, (_)).Times(1).WillRepeatedly(Return());
+    auto req = MakeReq({ { .objectKey = "obj1", .version = 1, .dataSize = defaultDataSize_,
+                           .withUrmaInfo = true } },
+                       "127.0.0.1:19999");
+
+    MigrateDataDirectRspPb rsp;
+    EXPECT_EQ(impl_->MigrateDataDirect(req, rsp).GetCode(), K_URMA_ERROR);
+    ASSERT_TRUE(rsp.has_provider_ub_failure_detail());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().failure_side(), MIGRATION_LOCAL_UB_READ_FAILURE_SIDE);
+    EXPECT_EQ(rsp.provider_ub_failure_detail().operator_worker(), "127.0.0.1:18888");
+    EXPECT_EQ(rsp.provider_ub_failure_detail().cqe_status(), 4);
+    const HostPort localOperator("127.0.0.1", 18888);
+    EXPECT_EQ(ubAdmission_.CheckWriteTarget(localOperator, UbOperationKind::MIGRATION_READ).GetCode(),
+              K_URMA_WORKER_UNAVAILABLE);
+}
+
 TEST_F(MigrateDataDirectTest, TestMigrateDataDirectPartialFail)
 {
     EnableUrma(true);
@@ -337,7 +377,7 @@ TEST_F(MigrateDataDirectTest, TestMigrateDataDirectVersionMismatch)
     MockQueryMasterMetadataOk(metaVersion, defaultDataSize_);
 
     BINEXPECT_CALL(&datasystem::UrmaRead, (_, _, _, _, _, _, _)).Times(0);
-    BINEXPECT_CALL(&datasystem::WaitFastTransportEvent, (_, _, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).Times(0);
     BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _)).Times(0);
 
     auto req = MakeReq({ { .objectKey = "obj1", .version = 1, .dataSize = defaultDataSize_ } });
@@ -357,7 +397,7 @@ TEST_F(MigrateDataDirectTest, TestMigrateDataDirectUrmaReadFail)
 
     MockQueryMasterMetadataOk(1, defaultDataSize_);
     MockUrmaReadReturnOnce(Status(StatusCode::K_RUNTIME_ERROR, "urma read failed"));
-    BINEXPECT_CALL(&datasystem::WaitFastTransportEvent, (_, _, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).Times(0);
     BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _)).Times(0);
 
     auto req = MakeReq({ { .objectKey = "obj1", .version = 1, .dataSize = defaultDataSize_ } });

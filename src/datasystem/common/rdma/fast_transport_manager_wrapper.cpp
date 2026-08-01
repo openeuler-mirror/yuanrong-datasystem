@@ -16,6 +16,7 @@
 
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include "datasystem/common/inject/inject_point.h"
@@ -95,6 +96,40 @@ Status InitializeFastTransportManager(const HostPort &hostport)
     }
 #endif
     return Status::OK();
+}
+
+Status ProbeUbDataPlane(const UrmaHandshakeRspPb &response)
+{
+#ifdef USE_URMA
+    CHECK_FAIL_RETURN_STATUS(response.has_recovery_probe_addr(), K_NOT_SUPPORTED,
+                             "Worker handshake has no dedicated URMA WRITE recovery probe address");
+    constexpr uint64_t probeSize = 1;
+    std::shared_ptr<UrmaManager::BufferHandle> localBuffer;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(localBuffer, probeSize));
+    RETURN_RUNTIME_ERROR_IF_NULL(localBuffer);
+    auto *probeBuffer = static_cast<uint8_t *>(localBuffer->GetPointer());
+    RETURN_RUNTIME_ERROR_IF_NULL(probeBuffer);
+    *probeBuffer = 0;
+    std::vector<uint64_t> eventKeys;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayload(
+        response.recovery_probe_addr(), localBuffer->GetSegmentAddress(), localBuffer->GetSegmentSize(),
+        reinterpret_cast<uint64_t>(probeBuffer), 0, probeSize, 0, INVALID_CHIP_ID, INVALID_CHIP_ID, false,
+        eventKeys));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    auto remainingTime = [deadline]() {
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        return std::max<int64_t>(0, remaining.count());
+    };
+    auto preserveError = [](Status &status) { return status; };
+    RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, preserveError));
+    INJECT_POINT("DataPlaneManager.ProbeUbDataPlane.AfterCompletion");
+    INJECT_POINT("FastTransportManager.ProbeUbDataPlane.AfterCompletion");
+    return Status::OK();
+#else
+    (void)response;
+    return Status(K_NOT_SUPPORTED, "URMA recovery probe is unavailable in this build");
+#endif
 }
 
 Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress)

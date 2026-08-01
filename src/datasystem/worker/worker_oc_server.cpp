@@ -1045,6 +1045,7 @@ void WorkerOCServer::CreateRebalanceExecutor(
                                              &topologyEngine_->Membership(),
                                              objectEndpointPolicy_.get(),
                                              &topologyExitRequested_,
+                                             objCacheClientWorkerSvc_->GetUbAdmission(),
                                              akSkManager_,
                                              objectTable,
                                              evictionManager,
@@ -1265,7 +1266,7 @@ Status WorkerOCServer::ConstructTopologyRuntime()
                 LOG_IF_ERROR(objCacheClientWorkerSvc_->GiveUpReconciliation(),
                              "Try to finish restart reconciliation after topology snapshot published failed");
             }
-            ScheduleTopologySnapshotWarmup(std::move(snapshot));
+            HandleTopologySnapshotPublished(std::move(snapshot));
         })
         .SetControlBackendProbe(
             [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers, auto deadline) {
@@ -1386,6 +1387,36 @@ Status WorkerOCServer::StartTopologyRuntime()
 {
     CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_NOT_READY, "topology engine is not constructed");
     return topologyEngine_->Start();
+}
+
+void WorkerOCServer::ReconcileUbAdmissionTopology(const cluster::TopologySnapshot &snapshot)
+{
+    if (objCacheClientWorkerSvc_ == nullptr) {
+        return;
+    }
+    std::unordered_set<HostPort> workers;
+    workers.reserve(snapshot.Members().size());
+    for (const auto &member : snapshot.Members()) {
+        HostPort worker;
+        if (worker.ParseString(member.identity.address).IsOk()) {
+            workers.emplace(std::move(worker));
+        }
+    }
+    const uint64_t graceMs = static_cast<uint64_t>(FLAGS_node_timeout_s) * 2 * SECS_TO_MS;
+    auto *admission = objCacheClientWorkerSvc_->GetUbAdmission();
+    const auto nowMs = GetSteadyClockTimeStampMs();
+    admission->ReconcileTopologyWorkers(workers, nowMs, graceMs);
+    if (IsUrmaEnabled() && workers.size() > 1 && !admission->GetState(hostPort_).has_value()) {
+        admission->InitializeProbing(hostPort_, nowMs);
+    }
+}
+
+void WorkerOCServer::HandleTopologySnapshotPublished(std::shared_ptr<const cluster::TopologySnapshot> snapshot)
+{
+    if (snapshot != nullptr) {
+        ReconcileUbAdmissionTopology(*snapshot);
+    }
+    ScheduleTopologySnapshotWarmup(std::move(snapshot));
 }
 
 Status WorkerOCServer::PublishReadyMembership()
@@ -1940,6 +1971,7 @@ void WorkerOCServer::RunUrmaWarmupController()
         if (snapshot != nullptr) {
             ScheduleUrmaWarmupTasks(snapshot->ActiveMembers(), scheduledPeers, futures);
         }
+        RunOneUbRecoveryProbe();
 
         const auto elapsedMs =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
@@ -1957,6 +1989,74 @@ void WorkerOCServer::RunUrmaWarmupController()
         "[URMA_WARMUP] finished actual_success_count=%zu/total_count=%zu, elapsed_ms=%lld, "
         "discovered_peer_count=%zu",
         successCount, futures.size(), elapsedMs, scheduledPeers.size());
+    ReleaseWarmupThreadPool();
+    while (!warmupExit_) {
+        ContinueUbLifecycleCleanup();
+        RunOneUbRecoveryProbe();
+        SleepForWarmupScanInterval(warmupExit_, warmupScanCv_, warmupScanMutex_);
+    }
+}
+
+void WorkerOCServer::ContinueUbLifecycleCleanup()
+{
+    if (objCacheClientWorkerSvc_ == nullptr || topologyEngine_ == nullptr) {
+        return;
+    }
+    if (objCacheClientWorkerSvc_->GetUbAdmission()->GetStats().pendingDepartures == 0) {
+        return;
+    }
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    if (topologyEngine_->GetSnapshot(snapshot).IsOk() && snapshot != nullptr) {
+        ReconcileUbAdmissionTopology(*snapshot);
+    }
+}
+
+Status WorkerOCServer::ResolveUbProbeEndpoint(const HostPort &subject, HostPort &endpoint) const
+{
+    if (subject != hostPort_) {
+        endpoint = subject;
+        return Status::OK();
+    }
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(topologyEngine_->GetSnapshot(snapshot));
+    for (const auto *member : snapshot->ActiveMembers()) {
+        if (member->identity.address != hostPort_.ToString()) {
+            return endpoint.ParseString(member->identity.address);
+        }
+    }
+    return Status(K_NOT_READY, "No active peer is available for the local UB sender probe");
+}
+
+void WorkerOCServer::RunOneUbRecoveryProbe()
+{
+    if (objCacheClientWorkerSvc_ == nullptr || objectEndpointPolicy_ == nullptr || topologyExitRequested_) {
+        return;
+    }
+    auto *admission = objCacheClientWorkerSvc_->GetUbAdmission();
+    const auto nowMs = GetSteadyClockTimeStampMs();
+    auto subject = admission->NextProbeCandidate(nowMs);
+    if (!subject.has_value()) {
+        return;
+    }
+    auto token = admission->TryBeginProbe(*subject, nowMs);
+    if (!token.has_value()) {
+        return;
+    }
+    HostPort endpoint;
+    Status status = objectEndpointPolicy_->CheckDataPlaneAdmission(
+        *subject, object_cache::DataPlaneAdmissionRole::INCOMING_TARGET);
+    if (status.IsOk()) {
+        status = ResolveUbProbeEndpoint(*subject, endpoint);
+    }
+    if (status.IsOk()) {
+        status = objCacheClientWorkerSvc_->ProbeUrmaConnectionToPeer(endpoint);
+    }
+    if (status.IsOk()) {
+        status = objectEndpointPolicy_->CheckDataPlaneAdmission(
+            *subject, object_cache::DataPlaneAdmissionRole::INCOMING_TARGET);
+    }
+    const bool requireGlobalAvailable = *subject != hostPort_;
+    (void)admission->CompleteProbe(*token, status, GetSteadyClockTimeStampMs(), requireGlobalAvailable);
 }
 
 Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()

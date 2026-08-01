@@ -258,6 +258,10 @@ target_link_libraries(ds_ut_stream PRIVATE
         datasystem_worker_static
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
+if (BUILD_WITH_URMA_MOCK)
+    target_compile_definitions(ds_ut_object PRIVATE USE_URMA USE_URMA_MOCK)
+    target_link_libraries(ds_ut_object PRIVATE common_urma_mock_obj)
+endif()
 target_link_libraries(ds_ut_object PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}

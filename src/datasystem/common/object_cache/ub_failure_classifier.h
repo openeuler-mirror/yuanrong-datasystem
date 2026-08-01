@@ -34,7 +34,9 @@ namespace datasystem {
 enum class UbOperationKind {
     CLIENT_PUT,
     CLIENT_GET_WRITEBACK,
-    WORKER_REMOTE_GET_WRITEBACK
+    WORKER_REMOTE_GET_WRITEBACK,
+    MIGRATION_READ,
+    MIGRATION_WRITE
 };
 
 enum class UbFailureClass {

@@ -20,6 +20,7 @@
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/timer.h"
@@ -132,6 +133,11 @@ Status MigrateDataHandler::MigrateDataByCacheType(CacheType type, std::vector<st
             return Status(StatusCode::K_NO_SPACE, "[Migrate Data] No remain bytes");
         }
         CollectObjectForMigration(*it, isSlotMigration);
+        if (lastRc_.IsError()) {
+            INJECT_POINT_NO_RETURN("MigrateDataHandler.StopAfterTransportFailure");
+            failedIds_.insert(it, needMigrateDataIds.end());
+            return lastRc_;
+        }
     }
     SendDataToRemote(isSlotMigration);
     return lastRc_;
@@ -150,6 +156,9 @@ void MigrateDataHandler::CollectObjectForMigration(const std::string &objectKey,
 {
     if (!isSlotMigration && IsFull()) {
         SendDataToRemote();
+        if (lastRc_.IsError()) {
+            return;
+        }
     }
 
     std::shared_ptr<SafeObjType> entry;
@@ -340,6 +349,9 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
         Clear();
         return;
     }
+    if (!CheckSendAdmission()) {
+        return;
+    }
 
     if (limiter_.IsRemoteBusyNode()) {
         VLOG(1) << FormatString("[Migrate Data] self-heal triggered for %s", remoteApi_->Address());
@@ -369,26 +381,46 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
     PerfPoint point(PerfKey::WORKER_MIGRATE_TRANSPORT_SEND_DATA);
     Status s = transport_->MigrateDataToRemote(req, rsp);
     point.Record();
-    if (s.IsOk()) {
-        AdjustMaxBatchSize(rsp.remainBytes);
-        successIds_.insert(rsp.successKeys.begin(), rsp.successKeys.end());
-        failedIds_.insert(rsp.failedKeys.begin(), rsp.failedKeys.end());
-        Status rc = TryUpdateRate(rsp.limitRate);
-        if (rc.IsError()) {
-            LOG(WARNING) << FormatString("[Migrate Data] Rate update failed for %s: %s",
-                                         remoteApi_->Address(), rc.ToString());
-        }
-        ReleaseResources(rsp.successKeys);
-    } else {
-        LOG(ERROR) << FormatString("[Migrate Data] Send %ld objects[%ld bytes] data to %s failed, error message: %s",
-                                   datas_.size(), currBatchSize_, remoteApi_->Address(), s.ToString());
-        std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
-                       [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
-        lastRc_ = s;
-    }
-
-    // 3. Clear finally.
+    HandleMigrationTransportResponse(s, rsp);
     Clear();
+}
+
+bool MigrateDataHandler::CheckSendAdmission()
+{
+    if (!sendAdmission_) {
+        return true;
+    }
+    auto status = sendAdmission_();
+    if (status.IsOk()) {
+        return true;
+    }
+    std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
+                   [](const std::unique_ptr<BaseDataUnit> &data) { return data->Id(); });
+    lastRc_ = std::move(status);
+    Clear();
+    INJECT_POINT_NO_RETURN("MigrateDataHandler.SendAdmissionDenied");
+    return false;
+}
+
+void MigrateDataHandler::HandleMigrationTransportResponse(const Status &status, MigrateTransport::Response &response)
+{
+    if (response.ubFailureDetail.has_value()) {
+        ubFailureDetail_ = std::move(response.ubFailureDetail);
+    }
+    if (status.IsError()) {
+        LOG(ERROR) << FormatString("[Migrate Data] Send %ld objects[%ld bytes] data to %s failed, error message: %s",
+                                   datas_.size(), currBatchSize_, remoteApi_->Address(), status.ToString());
+        std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
+                       [](const std::unique_ptr<BaseDataUnit> &data) { return data->Id(); });
+        lastRc_ = status;
+        return;
+    }
+    AdjustMaxBatchSize(response.remainBytes);
+    successIds_.insert(response.successKeys.begin(), response.successKeys.end());
+    failedIds_.insert(response.failedKeys.begin(), response.failedKeys.end());
+    Status rateStatus = TryUpdateRate(response.limitRate);
+    LOG_IF_ERROR(rateStatus, FormatString("[Migrate Data] Rate update failed for %s", remoteApi_->Address()));
+    ReleaseResources(response.successKeys);
 }
 
 Status MigrateDataHandler::MigrateDataToRemoteRetry(const std::shared_ptr<WorkerRemoteWorkerOCApi> &api,
@@ -489,7 +521,8 @@ MigrateDataHandler::MigrateResult MigrateDataHandler::ConstructResult(Status sta
              .successIds = successIds_,
              .failedIds = failedIds_,
              .skipIds = skipIds_,
-             .strategy = strategy_ };
+             .strategy = strategy_,
+             .ubFailureDetail = ubFailureDetail_ };
 }
 
 void MigrateDataHandler::Clear()

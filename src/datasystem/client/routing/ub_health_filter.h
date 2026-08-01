@@ -39,6 +39,7 @@ private:
     std::unordered_map<HostPort, std::string> trustedIncarnations_;
     // An empty value means the failure was observed before a trusted incarnation was available.
     std::unordered_map<HostPort, std::string> localObservationIncarnations_;
+    bool topologyInitialized_{ false };
 };
 }  // namespace datasystem::client
 

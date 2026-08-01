@@ -33,6 +33,8 @@ struct UrmaWriteFailure {
     std::optional<int> cqeStatus;
 };
 
+static constexpr int URMA_PORT_UNAVAILABLE_STATUS = 4;
+
 /**
  * @brief Register fast transport memory (as segment).
  * @param[in] segAddress Starting address of the segment.

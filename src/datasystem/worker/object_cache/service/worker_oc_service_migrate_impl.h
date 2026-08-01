@@ -25,6 +25,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -239,10 +240,6 @@ private:
      * @param[out] migratedBytes Bytes whose URMA read events have completed successfully.
      * @return K_OK on success, the error otherwise.
      */
-    Status FillDataToObjectEntries(const MigrateDataDirectReqPb &req, const ObjectInfoMap &needReadDataIds,
-                                   ObjectInfoMap &needSendMasterIds, std::unordered_set<std::string> &failedIds,
-                                   uint64_t &migratedBytes);
-
     struct ReadTask {
         std::string objectKey;
         uint64_t dataSize;
@@ -250,7 +247,19 @@ private:
         std::shared_ptr<ShmUnit> shmUnit;
         std::shared_ptr<SafeObjType> entry;
         bool isNewCreate{ false };
+        UrmaWriteFailure failure;
     };
+
+    struct DirectReadOutcome {
+        const MigrateDataDirectReqPb &req;
+        const ObjectInfoMap &needReadDataIds;
+        ObjectInfoMap needSendMasterIds;
+        std::unordered_set<std::string> &failedIds;
+        uint64_t migratedBytes{ 0 };
+        std::optional<ProviderUbFailureDetailPb> failureDetail;
+    };
+
+    Status FillDataToObjectEntries(DirectReadOutcome &outcome);
 
     /**
      * @brief Start remote read tasks.
@@ -262,10 +271,9 @@ private:
      * @param[out] failedIds Failed object key list.
      * @return K_OK on success, the error otherwise.
      */
-    Status StartRemoteReadTasks(const MigrateDataDirectReqPb &req, const ObjectInfoMap &needReadDataIds,
-                                const std::vector<uint32_t> &shmIndexMapping,
+    Status StartRemoteReadTasks(DirectReadOutcome &outcome, const std::vector<uint32_t> &shmIndexMapping,
                                 const std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
-                                std::vector<ReadTask> &tasks, std::unordered_set<std::string> &failedIds);
+                                std::vector<ReadTask> &tasks);
 
     /**
      * @brief Get shared memory owner by index.
@@ -301,8 +309,8 @@ private:
      * @param[out] migratedBytes Bytes whose URMA read events have completed successfully.
      * @return K_OK on success, the error otherwise.
      */
-    Status WaitRemoteReadTasks(std::vector<ReadTask> &tasks, ObjectInfoMap &needSendMasterIds,
-                               std::unordered_set<std::string> &failedIds, uint64_t &migratedBytes);
+    Status WaitRemoteReadTasks(std::vector<ReadTask> &tasks, DirectReadOutcome &outcome);
+    void RecordDirectReadUbFailure(const ReadTask &task, DirectReadOutcome &outcome, const Status &status);
 
     /**
      * @brief Helper function for aggregate allocation.
@@ -549,7 +557,7 @@ private:
      * @brief Acquire one incoming migration admission slot.
      * @return K_OK while the gate is open; K_NOT_READY after local ScaleIn starts.
      */
-    Status AcquireIncomingMigrationAdmission();
+    Status AcquireIncomingMigrationAdmission(bool requireUbAdmission = false);
 
     /**
      * @brief Release one incoming migration admission slot.
@@ -666,6 +674,7 @@ private:
     std::string localAddr_;
 
     std::shared_ptr<MigrateDataRateController> rateController_;
+    PeerUbAdmission *ubAdmission_{ nullptr };
 
     // Protects incomingMigrationAdmissionClosed_ and incomingMigrationCount_.
     std::mutex incomingMigrationMutex_;

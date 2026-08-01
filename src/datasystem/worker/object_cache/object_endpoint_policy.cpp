@@ -70,6 +70,24 @@ Status ObjectEndpointPolicy::CheckEndpoint(const HostPort &address, bool allowDi
     return Status::OK();
 }
 
+Status ObjectEndpointPolicy::CheckDataPlaneAdmission(const HostPort &address, DataPlaneAdmissionRole role) const
+{
+    cluster::MemberEndpoint endpoint;
+    RETURN_IF_NOT_OK(membership_.ResolveByAddress(address.ToString(), endpoint));
+    CHECK_FAIL_RETURN_STATUS(endpoint.localAvailability != cluster::EndpointAvailability::UNREACHABLE,
+                             K_MASTER_TIMEOUT, "Disconnected from remote node " + address.ToString());
+    const bool scaleInSource = role == DataPlaneAdmissionRole::TOPOLOGY_SCALE_IN_SOURCE;
+    const bool sourceAllowed =
+        endpoint.topologyState == cluster::MemberState::ACTIVE
+        || (scaleInSource && (endpoint.topologyState == cluster::MemberState::PRE_LEAVING
+                              || endpoint.topologyState == cluster::MemberState::LEAVING));
+    const bool sourceRole = role == DataPlaneAdmissionRole::ORDINARY_SOURCE || scaleInSource;
+    const bool allowed = sourceRole ? sourceAllowed : endpoint.topologyState == cluster::MemberState::ACTIVE;
+    CHECK_FAIL_RETURN_STATUS(allowed, K_NOT_READY,
+                             "Worker " + address.ToString() + " is not admitted for the requested data-plane role");
+    return Status::OK();
+}
+
 Status ObjectEndpointPolicy::CheckMetaOwner(std::string_view key, bool allowDirectoryLag) const
 {
     HostPort address;

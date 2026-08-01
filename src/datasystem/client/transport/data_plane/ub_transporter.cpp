@@ -57,7 +57,6 @@ constexpr uint32_t UB_FAILURE_PRIORITY_TRANSIENT = 1;
 constexpr uint32_t UB_FAILURE_PRIORITY_TIMEOUT = 2;
 constexpr uint32_t UB_FAILURE_PRIORITY_PATH = 3;
 constexpr uint32_t UB_FAILURE_PRIORITY_PORT_UNAVAILABLE = 4;
-constexpr int URMA_PORT_UNAVAILABLE_STATUS = 4;
 
 Status AlignUbBatchSlice(uint64_t size, uint64_t &alignedSize)
 {

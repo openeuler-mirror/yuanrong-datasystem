@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -212,6 +213,95 @@ TEST(UbHealthSummaryCacheTest, SupportsConcurrentApplyAndGet)
     const auto stored = cache.Get(PEER);
     ASSERT_TRUE(stored.has_value());
     EXPECT_EQ(stored->epoch, ITERATIONS);
+}
+
+TEST(PeerUbAdmissionTest, AvailableGlobalFactRequiresProbeBeforeRecovery)
+{
+    PeerUbAdmission admission;
+    UbOpOutcome failure(PEER, UbOperationKind::MIGRATION_WRITE, Status(K_URMA_ERROR, "CQE status 4"));
+    failure.cqeStatus = 4;
+    admission.ReportOutcome(failure);
+    auto summary = admission.BuildSelfHealthSummary(PEER);
+    summary.incarnation = "worker-a";
+    summary.writable = true;
+    summary.epoch = 2;
+    admission.ReplaceGlobalSummaries({ summary });
+
+    EXPECT_EQ(admission.GetState(PEER)->state, UbAdmissionState::PROBING);
+    EXPECT_EQ(admission.CheckWriteTarget(PEER, UbOperationKind::MIGRATION_WRITE).GetCode(),
+              K_URMA_WORKER_UNAVAILABLE);
+    auto token = admission.TryBeginProbe(PEER, std::numeric_limits<uint64_t>::max());
+    ASSERT_TRUE(token.has_value());
+    EXPECT_TRUE(admission.CompleteProbe(*token, Status::OK(), 100));
+    EXPECT_TRUE(admission.CheckWriteTarget(PEER, UbOperationKind::MIGRATION_WRITE).IsOk());
+}
+
+TEST(PeerUbAdmissionTest, StaleProbeCannotOverrideNewFailure)
+{
+    PeerUbAdmission admission;
+    admission.InitializeProbing(PEER, 10);
+    auto token = admission.TryBeginProbe(PEER, 10);
+    ASSERT_TRUE(token.has_value());
+    UbOpOutcome newerFailure(PEER, UbOperationKind::MIGRATION_READ, Status(K_URMA_ERROR, "new CQE status 4"));
+    newerFailure.cqeStatus = 4;
+    admission.ReportOutcome(newerFailure);
+
+    EXPECT_FALSE(admission.CompleteProbe(*token, Status::OK(), 20, false));
+    EXPECT_EQ(admission.GetState(PEER)->state, UbAdmissionState::UNAVAILABLE);
+}
+
+TEST(PeerUbAdmissionTest, EmptyLeaseSnapshotDoesNotClearLocalObservation)
+{
+    PeerUbAdmission admission;
+    UbOpOutcome failure(PEER, UbOperationKind::MIGRATION_WRITE, Status(K_URMA_ERROR, "CQE status 4"));
+    failure.cqeStatus = 4;
+    admission.ReportOutcome(failure);
+
+    admission.ReplaceGlobalSummaries({});
+
+    EXPECT_EQ(admission.CheckWriteTarget(PEER, UbOperationKind::MIGRATION_WRITE).GetCode(),
+              K_URMA_WORKER_UNAVAILABLE);
+    ASSERT_TRUE(admission.GetState(PEER).has_value());
+    EXPECT_EQ(admission.GetState(PEER)->lastFailureClass, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
+}
+
+TEST(PeerUbAdmissionTest, AuthoritativeRemovalBoundsStateAndRejectsOldReplay)
+{
+    PeerUbAdmission admission;
+    admission.ReconcileTopologyWorkers({ PEER }, 100, 10);
+    UbHealthSummary oldSummary;
+    oldSummary.worker = PEER;
+    oldSummary.incarnation = "worker-old";
+    oldSummary.writable = false;
+    admission.ReplaceGlobalSummaries({ oldSummary });
+    admission.ReconcileTopologyWorkers({}, 101, 10);
+    admission.ReconcileTopologyWorkers({}, 111, 10);
+    auto stats = admission.GetStats();
+    EXPECT_EQ(stats.localStates, 0u);
+    EXPECT_EQ(stats.globalSummaries, 0u);
+    EXPECT_EQ(stats.latestIncarnations, 0u);
+    EXPECT_EQ(stats.replayTombstones, 1u);
+
+    admission.ReconcileTopologyWorkers({ PEER }, 112, 10);
+    admission.ReplaceGlobalSummaries({ oldSummary });
+    EXPECT_TRUE(admission.CheckReadSource(PEER).IsOk());
+    oldSummary.incarnation = "worker-new";
+    admission.ReplaceGlobalSummaries({ oldSummary });
+    EXPECT_EQ(admission.CheckReadSource(PEER).GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE);
+}
+
+TEST(UbHealthSummaryCacheTest, TopologyReconcileDropsRemovedWorkerBuckets)
+{
+    UbHealthSummaryCache cache;
+    UbHealthSummary summary;
+    summary.worker = PEER;
+    summary.incarnation = "worker-old";
+    ASSERT_TRUE(cache.Apply(summary, summary.incarnation));
+    summary.incarnation = "worker-new";
+    ASSERT_TRUE(cache.Apply(summary, summary.incarnation));
+    cache.ReconcileWorkers({});
+    EXPECT_EQ(cache.Size(), 0u);
+    EXPECT_FALSE(cache.Get(PEER).has_value());
 }
 
 }  // namespace

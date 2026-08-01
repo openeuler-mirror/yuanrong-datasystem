@@ -6,6 +6,7 @@
 
 #include "datasystem/client/routing/ub_health_filter.h"
 
+#include <unordered_set>
 #include <utility>
 
 #include "datasystem/common/inject/inject_point.h"
@@ -16,7 +17,15 @@ bool UbHealthFilter::ApplySummary(const UbHealthSummary &summary, const std::str
 {
     {
         std::lock_guard<std::mutex> lock(incarnationMutex_);
-        if (!cache_.Apply(summary, expectedIncarnation)) {
+        auto expected = expectedIncarnation;
+        if (topologyInitialized_) {
+            auto trusted = trustedIncarnations_.find(summary.worker);
+            if (trusted == trustedIncarnations_.end()) {
+                return false;
+            }
+            expected = trusted->second;
+        }
+        if (!cache_.Apply(summary, expected)) {
             return false;
         }
         ReconcileLocalObservationWithTrustedIncarnationLocked(summary.worker, summary.incarnation);
@@ -31,18 +40,31 @@ bool UbHealthFilter::ApplySummary(const UbHealthSummary &summary, const std::str
 void UbHealthFilter::ApplyTopologyIncarnations(const ::datasystem::ClusterTopologyPb &ring)
 {
     std::unordered_map<HostPort, std::string> replacement;
+    std::unordered_set<HostPort> workers;
     replacement.reserve(ring.members_size());
+    workers.reserve(ring.members_size());
     for (const auto &[endpoint, member] : ring.members()) {
         HostPort worker;
         if (worker.ParseString(endpoint).IsError() || member.id().empty()) {
             continue;
         }
+        workers.emplace(worker);
         replacement.emplace(std::move(worker), member.id());
     }
 
     std::lock_guard<std::mutex> lock(incarnationMutex_);
+    topologyInitialized_ = true;
+    cache_.ReconcileWorkers(workers);
     for (const auto &[worker, incarnation] : replacement) {
         ReconcileLocalObservationWithTrustedIncarnationLocked(worker, incarnation);
+    }
+    for (auto iter = localObservationIncarnations_.begin(); iter != localObservationIncarnations_.end();) {
+        if (workers.count(iter->first) == 0) {
+            localAdmission_.ClearLocalState(iter->first);
+            iter = localObservationIncarnations_.erase(iter);
+        } else {
+            ++iter;
+        }
     }
     trustedIncarnations_ = std::move(replacement);
 }

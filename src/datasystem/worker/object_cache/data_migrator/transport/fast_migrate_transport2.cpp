@@ -81,6 +81,9 @@ Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &
     rspPb.Clear();
     GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(migrateDirectTimeoutMs);
     Status rc = req.api->NotifyRemoteGet(reqPb, rspPb);
+    if (rspPb.has_provider_ub_failure_detail()) {
+        rsp.ubFailureDetail = rspPb.provider_ub_failure_detail();
+    }
     if (rc.IsOk()) {
         ProcessMigrateResponse(reqPb, rspPb, req, rsp);
     } else {

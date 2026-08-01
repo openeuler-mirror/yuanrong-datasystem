@@ -73,7 +73,6 @@ constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
 constexpr size_t URMA_CHIP_INFLIGHT_TRACKED_COUNT = 10;
 constexpr size_t URMA_CHIP_INFLIGHT_LOG_BUFFER_SIZE = 160;
 constexpr uint64_t URMA_RECOVERY_PROBE_SEGMENT_SIZE = 4096;
-constexpr int URMA_CQE_PORT_UNAVAILABLE = 4;
 constexpr const char *URMA_ELAPSED_TOTAL_SUGGEST =
     "check whether URMA_ELAPSED_THREAD_SHED/URMA_ELAPSED_POLL_JFC/URMA_ELAPSED_NOTIFY logs appear in the "
     "same time window; if none appear, check URMA and UDMA";
@@ -274,10 +273,12 @@ Status UrmaManager::Init(const HostPort &hostport)
     aeHandler_.Init(urmaResource_.get());
     aeHandler_.Start(serverStop_);
 
-    // For client mode, we need to initialize extra memory buffer pool.
+    // Initialize the UB transport memory buffer pool for both client and server:
+    // server-side recovery probes allocate UB_TRANSPORT memory through
+    // GetMemoryBufferHandle, which requires ubTransportStats_ to be created.
+    RETURN_IF_NOT_OK(InitMemoryBufferPool());
     if (UrmaManager::clientMode_) {
         clientId_ = GetStringUuid();
-        RETURN_IF_NOT_OK(InitMemoryBufferPool());
         RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(MAX_STUB_CACHE_NUM, hostport));
     }
     perfThread_ = std::make_unique<std::thread>(&UrmaManager::PerfThreadMain, this);
@@ -1121,7 +1122,7 @@ Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
                                waitRc);
     if (event->IsFailed() && failure != nullptr) {
         const int cqeStatus = event->GetStatusCode();
-        if (!failure->cqeStatus.has_value() || cqeStatus == URMA_CQE_PORT_UNAVAILABLE) {
+        if (!failure->cqeStatus.has_value() || cqeStatus == URMA_PORT_UNAVAILABLE_STATUS) {
             failure->cqeStatus = cqeStatus;
         }
     }

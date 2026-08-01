@@ -1025,6 +1025,7 @@ TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetRejectsAfterLocalScaleInStarts)
 TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetHoldsAdmissionUntilRequestReturns)
 {
     ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
     constexpr std::chrono::seconds schedulingTimeout(1);
     constexpr std::chrono::seconds closeBudget(2);
     constexpr std::chrono::milliseconds observationWindow(50);
@@ -1072,6 +1073,7 @@ TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetHoldsAdmissionUntilRequestReturns
 TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetReturnsFailureWhenDrainTimesOut)
 {
     ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
     constexpr std::chrono::seconds schedulingTimeout(1);
     constexpr std::chrono::milliseconds closeBudget(100);
     const std::string injectPoint = "WorkerOCServiceImpl.NotifyRemoteGet.afterAdmission";

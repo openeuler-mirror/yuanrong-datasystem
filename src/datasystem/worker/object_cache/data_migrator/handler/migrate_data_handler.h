@@ -22,8 +22,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "datasystem/common/immutable_string/immutable_string.h"
@@ -69,6 +72,7 @@ public:
         std::unordered_set<ImmutableString> failedIds;
         std::unordered_set<ImmutableString> skipIds;
         std::shared_ptr<SelectionStrategy> strategy;
+        std::optional<ProviderUbFailureDetailPb> ubFailureDetail;
         int retryCount = 0;
     };
 
@@ -78,6 +82,15 @@ public:
      * @return Migrate result contains ip address, status, success ids, failed ids and skip ids.
      */
     MigrateResult MigrateDataToRemote(bool isSlotMigration = false);
+
+    /**
+     * @brief Set the admission check executed immediately before every transport batch.
+     * @param[in] admission Non-blocking check owned by the enclosing DataMigrator.
+     */
+    void SetSendAdmission(std::function<Status()> admission)
+    {
+        sendAdmission_ = std::move(admission);
+    }
 
     /**
      * @brief Pretty print the migrate result.
@@ -136,6 +149,8 @@ private:
      * @param[in] isSlotMigration Whether this is a slot migration.
      */
     void SendDataToRemote(bool isSlotMigration = false);
+    bool CheckSendAdmission();
+    void HandleMigrationTransportResponse(const Status &status, MigrateTransport::Response &response);
 
     /**
      * @brief Update rate from response, or self-heal when rate is zero.
@@ -249,6 +264,8 @@ private:
     std::unordered_set<ImmutableString> failedIds_;
     std::unordered_set<ImmutableString> skipIds_;
     std::vector<std::unique_ptr<BaseDataUnit>> datas_;
+    std::optional<ProviderUbFailureDetailPb> ubFailureDetail_;
+    std::function<Status()> sendAdmission_;
 
     Status lastRc_;
 };

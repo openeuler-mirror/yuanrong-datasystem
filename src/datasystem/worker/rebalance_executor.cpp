@@ -22,6 +22,7 @@
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/math_util.h"
 #include "datasystem/common/util/raii.h"
@@ -53,6 +54,7 @@ RebalanceExecutor::RebalanceExecutor(RebalanceExecutorConfig config)
       membership_(config.membership),
       endpointPolicy_(config.endpointPolicy),
       exitRequested_(config.exitRequested),
+      ubAdmission_(config.ubAdmission),
       akSkManager_(std::move(config.akSkManager)),
       objectTable_(std::move(config.objectTable)),
       evictionManager_(std::move(config.evictionManager)),
@@ -140,6 +142,18 @@ Status RebalanceExecutor::ValidateTask(const master::RebalanceTaskPb &task, Host
     RETURN_IF_NOT_OK(targetAddr.ParseString(task.target_worker()));
     CHECK_FAIL_RETURN_STATUS(targetAddr != localAddress_, K_INVALID,
                              FormatString("Rebalance target %s can not be local worker", task.target_worker()));
+    return CheckTargetAdmission(targetAddr);
+}
+
+Status RebalanceExecutor::CheckTargetAdmission(const HostPort &targetAddr) const
+{
+    CHECK_FAIL_RETURN_STATUS(endpointPolicy_ != nullptr, K_NOT_READY,
+                             "Rebalance endpoint policy is not initialized");
+    RETURN_IF_NOT_OK(endpointPolicy_->CheckDataPlaneAdmission(
+        targetAddr, object_cache::DataPlaneAdmissionRole::REBALANCE_TARGET));
+    if (IsUrmaEnabled() && ubAdmission_ != nullptr) {
+        RETURN_IF_NOT_OK(ubAdmission_->CheckWriteTarget(targetAddr, UbOperationKind::MIGRATION_WRITE));
+    }
     return Status::OK();
 }
 
@@ -170,7 +184,8 @@ RebalanceExecutor::MigrateResult RebalanceExecutor::MigrateToTarget(const master
 #else
     (void)task;
 #endif
-    return migrator.MigrateToTargetNode(objectKeys, targetAddr, nullptr, false, 0, false).get();
+    object_cache::DataMigrator::TargetMigrationOptions options{ .isSlotMigration = false };
+    return migrator.MigrateToTargetNode(objectKeys, targetAddr, nullptr, options).get();
 }
 
 uint64_t RebalanceExecutor::NowMsForExpiryCheck() const
@@ -247,6 +262,7 @@ bool RebalanceExecutor::IsAssignedMasterUnavailable(const master::RebalanceTaskP
 Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
                                        ExecutionStats &stats, object_cache::DataMigrator &migrator)
 {
+    RETURN_IF_NOT_OK(CheckTargetAdmission(targetAddr));
     std::unordered_map<std::string, uint64_t> candidates;
     RETURN_IF_NOT_OK(SelectCandidates(task.max_bytes() - stats.migratedBytes, candidates));
     // SelectCandidates marks selected objects as rebalancing; the marks must be released after this batch.
@@ -311,6 +327,7 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
             migrator = std::make_unique<object_cache::DataMigrator>(
                 MigrateType::SPILL, *metadataRoute_, *membership_, *endpointPolicy_, exitRequested_, localAddress_,
                 akSkManager_, objectTable_, task.task_id(), 0);
+            migrator->SetUbAdmission(ubAdmission_);
             migrator->Init();
         }
         auto rc = ExecuteBatch(task, targetAddr, stats, *migrator);

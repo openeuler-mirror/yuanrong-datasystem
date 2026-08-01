@@ -616,6 +616,13 @@ public:
     Status WarmupUrmaConnectionToPeer(const std::string &peerAddr, const std::string &peerKey);
 
     /**
+     * @brief Run a dedicated worker-to-worker UB recovery probe.
+     * @param[in] peerAddr Remote worker endpoint.
+     * @return K_OK only after the one-byte URMA WRITE completes.
+     */
+    Status ProbeUrmaConnectionToPeer(const HostPort &peerAddr);
+
+    /**
      * @brief Try to give up waiting for reconciliation to be done when using distributed master. If the local worker
      * needs reconciliation from distributed masters, but did not receive expected number of reconciliations and waiting
      * time is too long (timeout), the local worker will give up waiting and set health file to process client requests.

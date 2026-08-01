@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <unordered_map>
+
 #include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
@@ -467,6 +469,29 @@ TEST(WorkerOcServiceGetUbAdmissionTest, RemoteGetWritebackFailureQuarantinesProv
     ASSERT_TRUE(self.has_value());
     EXPECT_EQ(self->state, UbAdmissionState::UNAVAILABLE);
     EXPECT_EQ(self->lastFailureClass, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, NotifyRemoteGetPropagatesNewSourceProviderError4)
+{
+    auto admission = std::make_shared<PeerUbAdmission>();
+    WorkerRequestManager requestManager;
+    auto param = BuildGetParam(requestManager, std::make_shared<ObjectTable>());
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, LOCAL_WORKER, nullptr, admission);
+    std::unordered_map<std::string, uint64_t> epochsBefore{ { DATA_WORKER.ToString(), 0 } };
+    UbOpOutcome failure(DATA_WORKER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                        Status(K_URMA_ERROR, "source provider CQE status 4"));
+    failure.providerStatus = 4;
+    failure.cqeStatus = 4;
+    admission->ReportOutcome(failure);
+    NotifyRemoteGetRspPb rsp;
+
+    getImpl.AttachNotifyRemoteGetUbFailure(epochsBefore, rsp);
+
+    ASSERT_TRUE(rsp.has_provider_ub_failure_detail());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().failed_endpoint(), LOCAL_WORKER.ToString());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().operator_worker(), DATA_WORKER.ToString());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().provider_status(), 4);
+    EXPECT_EQ(rsp.provider_ub_failure_detail().cqe_status(), 4);
 }
 }  // namespace object_cache
 }  // namespace datasystem

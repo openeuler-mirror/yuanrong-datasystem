@@ -227,8 +227,8 @@ public:
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR,
                                                                      GetTestMetadataRoute());
         RebalanceExecutorConfig config{ LOCAL_ADDR,       &metadataRoute_, &membership_, &endpointPolicy_,
-                                        &exitRequested_, nullptr,         objectTable_,  evictionManager_,
-                                        nullptr };
+                                        &exitRequested_, nullptr,         nullptr,       objectTable_,
+                                        evictionManager_, nullptr };
         executor_ = std::make_unique<RebalanceExecutor>(std::move(config));
     }
 
@@ -243,8 +243,12 @@ protected:
 
     void InstallHooks(const std::vector<std::unordered_map<std::string, uint64_t>> &batches,
                       const std::vector<RebalanceExecutor::MigrateResult> &results,
-                      std::function<void()> migrateSideEffect = nullptr)
+                      std::function<void()> migrateSideEffect = nullptr, bool ensureTopology = true)
     {
+        cluster::MemberEndpoint target;
+        if (ensureTopology && membership_.ResolveByAddress(TARGET_ADDR, target).IsError()) {
+            PublishAssignedMasterState(cluster::MemberState::ACTIVE);
+        }
         batches_ = batches;
         results_ = results;
         migrateSideEffect_ = std::move(migrateSideEffect);
@@ -306,20 +310,27 @@ protected:
 
     void PublishAssignedMasterState(
         cluster::MemberState state,
-        cluster::EndpointAvailability availability = cluster::EndpointAvailability::UNKNOWN)
+        cluster::EndpointAvailability availability = cluster::EndpointAvailability::UNKNOWN,
+        cluster::MemberState targetState = cluster::MemberState::ACTIVE)
     {
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = ++topologyVersion_;
+        // Transitional members require a matching activeBatch, otherwise
+        // TopologySnapshot::Create rejects the snapshot as an unstable topology.
         if (state == cluster::MemberState::FAILED) {
             topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::FAILURE, topologyVersion_ };
+        } else if (state == cluster::MemberState::LEAVING || targetState == cluster::MemberState::LEAVING) {
+            topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_IN, topologyVersion_ };
+        } else if (state == cluster::MemberState::JOINING || targetState == cluster::MemberState::JOINING) {
+            topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, topologyVersion_ };
         }
         topology.members = {
             cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 'l'), LOCAL_ADDR.ToString() },
                              cluster::MemberState::ACTIVE, { 0 } },
             cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 'm'), MASTER_ADDR.ToString() }, state, { 1 } },
-            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 't'), TARGET_ADDR },
-                             cluster::MemberState::ACTIVE, { TARGET_TOPOLOGY_TOKEN } },
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 't'), TARGET_ADDR }, targetState,
+                             { TARGET_TOPOLOGY_TOKEN } },
         };
         std::shared_ptr<const cluster::TopologySnapshot> snapshot;
         DS_ASSERT_OK(cluster::TopologySnapshot::Create(
@@ -444,17 +455,19 @@ TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterIsAbsentFromTopology)
     EXPECT_NE(reports_[0].failedReason.find("not found"), std::string::npos);
 }
 
-TEST_F(RebalanceExecutorTest, ContinuesBeforeTopologySnapshotIsReady)
+TEST_F(RebalanceExecutorTest, RejectsTargetBeforeTopologySnapshotIsReady)
 {
-    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) }, nullptr, false);
 
     executor_->Submit(MakeTask("topology-not-ready-task", 10), MASTER_ADDR.ToString());
 
     ASSERT_TRUE(WaitReports(1));
     ASSERT_TRUE(WaitTaskDone());
     ASSERT_EQ(reports_.size(), size_t(1));
-    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_SUCCEEDED);
-    EXPECT_EQ(migrateIndex_, size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_EQ(reports_[0].migratedBytes, 0u);
+    EXPECT_EQ(selectIndex_, 0u);
+    EXPECT_EQ(migrateIndex_, 0u);
 }
 
 TEST_F(RebalanceExecutorTest, ContinuesWhileAssignedMasterIsActive)
@@ -556,6 +569,43 @@ TEST_F(RebalanceExecutorTest, SubmitRunsMultipleBatchesUntilTargetBytesReached)
     ASSERT_EQ(migratedObjectKeys_.size(), size_t(2));
     EXPECT_EQ(migratedObjectKeys_[0].size(), size_t(2));
     EXPECT_EQ(migratedObjectKeys_[1].size(), size_t(1));
+}
+
+TEST_F(RebalanceExecutorTest, RejectsJoiningTargetBeforeSelectingCandidates)
+{
+    PublishAssignedMasterState(cluster::MemberState::ACTIVE, cluster::EndpointAvailability::UNKNOWN,
+                               cluster::MemberState::JOINING);
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+
+    executor_->Submit(MakeTask("joining-target-task", 10), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_EQ(reports_[0].migratedBytes, 0u);
+    EXPECT_EQ(selectIndex_, 0u);
+    EXPECT_EQ(migrateIndex_, 0u);
+}
+
+TEST_F(RebalanceExecutorTest, StopsBeforeNextBatchWhenTargetStartsLeaving)
+{
+    PublishAssignedMasterState(cluster::MemberState::ACTIVE);
+    InstallHooks({ { { "obj1", 50 } }, { { "obj2", 50 } } },
+                 { MakeMigrateResult({ "obj1" }), MakeMigrateResult({ "obj2" }) },
+                 [this] {
+                     PublishAssignedMasterState(cluster::MemberState::ACTIVE,
+                                                cluster::EndpointAvailability::UNKNOWN,
+                                                cluster::MemberState::LEAVING);
+                 });
+
+    executor_->Submit(MakeTask("target-leaves-mid-task", 100), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_EQ(reports_[0].migratedBytes, 50u);
+    EXPECT_EQ(selectIndex_, 1u);
+    EXPECT_EQ(migrateIndex_, 1u);
 }
 
 // Exhausting local candidates after a successful batch is a valid partial completion. The migrated data remains
