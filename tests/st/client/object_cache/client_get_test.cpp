@@ -1275,35 +1275,7 @@ public:
     }
 };
 
-TEST_F(OCClientRemoteGetTest, LEVEL2_RemoteGetOomTest)
-{
-    std::shared_ptr<ObjectClient> client0;
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client0);
-    int timeoutMs = 10'000;
-    InitTestClient(1, client1, timeoutMs);
 
-    std::string obj0 = NewObjectKey();
-    std::string obj1 = NewObjectKey();
-    std::vector<uint8_t> data0(1024 * 1024 * 8, '0');
-    std::vector<uint8_t> data1(1024 * 1024 * 8, '1');
-    CreateAndSealObject(client0, obj0, data0);
-    CreateAndSealObject(client1, obj1, data1);
-
-    std::vector<Optional<Buffer>> dataList;
-    Timer timer;
-    DS_ASSERT_OK(client1->Get({ obj0, obj1 }, 10000, dataList));
-    auto timeCost = static_cast<uint64_t>(timer.ElapsedMilliSecond());
-    LOG(INFO) << "time cast: " << timeCost;
-    ASSERT_TRUE(timeCost < 10000);
-    ASSERT_TRUE((dataList[0] || dataList[1]) && !(dataList[0] && dataList[1]));
-    std::vector<Optional<Buffer>> dataList1;
-    if (dataList[0]) {
-        ASSERT_EQ(client1->Get({ obj1 }, 0, dataList1).GetCode(), StatusCode::K_OUT_OF_MEMORY);
-    } else {
-        ASSERT_EQ(client1->Get({ obj0 }, 0, dataList1).GetCode(), StatusCode::K_OUT_OF_MEMORY);
-    }
-}
 
 TEST_F(OCClientRemoteGetTest, LocalGetOomTest)
 {

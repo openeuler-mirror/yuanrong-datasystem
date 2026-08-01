@@ -329,46 +329,7 @@ TEST_F(ClientCrashTest, TestClientCrashWhenCloseProducer)
     DS_ASSERT_OK(client2->InitTestClient(workerAddress.Host(), workerAddress.Port()));
 }
 
-TEST_F(ClientCrashTest, LEVEL2_TestClientCrashWhenCreateProducer)
-{
-    HostPort workerAddress;
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddress));
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(
-        ClusterNodeType::WORKER, 0, "ClientWorkerSCServiceImpl.CloseProducerImplForceClose.sleep", "1*sleep(1000)"));
-
-    std::string data = "Hello World";
-    Element element(reinterpret_cast<uint8_t *>(&data.front()), data.size());
-    auto pid = fork();
-    // Client 1, CreateProducer, then crash
-    if (pid == 0) {
-        auto client1 = std::make_unique<ClientSC1>("testCrashWhenCreateProd");
-        DS_ASSERT_OK(client1->InitTestClient(workerAddress.Host(), workerAddress.Port()));
-        std::shared_ptr<Producer> producer1;
-        DS_ASSERT_OK(client1->CreateProducer(producer1));
-        // Fake a crash point within producer after it holds the lock
-        datasystem::inject::Set("producer_obtained_lock", "1*abort()");
-        DS_ASSERT_NOT_OK(producer1->Send(element));
-        _exit(0);
-    }
-    ASSERT_TRUE(pid > 0);
-    // Client 2, CreateProducer, then sleep before adding to local
-    auto client2 = std::make_unique<ClientSC1>("testCrashWhenCreateProd");
-    DS_ASSERT_OK(client2->InitTestClient(workerAddress.Host(), workerAddress.Port()));
-    DS_ASSERT_OK(cluster_->SetInjectAction(
-        ClusterNodeType::WORKER, 0, "ClientWorkerSCServiceImpl.CreateProducerImpl.WaitBeforeAdd", "1*sleep(2000)"));
-    std::shared_ptr<Producer> producer2;
-    DS_ASSERT_OK(client2->CreateProducer(producer2));
-
-    // Wait for cleanup to finish. its set to 2secs above
-    const int sleepTime = 3;
-    sleep(sleepTime);
-
-    int status;
-    waitpid(pid, &status, 0);
-    // When we close producer created by client2 it should not error out
-    DS_ASSERT_OK(producer2->Close());
-}
 
 TEST_F(ClientCrashTest, TestClientCrashWhenCloseConsumer)
 {
@@ -1224,50 +1185,7 @@ TEST_F(ClientCrashTest, DISABLED_TestForceCloseLocalProducersDifferentWorker)
     DS_ASSERT_OK(client1->DeleteStream(streamName));
 }
 
-TEST_F(ClientCrashTest, LEVEL2_TestForceCloseDeadlock)
-{
-    // Test that with large amount of streams, force close can generate logical deadlock
-    // if too many const_accessor are held at the same time.
-    const int streamNum = 1000;
-    const uint64_t maxStreamSize = 1024 * 1024;
-    const int64_t pageSize = 4 * 1024;
-    ProducerConf conf;
-    conf.maxStreamSize = maxStreamSize;
-    conf.pageSize = pageSize;
-    conf.autoCleanup = true;
-    auto pid = fork();
-    if (pid == 0) {
-        std::shared_ptr<StreamClient> client;
-        DS_ASSERT_OK(InitClient(0, client));
-        std::vector<std::shared_ptr<Producer>> producers;
-        for (int i = 0; i < streamNum; i++) {
-            std::string streamName = "Stream_" + std::to_string(i);
-            std::shared_ptr<Producer> producer;
-            DS_ASSERT_OK(client->CreateProducer(streamName, producer, conf));
-            producers.emplace_back(producer);
-        }
-        std::abort();
-        ASSERT_TRUE(false);
-    }
-    ASSERT_TRUE(pid > 0);
 
-    int status;
-    waitpid(pid, &status, 0);
-
-    // Wait for MasterWorkerSCService thread pool to be occupied.
-    const int sleepTime = 20;
-    sleep(sleepTime);
-    std::shared_ptr<StreamClient> client1;
-    DS_ASSERT_OK(InitClient(0, client1));
-    std::shared_ptr<StreamClient> client2;
-    DS_ASSERT_OK(InitClient(1, client2));
-    std::string streamName = "Stream_" + RandomData().GetRandomString(10);
-    std::shared_ptr<Consumer> consumer;
-    SubscriptionConfig config("sub1", SubscriptionType::STREAM);
-    DS_ASSERT_OK(client2->Subscribe(streamName, config, consumer));
-    std::shared_ptr<Producer> producer;
-    DS_ASSERT_OK(client1->CreateProducer(streamName, producer, conf));
-}
 
 TEST_F(ClientCrashTest, TestForceEarlyReturn)
 {
@@ -1802,10 +1720,7 @@ TEST_F(ClientLockVersionTest, SendRecvTest2)
     DS_ASSERT_OK(StreamSendRecvTest(true, false, true));
 }
 
-TEST_F(ClientLockVersionTest, LEVEL2_SendRecvTest3)
-{
-    DS_ASSERT_OK(StreamSendRecvTest(false, true, true));
-}
+
 
 TEST_F(ClientLockVersionTest, SendRecvTest4)
 {

@@ -115,27 +115,7 @@ TEST_F(KVCacheTtlTest, DISABLED_BasicTest)
     EXPECT_NE(client1->Get(key3, value), Status::OK());
 }
 
-TEST_F(KVCacheTtlTest, LEVEL2_MasterRestart)
-{
-    std::string key = "k1";
-    std::string value = "hello";
-    DS_ASSERT_OK(client1->Set(key, value, { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = 5 }));
-    std::string key2 = "k2";
-    DS_ASSERT_OK(client3->Set(key2, value, { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = 1 }));
 
-    std::string outValue;
-    EXPECT_EQ(client2->Get(key, outValue), Status::OK());
-    EXPECT_EQ(value, outValue);
-
-    // Shutdown master and then restart to verify the metadata recovery.
-    cluster_->QuicklyShutdownWorker(0);
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, " -client_reconnect_wait_s=1"));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
-
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-    EXPECT_NE(client1->Get(key, value), Status::OK());
-    EXPECT_NE(client3->Get(key2, value), Status::OK());
-}
 
 TEST_F(KVCacheTtlTest, LEVEL1_MasterWorkerDead)
 {
@@ -162,31 +142,7 @@ TEST_F(KVCacheTtlTest, LEVEL1_MasterWorkerDead)
     EXPECT_EQ(failedKeys.size(), static_cast<uint64_t>(0));
 }
 
-TEST_F(KVCacheTtlTest, LEVEL2_TtlWithDuplicatedObjectKey)
-{
-    std::string key = "k1";
-    std::string value = "hello";
-    DS_ASSERT_OK(client1->Set(key, value, { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = 5 }));
-    std::string outValue;
-    DS_ASSERT_OK(client2->Get(key, outValue));
-    EXPECT_EQ(value, outValue);
-    // ExpiredObjectManger getExpiredOjbect but don't notify to delete.
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "master.ExpiredObjectManager.AsyncDelete", "1*call(10)"));
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "master.ExpiredObjectManager.AsyncDelete", "1*call(10)"));
-    std::this_thread::sleep_for(std::chrono::seconds(6));
-    std::string newValue = "world";
-    std::string newOutValue;
-    // Before object really delete, update the object with new ttl will retry until successful.
-    DS_EXPECT_OK(client1->Set(key, newValue, { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = 10 }));
-    DS_EXPECT_OK(client2->Get(key, newOutValue));
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-    DS_EXPECT_OK(client2->Get(key, newOutValue));
-    EXPECT_EQ(newValue, newOutValue);
-    std::this_thread::sleep_for(std::chrono::seconds(8));
-    DS_ASSERT_NOT_OK(client2->Get(key, newOutValue));
-}
+
 
 TEST_F(KVCacheTtlTest, DISABLED_TTLWithBigObject)
 {

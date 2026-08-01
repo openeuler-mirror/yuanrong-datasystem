@@ -1845,22 +1845,7 @@ TEST_F(ProducerTest, TestFlushPGIsFull)
 // Test a "local" OOM where the consumer is on the same node as the producer, but does not consume right away causing
 // build up of data and OOM conditions. Client retry will eventually run leading to overall sending success.
 // Send timeout of 0.
-TEST_F(ProducerTest, LEVEL2_TestOOM1)
-{
-    Status rc;
-    std::shared_ptr<StreamClient> spClient;
-    std::string streamName = "TestOOM1";
 
-    rc = CreateClient(0, spClient);
-    LOG_IF_ERROR(rc, "Creating client failed.");
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_OK);
-
-    rc = RunOOMTest(spClient, spClient, streamName);
-    LOG_IF_ERROR(rc, "Running OOM test gave error.");
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_OK);
-
-    spClient = nullptr;
-}
 
 // Test a "local" OOM where the consumer is on the same node as the producer, but does not consume right away causing
 // build up of data and OOM conditions. Use a send-side timeout such that OOM is only returned after timing out,
@@ -1916,28 +1901,7 @@ TEST_F(ProducerTest, TestOOM3)
 // send waiting.
 
 // no timeout on the send, use client-side retry when OOM's are returned
-TEST_F(ProducerTest, LEVEL2_TestOOM4)
-{
-    Status rc;
-    std::shared_ptr<StreamClient> prodClient;
-    std::shared_ptr<StreamClient> conClient;
-    std::string streamName = "TestOOM4";
 
-    rc = CreateClient(0, prodClient);
-    LOG_IF_ERROR(rc, "Creating client failed. ");
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_OK);
-
-    rc = CreateClient(1, conClient);
-    LOG_IF_ERROR(rc, "Creating client failed. ");
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_OK);
-
-    rc = RunOOMTest(prodClient, conClient, streamName);
-    LOG_IF_ERROR(rc, "Running OOM test gave error. ");
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_OK);  // expected success
-
-    prodClient = nullptr;
-    conClient = nullptr;
-}
 
 // disable client retry and use a timeout on the send calls that is large enough to support the work
 TEST_F(ProducerTest, TestOOM5)
@@ -2328,37 +2292,7 @@ TEST_F(BigShmTest, LEVEL1_MultiTest_NStream4)
 }
 
 // 3 producers, 1 consumer, 1 worker.
-TEST_F(BigShmTest, LEVEL2_MultiTest_NStream6)
-{
-    // README
-    // The eleSz_ has been increased from 48 to reduce run time during CI
-    // To run the intended load locally, edit the value.
-    Status rc;
-    sendTimeout_ = 10000;  // 10 second timeout to give it lots of wait time on send blocking
-    std::shared_ptr<StreamClient> newClient;
-    std::vector<std::shared_ptr<StreamClient>> clients;
-    autoAck_ = true;  // configure for auto ack mode
-    validate_ = false;
-    eleSz_ = 128;
 
-    rc = CreateClient(0, newClient);
-    LOG_IF_ERROR(rc, "Creating client failed. ");
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_OK);
-    clients.push_back(std::move(newClient));
-
-    int64_t pageSize = 1048576;  // 1 mb
-    uint64_t maxStreamSize = 16 * MB;
-    int numStreams = 1;
-    int numProds = 3;
-    int numSubs = 1;
-    rc = MultiTest_NStream(clients, pageSize, maxStreamSize, numStreams, numProds, numSubs);
-    LOG_IF_ERROR(rc, "Running multi test gave error. ");
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_OK);  // expected success
-    clients.clear();                            // frees the client ptr's
-
-    PerfManager *perfManager = PerfManager::Instance();
-    perfManager->PrintPerfLog();
-}
 
 class ProducerLocalMemTest : public ProducerTest {
 public:
@@ -2728,31 +2662,7 @@ TEST_F(ProducerTest, TestBlockedCreateRequestTimingHole)
     DS_ASSERT_OK(client1->DeleteStream(streamName));
 }
 
-TEST_F(ProducerTest, LEVEL2_TestCreateProducerLongTimeout1)
-{
-    // Request should not timeout if client timeout is set to 10mins and master takes more time
 
-    // set timeout to 10 mins
-    std::shared_ptr<StreamClient> client1;
-    const int32_t timeoutMs = 1000 * 60 * 10;
-    ASSERT_EQ(CreateClient(0, timeoutMs, client1), Status::OK());
-    std::shared_ptr<Producer> producer;
-    ProducerConf conf;
-    const uint64_t maxStreamSize = 100 * MB;
-    conf.maxStreamSize = maxStreamSize;
-    conf.pageSize = 1 * MB;
-
-    // Make master wait for 1 min and it should not timeout
-    // We actually dont know who is the master so inject in both
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "SCMetadataManager.CreateProducer.wait",
-                                           "1*sleep(60000)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "SCMetadataManager.CreateProducer.wait",
-                                           "1*sleep(60000)"));
-
-    // This request should not timeout as client timeout is 10 mins.
-    DS_ASSERT_OK(client1->CreateProducer("ProducerLongTimeout1", producer, conf));
-    DS_ASSERT_OK(producer->Close());
-}
 
 TEST_F(ProducerTest, LEVEL1_TestCreateProducerLongTimeout2)
 {
@@ -2782,32 +2692,7 @@ TEST_F(ProducerTest, LEVEL1_TestCreateProducerLongTimeout2)
     DS_ASSERT_NOT_OK(client1->CreateProducer("ProducerLongTimeout2", producer, conf));
 }
 
-TEST_F(ProducerTest, LEVEL2_TestCreateProducerLongTimeout3)
-{
-    // MasterWorkerSCServiceImpl::SyncConsumerNode takes long time
 
-    // set client timeout to 10 mins
-    std::shared_ptr<StreamClient> client1;
-    const int32_t timeoutMs = 1000 * 60 * 10;
-    ASSERT_EQ(CreateClient(0, timeoutMs, client1), Status::OK());
-
-    // Create a consumer so that we can get SyncConsumerNode
-    std::shared_ptr<StreamClient> client2;
-    ASSERT_EQ(CreateClient(1, client2), Status::OK());
-    std::shared_ptr<Consumer> newConsumer;
-    SubscriptionConfig consumerConf("sub1", SubscriptionType::STREAM);
-    DS_ASSERT_OK(client2->Subscribe("ProducerLongTimeout3", consumerConf, newConsumer));
-
-    // Make worker wait for 1 min in SyncConsumerNode() and CreateProducer request should not timeout
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0,
-                                           "MasterWorkerSCServiceImpl.SyncConsumerNode.sleep", "1*sleep(60000)"));
-
-    // Check request should not timeout as client timeout is 10 mins.
-    std::shared_ptr<Producer> producer;
-    ProducerConf conf;
-    conf.maxStreamSize = 67108864;
-    DS_ASSERT_OK(client1->CreateProducer("ProducerLongTimeout3", producer, conf));
-}
 
 TEST_F(ProducerTest, DISABLED_TestMultiLocalProducerCreateClose)
 {

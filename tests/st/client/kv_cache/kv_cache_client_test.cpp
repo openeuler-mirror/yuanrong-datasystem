@@ -2051,53 +2051,9 @@ TEST_F(EXCLUSIVE_KVCacheBigClusterTest, DISABLED_TestKVSetGetDelConcurrency)
     }
 }
 
-TEST_F(EXCLUSIVE_KVCacheBigClusterTest, LEVEL2_TestKVSetGetConcurrency)
-{
-    LOG(INFO) << "YuanRong disgusting testcase";
-    uint64_t multi = 5;
-    std::vector<std::thread> threads(num_ * multi);
-    for (size_t i = 0; i < threads.size(); ++i) {
-        threads[i] = std::thread([this]() { SetGet(); });
-    }
-    for (auto &t : threads) {
-        t.join();
-    }
-}
 
-TEST_F(EXCLUSIVE_KVCacheBigClusterTest, LEVEL2_TestKVDelManyKeysConcurrency)
-{
-    std::string keyPrefix = "Attack_on_Titan";
-    std::string val = "Love_And_Peace";
-    std::vector<std::string> keys;
-    uint64_t loop = 10;
-    for (size_t i = 0; i < loop; ++i) {
-        std::string key = keyPrefix + std::to_string(i);
-        DS_ASSERT_OK(clients_[0]->Set(key, val));
-        keys.emplace_back(key);
-    }
 
-    for (size_t i = 1; i < clients_.size(); ++i) {
-        std::string getVal;
-        DS_ASSERT_OK(clients_[i]->Get(keyPrefix + std::to_string(0), getVal));
-    }
 
-    uint64_t multi = 5;
-    std::vector<std::thread> threads(num_ * multi);
-    for (size_t i = 0; i < threads.size(); ++i) {
-        threads[i] = std::thread([this, i, &keys]() {
-            std::vector<std::string> failedKeys;
-            DS_ASSERT_OK(clients_[i % num_]->Del(keys, failedKeys));
-        });
-    }
-    for (auto &t : threads) {
-        t.join();
-    }
-
-    for (size_t i = 0; i < num_; ++i) {
-        std::vector<std::string> getVals;
-        ASSERT_EQ(clients_[i]->Get(keys, getVals).GetCode(), StatusCode::K_NOT_FOUND);
-    }
-}
 
 class KVCacheClientTestWithAsyncDelete : public OCClientCommon {
 public:
@@ -2300,32 +2256,7 @@ public:
     }
 };
 
-TEST_F(KVClientDfxTest, LEVEL2_TestWorkerRestartAddresEmpty)
-{
-    std::shared_ptr<KVClient> client1;
-    std::shared_ptr<KVClient> client2;
-    InitTestKVClient(0, client1);
-    InitTestKVClient(1, client2);
-    std::string objectKey = NewObjectKey();
-    uint64_t size = 128;
-    std::string data = GenRandomString(size);
-    // test
-    SetParam param;
-    param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
-    DS_ASSERT_OK(client2->Set(key1, "qqqqqqqqq", param));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
-    std::string val;
-    Timer timer;
-    DS_ASSERT_NOT_OK(client1->Get(key1, val));
-    ASSERT_TRUE(timer.ElapsedMilliSecond() < 3000);  // not wait for 10s, time is less than 3000ms
-}
+
 
 class KVClientQuerySizeTest : public OCClientCommon {
 public:

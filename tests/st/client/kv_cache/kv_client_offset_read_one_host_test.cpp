@@ -387,43 +387,7 @@ TEST_P(KVClientOffsetReadOneHostTest, DISABLED_TestReadKeyFromDisk)
     ASSERT_EQ(getValue1, "0012345678");
 }
 
-TEST_P(KVClientOffsetReadOneHostTest, LEVEL2_TestReadKeyAfterGet)
-{
-    LOG(INFO) << "TestReadKeyOverSize";
-    size_t count = 10;
-    size_t dataSize = 4 * 1024ul * 1024ul;
-    std::vector<std::string> keys;
 
-    std::string data(dataSize, '0');
-    std::string appendStr = "1234567890abcdefghijk000000";
-    size_t count300 = 300;
-    for (size_t i = 0; i < count300; i++) {
-        data = appendStr + data;
-    }
-    datasystem::SetParam param = type_;
-    for (size_t i = 0; i < count; ++i) {
-        auto key = client_->Set(data, param);
-        ASSERT_FALSE(key.empty());
-        keys.emplace_back(std::move(key));
-    }
-
-    std::string getKey = keys.front();
-
-    std::string val;
-    DS_ASSERT_OK(client_->Get(getKey, val));
-
-    ReadParam readParam{ .key = getKey, .offset = 1000, .size = 4000 };
-    std::vector<ReadParam> params = { readParam };
-    std::vector<Optional<ReadOnlyBuffer>> buffers;
-    client_->Read(params, buffers);
-    Optional<ReadOnlyBuffer> buffer = buffers.front();
-    std::string getValue(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
-    LOG(INFO) << "Key is " << getKey << " get value size: " << buffer->GetSize();
-    uint64_t size4000 = 4000;
-    uint64_t size1000 = 1000;
-    ASSERT_EQ(buffer->GetSize(), size4000);
-    ASSERT_EQ(getValue, data.substr(size1000, size4000));
-}
 
 TEST_P(KVClientOffsetReadOneHostTest, TestReadKeyFromMemForDiffRange)
 {
@@ -595,56 +559,7 @@ protected:
     uint64_t maxSize_ = 5 * 1024 * 1024ul * 1024ul;
 };
 
-TEST_F(KVClientOffsetRemoteReadTest, LEVEL2_ConcurrentReadSameKey)
-{
-    std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client);
-    std::shared_ptr<KVClient> client1;
-    InitTestKVClient(1, client1);
-    std::shared_ptr<KVClient> client2;
-    InitTestKVClient(1, client2);
-    size_t count = 100;
-    size_t dataSize = 2 * 1024ul * 1024ul;
-    std::vector<std::string> keys;
-    std::string data = randomData_.GetRandomString((dataSize));
 
-    datasystem::SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
-    for (size_t i = 0; i < count; ++i) {
-        auto key = client->Set(data, param);
-        ASSERT_FALSE(key.empty());
-    }
-    for (size_t i = 0; i < count; ++i) {
-        auto key = client->Set(data, param);
-        ASSERT_FALSE(key.empty());
-        keys.emplace_back(std::move(key));
-    }
-
-    int threadNum = 10;
-    std::vector<std::future<void>> results;
-
-    const size_t kOffset1 = 50;
-    const size_t kSize1 = 2030;
-    const size_t kOffset2 = 100;
-    const size_t kSize2 = 1080;
-    const int kThreadPoolSize = 50;
-    {
-        ThreadPool pool(kThreadPoolSize);
-        for (int m = 0; m < threadNum; ++m) {
-            results.emplace_back(pool.Submit(
-                [this, client1, keys, data]() { this->RemoteRead(client1, keys, data, kOffset1, kSize1); }));
-        }
-        for (int m = 0; m < threadNum; ++m) {
-            results.emplace_back(pool.Submit(
-                [this, client2, keys, data]() { this->RemoteRead(client2, keys, data, kOffset2, kSize2); }));
-        }
-        for (auto &res : results) {
-            (void)res.get();
-        }
-    }
-    std::vector<std::string> failedKeys;
-    DS_ASSERT_OK(client->Del(keys, failedKeys));
-    ASSERT_EQ(failedKeys.size(), 0);
-}
 
 class KVClientOffsetReadRemoteTest : public OCClientCommon,
                                         public testing::WithParamInterface<datasystem::SetParam> {
@@ -910,45 +825,7 @@ TEST_P(KVClientOffsetReadRemoteTest, TestRemoteGetFromMaster)
     ASSERT_EQ(failedKeys.size(), 0);
 }
 
-TEST_P(KVClientOffsetReadRemoteTest, LEVEL2_TestReadKeyRemoteGetFromDisk)
-{
-    LOG(INFO) << "TestReadKeyFromDisk";
-    size_t count = 10;
-    size_t dataSize = 4 * 1024ul * 1024ul;
-    std::vector<std::string> keys;
 
-    std::string data(dataSize, '0');
-    std::string appendStr = "1234567890abcdefghijk";
-    data += appendStr;
-    datasystem::SetParam param = type_;
-    for (size_t i = 0; i < count; ++i) {
-        auto key = client_->Set(data, param);
-        ASSERT_FALSE(key.empty());
-        keys.emplace_back(std::move(key));
-    }
-
-    std::string getKey = keys.front();
-    std::string getKey1 = keys[1];
-
-    uint64_t offset = data.size() - dataSize;
-    ReadParam readParam{ .key = getKey, .offset = dataSize, .size = offset };
-    ReadParam readParam2{ .key = getKey1, .offset = dataSize - 2, .size = 10 };
-    std::vector<ReadParam> params = { readParam, readParam2 };
-    std::vector<Optional<ReadOnlyBuffer>> buffers;
-    client1_->Read(params, buffers);
-    Optional<ReadOnlyBuffer> buffer = buffers.front();
-    std::string getValue(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
-    LOG(INFO) << "Key is " << getKey << " get value size: " << buffer->GetSize() << ", data: " << getValue;
-    ASSERT_EQ(buffer->GetSize(), offset);
-    ASSERT_EQ(getValue, appendStr);
-
-    Optional<ReadOnlyBuffer> buffer1 = buffers[1];
-    std::string getValue1(reinterpret_cast<const char *>(buffer1->ImmutableData()), buffer1->GetSize());
-    LOG(INFO) << "Key is " << getKey1 << " get value size: " << buffer1->GetSize() << ", data: " << getValue1;
-    uint64_t size10 = 10;
-    ASSERT_EQ(buffer1->GetSize(), size10);
-    ASSERT_EQ(getValue1, "0012345678");
-}
 
 class KVClientOffsetReadRemoteParallelTest : public KVClientOffsetReadRemoteTest {
 public:

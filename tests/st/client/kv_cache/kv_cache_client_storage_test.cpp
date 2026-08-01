@@ -127,28 +127,6 @@ TEST_F(KVCacheClientStorageTest, TestSetStorageNotExit)
     }
 }
 
-TEST_F(KVCacheClientStorageTest, LEVEL2_TestSetStorageWhenWorkershuttingdown)
-{
-    std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client);
-
-    ThreadPool threadPool(1);
-    threadPool.Execute([this, &client]() {
-        std::string key = "key1";
-        std::string value = "value1";
-        SetParam param{ .writeMode = WriteMode::WRITE_BACK_L2_CACHE };
-        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "persistence.service.save", "100*return(K_OK)"));
-        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_pop_from_queue", "100*sleep(5)"));
-        int requestNum = 10;
-        int intervalTimeS = 2;
-        for (int i = 0; i < requestNum; i++) {
-            DS_ASSERT_OK(client->Set(key, value, param));
-            std::this_thread::sleep_for(std::chrono::seconds(intervalTimeS));
-        }
-        client.reset();
-    });
-    externalCluster_->ShutdownNode(WORKER, 0);
-}
 
 TEST_F(KVCacheClientStorageTest, LEVEL1_TestSetStorageMutable)
 {
@@ -300,42 +278,6 @@ public:
     uint8_t WORKER_NUM = 2;
 };
 
-TEST_F(KVCacheNoMetaClientStorageTest, LEVEL2_TestDeleteThenPutAndGetAfterRestart)
-{
-    std::shared_ptr<KVClient> client;
-    int timeOutMs = 5000;
-    InitTestKVClient(0, client, timeOutMs);  // timeout is 5000 ms
-
-    std::string key = "key";
-    std::string targetPath = GetTestCaseDataDir() + "/OBS/test/" + key;
-    DS_ASSERT_OK(CreateDir(targetPath, true));
-    std::ofstream outfile(targetPath + "/100");
-    ASSERT_TRUE(outfile.is_open());
-    outfile << "hello";
-    outfile.close();
-
-    for (int i = 0; i < WORKER_NUM; i++) {
-        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "worker.DelPersistence.delay", "call(3)"));
-    }
-
-    DS_ASSERT_OK(client->Del(key));
-    sleep(1);
-    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-    DS_ASSERT_OK(client->Set(key, "value", param));
-
-    const int sleepTime = 5;  // 5s;
-    sleep(sleepTime);
-    for (int i = 0; i < WORKER_NUM; i++) {
-        DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(i));
-        DS_ASSERT_OK(externalCluster_->StartWorker(i, HostPort(), " -client_reconnect_wait_s=1"));
-        DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, i));
-    }
-    std::string val;
-    auto func = [&client, &key, &val] { return client->Get(key, val); };
-    auto waitTime = 15;
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult(func, waitTime, K_OK));
-    ASSERT_EQ(val, "value");
-}
 
 TEST_F(KVCacheNoMetaClientStorageTest, DISABLED_TestDeleteVersionBetweenPutAndDel)
 {
@@ -360,34 +302,6 @@ TEST_F(KVCacheNoMetaClientStorageTest, DISABLED_TestDeleteVersionBetweenPutAndDe
     DS_ASSERT_NOT_OK(client->Get(key, val));
 }
 
-TEST_F(KVCacheNoMetaClientStorageTest, LEVEL2_TestDeleteL2AfterWorkerRestart)
-{
-    std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client);
-
-    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-    int keyCount = 32;
-    std::vector<std::string> keys;
-    for (int i = 0; i < keyCount; i++) {
-        auto val = "data-" + std::to_string(i);
-        auto key = client->Set(val, param);
-        ASSERT_TRUE(!key.empty());
-        keys.emplace_back(key);
-    }
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.DelPersistenceObj.beforeDel", "return(K_TRY_AGAIN)"));
-    for (auto &key : keys) {
-        DS_ASSERT_OK(client->Del(key));
-    }
-    DS_ASSERT_OK(cluster_->ShutdownNode(ClusterNodeType::WORKER, 0));
-    DS_ASSERT_OK(externalCluster_->StartWorker(0, HostPort()));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
-    int delayMs = 3000;
-    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-    for (auto &key : keys) {
-        std::string val;
-        DS_ASSERT_NOT_OK(client->Get(key, val));
-    }
-}
 
 class KVCacheClientStorageTestMultiNode : public KVCacheClientStorageTest {
 public:

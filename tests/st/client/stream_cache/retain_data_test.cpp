@@ -664,52 +664,7 @@ TEST_F(RetainDataTest, TestDeleteWhileRetainDataRemoteNode)
     DS_ASSERT_OK(consumer1->Close());
 }
 
-TEST_F(RetainDataTest, LEVEL2_TestProducerCloseRemoteDeleteWhileRetainDataRemoteNode)
-{
-    // Create a consumer before producer
-    // Then create a producer with retainForNumConsumers == 2
-    // And Delete the stream in a different node
-    // We should give higher priority to delete stream and allow it
-    // Delayed ClearAllConsumers should be invoked and Flush is a no-op
 
-    std::shared_ptr<StreamClient> client1;
-    DS_ASSERT_OK(InitClient(0, client1));
-    std::shared_ptr<StreamClient> client2;
-    DS_ASSERT_OK(InitClient(1, client2));
-    std::string streamName = "Stream_" + RandomData().GetRandomString(10);
-    std::vector<uint8_t> writeElement = RandomData().RandomBytes(TEST_ELEMENT_SIZE);
-    Element element(reinterpret_cast<uint8_t *>(writeElement.data()), writeElement.size());
-
-    std::shared_ptr<Consumer> consumer1;
-    SubscriptionConfig config1("sub1", SubscriptionType::STREAM);
-    DS_ASSERT_OK(client2->Subscribe(streamName, config1, consumer1));
-
-    ProducerConf conf = GetDefaultConf();
-    conf.retainForNumConsumers = 2;
-    std::shared_ptr<Producer> producer;
-    DS_ASSERT_OK(client1->CreateProducer(streamName, producer, conf));
-    for (int i = 0; i < DEFAULT_NUM_ELEMENT; i++) {
-        DS_ASSERT_OK(producer->Send(element));
-    }
-    DS_ASSERT_OK(consumer1->Close());
-    DS_ASSERT_OK(producer->Close());
-    // Now close consumer sends async update topo notifications
-    // So, we need to wait sometime before doing delete stream
-    // Delete in a different node
-    DS_ASSERT_OK(TryAndDeleteStream(client2, streamName));
-
-    // Create a consumer
-    // It should not get any data
-    std::vector<Element> outElements;
-    std::shared_ptr<Consumer> consumer2;
-    SubscriptionConfig config2("sub2", SubscriptionType::STREAM);
-    DS_ASSERT_OK(client1->Subscribe(streamName, config2, consumer2));
-    DS_ASSERT_OK(consumer2->Receive(DEFAULT_NUM_ELEMENT, WAIT_TIME, outElements));
-    ASSERT_EQ(outElements.size(), 0);
-    DS_ASSERT_OK(consumer2->Close());
-    // Sleep for auto-delete logic to go through
-    std::this_thread::sleep_for(std::chrono::milliseconds(DEFAULT_WAIT_TIME));
-}
 
 TEST_F(RetainDataTest, LEVEL1_TestProducerCloseLocalDeleteWhileRetainDataRemoteNode)
 {

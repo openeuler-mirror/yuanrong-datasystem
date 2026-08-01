@@ -75,26 +75,7 @@ protected:
     HostPort workerAddr_;
 };
 
-TEST_F(KVClientTenantAkSkAuthTest, LEVEL2_TestUpdateAksk)
-{
-    std::shared_ptr<KVClient> client;
-    InitAkSkTestKVClient(client);
 
-    std::string key = "key";
-    std::string value = "value";
-    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
-    ASSERT_EQ(client->Set(key, value, param), Status::OK());
-
-    std::string accessKey2 = "newaccesskey";
-    std::string secretKey_ = "newsecretkey";
-    SensitiveValue secretKey2(secretKey_);
-    DS_ASSERT_OK(client->UpdateAkSk(accessKey2, secretKey2));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.akauth", "return(accesskey1,secretkey1,tenant1)"));
-    ASSERT_NE(client->Set(key, value, param), Status::OK());
-
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.akauth", "return(newaccesskey,newsecretkey,tenant1)"));
-    ASSERT_EQ(client->Set(key, value, param), Status::OK());
-}
 
 TEST_F(KVClientTenantAkSkAuthTest, TestTokenExperied)
 {

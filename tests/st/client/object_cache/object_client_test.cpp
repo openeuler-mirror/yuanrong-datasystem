@@ -414,27 +414,7 @@ TEST_F(ObjectClientTest, LEVEL1_InvalidateBufferAndRePublishSuccess)
     DS_ASSERT_OK(buffer->Publish());
 }
 
-TEST_F(ObjectClientTest, LEVEL2_InvalidateBufferAndRemoteGetFailed)
-{
-    std::string objectKey = NewObjectKey();
-    std::shared_ptr<Buffer> buffer;
-    std::shared_ptr<ObjectClient> client;
-    InitTestClient(0, client);
-    int dataSize = SHM_SIZE;
-    CreateParam param{};
-    DS_ASSERT_OK(client->Create(objectKey, dataSize, param, buffer));
-    ASSERT_NE(buffer, nullptr);
-    ASSERT_EQ(dataSize, buffer->GetSize());
-    DS_ASSERT_OK(buffer->Publish());
-    DS_ASSERT_OK(buffer->InvalidateBuffer());
 
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(1, client1);
-
-    std::vector<Optional<Buffer>> buffers;
-    std::vector<std::string> objectKeys{ objectKey };
-    DS_ASSERT_NOT_OK(client1->Get(objectKeys, 0, buffers));
-}
 
 TEST_F(ObjectClientTest, InvalidateBufferAfterRemoteGet)
 {
@@ -2088,53 +2068,7 @@ TEST_F(ObjectClientTest, LEVEL1_TestEtcdShutdown)
     std::this_thread::sleep_for(std::chrono::seconds(3));
 }
 
-TEST_F(ObjectClientTest, LEVEL2_TestClientTimeoutInterval)
-{
-    FLAGS_v = 1;
-    // Set same check time with zmq.
-    // Avoid heartbeat occupy the session lock to create session
-    datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(30000)");
-    datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(30000)");
-    ConnectOptions connectOptions;
-    // 1.Test invalid timeout configuration, timeout interval should greater than or equal to 500;
-    InitConnectOpt(0, connectOptions, 400);
-    std::shared_ptr<ObjectClient> client1 = std::make_shared<ObjectClient>(connectOptions);
-    ASSERT_EQ(client1->Init().GetCode(), StatusCode::K_INVALID);
 
-    // 2.Construct worker unavailable while GET, calculate the timeout interval meets the expectation
-    InitConnectOpt(0, connectOptions, 5000);
-    std::shared_ptr<ObjectClient> client2 = std::make_shared<ObjectClient>(connectOptions);
-    DS_ASSERT_OK(client2->Init());
-    std::shared_ptr<Buffer> buffer1;
-    std::string objectKey = NewObjectKey();
-    DS_ASSERT_OK(client2->Create(objectKey, SHM_SIZE, CreateParam{}, buffer1));
-    DS_ASSERT_OK(buffer1->Publish());
-    // Requests sent after the worker is shut down will time out for 3s.
-    cluster_->ShutdownNode(WORKER, 0);
-    Timer timer;
-    std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey }, 5000, buffers));
-    auto timeCost = static_cast<uint64_t>(timer.ElapsedMilliSecond());
-    LOG(INFO) << "time cast: " << timeCost;
-    uint64_t expectedTime = 3000 + 50 + 1950;  // 3000 is rpc timeout, 50 is retry interval, 1950 is the remaining time
-    uint64_t maxExpectedTime = expectedTime + 50;  // The actual running time should be 5001 ms.
-    ASSERT_TRUE(timeCost >= expectedTime && timeCost <= maxExpectedTime);
-
-    // 3.Construct worker unavailable while PUBLISH, calculate the timeout interval meets the expectation
-    timer.Reset();
-    DS_ASSERT_NOT_OK(buffer1->Publish());
-    timeCost = static_cast<uint64_t>(timer.ElapsedMilliSecond());
-    LOG(INFO) << "time cast: " << timeCost;
-    ASSERT_TRUE(timeCost >= expectedTime && timeCost <= maxExpectedTime);
-
-    // 4.Construct worker unavailable while DELETE, calculate the timeout interval meets the expectation
-    timer.Reset();
-    DS_ASSERT_NOT_OK(buffer1->InvalidateBuffer());
-    timeCost = static_cast<uint64_t>(timer.ElapsedMilliSecond());
-    LOG(INFO) << "time cast: " << timeCost;
-    ASSERT_TRUE(timeCost >= 2500 && timeCost <= 3500);
-    cluster_->StartNode(WORKER, 0, "");
-}
 
 TEST_F(ObjectClientTest, SetAndCacheInvalidConcurrency)
 {

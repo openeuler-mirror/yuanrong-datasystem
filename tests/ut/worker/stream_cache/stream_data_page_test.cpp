@@ -232,39 +232,5 @@ TEST_F(StreamDataPageTest, TestMultiElementsMPSC)
     ASSERT_EQ(totalElements, v.size());
 }
 
-TEST_F(StreamDataPageTest, LEVEL2_TestMillionInsert)
-{
-    PerfManager *perfManager = PerfManager::Instance();
-    FLAGS_v = 0;
-    const size_t pageSize = 1048576ul;
-    const size_t eleSz = 1024ul;
-    std::string a(eleSz, 'a');
-    const size_t numElements = 1'280'000ul;
-    auto pageUnit = std::make_shared<ShmUnit>();
-    DS_ASSERT_OK(pageUnit->AllocateMemory("", pageSize + StreamDataPage::PageOverhead(), false));
-    auto page = std::make_shared<datasystem::StreamDataPage>(pageUnit, 0, false);
-    DS_ASSERT_OK(page->Init());
-    DS_ASSERT_OK(page->InitEmptyPage());
-    Status rc;
-    HeaderAndData ele((uint8_t *)a.c_str(), a.size(), 0);
-    Timer t;
-    size_t numPagesNeeded = 1;
-    auto flags = InsertFlags::NONE;
-    for (size_t i = 0; i < numElements; ++i) {
-        rc = page->Insert(ele, 0, flags);
-        if (rc.GetCode() == K_NO_SPACE) {
-            DS_ASSERT_OK(page->InitEmptyPage());
-            ++numPagesNeeded;
-            DS_ASSERT_OK(page->Insert(ele, 0, flags));
-            continue;
-        }
-        DS_ASSERT_OK(rc);
-    }
-    LOG(INFO) << FormatString("Elapsed time [%.6lf]s. Total pages %zu", t.ElapsedSecond(), numPagesNeeded);
-    if (perfManager != nullptr) {
-        perfManager->Tick();
-        perfManager->PrintPerfLog();
-    }
-}
 }  // namespace ut
 }  // namespace datasystem

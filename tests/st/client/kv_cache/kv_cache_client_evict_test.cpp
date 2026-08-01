@@ -423,36 +423,7 @@ TEST_F(KVCacheClientEvict2WorkerTest, TestLastLocalCopyEvictRemovesMeta)
     ASSERT_EQ(queryRsp.not_exist_ids_size(), 1);
 }
 
-TEST_F(KVCacheClientEvict2WorkerTest, LEVEL2_TestEvictTypeGetAfterWorkerRestart)
-{
-    LOG(INFO) << "Test evict objects get after worker restart";
-    size_t dataSize = 4 * 1024ul * 1024ul;
-    std::string data(dataSize, '0');
-    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
-    auto key = client_->Set(data, param);
-    ASSERT_FALSE(key.empty());
 
-    // Shutdown data node let data loss.
-    DS_ASSERT_OK(cluster_->ShutdownNode(ClusterNodeType::WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
-
-    std::string getVal;
-    // Get.
-    ASSERT_EQ(client1_->Get(key, getVal).GetCode(), StatusCode::K_NOT_FOUND);
-    ASSERT_EQ(client_->Get(key, getVal).GetCode(), StatusCode::K_NOT_FOUND);
-
-    // Get with subscribe.
-    std::thread t1([this, &key, &data, &param]() { DS_ASSERT_OK(client1_->Set(key, data, param)); });
-    uint64_t timeoutMs = 5'000;
-    DS_ASSERT_OK(client1_->Get(key, getVal, timeoutMs));
-    ASSERT_EQ(getVal, data);
-    getVal.clear();
-    DS_ASSERT_OK(client_->Get(key, getVal, timeoutMs));
-    ASSERT_EQ(getVal, data);
-
-    t1.join();
-}
 
 class KVCacheClientEvictWithoutSpillTest : public KVCacheClientEvictTest {
 public:

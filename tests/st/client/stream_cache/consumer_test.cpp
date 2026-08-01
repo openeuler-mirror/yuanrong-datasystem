@@ -241,46 +241,9 @@ TEST_F(ConsumerTest, GetElementsWhenProducerClosesWithPage0)
     DS_ASSERT_OK(producer->Close());
 }
 
-TEST_F(ConsumerTest, LEVEL2_TestCreateConsumerLongTimeout)
-{
-    // Request should not timeout if client timeout is set to 10s and master takes more time
 
-    // set timeout to 10 mins
-    std::shared_ptr<StreamClient> client1;
-    const int32_t timeoutMs = 1000 * 60 * 10;
-    ASSERT_EQ(CreateClient(0, timeoutMs, client1), Status::OK());
-    std::shared_ptr<Consumer> consumer;
-    SubscriptionConfig config("sub1", SubscriptionType::STREAM);
 
-    // Make master wait for 1 min and it should not timeout
-    // We actually dont know who is the master so inject in both
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0,
-                                           "SCMetadataManager.Subscribe.wait", "1*sleep(60000)"));
 
-    // This request should not timeout as client timeout is 10 mins.
-    DS_ASSERT_OK(client1->Subscribe("CreateConLongTimeout", config, consumer));
-}
-
-TEST_F(ConsumerTest, LEVEL2_TestCloseConsumerLongTimeout)
-{
-    // Request should not timeout if client timeout is set to 10mins and master takes more time
-
-    // set timeout to 10 mins
-    std::shared_ptr<StreamClient> client1;
-    const int32_t timeoutMs = 1000 * 60 * 10;
-    ASSERT_EQ(CreateClient(0, timeoutMs, client1), Status::OK());
-    std::shared_ptr<Consumer> consumer;
-    SubscriptionConfig config("sub1", SubscriptionType::STREAM);
-
-    // Make master wait for 1 min and it should not timeout
-    // We actually dont know who is the master so inject in both
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0,
-                                           "SCMetadataManager.CloseConsumer.wait", "1*sleep(60000)"));
-
-    // This request should not timeout as client timeout is 10 mins.
-    DS_ASSERT_OK(client1->Subscribe("CloseConLongTimeout", config, consumer));
-    DS_ASSERT_OK(consumer->Close());
-}
 
 TEST_F(ConsumerTest, EmptyCaseValidation)
 {

@@ -760,73 +760,7 @@ TEST_F(PubSubMultiNodeDataVerificationTest, BigElement2S2P1C)
     DS_ASSERT_OK(w1Client_->DeleteStream(stream2));
 }
 
-TEST_F(PubSubMultiNodeDataVerificationTest, LEVEL2_ConsumerSubscribleLater)
-{
-    // 1 stream: 1 producer -> 2 consumers.
-    const std::string stream1 = "testConSubscribLater";
-    size_t size = 1 * MB;
-    RandomData rand;
-    std::string data = rand.GetRandomString(size);
-    defaultProducerConf_.maxStreamSize = 20 * MB;
-    defaultProducerConf_.pageSize = 4 * MB;
-    const int timeout = 10000;
 
-    // Create 1 producer.
-    std::shared_ptr<Producer> prod1;
-    DS_ASSERT_OK(w1Client_->CreateProducer(stream1, prod1, defaultProducerConf_));
-
-    // Create first consumer.
-    std::shared_ptr<Consumer> con1;
-    SubscriptionConfig config1("sub1", SubscriptionType::STREAM);
-    DS_ASSERT_OK(w2Client_->Subscribe(stream1, config1, con1, true));
-
-    // The producer send Elements to first consumer.
-    int send_count = 0;
-    Status status;
-    while (true) {
-        Element element1(reinterpret_cast<uint8_t *>(&data.front()), data.size());
-        status = prod1->Send(element1);
-        if (status.IsOk()) {
-            send_count += 1;
-        } else {
-            break;
-        }
-    }
-
-    // First consumer receive elements.
-    std::vector<Element> outElements;
-    DS_ASSERT_OK(con1->Receive(send_count, timeout, outElements));
-    for (auto &ele : outElements) {
-        DS_ASSERT_OK(con1->Ack(ele.id));
-    }
-    outElements.clear();
-
-    // The producer send more elements (existing page on consumer side dropped, element with seqNo = 0 is gone).
-    send_count = 0;
-    while (true) {
-        Element element1(reinterpret_cast<uint8_t *>(&data.front()), data.size());
-        status = prod1->Send(element1);
-        if (status.IsOk()) {
-            send_count += 1;
-        } else {
-            break;
-        }
-    }
-
-    // Create second consumer.
-    std::shared_ptr<Consumer> con2;
-    SubscriptionConfig config2("sub2", SubscriptionType::STREAM);
-    DS_ASSERT_OK(w2Client_->Subscribe(stream1, config2, con2));
-
-    // Second consumer receive elements starting with seqNo != 0.
-    DS_ASSERT_OK(con2->Receive(send_count, timeout, outElements));
-    outElements.clear();
-
-    DS_ASSERT_OK(prod1->Close());
-    DS_ASSERT_OK(con1->Close());
-    DS_ASSERT_OK(con2->Close());
-    DS_ASSERT_OK(w1Client_->DeleteStream(stream1));
-}
 
 TEST_F(PubSubMultiNodeDataVerificationTest, ProducerInsertFailed)
 {

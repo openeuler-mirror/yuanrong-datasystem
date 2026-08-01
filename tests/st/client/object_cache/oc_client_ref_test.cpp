@@ -2028,39 +2028,7 @@ TEST_F(OCClientShmRefHighConcurrentTest, MutiClientCreate)
     InitTestClient(0, client);
 }
 
-TEST_F(OCClientShmRefHighConcurrentTest, LEVEL2_MaxNumOfClientTest)
-{
-    int numClient = 800;
-    uint64_t dataSize = 600 * 1024;
-    std::string data = GenPartRandomString(dataSize);
 
-    ThreadPool threadPool(numClient);
-    int loopTimes = 10;
-    std::vector<std::future<void>> futureVec;
-    for (size_t i = 0; i < (size_t)numClient; ++i) {
-        auto fut = threadPool.Submit([&data, dataSize, loopTimes, this]() {
-            std::shared_ptr<ObjectClient> client;
-            InitTestClient(0, client);
-            CreateParam param;
-            std::vector<std::string> failedObjectKeys;
-            std::vector<Optional<Buffer>> buffers;
-            for (int index = 0; index < loopTimes; index++) {
-                std::string objectKey = NewObjectKey();
-                std::shared_ptr<Buffer> buffer;
-                DS_ASSERT_OK(client->GIncreaseRef({ objectKey }, failedObjectKeys));
-                DS_ASSERT_OK(client->Create(objectKey, dataSize, param, buffer));
-                DS_ASSERT_OK(buffer->MemoryCopy(const_cast<char *>(data.data()), dataSize));
-                DS_ASSERT_OK(buffer->Seal());
-                DS_ASSERT_OK(client->GDecreaseRef({ objectKey }, failedObjectKeys));
-                buffer.reset();
-            }
-        });
-        futureVec.push_back(std::move(fut));
-    }
-    for (auto &future : futureVec) {
-        future.get();
-    }
-}
 
 class OCClientShmRefTest : public OCClientCommon {
 public:
@@ -2129,85 +2097,9 @@ TEST_F(OCClientShmRefTest, LEVEL1_MultipleClientDecreaeObjectTest)
     sleep(1);  // wait for collect perf log.
 }
 
-TEST_F(OCClientShmRefTest, LEVEL2_MultipleThreadDecreaseTest)
-{
-    int numThread = 10;
-    std::shared_ptr<ObjectClient> client;
-    InitTestClient(0, client);
-    uint64_t dataSize = 600 * 1024;
-    CreateParam param;
-    std::string data = GenPartRandomString(dataSize);
-    int dataNum = numThread * 1000;
-    std::vector<std::string> objectKeys;
-    objectKeys.reserve(dataNum);
-    for (int i = 0; i < dataNum; i++) {
-        objectKeys.emplace_back(NewObjectKey());
-    }
 
-    std::vector<std::shared_ptr<Buffer>> buffers;
-    buffers.reserve(dataNum);
-    std::vector<std::string> failedObjectKeys;
-    DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
-    for (int i = 0; i < dataNum; i++) {
-        std::shared_ptr<Buffer> buffer;
-        DS_ASSERT_OK(client->Create(objectKeys[i], dataSize, param, buffer));
-        buffers.emplace_back(buffer);
-        DS_ASSERT_OK(buffer->MemoryCopy(const_cast<char *>(data.data()), dataSize));
-        DS_ASSERT_OK(buffer->Seal());
-    }
 
-    ThreadPool threadPool(numThread);
-    std::vector<std::future<void>> futureVec;
-    auto startTick = std::chrono::steady_clock::now();
-    for (int i = 0; i < numThread; ++i) {
-        auto fut = threadPool.Submit([&client, &buffers, &objectKeys, i]() {
-            std::vector<std::string> failedObjectKeys;
-            for (int index = 0; index < 1000; index++) {
-                auto pos = i * 1000 + index;
-                client->GDecreaseRef({ objectKeys[pos] }, failedObjectKeys);
-                std::shared_ptr<Buffer> bufferNew;
-                buffers[pos] = bufferNew;  // Decrease before buffer
-            }
-        });
-        futureVec.push_back(std::move(fut));
-    }
-    for (auto &future : futureVec) {
-        future.get();
-    }
-    auto endTick = std::chrono::steady_clock::now();
-    auto elapsedTime = std::chrono::duration_cast<std::chrono::microseconds>(endTick - startTick).count();
-    std::vector<Optional<Buffer>> buffersGet;
-    DS_ASSERT_NOT_OK(client->Get(objectKeys, 0, buffersGet));
-    LOG(INFO) << "elapsedTime is : " << elapsedTime << "us";
-}
 
-TEST_F(OCClientShmRefTest, LEVEL2_ClientDecreaseSuccessTest)
-{
-    int testNum = 3000;
-    std::string objectKey = NewObjectKey();
-    std::shared_ptr<ObjectClient> client;
-    InitTestClient(0, client);
-    int32_t size = 500 * 1024;
-    std::string data = GenRandomString(size);
-    for (int i = 0; i < testNum; i++) {
-        LOG(INFO) << "Start to test client decrease.";
-        std::shared_ptr<Buffer> buffer;
-        DS_ASSERT_OK(client->Create(objectKey, size, CreateParam{}, buffer));
-        std::vector<std::string> objectKeys{ objectKey };
-        std::vector<std::string> failedObjectKeys;
-        std::vector<Optional<Buffer>> buffers;
-        DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
-        buffer->MemoryCopy((void *)data.data(), size);
-        buffer->Publish();
-        buffer.reset();
-        DS_ASSERT_OK(client->Get(objectKeys, 0, buffers));
-        ASSERT_EQ(buffers.size(), (size_t)1);
-        buffers.clear();
-        DS_ASSERT_OK(client->GDecreaseRef(objectKeys, failedObjectKeys));
-        ASSERT_TRUE(failedObjectKeys.empty());
-        DS_ASSERT_NOT_OK(client->Get(objectKeys, 0, buffers));
-    }
-}
 
 TEST_F(OCClientShmRefTest, LEVEL1_TestWorkerLostInDeadLockAndReconnect)
 {

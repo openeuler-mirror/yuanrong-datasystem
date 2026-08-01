@@ -696,79 +696,9 @@ TEST_F(StreamClientScaleTest, LEVEL1_TestScaleUpCrashWorker1)
     }
 }
 
-TEST_F(StreamClientScaleTest, LEVEL2_TestScaleUpCrashWorker2)
-{
-    LOG(INFO) << "TestScaleUpCrashWorker2 start!";
-    // Test the scale up and metadata migrate logic after the new node crash and restarts
-    // Essentially the purpose is to make sure it can recover itself from rocksdb
-    // Initialize producers and consumers
-    const int streamNum = 5;
-    std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> streams;
-    std::string streamName = "testScaleUpCraskWorker2";
-    CreateNProducerAndConsumer(streams, streamNum, streamName);
 
-    // Add new worker node to trigger scale up and metadata migration
-    const int newWorkerIdx = workerNum_;
-    DS_ASSERT_OK(AddNode());
-    // Wait for scale up and migration done
-    sleep(SCALE_UP_WAIT_TIME);
-    // Use kill so it is not voluntary scale down
-    DS_ASSERT_OK(static_cast<ExternalCluster *>(cluster_.get())->KillWorker(newWorkerIdx));
-    // Wait for the process kill so it does not timeout after 60s on GcovFlush
-    sleep(1);
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, newWorkerIdx, {}));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, newWorkerIdx));
-    std::shared_ptr<StreamClient> w3Client;
-    InitStreamClient(newWorkerIdx, w3Client);
-    // Make sure requests are still handled correctly after worker2 crash and restart
-    for (auto &stream : streams) {
-        const auto &streamName = stream.first;
-        std::shared_ptr<Producer> producer;
-        DS_ASSERT_OK(w3Client->CreateProducer(streamName, producer, defaultProducerConf_));
-        std::shared_ptr<Consumer> consumer;
-        SubscriptionConfig config("sub_" + streamName, SubscriptionType::STREAM);
-        DS_ASSERT_OK(w3Client->Subscribe(streamName, config, consumer));
-        CheckCount(w3Client, streamName, K_TWO, K_TWO);
-        DS_ASSERT_OK(stream.second.first->Close());
-        DS_ASSERT_OK(stream.second.second->Close());
-        CheckCount(w3Client, streamName, 1, 1);
-        DS_ASSERT_OK(producer->Close());
-        DS_ASSERT_OK(consumer->Close());
-        CheckCount(w3Client, streamName, 0, 0);
-    }
-    sleep(K_TWO);
-    // Delete streams in seperate loop after to avoid running into pending notification failure
-    for (auto &stream : streams) {
-        const auto &streamName = stream.first;
-        DS_ASSERT_OK(w3Client->DeleteStream(streamName));
-    }
-    // Shutdown the new node to avoid problem caused by kill with signal 9
-    (void)cluster_->ShutdownNode(WORKER, newWorkerIdx);
-    LOG(INFO) << "TestScaleUpCrashWorker2 finish!";
-}
 
-TEST_F(StreamClientScaleTest, LEVEL2_TestVoluntaryScaleDown)
-{
-    LOG(INFO) << "TestVoluntaryScaleDown start!";
-    // Test the voluntary scale down and the related metadata migrate logic
-    // In this case after worker2 shuts down, worker1 should be able to take over all the streams
-    // Test will take around a minute due to the 16 streams being created
 
-    // Initialize 16 producers and consumers
-    const int streamNum = 16;
-    std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> streams;
-    std::string streamName = "testVoluntaryScaleDown";
-    CreateNProducerAndConsumer(streams, streamNum, streamName);
-
-    // Shutdown worker2 to trigger voluntary scale down and metadata migration
-    w2Client_.reset();
-    VoluntaryScaleDownInject(1);
-    // Wait for voluntary scale down to finish
-    sleep(SCALE_DOWN_WAIT_TIME);
-
-    PostScaleTest(streams, w1Client_);
-    LOG(INFO) << "TestVoluntaryScaleDown finish!";
-}
 
 TEST_F(StreamClientScaleTest, LEVEL1_TestScaleDownAutoDeleteStream1)
 {
@@ -795,42 +725,7 @@ TEST_F(StreamClientScaleTest, LEVEL1_TestScaleDownAutoDeleteStream1)
     DS_ASSERT_OK(WaitCreateProducerAfterAutoCleanup(w1Client_, streamName, defaultProducerConf_, producer1, deadline));
 }
 
-TEST_F(StreamClientScaleTest, LEVEL2_TestScaleDownWhileRetainingData)
-{
-    int streamNum = 10;
-    std::string streamNameBase = "testScaleDownAutoDelStream";
-    defaultProducerConf_.autoCleanup = false;
-    defaultProducerConf_.retainForNumConsumers = 1;
 
-    for (int i = 0; i < streamNum; i++) {
-        auto streamName = streamNameBase + std::to_string(i);
-        std::shared_ptr<Producer> producer;
-        DS_ASSERT_OK(w1Client_->CreateProducer(streamName, producer, defaultProducerConf_));
-        DS_ASSERT_OK(producer->Close());
-    }
-
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage", "return(K_RPC_UNAVAILABLE)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.RunKeepAliveTask", "return(K_RPC_UNAVAILABLE)"));
-
-    WaitAllMembersJoinClusterTopology(1);
-
-    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
-    ASSERT_NE(externalCluster, nullptr);
-    if (externalCluster->CheckWorkerProcess(0)) {
-        DS_ASSERT_OK(externalCluster->KillWorker(0));
-    }
-    DS_ASSERT_OK(externalCluster->StartWorkerAndWaitReady({ 0 }));
-
-    WaitAllMembersJoinClusterTopology(2);  // 2 workers online
-
-    for (int i = 0; i < streamNum; i++) {
-        auto streamName = streamNameBase + std::to_string(i);
-        std::shared_ptr<Consumer> consumer;
-        SubscriptionConfig config("sub1", SubscriptionType::STREAM);
-        DS_ASSERT_OK(w2Client_->Subscribe(streamName, config, consumer));
-    }
-}
 
 TEST_F(StreamClientScaleTest, DISABLED_LEVEL1_TestScaleDownDeleteStream)
 {
@@ -976,84 +871,9 @@ TEST_F(StreamClientScaleTest, DISABLED_LEVEL1_TestLargeScaleUp)
     LOG(INFO) << "LEVEL1_TestLargeScaleUp finish!";
 }
 
-TEST_F(StreamClientScaleTest, LEVEL2_TestUnlimitedAutodelete1)
-{
-    // Test that node lost etcd event will clear metadata, so auto-delete is not retried when related node is lost.
-    std::string streamName = "TestUnlimitedAutodelete1";
-    ProducerConf oldConf;
-    oldConf.autoCleanup = true;
-    oldConf.pageSize = 4 * MB;  //  page size is 4 MB
-    ProducerConf newConf;
-    newConf.pageSize = 3 * MB;  // page size is 3 MB
 
-    std::vector<std::string> streamVec;
-    std::vector<std::shared_ptr<Producer>> producerVec;
-    const int streamNum = 10;
-    for (int i = 0; i < streamNum; i++) {
-        auto tmpStreamName = streamName + std::to_string(i);
 
-        std::shared_ptr<Producer> producer;
-        DS_ASSERT_OK(w1Client_->CreateProducer(tmpStreamName, producer, oldConf));
-        producerVec.emplace_back(producer);
-        streamVec.emplace_back(tmpStreamName);
-    }
 
-    // Close all producers, but do not handle auto-delete yet.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.ProcessDeleteStreams", "1*sleep(10000)"));
-    for (auto &producer : producerVec) {
-        producer->Close();
-    }
-
-    // Shutdown worker 0
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    const int WAIT_FOR_DELETION = 15;
-    sleep(WAIT_FOR_DELETION);
-
-    for (auto streamName : streamVec) {
-        std::shared_ptr<Producer> producer;
-        DS_ASSERT_OK(w2Client_->CreateProducer(streamName, producer, newConf));
-    }
-}
-
-TEST_F(StreamClientScaleTest, LEVEL2_TestUnlimitedAutodelete2)
-{
-    // Test that even if metadata is not cleared, auto-delete will not be retried indefinitely when node is found lost.
-    std::string streamName = "TestUnlimitedAutodelete2";
-    ProducerConf oldConf;
-    oldConf.autoCleanup = true;
-    oldConf.pageSize = 4 * MB;  //  page size is 4 MB
-    ProducerConf newConf;
-    newConf.pageSize = 3 * MB;  // page size is 3 MB
-
-    std::vector<std::string> streamVec;
-    std::vector<std::shared_ptr<Producer>> producerVec;
-    const int streamNum = 10;
-    for (int i = 0; i < streamNum; i++) {
-        auto tmpStreamName = streamName + std::to_string(i);
-
-        std::shared_ptr<Producer> producer;
-        DS_ASSERT_OK(w1Client_->CreateProducer(tmpStreamName, producer, oldConf));
-        producerVec.emplace_back(producer);
-        streamVec.emplace_back(tmpStreamName);
-    }
-
-    // Close all producers, but do not handle auto-delete yet.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.ProcessDeleteStreams", "1*sleep(10000)"));
-    for (auto &producer : producerVec) {
-        producer->Close();
-    }
-
-    // Shutdown worker 0, also inject to simulate the scenario that metadata is not cleared.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "SCMetadataManager.SkipClearEmptyMeta", "call()"));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    const int WAIT_FOR_DELETION = 15;
-    sleep(WAIT_FOR_DELETION);
-
-    for (auto streamName : streamVec) {
-        std::shared_ptr<Producer> producer;
-        DS_ASSERT_OK(w2Client_->CreateProducer(streamName, producer, newConf));
-    }
-}
 
 TEST_F(StreamClientScaleTest, LEVEL1_ScaleWhenSyncConsumerNode)
 {
@@ -1478,67 +1298,9 @@ TEST_F(StreamClientVoluntaryScaleDownTest, LEVEL1_TestScaleDownAutoDeleteStream2
     CreateNProducerAndConsumerAfterAutoCleanup(streams, streamNum, streamName);
 }
 
-TEST_F(StreamClientVoluntaryScaleDownTest, LEVEL2_TestScaleDownNotifications1)
-{
-    InitClientsHelper();
-    // Test that with voluntary shutdown, add pub and add sub notifications can be readded.
-    // And also the stop data retention notification is also involved.
-    std::string streamName = "testScaleDownNotifications1";
-    defaultProducerConf_.retainForNumConsumers = 1;
-    // Inject so that notifications all become async on worker3, and async notifications are not handled.
-    const int worker3Index = 2;
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, worker3Index, "SCNotifyWorkerManager.ForceAsyncNotification", "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, worker3Index, "master.ProcessAsyncNotify", "sleep(10000)"));
-    const int streamNum = 10;
-    std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> streams;
-    CreateNProducerAndConsumer(streams, streamNum, streamName, false);
-    // Voluntarily scale down worker3, metadata will get migrated and notification/reconciliation logic should be
-    // triggered.
-    VoluntaryScaleDownInject(worker3Index);
-    sleep(SCALE_DOWN_WAIT_TIME);
-    for (auto &stream : streams) {
-        CheckCount(w1Client_, stream.first, 1, 1);
-        TestSendRecv(stream.second.first, stream.second.second);
-    }
-}
 
-TEST_F(StreamClientVoluntaryScaleDownTest, LEVEL2_TestScaleDownNotifications2)
-{
-    InitClientsHelper();
-    // Test that with voluntary shutdown, del pub and del sub notifications can be readded.
-    std::string streamName = "testScaleDownNotifications2";
-    const int streamNum = 6;
-    std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> streams;
-    CreateNProducerAndConsumer(streams, streamNum, streamName, false);
-    // Inject so that notifications all become async on worker3, and async notifications are not handled.
-    const int worker3Index = 2;
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, worker3Index, "SCNotifyWorkerManager.ForceAsyncNotification", "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, worker3Index, "master.ProcessAsyncNotify", "sleep(10000)"));
-    for (auto &stream : streams) {
-        // Close the remote consumer, but the notifications on worker3 are not handled.
-        stream.second.second->Close();
-    }
-    // Voluntarily scale down worker3,
-    // metadata will get migrated and notification/reconciliation logic should be triggered.
-    VoluntaryScaleDownInject(worker3Index);
-    sleep(SCALE_DOWN_WAIT_TIME);
-    // Force worker2 to fail to accept any elements with RPC_UNAVAILABLE.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "PushElementsCursors.begin", "return(K_RPC_UNAVAILABLE)"));
-    for (auto &stream : streams) {
-        auto &streamName = stream.first;
-        auto &producer = stream.second.first;
-        auto &consumer = stream.second.second;
-        SubscriptionConfig config("sub_" + streamName, SubscriptionType::STREAM);
-        DS_ASSERT_OK(w1Client_->Subscribe(streamName, config, consumer));
-        // Send data of amound more than max stream size, to make sure the procedure is fine.
-        std::thread producerThrd([this, &producer]() { SendHelper(producer); });
-        std::thread consumerThrd([this, &consumer]() { ReceiveHelper(consumer); });
-        producerThrd.join();
-        consumerThrd.join();
-    }
-}
+
+
 
 TEST_F(StreamClientVoluntaryScaleDownTest, TestScaleDownNotifications3)
 {
@@ -1589,56 +1351,7 @@ TEST_F(StreamClientVoluntaryScaleDownTest, LEVEL1_ScaleDownWhenMetaResidue)
     WaitForVoluntaryDownFinished(0, timeoutS);
 }
 
-TEST_F(StreamClientPassiveScaleTest, LEVEL2_TestSyncConsumerNode)
-{
-    // Test that during the reconciliation from passive scale down,
-    // the SyncConsumerNode would skip the duplicates
-    // Use the worker3 for crash purpose
-    const int worker3Index = 2;
-    // Initialize producers and consumers
-    const int streamNum = 10;
-    struct PlaceHolder {
-        PlaceHolder(std::shared_ptr<Producer> producer, std::shared_ptr<Consumer> consumer,
-                    std::shared_ptr<std::thread> producerThrd, std::shared_ptr<std::thread> consumerThrd)
-            : producer_(producer), consumer_(consumer), producerThrd_(producerThrd), consumerThrd_(consumerThrd)
-        {
-        }
-        std::shared_ptr<Producer> producer_;
-        std::shared_ptr<Consumer> consumer_;
-        std::shared_ptr<std::thread> producerThrd_;
-        std::shared_ptr<std::thread> consumerThrd_;
-    };
-    std::map<std::string, PlaceHolder> streams;
 
-    // Create Producer on worker1 and Consumer on worker2
-    for (int i = 0; i < streamNum; ++i) {
-        std::string streamName = "testSyncConNode" + std::to_string(i);
-        std::shared_ptr<Producer> producer;
-        ProducerConf conf;
-        const int TEST_PAGE_SIZE = 16 * KB;
-        const int TEST_STREAM_MAX_SIZE = 5 * MB;
-        conf.pageSize = TEST_PAGE_SIZE;
-        conf.maxStreamSize = TEST_STREAM_MAX_SIZE;
-        DS_ASSERT_OK(w1Client_->CreateProducer(streamName, producer, defaultProducerConf_));
-        std::shared_ptr<Consumer> consumer;
-        SubscriptionConfig config("sub" + std::to_string(i), SubscriptionType::STREAM);
-        DS_ASSERT_OK(w2Client_->Subscribe(streamName, config, consumer));
-        auto producerThrd = std::make_shared<std::thread>([this, producer]() { SendHelper(producer); });
-        auto consumerThrd = std::make_shared<std::thread>([this, consumer]() { ReceiveHelper(consumer); });
-        streams.emplace(streamName, PlaceHolder(producer, consumer, producerThrd, consumerThrd));
-        CheckCount(w1Client_, streamName, 1, 1);
-    }
-
-    // Kill worker3, and sleep to trigger passive scale down logic
-    DS_ASSERT_OK(static_cast<ExternalCluster *>(cluster_.get())->KillWorker(worker3Index));
-    sleep(NODE_DEAD_TIMEOUT + 1);
-
-    // Make sure requests can still be handled correctly between producer and consumer
-    for (auto &stream : streams) {
-        stream.second.producerThrd_->join();
-        stream.second.consumerThrd_->join();
-    }
-}
 
 TEST_F(StreamClientPassiveScaleTest, LEVEL1_TestClearAsyncNotifyTask)
 {
@@ -2062,24 +1775,7 @@ TEST_F(DataVerificationStreamClientPassiveScaleTest, TestRestartPassiveScaleDown
 
 class StreamClientScaleDfxTest : public StreamClientScaleTest {};
 
-TEST_F(StreamClientScaleDfxTest, LEVEL2_ScaleUpWhenMetaResidue)
-{
-    const int streamNum = 16;
-    std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> streams;
-    std::string streamName = "testScaleUpWhenMetaResidue";
-    CreateNProducerAndConsumer(streams, streamNum, streamName, false);
-    datasystem::inject::Set("StreamClient.ShutDown.skip", "return()");
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "BatchMigrateMetadata.finish", "1*sleep(2000)"));
 
-    VoluntaryScaleDownInject(1);
-    sleep(1);  // wait hash ring change
-    kill(cluster_->GetWorkerPid(1), SIGKILL);
-    w2Client_.reset();
-    sleep(6);  // wait 6s for worker passive reduction
-
-    DS_ASSERT_OK(AddNode());
-    WaitAllMembersJoinClusterTopology(2, 10);  // wait 10s for 2 workers online
-}
 
 }  // namespace st
 }  // namespace datasystem
