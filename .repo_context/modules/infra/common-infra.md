@@ -113,19 +113,23 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
     to `4` MB and is validated in the range `[1, 2048]` MB.
   - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.
-    `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; timeout/error retirement is
-    bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap is `200 + 200`.
+    `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; explicit provider/error
+    retirement is bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap
+    is `200 + 200`. An upper-layer timeout deletes its business Event immediately; the resource-level active-lane
+    registry keeps the in-flight lane until all accepted WR CQEs arrive, then releases the valid Jetty without refill.
     Every provider post first acquires a shared `UrmaJetty::PostPermit`. The Jetty uses one atomic gate word for
     `closing`, retire-finalizer arming/scheduling, and the active provider-call count: concurrent posts remain allowed,
     while retire closes admission and waits for already-admitted provider calls before `modify(ERROR)`.
     Pool detach and the pending-retire record are established before the finalizer is armed. The record preserves an
-    early `FLUSH_ERR_DONE`; provider delete is admitted only after the per-Jetty flush notification moves the lifecycle
-    to delete-ready. Jetty-level flush notifications are dispatched before request-level pipeline hooks so the sole
-    notification cannot be consumed as an ordinary request completion. Modify/delete failure is quarantined and
+    early `FLUSH_ERR_DONE`. Because that notification has no valid WR `user_ctx`, it is handled only by `local_id` and
+    advances the pending-delete record directly; it never re-enters request Event handling or calls `urma_flush_jetty`.
+    Jetty-level flush notifications are dispatched before request-level pipeline hooks so the sole notification cannot
+    be consumed as an ordinary request completion. Modify/flush/delete failure is quarantined and
     remains inside the configured live-resource bound. A quarantined Jetty keeps its registry identity reserved:
     flush carries only `local_id`, so registration rejects a different live wrapper with the same ID to prevent ABA.
-    A send lane is leased once per logical transfer and shared by that transfer's chunk WR events; release or retirement
-    happens only after the shared request lease is sealed and all associated events have completed, failed, or timed out.
+    A send lane is leased once per logical transfer and shared by that transfer's chunk WRs; release or retirement
+    happens only after the shared request lease is sealed and all accepted WRs have completed. Event timeout is a
+    business-lifecycle transition and does not settle or retire the lane.
     Worker-to-worker Batch Get is a narrower RPC-scoped exception: `BatchGetObjectRemoteImpl` attempts one shared-lane
     acquire before object processing. On success it passes the lane to ordinary and gather writes and seals it once
     after all sub-request WRs are created. When the acquire fails and transport fallback is enabled, the whole RPC is
@@ -137,7 +141,11 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - URMA receive-side Jetty reuse is process-level: `UrmaResource::GetOrCreateSharedRecvJetty()` lazily creates the
     single RECV Jetty/JFR published by TCP handshake responses. Jetty role is immutable, so RECV async-event retirement
     does not enter the send pool or trigger send-pool refill. Shutdown closes Jetty admission before stopping the poll
-    thread; non-converged provider resources are retained fail-closed rather than implicitly deleted.
+    thread; non-converged provider resources are retained fail-closed rather than implicitly deleted. If shutdown still
+    has pending or quarantined Jetty resources, `UrmaResource` also retains their shared JFC/JFCE/context dependency
+    closure until process exit, and `UrmaManager` skips `urma_uninit` plus dynamic-library unloading. This avoids an
+    invalid partial teardown and the resulting expected provider error logs; fully converged shutdown keeps the normal
+    explicit cleanup path.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
   - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
     CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available

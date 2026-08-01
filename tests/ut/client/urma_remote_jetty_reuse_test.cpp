@@ -427,8 +427,9 @@ TEST(UrmaRemoteJettyReuseTest, MultiChunkWriteSharesAndSettlesOneRemoteSendLane)
         [] { return inject::GetExecuteCount("UrmaManager.UrmaWriteAfterPost") == 1; });
     std::shared_ptr<UrmaEvent> firstEvent;
     const bool firstEventFound = postPaused && manager.GetEvent(1000, firstEvent).IsOk();
+    auto firstLease = firstEventFound ? firstEvent->laneLease_.lock() : nullptr;
     const bool completionBeforeSeal = firstEventFound && WaitUntil([&] {
-        return firstEvent->laneLease_->GetPendingEventCount() == 0 && !firstEvent->laneLease_->IsSettled();
+        return firstLease != nullptr && firstLease->GetPendingWrCount() == 0 && !firstLease->IsSettled();
     });
     const auto statsBeforeSeal = manager.urmaResource_->GetSendJettyPoolStats();
 
@@ -442,12 +443,15 @@ TEST(UrmaRemoteJettyReuseTest, MultiChunkWriteSharesAndSettlesOneRemoteSendLane)
     ASSERT_TRUE(writeStatus.IsOk()) << writeStatus.ToString();
     ASSERT_EQ(eventKeys.size(), 2u);
 
-    // Both chunks belong to one request, so they must retain both the exact same lease and the same send Jetty.
+    // Both chunks belong to one request and retain the same send Jetty until their WRs drain.
     std::shared_ptr<UrmaEvent> secondEvent;
     ASSERT_TRUE(manager.GetEvent(eventKeys[0], firstEvent).IsOk());
     ASSERT_TRUE(manager.GetEvent(eventKeys[1], secondEvent).IsOk());
-    ASSERT_NE(firstEvent->laneLease_, nullptr);
-    EXPECT_EQ(firstEvent->laneLease_.get(), secondEvent->laneLease_.get());
+    firstLease = firstEvent->laneLease_.lock();
+    const auto secondLease = secondEvent->laneLease_.lock();
+    ASSERT_NE(firstLease, nullptr);
+    ASSERT_NE(secondLease, nullptr);
+    EXPECT_EQ(firstLease.get(), secondLease.get());
     EXPECT_EQ(firstEvent->GetJetty().lock().get(), secondEvent->GetJetty().lock().get());
     for (const auto key : eventKeys) {
         ASSERT_TRUE(manager.WaitToFinish(key, 10000).IsOk());

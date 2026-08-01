@@ -169,8 +169,10 @@ UrmaManager::~UrmaManager()
     if (urmaResource_ != nullptr) {
         urmaResource_->Clear();
     }
-    UrmaUninit();
-    urma_dlopen::Cleanup();
+    if (urmaResource_ == nullptr || !urmaResource_->IsProviderCleanupDeferred()) {
+        UrmaUninit();
+        urma_dlopen::Cleanup();
+    }
     if (memoryBuffer_ != nullptr) {
         munmap(memoryBuffer_, ubTransportMemSize_.load());
         memoryBuffer_ = nullptr;
@@ -835,10 +837,9 @@ Status UrmaManager::CheckAndNotify(const UrmaWriteTrace &pollTrace)
                 event->SetFailed(failedIt->second);
                 failedRequests_.erase(failedIt);
             }
-            ReleaseEventLane(event);
-            // Notify everyone who are waiting on the event
+            // Business completion is independent from lane/WR accounting, which was already
+            // settled by local_id while classifying this CQE.
             event->NotifyAll();
-            // delete the event and
             VLOG(1) << "[UrmaEventHandler] Notifying the request id: " << requestId;
             // remove request id from finishedRequests_ set
             // we dont need lock for finishedRequests_ as its accessed only by single thread
@@ -862,58 +863,7 @@ Status UrmaManager::CheckAndNotify(const UrmaWriteTrace &pollTrace)
 void UrmaManager::DeleteEvent(uint64_t requestId)
 {
     tbbEventMap_.erase(requestId);
-}
-
-void UrmaManager::ReleaseEventLane(const std::shared_ptr<UrmaEvent> &event)
-{
-    if (event == nullptr) {
-        return;
-    }
-    LOG_IF_ERROR(ApplySendLaneAction(event->MarkLaneReleased(), event->GetJetty().lock()),
-                 FormatString("Failed to settle URMA lane for request: %zu", event->GetRequestId()));
-}
-
-void UrmaManager::ReleaseAndDeleteEvent(uint64_t requestId)
-{
-    std::shared_ptr<UrmaEvent> event;
-    if (GetEvent(requestId, event).IsOk()) {
-        ReleaseEventLane(event);
-    }
-    DeleteEvent(requestId);
-}
-
-void UrmaManager::RetireAndDeleteEvent(uint64_t requestId)
-{
-    std::shared_ptr<UrmaEvent> event;
-    if (GetEvent(requestId, event).IsOk()) {
-        LOG_IF_ERROR(RetireEventLane(event), FormatString("Failed to retire URMA lane for request: %zu", requestId));
-    }
-    DeleteEvent(requestId);
-}
-
-Status UrmaManager::RetireEventLane(const std::shared_ptr<UrmaEvent> &event)
-{
-    if (event == nullptr) {
-        return Status::OK();
-    }
-    return ApplySendLaneAction(event->MarkLaneRetired(), event->GetJetty().lock());
-}
-
-Status UrmaManager::ApplySendLaneAction(UrmaSendLaneLease::SettleAction action, const std::shared_ptr<UrmaJetty> &jetty)
-{
-    if (action == UrmaSendLaneLease::SettleAction::NONE) {
-        return Status::OK();
-    }
-    if (jetty == nullptr) {
-        return Status::OK();
-    }
-    if (action == UrmaSendLaneLease::SettleAction::RELEASE) {
-        INJECT_POINT("UrmaManager.ApplySendLaneAction.Release");
-        urmaResource_->ReleaseJetty(jetty);
-        return Status::OK();
-    }
-    INJECT_POINT("UrmaManager.ApplySendLaneAction.Retire");
-    return urmaResource_->RetireJetty(jetty);
+    INJECT_POINT_NO_RETURN("UrmaManager.DeleteEvent");
 }
 
 Status UrmaManager::SealSendLaneLease(const std::shared_ptr<UrmaSendLaneLease> &laneLease)
@@ -921,7 +871,7 @@ Status UrmaManager::SealSendLaneLease(const std::shared_ptr<UrmaSendLaneLease> &
     if (laneLease == nullptr) {
         return Status::OK();
     }
-    return ApplySendLaneAction(laneLease->Seal(), laneLease->GetJetty());
+    return urmaResource_->SealActiveSendLane(laneLease);
 }
 
 Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<UrmaEvent> &event)
@@ -1029,38 +979,27 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
             << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST);
 }
 
-Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
+Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
+                                                double elapsedMs, const std::string &reason) const
 {
-    PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
-    // This legacy injection models a wait call that fails before it obtains an event.
-    // Keep it before GetEvent: moving it below changes the ST from a fallback error-path
-    // test into a destructive in-flight lane-retirement test.
-    INJECT_POINT("UrmaManager.UrmaWaitError", []() { return Status(K_URMA_WAIT_TIMEOUT, "Inject urma wait error"); });
-    std::shared_ptr<UrmaEvent> event;
-    RETURN_IF_NOT_OK(GetEvent(requestId, event));
-    // Unlike UrmaWaitError, this test hook models a timeout after an event owns an in-flight lane.
-    INJECT_POINT("UrmaManager.UrmaWaitInFlightTimeout", [&timeoutMs](int64_t injectedTimeoutMs) {
-        timeoutMs = injectedTimeoutMs;
-        return Status::OK();
-    });
-    // use this unique request id as key to wait
-    // wait until timeout
+    const auto requestIdStr = std::to_string(requestId);
+    const auto srcAddress = localUrmaInfo_.localAddress.ToString();
+    const auto message = FormatString(
+        "[URMA_WAIT_TIMEOUT] timedout waiting for requestId=%s, elapsedMs=%f, srcAddress=%s, "
+        "targetAddress=%s, remoteInstanceId=%s, dataSize=%zu, op=%s, reason=%s",
+        requestIdStr.c_str(), elapsedMs, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
+        event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
+        UrmaEvent::OperationTypeName(event->GetOperationType()), reason.c_str());
+    LOG(WARNING) << message;
+    return Status(K_URMA_WAIT_TIMEOUT, message);
+}
 
-    Raii deleteEvent([this, &requestId]() { DeleteEvent(requestId); });
+Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
+                                     const std::shared_ptr<UrmaEvent> &event)
+{
     if (timeoutMs < 0) {
-        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
-        LOG_IF_ERROR(RetireEventLane(event), FormatString("Failed to retire URMA lane for request: %s",
-                                                          requestIdStr.c_str()));
-        const auto srcAddress = localUrmaInfo_.localAddress.ToString();
-        RETURN_STATUS_LOG_ERROR(
-            K_URMA_WAIT_TIMEOUT,
-            FormatString("[URMA_WAIT_TIMEOUT] timedout waiting for request: %s, srcAddress=%s, targetAddress=%s, "
-                         "remoteInstanceId=%s, dataSize=%zu, op=%s",
-                         requestIdStr.c_str(), srcAddress.c_str(), event->GetRemoteAddress().c_str(),
-                         event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
-                         UrmaEvent::OperationTypeName(event->GetOperationType())));
+        return CreateUrmaWaitTimeoutStatus(requestId, event, 0, "request deadline already expired");
     }
-
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
     Timer waitTimer;
     event->SetWriteWaitTimeUs(waitTimer.GetStartTimeStampUs());
@@ -1079,20 +1018,34 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     const bool isUrmaWaitTimeout = waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT
                                    || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
     if (isUrmaWaitTimeout) {
-        LOG_IF_ERROR(RetireEventLane(event), FormatString("Failed to retire URMA lane for request: %zu", requestId));
-        const auto srcAddress = localUrmaInfo_.localAddress.ToString();
-        return Status(K_URMA_WAIT_TIMEOUT,
-                      FormatString("urma write deadline exceeded: %fms, requestId=%zu, srcAddress=%s, "
-                                   "targetAddress=%s, remoteInstanceId=%s, dataSize=%zu, op=%s, %s",
-                                   totalElapsedMs, requestId, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
-                                   event->GetRemoteInstanceId().c_str(),
-                                   static_cast<size_t>(event->GetDataSize()),
-                                   UrmaEvent::OperationTypeName(event->GetOperationType()), waitRc.GetMsg()));
+        return CreateUrmaWaitTimeoutStatus(requestId, event, totalElapsedMs, waitRc.GetMsg());
     }
     LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, waitElapsedMs, wakeSchedLatencyUs,
                                waitRc);
     RETURN_IF_NOT_OK(waitRc);
     waitPoint.Record();
+    return Status::OK();
+}
+
+Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
+{
+    PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
+    // This legacy injection models a wait call that fails before it obtains an event.
+    // Keep it before GetEvent: moving it below changes the ST from a fallback error-path
+    // test into a destructive in-flight lane-retirement test.
+    INJECT_POINT("UrmaManager.UrmaWaitError", []() { return Status(K_URMA_WAIT_TIMEOUT, "Inject urma wait error"); });
+    std::shared_ptr<UrmaEvent> event;
+    RETURN_IF_NOT_OK(GetEvent(requestId, event));
+    // Unlike UrmaWaitError, this test hook models a timeout after an event owns an in-flight lane.
+    INJECT_POINT("UrmaManager.UrmaWaitInFlightTimeout", [&timeoutMs](int64_t injectedTimeoutMs) {
+        timeoutMs = injectedTimeoutMs;
+        return Status::OK();
+    });
+    // use this unique request id as key to wait
+    // wait until timeout
+
+    Raii deleteEvent([this, &requestId]() { DeleteEvent(requestId); });
+    RETURN_IF_NOT_OK(WaitForUrmaEvent(requestId, timeoutMs, event));
     RETURN_IF_NOT_OK(HandleUrmaEvent(requestId, event));
     return Status::OK();
 }
@@ -1155,6 +1108,16 @@ Status UrmaManager::TryRecoverFailedJettyFromCompletion(uint64_t requestId, int 
         return Status::OK();
     }
 
+    const auto activeRetireRc = urmaResource_->RetireActiveSendLane(jettyId);
+    if (activeRetireRc.IsOk()) {
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_RECREATE_JETTY] Retired active lane from completion, requestId=" << requestId
+            << ", jettyId=" << jettyId << ", cqeStatus=" << statusCode;
+        return Status::OK();
+    }
+    // The shared JFC can report a Jetty that is not represented by the active send-lane registry,
+    // or another fault path may already have removed its lane. Preserve the registry lookup so
+    // retirement remains compatible and idempotent for those completions.
     std::shared_ptr<UrmaJetty> failedJetty;
     auto lookupRc = urmaResource_->GetJettyById(jettyId, failedJetty);
     if (lookupRc.IsError() || failedJetty == nullptr) {
@@ -1167,7 +1130,7 @@ Status UrmaManager::TryRecoverFailedJettyFromCompletion(uint64_t requestId, int 
     LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
         << "[URMA_RECREATE_JETTY] Trigger from completion, requestId=" << requestId << ", jettyId=" << jettyId
         << ", cqeStatus=" << statusCode;
-    return urmaResource_->ReCreateJetty(failedJetty);
+    return urmaResource_->RetireJetty(failedJetty);
 }
 
 Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int count,
@@ -1181,43 +1144,51 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
         return Status::OK();
     });
     for (int i = 0; i < count; i++) {
-        auto crStatus = completeRecords[i].status;
-        auto userCtx = completeRecords[i].user_ctx;
-        auto jettyId = completeRecords[i].local_id;
-        // FLUSH_ERR_DONE is a Jetty-lifecycle event, not a request completion. It must take
-        // precedence over request-specific hooks; otherwise a pipeline hook could consume the
-        // sole per-Jetty flush notification and leave the retired Jetty permanently non-deletable.
+        const auto crStatus = completeRecords[i].status;
+        const auto userCtx = completeRecords[i].user_ctx;
+        const auto jettyId = completeRecords[i].local_id;
+        // FLUSH_ERR_DONE is a Jetty-lifecycle event. Its user_ctx is a fake value, so only
+        // local_id may be used to advance the already-published pending-delete record.
         if (crStatus == URMA_CR_WR_FLUSH_ERR_DONE) {
-            LOG(INFO) << "[URMA_POLL_JFC] Write flush error done for request id: " << userCtx
-                      << ", jetty id: " << jettyId;
-            urmaResource_->AsyncDeleteJetty(jettyId);
+            LOG(INFO) << "[URMA_POLL_JFC] Write flush error done for jetty id: " << jettyId;
+            LOG_IF_ERROR(urmaResource_->HandleFlushErrDone(jettyId),
+                         FormatString("[URMA_FLUSH_JETTY_FAILED] jettyId=%u", jettyId));
             continue;
+        }
+
+        // Settle transport ownership by Jetty identity before notifying the business request.
+        if (crStatus == URMA_CR_SUCCESS ||
+            GetUrmaErrorHandlePolicy(crStatus) != UrmaErrorHandlePolicy::RECREATE_JETTY) {
+            LOG_IF_ERROR(urmaResource_->CompleteActiveSendLane(jettyId),
+                         FormatString("[URMA_SEND_LANE_COMPLETE_FAILED] jettyId=%u", jettyId));
+        } else {
+            const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
+            LOG_IF_ERROR(TryRecoverFailedJettyFromCompletion(userCtx, crStatus, jettyId),
+                         FormatString("[URMA_RECREATE_JETTY_FAILED] requestId=%s, jettyId=%u, cqeStatus=%d",
+                                      requestIdStr.c_str(), jettyId, crStatus));
         }
 #ifdef BUILD_PIPLN_H2D
         // redirect pipeline h2d events
         if (OsXprtPipln::PiplnH2DRecvEventHook(&completeRecords[i])) {
             std::shared_ptr<UrmaEvent> event;
             if (GetEvent(completeRecords[i].user_ctx, event).IsOk()) {
-                ReleaseEventLane(event);
+                // The send lane was already settled by local_id before the pipeline consumed this event.
                 DeleteEvent(completeRecords[i].user_ctx);
             }
             continue;
         }
 #endif
+
+        // Classify the business result by request identity for CheckAndNotify().
         if (crStatus == URMA_CR_SUCCESS) {
-            VLOG(1) << "[URMA_POLL_JFC] Got event with request id: " << userCtx << ", count:" << count
-                    << ", cpuid: " << sched_getcpu();
+            VLOG(1) << "[URMA_POLL_JFC] Got event with request id: " << userCtx;
             successCompletedReqs.insert(userCtx);
         } else {
             const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
             LOG(ERROR) << FormatString(
-                "[URMA_POLL_JFC]: urma_poll_jfc return failed completion record, requestId: %s "
-                "CR.status: %d",
+                "[URMA_POLL_JFC]: urma_poll_jfc return failed completion record, requestId: %s CR.status: %d",
                 requestIdStr.c_str(), crStatus);
-            LOG_IF_ERROR(TryRecoverFailedJettyFromCompletion(userCtx, crStatus, jettyId),
-                         FormatString("[URMA_RECREATE_JETTY_FAILED] requestId=%s, jettyId=%u, cqeStatus=%d",
-                                      requestIdStr.c_str(), jettyId, crStatus));
-            failedCompletedReqs[completeRecords[i].user_ctx] = crStatus;
+            failedCompletedReqs[userCtx] = crStatus;
         }
     }
 
@@ -1579,6 +1550,12 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     if (ownsLaneLease) {
         RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(args.connection, jetty, targetJetty));
         laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+        auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
+        if (registerRc.IsError()) {
+            LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
+                         "Failed to retire URMA send Jetty after lane registration failure");
+            return registerRc;
+        }
     } else {
         laneLease = externalLaneLease;
         jetty = laneLease->GetJetty();
@@ -1630,8 +1607,8 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         }();
         if (injectRc.IsError()) {
             if (ownsLaneLease) {
-                LOG_IF_ERROR(ApplySendLaneAction(laneLease->RequestRetire(), laneLease->GetJetty()),
-                             "Failed to mark URMA write lane for retirement after injected write failure");
+                LOG_IF_ERROR(urmaResource_->RequestRetireActiveSendLane(laneLease),
+                             "Failed to request URMA write lane retirement after injected write failure");
             }
             cleanupSubmittedEvents();
             return injectRc;
@@ -1641,12 +1618,13 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                                     UrmaEvent::OperationType::WRITE, srcChipInflightCounter, args.waiter, &event);
         if (createRc.IsError()) {
             if (ownsLaneLease) {
-                LOG_IF_ERROR(ApplySendLaneAction(laneLease->RequestRetire(), laneLease->GetJetty()),
-                             "Failed to mark URMA write lane for retirement after event creation failure");
+                LOG_IF_ERROR(urmaResource_->RequestRetireActiveSendLane(laneLease),
+                             "Failed to request URMA write lane retirement after event creation failure");
             }
             cleanupSubmittedEvents();
             return createRc;
         }
+        laneLease->AddWr();
         urma_status_t ret;
         Timer t;
         event->SetWritePostTimeUs(t.GetStartTimeStampUs());
@@ -1662,12 +1640,15 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                 return Status::OK();
             }();
             if (numaInjectRc.IsError()) {
+                LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease),
+                             "Failed to cancel URMA WR after NUMA-affinity post setup failure");
                 if (ownsLaneLease) {
-                    RetireAndDeleteEvent(key);
-                } else {
-                    // A failed object WR must not retire the RPC-shared lane.
-                    ReleaseAndDeleteEvent(key);
+                    LOG_IF_ERROR(urmaResource_->RequestRetireActiveSendLane(laneLease),
+                                 "Failed to request URMA lane retirement after NUMA-affinity post setup failure");
                 }
+                // Event lifetime is independent from the owned/shared lane policy. This key has not been appended to
+                // eventKeys, so cleanupSubmittedEvents() cannot remove it.
+                DeleteEvent(key);
                 cleanupSubmittedEvents();
                 return numaInjectRc;
             }
@@ -1680,7 +1661,9 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         }
 
         if (ret != URMA_SUCCESS) {
-            ReleaseAndDeleteEvent(key);
+            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease),
+                         "Failed to cancel unaccepted URMA write WR");
+            DeleteEvent(key);
             cleanupSubmittedEvents();
             const auto srcAddress = localUrmaInfo_.localAddress.ToString();
             const auto remoteInstanceId =
@@ -1735,6 +1718,13 @@ Status UrmaManager::AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo,
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR,
                                          "Batch Get got empty remote target Jetty");
     laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+    auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
+    if (registerRc.IsError()) {
+        LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
+                     "Failed to retire URMA send Jetty after lane registration failure");
+        laneLease.reset();
+        return registerRc;
+    }
     return Status::OK();
 }
 
@@ -1809,6 +1799,12 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
         if (ownsLaneLease) {
             RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
             laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+            auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
+            if (registerRc.IsError()) {
+                LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
+                             "Failed to retire URMA send Jetty after lane registration failure");
+                return registerRc;
+            }
         } else {
             jetty = externalLaneLease->GetJetty();
             targetJetty = connection->GetTargetJetty();
@@ -1848,13 +1844,15 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
         RETURN_IF_NOT_OK(
             CreateEvent(args.serverKey, connection, laneLease, remoteAddress, readSize,
                         UrmaEvent::OperationType::WRITE, nullptr));
+        laneLease->AddWr();
         eventKeys.emplace_back(args.serverKey);
         Status rc;
         rc = OsXprtPipln::DoPiplnStep1_StartSender(args);
         if (rc.IsError()) {
-            // A failed object WR does not retire an RPC-shared lane. The RPC
-            // seals the lease and lets all posted events settle through release.
-            ReleaseAndDeleteEvent(args.serverKey);
+            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease),
+                         "Failed to cancel unaccepted URMA pipeline WR");
+            // A failed object WR does not retire an RPC-shared lane.
+            DeleteEvent(args.serverKey);
             eventKeys.clear();
         }
         return rc;
@@ -1922,6 +1920,12 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     urma_target_jetty_t *targetJetty = nullptr;
     RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
     auto laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+    auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
+    if (registerRc.IsError()) {
+        LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
+                     "Failed to retire URMA send Jetty after lane registration failure");
+        return registerRc;
+    }
     bool laneLeaseSealed = false;
     auto sealLaneLease = [this, &laneLease, &laneLeaseSealed]() {
         if (laneLeaseSealed) {
@@ -1953,12 +1957,15 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
             cleanupSubmittedEvents();
             return createRc;
         }
+        laneLease->AddWr();
         urma_status_t ret = PostJettyRw(
             jetty, URMA_OPC_READ, targetJetty, remoteSegAccessor->second->Raw(), localSegAccessor->second->Raw(),
             segVa + urmaInfo.seg_data_offset() + readOffset, localObjectAddress + metaDataSize + readOffset, readSize,
             flag, key, false, INVALID_CHIP_ID, INVALID_CHIP_ID);
         if (ret != URMA_SUCCESS) {
-            ReleaseAndDeleteEvent(key);
+            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease),
+                         "Failed to cancel unaccepted URMA read WR");
+            DeleteEvent(key);
             cleanupSubmittedEvents();
             const auto srcAddress = localUrmaInfo_.localAddress.ToString();
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
@@ -2033,6 +2040,12 @@ Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
     if (ownsLaneLease) {
         RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
         laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+        auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
+        if (registerRc.IsError()) {
+            LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
+                         "Failed to retire URMA send Jetty after lane registration failure");
+            return registerRc;
+        }
     } else {
         jetty = externalLaneLease->GetJetty();
         targetJetty = connection->GetTargetJetty();
@@ -2059,12 +2072,14 @@ Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
     createdEventKeys.reserve(dstSgeNum);
     std::vector<uint64_t> submittedEventKeys;
     submittedEventKeys.reserve(dstSgeNum);
-    auto cleanupEvents = [this, &createdEventKeys, &submittedEventKeys, &sealLaneLease,
+    auto cleanupEvents = [this, &laneLease, &createdEventKeys, &submittedEventKeys, &sealLaneLease,
                           ownsLaneLease](size_t submittedCount) {
         submittedCount = std::min(submittedCount, createdEventKeys.size());
         for (size_t i = submittedCount; i < createdEventKeys.size(); ++i) {
             // These events are after bad_wr (or no WR was posted at all), so the provider cannot complete them.
-            ReleaseAndDeleteEvent(createdEventKeys[i]);
+            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease),
+                         "Failed to cancel unaccepted URMA gather WR");
+            DeleteEvent(createdEventKeys[i]);
         }
         submittedEventKeys.assign(createdEventKeys.begin(), createdEventKeys.begin() + submittedCount);
         if (ownsLaneLease) {
@@ -2130,6 +2145,7 @@ Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
             cleanupEvents(0);
             return createRc;
         }
+        laneLease->AddWr();
         createdEventKeys.emplace_back(key);
         if (dstSgeIdx > 0) {
             wrList[dstSgeIdx - 1].next = &wrList[dstSgeIdx];

@@ -665,12 +665,6 @@ private:
                        uint64_t dataSize, UrmaEvent::OperationType operationType,
                        std::atomic<int> *srcChipInflightCounter = nullptr,
                        std::shared_ptr<EventWaiter> waiter = nullptr, std::shared_ptr<UrmaEvent> *event = nullptr);
-    void ReleaseEventLane(const std::shared_ptr<UrmaEvent> &event);
-    void ReleaseAndDeleteEvent(uint64_t requestId);
-    void RetireAndDeleteEvent(uint64_t requestId);
-    Status RetireEventLane(const std::shared_ptr<UrmaEvent> &event);
-    Status ApplySendLaneAction(UrmaSendLaneLease::SettleAction action, const std::shared_ptr<UrmaJetty> &jetty);
-
     struct UrmaWriteArgs {
         std::shared_ptr<UrmaConnection> connection;
         std::shared_ptr<EventWaiter> waiter;
@@ -713,6 +707,9 @@ private:
     void LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                     uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
                                     uint64_t wakeSchedLatencyUs, const Status &waitRc) const;
+    Status CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
+                                       double elapsedMs, const std::string &reason) const;
+    Status WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs, const std::shared_ptr<UrmaEvent> &event);
     uint64_t pollLastStartUs_{ 0 };
     uint64_t pollLastEndUs_{ 0 };
 

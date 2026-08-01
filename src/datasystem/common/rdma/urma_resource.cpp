@@ -81,6 +81,26 @@ void RetainUnsafeRawJettyUntilProcessExit(urma_jetty_t *raw, std::shared_ptr<Urm
     retainedJettys->emplace_back(raw, std::move(sharedJfr));
 }
 
+struct RetainedUrmaProviderDependencies {
+    std::unique_ptr<UrmaContext> context;
+    std::unique_ptr<UrmaJfce> jfce;
+    std::unique_ptr<UrmaJfc> jfc;
+};
+
+// A live Jetty/JFR makes provider deletion of the shared JFC unsafe. Retain the complete
+// dependency closure so neither a later UrmaResource destructor nor liburma unloading can
+// partially tear it down. NoDestructor leaves final reclamation to process/kernel exit.
+void RetainUrmaProviderDependenciesUntilProcessExit(std::unique_ptr<UrmaContext> context,
+                                                    std::unique_ptr<UrmaJfce> jfce,
+                                                    std::unique_ptr<UrmaJfc> jfc)
+{
+    static NoDestructor<std::mutex> retainedMutex;
+    static NoDestructor<std::vector<RetainedUrmaProviderDependencies>> retainedDependencies;
+    std::lock_guard<std::mutex> lock(*retainedMutex);
+    retainedDependencies->emplace_back(
+        RetainedUrmaProviderDependencies{ std::move(context), std::move(jfce), std::move(jfc) });
+}
+
 Status BuildRemoteJetty(const UrmaJfrInfo &info, urma_rjetty_t &remoteJetty)
 {
     urma_eid_t eid{};
@@ -714,6 +734,11 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
     deleteJettyThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJfs");
     RETURN_IF_NOT_OK(OsXprtPipln::InitOsPiplnRH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw(), JETTY_SIZE));
 
+    {
+        std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+        activeSendLanes_.reserve(FLAGS_urma_send_jetty_lane_pool_size);
+    }
+
     // Pre-fill the send Jetty pool to capacity (fail-fast on creation failure).
     RETURN_IF_NOT_OK(PreFillSendJettyPool());
 
@@ -800,6 +825,12 @@ void UrmaResource::Clear()
         jettyRegistry_.clear();
     }
     {
+        // Shutdown ordering is intentionally unchanged. Clear only releases the registry's
+        // strong references so this new ownership edge does not outlive existing teardown.
+        std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+        activeSendLanes_.clear();
+    }
+    {
         std::lock_guard<std::mutex> lock(sharedJettyJfrMutex_);
         sharedJettyJfr_.reset();
     }
@@ -818,17 +849,23 @@ void UrmaResource::Clear()
         }
         quarantinedJettys_.clear();
     }
+    const auto unsafeJettyCount = unsafeJettys.size();
     for (auto &jetty : unsafeJettys) {
         RetainUnsafeJettyUntilProcessExit(std::move(jetty));
     }
-    LOG_IF(WARNING, !unsafeJettys.empty())
-        << "Retained " << unsafeJettys.size()
-        << " non-converged URMA Jetty wrappers until process exit to avoid unsafe provider cleanup";
     {
         std::lock_guard<std::mutex> lock(jettyPoolMutex_);
         sendJettyPool_.Clear();
     }
     jettyPriority_ = 0;
+    if (unsafeJettyCount != 0) {
+        RetainUrmaProviderDependenciesUntilProcessExit(std::move(context_), std::move(jfce_), std::move(jfc_));
+        providerCleanupDeferred_.store(true, std::memory_order_release);
+        LOG(WARNING) << "Detected " << unsafeJettyCount
+                     << " non-converged URMA Jetty resources during shutdown; defer Jetty/JFR/JFC/JFCE/context "
+                        "cleanup and liburma unloading to process exit";
+        return;
+    }
     jfc_.reset();
     jfce_.reset();
     context_.reset();
@@ -949,8 +986,8 @@ Status UrmaResource::RetireJettyToError(const std::shared_ptr<UrmaJetty> &jetty)
                       FormatString("Failed to modify jetty with id %u to error state: %s", jettyId,
                                    modifyRc.ToString()));
     }
-    // FLUSH_ERR_DONE can legitimately be delivered before modify returns. flushSeen_ preserves
-    // that early notification; the record was installed before the provider call in RetireJettyInternal.
+    // The pending record is installed before provider modify. A flush already queued in the JFC
+    // is preserved by flushSeen_ until the software state becomes WAIT_FLUSH.
     if (jetty->CompleteModify()) {
         ScheduleDeleteJetty(jetty);
     }
@@ -959,7 +996,7 @@ Status UrmaResource::RetireJettyToError(const std::shared_ptr<UrmaJetty> &jetty)
     return Status::OK();
 }
 
-void UrmaResource::AsyncDeleteJetty(uint32_t jettyId)
+Status UrmaResource::HandleFlushErrDone(uint32_t jettyId)
 {
     std::shared_ptr<UrmaJetty> jetty;
     {
@@ -967,13 +1004,162 @@ void UrmaResource::AsyncDeleteJetty(uint32_t jettyId)
         const auto iter = pendingDeleteJettys_.find(jettyId);
         if (iter == pendingDeleteJettys_.end()) {
             // An old/stale flush has no authority to delete a replacement identity.
-            return;
+            return Status::OK();
         }
         jetty = iter->second.jetty;
     }
     if (jetty->ObserveFlushErrDone()) {
         ScheduleDeleteJetty(jetty);
     }
+    return Status::OK();
+}
+
+Status UrmaResource::RegisterActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease)
+{
+    CHECK_FAIL_RETURN_STATUS(laneLease != nullptr, K_RUNTIME_ERROR, "Cannot register null URMA send lane");
+    const auto jetty = laneLease->GetJetty();
+    CHECK_FAIL_RETURN_STATUS(jetty != nullptr, K_RUNTIME_ERROR, "Cannot register URMA send lane without Jetty");
+    const auto jettyId = jetty->GetJettyId();
+    std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+    CHECK_FAIL_RETURN_STATUS(jetty->IsValid(), K_URMA_ERROR,
+                             FormatString("Cannot register inactive send Jetty %u", jettyId));
+    const auto iter = activeSendLanes_.find(jettyId);
+    if (iter != activeSendLanes_.end()) {
+        CHECK_FAIL_RETURN_STATUS(iter->second.get() == laneLease.get(), K_RUNTIME_ERROR,
+                                 FormatString("Jetty %u already has an active send lane", jettyId));
+        return Status::OK();
+    }
+    activeSendLanes_.emplace(jettyId, laneLease);
+    return Status::OK();
+}
+
+Status UrmaResource::ApplyActiveSendLaneAction(const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                                               UrmaSendLaneLease::SettleAction action)
+{
+    if (action == UrmaSendLaneLease::SettleAction::NONE || laneLease == nullptr) {
+        return Status::OK();
+    }
+    const auto jetty = laneLease->GetJetty();
+    if (jetty == nullptr) {
+        return Status::OK();
+    }
+    if (action == UrmaSendLaneLease::SettleAction::RELEASE) {
+        INJECT_POINT("UrmaManager.ApplySendLaneAction.Release");
+        ReleaseJetty(jetty);
+        return Status::OK();
+    }
+    INJECT_POINT("UrmaManager.ApplySendLaneAction.Retire");
+    return RetireJetty(jetty);
+}
+
+Status UrmaResource::CompleteActiveSendLane(uint32_t jettyId)
+{
+    std::shared_ptr<UrmaSendLaneLease> laneLease;
+    UrmaSendLaneLease::SettleAction action = UrmaSendLaneLease::SettleAction::NONE;
+    {
+        std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+        const auto iter = activeSendLanes_.find(jettyId);
+        if (iter == activeSendLanes_.end()) {
+            return Status::OK();
+        }
+        laneLease = iter->second;
+        action = laneLease->CompleteWr();
+        if (action != UrmaSendLaneLease::SettleAction::NONE) {
+            activeSendLanes_.erase(iter);
+        }
+    }
+    return ApplyActiveSendLaneAction(laneLease, action);
+}
+
+Status UrmaResource::CancelActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease)
+{
+    if (laneLease == nullptr) {
+        return Status::OK();
+    }
+    const auto jetty = laneLease->GetJetty();
+    if (jetty == nullptr) {
+        return Status::OK();
+    }
+    UrmaSendLaneLease::SettleAction action = UrmaSendLaneLease::SettleAction::NONE;
+    {
+        std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+        const auto iter = activeSendLanes_.find(jetty->GetJettyId());
+        if (iter == activeSendLanes_.end() || iter->second.get() != laneLease.get()) {
+            return Status::OK();
+        }
+        action = laneLease->CancelWr();
+        if (action != UrmaSendLaneLease::SettleAction::NONE) {
+            activeSendLanes_.erase(iter);
+        }
+    }
+    return ApplyActiveSendLaneAction(laneLease, action);
+}
+
+Status UrmaResource::SealActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease)
+{
+    if (laneLease == nullptr) {
+        return Status::OK();
+    }
+    const auto jetty = laneLease->GetJetty();
+    if (jetty == nullptr) {
+        return Status::OK();
+    }
+    UrmaSendLaneLease::SettleAction action = UrmaSendLaneLease::SettleAction::NONE;
+    {
+        std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+        const auto iter = activeSendLanes_.find(jetty->GetJettyId());
+        if (iter == activeSendLanes_.end() || iter->second.get() != laneLease.get()) {
+            return Status::OK();
+        }
+        action = laneLease->Seal();
+        if (action != UrmaSendLaneLease::SettleAction::NONE) {
+            activeSendLanes_.erase(iter);
+        }
+    }
+    return ApplyActiveSendLaneAction(laneLease, action);
+}
+
+Status UrmaResource::RequestRetireActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease)
+{
+    if (laneLease == nullptr) {
+        return Status::OK();
+    }
+    const auto jetty = laneLease->GetJetty();
+    if (jetty == nullptr) {
+        return Status::OK();
+    }
+    UrmaSendLaneLease::SettleAction action = UrmaSendLaneLease::SettleAction::NONE;
+    {
+        std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+        const auto iter = activeSendLanes_.find(jetty->GetJettyId());
+        if (iter == activeSendLanes_.end() || iter->second.get() != laneLease.get()) {
+            return Status::OK();
+        }
+        action = laneLease->RequestRetire();
+        if (action != UrmaSendLaneLease::SettleAction::NONE) {
+            activeSendLanes_.erase(iter);
+        }
+    }
+    return ApplyActiveSendLaneAction(laneLease, action);
+}
+
+Status UrmaResource::RetireActiveSendLane(uint32_t jettyId)
+{
+    std::shared_ptr<UrmaSendLaneLease> laneLease;
+    UrmaSendLaneLease::SettleAction action = UrmaSendLaneLease::SettleAction::NONE;
+    {
+        std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+        const auto iter = activeSendLanes_.find(jettyId);
+        if (iter == activeSendLanes_.end()) {
+            RETURN_STATUS(K_NOT_FOUND, FormatString("Active send lane for Jetty %u not found", jettyId));
+        }
+        laneLease = iter->second;
+        action = laneLease->Retire();
+        if (action != UrmaSendLaneLease::SettleAction::NONE) {
+            activeSendLanes_.erase(iter);
+        }
+    }
+    return ApplyActiveSendLaneAction(laneLease, action);
 }
 
 void UrmaResource::ScheduleDeleteJetty(const std::shared_ptr<UrmaJetty> &jetty)
@@ -1271,7 +1457,7 @@ void UrmaResource::ReleaseJetty(const std::shared_ptr<UrmaJetty> &jetty)
     std::lock_guard<std::mutex> lock(jettyPoolMutex_);
 
     if (!jetty->IsValid()) {
-        // Jetty was invalidated by ReCreateJetty or RetireJetty and already removed from the pool.
+        // Jetty was invalidated by RetireJetty and already removed from the pool.
         LOG(INFO) << "[URMA_SEND_LANE_POOL] Releasing invalid jetty " << jetty->GetJettyId()
                   << " (already removed from pool)";
         return;
@@ -1308,11 +1494,6 @@ size_t UrmaResource::GetRetiringOrPendingJettyCount()
     return sendJettyCount;
 }
 
-Status UrmaResource::ReCreateJetty(const std::shared_ptr<UrmaJetty> &failedJetty)
-{
-    return RetireJettyInternal(failedJetty);
-}
-
 Status UrmaResource::RetireJetty(const std::shared_ptr<UrmaJetty> &jetty)
 {
     return RetireJettyInternal(jetty);
@@ -1325,6 +1506,17 @@ Status UrmaResource::RetireJettyInternal(const std::shared_ptr<UrmaJetty> &jetty
     }
     const auto jettyId = jetty->GetJettyId();
     if (jetty->GetType() == JettyType::SEND) {
+        // BeginRetire closes post admission before this lookup. Serializing the terminal lease transition with
+        // registration prevents an AE from missing a just-released lane and then leaving a newly registered lane
+        // attached to the same failed Jetty.
+        {
+            std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+            const auto activeIter = activeSendLanes_.find(jettyId);
+            if (activeIter != activeSendLanes_.end() && activeIter->second->GetJetty().get() == jetty.get()) {
+                (void)activeIter->second->Retire();
+                activeSendLanes_.erase(activeIter);
+            }
+        }
         std::lock_guard<std::mutex> lock(jettyPoolMutex_);
         RemoveFromPoolLocked(jetty);
     } else {

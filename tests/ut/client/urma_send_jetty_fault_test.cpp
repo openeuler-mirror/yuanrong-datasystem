@@ -174,7 +174,7 @@ TEST(UrmaSendJettyFaultTest, CqeErrorRetiresAndRefillsJetty)
     std::unordered_map<uint64_t, int> failedRequests;
 
     // This is a synthetic CR delivered to the real completion handler. It reaches the status policy, registry lookup,
-    // ReCreateJetty, and asynchronous refill path without requiring a device-level data corruption fault.
+    // RetireJetty, and asynchronous refill path without requiring a device-level data corruption fault.
     const auto status = manager.CheckCompletionRecordStatus(&completion, 1, completedRequests, failedRequests);
     EXPECT_EQ(status.GetCode(), K_URMA_ERROR);
     EXPECT_TRUE(completedRequests.empty());
@@ -234,10 +234,12 @@ TEST(UrmaSendJettyFaultTest, NonRecoverableCqeDoesNotRecreateOrLeakLane)
     ASSERT_TRUE(resource.AcquireJetty(jetty).IsOk());
     const auto registryCount = GetRegisteredJettyCount(resource);
     auto lease = std::make_shared<UrmaSendLaneLease>(jetty);
+    ASSERT_TRUE(resource.RegisterActiveSendLane(lease).IsOk());
     constexpr uint64_t kRequestId = 3001;
     ASSERT_TRUE(manager.CreateEvent(kRequestId, MakeTestConnection(), lease, "non-recoverable-cqe", 0,
                                     UrmaEvent::OperationType::WRITE, nullptr)
                     .IsOk());
+    lease->AddWr();
     ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
 
     urma_cr_t completion{};
@@ -257,14 +259,11 @@ TEST(UrmaSendJettyFaultTest, NonRecoverableCqeDoesNotRecreateOrLeakLane)
     EXPECT_TRUE(jetty->IsValid());
     EXPECT_EQ(GetRegisteredJettyCount(resource), registryCount);
 
-    // CheckCompletionRecordStatus only classifies completions; the running server event thread normally transfers its
-    // result into CheckAndNotify. Avoid racing that thread's single-owner finished/failed sets here and drive the same
-    // per-event production sequence directly: mark failed, settle the sealed lease, notify the waiter, then let
-    // WaitToFinish observe the CQE error and delete the event.
+    // CheckCompletionRecordStatus already settles the transport lane from local_id. Avoid racing the running server
+    // event thread's single-owner finished/failed sets and drive only the remaining business-notify sequence directly.
     std::shared_ptr<UrmaEvent> event;
     ASSERT_TRUE(manager.GetEvent(kRequestId, event).IsOk());
     event->SetFailed(kNonRecoverableCqeStatus);
-    manager.ReleaseEventLane(event);
     event->NotifyAll();
     EXPECT_EQ(manager.WaitToFinish(kRequestId, 1).GetCode(), K_URMA_ERROR);
 
@@ -292,38 +291,11 @@ TEST(UrmaSendJettyFaultTest, AsyncJettyErrorRetiresAndRefillsJetty)
     asyncEvent.event_type = URMA_EVENT_JETTY_ERR;
     asyncEvent.element.jetty = failedJetty->Raw();
 
-    // Route a real Jetty through the async-event dispatcher instead of directly calling UrmaResource::ReCreateJetty.
+    // Route a real Jetty through the async-event dispatcher instead of directly calling UrmaResource::RetireJetty.
     ASSERT_TRUE(manager.aeHandler_.HandleUrmaAsyncEvent(asyncEvent).IsOk());
     EXPECT_FALSE(failedJetty->IsValid());
     resource.ReleaseJetty(failedJetty);
     ExpectReplacementAfterRetire(resource, failedJetty);
-}
-
-TEST(UrmaSendJettyFaultTest, WaitTimeoutRetiresAndRefillsJetty)
-{
-    if (!IsUrmaFaultTestEnvAvailable()) {
-        GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
-    }
-
-    auto &manager = UrmaManager::Instance();
-    ASSERT_TRUE(InitManagerForFaultTest(manager).IsOk());
-    auto &resource = *manager.urmaResource_;
-    ASSERT_TRUE(WaitForIdleSendLane(resource));
-
-    std::shared_ptr<UrmaJetty> timedOutJetty;
-    ASSERT_TRUE(resource.AcquireJetty(timedOutJetty).IsOk());
-    auto lease = std::make_shared<UrmaSendLaneLease>(timedOutJetty);
-    constexpr uint64_t kRequestId = 1002;
-    ASSERT_TRUE(manager.CreateEvent(kRequestId, MakeTestConnection(), lease, "fault-test", 0,
-                                    UrmaEvent::OperationType::WRITE, nullptr)
-                    .IsOk());
-    // Seal before waiting, matching the submit path: the timeout then becomes the lease's final retirement action.
-    ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
-    const auto status = manager.WaitToFinish(kRequestId, -1);
-    EXPECT_EQ(status.GetCode(), K_URMA_WAIT_TIMEOUT);
-    EXPECT_FALSE(timedOutJetty->IsValid());
-    resource.ReleaseJetty(timedOutJetty);
-    ExpectReplacementAfterRetire(resource, timedOutJetty);
 }
 
 TEST(UrmaSendJettyFaultTest, InFlightWaitTimeoutStatusIncludesPeerContext)
@@ -339,51 +311,22 @@ TEST(UrmaSendJettyFaultTest, InFlightWaitTimeoutStatusIncludesPeerContext)
 
     std::shared_ptr<UrmaJetty> timedOutJetty;
     ASSERT_TRUE(resource.AcquireJetty(timedOutJetty).IsOk());
+    Raii releaseJetty([&resource, &timedOutJetty] { resource.ReleaseJetty(timedOutJetty); });
     auto lease = std::make_shared<UrmaSendLaneLease>(timedOutJetty);
     constexpr uint64_t kRequestId = 1003;
     constexpr uint64_t kDataSize = 4096;
     ASSERT_TRUE(manager.CreateEvent(kRequestId, MakeTestConnection(), lease, "127.0.0.1:29100", kDataSize,
                                     UrmaEvent::OperationType::WRITE, nullptr)
                     .IsOk());
-    ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
+
+    // This case protects the business timeout status only. Real late-CQE lane accounting is covered by the
+    // timeout-storm ST, so the test does not reproduce that production path with a synthetic completion helper.
     const auto status = manager.WaitToFinish(kRequestId, 0);
     EXPECT_EQ(status.GetCode(), K_URMA_WAIT_TIMEOUT);
     EXPECT_EQ(status.GetMsg().find("RPC deadline exceeded"), std::string::npos) << status.ToString();
     ExpectStatusContains(status, { "requestId=1003", "srcAddress=", "targetAddress=127.0.0.1:29100",
                                    "dataSize=4096", "op=WRITE" });
-    EXPECT_FALSE(timedOutJetty->IsValid());
-    resource.ReleaseJetty(timedOutJetty);
-    ExpectReplacementAfterRetire(resource, timedOutJetty);
-}
-
-TEST(UrmaSendJettyFaultTest, RepeatedWaitTimeoutsRefillWithoutExceedingUniqueJettyHeadroom)
-{
-    if (!IsUrmaFaultTestEnvAvailable()) {
-        GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
-    }
-
-    auto &manager = UrmaManager::Instance();
-    ASSERT_TRUE(InitManagerForFaultTest(manager).IsOk());
-    auto &resource = *manager.urmaResource_;
-    ASSERT_TRUE(WaitForIdleSendLane(resource));
-
-    constexpr uint32_t kTimeoutCount = 4;
-    for (uint32_t i = 0; i < kTimeoutCount; ++i) {
-        std::shared_ptr<UrmaJetty> timedOutJetty;
-        ASSERT_TRUE(resource.AcquireJetty(timedOutJetty).IsOk());
-        auto lease = std::make_shared<UrmaSendLaneLease>(timedOutJetty);
-        const uint64_t requestId = 4000 + i;
-        ASSERT_TRUE(manager.CreateEvent(requestId, MakeTestConnection(), lease, "fault-storm", 0,
-                                        UrmaEvent::OperationType::WRITE, nullptr)
-                        .IsOk());
-        ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
-        EXPECT_EQ(manager.WaitToFinish(requestId, -1).GetCode(), K_URMA_WAIT_TIMEOUT);
-        EXPECT_FALSE(timedOutJetty->IsValid());
-        resource.ReleaseJetty(timedOutJetty);
-        ExpectReplacementAfterRetire(resource, timedOutJetty);
-        EXPECT_LE(GetRegisteredJettyCount(resource),
-                  FLAGS_urma_send_jetty_lane_pool_size + FLAGS_urma_send_jetty_lane_refill_extra_size);
-    }
+    EXPECT_TRUE(timedOutJetty->IsValid());
 }
 
 TEST(UrmaSendJettyFaultTest, RefillCreateFailuresKeepSurvivingLaneAndRecoverAutomatically)
@@ -432,7 +375,7 @@ TEST(UrmaSendJettyFaultTest, RefillCreateFailuresKeepSurvivingLaneAndRecoverAuto
     ASSERT_TRUE(inject::Set("urma.SendJettyPoolRefillAdded", "call()").IsOk());
     std::shared_ptr<UrmaJetty> failedJetty;
     ASSERT_TRUE(resource.AcquireJetty(failedJetty).IsOk());
-    ASSERT_TRUE(resource.ReCreateJetty(failedJetty).IsOk());
+    ASSERT_TRUE(resource.RetireJetty(failedJetty).IsOk());
     resource.ReleaseJetty(failedJetty);
 
     ASSERT_TRUE(WaitUntil([] {
