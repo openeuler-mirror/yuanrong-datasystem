@@ -1,8 +1,4 @@
 {
-  "service_type": {
-    "value": "coordinator",
-    "description": "Service type. Valid values: coordinator or worker. This field is used by dscli and is not passed to the service process."
-  },
   "coordinator_address": {
     "value": "127.0.0.1:31511",
     "description": "Address of coordinator in 'host:port' format (e.g., \"127.0.0.1:31511\"). The value cannot be empty."
@@ -14,6 +10,10 @@
   "coordinator_topology_max_active_clusters": {
     "value": "8",
     "description": "Maximum active topology clusters in [2, 32]. Restart Coordinator after changing it."
+  },
+  "coordinator_raft_initial_peers": {
+    "value": "",
+    "description": "Comma-separated Coordinator Raft initial peers in 'host:port' format. Empty means single-node no-election mode. Configure multiple peers to enable static-peers Raft election."
   },
   "coordinator_raft_data_dir": {
     "value": "./datasystem/coordinator_raft",

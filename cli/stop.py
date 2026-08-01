@@ -136,14 +136,18 @@ class Command(BaseCommand):
         return self.load_config(worker_config_path)
 
     def get_service_type(self, config):
-        """Resolve service_type. Missing or empty service_type means worker."""
+        """Resolve service type from config content without requiring service_type."""
         service_type = self.get_config_value(config, self._service_type_key)
-        if service_type in (None, ""):
+        if service_type not in (None, ""):
+            service_type = str(service_type).strip().lower()
+            if service_type not in (self._worker_service, self._coordinator_service):
+                raise ValueError("service_type must be coordinator or worker")
+            return service_type
+        if self.get_config_value(config, "worker_address"):
             return self._worker_service
-        service_type = str(service_type).strip().lower()
-        if service_type not in (self._worker_service, self._coordinator_service):
-            raise ValueError("service_type must be coordinator or worker")
-        return service_type
+        if self.get_config_value(config, "coordinator_address"):
+            return self._coordinator_service
+        raise RuntimeError("The configuration file is missing worker_address or coordinator_address")
 
     def get_address(self, config, key):
         """Get a required service address from config."""

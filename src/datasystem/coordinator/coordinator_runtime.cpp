@@ -122,12 +122,15 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
         } else {
             onStart_ = [] { return Status::OK(); };
             onStop_ = [] { return Status::OK(); };
-            const auto &peers = FLAGS_coordinator_raft_initial_peers.empty() ? FLAGS_coordinator_address
-                                                                             : FLAGS_coordinator_raft_initial_peers;
-            auto staticCoordinatorDiscovery = std::make_shared<StaticCoordinatorDiscovery>(peers);
-            expectedMemberCount = static_cast<int>(staticCoordinatorDiscovery->GetCount());
-            coordinatorDiscovery = std::move(staticCoordinatorDiscovery);
-            LOG(INFO) << "Coordinator initialize with static peers:" << peers;
+            if (!FLAGS_coordinator_raft_initial_peers.empty()) {
+                auto staticCoordinatorDiscovery =
+                    std::make_shared<StaticCoordinatorDiscovery>(FLAGS_coordinator_raft_initial_peers);
+                expectedMemberCount = static_cast<int>(staticCoordinatorDiscovery->GetCount());
+                coordinatorDiscovery = std::move(staticCoordinatorDiscovery);
+                LOG(INFO) << "Coordinator initialize with static peers:" << FLAGS_coordinator_raft_initial_peers;
+            } else {
+                LOG(INFO) << "Coordinator initialize in single-node no-election mode:" << FLAGS_coordinator_address;
+            }
         }
         callbackState_ = LifecycleCallbackState::READY;
 

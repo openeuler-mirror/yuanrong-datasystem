@@ -44,7 +44,6 @@ class Command(BaseCommand):
     _COORDINATOR_FILTERED_PARAMS = {_SERVICE_TYPE_KEY, "worker_address"}
     _NUMACTL_OPTION_TOKENS = {
         "-N",
-        "-C",
         "-m",
         "-i",
         "-p",
@@ -88,13 +87,24 @@ class Command(BaseCommand):
         )
 
         group.add_argument(
+            "-W",
+            "--worker_config_path",
             "-f",
             "--config_path",
-            "--worker_config_path",
-            dest="config_path",
+            dest="worker_config_path",
             metavar="FILE",
             help=(
-                "start service by using configuration file (JSON format), "
+                "start worker by using worker configuration file (JSON format), "
+                "which can be obtained through the generate_config command"
+            ),
+        )
+        group.add_argument(
+            "-C",
+            "--coordinator_config_path",
+            dest="coordinator_config_path",
+            metavar="FILE",
+            help=(
+                "start coordinator by using coordinator configuration file (JSON format), "
                 "which can be obtained through the generate_config command"
             ),
         )
@@ -109,6 +119,7 @@ class Command(BaseCommand):
             ),
         )
         group.add_argument(
+            "-c",
             "--coordinator_args",
             nargs=argparse.REMAINDER,
             help=(
@@ -117,6 +128,7 @@ class Command(BaseCommand):
             ),
         )
         group.add_argument(
+            "-a",
             "--coordinator_worker_args",
             dest="coordinator_worker_args",
             nargs=argparse.REMAINDER,
@@ -157,7 +169,6 @@ class Command(BaseCommand):
             help="Restricts process execution to only the CPUs belonging to the specified NUMA node(s).",
         )
         ng.add_argument(
-            "-C",
             "--physcpubind",
             metavar="CPUS",
             help="Binds the process to specific physical CPU cores by their numeric IDs.",
@@ -214,16 +225,13 @@ class Command(BaseCommand):
                 self._home_dir = util.valid_safe_path(home_dir)
             self._timeout = args.timeout
 
-            if args.config_path:
-                service_type = self.load_service_type(args.config_path)
-                params = self.load_config(args.config_path, service_type)
-                if service_type == self._COORDINATOR_SERVICE:
-                    self.start_coordinator(params)
-                else:
-                    params.setdefault("worker_address", self._DEFAULT_WORKER_ADDRESS)
-                    self.start_worker(
-                        params, args.enable_ums, use_numactl, numactl_opts
-                    )
+            if args.worker_config_path:
+                params = self.load_config(args.worker_config_path, self._WORKER_SERVICE)
+                params.setdefault("worker_address", self._DEFAULT_WORKER_ADDRESS)
+                self.start_worker(params, args.enable_ums, use_numactl, numactl_opts)
+            elif args.coordinator_config_path:
+                params = self.load_config(args.coordinator_config_path, self._COORDINATOR_SERVICE)
+                self.start_coordinator(params)
             elif args.coordinator_args:
                 params = self.parse_cli_args(
                     args.coordinator_args, fill_worker_defaults=False
@@ -297,21 +305,6 @@ class Command(BaseCommand):
         except json.JSONDecodeError as e:
             raise ValueError("The configuration file format is incorrect.") from e
 
-    def load_service_type(self, config_path: str) -> str:
-        """Load service_type from config. Missing or empty service_type means worker."""
-        config = self.load_json_config(config_path)
-        return self.get_service_type(config)
-
-    def get_service_type(self, config: Dict[str, Any]) -> str:
-        """Resolve service type from a parsed config object."""
-        service_type = self.get_config_value(config, self._SERVICE_TYPE_KEY)
-        if service_type in (None, ""):
-            return self._WORKER_SERVICE
-        service_type = str(service_type).strip().lower()
-        if service_type not in (self._WORKER_SERVICE, self._COORDINATOR_SERVICE):
-            raise ValueError("service_type must be coordinator or worker")
-        return service_type
-
     def get_config_value(self, config: Dict[str, Any], key: str):
         """Get a config value supporting both raw and {'value': ...} forms."""
         config_item = config.get(key)
@@ -330,7 +323,7 @@ class Command(BaseCommand):
 
         Args:
             config_path (str): Path to the configuration file.
-            service_type (str): Resolved service type. Missing means infer from config.
+            service_type (str): Explicit service type selected by the dscli option.
 
         Returns:
             Dict[str, str]: Dictionary containing extracted parameters.
@@ -339,7 +332,6 @@ class Command(BaseCommand):
             ValueError: If the configuration file format is incorrect.
         """
         config = self.load_json_config(config_path)
-        service_type = service_type or self.get_service_type(config)
         if service_type == self._COORDINATOR_SERVICE:
             return self.config_to_params(config, fill_defaults=False)
 

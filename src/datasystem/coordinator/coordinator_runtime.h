@@ -43,8 +43,9 @@ public:
     CoordinatorRuntime &operator=(CoordinatorRuntime &&) = delete;
 
     /**
-     * @brief Run the legacy no-election Coordinator lifecycle. A Runtime instance is one-shot; callers must not invoke
-     *        InitAndRun more than once on the same instance.
+     * @brief Run the dscli-compatible Coordinator lifecycle. Empty coordinator_raft_initial_peers keeps single-node
+     *        no-election mode; non-empty static peers can enable election. A Runtime instance is one-shot; callers must
+     *        not invoke InitAndRun more than once on the same instance.
      */
     Status InitAndRun();
 

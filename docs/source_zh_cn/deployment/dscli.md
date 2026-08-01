@@ -239,7 +239,7 @@ openYuanrong datasystem 单机部署依赖 [dscli start](#dscli-start) 命令。
 
 - 快速部署：
 
-    [dscli start -w](#dscli-start) 命令可在后面添加 datasystem_worker 初始化启动参数。使用 ETCD 时至少需要指定以下两个参数：
+    [dscli start --worker_args](#dscli-start) 命令可在后面添加 datasystem_worker 初始化启动参数。使用 ETCD 时至少需要指定以下两个参数：
 
     | 命令行参数 | 类型 | 说明 |
     |-----------|------|------|
@@ -247,14 +247,14 @@ openYuanrong datasystem 单机部署依赖 [dscli start](#dscli-start) 命令。
     | [--etcd_address](#etcd相关配置) | string | ETCD 服务端访问地址 |
 
     ```bash
-    dscli start -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+    dscli start --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
     # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
     ```
 
     输出 OK 说明部署成功。默认情况下，datasystem_worker 最大可使用 1GB 共享内存空间用于缓存数据；如需调整，可以指定 `--shared_memory_size_mb`：
 
     ```bash
-    dscli start -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379" --shared_memory_size_mb 4096
+    dscli start --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379" --shared_memory_size_mb 4096
     # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
     ```
 
@@ -276,10 +276,6 @@ openYuanrong datasystem 单机部署依赖 [dscli start](#dscli-start) 命令。
 
     ```json
     {
-      "service_type": {
-          "value": "worker",
-          "description": "Service type. Valid values: coordinator or worker. Empty or missing means worker. This field is used by dscli and is not passed to the service process."
-      },
       "worker_address": {
           "value": "127.0.0.1:31501",
           "description": "Address of worker in 'host:port' format (e.g., \"127.0.0.1:31501\"). The value cannot be empty."
@@ -294,7 +290,7 @@ openYuanrong datasystem 单机部署依赖 [dscli start](#dscli-start) 命令。
     启动 Worker：
 
     ```bash
-    dscli start -f ./worker_config.json
+    dscli start --worker_config_path ./worker_config.json
     # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
     ```
 
@@ -331,7 +327,7 @@ openYuanrong datasystem 单机卸载依赖 [dscli stop](#dscli-stop) 命令。
     此种方式需要指定 `worker_config.json` 文件。
 
     ```bash
-    dscli stop -f ./worker_config.json
+    dscli stop --config_path ./worker_config.json
     # [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100
     ```
 
@@ -413,14 +409,14 @@ openYuanrong datasystem 单机卸载依赖 [dscli stop](#dscli-stop) 命令。
     1. 在 127.0.0.1 节点执行：
 
         ```bash
-        dscli start -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+        dscli start --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
         # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
         ```
 
     2. 在 127.0.0.2 节点执行：
 
         ```bash
-        dscli start -w --worker_address "127.0.0.2:31501" --etcd_address "127.0.0.1:2379"
+        dscli start --worker_args --worker_address "127.0.0.2:31501" --etcd_address "127.0.0.1:2379"
         # [INFO] [  OK  ] Start worker service @ 127.0.0.2:31501 success, PID: 38101
         ```
 
@@ -459,8 +455,8 @@ openYuanrong datasystem 单机卸载依赖 [dscli stop](#dscli-stop) 命令。
     使用 `--datasystem_home_dir`（短参数：`-d`）明确指定较短的 datasystem home 目录：
 
     ```bash
-    dscli start -f ~/worker_config.json -d /home/usr1/dscli
-    dscli start -d /home/usr1/dscli -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+    dscli start --worker_config_path ~/worker_config.json --datasystem_home_dir /home/usr1/dscli
+    dscli start --datasystem_home_dir /home/usr1/dscli --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
     ```
 
 ### openYuanrong datasystem集群使用Coordinator部署
@@ -496,14 +492,10 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
     # [INFO] Configuration generation completed successfully
     ```
 
-    按需修改 `coordinator_config.json`。其中 `service_type` 必须为 `coordinator`：
+    按需修改 `coordinator_config.json` 中的 Coordinator 服务地址：
 
     ```json
     {
-      "service_type": {
-        "value": "coordinator",
-        "description": "Service type. Valid values: coordinator or worker. This field is used by dscli and is not passed to the service process."
-      },
       "coordinator_address": {
         "value": "127.0.0.1:31511",
         "description": "Address of coordinator in 'host:port' format (e.g., \"127.0.0.1:31511\"). The value cannot be empty."
@@ -514,17 +506,102 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
     启动 Coordinator：
 
     ```bash
-    dscli start -f ./coordinator_config.json
+    dscli start --coordinator_config_path ./coordinator_config.json
     # [INFO] [  OK  ] Start coordinator service @ 127.0.0.1:31511 success, PID: 38100
     ```
 
     应在所有 Worker 停止后，使用同一配置文件停止 Coordinator：
 
     ```bash
-    dscli stop -f ./coordinator_config.json
+    dscli stop --config_path ./coordinator_config.json
     ```
 
 更多 Coordinator 配置说明参见[Coordinator配置项](#coordinator配置项)。
+
+#### Coordinator 多节点部署
+
+`dscli` 支持通过静态 peers 启动多个 Coordinator 并启用 Raft 选主。每个节点都需要独立启动一个 Coordinator 进程，要求：
+
+- 所有 Coordinator 节点的 `coordinator_raft_initial_peers` 配置完全相同，格式为逗号分隔的 `host:port` 列表。
+- 每个节点的 `coordinator_address` 必须是本机对其他 Coordinator 和 Worker 可访问的地址，并且必须包含在 `coordinator_raft_initial_peers` 中。
+- 每个节点的 `coordinator_raft_data_dir` 必须是该节点独占的本地目录，不能在多个 Coordinator 进程之间共享。
+- 启用选主时必须设置 `use_brpc=true`。`coordinator_raft_initial_peers` 为空时按单节点无选主模式启动。
+- Worker 侧 `coordinator_address` 仍配置为可访问的 Coordinator 地址；如果需要客户端/Worker 自动发现多个 Coordinator，应使用支持多地址的 Coordinator Discovery 接入方式。
+
+三节点示例的静态 peers 列表如下：
+
+```text
+192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511
+```
+
+节点 1 的 `coordinator_config.json` 关键配置示例：
+
+```json
+{
+  "coordinator_address": {
+    "value": "192.0.2.10:31511"
+  },
+  "coordinator_raft_initial_peers": {
+    "value": "192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511"
+  },
+  "coordinator_raft_data_dir": {
+    "value": "./datasystem/coordinator_raft_node1"
+  },
+  "use_brpc": {
+    "value": "true"
+  }
+}
+```
+
+节点 2 和节点 3 使用相同的 `coordinator_raft_initial_peers`，但分别修改本机地址和 Raft 数据目录：
+
+```json
+{
+  "coordinator_address": {
+    "value": "192.0.2.11:31511"
+  },
+  "coordinator_raft_initial_peers": {
+    "value": "192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511"
+  },
+  "coordinator_raft_data_dir": {
+    "value": "./datasystem/coordinator_raft_node2"
+  },
+  "use_brpc": {
+    "value": "true"
+  }
+}
+```
+
+```json
+{
+  "coordinator_address": {
+    "value": "192.0.2.12:31511"
+  },
+  "coordinator_raft_initial_peers": {
+    "value": "192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511"
+  },
+  "coordinator_raft_data_dir": {
+    "value": "./datasystem/coordinator_raft_node3"
+  },
+  "use_brpc": {
+    "value": "true"
+  }
+}
+```
+
+首次启动三节点 Coordinator 时，应在三个节点上并发或近同时执行启动命令，避免只启动单个节点后长时间等待：
+
+```bash
+dscli start --coordinator_config_path ./coordinator_config.json
+```
+
+停止时应先停止所有 Worker，再在每个 Coordinator 节点使用对应配置文件停止本机进程：
+
+```bash
+dscli stop --config_path ./coordinator_config.json
+```
+
+> 注意：首次启动时，各节点应使用同一组静态 peers，并发或近同时完成启动。已有 Raft 数据目录的节点会优先从本地 Raft 状态恢复，不应通过删除 `coordinator_raft_data_dir` 强行重建成员关系。
 
 #### 单机部署
 
@@ -559,10 +636,6 @@ Coordinator 启动后，可以单独启动 Worker，也可以使用一条命令�
 
     ```json
     {
-      "service_type": {
-        "value": "worker",
-        "description": "Service type. Valid values: coordinator or worker. Empty or missing means worker. This field is used by dscli and is not passed to the service process."
-      },
       "worker_address": {
         "value": "127.0.0.1:31501",
         "description": "Address of worker in 'host:port' format (e.g., \"127.0.0.1:31501\"). The value cannot be empty."
@@ -581,7 +654,7 @@ Coordinator 启动后，可以单独启动 Worker，也可以使用一条命令�
     启动 Worker：
 
     ```bash
-    dscli start -f ./worker_config.json
+    dscli start --worker_config_path ./worker_config.json
     # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38101
     ```
 
@@ -598,8 +671,8 @@ Coordinator 启动后，可以单独启动 Worker，也可以使用一条命令�
 - 使用配置文件时，先停止 Worker，再停止 Coordinator：
 
     ```bash
-    dscli stop -f ./worker_config.json
-    dscli stop -f ./coordinator_config.json
+    dscli stop --config_path ./worker_config.json
+    dscli stop --config_path ./coordinator_config.json
     ```
 
 当 Worker 和 Coordinator 均停止后，说明单机集群卸载成功。
@@ -708,8 +781,8 @@ Coordinator 启动后，可以单独启动 Worker，也可以使用一条命令�
     使用 `--datasystem_home_dir`（短参数：`-d`）明确指定较短的 datasystem home 目录：
 
     ```bash
-    dscli start -f ~/worker_config.json -d /home/usr1/dscli
-    dscli start -d /home/usr1/dscli --worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
+    dscli start --worker_config_path ~/worker_config.json --datasystem_home_dir /home/usr1/dscli
+    dscli start --datasystem_home_dir /home/usr1/dscli --worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
     ```
 
 ### 生成Helm Chart模板
@@ -822,34 +895,57 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |选项                         |等效短参数  |说明     |
 |-----------------------------|-----------|--------|
 |--timeout &lt;SECONDS&gt;| -t &lt;SECONDS&gt; | 等待服务就绪的最大时间（默认：90秒） |
-|--config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 使用配置文件（JSON格式）启动worker或coordinator，配置文件可通过generate_config命令生成。`--worker_config_path` 保留为兼容别名 |
+|--worker_config_path &lt;FILE&gt; / --config_path &lt;FILE&gt;|-W &lt;FILE&gt; / -f &lt;FILE&gt;| 使用 Worker 配置文件（JSON格式）启动 Worker，配置文件可通过 generate_config 命令生成 |
+|--coordinator_config_path &lt;FILE&gt;|-C &lt;FILE&gt;| 使用 Coordinator 配置文件（JSON格式）启动 Coordinator，配置文件可通过 generate_config 命令生成 |
 |--worker_args &lt;...&gt;        |-w &lt;...&gt; | 使用参数启动数据系统worker, 以 "--<Args>  <Value>"为格式。比如--worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"<br>**注意**：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数|
-|--coordinator_args &lt;...&gt;|无| 使用参数启动coordinator，比如--coordinator_address "127.0.0.1:31511"。此选项必须是命令行的最后一个参数选项 |
-|--coordinator_worker_args &lt;...&gt;|无| 先启动coordinator再启动worker，比如--worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"。此选项必须是命令行的最后一个参数选项。参数会按 `coordinator_config.json` 和 `worker_config.json` 分别过滤后传给对应进程 |
+|--coordinator_args &lt;...&gt;|-c &lt;...&gt;| 使用参数启动coordinator，比如--coordinator_address "127.0.0.1:31511"。此选项必须是命令行的最后一个参数选项 |
+|--coordinator_worker_args &lt;...&gt;|-a &lt;...&gt;| 先启动coordinator再启动worker，比如--worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"。此选项必须是命令行的最后一个参数选项。参数会按 `coordinator_config.json` 和 `worker_config.json` 分别过滤后传给对应进程 |
 |--datasystem_home_dir |-d &lt;DIR&gt; | 指定基础路径，将配置文件中的相对路径转换为绝对路径。例如当配置中包含 './yr_datasystem/log_dir'，其中的 '.' 将被替换为 `datasystem_home_dir` 的值 |
 |--cpunodebind|-N | numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点 |
-|--physcpubind|-C | 按物理 CPU 编号将进程绑定到指定核心 |
+|--physcpubind|无 | 按物理 CPU 编号将进程绑定到指定核心 |
 |--interleave|-i | 设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面 |
 |--preferred|-p | 设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点 |
 |--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败  |
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 |--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
 
+常用启动方式的短参数和长参数等价示例如下：
+
+```bash
+# 使用命令行参数启动 Worker
+dscli start -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+dscli start --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+
+# 使用配置文件启动 Worker
+dscli start -W worker_config.json
+dscli start --worker_config_path worker_config.json
+dscli start -f worker_config.json
+dscli start --config_path worker_config.json
+
+# 使用命令行参数启动 Coordinator
+dscli start -c --coordinator_address "127.0.0.1:31511"
+dscli start --coordinator_args --coordinator_address "127.0.0.1:31511"
+
+# 使用配置文件启动 Coordinator
+dscli start -C coordinator_config.json
+dscli start --coordinator_config_path coordinator_config.json
+```
+
 > **配置文件启动注意事项**：
 >
-> - `dscli start -f` 根据配置文件中的 `service_type` 选择启动 Coordinator 或 Worker。
-> - `service_type` 为 `coordinator` 时启动 Coordinator，为 `worker` 时启动 Worker；字段缺失或值为空时按 Worker 处理。
-> - 其他取值会导致命令失败。`service_type` 仅由 `dscli` 使用，不会传递给 Coordinator 或 Worker 进程。
+> - `dscli start --worker_config_path` / `dscli start --config_path` 使用 Worker 配置文件启动 Worker。
+> - `dscli start --coordinator_config_path` 使用 Coordinator 配置文件启动 Coordinator。
+> - 配置文件中不再需要 `service_type` 字段；服务类型由 `dscli start` 的启动选项决定。
 
 > **绑核配置项注意事项**：
 >
 > - 使用绑核功能前请确保机器上已安装numactl命令。
-> - 绑核配置项（cpunodebind，physcpubind，interleave，preferred，membind，localalloc）需要位于 `--worker_args` 或 `--coordinator_worker_args` 参数之前。
+> - 绑核配置项（cpunodebind，physcpubind，interleave，preferred，membind，localalloc）需要位于 `--worker_args`、`--coordinator_args` 或 `--coordinator_worker_args` 参数之前。
 >
 > 例子：
 > ```bash
 > # 绑定到 NUMA 节点 0 的 CPU，并优先在 NUMA 节点 1 分配内存
-> dscli start --cpunodebind 0 --preferred 1 -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+> dscli start --cpunodebind 0 --preferred 1 --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
 > ```
 >
 > **启用ums注意事项**：
@@ -865,7 +961,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 >
 > 例子：
 > ```bash
-> dscli start --enable_ums -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+> dscli start --enable_ums --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
 > ```
 
 
@@ -880,9 +976,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 > **配置文件停止注意事项**：
 >
-> - `dscli stop -f` 根据配置文件中的 `service_type` 选择停止 Coordinator 或 Worker。
-> - `service_type` 为 `coordinator` 时停止 Coordinator，为 `worker` 时停止 Worker；字段缺失或值为空时按 Worker 处理。
-> - 其他取值会导致命令失败。`service_type` 仅由 `dscli` 使用，不会传递给 Coordinator 或 Worker 进程。
+> - `dscli stop --config_path` 根据配置文件中的服务地址字段选择停止服务：配置中包含 `worker_address` 时停止 Worker；不包含 `worker_address` 但包含 `coordinator_address` 时停止 Coordinator。
+> - 为避免歧义，Worker 配置文件应包含 `worker_address`，Coordinator 配置文件应包含 `coordinator_address`。
 
 `dscli stop` 会先向 worker 发送 `SIGTERM`，等待超时后再发送 `SIGKILL`。等待超时时间按以下公式动态计算（单位：秒）：
 
@@ -1069,22 +1164,20 @@ dscli query route \
 
 ### 命令行参数配置项
 
-服务启动配置项分别位于 `worker_config.json` 和 `coordinator_config.json`。两个配置文件都包含仅供 `dscli`
-识别的 `service_type`：取值为 `coordinator` 时处理 Coordinator，取值为 `worker` 时处理 Worker；字段缺失或
-值为空时按 Worker 处理。`service_type` 不会作为命令行参数传递给服务进程。
+服务启动配置项分别位于 `worker_config.json` 和 `coordinator_config.json`。配置文件只包含对应服务进程的启动参数；服务类型由 `dscli start` 的启动选项决定，例如使用 `--worker_config_path` 启动 Worker，使用 `--coordinator_config_path` 启动 Coordinator。
 
 #### Coordinator配置项
 
-`coordinator_config.json` 包含 Coordinator 启动参数。可以使用 `dscli start -f ./coordinator_config.json` 启动，
-使用 `dscli stop -f ./coordinator_config.json` 停止。
+`coordinator_config.json` 包含 Coordinator 启动参数。可以使用 `dscli start --coordinator_config_path ./coordinator_config.json` 启动，
+使用 `dscli stop --config_path ./coordinator_config.json` 停止。
 
 | 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
 |-----|------|---------|-----|-------------|
-| service_type | string | `"coordinator"` | 否 | 供 `dscli` 识别服务类型，不传递给 Coordinator 进程 |
 | coordinator_address | string | `"127.0.0.1:31511"` | 否 | Coordinator 服务地址，格式为 `host:port`，不能为空 |
 | coordinator_rpc_stub_cache_size | int | `4096` | 否 | Coordinator RPC Stub 缓存数量上限 |
 | coordinator_topology_max_active_clusters | int | `8` | 否 | Coordinator 同时承载的集群拓扑上限，取值范围为 `[2, 32]`；超限时拒绝新集群准入，修改后需重启 Coordinator |
-| coordinator_raft_data_dir | string | `"./datasystem/coordinator_raft"` | 否 | Coordinator本地braft状态目录；参数化入口启用选举时不能为空，且每个Coordinator节点必须独占一个目录 |
+| coordinator_raft_initial_peers | string | `""` | 否 | Coordinator Raft 静态初始成员列表，格式为逗号分隔的 `host:port`。为空时按单节点无选主模式启动；配置多个成员时启用静态 peers Raft 选主，各节点必须配置相同列表 |
+| coordinator_raft_data_dir | string | `"./datasystem/coordinator_raft"` | 否 | Coordinator本地braft状态目录；启用选主时不能为空，且每个Coordinator节点必须独占一个目录 |
 | coordinator_raft_heartbeat_interval_ms | int | `100` | 否 | Raft Leader发送心跳的时间间隔，单位为毫秒；取值范围为`[10, 10000]` |
 | coordinator_raft_election_timeout_ms | int | `1000` | 否 | Raft选举超时时间，单位为毫秒；必须是`coordinator_raft_heartbeat_interval_ms`的整数倍，且倍数在`[5, 10]`范围内 |
 | coordinator_member_failure_grace_ms | uint32 | `10000` | 否 | 成员持续失败宽限时间，单位为毫秒；必须大于内部健康检查间隔 |
@@ -1112,35 +1205,23 @@ dscli query route \
 
 Coordinator 日志和采样配置的详细语义参见[日志与可观测相关配置](#日志与可观测相关配置)。
 
-当前`dscli`通过单例`CoordinatorServer`façade调用无参`InitAndRun()`兼容入口，因此不启用Coordinator选举；
-实际生命周期实现由非单例`CoordinatorRuntime`承担。上表中的7个`coordinator_raft_*`/
-`coordinator_election_*`参数在使用`CoordinatorOptions`的参数化嵌入式入口启用选举时生效。仅在
-`coordinator_config.json`中填写这些参数或设置`use_brpc=true`，不会让当前`dscli`入口启用选举。
+`coordinator_raft_initial_peers` 为空时，Coordinator 按单节点无选主模式启动；配置多个静态 peers 时，
+Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinator_raft_data_dir`、
+`coordinator_raft_heartbeat_interval_ms`、`coordinator_raft_election_timeout_ms`、
+`coordinator_member_failure_grace_ms` 和 `coordinator_discovery_retry_interval_ms` 用于配置本节点 Raft 状态目录
+和选举时序。仅设置 `use_brpc=true` 不会启用选主，仍需配置 `coordinator_raft_initial_peers`。
 
-生产部署每个进程只运行一个Coordinator Runtime。参数化`CoordinatorServer::InitAndRun(options)`要求
-`configFilePath`非空；文件访问、JSON解析和flag校验由`FlagManager`及Runtime启动流程负责。Runtime在路径非空时
-解析配置文件，随后调用一次`GetRaftFlags()`取得本机地址、独占Raft数据目录和选举时序快照。文件解析失败统一
-返回不包含路径和parser原文的错误。达到`RUNNING`前的失败完成回调和Service清理后可重试；达到`RUNNING`后该
-Runtime保持one-shot。
-
-直接使用空`configFilePath`启动`CoordinatorRuntime`仅用于内部同进程测试：Runtime跳过文件解析并使用调用方
-预先设置的进程flags。测试fixture必须在启动任何Runtime前设置公共flags，在任一Runtime活动期间保持这些flags
-不变，并在所有Runtime停止和线程join后恢复；各实例的endpoint、Raft数据目录和选举时序通过各自的
-`GetRaftFlags()`快照隔离。
-
-参数化入口的当前顺序为：解析非空配置路径并取得Raft快照；Service `Init`；Service `Start`注册业务和braft
-services、开始监听并保持`STARTING`；Runtime `onStart`注册endpoint；Service `StartElectionManager`启动后台
-Manager并发布`RUNNING`；进入event loop。`STARTING`窗口内业务RPC返回`K_NOT_READY`。Manager随后异步执行
-Discovery/bootstrap或recover，启动Node再启动Membership。同步启动失败时，Runtime先调用`onStop`，再由
-Service shutdown依次停止Membership、drain Node、关闭shared server并释放其余components。进程signal handler
-只设置`g_exitFlag`；显式Runtime `Stop`只唤醒本实例。
+生产部署中，一个 Coordinator 配置文件对应一个 Coordinator 进程。多节点部署时，每个节点应使用自己的
+`coordinator_address` 和独占的 `coordinator_raft_data_dir`，并配置相同的 `coordinator_raft_initial_peers`。配置
+文件解析或参数校验失败时，Coordinator 启动失败；修改 Raft 成员、地址或数据目录类参数后，应停止相关节点并
+按部署规划重新启动。
 
 `worker_config.json` 包含 datasystem_worker 的命令行参数相关配置项。启动 Worker 时，必须在
 `coordinator_address`、`etcd_address`、`metastore_address` 中配置且仅配置一个集群管理后端。
 
 > **注意事项：**
 >
-> 单机快速部署 `dscli start -w` 该命令支持直接传入 datasystem_worker 的参数进行配置。表格中的配置项需要映射为命令行长参数。以配置项 `max_client_num` 为例，如需在启动时配置该项，应当写为 `dscli start -w --max_client_num 200`。
+> 单机快速部署 `dscli start --worker_args` 该命令支持直接传入 datasystem_worker 的参数进行配置。表格中的配置项需要映射为命令行长参数。以配置项 `max_client_num` 为例，如需在启动时配置该项，应当写为 `dscli start --worker_args --max_client_num 200`。
 
 #### 资源相关配置
 
