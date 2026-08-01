@@ -269,12 +269,17 @@ if (NOT BUILD_HETERO_GPU)
     list(FILTER DS_DEVICE_TEST_SRCS EXCLUDE REGEX ".*/hetero_d2h_test_gpu\\.cpp$")
 endif()
 add_executable(ds_device_llt ${DS_DEVICE_TEST_SRCS})
+target_sources(ds_device_llt PRIVATE
+        ${PROJECT_DIR}/src/datasystem/worker/object_cache/kv_event/zmq_lite.cpp)
 
 if (BUILD_HETERO)
     set(DS_DEVICE_LLT_DEPEND_LIB
             cluster
             ${ASCEND_LIBRARY}
             ${HCCL_LIBRARY}
+            ${ZeroMQ_LIBRARY}
+            nlohmann_json::nlohmann_json
+            common_rpc_zmq
             binmock)
     # copy acl plugin shared library to the same directory of ds_st.
     if (BUILD_HETERO_NPU)
@@ -297,6 +302,9 @@ else()
     # Keep device LLT available in non-hetero builds and rely on the mock device manager.
     set(DS_DEVICE_LLT_DEPEND_LIB
             cluster
+            ${ZeroMQ_LIBRARY}
+            nlohmann_json::nlohmann_json
+            common_rpc_zmq
             binmock)
 endif()
 

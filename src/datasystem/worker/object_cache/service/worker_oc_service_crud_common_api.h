@@ -34,6 +34,7 @@
 #include "datasystem/worker/object_cache/async_rollback_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
+#include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
@@ -41,6 +42,9 @@
 
 namespace datasystem {
 namespace object_cache {
+inline constexpr char kKvEventMediumCpu[] = "cpu";
+inline constexpr char kKvEventMediumDisk[] = "disk";
+
 class AsyncPersistenceDelManager {
 public:
     /**
@@ -81,6 +85,7 @@ struct WorkerOcServiceCrudParam {
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager;
     std::shared_ptr<AsyncSendManager> asyncSendManager;
     std::shared_ptr<AsyncRollbackManager> asyncRollbackManager;
+    std::shared_ptr<KvEventPublisher> kvEventPublisher;
     size_t metadataSize;
     std::shared_ptr<PersistenceApi> persistenceApi;
     EtcdClusterManager *etcdCM;
@@ -415,6 +420,8 @@ protected:
     std::shared_ptr<AsyncSendManager> asyncSendManager_{ nullptr };
 
     std::shared_ptr<AsyncRollbackManager> asyncRollbackManager_{ nullptr };
+
+    std::shared_ptr<KvEventPublisher> kvEventPublisher_{ nullptr };
 
     size_t metadataSize_{ 0 };
 

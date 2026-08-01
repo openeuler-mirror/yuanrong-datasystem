@@ -41,6 +41,7 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/worker/object_cache/eviction_list.h"
+#include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 
 namespace datasystem {
@@ -145,6 +146,15 @@ public:
     }
 
     /**
+     * @brief Setter function to assign the KV event publisher.
+     * @param[in] kvEventPublisher The KV event publisher pointer to assign.
+     */
+    void SetKvEventPublisher(std::shared_ptr<KvEventPublisher> kvEventPublisher)
+    {
+        kvEventPublisher_ = kvEventPublisher;
+    }
+
+    /**
      * @brief Evict clear object.
      * @param[in] objectKV The object that need to evict.
      * @return Status of the call.
@@ -159,6 +169,22 @@ public:
     {
         return !isDone_;
     }
+
+#ifdef WITH_TESTS
+    Status EvictDeleteObjectForTest(ObjectKV &objectKV)
+    {
+        EvictDeletedObjects deletedObjects;
+        return EvictObject(objectKV, Action::DELETE, &deletedObjects);
+    }
+
+    Status EvictFreeMemoryForTest(ObjectKV &objectKV)
+    {
+        return EvictObject(objectKV, Action::FREE_MEMORY);
+    }
+
+    Status DeletePrimaryEndLifeLocalForTest(const std::string &objectKey,
+                                            const std::shared_ptr<SafeObjType> &entry);
+#endif
 
 private:
     enum class Action : int { UNKNOWN, DELETE, FREE_MEMORY, SPILL, END_LIFE, RETAIN, MIGRATE };
@@ -442,6 +468,8 @@ private:
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
     std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };
     std::weak_ptr<AsyncSendManager> asyncSendManager_{};
+    // Keep the publisher alive until eviction background tasks have drained in this manager's destructor.
+    std::shared_ptr<KvEventPublisher> kvEventPublisher_{ nullptr };
     friend class ::datasystem::ut::SpillEvictionTest;
 };
 

@@ -106,6 +106,7 @@
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
+#include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/object_kv.h"
@@ -139,6 +140,7 @@ DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_uint32(memory_alignment);
 DS_DECLARE_bool(enable_metadata_recovery);
+DS_DECLARE_string(kv_events_config);
 
 using namespace datasystem::master;
 using namespace datasystem::worker;
@@ -262,6 +264,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .asyncPersistenceDelManager = asyncPersistenceDelManager_,
         .asyncSendManager = asyncSendManager_,
         .asyncRollbackManager = asyncRollbackManager_,
+        .kvEventPublisher = kvEventPublisher_,
         .metadataSize = metadataSize_,
         .persistenceApi = persistenceApi_,
         .etcdCM = etcdCM_,
@@ -326,6 +329,14 @@ Status WorkerOCServiceImpl::Init()
     workerDevOcManager_ = std::make_shared<WorkerDeviceOcManager>(this);
     lastReconTime_ = GetSteadyClockTimeStampMs();  // Record current timestamp in case we need reconciliation.
     RETURN_IF_NOT_OK(StartDecreaseReferenceProcess());
+    auto kvEventConfig = BuildKvEventConfigFromJsonString(FLAGS_kv_events_config);
+    if (kvEventConfig.enabled) {
+        kvEventPublisher_ = std::make_shared<KvEventPublisher>(std::move(kvEventConfig));
+        if (!kvEventPublisher_->Enabled()) {
+            kvEventPublisher_.reset();
+        }
+    }
+    evictionManager_->SetKvEventPublisher(kvEventPublisher_);
     metadataRecoveryManager_ =
         std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, etcdCM_, workerMasterApiManager_,
                                                   metadataSize_, evictionManager_, memCpyThreadPool_);

@@ -55,6 +55,7 @@ DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_monitor_exporter);
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_string(kv_events_config);
 DS_DECLARE_int32(oc_worker_worker_direct_port);
 DS_DECLARE_int32(sc_worker_worker_direct_port);
 DS_DECLARE_bool(enable_pipeline_h2d);
