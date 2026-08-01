@@ -731,13 +731,24 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
     // direct local connections that do not have a discovery object.
     auto sdkHostIdCache =
         std::make_shared<std::string>(serviceDiscovery_ == nullptr ? "" : serviceDiscovery_->GetHostId());
-    auto ringUpdateHook = [this, initialWorker, initialWorkerIsLocal, sdkHostIdCache](
+    auto hostIdUnresolvedWarned = std::make_shared<bool>(false);
+    auto ringUpdateHook = [this, initialWorker, initialWorkerIsLocal, sdkHostIdCache, hostIdUnresolvedWarned](
                               uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
                               const std::unordered_map<std::string, std::string> &hostIdMap) {
-        if (sdkHostIdCache->empty() && initialWorkerIsLocal) {
-            auto iter = hostIdMap.find(initialWorker.ToString());
-            if (iter != hostIdMap.end() && !iter->second.empty()) {
-                *sdkHostIdCache = iter->second;
+        if (sdkHostIdCache->empty()) {
+            // initialWorkerIsLocal must reflect the real locality of the bound worker (threaded from
+            // service-discovery selection), not a hardcoded default. When it is false, a cross-node
+            // bound worker's hostId is NOT adopted, so cross-node workers fall into otherAddrs and
+            // GetTransportHint selects UB/TCP instead of timing out on the SHM/UDS path.
+            const auto resolved = client::ResolveSdkHostId(initialWorkerIsLocal, initialWorker, hostIdMap);
+            if (!resolved.empty()) {
+                *sdkHostIdCache = resolved;
+            } else if (!*hostIdUnresolvedWarned) {
+                *hostIdUnresolvedWarned = true;
+                LOG(WARNING) << "[Routing] SDK host_id is unresolved and the bound worker is not confirmed"
+                             << " same-host (initialWorker=" << initialWorker.ToString()
+                             << "); same-host SHM partitioning is disabled and cross-node workers route"
+                             << " via UB/TCP. Set host_id_env_name on the client process to enable SHM.";
             }
         }
         return ApplyRoutingWorkerSnapshot(ringVersion, ring, hostIdMap, *sdkHostIdCache);
@@ -751,12 +762,17 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
     return Status::OK();
 }
 
-Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs)
+Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker,
+                                                 int32_t connectTimeoutMs, bool routedWorkerIsLocal)
 {
     int32_t timeoutMs = connectTimeoutMs >= 0 ? connectTimeoutMs : connectTimeoutMs_;
     CHECK_FAIL_RETURN_STATUS(timeoutMs >= 0, K_INVALID, "The connection timeout must be a positive integer.");
     RETURN_IF_NOT_OK(InitClientWorkerConnectAt(LOCAL_WORKER, ipAddress_, enableHeartbeat, initWithWorker, timeoutMs));
-    return InitClientRuntimeAt(LOCAL_WORKER, initWithWorker, true);
+    // isLocalWorker stays true so InitListenWorkerAt recovery wiring is unchanged; routedWorkerIsLocal
+    // carries the real locality of the bound worker so InitRouting does not adopt a cross-node bound
+    // worker's hostId (which would misclassify that whole remote host as same-host and time out Gets
+    // on the SHM/UDS path). Defaults to true for callers without locality (embedded client).
+    return InitClientRuntimeAt(LOCAL_WORKER, initWithWorker, true, routedWorkerIsLocal);
 }
 
 Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
@@ -849,7 +865,8 @@ bool ObjectClientImpl::IsCurrentUrmaDataPlaneTrigger(
     return currentNode_ == node && workerApi_[node] != nullptr && workerApi_[node].get() == workerApi.get();
 }
 
-Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker)
+Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker,
+                                             bool routedWorkerIsLocal)
 {
     auto &workerApi = workerApi_[node];
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi, initWithWorker);
@@ -867,7 +884,7 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
     RETURN_IF_NOT_OK(InitListenWorkerAt(node, isLocalWorker));
     RETURN_IF_NOT_OK(workerApi->TryFastTransportAfterHeartbeat());
     if (!enableLocalCache_) {
-        RETURN_IF_NOT_OK(InitRouting(workerApi->hostPort_, isLocalWorker));
+        RETURN_IF_NOT_OK(InitRouting(workerApi->hostPort_, routedWorkerIsLocal));
     }
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
     RETURN_IF_NOT_OK(devOcImpl_->Init());
@@ -1018,7 +1035,7 @@ Status ObjectClientImpl::InitWorkerClientAtCurrentAddress(bool enableHeartbeat, 
         LOG(INFO) << "Start to init preferred remote fallback worker client at address: " << hostPortStr;
         rc = InitPreferredRemoteFallback(ipAddress_, enableHeartbeat, connectTimeoutMs);
     } else {
-        rc = InitClientWorkerConnect(enableHeartbeat, false, connectTimeoutMs);
+        rc = InitClientWorkerConnect(enableHeartbeat, false, connectTimeoutMs, isSameNode);
     }
     RETURN_IF_NOT_OK(rc);
     LogClientConfigInitSnapshot();

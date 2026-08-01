@@ -57,6 +57,26 @@ Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopo
                            const std::unordered_map<std::string, std::string> &hostIdMap,
                            const std::string &sdkHostId, WorkerSnapshot &snapshot);
 
+/**
+ * @brief Resolve the sdk hostId used to partition workers into sameHostAddrs/otherAddrs when service
+ *        discovery has not resolved the sdk's own host_id (the caller is inside the sdkHostIdCache
+ *        empty guard).
+ *
+ * The sdk adopts the bound (initial) worker's hostId only when that worker is confirmed same-host
+ * (boundWorkerIsLocal). Adopting a CROSS-NODE bound worker's hostId would label that entire remote
+ * host as same-host, so cross-node Gets would select the SHM/UDS transport and time out against an
+ * unreachable unix-domain socket. When locality is unconfirmed (boundWorkerIsLocal == false) the sdk
+ * keeps hostId empty and BuildWorkerSnapshot puts every worker into otherAddrs, so GetTransportHint
+ * selects the correct cross-node transport (UB when URMA is enabled, otherwise TCP) instead of SHM.
+ *
+ * @param[in] boundWorkerIsLocal True only when the bound worker is confirmed same-host.
+ * @param[in] boundWorker The bound (initial) worker endpoint, looked up in hostIdMap.
+ * @param[in] hostIdMap workerAddr("host:port") -> hostId, from GetHashRingRspPb.host_id_map.
+ * @return The sdk hostId to feed into BuildWorkerSnapshot; empty when unknown (safe degradation).
+ */
+std::string ResolveSdkHostId(bool boundWorkerIsLocal, const HostPort &boundWorker,
+                             const std::unordered_map<std::string, std::string> &hostIdMap);
+
 }  // namespace client
 }  // namespace datasystem
 
