@@ -139,6 +139,16 @@ bool ConfirmsGlobalOutage(const ControlBackendObservation &local, const std::vec
     }
     return accepted.size() == targets.size();
 }
+
+bool ConfirmsBackendAvailableOnPeer(const ControlBackendObservation &local,
+                                    const std::vector<ControlBackendObservation> &observations)
+{
+    const auto now = std::chrono::steady_clock::now();
+    return std::any_of(observations.begin(), observations.end(), [&](const auto &observation) {
+        return observation.state == ControlBackendState::AVAILABLE && SameAuthorityStamp(local, observation)
+               && IsFresh(observation, now);
+    });
+}
 }  // namespace
 
 struct TopologyEngine::Builder::Config {
@@ -592,6 +602,37 @@ Status TopologyEngine::Start()
 Status TopologyEngine::StartMemberRole()
 {
     RETURN_IF_NOT_OK(dispatcher_.Start());
+    if (options_.unifiedEtcdWatch && options_.controlBackendProbe) {
+        memberBackend_->SetCheckStoreStateWhenNetworkFailedHandler([this] {
+            ControlBackendObservation local;
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                local = backendObservation_;
+                local.state = ControlBackendState::UNAVAILABLE;
+                local.observedAt = std::chrono::steady_clock::now();
+            }
+            std::shared_ptr<const TopologySnapshot> snapshot;
+            std::vector<MemberIdentity> targets;
+            auto rc = snapshots_.Load(snapshot);
+            if (rc.IsOk()) {
+                rc = SelectQuorumProbeTargets(*snapshot, options_.localAddress, targets);
+            }
+            if (rc.IsError()) {
+                VLOG(1) << "Skip ETCD keepalive failure peer probe: " << rc.ToString();
+                return false;
+            }
+            std::vector<ControlBackendObservation> observations;
+            try {
+                observations = options_.controlBackendProbe(
+                    local, targets, std::chrono::steady_clock::now() + options_.scopeProbeDeadline);
+            } catch (const std::exception &error) {
+                LOG(ERROR) << "CLUSTER_BACKEND_PROBE_FAILED reason=exception error=" << error.what();
+            } catch (...) {
+                LOG(ERROR) << "CLUSTER_BACKEND_PROBE_FAILED reason=unknown_exception";
+            }
+            return ConfirmsBackendAvailableOnPeer(local, observations);
+        });
+    }
     if (options_.unifiedEtcdWatch) {
         memberBackend_->SetEventHandler([this](CoordinationEvent &&event) {
             auto rc = RouteUnifiedEtcdWatchEvent(std::move(event));
