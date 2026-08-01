@@ -324,6 +324,26 @@ TEST(RaftOperationSubmissionGateTest, ContainsThrowingCallbacks)
     }
 }
 
+TEST(RaftOperationDrainStateTest, AdmitsOnlyOneInFlightOperation)
+{
+    auto state = std::make_shared<detail::RaftOperationDrainState>();
+    EXPECT_FALSE(state->HasInFlight());
+
+    auto first = std::make_unique<detail::RaftOperationDrainToken>(state);
+    ASSERT_TRUE(first->IsAcquired());
+    EXPECT_TRUE(state->HasInFlight());
+
+    detail::RaftOperationDrainToken concurrent(state);
+    EXPECT_FALSE(concurrent.IsAcquired());
+
+    first.reset();
+    EXPECT_FALSE(state->HasInFlight());
+
+    detail::RaftOperationDrainToken next(state);
+    EXPECT_TRUE(next.IsAcquired());
+    EXPECT_TRUE(state->HasInFlight());
+}
+
 TEST(CoordinatorRaftNodeTest, StartFromConstructedValidatesOptionsWithoutRegistration)
 {
     auto options = MakeOneNodeOptions();

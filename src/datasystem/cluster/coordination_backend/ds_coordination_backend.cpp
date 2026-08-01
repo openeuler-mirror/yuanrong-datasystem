@@ -299,7 +299,8 @@ void DsCoordinationBackend::CommitWatchPlan(const std::vector<WatchKey> &watchKe
         watchRegistrationInProgress_ = false;
     }
     LOG(INFO) << "CLUSTER_WATCH_REGISTERED watcher=" << watcherAddr_ << ", scope_count=" << watchKeys.size()
-              << ", coordinator_id=" << coordinatorId.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
+              << ", coordinator_id="
+              << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
     if (previousCoordinatorId == coordinatorId && !previousWatchIds.empty()) {
         LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, previousWatchIds, previousCoordinatorId),
                      "Cancel replaced Coordinator watches");
@@ -589,7 +590,7 @@ void DsCoordinationBackend::HandleMembershipSuccess(const std::string &coordinat
     }
     if (identityChanged || recreated) {
         LOG(INFO) << "CLUSTER_COORDINATOR_ID role=worker watcher=" << watcherAddr_
-                  << ", id=" << coordinatorId.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                  << ", id=" << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
                   << ", membership_recreated=" << recreated << ", watches_invalidated=" << invalidated;
     }
     if (handler != nullptr) {

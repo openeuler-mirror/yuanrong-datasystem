@@ -121,7 +121,7 @@ Status TopologyControlHost::Start()
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("start topology Control Host failed: ") + error.what());
     }
     LOG(INFO) << "CLUSTER_CONTROL_HOST state=started coordinator_id="
-              << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+              << BytesUuidToString(coordinatorId_).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
               << " cluster_limit=" << options_.maxClusters;
     return Status::OK();
 }
@@ -323,7 +323,7 @@ void TopologyControlHost::ReconcileWaitingEntry(const std::string &clusterName, 
         entry.state = EntryState::RUNNING;
         entry.retryBackoff = options_.startRetryInitial;
         LOG(INFO) << "CLUSTER_CONTROL_HOST cluster=" << clusterName << " state=running coordinator_id="
-                  << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                  << BytesUuidToString(coordinatorId_).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
                   << " start_elapsed_ms=" << elapsedMs;
         if (elapsedMs > RUNTIME_START_WARN_MS) {
             LOG(WARNING) << "CLUSTER_CONTROL_HOST cluster=" << clusterName

@@ -458,6 +458,11 @@ Status CoordinatorRaftNode::GetMembershipStatus(CoordinatorRaftMembershipStatus 
     return Status::OK();
 }
 
+bool CoordinatorRaftNode::HasInFlightMembershipOperation() const
+{
+    return operationDrainState_->HasInFlight();
+}
+
 Status CoordinatorRaftNode::SubmitPeerMembershipChange(const std::string &peer, RaftOperationCallback &&callback,
                                                        PeerMembershipOperation operation)
 {
@@ -508,7 +513,9 @@ Status CoordinatorRaftNode::SubmitPeerMembershipChange(const std::string &peer, 
 
     auto inFlightToken = std::make_shared<detail::RaftOperationDrainToken>(operationDrainState_);
     if (!inFlightToken->IsAcquired()) {
-        return NotReadyStatus(notReadyOperation);
+        return Status(K_TRY_AGAIN,
+                      FormatString("Coordinator raft already has an in-flight membership operation for group %s",
+                                   kCoordinatorRaftGroupId));
     }
     RaftOperationCallback trackedCallback = [callback = std::move(callback),
                                              inFlightToken = std::move(inFlightToken)](Status result) mutable {

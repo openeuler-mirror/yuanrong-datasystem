@@ -386,8 +386,7 @@ protected:
         raftFlags_ = coordinator::CoordinatorRaftFlags{ coordinatorAddress_, tempDirectory_->Child("raft-data"),
                                                         kHeartbeatIntervalMs, kElectionTimeoutMs,
                                                         kDiscoveryRetryMs,    kFailureGraceMs,
-                                                        kHealthIntervalMs,    kOperationWarningMs,
-                                                        kCandidateCooldownMs };
+                                                        kHealthIntervalMs,    kBootstrapWarningIntervalMs };
     }
 
     void TearDown() override
@@ -445,8 +444,7 @@ protected:
     static constexpr uint32_t kHealthIntervalMs = 1'000;
     static constexpr uint32_t kFailureGraceMs = 20'000;
     static constexpr uint32_t kDiscoveryRetryMs = 5'000;
-    static constexpr uint32_t kOperationWarningMs = 30'000;
-    static constexpr uint32_t kCandidateCooldownMs = 60'000;
+    static constexpr uint32_t kBootstrapWarningIntervalMs = 30'000;
 
     std::unique_ptr<ScopedTempDirectory> tempDirectory_;
     std::vector<st::TestPortLease> portLeases_;
@@ -573,8 +571,8 @@ TEST(CoordinatorServerOptionsTest, DefaultRaftFlagSnapshotCapturesEveryRuntimeFl
     EXPECT_EQ(snapshot.memberFailureGraceMs, FLAGS_coordinator_member_failure_grace_ms);
     EXPECT_EQ(snapshot.discoveryRetryIntervalMs, FLAGS_coordinator_discovery_retry_interval_ms);
     EXPECT_EQ(snapshot.healthCheckIntervalMs, coordinator::kDefaultCoordinatorElectionHealthCheckIntervalMs);
-    EXPECT_EQ(snapshot.operationWarningTimeoutMs, coordinator::kDefaultCoordinatorElectionOperationWarningTimeoutMs);
-    EXPECT_EQ(snapshot.candidateRetryCooldownMs, coordinator::kDefaultCoordinatorElectionCandidateRetryCooldownMs);
+    EXPECT_EQ(snapshot.bootstrapWarningIntervalMs,
+              coordinator::kDefaultCoordinatorElectionBootstrapWarningIntervalMs);
 
     FLAGS_coordinator_address = savedCoordinatorAddress;
     FLAGS_coordinator_raft_data_dir = savedRaftDataDir;
@@ -587,7 +585,7 @@ TEST(CoordinatorServerOptionsTest, DefaultRaftFlagSnapshotCapturesEveryRuntimeFl
 TEST(CoordinatorServerOptionsTest, RuntimeMockReturnsInjectedRaftFlagSnapshot)
 {
     coordinator::CoordinatorRaftFlags flags{
-        "127.0.0.1:31611", "/tmp/injected-runtime-snapshot", 411, 4'110, 5'111, 20'111, 1'111, 30'111, 60'111
+        "127.0.0.1:31611", "/tmp/injected-runtime-snapshot", 411, 4'110, 5'111, 20'111, 1'111, 30'111
     };
     CoordinatorRuntimeMock runtime(flags);
 
@@ -600,8 +598,7 @@ TEST(CoordinatorServerOptionsTest, RuntimeMockReturnsInjectedRaftFlagSnapshot)
     EXPECT_EQ(snapshot.healthCheckIntervalMs, flags.healthCheckIntervalMs);
     EXPECT_EQ(snapshot.memberFailureGraceMs, flags.memberFailureGraceMs);
     EXPECT_EQ(snapshot.discoveryRetryIntervalMs, flags.discoveryRetryIntervalMs);
-    EXPECT_EQ(snapshot.operationWarningTimeoutMs, flags.operationWarningTimeoutMs);
-    EXPECT_EQ(snapshot.candidateRetryCooldownMs, flags.candidateRetryCooldownMs);
+    EXPECT_EQ(snapshot.bootstrapWarningIntervalMs, flags.bootstrapWarningIntervalMs);
 }
 
 TEST(CoordinatorServerOptionsTest, ThrownStartExceptionStillInvokesStopExactlyOnce)
@@ -913,14 +910,11 @@ TEST_F(CoordinatorElectionServiceTest, BuildElectionContextOnlyCopiesImmutableMa
     EXPECT_EQ(options.raftFlags.healthCheckIntervalMs, service->raftFlags_.healthCheckIntervalMs);
     EXPECT_EQ(options.raftFlags.memberFailureGraceMs, service->raftFlags_.memberFailureGraceMs);
     EXPECT_EQ(options.raftFlags.discoveryRetryIntervalMs, service->raftFlags_.discoveryRetryIntervalMs);
-    EXPECT_EQ(options.raftFlags.operationWarningTimeoutMs, service->raftFlags_.operationWarningTimeoutMs);
-    EXPECT_EQ(options.raftFlags.candidateRetryCooldownMs, service->raftFlags_.candidateRetryCooldownMs);
+    EXPECT_EQ(options.raftFlags.bootstrapWarningIntervalMs, service->raftFlags_.bootstrapWarningIntervalMs);
     EXPECT_EQ(options.membershipOptions.expectedMemberCount, kCoordinatorCount);
     EXPECT_EQ(options.membershipOptions.healthCheckInterval, std::chrono::milliseconds(kHealthIntervalMs));
     EXPECT_EQ(options.membershipOptions.memberFailureGrace, std::chrono::milliseconds(kFailureGraceMs));
     EXPECT_EQ(options.membershipOptions.discoveryRetryInterval, std::chrono::milliseconds(kDiscoveryRetryMs));
-    EXPECT_EQ(options.membershipOptions.operationWarningTimeout, std::chrono::milliseconds(kOperationWarningMs));
-    EXPECT_EQ(options.membershipOptions.candidateRetryCooldown, std::chrono::milliseconds(kCandidateCooldownMs));
     EXPECT_EQ(discovery->calls_.load(), 0U);
 }
 

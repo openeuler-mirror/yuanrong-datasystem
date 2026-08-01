@@ -41,8 +41,7 @@ inline constexpr int kCoordinatorRaftMinElectionTimeoutMs =
 inline constexpr int kCoordinatorRaftMaxElectionTimeoutMs =
     kCoordinatorRaftMaxHeartbeatIntervalMs * kCoordinatorRaftMaxElectionHeartbeatRatio;
 inline constexpr uint32_t kDefaultCoordinatorElectionHealthCheckIntervalMs = 3'000;
-inline constexpr uint32_t kDefaultCoordinatorElectionOperationWarningTimeoutMs = 3'000;
-inline constexpr uint32_t kDefaultCoordinatorElectionCandidateRetryCooldownMs = 10'000;
+inline constexpr uint32_t kDefaultCoordinatorElectionBootstrapWarningIntervalMs = 3'000;
 inline constexpr int64_t kBraftDefaultMaxClockDriftMs = 1'000;
 inline constexpr int64_t kBraftIntTimerMaxMs = std::numeric_limits<int>::max();
 inline constexpr int64_t kCoordinatorRaftMaxVoteTimerBaseMs =
@@ -76,8 +75,7 @@ struct CoordinatorRaftFlags {
     uint32_t discoveryRetryIntervalMs{ 0 };
     uint32_t memberFailureGraceMs{ 0 };
     uint32_t healthCheckIntervalMs{ kDefaultCoordinatorElectionHealthCheckIntervalMs };
-    uint32_t operationWarningTimeoutMs{ kDefaultCoordinatorElectionOperationWarningTimeoutMs };
-    uint32_t candidateRetryCooldownMs{ kDefaultCoordinatorElectionCandidateRetryCooldownMs };
+    uint32_t bootstrapWarningIntervalMs{ kDefaultCoordinatorElectionBootstrapWarningIntervalMs };
 };
 
 struct BootstrapPlan {

@@ -63,8 +63,7 @@ constexpr int32_t kElectionTimeoutMs = 300;
 constexpr uint32_t kHealthCheckIntervalMs = 50;
 constexpr uint32_t kMemberFailureGraceMs = 500;
 constexpr uint32_t kDiscoveryRetryIntervalMs = 100;
-constexpr uint32_t kOperationWarningTimeoutMs = 500;
-constexpr uint32_t kCandidateRetryCooldownMs = 100;
+constexpr uint32_t kBootstrapWarningIntervalMs = 500;
 constexpr int32_t kMinimumRpcTimeoutMs = 1;
 constexpr int32_t kRpcTimeoutMs = 200;
 constexpr std::chrono::milliseconds kPollInterval{ 20 };
@@ -538,8 +537,7 @@ protected:
                                                   kDiscoveryRetryIntervalMs,
                                                   kMemberFailureGraceMs,
                                                   kHealthCheckIntervalMs,
-                                                  kOperationWarningTimeoutMs,
-                                                  kCandidateRetryCooldownMs };
+                                                  kBootstrapWarningIntervalMs };
     }
 
     size_t LaunchRuntime(size_t index, size_t expectedMemberCount = kBaselineCoordinatorCount,

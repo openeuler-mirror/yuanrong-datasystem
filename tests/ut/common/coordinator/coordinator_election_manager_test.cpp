@@ -62,8 +62,7 @@ constexpr size_t kExpectedMemberCount = 3;
 constexpr std::chrono::milliseconds kHealthCheckInterval{ 10 };
 constexpr std::chrono::milliseconds kMemberFailureGrace{ 20 };
 constexpr std::chrono::hours kDiscoveryRetryInterval{ 1 };
-constexpr std::chrono::milliseconds kOperationWarningTimeout{ 30 };
-constexpr std::chrono::milliseconds kCandidateRetryCooldown{ 40 };
+constexpr std::chrono::milliseconds kBootstrapWarningInterval{ 30 };
 constexpr std::chrono::seconds kConcurrencyDeadline{ 2 };
 constexpr size_t kConcurrentSnapshotIterations = 100;
 constexpr size_t kSha256HexLength = 64;
@@ -182,14 +181,11 @@ CoordinatorElectionOptions MakeOptions(const std::string &localPeer = kPeer1,
                                                       .count()),
                                               static_cast<uint32_t>(kMemberFailureGrace.count()),
                                               static_cast<uint32_t>(kHealthCheckInterval.count()),
-                                              static_cast<uint32_t>(kOperationWarningTimeout.count()),
-                                              static_cast<uint32_t>(kCandidateRetryCooldown.count()) };
+                                              static_cast<uint32_t>(kBootstrapWarningInterval.count()) };
     options.membershipOptions = CoordinatorMembershipOptions{ expectedMemberCount,
                                                                kHealthCheckInterval,
                                                                kMemberFailureGrace,
-                                                               kDiscoveryRetryInterval,
-                                                               kOperationWarningTimeout,
-                                                               kCandidateRetryCooldown };
+                                                               kDiscoveryRetryInterval };
     return options;
 }
 
