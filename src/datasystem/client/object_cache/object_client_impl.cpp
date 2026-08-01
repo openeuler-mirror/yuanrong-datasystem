@@ -3881,6 +3881,7 @@ struct DirectPipelineItem {
 };
 
 struct DirectBatchGetTask {
+    std::unique_ptr<client::DataPlaneManager::DataPlaneLease> endpointLease;
     std::shared_ptr<client::WorkerRpcClient> rpcClient;
     BatchGetObjectRemoteReqPb request;
     BatchGetObjectRemoteRspPb response;
@@ -4314,8 +4315,8 @@ void PrepareDirectPipelineBatches(client::TransportLayer &transport, const std::
                                   const std::unordered_map<HostPort, std::vector<DirectPipelineItem *>> &groups)
 {
     for (const auto &group : groups) {
-        std::shared_ptr<client::WorkerRpcClient> rpcClient;
-        Status endpointRc = transport.PrepareDirectUbEndpoint(group.first, rpcClient);
+        std::unique_ptr<client::DataPlaneManager::DataPlaneLease> endpointLease;
+        Status endpointRc = transport.AcquireDirectUbEndpointLease(group.first, endpointLease);
         std::vector<DirectPipelineItem *> ready;
         for (auto *item : group.second) {
             item->registered = false;
@@ -4335,7 +4336,9 @@ void PrepareDirectPipelineBatches(client::TransportLayer &transport, const std::
             continue;
         }
         DirectBatchGetTask task;
-        Status rc = BuildDirectPipelineBatch(rpcClient, ready, task);
+        task.endpointLease = std::move(endpointLease);
+        task.rpcClient = task.endpointLease->GetRpcClient();
+        Status rc = BuildDirectPipelineBatch(task.rpcClient, ready, task);
         if (rc.IsError()) {
             for (auto *item : ready) {
                 FailDirectAttempt(*item, rc, manager);

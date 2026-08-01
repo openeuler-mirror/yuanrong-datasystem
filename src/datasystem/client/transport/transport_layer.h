@@ -78,7 +78,8 @@ public:
 
     Status ResolveMetadata(const ObjectReadRequest &input, std::vector<ObjectMetadataItem> &metadata);
 
-    Status PrepareDirectUbEndpoint(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &rpcClient);
+    Status AcquireDirectUbEndpointLease(const HostPort &workerAddr,
+                                        std::unique_ptr<DataPlaneManager::DataPlaneLease> &lease);
 
     /**
      * @brief Execute Exist and rebuild the RPC connection once when the channel is unavailable.
