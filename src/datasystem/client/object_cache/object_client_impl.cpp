@@ -988,6 +988,90 @@ Status ObjectClientImpl::GetCurrentWorkerHostPort(HostPort &addr) const
     return Status::OK();
 }
 
+Status ObjectClientImpl::PickFallbackWorker(const std::unordered_set<HostPort> &failedWorkerAddrs,
+                                            HostPort &outAddr, bool &outIsSameNode)
+{
+    std::vector<std::string> sameHostStrs;
+    std::vector<std::string> otherStrs;
+    Status getAllRc = serviceDiscovery_->GetAllWorkers(sameHostStrs, otherStrs);
+    if (getAllRc.IsError()) {
+        LOG(WARNING) << "[Init] GetAllWorkers failed during fallback: " << getAllRc.ToString()
+                     << ". Retrying within Init budget.";
+        return Status(K_TRY_AGAIN, "GetAllWorkers failed during fallback");
+    }
+    std::vector<HostPort> sameHost;
+    std::vector<HostPort> others;
+    auto collect = [&failedWorkerAddrs](const std::vector<std::string> &addrs, std::vector<HostPort> &out) {
+        for (const auto &a : addrs) {
+            HostPort hp;
+            if (hp.ParseString(a).IsError()) {
+                continue;
+            }
+            if (failedWorkerAddrs.count(hp) > 0) {
+                continue;
+            }
+            out.emplace_back(std::move(hp));
+        }
+    };
+    collect(sameHostStrs, sameHost);
+    collect(otherStrs, others);
+    ShuffleWorkerCandidates(sameHost);
+    ShuffleWorkerCandidates(others);
+    if (!sameHost.empty()) {
+        outAddr = std::move(sameHost.front());
+        outIsSameNode = true;
+        return Status::OK();
+    }
+    if (serviceDiscovery_->GetAffinityPolicy() != ServiceAffinityPolicy::REQUIRED_SAME_NODE && !others.empty()) {
+        outAddr = std::move(others.front());
+        outIsSameNode = false;
+        return Status::OK();
+    }
+    return Status(K_TRY_AGAIN, "no admissible candidate after exclusion");
+}
+
+bool ObjectClientImpl::ShouldExcludeFailedWorker(const Status &rc) const
+{
+    bool shouldExclude = rc.GetCode() == K_RPC_UNAVAILABLE || rc.GetCode() == K_CLIENT_WORKER_DISCONNECT;
+    if (!shouldExclude && !FLAGS_use_brpc && rc.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
+        shouldExclude = true;
+    }
+    return shouldExclude;
+}
+
+Status ObjectClientImpl::SelectNextInitWorker(std::unordered_set<HostPort> &failedWorkerAddrs, HostPort &outAddr,
+                                              bool &outIsSameNode, bool &outIsNoAvailableWorker)
+{
+    std::string workerIp;
+    int workerPort;
+    bool isSameNode = false;
+    Status selectRc = serviceDiscovery_->SelectWorker(workerIp, workerPort, &isSameNode, &outIsNoAvailableWorker);
+    if (selectRc.GetCode() == K_TRY_AGAIN) {
+        return selectRc;
+    }
+    RETURN_IF_NOT_OK(selectRc);
+    HostPort selectedAddr(workerIp, workerPort);
+    if (failedWorkerAddrs.count(selectedAddr) == 0) {
+        outAddr = std::move(selectedAddr);
+        outIsSameNode = isSameNode;
+        return Status::OK();
+    }
+    HostPort fallback;
+    bool fallbackSameNode = false;
+    Status fbRc = PickFallbackWorker(failedWorkerAddrs, fallback, fallbackSameNode);
+    if (fbRc.GetCode() == K_TRY_AGAIN) {
+        outIsNoAvailableWorker = true;
+        return fbRc;
+    }
+    RETURN_IF_NOT_OK(fbRc);
+    LOG(INFO) << FormatString("[Init] SD-selected worker %s failed earlier this Init; "
+                              "falling back to %s (isSameNode=%d)",
+                              selectedAddr.ToString(), fallback.ToString(), fallbackSameNode);
+    outAddr = std::move(fallback);
+    outIsSameNode = fallbackSameNode;
+    return Status::OK();
+}
+
 Status ObjectClientImpl::InitWithServiceDiscovery(bool enableHeartbeat)
 {
     CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
@@ -998,25 +1082,35 @@ Status ObjectClientImpl::InitWithServiceDiscovery(bool enableHeartbeat)
     Timer timer(connectTimeoutMs_);
     int32_t remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
     int32_t retryTimes = 0;
+    // Per-Init lifecycle local exclusion set: a worker that failed Init in an earlier
+    // retry round is excluded for the remainder of THIS Init so the retry loop switches
+    // to a different candidate instead of re-selecting the same dead worker (which
+    // PREFERRED_SAME_NODE would otherwise do when the killed same-node worker is still
+    // READY in etcd within the lease window). The set is a local variable, not a member,
+    // so it is automatically cleared when Init() returns — a worker excluded in one
+    // Init() call is fully selectable in the next, and a worker that restarts later
+    // is never permanently blacklisted.
+    std::unordered_set<HostPort> failedWorkerAddrs;
+    auto prepareNextRetry = [&](int32_t intervalMs) -> Status {
+        CHECK_FAIL_RETURN_STATUS(++retryTimes < INIT_SELECT_WORKER_TRIES, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+        CHECK_FAIL_RETURN_STATUS(remainTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::min(remainTimeMs, intervalMs)));
+        remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+        return Status::OK();
+    };
     while (remainTimeMs > 0) {
-        std::string workerIp;
-        int workerPort;
+        HostPort selectedAddr;
         bool isSameNode = false;
         bool isNoAvailableWorker = false;
-        Status selectRc = serviceDiscovery_->SelectWorker(workerIp, workerPort, &isSameNode, &isNoAvailableWorker);
+        Status selectRc = SelectNextInitWorker(failedWorkerAddrs, selectedAddr, isSameNode, isNoAvailableWorker);
         if (selectRc.GetCode() == K_TRY_AGAIN) {
-            CHECK_FAIL_RETURN_STATUS(++retryTimes < INIT_SELECT_WORKER_TRIES, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
-            remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
-            CHECK_FAIL_RETURN_STATUS(remainTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(
-                    std::min(remainTimeMs, isNoAvailableWorker ? INIT_SELECT_WORKER_NO_WORKER_RETRY_INTERVAL_MS
-                                                               : INIT_SELECT_WORKER_RETRY_INTERVAL_MS)));
-            remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+            RETURN_IF_NOT_OK(prepareNextRetry(isNoAvailableWorker ? INIT_SELECT_WORKER_NO_WORKER_RETRY_INTERVAL_MS
+                                                                  : INIT_SELECT_WORKER_RETRY_INTERVAL_MS));
             continue;
         }
         RETURN_IF_NOT_OK(selectRc);
-        ipAddress_ = HostPort(workerIp, workerPort);
+        ipAddress_ = selectedAddr;
 
         remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
         CHECK_FAIL_RETURN_STATUS(remainTimeMs >= RPC_MINIMUM_TIMEOUT, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
@@ -1031,13 +1125,10 @@ Status ObjectClientImpl::InitWithServiceDiscovery(bool enableHeartbeat)
         if (!ShouldRetryInit(rc)) {
             return rc;
         }
-        CHECK_FAIL_RETURN_STATUS(++retryTimes < INIT_SELECT_WORKER_TRIES, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
-
-        remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
-        CHECK_FAIL_RETURN_STATUS(remainTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(std::min(remainTimeMs, INIT_SELECT_WORKER_RETRY_INTERVAL_MS)));
-        remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+        if (ShouldExcludeFailedWorker(rc)) {
+            failedWorkerAddrs.insert(ipAddress_);
+        }
+        RETURN_IF_NOT_OK(prepareNextRetry(INIT_SELECT_WORKER_RETRY_INTERVAL_MS));
     }
     return Status(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
 }

@@ -214,6 +214,15 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
         auto session = std::make_shared<BrpcSession>(std::move(stub), std::move(channel));
         std::atomic_store(&brpcSession_, session);
     } else {
+        // zmq path: mirror brpc's WaitForBrpcSocketAvailable with a TCP port probe
+        // so a worker killed by SIGKILL fails fast with K_RPC_UNAVAILABLE instead
+        // of waiting for the RPC timeout. The probe timeout is capped by the
+        // caller's connect budget so a host-unreachable probe never exceeds the
+        // Init budget.
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            WaitForTcpPortAvailable(hostPort_, ComputeTcpProbeTimeoutMs(connectTimeoutMs)),
+            StatusCode::K_RPC_UNAVAILABLE,
+            FormatString("zmq tcp port not available to %s for WorkerOCService", hostPort_.ToString()));
         auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
         if (IsShmEnableByUDS()) {
             channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
