@@ -165,6 +165,13 @@ void Routing::UpdateState(const HostPort &addr, StatusCode status)
     }
 }
 
+void Routing::ForceRefresh()
+{
+    if (initialized_.load() && refresher_ != nullptr) {
+        refresher_->ForceRefresh();
+    }
+}
+
 void Routing::Shutdown()
 {
     if (refresher_ != nullptr) {

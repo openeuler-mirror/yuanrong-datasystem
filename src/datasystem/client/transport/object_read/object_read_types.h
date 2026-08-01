@@ -28,6 +28,14 @@
 
 namespace datasystem {
 namespace client {
+inline constexpr char STALE_TRANSPORT_SNAPSHOT_MESSAGE[] =
+    "Worker endpoint is absent from latest transport snapshot";
+
+inline bool IsTransportSnapshotStaleLocation(const Status &status)
+{
+    return status.GetCode() == K_NOT_READY
+           && status.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE) != std::string::npos;
+}
 
 /** @brief One object and metadata owner supplied by the routing layer. */
 struct ObjectReadItem {

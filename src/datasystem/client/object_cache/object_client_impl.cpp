@@ -171,6 +171,8 @@ namespace datasystem {
 namespace {
 constexpr size_t MIN_SHUFFLE_CANDIDATE_COUNT = 2;
 constexpr size_t SET_ROUTE_MAX_ATTEMPTS = 3;
+constexpr size_t STALE_LOCATION_REFRESH_ATTEMPTS = 5;
+constexpr int64_t STALE_LOCATION_REFRESH_INITIAL_BACKOFF_MS = 20;
 constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 const std::unordered_set<std::string> NON_GFLAG_KV_CLIENT_CONFIG_KEYS = {
     "client_access_log_filename",
@@ -179,6 +181,50 @@ const std::unordered_set<std::string> NON_GFLAG_KV_CLIENT_CONFIG_KEYS = {
 std::mutex g_kvClientConfigMutex;
 bool g_hasKvClientProcessConfig = false;
 std::unordered_map<std::string, std::string> g_kvClientProcessConfig;
+
+std::vector<std::string> BuildPendingTransportReadKeys(const std::vector<std::string> &objectKeys,
+                                                       const std::vector<size_t> &pendingIndexes)
+{
+    std::vector<std::string> keys;
+    keys.reserve(pendingIndexes.size());
+    for (auto index : pendingIndexes) {
+        keys.emplace_back(objectKeys[index]);
+    }
+    return keys;
+}
+
+std::vector<size_t> CollectStaleTransportReadIndexes(const std::vector<size_t> &pendingIndexes,
+                                                     std::vector<std::shared_ptr<Buffer>> &roundBuffers,
+                                                     const std::vector<Status> &roundStatuses,
+                                                     std::vector<std::shared_ptr<Buffer>> &buffers,
+                                                     std::vector<Status> &itemStatuses)
+{
+    std::vector<size_t> staleIndexes;
+    staleIndexes.reserve(pendingIndexes.size());
+    for (size_t i = 0; i < pendingIndexes.size(); ++i) {
+        const auto outputIndex = pendingIndexes[i];
+        itemStatuses[outputIndex] = roundStatuses[i];
+        if (roundStatuses[i].IsOk()) {
+            buffers[outputIndex] = std::move(roundBuffers[i]);
+        } else if (client::IsTransportSnapshotStaleLocation(roundStatuses[i])) {
+            staleIndexes.push_back(outputIndex);
+        }
+    }
+    return staleIndexes;
+}
+
+Status RefreshStaleTransportReadRoute(const std::shared_ptr<client::Routing> &routing, size_t keyCount,
+                                      size_t refreshCount, client::DeadlineRetry &retry, int64_t &backoffMs)
+{
+    LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+        << "[TransportGet][Route] Retry stale transport snapshot locations, key count: "
+        << keyCount << ", refresh count: " << refreshCount
+        << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
+    if (routing != nullptr) {
+        routing->ForceRefresh();
+    }
+    return retry.Backoff(backoffMs);
+}
 
 #ifdef USE_URMA
 AccessTransportKind MergeTransportKind(AccessTransportKind lhs, AccessTransportKind rhs)
@@ -4596,6 +4642,27 @@ Status ObjectClientImpl::FinishTransportRead(const std::vector<Status> &itemStat
     return transportStatus.IsError() ? transportStatus : Status(K_RUNTIME_ERROR, "Failed to get objects");
 }
 
+Status ObjectClientImpl::ReadTransportRound(const std::vector<std::string> &objectKeys, bool traceEnabled,
+                                            int64_t subTimeoutMs, bool queryL2Cache,
+                                            std::vector<std::shared_ptr<Buffer>> &buffers,
+                                            std::vector<Status> &itemStatuses, AccessTransportKind &actualKind,
+                                            Status &transportStatus)
+{
+    client::ObjectReadRequest request;
+    request.traceEnabled = traceEnabled;
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_ROUTE_START);
+    BuildTransportReadRequest(objectKeys, request, itemStatuses, subTimeoutMs, queryL2Cache);
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_ROUTE_END);
+    client::ObjectReadResult result;
+    transportStatus = request.items.empty() ? Status(K_NOT_READY, "No object route is available")
+                                            : transportLayer_->Get(request, result);
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_START);
+    Status applyStatus =
+        ApplyTransportReadResult(objectKeys, request, result, transportStatus, buffers, itemStatuses, actualKind);
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_END);
+    return applyStatus;
+}
+
 Status ObjectClientImpl::RouteGetByShm(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
                                        bool queryL2Cache, bool isRH2DSupported, bool traceEnabled,
                                        std::vector<std::shared_ptr<Buffer>> &objectBuffers, Status &rc)
@@ -4762,21 +4829,43 @@ Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &o
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(transportLayer_ != nullptr, K_NOT_READY, "Object service is not ready");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() == buffers.size(), K_RUNTIME_ERROR,
                                          "Failed to prepare object Get request");
-    client::ObjectReadRequest request;
-    request.traceEnabled = traceEnabled;
     std::vector<Status> itemStatuses(objectKeys.size(), Status(K_NOT_READY, "Object Get has not completed"));
-    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_ROUTE_START);
-    BuildTransportReadRequest(objectKeys, request, itemStatuses, subTimeoutMs, queryL2Cache);
-    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_ROUTE_END);
-    client::ObjectReadResult result;
-    Status transportStatus = request.items.empty() ? Status(K_NOT_READY, "No object route is available")
-                                                   : transportLayer_->Get(request, result);
     AccessTransportKind actualKind = AccessTransportKind::SHM;
-    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_START);
-    Status applyStatus =
-        ApplyTransportReadResult(objectKeys, request, result, transportStatus, buffers, itemStatuses, actualKind);
-    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_END);
-    RETURN_IF_NOT_OK(applyStatus);
+    Status transportStatus(K_NOT_READY, "No object route is available");
+    std::vector<size_t> pendingIndexes(objectKeys.size());
+    std::iota(pendingIndexes.begin(), pendingIndexes.end(), 0);
+    client::DeadlineRetry retry;
+    int64_t backoffMs = STALE_LOCATION_REFRESH_INITIAL_BACKOFF_MS;
+
+    size_t refreshCount = 0;
+    while (!pendingIndexes.empty()) {
+        std::vector<std::string> retryKeys;
+        const std::vector<std::string> *roundKeys = &objectKeys;
+        if (refreshCount > 0) {
+            retryKeys = BuildPendingTransportReadKeys(objectKeys, pendingIndexes);
+            roundKeys = &retryKeys;
+        }
+        std::vector<std::shared_ptr<Buffer>> roundBuffers(roundKeys->size());
+        std::vector<Status> roundStatuses(roundKeys->size(), Status(K_NOT_READY, "Object Get has not completed"));
+        RETURN_IF_NOT_OK(ReadTransportRound(*roundKeys, traceEnabled, subTimeoutMs, queryL2Cache, roundBuffers,
+                                            roundStatuses, actualKind, transportStatus));
+        auto staleIndexes =
+            CollectStaleTransportReadIndexes(pendingIndexes, roundBuffers, roundStatuses, buffers, itemStatuses);
+
+        if (staleIndexes.empty() || refreshCount >= STALE_LOCATION_REFRESH_ATTEMPTS
+            || ApiDeadline::Instance().ApiRemainingUs() <= 0) {
+            break;
+        }
+        ++refreshCount;
+        auto routing = std::atomic_load(&routing_);
+        Status waitStatus =
+            RefreshStaleTransportReadRoute(routing, staleIndexes.size(), refreshCount, retry, backoffMs);
+        if (waitStatus.IsError()) {
+            transportStatus = waitStatus;
+            break;
+        }
+        pendingIndexes = std::move(staleIndexes);
+    }
     return FinishTransportRead(itemStatuses, actualKind, transportStatus);
 }
 
