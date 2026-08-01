@@ -70,10 +70,12 @@ public:
                  int64_t &revision, int32_t, std::string *coordinatorId) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (key == nextRangeFailureKey_ && nextRangeFailureCode_ != K_OK) {
+        if (key == nextRangeFailureKey_ && nextRangeFailureCode_ != K_OK && rangeFailureCount_ > 0) {
             const auto failureCode = nextRangeFailureCode_;
-            nextRangeFailureKey_.clear();
-            nextRangeFailureCode_ = K_OK;
+            if (--rangeFailureCount_ == 0) {
+                nextRangeFailureKey_.clear();
+                nextRangeFailureCode_ = K_OK;
+            }
             return Status(failureCode, "injected Coordinator Range failure");
         }
         kvs.clear();
@@ -218,9 +220,23 @@ public:
 
     void FailNextRangeForKey(std::string key, StatusCode code)
     {
+        FailRangeForKeyTimes(std::move(key), code, 1);
+    }
+
+    void FailRangeForKeyTimes(std::string key, StatusCode code, uint32_t count)
+    {
         std::lock_guard<std::mutex> lock(mutex_);
         nextRangeFailureKey_ = std::move(key);
         nextRangeFailureCode_ = code;
+        rangeFailureCount_ = count;
+    }
+
+    void ClearRangeFailures()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        nextRangeFailureKey_.clear();
+        nextRangeFailureCode_ = K_OK;
+        rangeFailureCount_ = 0;
     }
 
     void FailNextWatchForKey(std::string key, StatusCode code)
@@ -300,6 +316,7 @@ private:
     std::string coordinatorId_{ "coordinator-test" };
     std::string nextRangeFailureKey_;
     StatusCode nextRangeFailureCode_{ K_OK };
+    uint32_t rangeFailureCount_{ 0 };
     std::string nextWatchFailureKey_;
     StatusCode nextWatchFailureCode_{ K_OK };
     bool requireRecoveryPayload_{ false };

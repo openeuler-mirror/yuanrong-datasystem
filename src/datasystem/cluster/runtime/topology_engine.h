@@ -12,10 +12,12 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -154,6 +156,20 @@ public:
          * @return This Builder.
          */
         Builder &SetNodeDeadTimeout(std::chrono::seconds timeout);
+
+        /**
+         * @brief Bind the periodic exact-read and failure-scope probe interval.
+         * @param[in] interval Positive interval; production uses the bounded default.
+         * @return This Builder.
+         */
+        Builder &SetFailureScopeProbeInterval(std::chrono::milliseconds interval);
+
+        /**
+         * @brief Bind the full timeout for confirmed local control-backend isolation.
+         * @param[in] timeout Non-negative duration from the first conclusive local-isolation observation.
+         * @return This Builder.
+         */
+        Builder &SetLocalIsolationTimeout(std::chrono::seconds timeout);
 
         /**
          * @brief Bind the ordinary SCALE_IN coalescing window.
@@ -331,7 +347,9 @@ private:
         bool unifiedEtcdWatch{ false };
         size_t eventQueueCapacity{ 1'024 };
         std::chrono::seconds scopeProbeDeadline{ 2 };
-        std::chrono::seconds scopeProbeInterval{ 5 };
+        std::chrono::milliseconds scopeProbeInterval{ 5'000 };
+        std::chrono::seconds nodeDeadTimeout{ 0 };
+        std::chrono::seconds localIsolationTimeout{ 0 };
         std::chrono::seconds stopGrace{ 10 };
         ControlBackendProbe controlBackendProbe;
         std::function<void(TopologyAvailabilityLevel)> availabilityHandler;
@@ -490,6 +508,16 @@ private:
     Status RefreshUnavailableBackend();
 
     /**
+     * @brief Clear state-thread-owned local-isolation evidence after recovery or an inconclusive round.
+     */
+    void ResetLocalIsolationEvidence();
+
+    /**
+     * @brief Terminate this Worker after confirmed local isolation remains unrecovered for nodeDeadTimeout.
+     */
+    void KillSelfIfIsolationExpired();
+
+    /**
      * @brief Publish process-local availability and diagnostic reason.
      * @param[in] level New process-local availability level.
      * @param[in] reason Low-cardinality reason stored with the level.
@@ -562,6 +590,9 @@ private:
     std::string isolationReason_;
     std::string lastError_;
     ControlBackendObservation backendObservation_;
+    uint32_t localIsolationConfirmations_{ 0 };  // State-thread owned.
+    std::optional<std::chrono::steady_clock::time_point> localIsolationStartedAt_;  // State-thread owned.
+    std::optional<std::chrono::steady_clock::time_point> isolationKillDeadline_;  // State-thread owned.
 };
 
 }  // namespace datasystem::cluster

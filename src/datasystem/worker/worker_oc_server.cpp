@@ -1256,6 +1256,8 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         .SetLocalAddress(hostPort_.ToString())
         .SetPhaseCallbacks(*topologyTaskCallbacks_)
         .SetNodeDeadTimeout(std::chrono::seconds(classifierAbsenceS))
+        // Local backend isolation starts at the first positive peer observation, so it owns the full dead timeout.
+        .SetLocalIsolationTimeout(std::chrono::seconds(FLAGS_node_dead_timeout_s))
         .SetScaleInCollectWindow(std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms))
         .SetMembershipRestartHandler([this](const std::map<std::string, int64_t> &restartFacts,
                                             cluster::RestartEffectMode mode) {

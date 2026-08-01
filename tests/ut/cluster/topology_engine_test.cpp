@@ -39,6 +39,7 @@ constexpr int BUILD_ENGINE_FAILED_EXIT = 1;
 constexpr int START_FAILED_EXIT = 2;
 constexpr int START_RETURNED_EXIT = 3;
 constexpr int EMIT_EVENT_FAILED_EXIT = 4;
+constexpr int ISOLATION_NOT_CONFIRMED_EXIT = 5;
 constexpr auto TEST_WAIT = std::chrono::seconds(3);
 
 class NoopTopologyCallbacks final : public ITopologyPhaseCallbacks {
@@ -179,11 +180,15 @@ TopologyState MakeTopology(uint64_t version = 1)
     return state;
 }
 
-TopologyState MakeTopologyWithPeer(uint64_t version = 1)
+TopologyState MakeTopologyWithPeer(uint64_t version = 1, size_t peerCount = 1)
 {
     auto state = MakeTopology(version);
-    state.members.emplace_back(
-        Member{ { std::string(16, 'b'), "127.0.0.1:10002" }, MemberState::ACTIVE, { 500'000'000 } });
+    for (size_t i = 0; i < peerCount; ++i) {
+        state.members.emplace_back(Member{ { std::string(16, static_cast<char>('b' + i)),
+                                             "127.0.0.1:" + std::to_string(10'002 + i) },
+                                           MemberState::ACTIVE,
+                                           { static_cast<uint32_t>((i + 1) * 1'000'000'000 / (peerCount + 1)) } });
+    }
     return state;
 }
 
@@ -576,6 +581,11 @@ TEST(TopologyEngineTest, BuilderRejectsInvalidAddressAndTimeout)
     zeroTimeout.SetNodeDeadTimeout(std::chrono::seconds(0));
     DS_ASSERT_OK(zeroTimeout.Build(output));
     ASSERT_NE(output, nullptr);
+
+    TopologyEngine::Builder invalidIsolationTimeout;
+    ConfigureBuilder(invalidIsolationTimeout, proxy, ingress, callbacks, "invalid-isolation-timeout");
+    invalidIsolationTimeout.SetLocalIsolationTimeout(std::chrono::seconds(-1));
+    EXPECT_EQ(invalidIsolationTimeout.Build(output).GetCode(), K_INVALID);
 }
 
 TEST(TopologyEngineTest, RecoveryReporterExportsCanonicalRuntimeSnapshot)
@@ -626,26 +636,35 @@ TEST(TopologyEngineTest, MatchingPeerOutageEvidenceEntersControlDegraded)
     TestWatchIngress ingress;
     NoopTopologyCallbacks callbacks;
     const auto keys = MakeKeys("global-outage");
-    PutTopology(proxy, "global-outage", MakeTopologyWithPeer());
+    PutTopology(proxy, "global-outage", MakeTopologyWithPeer(1, 3));
     TopologyEngine::Builder builder;
     ConfigureBuilder(builder, proxy, ingress, callbacks, "global-outage");
-    builder.SetControlBackendProbe([](const ControlBackendObservation &local, const auto &peers, auto) {
-        auto peer = local;
-        peer.reporter = peers.front();
-        peer.state = ControlBackendState::UNAVAILABLE;
-        peer.observedAt = std::chrono::steady_clock::now();
-        const auto target = peer.reporter;
-        return std::vector<ControlBackendProbeResult>{
-            { target, std::move(peer), ControlBackendProbeOutcome::RESPONSE, std::chrono::milliseconds(0) }
-        };
+    std::atomic<uint32_t> probeCalls{ 0 };
+    std::atomic<size_t> probedPeers{ 0 };
+    builder.SetFailureScopeProbeInterval(std::chrono::milliseconds(20));
+    builder.SetControlBackendProbe([&](const ControlBackendObservation &local, const auto &peers, auto) {
+        ++probeCalls;
+        probedPeers.store(peers.size());
+        std::vector<ControlBackendProbeResult> results;
+        for (const auto &target : peers) {
+            auto peer = local;
+            peer.reporter = target;
+            peer.state = ControlBackendState::UNAVAILABLE;
+            peer.observedAt = std::chrono::steady_clock::now();
+            results.push_back(
+                { target, std::move(peer), ControlBackendProbeOutcome::RESPONSE, std::chrono::milliseconds(0) });
+        }
+        return results;
     });
     std::unique_ptr<TopologyEngine> engine;
     DS_ASSERT_OK(builder.Build(engine));
     DS_ASSERT_OK(engine->Start());
 
-    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+    proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 100);
     DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
     ASSERT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::CONTROL_DEGRADED; }));
+    ASSERT_TRUE(WaitFor([&] { return probeCalls.load() > 0; }));
+    EXPECT_EQ(probedPeers.load(), 3U);
     EXPECT_EQ(engine->GetControlBackendObservation().state, ControlBackendState::UNAVAILABLE);
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
@@ -659,6 +678,7 @@ TEST(TopologyEngineTest, AsymmetricBackendOutageIsolatesThenRecovers)
     PutTopology(proxy, "asymmetric", MakeTopologyWithPeer());
     TopologyEngine::Builder builder;
     ConfigureBuilder(builder, proxy, ingress, callbacks, "asymmetric");
+    builder.SetFailureScopeProbeInterval(std::chrono::milliseconds(20));
     builder.SetControlBackendProbe([](const ControlBackendObservation &local, const auto &peers, auto) {
         auto peer = local;
         peer.reporter = peers.front();
@@ -673,15 +693,17 @@ TEST(TopologyEngineTest, AsymmetricBackendOutageIsolatesThenRecovers)
     DS_ASSERT_OK(builder.Build(engine));
     DS_ASSERT_OK(engine->Start());
 
-    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+    proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 100);
     DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
+    ASSERT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::CONTROL_DEGRADED; }));
     ASSERT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::ROLE_ISOLATED; }));
+    proxy.ClearRangeFailures();
     DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 3));
     ASSERT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::NORMAL; }));
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
-TEST(TopologyEngineTest, MissingPeerQuorumIsolatesBackendOutage)
+TEST(TopologyEngineTest, MissingPeerQuorumKeepsBackendOutageDegraded)
 {
     testing::FakeCoordinatorServiceProxy proxy;
     TestWatchIngress ingress;
@@ -690,17 +712,153 @@ TEST(TopologyEngineTest, MissingPeerQuorumIsolatesBackendOutage)
     PutTopology(proxy, "missing-quorum", MakeTopologyWithPeer());
     TopologyEngine::Builder builder;
     ConfigureBuilder(builder, proxy, ingress, callbacks, "missing-quorum");
-    builder.SetControlBackendProbe([](const auto &, const auto &, auto) {
-        return std::vector<ControlBackendProbeResult>{};
+    std::atomic<uint32_t> probeCalls{ 0 };
+    std::atomic<bool> isolated{ false };
+    builder.SetFailureScopeProbeInterval(std::chrono::milliseconds(20));
+    builder.SetAvailabilityHandler([&](TopologyAvailabilityLevel level) {
+        isolated.store(isolated.load() || level == TopologyAvailabilityLevel::ROLE_ISOLATED);
+    });
+    builder.SetControlBackendProbe([&](const auto &, const auto &peers, auto) {
+        ++probeCalls;
+        return std::vector<ControlBackendProbeResult>{
+            { peers.front(), std::nullopt, ControlBackendProbeOutcome::DEADLINE_EXCEEDED,
+              std::chrono::milliseconds(20) }
+        };
     });
     std::unique_ptr<TopologyEngine> engine;
     DS_ASSERT_OK(builder.Build(engine));
     DS_ASSERT_OK(engine->Start());
 
-    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+    proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 100);
     DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
-    ASSERT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::ROLE_ISOLATED; }));
+    ASSERT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::CONTROL_DEGRADED; }));
+    ASSERT_TRUE(WaitFor([&] { return probeCalls.load() >= 4; }));
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::CONTROL_DEGRADED);
+    EXPECT_FALSE(isolated.load());
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, BackendRecoveryBeforeThreeLocalConfirmationsStaysAvailable)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const auto keys = MakeKeys("transient-asymmetric");
+    PutTopology(proxy, "transient-asymmetric", MakeTopologyWithPeer());
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, "transient-asymmetric");
+    std::atomic<uint32_t> probeCalls{ 0 };
+    std::atomic<bool> isolated{ false };
+    builder.SetFailureScopeProbeInterval(std::chrono::milliseconds(20));
+    builder.SetAvailabilityHandler([&](TopologyAvailabilityLevel level) {
+        isolated.store(isolated.load() || level == TopologyAvailabilityLevel::ROLE_ISOLATED);
+    });
+    builder.SetControlBackendProbe([&](const ControlBackendObservation &local, const auto &peers, auto) {
+        if (++probeCalls == 2) {
+            proxy.ClearRangeFailures();
+        }
+        auto peer = local;
+        peer.reporter = peers.front();
+        peer.state = ControlBackendState::AVAILABLE;
+        peer.observedAt = std::chrono::steady_clock::now();
+        return std::vector<ControlBackendProbeResult>{
+            { peer.reporter, std::move(peer), ControlBackendProbeOutcome::RESPONSE, std::chrono::milliseconds(0) }
+        };
+    });
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+
+    proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 100);
+    DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
+    ASSERT_TRUE(WaitFor([&] { return probeCalls.load() == 2; }));
+    ASSERT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::NORMAL; }));
+    EXPECT_FALSE(isolated.load());
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineDeathTest, ConfirmedLocalBackendIsolationKillsWorkerAfterTimeout)
+{
+    ASSERT_EXIT(
+        {
+            testing::FakeCoordinatorServiceProxy proxy;
+            TestWatchIngress ingress;
+            NoopTopologyCallbacks callbacks;
+            const auto keys = MakeKeys("isolated-kill");
+            PutTopology(proxy, "isolated-kill", MakeTopologyWithPeer());
+            TopologyEngine::Builder builder;
+            ConfigureBuilder(builder, proxy, ingress, callbacks, "isolated-kill");
+            builder.SetLocalIsolationTimeout(std::chrono::seconds(0));
+            builder.SetFailureScopeProbeInterval(std::chrono::milliseconds(20));
+            builder.SetControlBackendProbe([](const ControlBackendObservation &local, const auto &peers, auto) {
+                auto peer = local;
+                peer.reporter = peers.front();
+                peer.state = ControlBackendState::AVAILABLE;
+                peer.observedAt = std::chrono::steady_clock::now();
+                return std::vector<ControlBackendProbeResult>{
+                    { peer.reporter, std::move(peer), ControlBackendProbeOutcome::RESPONSE,
+                      std::chrono::milliseconds(0) }
+                };
+            });
+            std::unique_ptr<TopologyEngine> engine;
+            if (builder.Build(engine).IsError()) {
+                std::_Exit(BUILD_ENGINE_FAILED_EXIT);
+            }
+            if (engine->Start().IsError()) {
+                std::_Exit(START_FAILED_EXIT);
+            }
+            proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 100);
+            if (EmitTopologyEvent(proxy, ingress, *keys, 2).IsError()) {
+                std::_Exit(EMIT_EVENT_FAILED_EXIT);
+            }
+            std::this_thread::sleep_for(TEST_WAIT);
+            std::_Exit(START_RETURNED_EXIT);
+        },
+        ::testing::KilledBySignal(SIGKILL), "");
+}
+
+TEST(TopologyEngineDeathTest, NonAuthoritativeReadFailureDoesNotCancelIsolationKill)
+{
+    ASSERT_EXIT(
+        {
+            testing::FakeCoordinatorServiceProxy proxy;
+            TestWatchIngress ingress;
+            NoopTopologyCallbacks callbacks;
+            const auto keys = MakeKeys("isolated-read-failure");
+            PutTopology(proxy, "isolated-read-failure", MakeTopologyWithPeer());
+            TopologyEngine::Builder builder;
+            ConfigureBuilder(builder, proxy, ingress, callbacks, "isolated-read-failure");
+            builder.SetLocalIsolationTimeout(std::chrono::seconds(1));
+            builder.SetFailureScopeProbeInterval(std::chrono::milliseconds(20));
+            builder.SetControlBackendProbe([](const ControlBackendObservation &local, const auto &peers, auto) {
+                auto peer = local;
+                peer.reporter = peers.front();
+                peer.state = ControlBackendState::AVAILABLE;
+                peer.observedAt = std::chrono::steady_clock::now();
+                return std::vector<ControlBackendProbeResult>{
+                    { peer.reporter, std::move(peer), ControlBackendProbeOutcome::RESPONSE,
+                      std::chrono::milliseconds(0) }
+                };
+            });
+            std::unique_ptr<TopologyEngine> engine;
+            if (builder.Build(engine).IsError()) {
+                std::_Exit(BUILD_ENGINE_FAILED_EXIT);
+            }
+            if (engine->Start().IsError()) {
+                std::_Exit(START_FAILED_EXIT);
+            }
+            proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 100);
+            if (EmitTopologyEvent(proxy, ingress, *keys, 2).IsError()) {
+                std::_Exit(EMIT_EVENT_FAILED_EXIT);
+            }
+            if (!WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::ROLE_ISOLATED; })) {
+                std::_Exit(ISOLATION_NOT_CONFIRMED_EXIT);
+            }
+            proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_NOT_FOUND, 100);
+            std::this_thread::sleep_for(TEST_WAIT);
+            std::_Exit(START_RETURNED_EXIT);
+        },
+        ::testing::KilledBySignal(SIGKILL), "");
 }
 
 TEST(TopologyEngineTest, CoordinatorWatchEventFlowsThroughBoundedDispatcher)

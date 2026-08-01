@@ -33,7 +33,8 @@
 
 namespace datasystem::cluster {
 namespace {
-constexpr auto BACKEND_EVIDENCE_MAX_AGE = std::chrono::seconds(5);
+constexpr auto BACKEND_EVIDENCE_MAX_AGE = std::chrono::seconds(10);
+constexpr uint32_t LOCAL_ISOLATION_CONFIRMATIONS = 3;
 constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
 constexpr int CONTROL_DEGRADED_ERROR_LOG_INTERVAL = 60;
 
@@ -89,8 +90,8 @@ bool IsBackendAccessFailure(const Status &status)
            || status.GetCode() == K_RPC_CANCELLED;
 }
 
-Status SelectQuorumProbeTargets(const TopologySnapshot &snapshot, const std::string &localAddress,
-                                std::vector<MemberIdentity> &targets)
+Status SelectProbeTargets(const TopologySnapshot &snapshot, const std::string &localAddress,
+                          std::vector<MemberIdentity> &targets)
 {
     std::vector<MemberIdentity> committed;
     bool localCommitted = false;
@@ -105,21 +106,21 @@ Status SelectQuorumProbeTargets(const TopologySnapshot &snapshot, const std::str
         }
     }
     CHECK_FAIL_RETURN_STATUS(localCommitted, K_NOT_READY, "local member is not committed for backend quorum");
-    const size_t requiredPeers = (committed.size() + 1) / 2;
-    CHECK_FAIL_RETURN_STATUS(committed.size() >= requiredPeers, K_NOT_READY,
-                             "insufficient committed peers for backend quorum");
     std::sort(committed.begin(), committed.end(),
               [](const auto &left, const auto &right) { return left.address < right.address; });
-    committed.resize(requiredPeers);
     targets = std::move(committed);
     return Status::OK();
 }
 
-bool ConfirmsGlobalOutage(const ControlBackendObservation &local, const std::vector<MemberIdentity> &targets,
-                          const std::vector<ControlBackendObservation> &observations)
+enum class BackendFailureScope : uint8_t { GLOBAL_OUTAGE, LOCAL_BACKEND_PATH, INCONCLUSIVE };
+
+BackendFailureScope ClassifyBackendFailure(const ControlBackendObservation &local,
+                                           const std::vector<MemberIdentity> &targets,
+                                           const std::vector<ControlBackendProbeResult> &results)
 {
-    if (observations.size() != targets.size()) {
-        return false;
+    const size_t quorum = (targets.size() + 1) / 2;
+    if (quorum == 0) {
+        return BackendFailureScope::INCONCLUSIVE;
     }
     std::unordered_map<std::string, MemberIdentity> expected;
     expected.reserve(targets.size());
@@ -129,16 +130,31 @@ bool ConfirmsGlobalOutage(const ControlBackendObservation &local, const std::vec
     std::unordered_set<std::string> accepted;
     accepted.reserve(targets.size());
     const auto now = std::chrono::steady_clock::now();
-    for (const auto &observation : observations) {
-        auto target = expected.find(observation.reporter.address);
-        if (target == expected.end() || !(target->second == observation.reporter)
-            || !accepted.insert(observation.reporter.address).second
-            || observation.state != ControlBackendState::UNAVAILABLE || !SameAuthorityStamp(local, observation)
-            || !IsFresh(observation, now)) {
-            return false;
+    size_t available = 0;
+    size_t unavailable = 0;
+    for (const auto &result : results) {
+        auto target = expected.find(result.target.address);
+        if (target == expected.end() || !(target->second == result.target)
+            || !accepted.insert(result.target.address).second) {
+            continue;
+        }
+        if (result.outcome == ControlBackendProbeOutcome::RESPONSE && result.observation.has_value()) {
+            const auto &observation = *result.observation;
+            if (!(observation.reporter == result.target) || !SameAuthorityStamp(local, observation)
+                || !IsFresh(observation, now)) {
+                continue;
+            }
+            available += observation.state == ControlBackendState::AVAILABLE;
+            unavailable += observation.state == ControlBackendState::UNAVAILABLE;
         }
     }
-    return accepted.size() == targets.size();
+    if (available > 0) {
+        return BackendFailureScope::LOCAL_BACKEND_PATH;
+    }
+    if (unavailable >= quorum) {
+        return BackendFailureScope::GLOBAL_OUTAGE;
+    }
+    return BackendFailureScope::INCONCLUSIVE;
 }
 }  // namespace
 
@@ -157,6 +173,8 @@ struct TopologyEngine::Builder::Config {
     std::function<Status(const std::map<std::string, int64_t> &, RestartEffectMode)> membershipRestartHandler;
     std::function<void(std::shared_ptr<const TopologySnapshot>)> snapshotPublishedHandler;
     std::chrono::seconds nodeDeadTimeout{ TopologyControllerOptions{}.nodeDeadTimeout };
+    std::chrono::seconds localIsolationTimeout{ TopologyControllerOptions{}.nodeDeadTimeout };
+    std::chrono::milliseconds scopeProbeInterval{ 5'000 };
     std::chrono::milliseconds scaleInCollectWindow{ TopologyControllerOptions{}.scaleInCollectWindow };
     bool buildAttempted{ false };
     bool backendSelectionInvalid{ false };
@@ -267,6 +285,22 @@ TopologyEngine::Builder &TopologyEngine::Builder::SetNodeDeadTimeout(std::chrono
     return *this;
 }
 
+TopologyEngine::Builder &TopologyEngine::Builder::SetFailureScopeProbeInterval(std::chrono::milliseconds interval)
+{
+    if (config_ != nullptr) {
+        config_->scopeProbeInterval = interval;
+    }
+    return *this;
+}
+
+TopologyEngine::Builder &TopologyEngine::Builder::SetLocalIsolationTimeout(std::chrono::seconds timeout)
+{
+    if (config_ != nullptr) {
+        config_->localIsolationTimeout = timeout;
+    }
+    return *this;
+}
+
 TopologyEngine::Builder &TopologyEngine::Builder::SetScaleInCollectWindow(std::chrono::milliseconds window)
 {
     if (config_ != nullptr) {
@@ -279,6 +313,8 @@ Status TopologyEngine::Builder::Validate() const
 {
     CHECK_FAIL_RETURN_STATUS(config_ != nullptr && IsCanonicalAddress(config_->localAddress)
                                  && config_->callbacks != nullptr && config_->nodeDeadTimeout.count() >= 0
+                                 && config_->localIsolationTimeout.count() >= 0
+                                 && config_->scopeProbeInterval.count() > 0
                                  && config_->scaleInCollectWindow.count() >= 0
                                  && config_->scaleInCollectWindow.count() <= MAX_SCALE_IN_COLLECT_WINDOW_MS
                                  && !config_->backendSelectionInvalid,
@@ -363,6 +399,9 @@ TopologyEngine::RuntimeOptions TopologyEngine::ConsumeRuntimeOptions(Builder::Co
     options.localAddress = config.localAddress;
     options.isRestart = config.isRestart;
     options.unifiedEtcdWatch = config.backendKind == Builder::Config::BackendKind::ETCD;
+    options.nodeDeadTimeout = config.nodeDeadTimeout;
+    options.localIsolationTimeout = config.localIsolationTimeout;
+    options.scopeProbeInterval = config.scopeProbeInterval;
     options.controlBackendProbe = std::move(config.controlBackendProbe);
     options.availabilityHandler = std::move(config.availabilityHandler);
     options.snapshotPublishedHandler = std::move(config.snapshotPublishedHandler);
@@ -1090,6 +1129,7 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
         RETURN_STATUS(K_RUNTIME_ERROR, "local member missing from topology after SIGKILL request returned");
     }
     RETURN_IF_NOT_OK(findStatus);
+    ResetLocalIsolationEvidence();
     bool identityChanged = false;
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
@@ -1146,11 +1186,14 @@ Status TopologyEngine::HandleBackendUnavailable()
         SetAvailability(TopologyAvailabilityLevel::NOT_READY, "backend_unavailable_without_snapshot");
         return Status::OK();
     }
-    if (options_.unifiedEtcdWatch) {
-        SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "control_backend_unavailable");
+    const auto current = availability_.load();
+    if (current == TopologyAvailabilityLevel::ROLE_ISOLATED
+        || current == TopologyAvailabilityLevel::CONTROL_DEGRADED) {
         return Status::OK();
     }
-    return ReevaluateFailureScope();
+    ResetLocalIsolationEvidence();
+    SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "control_backend_unavailable");
+    return Status::OK();
 }
 
 Status TopologyEngine::ReevaluateFailureScope()
@@ -1161,17 +1204,19 @@ Status TopologyEngine::ReevaluateFailureScope()
         local = backendObservation_;
     }
     if (!options_.controlBackendProbe) {
-        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "backend_scope_unknown");
+        ResetLocalIsolationEvidence();
+        SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "backend_scope_unknown");
         return Status::OK();
     }
     std::shared_ptr<const TopologySnapshot> snapshot;
     std::vector<MemberIdentity> targets;
     auto rc = snapshots_.Load(snapshot);
     if (rc.IsOk()) {
-        rc = SelectQuorumProbeTargets(*snapshot, options_.localAddress, targets);
+        rc = SelectProbeTargets(*snapshot, options_.localAddress, targets);
     }
     if (rc.IsError()) {
-        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "backend_quorum_unavailable");
+        ResetLocalIsolationEvidence();
+        SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "backend_scope_unknown");
         return Status::OK();
     }
     const auto deadline = std::chrono::steady_clock::now() + options_.scopeProbeDeadline;
@@ -1184,17 +1229,25 @@ Status TopologyEngine::ReevaluateFailureScope()
     } catch (...) {
         LOG(ERROR) << "CLUSTER_BACKEND_PROBE_FAILED reason=unknown_exception";
     }
-    std::vector<ControlBackendObservation> observations;
-    observations.reserve(results.size());
-    for (auto &result : results) {
-        if (result.observation.has_value()) {
-            observations.push_back(std::move(*result.observation));
-        }
-    }
-    if (ConfirmsGlobalOutage(local, targets, observations)) {
+    const auto scope = ClassifyBackendFailure(local, targets, results);
+    if (scope == BackendFailureScope::GLOBAL_OUTAGE) {
+        ResetLocalIsolationEvidence();
         SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "control_backend_unavailable");
+    } else if (scope == BackendFailureScope::LOCAL_BACKEND_PATH) {
+        if (localIsolationConfirmations_ == 0) {
+            localIsolationStartedAt_ = std::chrono::steady_clock::now();
+        }
+        if (++localIsolationConfirmations_ < LOCAL_ISOLATION_CONFIRMATIONS) {
+            SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "local_isolation_confirmation_pending");
+            return Status::OK();
+        }
+        if (!isolationKillDeadline_.has_value()) {
+            isolationKillDeadline_ = *localIsolationStartedAt_ + options_.localIsolationTimeout;
+        }
+        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "local_backend_path_isolated");
     } else {
-        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "backend_quorum_not_confirmed");
+        ResetLocalIsolationEvidence();
+        SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "backend_scope_inconclusive");
     }
     return Status::OK();
 }
@@ -1206,9 +1259,36 @@ Status TopologyEngine::RefreshUnavailableBackend()
         return Status::OK();
     }
     if (IsBackendAccessFailure(rc)) {
+        const bool reevaluate = availability_.load() == TopologyAvailabilityLevel::CONTROL_DEGRADED;
         LOG_IF_ERROR(HandleBackendUnavailable(), "CLUSTER_BACKEND_FAILURE_REEVALUATION_FAILED");
+        if (reevaluate) {
+            LOG_IF_ERROR(ReevaluateFailureScope(), "CLUSTER_BACKEND_FAILURE_REEVALUATION_FAILED");
+        }
+    } else if (availability_.load() == TopologyAvailabilityLevel::CONTROL_DEGRADED) {
+        ResetLocalIsolationEvidence();
     }
     return rc;
+}
+
+void TopologyEngine::ResetLocalIsolationEvidence()
+{
+    localIsolationConfirmations_ = 0;
+    localIsolationStartedAt_.reset();
+    isolationKillDeadline_.reset();
+}
+
+void TopologyEngine::KillSelfIfIsolationExpired()
+{
+    if (!isolationKillDeadline_.has_value() || std::chrono::steady_clock::now() < *isolationKillDeadline_
+        || state_.load() == TopologyEngineState::STOPPING) {
+        return;
+    }
+    LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
+               << " role=worker state=local_isolation action=kill_self signal=SIGKILL address="
+               << options_.localAddress;
+    Provider::Instance().FlushLogs();
+    (void)std::raise(SIGKILL);
+    isolationKillDeadline_.reset();
 }
 
 void TopologyEngine::SetAvailability(TopologyAvailabilityLevel level, std::string reason)
@@ -1300,7 +1380,10 @@ void TopologyEngine::Run()
     auto nextExactRefresh = std::chrono::steady_clock::now() + options_.scopeProbeInterval;
     while (state_.load() != TopologyEngineState::STOPPING) {
         RuntimeEvent event;
-        auto rc = dispatcher_.WaitPop(nextExactRefresh, event);
+        const auto waitDeadline = isolationKillDeadline_.has_value()
+                                      ? std::min(nextExactRefresh, *isolationKillDeadline_)
+                                      : nextExactRefresh;
+        auto rc = dispatcher_.WaitPop(waitDeadline, event);
         if (rc.IsOk()) {
             rc = HandleRuntimeEvent(std::move(event));
         }
@@ -1326,6 +1409,7 @@ void TopologyEngine::Run()
             }
             nextExactRefresh = std::chrono::steady_clock::now() + options_.scopeProbeInterval;
         }
+        KillSelfIfIsolationExpired();
     }
     std::lock_guard<std::mutex> lock(stateMutex_);
     threadExited_ = true;
