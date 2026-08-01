@@ -3142,7 +3142,15 @@ Status OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedi
     bool resolvedMoving = route.moving;
     bool resolvedRedirect = route.redirect || resolvedMoving;
     if (resolvedMoving) {
-        VLOG(1) << FormatString("objectKey %s is waiting for ScaleOut metadata migration", objectKey);
+        // Placement says this key range is migrating, but verify the key exists —
+        // metadata may have been deleted (e.g. GDecreaseRef to zero refs).
+        TbbMetaTable::const_accessor accessor;
+        if (!metaShards_[GetShardIndex(objectKey)].table.find(accessor, objectKey)) {
+            resolvedMoving = false;
+            resolvedRedirect = route.redirect;
+        } else {
+            VLOG(1) << FormatString("objectKey %s is waiting for ScaleOut metadata migration", objectKey);
+        }
     } else if (!resolvedRedirect) {
         // No reference-state lookup is needed for local ownership.
     } else if (globalRefTable_->GetRefWorkerCount(objectKey) > 0) {
