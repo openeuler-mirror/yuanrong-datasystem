@@ -70,6 +70,40 @@ def get_pods(namespace, prefixes):
     return pods
 
 
+def discover_nodes(timeout=DEFAULT_TIMEOUT):
+    """Discover cluster nodes via ``kubectl get nodes``.
+
+    Returns a list of ``{'ip', 'name'}`` for every node that exposes an
+    InternalIP address, mirroring the discovery logic in deploy_pods so a
+    caller that needs to spread work across nodes gets the same node set
+    deploy_pods would schedule on. Returns an empty list on any kubectl
+    failure (kubectl missing, non-zero exit, timeout) so callers can decide
+    whether to abort; a multi-instance deploy that must spread pods treats
+    an empty list as a hard error.
+    """
+    try:
+        out = subprocess.check_output(
+            ['kubectl', 'get', 'nodes', '-o', 'json'],
+            text=True, timeout=timeout)
+    except FileNotFoundError:
+        print('ERROR: kubectl not found', file=sys.stderr)
+        return []
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print(f'ERROR: kubectl get nodes failed: {e}', file=sys.stderr)
+        return []
+
+    nodes = []
+    for item in json.loads(out).get('items', []):
+        for addr in item.get('status', {}).get('addresses', []):
+            if addr.get('type') == 'InternalIP':
+                nodes.append({
+                    'ip': addr.get('address', ''),
+                    'name': item.get('metadata', {}).get('name', ''),
+                })
+                break
+    return nodes
+
+
 def kubectl_exec(pod, namespace, cmd, check=True, timeout=DEFAULT_TIMEOUT):
     """Execute command in pod via kubectl."""
     return subprocess.run(
@@ -295,8 +329,13 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
     coordinators) before calling this function.
 
     Writes the config to a temp file, copies it into the pod, runs
-    ``dscli start -f <remote_config>`` (optionally with numactl options
-    appended for the worker), then attaches procmon to the started process.
+    ``dscli start -f <remote_config>`` for workers or
+    ``dscli start -C <remote_config>`` for coordinators (optionally with
+    numactl options appended for the worker), then attaches procmon to the
+    started process. The role is selected from ``process_name``: dscli's
+    ``-f`` flag binds to ``worker_config_path`` and ``-C`` binds to
+    ``coordinator_config_path``, so a coordinator must not be started with
+    ``-f`` (dscli would treat it as a worker config).
     """
     pod_name = pod['name']
     pod_ip = pod['ip']
@@ -310,8 +349,10 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
 
     try:
         kubectl_cp_to(pod_name, namespace, tmp_path, remote_config, timeout=timeout)
-        cmd = f'dscli start -f {remote_config}'
-        if numactl_opts:
+        is_coordinator = process_name == 'datasystem_coordinator'
+        config_flag = '-C' if is_coordinator else '-f'
+        cmd = f'dscli start {config_flag} {remote_config}'
+        if numactl_opts and not is_coordinator:
             cmd += f' {numactl_opts}'
         kubectl_exec(pod_name, namespace, cmd, timeout=timeout)
         print(f'  {pod_name} ({pod_ip}) -> started')

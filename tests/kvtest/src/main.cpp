@@ -11,6 +11,15 @@
 #include "benchmark/kv_client_adapter.h"
 #include "benchmark/subprocess.h"
 
+// BUILD_VERSION / BUILD_COMMIT are provided by CMake as -D compile flags. When
+// building under Bazel (tests/kvtest/BUILD.bazel) the generated build_info.h is
+// on the include path instead; pick it up conditionally so both build systems
+// keep the same source without redefining the macros. Mirrors the pattern used
+// by src/datasystem/common/util/version.h for git_version_def.h.
+#if __has_include("build_info.h")
+#include "build_info.h"
+#endif
+
 #include <datasystem/kv_client.h>
 #include <datasystem/utils/connection.h>
 #include <datasystem/utils/service_discovery.h>

@@ -1,0 +1,115 @@
+# Bazel build for the standalone kvtest KVClient performance tool.
+#
+# Mirrors tests/kvtest/CMakeLists.txt. Unlike the CMake flow (which links
+# against a pre-installed SDK at $DATASYSTEM_SDK_DIR), the Bazel flow builds
+# the in-tree datasystem client library as part of the graph and produces a
+# self-contained kvtest binary. This matches example/cpp/BUILD.bazel.
+#
+# The kvtest binary therefore does NOT need libdatasystem.so at runtime; the
+# Makefile `package` step tolerates a missing third_party/sdk/ for this mode.
+#
+# Build:
+#   cd <repo root> && bazel build //tests/kvtest:kvtest
+# or via build.sh:
+#   cd tests/kvtest && bash build.sh -b bazel
+
+package(default_visibility = ["//visibility:public"])
+
+# NUMA support is opt-in via --define=kvtest_numa=true. build.sh enables it
+# only when both <numa.h> and libnuma.so are detected, keeping the link in
+# sync with cpu_affinity.h's __has_include(<numa.h>) auto-detection.
+config_setting(
+    name = "with_numa",
+    values = {"define": "kvtest_numa=true"},
+)
+
+# Embed BUILD_VERSION (from VERSION) and BUILD_COMMIT (from git) at compile
+# time, matching the CMake add_definitions() path. Values are taken from the
+# KVTEST_BUILD_VERSION / KVTEST_BUILD_COMMIT action env vars when set by
+# build.sh (which can run git in the real workspace); otherwise falls back to
+# the VERSION file and "unknown" so a standalone `bazel build` still works.
+#
+# Consumed via src/main.cpp's `__has_include("build_info.h")` guard, the same
+# pattern the SDK uses for src/datasystem/common/util/version.h vs the
+# generated git_version_def.h. This keeps CMake (-D defines) and Bazel
+# (generated header) on consistent, source-side-conditional ground.
+genrule(
+    name = "build_info_gen",
+    srcs = ["VERSION"],
+    outs = ["src/build_info.h"],
+    cmd = "V=$${KVTEST_BUILD_VERSION:-$$(tr -d '\\n' < $(location VERSION))}; " +
+          "C=$${KVTEST_BUILD_COMMIT:-unknown}; " +
+          "{ printf '#define BUILD_VERSION \"%s\"\\n' \"$$V\"; " +
+          "printf '#define BUILD_COMMIT \"%s\"\\n' \"$$C\"; } > $@",
+)
+
+# kvtest sources compiled as a library so the generated build_info.h (listed in
+# hdrs like //src/datasystem/common/util:common_util_impl lists :git_version_def)
+# is on the include path for the #include in main.cpp. alwayslink ensures every
+# translation unit (and any static initializers) lands in the final binary.
+#
+# strip_include_prefix = "src" makes src/common/config.h includable as
+# "common/config.h" and src/build_info.h as "build_info.h", matching the
+# CMake target_include_directories(... src) layout and main.cpp's includes.
+cc_library(
+    name = "kvtest_lib",
+    srcs = [
+        "src/main.cpp",
+        "src/common/config.cpp",
+        "src/metrics/metrics.cpp",
+        "src/pipeline/pipeline.cpp",
+        "src/pipeline/kv_worker.cpp",
+        "src/pipeline/cache_reader.cpp",
+        "src/pipeline/stop.cpp",
+        "src/rpc/http_server.cpp",
+        "src/benchmark/benchmark_runner.cpp",
+    ],
+    hdrs = [
+        "src/common/config.h",
+        "src/common/simple_log.h",
+        "src/common/thread_pool.h",
+        "src/common/cpu_affinity.h",
+        "src/metrics/metrics.h",
+        "src/pipeline/pipeline.h",
+        "src/pipeline/kv_worker.h",
+        "src/pipeline/cache_reader.h",
+        "src/pipeline/data_pattern.h",
+        "src/pipeline/stop.h",
+        "src/rpc/http_server.h",
+        "src/benchmark/benchmark_runner.h",
+        "src/benchmark/kv_client_adapter.h",
+        "src/benchmark/subprocess.h",
+        "src/vendor/httplib.h",
+        "src/vendor/nlohmann_json.hpp",
+        ":build_info_gen",
+    ],
+    strip_include_prefix = "src",
+    copts = [
+        "-Wno-sign-compare",
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
+    ],
+    # Statically link libstdc++/libgcc so the binary runs on older GCC hosts
+    # (e.g. openEuler 22.04 with GCC 10), matching CMake target_link_options.
+    linkopts = select({
+        ":with_numa": ["-lnuma"],
+        "//conditions:default": [],
+    }) + [
+        "-static-libstdc++",
+        "-static-libgcc",
+        "-pthread",
+    ],
+    alwayslink = True,
+    deps = [
+        # Provides KVClient, ServiceDiscovery (transitively alwayslinked via
+        # :object_cache:object_client -> :service_discovery), and the public
+        # datasystem headers.
+        "//src/datasystem/client:datasystem",
+        "//include/datasystem:headers",
+    ],
+)
+
+cc_binary(
+    name = "kvtest",
+    deps = [":kvtest_lib"],
+)

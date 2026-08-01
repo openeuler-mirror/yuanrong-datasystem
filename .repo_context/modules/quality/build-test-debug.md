@@ -132,6 +132,31 @@ Backed by `.bazelrc`, `bazel/workspace_status.sh`, `bazel/git_version.bzl`, and 
 - the `@datasystem_sdk_validation` source SDK repository is registered by `bazel/sdk/workspace.bzl` with
   `repository_ctx.symlink()` for source-tree entries and does not require host `rsync`.
 
+Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
+
+- `tests/kvtest` is a standalone KVClient performance tool with its own `build.sh` supporting `-b cmake|bazel`,
+  mirroring the main repo's build-system switch;
+- the CMake mode links against a pre-installed SDK (`-s/--sdk`, default `../../output/cpp`), while the Bazel mode
+  builds `//tests/kvtest:kvtest` against the in-tree `//src/datasystem/client:datasystem`, producing a self-contained
+  binary that does not need `libdatasystem.so` at runtime;
+- `tests/kvtest/Makefile` `package` tolerates a missing `third_party/sdk/` so the same packaging step serves both
+  modes (cmake ships SDK libs alongside; bazel ships only the fat binary).
+
+Backed by `tests/kvtest/deploy_coordinator.py`, `deploy_worker.py`, `deploy_common.py`, and `deploy_pods.py`:
+
+- `deploy_coordinator.py` has two coordinator lifecycle entrypoints: `start` (start coordinators on already-running
+  pods matched by `-p/--prefix`, single-node no-election mode) and `deploy` (full lifecycle: bring up N pods via
+  `deploy_pods`, install the datasystem whl, then start N coordinators);
+- `deploy_coordinator.py deploy --instances N` spreads the N pods across the cluster nodes discovered by
+  `deploy_common.discover_nodes()` (balanced round-robin; the per-node distribution is not exposed on the CLI) and
+  reuses `deploy_pods.cmd_deploy` with a computed `--replicas` string;
+- for `N >= 2`, `deploy` injects `coordinator_raft_initial_peers` (full member list, including self) into each pod's
+  config so the coordinators run static-peers Raft election; for `N == 1` the peers field is left untouched
+  (single-node no-election mode, matching `start`). The config flag passed to dscli is role-aware:
+  `dscli start -C <cfg>` for coordinators vs `dscli start -f <cfg>` for workers;
+- the shared kubectl/procmon/whl-install/parallel orchestration lives in `deploy_common.py`; `deploy_pods.py` is the
+  standalone pod-bringup CLI (`deploy`/`delete`/`status`).
+
 ## Environment Notes
 
 Backed by `build.sh` and current docs:
