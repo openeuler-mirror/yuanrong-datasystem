@@ -634,7 +634,10 @@ TEST(TopologyEngineTest, MatchingPeerOutageEvidenceEntersControlDegraded)
         peer.reporter = peers.front();
         peer.state = ControlBackendState::UNAVAILABLE;
         peer.observedAt = std::chrono::steady_clock::now();
-        return std::vector<ControlBackendObservation>{ peer };
+        const auto target = peer.reporter;
+        return std::vector<ControlBackendProbeResult>{
+            { target, std::move(peer), ControlBackendProbeOutcome::RESPONSE, std::chrono::milliseconds(0) }
+        };
     });
     std::unique_ptr<TopologyEngine> engine;
     DS_ASSERT_OK(builder.Build(engine));
@@ -661,7 +664,10 @@ TEST(TopologyEngineTest, AsymmetricBackendOutageIsolatesThenRecovers)
         peer.reporter = peers.front();
         peer.state = ControlBackendState::AVAILABLE;
         peer.observedAt = std::chrono::steady_clock::now();
-        return std::vector<ControlBackendObservation>{ peer };
+        const auto target = peer.reporter;
+        return std::vector<ControlBackendProbeResult>{
+            { target, std::move(peer), ControlBackendProbeOutcome::RESPONSE, std::chrono::milliseconds(0) }
+        };
     });
     std::unique_ptr<TopologyEngine> engine;
     DS_ASSERT_OK(builder.Build(engine));
@@ -685,7 +691,7 @@ TEST(TopologyEngineTest, MissingPeerQuorumIsolatesBackendOutage)
     TopologyEngine::Builder builder;
     ConfigureBuilder(builder, proxy, ingress, callbacks, "missing-quorum");
     builder.SetControlBackendProbe([](const auto &, const auto &, auto) {
-        return std::vector<ControlBackendObservation>{};
+        return std::vector<ControlBackendProbeResult>{};
     });
     std::unique_ptr<TopologyEngine> engine;
     DS_ASSERT_OK(builder.Build(engine));

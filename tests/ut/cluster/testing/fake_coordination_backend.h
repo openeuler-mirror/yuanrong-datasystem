@@ -62,6 +62,7 @@ public:
     void FailNextCasBeforeCommit();
     void FailNextWatch();
     void FailNextGet();
+    void FailNextGetAll();
     void ReturnNotReadyOnNextGet();
     void ReturnNotReadyOnNextGets(size_t count);
     void EmitEvent(CoordinationEvent event);
@@ -96,6 +97,7 @@ private:
     bool failNextCasBeforeCommit_{ false };
     bool failNextWatch_{ false };
     bool failNextGet_{ false };
+    bool failNextGetAll_{ false };
     size_t notReadyGetAttempts_{ 0 };
     // Uses mutex_ to signal changes to getBlocked_ and releaseGet_.
     std::condition_variable getCv_;

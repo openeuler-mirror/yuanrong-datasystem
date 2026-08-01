@@ -33,6 +33,10 @@ Status FakeCoordinationBackend::GetAll(const std::string &table,
 {
     std::lock_guard<std::mutex> lock(mutex_);
     ++getAllAttemptsByTable_[table];
+    if (failNextGetAll_) {
+        failNextGetAll_ = false;
+        return Status(K_RPC_UNAVAILABLE, "injected exact-read membership failure");
+    }
     values.clear();
     const std::string prefix = table + "/";
     for (const auto &[key, value] : values_) {
@@ -51,6 +55,10 @@ Status FakeCoordinationBackend::GetAll(const std::string &table,
     {
         std::lock_guard<std::mutex> lock(mutex_);
         ++revisionGetAllAttemptsByTable_[table];
+        if (failNextGetAll_) {
+            failNextGetAll_ = false;
+            return Status(K_RPC_UNAVAILABLE, "injected exact-read membership failure");
+        }
         values.clear();
         const std::string prefix = table + "/";
         for (const auto &[key, value] : values_) {
@@ -291,6 +299,12 @@ void FakeCoordinationBackend::FailNextGet()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     failNextGet_ = true;
+}
+
+void FakeCoordinationBackend::FailNextGetAll()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    failNextGetAll_ = true;
 }
 
 void FakeCoordinationBackend::ReturnNotReadyOnNextGet()

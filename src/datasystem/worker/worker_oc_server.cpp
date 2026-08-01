@@ -258,6 +258,7 @@ Status CheckLocalTopologyServingReady(cluster::TopologyEngine &engine, const std
 struct PendingControlBackendProbe {
     cluster::MemberIdentity peer;
     std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
+    std::chrono::steady_clock::time_point startedAt;
     int64_t tag{ -1 };
 
     PendingControlBackendProbe() = default;
@@ -268,7 +269,10 @@ struct PendingControlBackendProbe {
     PendingControlBackendProbe(const PendingControlBackendProbe &) = delete;
     PendingControlBackendProbe &operator=(const PendingControlBackendProbe &) = delete;
     PendingControlBackendProbe(PendingControlBackendProbe &&other) noexcept
-        : peer(std::move(other.peer)), api(std::move(other.api)), tag(std::exchange(other.tag, -1))
+        : peer(std::move(other.peer)),
+          api(std::move(other.api)),
+          startedAt(other.startedAt),
+          tag(std::exchange(other.tag, -1))
     {
     }
     PendingControlBackendProbe &operator=(PendingControlBackendProbe &&) = delete;
@@ -348,59 +352,126 @@ Status FinishControlBackendProbe(PendingControlBackendProbe &pending, cluster::C
         pending.peer.address, response, observation);
 }
 
-std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
+cluster::ControlBackendProbeOutcome ProbeOutcomeFromStatus(const Status &status)
+{
+    switch (status.GetCode()) {
+        case K_RPC_DEADLINE_EXCEEDED:
+        case K_URMA_WAIT_TIMEOUT:
+            return cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED;
+        case K_RPC_UNAVAILABLE:
+            return cluster::ControlBackendProbeOutcome::UNAVAILABLE;
+        case K_RPC_CANCELLED:
+            return cluster::ControlBackendProbeOutcome::CANCELLED;
+        default:
+            return cluster::ControlBackendProbeOutcome::ERROR;
+    }
+}
+
+std::chrono::milliseconds ProbeElapsedSince(std::chrono::steady_clock::time_point startedAt)
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt);
+}
+
+cluster::ControlBackendProbeResult BuildFailedProbeResult(const cluster::MemberIdentity &peer, const Status &status,
+                                                          std::chrono::steady_clock::time_point startedAt)
+{
+    std::optional<cluster::ControlBackendObservation> observation;
+    if (!IsRpcTimeout(status)) {
+        observation = { peer, cluster::ControlBackendState::UNKNOWN, 0, 0, "", std::chrono::steady_clock::now() };
+    }
+    return { peer, std::move(observation), ProbeOutcomeFromStatus(status), ProbeElapsedSince(startedAt) };
+}
+
+std::vector<PendingControlBackendProbe> StartControlBackendProbes(
     const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
-    const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline)
+    const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline,
+    std::vector<cluster::ControlBackendProbeResult> &results)
 {
     std::vector<PendingControlBackendProbe> pending;
     pending.reserve(peers.size());
-    std::vector<cluster::ControlBackendObservation> observations;
-    observations.reserve(peers.size());
     for (const auto &peer : peers) {
         PendingControlBackendProbe probe;
+        probe.startedAt = std::chrono::steady_clock::now();
         auto rc = StartControlBackendProbe(localAddress, akSkManager, peer, deadline, probe);
         if (rc.IsError()) {
             VLOG(1) << "Cluster-state probe start failed for " << peer.address << ": " << rc.ToString();
-            if (!IsRpcTimeout(rc)) {
-                observations.push_back(
-                    { peer, cluster::ControlBackendState::UNKNOWN, 0, 0, "", std::chrono::steady_clock::now() });
-            }
+            results.push_back(BuildFailedProbeResult(peer, rc, probe.startedAt));
             continue;
         }
         pending.push_back(std::move(probe));
     }
+    return pending;
+}
+
+bool TryCollectControlBackendProbe(PendingControlBackendProbe &pending,
+                                   cluster::ControlBackendProbeResult &result)
+{
+    cluster::ControlBackendObservation observation;
+    auto rc = FinishControlBackendProbe(pending, observation);
+    if (rc.GetCode() == K_TRY_AGAIN) {
+        return false;
+    }
+    if (rc.IsError()) {
+        VLOG(1) << "Cluster-state probe read failed for " << pending.peer.address << ": " << rc.ToString();
+        result = BuildFailedProbeResult(pending.peer, rc, pending.startedAt);
+        return true;
+    }
+    result = { pending.peer, std::move(observation), cluster::ControlBackendProbeOutcome::RESPONSE,
+               ProbeElapsedSince(pending.startedAt) };
+    return true;
+}
+
+bool CollectCompletedControlBackendProbes(std::vector<PendingControlBackendProbe> &pending,
+                                          std::vector<bool> &finished, size_t &remaining,
+                                          std::vector<cluster::ControlBackendProbeResult> &results)
+{
+    bool madeProgress = false;
+    for (size_t index = 0; index < pending.size(); ++index) {
+        if (finished[index]) {
+            continue;
+        }
+        cluster::ControlBackendProbeResult result;
+        if (!TryCollectControlBackendProbe(pending[index], result)) {
+            continue;
+        }
+        finished[index] = true;
+        --remaining;
+        madeProgress = true;
+        results.push_back(std::move(result));
+    }
+    return madeProgress;
+}
+
+void AppendTimedOutControlBackendProbes(const std::vector<PendingControlBackendProbe> &pending,
+                                        const std::vector<bool> &finished,
+                                        std::vector<cluster::ControlBackendProbeResult> &results)
+{
+    for (size_t index = 0; index < pending.size(); ++index) {
+        if (!finished[index]) {
+            results.push_back({ pending[index].peer, std::nullopt,
+                                cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED,
+                                ProbeElapsedSince(pending[index].startedAt) });
+        }
+    }
+}
+
+std::vector<cluster::ControlBackendProbeResult> ProbeControlBackendPeers(
+    const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
+    const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline)
+{
+    std::vector<cluster::ControlBackendProbeResult> results;
+    results.reserve(peers.size());
+    auto pending = StartControlBackendProbes(localAddress, akSkManager, peers, deadline, results);
     std::vector<bool> finished(pending.size(), false);
     size_t remaining = pending.size();
     while (remaining > 0 && std::chrono::steady_clock::now() < deadline) {
-        bool madeProgress = false;
-        for (size_t index = 0; index < pending.size(); ++index) {
-            if (finished[index]) {
-                continue;
-            }
-            cluster::ControlBackendObservation observation;
-            auto rc = FinishControlBackendProbe(pending[index], observation);
-            if (rc.GetCode() == K_TRY_AGAIN) {
-                continue;
-            }
-            finished[index] = true;
-            --remaining;
-            madeProgress = true;
-            if (rc.IsError()) {
-                VLOG(1) << "Cluster-state probe read failed for " << pending[index].peer.address << ": "
-                        << rc.ToString();
-                if (!IsRpcTimeout(rc)) {
-                    observations.push_back({ pending[index].peer, cluster::ControlBackendState::UNKNOWN, 0, 0, "",
-                                             std::chrono::steady_clock::now() });
-                }
-                continue;
-            }
-            observations.push_back(std::move(observation));
-        }
+        const bool madeProgress = CollectCompletedControlBackendProbes(pending, finished, remaining, results);
         if (!madeProgress && remaining > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
-    return observations;
+    AppendTimedOutControlBackendProbes(pending, finished, results);
+    return results;
 }
 
 bool IsWorkerScopedSlotStoreEnabled()

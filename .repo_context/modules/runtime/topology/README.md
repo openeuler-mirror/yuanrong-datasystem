@@ -72,14 +72,18 @@
   binary response from an upgraded Worker. Deploy or roll back this behavior cluster-wide; an ETCD outage during a
   mixed-version rolling upgrade is outside this contract.
   BRPC stub acquisition and channel establishment share this low-frequency probe's absolute deadline;
-  default business-RPC stub lookup semantics remain unchanged. An absent direct response remains retryable until the same
-  membership absence has continued through
-  `nodeDeadTimeout` plus one
-  `failureProbeTimeout`; only then is the member eligible for the existing Failure plan. Backend-unreadable intervals
-  observed while reading either topology or membership do not consume the continuous-absence budget. In centralized
-  Coordinator mode, `TopologyFailureClassifier` instead promotes a member only after it has remained absent from
-  consecutive exact membership reads for `node_dead_timeout_s`; presence clears the window, Store read failures pause
-  it, and the first implementation does not add Coordinator-to-Worker probe RPCs.
+  default business-RPC stub lookup semantics remain unchanged. After classifier confirmation, the owned successor runs
+  one complete bounded direct probe (`failureProbeTimeout`). The probe returns one structured result per target with
+  the optional observation, actual completion outcome, and elapsed time. Any correctly attributed direct response
+  (including `ready=false` or stale evidence) resets the absence window. A target without a valid direct response is
+  exact-read from authoritative membership before the existing Failure plan can start: membership presence resets the
+  absence window, absence remains eligible, and read failure pauses the absence budget and aborts that reconcile tick.
+  There is no second full probe wait gated on probe-start `missingMs` versus
+  `nodeDeadTimeout + failureProbeTimeout`. Backend-unreadable intervals observed while reading either topology or
+  membership do not consume the continuous-absence budget. In centralized Coordinator mode,
+  `TopologyFailureClassifier` instead promotes a member only after it has remained absent from consecutive exact
+  membership reads for `node_dead_timeout_s`; presence clears the window, Store read failures pause it, and the first
+  implementation does not add Coordinator-to-Worker probe RPCs.
 - Both backends use the same fixed three-second joining collection window beginning at the first eligible member.
   Later arrivals do not extend the deadline. An empty cluster admits the collected bootstrap members directly without
   migration; an initialized cluster starts one multi-member ScaleOut batch. Failure remains higher priority.
