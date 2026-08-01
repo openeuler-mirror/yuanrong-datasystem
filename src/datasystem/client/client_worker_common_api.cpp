@@ -451,6 +451,16 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
         // one-shot connect-attempt budget.
         brpcCommonStub_ = std::make_unique<WorkerService_BrpcGenericStub>(brpcChannel_.get(), requestTimeoutMs_);
     } else {
+        // zmq path: mirror brpc's WaitForBrpcSocketAvailable with a TCP port probe.
+        // zmq_connect always returns success asynchronously, so a worker killed by
+        // SIGKILL (port not listening) is only surfaced at RPC timeout. Probe the TCP
+        // port first to fail fast with K_RPC_UNAVAILABLE instead. The probe timeout
+        // is capped by the caller's connect budget so a host-unreachable probe never
+        // exceeds the Init budget.
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            WaitForTcpPortAvailable(hostPort_, ComputeTcpProbeTimeoutMs(connectTimeoutMs_)),
+            StatusCode::K_RPC_UNAVAILABLE,
+            FormatString("zmq tcp port not available to %s for WorkerService", hostPort_.ToString()));
         auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
         commonWorkerSession_ = std::make_unique<WorkerService_Stub>(channel);
     }

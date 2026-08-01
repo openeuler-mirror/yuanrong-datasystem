@@ -21,6 +21,13 @@
 #include <mutex>
 #include <thread>
 
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <brpc/channel.h>
 
 #include "datasystem/common/inject/inject_point.h"
@@ -239,6 +246,61 @@ bool WaitForBrpcSocketAvailable(const HostPort &brpcAddr, int maxRetries, int in
         usleep(intervalUs);
     }
     return false;
+}
+
+bool WaitForTcpPortAvailable(const HostPort &addr, int timeoutMs)
+{
+    int family = addr.IsIPv6() ? AF_INET6 : AF_INET;
+    int sockfd = socket(family, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        return false;
+    }
+    Raii closer([&sockfd]() { close(sockfd); });
+
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    if (flags < 0 || fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        return false;
+    }
+
+    int rc;
+    if (family == AF_INET6) {
+        struct sockaddr_in6 addr6{};
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port = htons(static_cast<uint16_t>(addr.Port()));
+        if (inet_pton(AF_INET6, addr.Host().c_str(), &addr6.sin6_addr) != 1) {
+            return false;
+        }
+        rc = connect(sockfd, reinterpret_cast<struct sockaddr *>(&addr6), sizeof(addr6));
+    } else {
+        struct sockaddr_in addr4{};
+        addr4.sin_family = AF_INET;
+        addr4.sin_port = htons(static_cast<uint16_t>(addr.Port()));
+        if (inet_pton(AF_INET, addr.Host().c_str(), &addr4.sin_addr) != 1) {
+            return false;
+        }
+        rc = connect(sockfd, reinterpret_cast<struct sockaddr *>(&addr4), sizeof(addr4));
+    }
+    if (rc == 0) {
+        return true;
+    }
+    if (errno != EINPROGRESS) {
+        return false;
+    }
+
+    struct pollfd pfd;
+    pfd.fd = sockfd;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+    int ready = poll(&pfd, 1, timeoutMs);
+    if (ready <= 0) {
+        return false;
+    }
+    int sockErr = 0;
+    socklen_t sockErrLen = sizeof(sockErr);
+    if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &sockErr, &sockErrLen) != 0) {
+        return false;
+    }
+    return sockErr == 0;
 }
 
 Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_ptr<brpc::Channel> &brpcChannel)

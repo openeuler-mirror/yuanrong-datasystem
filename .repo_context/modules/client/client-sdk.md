@@ -190,6 +190,14 @@
   - connection and request timeout controls
   - token auth, curve key fields, AK/SK fields, tenant id
   - cross-node and exclusive connection toggles
+  - `ConnectOptions::enableCrossNodeConnection` gates RUNTIME worker switching only (heartbeat-driven
+    `SwitchWorkerHandle` installation, URMA data-plane failure callback, `SaveStandbyWorker` standby
+    address retention, voluntary scale-down handling). It does NOT gate Init-stage connection
+    establishment or `InitPreferredRemoteFallback`: under `PREFERRED_SAME_NODE` with the same-node
+    worker unavailable, Init still admits a remote fallback worker and succeeds even when
+    cross-node connection is disabled; only later runtime switch-over is blocked. The flag that
+    prevents Init-stage remote fallback is `affinityPolicy = REQUIRED_SAME_NODE`, not
+    `enableCrossNodeConnection`.
   - local-cache routing toggle; `enableLocalCache=false` routes Set according to
     `ConnectOptions::dataPlacementPolicy`
     and supports single- and multi-key full-object `Get`, with per-key partial results and without L2 loading or RH2D
@@ -330,6 +338,16 @@
     missing diagnostics, timeout, EOF, connection reset, and other ambiguous failures are never replayed on another
     worker. If a same-worker retry follows an ambiguous first Publish result, `TransportLayer` preserves that first
     result so a later connection-refused error cannot make replay appear safe.
+  - `ObjectClientImpl::InitWithServiceDiscovery` keeps a per-Init local exclusion set: a worker
+    whose Init attempt fails with `K_RPC_UNAVAILABLE` or `K_CLIENT_WORKER_DISCONNECT` (or
+    `K_RPC_DEADLINE_EXCEEDED` under the zmq transport, where a post-TCP-probe RPC timeout is the
+    only dead-worker signal) is skipped for the remainder of THAT Init call so the bounded retry
+    switches to a different candidate instead of re-selecting a dead worker still shown READY
+    inside the etcd lease window. The set is a function-local `unordered_set<HostPort>`, not a
+    member, so it is cleared when Init returns (no cross-Init persistence, no permanent
+    blacklist); a worker that restarts is selectable in the next Init call or via the runtime
+    `RecoverPreferredLocalWorker` path. Under `REQUIRED_SAME_NODE` remote fallback is never
+    admitted even when all same-node candidates are excluded.
   - Routed Set and MSet use the remaining SDK `ApiDeadline` for transport Create and Publish RPCs. brpc delivers the
     selected RPC timeout to the target worker, whose generated unary adapter initializes `reqTimeoutDuration` before
     entering the object-cache handler. Nested request contexts inherit that deadline, so metadata-owner retry loops and

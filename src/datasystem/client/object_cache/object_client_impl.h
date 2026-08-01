@@ -1636,6 +1636,31 @@ private:
 
     Status InitWithServiceDiscovery(bool enableHeartbeat);
 
+    // Pick a fallback worker when ServiceDiscovery returns one that already failed
+    // earlier in the same Init() call. Queries GetAllWorkers, drops addresses present
+    // in failedWorkerAddrs, shuffles the surviving same-host and remote lists, and
+    // returns the first admissible same-host candidate (or the first remote one when
+    // affinityPolicy != REQUIRED_SAME_NODE). Returns K_TRY_AGAIN when no candidate
+    // remains admissible or GetAllWorkers fails; the caller retries within the Init
+    // budget. Does not log the success path — the caller logs the fallback switch.
+    Status PickFallbackWorker(const std::unordered_set<HostPort> &failedWorkerAddrs, HostPort &outAddr,
+                              bool &outIsSameNode);
+
+    // Select the next worker to try in the Init retry loop. Wraps SelectWorker and,
+    // when SD returns a worker already in failedWorkerAddrs, delegates to
+    // PickFallbackWorker. Returns K_TRY_AGAIN when SD has no worker yet or the
+    // fallback has no admissible candidate (outIsNoAvailableWorker is set so the
+    // caller can pick the longer retry interval). Logs the fallback switch.
+    Status SelectNextInitWorker(std::unordered_set<HostPort> &failedWorkerAddrs, HostPort &outAddr,
+                               bool &outIsSameNode, bool &outIsNoAvailableWorker);
+
+    // Whether a failed Init attempt's error code indicates the worker is genuinely
+    // unreachable and should be excluded for the remainder of this Init call.
+    // K_RPC_UNAVAILABLE and K_CLIENT_WORKER_DISCONNECT always qualify; under zmq
+    // K_RPC_DEADLINE_EXCEEDED also qualifies (a post-TCP-probe timeout is the only
+    // dead-worker signal). Under brpc K_RPC_DEADLINE_EXCEEDED is treated as transient.
+    bool ShouldExcludeFailedWorker(const Status &rc) const;
+
     bool ShouldRetryInit(const Status &status) const;
 
     void ClearFailedInitAttempt();

@@ -53,6 +53,25 @@ constexpr int kBrpcConnRetryIntervalUs = 100000;
 bool WaitForBrpcSocketAvailable(const HostPort& brpcAddr, int maxRetries = kBrpcConnMaxRetries,
                                 int intervalUs = kBrpcConnRetryIntervalUs);
 
+// Default TCP probe timeout: 3000ms, matching the brpc WaitForBrpcSocketAvailable
+// budget (kBrpcConnMaxRetries * kBrpcConnRetryIntervalUs = 30 * 100000us = 3000ms).
+constexpr int kTcpProbeDefaultTimeoutMs = 3000;
+
+// Return a TCP probe timeout capped by the caller's connect budget so a
+// host-unreachable probe never exceeds the Init budget. Falls back to the
+// default when budgetMs is non-positive (caller did not provide a budget).
+inline int ComputeTcpProbeTimeoutMs(int budgetMs)
+{
+    return (budgetMs > 0 && budgetMs < kTcpProbeDefaultTimeoutMs) ? budgetMs : kTcpProbeDefaultTimeoutMs;
+}
+
+// Probe whether the TCP port of addr is listening with a non-blocking connect.
+// Returns true if connect succeeds within timeoutMs (port is listening); false on
+// timeout or refused connection (e.g. a worker killed by SIGKILL). Mirrors the
+// WaitForBrpcSocketAvailable intent for the ZMQ path, where zmq_connect always
+// succeeds asynchronously and a dead worker would otherwise surface only at RPC timeout.
+bool WaitForTcpPortAvailable(const HostPort& addr, int timeoutMs = kTcpProbeDefaultTimeoutMs);
+
 enum class StubPriority : int {
     HIGH = 0,
     LOW = 1,

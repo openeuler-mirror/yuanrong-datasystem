@@ -1879,6 +1879,105 @@ TEST_F(ObjectClientTest, TestInitServiceDiscoveryInvalidConnectTimeout)
     ASSERT_EQ(rc.GetCode(), K_INVALID);
 }
 
+// Before this enhancement, with default PREFERRED_SAME_NODE affinity, killing the only same-node
+// worker (SIGKILL, so etcd membership still shows it READY within the lease window) and
+// immediately calling Init got stuck retrying the dead worker. InitWithServiceDiscovery
+// retried up to INIT_SELECT_WORKER_TRIES but did NOT exclude the failed worker address, so
+// SelectWorker deterministically re-picked the same killed same-node worker each round and Init
+// ultimately returned K_RPC_DEADLINE_EXCEEDED. With the per-Init exclusion, the killed worker is
+// skipped and the retry switches to an alive remote worker.
+TEST_F(ObjectClientTest, TestInitSwitchesAwayFromKilledSameNodeWorker)
+{
+    // Client hostId matches worker 1 -> worker 1 is the only same-node candidate.
+    ASSERT_EQ(setenv("object_client_sd_host_id_env_1", "object_client_sd_host_id_1", 1), 0);
+    std::string etcdAddress = cluster_->GetEtcdAddrs();
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = etcdAddress;
+    sdOpts.clusterName = GetTestClusterName();
+    sdOpts.hostIdEnvName = "object_client_sd_host_id_env_1";
+    sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+    DS_ASSERT_OK(serviceDiscovery->Init());
+
+    // SIGKILL worker 1 (not worker 0, which is the meta server). The etcd lease
+    // (FLAGS_node_timeout_s, default 60s) keeps the membership entry READY, so
+    // ServiceDiscovery still returns worker 1 as the same-node candidate.
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+
+    // Immediately construct and init the client (no lease-expiry wait).
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    connectOptions.connectTimeoutMs = 9000;
+    connectOptions.enableCrossNodeConnection = true;
+    auto client = std::make_shared<ObjectClient>(connectOptions);
+    DS_ASSERT_OK(client->Init());
+
+    // Restart the killed worker so the fixture tears down cleanly.
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1, 30));
+}
+
+// REQUIRED_SAME_NODE: killing the only same-node worker leaves no admissible candidate
+// (remote fallback is forbidden by policy), so Init must return K_RPC_DEADLINE_EXCEEDED
+// rather than silently falling back to a remote worker.
+TEST_F(ObjectClientTest, TestInitRequiredSameNodeNoCandidateReturnsDeadlineExceeded)
+{
+    ASSERT_EQ(setenv("object_client_sd_host_id_env_1", "object_client_sd_host_id_1", 1), 0);
+    std::string etcdAddress = cluster_->GetEtcdAddrs();
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = etcdAddress;
+    sdOpts.clusterName = GetTestClusterName();
+    sdOpts.hostIdEnvName = "object_client_sd_host_id_env_1";
+    sdOpts.affinityPolicy = ServiceAffinityPolicy::REQUIRED_SAME_NODE;
+    auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+    DS_ASSERT_OK(serviceDiscovery->Init());
+
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    connectOptions.connectTimeoutMs = 4000;
+    connectOptions.enableCrossNodeConnection = true;
+    auto client = std::make_shared<ObjectClient>(connectOptions);
+    auto rc = client->Init();
+    ASSERT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1, 30));
+}
+
+// enableCrossNodeConnection gates RUNTIME worker switching only; it must NOT block
+// Init-stage preferred-remote fallback. With PREFERRED_SAME_NODE + the only same-node
+// worker killed + cross-node=false, Init must still succeed by falling back to a
+// remote worker.
+TEST_F(ObjectClientTest, TestInitPreferredRemoteFallbackUnaffectedByCrossNodeFalse)
+{
+    ASSERT_EQ(setenv("object_client_sd_host_id_env_1", "object_client_sd_host_id_1", 1), 0);
+    std::string etcdAddress = cluster_->GetEtcdAddrs();
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = etcdAddress;
+    sdOpts.clusterName = GetTestClusterName();
+    sdOpts.hostIdEnvName = "object_client_sd_host_id_env_1";
+    sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+    DS_ASSERT_OK(serviceDiscovery->Init());
+
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    connectOptions.connectTimeoutMs = 9000;
+    connectOptions.enableCrossNodeConnection = false;
+    auto client = std::make_shared<ObjectClient>(connectOptions);
+    DS_ASSERT_OK(client->Init());
+
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1, 30));
+}
+
 TEST_F(ObjectClientTest, TestFdNotLeakWhenRegisterFailed)
 {
     if (FLAGS_use_brpc) {
