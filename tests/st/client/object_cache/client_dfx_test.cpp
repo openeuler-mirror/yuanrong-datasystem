@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "common.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
@@ -53,6 +54,15 @@ namespace st {
 namespace {
 constexpr int kEventuallyWaitTimeoutMs = 15'000;
 constexpr int kEventuallyPollIntervalMs = 100;
+constexpr int kRestartReconciliationNodeTimeoutSec = 3;
+constexpr int kRestartReconciliationNodeDeadTimeoutSec = 4;
+constexpr int kRestartReconciliationReadyTimeoutSec = 12;
+constexpr int kRestartReconciliationHeartbeatMs = 500;
+constexpr int kRestartReconciliationBlockedPeerMs = 5'000;
+constexpr int kRestartReconciliationRpcRetryTimeoutMs = 1'000;
+constexpr char kRestartReconciliationRpcRetryInject[] =
+    "WorkerRemoteMasterOCApi.ReconcileMembershipChange.retryTimeout";
+constexpr char kRestartReconciliationBlockedPeerInject[] = "ProcessWorkerRestart";
 constexpr char kMasterCacheInvalidInject[] = "master.cache_invalid_failed";
 constexpr char kPersistentRpcDeadlineExceeded[] = "return(K_RPC_DEADLINE_EXCEEDED)";
 
@@ -1346,6 +1356,22 @@ public:
         ASSERT_EQ(actual, expected) << tableName << " did not converge within " << kEventuallyWaitTimeoutMs << " ms";
     }
 
+    void WaitWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &injectName, uint64_t expectedCount,
+                                      const std::string &operationName)
+    {
+        uint64_t executeCount = 0;
+        AssertEventuallyOk(
+            [this, workerIdx, &injectName, expectedCount, &executeCount] {
+                RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, injectName, executeCount));
+                if (executeCount >= expectedCount) {
+                    return Status::OK();
+                }
+                RETURN_STATUS(K_NOT_READY, "inject action has not reached expected count");
+            },
+            operationName);
+        ASSERT_GE(executeCount, expectedCount);
+    }
+
 protected:
     std::vector<std::shared_ptr<ObjectClient>> clients_;
     std::unique_ptr<IUtOCStub> utSvcStub0_;
@@ -1579,8 +1605,30 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_GiveUpReconciliation)
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
 }
 
+TEST_F(WorkerReconciliationDfxTest, LEVEL1_RestartReadyAfterPeerMembershipDeleted)
+{
+    PutObjGIncreaseRef();
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, kRestartReconciliationBlockedPeerInject,
+                                           FormatString("sleep(%d)", kRestartReconciliationBlockedPeerMs)));
 
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+    const auto restartParams = FormatString(
+        " -node_timeout_s=%d -node_dead_timeout_s=%d -heartbeat_interval_ms=%d"
+        " -inject_actions=%s:call(%d)",
+        kRestartReconciliationNodeTimeoutSec, kRestartReconciliationNodeDeadTimeoutSec,
+        kRestartReconciliationHeartbeatMs, kRestartReconciliationRpcRetryInject,
+        kRestartReconciliationRpcRetryTimeoutMs);
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, restartParams));
+    WaitWorkerInjectExecuteCount(1, kRestartReconciliationBlockedPeerInject, 1, "worker1 restart reconciliation rpc");
 
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+    std::string membershipKey;
+    DS_ASSERT_OK(cluster::TopologyKeyHelper::MembershipKey(workerAddresses_[1], membershipKey));
+    auto deleteRc = db_->Delete(GetMembershipTableName(), membershipKey);
+    ASSERT_TRUE(deleteRc.IsOk() || deleteRc.GetCode() == K_NOT_FOUND) << deleteRc.ToString();
+
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0, kRestartReconciliationReadyTimeoutSec));
+}
 
 
 TEST_F(WorkerReconciliationDfxTest, DISABLED_LEVEL1_RestartAgainNoExtraReconciliation)
