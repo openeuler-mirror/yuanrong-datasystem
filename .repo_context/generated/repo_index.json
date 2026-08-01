@@ -417,6 +417,7 @@
         "    - test_e2e.sh",
         "  - tools/",
         "    - procmon.py",
+        "  - BUILD.bazel",
         "  - CMakeLists.txt",
         "  - Makefile",
         "  - README.md",

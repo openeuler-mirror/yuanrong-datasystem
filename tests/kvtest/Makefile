@@ -20,11 +20,18 @@ copy-sdk:
 	@echo "  $$(ls $(SDK_DST)/*.so* | sed 's|.*/||')"
 
 package:
-	@if [ ! -f build/kvtest ]; then echo "ERROR: build/kvtest not found. Run cmake/make first."; exit 1; fi
+	@if [ ! -f build/kvtest ]; then echo "ERROR: build/kvtest not found. Run build.sh first."; exit 1; fi
 	@mkdir -p $(OUTPUT)/lib $(OUTPUT)/config
 	@cp build/kvtest $(OUTPUT)/
-	@cp third_party/sdk/*.so* $(OUTPUT)/lib/
-	@rm -f $(OUTPUT)/lib/libds_client_py.so*
+# Copy SDK libs when present (cmake mode links dynamically against the SDK).
+# In bazel mode the binary is self-contained and third_party/sdk/ is absent;
+# tolerate that so the same target serves both build systems.
+	@if [ -n "$$(ls third_party/sdk/*.so* 2>/dev/null)" ]; then \
+		cp third_party/sdk/*.so* $(OUTPUT)/lib/; \
+		rm -f $(OUTPUT)/lib/libds_client_py.so*; \
+	else \
+		echo "  (no SDK libs to copy — self-contained bazel binary mode)"; \
+	fi
 	@cp deploy_client.py tools/procmon.py VERSION $(OUTPUT)/
 	@cp tests/test_deploy.sh $(OUTPUT)/
 	@cp config/config.json.example $(OUTPUT)/config/

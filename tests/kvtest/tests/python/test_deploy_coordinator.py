@@ -23,6 +23,7 @@ from deploy_coordinator import (
     ADDRESS_KEY,
     PROCESS_NAME,
     cmd_clean,
+    cmd_deploy,
     cmd_kill,
     cmd_start,
     cmd_stop,
@@ -214,6 +215,276 @@ class TestCmdWiring(unittest.TestCase):
         mock_impl.assert_called_once_with(
             [self._pod()], 'default', '/tmp/coordinator.config',
             PROCESS_NAME, 'coordinator logs', 10)
+
+
+class TestCmdDeploy(unittest.TestCase):
+    """cmd_deploy: full lifecycle (pods -> whl -> coordinators with peers).
+
+    Each step is mocked so the orchestration logic is tested without a real
+    cluster. The role-specific concern under test is that multi-instance
+    coordinators get coordinator_raft_initial_peers injected with the full
+    member list (including self), while a single instance stays in
+    single-node no-election mode (peers left untouched).
+    """
+
+    def _pod(self, name, ip):
+        return {'name': name, 'ip': ip}
+
+    def _nodes(self, n):
+        return [{'ip': f'10.0.0.{i + 1}', 'name': f'node-{i}'}
+                for i in range(n)]
+
+    def _args(self, **overrides):
+        defaults = dict(
+            prefixes=['coordinator-a'],
+            namespace='default',
+            timeout=10,
+            config=None,
+            port=31511,
+            remote_config='/tmp/coordinator.config',
+            set=[],
+            enable_procmon=True,
+            procmon_dir=None,
+            whl='/path/to/datasystem.whl',
+            image='registry/coordinator:latest',
+            yaml='config/pod_config.yaml.example',
+            cpu='8',
+            memory='16Gi',
+            requests_cpu=None,
+            requests_memory=None,
+            instances=2,
+            force=False,
+            dry_run=False,
+        )
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    @patch('deploy_coordinator.start_coordinator', return_value=True)
+    @patch('deploy_coordinator.cmd_install_impl', return_value=0)
+    @patch('deploy_coordinator.get_pods')
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_full_lifecycle_installs_whl_and_starts_with_peers(
+            self, mock_deploy_pods, mock_discover, mock_get_pods,
+            mock_install, mock_start):
+        pods = [self._pod('coordinator-a-0', '10.0.0.1'),
+                self._pod('coordinator-a-1', '10.0.0.2')]
+        mock_get_pods.return_value = pods
+        mock_discover.return_value = self._nodes(2)
+        cfg_path = _write_config({
+            'coordinator_address': {'value': '0.0.0.0:0'},
+        })
+        try:
+            args = self._args(config=cfg_path, instances=2)
+            rc = cmd_deploy(args)
+            self.assertEqual(rc, 0)
+
+            # Step 1: deploy_pods got a replicas string spread across nodes.
+            deploy_ns = mock_deploy_pods.call_args[0][0]
+            self.assertEqual(deploy_ns.replicas, '10.0.0.1:1,10.0.0.2:1')
+            self.assertFalse(deploy_ns.dry_run)
+
+            # Step 2: whl install ran once for the pod batch.
+            mock_install.assert_called_once()
+
+            # Step 3: one start_coordinator per pod, each cfg carries the
+            # per-pod address and the full member list (including self).
+            self.assertEqual(mock_start.call_count, 2)
+            expected_peers = '10.0.0.1:31511,10.0.0.2:31511'
+            seen_peers = set()
+            for call in mock_start.call_args_list:
+                pod = _pos(call)[0]
+                cfg = _pos(call)[2]
+                self.assertEqual(cfg[ADDRESS_KEY]['value'],
+                                 f'{pod["ip"]}:31511')
+                self.assertEqual(cfg['coordinator_raft_initial_peers']['value'],
+                                 expected_peers)
+                seen_peers.add(cfg['coordinator_raft_initial_peers']['value'])
+            # Every coordinator got the same full member list.
+            self.assertEqual(len(seen_peers), 1)
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_coordinator.start_coordinator', return_value=True)
+    @patch('deploy_coordinator.cmd_install_impl', return_value=0)
+    @patch('deploy_coordinator.get_pods')
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_single_instance_leaves_peers_untouched(
+            self, mock_deploy_pods, mock_discover, mock_get_pods,
+            mock_install, mock_start):
+        mock_get_pods.return_value = [self._pod('coordinator-a-0', '10.0.0.1')]
+        mock_discover.return_value = self._nodes(1)
+        cfg_path = _write_config({
+            'coordinator_address': {'value': '0.0.0.0:0'},
+        })
+        try:
+            args = self._args(config=cfg_path, instances=1)
+            rc = cmd_deploy(args)
+            self.assertEqual(rc, 0)
+            self.assertEqual(mock_start.call_count, 1)
+            cfg = _pos(mock_start.call_args)[2]
+            self.assertEqual(cfg[ADDRESS_KEY]['value'], '10.0.0.1:31511')
+            # N == 1 -> single-node no-election mode; peers not injected.
+            self.assertNotIn('coordinator_raft_initial_peers', cfg)
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_instances_spread_round_robin_across_nodes(
+            self, mock_deploy_pods, mock_discover):
+        # 3 nodes, 5 instances -> 2,2,1 balanced spread.
+        mock_discover.return_value = self._nodes(3)
+        args = self._args(instances=5, dry_run=True)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 0)
+        deploy_ns = mock_deploy_pods.call_args[0][0]
+        self.assertEqual(deploy_ns.replicas,
+                         '10.0.0.1:2,10.0.0.2:2,10.0.0.3:1')
+
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_more_instances_than_nodes_spreads_evenly(
+            self, mock_deploy_pods, mock_discover):
+        # 2 nodes, 7 instances -> 4,3.
+        mock_discover.return_value = self._nodes(2)
+        args = self._args(instances=7, dry_run=True)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 0)
+        deploy_ns = mock_deploy_pods.call_args[0][0]
+        self.assertEqual(deploy_ns.replicas, '10.0.0.1:4,10.0.0.2:3')
+
+    @patch('deploy_coordinator.discover_nodes', return_value=[])
+    @patch('deploy_pods.cmd_deploy')
+    def test_no_nodes_discovered_errors(self, mock_deploy_pods, mock_discover):
+        args = self._args(instances=3)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 1)
+        mock_deploy_pods.assert_not_called()
+
+    @patch('deploy_coordinator.cmd_install_impl')
+    @patch('deploy_coordinator.get_pods', return_value=[])
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_no_pods_after_bringup_aborts_before_whl(
+            self, mock_deploy_pods, mock_discover, mock_get_pods,
+            mock_install):
+        mock_discover.return_value = self._nodes(1)
+        args = self._args(instances=1)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 1)
+        mock_install.assert_not_called()
+
+    @patch('deploy_coordinator.start_coordinator')
+    @patch('deploy_coordinator.cmd_install_impl')
+    @patch('deploy_coordinator.get_pods')
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=1)
+    def test_deploy_pods_failure_aborts_before_whl_and_start(
+            self, mock_deploy_pods, mock_discover, mock_get_pods,
+            mock_install, mock_start):
+        mock_discover.return_value = self._nodes(1)
+        args = self._args(instances=1)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 1)
+        mock_install.assert_not_called()
+        mock_start.assert_not_called()
+
+    @patch('deploy_coordinator.start_coordinator')
+    @patch('deploy_coordinator.cmd_install_impl', return_value=1)
+    @patch('deploy_coordinator.get_pods')
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_whl_install_failure_aborts_before_start(
+            self, mock_deploy_pods, mock_discover, mock_get_pods,
+            mock_install, mock_start):
+        mock_get_pods.return_value = [self._pod('coordinator-a-0', '10.0.0.1')]
+        mock_discover.return_value = self._nodes(1)
+        cfg_path = _write_config({
+            'coordinator_address': {'value': '0.0.0.0:0'},
+        })
+        try:
+            args = self._args(config=cfg_path, instances=1)
+            rc = cmd_deploy(args)
+            self.assertEqual(rc, 1)
+            mock_start.assert_not_called()
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy')
+    def test_requires_exactly_one_prefix(self, mock_deploy_pods, mock_discover):
+        mock_discover.return_value = self._nodes(1)
+        args = self._args(prefixes=['coordinator-a', 'coordinator-b'],
+                          instances=1)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 1)
+        mock_deploy_pods.assert_not_called()
+
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy')
+    def test_zero_prefixes_errors(self, mock_deploy_pods, mock_discover):
+        mock_discover.return_value = self._nodes(1)
+        args = self._args(prefixes=[], instances=1)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 1)
+        mock_deploy_pods.assert_not_called()
+
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_dry_run_skips_whl_and_start(self, mock_deploy_pods, mock_discover):
+        mock_discover.return_value = self._nodes(1)
+        args = self._args(instances=1, dry_run=True)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 0)
+        deploy_ns = mock_deploy_pods.call_args[0][0]
+        self.assertTrue(deploy_ns.dry_run)
+
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_force_forwarded_and_wait_always_on(
+            self, mock_deploy_pods, mock_discover):
+        # --wait is not exposed: deploy always waits for pods to be Running
+        # before whl install / coordinator start, since those steps require
+        # Running pods. --force is forwarded verbatim.
+        mock_discover.return_value = self._nodes(1)
+        args = self._args(instances=1, force=True, dry_run=True)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 0)
+        deploy_ns = mock_deploy_pods.call_args[0][0]
+        self.assertTrue(deploy_ns.force)
+        self.assertTrue(deploy_ns.wait)
+
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_resource_overrides_forwarded_to_deploy_pods(
+            self, mock_deploy_pods, mock_discover):
+        mock_discover.return_value = self._nodes(1)
+        args = self._args(instances=1, cpu='16', memory='32Gi',
+                          requests_cpu='8', requests_memory='16Gi',
+                          dry_run=True)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 0)
+        deploy_ns = mock_deploy_pods.call_args[0][0]
+        self.assertEqual(deploy_ns.cpu, '16')
+        self.assertEqual(deploy_ns.memory, '32Gi')
+        self.assertEqual(deploy_ns.requests_cpu, '8')
+        self.assertEqual(deploy_ns.requests_memory, '16Gi')
+
+    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_pods.cmd_deploy', return_value=0)
+    def test_requests_default_to_limits_when_unset(
+            self, mock_deploy_pods, mock_discover):
+        mock_discover.return_value = self._nodes(1)
+        args = self._args(instances=1, cpu='16', memory='32Gi',
+                          requests_cpu=None, requests_memory=None,
+                          dry_run=True)
+        rc = cmd_deploy(args)
+        self.assertEqual(rc, 0)
+        deploy_ns = mock_deploy_pods.call_args[0][0]
+        self.assertEqual(deploy_ns.requests_cpu, '16')
+        self.assertEqual(deploy_ns.requests_memory, '32Gi')
 
 
 if __name__ == '__main__':

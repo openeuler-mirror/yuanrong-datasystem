@@ -96,7 +96,7 @@ def cmd_start(args, pods):
         if args.numa_nodes:
             numactl_opts = f'-N {args.numa_nodes}'
         if args.cpu_bind:
-            numactl_opts = f'-C {args.cpu_bind}'
+            numactl_opts = f'--physcpubind {args.cpu_bind}'
         t0 = time.monotonic()
         ok = False
         try:

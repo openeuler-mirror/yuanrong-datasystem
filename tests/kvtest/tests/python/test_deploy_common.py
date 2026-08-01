@@ -27,6 +27,7 @@ from deploy_common import (
     parse_config_override,
     read_remote_log_dir,
     resolve_procmon_dir,
+    start_service,
     upload_procmon,
 )
 
@@ -342,6 +343,71 @@ class TestCmdInstallImpl(unittest.TestCase):
         rc = cmd_install_impl(pods, 'default', '/path/pkg.whl', timeout=10)
         self.assertEqual(rc, 0)
         self.assertEqual(mock_install.call_count, 2)
+
+
+class TestStartService(unittest.TestCase):
+    """start_service must pick the dscli config flag from process_name.
+
+    dscli start -f <cfg> binds to worker_config_path (starts a worker);
+    -C <cfg> binds to coordinator_config_path (starts a coordinator).
+    A coordinator config has no worker_address/etcd_address, so starting it
+    with -f would make dscli run start_worker and fail backend validation.
+    """
+    def _pod(self):
+        return {'name': 'p1', 'ip': '10.0.0.1'}
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_worker_uses_f_flag(self, mock_cp, mock_exec):
+        mock_exec.return_value = MagicMock(returncode=0)
+        ok = start_service(self._pod(), 'default',
+                           {'worker_address': {'value': '10.0.0.1:31501'}},
+                           '/tmp/worker.config', 31501, 'datasystem_worker',
+                           enable_procmon=False, timeout=10)
+        self.assertTrue(ok)
+        self.assertEqual(mock_exec.call_count, 1)
+        self.assertEqual(mock_exec.call_args[0][2],
+                         'dscli start -f /tmp/worker.config')
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_coordinator_uses_C_flag(self, mock_cp, mock_exec):
+        mock_exec.return_value = MagicMock(returncode=0)
+        ok = start_service(self._pod(), 'default',
+                           {'coordinator_address': {'value': '10.0.0.1:31511'}},
+                           '/tmp/coordinator.config', 31511,
+                           'datasystem_coordinator',
+                           enable_procmon=False, timeout=10)
+        self.assertTrue(ok)
+        self.assertEqual(mock_exec.call_count, 1)
+        self.assertEqual(mock_exec.call_args[0][2],
+                         'dscli start -C /tmp/coordinator.config')
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_numactl_opts_appended_for_worker(self, mock_cp, mock_exec):
+        mock_exec.return_value = MagicMock(returncode=0)
+        start_service(self._pod(), 'default',
+                      {'worker_address': {'value': '10.0.0.1:31501'}},
+                      '/tmp/worker.config', 31501, 'datasystem_worker',
+                      enable_procmon=False, numactl_opts='-N 0', timeout=10)
+        self.assertEqual(mock_exec.call_args[0][2],
+                         'dscli start -f /tmp/worker.config -N 0')
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_coordinator_ignores_numactl_opts(self, mock_cp, mock_exec):
+        # numactl is worker-only; coordinator path passes numactl_opts=None,
+        # so even if a caller mistakenly passed opts they must not be
+        # appended to a coordinator's dscli start -C command.
+        mock_exec.return_value = MagicMock(returncode=0)
+        start_service(self._pod(), 'default',
+                      {'coordinator_address': {'value': '10.0.0.1:31511'}},
+                      '/tmp/coordinator.config', 31511,
+                      'datasystem_coordinator',
+                      enable_procmon=False, numactl_opts='-N 0', timeout=10)
+        self.assertEqual(mock_exec.call_args[0][2],
+                         'dscli start -C /tmp/coordinator.config')
 
 
 if __name__ == '__main__':

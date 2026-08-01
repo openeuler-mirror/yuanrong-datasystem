@@ -129,7 +129,7 @@ class TestCmdStart(unittest.TestCase):
             args = self._args(config=cfg_path, cpu_bind='0-7')
             cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
             self.assertEqual(_kw(mock_start.call_args)['numactl_opts'],
-                             '-C 0-7')
+                             '--physcpubind 0-7')
         finally:
             os.unlink(cfg_path)
 
@@ -153,7 +153,7 @@ class TestCmdStart(unittest.TestCase):
             args = self._args(config=cfg_path, numa_nodes='0', cpu_bind='0-3')
             cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
             self.assertEqual(_kw(mock_start.call_args)['numactl_opts'],
-                             '-C 0-3')
+                             '--physcpubind 0-3')
         finally:
             os.unlink(cfg_path)
 

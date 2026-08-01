@@ -19,7 +19,9 @@ import argparse
 import json
 import os
 import sys
+from types import SimpleNamespace
 
+import deploy_pods
 from deploy_common import (
     DEFAULT_TIMEOUT,
     apply_config_overrides,
@@ -27,9 +29,12 @@ from deploy_common import (
     cmd_clean_impl,
     cmd_collect_impl,
     cmd_exec_impl,
+    cmd_install_impl,
     cmd_kill_impl,
     cmd_stop_impl,
+    discover_nodes,
     do_for_all_pods,
+    find_default_whl,
     get_pods,
     resolve_procmon_dir,
     start_service,
@@ -79,6 +84,178 @@ def cmd_start(args, pods):
                                  timeout=args.timeout)
 
     return do_for_all_pods(pods, do_op, 'Starting coordinators')
+
+
+def _distribute_instances_across_nodes(num_instances, nodes):
+    """Spread N instances across M nodes as evenly as possible.
+
+    Returns a ``{node_ip: count}`` dict with only non-zero counts. The first
+    ``N % M`` nodes receive one extra instance so the spread is balanced
+    (e.g. 5 instances across 3 nodes -> {ip0:2, ip1:2, ip2:1}).
+
+    Raises ValueError when there is nothing to distribute or no nodes to
+    spread across; the caller surfaces this as a hard error since a
+    multi-instance deploy cannot place pods without nodes.
+    """
+    if num_instances <= 0:
+        raise ValueError(
+            f'--instances must be a positive integer, got {num_instances}')
+    if not nodes:
+        raise ValueError(
+            'no cluster nodes discovered via kubectl get nodes; '
+            'cannot spread instances')
+    m = len(nodes)
+    base = num_instances // m
+    remainder = num_instances % m
+    distribution = {}
+    for i, node in enumerate(nodes):
+        count = base + (1 if i < remainder else 0)
+        if count > 0:
+            distribution[node['ip']] = count
+    return distribution
+
+
+def _build_deploy_pods_args(args, prefix, replicas_str, dry_run):
+    """Construct the Namespace ``deploy_pods.cmd_deploy`` expects.
+
+    deploy_pods.cmd_deploy reads ``namespace/prefix/image/cpu/memory/
+    requests_cpu/requests_memory/replicas/pods_per_node/yaml/dry_run/
+    force/wait/timeout``. The pod-bringup knobs are forwarded from the
+    user's args, and the computed ``replicas_str`` (built from
+    ``--instances`` spread) is the authoritative spec; ``pods_per_node``
+    stays None so deploy_pods uses the replicas string.
+
+    ``wait`` is forced True (not exposed on the CLI) because the whl
+    install and coordinator start steps require Running pods; deploy_pods
+    skips its wait path under dry_run, so forcing True is safe there too.
+    """
+    return SimpleNamespace(
+        namespace=args.namespace,
+        prefix=prefix,
+        image=args.image,
+        cpu=args.cpu,
+        memory=args.memory,
+        requests_cpu=args.requests_cpu or args.cpu,
+        requests_memory=args.requests_memory or args.memory,
+        replicas=replicas_str,
+        pods_per_node=None,
+        yaml=args.yaml,
+        dry_run=dry_run,
+        force=args.force,
+        wait=True,
+        timeout=args.timeout,
+    )
+
+
+def cmd_deploy(args, pods=None):
+    """Full lifecycle: bring up N pods, install whl, start N coordinators.
+
+    The instance count (``args.instances``) is spread across the cluster
+    nodes discovered via ``kubectl get nodes``; the per-node distribution is
+    not exposed on the CLI. After deploy_pods brings the pods up, this
+    command installs the datasystem whl into each pod and starts a
+    coordinator in each pod.
+
+    For multi-instance (N >= 2), each coordinator's config gets
+    ``coordinator_raft_initial_peers`` injected with the full member list
+    (including self) so the cluster can run static-peers Raft election. For
+    a single instance (N == 1), the peers field is left untouched so the
+    coordinator runs in single-node no-election mode (matching the ``start``
+    subcommand).
+
+    ``pods`` is an optional pre-discovered pod list used by tests. When
+    None, pods are discovered via ``get_pods`` after deploy_pods brings them
+    up. On any step failure, already-created pods are left running for
+    inspection; clean them with ``deploy_coordinator.py clean`` or
+    ``deploy_pods.py delete``.
+    """
+    if not args.prefixes or len(args.prefixes) != 1:
+        print('ERROR: deploy requires exactly one --prefix '
+              '(e.g. -p coordinator-a)', file=sys.stderr)
+        return 1
+    prefix = args.prefixes[0]
+
+    nodes = discover_nodes(timeout=args.timeout)
+    try:
+        distribution = _distribute_instances_across_nodes(args.instances, nodes)
+    except ValueError as e:
+        print(f'ERROR: {e}', file=sys.stderr)
+        return 1
+    replicas_str = ','.join(f'{ip}:{count}'
+                            for ip, count in distribution.items())
+
+    pod_count = sum(distribution.values())
+    print(f'\nDeploying {pod_count} coordinator instance(s) across '
+          f'{len(distribution)} node(s):')
+    for ip, count in distribution.items():
+        print(f'  {ip}: {count}')
+
+    print('\n--- Step 1/3: bringing up pods ---')
+    deploy_args = _build_deploy_pods_args(args, prefix, replicas_str,
+                                          dry_run=args.dry_run)
+    rc = deploy_pods.cmd_deploy(deploy_args)
+    if rc != 0:
+        print('ERROR: deploy_pods failed; leaving any created pods '
+              'for inspection', file=sys.stderr)
+        return rc
+    if args.dry_run:
+        print('\n--- Dry run: skipped whl install and coordinator start ---')
+        return 0
+
+    if pods is None:
+        pods = get_pods(args.namespace, args.prefixes)
+    if not pods:
+        print('ERROR: no running pods found matching prefix after '
+              'deploy_pods; cannot install whl or start coordinators',
+              file=sys.stderr)
+        return 1
+    print(f'\nFound {len(pods)} pod(s):')
+    for p in pods:
+        print(f'  {p["name"]} ({p["ip"]})')
+
+    print('\n--- Step 2/3: installing whl ---')
+    if cmd_install_impl(pods, args.namespace, args.whl,
+                        timeout=args.timeout) != 0:
+        print('ERROR: whl install failed; leaving pods running '
+              'for inspection', file=sys.stderr)
+        return 1
+
+    print('\n--- Step 3/3: starting coordinators ---')
+    with open(args.config) as f:
+        config_template = json.load(f)
+    if args.procmon_dir is None:
+        args.procmon_dir = resolve_procmon_dir(config_template,
+                                               args.remote_config)
+    if args.set:
+        apply_config_overrides(config_template, args.set)
+    else:
+        print('\nNo config overrides specified')
+
+    # N >= 2: inject the full member list (including self) so the
+    # coordinators run static-peers Raft election. N == 1: leave peers
+    # empty so the single coordinator runs in single-node no-election mode
+    # (matches the start subcommand).
+    if len(pods) >= 2:
+        peers = ','.join(f'{p["ip"]}:{args.port}' for p in pods)
+    else:
+        peers = ''
+
+    def do_op(pod):
+        cfg = json.loads(json.dumps(config_template))
+        cfg[ADDRESS_KEY]['value'] = f'{pod["ip"]}:{args.port}'
+        if peers:
+            cfg['coordinator_raft_initial_peers'] = {'value': peers}
+        return start_coordinator(pod, args.namespace, cfg, args.port,
+                                 args.remote_config,
+                                 enable_procmon=args.enable_procmon,
+                                 procmon_remote_dir=args.procmon_dir,
+                                 timeout=args.timeout)
+
+    rc = do_for_all_pods(pods, do_op, 'Starting coordinators')
+    if rc != 0:
+        print('ERROR: some coordinators failed to start; pods left '
+              'running for inspection', file=sys.stderr)
+    return rc
 
 
 def cmd_stop(args, pods):
@@ -198,6 +375,59 @@ def main():
     parser_clean.add_argument('--remote-config', default='/tmp/coordinator.config',
                               help='Config path inside pod (default: /tmp/coordinator.config)')
 
+    # Deploy subcommand (full lifecycle: bring up pods + install whl +
+    # start multi-instance coordinators with Raft peers)
+    parser_deploy = subparsers.add_parser(
+        'deploy', parents=[parent_parser],
+        help='Bring up N pods, install whl, and start N coordinators '
+             'with Raft peers (multi-instance)')
+    parser_deploy.add_argument('-c', '--config', required=True,
+                               help='Path to coordinator.config template')
+    parser_deploy.add_argument('--port', type=int, default=31511,
+                               help='Coordinator port (default: 31511)')
+    parser_deploy.add_argument('--remote-config', default='/tmp/coordinator.config',
+                               help='Config path inside pod (default: /tmp/coordinator.config)')
+    parser_deploy.add_argument('--set', '-s', action='append', default=[],
+                               help='Add/override config values (format: key=value). '
+                                    'Common coordinator keys: log_dir, log_filename, '
+                                    'minloglevel, rpc_thread_num, '
+                                    'watch_event_dispatch_thread, '
+                                    'coordinator_rpc_stub_cache_size, '
+                                    'max_log_size, max_log_file_num, '
+                                    'log_retention_day.')
+    parser_deploy.add_argument('--enable-procmon', action='store_true', default=True,
+                               dest='enable_procmon',
+                               help='Start procmon.py for coordinator monitoring (default: enabled)')
+    parser_deploy.add_argument('--no-procmon', action='store_false',
+                              dest='enable_procmon',
+                              help='Disable procmon.py monitoring')
+    parser_deploy.add_argument('--procmon-dir', default=None,
+                               help='Remote directory for procmon files (default: same as --remote-config dir)')
+    parser_deploy.add_argument('--whl', default=find_default_whl(),
+                               help='Path to datasystem whl package '
+                                    '(default: auto-detect from ../../output)')
+    parser_deploy.add_argument('--image', '-i', required=True,
+                               help='Container image for pods (required)')
+    parser_deploy.add_argument('--yaml', '-y',
+                               default='config/pod_config.yaml.example',
+                               help='Pod YAML template (default: config/pod_config.yaml.example)')
+    parser_deploy.add_argument('--cpu', default='8',
+                               help='Pod CPU limit (default: 8)')
+    parser_deploy.add_argument('--memory', '-m', default='16Gi',
+                               help='Pod memory limit (default: 16Gi)')
+    parser_deploy.add_argument('--requests-cpu', default=None,
+                               help='Pod CPU request (default: same as --cpu)')
+    parser_deploy.add_argument('--requests-memory', default=None,
+                               help='Pod memory request (default: same as --memory)')
+    parser_deploy.add_argument('--instances', type=int, required=True,
+                               help='Number of coordinator instances to deploy '
+                                    '(spread across cluster nodes)')
+    parser_deploy.add_argument('--force', '-f', action='store_true', default=False,
+                               help='Delete existing pods with same prefix before deploying')
+    parser_deploy.add_argument('--dry-run', action='store_true', default=False,
+                               help='Preview pod manifest only; skip whl install '
+                                    'and coordinator start')
+
     args = parser.parse_args()
 
     if not args.action:
@@ -211,16 +441,20 @@ def main():
               '(e.g. -p coordinator-a [-p coordinator-b])', file=sys.stderr)
         return 1
 
-    # Get pods
-    pods = get_pods(args.namespace, args.prefixes)
-    if not pods:
-        print(f'No running pods found matching prefixes {args.prefixes} '
-              f'in namespace "{args.namespace}"')
-        return 1
+    # deploy brings up its own pods; skip the pre-fetch used by the
+    # operate-on-existing-pods subcommands.
+    if args.action == 'deploy':
+        pods = None
+    else:
+        pods = get_pods(args.namespace, args.prefixes)
+        if not pods:
+            print(f'No running pods found matching prefixes {args.prefixes} '
+                  f'in namespace "{args.namespace}"')
+            return 1
 
-    print(f'Found {len(pods)} pods:')
-    for p in pods:
-        print(f'  {p["name"]} ({p["ip"]})')
+        print(f'Found {len(pods)} pods:')
+        for p in pods:
+            print(f'  {p["name"]} ({p["ip"]})')
 
     # Dispatch
     if args.action == 'start':
@@ -237,6 +471,8 @@ def main():
         return cmd_collect(args, pods)
     elif args.action == 'clean':
         return cmd_clean(args, pods)
+    elif args.action == 'deploy':
+        return cmd_deploy(args, pods)
 
     return 0
 

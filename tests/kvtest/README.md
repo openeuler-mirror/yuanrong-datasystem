@@ -7,12 +7,23 @@
 ```bash
 cd tests/kvtest
 
-# 编译（使用默认 SDK 路径 ../../output/cpp）
+# 编译（使用默认 SDK 路径 ../../output/cpp，默认 CMake）
 ./build.sh
 
 # 或指定 SDK 路径
 ./build.sh -s /path/to/sdk
 
+# 用 Bazel 构建（in-tree datasystem，自包含二进制，无需预装 SDK）
+./build.sh -b bazel
+
+# Debug 构建
+./build.sh -d          # cmake: -DCMAKE_BUILD_TYPE=Debug; bazel: --config=debug
+./build.sh -b bazel -d
+```
+
+## 运行
+
+```bash
 # 启动依赖
 etcd &
 mkdir -p /tmp/ds_worker && cd /tmp/ds_worker
