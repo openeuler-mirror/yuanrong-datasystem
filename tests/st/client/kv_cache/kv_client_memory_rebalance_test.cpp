@@ -21,6 +21,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -78,7 +79,17 @@ const std::string SOURCE_CLOCK_OFFSET_POINT = "RebalanceExecutor.NowMsForExpiryC
 const std::string ADMISSION_CLOSED_POINT = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.closed";
 const std::string DRAIN_TIMED_OUT_POINT = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.timedOut";
 const std::string MIGRATE_DATA_AFTER_ADMISSION = "WorkerOcServiceMigrateImpl.MigrateData.afterAdmission";
+const std::string MIGRATE_DIRECT_AFTER_ADMISSION =
+    "WorkerOcServiceMigrateImpl.MigrateDataDirect.afterAdmission";
 const std::string URMA_CQE_ERROR_INJECT = "UrmaManager.CheckCompletionRecordStatus";
+const std::string BEFORE_TRANSPORT_SEND = "MigrateDataHandler.BeforeTransportSend";
+const std::string TRANSPORT_BATCH_STARTED = "MigrateDataHandler.TransportBatchStarted";
+const std::string LOCAL_OPERATOR_UNAVAILABLE = "DataMigrator.LocalOperatorUnavailable";
+const std::string REMOTE_OPERATOR_UNAVAILABLE = "DataMigrator.RemoteOperatorUnavailable";
+const std::string REDIRECT_MIGRATION_SUBMITTED = "DataMigrator.RedirectMigrationSubmitted";
+const std::string STOP_AFTER_TRANSPORT_FAILURE = "MigrateDataHandler.StopAfterTransportFailure";
+const std::string UB_PROBE_SUCCEEDED = "PeerUbAdmission.CompleteProbe.success";
+const std::string WRITE_TARGET_BLOCKED = "PeerUbAdmission.CheckWriteTarget.blocked";
 
 struct ObjectBatch {
    std::vector<std::string> keys;
@@ -988,11 +999,21 @@ public:
         opts.injectActions +=
             ";PeerUbAdmission.CheckWriteTarget.blocked:100000*call()"
             ";DataMigrator.LocalOperatorUnavailable:100000*call()"
+            ";DataMigrator.RemoteOperatorUnavailable:100000*call()"
+            ";DataMigrator.RedirectMigrationSubmitted:100000*call()"
             ";MigrateDataHandler.StopAfterTransportFailure:100000*call()"
+            ";MigrateDataHandler.TransportBatchStarted:100000*call()"
             ";PeerUbAdmission.CompleteProbe.success:100000*call()";
     }
 
 protected:
+    struct MigrationPause {
+        bool readMode = false;
+        uint64_t target1Baseline = 0;
+        uint64_t target2Baseline = 0;
+        uint64_t sourceBaseline = 0;
+    };
+
     void ClearCqeFault()
     {
         for (auto worker : AllWorkers()) {
@@ -1000,18 +1021,66 @@ protected:
         }
     }
 
-    ObjectBatch TriggerError4(const std::string &prefix)
+    MigrationPause ArmNextMigrationPause()
     {
-        // Write first so the Set data-plane URMA completions finish, then wait
-        // for the rebalance task to be assigned, and only then arm the one-shot
-        // CQE fault. Arming earlier lets the Set writes (or recovery probes)
-        // consume the 1*call(0, 4) injection before the migration read runs.
-        auto batch = WriteObjects(client0_, prefix, 8, 'u');
+        MigrationPause pause;
+        pause.readMode = IsCurrentTestName("FastMigrationReadError4KeepsSourceAndQuarantinesTarget")
+                         || IsCurrentTestName("UnavailableTargetRecoversOnlyAfterDedicatedProbe");
+        if (pause.readMode) {
+            SetInjectAction(WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION, "pause()");
+            SetInjectAction(WORKER2, MIGRATE_DIRECT_AFTER_ADMISSION, "pause()");
+            pause.target1Baseline = GetInjectCount(WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION);
+            pause.target2Baseline = GetInjectCount(WORKER2, MIGRATE_DIRECT_AFTER_ADMISSION);
+        } else {
+            SetInjectAction(WORKER0, BEFORE_TRANSPORT_SEND, "pause()");
+            pause.sourceBaseline = GetInjectCount(WORKER0, BEFORE_TRANSPORT_SEND);
+        }
+        return pause;
+    }
+
+    std::optional<uint32_t> WaitForPausedMigration(const MigrationPause &pause)
+    {
+        if (!pause.readMode) {
+            WaitForInjectCount(WORKER0, BEFORE_TRANSPORT_SEND, pause.sourceBaseline + 1);
+            return WORKER0;
+        }
+        const bool reached = WaitFor([&] {
+            return GetInjectCountIfAlive(WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION) > pause.target1Baseline
+                   || GetInjectCountIfAlive(WORKER2, MIGRATE_DIRECT_AFTER_ADMISSION) > pause.target2Baseline;
+        });
+        if (!reached) {
+            return std::nullopt;
+        }
+        return GetInjectCountIfAlive(WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION) > pause.target1Baseline ? WORKER1
+                                                                                                     : WORKER2;
+    }
+
+    void ReleaseMigrationPause(bool readMode)
+    {
+        if (readMode) {
+            DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION));
+            DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER2, MIGRATE_DIRECT_AFTER_ADMISSION));
+        } else {
+            DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER0, BEFORE_TRANSPORT_SEND));
+        }
+    }
+
+    ObjectBatch TriggerError4(const std::string &prefix, uint32_t &operatorWorker)
+    {
         const uint64_t assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+        auto pause = ArmNextMigrationPause();
+        auto batch = WriteObjects(client0_, prefix, 8, 'u');
         WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
-        SleepMs(POLL_INTERVAL_MS);
-        SetInjectActionForAll(URMA_CQE_ERROR_INJECT, "1*call(0, 4)");
-        WaitForTotalInjectCount(URMA_CQE_ERROR_INJECT, 1);
+        auto pausedWorker = WaitForPausedMigration(pause);
+        if (!pausedWorker.has_value()) {
+            ReleaseMigrationPause(pause.readMode);
+            ADD_FAILURE() << "No migration reached the deterministic CQE injection boundary";
+            return batch;
+        }
+        operatorWorker = *pausedWorker;
+        SetInjectAction(operatorWorker, URMA_CQE_ERROR_INJECT, "1*call(0, 4)");
+        ReleaseMigrationPause(pause.readMode);
+        WaitForInjectCount(operatorWorker, URMA_CQE_ERROR_INJECT, 1);
         ClearCqeFault();
         return batch;
     }
@@ -1021,9 +1090,13 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, FastMigrationReadError4KeepsSo
 {
 #ifdef USE_URMA
     WaitAllNodesActiveInHashRing(3);
-    auto blockedBaseline = GetTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked");
-    auto batch = TriggerError4("p3_read_error4");
-    WaitForTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked", blockedBaseline + 1);
+    auto remoteBaseline = GetInjectCount(WORKER0, REMOTE_OPERATOR_UNAVAILABLE);
+    auto blockedBaseline = GetInjectCount(WORKER0, WRITE_TARGET_BLOCKED);
+    uint32_t operatorWorker = WORKER0;
+    auto batch = TriggerError4("p3_read_error4", operatorWorker);
+    ASSERT_NE(operatorWorker, WORKER0);
+    WaitForInjectCount(WORKER0, REMOTE_OPERATOR_UNAVAILABLE, remoteBaseline + 1);
+    WaitForInjectCount(WORKER0, WRITE_TARGET_BLOCKED, blockedBaseline + 1);
     AssertReadable(client0_, batch);
 #else
     GTEST_SKIP() << "Worker not built with URMA framework";
@@ -1034,9 +1107,13 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, FastMigrationWriteError4Quaran
 {
 #ifdef USE_URMA
     WaitAllNodesActiveInHashRing(3);
-    auto blockedBaseline = GetTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked");
-    auto batch = TriggerError4("p3_write_error4");
-    WaitForTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked", blockedBaseline + 1);
+    auto localBaseline = GetInjectCount(WORKER0, LOCAL_OPERATOR_UNAVAILABLE);
+    auto redirectBaseline = GetInjectCount(WORKER0, REDIRECT_MIGRATION_SUBMITTED);
+    uint32_t operatorWorker = WORKER1;
+    auto batch = TriggerError4("p3_write_error4", operatorWorker);
+    ASSERT_EQ(operatorWorker, WORKER0);
+    WaitForInjectCount(WORKER0, LOCAL_OPERATOR_UNAVAILABLE, localBaseline + 1);
+    EXPECT_EQ(GetInjectCount(WORKER0, REDIRECT_MIGRATION_SUBMITTED), redirectBaseline);
     AssertReadable(client0_, batch);
 #else
     GTEST_SKIP() << "Worker not built with URMA framework";
@@ -1047,9 +1124,15 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, RebalanceError4StopsFollowingM
 {
 #ifdef USE_URMA
     WaitAllNodesActiveInHashRing(3);
-    auto blockedBaseline = GetTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked");
-    auto batch = TriggerError4("p3_mid_batch_error4");
-    WaitForTotalInjectCount("PeerUbAdmission.CheckWriteTarget.blocked", blockedBaseline + 1);
+    auto batchBaseline = GetInjectCount(WORKER0, TRANSPORT_BATCH_STARTED);
+    auto stopBaseline = GetInjectCount(WORKER0, STOP_AFTER_TRANSPORT_FAILURE);
+    auto localBaseline = GetInjectCount(WORKER0, LOCAL_OPERATOR_UNAVAILABLE);
+    uint32_t operatorWorker = WORKER1;
+    auto batch = TriggerError4("p3_mid_batch_error4", operatorWorker);
+    ASSERT_EQ(operatorWorker, WORKER0);
+    WaitForInjectCount(WORKER0, STOP_AFTER_TRANSPORT_FAILURE, stopBaseline + 1);
+    WaitForInjectCount(WORKER0, LOCAL_OPERATOR_UNAVAILABLE, localBaseline + 1);
+    EXPECT_EQ(GetInjectCount(WORKER0, TRANSPORT_BATCH_STARTED), batchBaseline + 1);
     AssertReadable(client0_, batch);
 #else
     GTEST_SKIP() << "Worker not built with URMA framework";
@@ -1060,13 +1143,17 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, UnavailableTargetRecoversOnlyA
 {
 #ifdef USE_URMA
     WaitAllNodesActiveInHashRing(3);
-    auto firstBatch = TriggerError4("p3_probe_recovery_first");
-    // The target is isolated after the migration ERROR 4. Its own recovery
-    // probe (CompleteProbe.success) restores the worker-local admission, and
-    // the source's probe restores the peer admission. Read again only after
-    // the recovery probe has fired; poll so peer-admission propagation does
-    // not race the assertion.
-    WaitForTotalInjectCount("PeerUbAdmission.CompleteProbe.success", 1, AllWorkers(), 45'000);
+    std::vector<uint64_t> probeBaselines;
+    for (auto worker : AllWorkers()) {
+        probeBaselines.emplace_back(GetInjectCount(worker, UB_PROBE_SUCCEEDED));
+    }
+    auto blockedBaseline = GetInjectCount(WORKER0, WRITE_TARGET_BLOCKED);
+    uint32_t operatorWorker = WORKER0;
+    auto firstBatch = TriggerError4("p3_probe_recovery_first", operatorWorker);
+    ASSERT_NE(operatorWorker, WORKER0);
+    WaitForInjectCount(WORKER0, WRITE_TARGET_BLOCKED, blockedBaseline + 1);
+    WaitForInjectCount(operatorWorker, UB_PROBE_SUCCEEDED, probeBaselines[operatorWorker] + 1, 45'000);
+    WaitForInjectCount(WORKER0, UB_PROBE_SUCCEEDED, probeBaselines[WORKER0] + 1, 45'000);
     ASSERT_TRUE(WaitFor([&] {
         for (const auto &key : firstBatch.keys) {
             std::string value;
@@ -1076,7 +1163,9 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, UnavailableTargetRecoversOnlyA
         }
         return true;
     })) << "objects did not become readable after the dedicated recovery probe";
-    auto secondBatch = WriteObjects(client0_, "p3_probe_recovery_second", 2, 'v');
+    auto recoveredBatchBaseline = GetInjectCount(WORKER0, TRANSPORT_BATCH_STARTED);
+    auto secondBatch = WriteObjects(client0_, "p3_probe_recovery_second", 8, 'v');
+    WaitForInjectCount(WORKER0, TRANSPORT_BATCH_STARTED, recoveredBatchBaseline + 1);
     AssertReadable(client0_, firstBatch);
     AssertReadable(client0_, secondBatch);
 #else

@@ -276,6 +276,14 @@ void PeerUbAdmission::ReconcileTopologyWorkers(const std::unordered_set<HostPort
     PruneTombstonesLocked(nowMs);
 }
 
+void PeerUbAdmission::PruneExpiredTopologyState(uint64_t nowMs)
+{
+    std::lock_guard<std::shared_mutex> lock(mutex_);
+    if (nextTombstoneExpiryMs_ != 0 && nowMs >= nextTombstoneExpiryMs_) {
+        PruneTombstonesLocked(nowMs);
+    }
+}
+
 UbHealthSummary PeerUbAdmission::BuildSelfHealthSummary(const HostPort &self) const
 {
     std::shared_lock<std::shared_mutex> lock(mutex_);
@@ -430,6 +438,9 @@ void PeerUbAdmission::RetireWorkerLocked(const HostPort &worker, uint64_t nowMs,
     }
     if (!tombstone.incarnations.empty()) {
         tombstone.expiresAtMs = nowMs + tombstoneTtlMs;
+        if (nextTombstoneExpiryMs_ == 0 || tombstone.expiresAtMs < nextTombstoneExpiryMs_) {
+            nextTombstoneExpiryMs_ = tombstone.expiresAtMs;
+        }
         replayTombstones_[worker] = std::move(tombstone);
     }
     states_.erase(worker);
@@ -445,6 +456,13 @@ void PeerUbAdmission::PruneTombstonesLocked(uint64_t nowMs)
     }
     while (replayTombstones_.size() > MAX_REPLAY_TOMBSTONES) {
         replayTombstones_.erase(replayTombstones_.begin());
+    }
+    nextTombstoneExpiryMs_ = 0;
+    for (const auto &[worker, tombstone] : replayTombstones_) {
+        (void)worker;
+        if (nextTombstoneExpiryMs_ == 0 || tombstone.expiresAtMs < nextTombstoneExpiryMs_) {
+            nextTombstoneExpiryMs_ = tombstone.expiresAtMs;
+        }
     }
 }
 

@@ -798,6 +798,32 @@ TEST(UrmaRecoveryProbeBufferTest, ManagerOwnsStableDedicatedSegment)
 #endif
 }
 
+TEST(UrmaRecoveryProbeBufferTest, ManagerOwnsSmallStableSourceSegment)
+{
+#if defined(USE_URMA) || defined(USE_URMA_MOCK)
+    uint64_t sourceAddress = 0;
+    uint64_t sourceSize = 0;
+    uint64_t sourceDataAddress = 0;
+    ASSERT_TRUE(
+        UrmaManager::Instance().GetRecoveryProbeSourceInfo(sourceAddress, sourceSize, sourceDataAddress).IsOk());
+    EXPECT_NE(sourceAddress, 0u);
+    EXPECT_EQ(sourceSize, 4'096u);
+    EXPECT_EQ(sourceDataAddress, sourceAddress);
+
+    uint64_t secondAddress = 0;
+    ASSERT_TRUE(
+        UrmaManager::Instance().GetRecoveryProbeSourceInfo(secondAddress, sourceSize, sourceDataAddress).IsOk());
+    EXPECT_EQ(secondAddress, sourceAddress);
+    uint64_t destinationAddress = 0;
+    uint64_t destinationOffset = 0;
+    ASSERT_TRUE(
+        UrmaManager::Instance().GetRecoveryProbeSegmentInfo(destinationAddress, destinationOffset).IsOk());
+    EXPECT_NE(destinationAddress, sourceAddress);
+#else
+    GTEST_SKIP() << "URMA recovery probe segment is only available in URMA or URMA mock builds.";
+#endif
+}
+
 TEST(DataPlaneManagerAdmissionTest, ProbeRejectsMembershipWorkerDeniedByGlobalFact)
 {
     auto manager = std::make_shared<FakeDataPlaneManager>();
