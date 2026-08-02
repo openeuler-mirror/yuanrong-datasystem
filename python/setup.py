@@ -103,6 +103,12 @@ def get_all_dependencies():
         all_dependencies.update(get_dependencies(str(module_path)))
     for item in src_path.rglob('*'):
         all_dependencies.update(get_dependencies(item))
+    # Preserve all URMA-related so files regardless of ldd resolution.
+    # liburma_ubagg.so.0 and liburma-udma.so.0 are NOT in liburma's DT_NEEDED,
+    # so ldd won't list them, but they must be shipped for runtime.
+    for pattern in ['libtpsa.so*', 'libummu.so*', 'liburma*.so*']:
+        for item in src_path.rglob(pattern):
+            all_dependencies.add(item.name)
     return all_dependencies
 
 all_dependencies_for_datasystem = get_all_dependencies()

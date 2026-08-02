@@ -55,13 +55,10 @@ ds_cc_library(
         "//:enable_urma_mock": ["-DUSE_URMA_MOCK"],
         "//conditions:default": [],
     }),
-    includes=[
-        "/usr/include",
-        "/usr/local/include",
-    ],
     deps=[
         "//src/datasystem/common/log:common_log",
     ] + select({
+        "//:enable_urma": ["@local_urma//:urma"],
         "//:enable_urma_mock": ["//src/datasystem/common/urma_mock:urma_abi_compat"],
         "//conditions:default": [],
     }),
@@ -170,7 +167,11 @@ ds_cc_library(
         "//src/datasystem/protos:share_memory_cc_proto",
         "//src/datasystem/protos:utils_cc_proto",
         "@com_github_apache_brpc//:brpc",
-    ],
+    ] + select({
+        "//:enable_urma": ["@local_urma//:urma"],
+        "//:enable_urma_mock": ["//src/datasystem/common/urma_mock:urma_abi_compat"],
+        "//conditions:default": [],
+    }),
 )
 
 alias(name="rdma_util", actual=":common_rdma")

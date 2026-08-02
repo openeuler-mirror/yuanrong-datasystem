@@ -139,6 +139,28 @@ install_file_pattern(
 )
 
 ############################################################
+# URMA shared libraries (6 so files: libtpsa, libummu, liburma,
+# liburma_common, liburma_ubagg, liburma-udma).
+# liburma is linked at compile time; the others are its transitive
+# DT_NEEDED dependencies. All must be shipped alongside libdatasystem.so.
+############################################################
+if (BUILD_WITH_URMA)
+    set(URMA_LIB_PATTERNS
+            "${URMA_LIB_LOCATION}/libtpsa.so*"
+            "${URMA_LIB_LOCATION}/libummu.so*"
+            "${URMA_LIB_LOCATION}/liburma.so*"
+            "${URMA_LIB_LOCATION}/liburma_common.so*"
+            "${URMA_LIB_LOCATION}/liburma_ubagg.so*"
+            "${URMA_LIB_LOCATION}/liburma-udma.so*")
+    install_file_pattern(
+            PATH_PATTERN ${URMA_LIB_PATTERNS}
+            DEST_DIR ${DATASYSTEM_SDK_USER_LIBPATH})
+    install_file_pattern(
+            PATH_PATTERN ${URMA_LIB_PATTERNS}
+            DEST_DIR ${DATASYSTEM_SDK_USER_NEW_LIBPATH})
+endif()
+
+############################################################
 # Datasystem python share libraries.
 ############################################################
 if (BUILD_PYTHON_API)
@@ -167,6 +189,16 @@ if (BUILD_PYTHON_API)
             ${RPC_LIB_PATH}
             ${SDK_BRPC_LIBS}
     )
+
+    if (BUILD_WITH_URMA)
+        list(APPEND PYTHON_LIB_PATTERNS
+                "${URMA_LIB_LOCATION}/libtpsa.so*"
+                "${URMA_LIB_LOCATION}/libummu.so*"
+                "${URMA_LIB_LOCATION}/liburma.so*"
+                "${URMA_LIB_LOCATION}/liburma_common.so*"
+                "${URMA_LIB_LOCATION}/liburma_ubagg.so*"
+                "${URMA_LIB_LOCATION}/liburma-udma.so*")
+    endif()
 
     package_python(yr/datasystem
             PYTHON_SRC_DIR ${CMAKE_SOURCE_DIR}/python

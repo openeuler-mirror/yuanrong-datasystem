@@ -33,6 +33,12 @@ build:urma --define=enable_urma=true
 build:urma --copt=-DUSE_URMA
 build:urma --copt=-DURMA_OVER_UB
 
+# URMA package download mode (uncomment to download the URMA SDK package instead
+# of relying on a system-installed /usr/lib64/liburma.so).
+# When commented out, the urma_pkg_repository rule falls back to /usr/include.
+# build:urma --repo_env=URMA_PKG_URL=<url>
+# build:urma --repo_env=URMA_PKG_SHA256=<sha256>
+
 # URMA mock backend: dev/CI without liburma.so / RDMA hardware
 # Provides a local shm+TCP transport so urma_manager.cpp can be unit-tested.
 # Mutually exclusive with build:urma (the actual SDK backend).

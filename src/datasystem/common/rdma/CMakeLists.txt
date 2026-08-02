@@ -24,7 +24,23 @@ if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
         urma_resource.cpp
         urma_dlopen_util.cpp
     )
-    list(APPEND URMA_DEPEND_LIBS dl)
+    # Real URMA: link liburma at compile time (the 44 ds_urma_* shims call
+    # symbols resolved by -lurma directly). liburma_ubagg/liburma-udma are
+    # liburma's transitive DT_NEEDED dependencies; they are NOT linked
+    # explicitly to avoid recursively validating their own transitive deps
+    # (e.g. libummu needs GLIBCXX_3.4.29 which may exceed the build host's
+    # libstdc++). They are shipped in the package (see cmake/package.cmake)
+    # and resolved by the runtime dynamic linker.
+    # libtpsa provides ub_str_to_* symbols that liburma.so references but does
+    # not declare in its DT_NEEDED, so it must be linked explicitly.
+    # Mock URMA: no real library needed (weak-symbol dispatch, no dlopen).
+    if (BUILD_WITH_URMA)
+        list(APPEND URMA_DEPEND_LIBS ${URMA_LIBRARY})
+        find_library(URMA_TPSA_LIBRARY tpsa PATHS ${URMA_LIB_LOCATION} DOC "URMA tpsa library")
+        if (URMA_TPSA_LIBRARY)
+            list(APPEND URMA_DEPEND_LIBS ${URMA_TPSA_LIBRARY})
+        endif()
+    endif()
     list(APPEND URMA_DEPEND_LIBS ${TBB_LIBRARY})
     list(APPEND URMA_DEPEND_LIBS string_ref)
     list(APPEND URMA_DEPEND_LIBS common_util)
@@ -68,6 +84,10 @@ endif()
 
 add_library(common_rdma STATIC ${FAST_TRANSPORT_SRCS} ${URMA_SRCS} ${RDMA_SRCS})
 if (BUILD_WITH_URMA)
+    # Let the linker locate liburma's transitive DT_NEEDED deps (liburma_common,
+    # libtpsa, etc.) in the URMA lib dir without linking them explicitly.
+    target_link_directories(common_rdma PRIVATE ${URMA_LIB_LOCATION})
+    target_link_options(common_rdma PRIVATE "-Wl,-rpath-link,${URMA_LIB_LOCATION}")
     target_compile_definitions(common_rdma PUBLIC USE_URMA)
 endif()
 if (BUILD_WITH_URMA_MOCK)
