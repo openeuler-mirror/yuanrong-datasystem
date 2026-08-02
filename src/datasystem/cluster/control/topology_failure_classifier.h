@@ -29,6 +29,14 @@ struct MemberAbsenceObservation {
 };
 
 /**
+ * @brief One bounded member sample whose authoritative membership key is absent.
+ */
+struct MemberAbsenceSample {
+    MemberIdentity identity;
+    MemberState state{ MemberState::INITIAL };
+};
+
+/**
  * @brief Disjoint actions produced by one successful membership observation.
  */
 struct FailureClassification {
@@ -79,6 +87,18 @@ public:
                    std::chrono::steady_clock::time_point now, FailureClassification &classification);
 
     /**
+     * @brief Observe a caller-bounded deterministic subset without scanning a full topology.
+     * @param[in] samples Missing committed-member samples selected by the caller.
+     * @param[in] now Monotonic time.
+     * @param[out] confirmedMissing Samples whose continuous absence reached nodeDeadTimeout, in input order.
+     * @return Operation status.
+     * @note Timers outside the current subset are discarded; this path does not materialize or sort full failures.
+     */
+    Status ObserveMissingSamples(const std::vector<MemberAbsenceSample> &samples,
+                                 std::chrono::steady_clock::time_point now,
+                                 std::vector<MemberAbsenceObservation> &confirmedMissing);
+
+    /**
      * @brief Freeze accumulated absence while authoritative membership cannot be read.
      * @param[in] now Monotonic time at the first failed read.
      */
@@ -96,6 +116,8 @@ public:
     void Reset() noexcept;
 
 private:
+    void Resume(std::chrono::steady_clock::time_point now) noexcept;
+
     std::chrono::seconds nodeDeadTimeout_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> missingSince_;
     std::optional<std::chrono::steady_clock::time_point> pausedAt_;

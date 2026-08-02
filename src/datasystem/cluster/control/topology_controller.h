@@ -91,6 +91,19 @@ struct TopologyControllerOptions {
         memberLivenessProbe;
 
     /**
+     * @brief Return the current authority epoch for collective stale-topology recovery.
+     *
+     * An empty callback preserves the existing self-managed/ETCD behavior. A callback returning std::nullopt means
+     * this Controller currently has no authority to probe or replace a stale topology.
+     */
+    std::function<std::optional<uint64_t>()> collectiveControlEpoch;
+
+    /**
+     * @brief Execute the final collective replacement commit only while the expected authority epoch remains current.
+     */
+    std::function<Status(uint64_t, const std::function<Status()> &)> collectiveReplacementFence;
+
+    /**
      * @brief Semantic policy clock; production uses steady time and tests may inject virtual time.
      */
     std::function<std::chrono::steady_clock::time_point()> now{ [] { return std::chrono::steady_clock::now(); } };
@@ -237,6 +250,26 @@ private:
 
     Status TryConfirmFailures(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
+    Status PrepareCollectiveProbeContext(const TopologySnapshot &latest,
+                                         const std::vector<MembershipRecord> &memberships,
+                                         const std::vector<MemberIdentity> &samples, size_t &readyCount,
+                                         std::optional<std::string> &owner, bool &hasControlAuthority);
+
+    Status HandleCollectiveMembershipAbsence(const TopologySnapshot &latest,
+                                             const std::vector<MembershipRecord> &memberships,
+                                             const std::vector<MemberIdentity> &samples,
+                                             const std::vector<MemberAbsenceObservation> &confirmedMissing);
+    std::vector<MemberIdentity> SelectCollectiveProbeSamples(const TopologySnapshot &latest) const;
+    Status ProbeCollectiveSample(const TopologySnapshot &latest, const std::vector<MemberIdentity> &samples,
+                                 size_t membershipCount, size_t readyCount);
+    Status BootstrapCollectiveReplacement(const TopologySnapshot &latest);
+    void ResetCollectiveProbeProgress() noexcept;
+    void SummarizeCollectiveReadyMemberships(const std::vector<MembershipRecord> &memberships,
+                                             size_t &readyCount, std::optional<std::string> &owner) const;
+    void LogCollectiveDecision(const TopologySnapshot &latest, size_t membershipCount, size_t readyCount,
+                               const std::string &owner, size_t progress, size_t sampleCount, const char *action,
+                               const char *decision, const char *reason, bool sampled,
+                               const std::string &details = {}) const;
     Status ConfirmMissingMembersUnreachable(const TopologySnapshot &latest, FailureClassification &classification);
 
     struct SuspectProbeRound;
@@ -371,6 +404,11 @@ private:
     bool progressWorkPending_{ false };
     // State-thread-owned monotonic task progress cache for progress reads bounded across reconciliation ticks.
     std::unordered_set<std::string> finishedTaskIds_;
+    // State-thread-owned, non-persistent stale-topology probe evidence.
+    std::optional<uint64_t> collectiveProbeTopologyVersion_;
+    std::optional<std::string> collectiveProbeOwner_;
+    std::optional<uint64_t> collectiveProbeControlEpoch_;
+    std::unordered_set<std::string> collectiveUnreachableSamples_;
     std::string membershipEventPrefix_;
     // Protects membershipEventPrefix_, latestRestartTimestampByAddress_, and pendingRestartTimestampByAddress_.
     std::mutex membershipRestartMutex_;

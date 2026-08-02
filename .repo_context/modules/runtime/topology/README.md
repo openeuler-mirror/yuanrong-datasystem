@@ -62,11 +62,31 @@
   exactly one Controller owns that target's probe and each Controller owns at most one target. This ownership changes
   only after a new authoritative topology is committed; local membership timers cannot create extra reporters. A
   responding member starts a new absence window, and a target not owned or not probed by this Controller cannot enter
-  its Failure plan. When at least two committed members simultaneously have no matching membership row, the Controller
-  resets its local absence windows and preserves the last-good topology instead of starting collective failure
-  detection. Zero or one committed member remains on the normal failure-detection path so a genuine sole-member failure
-  cannot block removal or recovery indefinitely; when any membership row returns after collective suppression, normal
-  per-member absence timing starts from a new window. The peer RPC reads the cached control-backend observation and
+  its Failure plan. When a topology has at least one committed member and none of those committed addresses has a
+  matching membership row, the Controller preserves the last-good topology while reusing the same continuous-absence
+  timer. The collective path observes only its deterministic sample subset in the classifier, discards timers outside
+  that subset, and never materializes or sorts a full-topology failure classification on each reconcile. After
+  `nodeDeadTimeout`, it samples at most five address-sorted committed members and probes one sample per reconcile. ETCD
+  assigns the current address-smallest READY membership as the sole probe owner;
+  Coordinator uses one stable central-owner identity and reuses the existing watch RPC transport with a validation-only
+  event rejected during whole-batch validation. The dispatched application-error response proves process liveness
+  without delivery to the watch handler or triggering rewatch. Topology-version, ETCD READY-owner, or no-READY
+  transitions fence all accumulated sample progress, including A -> B -> A changes. The
+  Coordinator probe's absolute deadline covers endpoint parsing, deadline-aware stub acquisition, concrete stub cast,
+  and `HandleEvent`; provenance distinguishes a dispatched peer application error from a neutral local error. Any
+  attributed response or application-level error resets that sample's full absence window. Only attributed
+  deadline/unavailable outcomes accumulate as unreachable. Once every sample is unreachable, an exact membership reread
+  must still contain no old
+  committed address and at least one READY generation before the Controller bootstraps those READY generations through
+  the existing empty-topology `BuildBootstrap` and topology CAS path. A returned old membership, absent READY
+  generation, changed owner, read failure, or CAS conflict preserves the old topology. All except read failure discard
+  stale sample progress; read failure instead retains it and pauses absence time. This includes a genuine sole-member
+  stale topology. This fixed-five check is a bounded recovery heuristic, not strict fencing. A partitioned or unsampled
+  old Worker can remain alive while replacement Workers form a temporarily independent cluster; this is an explicitly
+  accepted risk of the bounded heuristic. When an old Worker reconnects and publishes the replacement authority, the
+  existing local-member-missing path kills and restarts it so it can rejoin the authoritative ring. Before replacement
+  topology CAS, rollback can remove the heuristic. After authority is replaced, binary rollback alone is unsafe;
+  operators must use a controlled stop and topology recovery. The peer RPC reads the cached control-backend observation and
   never synchronously queries ETCD inside the bounded liveness probe. A reachable peer with temporarily unavailable
   backend evidence therefore returns a successful `ready=false` response, so transport reachability remains
   distinguishable from authoritative topology evidence. Its protobuf carries the 16-byte binary member identity as
@@ -74,6 +94,12 @@
   and lets upgraded readers consume successfully serialized legacy responses, but a legacy reader cannot consume every
   binary response from an upgraded Worker. Deploy or roll back this behavior cluster-wide; an ETCD outage during a
   mixed-version rolling upgrade is outside this contract.
+  Coordinator collective probe progress is additionally bound to the current nonzero Raft leader term; loss of control
+  authority or a term change discards accumulated samples before any further probe or replacement attempt. Each
+  Coordinator-to-Worker control probe and the final collective replacement commit use that expected term under the
+  shared leader-operation fence, so Leader stop or term replacement cannot authorize evidence accumulated by an older
+  term. Election-free singleton mode uses one stable process-lifetime control epoch. Ordinary Controller Store mutations
+  remain outside this narrow collective-recovery fence.
   BRPC stub acquisition and channel establishment share this low-frequency probe's absolute deadline;
   default business-RPC stub lookup semantics remain unchanged. After classifier confirmation, the owned successor runs
   one complete bounded direct probe (`failureProbeTimeout`). The probe returns one structured result per target with
@@ -85,8 +111,9 @@
   `nodeDeadTimeout + failureProbeTimeout`. Backend-unreadable intervals observed while reading either topology or
   membership do not consume the continuous-absence budget. In centralized Coordinator mode,
   `TopologyFailureClassifier` instead promotes a member only after it has remained absent from consecutive exact
-  membership reads for `node_dead_timeout_s`; presence clears the window, Store read failures pause it, and the first
-  implementation does not add Coordinator-to-Worker probe RPCs.
+  membership reads for `node_dead_timeout_s`; presence clears the window and Store read failures pause it. Collective
+  stale-topology recovery additionally uses the bounded validation-only Coordinator-to-Worker watch-transport probe
+  described above.
 - Both backends use the same fixed three-second joining collection window beginning at the first eligible member.
   Later arrivals do not extend the deadline. An empty cluster admits the collected bootstrap members directly without
   migration; an initialized cluster starts one multi-member ScaleOut batch. Failure remains higher priority.

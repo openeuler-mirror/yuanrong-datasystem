@@ -31,6 +31,7 @@ namespace datasystem {
 namespace coordinator {
 namespace {
 constexpr int32_t WATCH_NOTIFY_RPC_TIMEOUT_MS = 3000;
+constexpr int64_t PROBE_WATCH_ID = 1;
 
 /**
  * @brief Calculate the watch callback RPC timeout from the node timeout.
@@ -86,12 +87,6 @@ WatchDispatcherImpl::~WatchDispatcherImpl()
 Status WatchDispatcherImpl::DoNotify(int64_t watchId, const std::string &watcherAddr,
                                      std::vector<std::shared_ptr<WatchEvent>> &events)
 {
-    HostPort watcherHostPort;
-    RETURN_IF_NOT_OK(watcherHostPort.ParseString(watcherAddr));
-
-    std::shared_ptr<RpcStubBase> rpcStub;
-    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(watcherHostPort, StubType::COORDINATOR_WORKER_SVC, rpcStub));
-
     EventReqPb req;
     req.set_watch_id(watchId);
     req.set_coordinator_id(coordinatorId_);
@@ -105,17 +100,63 @@ Status WatchDispatcherImpl::DoNotify(int64_t watchId, const std::string &watcher
             FillEventKv(event->entry, pbEvent->mutable_kv());
         }
     }
-    RpcOptions opts;
-    opts.SetTimeout(GetWatchNotifyRpcTimeoutMs());
-    EventRspPb rsp;
-    if (FLAGS_use_brpc) {
-        auto brpcStub = std::dynamic_pointer_cast<CoordinatorWatchService_BrpcGenericStub>(rpcStub);
-        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
-        return brpcStub->HandleEvent(opts, req, rsp);
+    return SendEventRequest(watcherAddr, req, GetWatchNotifyRpcTimeoutMs());
+}
+
+WorkerReachabilityProbeResult WatchDispatcherImpl::ProbeWorkerReachable(
+    const std::string &watcherAddr, std::chrono::steady_clock::time_point absoluteDeadline)
+{
+    if (std::chrono::steady_clock::now() >= absoluteDeadline) {
+        return { Status(K_RPC_DEADLINE_EXCEEDED, "Worker reachability probe deadline already expired"), false };
     }
-    auto stub = std::dynamic_pointer_cast<CoordinatorWatchService_Stub>(rpcStub);
-    RETURN_RUNTIME_ERROR_IF_NULL(stub);
-    return stub->HandleEvent(opts, req, rsp);
+    EventReqPb req;
+    req.set_watch_id(PROBE_WATCH_ID);
+    req.set_coordinator_id(coordinatorId_);
+    // Intentionally fail Worker whole-batch validation: a dispatched application error proves process reachability
+    // without acquiring/delivering the event handler or triggering rewatch.
+    req.add_events()->set_type(EventPb::EVENT_TYPE_UNSPECIFIED);
+    bool rpcDispatched = false;
+    auto rc = SendEventRequest(watcherAddr, req, GetWatchNotifyRpcTimeoutMs(), absoluteDeadline, &rpcDispatched);
+    return { std::move(rc), rpcDispatched };
+}
+
+Status WatchDispatcherImpl::SendEventRequest(const std::string &watcherAddr, const EventReqPb &req,
+                                             int32_t timeoutMs,
+                                             std::chrono::steady_clock::time_point absoluteDeadline,
+                                             bool *rpcDispatched)
+{
+    if (rpcDispatched != nullptr) {
+        *rpcDispatched = false;
+    }
+    HostPort watcherHostPort;
+    RETURN_IF_NOT_OK(watcherHostPort.ParseString(watcherAddr));
+    std::shared_ptr<RpcStubBase> rpcStub;
+    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(
+        watcherHostPort, StubType::COORDINATOR_WORKER_SVC, rpcStub, absoluteDeadline));
+    RpcOptions opts;
+    EventRspPb rsp;
+    std::shared_ptr<CoordinatorWatchService_BrpcGenericStub> brpcStub;
+    std::shared_ptr<CoordinatorWatchService_Stub> stub;
+    if (FLAGS_use_brpc) {
+        brpcStub = std::dynamic_pointer_cast<CoordinatorWatchService_BrpcGenericStub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
+    } else {
+        stub = std::dynamic_pointer_cast<CoordinatorWatchService_Stub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(stub);
+    }
+    if (absoluteDeadline != std::chrono::steady_clock::time_point::max()) {
+        const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     absoluteDeadline - std::chrono::steady_clock::now())
+                                     .count();
+        CHECK_FAIL_RETURN_STATUS(remainingMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                                 "Worker reachability probe deadline exceeded before dispatch");
+        timeoutMs = static_cast<int32_t>(std::min<int64_t>(timeoutMs, remainingMs));
+    }
+    opts.SetTimeout(timeoutMs);
+    if (rpcDispatched != nullptr) {
+        *rpcDispatched = true;
+    }
+    return FLAGS_use_brpc ? brpcStub->HandleEvent(opts, req, rsp) : stub->HandleEvent(opts, req, rsp);
 }
 }  // namespace coordinator
 }  // namespace datasystem

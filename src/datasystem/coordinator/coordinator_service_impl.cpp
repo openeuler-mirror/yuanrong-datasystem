@@ -494,6 +494,82 @@ Status CoordinatorServiceImpl::BuildComponentTree()
     hostOptions.maxClusters = FLAGS_coordinator_topology_max_active_clusters;
     hostOptions.controller.nodeDeadTimeout = std::chrono::seconds(FLAGS_node_dead_timeout_s);
     hostOptions.controller.scaleInCollectWindow = std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms);
+    hostOptions.controller.eventSourceMode = cluster::TopologyEventSourceMode::EXTERNAL;
+    hostOptions.controller.probeEpoch = coordinatorId_;
+    // The Service owns the Host/Runtime callbacks and shuts the Host down before clearing any captured fields.
+    const auto collectiveControlEpoch = [this]() -> std::optional<uint64_t> {
+        std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+        const auto state = servingState_.load(std::memory_order_acquire);
+        if (!IsElectionConfigured()) {
+            return state == ServingState::STOPPING || state == ServingState::STOPPED
+                       ? std::nullopt
+                       : std::optional<uint64_t>{ 1 };
+        }
+        if ((state != ServingState::LEADER_RECOVERING && state != ServingState::LEADER_SERVING) || !IsLeader()) {
+            return std::nullopt;
+        }
+        const auto term = leaderTerm_.load(std::memory_order_acquire);
+        return term == 0 ? std::nullopt : std::optional<uint64_t>{ term };
+    };
+    const auto collectiveReplacementFence =
+        [this](uint64_t expectedEpoch, const std::function<Status()> &mutation) {
+            std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+            const auto state = servingState_.load(std::memory_order_acquire);
+            if (!IsElectionConfigured()) {
+                CHECK_FAIL_RETURN_STATUS(expectedEpoch == 1 && state != ServingState::STOPPING
+                                             && state != ServingState::STOPPED,
+                                         K_NOT_READY, "Coordinator collective control epoch is stale");
+                return mutation();
+            }
+            CHECK_FAIL_RETURN_STATUS(
+                expectedEpoch != 0 && leaderTerm_.load(std::memory_order_acquire) == expectedEpoch
+                    && (state == ServingState::LEADER_RECOVERING || state == ServingState::LEADER_SERVING)
+                    && IsLeader(),
+                K_NOT_READY, "Coordinator collective control term is stale");
+            return mutation();
+        };
+    hostOptions.controller.collectiveControlEpoch = collectiveControlEpoch;
+    hostOptions.controller.collectiveReplacementFence = collectiveReplacementFence;
+    hostOptions.controller.memberLivenessProbe =
+        [dispatcher = watchDispatcher_, collectiveControlEpoch, collectiveReplacementFence](
+            const std::vector<cluster::MemberIdentity> &targets, std::chrono::steady_clock::time_point deadline) {
+            std::vector<cluster::ControlBackendProbeResult> results;
+            results.reserve(targets.size());
+            for (const auto &target : targets) {
+                results.push_back({ target, std::nullopt, cluster::ControlBackendProbeOutcome::CANCELLED,
+                                    std::chrono::milliseconds(0) });
+            }
+            const auto expectedEpoch = collectiveControlEpoch();
+            if (!expectedEpoch.has_value()) {
+                return results;
+            }
+            static_cast<void>(collectiveReplacementFence(*expectedEpoch, [&] {
+                for (size_t index = 0; index < targets.size(); ++index) {
+                    const auto &target = targets[index];
+                    const auto startedAt = std::chrono::steady_clock::now();
+                    const auto probe = dispatcher->ProbeWorkerReachable(target.address, deadline);
+                    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - startedAt);
+                    const auto &status = probe.status;
+                    auto outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
+                    if (probe.rpcDispatched) {
+                        outcome = cluster::ControlBackendProbeOutcome::ERROR;
+                        if (status.IsOk()) {
+                            outcome = cluster::ControlBackendProbeOutcome::RESPONSE;
+                        } else if (status.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
+                            outcome = cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED;
+                        } else if (status.GetCode() == K_RPC_UNAVAILABLE) {
+                            outcome = cluster::ControlBackendProbeOutcome::UNAVAILABLE;
+                        } else if (status.GetCode() == K_RPC_CANCELLED) {
+                            outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
+                        }
+                    }
+                    results[index] = { target, std::nullopt, outcome, elapsed };
+                }
+                return Status::OK();
+            }));
+            return results;
+        };
     topologyControlHost_ =
         std::make_unique<TopologyControlHost>(coordinatorId_, *store_, *topologyRecoveryManager_, hostOptions);
     RETURN_IF_NOT_OK(topologyControlHost_->Start());

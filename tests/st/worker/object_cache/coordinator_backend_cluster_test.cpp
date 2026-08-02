@@ -17,7 +17,9 @@
 /**
  * Description: ST for coordinator-backed worker cluster coordination.
  */
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <initializer_list>
 #include <map>
 #include <memory>
@@ -139,6 +141,18 @@ private:
     BaseCluster &cluster_;
     std::vector<uint32_t> workerIndexes_;
 };
+
+constexpr size_t STALE_TOPOLOGY_MEMBER_COUNT = 4;
+
+enum class CoordinationBackendType : uint8_t {
+    ETCD,
+    COORDINATOR,
+};
+
+std::string CoordinationBackendName(const testing::TestParamInfo<CoordinationBackendType> &info)
+{
+    return info.param == CoordinationBackendType::ETCD ? "Etcd" : "Coordinator";
+}
 
 std::string WorkerStateToString(MembershipPb::StatePb state)
 {
@@ -602,6 +616,126 @@ protected:
         DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2, WAIT_SCALE_TIMEOUT_SEC));
     }
 };
+
+class StaleTopologyBootstrapTest : public CoordinatorBackendClusterTest,
+                                   public testing::WithParamInterface<CoordinationBackendType> {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        CoordinatorBackendClusterTest::SetClusterSetupOptions(opts);
+        opts.numWorkers = STALE_TOPOLOGY_MEMBER_COUNT;
+        opts.waitWorkerReady = false;
+        if (GetParam() == CoordinationBackendType::ETCD) {
+            opts.numEtcd = 1;
+            opts.numCoordinators = 0;
+            opts.coordinatorGflagParams.clear();
+        }
+    }
+
+protected:
+    int GetTestCaseTimeoutSecs() const override
+    {
+        return 120;
+    }
+
+    Status ReadTopologyWorkers(std::map<std::string, MembershipPb::StatePb> &workers)
+    {
+        ClusterTopologyPb topology;
+        RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(topology));
+        workers.clear();
+        for (const auto &member : topology.members()) {
+            workers.emplace(member.first, member.second.state());
+        }
+        return Status::OK();
+    }
+
+    Status WaitForExactActiveWorkers(const std::set<std::string> &expectedWorkers,
+                                     int timeoutSec = WAIT_SCALE_TIMEOUT_SEC)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+        Status lastRc = Status::OK();
+        std::map<std::string, MembershipPb::StatePb> lastWorkers;
+        while (std::chrono::steady_clock::now() < deadline) {
+            lastRc = ReadTopologyWorkers(lastWorkers);
+            if (lastRc.IsOk() && lastWorkers.size() == expectedWorkers.size()
+                && std::all_of(expectedWorkers.begin(), expectedWorkers.end(), [&](const std::string &address) {
+                       const auto found = lastWorkers.find(address);
+                       return found != lastWorkers.end() && found->second == MembershipPb::ACTIVE;
+                   })) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR,
+                      "Timed out waiting for exact replacement topology. Expected: "
+                          + VectorToString(std::vector<std::string>(expectedWorkers.begin(), expectedWorkers.end()))
+                          + ", last workers: " + WorkerStatesToString(lastWorkers)
+                          + ", last status: " + lastRc.ToString());
+    }
+
+    Status AddReplacementWorkers(std::set<std::string> &addresses, size_t &firstIndex)
+    {
+        auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+        CHECK_FAIL_RETURN_STATUS(externalCluster != nullptr, K_RUNTIME_ERROR, "Not an ExternalCluster");
+        HostPort firstReplacement;
+        firstIndex = externalCluster->GetWorkerNum();
+        for (size_t offset = 0; offset < STALE_TOPOLOGY_MEMBER_COUNT; ++offset) {
+            HostPort workerAddress("127.0.0.1", GetFreePort());
+            if (offset == 0) {
+                firstReplacement = workerAddress;
+            }
+            const auto &masterAddress = offset == 0 ? workerAddress : firstReplacement;
+            RETURN_IF_NOT_OK(externalCluster->AddNode(masterAddress, workerAddress.ToString(), GetFreePort()));
+            addresses.insert(workerAddress.ToString());
+        }
+        return Status::OK();
+    }
+};
+
+TEST_P(StaleTopologyBootstrapTest, EntireCommittedRingCanBootstrapFromReadyReplacementWorkers)
+{
+    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    ASSERT_NE(externalCluster, nullptr);
+
+    std::set<std::string> oldWorkers;
+    for (size_t index = 0; index < STALE_TOPOLOGY_MEMBER_COUNT; ++index) {
+        HostPort address;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(index, address));
+        oldWorkers.insert(address.ToString());
+    }
+    DS_ASSERT_OK(WaitForExactActiveWorkers(oldWorkers));
+
+    for (size_t index = 0; index < STALE_TOPOLOGY_MEMBER_COUNT; ++index) {
+        DS_ASSERT_OK(externalCluster->KillWorker(index));
+    }
+    std::map<std::string, MembershipPb::StatePb> retainedWorkers;
+    DS_ASSERT_OK(ReadTopologyWorkers(retainedWorkers));
+    for (const auto &address : oldWorkers) {
+        EXPECT_NE(retainedWorkers.find(address), retainedWorkers.end());
+    }
+
+    std::set<std::string> replacements;
+    size_t firstReplacementIndex;
+    DS_ASSERT_OK(AddReplacementWorkers(replacements, firstReplacementIndex));
+    DS_ASSERT_OK(WaitForExactActiveWorkers(replacements));
+    for (size_t offset = 0; offset < STALE_TOPOLOGY_MEMBER_COUNT; ++offset) {
+        DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, firstReplacementIndex + offset, WAIT_SCALE_TIMEOUT_SEC));
+    }
+
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(STALE_TOPOLOGY_MEMBER_COUNT, client, 10'000, false, 10'000);
+    ASSERT_NE(client, nullptr);
+    const auto key = NewObjectKey();
+    const std::string expectedValue = "replacement-topology-value";
+    DS_ASSERT_OK(client->Set(key, expectedValue));
+    std::string observedValue;
+    DS_ASSERT_OK(client->Get(key, observedValue));
+    EXPECT_EQ(observedValue, expectedValue);
+}
+
+INSTANTIATE_TEST_SUITE_P(CoordinationBackends, StaleTopologyBootstrapTest,
+                         testing::Values(CoordinationBackendType::ETCD, CoordinationBackendType::COORDINATOR),
+                         CoordinationBackendName);
 
 TEST_F(CoordinatorBackendClusterTest, TwoWorkersCanReadKeysAcrossWorkers)
 {

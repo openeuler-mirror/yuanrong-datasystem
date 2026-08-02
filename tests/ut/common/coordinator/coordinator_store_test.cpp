@@ -36,6 +36,7 @@
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/coordinator/coordinator_service_impl.h"
+#include "datasystem/coordinator/watch_dispatcher_impl.h"
 #include "datasystem/coordinator/topology_recovery_manager.h"
 #include "datasystem/common/coordinator/memory_kv_store.h"
 #include "datasystem/common/coordinator/steady_clock.h"
@@ -57,6 +58,25 @@ constexpr int64_t MAX_RETRY_SHUTDOWN_MS = 1000;
 constexpr uint16_t OVERSIZED_RECOVERY_TEST_PORT = 18486;
 constexpr uint16_t WATCH_RANGE_VALIDATION_TEST_PORT = 18487;
 constexpr uint16_t RAW_SNAPSHOT_TEST_PORT = 18488;
+
+TEST(WatchDispatcherImplTest, ExpiredProbeDeadlineIsNeutralAndUndispatched)
+{
+    coordinator::WatchDispatcherImpl dispatcher(nullptr, "coordinator-test");
+    const auto result = dispatcher.ProbeWorkerReachable("127.0.0.1:1", std::chrono::steady_clock::now());
+
+    EXPECT_EQ(result.status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_FALSE(result.rpcDispatched);
+}
+
+TEST(WatchDispatcherImplTest, MalformedProbeAddressIsNeutralAndUndispatched)
+{
+    coordinator::WatchDispatcherImpl dispatcher(nullptr, "coordinator-test");
+    const auto result = dispatcher.ProbeWorkerReachable(
+        "malformed-address", std::chrono::steady_clock::now() + std::chrono::seconds(1));
+
+    EXPECT_TRUE(result.status.IsError());
+    EXPECT_FALSE(result.rpcDispatched);
+}
 
 class MockWatchDispatcher : public WatchDispatcher {
 public:
