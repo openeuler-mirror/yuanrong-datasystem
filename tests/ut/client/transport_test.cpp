@@ -52,6 +52,7 @@
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/object_read/object_read_flow.h"
 #include "datasystem/client/transport/object_read/replica_reader.h"
+#include "datasystem/client/transport/worker_snapshot.h"
 #include "datasystem/client/transport/rpc/exist_request_builder.h"
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
@@ -1900,6 +1901,29 @@ TEST(WorkerSnapshotTest, RingMemberMissingFromHostIdMapGoesToOtherAddrs)
     EXPECT_EQ(snapshot.sameHostAddrs.front(), known);
     EXPECT_EQ(snapshot.otherAddrs.size(), 1u);
     EXPECT_EQ(snapshot.otherAddrs.front(), unknown);
+}
+
+// ResolveSdkHostId decides whether the sdk adopts the bound (initial) worker's hostId when its own
+// host_id is unresolved. A cross-node bound worker's hostId must NOT be adopted, or the whole remote
+// host is misclassified as same-host and cross-node Gets time out on the SHM/UDS path.
+TEST(ResolveSdkHostIdTest, DoesNotAdoptCrossNodeBoundWorkerHostId)
+{
+    const HostPort bound = MakeAddress(501);
+    std::unordered_map<std::string, std::string> hostIdMap = { { bound.ToString(), "remoteHost" } };
+    // Bound worker NOT confirmed same-host: keep empty so cross-node workers fall into otherAddrs and
+    // GetTransportHint selects UB/TCP instead of SHM. This is the fix.
+    EXPECT_TRUE(ResolveSdkHostId(/*boundWorkerIsLocal=*/false, bound, hostIdMap).empty());
+}
+
+TEST(ResolveSdkHostIdTest, AdoptsGenuineLocalBoundWorkerHostId)
+{
+    const HostPort bound = MakeAddress(502);
+    std::unordered_map<std::string, std::string> hostIdMap = { { bound.ToString(), "localHost" } };
+    EXPECT_EQ(ResolveSdkHostId(/*boundWorkerIsLocal=*/true, bound, hostIdMap), "localHost");
+    // No host_id_map entry for the bound worker: nothing to adopt, stay empty.
+    EXPECT_TRUE(
+        ResolveSdkHostId(/*boundWorkerIsLocal=*/true, bound, std::unordered_map<std::string, std::string>{})
+            .empty());
 }
 
 TEST(DataPlaneManagerTest, ReusesRpcClientAndTransporterForSameAddress)

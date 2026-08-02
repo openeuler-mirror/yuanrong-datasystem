@@ -1598,12 +1598,14 @@ private:
 
     Status InitDataPlacementPolicy();
 
-    Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs = -1);
+    Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs = -1,
+                                   bool routedWorkerIsLocal = true);
 
     Status InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
                                      bool initWithWorker, int32_t connectTimeoutMs);
 
-    Status InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker);
+    Status InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker,
+                               bool routedWorkerIsLocal = true);
 
     Status GetCurrentWorkerHostPort(HostPort &addr) const;
 

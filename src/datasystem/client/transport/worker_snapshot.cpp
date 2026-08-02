@@ -55,5 +55,22 @@ Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopo
     return Status::OK();
 }
 
+std::string ResolveSdkHostId(bool boundWorkerIsLocal, const HostPort &boundWorker,
+                             const std::unordered_map<std::string, std::string> &hostIdMap)
+{
+    // The sdk cannot confirm any worker is same-host when its own hostId was not resolved. Adopt the
+    // bound worker's hostId only when the caller has positively confirmed the bound worker is local;
+    // a cross-node bound worker's hostId must NOT be adopted or the whole remote host is misclassified
+    // as same-host and cross-node Gets time out on the SHM/UDS path.
+    if (!boundWorkerIsLocal) {
+        return std::string{};
+    }
+    auto iter = hostIdMap.find(boundWorker.ToString());
+    if (iter != hostIdMap.end() && !iter->second.empty()) {
+        return iter->second;
+    }
+    return std::string{};
+}
+
 }  // namespace client
 }  // namespace datasystem
