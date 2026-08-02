@@ -173,7 +173,11 @@ UrmaManager::~UrmaManager()
     }
     if (urmaResource_ == nullptr || !urmaResource_->IsProviderCleanupDeferred()) {
         UrmaUninit();
+#ifdef USE_URMA_MOCK
+        // Real URMA links liburma at compile time; Cleanup() is a no-op there.
+        // Mock mode needs Cleanup() to reset the mock dispatch backend.
         urma_dlopen::Cleanup();
+#endif
     }
     {
         std::lock_guard<std::mutex> lock(clientTransportMemoryPinMutex_);

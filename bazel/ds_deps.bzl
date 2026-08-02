@@ -1,5 +1,5 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-load("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load(":ds_python_deps.bzl", "ds_python_deps")
 load(":grpc_deps.bzl", "grpc_deps")
@@ -18,6 +18,7 @@ load(
     "setup_tbb",
     "setup_zmq",
 )
+load(":urma_pkg_repo.bzl", "urma_pkg_repository")
 
 def ds_deps():
     """Loads dependencies need to compile and test the Yuanrong Datasystem ."""
@@ -48,7 +49,7 @@ def ds_deps():
     setup_curl()
     setup_cuda()
     setup_mlcachedirect()
-    setup_local_urma()
+    setup_urma()
 
 def setup_cuda():
     maybe(
@@ -249,10 +250,8 @@ def setup_mlcachedirect():
         ],
     )
 
-def setup_local_urma():
+def setup_urma():
     maybe(
-        new_local_repository,
+        urma_pkg_repository,
         name = "local_urma",
-        path = "/usr",
-        build_file = "@mlcachedirect//third_party:BUILD.urma",
     )
