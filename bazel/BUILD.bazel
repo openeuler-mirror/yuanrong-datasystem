@@ -57,6 +57,10 @@ datasystem_sdk_tree(
     libdatasystem = "//:libdatasystem_file",
     libworker = "//:libdatasystem_worker_shared_file",
     libcoordinator = "//:libdatasystem_coordinator_shared_file",
+    urma_libs = select({
+        "//:enable_urma": ["@local_urma//:urma_libs"],
+        "//conditions:default": [],
+    }),
 )
 
 datasystem_cmake_config(
@@ -186,5 +190,8 @@ py_wheel(
         "//:readme_file",
         "//:version_file",
         "//:worker_config_file",
-    ],
+    ] + select({
+        "//:enable_urma": ["//:urma_libs_files"],
+        "//conditions:default": [],
+    }),
 )
