@@ -554,7 +554,8 @@ class Deployer:
         timings = []
 
         def http_stop(node):
-            """Try HTTP POST /stop via curl, wget, then python3."""
+            """Stop one instance via the brpc HTTP gateway (path preserved as
+            /stop, mapped to KvtestControl::Stop via brpc restful mapping)."""
             port = node.get('port', self.listen_port)
             url = f'http://localhost:{port}/stop'
             # Try curl first (most common in containers)
@@ -1273,7 +1274,7 @@ def main():
                    help='Config template (default: config/config.json.example)')
 
     # stop
-    p = sub.add_parser('stop', help='Stop all instances via HTTP /stop', parents=[shared])
+    p = sub.add_parser('stop', help='Stop all instances (HTTP POST /stop -> KvtestControl::Stop)', parents=[shared])
     p.add_argument('deploy_json')
     p.add_argument('config_template', nargs='?', default='config/config.json.example')
 

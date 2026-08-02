@@ -4,6 +4,7 @@
 #include "common/thread_pool.h"
 #include "metrics/metrics.h"
 #include "pipeline.h"
+#include "rpc/peer_client.h"
 #include <datasystem/kv_client.h>
 #include <atomic>
 #include <memory>
@@ -37,11 +38,12 @@ public:
 private:
     void PipelineLoop(int threadId);
     void NotifyPeers(const std::vector<std::string> &keys, uint64_t size);
-    void NotifyWarmupDone(const std::string &body);
+    void NotifyWarmupDone(const std::vector<std::string> &warmupKeys);
 
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;
     MetricsCollector &metrics_;
+    std::unique_ptr<PeerControlClient> peerClient_;
     std::atomic<bool> running_{false};
     std::atomic<uint64_t> currentPoolSize_{0};
     std::atomic<int> currentTargetQps_{0};

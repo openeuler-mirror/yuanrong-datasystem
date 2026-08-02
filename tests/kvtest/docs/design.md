@@ -344,9 +344,9 @@ graph TB
 |------|------|------|------|
 | kvtest → ds-worker | SDK RPC (ZMQ) | 客户端 → Worker | Set/Get/Exist 等 KV 操作 |
 | kvtest → etcd | HTTP | 客户端 → etcd | ServiceDiscovery 查询 Worker 地址 |
-| Writer → Reader | HTTP POST | 进程间 | `/notify` JSON: keys + sender + size |
+| Writer → Reader | brpc Notify（bazel）/ HTTP POST（cmake） | 进程间 | notify 载荷: action + keys + sender + size |
 | 部署工具 → 节点 | SSH / kubectl | 运维 → 远程 | SCP 二进制、启动/停止命令 |
-| 用户 → kvtest | HTTP GET/POST | 运维 → 进程 | `/stats` 查看、`/stop` 停止、`/summary` 汇总 |
+| 用户 → kvtest | HTTP（路径不变：/stats /stop /summary /notify） | 运维 → 进程 | 查看/停止/汇总（bazel brpc restful 映射保留路径） |
 
 ### 2.5 Scenarios — 关键使用场景
 
@@ -597,16 +597,23 @@ NotifyPeers(keys, size):
 
 ### 3.3 HTTP 服务 (HttpServer)
 
-**文件**: `src/rpc/http_server.h` / `src/rpc/http_server.cpp`
+**文件**: `src/rpc/http_server.{h,cpp}`（cmake 模式）、`src/rpc/brpc_server.{h,cpp}`（bazel 模式，`KVTEST_USE_BRPC`）、共享 `src/rpc/notify_dispatcher.{h,cpp}`
 
-基于 cpp-httplib 的轻量 HTTP 服务，提供 4 个端点：
+控制面有两条等价传输实现，由 `KVTEST_USE_BRPC` 编译期开关选择，notify 协议语义（NotifyDispatcher）完全一致：
 
-| 端点 | 方法 | 用途 | 响应 |
-|------|------|------|------|
-| `/notify` | POST | Reader 接收写入通知，触发 notify_pipeline | `"ok"` |
-| `/stop` | POST | 优雅停止（设置 gRunning=false） | `"stopping"` |
-| `/stats` | GET | 返回 JSON 格式当前计数 | JSON |
-| `/summary` | POST | 触发 WriteSummary，不停止进程 | `"ok"` |
+- **bazel 模式**：brpc 服务 `KvtestControl`，4 个 RPC。经 brpc restful 映射 **保留 httplib 旧路径**（`/stats`、`/stop`、`/summary`、`/notify`），`allow_default_url=false` 隐藏 `/KvtestControl/<Method>` 默认网关路径——外部 curl/脚本路径不变。C++ peer 客户端（`BrpcPeerClient`）用 `KvtestControl::Stub` 走二进制 protobuf，不经 HTTP 路径。
+- **cmake 模式**：cpp-httplib 轻量 HTTP 服务，4 个端点。
+
+| HTTP 路径（bazel restful 映射 + cmake httplib 一致） | 方法 | 用途 | 响应 |
+|---|---|---|---|
+| `/notify` | POST | Reader 接收写入通知，触发 notify_pipeline | cmake `"ok"` / bazel `{ok:true}` |
+| `/stop` | POST | 优雅停止（设置 gRunning=false） | cmake `"stopping"` / bazel `{stopping:true}` |
+| `/stats` | GET | 返回统计 | cmake 直接 metrics JSON / bazel `{stats_json:"<metrics json>"}` |
+| `/summary` | POST | 触发 WriteSummary，不停止进程 | cmake `"ok"` / bazel `{ok:true}` |
+
+> 注：bazel 模式 `/stats` 响应为 protobuf-JSON 包裹（`{"stats_json":"..."}`），与 cmake 的裸 JSON 略有差异；基于 `grep` 的脚本（如 `grep instance_id`）仍命中，`python3 -m json.tool` 显示包裹层。
+
+实例间通信（Writer→Reader notify、批量 stop peers）经 `src/rpc/peer_client.{h,cpp}` 的 `PeerControlClient` 抽象：bazel 用 `brpc::Channel`+`KvtestControl::Stub`，cmake 用 `httplib::Client` POST 旧端点。
 
 #### HandleNotify 流程
 

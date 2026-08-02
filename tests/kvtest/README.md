@@ -33,9 +33,11 @@ dscli start -w --worker_address 127.0.0.1:31501 --etcd_address 127.0.0.1:2379
 cd tests/kvtest/output
 LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/my_config.json
 
-# 查看统计 / 停止
-curl http://127.0.0.1:9000/stats | python3 -m json.tool
+# 查看统计 / 停止（HTTP 端点路径不变：/stats、/stop、/summary、/notify）
+# bazel 构建：brpc 经 restful 映射保留旧路径，响应 /stats 为 {"stats_json":"<metrics json>"}
+curl -s http://127.0.0.1:9000/stats | python3 -m json.tool
 curl -X POST http://127.0.0.1:9000/stop
+# cmake 构建仍走 httplib：/stats 直接返回 metrics JSON
 ```
 
 ## Benchmark Set/Get 模式
