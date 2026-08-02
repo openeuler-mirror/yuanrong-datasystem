@@ -29,12 +29,6 @@ namespace datasystem::cluster {
 namespace {
 constexpr size_t MEMBER_ID_SIZE = 16;
 constexpr size_t SHA256_HEX_SIZE = 64;
-constexpr size_t MAX_MEMBER_ADDRESS_BYTES = 1'024;
-
-bool IsCommitted(MemberState state)
-{
-    return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING || state == MemberState::LEAVING;
-}
 
 bool IsProspective(MemberState state, const std::optional<ActiveBatch> &batch)
 {
@@ -42,10 +36,10 @@ bool IsProspective(MemberState state, const std::optional<ActiveBatch> &batch)
         return false;
     }
     if (batch->type == TopologyChangeType::SCALE_OUT) {
-        return IsCommitted(state) || state == MemberState::JOINING;
+        return IsCommittedMemberState(state) || state == MemberState::JOINING;
     }
     if (batch->type == TopologyChangeType::SCALE_IN) {
-        return IsCommitted(state) && state != MemberState::LEAVING;
+        return IsCommittedMemberState(state) && state != MemberState::LEAVING;
     }
     return false;
 }
@@ -117,13 +111,10 @@ bool IsSha256Hex(const std::string &digest)
 }
 }  // namespace
 
-Status TopologySnapshot::Create(TopologyState state, int64_t authorityRevision, std::string canonicalDigest,
-                                std::shared_ptr<const TopologySnapshot> &snapshot)
+Status ValidateAndCanonicalizeTopologyState(TopologyState &state)
 {
     CHECK_FAIL_RETURN_STATUS(state.version > 0 && state.version <= std::numeric_limits<int64_t>::max(), K_INVALID,
                              "invalid topology version");
-    CHECK_FAIL_RETURN_STATUS(authorityRevision >= 0 && IsSha256Hex(canonicalDigest), K_INVALID,
-                             "invalid topology evidence");
     if (state.activeBatch.has_value()) {
         CHECK_FAIL_RETURN_STATUS(state.activeBatch->epoch > 0 && state.activeBatch->epoch <= state.version, K_INVALID,
                                  "invalid active batch epoch");
@@ -131,12 +122,47 @@ Status TopologySnapshot::Create(TopologyState state, int64_t authorityRevision, 
     RETURN_IF_NOT_OK(ValidateBatchStates(state));
     std::sort(state.members.begin(), state.members.end(),
               [](const Member &left, const Member &right) { return left.identity.address < right.identity.address; });
-    for (auto &member : state.members) {
-        std::sort(member.tokens.begin(), member.tokens.end());
+
+    std::unordered_set<std::string_view> ids;
+    std::unordered_set<uint32_t> tokens;
+    ids.reserve(state.members.size());
+    size_t tokenCount = 0;
+    bool hasCommittedMember = false;
+    bool hasCommittedToken = false;
+    for (const auto &member : state.members) {
+        tokenCount += member.tokens.size();
     }
+    tokens.reserve(tokenCount);
+    for (size_t index = 0; index < state.members.size(); ++index) {
+        auto &member = state.members[index];
+        RETURN_IF_NOT_OK(ValidateAddress(member.identity.address));
+        CHECK_FAIL_RETURN_STATUS(member.identity.id.size() == MEMBER_ID_SIZE, K_INVALID, "invalid member id");
+        CHECK_FAIL_RETURN_STATUS(index == 0 || state.members[index - 1].identity.address != member.identity.address,
+                                 K_INVALID, "duplicate member address");
+        CHECK_FAIL_RETURN_STATUS(ids.emplace(member.identity.id).second, K_INVALID, "duplicate member id");
+        std::sort(member.tokens.begin(), member.tokens.end());
+        for (uint32_t ringPoint : member.tokens) {
+            CHECK_FAIL_RETURN_STATUS(tokens.emplace(ringPoint).second, K_INVALID, "duplicate topology token");
+        }
+        if (IsCommittedMemberState(member.state)) {
+            hasCommittedMember = true;
+            hasCommittedToken = hasCommittedToken || !member.tokens.empty();
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(!hasCommittedMember || hasCommittedToken, K_INVALID,
+                             "committed topology members have no token owner");
+    return Status::OK();
+}
+
+Status TopologySnapshot::Create(TopologyState state, int64_t authorityRevision, std::string canonicalDigest,
+                                std::shared_ptr<const TopologySnapshot> &snapshot)
+{
+    CHECK_FAIL_RETURN_STATUS(authorityRevision >= 0 && IsSha256Hex(canonicalDigest), K_INVALID,
+                             "invalid topology evidence");
+    RETURN_IF_NOT_OK(ValidateAndCanonicalizeTopologyState(state));
     auto candidate = std::shared_ptr<TopologySnapshot>(
         new TopologySnapshot(std::move(state), authorityRevision, std::move(canonicalDigest)));
-    RETURN_IF_NOT_OK(candidate->BuildIndexes());
+    candidate->BuildIndexes();
     snapshot = std::move(candidate);
     return Status::OK();
 }
@@ -146,20 +172,7 @@ TopologySnapshot::TopologySnapshot(TopologyState state, int64_t authorityRevisio
 {
 }
 
-Status TopologySnapshot::BuildIndexes()
-{
-    ReserveIndexes();
-    RETURN_IF_NOT_OK(BuildIndexEntries());
-    CHECK_FAIL_RETURN_STATUS(committedMembers_.empty() || !committedTokenOwners_.empty(), K_INVALID,
-                             "committed topology members have no token owner");
-    std::sort(committedTokenOwners_.begin(), committedTokenOwners_.end(),
-              [](const auto &left, const auto &right) { return left.first < right.first; });
-    std::sort(prospectiveTokenOwners_.begin(), prospectiveTokenOwners_.end(),
-              [](const auto &left, const auto &right) { return left.first < right.first; });
-    return Status::OK();
-}
-
-void TopologySnapshot::ReserveIndexes()
+void TopologySnapshot::BuildIndexes()
 {
     size_t committedMemberCount = 0;
     size_t activeMemberCount = 0;
@@ -167,7 +180,7 @@ void TopologySnapshot::ReserveIndexes()
     size_t committedTokenCount = 0;
     size_t prospectiveTokenCount = 0;
     for (const auto &member : state_.members) {
-        if (IsCommitted(member.state)) {
+        if (IsCommittedMemberState(member.state)) {
             ++committedMemberCount;
             committedTokenCount += member.tokens.size();
         }
@@ -184,30 +197,14 @@ void TopologySnapshot::ReserveIndexes()
     failedMembers_.reserve(failedMemberCount);
     committedTokenOwners_.reserve(committedTokenCount);
     prospectiveTokenOwners_.reserve(prospectiveTokenCount);
-}
-
-Status TopologySnapshot::BuildIndexEntries()
-{
-    std::unordered_set<uint32_t> tokens;
-    size_t tokenCount = 0;
-    for (const auto &member : state_.members) {
-        tokenCount += member.tokens.size();
-    }
-    tokens.reserve(tokenCount);
     for (size_t index = 0; index < state_.members.size(); ++index) {
         const auto &member = state_.members[index];
-        RETURN_IF_NOT_OK(ValidateAddress(member.identity.address));
-        CHECK_FAIL_RETURN_STATUS(member.identity.id.size() == MEMBER_ID_SIZE, K_INVALID, "invalid member id");
-        CHECK_FAIL_RETURN_STATUS(addressIndex_.emplace(member.identity.address, index).second, K_INVALID,
-                                 "duplicate member address");
-        CHECK_FAIL_RETURN_STATUS(idIndex_.emplace(member.identity.id, index).second, K_INVALID, "duplicate member id");
-        for (uint32_t token : member.tokens) {
-            CHECK_FAIL_RETURN_STATUS(tokens.emplace(token).second, K_INVALID, "duplicate topology token");
-        }
-        if (IsCommitted(member.state)) {
+        addressIndex_.emplace(member.identity.address, index);
+        idIndex_.emplace(member.identity.id, index);
+        if (IsCommittedMemberState(member.state)) {
             committedMembers_.emplace_back(&member);
-            for (uint32_t token : member.tokens) {
-                committedTokenOwners_.emplace_back(token, &member);
+            for (uint32_t ringPoint : member.tokens) {
+                committedTokenOwners_.emplace_back(ringPoint, &member);
             }
         }
         if (member.state == MemberState::ACTIVE) {
@@ -216,12 +213,15 @@ Status TopologySnapshot::BuildIndexEntries()
             failedMembers_.emplace_back(&member);
         }
         if (IsProspective(member.state, state_.activeBatch)) {
-            for (uint32_t token : member.tokens) {
-                prospectiveTokenOwners_.emplace_back(token, &member);
+            for (uint32_t ringPoint : member.tokens) {
+                prospectiveTokenOwners_.emplace_back(ringPoint, &member);
             }
         }
     }
-    return Status::OK();
+    std::sort(committedTokenOwners_.begin(), committedTokenOwners_.end(),
+              [](const auto &left, const auto &right) { return left.first < right.first; });
+    std::sort(prospectiveTokenOwners_.begin(), prospectiveTokenOwners_.end(),
+              [](const auto &left, const auto &right) { return left.first < right.first; });
 }
 
 uint64_t TopologySnapshot::Version() const noexcept
@@ -290,7 +290,7 @@ Status TopologySnapshot::FindNextCommittedMember(const std::string &address, con
 {
     const Member *current = nullptr;
     auto rc = FindMemberByAddress(address, current);
-    CHECK_FAIL_RETURN_STATUS(rc.IsOk() && current != nullptr && IsCommitted(current->state), K_NOT_FOUND,
+    CHECK_FAIL_RETURN_STATUS(rc.IsOk() && current != nullptr && IsCommittedMemberState(current->state), K_NOT_FOUND,
                              "committed member address not found");
     CHECK_FAIL_RETURN_STATUS(committedMembers_.size() > 1, K_NOT_FOUND, "no distinct committed member");
     auto iter = std::upper_bound(
@@ -329,7 +329,7 @@ Status TopologySnapshot::ValidateMigrationFence(const TopologyMigrationFence &fe
     RETURN_IF_NOT_OK(FindExactMember(*this, fence.source, source));
     RETURN_IF_NOT_OK(FindExactMember(*this, fence.target, target));
     const auto type = state_.activeBatch->type;
-    const bool scaleOut = type == TopologyChangeType::SCALE_OUT && IsCommitted(source->state)
+    const bool scaleOut = type == TopologyChangeType::SCALE_OUT && IsCommittedMemberState(source->state)
                           && target->state == MemberState::JOINING;
     const bool scaleIn = type == TopologyChangeType::SCALE_IN && source->state == MemberState::LEAVING
                          && target->state == MemberState::ACTIVE

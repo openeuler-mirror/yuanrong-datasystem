@@ -67,11 +67,6 @@ bool SameAuthorityStamp(const ControlBackendObservation &left, const ControlBack
            && !left.topologyDigest.empty() && left.topologyDigest == right.topologyDigest;
 }
 
-bool IsCommitted(MemberState state)
-{
-    return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING || state == MemberState::LEAVING;
-}
-
 bool AllowsBusinessTraffic(TopologyAvailabilityLevel level)
 {
     return level == TopologyAvailabilityLevel::NORMAL || level == TopologyAvailabilityLevel::CONTROL_DEGRADED;
@@ -96,7 +91,7 @@ Status SelectProbeTargets(const TopologySnapshot &snapshot, const std::string &l
     std::vector<MemberIdentity> committed;
     bool localCommitted = false;
     for (const auto &member : snapshot.Members()) {
-        if (!IsCommitted(member.state)) {
+        if (!IsCommittedMemberState(member.state)) {
             continue;
         }
         if (member.identity.address == localAddress) {
@@ -694,7 +689,7 @@ Status TopologyEngine::StartMemberRole()
     std::vector<WatchKey> watches;
     const auto role = options_.unifiedEtcdWatch ? TopologyRuntimeRole::UNIFIED_ETCD : TopologyRuntimeRole::WORKER;
     const auto factRevision = options_.unifiedEtcdWatch ? controllerRevision : watchRevision;
-    RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(role, options_.localAddress, *keys_, factRevision, watches));
+    RETURN_IF_NOT_OK(BuildTopologyRoleWatchPlan(role, options_.localAddress, *keys_, factRevision, watches));
     if (options_.unifiedEtcdWatch) {
         for (auto &watch : watches) {
             if (watch.tableName == keys_->NotifyTable()) {
@@ -1023,7 +1018,6 @@ TopologyDiagnostics TopologyEngine::GetDiagnostics() const
         diagnostics.topologyVersion = backendObservation_.topologyVersion;
         diagnostics.topologyRevision = backendObservation_.topologyRevision;
         diagnostics.topologyDigestPrefix = TopologyDiagnosticPrefix(backendObservation_.topologyDigest);
-        diagnostics.backendHealthy = backendObservation_.state == ControlBackendState::AVAILABLE;
         diagnostics.controlBackendState = backendObservation_.state;
         diagnostics.isolationReason = isolationReason_;
         diagnostics.lastError = lastError_;
@@ -1148,9 +1142,9 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
         SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED,
                         identityChanged ? "local_identity_changed" : "local_member_failed");
     } else {
-        SetAvailability(
-            IsCommitted(local->state) ? TopologyAvailabilityLevel::NORMAL : TopologyAvailabilityLevel::NOT_READY,
-            IsCommitted(local->state) ? "" : "local_member_not_committed");
+        SetAvailability(IsCommittedMemberState(local->state) ? TopologyAvailabilityLevel::NORMAL
+                                                             : TopologyAvailabilityLevel::NOT_READY,
+                        IsCommittedMemberState(local->state) ? "" : "local_member_not_committed");
     }
     localMemberExistedInPreviousSnapshot_.store(true, std::memory_order_relaxed);
     localMemberWasLeavingInPreviousSnapshot_.store(

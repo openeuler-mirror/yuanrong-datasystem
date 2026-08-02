@@ -139,8 +139,7 @@ TEST(MembershipEndpointViewTest, FencesLocalObservationByTopologyVersionAndIdent
     SnapshotUpdateOutcome outcome;
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     MembershipEndpointView view(snapshots);
-    EndpointObservation observation{ topology.members.front().identity, 1, EndpointAvailability::REACHABLE,
-                                     std::chrono::steady_clock::now() };
+    EndpointObservation observation{ topology.members.front().identity, 1, EndpointAvailability::REACHABLE };
     DS_ASSERT_OK(view.UpdateObservation(observation));
     MemberEndpoint endpoint;
     DS_ASSERT_OK(view.ResolveByAddress(observation.identity.address, endpoint));
@@ -171,8 +170,7 @@ TEST(MembershipEndpointViewTest, ResolvesUnknownWithoutObservationAndRemovesStal
 
     DS_ASSERT_OK(view.ResolveByAddress(topology.members.front().identity.address, endpoint));
     EXPECT_EQ(endpoint.localAvailability, EndpointAvailability::UNKNOWN);
-    EndpointObservation observation{ topology.members.front().identity, 1, EndpointAvailability::REACHABLE,
-                                     std::chrono::steady_clock::now() };
+    EndpointObservation observation{ topology.members.front().identity, 1, EndpointAvailability::REACHABLE };
     DS_ASSERT_OK(view.UpdateObservation(observation));
 
     topology.version = 2;
@@ -194,8 +192,7 @@ TEST(MembershipEndpointViewTest, RejectsObservationWhenIdentityDoesNotMatchCurre
     SnapshotUpdateOutcome outcome;
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     MembershipEndpointView view(snapshots);
-    EndpointObservation observation{ topology.members.front().identity, 1, EndpointAvailability::REACHABLE,
-                                     std::chrono::steady_clock::now() };
+    EndpointObservation observation{ topology.members.front().identity, 1, EndpointAvailability::REACHABLE };
     observation.identity.id = std::string(16, 'b');
 
     EXPECT_EQ(view.UpdateObservation(observation).GetCode(), K_INVALID);

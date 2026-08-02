@@ -31,6 +31,13 @@ namespace datasystem::cluster {
 
 class HashAlgorithm;
 
+/**
+ * @brief Validate and canonically order a mutable topology state without building runtime indexes.
+ * @param[in,out] state State to validate and order by address/token.
+ * @return K_OK on success; K_INVALID for an illegal topology.
+ */
+Status ValidateAndCanonicalizeTopologyState(TopologyState &state);
+
 class TopologySnapshot final {
 public:
     /**
@@ -44,54 +51,24 @@ public:
     static Status Create(TopologyState state, int64_t authorityRevision, std::string canonicalDigest,
                          std::shared_ptr<const TopologySnapshot> &snapshot);
 
-    /**
-     * @brief Destroy immutable storage and indexes.
-     */
     ~TopologySnapshot() = default;
-
-    /**
-     * @brief Disable copying immutable Snapshot storage.
-     */
     TopologySnapshot(const TopologySnapshot &) = delete;
-
-    /**
-     * @brief Disable copy assignment of immutable Snapshot storage.
-     */
     TopologySnapshot &operator=(const TopologySnapshot &) = delete;
 
-    /**
-     * @brief Return the topology version.
-     * @return Authoritative monotonic version.
-     */
     uint64_t Version() const noexcept;
-
-    /**
-     * @brief Return the exact-read revision.
-     * @return Non-negative backend revision.
-     */
     int64_t AuthorityRevision() const noexcept;
-
-    /**
-     * @brief Return the canonical digest.
-     * @return Stable snapshot-lifetime reference.
-     */
     const std::string &CanonicalDigest() const noexcept;
-
-    /**
-     * @brief Check first bootstrap state.
-     * @return True after bootstrap committed.
-     */
     bool ClusterHasInit() const noexcept;
 
     /**
      * @brief Return the minimal active batch.
-     * @return Stable optional reference.
+     * @return Stable snapshot-lifetime optional reference.
      */
     const std::optional<ActiveBatch> &GetActiveBatch() const noexcept;
 
     /**
      * @brief Return canonically ordered members.
-     * @return Stable member-vector reference.
+     * @return Stable snapshot-lifetime member-vector reference.
      */
     const std::vector<Member> &Members() const noexcept;
 
@@ -112,20 +89,20 @@ public:
     Status FindMemberById(const std::string &id, const Member *&member) const;
 
     /**
-     * @brief Return committed owners.
-     * @return ACTIVE/PRE_LEAVING/LEAVING member pointers.
+     * @brief Return committed owners in canonical address order.
+     * @return Stable snapshot-lifetime ACTIVE/PRE_LEAVING/LEAVING pointer vector with no allocation or IO.
      */
     const std::vector<const Member *> &CommittedMembers() const noexcept;
 
     /**
      * @brief Return ACTIVE members in canonical address order.
-     * @return Stable Snapshot-lifetime pointer vector with no allocation or IO.
+     * @return Stable snapshot-lifetime pointer vector with no allocation or IO.
      */
     const std::vector<const Member *> &ActiveMembers() const noexcept;
 
     /**
      * @brief Return FAILED members in canonical address order.
-     * @return Stable Snapshot-lifetime pointer vector with no allocation or IO.
+     * @return Stable snapshot-lifetime pointer vector with no allocation or IO.
      */
     const std::vector<const Member *> &FailedMembers() const noexcept;
 
@@ -159,30 +136,8 @@ public:
 private:
     friend class HashAlgorithm;
 
-    /**
-     * @brief Construct prevalidated immutable storage.
-     * @param[in] state Validated state to consume.
-     * @param[in] authorityRevision Non-negative backend revision.
-     * @param[in] canonicalDigest Canonical digest to consume.
-     */
     TopologySnapshot(TopologyState state, int64_t authorityRevision, std::string canonicalDigest);
-
-    /**
-     * @brief Build stable indexes once.
-     * @return K_OK or K_INVALID.
-     */
-    Status BuildIndexes();
-
-    /**
-     * @brief Reserve immutable index storage before inserting entries.
-     */
-    void ReserveIndexes();
-
-    /**
-     * @brief Validate members and insert immutable index entries.
-     * @return K_OK or K_INVALID.
-     */
-    Status BuildIndexEntries();
+    void BuildIndexes();
 
     TopologyState state_;
     int64_t authorityRevision_{ 0 };

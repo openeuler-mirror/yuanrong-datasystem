@@ -569,11 +569,13 @@ TEST(DsCoordinationBackendSessionTest, RecoveringLeaderInitialLeaseUsesReconcile
 {
     DeterministicCoordinatorProxy proxy;
     proxy.SetPutStatus(Status(K_NOT_READY, "leader recovering"));
+    proxy.SetKeepAliveStatus(Status::OK());
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
     int reconciled = 0;
-    backend.SetMembershipReconcileHandler([&backend, &reconciled](bool waitForCompletion) {
+    backend.SetMembershipReconcileHandler([&backend, &proxy, &reconciled](bool waitForCompletion) {
         EXPECT_TRUE(waitForCompletion);
         ++reconciled;
+        proxy.SetMembershipRevision(17);
         backend.OnMembershipEnsured(COORDINATOR_A, 17);
         return Status::OK();
     });
@@ -582,7 +584,6 @@ TEST(DsCoordinationBackendSessionTest, RecoveringLeaderInitialLeaseUsesReconcile
     EXPECT_EQ(reconciled, 1);
     EXPECT_TRUE(backend.IsFirstKeepAliveSent());
     proxy.SetPutStatus(Status::OK());
-    proxy.SetMembershipRevision(17);
     ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
     EXPECT_EQ(proxy.LastExpectedModRevision(), 17);
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());

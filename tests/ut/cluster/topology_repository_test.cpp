@@ -166,7 +166,8 @@ TEST(TopologyRepositoryTest, ScaleInMetadataDoneTombstoneMakesConcurrentRewriteR
     const std::string taskId = "m-e7-0123456789abcdef0123456789abcdef";
     DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, taskId, "operation-a" }));
     std::vector<ScaleInMetadataDoneJanitorCandidate> markers;
-    DS_ASSERT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(8, markers));
+    std::string markerCursor;
+    DS_ASSERT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(8, markerCursor, markers));
     ASSERT_EQ(markers.size(), 1);
     Status staleDeleteStatus;
     bool staleDeleted = true;

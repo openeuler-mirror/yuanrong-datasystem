@@ -129,17 +129,17 @@ size_t MaterializeAndSerialize(const TopologySnapshot &snapshot, const HashAlgor
     ExpectedDerivedState expected;
     EXPECT_TRUE(materializer.RebuildExpected(snapshot, algorithm, BuildMemberships(snapshot.Members()), true, expected)
                     .IsOk());
-    EXPECT_EQ(expected.restartTimestampsByAddress.size(), JOINING_MEMBER_COUNT);
     if (expected.notifyRecipients.empty()) {
         ADD_FAILURE() << "materialized generation has no notify recipients";
         return 0;
     }
-    TopologyTaskNotify regularNotify;
     std::string regularBytes;
     std::string optimizedBytes;
-    EXPECT_TRUE(materializer.BuildNotifyFor(expected, expected.notifyRecipients.front(), regularNotify).IsOk());
-    EXPECT_TRUE(TopologyRepositoryCodec::EncodeNotify(regularNotify, regularBytes).IsOk());
     EXPECT_TRUE(materializer.BuildEncodedNotifyFor(expected, expected.notifyRecipients.front(), optimizedBytes).IsOk());
+    TopologyTaskNotify regularNotify;
+    EXPECT_TRUE(TopologyRepositoryCodec::DecodeNotify(optimizedBytes, regularNotify).IsOk());
+    EXPECT_EQ(regularNotify.restartTimestampsByAddress.size(), JOINING_MEMBER_COUNT);
+    EXPECT_TRUE(TopologyRepositoryCodec::EncodeNotify(regularNotify, regularBytes).IsOk());
     EXPECT_EQ(optimizedBytes, regularBytes);
     size_t serializedBytes = 0;
     for (const auto &address : expected.notifyRecipients) {

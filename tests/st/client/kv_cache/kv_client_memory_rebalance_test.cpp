@@ -850,7 +850,7 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceTargetActiveScaleInUrmaDoesN
 // WaitForTopologyRemoval; PreShutDown (F5) then runs best-effort cleanup and the process
 // exits. The ring re-stabilizes at the two survivors once WORKER1's membership lease
 // (node_timeout_s=5 + node_dead_timeout_s=10) expires after the process is gone.
-// NOTE: F2's window-exhaustion branch (advance attemptsByOperation_ + ScheduleRetryLocked)
+// NOTE: F2's window-exhaustion branch (advance the operation attempt count + schedule bounded retry)
 // is not exercised here — it would need a UT that pre-exhausts the 3min window. This ST
 // case only proves F1's bounded grace unblocks the stuck Target.
 // Data readability is not asserted here (SPILL data-loss is tracked by #869).

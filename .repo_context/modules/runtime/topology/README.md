@@ -12,6 +12,9 @@
   - `src/datasystem/worker/metadata_route_resolver.{h,cpp}`
 - The module owns authoritative cluster membership state, immutable routing snapshots, topology planning, task
   materialization/execution, and the backend-specific control loop.
+- Headers under `src/datasystem/cluster` are repository-internal composition interfaces, not installed SDK headers or
+  a cross-release source-compatibility surface. Bazel visibility and CMake public include propagation support monorepo
+  consumers; external client compatibility is owned by installed headers under `include/datasystem`.
 - `DsCoordinationBackend` preserves the topology architecture while using the in-memory Coordinator transport. A
   restarted Coordinator fences its new lifetime with `CoordinatorId`, gates topology/task/notify access, accepts
   Worker-reported last-good topology candidates, installs one canonical highest version, and regenerates derived work.
@@ -134,6 +137,10 @@
   metadata or data handoff from another leaving member.
 - Business migration/recovery is invoked through one opaque task callback. `IKeyFilter` and `StorageScanPlan` keep token
   representation internal, while callbacks receive stable operation identity, deadline, and cooperative cancellation.
+  `TopologyTaskExecutor` owns one mutex-protected state record per business operation; retry timing, attempt count,
+  cancellation, progress-only retry, and ScaleIn stage facts cannot diverge across parallel maps. Sparse reverse indexes
+  retain only operation IDs needed to scan scheduled retries without walking the full operation table and to determine
+  when one source/batch metadata gate becomes ready.
 - Scale-in execution is metadata-first. The first callback migrates source metadata and writes one metadata-done marker
   per task under the source/batch gate; only after all expected source markers exist does the executor re-enter the task
   to drain Worker-local data and prepare cleanup. Scale-in cleanup preparation only materializes the task scope. The
@@ -233,9 +240,9 @@
   coordinator crash before final topology CAS may repeat it.
 - Scale-out and scale-in callbacks use bounded retries. Exhausted scale-out removes the joining member so it can restart
   and re-enter as `INITIAL`; exhausted scale-in proceeds through external bounded termination and Failure handling.
-  Callback window exhaustion advances `attemptsByOperation_` and re-arms via `ScheduleRetryLocked` (bounded backoff)
-  rather than blindly resetting `nextAttempt` through `PreserveDueOperation`; the operation stays pending so the
-  controller's failure-confirmation / lease-expiry path can still finalize it.
+  Callback window exhaustion advances the operation record's attempt count and re-arms its next-attempt deadline with
+  bounded backoff rather than blindly resetting it through the due-operation preservation path; the operation stays
+  pending so the controller's failure-confirmation / lease-expiry path can still finalize it.
   Object and stream callbacks treat per-item migration failures as retryable task failures, so a successful RPC status
   alone cannot advance the batch while selected metadata is still missing at the target. Object metadata success
   includes durable nested relationships and nested reference counts; target persistence failure keeps the source-side

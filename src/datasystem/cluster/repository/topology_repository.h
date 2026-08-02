@@ -156,16 +156,6 @@ public:
     Status ReadNotify(const std::string &address, TopologyTaskNotify &notify) const;
 
     /**
-     * @brief List a bounded backend-neutral Janitor task snapshot.
-     * @param[in] kind Task collection kind.
-     * @param[in] limit Maximum result count.
-     * @param[out] tasks Raw byte-match candidates.
-     * @return Backend status.
-     */
-    Status ListTaskCandidatesForJanitor(TopologyTaskKind kind, size_t limit,
-                                        std::vector<TaskJanitorCandidate> &tasks) const;
-
-    /**
      * @brief Continue a rotating backend-neutral Janitor task scan.
      * @param[in] kind Task collection kind.
      * @param[in] limit Maximum result count.
@@ -177,14 +167,6 @@ public:
                                         std::vector<TaskJanitorCandidate> &tasks) const;
 
     /**
-     * @brief List a bounded backend-neutral Janitor notify snapshot.
-     * @param[in] limit Maximum result count.
-     * @param[out] notifies Decoded byte-match candidates.
-     * @return Backend or validation status.
-     */
-    Status ListNotifyCandidatesForJanitor(size_t limit, std::vector<NotifyJanitorCandidate> &notifies) const;
-
-    /**
      * @brief Continue a rotating backend-neutral Janitor notify scan.
      * @param[in] limit Maximum result count.
      * @param[in,out] cursor Last visited physical key; updated after a successful page.
@@ -193,15 +175,6 @@ public:
      */
     Status ListNotifyCandidatesForJanitor(size_t limit, std::string &cursor,
                                           std::vector<NotifyJanitorCandidate> &notifies) const;
-
-    /**
-     * @brief List a bounded backend-neutral Janitor ScaleIn metadata marker snapshot.
-     * @param[in] limit Maximum result count.
-     * @param[out] markers Raw byte-match candidates.
-     * @return Backend status.
-     */
-    Status ListScaleInMetadataDoneCandidatesForJanitor(
-        size_t limit, std::vector<ScaleInMetadataDoneJanitorCandidate> &markers) const;
 
     /**
      * @brief Continue a rotating backend-neutral Janitor ScaleIn metadata marker scan.
@@ -255,6 +228,9 @@ private:
      * @return Backend status.
      */
     Status RewriteEncodedNotify(const std::string &address, const std::string &value);
+
+    Status DeleteIfMatches(const std::string &table, const std::string &key, const std::string &matchToken,
+                           const char *tombstonePrefix, bool &deleted);
 
     /**
      * @brief Select a fixed task table.

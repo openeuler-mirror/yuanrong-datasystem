@@ -37,7 +37,6 @@ struct EndpointObservation {
     MemberIdentity identity;
     uint64_t topologyVersion{ 0 };
     EndpointAvailability availability{ EndpointAvailability::UNKNOWN };
-    std::chrono::steady_clock::time_point observedAt;
 };
 
 /**

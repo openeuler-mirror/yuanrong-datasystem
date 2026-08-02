@@ -320,6 +320,28 @@ TEST(TopologyTaskExecutorTest, ExecutesOneTaskCallbackAndCommitsWholeScopeProgre
     DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
+TEST(TopologyTaskExecutorTest, LateProgressCompletionAfterFailureCleanupIsIdempotent)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, {});
+    DS_ASSERT_OK(executor.Start());
+    DS_ASSERT_OK(executor.HandleNotify(scenario.expected.notifiesByAddress.at(task.executorAddress)));
+    auto completion = WaitCompletion(scenario.dispatcher);
+    TopologyCallbackCompletion late{ completion.fence, completion.businessOperationId, completion.deadline,
+                                     Status::OK(), nullptr };
+    completion.status = Status(K_INVALID, "injected terminal completion failure");
+    EXPECT_EQ(executor.HandleCompletion(std::move(completion)).GetCode(), K_INVALID);
+    const auto diagnostics = executor.GetDiagnostics();
+
+    DS_ASSERT_OK(executor.HandleCompletion(std::move(late)));
+    EXPECT_EQ(executor.GetDiagnostics().failed, diagnostics.failed);
+    EXPECT_EQ(executor.GetDiagnostics().lastError, diagnostics.lastError);
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
 TEST(TopologyTaskExecutorTest, RetriesFailedRestartFactsAndDeduplicatesOnlySuccess)
 {
     ExecutorScenario scenario;
@@ -752,6 +774,28 @@ TEST(TopologyTaskExecutorTest, ScaleInMetadataGatePrecedesDataDrainAndTaskProgre
     EXPECT_EQ(scenario.callbacks.scaleInDataDrainCalls.load(), 1);
     EXPECT_EQ(scenario.callbacks.cleanupAuthorizations.load(), 1);
     EXPECT_EQ(scenario.callbacks.cleanupEffects.load(), 1);
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyTaskExecutorTest, LateScaleInMetadataCompletionAfterFailureCleanupIsIdempotent)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp(TopologyChangeType::SCALE_IN));
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, {});
+    DS_ASSERT_OK(executor.Start());
+    DS_ASSERT_OK(executor.HandleNotify(scenario.expected.notifiesByAddress.at(task.executorAddress)));
+    auto completion = WaitCompletion(scenario.dispatcher);
+    TopologyCallbackCompletion late{ completion.fence, completion.businessOperationId, completion.deadline,
+                                     Status::OK(), nullptr };
+    completion.status = Status(K_INVALID, "injected terminal completion failure");
+    EXPECT_EQ(executor.HandleCompletion(std::move(completion)).GetCode(), K_INVALID);
+    const auto diagnostics = executor.GetDiagnostics();
+
+    DS_ASSERT_OK(executor.HandleCompletion(std::move(late)));
+    EXPECT_EQ(executor.GetDiagnostics().failed, diagnostics.failed);
+    EXPECT_EQ(executor.GetDiagnostics().lastError, diagnostics.lastError);
     DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

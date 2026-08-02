@@ -153,12 +153,11 @@ private:
     TopologyTaskMaterializer materializer_;
     TopologyController controller_;
     std::unique_ptr<TopologyTaskJanitor> janitor_;
-    // Protects startAttempted_, started_, stopping_, and lifecycleOperationInFlight_. Component Start/Stop and join
+    // Protects startAttempted_, started_, and lifecycleOperationInFlight_. Component Start/Stop and join
     // always execute after releasing this mutex. No component mutex may be held while acquiring lifecycleMutex_.
     std::mutex lifecycleMutex_;
     bool startAttempted_{ false };
     bool started_{ false };
-    bool stopping_{ false };
     bool lifecycleOperationInFlight_{ false };
 };
 

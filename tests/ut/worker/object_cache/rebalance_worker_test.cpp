@@ -341,8 +341,7 @@ protected:
         if (availability != cluster::EndpointAvailability::UNKNOWN) {
             cluster::MemberEndpoint endpoint;
             DS_ASSERT_OK(membership_.ResolveByAddress(MASTER_ADDR.ToString(), endpoint));
-            cluster::EndpointObservation observation{ endpoint.identity, topologyVersion_, availability,
-                                                      std::chrono::steady_clock::now() };
+            cluster::EndpointObservation observation{ endpoint.identity, topologyVersion_, availability };
             DS_ASSERT_OK(membership_.UpdateObservation(observation));
         }
     }

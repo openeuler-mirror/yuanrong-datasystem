@@ -66,7 +66,7 @@ void TopologyObserver::CleanupAfterStartFailure(const char *cleanupMessage)
 Status TopologyObserver::RegisterWatchEvents()
 {
     std::vector<WatchKey> watches;
-    RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(TopologyRuntimeRole::OBSERVER, "", keys_, 0, watches));
+    RETURN_IF_NOT_OK(BuildTopologyRoleWatchPlan(TopologyRuntimeRole::OBSERVER, "", keys_, 0, watches));
     InstallEventHandler();
     auto watchStatus = backend_.WatchEvents(watches);
     if (watchStatus.IsError()) {

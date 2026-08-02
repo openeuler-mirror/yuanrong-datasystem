@@ -39,12 +39,7 @@ std::string TaskId(const TopologyTask &task)
 
 bool SameNotify(const TopologyTaskNotify &left, const TopologyTaskNotify &right)
 {
-    const bool sameBatchPresence = left.activeBatch.has_value() == right.activeBatch.has_value();
-    const bool sameBatch =
-        !left.activeBatch.has_value()
-        || (right.activeBatch.has_value() && left.activeBatch->type == right.activeBatch->type
-            && left.activeBatch->epoch == right.activeBatch->epoch);
-    return sameBatchPresence && sameBatch && left.taskIds == right.taskIds
+    return left.activeBatch == right.activeBatch && left.taskIds == right.taskIds
            && left.restartTimestampsByAddress == right.restartTimestampsByAddress;
 }
 
