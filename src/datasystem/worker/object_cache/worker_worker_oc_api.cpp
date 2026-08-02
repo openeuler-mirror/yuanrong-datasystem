@@ -227,6 +227,20 @@ Status WorkerRemoteWorkerOCApi::GetClusterStateAsyncRead(int64_t tag, GetCluster
     return Status::OK();
 }
 
+Status WorkerRemoteWorkerOCApi::GetHashRing(uint64_t currentVersion, int32_t timeoutMs, GetHashRingRspPb &rsp)
+{
+    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "Hash-ring RPC timeout must be positive");
+    GetHashRingReqPb req;
+    req.set_version(currentVersion);
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    auto rc = brpcSession_ ? brpcSession_->GetPeerHashRing(options, req, rsp)
+                           : rpcSession_->GetPeerHashRing(options, req, rsp);
+    return WithRpcDiag(rc, "GetHashRing", localHostPort_, hostPort_);
+}
+
 void WorkerRemoteWorkerOCApi::ForgetClusterStateRequest(int64_t tag)
 {
     if (brpcSession_ != nullptr) {

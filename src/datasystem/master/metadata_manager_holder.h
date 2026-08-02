@@ -88,6 +88,8 @@ public:
 
     bool HaveAsyncMetaRequest();
 
+    Status CleanupLocalMetadataForRejoin(const std::string &workerAddr);
+
     void Shutdown();
 
     Status GetDeviceOcManager(std::shared_ptr<master::MasterDevOcManager> &devOcManager);

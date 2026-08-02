@@ -231,6 +231,7 @@ service WorkerWorkerOCService {
   }
   rpc MigrateDataDirect(MigrateDataDirectReqPb) returns (MigrateDataDirectRspPb) {}
   rpc NotifyRemoteGet(NotifyRemoteGetReqPb) returns (NotifyRemoteGetRspPb) {}
+  rpc GetPeerHashRing(GetHashRingReqPb) returns (GetHashRingRspPb) {}
 }
 
 message UpdateObjectInfoPb {

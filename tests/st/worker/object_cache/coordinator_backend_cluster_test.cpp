@@ -45,7 +45,9 @@ namespace {
 constexpr int WAIT_TOPOLOGY_TIMEOUT_SEC = 10;
 constexpr int WAIT_SCALE_TIMEOUT_SEC = 30;
 constexpr int WAIT_TOPOLOGY_INTERVAL_MS = 100;
+constexpr int TARGET_WORKER_COORDINATOR_BLINK_SEC = 3;
 constexpr size_t TEST_KEY_COUNT = 100;
+constexpr char COORDINATION_KEEPALIVE_FAILURE_INJECT[] = "CoordinationBackend.KeepAlive.returnError";
 
 std::string WorkerStateToString(MembershipPb::StatePb state)
 {
@@ -338,6 +340,121 @@ TEST_F(CoordinatorBackendClusterTest, TwoWorkersCanReadKeysAcrossWorkers)
     const auto values = BuildValues(keys, "two_workers_cross_read");
     AssertSetKeys(client0, keys, values);
     AssertGetKeysEventually(client1, keys, values);
+}
+
+TEST_F(CoordinatorBackendClusterTest, WorkersStayAliveDuringCoordinatorOutageAndRecover)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    AssertWorkersInCluster({ 0, 1 }, WAIT_TOPOLOGY_TIMEOUT_SEC);
+
+    DS_ASSERT_OK(cluster_->ShutdownNodes(ClusterNodeType::COORDINATOR));
+    coordinatorProxy_.reset();
+    auto t1 = std::chrono::steady_clock::now();
+    LOG(INFO) << "[TIMING] Coordinator shutdown done in "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "ms";
+
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    EXPECT_TRUE(cluster_->CheckWorkerProcess(0));
+    EXPECT_TRUE(cluster_->CheckWorkerProcess(1));
+    auto t2 = std::chrono::steady_clock::now();
+    LOG(INFO) << "[TIMING] Workers survived coordinator outage for "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() << "ms";
+
+    DS_ASSERT_OK(cluster_->StartCoordinatorCluster());
+    AssertWorkersInCluster({ 0, 1 }, WAIT_SCALE_TIMEOUT_SEC);
+    auto t3 = std::chrono::steady_clock::now();
+    LOG(INFO) << "[TIMING] Coordinator recovery confirmed in "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count() << "ms";
+    LOG(INFO) << "[TIMING] WorkersStayAliveDuringCoordinatorOutageAndRecover total test time: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t0).count() << "ms";
+}
+
+TEST_F(CoordinatorBackendClusterTest, SingleWorkerCoordinatorBlinkRecoversWithoutClusterDegrade)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    AssertWorkersInCluster({ 0, 1 }, WAIT_TOPOLOGY_TIMEOUT_SEC);
+
+    std::shared_ptr<KVClient> client0;
+    InitKVClient(0, client0);
+    DS_ASSERT_OK(client0->Set("single_worker_coordinator_blink_key", "before_blink"));
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, COORDINATION_KEEPALIVE_FAILURE_INJECT,
+                                           "100*return(K_RPC_UNAVAILABLE)"));
+    bool keepAliveFailureInjected = true;
+    Raii clearKeepAliveFailure([this, &keepAliveFailureInjected] {
+        if (keepAliveFailureInjected) {
+            (void)cluster_->ClearInjectAction(ClusterNodeType::WORKER, 1, COORDINATION_KEEPALIVE_FAILURE_INJECT);
+        }
+    });
+
+    std::this_thread::sleep_for(std::chrono::seconds(TARGET_WORKER_COORDINATOR_BLINK_SEC));
+
+    DS_ASSERT_OK(client0->Set("single_worker_coordinator_blink_during_key", "during_blink"));
+    EXPECT_TRUE(cluster_->CheckWorkerProcess(0));
+    EXPECT_TRUE(cluster_->CheckWorkerProcess(1));
+    AssertWorkersInCluster({ 0, 1 }, WAIT_TOPOLOGY_TIMEOUT_SEC);
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, 1, COORDINATION_KEEPALIVE_FAILURE_INJECT));
+    keepAliveFailureInjected = false;
+    AssertWorkersInCluster({ 0, 1 }, WAIT_SCALE_TIMEOUT_SEC);
+
+    std::shared_ptr<KVClient> client1;
+    InitKVClient(1, client1);
+    std::string value;
+    DS_ASSERT_OK(client1->Get("single_worker_coordinator_blink_key", value));
+    EXPECT_EQ(value, "before_blink");
+    DS_ASSERT_OK(client1->Get("single_worker_coordinator_blink_during_key", value));
+    EXPECT_EQ(value, "during_blink");
+    DS_ASSERT_OK(client1->Set("single_worker_coordinator_blink_recovered_key", "after_blink"));
+    DS_ASSERT_OK(client0->Get("single_worker_coordinator_blink_recovered_key", value));
+    EXPECT_EQ(value, "after_blink");
+
+    auto t1 = std::chrono::steady_clock::now();
+    LOG(INFO) << "[TIMING] SingleWorkerCoordinatorBlinkRecoversWithoutClusterDegrade total test time: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "ms";
+}
+
+TEST_F(CoordinatorBackendClusterTest, IsolatedWorkerRemovedThenColdRejoinsWithoutSuicide)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    AssertWorkersInCluster({ 0, 1 }, WAIT_TOPOLOGY_TIMEOUT_SEC);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, COORDINATION_KEEPALIVE_FAILURE_INJECT,
+                                           "100*return(K_RPC_UNAVAILABLE)"));
+    bool keepAliveFailureInjected = true;
+    Raii clearKeepAliveFailure([this, &keepAliveFailureInjected] {
+        if (keepAliveFailureInjected) {
+            (void)cluster_->ClearInjectAction(ClusterNodeType::WORKER, 1, COORDINATION_KEEPALIVE_FAILURE_INJECT);
+        }
+    });
+
+    AssertWorkersNotInCluster({ 1 }, WAIT_SCALE_TIMEOUT_SEC);
+    EXPECT_TRUE(cluster_->CheckWorkerProcess(0));
+    EXPECT_TRUE(cluster_->CheckWorkerProcess(1));
+
+    std::shared_ptr<KVClient> isolatedClient;
+    InitKVClient(1, isolatedClient);
+    ASSERT_NE(isolatedClient, nullptr);
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&isolatedClient] {
+            return isolatedClient->Set("isolated_worker_removed_key", "during_isolation");
+        },
+        WAIT_SCALE_TIMEOUT_SEC, K_NOT_READY));
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, 1, COORDINATION_KEEPALIVE_FAILURE_INJECT));
+    keepAliveFailureInjected = false;
+    AssertWorkersInCluster({ 0, 1 }, WAIT_SCALE_TIMEOUT_SEC);
+
+    std::shared_ptr<KVClient> client0;
+    InitKVClient(0, client0);
+    DS_ASSERT_OK(isolatedClient->Set("isolated_worker_rejoined_key", "after_rejoin"));
+    std::string value;
+    DS_ASSERT_OK(client0->Get("isolated_worker_rejoined_key", value));
+    EXPECT_EQ(value, "after_rejoin");
+
+    auto t1 = std::chrono::steady_clock::now();
+    LOG(INFO) << "[TIMING] IsolatedWorkerRemovedThenColdRejoinsWithoutSuicide total test time: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "ms";
 }
 
 TEST_F(CoordinatorBackendClusterTest, AddedWorkerCanWriteKeysReadableFromExistingWorker)

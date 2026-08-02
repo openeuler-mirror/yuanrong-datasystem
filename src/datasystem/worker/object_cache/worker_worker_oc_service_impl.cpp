@@ -925,6 +925,12 @@ Status WorkerWorkerOCServiceImpl::GetClusterState(const GetClusterStateReqPb &re
     return Status::OK();
 }
 
+Status WorkerWorkerOCServiceImpl::GetPeerHashRing(const GetHashRingReqPb &req, GetHashRingRspPb &rsp)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(ocClientWorkerSvc_);
+    return ocClientWorkerSvc_->GetHashRing(req, rsp);
+}
+
 Status WorkerWorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
                                               std::vector<::datasystem::RpcMessage> payloads)
 {

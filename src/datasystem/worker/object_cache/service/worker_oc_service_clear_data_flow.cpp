@@ -413,6 +413,19 @@ void WorkerOcServiceClearDataFlow::ClearObject(const std::vector<std::string> &o
     }
 }
 
+Status WorkerOcServiceClearDataFlow::ClearLocalObjectsForRejoin()
+{
+    std::vector<std::string> objectKeys;
+    objectKeys.reserve(objectTable_->GetSize());
+    for (const auto &entry : *objectTable_) {
+        objectKeys.emplace_back(entry.first);
+    }
+    ClearObject(objectKeys);
+    CHECK_FAIL_RETURN_STATUS(objectTable_->GetSize() == 0, K_RUNTIME_ERROR,
+                             "local object table is not empty after rejoin cleanup");
+    return Status::OK();
+}
+
 void WorkerOcServiceClearDataFlow::FilterObjectsNeedRebuildRefByLocalRef(
     const std::vector<std::string> &objectKeys, std::vector<std::string> &rebuildObjectKeys) const
 {

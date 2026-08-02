@@ -164,7 +164,9 @@ struct TopologyEngine::Builder::Config {
     CoordinatorWatchIngress ingress;
     ITopologyPhaseCallbacks *callbacks{ nullptr };
     ControlBackendProbe controlBackendProbe;
+    PeerTopologyRefresh peerTopologyRefresh;
     std::function<void(TopologyAvailabilityLevel)> availabilityHandler;
+    std::function<Status()> membershipRecreateGate;
     std::function<Status(const std::map<std::string, int64_t> &, RestartEffectMode)> membershipRestartHandler;
     std::function<void(std::shared_ptr<const TopologySnapshot>)> snapshotPublishedHandler;
     std::chrono::seconds nodeDeadTimeout{ TopologyControllerOptions{}.nodeDeadTimeout };
@@ -245,11 +247,27 @@ TopologyEngine::Builder &TopologyEngine::Builder::SetControlBackendProbe(Control
     return *this;
 }
 
+TopologyEngine::Builder &TopologyEngine::Builder::SetPeerTopologyRefresh(PeerTopologyRefresh refresh)
+{
+    if (config_ != nullptr) {
+        config_->peerTopologyRefresh = std::move(refresh);
+    }
+    return *this;
+}
+
 TopologyEngine::Builder &TopologyEngine::Builder::SetAvailabilityHandler(
     std::function<void(TopologyAvailabilityLevel)> handler)
 {
     if (config_ != nullptr) {
         config_->availabilityHandler = std::move(handler);
+    }
+    return *this;
+}
+
+TopologyEngine::Builder &TopologyEngine::Builder::SetMembershipRecreateGate(std::function<Status()> gate)
+{
+    if (config_ != nullptr) {
+        config_->membershipRecreateGate = std::move(gate);
     }
     return *this;
 }
@@ -340,6 +358,8 @@ Status TopologyEngine::Builder::CreateOwnedDependencies()
     } else {
         config_->memberBackend =
             std::make_unique<DsCoordinationBackend>(config_->coordinatorProxy, config_->localAddress);
+        static_cast<DsCoordinationBackend *>(config_->memberBackend.get())
+            ->SetMembershipRecreateGate(std::move(config_->membershipRecreateGate));
     }
     return Status::OK();
 }
@@ -398,6 +418,7 @@ TopologyEngine::RuntimeOptions TopologyEngine::ConsumeRuntimeOptions(Builder::Co
     options.localIsolationTimeout = config.localIsolationTimeout;
     options.scopeProbeInterval = config.scopeProbeInterval;
     options.controlBackendProbe = std::move(config.controlBackendProbe);
+    options.peerTopologyRefresh = std::move(config.peerTopologyRefresh);
     options.availabilityHandler = std::move(config.availabilityHandler);
     options.snapshotPublishedHandler = std::move(config.snapshotPublishedHandler);
     return options;
@@ -870,6 +891,11 @@ TopologyAvailabilityLevel TopologyEngine::GetAvailability() const noexcept
     return publishedAvailability_.load();
 }
 
+bool TopologyEngine::RequiresMembershipRejoin() const noexcept
+{
+    return membershipRejoinRequired_.load(std::memory_order_relaxed);
+}
+
 const PlacementFacade &TopologyEngine::Placement() const noexcept
 {
     return placement_;
@@ -1023,6 +1049,7 @@ TopologyDiagnostics TopologyEngine::GetDiagnostics() const
         diagnostics.isolationReason = isolationReason_;
         diagnostics.lastError = lastError_;
     }
+    diagnostics.peerObservedTopologyVersion = peerObservedTopologyVersion_.load(std::memory_order_relaxed);
     diagnostics.dispatcher = dispatcher_.GetStats();
     diagnostics.executor = executor_.GetDiagnostics();
     return diagnostics;
@@ -1113,15 +1140,15 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
             backendObservation_ = {};
         }
         if (!localMemberExisted || localMemberWasLeaving) {
+            membershipRejoinRequired_.store(false, std::memory_order_relaxed);
             SetAvailability(TopologyAvailabilityLevel::NOT_READY, "local_member_missing");
             return Status::OK();
         }
         LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
-                   << " role=worker state=local_member_missing action=kill_self signal=SIGKILL address="
-                   << options_.localAddress;
-        Provider::Instance().FlushLogs();
-        (void)std::raise(SIGKILL);
-        RETURN_STATUS(K_RUNTIME_ERROR, "local member missing from topology after SIGKILL request returned");
+                   << " role=worker state=local_member_missing action=require_rejoin address=" << options_.localAddress;
+        membershipRejoinRequired_.store(true, std::memory_order_relaxed);
+        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "local_member_missing");
+        return Status::OK();
     }
     RETURN_IF_NOT_OK(findStatus);
     ResetLocalIsolationEvidence();
@@ -1140,9 +1167,11 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
     }
     membershipView_.RemoveStaleObservations();
     if (identityChanged || local->state == MemberState::FAILED) {
+        membershipRejoinRequired_.store(true, std::memory_order_relaxed);
         SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED,
                         identityChanged ? "local_identity_changed" : "local_member_failed");
     } else {
+        membershipRejoinRequired_.store(false, std::memory_order_relaxed);
         SetAvailability(IsCommittedMemberState(local->state) ? TopologyAvailabilityLevel::NORMAL
                                                              : TopologyAvailabilityLevel::NOT_READY,
                         IsCommittedMemberState(local->state) ? "" : "local_member_not_committed");
@@ -1247,6 +1276,47 @@ Status TopologyEngine::ReevaluateFailureScope()
     return Status::OK();
 }
 
+Status TopologyEngine::RefreshPeerTopology()
+{
+    if (!options_.peerTopologyRefresh) {
+        return Status::OK();
+    }
+    std::shared_ptr<const TopologySnapshot> current;
+    std::vector<MemberIdentity> targets;
+    auto rc = snapshots_.Load(current);
+    if (rc.IsOk()) {
+        rc = SelectProbeTargets(*current, options_.localAddress, targets);
+    }
+    if (rc.IsError() || targets.empty()) {
+        return Status::OK();
+    }
+    std::shared_ptr<const TopologySnapshot> peerSnapshot;
+    rc = options_.peerTopologyRefresh(current->Version(), targets,
+                                      std::chrono::steady_clock::now() + options_.scopeProbeDeadline, peerSnapshot);
+    if (rc.IsError() || peerSnapshot == nullptr || peerSnapshot->Version() <= current->Version()) {
+        VLOG_IF(1, rc.IsError()) << "CLUSTER_PEER_TOPOLOGY_REFRESH_IGNORED status=" << rc.ToString();
+        return Status::OK();
+    }
+    peerObservedTopologyVersion_.store(peerSnapshot->Version(), std::memory_order_relaxed);
+    const Member *local = nullptr;
+    rc = peerSnapshot->FindMemberByAddress(options_.localAddress, local);
+    const bool localMissing = rc.GetCode() == K_NOT_FOUND;
+    if (!localMissing) {
+        RETURN_IF_NOT_OK(rc);
+    }
+    if (localMissing || local->state == MemberState::FAILED) {
+        const auto reason = localMissing ? "missing" : "failed";
+        LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
+                   << " role=worker state=peer_observed_local_member_unavailable action=require_rejoin"
+                   << " reason=" << reason << " address=" << options_.localAddress
+                   << " peer_version=" << peerSnapshot->Version();
+        membershipRejoinRequired_.store(true, std::memory_order_relaxed);
+        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "peer_observed_local_member_unavailable");
+        return Status::OK();
+    }
+    return Status::OK();
+}
+
 Status TopologyEngine::RefreshUnavailableBackend()
 {
     auto rc = ReloadTopologyAndNotify();
@@ -1259,6 +1329,7 @@ Status TopologyEngine::RefreshUnavailableBackend()
         if (reevaluate) {
             LOG_IF_ERROR(ReevaluateFailureScope(), "CLUSTER_BACKEND_FAILURE_REEVALUATION_FAILED");
         }
+        LOG_IF_ERROR(RefreshPeerTopology(), "CLUSTER_PEER_TOPOLOGY_REFRESH_FAILED");
     } else if (availability_.load() == TopologyAvailabilityLevel::CONTROL_DEGRADED) {
         ResetLocalIsolationEvidence();
     }
@@ -1279,10 +1350,7 @@ void TopologyEngine::KillSelfIfIsolationExpired()
         return;
     }
     LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
-               << " role=worker state=local_isolation action=kill_self signal=SIGKILL address="
-               << options_.localAddress;
-    Provider::Instance().FlushLogs();
-    (void)std::raise(SIGKILL);
+               << " role=worker state=local_isolation action=keep_alive address=" << options_.localAddress;
     isolationKillDeadline_.reset();
 }
 

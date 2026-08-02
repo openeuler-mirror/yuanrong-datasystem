@@ -135,6 +135,20 @@ bool MetadataManagerHolder::HaveAsyncMetaRequest()
     return ocMetadataManager_ != nullptr && ocMetadataManager_->HaveAsyncMetaRequest();
 }
 
+Status MetadataManagerHolder::CleanupLocalMetadataForRejoin(const std::string &workerAddr)
+{
+    HostPort localAddress;
+    RETURN_IF_NOT_OK(localAddress.ParseString(workerAddr));
+    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    if (ocMetadataManager_ != nullptr) {
+        RETURN_IF_NOT_OK(ocMetadataManager_->CleanupLocalMetadataForRejoin(workerAddr));
+    }
+    if (scMetadataManager_ != nullptr) {
+        RETURN_IF_NOT_OK(scMetadataManager_->ClearWorkerMetadata(localAddress, true));
+    }
+    return Status::OK();
+}
+
 Status MetadataManagerHolder::EnsureLocalMetadataManager(const std::string &workerId)
 {
     std::unique_lock<std::shared_timed_mutex> locker(mutex_);

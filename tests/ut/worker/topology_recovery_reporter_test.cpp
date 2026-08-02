@@ -307,8 +307,8 @@ TEST(TopologyRecoveryReporterTest, SendsSnapshotEvidenceThenRequestedPayload)
     FakeCoordinatorServiceProxy proxy;
     proxy.PushAction(Accepted(coordinator::COORDINATOR_RECOVERING, true));
     proxy.PushAction(Accepted(coordinator::COORDINATOR_READY));
-    TopologyRecoveryReporter reporter(proxy, CLUSTER_NAME, REPORTER_ADDRESS,
-                                      Snapshot(TOPOLOGY_VERSION, canonical), DefaultOptions());
+    TopologyRecoveryReporter reporter(proxy, CLUSTER_NAME, REPORTER_ADDRESS, Snapshot(TOPOLOGY_VERSION, canonical),
+                                      DefaultOptions());
 
     OpenReportGates(reporter, COORDINATOR_A);
 
@@ -332,8 +332,8 @@ TEST(TopologyRecoveryReporterTest, RetriesRequestedPayloadAfterTransientFailure)
     transientFailure.status = Status(K_RPC_UNAVAILABLE, "transient payload failure");
     proxy.PushAction(std::move(transientFailure));
     proxy.PushAction(Accepted(coordinator::COORDINATOR_READY));
-    TopologyRecoveryReporter reporter(proxy, CLUSTER_NAME, REPORTER_ADDRESS,
-                                      Snapshot(TOPOLOGY_VERSION, canonical), DefaultOptions());
+    TopologyRecoveryReporter reporter(proxy, CLUSTER_NAME, REPORTER_ADDRESS, Snapshot(TOPOLOGY_VERSION, canonical),
+                                      DefaultOptions());
 
     OpenReportGates(reporter, COORDINATOR_A);
 
@@ -341,6 +341,24 @@ TEST(TopologyRecoveryReporterTest, RetriesRequestedPayloadAfterTransientFailure)
     EXPECT_TRUE(proxy.RequestAt(0).canonical_topology().empty());
     EXPECT_EQ(proxy.RequestAt(1).canonical_topology(), canonical);
     EXPECT_EQ(proxy.RequestAt(2).canonical_topology(), canonical);
+}
+
+TEST(TopologyRecoveryReporterTest, SendsPayloadOnlyWhenCoordinatorRequestsIt)
+{
+    const std::string canonical = "canonical-topology";
+    FakeCoordinatorServiceProxy proxy;
+    proxy.PushAction(Accepted(coordinator::COORDINATOR_RECOVERING, true));
+    proxy.PushAction(Accepted(coordinator::COORDINATOR_RECOVERING));
+    proxy.PushAction(Accepted(coordinator::COORDINATOR_READY));
+    TopologyRecoveryReporter reporter(proxy, CLUSTER_NAME, REPORTER_ADDRESS, Snapshot(TOPOLOGY_VERSION, canonical),
+                                      DefaultOptions());
+
+    OpenReportGates(reporter, COORDINATOR_A);
+
+    ASSERT_TRUE(proxy.WaitForReturned(3));
+    EXPECT_TRUE(proxy.RequestAt(0).canonical_topology().empty());
+    EXPECT_EQ(proxy.RequestAt(1).canonical_topology(), canonical);
+    EXPECT_TRUE(proxy.RequestAt(2).canonical_topology().empty());
 }
 
 TEST(TopologyRecoveryReporterTest, DoesNotReportWhenSnapshotExportFails)
@@ -434,7 +452,7 @@ TEST(TopologyRecoveryReporterTest, ReadyCompletesCoordinatorRound)
     EXPECT_EQ(proxy.StartedCount(), 1UL);
 }
 
-TEST(TopologyRecoveryReporterTest, RecoveringWaitsForNextMembershipSignal)
+TEST(TopologyRecoveryReporterTest, RecoveringKeepsReportingWithoutMembershipSignal)
 {
     FakeCoordinatorServiceProxy proxy;
     proxy.PushAction(Accepted(coordinator::COORDINATOR_RECOVERING));
@@ -442,11 +460,8 @@ TEST(TopologyRecoveryReporterTest, RecoveringWaitsForNextMembershipSignal)
     TopologyRecoveryReporter reporter(proxy, CLUSTER_NAME, REPORTER_ADDRESS, NoSnapshot(), DefaultOptions());
 
     OpenReportGates(reporter, COORDINATOR_A);
-    ASSERT_TRUE(proxy.WaitForReturned(1));
-    EXPECT_EQ(proxy.StartedCount(), 1UL);
-    ASSERT_TRUE(TriggerNextMembershipRound(reporter, proxy, COORDINATOR_A, 2));
-
     EXPECT_TRUE(proxy.WaitForReturned(2));
+    EXPECT_EQ(proxy.StartedCount(), 2UL);
 }
 
 void VerifyRetryCanBeCancelled(StatusCode retryCode)

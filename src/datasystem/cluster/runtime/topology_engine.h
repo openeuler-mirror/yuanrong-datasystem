@@ -128,11 +128,25 @@ public:
         Builder &SetControlBackendProbe(ControlBackendProbe probe);
 
         /**
+         * @brief Register a best-effort peer topology refresh hook.
+         * @param[in] refresh Refresh hook used only while exact backend reads are unavailable.
+         * @return This Builder.
+         */
+        Builder &SetPeerTopologyRefresh(PeerTopologyRefresh refresh);
+
+        /**
          * @brief Register the non-blocking business-admission callback.
          * @param[in] handler Availability callback to consume.
          * @return This Builder.
          */
         Builder &SetAvailabilityHandler(std::function<void(TopologyAvailabilityLevel)> handler);
+
+        /**
+         * @brief Register the membership recreate gate used before a recreated lease is written.
+         * @param[in] gate Gate callback; K_OK allows membership recreate.
+         * @return This Builder.
+         */
+        Builder &SetMembershipRecreateGate(std::function<Status()> gate);
 
         /**
          * @brief Register the existing member-restart cleanup sink.
@@ -304,6 +318,12 @@ public:
     TopologyAvailabilityLevel GetAvailability() const noexcept;
 
     /**
+     * @brief Return whether this Engine has observed that the local membership identity must cold-rejoin.
+     * @return True after the local member is missing, failed, or replaced by another identity.
+     */
+    bool RequiresMembershipRejoin() const noexcept;
+
+    /**
      * @brief Return the foreground placement facade.
      * @return Stable facade reference valid for this Engine's lifetime.
      */
@@ -352,6 +372,7 @@ private:
         std::chrono::seconds localIsolationTimeout{ 0 };
         std::chrono::seconds stopGrace{ 10 };
         ControlBackendProbe controlBackendProbe;
+        PeerTopologyRefresh peerTopologyRefresh;
         std::function<void(TopologyAvailabilityLevel)> availabilityHandler;
         std::function<void(std::shared_ptr<const TopologySnapshot>)> snapshotPublishedHandler;
         TopologyTaskExecutorOptions executor;
@@ -502,6 +523,12 @@ private:
     Status ReevaluateFailureScope();
 
     /**
+     * @brief Best-effort peer hash-ring refresh while exact backend reads are unavailable.
+     * @return K_OK after consuming or ignoring peer evidence.
+     */
+    Status RefreshPeerTopology();
+
+    /**
      * @brief Periodically exact-read for recovery, otherwise refresh failure scope.
      * @return K_OK after recovery; the latest exact-read error while unavailable.
      */
@@ -513,7 +540,7 @@ private:
     void ResetLocalIsolationEvidence();
 
     /**
-     * @brief Terminate this Worker after confirmed local isolation remains unrecovered for nodeDeadTimeout.
+     * @brief Record an expired local-isolation window without terminating the Worker process.
      */
     void KillSelfIfIsolationExpired();
 
@@ -583,6 +610,8 @@ private:
     std::atomic<TopologyAvailabilityLevel> publishedAvailability_{ TopologyAvailabilityLevel::NOT_READY };
     // Permanently fences this Engine lifetime after authoritative rollback or same-version content conflict.
     std::atomic<bool> authorityIsolated_{ false };
+    // Fences membership recreate behind Worker-local cleanup after the local identity is invalidated.
+    std::atomic<bool> membershipRejoinRequired_{ false };
     // Records whether the immediately previous processed Snapshot contained the local Worker.
     std::atomic<bool> localMemberExistedInPreviousSnapshot_{ false };
     // Records whether that local member was leaving voluntarily in the previous Snapshot.
@@ -590,6 +619,7 @@ private:
     std::string isolationReason_;
     std::string lastError_;
     ControlBackendObservation backendObservation_;
+    std::atomic<uint64_t> peerObservedTopologyVersion_{ 0 };
     uint32_t localIsolationConfirmations_{ 0 };  // State-thread owned.
     std::optional<std::chrono::steady_clock::time_point> localIsolationStartedAt_;  // State-thread owned.
     std::optional<std::chrono::steady_clock::time_point> isolationKillDeadline_;  // State-thread owned.

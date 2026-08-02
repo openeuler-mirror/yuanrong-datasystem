@@ -451,6 +451,14 @@ Status DsCoordinationBackend::AutoCreateKeepAliveKey(bool recreated)
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     CHECK_FAIL_RETURN_STATUS(!keepAliveTableName_.empty(), K_INVALID, "Coordinator keepalive table is empty");
     CHECK_FAIL_RETURN_STATUS(!keepAliveKey_.empty(), K_INVALID, "Coordinator keepalive key is empty");
+    MembershipRecreateGate recreateGate;
+    if (recreated) {
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        recreateGate = membershipRecreateGate_;
+    }
+    if (recreateGate != nullptr) {
+        RETURN_IF_NOT_OK(recreateGate());
+    }
     std::lock_guard<std::mutex> mutationLock(membershipMutationMutex_);
 
     const std::string physicalKey = BuildRealKey(keepAliveTableName_, keepAliveKey_);
@@ -547,6 +555,11 @@ void DsCoordinationBackend::RunKeepAliveLoop()
     INJECT_POINT("CoordinationBackend.KeepAlive.confirmTimes", [&state](int times) { state.confirmMinTimes = times; });
     const std::string realKey = BuildRealKey(keepAliveTableName_, keepAliveKey_);
     while (!keepAliveExit_) {
+        uint64_t wakeEpoch = 0;
+        {
+            std::lock_guard<std::mutex> lock(keepAliveMutex_);
+            wakeEpoch = keepAliveWakeEpoch_;
+        }
         auto rc = RenewKeepAliveOnce();
         VLOG(1) << "Member " << watcherAddr_ << " keepalive result: " << rc.ToString();
         if (rc.IsOk()) {
@@ -555,7 +568,9 @@ void DsCoordinationBackend::RunKeepAliveLoop()
             HandleKeepAliveFailure(rc, realKey, state);
         }
         std::unique_lock<std::mutex> lock(keepAliveMutex_);
-        keepAliveCv_.wait_for(lock, std::chrono::milliseconds(intervalMs), [this]() { return keepAliveExit_.load(); });
+        keepAliveCv_.wait_for(lock, std::chrono::milliseconds(intervalMs), [this, wakeEpoch]() {
+            return keepAliveExit_.load() || keepAliveWakeEpoch_ != wakeEpoch;
+        });
     }
 }
 
@@ -857,21 +872,51 @@ void DsCoordinationBackend::SetMembershipReconcileHandler(MembershipReconcileHan
     membershipReconcileHandler_ = std::move(handler);
 }
 
-void DsCoordinationBackend::OnMembershipEnsured(const std::string &coordinatorId, int64_t membershipModRevision)
+void DsCoordinationBackend::SetMembershipRecreateGate(MembershipRecreateGate gate)
+{
+    std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+    membershipRecreateGate_ = std::move(gate);
+}
+
+Status DsCoordinationBackend::PrepareMembershipRecreate()
+{
+    MembershipRecreateGate recreateGate;
+    {
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        recreateGate = membershipRecreateGate_;
+    }
+    // Run the rejoin cleanup gate outside eventHandlerMutex_; the callback closes local admissions and may enter
+    // worker cleanup/RPC paths before the new keepalive revision is installed.
+    if (recreateGate != nullptr) {
+        RETURN_IF_NOT_OK(recreateGate());
+    }
+    return Status::OK();
+}
+
+void DsCoordinationBackend::InstallEnsuredMembership(const std::string &coordinatorId, int64_t membershipModRevision)
 {
     std::lock_guard<std::mutex> mutationLock(membershipMutationMutex_);
     // Ensure can return after a newer local membership mutation completed. Revisions are globally monotonic.
-    if (membershipModRevision > keepAliveModRevision_) {
-        keepAliveModRevision_ = membershipModRevision;
-    }
+    keepAliveModRevision_ = std::max(membershipModRevision, keepAliveModRevision_);
     keepAliveTimeout_ = false;
     firstKeepAliveSent_.store(true, std::memory_order_release);
     HandleMembershipSuccess(coordinatorId, true);
-    std::lock_guard<std::mutex> lock(keepAliveMutex_);
-    if (keepAliveValue_.lifecycleState == MemberLifecycleState::STARTING
-        || keepAliveValue_.lifecycleState == MemberLifecycleState::RESTARTING) {
-        keepAliveValue_.lifecycleState = MemberLifecycleState::RECOVERING;
+    {
+        std::lock_guard<std::mutex> lock(keepAliveMutex_);
+        if (keepAliveValue_.lifecycleState == MemberLifecycleState::STARTING
+            || keepAliveValue_.lifecycleState == MemberLifecycleState::RESTARTING) {
+            keepAliveValue_.lifecycleState = MemberLifecycleState::RECOVERING;
+        }
+        ++keepAliveWakeEpoch_;
     }
+    keepAliveCv_.notify_all();
+}
+
+Status DsCoordinationBackend::OnMembershipEnsured(const std::string &coordinatorId, int64_t membershipModRevision)
+{
+    RETURN_IF_NOT_OK(PrepareMembershipRecreate());
+    InstallEnsuredMembership(coordinatorId, membershipModRevision);
+    return Status::OK();
 }
 
 bool DsCoordinationBackend::OwnsWatchIdentity(const std::string &coordinatorId, int64_t watchId) const

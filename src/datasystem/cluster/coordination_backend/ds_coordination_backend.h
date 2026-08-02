@@ -32,6 +32,7 @@ class DsCoordinationBackend final : public ICoordinationBackend {
 public:
     using MembershipReadyHandler = std::function<void(const std::string &, bool)>;
     using MembershipReconcileHandler = std::function<Status(bool waitForCompletion)>;
+    using MembershipRecreateGate = std::function<Status()>;
 
     struct MembershipRenewalPayload {
         std::string reporterAddress;
@@ -232,9 +233,24 @@ public:
     void SetMembershipReconcileHandler(MembershipReconcileHandler handler);
 
     /**
+     * @brief Install or remove the local cleanup gate for recreated membership writes.
+     */
+    void SetMembershipRecreateGate(MembershipRecreateGate gate);
+
+    /**
+     * @brief Run the local cleanup gate before accepting a recreated membership.
+     */
+    Status PrepareMembershipRecreate();
+
+    /**
      * @brief Commit the local effects after a successful EnsureLeaderMembership RPC.
      */
-    void OnMembershipEnsured(const std::string &coordinatorId, int64_t membershipModRevision);
+    void InstallEnsuredMembership(const std::string &coordinatorId, int64_t membershipModRevision);
+
+    /**
+     * @brief Run the local cleanup gate and commit the local effects after a successful EnsureLeaderMembership RPC.
+     */
+    Status OnMembershipEnsured(const std::string &coordinatorId, int64_t membershipModRevision);
 
     /**
      * @brief Check whether this backend owns one CoordinatorId/watch identity.
@@ -439,6 +455,7 @@ private:
     EventHandler eventHandler_;
     MembershipReadyHandler membershipReadyHandler_;
     MembershipReconcileHandler membershipReconcileHandler_;
+    MembershipRecreateGate membershipRecreateGate_;
     std::string lastMembershipCoordinatorId_;
     std::function<bool()> checkStoreStateWhenNetworkFailedHandler_;
     size_t activeEventHandlers_{ 0 };
@@ -453,6 +470,8 @@ private:
     mutable std::mutex keepAliveMutex_;
     MembershipValue keepAliveValue_;
     std::condition_variable keepAliveCv_;
+    // Distinguishes explicit keepalive wake requests from spurious condition-variable wakeups.
+    uint64_t keepAliveWakeEpoch_{ 0 };
     Thread keepAliveThread_;
     std::atomic<bool> keepAliveExit_{ false };
     std::atomic<bool> keepAliveTimeout_{ false };

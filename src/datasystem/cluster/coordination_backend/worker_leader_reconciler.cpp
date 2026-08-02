@@ -173,12 +173,20 @@ Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity
     request.set_leader_term(identity.leaderTerm);
     request.set_membership_value(payload.encodedValue);
     request.set_ttl_ms(payload.ttlMs);
-    coordinator::EnsureLeaderMembershipRspPb response;
-    RETURN_IF_NOT_OK(proxy_.EnsureLeaderMembership(request, response));
     auto *routes = proxy_.GetLeaderRouteProvider();
     CHECK_FAIL_RETURN_STATUS(routes != nullptr, K_NOT_READY, "Coordinator Leader route is unavailable");
-    const auto current = routes->GetLeaderCache();
-    CHECK_FAIL_RETURN_STATUS(SameIdentity(current, identity), K_TRY_AGAIN,
+
+    // Rejoin recreates membership in three ordered steps: close local admissions, ask the current Coordinator to
+    // install a fresh membership key, then publish the returned revision into the local keepalive state.
+    RETURN_IF_NOT_OK(backend_.PrepareMembershipRecreate());
+    const auto currentAfterCleanup = routes->GetLeaderCache();
+    CHECK_FAIL_RETURN_STATUS(SameIdentity(currentAfterCleanup, identity), K_TRY_AGAIN,
+                             "Coordinator Leader changed during membership recreate cleanup");
+
+    coordinator::EnsureLeaderMembershipRspPb response;
+    RETURN_IF_NOT_OK(proxy_.EnsureLeaderMembership(request, response));
+    const auto currentAfterEnsure = routes->GetLeaderCache();
+    CHECK_FAIL_RETURN_STATUS(SameIdentity(currentAfterEnsure, identity), K_TRY_AGAIN,
                              "Coordinator Leader changed during membership ensure");
     CHECK_FAIL_RETURN_STATUS(
         response.result() == coordinator::EnsureLeaderMembershipRspPb::ACCEPTED,
@@ -190,7 +198,7 @@ Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity
         std::lock_guard<std::mutex> lock(mutex_);
         CHECK_FAIL_RETURN_STATUS(!stopping_.load(std::memory_order_acquire) && IsCurrentIdentityLocked(identity),
                                  K_TRY_AGAIN, "Coordinator Leader changed during membership ensure");
-        backend_.OnMembershipEnsured(identity.coordinatorId, response.membership_mod_revision());
+        backend_.InstallEnsuredMembership(identity.coordinatorId, response.membership_mod_revision());
         reporter_.NotifyMembershipReady(identity);
         lastEnsuredIdentity_ = identity;
     }
