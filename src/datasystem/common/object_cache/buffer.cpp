@@ -240,7 +240,11 @@ Status Buffer::MemoryCopyWithTransport(const void *data, uint64_t length, uint8_
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(data != nullptr, K_INVALID, "Can't put null pointer.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(length > 0 && length <= dataSize, K_INVALID,
                                          "Data length must be in (0, buffer_size].");
-    if (bufferInfo_->ubUrmaDataInfo) {
+    // Routed two-step buffers publish their payload via transportLayer_->Set on the worker pinned at
+    // Create time (UbTransporter::Set sends via that worker). Skip the legacy bound-worker UB pre-send
+    // here, otherwise the payload goes to the bound worker and UbTransporter::Set then skips it
+    // (ubDataSentByMemoryCopy), splitting data and metadata across two workers.
+    if (bufferInfo_->ubUrmaDataInfo && !bufferInfo_->isRoutedWrite) {
         Status ubStatus;
         if (bufferInfo_->ubGetBufferHandle && bufferInfo_->pointer != nullptr) {
             ubStatus = clientImpl->SendBufferViaUbFromPool(bufferInfo_, data, length, traceEnabled);
@@ -287,7 +291,9 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
 
-    if (bufferInfo_->ubUrmaDataInfo && !bufferInfo_->ubDataSentByMemoryCopy) {
+    // Routed two-step buffers send their payload via transportLayer_->Set on the Create-pinned worker;
+    // skip the legacy bound-worker UB pre-send here too (symmetric with the MemoryCopy guard above).
+    if (bufferInfo_->ubUrmaDataInfo && !bufferInfo_->ubDataSentByMemoryCopy && !bufferInfo_->isRoutedWrite) {
         uint64_t dataSize = GetSize();
         const void *dataPtr = ImmutableData();
         if (dataPtr != nullptr && dataSize > 0) {

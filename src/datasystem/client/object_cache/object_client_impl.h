@@ -774,6 +774,43 @@ private:
                                uint32_t ttlSecond, int existence, const SetRouteContext &routeContext,
                                SetFailureStage &failureStage);
 
+    // Routed two-step Create/Publish (Component D). When local cache is off, allocate the buffer
+    // on the hash-ring-selected worker via the transport layer and bridge the result to a legacy
+    // Buffer; seal it via the transport layer on the worker pinned at Create time. The one-step
+    // equivalents are ProcessTransportPut (Create+Set) above.
+    Status CreateRoutedBuffer(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
+                              std::shared_ptr<Buffer> &buffer);
+
+    Status PublishRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                               const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal);
+
+    // Routed two-step MultiCreate (lc=false batch). Allocates buffers on hash-ring-selected workers
+    // via transportLayer_->MCreate and bridges each ObjectBufferInfo to a legacy Buffer at its
+    // original key index. Mirrors CreateRoutedBuffer for the batch case.
+    Status MultiCreateRouted(const std::vector<std::string> &objectKeyList,
+                             const std::vector<uint64_t> &dataSizeList, const FullParam &param,
+                             std::vector<std::shared_ptr<Buffer>> &bufferList, std::vector<bool> &exists);
+
+    // Build the route context for one worker, call transportLayer_->MCreate, and bridge each
+    // returned ObjectBuffer to a legacy Buffer at its original key index. Extracted from
+    // MultiCreateRouted to keep each function within the codecheck size limit.
+    Status ProcessRoutedMCreateGroup(const HostPort &worker, const std::vector<std::string> &keys,
+                                     const std::vector<uint64_t> &sizes, const FullParam &param,
+                                     const std::unordered_map<std::string, size_t> &keyIndex,
+                                     std::vector<std::shared_ptr<Buffer>> &bufferList);
+
+    // Routed two-step MSet(vector<Buffer>) (lc=false batch). When every non-placeholder buffer is a
+    // routed write, groups them by workerAddr and publishes per worker via transportLayer_->MSet;
+    // otherwise falls back to per-buffer PublishRoutedBuffer for the routed subset.
+    Status MSetRoutedBuffers(const std::vector<std::shared_ptr<Buffer>> &buffers, bool allRouted);
+
+    // Reconstruct transient ObjectBuffers from one worker's routed bufferInfos and publish them as a
+    // single transportLayer_->MSet batch. Updates failedCount with per-object failures. Extracted
+    // from MSetRoutedBuffers to keep each function within the codecheck size limit.
+    Status ProcessRoutedMSetGroup(const HostPort &worker,
+                                  const std::vector<std::shared_ptr<ObjectBufferInfo>> &infos,
+                                  size_t &failedCount);
+
     bool HandleSetRouteFailure(const Status &status, SetFailureStage failureStage, const HostPort &worker,
                                std::vector<HostPort> &excludedWorkers);
 

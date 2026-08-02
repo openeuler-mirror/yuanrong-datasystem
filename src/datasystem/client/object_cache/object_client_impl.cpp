@@ -46,6 +46,7 @@
 #include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/client/routing/routing.h"
 #include "datasystem/client/transport/common/deadline_retry.h"
+#include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/client/transport/worker_snapshot.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
@@ -2641,14 +2642,18 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_START);
     }
-    std::shared_ptr<IClientWorkerApi> workerApi;
-    std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     PerfPoint createPoint(PerfKey::CLIENT_CREATE_OBJECT);
     VLOG(1) << "Begin to create object, object_key: " << objectKey;
     buffer.reset();  // Decrease should precede increase to avoid worker lost (ref cnt will be clear) and then restart.
     std::shared_ptr<Buffer> newBuffer;
-    RETURN_IF_NOT_OK(CreateShmBuffer(objectKey, dataSize, param, workerApi, config, traceEnabled, newBuffer));
+    if (!enableLocalCache_) {
+        RETURN_IF_NOT_OK(CreateRoutedBuffer(objectKey, dataSize, param, newBuffer));
+    } else {
+        std::shared_ptr<IClientWorkerApi> workerApi;
+        std::unique_ptr<Raii> raii;
+        RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+        RETURN_IF_NOT_OK(CreateShmBuffer(objectKey, dataSize, param, workerApi, config, traceEnabled, newBuffer));
+    }
     buffer = std::move(newBuffer);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_END);
@@ -2656,6 +2661,122 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     EmitClientLatencySummary(LatencyTickKey::CLIENT_CREATE_START, LatencyTickKey::CLIENT_CREATE_END);
     createPoint.Record();
     VLOG(1) << "Finished creating object, object_key: " << objectKey;
+    return Status::OK();
+}
+
+Status ObjectClientImpl::CreateRoutedBuffer(const std::string &objectKey, uint64_t dataSize,
+                                            const FullParam &param, std::shared_ptr<Buffer> &buffer)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    SetRouteContext routeContext;
+    RETURN_IF_NOT_OK(SelectSetRoute(objectKey, {}, routeContext));
+    const auto requestContext = BuildTransportRequestContext(routeContext);
+    client::TransportCreateParam createParam;
+    createParam.requestContext = requestContext;
+    createParam.cacheType = param.cacheType;
+    createParam.consistencyType = param.consistencyType;
+    createParam.writeMode = param.writeMode;
+    createParam.subTimeoutMs = requestTimeoutMs_;
+    std::shared_ptr<ObjectBuffer> objBuf;
+    RETURN_IF_NOT_OK(transportLayer_->Create(routeContext.worker, objectKey, dataSize, createParam, objBuf));
+    // Bridge: transfer the routed ObjectBufferInfo (populated by ShmTransporter::Create with
+    // workerAddr/shmId/pointer/mmapEntry/sessionLockId/receiveBufferOwner) to a legacy Buffer.
+    auto bufferInfo = ObjectBufferInternal::ExtractInfo(objBuf);
+    bufferInfo->isRoutedWrite = true;  // marks a routed write buffer (not a Get'd read-only buffer)
+    auto rc = Buffer::CreateBuffer(bufferInfo, shared_from_this(), buffer);
+    if (rc.IsError() && bufferInfo->receiveBufferOwner != nullptr) {
+        // Buffer init failed (rare); no Buffer will release the worker allocation, so retire it here.
+        bufferInfo->receiveBufferOwner->Release();
+    }
+    return rc;
+}
+
+Status ObjectClientImpl::MultiCreateRouted(const std::vector<std::string> &objectKeyList,
+                                           const std::vector<uint64_t> &dataSizeList, const FullParam &param,
+                                           std::vector<std::shared_ptr<Buffer>> &bufferList,
+                                           std::vector<bool> &exists)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    const auto sz = objectKeyList.size();
+    bufferList.assign(sz, nullptr);
+    // Routed MCreate does not pre-check existence; existence is enforced at MSet/Publish time
+    // (consistent with the one-step routed MSet, which checks existence at transportLayer_->MSet).
+    exists.assign(sz, false);
+    auto routing = std::atomic_load(&routing_);
+    RETURN_RUNTIME_ERROR_IF_NULL(routing);
+    std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
+    RETURN_IF_NOT_OK(routing->SelectWorkers(objectKeyList, dataPlacementPolicy_, groupedKeys));
+    // Map each key back to its original position so results land in the caller's order.
+    std::unordered_map<std::string, size_t> keyIndex;
+    keyIndex.reserve(sz);
+    for (size_t i = 0; i < sz; ++i) {
+        keyIndex.emplace(objectKeyList[i], i);
+    }
+    CHECK_FAIL_RETURN_STATUS(keyIndex.size() == sz, K_INVALID,
+                             "MultiCreate routed path does not support duplicate keys");
+    // Retire worker allocations behind already-created routed Buffers when a later group fails.
+    // IReceiveBufferOwner::Release is idempotent, so the Buffer destructor's later Release is a no-op.
+    auto releaseAllocated = [&bufferList]() {
+        for (auto &b : bufferList) {
+            if (b != nullptr && b->bufferInfo_ != nullptr && b->bufferInfo_->receiveBufferOwner != nullptr) {
+                b->bufferInfo_->receiveBufferOwner->Release();
+            }
+        }
+    };
+    for (auto &entry : groupedKeys) {
+        std::vector<uint64_t> sizes;
+        sizes.reserve(entry.second.size());
+        for (const auto &key : entry.second) {
+            sizes.emplace_back(dataSizeList[keyIndex[key]]);  // key from SelectWorkers(input) is in keyIndex
+        }
+        auto rc = ProcessRoutedMCreateGroup(entry.first, entry.second, sizes, param, keyIndex, bufferList);
+        if (rc.IsError()) {
+            releaseAllocated();
+            bufferList.clear();
+            return rc;
+        }
+    }
+    return Status::OK();
+}
+
+Status ObjectClientImpl::ProcessRoutedMCreateGroup(const HostPort &worker, const std::vector<std::string> &keys,
+                                                   const std::vector<uint64_t> &sizes, const FullParam &param,
+                                                   const std::unordered_map<std::string, size_t> &keyIndex,
+                                                   std::vector<std::shared_ptr<Buffer>> &bufferList)
+{
+    SetRouteContext routeContext;
+    RETURN_IF_NOT_OK(BuildSetRouteContext(worker, routeContext));
+    const auto requestContext = BuildTransportRequestContext(routeContext);
+    client::TransportCreateParam createParam;
+    createParam.requestContext = requestContext;
+    createParam.cacheType = param.cacheType;
+    createParam.consistencyType = param.consistencyType;
+    createParam.writeMode = param.writeMode;
+    createParam.subTimeoutMs = requestTimeoutMs_;
+    std::vector<std::shared_ptr<ObjectBuffer>> objBufs;
+    RETURN_IF_NOT_OK(transportLayer_->MCreate(worker, keys, sizes, createParam, objBufs));
+    for (auto &objBuf : objBufs) {
+        // Bridge: transfer the routed ObjectBufferInfo to a legacy Buffer at its original index.
+        auto bufferInfo = ObjectBufferInternal::ExtractInfo(objBuf);
+        bufferInfo->isRoutedWrite = true;  // marks a routed write buffer (not a Get'd read-only buffer)
+        bufferInfo->ttlSecond = param.ttlSecond;          // carry Create-time ttl/existence to Publish
+        bufferInfo->existence = static_cast<int>(param.existence);
+        auto it = keyIndex.find(bufferInfo->objectKey);
+        if (it == keyIndex.end()) {
+            if (bufferInfo->receiveBufferOwner != nullptr) {
+                bufferInfo->receiveBufferOwner->Release();
+            }
+            return Status(K_RUNTIME_ERROR, "Routed MCreate returned an unknown object key");
+        }
+        auto rc = Buffer::CreateBuffer(bufferInfo, shared_from_this(), bufferList[it->second]);
+        if (rc.IsError()) {
+            // Buffer init failed (rare); no Buffer will own it, so retire the worker allocation here.
+            if (bufferInfo->receiveBufferOwner != nullptr) {
+                bufferInfo->receiveBufferOwner->Release();
+            }
+            return rc;
+        }
+    }
     return Status::OK();
 }
 
@@ -2760,6 +2881,10 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     RETURN_IF_NOT_OK(
         ConstructMultiCreateParam(objectKeyList, dataSizeList, bufferList, multiCreateParamList, dataSizeSum));
     point.Record();
+    if (!enableLocalCache_) {
+        // Route each buffer to its hash-ring-selected worker via the transport layer.
+        return MultiCreateRouted(objectKeyList, dataSizeList, param, bufferList, exists);
+    }
     // If failed with create, need to rollback.
     auto version = 0u;
     // This variable is the output from MultiCreate, indicates whether shared memory was actually used
@@ -2976,6 +3101,10 @@ Status ObjectClientImpl::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInf
         RETURN_STATUS(K_UNKNOWN_ERROR, "Nested object references cannot be nested in a loop.");
     }
     VLOG(1) << "Begin to seal object, object_key: " << objectKey;
+    if (bufferInfo->isRoutedWrite) {
+        // Routed two-step buffer: seal via transport layer on the worker pinned at Create time.
+        return PublishRoutedBuffer(bufferInfo, nestedObjectKeys, true);
+    }
     PerfPoint rpcPoint(PerfKey::RPC_CLIENT_SEAL_OBJECT);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, true, nestedObjectKeys),
                                      FormatString("Seal object %s", objectKey));
@@ -3004,6 +3133,10 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
     VLOG(1) << "Begin to publish object, object_key: " << objectKey << " with ttlSecond = " << ttlSecond;
 
     bufferInfo->isSeal = false;
+    if (bufferInfo->isRoutedWrite) {
+        // Routed two-step buffer: the worker was pinned at Create time; seal via transport layer.
+        return PublishRoutedBuffer(bufferInfo, nestedObjectKeys, false);
+    }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -3023,6 +3156,35 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
                      elapsedMs, rc.ToString()));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Publish object %s", objectKey));
     return Status::OK();
+}
+
+Status ObjectClientImpl::PublishRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                             const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    // The worker was pinned on the buffer at Create time; rebuild the route context from it only to
+    // carry the client identity (clientId/token/tenantId) into the request context. TransportLayer::Set
+    // reads the target worker from the buffer's own workerAddr.
+    SetRouteContext routeContext;
+    RETURN_IF_NOT_OK(BuildSetRouteContext(bufferInfo->workerAddr, routeContext));
+    const auto requestContext = BuildTransportRequestContext(routeContext);
+    std::shared_ptr<ObjectBuffer> objBuf;
+    RETURN_IF_NOT_OK(ObjectBufferInternal::Create(bufferInfo, objBuf));
+    // The legacy Buffer owns the payload; keep the transient ObjectBuffer from freeing (and nulling)
+    // the shared pointer at end of scope. No-op for SHM buffers.
+    ObjectBufferInternal::DisownLocalMemory(*objBuf);
+    client::TransportSetParam setParam;
+    setParam.requestContext = requestContext;
+    setParam.nestedKeys = nestedObjectKeys;
+    setParam.ttlSecond = bufferInfo->ttlSecond;
+    setParam.existence = static_cast<ExistenceOpt>(bufferInfo->existence);
+    setParam.isSeal = isSeal;
+    setParam.subTimeoutMs = requestTimeoutMs_;
+    auto setRc = transportLayer_->Set(*objBuf, setParam);
+    if (setRc.IsOk()) {
+        bufferInfo->isSeal = isSeal;  // mark sealed only after a successful Set (avoid stuck-sealed on retry)
+    }
+    return setRc;
 }
 
 Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
@@ -6005,6 +6167,84 @@ Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
     return rc;
 }
 
+Status ObjectClientImpl::MSetRoutedBuffers(const std::vector<std::shared_ptr<Buffer>> &buffers, bool allRouted)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    // Group routed bufferInfos by the worker pinned at Create time.
+    std::unordered_map<HostPort, std::vector<std::shared_ptr<ObjectBufferInfo>>> grouped;
+    size_t totalRouted = 0;
+    for (const auto &buffer : buffers) {
+        if (buffer == nullptr || buffer->bufferInfo_->dataSize == 0 || !buffer->bufferInfo_->isRoutedWrite) {
+            continue;  // nullptr or MCreate NX placeholder (dataSize=0) or legacy buffer.
+        }
+        grouped[buffer->bufferInfo_->workerAddr].push_back(buffer->bufferInfo_);
+        ++totalRouted;
+    }
+    if (grouped.empty()) {
+        return Status::OK();
+    }
+    if (!allRouted) {
+        // Mixed batch (should not happen in normal use): publish routed buffers one by one and let
+        // the caller drive the legacy buffers through the bound-worker path below.
+        Status lastRc = Status::OK();
+        for (const auto &buffer : buffers) {
+            if (buffer == nullptr || buffer->bufferInfo_->dataSize == 0 || !buffer->bufferInfo_->isRoutedWrite) {
+                continue;
+            }
+            auto rc = PublishRoutedBuffer(buffer->bufferInfo_, {}, false);
+            if (rc.IsError()) {
+                lastRc = rc;
+            }
+        }
+        return lastRc;
+    }
+    // All routed: batch the publish per worker via transportLayer_->MSet, mirroring ProcessTransportMSet.
+    Status lastRc = Status::OK();
+    size_t failedCount = 0;
+    for (auto &entry : grouped) {
+        auto rc = ProcessRoutedMSetGroup(entry.first, entry.second, failedCount);
+        if (rc.IsError()) {
+            lastRc = rc;
+        }
+    }
+    // Mirror MSetThroughTransport: report OK when at least one object published successfully.
+    return (failedCount < totalRouted) ? Status::OK() : lastRc;
+}
+
+Status ObjectClientImpl::ProcessRoutedMSetGroup(const HostPort &worker,
+                                                const std::vector<std::shared_ptr<ObjectBufferInfo>> &infos,
+                                                size_t &failedCount)
+{
+    SetRouteContext routeContext;
+    RETURN_IF_NOT_OK(BuildSetRouteContext(worker, routeContext));
+    const auto requestContext = BuildTransportRequestContext(routeContext);
+    std::vector<std::shared_ptr<ObjectBuffer>> objBufs;
+    objBufs.reserve(infos.size());
+    for (const auto &info : infos) {
+        std::shared_ptr<ObjectBuffer> objBuf;
+        auto rc = ObjectBufferInternal::Create(info, objBuf);
+        if (rc.IsError()) {
+            // Reconstruct failed mid-group: nothing published for this group.
+            failedCount += infos.size();
+            return rc;
+        }
+        // The legacy Buffer owns the payload; keep the transient ObjectBuffer from freeing it.
+        ObjectBufferInternal::DisownLocalMemory(*objBuf);
+        objBufs.push_back(std::move(objBuf));
+    }
+    client::TransportSetParam setParam;
+    setParam.requestContext = requestContext;
+    // MSet(buffers) is the publish step after MCreate; carry the existence opt recorded on the
+    // buffer at Create time (mirrors single PublishRoutedBuffer).
+    setParam.existence = static_cast<ExistenceOpt>(infos.front()->existence);
+    setParam.ttlSecond = infos.front()->ttlSecond;
+    setParam.subTimeoutMs = requestTimeoutMs_;
+    client::TransportMSetResult result;
+    auto rc = transportLayer_->MSet(objBufs, setParam, result);
+    failedCount += rc.IsError() ? infos.size() : result.failedKeys.size();
+    return rc;
+}
+
 Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
 {
     AccessTransportTracker::Reset();
@@ -6014,12 +6254,10 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
     RETURN_IF_NOT_OK(IsClientReady());
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
-    std::shared_ptr<IClientWorkerApi> workerApi;
-    std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     const size_t bufferCnt = buffers.size();
     std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList;
     bufferInfoList.reserve(bufferCnt);
+    bool hasRouted = false;
     for (size_t i = 0; i < bufferCnt; i++) {
         auto &buffer = buffers[i];
         CHECK_FAIL_RETURN_STATUS(buffers[i] != nullptr, K_INVALID, "The buffer should not be empty.");
@@ -6028,12 +6266,26 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
         if (buffer->bufferInfo_->dataSize == 0) {
             continue;
         }
+        // Routed (lc=false two-step Create) buffers are published through the transport layer below.
         CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
+        if (buffer->bufferInfo_->isRoutedWrite) {
+            hasRouted = true;
+            continue;
+        }
         bufferInfoList.push_back(buffer->bufferInfo_);
     }
-    if (bufferInfoList.empty()) {
-        return Status::OK();
+    // Routed buffers: publish on the worker pinned at Create time. When bufferInfoList is empty
+    // every non-placeholder buffer is routed (all-routed batch); otherwise it is a mixed batch.
+    Status routedRc = Status::OK();
+    if (hasRouted) {
+        routedRc = MSetRoutedBuffers(buffers, bufferInfoList.empty());
     }
+    if (bufferInfoList.empty()) {
+        return routedRc;  // all-routed/all-placeholder, or legacy publish fully handled above
+    }
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     const uint32_t ttl = bufferInfoList.front()->ttlSecond;
     // MSet(buffers) is the publish step after MCreate. The existence check was already done
     // during MCreate, so the publish step should always use NONE to avoid the worker-side
@@ -6041,7 +6293,8 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
     PublishParam publishParam{ .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl };
     MultiPublishRspPb rsp;
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
-    return HandleShmRefCountAfterMultiPublish(buffers, rsp);
+    auto rc = HandleShmRefCountAfterMultiPublish(buffers, rsp);
+    return rc.IsError() ? rc : routedRc;
 }
 
 Status ObjectClientImpl::Set(const std::string &key, const StringView &val, const SetParam &setParam)

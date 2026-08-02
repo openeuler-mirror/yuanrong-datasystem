@@ -457,6 +457,13 @@ class Deployer:
 
             # Add custom environment variables from config
             custom_env = {k: v for k, v in config.get('env', {}).items() if k}
+            # Inject this node's address into the host-id env var (named by host_id_env_name) so the
+            # SDK resolves a non-empty hostId and ServiceDiscovery prefers same-host workers. Without
+            # this the SDK's hostId_ stays empty, HasHostAffinity() is false, and worker selection
+            # falls back to uniform-random across the whole cluster (cross-node binding + load skew).
+            host_id_env = config.get('host_id_env_name') or 'HOST_IP'
+            if host_id_env and host_id_env not in custom_env:
+                custom_env[host_id_env] = node.get('host', '')
             if custom_env:
                 env_assignments = [f'{k}={shlex.quote(str(v))}' for k, v in custom_env.items()]
                 env_prefix += ' '.join(env_assignments) + ' '
