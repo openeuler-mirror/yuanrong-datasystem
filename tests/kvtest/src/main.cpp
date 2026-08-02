@@ -5,11 +5,22 @@
 #include "pipeline/pipeline.h"
 #include "pipeline/kv_worker.h"
 #include "pipeline/cache_reader.h"
-#include "rpc/http_server.h"
 #include "pipeline/stop.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/kv_client_adapter.h"
 #include "benchmark/subprocess.h"
+
+// Control-plane transport: bazel mode (KVTEST_USE_BRPC) serves brpc RPCs;
+// cmake mode keeps the httplib HTTP endpoints. Both share NotifyDispatcher so
+// the notify protocol semantics are identical. Select at compile time to keep
+// the rest of main.cpp transport-agnostic.
+#ifdef KVTEST_USE_BRPC
+#include "rpc/brpc_server.h"
+using ControlServer = BrpcControlServer;
+#else
+#include "rpc/http_server.h"
+using ControlServer = HttpServer;
+#endif
 
 // BUILD_VERSION / BUILD_COMMIT are provided by CMake as -D compile flags. When
 // building under Bazel (tests/kvtest/BUILD.bazel) the generated build_info.h is
@@ -387,7 +398,7 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
 }
 
 static int RunServerMode(const Config &cfg) {
-    std::cerr << "kvtest v" BUILD_VERSION << std::endl;
+    std::cerr << "kvtest v" BUILD_VERSION << " (commit: " << BUILD_COMMIT << ")" << std::endl;
     std::cerr << "Output directory: " << cfg.outputDir << std::endl;
 
     // Apply CPU/NUMA affinity before creating any threads
@@ -445,16 +456,16 @@ static int RunServerMode(const Config &cfg) {
     std::signal(SIGINT, SignalHandler);
     std::signal(SIGPIPE, SIG_IGN);
 
-    HttpServer httpServer(cfg, client, metrics, gRunning);
+    ControlServer server(cfg, client, metrics, gRunning);
 
-    // Cache mode: create CacheReader before httpServer starts accepting connections
+    // Cache mode: create CacheReader before the server starts accepting connections
     std::unique_ptr<CacheReader> cacheReader;
     if (cfg.keyPoolSize > 0 && cfg.role == "reader") {
         cacheReader = std::make_unique<CacheReader>(cfg, client, metrics);
-        httpServer.SetCacheReader(cacheReader.get());
+        server.SetCacheReader(cacheReader.get());
     }
 
-    httpServer.Start();
+    server.Start();
 
     if (cacheReader) {
         cacheReader->Start();
@@ -495,7 +506,7 @@ static int RunServerMode(const Config &cfg) {
         // Queue depths
         size_t notifyOutQ = 0, notifyInQ = 0;
         if (worker) notifyOutQ = worker->NotifyQueueSize();
-        notifyInQ = httpServer.NotifyQueueSize();
+        notifyInQ = server.NotifyQueueSize();
 
         if (notifyOutQ > 1000) {
             SLOG_WARN("notify out queue backlog: " << notifyOutQ);
@@ -530,7 +541,7 @@ static int RunServerMode(const Config &cfg) {
 
     if (cacheReader) cacheReader->Stop();
     if (worker) worker->Stop();
-    httpServer.Stop();
+    server.Stop();
     metrics.Stop();
 
     std::cerr << "Shutdown complete" << std::endl;

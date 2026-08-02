@@ -34,6 +34,8 @@ add_executable(kvtest
     src/pipeline/cache_reader.cpp
     src/pipeline/stop.cpp
     src/rpc/http_server.cpp
+    src/rpc/notify_dispatcher.cpp
+    src/rpc/peer_client.cpp
     src/benchmark/benchmark_runner.cpp)
 
 target_include_directories(kvtest PRIVATE

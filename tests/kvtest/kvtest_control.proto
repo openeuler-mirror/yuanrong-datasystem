@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package kvtest_control;
+
+// brpc dispatches services through the legacy protobuf generic Service base
+// class. protobuf 4.x defaults cc_generic_services=false (no Service base is
+// generated), so we must enable it here explicitly; otherwise the generated
+// kvtest_control.pb.h has the request/response messages but no
+// KvtestControl::Service for KvtestControlServiceImpl to inherit. Mirrors the
+// tests/tools brpc_server_example pattern.
+option cc_generic_services = true;
+
+// Notify request: mirrors the former httplib POST /notify JSON body
+// {action, sender, keys[], size}. action="warmup_done" targets the cache
+// reader warmup path; an empty action takes the normal notify_pipeline path.
+message NotifyReq {
+  string action = 1;
+  int32 sender = 2;
+  repeated string keys = 3;
+  uint64 size = 4;
+}
+
+message NotifyResp {
+  bool ok = 1;
+  string message = 2;
+}
+
+message StatsReq {}
+
+// Stats response wraps the existing MetricsCollector::GetStatsJson() string
+// verbatim so the brpc path does not force a metrics-layer refactor. External
+// HTTP-gateway clients receive it as a JSON string field.
+message StatsResp {
+  string stats_json = 1;
+}
+
+message StopReq {}
+message StopResp {
+  bool stopping = 1;
+}
+
+message SummaryReq {}
+message SummaryResp {
+  bool ok = 1;
+}
+
+// Kvtest control plane, replacing the former httplib endpoints:
+//   Notify  <- POST /notify
+//   Stats   <- GET  /stats
+//   Stop    <- POST /stop
+//   Summary <- POST /summary
+// Callable via brpc channel (C++ peer client) or brpc's built-in HTTP gateway
+// (curl/python: POST /KvtestControl/Stop etc., protobuf JSON body).
+service KvtestControl {
+  rpc Notify(NotifyReq) returns (NotifyResp);
+  rpc Stats(StatsReq) returns (StatsResp);
+  rpc Stop(StopReq) returns (StopResp);
+  rpc Summary(SummaryReq) returns (SummaryResp);
+}

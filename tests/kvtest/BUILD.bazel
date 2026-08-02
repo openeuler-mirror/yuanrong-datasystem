@@ -13,7 +13,25 @@
 # or via build.sh:
 #   cd tests/kvtest && bash build.sh -b bazel
 
+load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
 package(default_visibility = ["//visibility:public"])
+
+# kvtest control-plane proto (Notify/Stats/Stop/Summary). strip_import_prefix
+# (mirrors src/datasystem/protos PROTO_ROOT usage) makes the generated
+# kvtest_control.pb.h includable by basename via the cc_proto_library's virtual
+# includes; without it the dep does not propagate the header include path.
+proto_library(
+    name = "kvtest_control_proto",
+    srcs = ["kvtest_control.proto"],
+    strip_import_prefix = "/tests/kvtest",
+)
+
+cc_proto_library(
+    name = "kvtest_control_cc_proto",
+    deps = [":kvtest_control_proto"],
+)
 
 # NUMA support is opt-in via --define=kvtest_numa=true. build.sh enables it
 # only when both <numa.h> and libnuma.so are detected, keeping the link in
@@ -51,10 +69,14 @@ genrule(
 # strip_include_prefix = "src" makes src/common/config.h includable as
 # "common/config.h" and src/build_info.h as "build_info.h", matching the
 # CMake target_include_directories(... src) layout and main.cpp's includes.
+#
+# KVTEST_USE_BRPC selects the brpc control plane (BrpcControlServer + brpc peer
+# client) over the httplib one. The CMake build does not define this symbol and
+# keeps the httplib path; brpc headers/libs are not shipped in the SDK, so the
+# cmake mode cannot use brpc until the SDK packages third-party dev headers.
 cc_library(
     name = "kvtest_lib",
     srcs = [
-        "src/main.cpp",
         "src/common/config.cpp",
         "src/metrics/metrics.cpp",
         "src/pipeline/pipeline.cpp",
@@ -62,6 +84,9 @@ cc_library(
         "src/pipeline/cache_reader.cpp",
         "src/pipeline/stop.cpp",
         "src/rpc/http_server.cpp",
+        "src/rpc/notify_dispatcher.cpp",
+        "src/rpc/brpc_server.cpp",
+        "src/rpc/peer_client.cpp",
         "src/benchmark/benchmark_runner.cpp",
     ],
     hdrs = [
@@ -76,6 +101,9 @@ cc_library(
         "src/pipeline/data_pattern.h",
         "src/pipeline/stop.h",
         "src/rpc/http_server.h",
+        "src/rpc/notify_dispatcher.h",
+        "src/rpc/brpc_server.h",
+        "src/rpc/peer_client.h",
         "src/benchmark/benchmark_runner.h",
         "src/benchmark/kv_client_adapter.h",
         "src/benchmark/subprocess.h",
@@ -83,12 +111,17 @@ cc_library(
         "src/vendor/nlohmann_json.hpp",
         ":build_info_gen",
     ],
+    # `src/` is the include root for kvtest's own headers (e.g. "common/config.h",
+    # "vendor/httplib.h"), matching CMake target_include_directories(... src).
     strip_include_prefix = "src",
     copts = [
         "-Wno-sign-compare",
         "-Wno-unused-parameter",
         "-Wno-unused-variable",
     ],
+    # Brpc control plane replaces httplib in bazel mode. main.cpp / kv_worker.cpp
+    # / stop.cpp select impls behind this define; httplib stays the cmake path.
+    defines = ["KVTEST_USE_BRPC"],
     # Statically link libstdc++/libgcc so the binary runs on older GCC hosts
     # (e.g. openEuler 22.04 with GCC 10), matching CMake target_link_options.
     linkopts = select({
@@ -106,10 +139,24 @@ cc_library(
         # datasystem headers.
         "//src/datasystem/client:datasystem",
         "//include/datasystem:headers",
+        # kvtest control-plane proto (Notify/Stats/Stop/Summary).
+        ":kvtest_control_cc_proto",
+        # brpc server runtime for the bazel-mode control plane. Already pulled
+        # transitively by the datasystem client, but listed explicitly because
+        # brpc_server.cpp / peer_client.cpp use brpc::Server / brpc::Channel
+        # directly.
+        "@com_github_apache_brpc//:brpc",
+        # gflags is a runtime dep of brpc; link explicitly so the brpc server's
+        # internal flags resolve at load time.
+        "@com_github_gflags_gflags//:gflags",
+        # Direct use of google::protobuf::Service / DescriptorPool in
+        # brpc_server.cpp (protobuf 28.x generic-service dispatch).
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
 cc_binary(
     name = "kvtest",
+    srcs = ["src/main.cpp"],
     deps = [":kvtest_lib"],
 )

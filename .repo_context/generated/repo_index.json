@@ -428,6 +428,7 @@
         "  - deploy_coordinator.py",
         "  - deploy_pods.py",
         "  - deploy_worker.py",
+        "  - kvtest_control.proto",
         "- perf/",
         "  - rpc_compare/",
         "    - brpc/",

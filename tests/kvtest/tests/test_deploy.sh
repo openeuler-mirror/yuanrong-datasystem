@@ -165,7 +165,8 @@ ssh "$REMOTE_HOST" "cd ${REMOTE_WORK_DIR} && chmod +x kvtest && \
 sleep 3
 echo "  Remote reader started"
 
-# Verify remote is listening
+# Verify remote is listening (brpc serves /stats via restful mapping; response
+# is {"stats_json":"<inner json>"} which still contains "instance_id")
 if ssh "$REMOTE_HOST" "curl -s http://127.0.0.1:${REMOTE_HTTP_PORT}/stats" 2>/dev/null | grep -q "instance_id"; then
     echo "  Remote reader is alive"
 else

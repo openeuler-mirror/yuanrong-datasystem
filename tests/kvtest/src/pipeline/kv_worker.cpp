@@ -1,6 +1,5 @@
 #include "kv_worker.h"
 #include "data_pattern.h"
-#include "vendor/httplib.h"
 #include <datasystem/utils/string_view.h>
 #include "common/simple_log.h"
 #include <chrono>
@@ -15,7 +14,8 @@ KVWorker::KVWorker(const Config &cfg, std::shared_ptr<KVClient> client,
                    MetricsCollector &metrics)
     : cfg_(cfg), client_(client), metrics_(metrics),
       currentPoolSize_(static_cast<uint64_t>(cfg.keyPoolSize)),
-      currentTargetQps_(cfg.targetQps), notifyPool_(100) {
+      currentTargetQps_(cfg.targetQps), notifyPool_(100),
+      peerClient_(MakePeerControlClient()) {
     for (auto &name : cfg_.pipeline) {
         auto fn = GetOpFunc(name);
         if (!fn) {
@@ -85,15 +85,7 @@ void KVWorker::Start() {
         SLOG_INFO("Warmup done: " << warmupOk << " ok, " << warmupFail << " fail");
 
         if (!warmupKeys.empty()) {
-            std::string body = "{\"action\":\"warmup_done\",\"sender\":"
-                             + std::to_string(cfg_.instanceId)
-                             + ",\"keys\":[";
-            for (size_t i = 0; i < warmupKeys.size(); i++) {
-                if (i > 0) body += ",";
-                body += "\"" + warmupKeys[i] + "\"";
-            }
-            body += "]}";
-            NotifyWarmupDone(body);
+            NotifyWarmupDone(warmupKeys);
         }
     }
 
@@ -258,15 +250,6 @@ void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size) 
         std::swap(indices[i], indices[dist(rng)]);
     }
 
-    // JSON body: {"keys":["...","..."],"sender":0,"size":8388608}
-    std::string body = "{\"keys\":[";
-    for (size_t i = 0; i < keys.size(); i++) {
-        if (i > 0) body += ",";
-        body += "\"" + keys[i] + "\"";
-    }
-    body += "],\"sender\":" + std::to_string(cfg_.instanceId)
-          + ",\"size\":" + std::to_string(size) + "}";
-
     // Resolve peer addresses
     struct PeerAddr { std::string host; int port; };
     std::vector<PeerAddr> targets;
@@ -284,44 +267,33 @@ void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size) 
         } catch (...) { continue; }
     }
 
-    auto sendOne = [](const std::string &host, int port, const std::string &body) {
-        try {
-            thread_local std::unordered_map<std::string,
-                std::unique_ptr<httplib::Client>> clientCache;
-            std::string ckey = host + ":" + std::to_string(port);
-            auto &ref = clientCache[ckey];
-            if (!ref) {
-                ref = std::make_unique<httplib::Client>(host, port);
-                ref->set_connection_timeout(2);
-                ref->set_read_timeout(2);
-            }
-            ref->Post("/notify", body, "application/json");
-        } catch (...) {}
-    };
-
+    int sender = cfg_.instanceId;
+    // Capture a copy of the keys for the async tasks; the transport (httplib
+    // JSON body or brpc NotifyReq) is built inside PeerControlClient.
     if (cfg_.notifyIntervalUs > 0) {
         // Sequential: offload to thread pool, notify one by one with interval
         int intervalUs = cfg_.notifyIntervalUs;
-        notifyPool_.Submit([targets = std::move(targets), body, intervalUs, sendOne]() {
+        notifyPool_.Submit([this, targets = std::move(targets), keys, sender, size, intervalUs]() {
             for (size_t i = 0; i < targets.size(); i++) {
                 if (i > 0) {
                     std::this_thread::sleep_for(
                         std::chrono::microseconds(intervalUs));
                 }
-                sendOne(targets[i].host, targets[i].port, body);
+                peerClient_->Notify(targets[i].host, targets[i].port,
+                                     /*action=*/"", sender, keys, size);
             }
         });
     } else {
         // Parallel: fire-and-forget via thread pool
         for (auto &t : targets) {
-            notifyPool_.Submit([h = t.host, p = t.port, body, sendOne]() {
-                sendOne(h, p, body);
+            notifyPool_.Submit([this, h = t.host, p = t.port, keys, sender, size]() {
+                peerClient_->Notify(h, p, /*action=*/"", sender, keys, size);
             });
         }
     }
 }
 
-void KVWorker::NotifyWarmupDone(const std::string &body) {
+void KVWorker::NotifyWarmupDone(const std::vector<std::string> &warmupKeys) {
     if (cfg_.peers.empty()) return;
 
     struct PeerAddr { std::string host; int port; };
@@ -339,24 +311,10 @@ void KVWorker::NotifyWarmupDone(const std::string &body) {
         } catch (...) { continue; }
     }
 
-    auto sendOne = [](const std::string &host, int port, const std::string &body) {
-        try {
-            thread_local std::unordered_map<std::string,
-                std::unique_ptr<httplib::Client>> clientCache;
-            std::string ckey = host + ":" + std::to_string(port);
-            auto &ref = clientCache[ckey];
-            if (!ref) {
-                ref = std::make_unique<httplib::Client>(host, port);
-                ref->set_connection_timeout(5);
-                ref->set_read_timeout(5);
-            }
-            ref->Post("/notify", body, "application/json");
-        } catch (...) {}
-    };
-
+    int sender = cfg_.instanceId;
     for (auto &t : targets) {
-        notifyPool_.Submit([h = t.host, p = t.port, body, sendOne]() {
-            sendOne(h, p, body);
+        notifyPool_.Submit([this, h = t.host, p = t.port, warmupKeys, sender]() {
+            peerClient_->Notify(h, p, /*action=*/"warmup_done", sender, warmupKeys, /*size=*/0);
         });
     }
 }

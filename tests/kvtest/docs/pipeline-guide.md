@@ -116,7 +116,7 @@ LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/writer.json
 
 **交互流程：**
 1. Reader 启动 → 等待 Writer 预热完成通知
-2. Writer 启动 → 预热 100 keys → HTTP POST /notify 通知 Reader
+2. Writer 启动 → 预热 100 keys → 经 PeerControlClient 发送 notify 通知 Reader（bazel: brpc Notify；cmake: HTTP POST /notify）
 3. Reader 收到通知 → key 池填充 → 开始读取
 4. Writer 持续写入 → 通知 Reader → Reader 读取新 key
 
