@@ -56,6 +56,48 @@ def _find_all_files_via_shell(repository_ctx, root, basenames):
                     result.append(line)
     return result
 
+# The 6 URMA shared libraries shipped in a URMA SDK package. The real SONAME
+# of each may be any .so.N (e.g. libummu.so.1 while the others are .so.0), and
+# transitive DT_NEEDED references the exact SONAME — so we preserve every
+# shipped variant rather than hardcoding .so/.so.0/.so.1.
+_URMA_SO_BASES = [
+    "libtpsa", "libummu", "liburma", "liburma_common",
+    "liburma_ubagg", "liburma-udma",
+]
+
+def _symlink_urma_libs(repository_ctx, lib_dir):
+    """Symlink every shipped lib<base>.so* variant from lib_dir into lib/.
+
+    lib_dir is a flat directory (the package's lib root in download mode, or
+    /usr/lib64 in system mode). Uses `find -maxdepth 1 -name lib<base>.so*`
+    (no recursion, no -L) so only the 6 URMA libs' own variants are picked
+    up — unrelated system libs are never引入. Each found file/symlink is
+    symlinked into lib/ under its own basename, preserving the original
+    SONAME so link/load-time DT_NEEDED always resolves. Missing variants are
+    simply skipped (no empty-file fallback — packaging no longer relies on a
+    fixed set of declared outputs).
+    """
+    for base in _URMA_SO_BASES:
+        pattern = base + ".so*"
+        # -maxdepth 1: stay in lib_dir (no recursion into subdirs / no chasing
+        #              symlinks elsewhere). -type f OR -type l: catch both the
+        #              real versioned files and the dev symlink lib<base>.so.
+        find_result = repository_ctx.execute(
+            ["find", lib_dir, "-maxdepth", "1", "-name", pattern,
+             "(", "-type", "f", "-o", "-type", "l", ")"],
+            quiet = True,
+        )
+        if find_result.return_code != 0:
+            continue
+        for line in find_result.stdout.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            basename = line.rsplit("/", 1)[-1]
+            target = "yr/datasystem/lib/" + basename
+            if not repository_ctx.path(target).exists:
+                repository_ctx.symlink(repository_ctx.path(line), target)
+
 def _urma_pkg_repository_impl(repository_ctx):
     urma_pkg_url = repository_ctx.getenv("URMA_PKG_URL", "")
     urma_pkg_sha256 = repository_ctx.getenv("URMA_PKG_SHA256", "")
@@ -114,29 +156,14 @@ def _urma_pkg_repository_impl(repository_ctx):
         lib_path_parts = urma_so_path.split("/")
         lib_dir = "/".join(lib_path_parts[:-1])
 
-        # Find all 6 urma so files (and .so.0 versions) and symlink into lib/.
-        # If .so.0 is missing, symlink .so.0 -> .so so all 12 genrule outputs exist.
-        urma_so_basenames = [
-            "libtpsa", "libummu", "liburma", "liburma_common",
-            "liburma_ubagg", "liburma-udma",
-        ]
-        for base in urma_so_basenames:
-            for suffix in [".so", ".so.0"]:
-                so_name = base + suffix
-                found_path = _find_file_via_shell(repository_ctx, ".", so_name)
-                if found_path != "":
-                    repository_ctx.symlink(repository_ctx.path(found_path), "lib/" + so_name)
-                else:
-                    # .so.0 not found; try .so.1 or fall back to .so
-                    fb_found = False
-                    for fb_suffix in [".so.1", ".so.1.0.5", ".so.0.0.3", ".so.0.0.1", ".so"]:
-                        fb_path = _find_file_via_shell(repository_ctx, ".", base + fb_suffix)
-                        if fb_path != "":
-                            repository_ctx.symlink(repository_ctx.path(fb_path), "lib/" + so_name)
-                            fb_found = True
-                            break
-                    if not fb_found:
-                        repository_ctx.file("lib/" + so_name, "")
+        # Preserve EVERY shipped lib<base>.so* variant under lib/, so the real
+        # SONAME (whatever it is — .so.0 / .so.1 / .so.2 / .so.1.0.5 ...) is
+        # always reachable at link/load time. Transitive DT_NEEDED references
+        # the exact SONAME; hardcoding .so+.so.0 breaks whenever the package's
+        # SONAME differs (e.g. libummu.so.1 here). Globbing lib_dir (maxdepth 1,
+        # no recursion, no -L) makes it future-proof against URMA SONAME bumps
+        # without pulling in unrelated package files.
+        _symlink_urma_libs(repository_ctx, lib_dir)
 
         build_content = """
 package(default_visibility = ["//visibility:public"])
@@ -146,21 +173,21 @@ cc_library(
     hdrs = glob(["ub/umdk/urma/*.h"]) + glob(["include/ub/umdk/urma/*.h"]),
     includes = ["", "include"],
     srcs = glob([
-        "lib/liburma.so*",
-        "lib/liburma_ubagg.so*",
-        "lib/liburma-udma.so*",
+        "yr/datasystem/lib/liburma.so*",
+        "yr/datasystem/lib/liburma_ubagg.so*",
+        "yr/datasystem/lib/liburma-udma.so*",
     ]),
 )
 
 filegroup(
     name = "urma_libs",
     srcs = glob([
-        "lib/libtpsa.so*",
-        "lib/libummu.so*",
-        "lib/liburma.so*",
-        "lib/liburma_common.so*",
-        "lib/liburma_ubagg.so*",
-        "lib/liburma-udma.so*",
+        "yr/datasystem/lib/libtpsa.so*",
+        "yr/datasystem/lib/libummu.so*",
+        "yr/datasystem/lib/liburma.so*",
+        "yr/datasystem/lib/liburma_common.so*",
+        "yr/datasystem/lib/liburma_ubagg.so*",
+        "yr/datasystem/lib/liburma-udma.so*",
     ]),
 )
 """
@@ -191,31 +218,12 @@ filegroup(
             repository_ctx.file("BUILD.bazel", build_content)
             return
 
-        # Symlink the 6 urma so files and their .so/.so.0 versions from
-        # /usr/lib64 into lib/. Ensure all 12 declared genrule outputs exist:
-        # if .so.0 is missing, try .so.1 or fall back to the .so itself.
-        urma_so_names = [
-            "libtpsa", "libummu", "liburma", "liburma_common",
-            "liburma_ubagg", "liburma-udma",
-        ]
-        for base in urma_so_names:
-            for suffix in [".so", ".so.0"]:
-                so_name = base + suffix
-                src_path = repository_ctx.path("/usr/lib64/" + so_name)
-                if src_path.exists:
-                    repository_ctx.symlink(src_path, "lib/" + so_name)
-                else:
-                    # .so.0 missing: try .so.1, .so.1.0.5, or fall back to .so
-                    found = False
-                    for fb in [".so.1", ".so.1.0.5", ".so.0.0.3", ".so.0.0.1", ".so"]:
-                        fb_path = repository_ctx.path("/usr/lib64/" + base + fb)
-                        if fb_path.exists:
-                            repository_ctx.symlink(fb_path, "lib/" + so_name)
-                            found = True
-                            break
-                    if not found:
-                        # Last resort: create an empty file so genrule outs exist
-                        repository_ctx.file("lib/" + so_name, "")
+        # Symlink EVERY shipped lib<base>.so* variant from /usr/lib64 into lib/.
+        # Preserve the real SONAME (whatever it is) so transitive DT_NEEDED
+        # (e.g. liburma-udma.so -> libummu.so.1) always resolves. Globbing all
+        # .so* (via _symlink_urma_libs) is future-proof against SONAME bumps;
+        # hardcoding .so/.so.0/.so.1 breaks when the SONAME is something else.
+        _symlink_urma_libs(repository_ctx, "/usr/lib64")
 
         build_content = """
 package(default_visibility = ["//visibility:public"])
@@ -225,21 +233,21 @@ cc_library(
     hdrs = glob(["include/ub/umdk/urma/*.h"]),
     includes = ["include"],
     srcs = glob([
-        "lib/liburma.so*",
-        "lib/liburma_ubagg.so*",
-        "lib/liburma-udma.so*",
+        "yr/datasystem/lib/liburma.so*",
+        "yr/datasystem/lib/liburma_ubagg.so*",
+        "yr/datasystem/lib/liburma-udma.so*",
     ]),
 )
 
 filegroup(
     name = "urma_libs",
     srcs = glob([
-        "lib/libtpsa.so*",
-        "lib/libummu.so*",
-        "lib/liburma.so*",
-        "lib/liburma_common.so*",
-        "lib/liburma_ubagg.so*",
-        "lib/liburma-udma.so*",
+        "yr/datasystem/lib/libtpsa.so*",
+        "yr/datasystem/lib/libummu.so*",
+        "yr/datasystem/lib/liburma.so*",
+        "yr/datasystem/lib/liburma_common.so*",
+        "yr/datasystem/lib/liburma_ubagg.so*",
+        "yr/datasystem/lib/liburma-udma.so*",
     ]),
 )
 """

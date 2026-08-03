@@ -527,33 +527,11 @@ copy_file(
     ],
 )
 
-# --- URMA shared libraries (6 so files) into wheel lib ---
-# liburma is linked at compile time; the others are its transitive DT_NEEDED
-# dependencies. All must be shipped alongside libdatasystem.so.
-# Each .so and .so.0 must be declared as an output so bazel keeps them.
-genrule(
-    name = "urma_libs_files",
-    srcs = ["@local_urma//:urma_libs"],
-    outs = [
-        "yr/datasystem/lib/libtpsa.so",
-        "yr/datasystem/lib/libtpsa.so.0",
-        "yr/datasystem/lib/libummu.so",
-        "yr/datasystem/lib/libummu.so.0",
-        "yr/datasystem/lib/liburma.so",
-        "yr/datasystem/lib/liburma.so.0",
-        "yr/datasystem/lib/liburma_common.so",
-        "yr/datasystem/lib/liburma_common.so.0",
-        "yr/datasystem/lib/liburma_ubagg.so",
-        "yr/datasystem/lib/liburma_ubagg.so.0",
-        "yr/datasystem/lib/liburma-udma.so",
-        "yr/datasystem/lib/liburma-udma.so.0",
-    ],
-    cmd = "mkdir -p $(RULEDIR)/yr/datasystem/lib && cp -fL $(SRCS) $(RULEDIR)/yr/datasystem/lib/",
-    tags = ["no-sandbox"],
-    visibility = [
-        "//bazel:__pkg__",
-    ],
-)
+# URMA shared libraries are now shipped via @local_urma//:urma_libs directly
+# (urma_pkg_repo.bzl places them at yr/datasystem/lib/, matching the wheel's
+# package layout, so py_wheel picks them up via _path_inside_wheel with no
+# genrule/static-outs relay). Any .so.N variant the package ships is included
+# automatically — no enumeration, future-proof against URMA SONAME bumps.
 
 copy_file(
     name = "libdatasystem_sym_file",
