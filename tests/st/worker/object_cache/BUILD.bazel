@@ -6,6 +6,7 @@ ds_cc_test(
     name="coordinator_backend_cluster_test",
     srcs=["coordinator_backend_cluster_test.cpp"],
     tags=["manual"],
+    timeout="long",
     deps=[
         "//src/datasystem/client:datasystem",
         "//src/datasystem/cluster:cluster_topology_keyspace",

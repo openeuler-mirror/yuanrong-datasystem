@@ -83,9 +83,19 @@ Status CoordinationEventDispatcher::SubmitCoordination(CoordinationEvent &&event
     return Submit(RuntimeEvent{ RuntimeEventPayload{ std::move(event) } }, true);
 }
 
+Status CoordinationEventDispatcher::SubmitCoordinationUncoalesced(CoordinationEvent &&event)
+{
+    return Submit(RuntimeEvent{ RuntimeEventPayload{ std::move(event) } }, false);
+}
+
 Status CoordinationEventDispatcher::SubmitCompletion(TopologyCallbackCompletion completion)
 {
     return Submit(RuntimeEvent{ RuntimeEventPayload{ std::move(completion) } }, false);
+}
+
+Status CoordinationEventDispatcher::SubmitWorkerLiveness(WorkerLivenessReport report)
+{
+    return Submit(RuntimeEvent{ RuntimeEventPayload{ std::move(report) } }, false);
 }
 
 Status CoordinationEventDispatcher::WaitPop(std::chrono::steady_clock::time_point deadline, RuntimeEvent &event)

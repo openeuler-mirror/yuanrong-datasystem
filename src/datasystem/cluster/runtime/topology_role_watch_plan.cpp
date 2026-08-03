@@ -24,6 +24,11 @@ Status BuildTopologyRoleWatchPlan(TopologyRuntimeRole role, const std::string &l
         RETURN_IF_NOT_OK(TopologyKeyHelper::NotifyKey(localAddress, notifyKey));
         built.emplace_back(WatchKey{ keys.NotifyTable(), std::move(notifyKey), startRevision });
     }
+    if (role == TopologyRuntimeRole::WORKER) {
+        std::string probeKey;
+        RETURN_IF_NOT_OK(TopologyKeyHelper::ProbeKey(localAddress, probeKey));
+        built.emplace_back(WatchKey{ keys.ProbeTable(), std::move(probeKey), startRevision });
+    }
     if (role == TopologyRuntimeRole::CONTROLLER || role == TopologyRuntimeRole::UNIFIED_ETCD) {
         if (role == TopologyRuntimeRole::CONTROLLER) {
             CHECK_FAIL_RETURN_STATUS(localAddress.empty(), K_INVALID, "Controller watch plan has a local address");

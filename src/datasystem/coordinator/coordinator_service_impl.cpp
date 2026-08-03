@@ -36,6 +36,7 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
+#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/coordinator/topology_control_host.h"
 #include "datasystem/coordinator/raft/coordinator_raft_service.h"
@@ -551,9 +552,10 @@ void CoordinatorServiceImpl::HandleCommittedMembershipMutation(const std::string
     if (!present && watchDispatcher_ != nullptr) {
         std::unique_ptr<cluster::TopologyKeyHelper> keys;
         if (cluster::TopologyKeyHelper::Create(parsed.clusterName, keys).IsOk()) {
-            const std::vector<std::string> scopes = { keys->TopologyTable(),   keys->MigrateTaskTable(),
-                                                      keys->DeleteTaskTable(), keys->NotifyTable(),
-                                                      keys->MembershipTable(), keys->ScaleInMetadataDoneTable() };
+            const std::vector<std::string> scopes = {
+                keys->TopologyTable(), keys->MigrateTaskTable(), keys->DeleteTaskTable(),         keys->NotifyTable(),
+                keys->ProbeTable(),    keys->MembershipTable(),  keys->ScaleInMetadataDoneTable()
+            };
             watchDispatcher_->RemoveChannelsByWatcherInScopes(parsed.relativeKey, scopes);
         }
     }
@@ -1210,6 +1212,50 @@ Status CoordinatorServiceImpl::EnsureLeaderMembership(const EnsureLeaderMembersh
     rsp.set_result(EnsureLeaderMembershipRspPb::ACCEPTED);
     rsp.set_remaining_ttl_ms(remainingTtlMs);
     rsp.set_membership_mod_revision(revision);
+    return Status::OK();
+}
+
+Status CoordinatorServiceImpl::ReportWorkerLiveness(const ReportWorkerLivenessReqPb &req,
+                                                    ReportWorkerLivenessRspPb &rsp)
+{
+    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    bool businessAllowed = false;
+    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
+    if (!businessAllowed) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(topologyControlHost_ != nullptr, K_NOT_READY, "topology Control Host is not bound");
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(req.cluster_name(), keys));
+    std::string canonical;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::ProbeKey(req.witness_address(), canonical));
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::MembershipKey(req.target_address(), canonical));
+    CHECK_FAIL_RETURN_STATUS(req.coordinator_id() == coordinatorId_, K_TRY_AGAIN,
+                             "worker liveness report CoordinatorId is stale");
+    CHECK_FAIL_RETURN_STATUS(!req.target_member_id().empty() && req.probe_round() > 0
+                                 && (req.result() == WORKER_REACHABLE || req.result() == WORKER_UNREACHABLE),
+                             K_INVALID, "invalid worker liveness report");
+    const auto result = req.result() == WORKER_REACHABLE ? cluster::WorkerLivenessResult::REACHABLE
+                                                         : cluster::WorkerLivenessResult::UNREACHABLE;
+    const auto probeId = cluster::WorkerProbeIdForLog(req.coordinator_id(), req.probe_round());
+    LOG(INFO) << "CLUSTER_WORKER_PROBE cluster=" << req.cluster_name()
+              << " action=WITNESS_PROBE_REPORT_RECEIVED probe_id=" << probeId << " witness=" << req.witness_address()
+              << " target=" << req.target_address()
+              << " target_id_prefix=" << cluster::MemberIdForLog(req.target_member_id())
+              << " result=" << cluster::WorkerLivenessResultName(result);
+    auto status = topologyControlHost_->EnqueueWorkerLivenessReport(req.cluster_name(),
+                                                                    { req.coordinator_id(),
+                                                                      req.witness_address(),
+                                                                      { req.target_member_id(), req.target_address() },
+                                                                      req.probe_round(),
+                                                                      result });
+    if (status.IsError()) {
+        LOG(WARNING) << "CLUSTER_WORKER_PROBE cluster=" << req.cluster_name()
+                     << " action=WITNESS_PROBE_REPORT_ENQUEUE_FAILED probe_id=" << probeId
+                     << " witness=" << req.witness_address() << " target=" << req.target_address()
+                     << " result=" << cluster::WorkerLivenessResultName(result) << " status=" << status.ToString();
+        return status;
+    }
     return Status::OK();
 }
 

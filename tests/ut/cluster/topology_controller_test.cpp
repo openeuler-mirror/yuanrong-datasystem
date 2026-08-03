@@ -20,6 +20,7 @@
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/common/util/wait_post.h"
+#include "datasystem/protos/coordinator.pb.h"
 #include "ut/cluster/testing/fake_coordination_backend.h"
 
 #include "gtest/gtest.h"
@@ -153,6 +154,11 @@ std::vector<ControlBackendProbeResult> NoResponseProbe(
         results.push_back({ target, std::nullopt, outcome, elapsed });
     }
     return results;
+}
+
+uint64_t ProbeRoundFor(const coordinator::WorkerProbeEventValuePb &value, const std::string &targetAddress)
+{
+    return value.target_address() == targetAddress ? value.probe_round() : 0;
 }
 
 void ExpectActiveTopologyUnchanged(const TopologyState &observed, uint64_t expectedVersion,
@@ -1574,6 +1580,251 @@ TEST(TopologyControllerTest, ScaleInCollectWindowIsValidBounds)
     EXPECT_FALSE(options.IsValid());
 }
 
+TEST(TopologyControllerTest, ExternalWitnessProbeRequiresProbeEpoch)
+{
+    TopologyControllerOptions options;
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    EXPECT_FALSE(options.IsValid());
+    options.probeEpoch = "coordinator-test";
+    EXPECT_TRUE(options.IsValid());
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
+    options.probeEpoch.clear();
+    EXPECT_TRUE(options.IsValid());
+}
+
+TEST(TopologyControllerTest, WitnessProbeOptionsRequireValidWitnessCountAndRound)
+{
+    TopologyControllerOptions options;
+    EXPECT_TRUE(options.IsValid());
+    options.failureProbeWitnessCount = 0;
+    EXPECT_FALSE(options.IsValid());
+    options.failureProbeWitnessCount = 3;
+    options.initialProbeRound = 0;
+    EXPECT_FALSE(options.IsValid());
+    options.initialProbeRound = 1;
+    options.witnessProbeRoundTimeout = options.failureProbeTimeout;
+    EXPECT_FALSE(options.IsValid());
+}
+
+TEST(TopologyControllerTest, OneWitnessKeyReceivesIndependentEventsForOutstandingTargets)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("witness-target-events", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } },
+                       Member{ { std::string(16, 'c'), "127.0.0.1:3" }, MemberState::ACTIVE, { 3 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+    const auto revisionBeforeProbe = backend.CurrentRevision();
+
+    TopologyControllerOptions options;
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "coordinator-test";
+    options.reconcileTick = std::chrono::milliseconds(1);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(WaitForCondition([&] { return backend.CurrentRevision() >= revisionBeforeProbe + 2; }));
+    coordinator::WorkerProbeEventValuePb value;
+    std::string encoded;
+    DS_ASSERT_OK(backend.Get(keys->ProbeTable(), "127.0.0.1:1", encoded));
+    ASSERT_TRUE(value.ParseFromString(encoded));
+    EXPECT_TRUE(value.target_address() == "127.0.0.1:2" || value.target_address() == "127.0.0.1:3");
+    EXPECT_GT(value.probe_round(), 0U);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, CoordinatorWitnessEvidenceContinuesToProtectMissingMember)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("witness-protected", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+
+    std::atomic<int64_t> nowSeconds{ 0 };
+    TopologyControllerOptions options;
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "coordinator-test";
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.failureProbeTimeout = std::chrono::seconds(1);
+    options.witnessProbeRoundTimeout = std::chrono::seconds(2);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.now = [&] { return std::chrono::steady_clock::time_point(std::chrono::seconds(nowSeconds.load())); };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+
+    coordinator::WorkerProbeEventValuePb first;
+    ASSERT_TRUE(WaitForCondition([&] {
+        std::string value;
+        return backend.Get(keys->ProbeTable(), "127.0.0.1:1", value).IsOk() && first.ParseFromString(value);
+    }));
+    const auto firstRound = ProbeRoundFor(first, "127.0.0.1:2");
+    ASSERT_GT(firstRound, 0U);
+    DS_ASSERT_OK(controller.SubmitWorkerLivenessReport(
+        { "coordinator-test", "127.0.0.1:1", { std::string(16, 'b'), "127.0.0.1:2" }, firstRound,
+          WorkerLivenessResult::UNREACHABLE }));
+    DS_ASSERT_OK(controller.SubmitWorkerLivenessReport(
+        { "coordinator-test", "127.0.0.1:1", { std::string(16, 'b'), "127.0.0.1:2" }, firstRound,
+          WorkerLivenessResult::REACHABLE }));
+    ASSERT_TRUE(WaitForCondition([&] { return dispatcher.GetStats().queueDepth == 0; }));
+
+    nowSeconds.store(2);
+    coordinator::WorkerProbeEventValuePb second;
+    ASSERT_TRUE(WaitForCondition([&] {
+        std::string value;
+        return backend.Get(keys->ProbeTable(), "127.0.0.1:1", value).IsOk() && second.ParseFromString(value)
+               && ProbeRoundFor(second, "127.0.0.1:2") != firstRound;
+    }));
+    const auto secondRound = ProbeRoundFor(second, "127.0.0.1:2");
+    ASSERT_GT(secondRound, 0U);
+    TopologyState observed;
+    int64_t revision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    EXPECT_FALSE(observed.activeBatch.has_value());
+
+    DS_ASSERT_OK(controller.SubmitWorkerLivenessReport(
+        { "coordinator-test", "127.0.0.1:1", { std::string(16, 'b'), "127.0.0.1:2" }, secondRound,
+          WorkerLivenessResult::REACHABLE }));
+    ASSERT_TRUE(WaitForCondition([&] { return dispatcher.GetStats().queueDepth == 0; }));
+    nowSeconds.store(4);
+    coordinator::WorkerProbeEventValuePb third;
+    ASSERT_TRUE(WaitForCondition([&] {
+        std::string value;
+        return backend.Get(keys->ProbeTable(), "127.0.0.1:1", value).IsOk() && third.ParseFromString(value)
+               && ProbeRoundFor(third, "127.0.0.1:2") != secondRound;
+    }));
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    EXPECT_FALSE(observed.activeBatch.has_value());
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, CoordinatorOldRoundEvidenceDoesNotProtectCurrentProbe)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("witness-old-round", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+
+    std::atomic<int64_t> nowSeconds{ 0 };
+    TopologyControllerOptions options;
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "coordinator-test";
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.failureProbeTimeout = std::chrono::seconds(1);
+    options.witnessProbeRoundTimeout = std::chrono::seconds(2);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.now = [&] { return std::chrono::steady_clock::time_point(std::chrono::seconds(nowSeconds.load())); };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+
+    coordinator::WorkerProbeEventValuePb first;
+    ASSERT_TRUE(WaitForCondition([&] {
+        std::string value;
+        return backend.Get(keys->ProbeTable(), "127.0.0.1:1", value).IsOk() && first.ParseFromString(value);
+    }));
+    const auto firstRound = ProbeRoundFor(first, "127.0.0.1:2");
+    ASSERT_GT(firstRound, 0U);
+    DS_ASSERT_OK(controller.SubmitWorkerLivenessReport(
+        { "coordinator-test", "127.0.0.1:1", { std::string(16, 'b'), "127.0.0.1:2" }, firstRound,
+          WorkerLivenessResult::REACHABLE }));
+    ASSERT_TRUE(WaitForCondition([&] { return dispatcher.GetStats().queueDepth == 0; }));
+    nowSeconds.store(2);
+
+    coordinator::WorkerProbeEventValuePb second;
+    ASSERT_TRUE(WaitForCondition([&] {
+        std::string value;
+        return backend.Get(keys->ProbeTable(), "127.0.0.1:1", value).IsOk() && second.ParseFromString(value)
+               && ProbeRoundFor(second, "127.0.0.1:2") != firstRound;
+    }));
+    DS_ASSERT_OK(controller.SubmitWorkerLivenessReport(
+        { "coordinator-test", "127.0.0.1:1", { std::string(16, 'b'), "127.0.0.1:2" }, firstRound,
+          WorkerLivenessResult::REACHABLE }));
+    ASSERT_TRUE(WaitForCondition([&] { return dispatcher.GetStats().queueDepth == 0; }));
+    nowSeconds.store(4);
+    EXPECT_TRUE(WaitForCondition([&] {
+        TopologyState observed;
+        int64_t revision = 0;
+        return repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision).IsOk()
+               && observed.activeBatch.has_value()
+               && observed.activeBatch->type == TopologyChangeType::FAILURE;
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, CoordinatorMissingMemberWithoutWitnessEvidenceCommitsFailure)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("witness-unreachable", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+
+    std::atomic<int64_t> nowSeconds{ 0 };
+    TopologyControllerOptions options;
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "coordinator-test";
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.failureProbeTimeout = std::chrono::seconds(1);
+    options.witnessProbeRoundTimeout = std::chrono::seconds(2);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.now = [&] { return std::chrono::steady_clock::time_point(std::chrono::seconds(nowSeconds.load())); };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+    coordinator::WorkerProbeEventValuePb value;
+    ASSERT_TRUE(WaitForCondition([&] {
+        std::string encoded;
+        return backend.Get(keys->ProbeTable(), "127.0.0.1:1", encoded).IsOk() && value.ParseFromString(encoded);
+    }));
+    const auto round = ProbeRoundFor(value, "127.0.0.1:2");
+    ASSERT_GT(round, 0U);
+    DS_ASSERT_OK(controller.SubmitWorkerLivenessReport(
+        { "stale-coordinator", "127.0.0.1:1", { std::string(16, 'b'), "127.0.0.1:2" }, round,
+          WorkerLivenessResult::REACHABLE }));
+    ASSERT_TRUE(WaitForCondition([&] { return dispatcher.GetStats().queueDepth == 0; }));
+
+    nowSeconds.store(2);
+    EXPECT_TRUE(WaitForCondition([&] {
+        TopologyState observed;
+        int64_t revision = 0;
+        return repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision).IsOk()
+               && observed.activeBatch.has_value()
+               && observed.activeBatch->type == TopologyChangeType::FAILURE;
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
 TEST(TopologyControllerTest, ReachableMissingMemberIsNotCommittedAsFailure)
 {
     FakeCoordinationBackend backend;
@@ -1993,16 +2244,21 @@ TEST(TopologyControllerTest, ExternalEventSourceConfirmsMultipleFailuresWithoutW
 
     TopologyControllerOptions options;
     options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.failureProbeTimeout = std::chrono::seconds(1);
+    options.witnessProbeRoundTimeout = std::chrono::seconds(2);
     options.reconcileTick = std::chrono::milliseconds(1);
     options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "coordinator-test";
     const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
-    std::atomic<size_t> clockCalls{ 0 };
-    options.now = [&] {
-        return start + (clockCalls.fetch_add(1) == 0 ? std::chrono::seconds(0) : std::chrono::seconds(2));
-    };
+    std::atomic<int64_t> elapsedSeconds{ 0 };
+    options.now = [&] { return start + std::chrono::seconds(elapsedSeconds.load()); };
+    const auto revisionBeforeProbe = backend.CurrentRevision();
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
 
     DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(WaitForCondition([&] { return backend.CurrentRevision() >= revisionBeforeProbe + 2; }));
+    elapsedSeconds.store(2);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
     const auto deadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
     EXPECT_TRUE(WaitForTopology(repository, deadline, [](const auto &state) {
         if (!state.activeBatch.has_value() || state.activeBatch->type != TopologyChangeType::FAILURE) {
@@ -2036,6 +2292,7 @@ TEST(TopologyControllerTest, CentralizedControllerMaterializesAndClearsRestartFa
     TopologyControllerOptions options;
     options.reconcileTick = std::chrono::milliseconds(1);
     options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "coordinator-test";
     options.materializeRestartFacts = true;
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
 

@@ -108,7 +108,8 @@
   | `CLUSTER_MEMBERSHIP` | Controller membership reconciliation | membership read failures or per-cycle membership summary; includes version and member counts. |
   | `CLUSTER_MEMBERSHIP_OBSERVED` | Controller membership reconciliation | changed membership digest/sample after membership watch dirties state. |
   | `CLUSTER_MEMBER_TRANSITION` | Controller planner | member state changes such as INITIAL/JOINING/LEAVING/FAILED. |
-  | `CLUSTER_FAILURE_DETECT` | Failure classifier/controller | endpoint or membership failures promoted to topology change candidates. |
+  | `CLUSTER_FAILURE_DETECT` | Failure classifier/controller | endpoint or membership failures promoted to topology change candidates; Witness probe decisions carry `probe_id`. |
+  | `CLUSTER_WORKER_PROBE` | Worker/Coordinator probe delivery | end-to-end Witness event, queue, peer probe, report, and ingress stages correlated by `probe_id`. |
   | `CLUSTER_CHANGE_BATCH` | Controller batch commit path | batch start, deadline expiration, finalization, and preemption; includes batch type/epoch/version. |
   | `CLUSTER_MEMBER_JOIN_SUMMARY` | Controller scale-out commit | summarized joining members admitted into a scale-out batch. |
   | `CLUSTER_MEMBER_LEAVE_SUMMARY` | Controller scale-in/failure commit | summarized leaving or failed members in a removal batch. |
@@ -154,14 +155,17 @@
   `CLUSTER_SCALE_IN action=metadata_done checkpoint_scope=task` describes one persisted task marker; `source_gate`
   distinguishes waiting from all-metadata-ready. Data drain is source-Worker scoped, so `target_role=trigger` marks the
   shared participant-scope `target` as the per-task trigger instead of implying that one target owns the whole drain.
-- `WorkerOCServer` owns only the `TopologyEngine` composition root plus the Store/Proxy and callback resources borrowed
-  by it. `ConstructTopologyRuntime` sets classifier `nodeDeadTimeout` to
+- `WorkerOCServer` owns the `TopologyEngine` composition root, a fixed three-thread witness-probe pool with a bounded
+  FIFO event queue and in-flight count, plus the Store/Proxy and callback resources borrowed by the Engine.
+  `ConstructTopologyRuntime` sets classifier `nodeDeadTimeout` to
   `max(0, FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s)` so confirmed failure tracks wall-clock
   `node_dead_timeout_s` after lease expiry (`node_timeout_s`), not a second full `node_timeout_s`. A zero budget
-  confirms on the first successful membership-absence observation. Shutdown drains business RPC ingress and calls Engine once. In ETCD mode Engine closes the shared watch and
-  keepalive event sources once, drains Worker execution, stops the externally-fed Controller/Janitor, and fully shuts
-  down the Store once. Coordinator mode unbinds ingress and preserves role-specific event-source shutdown. A deadline
-  failure preserves Engine and every borrowed dependency for retry. Engine Start is one-shot;
+  confirms on the first successful membership-absence observation. Shutdown drains business RPC ingress, stops accepting
+  probe events, clears pending probes, shuts down Engine ingress, waits for in-flight probe/report work, and only then
+  destroys the joined probe pool. In ETCD mode Engine closes the shared watch and keepalive event sources once, drains
+  Worker execution, stops the externally-fed Controller/Janitor, and fully shuts down the Store once. Coordinator mode
+  unbinds ingress and preserves role-specific event-source shutdown. A deadline failure preserves Engine, probe pool,
+  and every borrowed dependency for retry. Engine Start is one-shot;
   component destructors safely stop and join as a final fallback and never call `std::terminate`, detach a live thread,
   or kill the process. The process manager owns the outer hard termination bound.
 - Coordinator exposes `GetClusterRawSnapshot` as a cold, read-only diagnostic RPC. The handler validates a logical
@@ -174,10 +178,15 @@
 
 - Keyspace supports an optional cluster scope. A non-empty validated name uses
   `/datasystem/{cluster_name}/...`; an empty name uses `/datasystem/...` without an empty path segment. Multi-cluster
-  deployments sharing one backend must use non-empty distinct names. The six logical paths are topology,
-  tasks/migrate, tasks/delete, notify, cluster membership, and ScaleIn metadata-done markers.
+  deployments sharing one backend must use non-empty distinct names. The seven logical paths are topology,
+  tasks/migrate, tasks/delete, notify, probe, cluster membership, and ScaleIn metadata-done markers. Each probe PUT is a
+  non-authoritative, overwriteable single-target event under `root/probe/<witness_address>`. Normal watch delivery handles
+  each revision independently. The protocol does not require historical event recovery; Coordinator rewatch may redeliver
+  the key's latest value as a duplicate event, which epoch/member/round fencing safely tolerates. Multiple witnesses provide
+  best-effort redundancy, so probe delivery lowers but does not eliminate false-failure probability.
 - `TopologyKeyHelper` is the only topology keyspace builder. It owns logical tables, the legacy-compatible ETCD
-  membership prefix, and allocation-free raw ETCD watch-key classification. `EtcdStore::CreateTableWithExactPrefix`
+  membership prefix, and allocation-free physical watch-key classification across Coordinator and ETCD layouts.
+  `EtcdStore::CreateTableWithExactPrefix`
   registers these paths without legacy `FLAGS_cluster_name` prefix rewriting. `TopologyEngine::Builder` owns
   registration for the shared ETCD Store; Worker business composition does not construct topology keys or table
   mappings. `TopologyEngine` maps classified key kinds to Worker/Controller delivery policy.
@@ -288,6 +297,15 @@
   `NONE_L2_CACHE_EVICT` objects. It does not cover a Get that must recover object metadata directly from ETCD through
   `oc_io_from_l2cache_need_metadata`; that L2 metadata fallback remains backend-dependent.
 - Temporary endpoint observations stay process local. Only confirmed Failure enters the authoritative topology.
+- In Coordinator mode, membership TTL expiry creates a per-target, process-local witness probe round. For each selected
+  witness, the Controller publishes one coordinator-ID-fenced single-target event under
+  `root/probe/<witness_address>` through the existing watch channel. Each received PUT is admitted independently to a
+  bounded FIFO queue; later target events do not cancel earlier events. Three fixed-concurrency loops probe targets with
+  `GetClusterState` and report the target member identity, coordinator ID, probe round, and reachability with bounded
+  best-effort attempts. One fresh reachable report from any invited witness gates `confirmedFailure` immediately before
+  commit without rewriting membership or resetting the classifier's missing fact. Expired rounds without reachable
+  evidence proceed through the existing Failure path; long Coordinator partitions remain protected only while successive
+  rounds keep producing fresh reachable evidence. Probe delivery and reporting are not end-to-end guaranteed.
 - Worker startup selects the coordination backend once: a non-null `ICoordinatorDiscovery` selects Coordinator mode, while a null pointer selects ETCD/metastore. All Worker composition branches use that constructor-selected pointer instead of independently re-reading `coordinator_address`.
 - At most one change type is active at a time; one batch may contain many members. Failure has highest priority and may
   preempt ordinary work. Scale-in waits for an already-running scale-out batch to finish.

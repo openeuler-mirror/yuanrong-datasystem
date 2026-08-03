@@ -92,6 +92,11 @@ public:
      */
     Status SubmitCoordinationEvent(CoordinationEvent &&event);
 
+    /**
+     * @brief Submit one validated witness report to the Controller state thread.
+     */
+    Status SubmitWorkerLivenessReport(WorkerLivenessReport report);
+
     int64_t GetBootstrapRevision() const noexcept;  // Valid after Start for external watch registration.
 
     /**

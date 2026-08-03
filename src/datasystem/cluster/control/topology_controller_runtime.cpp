@@ -178,6 +178,11 @@ Status TopologyControllerRuntime::SubmitCoordinationEvent(CoordinationEvent &&ev
     return controller_.SubmitCoordinationEvent(std::move(event));
 }
 
+Status TopologyControllerRuntime::SubmitWorkerLivenessReport(WorkerLivenessReport report)
+{
+    return controller_.SubmitWorkerLivenessReport(std::move(report));
+}
+
 int64_t TopologyControllerRuntime::GetBootstrapRevision() const noexcept
 {
     return controller_.GetBootstrapRevision();

@@ -18,10 +18,11 @@
 
 #include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/cluster/executor/topology_task_executor.h"
+#include "datasystem/cluster/runtime/worker_liveness.h"
 
 namespace datasystem::cluster {
 
-using RuntimeEventPayload = std::variant<CoordinationEvent, TopologyCallbackCompletion>;
+using RuntimeEventPayload = std::variant<CoordinationEvent, TopologyCallbackCompletion, WorkerLivenessReport>;
 struct RuntimeEvent {
     RuntimeEventPayload payload;
 };
@@ -79,11 +80,21 @@ public:
     Status SubmitCoordination(CoordinationEvent &&event);
 
     /**
+     * @brief Non-blockingly enqueue a value-bearing coordination event without key coalescing.
+     */
+    Status SubmitCoordinationUncoalesced(CoordinationEvent &&event);
+
+    /**
      * @brief Non-blockingly enqueue a callback completion without dropping it silently.
      * @param[in] completion Move-only callback completion to enqueue.
      * @return K_OK on enqueue; K_TRY_AGAIN on overflow; K_NOT_READY after shutdown.
      */
     Status SubmitCompletion(TopologyCallbackCompletion completion);
+
+    /**
+     * @brief Non-blockingly enqueue a witness liveness report.
+     */
+    Status SubmitWorkerLiveness(WorkerLivenessReport report);
 
     /**
      * @brief Pop by a monotonic deadline.

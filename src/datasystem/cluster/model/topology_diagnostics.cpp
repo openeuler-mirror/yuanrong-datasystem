@@ -193,6 +193,12 @@ std::string MemberIdForLog(const std::string &id, size_t prefixSize)
     return TopologyDiagnosticPrefix(printable, prefixSize);
 }
 
+std::string WorkerProbeIdForLog(const std::string &probeEpoch, uint64_t probeRound)
+{
+    const auto printableEpoch = probeEpoch.size() == UUID_SIZE ? BytesUuidToString(probeEpoch) : probeEpoch;
+    return printableEpoch + "-" + std::to_string(probeRound);
+}
+
 std::string MemberIdentitySample(const std::vector<MemberIdentity> &members, size_t limit)
 {
     std::ostringstream out;

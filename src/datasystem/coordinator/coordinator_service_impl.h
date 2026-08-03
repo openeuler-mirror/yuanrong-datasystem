@@ -200,6 +200,12 @@ public:
                                   EnsureLeaderMembershipRspPb &rsp) override;
 
     /**
+     * @brief Accept one witness result for a Controller-owned worker probe round.
+     */
+    Status ReportWorkerLiveness(const ReportWorkerLivenessReqPb &req,
+                                ReportWorkerLivenessRspPb &rsp) override;
+
+    /**
      * @brief Read raw topology and membership facts without recovery gating or domain projection.
      * @param[in] req Validated logical cluster name.
      * @param[out] rsp Raw key/value groups including each entry's modification revision.

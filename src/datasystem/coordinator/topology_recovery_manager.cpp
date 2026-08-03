@@ -33,7 +33,7 @@ namespace {
 constexpr size_t SHA256_HEX_SIZE = 64;
 constexpr size_t DIGEST_LOG_PREFIX_SIZE = 8;
 constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
-constexpr size_t TOPOLOGY_KEYSPACE_KIND_COUNT = 6;
+constexpr size_t TOPOLOGY_KEYSPACE_KIND_COUNT = 7;
 constexpr size_t MAX_ENCODED_SCALE_IN_SOURCE_SIZE = 256;
 constexpr uint64_t MEMBER_LIMIT_LOG_INTERVAL = 1'024;
 constexpr char PHYSICAL_ROOT[] = "/datasystem/";
@@ -153,6 +153,8 @@ Status ValidateRelativeKey(TopologyCoordinationKeyKind kind, const std::string &
         CHECK_FAIL_RETURN_STATUS(relative.rfind("d-", 0) == 0, K_INVALID, "delete task key kind mismatch");
     } else if (kind == TopologyCoordinationKeyKind::NOTIFY && !relative.empty()) {
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::NotifyKey(relative, canonical));
+    } else if (kind == TopologyCoordinationKeyKind::PROBE) {
+        RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::ProbeKey(relative, canonical));
     } else if (kind == TopologyCoordinationKeyKind::MEMBERSHIP && !relative.empty()) {
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::MembershipKey(relative, canonical));
     } else if (kind == TopologyCoordinationKeyKind::SCALE_IN_METADATA_DONE) {
@@ -170,6 +172,7 @@ Status MatchKeyspace(const cluster::TopologyKeyHelper &keys, const std::string &
         std::make_pair(&keys.MigrateTaskTable(), TopologyCoordinationKeyKind::MIGRATE_TASK),
         std::make_pair(&keys.DeleteTaskTable(), TopologyCoordinationKeyKind::DELETE_TASK),
         std::make_pair(&keys.NotifyTable(), TopologyCoordinationKeyKind::NOTIFY),
+        std::make_pair(&keys.ProbeTable(), TopologyCoordinationKeyKind::PROBE),
         std::make_pair(&keys.MembershipTable(), TopologyCoordinationKeyKind::MEMBERSHIP),
         std::make_pair(&keys.ScaleInMetadataDoneTable(), TopologyCoordinationKeyKind::SCALE_IN_METADATA_DONE),
     };

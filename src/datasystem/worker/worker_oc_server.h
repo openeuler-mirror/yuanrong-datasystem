@@ -25,6 +25,7 @@
 #include <map>
 #include <mutex>
 #include <memory>
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -622,6 +623,23 @@ private:
     cluster::CoordinatorWatchIngress BuildCoordinatorWatchIngress();
 
     /**
+     * @brief Admit one watch-delivered worker probe request into bounded asynchronous work.
+     */
+    Status EnqueueWorkerProbe(cluster::WorkerProbeRequest request);
+
+    /**
+     * @brief Probe one target and report the result to Coordinator.
+     */
+    void ProbeAndReportWorker(cluster::WorkerProbeRequest request);
+    bool ReportWorkerProbeResult(const cluster::WorkerProbeRequest &request,
+                                 cluster::WorkerLivenessResult result);
+
+    /**
+     * @brief Drain the bounded per-target worker probe queue.
+     */
+    void RunWorkerProbeLoop();
+
+    /**
      * @brief Deliver one deduplicated membership restart batch to local business owners.
      * @param[in] restartFacts Canonical member addresses and their membership generation timestamps.
      * @param[in] sync Whether business effects run synchronously in the caller's bounded pool.
@@ -750,6 +768,12 @@ private:
     std::unique_ptr<cluster::UbHealthLeaseSync> ubHealthLeaseSync_;
     std::string ubHealthTable_;
     std::unique_ptr<cluster::ITopologyPhaseCallbacks> topologyTaskCallbacks_{ nullptr };
+    std::shared_ptr<ThreadPool> workerProbeThreadPool_{ nullptr };
+    std::mutex workerProbeMutex_;
+    std::condition_variable workerProbeCv_;
+    std::deque<cluster::WorkerProbeRequest> pendingWorkerProbes_;
+    size_t inFlightWorkerProbeCount_{ 0 };
+    bool workerProbeStopping_{ true };
     // Declared before topologyEngine_ so the Engine drains ingress before the service is destroyed.
     std::unique_ptr<coordinator::CoordinatorWatchServiceImpl> coordinatorWatchSvc_{ nullptr };
     // ResourceManager's rebalance scheduler borrows MembershipEndpointView from this engine. The destructor must reset
