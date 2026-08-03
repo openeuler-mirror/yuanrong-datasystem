@@ -888,7 +888,8 @@ Status TopologyEngine::MarkReady()
                              "cluster topology member lease is not established");
     auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::READY);
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
-              << " role=worker action=mark_ready address=" << options_.localAddress << " status=" << rc.ToString();
+              << " role=worker action=publish_ready_membership purpose=topology_admission address="
+              << options_.localAddress << " status=" << rc.ToString();
     return rc;
 }
 

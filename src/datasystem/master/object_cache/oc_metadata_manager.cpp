@@ -215,21 +215,34 @@ void OCMetadataManager::StartMetaMonitor()
                 continue;
             }
             timer.Reset();
-            std::stringstream ss;
-            ss << "Metadata size info: {";
             size_t metaTableTotalSize = 0;
-            for (const auto& shard : metaShards_) {
+            for (const auto &shard : metaShards_) {
                 metaTableTotalSize += shard.table.size();
             }
+            const size_t request2SubMetaSize = request2SubMeta_.size();
+            const size_t objKey2ReqIdSize = objKey2ReqId_.size();
+            const size_t migratingObjectKeySize = migratingItems_.size();
+            const size_t clientIdRefTableSize = clientIdRefTable_.size();
+            const size_t clientRefTableSize = globalRefTable_->GetClientRefCount();
+            const size_t objectRefTableSize = globalRefTable_->GetObjectRefCount();
+            const size_t remoteClientIdTableSize = globalRefTable_->GetRemoteClientCount();
+            const size_t deletingObjectCount = globalCacheDeleteManager_->GetDeletingObjectCount();
+            if (metaTableTotalSize == 0 && request2SubMetaSize == 0 && objKey2ReqIdSize == 0
+                && migratingObjectKeySize == 0 && clientIdRefTableSize == 0 && clientRefTableSize == 0
+                && objectRefTableSize == 0 && remoteClientIdTableSize == 0 && deletingObjectCount == 0) {
+                continue;
+            }
+            std::stringstream ss;
+            ss << "Metadata size info: {";
             ss << "metaTable:" << metaTableTotalSize;
-            ss << ", request2SubMeta:" << request2SubMeta_.size();
-            ss << ", objKey2ReqId:" << objKey2ReqId_.size();
-            ss << ", migratingObjectKeys:" << migratingItems_.size();
-            ss << ", clientIdRefTable:" << clientIdRefTable_.size();
-            ss << ", clientRefTable:" << globalRefTable_->GetClientRefCount();
-            ss << ", objectRefTable:" << globalRefTable_->GetObjectRefCount();
-            ss << ", remoteClientIdTable:" << globalRefTable_->GetRemoteClientCount();
-            ss << ", globalCacheDeleteManager:" << globalCacheDeleteManager_->GetDeletingObjectCount();
+            ss << ", request2SubMeta:" << request2SubMetaSize;
+            ss << ", objKey2ReqId:" << objKey2ReqIdSize;
+            ss << ", migratingObjectKeys:" << migratingObjectKeySize;
+            ss << ", clientIdRefTable:" << clientIdRefTableSize;
+            ss << ", clientRefTable:" << clientRefTableSize;
+            ss << ", objectRefTable:" << objectRefTableSize;
+            ss << ", remoteClientIdTable:" << remoteClientIdTableSize;
+            ss << ", globalCacheDeleteManager:" << deletingObjectCount;
             ss << "}";
             LOG(INFO) << ss.str();
         }

@@ -141,6 +141,19 @@ TEST_F(OCClientWorkerHeartbeatTest, OneClientShutdownTest)
 
 class OCClientWorkerHeartbeatNoRocksDBTest : public OCClientCommon {
 public:
+    void SetUp() override
+    {
+        previousUseBrpc_ = FLAGS_use_brpc;
+        FLAGS_use_brpc = false;
+        OCClientCommon::SetUp();
+    }
+
+    void TearDown() override
+    {
+        OCClientCommon::TearDown();
+        FLAGS_use_brpc = previousUseBrpc_;
+    }
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 1;
@@ -152,13 +165,13 @@ public:
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
         datasystem::inject::Set("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", "call(500)");
     }
+
+private:
+    bool previousUseBrpc_{ false };
 };
 
 TEST_F(OCClientWorkerHeartbeatNoRocksDBTest, TestWorkerRestartWithoutRocksDB)
 {
-    if (FLAGS_use_brpc) {
-        GTEST_SKIP() << "brpc migration gap; flaky under brpc (kill/scale down + worker restart). Tracked separately.";
-    }
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
 

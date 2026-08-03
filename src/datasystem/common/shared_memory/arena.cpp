@@ -819,7 +819,6 @@ void *Arena::AllocHook(size_t size, size_t alignment, bool *zero, bool *commit)
     }
     bool needCommit = *commit && !*zero;
     if (fakeAllocate && !firstFakeHook_.load()) {
-        LOG(INFO) << "fake hook before, no need to hook again";
         return nullptr;
     }
 
@@ -897,7 +896,6 @@ bool Arena::CommitHook(bool commit, void *addr, size_t size, size_t offset, size
     (void)size;
     if (commit) {
         if (currentFakeAllocate_.load(std::memory_order_relaxed)) {
-            LOG(INFO) << "fake allocate no need to commit";
             return true;
         }
         if (!AddPhysicalMemeoryUsage(length)) {
