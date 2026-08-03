@@ -99,13 +99,56 @@ Status RoCETransport::GetConnectionIdentity(std::string *identity)
 
 Status RoCETransport::Connect(const std::string &remoteIdentity, P2pKind kind, std::function<int()> *heartbeatCallback)
 {
-    std::lock_guard<std::mutex> lock(connMutex_);
-
-    // Check if already connected
-    if (endpointToComm_.find(remoteIdentity) != endpointToComm_.end()) {
-        return Status::OK();
+    std::shared_ptr<ConnectionInitState> initState;
+    bool initializer = false;
+    {
+        std::unique_lock<std::mutex> lock(connMutex_);
+        connCv_.wait(lock, [this, &remoteIdentity] {
+            return !disconnectAllInProgress_ && disconnectingEndpoints_.count(remoteIdentity) == 0;
+        });
+        if (endpointToComm_.find(remoteIdentity) != endpointToComm_.end()) {
+            return Status::OK();
+        }
+        auto it = connectionInits_.find(remoteIdentity);
+        if (it != connectionInits_.end()) {
+            initState = it->second;
+        } else {
+            initState = std::make_shared<ConnectionInitState>();
+            connectionInits_.emplace(remoteIdentity, initState);
+            initializer = true;
+        }
     }
 
+    if (!initializer) {
+        return WaitForConnectionInit(initState);
+    }
+
+    P2PComm p2pComm = nullptr;
+    int32_t devId = -1;
+    Status rc = InitializeP2PComm(remoteIdentity, kind, heartbeatCallback, p2pComm, devId);
+    if (rc.IsOk()) {
+        auto context = std::make_shared<P2PCommContext>(p2pComm, devId);
+        std::lock_guard<std::mutex> lock(connMutex_);
+        endpointToComm_[remoteIdentity] = std::move(context);
+        auto it = connectionInits_.find(remoteIdentity);
+        if (it != connectionInits_.end() && it->second == initState) {
+            connectionInits_.erase(it);
+        }
+    }
+
+    PublishConnectionInitResult(remoteIdentity, initState, rc);
+
+    if (rc.IsError()) {
+        return rc;
+    }
+
+    LOG(INFO) << "[RoCE] Connected to endpoint: " << remoteIdentity.substr(0, MAX_ENDPOINT_LOG_LEN);
+    return Status::OK();
+}
+
+Status RoCETransport::InitializeP2PComm(const std::string &remoteIdentity, P2pKind kind,
+                                        std::function<int()> *heartbeatCallback, P2PComm &p2pComm, int32_t &devId)
+{
     // Decode base64 remoteIdentity back to rootInfo bytes
     std::string rootInfoBytes;
     if (!Base64Decode(remoteIdentity, rootInfoBytes)) {
@@ -122,10 +165,8 @@ Status RoCETransport::Connect(const std::string &remoteIdentity, P2pKind kind, s
     // Prepare connection options with heartbeat callback
     P2PCommInitOptions p2pCommInitOptions(false, heartbeatCallback);
 
-    int32_t devId = -1;
     RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->GetDeviceIdx(devId));
 
-    P2PComm p2pComm = nullptr;
     Status rc = acl::AclDeviceManager::Instance()->DSP2PCommInitRootInfo(&remoteRootInfo, kind, P2P_LINK_ROCE, &p2pComm,
                                                                          &p2pCommInitOptions);
     if (rc.IsError()) {
@@ -137,26 +178,104 @@ Status RoCETransport::Connect(const std::string &remoteIdentity, P2pKind kind, s
         return Status(StatusCode::K_RUNTIME_ERROR, "DSP2PCommInitRootInfo failed: " + rc.GetMsg());
     }
 
-    // Track this connection for later cleanup.
-    // The underlying P2PComm is destroyed when the last shared_ptr copy goes away (via ~P2PCommContext()),
-    // which may happen after Disconnect if in-flight ScatterBatch calls still hold a reference.
-    endpointToComm_[remoteIdentity] = std::make_shared<P2PCommContext>(p2pComm, devId);
-
-    LOG(INFO) << "[RoCE] Connected to endpoint: " << remoteIdentity.substr(0, MAX_ENDPOINT_LOG_LEN);
     return Status::OK();
+}
+
+Status RoCETransport::WaitForConnectionInit(const std::shared_ptr<ConnectionInitState> &initState)
+{
+    std::unique_lock<std::mutex> lock(initState->mutex);
+    initState->cv.wait(lock, [&initState] { return initState->done; });
+    return initState->status;
+}
+
+void RoCETransport::PublishConnectionInitResult(const std::string &remoteIdentity,
+                                                const std::shared_ptr<ConnectionInitState> &initState,
+                                                const Status &status)
+{
+    {
+        std::lock_guard<std::mutex> lock(initState->mutex);
+        initState->status = status;
+        initState->done = true;
+    }
+    initState->cv.notify_all();
+    if (status.IsError()) {
+        // Keep a failed initialization discoverable until its result has been published to current waiters.
+        std::lock_guard<std::mutex> lock(connMutex_);
+        auto it = connectionInits_.find(remoteIdentity);
+        if (it != connectionInits_.end() && it->second == initState) {
+            connectionInits_.erase(it);
+        }
+    }
 }
 
 Status RoCETransport::Disconnect(const std::string &remoteIdentity)
 {
-    std::lock_guard<std::mutex> lock(connMutex_);
-    endpointToComm_.erase(remoteIdentity);
+    std::shared_ptr<ConnectionInitState> initState;
+    {
+        std::unique_lock<std::mutex> lock(connMutex_);
+        connCv_.wait(lock, [this, &remoteIdentity] {
+            return !disconnectAllInProgress_ && disconnectingEndpoints_.count(remoteIdentity) == 0;
+        });
+        disconnectingEndpoints_.insert(remoteIdentity);
+        auto it = connectionInits_.find(remoteIdentity);
+        if (it != connectionInits_.end()) {
+            initState = it->second;
+        }
+    }
+
+    // Preserve the old Connect/Disconnect serialization for the same identity without blocking unrelated identities.
+    if (initState != nullptr) {
+        (void)WaitForConnectionInit(initState);
+    }
+    std::shared_ptr<P2PCommContext> context;
+    {
+        std::lock_guard<std::mutex> lock(connMutex_);
+        auto it = endpointToComm_.find(remoteIdentity);
+        if (it != endpointToComm_.end()) {
+            context = std::move(it->second);
+            endpointToComm_.erase(it);
+        }
+    }
+    // P2PComm destruction can call into the NPU runtime, so keep the per-identity gate but release connMutex_ first.
+    context.reset();
+    {
+        std::lock_guard<std::mutex> lock(connMutex_);
+        disconnectingEndpoints_.erase(remoteIdentity);
+    }
+    connCv_.notify_all();
     return Status::OK();
 }
 
 Status RoCETransport::DisconnectAll()
 {
-    std::lock_guard<std::mutex> lock(connMutex_);
-    endpointToComm_.clear();
+    std::vector<std::shared_ptr<ConnectionInitState>> initStates;
+    {
+        std::unique_lock<std::mutex> lock(connMutex_);
+        connCv_.wait(lock, [this] { return !disconnectAllInProgress_ && disconnectingEndpoints_.empty(); });
+        disconnectAllInProgress_ = true;
+        initStates.reserve(connectionInits_.size());
+        for (const auto &item : connectionInits_) {
+            initStates.emplace_back(item.second);
+        }
+    }
+
+    for (const auto &initState : initStates) {
+        (void)WaitForConnectionInit(initState);
+    }
+
+    std::unordered_map<std::string, std::shared_ptr<P2PCommContext>> connectionsToDestroy;
+    {
+        std::lock_guard<std::mutex> lock(connMutex_);
+        endpointToComm_.swap(connectionsToDestroy);
+        connectionInits_.clear();
+    }
+    // Keep the global disconnect gate closed until every detached P2PComm has been destroyed.
+    connectionsToDestroy.clear();
+    {
+        std::lock_guard<std::mutex> lock(connMutex_);
+        disconnectAllInProgress_ = false;
+    }
+    connCv_.notify_all();
     return Status::OK();
 }
 
@@ -186,19 +305,23 @@ Status RoCETransport::ImportRemoteAddressInfo(const std::string &remoteEndpoint,
 
 Status RoCETransport::GetP2PCommContext(const std::string &remoteEndpoint, std::shared_ptr<P2PCommContext> &ctx)
 {
-    // Only hold connMutex_ while looking up endpointToComm_; copy the shared_ptr and release it immediately.
-    // This avoids serializing all endpoints during the subsequent transfer, including the blocking
-    // RtSynchronizeStreamWithTimeout calls (up to 5 seconds each).
-    std::lock_guard<std::mutex> lock(connMutex_);
-    auto it = endpointToComm_.find(remoteEndpoint);
-    if (it == endpointToComm_.end()) {
-        LOG(ERROR) << "[RH2D][ScatterBatch][RoCE] no connection for endpoint="
-                   << remoteEndpoint.substr(0, MAX_ENDPOINT_LOG_LEN);
-        return Status(StatusCode::K_NOT_FOUND,
-                      "No RoCE connection for endpoint: " + remoteEndpoint.substr(0, MAX_ENDPOINT_LOG_LEN));
+    {
+        // Copy the shared_ptr under connMutex_ and release it before any transfer or stream synchronization.
+        std::unique_lock<std::mutex> lock(connMutex_);
+        connCv_.wait(lock, [this, &remoteEndpoint] {
+            return !disconnectAllInProgress_ && disconnectingEndpoints_.count(remoteEndpoint) == 0;
+        });
+        auto it = endpointToComm_.find(remoteEndpoint);
+        if (it != endpointToComm_.end()) {
+            ctx = it->second;
+            return Status::OK();
+        }
     }
-    ctx = it->second;
-    return Status::OK();
+
+    LOG(ERROR) << "[RH2D][ScatterBatch][RoCE] no connection for endpoint="
+               << remoteEndpoint.substr(0, MAX_ENDPOINT_LOG_LEN);
+    return Status(StatusCode::K_NOT_FOUND,
+                  "No RoCE connection for endpoint: " + remoteEndpoint.substr(0, MAX_ENDPOINT_LOG_LEN));
 }
 
 Status RoCETransport::SubmitScatterBatch(P2pScatterEntry *entries, P2PComm p2pComm, aclrtStream stream,
