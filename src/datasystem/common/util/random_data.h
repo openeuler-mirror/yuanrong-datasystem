@@ -26,6 +26,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 namespace datasystem {
 class RandomData {
@@ -34,7 +35,13 @@ public:
     {
     }
 
-    RandomData() : randomDevice_(std::mt19937(std::chrono::system_clock::now().time_since_epoch().count()))
+    // Seed with OS entropy plus pid so that client processes started near-simultaneously
+    // (same system_clock tick, close pids) do not produce identical sequences. A plain
+    // system_clock seed collided across same-node clients launched by a deploy loop, which
+    // made ServiceDiscovery pick the same worker for every client.
+    RandomData()
+        : randomDevice_(std::mt19937(static_cast<uint32_t>(std::random_device{}())
+                                     ^ static_cast<uint32_t>(getpid())))
     {
     }
 

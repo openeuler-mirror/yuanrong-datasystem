@@ -545,6 +545,35 @@ TEST_F(KVClientTransportSetTest, RoutedMSetGroupsObjectsByMetadataOwner)
     AssertPrimaryWorker(keys[1], ROUTED_CLIENT_WORKER_INDEX);
 }
 
+// Two-step batch write (MCreate + MSet(vector<Buffer>)) must route each key to its hash-ring
+// worker instead of the bound worker. Mirrors RoutedMSetGroupsObjectsByMetadataOwner for the
+// two-step Buffer API (Component D).
+TEST_F(KVClientTransportSetTest, RoutedTwoStepMCreateMSetGroupsByWorker)
+{
+    std::string worker0Key;
+    std::string worker1Key;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_2step_mset_worker0_", worker0Key));
+    DS_ASSERT_OK(FindRouteKeyToWorker(ROUTED_CLIENT_WORKER_INDEX, "transport_2step_mset_worker1_", worker1Key));
+    const std::vector<std::string> keys{ worker0Key, worker1Key };
+    const std::vector<uint64_t> sizes{ VALUE_SIZE, VALUE_SIZE };
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE, 'b') };
+
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    SetParam param;
+    DS_ASSERT_OK(routedClient_->MCreate(keys, sizes, param, buffers));
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (size_t i = 0; i < buffers.size(); i++) {
+        DS_ASSERT_OK(buffers[i]->MemoryCopy(values[i].data(), values[i].size()));
+    }
+    DS_ASSERT_OK(routedClient_->MSet(buffers));
+
+    AssertValue(keys[0], values[0]);
+    AssertValue(keys[1], values[1]);
+    // Each key landed on its hash-ring-selected worker, not the client's bound worker.
+    AssertPrimaryWorker(keys[0], READER_WORKER_INDEX);
+    AssertPrimaryWorker(keys[1], ROUTED_CLIENT_WORKER_INDEX);
+}
+
 TEST_F(KVClientTransportSetTest, RoutedMSetLargePayloadParallelCopyPreservesData)
 {
     constexpr size_t parallelCopyValueSize = 512 * 1024;

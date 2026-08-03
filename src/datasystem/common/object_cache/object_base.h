@@ -384,6 +384,8 @@ struct ObjectBufferInfo {
     uint32_t sessionLockId = 0;                // Target Worker lock slot for routed SHM Buffer.
     bool useSessionLockId = false;
     HostPort workerAddr;                       // Worker address for Set(buffer) recovery
+    bool isRoutedWrite = false;                // Set by routed two-step Create (lc=false). Distinguishes a routed write
+                                               // buffer from a Get'd (read-only) buffer, which also carries workerAddr.
 };
 
 enum class TransferType : uint8_t { HOST = 0, P2P = 1 };
