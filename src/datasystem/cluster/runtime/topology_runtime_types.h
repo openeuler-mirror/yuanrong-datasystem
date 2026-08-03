@@ -12,9 +12,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "datasystem/cluster/executor/topology_task_executor.h"
+#include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/cluster/runtime/control_backend_state.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 
@@ -44,7 +48,12 @@ struct TopologyDiagnostics {
     CoordinationEventDispatcherStats dispatcher;
     TopologyTaskExecutorDiagnostics executor;
     std::string lastError;
+    uint64_t peerObservedTopologyVersion{ 0 };
 };
+
+using PeerTopologyRefresh = std::function<Status(uint64_t currentVersion, const std::vector<MemberIdentity> &peers,
+                                                 std::chrono::steady_clock::time_point deadline,
+                                                 std::shared_ptr<const TopologySnapshot> &peerSnapshot)>;
 
 }  // namespace datasystem::cluster
 

@@ -46,6 +46,7 @@
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/cluster_event_type.h"
+#include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "tests/ut/worker/object_cache/test_metadata_route.h"
@@ -79,6 +80,7 @@ constexpr uint16_t K_PEER_MASTER_PORT = 18482;
 constexpr int64_t K_WAIT_FIRST_MOVING_CALL_TIMEOUT_MS = 1000;
 constexpr int64_t K_WAIT_RETRY_SLEEP_INJECT_TIMEOUT_MS = 1000;
 constexpr int64_t K_LOCK_PROBE_TIMEOUT_MS = 1000;
+constexpr int64_t K_REJOIN_RECONCILIATION_LOCK_UPPER_BOUND_MS = 1000;
 
 bool WaitForInjectPointExecuteCount(const std::string &name, uint64_t expectedCount,
                                     std::chrono::milliseconds timeout)
@@ -375,6 +377,13 @@ public:
         ASSERT_TRUE(failIncIds.empty());
     }
 
+    void InitImplClearDataFlow()
+    {
+        impl_->clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
+            objectTable_, globalRefTable_, nullptr, impl_->gRefProc_, impl_->deleteProc_, nullptr, metadataRoute_,
+            *endpointPolicy_, localAddress_.ToString());
+    }
+
     WorkerOcServiceCrudParam MakeCrudParam(std::shared_ptr<WorkerMasterOCApiManager> apiManager = nullptr,
                                            const worker::MetadataRouteResolver *metadataRoute = nullptr,
                                            const ObjectEndpointPolicy *endpointPolicy = nullptr)
@@ -504,6 +513,130 @@ TEST_F(WorkerOcServiceImplTest, TestParallelClearData)
         auto rc = objectTable_->Get(id, entry);
         ASSERT_EQ(rc.GetCode(), K_NOT_FOUND);
     }
+}
+
+TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinClearsLocalObjects)
+{
+    InitImplClearDataFlow();
+    AddObject("rejoin-object-1");
+    AddObject("rejoin-object-2");
+
+    DS_ASSERT_OK(impl_->CleanupLocalStateForRejoin(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+
+    EXPECT_EQ(objectTable_->GetSize(), 0);
+}
+
+TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinRespectsExpiredDeadline)
+{
+    InitImplClearDataFlow();
+    AddObject("rejoin-deadline-object");
+
+    const auto rc = impl_->CleanupLocalStateForRejoin(std::chrono::steady_clock::now() - std::chrono::milliseconds(1));
+
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(objectTable_->GetSize(), 1);
+}
+
+TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinDoesNotRebuildRefs)
+{
+    InitImplClearDataFlow();
+    AddObject("rejoin-ref-object");
+    AddWorkerRef("rejoin-ref-object");
+    bool recoverMasterAppRefCalled = false;
+    RecoverMasterAppRefEvent::GetInstance().AddSubscriber(
+        kRecoverMasterAppRefSubscriber,
+        [&recoverMasterAppRefCalled](const std::function<bool(const std::string &)> &, const std::string &) {
+            recoverMasterAppRefCalled = true;
+            return Status::OK();
+        });
+
+    DS_ASSERT_OK(impl_->CleanupLocalStateForRejoin(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+
+    EXPECT_FALSE(recoverMasterAppRefCalled);
+}
+
+TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinStopsWhenMetadataCleanupFails)
+{
+    InitImplClearDataFlow();
+    AddObject("rejoin-metadata-failure-object");
+    bool metadataCleanupCalled = false;
+    impl_->RegisterLocalMetadataCleanupForRejoin([&metadataCleanupCalled] {
+        metadataCleanupCalled = true;
+        return Status(K_RUNTIME_ERROR, "metadata cleanup failed");
+    });
+
+    const auto rc = impl_->CleanupLocalStateForRejoin(std::chrono::steady_clock::now() + std::chrono::seconds(1));
+
+    EXPECT_TRUE(metadataCleanupCalled);
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    EXPECT_EQ(objectTable_->GetSize(), 1);
+}
+
+TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinWaitsForOrdinaryRpcDrain)
+{
+    InitImplClearDataFlow();
+    AddObject("rejoin-drain-object");
+    ReadLock inFlightRequest(&impl_->reconFlag_);
+
+    const auto rc = impl_->CleanupLocalStateForRejoin(std::chrono::steady_clock::now() + std::chrono::milliseconds(20));
+
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(objectTable_->GetSize(), 1);
+}
+
+TEST_F(WorkerOcServiceImplTest, ReconciliationReturnsNotReadyWhenRejoinCleanupHoldsReconFlag)
+{
+    SetUnhealthy();
+    WriteLock cleanup(&impl_->reconFlag_);
+    PushMetaToWorkerReqPb req;
+    req.set_event_timestamp(1);
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto rc = impl_->Reconciliation(req);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_NOT_READY);
+    EXPECT_LT(elapsed.count(), K_REJOIN_RECONCILIATION_LOCK_UPPER_BOUND_MS);
+}
+
+TEST_F(WorkerOcServiceImplTest, RestartReconciliationWaitsForRejoinCleanupReconFlag)
+{
+    SetUnhealthy();
+    WriteLock cleanup(&impl_->reconFlag_);
+    PushMetaToWorkerReqPb req;
+    req.set_event_timestamp(1);
+    req.set_is_restart(true);
+    constexpr const char *skipRestartWait = "WorkerOCServiceImpl.Reconciliation.SkipWait";
+    DS_ASSERT_OK(inject::Set(skipRestartWait, "1*call()"));
+    Raii clearInject([&] { (void)inject::Clear(skipRestartWait); });
+
+    auto releaseCleanup = std::async(std::launch::async, [&cleanup] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        cleanup.UnlockIfLocked();
+    });
+    const auto start = std::chrono::steady_clock::now();
+    const auto rc = impl_->Reconciliation(req);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+    releaseCleanup.wait();
+
+    EXPECT_NE(rc.GetCode(), StatusCode::K_NOT_READY);
+    EXPECT_GE(elapsed.count(), 40);
+    EXPECT_LT(elapsed.count(), K_REJOIN_RECONCILIATION_LOCK_UPPER_BOUND_MS);
+}
+
+TEST_F(WorkerOcServiceImplTest, RejoinRequiredRejectsClientFacingRpc)
+{
+    SetTopologyServingAdmission(false);
+    Raii restoreAdmission([] { SetTopologyServingAdmission(true); });
+
+    CreateReqPb req;
+    req.set_object_key("rejoin-reject-create");
+    req.set_data_size(1);
+    CreateRspPb rsp;
+
+    EXPECT_EQ(impl_->Create(req, rsp).GetCode(), StatusCode::K_NOT_READY);
 }
 
 TEST_F(WorkerOcServiceImplTest, CollectDisconnectedClientRefIdsReturnsOnlyMissingClients)

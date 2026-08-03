@@ -25,6 +25,13 @@ using namespace datasystem::object_cache;
 
 namespace datasystem {
 namespace ut {
+namespace {
+constexpr int REMOTE_WORKER_PORT = 19'000;
+constexpr int LOCAL_WORKER_PORT = 19'001;
+constexpr uint64_t HASH_RING_VERSION = 7;
+constexpr int RPC_TIMEOUT_MS = 100;
+}  // namespace
+
 class WorkerWorkerOcApiTest : public CommonTest {
 };
 
@@ -32,6 +39,18 @@ TEST_F(WorkerWorkerOcApiTest, TestExecRemoteGetLocally)
 {
     auto localApi = std::make_unique<object_cache::WorkerLocalWorkerOCApi>(nullptr, nullptr);
     ASSERT_EQ(localApi->GetObjectRemote(nullptr).GetCode(), K_RUNTIME_ERROR);
+}
+
+TEST_F(WorkerWorkerOcApiTest, RemoteHashRingRefreshRequiresInitializedSession)
+{
+    auto akSkManager = std::make_shared<AkSkManager>();
+    WorkerRemoteWorkerOCApi remoteApi(HostPort("127.0.0.1", REMOTE_WORKER_PORT),
+                                      HostPort("127.0.0.1", LOCAL_WORKER_PORT), akSkManager);
+    GetHashRingRspPb rsp;
+
+    auto rc = remoteApi.GetHashRing(HASH_RING_VERSION, RPC_TIMEOUT_MS, rsp);
+
+    EXPECT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
 }
 }  // namespace ut
 }  // namespace datasystem

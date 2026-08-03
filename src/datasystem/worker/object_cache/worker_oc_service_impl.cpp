@@ -220,6 +220,9 @@ static constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
 static constexpr int64_t URMA_WARMUP_REQUEST_TIMEOUT_MS = 5'000;
 static constexpr int64_t TOPOLOGY_READY_WAIT_TIMEOUT_S = 60;
 static constexpr size_t MAX_TOPOLOGY_SCALE_IN_CLEANUP_STATES = 1'024;
+static constexpr int ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS = 10;
+static constexpr int64_t ORDINARY_RECONCILIATION_LOCK_TIMEOUT_MS = 500;
+static constexpr int64_t REJOIN_RECONCILIATION_LOCK_TIMEOUT_MS = 10'000;
 
 uint64_t PayloadBytes(const std::vector<RpcMessage> &payloads)
 {
@@ -678,6 +681,11 @@ void WorkerOCServiceImpl::RegisterAsyncTasksDoneChecker(AsyncTasksDoneChecker ch
     asyncTasksDoneChecker_ = std::move(checker);
 }
 
+void WorkerOCServiceImpl::RegisterLocalMetadataCleanupForRejoin(std::function<Status()> cleanup)
+{
+    localMetadataCleanupForRejoin_ = std::move(cleanup);
+}
+
 Status WorkerOCServiceImpl::SelectTopologyScaleInObjects(std::vector<std::string> &copies,
                                                          std::vector<std::string> &primaries) const
 {
@@ -903,6 +911,27 @@ Status WorkerOCServiceImpl::SubmitTopologyFailureCleanup(
 {
     CHECK_FAIL_RETURN_STATUS(clearDataFlow_ != nullptr, K_NOT_READY, "clear-data flow is not initialized");
     return clearDataFlow_->SubmitTopologyFailureCleanup(action, filter, businessOperationId, deadline, cancellation);
+}
+
+Status WorkerOCServiceImpl::CleanupLocalStateForRejoin(std::chrono::steady_clock::time_point deadline)
+{
+    CHECK_FAIL_RETURN_STATUS(clearDataFlow_ != nullptr, K_NOT_READY, "clear-data flow is not initialized");
+    RETURN_IF_NOT_OK(CloseIncomingMigrationAdmissionAndWait(deadline));
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "rejoin cleanup deadline exceeded");
+    WriteLock ordinaryRpcDrain;
+    ordinaryRpcDrain.Assign(&reconFlag_);
+    while (!ordinaryRpcDrain.TryLockIfUnlocked()) {
+        CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                                 "rejoin cleanup waits for ordinary RPC drain timed out");
+        std::this_thread::sleep_for(std::chrono::milliseconds(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS));
+    }
+    if (localMetadataCleanupForRejoin_ != nullptr) {
+        RETURN_IF_NOT_OK(localMetadataCleanupForRejoin_());
+        CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                                 "rejoin cleanup deadline exceeded");
+    }
+    return clearDataFlow_->ClearLocalObjectsForRejoin();
 }
 
 Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
@@ -1387,6 +1416,26 @@ Status WorkerOCServiceImpl::PrepareRestartReconciliation(const PushMetaToWorkerR
     return Status::OK();
 }
 
+Status WorkerOCServiceImpl::LockReconciliationIfWorkerUnhealthy(WriteLock &haveRecon, bool isRestartReconciliation)
+{
+    if (IsHealthy()) {
+        return Status::OK();
+    }
+    Timer timer;
+    const auto lockTimeoutMs =
+        isRestartReconciliation ? REJOIN_RECONCILIATION_LOCK_TIMEOUT_MS : ORDINARY_RECONCILIATION_LOCK_TIMEOUT_MS;
+    haveRecon.Assign(&reconFlag_);
+    while (!haveRecon.TryLockIfUnlocked()) {
+        CHECK_FAIL_RETURN_STATUS(timer.ElapsedMilliSecond() < lockTimeoutMs, K_NOT_READY,
+                                 "rejoin cleanup is in progress");
+        std::this_thread::sleep_for(std::chrono::milliseconds(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS));
+    }
+    if (timer.ElapsedMilliSecond() > 0) {
+        LOG(INFO) << "Reconciliation waited for reconFlag, elapsed ms: " << timer.ElapsedMilliSecond();
+    }
+    return Status::OK();
+}
+
 Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
 {
     ScopedRequestContext ctx;
@@ -1398,7 +1447,8 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
     if (req.event_timestamp() <= 0) {
         LOG(WARNING) << "timestamp should be greater than 0";
     }
-    WriteLock haveRecon(IsHealthy() ? nullptr : &reconFlag_);
+    WriteLock haveRecon;
+    RETURN_IF_NOT_OK(LockReconciliationIfWorkerUnhealthy(haveRecon, req.is_restart()));
     std::lock_guard<std::mutex> reconciliationLock(reconciliationMutex_);
     Status rc;
     if (req.event_timestamp() > timestamp_) {
@@ -1440,7 +1490,10 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
     RETURN_IF_NOT_OK(GetExpectedReconciliationCount(hashWorkerNum));
     if ((hashWorkerNum > 0 && numRecon_ >= hashWorkerNum) || (hashWorkerNum < 0 && numRecon_ >= 1)) {
         LOG(INFO) << "Reconciliation with all masters is done.";
-        RETURN_IF_NOT_OK(CheckWaitTopologyReady());
+        const bool restartNeedsRejoin = req.is_restart() && topologyEngine_->RequiresMembershipRejoin();
+        if (!restartNeedsRejoin) {
+            RETURN_IF_NOT_OK(CheckWaitTopologyReady());
+        }
         if (req.is_restart()) {
             LOG(INFO) << "Restart finish. Set health file.";
             if (!topologyEngine_->HasEstablishedMemberLease() && controlBackendAvailableAtStartup_) {
@@ -1455,6 +1508,9 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
             RETURN_IF_NOT_OK(topologyEngine_->NotifyReconciliationDone());
         }
         if (req.is_restart()) {
+            if (restartNeedsRejoin) {
+                RETURN_IF_NOT_OK(CheckWaitTopologyReady());
+            }
             RETURN_IF_NOT_OK(SetHealthProbe());
             setHealthFile_.store(true);
         }

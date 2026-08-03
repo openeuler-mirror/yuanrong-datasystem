@@ -213,6 +213,15 @@ public:
     Status GetClusterStateAsyncRead(int64_t tag, GetClusterStateRspPb &rsp, RpcRecvFlags flags = RpcRecvFlags::NONE);
 
     /**
+     * @brief Fetch a peer-observed hash ring from the remote worker control service.
+     * @param[in] currentVersion Local cached topology version; zero requests a full response.
+     * @param[in] timeoutMs Positive RPC timeout in milliseconds.
+     * @param[out] rsp Peer hash-ring response.
+     * @return Status of the call.
+     */
+    Status GetHashRing(uint64_t currentVersion, int32_t timeoutMs, GetHashRingRspPb &rsp);
+
+    /**
      * @brief Release one unread cluster-state async tag while allowing its in-flight callback to finish safely.
      * @param[in] tag Async response tag.
      */

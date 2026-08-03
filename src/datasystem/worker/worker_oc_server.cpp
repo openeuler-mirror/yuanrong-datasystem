@@ -37,6 +37,7 @@
 
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/flags/flags.h"
@@ -214,6 +215,7 @@ constexpr uint32_t WARMUP_STABLE_ROUNDS = 3;
 constexpr int32_t MASTER_RPC_WARMUP_THREAD_NUM = 4;
 constexpr auto TOPOLOGY_CALLBACK_POLL_INTERVAL = std::chrono::milliseconds(100);
 constexpr auto TOPOLOGY_MEMBERSHIP_POLL_INTERVAL = std::chrono::milliseconds(100);
+constexpr int64_t TOPOLOGY_READY_WAIT_TIMEOUT_S = 60;
 constexpr auto TOPOLOGY_STOP_GRACE = std::chrono::seconds(10);
 #ifdef WITH_TESTS
 constexpr auto LOSSLESS_EXIT_GRACE = std::chrono::seconds(10);
@@ -472,6 +474,78 @@ std::vector<cluster::ControlBackendProbeResult> ProbeControlBackendPeers(
     }
     AppendTimedOutControlBackendProbes(pending, finished, results);
     return results;
+}
+
+int32_t RemainingTimeoutMs(std::chrono::steady_clock::time_point deadline)
+{
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+    return static_cast<int32_t>(std::max<int64_t>(1, remaining.count()));
+}
+
+Status BuildPeerTopologySnapshot(const GetHashRingRspPb &rsp,
+                                 std::shared_ptr<const cluster::TopologySnapshot> &snapshot)
+{
+    static constexpr size_t sha256HexSize = 64;
+    if (!rsp.hash_ring_changed()) {
+        RETURN_STATUS(K_NOT_FOUND, "peer hash ring unchanged");
+    }
+    std::string encoded;
+    CHECK_FAIL_RETURN_STATUS(rsp.hash_ring().SerializeToString(&encoded), K_RUNTIME_ERROR,
+                             "serialize peer hash ring failed");
+    cluster::TopologyState state;
+    RETURN_IF_NOT_OK(cluster::TopologyRepositoryCodec::DecodeTopology(encoded, state));
+    return cluster::TopologySnapshot::Create(std::move(state), 0, std::string(sha256HexSize, '0'), snapshot);
+}
+
+struct PeerHashRingRefreshContext {
+    const HostPort &localAddress;
+    const std::shared_ptr<AkSkManager> &akSkManager;
+    uint64_t currentVersion;
+    const std::vector<cluster::MemberIdentity> &peers;
+    std::chrono::steady_clock::time_point deadline;
+};
+
+Status RefreshPeerHashRing(const PeerHashRingRefreshContext &context,
+                           std::shared_ptr<const cluster::TopologySnapshot> &peerSnapshot)
+{
+    Status lastStatus(K_NOT_FOUND, "no newer peer hash ring");
+    for (const auto &peer : context.peers) {
+        if (std::chrono::steady_clock::now() >= context.deadline) {
+            break;
+        }
+        HostPort peerAddress;
+        auto rc = peerAddress.ParseString(peer.address);
+        if (rc.IsError()) {
+            lastStatus = rc;
+            continue;
+        }
+        object_cache::WorkerRemoteWorkerOCApi api(peerAddress, context.localAddress, context.akSkManager);
+        rc = api.Init();
+        if (rc.IsError()) {
+            lastStatus = rc;
+            continue;
+        }
+        GetHashRingRspPb rsp;
+        rc = api.GetHashRing(context.currentVersion, RemainingTimeoutMs(context.deadline), rsp);
+        if (rc.IsError()) {
+            lastStatus = rc;
+            continue;
+        }
+        std::shared_ptr<const cluster::TopologySnapshot> candidate;
+        rc = BuildPeerTopologySnapshot(rsp, candidate);
+        if (rc.IsError()) {
+            lastStatus = rc;
+            continue;
+        }
+        if (candidate->Version() <= context.currentVersion) {
+            lastStatus = Status(K_NOT_FOUND, "peer hash ring is stale");
+            continue;
+        }
+        peerSnapshot = std::move(candidate);
+        return Status::OK();
+    }
+    return lastStatus;
 }
 
 bool IsWorkerScopedSlotStoreEnabled()
@@ -1001,6 +1075,11 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
         hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
         objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
         &topologyExitRequested_, topologyEngine_->IsRestart(), true);
+    objCacheClientWorkerSvc_->RegisterLocalMetadataCleanupForRejoin([this] {
+        CHECK_FAIL_RETURN_STATUS(metadataManagerHolder_ != nullptr, K_NOT_READY,
+                                 "Metadata manager holder is not ready for rejoin cleanup");
+        return metadataManagerHolder_->CleanupLocalMetadataForRejoin(hostPort_.ToString());
+    });
     std::weak_ptr<datasystem::object_cache::WorkerOCServiceImpl> weakOcService = objCacheClientWorkerSvc_;
     workerSvc_->SetUbHealthSummaryProvider([weakOcService]() -> std::optional<UbHealthSummary> {
         auto service = weakOcService.lock();
@@ -1252,6 +1331,18 @@ Status WorkerOCServer::ConstructTopologyRuntime()
     const uint32_t classifierAbsenceS = FLAGS_node_dead_timeout_s > FLAGS_node_timeout_s
                                             ? FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s
                                             : 0U;
+    auto membershipRestartHandler = [this](const std::map<std::string, int64_t> &restartFacts,
+                                           cluster::RestartEffectMode mode) {
+        return HandleMembershipRestarts(restartFacts, mode == cluster::RestartEffectMode::WAIT_FOR_COMPLETION);
+    };
+    auto controlBackendProbe = [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers,
+                                                                                      auto deadline) {
+        return ProbeControlBackendPeers(localAddress, akSkManager, peers, deadline);
+    };
+    auto peerTopologyRefresh = [localAddress = hostPort_, akSkManager = akSkManager_](
+                                   uint64_t currentVersion, const auto &peers, auto deadline, auto &peerSnapshot) {
+        return RefreshPeerHashRing({ localAddress, akSkManager, currentVersion, peers, deadline }, peerSnapshot);
+    };
     builder.SetClusterName(FLAGS_cluster_name)
         .SetLocalAddress(hostPort_.ToString())
         .SetPhaseCallbacks(*topologyTaskCallbacks_)
@@ -1259,10 +1350,7 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         // Local backend isolation starts at the first positive peer observation, so it owns the full dead timeout.
         .SetLocalIsolationTimeout(std::chrono::seconds(FLAGS_node_dead_timeout_s))
         .SetScaleInCollectWindow(std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms))
-        .SetMembershipRestartHandler([this](const std::map<std::string, int64_t> &restartFacts,
-                                            cluster::RestartEffectMode mode) {
-            return HandleMembershipRestarts(restartFacts, mode == cluster::RestartEffectMode::WAIT_FOR_COMPLETION);
-        })
+        .SetMembershipRestartHandler(membershipRestartHandler)
         .SetSnapshotPublishedHandler([this](std::shared_ptr<const cluster::TopologySnapshot> snapshot) {
             if (EnableOCService() && objCacheClientWorkerSvc_ != nullptr) {
                 LOG_IF_ERROR(objCacheClientWorkerSvc_->GiveUpReconciliation(),
@@ -1270,10 +1358,17 @@ Status WorkerOCServer::ConstructTopologyRuntime()
             }
             HandleTopologySnapshotPublished(std::move(snapshot));
         })
-        .SetControlBackendProbe(
-            [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers, auto deadline) {
-                return ProbeControlBackendPeers(localAddress, akSkManager, peers, deadline);
-            })
+        .SetMembershipRecreateGate([this] {
+            if (topologyEngine_ == nullptr || !topologyEngine_->RequiresMembershipRejoin()) {
+                return Status::OK();
+            }
+            CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY,
+                                     "Object cache service is not ready for rejoin cleanup");
+            const auto deadline = std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE;
+            return objCacheClientWorkerSvc_->CleanupLocalStateForRejoin(deadline);
+        })
+        .SetControlBackendProbe(controlBackendProbe)
+        .SetPeerTopologyRefresh(peerTopologyRefresh)
         .SetAvailabilityHandler([](cluster::TopologyAvailabilityLevel level) {
             const bool allowBusiness = level == cluster::TopologyAvailabilityLevel::NORMAL
                                        || level == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED;
@@ -1424,7 +1519,8 @@ void WorkerOCServer::HandleTopologySnapshotPublished(std::shared_ptr<const clust
 Status WorkerOCServer::PublishReadyMembership()
 {
     CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_NOT_READY, "topology Engine is not constructed");
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(FLAGS_node_timeout_s);
+    const auto timeoutS = std::max<int64_t>(TOPOLOGY_READY_WAIT_TIMEOUT_S, FLAGS_node_timeout_s);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutS);
     Status lastStatus(K_NOT_READY, "first membership keepalive has not been sent");
     LOG(INFO) << "Wait for the first membership lease before publishing READY";
     while (std::chrono::steady_clock::now() < deadline) {
@@ -1437,7 +1533,8 @@ Status WorkerOCServer::PublishReadyMembership()
         std::this_thread::sleep_for(TOPOLOGY_MEMBERSHIP_POLL_INTERVAL);
     }
     RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED,
-                  "timed out publishing READY membership after first lease: " + lastStatus.ToString());
+                  "timed out publishing READY membership after first lease within " + std::to_string(timeoutS)
+                      + " seconds: " + lastStatus.ToString());
 }
 
 Status WorkerOCServer::StartUbHealthLeaseSync()

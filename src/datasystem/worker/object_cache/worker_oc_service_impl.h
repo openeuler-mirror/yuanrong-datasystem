@@ -245,6 +245,19 @@ public:
         const cluster::CancellationToken &cancellation);
 
     /**
+     * @brief Close local admissions and clear worker-local state before membership is recreated after rejoin.
+     * @param[in] deadline Absolute monotonic cleanup deadline.
+     * @return K_OK after local cleanup; an error otherwise.
+     */
+    Status CleanupLocalStateForRejoin(std::chrono::steady_clock::time_point deadline);
+
+    /**
+     * @brief Register optional local metadata cleanup executed during rejoin cleanup after admission is closed.
+     * @param[in] cleanup Local metadata cleanup callback.
+     */
+    void RegisterLocalMetadataCleanupForRejoin(std::function<Status()> cleanup);
+
+    /**
      * @brief Register callback for waiting until async tasks in server are done.
      * @param[in] checker callback waits internally and returns status.
      */
@@ -1004,6 +1017,14 @@ private:
     Status Reconciliation(const PushMetaToWorkerReqPb &req);
 
     /**
+     * @brief Block unhealthy-worker reconciliation while rejoin cleanup owns the local object state.
+     * @param[out] haveRecon Held write lock when this call returns K_OK and the worker is unhealthy.
+     * @param[in] isRestartReconciliation Whether the caller is the restart/rejoin reconciliation path.
+     * @return K_OK after the reconciliation lock is acquired or not needed; an error otherwise.
+     */
+    Status LockReconciliationIfWorkerUnhealthy(WriteLock &haveRecon, bool isRestartReconciliation);
+
+    /**
      * @brief Create a shared memory communication channel.
      * @param[out] decreaseRPCQ The rpc circular queue.
      * @return K_OK on success; the error code otherwise.
@@ -1327,6 +1348,7 @@ private:
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
     std::unique_ptr<MetaDataRecoveryManager> metadataRecoveryManager_{ nullptr };
     std::unique_ptr<WorkerOcServiceClearDataFlow> clearDataFlow_{ nullptr };
+    std::function<Status()> localMetadataCleanupForRejoin_{ nullptr };
 
     WorkerRequestManager workerRequestManager_;
 

@@ -58,6 +58,10 @@ constexpr auto VALIDATION_TIMEOUT = std::chrono::seconds(1);
 constexpr auto TEST_DEADLINE = std::chrono::seconds(2);
 constexpr auto POLL_INTERVAL = std::chrono::milliseconds(1);
 constexpr auto SHUTDOWN_OBSERVATION = std::chrono::milliseconds(100);
+constexpr auto DELAYED_RECONCILE_WORKER_WINDOW = std::chrono::milliseconds(500);
+constexpr auto DELAYED_RECONCILE_VALIDATION_TIMEOUT = std::chrono::milliseconds(50);
+constexpr auto DELAYED_RECONCILE_WORKER_SETTLE = std::chrono::milliseconds(60);
+constexpr size_t DELAYED_RECONCILE_WORKER_COUNT = 2;
 constexpr uint64_t TEST_DOWNSTREAM_PHASE_US = 123;
 
 class NoopWatchDispatcher final : public WatchDispatcher {
@@ -334,6 +338,25 @@ TEST_F(TopologyRecoveryManagerTest, InstallsUniqueHighestCanonicalPayload)
 
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
+    std::vector<KeyValueEntry> entries;
+    int64_t revision = 0;
+    DS_ASSERT_OK(store_->Range(TopologyKey(clusterName), "", entries, revision));
+    ASSERT_EQ(entries.size(), 1);
+    EXPECT_EQ(entries.front().value, payload.canonicalTopology);
+}
+
+TEST_F(TopologyRecoveryManagerTest, AcceptedPayloadInstallsAfterDiscoveryWindowWithoutNewReport)
+{
+    const std::string clusterName = "delayed-install";
+    ObserveMember(clusterName, MEMBER_A);
+    auto payload = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
+    TopologyRecoveryReportDecision decision;
+    ReportEvidence(clusterName, payload, decision);
+    ASSERT_TRUE(decision.payloadRequired);
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
+
+    clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
+    ASSERT_TRUE(WaitUntil([&] { return manager_->GetState(clusterName) == TopologyRecoveryState::READY; }));
     std::vector<KeyValueEntry> entries;
     int64_t revision = 0;
     DS_ASSERT_OK(store_->Range(TopologyKey(clusterName), "", entries, revision));
@@ -738,6 +761,55 @@ TEST_F(TopologyRecoveryManagerTest, RequestsOnePayloadForIdenticalHighestEvidenc
     EXPECT_TRUE(decision.payloadRequired);
     ReportEvidence(clusterName, second, decision);
     EXPECT_FALSE(decision.payloadRequired);
+}
+
+TEST_F(TopologyRecoveryManagerTest, DelayedReconcileTimerDoesNotBlockPayloadValidationWorker)
+{
+    manager_.reset();
+    options_.discoveryWindow = DELAYED_RECONCILE_WORKER_WINDOW;
+    options_.validationWaitTimeout = DELAYED_RECONCILE_VALIDATION_TIMEOUT;
+    options_.minRecoveryThreads = DELAYED_RECONCILE_WORKER_COUNT;
+    options_.maxRecoveryThreads = DELAYED_RECONCILE_WORKER_COUNT;
+    auto realClock = std::make_shared<SteadyClockReal>();
+    manager_ = std::make_unique<TopologyRecoveryManager>(COORDINATOR_ID, *store_, realClock, options_);
+    manager_->BeginLeaderRound({ 0, COORDINATOR_ID });
+
+    TopologyRecoveryReportDecision decision;
+    for (size_t i = 0; i < DELAYED_RECONCILE_WORKER_COUNT; ++i) {
+        const std::string delayedCluster = "delayed-worker-" + std::to_string(i);
+        ObserveMember(delayedCluster, MEMBER_A);
+        auto delayedPayload = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, static_cast<char>('d' + i));
+        ReportEvidence(delayedCluster, delayedPayload, decision);
+        ASSERT_TRUE(decision.payloadRequired);
+        DS_ASSERT_OK(manager_->ReportCandidate(delayedCluster, 0, COORDINATOR_ID, std::move(delayedPayload), decision));
+        std::this_thread::sleep_for(DELAYED_RECONCILE_WORKER_SETTLE);
+    }
+
+    const std::string payloadCluster = "payload-single-worker";
+    ObserveMember(payloadCluster, MEMBER_A);
+    auto payload = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
+    ReportEvidence(payloadCluster, payload, decision);
+    EXPECT_TRUE(decision.payloadRequired);
+    DS_ASSERT_OK(manager_->ReportCandidate(payloadCluster, 0, COORDINATOR_ID, std::move(payload), decision));
+}
+
+TEST_F(TopologyRecoveryManagerTest, ShutdownCancelsDelayedReconcile)
+{
+    manager_.reset();
+    options_.discoveryWindow = std::chrono::seconds(1);
+    manager_ = std::make_unique<TopologyRecoveryManager>(COORDINATOR_ID, *store_, clock_, options_);
+    manager_->BeginLeaderRound({ 0, COORDINATOR_ID });
+    const std::string clusterName = "shutdown-delayed";
+    ObserveMember(clusterName, MEMBER_A);
+    TopologyRecoveryCandidateReport report;
+    report.reporterAddress = MEMBER_A;
+    TopologyRecoveryReportDecision decision;
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, report, decision));
+    EXPECT_EQ(decision.result, TopologyRecoveryReportResult::ACCEPTED);
+
+    const auto start = std::chrono::steady_clock::now();
+    DS_ASSERT_OK(manager_->Shutdown());
+    EXPECT_LT(std::chrono::steady_clock::now() - start, SHUTDOWN_OBSERVATION);
 }
 
 TEST_F(TopologyRecoveryManagerTest, ExistingTopologyWinsCreateOnceInstallFence)

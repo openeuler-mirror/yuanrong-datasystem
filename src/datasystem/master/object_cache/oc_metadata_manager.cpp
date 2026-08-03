@@ -3630,6 +3630,15 @@ Status OCMetadataManager::RemoveMetaByWorker(const std::string &workerAddr)
     return Status::OK();
 }
 
+Status OCMetadataManager::CleanupLocalMetadataForRejoin(const std::string &workerAddr)
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveMetaByWorker(workerAddr),
+                                     "RemoveMetaByWorker failed in CleanupLocalMetadataForRejoin");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr),
+                                     "ClearAsyncWorkerOp failed in CleanupLocalMetadataForRejoin");
+    return Status::OK();
+}
+
 Status OCMetadataManager::RemoveMetaByWorkers(const std::map<std::string, int64_t> &restartFacts)
 {
     RETURN_OK_IF_TRUE(restartFacts.empty());

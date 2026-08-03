@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
@@ -107,6 +108,13 @@ bool HasPeerPayloadRequest(const std::unordered_map<std::string, TopologyCandida
         return entry.first != reporterAddress && entry.second.payloadRequested
                && entry.second.topologyVersion == selection.highestVersion
                && entry.second.canonicalDigest == selection.highestDigest;
+    });
+}
+
+bool HasOutstandingPayloadRequest(const std::unordered_map<std::string, TopologyCandidateEvidence> &evidenceByReporter)
+{
+    return std::any_of(evidenceByReporter.begin(), evidenceByReporter.end(), [](const auto &entry) {
+        return entry.second.payloadRequested;
     });
 }
 
@@ -228,8 +236,10 @@ struct TopologyRecoveryManager::ClusterRecoveryContext {
     std::string selectedCanonicalDigest;
     uint64_t selectedVersion{ 0 };
     std::optional<std::chrono::steady_clock::time_point> discoveryDeadline;
+    std::optional<TopologyRecoveryRoundIdentity> delayedReconcileIdentity;
     bool payloadValidationPending{ false };
     bool reconcileQueued{ false };
+    bool delayedReconcileQueued{ false };
     bool storedAuthorityChecked{ false };
 };
 
@@ -247,6 +257,7 @@ TopologyRecoveryManager::TopologyRecoveryManager(std::string coordinatorId, Coor
     }
     recoveryPool_ = std::make_unique<ThreadPool>(options_.minRecoveryThreads, options_.maxRecoveryThreads,
                                                  "TopologyRecovery", true);
+    delayedReconcilePool_ = std::make_unique<ThreadPool>(1, 1, "TopologyRecoveryDelay", true);
 }
 
 TopologyRecoveryManager::~TopologyRecoveryManager() noexcept
@@ -458,12 +469,10 @@ void TopologyRecoveryManager::BeginLeaderRound(TopologyRecoveryRoundIdentity ide
         ReleaseSelectedPayload(*context);
     }
     contexts_.clear();
-    // Counters belong to the active round. Old closures leave them untouched once
-    // their identity fence no longer matches.
-    pendingRecoveryWork_ = 0;
+    // Old-round async closures own their pendingRecoveryWork_ counters until they drain.
     retainedCandidateBytes_ = 0;
-    admittedReportBytes_ = 0;
     activeRound_ = std::move(identity);
+    shutdownCv_.notify_all();
 }
 
 void TopologyRecoveryManager::EndLeaderRound(const TopologyRecoveryRoundIdentity &identity)
@@ -471,6 +480,7 @@ void TopologyRecoveryManager::EndLeaderRound(const TopologyRecoveryRoundIdentity
     std::lock_guard<std::mutex> lock(mutex_);
     if (activeRound_.has_value() && *activeRound_ == identity) {
         activeRound_.reset();
+        shutdownCv_.notify_all();
     }
 }
 
@@ -738,7 +748,7 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
                     return RejectPayload(clusterName, identity, contextGeneration, report, payloadBytes, status);
                 });
         } catch (const std::exception &error) {
-            --pendingRecoveryWork_;
+            CompleteRecoveryWorkLocked();
             admittedReportBytes_ -= payloadBytes;
             context.payloadValidationPending = false;
             RETURN_STATUS(K_TRY_AGAIN, std::string("submit candidate validation failed: ") + error.what());
@@ -760,9 +770,11 @@ Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName,
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!activeRound_.has_value() || *activeRound_ != identity) {
+            CompleteRecoveryWorkLocked();
+            admittedReportBytes_ -= payloadBytes;
             return Status(K_TRY_AGAIN, "leader round changed during payload validation");
         }
-        --pendingRecoveryWork_;
+        CompleteRecoveryWorkLocked();
         admittedReportBytes_ -= payloadBytes;
         auto found = contexts_.find(clusterName);
         CHECK_FAIL_RETURN_STATUS(found != contexts_.end() && found->second->generation == contextGeneration,
@@ -809,9 +821,11 @@ Status TopologyRecoveryManager::RejectPayload(const std::string &clusterName,
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!activeRound_.has_value() || *activeRound_ != identity) {
+        CompleteRecoveryWorkLocked();
+        admittedReportBytes_ -= payloadBytes;
         return Status(K_TRY_AGAIN, "leader round changed during payload validation");
     }
-    --pendingRecoveryWork_;
+    CompleteRecoveryWorkLocked();
     admittedReportBytes_ -= payloadBytes;
     auto found = contexts_.find(clusterName);
     if (found == contexts_.end() || found->second->generation != contextGeneration) {
@@ -846,6 +860,22 @@ void TopologyRecoveryManager::ReleaseSelectedPayload(ClusterRecoveryContext &con
     context.selectedCanonicalTopology.reset();
     context.selectedCanonicalDigest.clear();
     context.selectedVersion = 0;
+}
+
+void TopologyRecoveryManager::CompleteRecoveryWorkLocked()
+{
+    // Pending work is accounted before async submission; keep the guard here so failed worker callbacks cannot hide a
+    // shutdown wait bug by wrapping the counter.
+    if (pendingRecoveryWork_ == 0) {
+        LOG(ERROR) << "CLUSTER_RECOVERY_PENDING_UNDERFLOW, coordinator_id="
+                   << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
+        return;
+    }
+    --pendingRecoveryWork_;
+    if (stopping_ && pendingRecoveryWork_ == 0) {
+        // Shutdown waits for already accepted recovery work after closing the delayed-reconcile worker.
+        shutdownCv_.notify_all();
+    }
 }
 
 void TopologyRecoveryManager::RefreshSelection(ClusterRecoveryContext &context)
@@ -892,9 +922,10 @@ void TopologyRecoveryManager::ScheduleReconcile(const std::string &clusterName)
             }
             std::lock_guard<std::mutex> finishLock(mutex_);
             if (!activeRound_.has_value() || *activeRound_ != identity) {
+                CompleteRecoveryWorkLocked();
                 return;
             }
-            --pendingRecoveryWork_;
+            CompleteRecoveryWorkLocked();
             auto current = contexts_.find(clusterName);
             if (current != contexts_.end()) {
                 current->second->reconcileQueued = false;
@@ -905,14 +936,122 @@ void TopologyRecoveryManager::ScheduleReconcile(const std::string &clusterName)
                      << ", error=" << error.what();
     }
     if (!accepted) {
-        --pendingRecoveryWork_;
+        CompleteRecoveryWorkLocked();
         found->second->reconcileQueued = false;
+    }
+}
+
+void TopologyRecoveryManager::ScheduleDelayedReconcileLocked(const std::string &clusterName,
+                                                             ClusterRecoveryContext &context)
+{
+    if (stopping_ || context.delayedReconcileQueued || !context.discoveryDeadline.has_value()
+        || !activeRound_.has_value()) {
+        return;
+    }
+    static_cast<void>(clusterName);
+    if (!StartDelayedReconcileWorkerLocked()) {
+        return;
+    }
+    context.delayedReconcileQueued = true;
+    context.delayedReconcileIdentity = *activeRound_;
+    shutdownCv_.notify_all();
+}
+
+bool TopologyRecoveryManager::StartDelayedReconcileWorkerLocked()
+{
+    if (delayedReconcileStarted_) {
+        return true;
+    }
+    try {
+        delayedReconcilePool_->Execute([this] { DelayedReconcileLoop(); });
+        delayedReconcileStarted_ = true;
+        return true;
+    } catch (const std::exception &error) {
+        LOG(WARNING) << "CLUSTER_RECOVERY_DELAYED_RECONCILE_START_FAILED, coordinator_id="
+                     << CoordinatorIdLogPrefix(coordinatorId_) << ", error=" << error.what();
+    } catch (...) {
+        LOG(WARNING) << "CLUSTER_RECOVERY_DELAYED_RECONCILE_START_FAILED, coordinator_id="
+                     << CoordinatorIdLogPrefix(coordinatorId_) << ", unknown error";
+    }
+    return false;
+}
+
+bool TopologyRecoveryManager::HasDelayedReconcileLocked() const
+{
+    return std::any_of(contexts_.begin(), contexts_.end(), [](const auto &entry) {
+        return entry.second->delayedReconcileQueued && entry.second->discoveryDeadline.has_value();
+    });
+}
+
+std::optional<std::chrono::steady_clock::time_point> TopologyRecoveryManager::CollectDueDelayedReconcileLocked(
+    std::vector<std::string> &dueClusters)
+{
+    auto now = clock_->Now();
+    std::optional<std::chrono::steady_clock::time_point> nextWake;
+    for (auto &[clusterName, context] : contexts_) {
+        if (!context->delayedReconcileQueued || !context->discoveryDeadline.has_value()) {
+            continue;
+        }
+        if (*context->discoveryDeadline > now) {
+            if (!nextWake.has_value() || *context->discoveryDeadline < *nextWake) {
+                nextWake = *context->discoveryDeadline;
+            }
+            continue;
+        }
+        if (activeRound_.has_value() && context->delayedReconcileIdentity.has_value()
+            && *context->delayedReconcileIdentity == *activeRound_
+            && context->state == TopologyRecoveryState::RECOVERING) {
+            dueClusters.emplace_back(clusterName);
+        }
+        context->delayedReconcileQueued = false;
+        context->delayedReconcileIdentity.reset();
+    }
+    return nextWake;
+}
+
+void TopologyRecoveryManager::DelayedReconcileLoop()
+{
+    bool stopped = false;
+    while (!stopped) {
+        std::vector<std::string> dueClusters;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            while (!stopping_) {
+                auto nextWake = CollectDueDelayedReconcileLocked(dueClusters);
+                if (!dueClusters.empty()) {
+                    break;
+                }
+                if (nextWake.has_value()) {
+                    shutdownCv_.wait_until(lock, *nextWake);
+                } else {
+                    shutdownCv_.wait(lock, [this] { return stopping_ || HasDelayedReconcileLocked(); });
+                }
+            }
+            stopped = stopping_;
+        }
+        if (stopped) {
+            continue;
+        }
+        for (const auto &clusterName : dueClusters) {
+            ScheduleReconcile(clusterName);
+        }
     }
 }
 
 Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName,
                                               const TopologyRecoveryRoundIdentity &identity)
 {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!activeRound_.has_value() || *activeRound_ != identity) {
+            return Status(K_TRY_AGAIN, "leader round changed before finalization");
+        }
+        auto found = contexts_.find(clusterName);
+        if (found != contexts_.end() && found->second->state == TopologyRecoveryState::RECOVERING
+            && found->second->discoveryDeadline.has_value() && clock_->Now() < *found->second->discoveryDeadline) {
+            return Status::OK();
+        }
+    }
     bool resolved = false;
     RETURN_IF_NOT_OK(AdoptStoredAuthorityIfPresent(clusterName, identity, resolved));
     if (resolved) {
@@ -926,6 +1065,10 @@ Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName,
             return Status(K_TRY_AGAIN, "leader round changed before installation");
         }
         RETURN_IF_NOT_OK(PrepareInstallationLocked(clusterName, identity, payload, version));
+        auto found = contexts_.find(clusterName);
+        if (version == 0 && found != contexts_.end() && found->second->state == TopologyRecoveryState::RECOVERING) {
+            ScheduleDelayedReconcileLocked(clusterName, *found->second);
+        }
     }
     if (version == 0) {
         return Status::OK();
@@ -977,6 +1120,12 @@ Status TopologyRecoveryManager::AdoptStoredAuthorityIfPresent(const std::string 
             || found->second->storedAuthorityChecked) {
             return Status::OK();
         }
+        if (found->second->discoveryDeadline.has_value() && clock_->Now() < *found->second->discoveryDeadline) {
+            return Status::OK();
+        }
+        if (found->second->payloadValidationPending || HasOutstandingPayloadRequest(found->second->reporterEvidence)) {
+            return Status::OK();
+        }
         found->second->storedAuthorityChecked = true;
         contextGeneration = found->second->generation;
     }
@@ -985,7 +1134,7 @@ Status TopologyRecoveryManager::AdoptStoredAuthorityIfPresent(const std::string 
     const std::string physicalKey = keys->TopologyTable() + "/" + cluster::TopologyKeyHelper::TopologyKey();
     std::vector<KeyValueEntry> entries;
     int64_t revision = 0;
-    const auto rangeStatus = store_.Range(physicalKey, "", entries, revision);
+    auto rangeStatus = store_.Range(physicalKey, "", entries, revision);
     INJECT_POINT_NO_RETURN("TopologyRecoveryManager.AdoptStoredAuthority.afterRead");
     if (rangeStatus.IsError()) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1021,6 +1170,10 @@ void TopologyRecoveryManager::ApplyStoredAuthorityLocked(const std::string &clus
         return;
     }
     auto &context = *found->second;
+    if (context.payloadValidationPending || HasOutstandingPayloadRequest(context.reporterEvidence)) {
+        context.storedAuthorityChecked = false;
+        return;
+    }
     resolved = true;
     ReleaseSelectedPayload(context);
     context.reporterEvidence.clear();
@@ -1157,6 +1310,7 @@ TopologyRecoveryState TopologyRecoveryManager::GetState(const std::string &clust
 Status TopologyRecoveryManager::Shutdown()
 {
     std::unique_ptr<ThreadPool> pool;
+    std::unique_ptr<ThreadPool> delayedReconcilePool;
     {
         std::unique_lock<std::mutex> lock(mutex_);
         if (shutdownComplete_) {
@@ -1167,9 +1321,15 @@ Status TopologyRecoveryManager::Shutdown()
             return Status::OK();
         }
         stopping_ = true;
+        shutdownCv_.notify_all();
         LOG(INFO) << "CLUSTER_RECOVERY_SHUTDOWN state=draining, coordinator_id="
                   << CoordinatorIdLogPrefix(coordinatorId_)
                   << ", clusters=" << contexts_.size() << ", pending_work=" << pendingRecoveryWork_;
+        delayedReconcilePool = std::move(delayedReconcilePool_);
+        lock.unlock();
+        delayedReconcilePool.reset();
+        lock.lock();
+        shutdownCv_.wait(lock, [this] { return pendingRecoveryWork_ == 0; });
         pool = std::move(recoveryPool_);
     }
     pool.reset();

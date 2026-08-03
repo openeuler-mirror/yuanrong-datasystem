@@ -308,7 +308,11 @@ void TopologyRecoveryReporter::RunReportLoop(CoordinatorLeaderIdentity &identity
             includePayload = true;
             continue;
         }
-        return;
+        includePayload = false;
+        if (!WaitRetry(identity, backoff)) {
+            return;
+        }
+        backoff = std::min(backoff * RETRY_BACKOFF_MULTIPLIER, options_.maxRetryBackoff);
     }
 }
 

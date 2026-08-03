@@ -9,7 +9,7 @@ set(BIN_PATH_LIST
         COORDINATOR_BIN_PATH="${CMAKE_BINARY_DIR}/src/datasystem/coordinator/datasystem_coordinator"
         LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/..")
 target_compile_definitions(cluster PUBLIC ${BIN_PATH_LIST})
-add_dependencies(cluster datasystem_coordinator)
+add_dependencies(cluster datasystem_worker_bin datasystem_coordinator)
 target_link_libraries(cluster
     GTest::gtest
     GTest::gmock

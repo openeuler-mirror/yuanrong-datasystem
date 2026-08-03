@@ -110,6 +110,12 @@ public:
     void ClearObject(const std::vector<std::string> &objectKeys);
 
     /**
+     * @brief Clear all local object data before this worker recreates membership as a new identity.
+     * @return K_OK when the local object table is empty after cleanup; an error otherwise.
+     */
+    Status ClearLocalObjectsForRejoin();
+
+    /**
      * @brief Materialize one failure scope and submit owned asynchronous cleanup work.
      * @param[in] action Validated Failure participants and task identity.
      * @param[in] filter Final object-key predicate for the task scope.

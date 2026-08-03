@@ -317,6 +317,39 @@ private:
     void ScheduleReconcile(const std::string &clusterName);
 
     /**
+     * @brief Submit one delayed arbitration attempt for the current discovery deadline.
+     *
+     * This closes a recovery round even when the accepted payload arrives before the discovery window expires and no
+     * later reporter refreshes the cluster. The caller must hold mutex_.
+     *
+     * @param[in] clusterName Cluster scope.
+     */
+    void ScheduleDelayedReconcileLocked(const std::string &clusterName, ClusterRecoveryContext &context);
+
+    /**
+     * @brief Start the single delayed-reconcile scheduler worker while mutex_ is held.
+     */
+    bool StartDelayedReconcileWorkerLocked();
+
+    /**
+     * @brief Wait for delayed discovery deadlines and submit due reconciliation work.
+     */
+    void DelayedReconcileLoop();
+
+    /**
+     * @brief Collect delayed reconciliation work that is ready while mutex_ is held.
+     * @param[out] dueClusters Clusters whose delayed reconciliation should be scheduled.
+     * @return The next delayed reconciliation wake-up time if one exists.
+     */
+    std::optional<std::chrono::steady_clock::time_point> CollectDueDelayedReconcileLocked(
+        std::vector<std::string> &dueClusters);
+
+    /**
+     * @brief Whether any cluster has a delayed reconcile deadline while mutex_ is held.
+     */
+    bool HasDelayedReconcileLocked() const;
+
+    /**
      * @brief Reuse a legal topology already owned by the current process Store.
      * @param[in] clusterName Cluster scope.
      * @param[out] resolved True when an existing authority made recovery READY or BLOCKED.
@@ -374,11 +407,18 @@ private:
      */
     void ReleaseSelectedPayload(ClusterRecoveryContext &context);
 
+    /**
+     * @brief Mark one asynchronous recovery task complete while mutex_ is held.
+     */
+    void CompleteRecoveryWorkLocked();
+
     const std::string coordinatorId_;
     CoordinatorStore &store_;
     std::shared_ptr<SteadyClock> clock_;
     TopologyRecoveryOptions options_;
     std::unique_ptr<ThreadPool> recoveryPool_;
+    std::unique_ptr<ThreadPool> delayedReconcilePool_;
+    bool delayedReconcileStarted_{ false };
     // Protects lifecycle flags, work/byte counters and contexts_. No codec or Store operation is allowed while held.
     mutable std::mutex mutex_;
     std::condition_variable shutdownCv_;

@@ -100,6 +100,14 @@ public:
     Status GetClusterState(const GetClusterStateReqPb &req, GetClusterStateRspPb &rsp) override;
 
     /**
+     * @brief Get peer-observed hash ring from the local worker service.
+     * @param[in] req Hash-ring request.
+     * @param[out] rsp Hash-ring response.
+     * @return Status of the call.
+     */
+    Status GetPeerHashRing(const GetHashRingReqPb &req, GetHashRingRspPb &rsp) override;
+
+    /**
      * @brief Migrate data when scale down happen.
      * @param[in] req Migrate data request.
      * @param[out] rsp Migrate data response.

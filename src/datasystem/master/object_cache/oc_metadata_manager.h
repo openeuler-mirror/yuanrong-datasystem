@@ -473,6 +473,13 @@ public:
     Status RemoveMetaByWorker(const std::string &workerAddr);
 
     /**
+     * @brief Remove stale local object-cache metadata before a worker recreates membership.
+     * @param[in] workerAddr The rpc service endpoint of the local worker.
+     * @return Status of metadata-location and async worker-op cleanup.
+     */
+    Status CleanupLocalMetadataForRejoin(const std::string &workerAddr);
+
+    /**
      * @brief Remove locations for a restarted-worker batch after one metadata-table scan.
      * @param[in] restartFacts Worker addresses and their membership generation timestamps.
      * @return Status of the call.
