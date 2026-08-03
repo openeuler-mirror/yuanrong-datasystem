@@ -74,8 +74,7 @@ TEST(ObjectEndpointPolicyTest, RejectsObservedUnreachableEndpoint)
     worker::MetadataRouteResolver resolver(nullptr, options);
     ObjectEndpointPolicy policy(resolver, membership);
     cluster::EndpointObservation observation{ snapshot->Members().front().identity, 1,
-                                              cluster::EndpointAvailability::UNREACHABLE,
-                                              std::chrono::steady_clock::now() };
+                                              cluster::EndpointAvailability::UNREACHABLE };
     DS_ASSERT_OK(membership.UpdateObservation(observation));
 
     EXPECT_EQ(policy.CheckMetaOwner("key", false).GetCode(), K_MASTER_TIMEOUT);

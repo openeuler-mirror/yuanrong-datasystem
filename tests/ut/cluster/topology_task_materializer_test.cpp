@@ -81,34 +81,28 @@ TEST(TopologyTaskMaterializerTest, BuildsOneSharedRestartSetForEveryMembershipRe
     EXPECT_TRUE(expected.notifiesByAddress.empty());
     EXPECT_EQ(expected.notifyRecipients,
               (std::vector<std::string>{ "127.0.0.1:1", "127.0.0.1:2" }));
-    EXPECT_EQ(expected.restartTimestampsByAddress,
-              (std::map<std::string, int64_t>{ { "127.0.0.1:2", 200 } }));
+    const std::map<std::string, int64_t> restartTimestamps{ { "127.0.0.1:2", 200 } };
     for (const auto &address : expected.notifyRecipients) {
+        std::string optimizedBytes;
+        DS_ASSERT_OK(materializer.BuildEncodedNotifyFor(expected, address, optimizedBytes));
         TopologyTaskNotify notify;
-        DS_ASSERT_OK(materializer.BuildNotifyFor(expected, address, notify));
+        DS_ASSERT_OK(TopologyRepositoryCodec::DecodeNotify(optimizedBytes, notify));
         EXPECT_FALSE(notify.activeBatch.has_value());
         EXPECT_TRUE(notify.taskIds.empty());
-        EXPECT_EQ(notify.restartTimestampsByAddress, expected.restartTimestampsByAddress);
+        EXPECT_EQ(notify.restartTimestampsByAddress, restartTimestamps);
         std::string regularBytes;
-        std::string optimizedBytes;
         DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(notify, regularBytes));
-        DS_ASSERT_OK(materializer.BuildEncodedNotifyFor(expected, address, optimizedBytes));
         EXPECT_EQ(optimizedBytes, regularBytes);
     }
     auto &taskNotify = expected.notifiesByAddress["127.0.0.1:1"];
     taskNotify.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 3 };
     taskNotify.taskIds = { "m-e3-0123456789abcdef0123456789abcdef" };
-    TopologyTaskNotify combined;
-    DS_ASSERT_OK(materializer.BuildNotifyFor(expected, "127.0.0.1:1", combined));
-    std::string regularBytes;
     std::string optimizedBytes;
-    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(combined, regularBytes));
     DS_ASSERT_OK(materializer.BuildEncodedNotifyFor(expected, "127.0.0.1:1", optimizedBytes));
-    EXPECT_EQ(optimizedBytes, regularBytes);
-    TopologyTaskNotify decoded;
-    DS_ASSERT_OK(TopologyRepositoryCodec::DecodeNotify(optimizedBytes, decoded));
-    EXPECT_EQ(decoded.taskIds, combined.taskIds);
-    EXPECT_EQ(decoded.restartTimestampsByAddress, combined.restartTimestampsByAddress);
+    TopologyTaskNotify combined;
+    DS_ASSERT_OK(TopologyRepositoryCodec::DecodeNotify(optimizedBytes, combined));
+    EXPECT_EQ(combined.taskIds, taskNotify.taskIds);
+    EXPECT_EQ(combined.restartTimestampsByAddress, restartTimestamps);
 }
 
 TEST(TopologyTaskMaterializerTest, InvalidRestartSetDoesNotReplacePreviousGeneration)
@@ -130,7 +124,6 @@ TEST(TopologyTaskMaterializerTest, InvalidRestartSetDoesNotReplacePreviousGenera
 
     EXPECT_EQ(materializer.RebuildExpected(*snapshot, algorithm, memberships, true, expected).GetCode(), K_INVALID);
     EXPECT_EQ(expected.notifyRecipients, (std::vector<std::string>{ "unchanged" }));
-    EXPECT_TRUE(expected.restartTimestampsByAddress.empty());
     EXPECT_EQ(expected.canonicalRestartNotify, "unchanged");
 }
 

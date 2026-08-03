@@ -20,7 +20,6 @@
 namespace datasystem::cluster {
 namespace {
 constexpr size_t ID_HASH_CHARS = 32;
-constexpr size_t MAX_RANGES_PER_TASK = 4'096;
 constexpr uint32_t DEFAULT_TOKENS_PER_MEMBER = 4;
 constexpr int BITS_PER_BYTE = 8;
 constexpr int U64_MOST_SIGNIFICANT_SHIFT = 56;
@@ -107,9 +106,7 @@ bool MatchesSnapshot(const TopologySnapshot &latest, const TopologyState &next)
         || latest.GetActiveBatch().has_value() != next.activeBatch.has_value()) {
         return false;
     }
-    if (next.activeBatch.has_value()
-        && (latest.GetActiveBatch()->type != next.activeBatch->type
-            || latest.GetActiveBatch()->epoch != next.activeBatch->epoch)) {
+    if (latest.GetActiveBatch() != next.activeBatch) {
         return false;
     }
     if (latest.Members().size() != next.members.size()) {
@@ -135,13 +132,10 @@ Status ValidateOwnerChange(const TopologySnapshot &latest, TopologyChangeType ty
     RETURN_IF_NOT_OK(latest.FindMemberByAddress(change.target.address, target));
     CHECK_FAIL_RETURN_STATUS(source->identity == *change.source && target->identity == change.target, K_INVALID,
                              "owner change member generation is stale");
-    const auto committed = [](MemberState state) {
-        return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING || state == MemberState::LEAVING;
-    };
     const auto expectedSource = type == TopologyChangeType::FAILURE ? MemberState::FAILED : MemberState::LEAVING;
     if (type == TopologyChangeType::SCALE_OUT) {
-        CHECK_FAIL_RETURN_STATUS(committed(source->state) && target->state == MemberState::JOINING, K_INVALID,
-                                 "ScaleOut target is not joining");
+        CHECK_FAIL_RETURN_STATUS(IsCommittedMemberState(source->state) && target->state == MemberState::JOINING,
+                                 K_INVALID, "ScaleOut target is not joining");
     } else if (type == TopologyChangeType::FAILURE) {
         CHECK_FAIL_RETURN_STATUS(source->state == expectedSource, K_INVALID,
                                  "Failure owner change source is not failed");
@@ -170,8 +164,8 @@ void AppendTaskChunks(TopologyChangeType type, uint64_t epoch, const TopologyOwn
     std::sort(ranges.begin(), ranges.end(), [](const auto &left, const auto &right) {
         return std::tie(left.from, left.end) < std::tie(right.from, right.end);
     });
-    for (size_t offset = 0; offset < ranges.size(); offset += MAX_RANGES_PER_TASK) {
-        const size_t end = std::min(offset + MAX_RANGES_PER_TASK, ranges.size());
+    for (size_t offset = 0; offset < ranges.size(); offset += MAX_TOPOLOGY_TASK_RANGES) {
+        const size_t end = std::min(offset + MAX_TOPOLOGY_TASK_RANGES, ranges.size());
         if (type == TopologyChangeType::FAILURE) {
             TopologyDeleteTask task{ "", epoch, change.target.address, change.source->address, {} };
             for (size_t index = offset; index < end; ++index) {
@@ -305,14 +299,14 @@ Status TopologyTaskMaterializer::BuildExpected(const TopologySnapshot &latest, c
     return Status::OK();
 }
 
-Status TopologyTaskMaterializer::RebuildExpected(const TopologySnapshot &latest, const IPlanningAlgorithm &algorithm,
+Status TopologyTaskMaterializer::RebuildExpected(const TopologySnapshot &latest,
+                                                 const IPlanningAlgorithm &algorithm,
                                                  ExpectedDerivedState &expected) const
 {
     return RebuildExpected(latest, algorithm, {}, false, expected);
 }
 
-Status TopologyTaskMaterializer::RebuildExpected(const TopologySnapshot &latest,
-                                                 const IPlanningAlgorithm &algorithm,
+Status TopologyTaskMaterializer::RebuildExpected(const TopologySnapshot &latest, const IPlanningAlgorithm &algorithm,
                                                  const std::vector<MembershipRecord> &memberships,
                                                  bool includeRestartFacts, ExpectedDerivedState &expected) const
 {
@@ -326,40 +320,20 @@ Status TopologyTaskMaterializer::RebuildExpected(const TopologySnapshot &latest,
         expected = std::move(built);
         return Status::OK();
     }
+    TopologyTaskNotify restartNotify;
     for (const auto &record : memberships) {
         CHECK_FAIL_RETURN_STATUS(!record.address.empty(), K_INVALID, "restart membership address is empty");
         built.notifyRecipients.push_back(record.address);
         if (record.state == MemberLifecycleState::RESTARTING) {
             CHECK_FAIL_RETURN_STATUS(record.timestamp > 0, K_INVALID, "restart membership timestamp is invalid");
-            built.restartTimestampsByAddress[record.address] = record.timestamp;
+            restartNotify.restartTimestampsByAddress[record.address] = record.timestamp;
         }
     }
     std::sort(built.notifyRecipients.begin(), built.notifyRecipients.end());
     built.notifyRecipients.erase(
         std::unique(built.notifyRecipients.begin(), built.notifyRecipients.end()), built.notifyRecipients.end());
-    TopologyTaskNotify restartNotify;
-    restartNotify.restartTimestampsByAddress = built.restartTimestampsByAddress;
     RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeNotify(restartNotify, built.canonicalRestartNotify));
     expected = std::move(built);
-    return Status::OK();
-}
-
-Status TopologyTaskMaterializer::BuildNotifyFor(const ExpectedDerivedState &expected, const std::string &address,
-                                                TopologyTaskNotify &notify) const
-{
-    CHECK_FAIL_RETURN_STATUS(
-        std::binary_search(expected.notifyRecipients.begin(), expected.notifyRecipients.end(), address), K_INVALID,
-        "address is not an expected notify recipient");
-    notify.activeBatch.reset();
-    notify.taskIds.clear();
-    const auto taskNotify = expected.notifiesByAddress.find(address);
-    if (taskNotify != expected.notifiesByAddress.end()) {
-        notify.activeBatch = taskNotify->second.activeBatch;
-        notify.taskIds = taskNotify->second.taskIds;
-    }
-    if (notify.restartTimestampsByAddress != expected.restartTimestampsByAddress) {
-        notify.restartTimestampsByAddress = expected.restartTimestampsByAddress;
-    }
     return Status::OK();
 }
 

@@ -445,13 +445,6 @@ Status TopologyRepository::CountScaleInMetadataDone(uint64_t batchEpoch, const s
     return Status::OK();
 }
 
-Status TopologyRepository::ListTaskCandidatesForJanitor(TopologyTaskKind kind, size_t limit,
-                                                        std::vector<TaskJanitorCandidate> &tasks) const
-{
-    std::string cursor;
-    return ListTaskCandidatesForJanitor(kind, limit, cursor, tasks);
-}
-
 template <typename Visit>
 Status VisitRotatingPage(std::vector<std::pair<std::string, std::string>> &values, size_t limit,
                          std::string &cursor, Visit visit)
@@ -497,13 +490,6 @@ Status TopologyRepository::ListTaskCandidatesForJanitor(TopologyTaskKind kind, s
     return Status::OK();
 }
 
-Status TopologyRepository::ListNotifyCandidatesForJanitor(size_t limit,
-                                                          std::vector<NotifyJanitorCandidate> &notifies) const
-{
-    std::string cursor;
-    return ListNotifyCandidatesForJanitor(limit, cursor, notifies);
-}
-
 Status TopologyRepository::ListNotifyCandidatesForJanitor(size_t limit, std::string &cursor,
                                                           std::vector<NotifyJanitorCandidate> &notifies) const
 {
@@ -527,13 +513,6 @@ Status TopologyRepository::ListNotifyCandidatesForJanitor(size_t limit, std::str
 }
 
 Status TopologyRepository::ListScaleInMetadataDoneCandidatesForJanitor(
-    size_t limit, std::vector<ScaleInMetadataDoneJanitorCandidate> &markers) const
-{
-    std::string cursor;
-    return ListScaleInMetadataDoneCandidatesForJanitor(limit, cursor, markers);
-}
-
-Status TopologyRepository::ListScaleInMetadataDoneCandidatesForJanitor(
     size_t limit, std::string &cursor, std::vector<ScaleInMetadataDoneJanitorCandidate> &markers) const
 {
     CHECK_FAIL_RETURN_STATUS(limit > 0, K_INVALID, "ScaleIn metadata marker Janitor scan limit must be positive");
@@ -552,24 +531,8 @@ Status TopologyRepository::ListScaleInMetadataDoneCandidatesForJanitor(
 
 Status TopologyRepository::DeleteTaskIfMatches(const TaskJanitorCandidate &candidate, bool &deleted)
 {
-    deleted = false;
-    bool matched = false;
-    ICoordinationBackend::ProcessFunction process = [&](const std::string &current,
-                                                        std::unique_ptr<std::string> &next, bool &retry) {
-        retry = false;
-        matched = current == candidate.matchToken;
-        if (matched) {
-            next = std::make_unique<std::string>(NextDeleteTombstone(TASK_DELETE_TOMBSTONE_PREFIX, current));
-        }
-        return Status::OK();
-    };
-    RETURN_IF_NOT_OK(backend_.CAS(TaskTable(candidate.kind), candidate.taskId, process));
-    if (!matched) {
-        return Status::OK();
-    }
-    RETURN_IF_NOT_OK(backend_.Delete(TaskTable(candidate.kind), candidate.taskId));
-    deleted = true;
-    return Status::OK();
+    return DeleteIfMatches(TaskTable(candidate.kind), candidate.taskId, candidate.matchToken,
+                           TASK_DELETE_TOMBSTONE_PREFIX, deleted);
 }
 
 Status TopologyRepository::ReconcileNotifyIfMatches(const NotifyJanitorCandidate &candidate, bool &changed)
@@ -608,24 +571,29 @@ Status TopologyRepository::ReconcileNotifyIfMatches(const NotifyJanitorCandidate
 Status TopologyRepository::DeleteScaleInMetadataDoneIfMatches(
     const ScaleInMetadataDoneJanitorCandidate &candidate, bool &deleted)
 {
+    return DeleteIfMatches(keys_.ScaleInMetadataDoneTable(), candidate.key, candidate.matchToken,
+                           SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE_PREFIX, deleted);
+}
+
+Status TopologyRepository::DeleteIfMatches(const std::string &table, const std::string &key,
+                                           const std::string &matchToken, const char *tombstonePrefix, bool &deleted)
+{
     deleted = false;
     bool matched = false;
-    ICoordinationBackend::ProcessFunction process = [&](const std::string &current,
-                                                        std::unique_ptr<std::string> &next, bool &retry) {
+    ICoordinationBackend::ProcessFunction process = [&](const std::string &current, std::unique_ptr<std::string> &next,
+                                                        bool &retry) {
         retry = false;
-        matched = current == candidate.matchToken;
+        matched = current == matchToken;
         if (matched) {
-            next = std::make_unique<std::string>(
-                NextDeleteTombstone(SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE_PREFIX, current));
+            next = std::make_unique<std::string>(NextDeleteTombstone(tombstonePrefix, current));
         }
         return Status::OK();
     };
-    RETURN_IF_NOT_OK(backend_.CAS(keys_.ScaleInMetadataDoneTable(), candidate.key, process));
-    if (!matched) {
-        return Status::OK();
+    RETURN_IF_NOT_OK(backend_.CAS(table, key, process));
+    if (matched) {
+        RETURN_IF_NOT_OK(backend_.Delete(table, key));
+        deleted = true;
     }
-    RETURN_IF_NOT_OK(backend_.Delete(keys_.ScaleInMetadataDoneTable(), candidate.key));
-    deleted = true;
     return Status::OK();
 }
 

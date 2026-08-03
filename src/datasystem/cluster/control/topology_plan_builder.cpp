@@ -22,11 +22,6 @@ bool SameIdentity(const Member &member, const MemberIdentity &identity)
     return member.identity == identity;
 }
 
-bool IsCommittedState(MemberState state)
-{
-    return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING || state == MemberState::LEAVING;
-}
-
 Status ValidateSelected(const TopologyState &latest, const std::vector<MemberIdentity> &selected, MemberState state)
 {
     CHECK_FAIL_RETURN_STATUS(!selected.empty(), K_INVALID, "selected topology member set is empty");
@@ -83,7 +78,7 @@ Status TopologyPlanBuilder::BuildBootstrap(const TopologyState &latest, const st
                                            TopologyState &next) const
 {
     const bool hasCommitted = std::any_of(latest.members.begin(), latest.members.end(),
-                                          [](const auto &member) { return IsCommittedState(member.state); });
+                                          [](const auto &member) { return IsCommittedMemberState(member.state); });
     CHECK_FAIL_RETURN_STATUS(!hasCommitted && !latest.activeBatch.has_value(), K_INVALID,
                              "bootstrap requires a stable topology without a committed owner");
     RETURN_IF_NOT_OK(ValidateSelected(latest, ready, MemberState::INITIAL));

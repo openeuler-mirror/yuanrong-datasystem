@@ -17,26 +17,17 @@ namespace datasystem::cluster {
 enum class TopologyRuntimeRole : uint8_t { WORKER, CONTROLLER, OBSERVER, UNIFIED_ETCD };
 
 /**
- * @brief Pure role-to-watch plan.
+ * @brief Build the complete role-minimal watch set.
+ * @param[in] role Runtime role.
+ * @param[in] localAddress Canonical Worker address; empty for other roles.
+ * @param[in] keys Cluster-scoped key helper.
+ * @param[in] startRevision Last processed revision, or WATCH_FROM_NOW; values below the sentinel are invalid.
+ * @param[out] watchKeys Complete descriptors, unchanged on failure.
+ * @return K_OK or K_INVALID.
  */
-class TopologyRoleWatchPlan final {
-public:
-    /**
-     * @brief Build the complete role-minimal watch set.
-     * @param[in] role Runtime role.
-     * @param[in] localAddress Canonical Worker address; empty for other roles.
-     * @param[in] keys Cluster-scoped key helper.
-     * @param[in] startRevision Last processed revision, or WATCH_FROM_NOW; values below the sentinel are invalid.
-     * @param[out] watchKeys Complete descriptors, unchanged on failure.
-     * @return K_OK or K_INVALID.
-     */
-    static Status Build(TopologyRuntimeRole role, const std::string &localAddress, const TopologyKeyHelper &keys,
-                        int64_t startRevision, std::vector<WatchKey> &watchKeys);
-
-private:
-    TopologyRoleWatchPlan() = delete;
-    ~TopologyRoleWatchPlan() = delete;
-};
+Status BuildTopologyRoleWatchPlan(TopologyRuntimeRole role, const std::string &localAddress,
+                                  const TopologyKeyHelper &keys, int64_t startRevision,
+                                  std::vector<WatchKey> &watchKeys);
 
 }  // namespace datasystem::cluster
 

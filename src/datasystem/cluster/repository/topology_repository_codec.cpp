@@ -25,16 +25,13 @@
 
 namespace datasystem::cluster {
 namespace {
-constexpr size_t MAX_TASK_RANGES = 4'096;
 constexpr size_t MAX_VALUE_BYTES = 4 * 1024 * 1024;
 constexpr size_t MAX_NOTIFY_TASK_REFS = 4'096;
 constexpr size_t MAX_NOTIFY_VALUE_BYTES = 4 * 1024 * 1024;
 constexpr size_t MAX_RESTART_NOTIFY_ENTRIES = 10'000;
 constexpr size_t MAX_TOPOLOGY_MEMBERS = 10'000;
 constexpr size_t MAX_TOPOLOGY_TOKENS = 40'000;
-constexpr size_t SHA256_HEX_SIZE = 64;
 constexpr char SCHEMA_VERSION[] = "1";
-const std::string VALIDATION_DIGEST(SHA256_HEX_SIZE, '0');
 
 Status SerializeCanonical(const google::protobuf::MessageLite &message, std::string &value)
 {
@@ -107,7 +104,7 @@ Status ValidateMemberAddress(const std::string &address)
 
 bool IsCanonicalRanges(const std::vector<TopologyTaskRange> &ranges, const std::string &executor)
 {
-    if (ranges.empty() || ranges.size() > MAX_TASK_RANGES || executor.empty()) {
+    if (ranges.empty() || ranges.size() > MAX_TOPOLOGY_TASK_RANGES || executor.empty()) {
         return false;
     }
     for (size_t index = 0; index < ranges.size(); ++index) {
@@ -137,7 +134,7 @@ void EncodeRanges(const std::vector<TopologyTaskRange> &ranges,
 Status DecodeRanges(const google::protobuf::RepeatedPtrField<::datasystem::TokenRangePb> &input,
                     std::vector<TopologyTaskRange> &ranges, std::string &executor)
 {
-    CHECK_FAIL_RETURN_STATUS(!input.empty() && static_cast<size_t>(input.size()) <= MAX_TASK_RANGES, K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(!input.empty() && static_cast<size_t>(input.size()) <= MAX_TOPOLOGY_TASK_RANGES, K_INVALID,
                              "invalid task range count");
     std::vector<TopologyTaskRange> decoded;
     decoded.reserve(input.size());
@@ -186,13 +183,13 @@ Status DecodeActiveBatch(const ::datasystem::ChangeBatchPb &input, ActiveBatch &
 
 Status TopologyRepositoryCodec::EncodeTopology(const TopologyState &state, std::string &value)
 {
-    std::shared_ptr<const TopologySnapshot> snapshot;
-    RETURN_IF_NOT_OK(TopologySnapshot::Create(state, 0, VALIDATION_DIGEST, snapshot));
+    auto canonical = state;
+    RETURN_IF_NOT_OK(ValidateAndCanonicalizeTopologyState(canonical));
     ::datasystem::ClusterTopologyPb pb;
-    pb.set_cluster_has_init(snapshot->ClusterHasInit());
-    pb.set_version(snapshot->Version());
+    pb.set_cluster_has_init(canonical.clusterHasInit);
+    pb.set_version(canonical.version);
     pb.set_schema_version(SCHEMA_VERSION);
-    for (const auto &member : snapshot->Members()) {
+    for (const auto &member : canonical.members) {
         auto &memberPb = (*pb.mutable_members())[member.identity.address];
         memberPb.set_id(member.identity.id);
         memberPb.set_state(static_cast<::datasystem::MembershipPb::StatePb>(member.state));
@@ -200,11 +197,11 @@ Status TopologyRepositoryCodec::EncodeTopology(const TopologyState &state, std::
             memberPb.add_tokens(token);
         }
     }
-    if (snapshot->GetActiveBatch().has_value()) {
+    if (canonical.activeBatch.has_value()) {
         ::datasystem::TypePb typePb;
-        RETURN_IF_NOT_OK(ToPbType(snapshot->GetActiveBatch()->type, typePb));
+        RETURN_IF_NOT_OK(ToPbType(canonical.activeBatch->type, typePb));
         pb.mutable_active_batch()->set_type(typePb);
-        pb.mutable_active_batch()->set_epoch(snapshot->GetActiveBatch()->epoch);
+        pb.mutable_active_batch()->set_epoch(canonical.activeBatch->epoch);
     }
     return SerializeCanonical(pb, value);
 }
@@ -241,9 +238,7 @@ Status TopologyRepositoryCodec::DecodeTopology(const std::string &value, Topolog
         RETURN_IF_NOT_OK(FromPbType(pb.active_batch().type(), type));
         decoded.activeBatch = ActiveBatch{ type, pb.active_batch().epoch() };
     }
-    std::shared_ptr<const TopologySnapshot> validated;
-    RETURN_IF_NOT_OK(TopologySnapshot::Create(decoded, 0, VALIDATION_DIGEST, validated));
-    decoded.members = validated->Members();
+    RETURN_IF_NOT_OK(ValidateAndCanonicalizeTopologyState(decoded));
     state = std::move(decoded);
     return Status::OK();
 }

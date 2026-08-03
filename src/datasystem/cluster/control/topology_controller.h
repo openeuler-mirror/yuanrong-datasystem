@@ -175,175 +175,68 @@ public:
     TopologyControllerDiagnostics GetDiagnostics() const;
 
 private:
-    /**
-     * @brief Enqueue a watch doorbell.
-     * @param[in] event Backend event.
-     * @return Queue status.
-     */
+    struct BatchDeadlineState {
+        ActiveBatch batch;
+        std::chrono::steady_clock::time_point deadline;
+    };
+
+    struct BatchCollectState {
+        std::chrono::steady_clock::time_point deadline;
+        bool started{ false };
+    };
+
     Status EnqueueCoordinationEvent(CoordinationEvent &&event);
 
-    /**
-     * @brief Resolve the membership event prefix and reset restart de-duplication.
-     * @return K_OK when restart observation is disabled or initialized; backend or key validation status otherwise.
-     */
     Status PrepareMembershipRestartObservation();
 
-    /**
-     * @brief Preserve a RESTARTING generation before generic doorbell coalescing.
-     * @param[in] event Backend event to inspect without consuming it.
-     * @return K_OK when ignored or recorded; key or membership value validation status otherwise.
-     */
     Status ObserveMembershipRestart(const CoordinationEvent &event);
 
     Status ResyncExternalFacts();
     Status ApplyExternalEvent(const CoordinationEvent &event);
     Status PublishExternalTopology(std::shared_ptr<const TopologySnapshot> candidate, bool fullRebuild);
 
-    /**
-     * @brief Preserve restart generations recovered by a full membership read.
-     * @param[in] memberships Successful authoritative membership read.
-     */
     void ObserveMembershipRestarts(const std::vector<MembershipRecord> &memberships);
 
-    /**
-     * @brief De-duplicate one restarting address generation.
-     * @param[in] address Canonical member address.
-     * @param[in] timestamp Membership process-generation timestamp.
-     */
     void RecordMembershipRestart(const std::string &address, int64_t timestamp);
 
-    /**
-     * @brief Deliver preserved restart generations on the serial state thread.
-     */
     void DrainMembershipRestarts();
 
-    /**
-     * @brief Run the serial state loop.
-     */
     void Run();
 
-    /**
-     * @brief Check the Controller stop flag under stateMutex_.
-     * @return True after Stop closes the state loop.
-     */
     bool StopRequested() const;
 
-    /**
-     * @brief Wait for one event or reconcile deadline and coalesce queued doorbells.
-     * @param[in] immediate Whether bounded unfinished work requires an immediate tick.
-     * @param[out] drained Number of coalesced doorbells.
-     * @return K_OK for an event or normal deadline, or an unexpected dispatcher status.
-     */
     Status WaitForReconcile(bool immediate, size_t &drained);
 
-    /**
-     * @brief Update backoff, diagnostics and sampled logs after one reconcile tick.
-     * @param[in] status Reconcile result.
-     * @param[in] now Tick time used as the backoff base.
-     * @param[in] startedAt Tick start used for latency diagnostics.
-     * @param[in] drained Number of coalesced doorbells.
-     */
     void RecordReconcileResult(const Status &status, std::chrono::steady_clock::time_point now,
                                std::chrono::steady_clock::time_point startedAt, size_t drained);
 
-    /**
-     * @brief Advance one bounded reconciliation tick.
-     * @return Operation status.
-     */
     Status ReconcileOnce();
 
-    /**
-     * @brief Join and repair the committed epoch.
-     * @return Operation status.
-     */
     Status RecoverFromLatestTopology();
 
-    /**
-     * @brief Create the empty pre-bootstrap authority record if absent.
-     * @return Operation status.
-     */
     Status EnsureTopologyAuthority();
 
-    /**
-     * @brief Repair expected task and notify keys.
-     * @param[in] latest Snapshot.
-     * @param[in] memberships Memberships from the same exact-read tick.
-     * @return Operation status.
-     */
     Status ReconcileDerivedState(const TopologySnapshot &latest,
                                  const std::vector<MembershipRecord> &memberships);
 
-    /**
-     * @brief Rebuild the immutable expected generation only when its authority changes.
-     * @param[in] latest Snapshot.
-     * @param[in] memberships Memberships from the same exact-read tick.
-     * @return Operation status.
-     */
     Status PrepareDerivedGeneration(const TopologySnapshot &latest,
                                     const std::vector<MembershipRecord> &memberships);
 
-    /**
-     * @brief Materialize one bounded slice from the cached expected generation.
-     * @return Operation status.
-     */
     Status ReconcileDerivedSlice();
 
-    /**
-     * @brief Confirm failures from the tick-consistent membership snapshot.
-     * @param[in] latest Snapshot.
-     * @param[in] memberships Memberships read once for this reconciliation tick.
-     * @return Operation status.
-     */
     Status TryConfirmFailures(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
-    /**
-     * @brief Narrow failure candidates with one owned bounded direct probe after classifier confirmation.
-     * @param[in] latest Snapshot that supplied the candidate identities.
-     * @param[in,out] classification Failure candidates; omitted probe targets become immediately eligible.
-     * @return K_OK after bounded probing; K_RUNTIME_ERROR if an injected probe throws.
-     */
     Status ConfirmMissingMembersUnreachable(const TopologySnapshot &latest, FailureClassification &classification);
 
-    /**
-     * @brief Commit the cluster-shutdown special path.
-     * @param[in] latest Snapshot.
-     * @return Operation status.
-     */
     Status CommitClusterShutdown(const TopologySnapshot &latest);
 
-    /**
-     * @brief Commit one complete confirmed Failure set.
-     * @param[in] latest Snapshot.
-     * @param[in] classification Complete classification.
-     * @return Operation status.
-     */
     Status CommitConfirmedFailures(const TopologySnapshot &latest, const FailureClassification &classification);
 
-    /**
-     * @brief Commit immediate INITIAL/JOINING cleanup.
-     * @param[in] latest Snapshot.
-     * @param[in] classification Complete classification.
-     * @return Operation status.
-     */
     Status CommitUncommittedCleanup(const TopologySnapshot &latest, const FailureClassification &classification);
-
-    Status CommitScaleOutUncommittedCleanup(const TopologySnapshot &latest,
-                                            const FailureClassification &classification);
-
-    Status CommitFailureUncommittedCleanup(const TopologySnapshot &latest,
-                                           const FailureClassification &classification);
-
-    Status CommitInitialCleanup(const TopologySnapshot &latest, const FailureClassification &classification);
 
     Status CommitAndLogMemberTransition(const TopologySnapshot &latest, const TopologyState &next,
                                         const std::vector<MemberIdentity> &members, const char *action);
 
-    /**
-     * @brief Persist READY/EXITING membership facts as INITIAL/PRE_LEAVING.
-     * @param[in] latest Snapshot.
-     * @param[in] memberships Successful membership read-back.
-     * @return Operation status.
-     */
     Status CommitMembershipFacts(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
     void CollectMembershipFacts(const std::vector<MembershipRecord> &memberships,
@@ -361,137 +254,41 @@ private:
     void LogMembershipFactsCommit(uint64_t committedVersion, const std::vector<MemberIdentity> &admittedLeaving,
                                   const std::vector<MemberIdentity> &admittedJoining) const;
 
-    /**
-     * @brief Finalize a completed or expired batch.
-     * @param[in] latest Snapshot.
-     * @param[in] memberships Memberships read once for this reconciliation tick.
-     * @return Operation status.
-     */
     Status TryFinalizeActiveBatch(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
-    /**
-     * @brief Read current task progress and identify incomplete ScaleOut generations.
-     * @param[in] latest Snapshot.
-     * @param[in] expected Expected derived state.
-     * @param[out] complete True when every expected task is finished.
-     * @return Operation status.
-     */
     Status InspectBatchProgress(const TopologySnapshot &latest, const ExpectedDerivedState &expected, bool &complete);
 
-    /**
-     * @brief Resolve incomplete ScaleOut targets once after the batch deadline expires.
-     * @param[in] latest Expired ScaleOut snapshot.
-     * @param[in] expected Expected task generation.
-     * @param[out] failedJoining Incomplete JOINING member generations.
-     */
     void CollectFailedJoining(const TopologySnapshot &latest, const ExpectedDerivedState &expected,
                               std::vector<MemberIdentity> &failedJoining) const;
 
-    /**
-     * @brief Refresh a bounded slice of the state-thread-owned task progress cache.
-     * @param[in] batch Active batch fence.
-     * @param[in] expected Expected task identities.
-     * @return Operation status.
-     */
     Status RefreshTaskProgressCache(const ActiveBatch &batch, const ExpectedDerivedState &expected);
 
-    /**
-     * @brief Commit the normal or Failure final state.
-     * @param[in] latest Snapshot.
-     * @return Operation status.
-     */
     Status CommitBatchFinal(const TopologySnapshot &latest);
 
-    /**
-     * @brief Remove incomplete ScaleOut generations and replan retained members.
-     * @param[in] latest Snapshot.
-     * @param[in] failedJoining Incomplete generations.
-     * @param[in] memberships Memberships read once for this reconciliation tick.
-     * @return Operation status.
-     */
     Status CommitScaleOutExhaustion(const TopologySnapshot &latest, const std::vector<MemberIdentity> &failedJoining,
                                     const std::vector<MembershipRecord> &memberships);
 
-    /**
-     * @brief Apply the type-specific exhausted-batch terminal path.
-     * @param[in] latest Snapshot.
-     * @param[in] failedJoining Incomplete ScaleOut generations.
-     * @param[in] memberships Memberships read once for this reconciliation tick.
-     * @return Operation status.
-     */
     Status CommitExpiredBatch(const TopologySnapshot &latest, const std::vector<MemberIdentity> &failedJoining,
                               const std::vector<MembershipRecord> &memberships);
 
-    /**
-     * @brief Admit the next stable ordinary batch.
-     * @param[in] latest Snapshot.
-     * @param[in] memberships Memberships read once for this reconciliation tick.
-     * @return Operation status.
-     */
     Status TryStartNextBatch(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
-    /**
-     * @brief Admit the ordinary SCALE_IN batch through the coalescing collect window.
-     *
-     * When scaleInCollectWindow is non-zero, the first PRE_LEAVING candidate opens a deadline (now + window) and the
-     * batch is started only after the deadline expires, so that members exiting within the window land in the same
-     * epoch. Returns without starting a batch while the deadline is pending, and clears the deadline when the window
-     * is superseded by an active batch or a scale-out candidate.
-     * @param[in] latest Snapshot.
-     * @param[in] state Derived topology state for the next batch.
-     * @param[in] leaving Pre-collected PRE_LEAVING candidates, already bounded by maxMembersPerBatch.
-     * @return Operation status.
-     */
-    Status TryStartScaleInBatchAfterCollection(const TopologySnapshot &latest, const TopologyState &state,
-                                               const std::vector<MemberIdentity> &leaving);
+    Status TryStartBatchAfterCollection(const TopologySnapshot &latest, const TopologyState &state,
+                                        const std::vector<MemberIdentity> &participants, TopologyChangeType type,
+                                        bool bootstrap);
 
-    /**
-     * @brief Admit one bootstrap or ordinary SCALE_OUT batch after the bounded collection window.
-     *
-     * @param[in] latest Latest authoritative topology snapshot.
-     * @param[in] state Mutable planning state derived from latest.
-     * @param[in] joining Pre-collected INITIAL candidates.
-     * @param[in] bootstrap True when no committed owner exists and candidates can be admitted without migration.
-     * @return K_OK on success; otherwise the storage, planning, or validation error.
-     */
-    Status TryStartJoiningBatchAfterCollection(const TopologySnapshot &latest, const TopologyState &state,
-                                               const std::vector<MemberIdentity> &joining, bool bootstrap);
-
-    /**
-     * @brief Drop the in-progress SCALE_IN collect window and log the reason once.
-     * @param[in] reason Short reason token emitted in the cancel log.
-     */
-    void ClearScaleInCollectState(const char *reason);
-
-    /**
-     * @brief Drop the in-progress SCALE_OUT collection window and log the reason once.
-     * @param[in] reason Short reason token emitted in the cancel log.
-     */
-    void ClearScaleOutCollectState(const char *reason);
+    void ClearBatchCollectState(TopologyChangeType type, const char *reason);
 
     void CollectNextBatchCandidates(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships,
                                     std::vector<MemberIdentity> &leaving,
                                     std::vector<MemberIdentity> &joining) const;
 
-    Status CommitBootstrapBatchStart(const TopologySnapshot &latest, const TopologyState &state,
-                                     const std::vector<MemberIdentity> &joining);
-
-    Status CommitOrdinaryBatchStart(const TopologySnapshot &latest, const TopologyState &state,
-                                    const std::vector<MemberIdentity> &participants, TopologyChangeType type);
-
-    Status CommitStartedBatch(const TopologySnapshot &latest, const TopologyState &next,
-                              const std::vector<MemberIdentity> &participants);
+    Status CommitBatchStart(const TopologySnapshot &latest, const TopologyState &state,
+                            const std::vector<MemberIdentity> &participants, TopologyChangeType type, bool bootstrap);
 
     void LogBatchStart(const TopologySnapshot &latest, const TopologySnapshot &committed,
                        const std::vector<MemberIdentity> &participants, const char *action) const;
 
-    /**
-     * @brief CAS and exact-read the committed state.
-     * @param[in] expectedVersion Expected version.
-     * @param[in] desired Candidate.
-     * @param[out] committed Read-back snapshot.
-     * @return Operation status.
-     */
     Status CommitAndReadBack(uint64_t expectedVersion, const TopologyState &desired,
                              std::shared_ptr<const TopologySnapshot> &committed);
 
@@ -512,25 +309,18 @@ private:
     bool started_{ false };
     bool stopping_{ false };
     bool threadExited_{ true };
-    bool topologyDirty_{ true };
     bool membershipDirty_{ true };
-    bool taskDirty_{ true };
     bool topologyCommittedThisTick_{ false };
     uint32_t consecutiveReconcileFailures_{ 0 };
     std::chrono::steady_clock::time_point reconcileNotBefore_{};
-    std::optional<std::chrono::steady_clock::time_point> batchDeadline_;
-    std::optional<TopologyChangeType> deadlineBatchType_;
-    uint64_t deadlineBatchEpoch_{ 0 };
+    std::optional<BatchDeadlineState> batchDeadline_;
     uint64_t loggedExpiredBatchEpoch_{ 0 };
     uint64_t loggedScaleInWaitEpoch_{ 0 };
     // State-thread-owned, in-process and non-persistent collect deadline for ordinary SCALE_IN coalescing.
     // Not written to topology, not part of CAS, not shared across Controller instances or restarts.
-    std::optional<std::chrono::steady_clock::time_point> scaleInCollectDeadline_;
-    // De-duplicates scalein_collect_start/scalein_collect_finish/scalein_collect_cancel logs per collect window.
-    bool scaleInCollectStarted_{ false };
+    std::optional<BatchCollectState> scaleInCollect_;
     // State-thread-owned bounded quiet window that coalesces INITIAL members into one SCALE_OUT batch.
-    std::optional<std::chrono::steady_clock::time_point> scaleOutCollectDeadline_;
-    bool scaleOutCollectStarted_{ false };
+    std::optional<BatchCollectState> scaleOutCollect_;
     // The Controller state thread exclusively owns derived-generation and task-progress cursors/caches below.
     size_t admissionCursor_{ 0 };
     uint64_t derivedTopologyVersion_{ 0 };

@@ -24,23 +24,15 @@ namespace {
 constexpr char ALGORITHM_ID[] = "hash";
 constexpr char TOKEN_SEPARATOR[] = "#";
 constexpr uint32_t MAX_TOKEN_PROBES = 1'024;
-constexpr size_t MAX_MEMBER_ADDRESS_BYTES = 1'024;
 constexpr uint32_t MAX_TOKENS_PER_MEMBER = 4'096;
 
 struct TokenOwner {
     uint32_t token;
-    MemberIdentity identity;
+    const MemberIdentity *identity;
 };
 
-bool IsCommitted(MemberState state)
+Status ValidateIdentities(const std::vector<MemberIdentity> &identities)
 {
-    return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING || state == MemberState::LEAVING;
-}
-
-Status NormalizeIdentities(std::vector<MemberIdentity> identities)
-{
-    std::sort(identities.begin(), identities.end(),
-              [](const auto &left, const auto &right) { return left.address < right.address; });
     std::unordered_set<std::string> ids;
     std::unordered_set<std::string> addresses;
     for (const auto &identity : identities) {
@@ -63,7 +55,8 @@ Status ValidateSelectedMembers(const TopologyState &current, const std::vector<M
         auto iter = std::find_if(current.members.begin(), current.members.end(),
                                  [&](const auto &member) { return member.identity.address == identity.address; });
         CHECK_FAIL_RETURN_STATUS(
-            iter != current.members.end() && iter->identity == identity && IsCommitted(iter->state), K_INVALID,
+            iter != current.members.end() && iter->identity == identity
+                && IsCommittedMemberState(iter->state), K_INVALID,
             "selected member identity/state is stale");
     }
     return Status::OK();
@@ -106,12 +99,13 @@ Status BuildOwners(const std::vector<Member> &members, bool includeJoining, cons
     for (const auto &member : members) {
         const bool eligible =
             activeOnly ? member.state == MemberState::ACTIVE
-                       : IsCommitted(member.state) || (includeJoining && member.state == MemberState::JOINING);
+                       : IsCommittedMemberState(member.state)
+                             || (includeJoining && member.state == MemberState::JOINING);
         if (!eligible || excluded.count(member.identity.address) > 0) {
             continue;
         }
-        for (uint32_t token : member.tokens) {
-            owners.push_back({ token, member.identity });
+        for (uint32_t ringPoint : member.tokens) {
+            owners.push_back({ ringPoint, &member.identity });
         }
     }
     CHECK_FAIL_RETURN_STATUS(!owners.empty(), K_NOT_READY, "cluster topology has no committed token owner");
@@ -170,8 +164,8 @@ Status DiffOwners(const std::vector<TokenOwner> &fromOwners, const std::vector<T
         const uint32_t from = boundaries[index];
         const uint32_t end =
             index + 1 < boundaries.size() ? boundaries[index + 1] - 1 : std::numeric_limits<uint32_t>::max();
-        const auto &source = FindOwner(fromOwners, from).identity;
-        const auto &target = FindOwner(toOwners, from).identity;
+        const auto &source = *FindOwner(fromOwners, from).identity;
+        const auto &target = *FindOwner(toOwners, from).identity;
         if (source == target) {
             continue;
         }
@@ -216,7 +210,7 @@ Status HashAlgorithm::AllocateTokens(const std::vector<MemberIdentity> &members,
 {
     CHECK_FAIL_RETURN_STATUS(tokensPerMember > 0 && tokensPerMember <= MAX_TOKENS_PER_MEMBER, K_INVALID,
                              "tokens per member is outside the supported range");
-    RETURN_IF_NOT_OK(NormalizeIdentities(members));
+    RETURN_IF_NOT_OK(ValidateIdentities(members));
     auto ordered = members;
     std::sort(ordered.begin(), ordered.end(),
               [](const auto &left, const auto &right) { return left.address < right.address; });
@@ -260,9 +254,9 @@ Status HashAlgorithm::Validate(const TopologyState &state) const
         CHECK_FAIL_RETURN_STATUS(
             ids.insert(member.identity.id).second && addresses.insert(member.identity.address).second, K_INVALID,
             "duplicate topology member identity");
-        hasCommitted = hasCommitted || IsCommitted(member.state);
-        for (uint32_t token : member.tokens) {
-            CHECK_FAIL_RETURN_STATUS(tokens.insert(token).second, K_INVALID, "duplicate topology token");
+        hasCommitted = hasCommitted || IsCommittedMemberState(member.state);
+        for (uint32_t ringPoint : member.tokens) {
+            CHECK_FAIL_RETURN_STATUS(tokens.insert(ringPoint).second, K_INVALID, "duplicate topology token");
         }
     }
     CHECK_FAIL_RETURN_STATUS(state.members.empty() || hasCommitted, K_INVALID,
@@ -273,7 +267,7 @@ Status HashAlgorithm::Validate(const TopologyState &state) const
 Status HashAlgorithm::PlanScaleOut(const ScaleOutPlanInput &input, TopologyPlan &plan) const
 {
     RETURN_IF_NOT_OK(Validate(input.current));
-    RETURN_IF_NOT_OK(NormalizeIdentities(input.joining));
+    RETURN_IF_NOT_OK(ValidateIdentities(input.joining));
     CHECK_FAIL_RETURN_STATUS(
         !input.joining.empty() && input.tokensPerMember > 0 && input.tokensPerMember <= MAX_TOKENS_PER_MEMBER,
         K_INVALID, "ScaleOut requires joining members and tokens");
@@ -313,7 +307,7 @@ Status HashAlgorithm::PlanScaleOut(const ScaleOutPlanInput &input, TopologyPlan 
 Status HashAlgorithm::PlanScaleIn(const ScaleInPlanInput &input, TopologyPlan &plan) const
 {
     RETURN_IF_NOT_OK(Validate(input.current));
-    RETURN_IF_NOT_OK(NormalizeIdentities(input.leaving));
+    RETURN_IF_NOT_OK(ValidateIdentities(input.leaving));
     RETURN_IF_NOT_OK(ValidateSelectedMembers(input.current, input.leaving));
     CHECK_FAIL_RETURN_STATUS(!input.leaving.empty(), K_INVALID, "ScaleIn requires leaving members");
     TopologyPlan built;
@@ -339,7 +333,7 @@ Status HashAlgorithm::PlanScaleIn(const ScaleInPlanInput &input, TopologyPlan &p
 Status HashAlgorithm::PlanFailure(const FailurePlanInput &input, TopologyPlan &plan) const
 {
     RETURN_IF_NOT_OK(Validate(input.current));
-    RETURN_IF_NOT_OK(NormalizeIdentities(input.failed));
+    RETURN_IF_NOT_OK(ValidateIdentities(input.failed));
     RETURN_IF_NOT_OK(ValidateSelectedMembers(input.current, input.failed));
     CHECK_FAIL_RETURN_STATUS(!input.failed.empty(), K_INVALID, "Failure planning requires failed members");
     TopologyPlan built;

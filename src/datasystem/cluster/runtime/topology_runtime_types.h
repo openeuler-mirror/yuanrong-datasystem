@@ -39,7 +39,6 @@ struct TopologyDiagnostics {
     uint64_t topologyVersion{ 0 };
     int64_t topologyRevision{ 0 };
     std::string topologyDigestPrefix;
-    bool backendHealthy{ false };
     ControlBackendState controlBackendState{ ControlBackendState::UNKNOWN };
     std::string isolationReason;
     CoordinationEventDispatcherStats dispatcher;

@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_CLUSTER_MODEL_TOPOLOGY_TYPES_H
 #define DATASYSTEM_CLUSTER_MODEL_TOPOLOGY_TYPES_H
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -30,6 +31,14 @@ enum class MemberState : uint8_t { INITIAL = 0, JOINING = 1, ACTIVE = 2, PRE_LEA
 enum class TopologyChangeType : uint8_t { SCALE_OUT = 0, SCALE_IN = 1, FAILURE = 2 };
 enum class TopologyTaskKind : uint8_t { MIGRATE = 0, DELETE_MEMBER = 1 };
 enum class TopologyCallbackPhase : uint8_t { SCALE_OUT = 0, SCALE_IN = 1, SCALE_IN_CLEANUP = 2, FAILURE = 3 };
+
+inline constexpr size_t MAX_MEMBER_ADDRESS_BYTES = 1'024;
+inline constexpr size_t MAX_TOPOLOGY_TASK_RANGES = 4'096;
+
+inline bool IsCommittedMemberState(MemberState state) noexcept
+{
+    return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING || state == MemberState::LEAVING;
+}
 
 /**
  * @brief Restart effect completion contract selected by its topology execution owner.
@@ -67,6 +76,14 @@ struct Member {
 struct ActiveBatch {
     TopologyChangeType type{ TopologyChangeType::SCALE_OUT };
     uint64_t epoch{ 0 };
+    bool operator==(const ActiveBatch &other) const noexcept
+    {
+        return type == other.type && epoch == other.epoch;
+    }
+    bool operator!=(const ActiveBatch &other) const noexcept
+    {
+        return !(*this == other);
+    }
 };
 
 /**
@@ -110,6 +127,12 @@ struct TopologyDeleteTask {
 };
 
 using TopologyTask = std::variant<TopologyMigrateTask, TopologyDeleteTask>;
+
+inline TopologyTaskKind TaskKind(const TopologyTask &task) noexcept
+{
+    return std::holds_alternative<TopologyMigrateTask>(task) ? TopologyTaskKind::MIGRATE
+                                                             : TopologyTaskKind::DELETE_MEMBER;
+}
 
 struct TopologyTaskNotify {
     std::optional<ActiveBatch> activeBatch;

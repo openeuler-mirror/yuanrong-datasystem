@@ -12,9 +12,9 @@
 
 namespace datasystem::cluster {
 
-Status TopologyRoleWatchPlan::Build(TopologyRuntimeRole role, const std::string &localAddress,
-                                    const TopologyKeyHelper &keys, int64_t startRevision,
-                                    std::vector<WatchKey> &watchKeys)
+Status BuildTopologyRoleWatchPlan(TopologyRuntimeRole role, const std::string &localAddress,
+                                  const TopologyKeyHelper &keys, int64_t startRevision,
+                                  std::vector<WatchKey> &watchKeys)
 {
     CHECK_FAIL_RETURN_STATUS(startRevision >= WATCH_FROM_NOW, K_INVALID,
                              "cluster topology watch revision is below WATCH_FROM_NOW");

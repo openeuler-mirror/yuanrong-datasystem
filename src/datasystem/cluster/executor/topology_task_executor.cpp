@@ -70,11 +70,6 @@ bool ValidOptions(const TopologyTaskExecutorOptions &options)
            && options.ordinaryDrain.count() > 0;
 }
 
-bool IsCommitted(MemberState state)
-{
-    return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING || state == MemberState::LEAVING;
-}
-
 std::vector<TokenRange> UnfinishedRanges(const TopologyTask &task)
 {
     std::vector<TokenRange> ranges;
@@ -215,8 +210,7 @@ Status TopologyTaskExecutor::BuildExecutionFence(const TopologyTask &task, Topol
             built.batchEpoch = value.epoch;
         },
         task);
-    built.taskKind =
-        std::holds_alternative<TopologyMigrateTask>(task) ? TopologyTaskKind::MIGRATE : TopologyTaskKind::DELETE_MEMBER;
+    built.taskKind = TaskKind(task);
     built.batchType = snapshot.GetActiveBatch()->type;
     CHECK_FAIL_RETURN_STATUS(TopologyTaskMaterializer::BuildTaskId(task) == built.taskId
                                  && built.batchEpoch == snapshot.GetActiveBatch()->epoch,
@@ -231,7 +225,8 @@ Status TopologyTaskExecutor::BuildExecutionFence(const TopologyTask &task, Topol
         RETURN_IF_NOT_OK(snapshot.FindMemberByAddress(migrate.targetAddress, target));
         CHECK_FAIL_RETURN_STATUS(migrate.type == built.batchType, K_INVALID, "migrate task type is stale");
         if (migrate.type == TopologyChangeType::SCALE_OUT) {
-            CHECK_FAIL_RETURN_STATUS(phase == TopologyCallbackPhase::SCALE_OUT && IsCommitted(executor->state)
+            CHECK_FAIL_RETURN_STATUS(phase == TopologyCallbackPhase::SCALE_OUT
+                                         && IsCommittedMemberState(executor->state)
                                          && target->state == MemberState::JOINING,
                                      K_INVALID, "invalid ScaleOut task participants");
         } else {
@@ -321,7 +316,7 @@ Status TopologyTaskExecutor::HandleNotify(const TopologyTaskNotify &notify)
     RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
     const auto activeBatch = snapshot->GetActiveBatch();
     const auto &notifyBatch = *notify.activeBatch;
-    if (!activeBatch.has_value() || activeBatch->type != notifyBatch.type || activeBatch->epoch != notifyBatch.epoch) {
+    if (!activeBatch.has_value() || *activeBatch != notifyBatch) {
         VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
             << "CLUSTER_TASK action=ignore_stale_notify type=" << static_cast<uint32_t>(notifyBatch.type)
             << " type_name=" << TopologyChangeTypeName(notifyBatch.type)
@@ -469,21 +464,18 @@ Status TopologyTaskExecutor::BuildScaleInMetadataGateForNotify(const TopologyTas
 Status TopologyTaskExecutor::RefreshNotifyEpochLocked(uint64_t epoch)
 {
     if (currentEpoch_ != 0 && currentEpoch_ != epoch) {
-        for (auto &[operation, cancellation] : inFlightByOperation_) {
-            cancellation->Cancel();
+        for (auto &[operation, state] : operations_) {
+            if (state.cancellation != nullptr) {
+                state.cancellation->Cancel();
+            }
         }
-        CHECK_FAIL_RETURN_STATUS(inFlightByOperation_.empty(), K_TRY_AGAIN,
+        CHECK_FAIL_RETURN_STATUS(inFlightOperations_ == 0, K_TRY_AGAIN,
                                  "old topology callback epoch is still draining");
-        attemptsByOperation_.clear();
-        nextAttemptByOperation_.clear();
+        operations_.clear();
+        scheduledOperations_.clear();
         ordinaryDeadlineByMember_.clear();
         failureDeadlineByEpoch_.clear();
-        pendingByOperation_.clear();
-        progressReadyByOperation_.clear();
         scaleInMetadataPendingByGate_.clear();
-        scaleInMetadataGateByOperation_.clear();
-        scaleInMetadataDoneByOperation_.clear();
-        bestEffortFailureByOperation_.clear();
     }
     currentEpoch_ = epoch;
     return Status::OK();
@@ -549,25 +541,29 @@ Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyEx
         });
     } catch (const std::exception &error) {
         --callbackBodies_;
-        inFlightByOperation_.erase(operation);
+        auto iter = operations_.find(operation);
+        if (iter != operations_.end()) {
+            ReleaseInFlightLocked(iter->second);
+        }
         diagnostics_.queuedCallbacks = callbackBodies_;
         ++diagnostics_.failed;
         diagnostics_.lastError = error.what();
         if (!ScheduleRetryLocked(phase, operation)) {
-            pendingByOperation_.erase(operation);
-            EraseScaleInOperationLocked(operation);
+            EraseOperationLocked(operation);
         }
         drained_.notify_all();
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("enqueue topology callback failed: ") + error.what());
     } catch (...) {
         --callbackBodies_;
-        inFlightByOperation_.erase(operation);
+        auto iter = operations_.find(operation);
+        if (iter != operations_.end()) {
+            ReleaseInFlightLocked(iter->second);
+        }
         diagnostics_.queuedCallbacks = callbackBodies_;
         ++diagnostics_.failed;
         diagnostics_.lastError = "enqueue topology callback failed with an unknown exception";
         if (!ScheduleRetryLocked(phase, operation)) {
-            pendingByOperation_.erase(operation);
-            EraseScaleInOperationLocked(operation);
+            EraseOperationLocked(operation);
         }
         drained_.notify_all();
         RETURN_STATUS(K_RUNTIME_ERROR, diagnostics_.lastError);
@@ -589,47 +585,52 @@ Status TopologyTaskExecutor::AdmitCallbackLocked(const TopologyTask &task, const
                                                  std::shared_ptr<CancellationToken> &cancellation)
 {
     CHECK_FAIL_RETURN_STATUS(started_ && !stopping_, K_NOT_READY, "topology task Executor is stopping");
-    if (inFlightByOperation_.count(operation) > 0) {
+    auto existing = operations_.find(operation);
+    if (existing != operations_.end() && existing->second.cancellation != nullptr) {
         return Status::OK();
     }
     const auto now = std::chrono::steady_clock::now();
     std::string gate;
     if (fence.phase == TopologyCallbackPhase::SCALE_IN) {
         RETURN_IF_NOT_OK(ScaleInMetadataGateKey(fence, gate));
-        scaleInMetadataGateByOperation_[operation] = gate;
+    }
+    auto operationIter = operations_.try_emplace(operation).first;
+    auto &state = operationIter->second;
+    state.task = task;
+    if (!gate.empty()) {
+        state.scaleInMetadataGate = gate;
     }
     // Validate the callback window before admitting. On window exhaustion advance the
     // attempt counter and re-arm via ScheduleRetryLocked (bounded backoff); returning OK
     // avoids PreserveDueOperation blindly resetting nextAttempt, which previously caused an
-    // infinite spin because attemptsByOperation_ never advanced. The operation stays pending
+    // infinite spin because the attempt count never advanced. The operation stays pending
     // so the controller's failure-confirmation / lease-expiry path can still finalize it.
     auto windowRc = ValidateCallbackWindowLocked(fence, now);
     if (windowRc.IsError()) {
-        ++attemptsByOperation_[operation];
-        pendingByOperation_[operation] = task;
+        ++state.attempts;
         if (!ScheduleRetryLocked(fence.phase, operation)) {
-            nextAttemptByOperation_.erase(operation);
+            ClearOperationScheduleLocked(operation, state);
         }
         return Status::OK();
     }
-    pendingByOperation_[operation] = task;
-    if (progressReadyByOperation_.count(operation) > 0) {
-        nextAttemptByOperation_[operation] = now;
+    if (state.progressReady) {
+        ScheduleOperationLocked(operation, state, now);
         return Status::OK();
     }
-    if (!allowScaleInDataDrain && scaleInMetadataDoneByOperation_.count(operation) > 0) {
-        nextAttemptByOperation_[operation] = now;
+    if (!allowScaleInDataDrain && state.scaleInMetadataDone) {
+        ScheduleOperationLocked(operation, state, now);
         return Status::OK();
     }
     const size_t capacity = options_.callbackThreads + options_.callbackQueueCapacity;
-    CHECK_FAIL_RETURN_STATUS(inFlightByOperation_.size() < capacity, K_TRY_AGAIN, "topology callback queue is full");
+    CHECK_FAIL_RETURN_STATUS(inFlightOperations_ < capacity, K_TRY_AGAIN, "topology callback queue is full");
     cancellation = std::make_shared<CancellationToken>();
-    inFlightByOperation_[operation] = cancellation;
-    nextAttemptByOperation_.erase(operation);
-    ++attemptsByOperation_[operation];
+    state.cancellation = cancellation;
+    ClearOperationScheduleLocked(operation, state);
+    ++state.attempts;
+    ++inFlightOperations_;
     ++callbackBodies_;
     diagnostics_.queuedCallbacks = callbackBodies_;
-    diagnostics_.inFlightCallbacks = inFlightByOperation_.size();
+    diagnostics_.inFlightCallbacks = inFlightOperations_;
     if (fence.phase == TopologyCallbackPhase::SCALE_IN && !allowScaleInDataDrain) {
         scaleInMetadataPendingByGate_[gate].insert(operation);
     }
@@ -748,16 +749,19 @@ void TopologyTaskExecutor::FinishCallbackBody(TopologyCallbackPhase phase, const
     diagnostics_.queuedCallbacks = callbackBodies_;
     drained_.notify_all();
     if (submitStatus.IsError()) {
-        inFlightByOperation_.erase(operation);
+        auto operationIter = operations_.find(operation);
+        if (operationIter != operations_.end()) {
+            ReleaseInFlightLocked(operationIter->second);
+        }
         ++diagnostics_.failed;
         bool scheduled = false;
         try {
             diagnostics_.lastError = submitStatus.ToString();
             const bool failurePhase = phase == TopologyCallbackPhase::FAILURE;
-            if (failurePhase) {
-                progressReadyByOperation_.insert(operation);
+            if (failurePhase && operationIter != operations_.end()) {
+                operationIter->second.progressReady = true;
                 if (callbackStatus.IsError()) {
-                    bestEffortFailureByOperation_.insert(operation);
+                    operationIter->second.bestEffortFailure = true;
                 }
             }
             const bool retryableCallback = failurePhase || callbackStatus.IsOk() || IsOrdinaryRetryable(callbackStatus);
@@ -767,12 +771,12 @@ void TopologyTaskExecutor::FinishCallbackBody(TopologyCallbackPhase phase, const
             }
         } catch (...) {
             // The callback worker must never terminate the process on diagnostic or retry-ledger allocation failure.
-            nextAttemptByOperation_.erase(operation);
+            if (operationIter != operations_.end()) {
+                ClearOperationScheduleLocked(operation, operationIter->second);
+            }
         }
         if (!scheduled) {
-            pendingByOperation_.erase(operation);
-            nextAttemptByOperation_.erase(operation);
-            EraseScaleInOperationLocked(operation);
+            EraseOperationLocked(operation);
         }
     }
 }
@@ -833,14 +837,14 @@ Status TopologyTaskExecutor::SubmitCleanupApply(const TopologyExecutionFence &fe
         std::lock_guard<std::mutex> lock(mutex_);
         CHECK_FAIL_RETURN_STATUS(started_ && !stopping_ && callbackPool_ != nullptr, K_NOT_READY,
                                  "topology cleanup Executor is stopping");
-        const auto iter = inFlightByOperation_.find(operation);
-        CHECK_FAIL_RETURN_STATUS(iter != inFlightByOperation_.end(), K_INVALID,
+        const auto iter = operations_.find(operation);
+        CHECK_FAIL_RETURN_STATUS(iter != operations_.end() && iter->second.cancellation != nullptr, K_INVALID,
                                  "topology cleanup operation is no longer in flight");
         ++callbackBodies_;
         diagnostics_.queuedCallbacks = callbackBodies_;
         try {
             callbackPool_->Execute(
-                [this, fence, operation, deadline, ownedCleanup, cancellation = iter->second]() mutable {
+                [this, fence, operation, deadline, ownedCleanup, cancellation = iter->second.cancellation]() mutable {
                     ExecuteCleanupApply(std::move(fence), std::move(operation), deadline, std::move(ownedCleanup),
                                         std::move(cancellation));
                 });
@@ -968,9 +972,11 @@ Status TopologyTaskExecutor::CompleteProgress(TopologyCallbackCompletion &comple
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        progressReadyByOperation_.insert(operation);
+        auto iter = operations_.find(operation);
+        RETURN_OK_IF_TRUE(iter == operations_.end());
+        iter->second.progressReady = true;
         if (completion.fence.phase == TopologyCallbackPhase::FAILURE && completion.status.IsError()) {
-            bestEffortFailureByOperation_.insert(operation);
+            iter->second.bestEffortFailure = true;
             diagnostics_.lastError = completion.status.ToString();
         }
     }
@@ -988,12 +994,11 @@ Status TopologyTaskExecutor::CompleteProgress(TopologyCallbackCompletion &comple
     bool bestEffortFailure = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        inFlightByOperation_.erase(operation);
-        pendingByOperation_.erase(operation);
-        nextAttemptByOperation_.erase(operation);
-        progressReadyByOperation_.erase(operation);
-        EraseScaleInOperationLocked(operation);
-        bestEffortFailure = bestEffortFailureByOperation_.erase(operation) > 0;
+        auto iter = operations_.find(operation);
+        if (iter != operations_.end()) {
+            bestEffortFailure = iter->second.bestEffortFailure;
+        }
+        EraseOperationLocked(operation);
         if (bestEffortFailure) {
             ++diagnostics_.failed;
         } else {
@@ -1033,6 +1038,10 @@ Status TopologyTaskExecutor::CompleteScaleInMetadata(TopologyCallbackCompletion 
 {
     CHECK_FAIL_RETURN_STATUS(completion.fence.source.has_value(), K_INVALID,
                              "ScaleIn metadata completion lacks source");
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        RETURN_OK_IF_TRUE(operations_.count(operation) == 0);
+    }
     auto rc = repository_.MarkScaleInMetadataDone({ completion.fence.batchEpoch, completion.fence.source->id,
                                                     completion.fence.taskId, operation });
     if (rc.IsError()) {
@@ -1044,9 +1053,12 @@ Status TopologyTaskExecutor::CompleteScaleInMetadata(TopologyCallbackCompletion 
     bool ready = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        inFlightByOperation_.erase(operation);
-        scaleInMetadataGateByOperation_[operation] = gate;
-        scaleInMetadataDoneByOperation_.insert(operation);
+        auto iter = operations_.find(operation);
+        RETURN_OK_IF_TRUE(iter == operations_.end());
+        auto &state = iter->second;
+        ReleaseInFlightLocked(state);
+        state.scaleInMetadataGate = gate;
+        state.scaleInMetadataDone = true;
         auto pending = scaleInMetadataPendingByGate_.find(gate);
         if (pending != scaleInMetadataPendingByGate_.end()) {
             pending->second.erase(operation);
@@ -1057,11 +1069,11 @@ Status TopologyTaskExecutor::CompleteScaleInMetadata(TopologyCallbackCompletion 
         } else {
             ready = true;
         }
-        nextAttemptByOperation_[operation] = ready ? now : now + options_.backoffInitial;
+        ScheduleOperationLocked(operation, state, ready ? now : now + options_.backoffInitial);
         if (ready) {
             ScheduleScaleInDataDrainReadyLocked(gate);
         }
-        diagnostics_.inFlightCallbacks = inFlightByOperation_.size();
+        diagnostics_.inFlightCallbacks = inFlightOperations_;
     }
     LOG(INFO) << "CLUSTER_SCALE_IN action=metadata_done stage=metadata_migration stage_event=finish"
               << " checkpoint=persisted checkpoint_scope=task source_gate=" << (ready ? "ready" : "waiting")
@@ -1076,10 +1088,10 @@ Status TopologyTaskExecutor::IsScaleInMetadataGateReadyForOperationLocked(const 
                                                                           bool &ready) const
 {
     ready = false;
-    auto iter = scaleInMetadataGateByOperation_.find(operation);
-    CHECK_FAIL_RETURN_STATUS(iter != scaleInMetadataGateByOperation_.end(), K_INVALID,
+    auto iter = operations_.find(operation);
+    CHECK_FAIL_RETURN_STATUS(iter != operations_.end() && !iter->second.scaleInMetadataGate.empty(), K_INVALID,
                              "ScaleIn metadata gate is missing");
-    ready = IsScaleInMetadataGateReadyLocked(iter->second);
+    ready = IsScaleInMetadataGateReadyLocked(iter->second.scaleInMetadataGate);
     return Status::OK();
 }
 
@@ -1092,34 +1104,64 @@ bool TopologyTaskExecutor::IsScaleInMetadataGateReadyLocked(const std::string &g
 bool TopologyTaskExecutor::IsScaleInDataDrainReady(const std::string &operation) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    return scaleInMetadataDoneByOperation_.count(operation) > 0;
+    auto iter = operations_.find(operation);
+    return iter != operations_.end() && iter->second.scaleInMetadataDone;
 }
 
 void TopologyTaskExecutor::ScheduleScaleInDataDrainReadyLocked(const std::string &gate)
 {
     const auto now = std::chrono::steady_clock::now();
-    for (const auto &[operation, operationGate] : scaleInMetadataGateByOperation_) {
-        if (operationGate == gate && scaleInMetadataDoneByOperation_.count(operation) > 0
-            && pendingByOperation_.count(operation) > 0) {
-            nextAttemptByOperation_[operation] = now;
+    for (auto &[operation, state] : operations_) {
+        if (state.scaleInMetadataGate == gate && state.scaleInMetadataDone) {
+            ScheduleOperationLocked(operation, state, now);
         }
     }
 }
 
-void TopologyTaskExecutor::EraseScaleInOperationLocked(const std::string &operation)
+bool TopologyTaskExecutor::ReleaseInFlightLocked(OperationState &state)
 {
-    auto gate = scaleInMetadataGateByOperation_.find(operation);
-    if (gate != scaleInMetadataGateByOperation_.end()) {
-        auto pending = scaleInMetadataPendingByGate_.find(gate->second);
+    if (state.cancellation == nullptr) {
+        return false;
+    }
+    state.cancellation.reset();
+    --inFlightOperations_;
+    diagnostics_.inFlightCallbacks = inFlightOperations_;
+    return true;
+}
+
+void TopologyTaskExecutor::ScheduleOperationLocked(const std::string &operation, OperationState &state,
+                                                   std::chrono::steady_clock::time_point nextAttempt)
+{
+    scheduledOperations_.insert(operation);
+    state.nextAttempt = nextAttempt;
+}
+
+void TopologyTaskExecutor::ClearOperationScheduleLocked(const std::string &operation, OperationState &state)
+{
+    state.nextAttempt = {};
+    scheduledOperations_.erase(operation);
+}
+
+bool TopologyTaskExecutor::EraseOperationLocked(const std::string &operation)
+{
+    auto iter = operations_.find(operation);
+    if (iter == operations_.end()) {
+        return false;
+    }
+    auto &state = iter->second;
+    if (!state.scaleInMetadataGate.empty()) {
+        auto pending = scaleInMetadataPendingByGate_.find(state.scaleInMetadataGate);
         if (pending != scaleInMetadataPendingByGate_.end()) {
             pending->second.erase(operation);
             if (pending->second.empty()) {
                 scaleInMetadataPendingByGate_.erase(pending);
             }
         }
-        scaleInMetadataGateByOperation_.erase(gate);
     }
-    scaleInMetadataDoneByOperation_.erase(operation);
+    const bool released = ReleaseInFlightLocked(state);
+    scheduledOperations_.erase(operation);
+    operations_.erase(iter);
+    return released;
 }
 
 Status TopologyTaskExecutor::CompleteFailure(const TopologyExecutionFence &fence, const std::string &operation,
@@ -1129,18 +1171,17 @@ Status TopologyTaskExecutor::CompleteFailure(const TopologyExecutionFence &fence
     bool retryScheduled = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        inFlightByOperation_.erase(operation);
+        auto iter = operations_.find(operation);
+        if (iter != operations_.end()) {
+            ReleaseInFlightLocked(iter->second);
+        }
         ++diagnostics_.failed;
         diagnostics_.lastError = status.ToString();
         const bool failurePhase = fence.phase == TopologyCallbackPhase::FAILURE;
         retryScheduled = (progressFailure || (!failurePhase && IsOrdinaryRetryable(status)))
                          && ScheduleRetryLocked(fence.phase, operation);
         if (!retryScheduled) {
-            pendingByOperation_.erase(operation);
-            nextAttemptByOperation_.erase(operation);
-            progressReadyByOperation_.erase(operation);
-            EraseScaleInOperationLocked(operation);
-            bestEffortFailureByOperation_.erase(operation);
+            EraseOperationLocked(operation);
         }
     }
     if (retryScheduled) {
@@ -1168,12 +1209,7 @@ Status TopologyTaskExecutor::CompleteFailure(const TopologyExecutionFence &fence
 Status TopologyTaskExecutor::CompleteStale(const std::string &operation, const Status &status)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    inFlightByOperation_.erase(operation);
-    pendingByOperation_.erase(operation);
-    nextAttemptByOperation_.erase(operation);
-    progressReadyByOperation_.erase(operation);
-    EraseScaleInOperationLocked(operation);
-    bestEffortFailureByOperation_.erase(operation);
+    EraseOperationLocked(operation);
     ++diagnostics_.stale;
     diagnostics_.lastError = status.ToString();
     LOG(WARNING) << "CLUSTER_TASK action=completion_stale local_address=" << localAddress_
@@ -1188,27 +1224,23 @@ bool TopologyTaskExecutor::DiscardIfStopping(const std::string &operation)
     if (started_ && !stopping_) {
         return false;
     }
-    const auto cancelled = inFlightByOperation_.erase(operation);
-    pendingByOperation_.erase(operation);
-    nextAttemptByOperation_.erase(operation);
-    progressReadyByOperation_.erase(operation);
-    EraseScaleInOperationLocked(operation);
-    bestEffortFailureByOperation_.erase(operation);
-    diagnostics_.cancelled += cancelled;
+    diagnostics_.cancelled += EraseOperationLocked(operation) ? 1 : 0;
     return true;
 }
 
 bool TopologyTaskExecutor::ScheduleRetryLocked(TopologyCallbackPhase phase, const std::string &operation)
 {
-    if (pendingByOperation_.count(operation) == 0) {
+    auto iter = operations_.find(operation);
+    if (iter == operations_.end()) {
         return false;
     }
+    auto &state = iter->second;
     if (phase != TopologyCallbackPhase::FAILURE
-        && attemptsByOperation_[operation] >= options_.ordinaryMaxAttempts) {
+        && state.attempts >= options_.ordinaryMaxAttempts) {
         return false;
     }
-    nextAttemptByOperation_[operation] =
-        std::chrono::steady_clock::now() + RetryDelay(attemptsByOperation_[operation], options_);
+    ScheduleOperationLocked(operation, state,
+                            std::chrono::steady_clock::now() + RetryDelay(state.attempts, options_));
     return true;
 }
 
@@ -1218,12 +1250,11 @@ Status TopologyTaskExecutor::HandleTick(std::chrono::steady_clock::time_point no
     {
         std::lock_guard<std::mutex> lock(mutex_);
         CHECK_FAIL_RETURN_STATUS(started_ && !stopping_, K_NOT_READY, "topology task Executor is stopping");
-        for (const auto &[operation, nextAttempt] : nextAttemptByOperation_) {
-            if (nextAttempt <= now && inFlightByOperation_.count(operation) == 0) {
-                auto task = pendingByOperation_.find(operation);
-                if (task != pendingByOperation_.end()) {
-                    due.emplace_back(operation, task->second);
-                }
+        for (const auto &operation : scheduledOperations_) {
+            const auto iter = operations_.find(operation);
+            if (iter != operations_.end() && iter->second.nextAttempt <= now
+                && iter->second.cancellation == nullptr) {
+                due.emplace_back(operation, iter->second.task);
             }
         }
     }
@@ -1235,8 +1266,9 @@ Status TopologyTaskExecutor::HandleTick(std::chrono::steady_clock::time_point no
         bool scaleInMetadataDone = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            progressOnly = progressReadyByOperation_.count(operation) > 0;
-            scaleInMetadataDone = scaleInMetadataDoneByOperation_.count(operation) > 0;
+            auto iter = operations_.find(operation);
+            progressOnly = iter != operations_.end() && iter->second.progressReady;
+            scaleInMetadataDone = iter != operations_.end() && iter->second.scaleInMetadataDone;
         }
         if (rc.IsError()) {
             PreserveDueOperation(operation, task, rc);
@@ -1276,21 +1308,18 @@ void TopologyTaskExecutor::PreserveDueOperation(const std::string &operation, co
                                                 const Status &status)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (stopping_ || pendingByOperation_.count(operation) == 0) {
+    auto iter = operations_.find(operation);
+    if (stopping_ || iter == operations_.end()) {
         return;
     }
     diagnostics_.lastError = status.ToString();
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {
-        pendingByOperation_.erase(operation);
-        nextAttemptByOperation_.erase(operation);
-        progressReadyByOperation_.erase(operation);
-        EraseScaleInOperationLocked(operation);
-        bestEffortFailureByOperation_.erase(operation);
+        EraseOperationLocked(operation);
         ++diagnostics_.stale;
         return;
     }
-    pendingByOperation_[operation] = task;
-    nextAttemptByOperation_[operation] = std::chrono::steady_clock::now() + options_.backoffInitial;
+    iter->second.task = task;
+    ScheduleOperationLocked(operation, iter->second, std::chrono::steady_clock::now() + options_.backoffInitial);
 }
 
 Status TopologyTaskExecutor::Stop(std::chrono::steady_clock::time_point deadline)
@@ -1300,12 +1329,12 @@ Status TopologyTaskExecutor::Stop(std::chrono::steady_clock::time_point deadline
         return Status::OK();
     }
     stopping_ = true;
-    for (auto &[operation, cancellation] : inFlightByOperation_) {
-        cancellation->Cancel();
-    }
     bool hasFailure = false;
-    for (const auto &[operation, task] : pendingByOperation_) {
-        hasFailure = hasFailure || std::holds_alternative<TopologyDeleteTask>(task);
+    for (auto &[operation, state] : operations_) {
+        if (state.cancellation != nullptr) {
+            state.cancellation->Cancel();
+        }
+        hasFailure = hasFailure || std::holds_alternative<TopologyDeleteTask>(state.task);
     }
     const auto drain = hasFailure ? options_.failureDrain : options_.ordinaryDrain;
     const auto effectiveDeadline = std::min(deadline, std::chrono::steady_clock::now() + drain);
@@ -1318,18 +1347,13 @@ Status TopologyTaskExecutor::Stop(std::chrono::steady_clock::time_point deadline
     // outer termination budget if a callback violates cooperative cancellation.
     callbackPool_.reset();
     lock.lock();
-    diagnostics_.cancelled += inFlightByOperation_.size();
-    inFlightByOperation_.clear();
-    pendingByOperation_.clear();
-    attemptsByOperation_.clear();
-    nextAttemptByOperation_.clear();
+    diagnostics_.cancelled += inFlightOperations_;
+    operations_.clear();
+    scheduledOperations_.clear();
+    inFlightOperations_ = 0;
     ordinaryDeadlineByMember_.clear();
     failureDeadlineByEpoch_.clear();
-    progressReadyByOperation_.clear();
     scaleInMetadataPendingByGate_.clear();
-    scaleInMetadataGateByOperation_.clear();
-    scaleInMetadataDoneByOperation_.clear();
-    bestEffortFailureByOperation_.clear();
     restartBatchInFlight_ = false;
     started_ = false;
     diagnostics_.running = false;
@@ -1341,7 +1365,7 @@ TopologyTaskExecutorDiagnostics TopologyTaskExecutor::GetDiagnostics() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     auto diagnostics = diagnostics_;
-    diagnostics.inFlightCallbacks = inFlightByOperation_.size();
+    diagnostics.inFlightCallbacks = inFlightOperations_;
     return diagnostics;
 }
 

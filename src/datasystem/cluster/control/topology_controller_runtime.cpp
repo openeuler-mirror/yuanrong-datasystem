@@ -93,7 +93,6 @@ void TopologyControllerRuntime::CommitStart(bool started)
 {
     std::lock_guard<std::mutex> lock(lifecycleMutex_);
     started_ = started;
-    stopping_ = false;
     lifecycleOperationInFlight_ = false;
 }
 
@@ -129,7 +128,6 @@ Status TopologyControllerRuntime::ClaimStop(bool &shouldStop)
                              "topology Controller Runtime lifecycle operation is in progress");
     shouldStop = started_;
     if (shouldStop) {
-        stopping_ = true;
         lifecycleOperationInFlight_ = true;
     }
     return Status::OK();
@@ -140,7 +138,6 @@ void TopologyControllerRuntime::CommitStop(bool allStopped)
     std::lock_guard<std::mutex> lock(lifecycleMutex_);
     if (allStopped) {
         started_ = false;
-        stopping_ = false;
     }
     lifecycleOperationInFlight_ = false;
 }

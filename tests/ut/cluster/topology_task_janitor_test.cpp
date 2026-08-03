@@ -88,7 +88,8 @@ TEST(TopologyTaskJanitorTest, DeletesOnlyStaleDerivedRecordsAfterReadingLatestTo
     TopologyTaskJanitorOptions options;
     options.scanLimit = 128;
     options.deleteBatch = 128;
-    TopologyTaskJanitor janitor("janitor", *scenario.repository, scenario.algorithm, scenario.materializer, options);
+    TopologyTaskJanitor janitor(
+        "janitor", *scenario.repository, scenario.algorithm, scenario.materializer, options);
     DS_ASSERT_OK(janitor.RunOnce());
     EXPECT_FALSE(DerivedRecordsExist(*scenario.repository, scenario.expected));
     std::vector<std::pair<std::string, std::string>> physicalNotifies;
@@ -137,7 +138,8 @@ TEST(TopologyTaskJanitorTest, MetadataMarkerDeleteBatchCountsOnlySuccessfulDelet
     DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, firstTaskId, "operation-a" }));
     DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, secondTaskId, "operation-b" }));
     std::vector<ScaleInMetadataDoneJanitorCandidate> markers;
-    DS_ASSERT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(8, markers));
+    std::string markerCursor;
+    DS_ASSERT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(8, markerCursor, markers));
     ASSERT_GE(markers.size(), 2);
     const auto concurrentKey = markers.front().key;
     backend.SetBeforeCasHandler([&] {
@@ -162,7 +164,8 @@ TEST(TopologyTaskJanitorTest, ConditionalCleanupPreservesConcurrentTaskAndNotify
     JanitorScenario scenario;
     DS_ASSERT_OK(scenario.SetUp(true));
     std::vector<TaskJanitorCandidate> tasks;
-    DS_ASSERT_OK(scenario.repository->ListTaskCandidatesForJanitor(TopologyTaskKind::MIGRATE, 16, tasks));
+    std::string taskCursor;
+    DS_ASSERT_OK(scenario.repository->ListTaskCandidatesForJanitor(TopologyTaskKind::MIGRATE, 16, taskCursor, tasks));
     ASSERT_FALSE(tasks.empty());
     const std::string concurrentTask = "concurrent-task-value";
     scenario.backend.PutBytes(scenario.keys->MigrateTaskTable(), tasks.front().taskId, concurrentTask);
@@ -174,7 +177,8 @@ TEST(TopologyTaskJanitorTest, ConditionalCleanupPreservesConcurrentTaskAndNotify
     EXPECT_EQ(observedTask, concurrentTask);
 
     std::vector<NotifyJanitorCandidate> notifies;
-    DS_ASSERT_OK(scenario.repository->ListNotifyCandidatesForJanitor(16, notifies));
+    std::string notifyCursor;
+    DS_ASSERT_OK(scenario.repository->ListNotifyCandidatesForJanitor(16, notifyCursor, notifies));
     ASSERT_FALSE(notifies.empty());
     auto concurrentNotify = notifies.front().notify;
     ASSERT_TRUE(concurrentNotify.activeBatch.has_value());
@@ -196,7 +200,8 @@ TEST(TopologyTaskJanitorTest, NotifyDeleteTombstoneFencesConcurrentRematerializa
     JanitorScenario scenario;
     DS_ASSERT_OK(scenario.SetUp(true));
     std::vector<NotifyJanitorCandidate> notifies;
-    DS_ASSERT_OK(scenario.repository->ListNotifyCandidatesForJanitor(16, notifies));
+    std::string notifyCursor;
+    DS_ASSERT_OK(scenario.repository->ListNotifyCandidatesForJanitor(16, notifyCursor, notifies));
     ASSERT_FALSE(notifies.empty());
     const auto address = notifies.front().address;
     const auto expected = notifies.front().notify;
@@ -235,8 +240,7 @@ TEST(TopologyTaskJanitorTest, LegacyEmptyNotifiesCannotStarveLaterCandidates)
     TopologyTaskJanitorOptions options;
     options.scanLimit = 4;
     options.deleteBatch = 4;
-    TopologyTaskJanitor janitor(
-        "janitor", *scenario.repository, scenario.algorithm, scenario.materializer, options);
+    TopologyTaskJanitor janitor("janitor", *scenario.repository, scenario.algorithm, scenario.materializer, options);
 
     for (size_t pass = 0; pass < 4; ++pass) {
         DS_ASSERT_OK(janitor.RunOnce());
@@ -345,7 +349,8 @@ TEST(TopologyTaskJanitorTest, TaskDeleteTombstoneFencesConcurrentRematerializati
     JanitorScenario scenario;
     DS_ASSERT_OK(scenario.SetUp(true));
     std::vector<TaskJanitorCandidate> tasks;
-    DS_ASSERT_OK(scenario.repository->ListTaskCandidatesForJanitor(TopologyTaskKind::MIGRATE, 16, tasks));
+    std::string taskCursor;
+    DS_ASSERT_OK(scenario.repository->ListTaskCandidatesForJanitor(TopologyTaskKind::MIGRATE, 16, taskCursor, tasks));
     ASSERT_FALSE(tasks.empty());
     const auto task = scenario.expected.tasks.front();
     Status staleDeleteStatus;

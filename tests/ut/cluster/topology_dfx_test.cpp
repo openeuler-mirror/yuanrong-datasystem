@@ -441,7 +441,8 @@ TEST(TopologyDfxTest, AllExitingMembersUseClusterShutdownWithoutDerivedTasks)
     }));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + DFX_WAIT));
     std::vector<TaskJanitorCandidate> tasks;
-    DS_ASSERT_OK(repository.ListTaskCandidatesForJanitor(TopologyTaskKind::MIGRATE, 16, tasks));
+    std::string taskCursor;
+    DS_ASSERT_OK(repository.ListTaskCandidatesForJanitor(TopologyTaskKind::MIGRATE, 16, taskCursor, tasks));
     EXPECT_TRUE(tasks.empty());
 }
 
