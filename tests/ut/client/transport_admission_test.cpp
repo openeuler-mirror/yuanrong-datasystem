@@ -263,6 +263,7 @@ public:
     }
 
     Status BuildTransporter(const HostPort &workerAddr, TransportHint hint, const std::shared_ptr<WorkerRpcClient> &,
+                            TransportPhaseLatencyRecorder *,
                             std::shared_ptr<IDataTransporter> &output) override
     {
         std::lock_guard<std::mutex> lock(mutex_);

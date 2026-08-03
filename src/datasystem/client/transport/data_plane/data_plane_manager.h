@@ -35,6 +35,7 @@
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/transport_kind.h"
+#include "datasystem/client/transport/transport_phase_latency_recorder.h"
 #include "datasystem/client/transport/worker_snapshot.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/net_util.h"
@@ -63,9 +64,11 @@ public:
      * @param[in] workerAddr Target worker address.
      * @param[in] hint Transport suggestion from the advisor.
      * @param[out] out The cached or newly built transporter.
+     * @param[in] recorder Optional request-scoped phase recorder.
      * @return K_OK when out is ready, or the error code.
      */
-    Status GetOrCreate(const HostPort &workerAddr, TransportHint hint, std::shared_ptr<IDataTransporter> &out);
+    Status GetOrCreate(const HostPort &workerAddr, TransportHint hint, std::shared_ptr<IDataTransporter> &out,
+                       TransportPhaseLatencyRecorder *recorder = nullptr);
 
     /**
      * @brief Get or lazily create both endpoint transports from one entry lookup.
@@ -127,6 +130,7 @@ protected:
 
     virtual Status BuildTransporter(const HostPort &workerAddr, TransportHint hint,
                                     const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                                    TransportPhaseLatencyRecorder *recorder,
                                     std::shared_ptr<IDataTransporter> &out);
 
     virtual Status EstablishUbProbe(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient);
@@ -145,19 +149,27 @@ private:
 
     using EntryMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerTransportEntry>>;
 
+    struct TransportBuildContext {
+        const HostPort &workerAddr;
+        TransportHint hint;
+        AccessTransportKind expectedKind;
+        TransportPhaseLatencyRecorder *recorder;
+    };
+
     Status GetOrCreateEntry(const std::string &workerKey, std::shared_ptr<WorkerTransportEntry> &entry);
 
-    Status GetOrBuildTransporter(const HostPort &workerAddr, TransportHint hint, AccessTransportKind expectedKind,
+    Status GetOrBuildTransporter(const TransportBuildContext &context,
                                  const std::shared_ptr<WorkerTransportEntry> &entry,
                                  std::shared_ptr<IDataTransporter> &out);
 
-    Status EnsureRpcClientLocked(const HostPort &workerAddr, const std::shared_ptr<WorkerTransportEntry> &entry);
+    Status EnsureRpcClientLocked(const HostPort &workerAddr, const std::shared_ptr<WorkerTransportEntry> &entry,
+                                 TransportPhaseLatencyRecorder *recorder);
 
-    Status EnsureTransporterLocked(const HostPort &workerAddr, TransportHint hint, AccessTransportKind expectedKind,
+    Status EnsureTransporterLocked(const TransportBuildContext &context,
                                    const std::shared_ptr<WorkerTransportEntry> &entry);
 
     Status BuildUbTransporter(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient,
-                              std::shared_ptr<IDataTransporter> &out);
+                              TransportPhaseLatencyRecorder *recorder, std::shared_ptr<IDataTransporter> &out);
 
     EntryMap entries_;
     // Protects entries_, the published worker admission set, and its version.

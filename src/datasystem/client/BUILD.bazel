@@ -226,6 +226,17 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "transport_phase_latency_recorder",
+    srcs = ["transport/transport_phase_latency_recorder.cpp"],
+    hdrs = ["transport/transport_phase_latency_recorder.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_library(
     name = "client_transport",
     srcs = [
         "transport/transport_advisor.cpp",
@@ -287,6 +298,7 @@ ds_cc_library(
         "//include/datasystem:headers",
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client:transport_phase_latency_recorder",
         "//src/datasystem/client/routing:routing",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/eventloop:common_event_loop",

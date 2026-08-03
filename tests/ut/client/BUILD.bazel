@@ -95,6 +95,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "transport_phase_latency_recorder_test",
+    srcs = ["transport_phase_latency_recorder_test.cpp"],
+    deps = [
+        "//src/datasystem/client:transport_phase_latency_recorder",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:common_util",
+    ],
+)
+
+ds_cc_test(
     name = "ub_fault_p1_transport_admission_test",
     srcs = ["transport_admission_test.cpp"],
     defines = select({

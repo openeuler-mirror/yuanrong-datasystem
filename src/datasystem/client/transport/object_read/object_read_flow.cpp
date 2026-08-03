@@ -177,7 +177,7 @@ void PropagateUnassignedBatchError(const ReplicaReadBatch &requests, const Statu
 }
 
 void ReadObjects(ReplicaReader &replicas, std::vector<ReadItem> &items,
-                 const std::shared_ptr<const TransportReadContext> &context)
+                 const std::shared_ptr<const TransportReadContext> &context, bool traceEnabled)
 {
     ReplicaReadBatch ready;
     ready.reserve(items.size());
@@ -197,10 +197,10 @@ void ReadObjects(ReplicaReader &replicas, std::vector<ReadItem> &items,
             << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
     Status readStatus = Status::OK();
     if (ready.size() == 1) {
-        readStatus = replicas.Read(*ready.front().location, *ready.front().result, ready.front().context);
+        readStatus = replicas.Read(*ready.front().location, *ready.front().result, ready.front().context, traceEnabled);
         ready.front().result->status = readStatus;
     } else if (ready.size() > 1) {
-        readStatus = replicas.ReadBatch(ready);
+        readStatus = replicas.ReadBatch(ready, traceEnabled);
         PropagateUnassignedBatchError(ready, readStatus);
     }
     const auto succeeded = std::count_if(items.begin(), items.end(), [](const ReadItem &item) {
@@ -276,7 +276,7 @@ Status ObjectReadFlow::Run(const ObjectReadRequest &request, ObjectReadResult &r
     QueryMetadata(*metadata_, *taskPool_, items);
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_END);
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_GET_DATA_START);
-    ReadObjects(*replicas_, items, request.context);
+    ReadObjects(*replicas_, items, request.context, request.traceEnabled);
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_GET_DATA_END);
     return BuildResult(items, result);
 }

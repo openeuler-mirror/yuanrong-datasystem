@@ -956,10 +956,12 @@ public:
 
     Status BuildTransporter(const HostPort &address, TransportHint hint,
                             const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                            TransportPhaseLatencyRecorder *recorder,
                             std::shared_ptr<IDataTransporter> &output) override
     {
         std::lock_guard<std::mutex> lock(mutex);
         ++transportBuildCount;
+        transportBuildTraceEnabled.push_back(recorder != nullptr);
         rpcClientsSeen.push_back(rpcClient);
         if (!transportBuildStatuses.empty()) {
             Status rc = transportBuildStatuses.front();
@@ -1008,6 +1010,7 @@ public:
     std::shared_ptr<FakeWorkerRpcClient> lastRpcClient;
     std::shared_ptr<FakeTransporter> lastTransporter;
     std::vector<std::shared_ptr<WorkerRpcClient>> rpcClientsSeen;
+    std::vector<bool> transportBuildTraceEnabled;
     std::vector<Status> transportBuildStatuses;
     std::vector<Status> existInvokeStatuses;
     std::vector<std::vector<Status>> transporterGetStatuses;
@@ -1083,18 +1086,19 @@ public:
     }
 
     Status Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result,
-                std::shared_ptr<const TransportReadContext> context) override
+                std::shared_ptr<const TransportReadContext> context, bool traceEnabled) override
     {
         EXPECT_NE(context, nullptr);
         {
             std::lock_guard<std::mutex> lock(mutex);
             unaryKeys.push_back(location.object_key());
             threadIds.push_back(std::this_thread::get_id());
+            traceDecisions.push_back(traceEnabled);
         }
         return FillResult(location, result);
     }
 
-    Status ReadBatch(const ReplicaReadBatch &requests) override
+    Status ReadBatch(const ReplicaReadBatch &requests, bool traceEnabled) override
     {
         std::vector<std::string> batch;
         batch.reserve(requests.size());
@@ -1105,6 +1109,7 @@ public:
             std::lock_guard<std::mutex> lock(mutex);
             batchKeys.emplace_back(std::move(batch));
             threadIds.push_back(std::this_thread::get_id());
+            traceDecisions.push_back(traceEnabled);
         }
 
         Status firstError(K_NOT_FOUND, "Cannot get objects from worker");
@@ -1140,6 +1145,7 @@ public:
     std::vector<std::string> unaryKeys;
     std::vector<std::vector<std::string>> batchKeys;
     std::vector<std::thread::id> threadIds;
+    std::vector<bool> traceDecisions;
     std::unordered_map<std::string, Status> itemStatuses;
     std::function<void(const std::string &, ObjectReadItemResult &)> resultHandler;
 };
@@ -2629,6 +2635,7 @@ TEST(ObjectReadFlowTest, BatchReadyItemsOnceOnCallerAndPreservesMetadataErrorPos
     EXPECT_EQ(replicas->batchKeys[0], std::vector<std::string>({ "ub", "tcp" }));
     ASSERT_EQ(replicas->threadIds.size(), 1u);
     EXPECT_EQ(replicas->threadIds[0], callerThread);
+    EXPECT_EQ(replicas->traceDecisions, std::vector<bool>({ false }));
     ASSERT_EQ(result.items.size(), 3u);
     EXPECT_TRUE(result.items[0].status.IsOk());
     EXPECT_EQ(result.items[1].status.GetCode(), K_NOT_FOUND);
@@ -2656,6 +2663,7 @@ TEST(ObjectReadFlowTest, RecordsDirectReadLatencyTicksWhenEnabled)
                                         Trace::Instance().GetLatencyTickDroppedCount());
     EXPECT_NE(phases.Find(LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET), nullptr);
     EXPECT_NE(phases.Find(LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA), nullptr);
+    EXPECT_EQ(replicas->traceDecisions, std::vector<bool>({ true }));
 }
 
 TEST(ObjectReadFlowTest, InlineDataSkipsReplicaReaderWhileMissesUseSecondPhase)
@@ -4486,6 +4494,22 @@ TEST(ReplicaReaderTest, StaleTransportSnapshotReturnsForMetadataRefreshAfterAllR
     Status rc = reader.Read(location, result, MakeReadContext());
     EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc));
     EXPECT_EQ(manager->transportBuildCount, 0);
+}
+
+TEST(ReplicaReaderTest, EnablesTransportPhaseRecordingOnlyForTracedRequest)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto normalLocation = MakeReplicaLocation("normal", 4, { MakeAddress(33) });
+    auto tracedLocation = MakeReplicaLocation("traced", 4, { MakeAddress(34) });
+    ObjectReadItemResult normalResult;
+    ObjectReadItemResult tracedResult;
+    ASSERT_TRUE(reader.Read(normalLocation, normalResult, MakeReadContext()).IsOk());
+    ASSERT_TRUE(reader.Read(tracedLocation, tracedResult, MakeReadContext(), true).IsOk());
+
+    EXPECT_EQ(manager->transportBuildTraceEnabled, std::vector<bool>({ false, true }));
 }
 
 TEST(ReplicaReaderTest, StopsOnNonRetryableLocationError)

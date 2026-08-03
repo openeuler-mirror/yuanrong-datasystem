@@ -19,6 +19,7 @@
 #include "datasystem/client/transport/data_plane/data_plane_executor.h"
 
 #include <cstddef>
+#include <optional>
 #include <utility>
 
 #include "datasystem/common/log/access_recorder.h"
@@ -85,42 +86,69 @@ bool DataPlaneExecutor::PrepareRetry(const HostPort &workerAddr, const std::shar
     return true;
 }
 
-Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &operation)
+DataPlaneExecutor::AttemptResult DataPlaneExecutor::ExecuteAttempt(const HostPort &workerAddr,
+                                                                   const Operation &operation, const AttemptPlan &plan,
+                                                                   TransportPhaseLatencyRecorder *recorder)
+{
+    std::shared_ptr<IDataTransporter> transporter;
+    const auto connectionBegin = recorder == nullptr ? TransportPhaseLatencyRecorder::TimePoint{}
+                                                     : recorder->StartPhase();
+    Status status = manager_->GetOrCreate(workerAddr, plan.hint, transporter, recorder);
+    if (recorder != nullptr) {
+        recorder->RecordPhase(plan.connectionPhase, connectionBegin, TransportLatencyThreshold::PROCESS);
+    }
+    if (status.IsError()) {
+        const char *message = plan.attempt == INITIAL_ATTEMPT ? "Get data plane failed" : "Rebuild data plane failed";
+        LOG(ERROR) << "[TransportGet][Connection] " << message << ", worker: " << workerAddr.ToString()
+                   << ", attempt: " << plan.attempt << ", status: " << status.ToString();
+        return { std::move(status), nullptr };
+    }
+    if (transporter == nullptr) {
+        status = Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "The pointer [transporter] is null.");
+        return { std::move(status), nullptr };
+    }
+    VLOG(1) << "[TransportGet][DataPlane] Send operation, worker: " << workerAddr.ToString()
+            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
+            << ", attempt: " << plan.attempt;
+    const auto transferBegin = recorder == nullptr ? TransportPhaseLatencyRecorder::TimePoint{}
+                                                   : recorder->StartPhase();
+    status = operation(*transporter);
+    if (recorder != nullptr) {
+        recorder->RecordPhase(plan.transferPhase, transferBegin, TransportLatencyThreshold::RPC);
+    }
+    LogDataPlaneOperation(workerAddr, transporter->Kind(), plan.attempt, status);
+    return { std::move(status), std::move(transporter) };
+}
+
+Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &operation, bool traceEnabled)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(operation), K_INVALID, "Data-plane operation is empty");
+    std::optional<TransportPhaseLatencyRecorder> recorder;
+    TransportPhaseLatencyRecorder *phaseRecorder = nullptr;
+    if (traceEnabled) {
+        phaseRecorder = &recorder.emplace(workerAddr);
+    }
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);
-    std::shared_ptr<IDataTransporter> transporter;
-    Status connectionStatus = manager_->GetOrCreate(workerAddr, hint, transporter);
-    if (connectionStatus.IsError()) {
-        LOG(ERROR) << "[TransportGet][Connection] Get data plane failed, worker: " << workerAddr.ToString()
-                   << ", attempt: " << INITIAL_ATTEMPT << ", status: " << connectionStatus.ToString();
-        return connectionStatus;
+    const AttemptPlan initialAttempt{ hint, INITIAL_ATTEMPT, "connection_acquire", "data_transfer" };
+    AttemptResult result = ExecuteAttempt(workerAddr, operation, initialAttempt, phaseRecorder);
+    if (result.transporter == nullptr) {
+        return result.status;
     }
-    RETURN_RUNTIME_ERROR_IF_NULL(transporter);
-    VLOG(1) << "[TransportGet][DataPlane] Send operation, worker: " << workerAddr.ToString()
-            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
-            << ", attempt: " << INITIAL_ATTEMPT;
-    Status rc = operation(*transporter);
-    LogDataPlaneOperation(workerAddr, transporter->Kind(), INITIAL_ATTEMPT, rc);
     TransportHint retryHint = hint;
-    if (!PrepareRetry(workerAddr, transporter, rc, hint, retryHint)) {
-        return rc;
+    const auto prepareBegin = phaseRecorder == nullptr ? TransportPhaseLatencyRecorder::TimePoint{}
+                                                       : phaseRecorder->StartPhase();
+    const bool shouldRetry = PrepareRetry(workerAddr, result.transporter, result.status, hint, retryHint);
+    if (!shouldRetry) {
+        return result.status;
     }
-    connectionStatus = manager_->GetOrCreate(workerAddr, retryHint, transporter);
-    if (connectionStatus.IsError()) {
-        LOG(ERROR) << "[TransportGet][Connection] Rebuild data plane failed, worker: " << workerAddr.ToString()
-                   << ", attempt: " << REBUILD_ATTEMPT << ", status: " << connectionStatus.ToString();
-        return connectionStatus;
+    if (phaseRecorder != nullptr) {
+        phaseRecorder->RecordPhase("retry_prepare", prepareBegin, TransportLatencyThreshold::PROCESS);
     }
-    RETURN_RUNTIME_ERROR_IF_NULL(transporter);
-    VLOG(1) << "[TransportGet][DataPlane] Send operation, worker: " << workerAddr.ToString()
-            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
-            << ", attempt: " << REBUILD_ATTEMPT;
-    rc = operation(*transporter);
-    LogDataPlaneOperation(workerAddr, transporter->Kind(), REBUILD_ATTEMPT, rc);
-    return rc;
+    const AttemptPlan retryAttempt{ retryHint, REBUILD_ATTEMPT, "connection_rebuild", "retry_data_transfer" };
+    AttemptResult retryResult = ExecuteAttempt(workerAddr, operation, retryAttempt, phaseRecorder);
+    return retryResult.status;
 }
 }  // namespace client
 }  // namespace datasystem

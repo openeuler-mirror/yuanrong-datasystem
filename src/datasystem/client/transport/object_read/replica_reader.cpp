@@ -206,10 +206,11 @@ Status ReplicaReader::Backoff(int64_t &backoffMs) const
     return retry_->Backoff(backoffMs);
 }
 
-Status ReplicaReader::ReadReplicaOnce(const master::ObjectLocationInfoPb &location, int replicaIndex, size_t round,
-                                      ObjectReadItemResult &result, const HostPort &workerAddr,
-                                      const std::shared_ptr<const TransportReadContext> &context)
+Status ReplicaReader::ReadReplicaOnce(const ReplicaReadRequest &request, int replicaIndex, size_t round,
+                                      const HostPort &workerAddr, bool traceEnabled)
 {
+    const auto &location = *request.location;
+    auto &result = *request.result;
     VLOG(1) << "[TransportGet][Data] Read replica, key: " << location.object_key()
             << ", worker: " << workerAddr.ToString() << ", replica index: " << replicaIndex
             << ", replica count: " << location.object_locations_size() << ", expected size: " << location.object_size()
@@ -217,10 +218,10 @@ Status ReplicaReader::ReadReplicaOnce(const master::ObjectLocationInfoPb &locati
     Status rc = readAdmissionCheck_ ? readAdmissionCheck_(workerAddr) : Status::OK();
     DataGetResult data;
     if (rc.IsOk()) {
-        DataGetRequest request{ location.object_key(), location.object_size(), context };
-        rc = executor_->Execute(workerAddr, [&request, &data](IDataTransporter &transporter) {
-            return transporter.Get(request, data);
-        });
+        DataGetRequest dataRequest{ location.object_key(), location.object_size(), request.context };
+        rc = executor_->Execute(workerAddr, [&dataRequest, &data](IDataTransporter &transporter) {
+            return transporter.Get(dataRequest, data);
+        }, traceEnabled);
         if (readOutcomeReport_) {
             readOutcomeReport_(workerAddr, data.response);
         }
@@ -241,7 +242,7 @@ Status ReplicaReader::ReadReplicaOnce(const master::ObjectLocationInfoPb &locati
 }
 
 Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result,
-                           std::shared_ptr<const TransportReadContext> context)
+                           std::shared_ptr<const TransportReadContext> context, bool traceEnabled)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(executor_);
     RETURN_RUNTIME_ERROR_IF_NULL(retry_);
@@ -250,6 +251,7 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
     int64_t backoffMs = 1;
     size_t round = 0;
     Status lastError(K_NOT_FOUND, "Cannot get objects from worker");
+    const ReplicaReadRequest request{ &location, &result, std::move(context) };
     while (true) {
         ++round;
         bool hasStaleLocation = false;
@@ -264,7 +266,7 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
             }
             HostPort workerAddr;
             RETURN_IF_NOT_OK(workerAddr.ParseString(location.object_locations(replicaIndex)));
-            Status rc = ReadReplicaOnce(location, replicaIndex, round, result, workerAddr, context);
+            Status rc = ReadReplicaOnce(request, replicaIndex, round, workerAddr, traceEnabled);
             if (rc.IsOk()) {
                 return Status::OK();
             }
@@ -298,7 +300,7 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
     }
 }
 
-Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
+Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnabled)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(executor_);
     RETURN_RUNTIME_ERROR_IF_NULL(retry_);
@@ -388,7 +390,7 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
             const Status admissionStatus = readAdmissionCheck_ ? readAdmissionCheck_(work.address) : Status::OK();
             auto *endpointWork = &work;
             futures.emplace_back(taskPool_->Submit([this, endpointWork, admissionStatus, remainingUs, dispatchTime,
-                                                    traceContext]() {
+                                                    traceContext, traceEnabled]() {
                 TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
                 Status dispatchStatus = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
                 bool outcomeReported = false;
@@ -408,7 +410,7 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
                         Status unaryStatus = executor_->Execute(endpointWork->address,
                                                                 [&chunk, &data](IDataTransporter &t) {
                             return t.Get(chunk.requests.front(), data);
-                        });
+                        }, traceEnabled);
                         chunk.results.resize(1);
                         chunk.results.front().status = unaryStatus;
                         // Preserve structured Provider failure detail even when the unary request failed.
@@ -418,9 +420,10 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
                                                    ? Status::OK()
                                                    : std::move(unaryStatus);
                     } else {
-                        chunk.endpointStatus = executor_->Execute(endpointWork->address, [&chunk](IDataTransporter &t) {
-                            return t.BatchGet(chunk.requests, chunk.results);
-                        });
+                        chunk.endpointStatus = executor_->Execute(
+                            endpointWork->address,
+                            [&chunk](IDataTransporter &t) { return t.BatchGet(chunk.requests, chunk.results); },
+                            traceEnabled);
                     }
                     if (!outcomeReported && readOutcomeReport_) {
                         for (const auto &result : chunk.results) {
