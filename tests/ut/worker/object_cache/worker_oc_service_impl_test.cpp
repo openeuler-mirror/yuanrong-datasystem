@@ -51,6 +51,7 @@
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
+#include "datasystem/worker/worker_health_check.h"
 #include "tests/ut/worker/object_cache/test_metadata_route.h"
 #include "tests/ut/worker/object_cache/test_placement_facade.h"
 #include "ut/common.h"
@@ -2148,5 +2149,58 @@ TEST_F(WorkerOcServiceImplTest, DrainWaitsForIncomingMigrationBeforeSnapshotColl
     EXPECT_EQ(inject::GetExecuteCount(snapshotPoint), 1U);
 }
 
+TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsTryAgainDuringStartupReconciliation)
+{
+    // worker crash and restart, reconciliation
+    DS_ASSERT_OK(ResetHealthProbe());
+    ASSERT_FALSE(IsHealthy());
+    FLAGS_enable_reconciliation = true;
+
+    // controlBackendAvailableAtStartup=true: start reconciliation (reconciliationReady_=false)
+    auto restartImpl = std::make_shared<WorkerOCServiceImpl>(
+        localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
+        topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
+        /*isRestart=*/true, /*controlBackendAvailableAtStartup=*/true);
+    restartImpl->InitServiceImpl();
+
+    ASSERT_TRUE(restartImpl->isRestart_);
+    ASSERT_FALSE(restartImpl->reconciliationReady_.load(std::memory_order_acquire));
+    ASSERT_TRUE(restartImpl->IsStartupReconciling());
+
+    BthreadReadGuard noRecon;
+    Status rc = restartImpl->ValidateWorkerState(noRecon, 60000);
+    EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
+
+    // reconciliation finish, reconciliationReady_=true, g_health=true -> K_OK
+    DS_ASSERT_OK(SetHealthProbe());
+    restartImpl->reconciliationReady_.store(true, std::memory_order_release);
+    ASSERT_TRUE(IsHealthy());
+    ASSERT_FALSE(restartImpl->IsStartupReconciling());
+}
+
+TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsNotReadyWhenReconciliationSkippedAndUnhealthy)
+{
+    // skip reconciliation(controlBackend=false)
+    DS_ASSERT_OK(ResetHealthProbe());
+    ASSERT_FALSE(IsHealthy());
+    FLAGS_enable_reconciliation = true;
+
+    // controlBackendAvailableAtStartup=false: reconciliationReady_=true (skip reconciliation)
+    auto skipImpl = std::make_shared<WorkerOCServiceImpl>(
+        localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
+        topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
+        /*isRestart=*/true, /*controlBackendAvailableAtStartup=*/false);
+    skipImpl->InitServiceImpl();
+
+    ASSERT_TRUE(skipImpl->isRestart_);
+    ASSERT_TRUE(skipImpl->reconciliationReady_.load(std::memory_order_acquire));
+    ASSERT_FALSE(skipImpl->IsStartupReconciling());
+
+    BthreadReadGuard noRecon;
+    Status rc = skipImpl->ValidateWorkerState(noRecon, 60000);
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+
+    DS_ASSERT_OK(SetHealthProbe());
+}
 }  // namespace ut
 }  // namespace datasystem

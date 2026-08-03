@@ -166,6 +166,13 @@ public:
     Status ValidateWorkerState(BthreadReadGuard &noRecon, int reqTimeoutMs);
 
     /**
+     * @brief Determine whether the worker is in the startup reconciliation phase
+     * (after a crash restart, g_health is not set to true but the process is running normally).
+     * @return True if starting reconciliation (when isRestart_ is true and setHealthFile_ is not set)
+     */
+    bool IsStartupReconciling() const;
+
+    /**
      * @brief GroupAndRemoveMeta
      * @param[in] objKeys ObjKeys need to remove meta
      * @param[in] removeCase Remove meta case
