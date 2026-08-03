@@ -4160,6 +4160,10 @@ void OCMetadataManager::AsyncDeleteByExpired(DeleteObjectMediator &mediator)
         // if object is being delete, don't need to insert again.
         if (rc.IsOk() || rc.GetCode() == K_TRY_AGAIN) {
             mediator.AddSuccessDelId(objectKey);
+        } else if (rc.GetCode() == K_RUNTIME_ERROR
+                   && rc.GetMsg().find(ExpiredObjectManager::kBeingDeletedMark) != std::string::npos) {
+            LOG(INFO) << FormatString("[ObjKey %s] already in async delete queue, treat as success", objectKey);
+            mediator.AddSuccessDelId(objectKey);
         } else {
             LOG(ERROR) << FormatString("[ObjKey %s] insert to ExpiredManager failed: %s", objectKey, rc.ToString());
             mediator.AddFailedDelId(objectKey);
