@@ -10,6 +10,12 @@ The URMA_PKG_URL / URMA_PKG_SHA256 values are injected via .bazelrc:
     build --repo_env=URMA_PKG_SHA256=<sha256>
 Comment them out to fall back to the system-installed URMA SDK.
 
+The package archive type is auto-detected from the URL file extension, so
+.zip, .tar.gz, .tar.bz2 and .tar.xz are all supported. This matches the
+CMake download path (cmake/external_libs/urma.cmake -> FetchContent_Populate),
+which also auto-detects the archive type. Keep the URL ending with one of
+these extensions; URLs without a recognizable extension are not supported.
+
 Modeled after bazel/cuda_local_repo.bzl.
 """
 
@@ -62,7 +68,6 @@ def _urma_pkg_repository_impl(repository_ctx):
         repository_ctx.download_and_extract(
             urma_pkg_url,
             sha256 = urma_pkg_sha256,
-            type = "zip",
         )
 
         # Auto-locate include root: find urma_api.h anchor.
