@@ -23,6 +23,7 @@
 
 #include "datasystem/client/transport/data_plane/i_data_plane_connection.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
+#include "datasystem/client/transport/transport_phase_latency_recorder.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
 
@@ -35,6 +36,15 @@ public:
     ~UbConnection() override;
 
     Status Establish(const HostPort &workerAddr) override;
+
+    /**
+     * @brief Establish the UB connection with optional Get phase timing.
+     * @param[in] workerAddr Target worker address.
+     * @param[in] recorder Optional request-scoped phase recorder.
+     * @return K_OK when the connection is ready; the error code otherwise.
+     */
+    Status Establish(const HostPort &workerAddr, TransportPhaseLatencyRecorder *recorder);
+
     bool IsAlive() const override;
     virtual bool SupportsPayloadOnlyClientBatchGet() const;
     AccessTransportKind Kind() const override
@@ -44,7 +54,7 @@ public:
     void Teardown() override;
 
 private:
-    Status EstablishUrma();
+    Status EstablishUrma(TransportPhaseLatencyRecorder *recorder);
 
     HostPort workerAddr_;
     std::shared_ptr<WorkerRpcClient> rpcClient_;

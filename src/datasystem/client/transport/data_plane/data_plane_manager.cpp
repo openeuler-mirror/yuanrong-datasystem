@@ -28,6 +28,7 @@
 #include "datasystem/client/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_connection.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
+#include "datasystem/client/transport/transport_phase_latency_recorder.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
@@ -171,12 +172,14 @@ Status DataPlaneManager::CreateWorkerRpcClient(const HostPort &workerAddr, std::
 }
 
 Status DataPlaneManager::GetOrCreate(const HostPort &workerAddr, TransportHint hint,
-                                     std::shared_ptr<IDataTransporter> &out)
+                                     std::shared_ptr<IDataTransporter> &out,
+                                     TransportPhaseLatencyRecorder *recorder)
 {
     out.reset();
     std::shared_ptr<WorkerTransportEntry> entry;
     RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
-    return GetOrBuildTransporter(workerAddr, hint, KindForHint(hint), entry, out);
+    const TransportBuildContext context{ workerAddr, hint, KindForHint(hint), recorder };
+    return GetOrBuildTransporter(context, entry, out);
 }
 
 Status DataPlaneManager::GetOrCreateEndpoint(const HostPort &workerAddr, TransportHint hint,
@@ -188,7 +191,8 @@ Status DataPlaneManager::GetOrCreateEndpoint(const HostPort &workerAddr, Transpo
     const AccessTransportKind expectedKind = KindForHint(hint);
     std::shared_ptr<WorkerTransportEntry> entry;
     RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
-    RETURN_IF_NOT_OK(GetOrBuildTransporter(workerAddr, hint, expectedKind, entry, transporter));
+    const TransportBuildContext context{ workerAddr, hint, expectedKind, nullptr };
+    RETURN_IF_NOT_OK(GetOrBuildTransporter(context, entry, transporter));
 
     bthread::RWLockRdGuard lock(entry->mutex);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
@@ -211,7 +215,8 @@ Status DataPlaneManager::WithDataPlaneLease(
     std::shared_ptr<WorkerTransportEntry> entry;
     RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
     std::shared_ptr<IDataTransporter> transporter;
-    RETURN_IF_NOT_OK(GetOrBuildTransporter(workerAddr, hint, expectedKind, entry, transporter));
+    const TransportBuildContext context{ workerAddr, hint, expectedKind, nullptr };
+    RETURN_IF_NOT_OK(GetOrBuildTransporter(context, entry, transporter));
 
     bthread::RWLockRdGuard lock(entry->mutex);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
@@ -240,7 +245,7 @@ Status DataPlaneManager::GetOrCreateRpcClient(const HostPort &workerAddr, std::s
     bthread::RWLockWrGuard lock(entry->mutex);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
-    RETURN_IF_NOT_OK(EnsureRpcClientLocked(workerAddr, entry));
+    RETURN_IF_NOT_OK(EnsureRpcClientLocked(workerAddr, entry, nullptr));
     out = entry->rpcClient;
     return Status::OK();
 }
@@ -324,64 +329,85 @@ Status DataPlaneManager::GetOrCreateEntry(const std::string &workerKey,
     return Status::OK();
 }
 
-Status DataPlaneManager::GetOrBuildTransporter(const HostPort &workerAddr, TransportHint hint,
-                                               AccessTransportKind expectedKind,
+Status DataPlaneManager::GetOrBuildTransporter(const TransportBuildContext &context,
                                                const std::shared_ptr<WorkerTransportEntry> &entry,
                                                std::shared_ptr<IDataTransporter> &out)
 {
+    auto *recorder = context.recorder;
     {
+        const auto lockBegin = recorder == nullptr ? TransportPhaseLatencyRecorder::TimePoint{}
+                                                   : recorder->StartPhase();
         bthread::RWLockRdGuard lock(entry->mutex);
+        if (recorder != nullptr) {
+            recorder->RecordPhase("connection_read_lock_wait", lockBegin, TransportLatencyThreshold::PROCESS);
+        }
         CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                                  "DataPlaneManager is shutting down");
-        if (entry->HasAliveTransporter(expectedKind)) {
+        if (entry->HasAliveTransporter(context.expectedKind)) {
             out = entry->transporter;
             return Status::OK();
         }
     }
-    bthread::RWLockWrGuard entryLock(entry->mutex);
-    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
-                             "DataPlaneManager is shutting down");
-    if (entry->HasAliveTransporter(expectedKind)) {
+    {
+        const auto lockBegin = recorder == nullptr ? TransportPhaseLatencyRecorder::TimePoint{}
+                                                   : recorder->StartPhase();
+        bthread::RWLockWrGuard entryLock(entry->mutex);
+        if (recorder != nullptr) {
+            recorder->RecordPhase("connection_write_lock_wait", lockBegin, TransportLatencyThreshold::PROCESS);
+        }
+        CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                                 "DataPlaneManager is shutting down");
+        if (entry->HasAliveTransporter(context.expectedKind)) {
+            out = entry->transporter;
+            return Status::OK();
+        }
+        Status status = EnsureRpcClientLocked(context.workerAddr, entry, context.recorder);
+        RETURN_IF_NOT_OK(status);
+        status = EnsureTransporterLocked(context, entry);
+        RETURN_IF_NOT_OK(status);
+        if (shutdown_.load(std::memory_order_acquire)) {
+            entry->ResetDataPlaneLocked();
+            return Status(K_SHUTTING_DOWN, __LINE__, __FILE__, "DataPlaneManager is shutting down");
+        }
         out = entry->transporter;
-        return Status::OK();
     }
-    RETURN_IF_NOT_OK(EnsureRpcClientLocked(workerAddr, entry));
-    RETURN_IF_NOT_OK(EnsureTransporterLocked(workerAddr, hint, expectedKind, entry));
-    if (shutdown_.load(std::memory_order_acquire)) {
-        entry->ResetDataPlaneLocked();
-        return Status(K_SHUTTING_DOWN, "DataPlaneManager is shutting down");
-    }
-    out = entry->transporter;
     return Status::OK();
 }
 
 Status DataPlaneManager::EnsureRpcClientLocked(const HostPort &workerAddr,
-                                               const std::shared_ptr<WorkerTransportEntry> &entry)
+                                               const std::shared_ptr<WorkerTransportEntry> &entry,
+                                               TransportPhaseLatencyRecorder *recorder)
 {
     if (entry->rpcClient != nullptr && entry->rpcClient->IsAlive()) {
         return Status::OK();
     }
     entry->ResetDataPlaneLocked();
     std::shared_ptr<WorkerRpcClient> rpcClient;
-    RETURN_IF_NOT_OK(CreateWorkerRpcClient(workerAddr, rpcClient));
+    const auto phaseBegin = recorder == nullptr ? TransportPhaseLatencyRecorder::TimePoint{}
+                                                : recorder->StartPhase();
+    Status status = CreateWorkerRpcClient(workerAddr, rpcClient);
+    if (recorder != nullptr) {
+        recorder->RecordPhase("rpc_client_create", phaseBegin, TransportLatencyThreshold::PROCESS);
+    }
+    RETURN_IF_NOT_OK(status);
     entry->rpcClient = std::move(rpcClient);
     return Status::OK();
 }
 
-Status DataPlaneManager::EnsureTransporterLocked(const HostPort &workerAddr, TransportHint hint,
-                                                 AccessTransportKind expectedKind,
+Status DataPlaneManager::EnsureTransporterLocked(const TransportBuildContext &context,
                                                  const std::shared_ptr<WorkerTransportEntry> &entry)
 {
-    if (entry->HasAliveTransporter(expectedKind)) {
+    if (entry->HasAliveTransporter(context.expectedKind)) {
         return Status::OK();
     }
     entry->ResetDataPlaneLocked();
     std::shared_ptr<IDataTransporter> transporter;
-    RETURN_IF_NOT_OK(BuildTransporter(workerAddr, hint, entry->rpcClient, transporter));
+    RETURN_IF_NOT_OK(
+        BuildTransporter(context.workerAddr, context.hint, entry->rpcClient, context.recorder, transporter));
     CHECK_FAIL_RETURN_STATUS(transporter != nullptr, K_RUNTIME_ERROR, "Transporter missing after build");
     entry->kind = transporter->Kind();
     entry->transporter = std::move(transporter);
-    VLOG(1) << "[TransportGet][Connection] Data transporter ready, endpoint: " << workerAddr.ToString()
+    VLOG(1) << "[TransportGet][Connection] Data transporter ready, endpoint: " << context.workerAddr.ToString()
             << ", transport: " << AccessTransportTracker::KindToName(entry->kind);
     return Status::OK();
 }
@@ -522,13 +548,14 @@ void DataPlaneManager::Shutdown()
 
 Status DataPlaneManager::BuildUbTransporter(const HostPort &workerAddr,
                                             const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                                            TransportPhaseLatencyRecorder *recorder,
                                             std::shared_ptr<IDataTransporter> &out)
 {
     CHECK_FAIL_RETURN_STATUS(initialized_.load(std::memory_order_acquire), K_NOT_READY,
                              "Call DataPlaneManager::Init before creating UB data-plane transport");
 
     auto ubConnection = std::make_shared<UbConnection>(rpcClient);
-    Status rc = ubConnection->Establish(workerAddr);
+    Status rc = ubConnection->Establish(workerAddr, recorder);
     if (rc.IsOk() && ubConnection->IsAlive()) {
         out = std::make_shared<UbTransporter>(rpcClient, ubConnection, ubBufferProvider_);
         return Status::OK();
@@ -541,6 +568,7 @@ Status DataPlaneManager::BuildUbTransporter(const HostPort &workerAddr,
 
 Status DataPlaneManager::BuildTransporter(const HostPort &workerAddr, TransportHint hint,
                                           const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                                          TransportPhaseLatencyRecorder *recorder,
                                           std::shared_ptr<IDataTransporter> &out)
 {
     if (hint == TransportHint::SHM_CANDIDATE) {
@@ -553,7 +581,7 @@ Status DataPlaneManager::BuildTransporter(const HostPort &workerAddr, TransportH
         return Status::OK();
     }
     if (hint != TransportHint::TCP_ONLY) {
-        return BuildUbTransporter(workerAddr, rpcClient, out);
+        return BuildUbTransporter(workerAddr, rpcClient, recorder, out);
     }
     out = std::make_shared<TcpTransporter>(rpcClient);
     return Status::OK();

@@ -18,11 +18,13 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_DATA_PLANE_DATA_PLANE_EXECUTOR_H
 #define DATASYSTEM_CLIENT_TRANSPORT_DATA_PLANE_DATA_PLANE_EXECUTOR_H
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 
 #include "datasystem/client/transport/data_plane/data_plane_manager.h"
 #include "datasystem/client/transport/transport_advisor.h"
+#include "datasystem/client/transport/transport_phase_latency_recorder.h"
 
 namespace datasystem {
 namespace client {
@@ -38,11 +40,27 @@ public:
      * @brief Execute one endpoint operation and rebuild the affected connection once when required.
      * @param[in] workerAddr Target data-worker address.
      * @param[in] operation Operation invoked on the endpoint-scoped transporter.
+     * @param[in] traceEnabled Whether to record detailed phase timing.
      * @return K_OK on success; the error code otherwise.
      */
-    Status Execute(const HostPort &workerAddr, const Operation &operation);
+    Status Execute(const HostPort &workerAddr, const Operation &operation, bool traceEnabled = false);
 
 private:
+    struct AttemptPlan {
+        TransportHint hint;
+        size_t attempt;
+        const char *connectionPhase;
+        const char *transferPhase;
+    };
+
+    struct AttemptResult {
+        Status status;
+        std::shared_ptr<IDataTransporter> transporter;
+    };
+
+    AttemptResult ExecuteAttempt(const HostPort &workerAddr, const Operation &operation, const AttemptPlan &plan,
+                                 TransportPhaseLatencyRecorder *recorder);
+
     // Decide whether a failed operation should be retried after a transporter rebuild, perform the
     // rebuild pre-step (ResetDataPlane/Teardown), and set the retry hint. Returns false (no retry)
     // for non-retryable errors. On a same-host SHM-off target the fd-passing negotiation returns

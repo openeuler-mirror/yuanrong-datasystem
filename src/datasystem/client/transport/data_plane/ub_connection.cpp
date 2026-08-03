@@ -18,9 +18,11 @@
 
 #include "datasystem/client/transport/data_plane/ub_connection.h"
 
+#include <cstdint>
 #include <utility>
 
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
+#include "datasystem/client/transport/transport_phase_latency_recorder.h"
 #include "datasystem/common/util/status_helper.h"
 
 #ifdef USE_URMA
@@ -43,11 +45,16 @@ UbConnection::~UbConnection()
 
 Status UbConnection::Establish(const HostPort &workerAddr)
 {
-    workerAddr_ = workerAddr;
-    return EstablishUrma();
+    return Establish(workerAddr, nullptr);
 }
 
-Status UbConnection::EstablishUrma()
+Status UbConnection::Establish(const HostPort &workerAddr, TransportPhaseLatencyRecorder *recorder)
+{
+    workerAddr_ = workerAddr;
+    return EstablishUrma(recorder);
+}
+
+Status UbConnection::EstablishUrma(TransportPhaseLatencyRecorder *recorder)
 {
     supportsPayloadOnlyClientBatchGet_.store(false, std::memory_order_release);
 #ifdef USE_URMA
@@ -56,13 +63,27 @@ Status UbConnection::EstablishUrma()
     }
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
     UrmaHandshakeRspPb response;
-    RETURN_IF_NOT_OK(rpcClient_->ExchangeUrmaConnectInfo(response));
-    RETURN_IF_NOT_OK(FinalizeOutboundConnection(response));
+    const auto exchangeBegin = recorder == nullptr ? TransportPhaseLatencyRecorder::TimePoint{}
+                                                   : recorder->StartPhase();
+    Status status = rpcClient_->ExchangeUrmaConnectInfo(response);
+    if (recorder != nullptr) {
+        const uint64_t exchangeUs = recorder->ElapsedUs(exchangeBegin);
+        recorder->RecordPhase("urma_connect_info_exchange", exchangeUs, TransportLatencyThreshold::RPC);
+    }
+    RETURN_IF_NOT_OK(status);
+    const auto phaseBegin = recorder == nullptr ? TransportPhaseLatencyRecorder::TimePoint{}
+                                                : recorder->StartPhase();
+    status = FinalizeOutboundConnection(response);
+    if (recorder != nullptr) {
+        recorder->RecordPhase("urma_connection_finalize", phaseBegin, TransportLatencyThreshold::PROCESS);
+    }
+    RETURN_IF_NOT_OK(status);
     supportsPayloadOnlyClientBatchGet_.store(response.supports_payload_only_client_batch_get(),
                                              std::memory_order_release);
     urmaReady_.store(true, std::memory_order_release);
     return Status::OK();
 #else
+    (void) recorder;
     return Status(K_NOT_SUPPORTED, "USE_URMA not compiled");
 #endif
 }

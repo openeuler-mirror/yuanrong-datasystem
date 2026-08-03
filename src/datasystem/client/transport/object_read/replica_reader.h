@@ -49,15 +49,25 @@ public:
                   ReadOutcomeReport readOutcomeReport = nullptr);
     virtual ~ReplicaReader() = default;
 
-    /** @brief Poll the fixed metadata locations until one read succeeds or the API deadline expires. */
+    /**
+     * @brief Poll the fixed metadata locations until one read succeeds or the API deadline expires.
+     * @param[in] location Fixed replica locations returned by metadata lookup.
+     * @param[out] result Object read result.
+     * @param[in] context Transport request context.
+     * @param[in] traceEnabled Whether to record detailed transport phase timing.
+     * @return K_OK when one replica succeeds; the final read error otherwise.
+     */
     virtual Status Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result,
-                        std::shared_ptr<const TransportReadContext> context);
+                        std::shared_ptr<const TransportReadContext> context, bool traceEnabled = false);
 
     /**
      * @brief Synchronously read objects in replica waves.
+     * @param[in] requests Replica read requests from one object read flow.
+     * @param[in] traceEnabled Whether to record detailed transport phase timing.
+     * @return K_OK when at least one object succeeds; the aggregate read error otherwise.
      * @note Location metadata and result slots must outlive this call. The scheduler owns only transient state.
      */
-    virtual Status ReadBatch(const ReplicaReadBatch &requests);
+    virtual Status ReadBatch(const ReplicaReadBatch &requests, bool traceEnabled = false);
 
 protected:
     virtual Status CheckDeadline() const;
@@ -65,9 +75,8 @@ protected:
 
 private:
     bool IsRetryableLocationError(const Status &status) const;
-    Status ReadReplicaOnce(const master::ObjectLocationInfoPb &location, int replicaIndex, size_t round,
-                           ObjectReadItemResult &result, const HostPort &workerAddr,
-                           const std::shared_ptr<const TransportReadContext> &context);
+    Status ReadReplicaOnce(const ReplicaReadRequest &request, int replicaIndex, size_t round,
+                           const HostPort &workerAddr, bool traceEnabled);
 
     std::shared_ptr<DataPlaneExecutor> executor_;
     std::shared_ptr<DeadlineRetry> retry_;
