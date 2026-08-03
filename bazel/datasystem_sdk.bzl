@@ -22,6 +22,9 @@ def _datasystem_sdk_tree_impl(ctx):
     else:
         coordinator_path = ""
 
+    urma_libs = ctx.files.urma_libs
+    urma_libs_args = [f.path for f in urma_libs]
+
     command = """
 	set -euo pipefail
 
@@ -32,7 +35,8 @@ def _datasystem_sdk_tree_impl(ctx):
 	libcoordinator="$5"
 	out_tar="$6"
 	header_count="$7"
-	shift 7
+	urma_libs_count="$8"
+	shift 8
 
 	mkdir -p "$out_dir/cpp/lib"
 	cp -f "$build_tpl" "$out_dir/cpp/BUILD.bazel"
@@ -40,6 +44,16 @@ def _datasystem_sdk_tree_impl(ctx):
 	cp -f "$libworker" "$out_dir/cpp/lib/libdatasystem_worker.so"
 	if [ -n "$libcoordinator" ] && [ -f "$libcoordinator" ]; then
 	    cp -f "$libcoordinator" "$out_dir/cpp/lib/libdatasystem_coordinator.so"
+	fi
+
+	# Copy URMA so files (urma_libs_count files, flat into cpp/lib/)
+	if [ "$urma_libs_count" -gt 0 ]; then
+	  i=0
+	  while [ "$i" -lt "$urma_libs_count" ] && [ "$#" -ge 1 ]; do
+	    cp -fL "$1" "$out_dir/cpp/lib/"
+	    shift
+	    i=$((i + 1))
+	  done
 	fi
 
 	# Copy headers (header_count pairs of src,rel)
@@ -81,7 +95,8 @@ def _datasystem_sdk_tree_impl(ctx):
         coordinator_path,
         out_tar.path,
         str(len(header_args) // 2),
-    ] + header_args + cmake_args
+        str(len(urma_libs_args)),
+    ] + urma_libs_args + header_args + cmake_args
 
     inputs_list = [ctx.file.build_tpl, ctx.file.libdatasystem, ctx.file.libworker]
     if has_coordinator:
@@ -89,7 +104,11 @@ def _datasystem_sdk_tree_impl(ctx):
 
     inputs = depset(
         inputs_list,
-        transitive = [depset(ctx.files.headers), depset(ctx.files.cmake_config)],
+        transitive = [
+            depset(ctx.files.headers),
+            depset(ctx.files.cmake_config),
+            depset(urma_libs),
+        ],
     )
 
     ctx.actions.run_shell(
@@ -112,5 +131,6 @@ datasystem_sdk_tree = rule(
         "libworker": attr.label(allow_single_file = True, mandatory = True),
         "libcoordinator": attr.label(allow_single_file = True, mandatory = False),
         "cmake_config": attr.label_list(allow_files = True, default = []),
+        "urma_libs": attr.label_list(allow_files = True, default = []),
     },
 )

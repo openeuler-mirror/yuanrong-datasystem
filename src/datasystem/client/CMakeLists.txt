@@ -131,6 +131,17 @@ add_library(datasystem SHARED ${CLIENT_SRCS})
 target_compile_options(datasystem PRIVATE "-fvisibility=hidden")
 target_link_libraries(datasystem PRIVATE "${CLIENT_DEPEND_LIBS}")
 
+if (BUILD_WITH_URMA)
+    # Let the linker resolve liburma's transitive DT_NEEDED deps (liburma_common,
+    # libtpsa, libummu, etc.) in the URMA lib dir without linking them explicitly.
+    target_link_directories(datasystem PRIVATE ${URMA_LIB_LOCATION})
+    target_link_options(datasystem PRIVATE "-Wl,-rpath-link,${URMA_LIB_LOCATION}")
+    # URMA .so files are pre-built; some have undefined symbols (e.g. ub_str_to_*
+    # in libtpsa.so) not declared in their DT_NEEDED. Allow undefined symbols in
+    # shared lib deps so link succeeds; these are resolved at runtime via rpath.
+    target_link_options(datasystem PRIVATE "-Wl,--allow-shlib-undefined")
+endif()
+
 if (BUILD_PIPLN_H2D)
     target_link_libraries(datasystem_static PRIVATE os_transport_pipeline)
     target_link_libraries(datasystem PRIVATE os_transport_pipeline)

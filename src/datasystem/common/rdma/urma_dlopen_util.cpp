@@ -16,15 +16,263 @@
 
 #include "datasystem/common/rdma/urma_dlopen_util.h"
 
-#include <climits>
-#include <dlfcn.h>
-#include <link.h>
+// ============================================================================
+// Real URMA path: liburma is linked at compile time via -lurma (no dlopen).
+// Each ds_urma_* shim directly forwards to the real URMA symbol.
+// ============================================================================
+#ifndef USE_URMA_MOCK
+
+#include "datasystem/common/log/log.h"
+
+namespace datasystem {
+namespace urma_dlopen {
+
+bool Init()
+{
+    // Symbols are resolved at link time; nothing to load at runtime.
+    return true;
+}
+
+bool IsAvailable()
+{
+    return true;
+}
+
+void Cleanup()
+{
+    // No dlopen handles to close; liburma is linked into the binary.
+}
+
+}  // namespace urma_dlopen
+}  // namespace datasystem
+
+// Direct-call shims: forward each ds_urma_* to the real URMA symbol.
+// The ds_ prefix avoids global symbol conflicts when liburma is linked.
+
+urma_status_t ds_urma_init(const urma_init_attr_t *attr)
+{
+    return urma_init(const_cast<urma_init_attr_t *>(attr));
+}
+
+urma_status_t ds_urma_uninit(void)
+{
+    return urma_uninit();
+}
+
+urma_status_t ds_urma_register_log_func(urma_log_cb_t log_cb)
+{
+    return urma_register_log_func(log_cb);
+}
+
+urma_status_t ds_urma_unregister_log_func(void)
+{
+    return urma_unregister_log_func();
+}
+
+urma_device_t **ds_urma_get_device_list(int *dev_num)
+{
+    return urma_get_device_list(dev_num);
+}
+
+urma_device_t *ds_urma_get_device_by_name(char *name)
+{
+    return urma_get_device_by_name(name);
+}
+
+urma_status_t ds_urma_query_device(urma_device_t *device, urma_device_attr_t *attr)
+{
+    return urma_query_device(device, attr);
+}
+
+urma_eid_info_t *ds_urma_get_eid_list(urma_device_t *device, uint32_t *eid_count)
+{
+    return urma_get_eid_list(device, eid_count);
+}
+
+void ds_urma_free_eid_list(urma_eid_info_t *eid_list)
+{
+    urma_free_eid_list(eid_list);
+}
+
+urma_context_t *ds_urma_create_context(urma_device_t *device, uint32_t eid_index)
+{
+    return urma_create_context(device, eid_index);
+}
+
+urma_status_t ds_urma_delete_context(urma_context_t *context)
+{
+    return urma_delete_context(context);
+}
+
+urma_status_t ds_urma_set_context_opt(urma_context_t *context, urma_opt_name_t opt_name, const void *opt_value,
+                                      size_t opt_len)
+{
+    return urma_set_context_opt(context, opt_name, opt_value, opt_len);
+}
+
+urma_status_t ds_urma_user_ctl(urma_context_t *ctx, urma_user_ctl_in_t *in, urma_user_ctl_out_t *out)
+{
+    return urma_user_ctl(ctx, in, out);
+}
+
+urma_jfce_t *ds_urma_create_jfce(urma_context_t *context)
+{
+    return urma_create_jfce(context);
+}
+
+urma_status_t ds_urma_delete_jfce(urma_jfce_t *jfce)
+{
+    return urma_delete_jfce(jfce);
+}
+
+urma_jfc_t *ds_urma_create_jfc(urma_context_t *context, const urma_jfc_cfg_t *config)
+{
+    return urma_create_jfc(context, const_cast<urma_jfc_cfg_t *>(config));
+}
+
+urma_status_t ds_urma_delete_jfc(urma_jfc_t *jfc)
+{
+    return urma_delete_jfc(jfc);
+}
+
+urma_status_t ds_urma_rearm_jfc(urma_jfc_t *jfc, bool enable_events)
+{
+    return urma_rearm_jfc(jfc, enable_events);
+}
+
+urma_jfr_t *ds_urma_create_jfr(urma_context_t *context, const urma_jfr_cfg_t *config)
+{
+    return urma_create_jfr(context, const_cast<urma_jfr_cfg_t *>(config));
+}
+
+urma_status_t ds_urma_delete_jfr(urma_jfr_t *jfr)
+{
+    return urma_delete_jfr(jfr);
+}
+
+urma_jetty_t *ds_urma_create_jetty(urma_context_t *context, urma_jetty_cfg_t *config)
+{
+    return urma_create_jetty(context, config);
+}
+
+urma_status_t ds_urma_delete_jetty(urma_jetty_t *jetty)
+{
+    return urma_delete_jetty(jetty);
+}
+
+urma_status_t ds_urma_modify_jetty(urma_jetty_t *jetty, urma_jetty_attr_t *attr)
+{
+    return urma_modify_jetty(jetty, attr);
+}
+
+urma_target_seg_t *ds_urma_register_seg(urma_context_t *context, const urma_seg_cfg_t *config)
+{
+    return urma_register_seg(context, const_cast<urma_seg_cfg_t *>(config));
+}
+
+int ds_urma_wait_jfc(urma_jfce_t *jfce, int max_events, int timeout_ms, urma_jfc_t **ev_jfc)
+{
+    return urma_wait_jfc(jfce, max_events, timeout_ms, ev_jfc);
+}
+
+int ds_urma_poll_jfc(urma_jfc_t *jfc, int max_cr, urma_cr_t *complete_records)
+{
+    return urma_poll_jfc(jfc, max_cr, complete_records);
+}
+
+void ds_urma_ack_jfc(urma_jfc_t **ev_jfc, uint32_t *ack_cnt, int num)
+{
+    urma_ack_jfc(ev_jfc, ack_cnt, num);
+}
+
+urma_target_jetty_t *ds_urma_import_jetty(urma_context_t *context, urma_rjetty_t *remote_jetty,
+                                          urma_token_t *token)
+{
+    return urma_import_jetty(context, remote_jetty, token);
+}
+
+urma_status_t ds_urma_unimport_jetty(urma_target_jetty_t *tjetty)
+{
+    return urma_unimport_jetty(tjetty);
+}
+
+urma_status_t ds_urma_get_rjetty(urma_jetty_t *jetty, urma_rjetty_t **rjetty, uint32_t *length)
+{
+    return urma_get_rjetty(jetty, rjetty, length);
+}
+
+void ds_urma_put_rjetty(urma_rjetty_t *rjetty)
+{
+    urma_put_rjetty(rjetty);
+}
+
+urma_status_t ds_urma_post_jetty_send_wr(urma_jetty_t *jetty, urma_jfs_wr_t *wr, urma_jfs_wr_t **bad_wr)
+{
+    return urma_post_jetty_send_wr(jetty, wr, bad_wr);
+}
+
+urma_target_seg_t *ds_urma_import_seg(urma_context_t *context, urma_seg_t *seg, urma_token_t *token, int flags,
+                                      urma_import_seg_flag_t import_flag)
+{
+    return urma_import_seg(context, seg, token, flags, import_flag);
+}
+
+urma_status_t ds_urma_get_seg_ctx(urma_target_seg_t *tseg, urma_seg_t **seg, uint32_t *size)
+{
+    return urma_get_seg_ctx(tseg, seg, size);
+}
+
+void ds_urma_put_seg_ctx(urma_seg_t *seg)
+{
+    urma_put_seg_ctx(seg);
+}
+
+urma_status_t ds_urma_unregister_seg(urma_target_seg_t *seg)
+{
+    return urma_unregister_seg(seg);
+}
+
+urma_status_t ds_urma_unimport_seg(urma_target_seg_t *seg)
+{
+    return urma_unimport_seg(seg);
+}
+
+urma_status_t ds_urma_get_async_event(urma_context_t *context, urma_async_event_t *event)
+{
+    return urma_get_async_event(context, event);
+}
+
+void ds_urma_ack_async_event(urma_async_event_t *event)
+{
+    urma_ack_async_event(event);
+}
+
+urma_status_t ds_urma_start_perf(void)
+{
+    return urma_start_perf();
+}
+
+urma_status_t ds_urma_stop_perf(void)
+{
+    return urma_stop_perf();
+}
+
+urma_status_t ds_urma_get_perf_info(char *perf_buf, uint32_t *length)
+{
+    return urma_get_perf_info(perf_buf, length);
+}
+
+// ============================================================================
+// Mock URMA path: dev/CI without liburma.so / RDMA hardware.
+// Uses a weak-symbol dispatch table (ds_urma_mock_dlopen_ops) to resolve
+// ds_urma_* to in-process mock backend functions instead of calling dlsym.
+// ============================================================================
+#else  // USE_URMA_MOCK
 
 #include "securec.h"
 
 #include "datasystem/common/log/log.h"
 
-#ifdef USE_URMA_MOCK
 struct UrmaMockDlopenOps {
     void *(*handle)();
     bool (*init)();
@@ -33,14 +281,10 @@ struct UrmaMockDlopenOps {
 };
 
 extern "C" const UrmaMockDlopenOps *ds_urma_mock_dlopen_ops() __attribute__((weak));
-#endif
 
 namespace {
 bool g_init = false;
-void *g_urma = nullptr;
-void *g_urmaUbAgg = nullptr;
 
-#ifdef USE_URMA_MOCK
 const UrmaMockDlopenOps *GetMockOps()
 {
     if (ds_urma_mock_dlopen_ops == nullptr) {
@@ -66,50 +310,16 @@ bool EnsureMockUrmaDlopenInitialized()
         return false;
     }
     LOG(INFO) << "[UrmaDlopen] URMA_MOCK mode: using mock dispatch table";
-    g_urma = ops->handle();
-    g_urmaUbAgg = g_urma;
     if (!ops->init()) {
         LOG(ERROR) << "[UrmaDlopen] URMA_MOCK provider init failed";
-        g_urma = nullptr;
-        g_urmaUbAgg = nullptr;
         return false;
     }
     g_init = true;
     return true;
 }
-#else
-const char *urmaLibs[] = { "liburma.so.0", "liburma.so" };
-const char *urmaUbAggLibs[] = { "/usr/lib64/urma/liburma_ubagg.so.0", "/usr/lib64/urma/liburma_ubagg.so" };
-#endif
-enum class UrmaLibType { URMA, UB_AGG };
 
-#ifndef USE_URMA_MOCK
-template <size_t N>
-void *TryLoadLib(const char *const (&candidates)[N])
-{
-    void *handle = nullptr;
-    for (size_t i = 0; i < N; ++i) {
-        const char *candidate = candidates[i];
-        handle = dlopen(candidate, RTLD_LAZY | RTLD_GLOBAL);
-        if (handle) {
-            char origin[PATH_MAX] = {};
-            const bool hasOrigin = (dlinfo(handle, RTLD_DI_ORIGIN, origin) == 0 && origin[0] != '\0');
-            LOG(INFO) << "[UrmaDlopen] dlopen succeeded for: " << candidate
-                      << (hasOrigin ? std::string(", origin path: ") + origin : "");
-            break;
-        } else {
-            LOG(ERROR) << "[UrmaDlopen] dlopen failed for: " << candidate << " -> " << dlerror();
-        }
-    }
-    return handle;
-}
-#endif
-
-template <UrmaLibType LibType>
 void *LoadUrmaSymbol(const char *name)
 {
-#ifdef USE_URMA_MOCK
-    (void)LibType;
     if (!EnsureMockUrmaDlopenInitialized()) {
         return nullptr;
     }
@@ -122,25 +332,12 @@ void *LoadUrmaSymbol(const char *name)
         LOG(ERROR) << "[UrmaDlopen] mock symbol not found: " << name;
     }
     return mockSym;
-#else
-    void *handle = (LibType == UrmaLibType::URMA) ? g_urma : g_urmaUbAgg;
-    if (!handle) {
-        const char *libName = (LibType == UrmaLibType::URMA) ? "liburma" : "liburma_ubagg";
-        LOG(INFO) << "[UrmaDlopen] " << libName << " handle is null before loading symbol: " << name;
-        return nullptr;
-    }
-    void *sym = dlsym(handle, name);
-    if (!sym) {
-        LOG(ERROR) << "[UrmaDlopen] dlsym failed for " << name << ": " << dlerror();
-    }
-    return sym;
-#endif
 }
 
-template <typename Fn, UrmaLibType LibType = UrmaLibType::URMA>
+template <typename Fn>
 Fn LoadFn(const char *name)
 {
-    void *sym = LoadUrmaSymbol<LibType>(name);
+    void *sym = LoadUrmaSymbol(name);
     if (!sym) {
         return nullptr;
     }
@@ -153,10 +350,10 @@ Fn LoadFn(const char *name)
     return fn;
 }
 
-template <UrmaLibType LibType, typename Ret, typename Fn, typename... Args>
+template <typename Ret, typename Fn, typename... Args>
 Ret CallRet(const char *name, Ret fallback, Args... args)
 {
-    auto fn = LoadFn<Fn, LibType>(name);
+    auto fn = LoadFn<Fn>(name);
     if (!fn) {
         return fallback;
     }
@@ -189,27 +386,7 @@ namespace urma_dlopen {
 
 bool Init()
 {
-    if (g_init) {
-        return true;
-    }
-#ifdef USE_URMA_MOCK
     return EnsureMockUrmaDlopenInitialized();
-#else
-    g_urma = TryLoadLib(urmaLibs);
-    if (!g_urma) {
-        LOG(ERROR) << "[UrmaDlopen] Failed to load liburma: " << dlerror();
-        Cleanup();
-        return false;
-    }
-    g_urmaUbAgg = TryLoadLib(urmaUbAggLibs);
-    if (!g_urmaUbAgg) {
-        LOG(ERROR) << "[UrmaDlopen] Failed to load liburma_ubagg: " << dlerror();
-        Cleanup();
-        return false;
-    }
-    g_init = true;
-    return true;
-#endif
 }
 
 bool IsAvailable()
@@ -219,23 +396,10 @@ bool IsAvailable()
 
 void Cleanup()
 {
-#ifdef USE_URMA_MOCK
     auto *ops = GetMockOps();
     if (ops != nullptr) {
         ops->cleanup();
     }
-    g_urma = nullptr;
-    g_urmaUbAgg = nullptr;
-#else
-    if (g_urma) {
-        dlclose(g_urma);
-        g_urma = nullptr;
-    }
-    if (g_urmaUbAgg) {
-        dlclose(g_urmaUbAgg);
-        g_urmaUbAgg = nullptr;
-    }
-#endif
     g_init = false;
 }
 
@@ -246,25 +410,25 @@ static constexpr urma_status_t kUrmaDlopenErrorStatus = static_cast<urma_status_
 
 urma_status_t ds_urma_init(const urma_init_attr_t *attr)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_init)>("urma_init", kUrmaDlopenErrorStatus,
-                                                                              attr);
+    return CallRet< urma_status_t, decltype(&ds_urma_init)>(
+        "urma_init", kUrmaDlopenErrorStatus, attr);
 }
 
 urma_status_t ds_urma_uninit(void)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_uninit)>("urma_uninit", kUrmaDlopenErrorStatus);
+    return CallRet< urma_status_t, decltype(&ds_urma_uninit)>("urma_uninit", kUrmaDlopenErrorStatus);
 }
 
 urma_status_t ds_urma_register_log_func(urma_log_cb_t log_cb)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_register_log_func)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_register_log_func)>(
         "urma_register_log_func", kUrmaDlopenErrorStatus, log_cb);
 }
 
 urma_status_t ds_urma_unregister_log_func(void)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_unregister_log_func)>("urma_unregister_log_func",
-                                                                                             kUrmaDlopenErrorStatus);
+    return CallRet< urma_status_t, decltype(&ds_urma_unregister_log_func)>(
+        "urma_unregister_log_func", kUrmaDlopenErrorStatus);
 }
 
 urma_device_t **ds_urma_get_device_list(int *dev_num)
@@ -280,7 +444,7 @@ urma_device_t *ds_urma_get_device_by_name(char *name)
 
 urma_status_t ds_urma_query_device(urma_device_t *device, urma_device_attr_t *attr)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_query_device)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_query_device)>(
         "urma_query_device", kUrmaDlopenErrorStatus, device, attr);
 }
 
@@ -303,21 +467,21 @@ urma_context_t *ds_urma_create_context(urma_device_t *device, uint32_t eid_index
 
 urma_status_t ds_urma_delete_context(urma_context_t *context)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_delete_context)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_delete_context)>(
         "urma_delete_context", kUrmaDlopenErrorStatus, context);
 }
 
 urma_status_t ds_urma_set_context_opt(urma_context_t *context, urma_opt_name_t opt_name, const void *opt_value,
                                       size_t opt_len)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_set_context_opt)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_set_context_opt)>(
         "urma_set_context_opt", kUrmaDlopenErrorStatus, context, opt_name, opt_value, opt_len);
 }
 
 urma_status_t ds_urma_user_ctl(urma_context_t *ctx, urma_user_ctl_in_t *in, urma_user_ctl_out_t *out)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_user_ctl)>("urma_user_ctl",
-                                                                                  kUrmaDlopenErrorStatus, ctx, in, out);
+    return CallRet< urma_status_t, decltype(&ds_urma_user_ctl)>(
+        "urma_user_ctl", kUrmaDlopenErrorStatus, ctx, in, out);
 }
 
 urma_jfce_t *ds_urma_create_jfce(urma_context_t *context)
@@ -327,8 +491,8 @@ urma_jfce_t *ds_urma_create_jfce(urma_context_t *context)
 
 urma_status_t ds_urma_delete_jfce(urma_jfce_t *jfce)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_delete_jfce)>("urma_delete_jfce",
-                                                                                     kUrmaDlopenErrorStatus, jfce);
+    return CallRet< urma_status_t, decltype(&ds_urma_delete_jfce)>(
+        "urma_delete_jfce", kUrmaDlopenErrorStatus, jfce);
 }
 
 urma_jfc_t *ds_urma_create_jfc(urma_context_t *context, const urma_jfc_cfg_t *config)
@@ -338,13 +502,13 @@ urma_jfc_t *ds_urma_create_jfc(urma_context_t *context, const urma_jfc_cfg_t *co
 
 urma_status_t ds_urma_delete_jfc(urma_jfc_t *jfc)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_delete_jfc)>("urma_delete_jfc",
-                                                                                    kUrmaDlopenErrorStatus, jfc);
+    return CallRet< urma_status_t, decltype(&ds_urma_delete_jfc)>(
+        "urma_delete_jfc", kUrmaDlopenErrorStatus, jfc);
 }
 
 urma_status_t ds_urma_rearm_jfc(urma_jfc_t *jfc, bool enable_events)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_rearm_jfc)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_rearm_jfc)>(
         "urma_rearm_jfc", kUrmaDlopenErrorStatus, jfc, enable_events);
 }
 
@@ -355,7 +519,7 @@ urma_jfr_t *ds_urma_create_jfr(urma_context_t *context, const urma_jfr_cfg_t *co
 
 urma_status_t ds_urma_delete_jfr(urma_jfr_t *jfr)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_delete_jfr)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_delete_jfr)>(
         "urma_delete_jfr", kUrmaDlopenErrorStatus, jfr);
 }
 
@@ -366,13 +530,13 @@ urma_jetty_t *ds_urma_create_jetty(urma_context_t *context, urma_jetty_cfg_t *co
 
 urma_status_t ds_urma_delete_jetty(urma_jetty_t *jetty)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_delete_jetty)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_delete_jetty)>(
         "urma_delete_jetty", kUrmaDlopenErrorStatus, jetty);
 }
 
 urma_status_t ds_urma_modify_jetty(urma_jetty_t *jetty, urma_jetty_attr_t *attr)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_modify_jetty)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_modify_jetty)>(
         "urma_modify_jetty", kUrmaDlopenErrorStatus, jetty, attr);
 }
 
@@ -384,13 +548,13 @@ urma_target_seg_t *ds_urma_register_seg(urma_context_t *context, const urma_seg_
 
 int ds_urma_wait_jfc(urma_jfce_t *jfce, int max_events, int timeout_ms, urma_jfc_t **ev_jfc)
 {
-    return CallRet<UrmaLibType::URMA, int, decltype(&ds_urma_wait_jfc)>(
+    return CallRet< int, decltype(&ds_urma_wait_jfc)>(
         "urma_wait_jfc", -1, jfce, max_events, timeout_ms, ev_jfc);
 }
 
 int ds_urma_poll_jfc(urma_jfc_t *jfc, int max_cr, urma_cr_t *complete_records)
 {
-    return CallRet<UrmaLibType::URMA, int, decltype(&ds_urma_poll_jfc)>(
+    return CallRet< int, decltype(&ds_urma_poll_jfc)>(
         "urma_poll_jfc", -1, jfc, max_cr, complete_records);
 }
 
@@ -408,13 +572,13 @@ urma_target_jetty_t *ds_urma_import_jetty(urma_context_t *context, urma_rjetty_t
 
 urma_status_t ds_urma_unimport_jetty(urma_target_jetty_t *tjetty)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_unimport_jetty)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_unimport_jetty)>(
         "urma_unimport_jetty", kUrmaDlopenErrorStatus, tjetty);
 }
 
 urma_status_t ds_urma_get_rjetty(urma_jetty_t *jetty, urma_rjetty_t **rjetty, uint32_t *length)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_get_rjetty)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_get_rjetty)>(
         "urma_get_rjetty", kUrmaDlopenErrorStatus, jetty, rjetty, length);
 }
 
@@ -425,7 +589,7 @@ void ds_urma_put_rjetty(urma_rjetty_t *rjetty)
 
 urma_status_t ds_urma_post_jetty_send_wr(urma_jetty_t *jetty, urma_jfs_wr_t *wr, urma_jfs_wr_t **bad_wr)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_post_jetty_send_wr)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_post_jetty_send_wr)>(
         "urma_post_jetty_send_wr", kUrmaDlopenErrorStatus, jetty, wr, bad_wr);
 }
 
@@ -438,7 +602,7 @@ urma_target_seg_t *ds_urma_import_seg(urma_context_t *context, urma_seg_t *seg, 
 
 urma_status_t ds_urma_get_seg_ctx(urma_target_seg_t *tseg, urma_seg_t **seg, uint32_t *size)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_get_seg_ctx)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_get_seg_ctx)>(
         "urma_get_seg_ctx", kUrmaDlopenErrorStatus, tseg, seg, size);
 }
 
@@ -449,19 +613,19 @@ void ds_urma_put_seg_ctx(urma_seg_t *seg)
 
 urma_status_t ds_urma_unregister_seg(urma_target_seg_t *seg)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_unregister_seg)>("urma_unregister_seg",
-                                                                                        kUrmaDlopenErrorStatus, seg);
+    return CallRet< urma_status_t, decltype(&ds_urma_unregister_seg)>(
+        "urma_unregister_seg", kUrmaDlopenErrorStatus, seg);
 }
 
 urma_status_t ds_urma_unimport_seg(urma_target_seg_t *seg)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_unimport_seg)>("urma_unimport_seg",
-                                                                                      kUrmaDlopenErrorStatus, seg);
+    return CallRet< urma_status_t, decltype(&ds_urma_unimport_seg)>(
+        "urma_unimport_seg", kUrmaDlopenErrorStatus, seg);
 }
 
 urma_status_t ds_urma_get_async_event(urma_context_t *context, urma_async_event_t *event)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_get_async_event)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_get_async_event)>(
         "urma_get_async_event", kUrmaDlopenErrorStatus, context, event);
 }
 
@@ -472,18 +636,20 @@ void ds_urma_ack_async_event(urma_async_event_t *event)
 
 urma_status_t ds_urma_start_perf(void)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_start_perf)>("urma_start_perf",
-                                                                                    kUrmaDlopenErrorStatus);
+    return CallRet< urma_status_t, decltype(&ds_urma_start_perf)>(
+        "urma_start_perf", kUrmaDlopenErrorStatus);
 }
 
 urma_status_t ds_urma_stop_perf(void)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_stop_perf)>("urma_stop_perf",
-                                                                                   kUrmaDlopenErrorStatus);
+    return CallRet< urma_status_t, decltype(&ds_urma_stop_perf)>(
+        "urma_stop_perf", kUrmaDlopenErrorStatus);
 }
 
 urma_status_t ds_urma_get_perf_info(char *perf_buf, uint32_t *length)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_get_perf_info)>(
+    return CallRet< urma_status_t, decltype(&ds_urma_get_perf_info)>(
         "urma_get_perf_info", kUrmaDlopenErrorStatus, perf_buf, length);
 }
+
+#endif  // USE_URMA_MOCK
