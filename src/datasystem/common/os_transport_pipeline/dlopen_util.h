@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: shared loader for libcudart.so and direct os_transport wrappers
+ * Description: Direct os_transport wrappers.
  */
 
 #ifndef OS_XPRT_PIPLN_DLOPEN_UTIL
@@ -25,43 +25,11 @@
 #ifndef PIPLN_USE_MOCK
 #include <cuda_runtime.h>
 #endif
-#include <ub/umdk/urma/urma_api.h>
-#include <ub/umdk/urma/urma_opcode.h>
 
-#include "datasystem/common/util/dlutils.h"
+#include "datasystem/common/util/cuda_host_memory.h"
 #include "os-transport/os_transport.h"
 
 namespace OsXprtPipln {
-
-struct LibLoaderBase {
-    LibLoaderBase(const std::string &libName);
-    virtual void Load();
-    virtual void UnLoad();
-
-    bool TryLoad(const std::string &path);
-    void AddPath(const std::string &path);
-    bool Inited()
-    {
-        return handle_ != nullptr;
-    }
-
-    std::vector<std::string> libpaths_;
-    void *handle_ = nullptr;
-    std::string libName_;
-};
-
-#define CALL_DYN_FUNC_BASE(type, ret, funcName, ...)                 \
-    {                                                                \
-        auto &func = OsXprtPipln::type::Instance()->funcName##Func_; \
-        if (func)                                                    \
-            ret = static_cast<decltype(ret)>(func(__VA_ARGS__));     \
-        else                                                         \
-            ret = static_cast<decltype(ret)>(-1);                    \
-    }
-
-#define DO_LOAD_DYNLIB(type) type::Instance()->Load();
-#define DO_UNLOAD_DYNLIB(type) type::Instance()->UnLoad();
-#define IS_VALID_DYNFUNC(type, func) (type::Instance()->func##Func_ != nullptr)
 
 #define DO_LOAD_OS_TRANSPORT() static_cast<void>(0)
 #define DO_UNLOAD_OS_TRANSPORT() static_cast<void>(0)
@@ -80,38 +48,20 @@ struct LibLoaderBase {
 #define OS_XPRT_DIRECT_DoCancel os_transport_cancel_tasks
 
 #ifndef PIPLN_USE_MOCK
-struct CudaRTLibLoader : public LibLoaderBase {
-    CudaRTLibLoader() : LibLoaderBase("libcudart.so")
-    {
-    }
-    void Load() override;
-    void UnLoad() override;
-    static CudaRTLibLoader *Instance();
+template <typename T>
+T LoadCudaRuntimeFunc(const char *name)
+{
+    return reinterpret_cast<T>(reinterpret_cast<intptr_t>(datasystem::GetCudaRuntimeSymbol(name)));
+}
 
-    // cuda toolkit
-    REG_METHOD(cudaStreamCreateWithFlags, cudaError_t, cudaStream_t *, unsigned int);
-    REG_METHOD(cudaEventCreate, cudaError_t, cudaEvent_t *, unsigned int);
-    REG_METHOD(cudaMemcpyAsync, cudaError_t, void *, const void *, size_t, cudaMemcpyKind, cudaStream_t);
-    REG_METHOD(cudaEventRecord, cudaError_t, cudaEvent_t, cudaStream_t);
-    REG_METHOD(cudaStreamDestroy, cudaError_t, cudaStream_t);
-    REG_METHOD(cudaEventSynchronize, cudaError_t, cudaEvent_t);
-    REG_METHOD(cudaEventDestroy, cudaError_t, cudaEvent_t);
-    REG_METHOD(cudaGetErrorString, const char *, cudaError_t);
-    REG_METHOD(cudaHostRegister, cudaError_t, void *, size_t, unsigned int);
-    REG_METHOD(cudaHostUnregister, cudaError_t, void *);
-};
-#else
-typedef int cudaError_t;
-struct CudaRTLibLoader {
-    void Load(){};
-    void UnLoad(){};
-    static CudaRTLibLoader *Instance()
-    {
-        static struct CudaRTLibLoader dummy;
-        return &dummy;
-    }
-};
+#define CALL_CUDA_RT_FUNC(ret, funcName, ...)                              \
+    do {                                                                   \
+        using CudaFunc = decltype(&funcName);                              \
+        static CudaFunc cudaFunc = LoadCudaRuntimeFunc<CudaFunc>(#funcName); \
+        ret = cudaFunc == nullptr ? static_cast<decltype(ret)>(-1)         \
+                                  : static_cast<decltype(ret)>(cudaFunc(__VA_ARGS__)); \
+    } while (0)
 #endif
-#define CALL_CUDA_RT_FUNC(ret, funcName, ...) CALL_DYN_FUNC_BASE(CudaRTLibLoader, ret, funcName, __VA_ARGS__);
+
 }  // namespace OsXprtPipln
 #endif

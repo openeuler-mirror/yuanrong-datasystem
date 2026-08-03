@@ -527,9 +527,7 @@ Status ChunkManager::InitOsPiplnRH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, ur
     cfg.jfc = jfc;
     cfg.recv_queue_capacity = jettySize;
 
-    if (needCuda) {
-        DO_LOAD_DYNLIB(CudaRTLibLoader);
-    }
+    (void)needCuda;
 
     DO_LOAD_OS_TRANSPORT();
 
@@ -544,7 +542,6 @@ Status ChunkManager::InitOsPiplnRH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, ur
     } else {
         osPiplnH2DHandle_ = nullptr;
         DO_UNLOAD_OS_TRANSPORT();
-        DO_UNLOAD_DYNLIB(CudaRTLibLoader);
         LOG(ERROR) << PIPLN_LOG_PREFIX "os_transport_init failed: ret=" << ret;
         return Status(StatusCode::K_INVALID, "Failed to init os pipeline h2d environments");
     }
@@ -560,7 +557,6 @@ void ChunkManager::UnInitOsPiplnRH2DEnv()
     CALL_OS_XPRT_FUNC(ret, DoDestroy, osPiplnH2DHandle_);
     osPiplnH2DHandle_ = nullptr;
     DO_UNLOAD_OS_TRANSPORT();
-    DO_UNLOAD_DYNLIB(CudaRTLibLoader);
 }
 
 Status ChunkManager::DoPiplnStep1_StartSender(PiplnSndArgs &args)

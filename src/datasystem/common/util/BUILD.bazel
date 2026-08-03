@@ -66,6 +66,7 @@ ds_cc_library(
             "strings_util.h",
         ],
     ) + [":git_version_def"],
+    linkopts = ["-ldl"],
     deps = [
         ":format",
         ":strings_util",
