@@ -43,8 +43,27 @@ static constexpr uint64_t CHUNK_SIZE = 1024 * 1024;
 
 #ifdef USE_URMA
 namespace {
+void RecordUbWriteFailure(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const Status &rc,
+                          const UrmaWriteFailure &failure)
+{
+    if (rc.IsOk()) {
+        return;
+    }
+    bufferInfo->ubFailureReportRc = rc;
+    bufferInfo->ubProviderStatus = failure.providerStatus;
+    bufferInfo->ubCqeStatus = failure.cqeStatus;
+}
+
+void ResetUbWriteFailure(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
+{
+    bufferInfo->ubFailureReportRc = Status::OK();
+    bufferInfo->ubProviderStatus.reset();
+    bufferInfo->ubCqeStatus.reset();
+}
+
 Status SendBufferViaSingleUbWrite(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
-                                  uint64_t totalSize, const std::shared_ptr<UrmaManager::BufferHandle> &bufHandle)
+                                  uint64_t totalSize, const std::shared_ptr<UrmaManager::BufferHandle> &bufHandle,
+                                  UrmaWriteFailure &failure)
 {
     std::vector<uint64_t> eventKeys;
     void *poolBuf = bufHandle->GetPointer();
@@ -58,7 +77,7 @@ Status SendBufferViaSingleUbWrite(const std::shared_ptr<ObjectBufferInfo> &buffe
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(), bufHandle->GetSegmentSize(),
                          reinterpret_cast<uint64_t>(poolBuf), 0, bufferInfo->dataSize, bufferInfo->metadataSize,
-                         srcChipId, dstChipId, true, eventKeys),
+                         srcChipId, dstChipId, true, eventKeys, nullptr, &failure),
         FormatString("Failed to submit UrmaWritePayload, totalSize=%llu", totalSize));
     bufferInfo->ubDataSentByMemoryCopy = true;
     METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
@@ -245,13 +264,16 @@ Status ClientWorkerBaseApi::PipelineDataTransferHelper(const std::shared_ptr<Obj
             const uint8_t dstChipId = bufferInfo->ubUrmaDataInfo->has_chip_id()
                                           ? static_cast<uint8_t>(bufferInfo->ubUrmaDataInfo->chip_id())
                                           : INVALID_CHIP_ID;
+            UrmaWriteFailure failure;
             Status writeStatus = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(),
                                                   bufHandle->GetSegmentSize(), reinterpret_cast<uint64_t>(chunkPtr), 0,
-                                                  writeSize, 0, srcChipId, dstChipId, false, eventKeys, waiter);
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(writeStatus,
-                                             FormatString("Failed to submit UrmaWritePayload, chunkIndex=%u, "
-                                                          "writeSize=%llu, processedSize=%llu, totalSize=%llu",
-                                                          chunkIndex, writeSize, processedSize, totalSize));
+                                                  writeSize, 0, srcChipId, dstChipId, false, eventKeys, waiter,
+                                                  &failure);
+            RecordUbWriteFailure(bufferInfo, writeStatus, failure);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                writeStatus, FormatString("Failed to submit UrmaWritePayload, chunkIndex=%u, writeSize=%llu, "
+                                          "processedSize=%llu, totalSize=%llu",
+                                          chunkIndex, writeSize, processedSize, totalSize));
 
             uint64_t eventKey = eventKeys[0];
             eventToChunkMap[eventKey] = chunkIndex;
@@ -270,7 +292,10 @@ Status ClientWorkerBaseApi::PipelineDataTransferHelper(const std::shared_ptr<Obj
             CHECK_FAIL_RETURN_STATUS(rc.IsOk(), K_RUNTIME_ERROR, rc.ToString());
             uint64_t eventId = event->GetRequestId();
             // Event should be ready
-            RETURN_IF_NOT_OK(UrmaManager::Instance().WaitToFinish(eventId, RPC_POLL_TIME));
+            UrmaWriteFailure failure;
+            Status waitRc = UrmaManager::Instance().WaitToFinish(eventId, RPC_POLL_TIME, &failure);
+            RecordUbWriteFailure(bufferInfo, waitRc, failure);
+            RETURN_IF_NOT_OK(waitRc);
 
             auto it = eventToChunkMap.find(eventId);
             CHECK_FAIL_RETURN_STATUS(it != eventToChunkMap.end(), K_RUNTIME_ERROR,
@@ -298,6 +323,7 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
     (void)traceEnabled;
 #ifdef USE_URMA
     {
+        ResetUbWriteFailure(bufferInfo);
         const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
         std::shared_ptr<UrmaManager::BufferHandle> bufHandle;
         uint64_t realSize = 0;
@@ -311,7 +337,9 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
             }
         });
         if (totalSize == realSize) {
-            Status rc = SendBufferViaSingleUbWrite(bufferInfo, data, totalSize, bufHandle);
+            UrmaWriteFailure failure;
+            Status rc = SendBufferViaSingleUbWrite(bufferInfo, data, totalSize, bufHandle, failure);
+            RecordUbWriteFailure(bufferInfo, rc, failure);
             RecordUrmaDataPlaneResult(rc.IsOk());
             return rc;
         }
@@ -349,6 +377,7 @@ Status ClientWorkerBaseApi::SendBufferViaUbFromPool(const std::shared_ptr<Object
         }
     }
     std::vector<uint64_t> eventKeys;
+    ResetUbWriteFailure(bufferInfo);
     const uint8_t srcChipId = NumaIdToChipId(ubHandle->GetNumaId());
     const uint8_t dstChipId = bufferInfo->ubUrmaDataInfo->has_chip_id()
                                   ? static_cast<uint8_t>(bufferInfo->ubUrmaDataInfo->chip_id())
@@ -359,9 +388,11 @@ Status ClientWorkerBaseApi::SendBufferViaUbFromPool(const std::shared_ptr<Object
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_START);
     }
+    UrmaWriteFailure failure;
     Status rc = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), segAddr, segSize,
                                  reinterpret_cast<uint64_t>(bufferInfo->pointer), 0, bufferInfo->dataSize,
-                                 bufferInfo->metadataSize, srcChipId, dstChipId, true, eventKeys);
+                                 bufferInfo->metadataSize, srcChipId, dstChipId, true, eventKeys, nullptr, &failure);
+    RecordUbWriteFailure(bufferInfo, rc, failure);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_END);
     }

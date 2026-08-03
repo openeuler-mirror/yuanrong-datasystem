@@ -22,6 +22,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -37,6 +38,7 @@
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/transport_advisor.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread.h"
@@ -49,6 +51,7 @@
 #include <bthread/mutex.h>
 
 namespace datasystem {
+
 namespace client {
 
 struct TransportLayerOptions {
@@ -67,6 +70,19 @@ public:
 
     /** @brief Initialize transport runtime resources before data-plane connections are created. */
     Status Init();
+
+    /** @brief Reject a new client-local UB write while the process-local sender is quarantined. */
+    Status CheckLocalUbSenderAdmission() const;
+
+    /**
+     * @brief Run a client-local UB write under the shared sender admission and classify its raw failure evidence.
+     * @param[in] workerAddr Worker endpoint used by the write.
+     * @param[in,out] bufferInfo Buffer state populated with the raw provider/CQE failure detail.
+     * @param[in] write Actual UB write operation.
+     * @return The write result, or K_URMA_WORKER_UNAVAILABLE when the sender is quarantined.
+     */
+    Status RunClientLocalUbWrite(const HostPort &workerAddr, ObjectBufferInfo &bufferInfo,
+                                 const std::function<Status()> &write);
 
     /**
      * @brief Execute an object read through metadata lookup and direct data-worker access.
