@@ -2397,9 +2397,6 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
     if (!isRestart || !controlBackendAvailableAtStartup_ || !FLAGS_enable_reconciliation) {
         RETURN_IF_NOT_OK(CheckWaitTopologyReady());
         LOG(INFO) << "Did not restart so no need to reconcile. Set health file.";
-        if (controlBackendAvailableAtStartup_) {
-            RETURN_IF_NOT_OK(UpdateLocalNodeReady());
-        }
         RETURN_IF_NOT_OK(SetHealthProbe());
         setHealthFile_.store(true);
     } else {
@@ -2566,7 +2563,7 @@ Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, s
 Status WorkerOCServiceImpl::CheckWaitTopologyReady()
 {
     constexpr int64_t waitIntervalMs = 100;
-    constexpr int logPerCount = 10;
+    constexpr int logPerCount = 100;
     const int64_t timeoutMs = std::max<int64_t>(TOPOLOGY_READY_WAIT_TIMEOUT_S, FLAGS_node_timeout_s) * SECS_TO_MS;
     Timer timer;
     auto rc = CheckTopologyServingReady();
