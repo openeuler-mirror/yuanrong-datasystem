@@ -93,6 +93,34 @@ public:
     BrpcChannelFactory() = default;
     ~BrpcChannelFactory() = default;
     static std::unique_ptr<brpc::Channel> Create(const BrpcChannelConfig &cfg);
+
+    /**
+     * @brief Force brpc's global one-shot initialization to run on the
+     * CALLING thread, before any concurrent RPC path can trigger it
+     * lazily inside a multi-threaded context.
+     *
+     * Background: brpc::Channel::Init calls brpc::GlobalInitializeOrDie
+     * (guarded by pthread_once) on the first call. Global init spawns the
+     * bthread worker pool (pthread_create inside TaskControl::init). Under
+     * ThreadSanitizer, the spawn path races with the spawning thread in
+     * bthread::TaskGroup::ready_to_run_remote — TSAN reports it and aborts.
+     * The race is in brpc 1.15.0 bthread internals (silenced via
+     * //tools/tsan:default_suppressions); calling the init explicitly on
+     * the main thread, BEFORE any topology/RPC code runs, further isolates
+     * the racy window to a quiet single-threaded point so even related
+     * brpc-internal accesses that the suppression might miss cannot
+     * interleave with datasystem's own threads.
+     *
+     * Idempotent via std::call_once. Safe to call from any thread, but is
+     * most useful from the worker/coordinator main thread during startup
+     * before ConstructTopologyRuntime / service initialization.
+     *
+     * Implementation note: triggers init via a throwaway brpc::Channel
+     * against an unreachable endpoint. brpc connects lazily on first RPC,
+     * so the throwaway channel never opens a TCP socket and is discarded
+     * immediately with no global-state side effects beyond the once-init.
+     */
+    static void EnsureGlobalInitialized();
 };
 
 /**

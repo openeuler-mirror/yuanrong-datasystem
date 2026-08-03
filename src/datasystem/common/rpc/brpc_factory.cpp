@@ -94,8 +94,37 @@ void EnsureBrpcCircuitBreakerIsolationCap()
 
 }  // namespace
 
+// Force brpc's global one-shot init (GlobalInitializeOrDie, guarded by
+// pthread_once) on the calling thread. See header for full rationale.
+// Trigger: a throwaway brpc::Channel + Init against an unreachable
+// endpoint. brpc connects lazily on first RPC, so Init only sets up the
+// channel/socket-map entry without opening a TCP socket; the channel
+// destructor immediately releases it. The actual value of Init's return
+// is irrelevant — we only care that the pthread_once body ran.
+void BrpcChannelFactory::EnsureGlobalInitialized()
+{
+    static std::once_flag once;
+    std::call_once(once, []() {
+        brpc::ChannelOptions opts;
+        brpc::Channel ch;
+        // 127.0.0.1:1 — loopback, no DNS; port 1 is unreachable on a normal
+        // host, but Init does not connect, so the return code is irrelevant.
+        // Discard via (void) to make the intent explicit.
+        (void)ch.Init("127.0.0.1:1", &opts);
+        LOG(INFO) << "brpc global initialization pre-warmed on main thread";
+    });
+}
+
 std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfig &cfg)
 {
+    // Pre-warm brpc global init on the calling thread before touching any
+    // channel. Idempotent via std::call_once. For callers that already
+    // invoked EnsureGlobalInitialized() explicitly during startup (worker,
+    // coordinator) this is a no-op; for ad-hoc callers (client SDK, tests,
+    // dsbench) this guarantees the once-init runs on a known thread before
+    // the first Channel::Init instead of racing inside a multi-threaded
+    // context. See header for the TSAN rationale.
+    EnsureGlobalInitialized();
     EnsureBrpcDeliverTimeoutMs();
     EnsureBrpcMaxBodySize();
     EnsureBrpcCircuitBreakerIsolationCap();

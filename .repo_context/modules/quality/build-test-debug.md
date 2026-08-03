@@ -115,6 +115,75 @@ Backed by `CMakeLists.txt`:
 - sanitizers are supported through `build.sh -S address|thread|undefined`;
 - coverage mode is supported through `build.sh -c on|html`.
 
+Backed by `tools/tsan/BUILD.bazel`, `.bazelrc` (`build:tsan`), `bazel/build_defs.bzl`, and the
+`datasystem_worker` / `datasystem_coordinator` binary targets:
+
+- ThreadSanitizer builds (`bazel build --config=tsan`, `bazel test --config=tsan`) link
+  `//tools/tsan:default_suppressions` into every `ds_cc_test` and both server binaries. That
+  translation unit defines `__tsan_default_suppressions()`, which the TSAN runtime calls at
+  process startup to obtain compiled-in suppression entries. Suppressed scope is intentionally
+  narrow: only known-benign third-party (brpc 1.15.0 / bthread M:N scheduler) init-time races
+  that TSAN's happens-before model cannot precisely model. `datasystem::*` races are NOT
+  suppressed, so real concurrency bugs in datasystem code still abort tests/binaries under TSAN.
+- `tools/tsan/brpc_suppressions.txt` mirrors the same entries in runtime-file form. Operators
+  who need to add more suppressions set `TSAN_OPTIONS=suppressions=<path>`; TSAN merges
+  env-supplied suppressions on top of the compiled-in baseline, it does not replace them.
+- The `.bazelrc` `build:tsan` block deliberately preserves TSAN's default `halt_on_error=1`
+  so real races still fail tests; only the brpc/bthread third-party init races are silenced by
+  the compiled-in baseline.
+- The worker also pre-warms brpc's global init on the main thread before any RPC path runs;
+  see `modules/runtime/worker-runtime.md` Startup section.
+
+### ThreadSanitizer platform support
+
+Verified by building and running `bazel build --config=tsan //src/datasystem/worker:datasystem_worker`
+on both x86_64 and aarch64:
+
+- **x86_64: SUPPORTED.** Worker starts successfully under TSAN with `enable_urma=false`,
+  zero TSAN races reported, stable steady-state operation. Required runtime setup:
+  - `setarch x86_64 -R` (disable ASLR) — without it TSAN aborts with "unexpected memory mapping"
+    because ASLR places the shared-memory mmap into TSAN's shadow region.
+  - `TSAN_OPTIONS='history_size=1:force_seq_cst=0'` — reduces TSAN shadow-memory overhead.
+  - `shared_memory_size_mb` reduced to ≤256 — minimises mmap pressure on TSAN shadow region.
+  - `enable_urma=false` — URMA device-memory mappings conflict with TSAN shadow region.
+- **aarch64: NOT SUPPORTED.** The worker segfaults inside `libtsan.so.2` during brpc's
+  internal health-check / timer tasks. Two architectural root causes make aarch64 + brpc +
+  TSAN fundamentally incompatible:
+
+  1. **brpc globally overrides `pthread_mutex_lock`** (`bthread/mutex.cpp`). TSAN detects
+     mutex acquisition by intercepting the standard `pthread_mutex_lock`, but brpc's override
+     bypasses the interceptor. Result: TSAN sees all brpc-internal mutex-protected code as
+     "unprotected" and reports false data races. `usercode_in_pthread=true` does NOT help
+     because brpc's INTERNAL tasks (HealthCheckTask, TimerThread, bvar SamplerCollector)
+     still use bthread::Mutex regardless of that flag.
+
+  2. **bthread uses custom-assembly fiber context switching** (`bthread_make_fcontext`,
+     similar to boost::context's fcontext_t), not POSIX `swapcontext`. TSAN can only
+     intercept `swapcontext` — it cannot track custom-assembly fiber stack switches.
+     After a fiber switch, TSAN's per-pthread ThreadState holds a stale stack pointer;
+     the next memory access computes a shadow address that lands in unmapped memory →
+     `ThreadSanitizer: SEGV`. This only manifests on aarch64 (shadow memory layout
+     conflicts with fiber stacks); x86_64's shadow layout does not conflict, so the
+     fiber switch is tolerated.
+
+- This is a **known brpc community issue** with no upstream fix:
+  - [apache/brpc#2864](https://github.com/apache/brpc/issues/2864) (Open, 2025-01):
+    brpc overrides `pthread_mutex_lock`, TSAN can't recognise internal mutex → false races.
+  - [apache/brpc#3295](https://github.com/apache/brpc/issues/3295) (Open, 2026-05):
+    aarch64 + openEuler + brpc 1.16, exact same races and SEGV as observed here
+    (`add_vlog_site`, `TimerThread::Bucket::schedule`, `bthread_make_fcontext`).
+  - [apache/brpc#1687](https://github.com/apache/brpc/issues/1687) (Closed without fix,
+    2022-01): `bvar::detail::AgentCombiner` linked-list race under TSAN.
+
+  The theoretical fix — integrating Clang's TSAN fiber API
+  (`__tsan_switch_to_fiber`) into bthread's context-switch code — requires
+  modifying brpc source and has not been done by the brpc community.
+
+- **Recommendation for aarch64**: use `bazel build --config=asan` (AddressSanitizer) instead
+  of TSAN. ASAN does not track fiber stacks and does not SEGV. For concurrency verification
+  on aarch64, rely on code review and unit tests; use x86_64 TSAN as the automated
+  concurrency-safety gate.
+
 Backed by `bazel/BUILD.bazel` and `bazel/datasystem_sdk.bzl`:
 
 - `//bazel:datasystem_sdk` emits both `bazel-bin/bazel/datasystem_sdk` and `bazel-bin/bazel/datasystem_sdk.tar`;

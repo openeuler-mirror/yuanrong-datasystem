@@ -431,6 +431,10 @@ tests/
     - test_e2e.sh
   - tools/
     - procmon.py
+    - tsan/
+      - BUILD.bazel
+      - brpc_suppressions.txt
+      - default_suppressions.cpp
   - BUILD.bazel
   - CMakeLists.txt
   - Makefile

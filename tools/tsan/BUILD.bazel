@@ -1,0 +1,36 @@
+package(default_visibility = ["//visibility:public"])
+
+# Compiled-in TSAN default suppressions. Linked into datasystem_worker,
+# datasystem_coordinator, and every ds_cc_test so the brpc / bthread
+# third-party init-time races are silenced automatically wherever the
+# binary runs, even without TSAN_OPTIONS=suppressions=... set in the
+# environment.
+#
+# alwayslink = True is required: __tsan_default_suppressions is never
+# referenced at link time from datasystem code — the TSAN runtime
+# dlsym's it at process startup. Without alwayslink the linker would
+# drop default_suppressions.o from the archive (no undefined symbol to
+# resolve), and the compiled-in baseline would silently not apply.
+# This matches the convention used by worker_oc_server /
+# worker_liveness_check / add_miss_libs_fixme for the same class of
+# registration-style translation units.
+#
+# Under non-TSAN builds the __tsan_default_suppressions symbol is simply
+# unused (no TSAN runtime to call it), so linking this target is harmless.
+cc_library(
+    name = "default_suppressions",
+    srcs = ["default_suppressions.cpp"],
+    alwayslink = True,
+)
+
+# Runtime suppression file. The compiled-in defaults in default_suppressions
+# above are the primary path; this file is for operators who want to ADD more
+# suppressions at runtime via:
+#   TSAN_OPTIONS=suppressions=<path-to-this-file>
+# TSAN merges env-supplied suppressions on top of the compiled-in ones. The
+# file is also the canonical reference listing every suppression with full
+# justification (operators read it to see what is silenced).
+filegroup(
+    name = "suppressions_file",
+    srcs = ["brpc_suppressions.txt"],
+)

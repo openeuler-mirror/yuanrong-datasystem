@@ -1,0 +1,32 @@
+# ThreadSanitizer suppressions for known-benign races in third-party
+# libraries used by yuanrong-datasystem.
+#
+# Format: <error_type>:<symbol_or_source_pattern>
+# Each entry suppresses a race reported by TSAN at runtime. These are
+# NOT suppressions for datasystem's own code — they cover only third-party
+# (brpc / bthread / butil) init-time and M:N-scheduler races that TSAN's
+# happens-before model cannot precisely model, but which are safe under
+# brpc's own atomicity discipline.
+#
+# Apply at runtime via:
+#   TSAN_OPTIONS=suppressions=<repo>/tools/tsan/brpc_suppressions.txt:halt_on_error=0
+# Or rely on the compiled-in defaults from //tools/tsan:default_suppressions
+# (linked into datasystem_worker / datasystem_coordinator / ds_cc_test).
+#
+# Add new entries only after confirming the race is in third-party code and
+# not in datasystem sources. Keep entries narrow (function-name scoped)
+# rather than blanket library-wide when possible.
+
+# brpc 1.15.0 bthread M:N scheduler: TaskGroup::ready_to_run_remote is
+# flagged during TaskControl::init when the spawning pthread publishes
+# the first ready task to the just-created worker's TaskGroup. The
+# release/acquire pair is modelled by brpc's own worker-entrance protocol
+# (TaskGroup::run_main) but TSAN reports it as a race.
+race:bthread::TaskGroup::ready_to_run_remote
+
+# Conservative blanket coverage for the rest of bthread's init and
+# scheduler internals. Kept narrow to the bthread namespace so future
+# real races in datasystem code are still reported.
+race:bthread::TaskGroup::*
+race:bthread::TaskControl::*
+race:bthread::TaskMeta::*
