@@ -20,7 +20,6 @@
 #include <algorithm>
 #include <exception>
 #include <set>
-#include <type_traits>
 #include <utility>
 
 #include "datasystem/common/log/log.h"
@@ -38,9 +37,9 @@ constexpr int kReconcileErrorLogIntervalSeconds = 10;
 constexpr uint32_t kPolicyDiagnosticLogEveryCount = 100;
 constexpr char kInvalidCandidateMarker[] = "Coordinator membership discovery returned an invalid candidate";
 constexpr char kDiscoveryErrorMarker[] = "Coordinator membership discovery failed";
-constexpr char kOperationWarningMarker[] = "Coordinator membership operation remains uncertain";
 constexpr char kAddSubmissionExceptionMarker[] = "Coordinator membership AddPeer submission exception";
 constexpr char kRemoveSubmissionExceptionMarker[] = "Coordinator membership RemovePeer submission exception";
+constexpr char kOperationCompletionErrorMarker[] = "Coordinator membership asynchronous operation failed";
 constexpr char kUnsafeOverTargetMarker[] =
     "Coordinator membership over-target configuration has no safe removal target";
 
@@ -59,20 +58,28 @@ const char *InvalidCoordinatorMembershipOptionsReason(const CoordinatorMembershi
     if (options.discoveryRetryInterval <= zero) {
         return "Coordinator membership discoveryRetryInterval must be positive";
     }
-    if (options.operationWarningTimeout <= zero) {
-        return "Coordinator membership operationWarningTimeout must be positive";
-    }
-    if (options.candidateRetryCooldown <= zero) {
-        return "Coordinator membership candidateRetryCooldown must be positive";
-    }
     if (options.healthCheckInterval >= options.memberFailureGrace) {
         return "Coordinator membership healthCheckInterval must be less than memberFailureGrace";
     }
-
     return nullptr;
 }
 
 }  // namespace
+
+const char *CoordinatorMembershipManager::MutationKindName(MutationKind kind) noexcept
+{
+    switch (kind) {
+        case MutationKind::ADD_VACANCY:
+            return "ADD_VACANCY";
+        case MutationKind::ADD_REPLACEMENT:
+            return "ADD_REPLACEMENT";
+        case MutationKind::REMOVE_FAILED:
+            return "REMOVE_FAILED";
+        case MutationKind::ROLLBACK_CANDIDATE:
+            return "ROLLBACK_CANDIDATE";
+    }
+    return "UNKNOWN";
+}
 
 bool CoordinatorMembershipOptions::IsValid() const noexcept
 {
@@ -85,6 +92,7 @@ CoordinatorMembershipManager::CoordinatorMembershipManager(CoordinatorMembership
     : CoordinatorMembershipManager(
           options,
           Dependencies{
+              [&raftNode] { return raftNode.HasInFlightMembershipOperation(); },
               [&raftNode](CoordinatorRaftMembershipStatus &status) { return raftNode.GetMembershipStatus(status); },
               [&raftNode](const std::string &peer, MembershipOperationCallback callback) {
                   return raftNode.AddPeer(peer, std::move(callback));
@@ -131,7 +139,6 @@ Status CoordinatorMembershipManager::Start()
         auto failedThread = std::move(thread_);
         state_ = failedThread == nullptr ? LifecycleState::STOPPED : LifecycleState::STOPPING;
         lock.unlock();
-        StopCompletionMailbox();
         lifecycleCv_.notify_all();
         if (failedThread != nullptr && failedThread->joinable()) {
             failedThread->join();
@@ -146,7 +153,6 @@ Status CoordinatorMembershipManager::Start()
         auto failedThread = std::move(thread_);
         state_ = failedThread == nullptr ? LifecycleState::STOPPED : LifecycleState::STOPPING;
         lock.unlock();
-        StopCompletionMailbox();
         lifecycleCv_.notify_all();
         if (failedThread != nullptr && failedThread->joinable()) {
             failedThread->join();
@@ -169,8 +175,6 @@ Status CoordinatorMembershipManager::Shutdown()
         }
     }
 
-    StopCompletionMailbox();
-
     std::unique_ptr<Thread> threadToJoin;
     bool stopConstructedManager = false;
     {
@@ -192,17 +196,16 @@ Status CoordinatorMembershipManager::Shutdown()
     }
 
     lifecycleCv_.notify_all();
-    if (stopConstructedManager) {
-        activeOperation_.reset();
-        ownedReplacementIntent_.reset();
-        return Status::OK();
-    }
-
-    if (threadToJoin != nullptr && threadToJoin->joinable()) {
+    if (!stopConstructedManager && threadToJoin != nullptr && threadToJoin->joinable()) {
         threadToJoin->join();
     }
-    activeOperation_.reset();
-    ownedReplacementIntent_.reset();
+
+    failureSince_.clear();
+    candidateLastAttemptAt_.clear();
+    replacementIntent_.reset();
+    if (stopConstructedManager) {
+        return Status::OK();
+    }
 
     {
         std::lock_guard<std::mutex> lock(lifecycleMutex_);
@@ -235,55 +238,32 @@ void CoordinatorMembershipManager::Run()
             LOG(ERROR) << kReconcileExceptionMarker;
         }
 
-        std::unique_lock<std::mutex> lock(completionMailbox_->mutex);
-        if (!completionMailbox_->wakeRequested) {
-            completionMailbox_->cv.wait_for(lock, options_.healthCheckInterval, [this] {
-                return completionMailbox_->stopping || completionMailbox_->wakeRequested;
-            });
-        }
-        if (completionMailbox_->stopping) {
+        std::unique_lock<std::mutex> lock(lifecycleMutex_);
+        lifecycleCv_.wait_for(lock, options_.healthCheckInterval, [this] { return state_ != LifecycleState::RUNNING; });
+        if (state_ != LifecycleState::RUNNING) {
             return;
         }
-        completionMailbox_->wakeRequested = false;
     }
 }
 
 Status CoordinatorMembershipManager::ReconcileOnce()
 {
-    auto completion = TakeCompletion();
+    if (dependencies_.hasInFlightMembershipOperation()) {
+        return Status::OK();
+    }
+
     CoordinatorRaftMembershipStatus status;
-    Status getStatusResult;
-    try {
-        getStatusResult = dependencies_.getStatus(status);
-    } catch (...) {
-        if (completion.has_value()) {
-            RestoreCompletion(std::move(*completion));
-        }
-        throw;
-    }
-    if (getStatusResult.IsError()) {
-        if (completion.has_value()) {
-            RestoreCompletion(std::move(*completion));
-        }
-        return getStatusResult;
-    }
-    ClaimCompletion(completion);
+    RETURN_IF_NOT_OK(dependencies_.getStatus(status));
     const auto now = now_();
 
     if (!RefreshLeaderObservation(status)) {
         return Status::OK();
     }
 
-    CleanupPolicyState(status, now);
+    CleanupPolicyState(status);
     const auto health = RefreshFollowerHealth(status, now);
-    const bool hasKnownQuorum = HasKnownQuorum(status, health);
-    if (activeOperation_.has_value()) {
-        RETURN_IF_NOT_OK(ConsumeCompletion(status, health, hasKnownQuorum, now));
-        return Status::OK();
-    }
-
-    ReconcileOwnedReplacementIntent(status);
-    if (!hasKnownQuorum) {
+    ReconcileReplacementIntent(status, health);
+    if (!HasKnownQuorum(status, health)) {
         return Status::OK();
     }
 
@@ -296,7 +276,7 @@ Status CoordinatorMembershipManager::ReconcileOnce()
         RETURN_IF_NOT_OK(SelectCandidate(status, now, candidate));
         if (!candidate.empty()) {
             RETURN_IF_NOT_OK(
-                SubmitAdd(CaptureSubmissionSnapshot(status), candidate, {}, OperationStage::ADDING_VACANCY, now));
+                SubmitAdd(CaptureSubmissionSnapshot(status), candidate, {}, MutationKind::ADD_VACANCY, now));
         }
         return Status::OK();
     }
@@ -304,31 +284,47 @@ Status CoordinatorMembershipManager::ReconcileOnce()
     if (committedCount > options_.expectedMemberCount) {
         if (!health.confirmedFailedPeers.empty()) {
             if (now >= nextMembershipSubmissionAt_) {
-                RETURN_IF_NOT_OK(SubmitFailedPeerRemoval(CaptureSubmissionSnapshot(status),
-                                                         health.confirmedFailedPeers.front(), now));
+                const auto &failedPeer = health.confirmedFailedPeers.front();
+                RETURN_IF_NOT_OK(SubmitRemove(CaptureSubmissionSnapshot(status), failedPeer, failedPeer,
+                                              MutationKind::REMOVE_FAILED, now));
             }
             return Status::OK();
         }
-        if (ownedReplacementIntent_.has_value()
-            && health.explicitlyHealthyPeers.count(ownedReplacementIntent_->failedPeer) != 0) {
-            if (now >= nextMembershipSubmissionAt_) {
-                RETURN_IF_NOT_OK(
-                    SubmitOwnedCandidateRollback(CaptureSubmissionSnapshot(status), *ownedReplacementIntent_, now));
+
+        if (replacementIntent_.has_value()
+            && health.explicitlyHealthyPeers.count(replacementIntent_->failedPeer) != 0) {
+            const auto candidate = FindCommittedReplacementCandidate(status);
+            if (candidate.has_value()) {
+                if (now >= nextMembershipSubmissionAt_) {
+                    RETURN_IF_NOT_OK(SubmitRemove(CaptureSubmissionSnapshot(status), *candidate,
+                                                  replacementIntent_->failedPeer, MutationKind::ROLLBACK_CANDIDATE,
+                                                  now));
+                }
+                return Status::OK();
             }
-            return Status::OK();
         }
+
         LogUnsafeOverTargetConfiguration(status);
         return Status::OK();
     }
 
-    if (health.confirmedFailedPeers.empty() || now < nextDiscoveryAt_) {
+    if (health.confirmedFailedPeers.empty()) {
         return Status::OK();
     }
+    const auto &failedPeer = health.confirmedFailedPeers.front();
+    if (!replacementIntent_.has_value() || replacementIntent_->failedPeer != failedPeer
+        || replacementIntent_->originalPeers != status.committedPeers) {
+        replacementIntent_.emplace(ReplacementIntent{ failedPeer, status.committedPeers, {} });
+    }
+    if (now < nextDiscoveryAt_) {
+        return Status::OK();
+    }
+
     std::string candidate;
     RETURN_IF_NOT_OK(SelectCandidate(status, now, candidate));
     if (!candidate.empty()) {
-        RETURN_IF_NOT_OK(SubmitAdd(CaptureSubmissionSnapshot(status), candidate, health.confirmedFailedPeers.front(),
-                                   OperationStage::ADDING_REPLACEMENT, now));
+        RETURN_IF_NOT_OK(
+            SubmitAdd(CaptureSubmissionSnapshot(status), candidate, failedPeer, MutationKind::ADD_REPLACEMENT, now));
     }
     return Status::OK();
 }
@@ -339,9 +335,10 @@ bool CoordinatorMembershipManager::RefreshLeaderObservation(const CoordinatorRaf
         observingLeader_ = false;
         observedTerm_ = status.term;
         failureSince_.clear();
+        candidateLastAttemptAt_.clear();
         nextDiscoveryAt_ = {};
-        ReconcileOwnedReplacementIntent(status);
-        ClearActiveOperation();
+        nextMembershipSubmissionAt_ = {};
+        replacementIntent_.reset();
         return false;
     }
 
@@ -349,9 +346,10 @@ bool CoordinatorMembershipManager::RefreshLeaderObservation(const CoordinatorRaf
         observingLeader_ = true;
         observedTerm_ = status.term;
         failureSince_.clear();
+        candidateLastAttemptAt_.clear();
         nextDiscoveryAt_ = {};
-        ReconcileOwnedReplacementIntent(status);
-        ClearActiveOperation();
+        nextMembershipSubmissionAt_ = {};
+        replacementIntent_.reset();
     }
     return true;
 }
@@ -403,7 +401,7 @@ CoordinatorMembershipManager::HealthSummary CoordinatorMembershipManager::Refres
     return summary;
 }
 
-void CoordinatorMembershipManager::CleanupPolicyState(const CoordinatorRaftMembershipStatus &status, TimePoint now)
+void CoordinatorMembershipManager::CleanupPolicyState(const CoordinatorRaftMembershipStatus &status)
 {
     const std::set<std::string> committedPeers(status.committedPeers.begin(), status.committedPeers.end());
     for (auto it = failureSince_.begin(); it != failureSince_.end();) {
@@ -413,9 +411,9 @@ void CoordinatorMembershipManager::CleanupPolicyState(const CoordinatorRaftMembe
             ++it;
         }
     }
-    for (auto it = candidateRetryAfter_.begin(); it != candidateRetryAfter_.end();) {
-        if (it->second <= now || committedPeers.count(it->first) != 0) {
-            it = candidateRetryAfter_.erase(it);
+    for (auto it = candidateLastAttemptAt_.begin(); it != candidateLastAttemptAt_.end();) {
+        if (committedPeers.count(it->first) != 0) {
+            it = candidateLastAttemptAt_.erase(it);
         } else {
             ++it;
         }
@@ -429,16 +427,22 @@ bool CoordinatorMembershipManager::HasKnownQuorum(const CoordinatorRaftMembershi
     return health.knownHealthyMembers >= requiredQuorum;
 }
 
+bool CoordinatorMembershipManager::TryAdmitDiscovery()
+{
+    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    return state_ == LifecycleState::CONSTRUCTED || state_ == LifecycleState::RUNNING;
+}
+
 Status CoordinatorMembershipManager::SelectCandidate(const CoordinatorRaftMembershipStatus &status, TimePoint now,
                                                      std::string &candidate)
 {
     candidate.clear();
-    nextDiscoveryAt_ = now + options_.discoveryRetryInterval;
-
-    std::vector<std::string> discoveredCandidates;
     if (!TryAdmitDiscovery()) {
         return Status::OK();
     }
+    nextDiscoveryAt_ = now + options_.discoveryRetryInterval;
+
+    std::vector<std::string> discoveredCandidates;
     const auto discoveryStatus = discovery_->GetCoordinators(discoveredCandidates);
     if (discoveryStatus.IsError()) {
         LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kDiscoveryErrorMarker;
@@ -465,190 +469,88 @@ Status CoordinatorMembershipManager::SelectCandidate(const CoordinatorRaftMember
                                normalizedCandidates.end());
 
     const std::set<std::string> committedPeers(status.committedPeers.begin(), status.committedPeers.end());
+    std::set<std::string> eligibleCandidates;
     for (const auto &normalizedCandidate : normalizedCandidates) {
-        if (committedPeers.count(normalizedCandidate) != 0
-            || (activeOperation_.has_value() && activeOperation_->candidate == normalizedCandidate)) {
+        if (committedPeers.count(normalizedCandidate) == 0) {
+            eligibleCandidates.emplace(normalizedCandidate);
+        }
+    }
+    for (auto it = candidateLastAttemptAt_.begin(); it != candidateLastAttemptAt_.end();) {
+        if (eligibleCandidates.count(it->first) == 0) {
+            it = candidateLastAttemptAt_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (const auto &eligibleCandidate : eligibleCandidates) {
+        if (candidate.empty()) {
+            candidate = eligibleCandidate;
             continue;
         }
-        const auto cooldownIt = candidateRetryAfter_.find(normalizedCandidate);
-        if (cooldownIt != candidateRetryAfter_.end() && cooldownIt->second > now) {
+        const auto candidateAttempt = candidateLastAttemptAt_.find(candidate);
+        const auto currentAttempt = candidateLastAttemptAt_.find(eligibleCandidate);
+        if (candidateAttempt != candidateLastAttemptAt_.end() && currentAttempt == candidateLastAttemptAt_.end()) {
+            candidate = eligibleCandidate;
             continue;
         }
-        candidate = normalizedCandidate;
-        break;
+        if (candidateAttempt != candidateLastAttemptAt_.end() && currentAttempt != candidateLastAttemptAt_.end()
+            && currentAttempt->second < candidateAttempt->second) {
+            candidate = eligibleCandidate;
+        }
     }
     return Status::OK();
 }
 
-bool CoordinatorMembershipManager::TryAdmitDiscovery()
+void CoordinatorMembershipManager::ReconcileReplacementIntent(const CoordinatorRaftMembershipStatus &status,
+                                                              const HealthSummary &health)
 {
-    std::lock_guard<std::mutex> lock(completionMailbox_->mutex);
-    return !completionMailbox_->stopping;
-}
-
-void CoordinatorMembershipManager::ClaimCompletion(std::optional<CompletionResult> &completion) noexcept
-{
-    if (!completion.has_value() || !activeOperation_.has_value()
-        || completion->generation != activeOperation_->generation) {
+    if (!replacementIntent_.has_value()) {
         return;
     }
-    if (completion->origin == CompletionOrigin::SUBMISSION_REJECTED
-        && activeOperation_->submittedStage == OperationStage::ADDING_REPLACEMENT) {
-        ownedReplacementIntent_.reset();
+
+    const auto failedPeer = replacementIntent_->failedPeer;
+    const bool failedStillConfirmed =
+        std::find(health.confirmedFailedPeers.begin(), health.confirmedFailedPeers.end(), failedPeer)
+        != health.confirmedFailedPeers.end();
+    if (status.committedPeers == replacementIntent_->originalPeers) {
+        if (!failedStillConfirmed && replacementIntent_->attemptedCandidates.empty()) {
+            replacementIntent_.reset();
+        }
+        return;
     }
-    activeOperation_->completionOrigin = completion->origin;
-    activeOperation_->completionStatus.emplace(std::move(completion->status));
-    completion.reset();
+
+    if (status.committedPeers.size() > options_.expectedMemberCount) {
+        const auto candidate = FindCommittedReplacementCandidate(status);
+        const bool failedStillCommitted =
+            std::find(status.committedPeers.begin(), status.committedPeers.end(), failedPeer)
+            != status.committedPeers.end();
+        if (candidate.has_value() && failedStillCommitted) {
+            return;
+        }
+    }
+    replacementIntent_.reset();
 }
 
-void CoordinatorMembershipManager::ReconcileOwnedReplacementIntent(const CoordinatorRaftMembershipStatus &status)
+std::optional<std::string> CoordinatorMembershipManager::FindCommittedReplacementCandidate(
+    const CoordinatorRaftMembershipStatus &status) const
 {
-    if (ownedReplacementIntent_.has_value() && !HasProvenOwnedReplacementIntent(status)) {
-        ownedReplacementIntent_.reset();
+    if (!replacementIntent_.has_value() || status.committedPeers.size() <= options_.expectedMemberCount) {
+        return std::nullopt;
     }
-}
-
-bool CoordinatorMembershipManager::HasProvenOwnedReplacementIntent(const CoordinatorRaftMembershipStatus &status) const
-{
-    if (!ownedReplacementIntent_.has_value() || status.committedPeers.size() <= options_.expectedMemberCount) {
-        return false;
+    const std::set<std::string> originalPeers(replacementIntent_->originalPeers.begin(),
+                                              replacementIntent_->originalPeers.end());
+    std::optional<std::string> candidate;
+    for (const auto &peer : status.committedPeers) {
+        if (originalPeers.count(peer) != 0) {
+            continue;
+        }
+        if (candidate.has_value() || replacementIntent_->attemptedCandidates.count(peer) == 0) {
+            return std::nullopt;
+        }
+        candidate = peer;
     }
-    const auto containsPeer = [&status](const std::string &peer) {
-        return std::find(status.committedPeers.begin(), status.committedPeers.end(), peer)
-               != status.committedPeers.end();
-    };
-    return containsPeer(ownedReplacementIntent_->candidate) && containsPeer(ownedReplacementIntent_->failedPeer);
-}
-
-Status CoordinatorMembershipManager::ConsumeCompletion(const CoordinatorRaftMembershipStatus &status,
-                                                       const HealthSummary &health, bool hasKnownQuorum, TimePoint now)
-{
-    auto &operation = *activeOperation_;
-    const bool configurationAdvanced = status.configurationIndex > operation.startingConfigurationIndex;
-    const auto containsPeer = [&status](const std::string &peer) {
-        return std::find(status.committedPeers.begin(), status.committedPeers.end(), peer)
-               != status.committedPeers.end();
-    };
-    const bool operationFailed = operation.completionStatus.has_value() && operation.completionStatus->IsError();
-    const bool submissionRejected =
-        operationFailed && operation.completionOrigin == CompletionOrigin::SUBMISSION_REJECTED;
-    const bool committedConfigurationUnchanged = status.committedPeers == operation.startingCommittedPeers;
-    if (operation.submittedStage == OperationStage::REMOVING_FAILED
-        || operation.submittedStage == OperationStage::ROLLING_BACK
-        || (operation.submittedStage == OperationStage::ADDING_REPLACEMENT && configurationAdvanced
-            && !containsPeer(operation.failedPeer))) {
-        ReconcileOwnedReplacementIntent(status);
-    }
-
-    switch (operation.submittedStage) {
-        case OperationStage::ADDING_VACANCY:
-            if (submissionRejected) {
-                candidateRetryAfter_[operation.candidate] = now + options_.candidateRetryCooldown;
-                nextDiscoveryAt_ = now + options_.discoveryRetryInterval;
-                ClearActiveOperation();
-                return Status::OK();
-            }
-            if (configurationAdvanced && containsPeer(operation.candidate)) {
-                ClearActiveOperation();
-                return Status::OK();
-            }
-            if (operationFailed && committedConfigurationUnchanged) {
-                candidateRetryAfter_[operation.candidate] = now + options_.candidateRetryCooldown;
-                nextDiscoveryAt_ = now + options_.discoveryRetryInterval;
-                ClearActiveOperation();
-                return Status::OK();
-            }
-            break;
-        case OperationStage::ADDING_REPLACEMENT:
-            if (submissionRejected) {
-                candidateRetryAfter_[operation.candidate] = now + options_.candidateRetryCooldown;
-                nextDiscoveryAt_ = now + options_.discoveryRetryInterval;
-                ownedReplacementIntent_.reset();
-                ClearActiveOperation();
-                return Status::OK();
-            }
-            if (configurationAdvanced && containsPeer(operation.candidate) && !containsPeer(operation.failedPeer)
-                && status.committedPeers.size() == options_.expectedMemberCount) {
-                ownedReplacementIntent_.reset();
-                ClearActiveOperation();
-                return Status::OK();
-            }
-            if (configurationAdvanced && containsPeer(operation.candidate)
-                && status.committedPeers.size() == options_.expectedMemberCount + 1 && hasKnownQuorum
-                && now >= nextMembershipSubmissionAt_) {
-                const bool failedPeerStillConfirmed = std::find(health.confirmedFailedPeers.begin(),
-                                                                health.confirmedFailedPeers.end(), operation.failedPeer)
-                                                      != health.confirmedFailedPeers.end();
-                if (failedPeerStillConfirmed) {
-                    const auto failedPeer = operation.failedPeer;
-                    return SubmitFailedPeerRemoval(CaptureSubmissionSnapshot(status), failedPeer, now);
-                }
-                if (health.explicitlyHealthyPeers.count(operation.failedPeer) != 0
-                    && ownedReplacementIntent_.has_value()) {
-                    const auto intent = *ownedReplacementIntent_;
-                    return SubmitOwnedCandidateRollback(CaptureSubmissionSnapshot(status), intent, now);
-                }
-            }
-            if (operationFailed && committedConfigurationUnchanged) {
-                candidateRetryAfter_[operation.candidate] = now + options_.candidateRetryCooldown;
-                nextDiscoveryAt_ = now + options_.discoveryRetryInterval;
-                ownedReplacementIntent_.reset();
-                ClearActiveOperation();
-                return Status::OK();
-            }
-            break;
-        case OperationStage::REMOVING_FAILED:
-            if (configurationAdvanced && !operation.startingCommittedPeers.empty()
-                && !containsPeer(operation.targetPeer)
-                && status.committedPeers.size() == operation.startingCommittedPeers.size() - 1) {
-                if (ownedReplacementIntent_.has_value()
-                    && operation.targetPeer == ownedReplacementIntent_->failedPeer) {
-                    ownedReplacementIntent_.reset();
-                }
-                ClearActiveOperation();
-                ReconcileOwnedReplacementIntent(status);
-                return Status::OK();
-            }
-            if (submissionRejected) {
-                nextMembershipSubmissionAt_ = now + options_.discoveryRetryInterval;
-                ClearActiveOperation();
-                ReconcileOwnedReplacementIntent(status);
-                return Status::OK();
-            }
-            break;
-        case OperationStage::ROLLING_BACK:
-            if (configurationAdvanced && !operation.startingCommittedPeers.empty()
-                && !containsPeer(operation.targetPeer)
-                && status.committedPeers.size() == operation.startingCommittedPeers.size() - 1) {
-                ownedReplacementIntent_.reset();
-                ClearActiveOperation();
-                return Status::OK();
-            }
-            if (submissionRejected) {
-                nextMembershipSubmissionAt_ = now + options_.discoveryRetryInterval;
-                ClearActiveOperation();
-                ReconcileOwnedReplacementIntent(status);
-                return Status::OK();
-            }
-            break;
-        case OperationStage::IDLE:
-        case OperationStage::UNCERTAIN:
-            break;
-    }
-
-    if (!operation.warningEmitted && now - operation.submittedAt >= options_.operationWarningTimeout) {
-        operation.warningEmitted = true;
-        LOG(WARNING) << kOperationWarningMarker << ", group=" << kCoordinatorRaftGroupId
-                     << ", generation=" << operation.generation
-                     << ", stage=" << OperationStageName(operation.submittedStage)
-                     << ", candidate=" << (operation.candidate.empty() ? "none" : operation.candidate)
-                     << ", failed_peer=" << (operation.failedPeer.empty() ? "none" : operation.failedPeer)
-                     << ", target_peer=" << (operation.targetPeer.empty() ? "none" : operation.targetPeer)
-                     << ", term=" << operation.term
-                     << ", starting_configuration_index=" << operation.startingConfigurationIndex;
-        operation.stage = OperationStage::UNCERTAIN;
-    }
-    return Status::OK();
+    return candidate;
 }
 
 CoordinatorMembershipManager::SubmissionSnapshot CoordinatorMembershipManager::CaptureSubmissionSnapshot(
@@ -657,8 +559,9 @@ CoordinatorMembershipManager::SubmissionSnapshot CoordinatorMembershipManager::C
     return SubmissionSnapshot{ status.term, status.configurationIndex, status.committedPeers };
 }
 
-Status CoordinatorMembershipManager::RevalidateSubmissionPolicy(const SubmissionSnapshot &expected,
-                                                                const ActiveOperation &operation, TimePoint now)
+Status CoordinatorMembershipManager::RevalidateSubmissionPolicy(const SubmissionSnapshot &expected, MutationKind kind,
+                                                                const std::string &targetPeer,
+                                                                const std::string &failedPeer, TimePoint now)
 {
     CoordinatorRaftMembershipStatus current;
     RETURN_IF_NOT_OK(dependencies_.getStatus(current));
@@ -666,8 +569,6 @@ Status CoordinatorMembershipManager::RevalidateSubmissionPolicy(const Submission
                                  && current.configurationIndex == expected.configurationIndex
                                  && current.committedPeers == expected.committedPeers;
     if (!snapshotMatches) {
-        ClearActiveOperation();
-        ReconcileOwnedReplacementIntent(current);
         return Status(K_TRY_AGAIN, "Coordinator membership submission decision is stale for group "
                                        + std::string(kCoordinatorRaftGroupId)
                                        + ", expected={leader=true, term=" + std::to_string(expected.term)
@@ -679,7 +580,7 @@ Status CoordinatorMembershipManager::RevalidateSubmissionPolicy(const Submission
                                        + ", committed_peers=[" + VectorToString(current.committedPeers) + "]}");
     }
 
-    CleanupPolicyState(current, now);
+    CleanupPolicyState(current);
     const auto health = RefreshFollowerHealth(current, now);
     const bool hasKnownQuorum = HasKnownQuorum(current, health);
     const auto containsCommittedPeer = [&current](const std::string &peer) {
@@ -691,174 +592,113 @@ Status CoordinatorMembershipManager::RevalidateSubmissionPolicy(const Submission
                != health.confirmedFailedPeers.end();
     };
 
-    bool stageConditionHolds = false;
-    switch (operation.submittedStage) {
-        case OperationStage::ADDING_VACANCY:
-            stageConditionHolds = current.committedPeers.size() < options_.expectedMemberCount;
+    bool policyStillHolds = false;
+    switch (kind) {
+        case MutationKind::ADD_VACANCY:
+            policyStillHolds =
+                current.committedPeers.size() < options_.expectedMemberCount && !containsCommittedPeer(targetPeer);
             break;
-        case OperationStage::ADDING_REPLACEMENT:
-            stageConditionHolds = current.committedPeers.size() == options_.expectedMemberCount
-                                  && isConfirmedFailed(operation.failedPeer);
+        case MutationKind::ADD_REPLACEMENT:
+            policyStillHolds = current.committedPeers.size() == options_.expectedMemberCount
+                               && !containsCommittedPeer(targetPeer) && isConfirmedFailed(failedPeer)
+                               && replacementIntent_.has_value() && replacementIntent_->failedPeer == failedPeer
+                               && replacementIntent_->originalPeers == current.committedPeers;
             break;
-        case OperationStage::REMOVING_FAILED:
-            stageConditionHolds = current.committedPeers.size() > options_.expectedMemberCount
-                                  && containsCommittedPeer(operation.targetPeer)
-                                  && isConfirmedFailed(operation.targetPeer);
+        case MutationKind::REMOVE_FAILED:
+            policyStillHolds = current.committedPeers.size() > options_.expectedMemberCount
+                               && containsCommittedPeer(targetPeer) && isConfirmedFailed(targetPeer);
             break;
-        case OperationStage::ROLLING_BACK:
-            stageConditionHolds =
-                current.committedPeers.size() > options_.expectedMemberCount
-                && containsCommittedPeer(operation.candidate) && containsCommittedPeer(operation.failedPeer)
-                && health.explicitlyHealthyPeers.count(operation.failedPeer) != 0 && ownedReplacementIntent_.has_value()
-                && ownedReplacementIntent_->candidate == operation.candidate
-                && ownedReplacementIntent_->failedPeer == operation.failedPeer;
+        case MutationKind::ROLLBACK_CANDIDATE: {
+            const auto committedCandidate = FindCommittedReplacementCandidate(current);
+            policyStillHolds = current.committedPeers.size() > options_.expectedMemberCount
+                               && containsCommittedPeer(targetPeer)
+                               && health.explicitlyHealthyPeers.count(failedPeer) != 0 && committedCandidate.has_value()
+                               && *committedCandidate == targetPeer;
             break;
-        case OperationStage::IDLE:
-        case OperationStage::UNCERTAIN:
-            break;
+        }
     }
-    if (hasKnownQuorum && stageConditionHolds) {
+    if (hasKnownQuorum && policyStillHolds) {
         return Status::OK();
     }
 
-    ClearActiveOperation();
-    ReconcileOwnedReplacementIntent(current);
     return Status(K_TRY_AGAIN, "Coordinator membership submission policy changed for group "
-                                   + std::string(kCoordinatorRaftGroupId)
-                                   + ", stage=" + OperationStageName(operation.submittedStage)
+                                   + std::string(kCoordinatorRaftGroupId) + ", mutation=" + MutationKindName(kind)
                                    + ", known_healthy_members=" + std::to_string(health.knownHealthyMembers)
                                    + ", committed_size=" + std::to_string(current.committedPeers.size())
                                    + ", confirmed_failed_peers=[" + VectorToString(health.confirmedFailedPeers) + "]");
 }
 
-Status CoordinatorMembershipManager::SubmitAdd(SubmissionSnapshot expected, const std::string &candidate,
-                                               const std::string &failedPeer, OperationStage stage, TimePoint now)
+Status CoordinatorMembershipManager::SubmitAdd(const SubmissionSnapshot &expected, const std::string &candidate,
+                                               const std::string &failedPeer, MutationKind kind, TimePoint now)
 {
-    uint64_t generation = lastOperationGeneration_ + 1;
-    if (generation == 0) {
-        generation = 1;
-    }
-    std::optional<ActiveOperation> newActiveOperation{ ActiveOperation{ generation,
-                                                                        stage,
-                                                                        stage,
-                                                                        expected.term,
-                                                                        expected.configurationIndex,
-                                                                        candidate,
-                                                                        failedPeer,
-                                                                        {},
-                                                                        expected.committedPeers,
-                                                                        now,
-                                                                        std::nullopt,
-                                                                        CompletionOrigin::CALLBACK,
-                                                                        false } };
-    const bool ownsReplacement = stage == OperationStage::ADDING_REPLACEMENT;
-    std::optional<OwnedReplacementIntent> newOwnedReplacementIntent;
-    if (ownsReplacement) {
-        newOwnedReplacementIntent.emplace(OwnedReplacementIntent{ candidate, failedPeer });
-    }
-
-    static_assert(std::is_nothrow_move_constructible_v<ActiveOperation>);
-    static_assert(std::is_nothrow_move_constructible_v<decltype(newActiveOperation)>);
-    static_assert(std::is_nothrow_move_assignable_v<decltype(activeOperation_)>);
-    static_assert(std::is_nothrow_move_constructible_v<OwnedReplacementIntent>);
-    static_assert(std::is_nothrow_move_constructible_v<decltype(newOwnedReplacementIntent)>);
-    static_assert(std::is_nothrow_move_assignable_v<decltype(ownedReplacementIntent_)>);
-
-    RETURN_IF_NOT_OK(RevalidateSubmissionPolicy(expected, *newActiveOperation, now));
-    lastOperationGeneration_ = generation;
-    activeOperation_ = std::move(newActiveOperation);
-    if (ownsReplacement) {
-        ownedReplacementIntent_ = std::move(newOwnedReplacementIntent);
-    }
-    if (!ArmCompletionMailbox(generation)) {
-        activeOperation_.reset();
-        if (ownsReplacement) {
-            ownedReplacementIntent_.reset();
-        }
+    RETURN_IF_NOT_OK(RevalidateSubmissionPolicy(expected, kind, candidate, failedPeer, now));
+    std::unique_lock<std::mutex> lifecycleLock(lifecycleMutex_);
+    if (state_ == LifecycleState::STOPPING || state_ == LifecycleState::STOPPED) {
         return Status::OK();
     }
+    candidateLastAttemptAt_[candidate] = now;
 
-    const std::weak_ptr<CompletionMailbox> weakMailbox = completionMailbox_;
-    Status submissionStatus;
+    std::set<std::string> *newOwnershipSet = nullptr;
+    std::set<std::string>::iterator newOwnership;
+    if (kind == MutationKind::ADD_REPLACEMENT && replacementIntent_.has_value()
+        && replacementIntent_->failedPeer == failedPeer
+        && replacementIntent_->originalPeers == expected.committedPeers) {
+        auto &attemptedCandidates = replacementIntent_->attemptedCandidates;
+        const auto [it, inserted] = attemptedCandidates.emplace(candidate);
+        if (inserted) {
+            newOwnershipSet = &attemptedCandidates;
+            newOwnership = it;
+        }
+    }
+    const auto rollbackNewOwnership = [&newOwnershipSet, &newOwnership] {
+        if (newOwnershipSet != nullptr) {
+            newOwnershipSet->erase(newOwnership);
+            newOwnershipSet = nullptr;
+        }
+    };
+
     try {
-        submissionStatus = dependencies_.addPeer(candidate, [weakMailbox, generation](Status completionStatus) {
-            PublishCompletion(weakMailbox, generation, std::move(completionStatus), CompletionOrigin::CALLBACK);
+        auto submissionStatus = dependencies_.addPeer(candidate, [](const Status &completionStatus) {
+            LogMembershipOperationCompletion("AddPeer", completionStatus);
         });
+        if (submissionStatus.IsError()) {
+            rollbackNewOwnership();
+        }
+        return submissionStatus;
     } catch (const std::exception &e) {
+        rollbackNewOwnership();
         const auto error = FormatString("%s: %s", kAddSubmissionExceptionMarker, e.what());
         LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << error;
-        submissionStatus = Status(K_RUNTIME_ERROR, error);
+        return Status(K_RUNTIME_ERROR, error);
     } catch (...) {
+        rollbackNewOwnership();
         LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kAddSubmissionExceptionMarker;
-        submissionStatus = Status(K_RUNTIME_ERROR, kAddSubmissionExceptionMarker);
+        return Status(K_RUNTIME_ERROR, kAddSubmissionExceptionMarker);
     }
-    if (submissionStatus.IsError()) {
-        PublishCompletion(weakMailbox, generation, std::move(submissionStatus), CompletionOrigin::SUBMISSION_REJECTED);
-    }
-    return Status::OK();
 }
 
-Status CoordinatorMembershipManager::SubmitFailedPeerRemoval(SubmissionSnapshot expected, const std::string &failedPeer,
-                                                             TimePoint now)
+Status CoordinatorMembershipManager::SubmitRemove(const SubmissionSnapshot &expected, const std::string &targetPeer,
+                                                  const std::string &failedPeer, MutationKind kind, TimePoint now)
 {
-    std::string ownedCandidate;
-    if (ownedReplacementIntent_.has_value() && ownedReplacementIntent_->failedPeer == failedPeer) {
-        ownedCandidate = ownedReplacementIntent_->candidate;
-    }
-    return SubmitRemoveOperation(
-        expected, ActiveOperation{ 0, OperationStage::REMOVING_FAILED, OperationStage::REMOVING_FAILED, expected.term,
-                                   expected.configurationIndex, std::move(ownedCandidate), failedPeer, failedPeer,
-                                   expected.committedPeers, now, std::nullopt, CompletionOrigin::CALLBACK, false });
-}
-
-Status CoordinatorMembershipManager::SubmitOwnedCandidateRollback(SubmissionSnapshot expected,
-                                                                  const OwnedReplacementIntent &intent, TimePoint now)
-{
-    return SubmitRemoveOperation(
-        expected, ActiveOperation{ 0, OperationStage::ROLLING_BACK, OperationStage::ROLLING_BACK, expected.term,
-                                   expected.configurationIndex, intent.candidate, intent.failedPeer, intent.candidate,
-                                   expected.committedPeers, now, std::nullopt, CompletionOrigin::CALLBACK, false });
-}
-
-Status CoordinatorMembershipManager::SubmitRemoveOperation(SubmissionSnapshot expected, ActiveOperation operation)
-{
-    RETURN_IF_NOT_OK(RevalidateSubmissionPolicy(expected, operation, operation.submittedAt));
-    operation.generation = NextOperationGeneration();
-    const auto generation = operation.generation;
-    const auto targetPeer = operation.targetPeer;
-    activeOperation_ = std::move(operation);
-    if (!ArmCompletionMailbox(generation)) {
-        activeOperation_.reset();
+    RETURN_IF_NOT_OK(RevalidateSubmissionPolicy(expected, kind, targetPeer, failedPeer, now));
+    std::unique_lock<std::mutex> lifecycleLock(lifecycleMutex_);
+    if (state_ == LifecycleState::STOPPING || state_ == LifecycleState::STOPPED) {
         return Status::OK();
     }
+    nextMembershipSubmissionAt_ = now + options_.discoveryRetryInterval;
 
-    const std::weak_ptr<CompletionMailbox> weakMailbox = completionMailbox_;
-    Status submissionStatus;
     try {
-        submissionStatus = dependencies_.removePeer(targetPeer, [weakMailbox, generation](Status completionStatus) {
-            PublishCompletion(weakMailbox, generation, std::move(completionStatus), CompletionOrigin::CALLBACK);
+        return dependencies_.removePeer(targetPeer, [](const Status &completionStatus) {
+            LogMembershipOperationCompletion("RemovePeer", completionStatus);
         });
     } catch (const std::exception &e) {
         const auto error = FormatString("%s: %s", kRemoveSubmissionExceptionMarker, e.what());
         LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << error;
-        submissionStatus = Status(K_RUNTIME_ERROR, error);
+        return Status(K_RUNTIME_ERROR, error);
     } catch (...) {
         LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kRemoveSubmissionExceptionMarker;
-        submissionStatus = Status(K_RUNTIME_ERROR, kRemoveSubmissionExceptionMarker);
+        return Status(K_RUNTIME_ERROR, kRemoveSubmissionExceptionMarker);
     }
-    if (submissionStatus.IsError()) {
-        PublishCompletion(weakMailbox, generation, std::move(submissionStatus), CompletionOrigin::SUBMISSION_REJECTED);
-    }
-    return Status::OK();
-}
-
-uint64_t CoordinatorMembershipManager::NextOperationGeneration()
-{
-    ++lastOperationGeneration_;
-    if (lastOperationGeneration_ == 0) {
-        ++lastOperationGeneration_;
-    }
-    return lastOperationGeneration_;
 }
 
 void CoordinatorMembershipManager::LogUnsafeOverTargetConfiguration(const CoordinatorRaftMembershipStatus &status) const
@@ -872,114 +712,13 @@ void CoordinatorMembershipManager::LogUnsafeOverTargetConfiguration(const Coordi
         << VectorToString(committedPeers) << "]";
 }
 
-void CoordinatorMembershipManager::ClearActiveOperation()
+void CoordinatorMembershipManager::LogMembershipOperationCompletion(const char *operation, const Status &status)
 {
-    activeOperation_.reset();
-    InvalidateCompletionMailbox();
-}
-
-bool CoordinatorMembershipManager::ArmCompletionMailbox(uint64_t generation)
-{
-    std::lock_guard<std::mutex> lock(completionMailbox_->mutex);
-    if (completionMailbox_->stopping) {
-        return false;
-    }
-    completionMailbox_->activeGeneration = generation;
-    completionMailbox_->resultPublished = false;
-    completionMailbox_->wakeRequested = false;
-    completionMailbox_->result.reset();
-    return true;
-}
-
-void CoordinatorMembershipManager::InvalidateCompletionMailbox()
-{
-    std::lock_guard<std::mutex> lock(completionMailbox_->mutex);
-    completionMailbox_->activeGeneration = 0;
-    completionMailbox_->resultPublished = false;
-    completionMailbox_->wakeRequested = false;
-    completionMailbox_->result.reset();
-}
-
-void CoordinatorMembershipManager::StopCompletionMailbox()
-{
-    std::lock_guard<std::mutex> lock(completionMailbox_->mutex);
-    completionMailbox_->stopping = true;
-    completionMailbox_->activeGeneration = 0;
-    completionMailbox_->resultPublished = false;
-    completionMailbox_->wakeRequested = false;
-    completionMailbox_->result.reset();
-    completionMailbox_->cv.notify_all();
-}
-
-std::optional<CoordinatorMembershipManager::CompletionResult> CoordinatorMembershipManager::TakeCompletion()
-{
-    std::lock_guard<std::mutex> lock(completionMailbox_->mutex);
-    auto result = std::move(completionMailbox_->result);
-    completionMailbox_->result.reset();
-    if (result.has_value()) {
-        completionMailbox_->wakeRequested = false;
-    }
-    return result;
-}
-
-void CoordinatorMembershipManager::RestoreCompletion(CompletionResult completion)
-{
-    bool notify = false;
-    {
-        std::lock_guard<std::mutex> lock(completionMailbox_->mutex);
-        if (completionMailbox_->stopping || completionMailbox_->activeGeneration != completion.generation
-            || completionMailbox_->result.has_value()) {
-            return;
-        }
-        completionMailbox_->resultPublished = true;
-        if (!completion.retryWakeIssued) {
-            completion.retryWakeIssued = true;
-            completionMailbox_->wakeRequested = true;
-            notify = true;
-        }
-        completionMailbox_->result = std::move(completion);
-    }
-    if (notify) {
-        completionMailbox_->cv.notify_all();
-    }
-}
-
-const char *CoordinatorMembershipManager::OperationStageName(OperationStage stage) noexcept
-{
-    switch (stage) {
-        case OperationStage::IDLE:
-            return "IDLE";
-        case OperationStage::ADDING_VACANCY:
-            return "ADDING_VACANCY";
-        case OperationStage::ADDING_REPLACEMENT:
-            return "ADDING_REPLACEMENT";
-        case OperationStage::REMOVING_FAILED:
-            return "REMOVING_FAILED";
-        case OperationStage::ROLLING_BACK:
-            return "ROLLING_BACK";
-        case OperationStage::UNCERTAIN:
-            return "UNCERTAIN";
-    }
-    return "UNKNOWN";
-}
-
-void CoordinatorMembershipManager::PublishCompletion(const std::weak_ptr<CompletionMailbox> &weakMailbox,
-                                                     uint64_t generation, Status status, CompletionOrigin origin)
-{
-    auto mailbox = weakMailbox.lock();
-    if (mailbox == nullptr) {
+    if (status.IsOk()) {
         return;
     }
-    {
-        std::lock_guard<std::mutex> lock(mailbox->mutex);
-        if (mailbox->stopping || mailbox->activeGeneration != generation || mailbox->resultPublished) {
-            return;
-        }
-        mailbox->resultPublished = true;
-        mailbox->wakeRequested = true;
-        mailbox->result = CompletionResult{ generation, std::move(status), origin, false };
-    }
-    mailbox->cv.notify_all();
+    LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount)
+        << kOperationCompletionErrorMarker << ", operation=" << operation << ", status=" << status;
 }
 
 }  // namespace datasystem::coordinator

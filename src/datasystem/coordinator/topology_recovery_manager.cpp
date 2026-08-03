@@ -37,6 +37,11 @@ constexpr size_t MAX_ENCODED_SCALE_IN_SOURCE_SIZE = 256;
 constexpr uint64_t MEMBER_LIMIT_LOG_INTERVAL = 1'024;
 constexpr char PHYSICAL_ROOT[] = "/datasystem/";
 
+std::string CoordinatorIdLogPrefix(const std::string &coordinatorId)
+{
+    return BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
+}
+
 TraceContext GetRecoveryTraceContext()
 {
     auto traceContext = Trace::Instance().GetContext();
@@ -286,7 +291,7 @@ Status TopologyRecoveryManager::EnsureContext(const std::string &clusterName, Cl
     auto inserted = contexts_.emplace(clusterName, std::move(candidate));
     context = inserted.first->second.get();
     LOG(INFO) << "CLUSTER_RECOVERY_STATE cluster=" << clusterName << ", coordinator_id="
-              << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+              << CoordinatorIdLogPrefix(coordinatorId_)
               << ", old=UNSEEN, new=RECOVERING, reason=membership_admitted";
     return Status::OK();
 }
@@ -361,7 +366,7 @@ void TopologyRecoveryManager::UpdateMembership(const ParsedTopologyCoordinationK
     if (ensureStatus.IsError()) {
         LOG_EVERY_N(ERROR, MEMBER_LIMIT_LOG_INTERVAL)
             << "CLUSTER_RECOVERY_CONTEXT_ADMISSION_FAILED, cluster=" << parsed.clusterName
-            << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+            << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
             << ", status=" << ensureStatus.ToString();
         return;
     }
@@ -376,7 +381,7 @@ void TopologyRecoveryManager::UpdateMembership(const ParsedTopologyCoordinationK
         if (context->observedMembers.size() >= options_.maxMembersPerCluster) {
             LOG_FIRST_AND_EVERY_N(WARNING, MEMBER_LIMIT_LOG_INTERVAL)
                 << "CLUSTER_RECOVERY_MEMBER_LIMIT_REACHED, cluster=" << parsed.clusterName
-                << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                 << ", members=" << context->observedMembers.size()
                 << ", limit=" << options_.maxMembersPerCluster;
             return;
@@ -403,7 +408,7 @@ void TopologyRecoveryManager::UpdateMembership(const ParsedTopologyCoordinationK
     }
     if (context->state == TopologyRecoveryState::BLOCKED || removedHighest) {
         LOG(INFO) << "CLUSTER_RECOVERY_STATE cluster=" << parsed.clusterName << ", coordinator_id="
-                  << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                  << CoordinatorIdLogPrefix(coordinatorId_)
                   << ", old=BLOCKED_OR_STALE, new=RECOVERING, reason=membership_removed";
         context->state = TopologyRecoveryState::RECOVERING;
         context->discoveryDeadline = context->reporterEvidence.empty()
@@ -564,7 +569,7 @@ Status TopologyRecoveryManager::ReportCandidate(const std::string &clusterName, 
         }
     }
     VLOG(1) << "CLUSTER_RECOVERY_CANDIDATE cluster=" << clusterName << ", coordinator_id="
-            << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE) << ", reporter=" << report.reporterAddress
+            << CoordinatorIdLogPrefix(coordinatorId_) << ", reporter=" << report.reporterAddress
             << ", version=" << report.topologyVersion << ", has_snapshot=" << report.hasSnapshot
             << ", payload_bytes=" << report.canonicalTopology.size();
     if (report.canonicalTopology.empty()) {
@@ -826,7 +831,7 @@ Status TopologyRecoveryManager::RejectPayload(const std::string &clusterName,
         context.state = TopologyRecoveryState::BLOCKED;
         ReleaseSelectedPayload(context);
         LOG(WARNING) << "CLUSTER_RECOVERY_INVALID_HIGHEST_CANDIDATE, cluster=" << clusterName
-                     << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                     << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                      << ", reporter=" << report.reporterAddress << ", version=" << report.topologyVersion
                      << ", status=" << validationStatus.ToString();
     }
@@ -1023,13 +1028,13 @@ void TopologyRecoveryManager::ApplyStoredAuthorityLocked(const std::string &clus
     if (decodeStatus.IsError()) {
         context.state = TopologyRecoveryState::BLOCKED;
         LOG(ERROR) << "CLUSTER_RECOVERY_STORED_AUTHORITY_INVALID cluster=" << clusterName
-                   << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                   << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                    << ", revision=" << revision << ", status=" << decodeStatus.ToString();
         return;
     }
     context.state = TopologyRecoveryState::READY;
     LOG(INFO) << "CLUSTER_RECOVERY_READY_STORED_AUTHORITY cluster=" << clusterName
-              << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+              << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
               << ", topology_version=" << topology.version << ", store_revision=" << revision
               << ", members=" << context.observedMembers.size();
 }
@@ -1058,14 +1063,14 @@ Status TopologyRecoveryManager::PrepareInstallationLocked(const std::string &clu
         context.state = TopologyRecoveryState::BLOCKED;
         ReleaseSelectedPayload(context);
         LOG(WARNING) << "CLUSTER_RECOVERY_CONFLICT, cluster=" << clusterName
-                     << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                     << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                      << ", version=" << selected.highestVersion << ", members=" << context.observedMembers.size()
                      << ", evidence=" << context.reporterEvidence.size();
         return Status::OK();
     }
     if (!selected.hasSnapshot && !context.reporterEvidence.empty()) {
         LOG(INFO) << "CLUSTER_RECOVERY_READY_NO_SNAPSHOT, cluster=" << clusterName << ", coordinator_id="
-                  << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                  << CoordinatorIdLogPrefix(coordinatorId_)
                   << ", members=" << context.observedMembers.size()
                   << ", evidence=" << context.reporterEvidence.size();
         context.state = TopologyRecoveryState::READY;
@@ -1082,7 +1087,7 @@ Status TopologyRecoveryManager::PrepareInstallationLocked(const std::string &clu
     payload = context.selectedCanonicalTopology;
     version = selected.highestVersion;
     LOG(INFO) << "CLUSTER_RECOVERY_STATE cluster=" << clusterName << ", coordinator_id="
-              << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+              << CoordinatorIdLogPrefix(coordinatorId_)
               << ", old=RECOVERING, new=INSTALLING, version=" << version
               << ", evidence=" << context.reporterEvidence.size();
     return Status::OK();
@@ -1108,19 +1113,19 @@ void TopologyRecoveryManager::CompleteInstallationLocked(const std::string &clus
         context.discoveryDeadline.reset();
         LOG(INFO) << "CLUSTER_RECOVERY_READY, cluster=" << clusterName << ", version=" << version
                   << ", digest=" << context.selectedCanonicalDigest.substr(0, DIGEST_LOG_PREFIX_SIZE)
-                  << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                  << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                   << ", members=" << context.observedMembers.size()
                   << ", evidence=" << context.reporterEvidence.size();
         ReleaseSelectedPayload(context);
     } else if (installStatus.GetCode() == K_INVALID) {
         context.state = TopologyRecoveryState::BLOCKED;
         LOG(WARNING) << "CLUSTER_RECOVERY_INSTALL_BLOCKED, cluster=" << clusterName
-                     << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                     << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                      << ", version=" << version << ", status=" << installStatus.ToString();
     } else {
         context.state = TopologyRecoveryState::RECOVERING;
         LOG(WARNING) << "CLUSTER_RECOVERY_INSTALL_RETRY, cluster=" << clusterName
-                     << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                     << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                      << ", version=" << version << ", status=" << installStatus.ToString();
         RefreshSelection(context);
         if (context.reporterEvidence.empty()) {
@@ -1138,7 +1143,7 @@ Status TopologyRecoveryManager::InstallSelected(const std::string &clusterName, 
     int64_t storedVersion = 0;
     int64_t revision = 0;
     VLOG(1) << "CLUSTER_RECOVERY_INSTALL, cluster=" << clusterName << ", coordinator_id="
-            << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE) << ", version=" << version;
+            << CoordinatorIdLogPrefix(coordinatorId_) << ", version=" << version;
     return store_.Put(physicalKey, canonicalTopology, 0, COORDINATOR_KEY_NOT_EXISTS_VERSION, storedVersion, revision);
 }
 
@@ -1163,7 +1168,7 @@ Status TopologyRecoveryManager::Shutdown()
         }
         stopping_ = true;
         LOG(INFO) << "CLUSTER_RECOVERY_SHUTDOWN state=draining, coordinator_id="
-                  << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                  << CoordinatorIdLogPrefix(coordinatorId_)
                   << ", clusters=" << contexts_.size() << ", pending_work=" << pendingRecoveryWork_;
         pool = std::move(recoveryPool_);
     }
@@ -1174,7 +1179,7 @@ Status TopologyRecoveryManager::Shutdown()
     }
     shutdownCv_.notify_all();
     LOG(INFO) << "CLUSTER_RECOVERY_SHUTDOWN state=complete, coordinator_id="
-              << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
+              << CoordinatorIdLogPrefix(coordinatorId_);
     return Status::OK();
 }
 

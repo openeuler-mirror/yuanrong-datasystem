@@ -65,8 +65,6 @@ constexpr std::chrono::milliseconds kManagerFailureGrace{ 250 };
 constexpr std::chrono::milliseconds kFailedLeaderReplacementGrace{ 2'000 };
 constexpr std::chrono::milliseconds kManagerObservationTolerance = kManagerHealthCheckInterval + kPollInterval;
 constexpr std::chrono::milliseconds kManagerRetryInterval{ 100 };
-constexpr std::chrono::milliseconds kManagerWarningTimeout{ 500 };
-constexpr std::chrono::milliseconds kManagerCandidateCooldown{ 100 };
 constexpr std::chrono::milliseconds kManagerNegativeObservationWindow{ 300 };
 constexpr std::chrono::seconds kCtestTimeout{ 8 };
 constexpr size_t kBootstrapNodeCount = 3;
@@ -501,9 +499,8 @@ protected:
         ASSERT_LT(nodeIndex, kMembershipNodeCount);
         ASSERT_NE(nodes_[nodeIndex], nullptr);
         ASSERT_EQ(managers_[nodeIndex], nullptr);
-        coordinator::CoordinatorMembershipOptions options{ expectedMemberCount,    kManagerHealthCheckInterval,
-                                                           failureGrace,           kManagerRetryInterval,
-                                                           kManagerWarningTimeout, kManagerCandidateCooldown };
+        coordinator::CoordinatorMembershipOptions options{ expectedMemberCount, kManagerHealthCheckInterval,
+                                                           failureGrace, kManagerRetryInterval };
         managers_[nodeIndex] =
             std::make_unique<coordinator::CoordinatorMembershipManager>(options, *nodes_[nodeIndex], discovery);
         const auto status = managers_[nodeIndex]->Start();
@@ -697,20 +694,40 @@ TEST_F(CoordinatorRaftMembershipTest, AddAndRemovePeerPublishCommittedMembership
               K_RUNTIME_ERROR);
     EXPECT_EQ(nonLeaderCallbackCount->load(std::memory_order_relaxed), 0);
 
+    auto fourPeers = initialPeers;
+    fourPeers.emplace_back(addresses_[kWaitingNodeIndex]);
+    std::sort(fourPeers.begin(), fourPeers.end());
+
     auto addCompletion = std::make_shared<RaftOperationCompletionState>();
     auto addFuture = addCompletion->completion.get_future();
-    const auto addSubmissionStatus =
-        leader.AddPeer(addresses_[kWaitingNodeIndex], MakeRaftOperationCallback(addCompletion));
+    const auto addSubmissionStatus = leader.AddPeer(
+        addresses_[kWaitingNodeIndex],
+        [&leader, addCompletion, expectedPeers = fourPeers, initialConfigurationIndex](Status status) mutable {
+            addCompletion->callbackCount.fetch_add(1, std::memory_order_relaxed);
+            std::vector<std::string> committedPeers;
+            int64_t configurationIndex = 0;
+            const auto observeStatus = leader.GetCommittedConfiguration(committedPeers, configurationIndex);
+            if (status.IsOk() && observeStatus.IsError()) {
+                status = observeStatus;
+            } else if (status.IsOk()
+                       && (committedPeers != expectedPeers || configurationIndex <= initialConfigurationIndex)) {
+                status = Status(K_RUNTIME_ERROR, "AddPeer callback ran before committed configuration publication");
+            } else if (status.IsOk() && !leader.HasInFlightMembershipOperation()) {
+                status = Status(K_RUNTIME_ERROR, "AddPeer token was released before completion callback returned");
+            }
+            std::call_once(addCompletion->completionOnce,
+                           [addCompletion, status = std::move(status)]() mutable {
+                               addCompletion->completion.set_value(std::move(status));
+                           });
+        });
     ASSERT_TRUE(addSubmissionStatus.IsOk()) << addSubmissionStatus.ToString();
     ASSERT_EQ(addFuture.wait_until(caseDeadline), std::future_status::ready)
         << "AddPeer callback did not complete before the membership deadline";
     const auto addCallbackStatus = addFuture.get();
     ASSERT_TRUE(addCallbackStatus.IsOk()) << addCallbackStatus.ToString();
     EXPECT_EQ(addCompletion->callbackCount.load(std::memory_order_relaxed), 1);
-
-    auto fourPeers = initialPeers;
-    fourPeers.emplace_back(addresses_[kWaitingNodeIndex]);
-    std::sort(fourPeers.begin(), fourPeers.end());
+    ASSERT_TRUE(WaitUntil([&leader] { return !leader.HasInFlightMembershipOperation(); }, caseDeadline))
+        << "AddPeer token was not released after completion callback returned";
     int64_t addConfigurationIndex = 0;
     ASSERT_TRUE(WaitForCommittedConfiguration(leader, fourPeers, initialConfigurationIndex, caseDeadline,
                                               addConfigurationIndex))

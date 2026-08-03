@@ -68,6 +68,12 @@ public:
         drained_.wait(lock, [this] { return inFlight_ == 0; });
     }
 
+    bool HasInFlight() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return inFlight_ != 0;
+    }
+
 private:
     friend class RaftOperationDrainToken;
     friend class CoordinatorRaftNodeTestAccessor;
@@ -101,7 +107,7 @@ private:
     bool TryAcquire()
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!acceptingNewTokens_) {
+        if (!acceptingNewTokens_ || inFlight_ != 0) {
             return false;
         }
         ++inFlight_;
@@ -121,7 +127,7 @@ private:
         }
     }
 
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable drained_;
     bool acceptingNewTokens_{ true };
     size_t inFlight_{ 0 };

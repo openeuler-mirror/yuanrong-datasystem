@@ -78,6 +78,7 @@ public:
     Status GetLeader(std::string &leaderAddress) const;
     Status GetCommittedConfiguration(std::vector<std::string> &peers, int64_t &index) const;
     Status GetMembershipStatus(CoordinatorRaftMembershipStatus &status) const;
+    bool HasInFlightMembershipOperation() const;
 
     Status AddPeer(const std::string &peer, RaftOperationCallback callback);
     Status RemovePeer(const std::string &peer, RaftOperationCallback callback);

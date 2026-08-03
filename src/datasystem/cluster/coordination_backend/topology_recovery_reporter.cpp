@@ -18,6 +18,7 @@
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem::cluster {
 namespace {
@@ -65,7 +66,8 @@ void LogReportRetry(const std::string &cluster, const std::string &reporter, uin
                     const std::string &coordinatorId, std::chrono::milliseconds backoff, const Status &status)
 {
     VLOG(1) << "CLUSTER_RECOVERY_REPORT_RETRY cluster=" << cluster << ", reporter=" << reporter
-            << ", version=" << version << ", coordinator_id=" << coordinatorId.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+            << ", version=" << version << ", coordinator_id="
+            << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
             << ", backoff_ms=" << backoff.count() << ", status=" << status.ToString();
 }
 
@@ -80,7 +82,8 @@ void LogReportDeferred(const std::string &cluster, const std::string &reporter, 
                        const coordinator::ReportTopologyRecoveryCandidateRspPb &response)
 {
     VLOG(1) << "CLUSTER_RECOVERY_REPORT_DEFERRED cluster=" << cluster << ", reporter=" << reporter
-            << ", coordinator_id=" << coordinatorId.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+            << ", coordinator_id="
+            << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
             << ", result=" << response.result() << ", state=" << response.recovery_state();
 }
 
@@ -96,7 +99,8 @@ void LogReportComplete(const std::string &cluster, const std::string &reporter, 
 {
     LOG(INFO) << "CLUSTER_RECOVERY_REPORT_COMPLETE cluster=" << cluster << ", reporter=" << reporter
               << ", version=" << version
-              << ", coordinator_id=" << coordinatorId.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
+              << ", coordinator_id="
+              << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
 }
 }  // namespace
 

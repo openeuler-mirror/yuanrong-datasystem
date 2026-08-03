@@ -502,6 +502,8 @@ Status CoordinatorElectionManager::ValidateStartupInput() const
     CHECK_FAIL_RETURN_STATUS(options_.raftFlags.electionTimeoutMs % options_.raftFlags.heartbeatIntervalMs == 0,
                              K_INVALID,
                              "Coordinator Raft election timeout must be an integer multiple of heartbeat interval");
+    CHECK_FAIL_RETURN_STATUS(options_.raftFlags.bootstrapWarningIntervalMs > 0, K_INVALID,
+                             "Coordinator Raft bootstrap warning interval must be positive");
     const auto electionHeartbeatRatio = options_.raftFlags.electionTimeoutMs / options_.raftFlags.heartbeatIntervalMs;
     CHECK_FAIL_RETURN_STATUS(electionHeartbeatRatio >= kCoordinatorRaftMinElectionHeartbeatRatio
                                  && electionHeartbeatRatio <= kCoordinatorRaftMaxElectionHeartbeatRatio,
@@ -1118,7 +1120,7 @@ void CoordinatorElectionManager::WarnBootstrapRetry(const Status &status,
         return;
     }
     LOG(WARNING) << "Coordinator Raft bootstrap has not converged: " << status;
-    nextWarningAt = now + options_.membershipOptions.operationWarningTimeout;
+    nextWarningAt = now + std::chrono::milliseconds(options_.raftFlags.bootstrapWarningIntervalMs);
 }
 
 Status CoordinatorElectionManager::GetBootstrapState(RaftBootstrapState &state) const

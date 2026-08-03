@@ -17,8 +17,8 @@
 | `CoordinatorServiceImpl` | Business components, shared brpc server, braft service registration, two-stage startup, RPC readiness state, and ordered shutdown. |
 | `RegisterCoordinatorRaftServices` | Registers braft services on the shared brpc server generation; called by the Service/shared-server owner. |
 | `CoordinatorElectionManager` | Owns bootstrap-state publication, Discovery/peer convergence, startup-plan selection, Node then Membership startup, and Membership-before-Node shutdown. |
-| `CoordinatorRaftNode` | Owns braft Node/FSM, leader and committed-membership observation, peer operations, and synchronous drain. |
-| `CoordinatorMembershipManager` | Owns Discovery-backed membership reconciliation after Node startup. |
+| `CoordinatorRaftNode` | Owns braft Node/FSM, leader and committed-membership observation, exclusive single-operation membership admission, peer operations, and synchronous drain. |
+| `CoordinatorMembershipManager` | Runs one reconciliation thread after Node startup, rebuilds each decision from Leader/term, committed configuration, and follower health, and rotates discovered candidates by oldest Add-attempt time while the Node admits at most one in-flight Add/Remove. |
 
 ## Runtime And Service Lifecycle
 
@@ -87,7 +87,7 @@ The no-argument `CoordinatorServer::InitAndRun()` / `CoordinatorRuntime::InitAnd
 
 User-facing Coordinator election timing flags are `coordinator_raft_heartbeat_interval_ms`, `coordinator_raft_election_timeout_ms`, `coordinator_discovery_retry_interval_ms`, and `coordinator_member_failure_grace_ms`. `coordinator_raft_heartbeat_interval_ms` defaults to 100 ms and must be in `[10, 10000]`; `coordinator_raft_election_timeout_ms` defaults to 1000 ms and must be an integer multiple of heartbeat with a ratio in `[5, 10]`. Discovery retry defaults to 5000 ms and member failure grace defaults to 10000 ms.
 
-The membership health-check interval, unresolved-operation warning timeout, and failed-candidate retry cooldown are no longer user flags. Production snapshots inject internal defaults of 3000 ms, 3000 ms, and 10000 ms respectively, while in-process tests may still override those internal values by constructing `CoordinatorRaftFlags` directly.
+The membership health-check interval and bootstrap retry-warning interval are internal values. Production snapshots inject 3000 ms defaults, while in-process tests may override them by constructing `CoordinatorRaftFlags` directly.
 
 ## Bootstrap Convergence And Serving Gate
 
@@ -100,7 +100,10 @@ The membership health-check interval, unresolved-operation warning timeout, and 
 - A successful remote probe reporting `UNKNOWN` or `CORRUPT` metadata is non-authoritative and retryable: it prevents first bootstrap with `K_NOT_READY` while the same Manager worker remains active.
 - Only when no visible candidate reports an authoritative committed configuration may a fresh set bootstrap. A peer is bootstrappable only after it is observable, has fresh `ABSENT` metadata, and reports the same full candidate count/digest plus immutable group/target identity. Peer unavailability excludes that peer from first-bootstrap selection and does not block when a fresh target majority remains; successful invalid observations, remote `UNKNOWN`/`CORRUPT` metadata, or digest disagreement keep the lifecycle active with no committed configuration and the business gate closed.
 - After braft successfully initializes a non-empty `BootstrapPlan`, `CoordinatorRaftNode` publishes lifecycle `STARTED`, marks configuration publication in progress, releases the lifecycle mutex, then publishes the normalized `initial_conf` as committed configuration index 0 through the FSM wrapped `onConfigurationCommitted`/`HandleConfigurationCommitted` path. Shutdown waits for this publication to finish before moving the Node/FSM, so callback reentry is deadlock-free without unlock-after-member-access UAF risk. Recover and Waiting-to-Join do not synthesize an empty configuration.
-- `CoordinatorMembershipManager` fills a bootstrap vacancy with Add-only reconciliation. For replacement, it commits the waiting candidate at `N + 1` before removing the confirmed failed follower.
+- `CoordinatorMembershipManager` treats committed configuration as the only membership authority; Add/Remove callbacks are diagnostic-only and capture no Manager state.
+- `CoordinatorRaftNode` admits at most one in-flight Add/Remove through its operation drain token. While that token is held, `CoordinatorMembershipManager` skips reconciliation before reading committed status; completion publishes committed configuration before releasing the token, so the next round rebuilds its decision from the new B. A concurrent submission still returns `K_TRY_AGAIN`, and Node shutdown stops new admission before draining the accepted operation.
+- It fills a bootstrap vacancy with Add-only reconciliation. For replacement, it commits the waiting candidate at `N + 1` before removing the confirmed failed follower.
+- Eligible candidates rotate by never-attempted first, then oldest Add-attempt timestamp. Replacement rollback requires committed-state proof that the candidate was submitted by the current term's replacement intent.
 - Service lifecycle `RUNNING` means the endpoint is active and the Manager's background bootstrap worker has started; it is not election completion or business readiness. Only the current braft Leader has `raftServing_ = true`; followers, waiting candidates, bootstrap waiters, and quorum-lost nodes return `K_NOT_READY` from business RPCs.
 
 The first-bootstrap Discovery safety premise is one globally convergent deployment control domain. Mutually invisible candidate sets that independently reach target majority are outside the supported bootstrap contract.
@@ -130,7 +133,7 @@ The current braft state machine rejects management-log apply and the Node expose
 | UT | `tests/ut/common/coordinator/coordinator_raft_types_test.cpp` | Stable peer identity and Raft option validation. |
 | UT | `tests/ut/common/coordinator/coordinator_raft_state_machine_test.cpp` | FSM event and exception boundaries. |
 | UT | `tests/ut/common/coordinator/coordinator_raft_node_test.cpp` | Node lifecycle, immediate Bootstrap index-0 publication and callback reentry, non-Bootstrap startup, committed state, operations, and drain. |
-| UT | `tests/ut/common/coordinator/coordinator_membership_manager_test.cpp` | Membership policy, timing, serialization, and shutdown. |
+| UT | `tests/ut/common/coordinator/coordinator_membership_manager_test.cpp` | Committed-state membership policy, candidate fairness, replacement proof and rollback, fresh submission revalidation, timing, and shutdown. |
 | UT | `tests/ut/common/coordinator/coordinator_election_manager_test.cpp` | Target-quorum bootstrap, local-`ABSENT` rebuild from authoritative peers, retrying `N`/`N + 1` conflicts, sanitized phase/status transitions, and Node/Membership ownership and lifecycle ordering. |
 | UT | `tests/ut/coordinator/coordinator_server_options_test.cpp` | Public empty-path rejection, direct Runtime empty-path process-flags startup, non-empty config parsing, per-instance Raft snapshots, lifecycle retry, readiness, shutdown ordering, ZMQ method-index compatibility, and allocator-backed real brpc lifecycle. |
 | ST | `tests/st/common/raft/coordinator_service_election_test.cpp` | Real single-Service shared endpoint, election, recovery, and cleanup. |

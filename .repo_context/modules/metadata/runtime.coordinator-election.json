@@ -89,7 +89,7 @@
       "debug Coordinator Raft recovery or waiting-to-join behavior",
       "change committed membership observation or asynchronous peer operations",
       "understand dynamic Discovery vacancy filling or failed follower replacement",
-      "validate Coordinator membership health, continuous failure grace, single-flight changes, or add-before-remove",
+      "validate Coordinator membership health, continuous failure grace, braft-serialized bounded retries, or add-before-remove",
       "review Manager-before-Node shutdown and term-scoped policy recovery",
       "validate unsupported management log restart and replay behavior",
       "understand the parameterized CoordinatorServiceImpl election path and legacy no-election defaults",

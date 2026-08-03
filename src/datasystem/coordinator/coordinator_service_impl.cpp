@@ -226,12 +226,9 @@ Status CoordinatorServiceImpl::BuildElectionStartupContext(CoordinatorElectionOp
     CHECK_FAIL_RETURN_STATUS(IsElectionConfigured(), K_INVALID, "Coordinator election is not configured");
     options.raftFlags = raftFlags_;
     options.membershipOptions =
-        CoordinatorMembershipOptions{ expectedMemberCount_,
-                                      std::chrono::milliseconds(raftFlags_.healthCheckIntervalMs),
+        CoordinatorMembershipOptions{ expectedMemberCount_, std::chrono::milliseconds(raftFlags_.healthCheckIntervalMs),
                                       std::chrono::milliseconds(raftFlags_.memberFailureGraceMs),
-                                      std::chrono::milliseconds(raftFlags_.discoveryRetryIntervalMs),
-                                      std::chrono::milliseconds(raftFlags_.operationWarningTimeoutMs),
-                                      std::chrono::milliseconds(raftFlags_.candidateRetryCooldownMs) };
+                                      std::chrono::milliseconds(raftFlags_.discoveryRetryIntervalMs) };
     return Status::OK();
 }
 
@@ -421,9 +418,8 @@ void CoordinatorServiceImpl::CompleteRecoveryWindow(uint64_t term)
         LOG(INFO) << "CLUSTER_COORDINATOR_RECOVERY_COMPLETE term=" << term
                   << ", discovered_clusters=" << summary.contextCount;
     } else {
-        LOG(ERROR) << "CLUSTER_COORDINATOR_RECOVERY_BLOCKED term=" << term
-                   << ", recovering=" << summary.recoveringCount << ", installing=" << summary.installingCount
-                   << ", blocked=" << summary.blockedCount;
+        LOG(ERROR) << "CLUSTER_COORDINATOR_RECOVERY_BLOCKED term=" << term << ", recovering=" << summary.recoveringCount
+                   << ", installing=" << summary.installingCount << ", blocked=" << summary.blockedCount;
     }
 }
 
@@ -462,7 +458,7 @@ Status CoordinatorServiceImpl::InitInternal()
                              "Coordinator Raft snapshot localAddress must match the Coordinator service address");
     coordinatorId_ = GetBytesUuid();
     LOG(INFO) << "CLUSTER_COORDINATOR_ID role=coordinator id="
-              << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE) << " state=created";
+              << BytesUuidToString(coordinatorId_).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE) << " state=created";
     RpcCredential cred;
     RETURN_IF_NOT_OK(RpcAuthKeyManager::ServerLoadKeys(WORKER_SERVER_NAME, cred));
     builder_.SetCredential(cred);
@@ -740,8 +736,7 @@ bool CoordinatorServiceImpl::IsLeader() const
     std::lock_guard<std::mutex> lock(lifecycleMutex_);
     const auto state = servingState_.load(std::memory_order_acquire);
     return (state == ServingState::LEADER_RECOVERING || state == ServingState::LEADER_SERVING)
-           && electionManager_ != nullptr
-           && electionManager_->IsLeader();
+           && electionManager_ != nullptr && electionManager_->IsLeader();
 }
 
 Status CoordinatorServiceImpl::GetLeader(std::string &leaderAddress) const
