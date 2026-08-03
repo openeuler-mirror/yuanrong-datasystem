@@ -3,7 +3,6 @@ if (BUILD_PIPLN_H2D)
         mock_rh2d_driver.cpp
         cuda_rh2d_driver.cpp
         chunk_manager.cpp
-        dlopen_util.cpp
         os_transport_pipeline_api_impl.cpp
         pipeline_notify_queue.cpp
     )
@@ -25,7 +24,7 @@ if (BUILD_PIPLN_H2D)
         mlcachedirect_os_transport_static
         common_log
         common_perf
-        dl
+        common_util
     )
     add_dependencies(os_transport_pipeline
         worker_object_cache

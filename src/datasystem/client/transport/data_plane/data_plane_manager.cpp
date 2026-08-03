@@ -154,8 +154,12 @@ Status DataPlaneManager::Init()
 #ifdef USE_URMA
     if (enableClientDirectPipelineH2D_) {
         RETURN_IF_NOT_OK(UrmaManager::Instance().EnsureClientPipelineH2DEnv());
-        RETURN_IF_NOT_OK(UrmaManager::Instance().RegisterClientTransportMemoryForH2D());
+    }
+    Status registerRc = UrmaManager::Instance().RegisterClientTransportMemoryForH2D();
+    if (registerRc.IsOk()) {
         h2dMemoryRegistered_ = true;
+    } else {
+        LOG(WARNING) << "[CudaHostMemory] Failed to register client transport memory: " << registerRc.ToString();
     }
 #endif
     initialized_.store(true, std::memory_order_release);

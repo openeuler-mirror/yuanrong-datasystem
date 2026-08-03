@@ -19,9 +19,6 @@
  */
 
 #include "datasystem/common/os_transport_pipeline/pipeline_notify_queue.h"
-#ifdef BUILD_PIPLN_H2D
-#include "datasystem/common/os_transport_pipeline/cuda_rh2d_driver.h"
-#endif
 
 #include <algorithm>
 #include <iterator>
@@ -221,12 +218,6 @@ PipelineRH2DQueueConsumer::~PipelineRH2DQueueConsumer()
         queue_->WriteUnlock();
         worker_->join();
     }
-    {
-        std::lock_guard<std::mutex> l(pinnedHostMemoryMutex_);
-        for (auto &it : pinnedHostMemories_) {
-            CudaRH2DDriver::UnRegisterHostMemory(it.second.ptr);
-        }
-    }
 }
 
 void PipelineRH2DQueueConsumer::AddCallback(uint32_t requestId, std::shared_ptr<PipelineMsgHandler> callback)
@@ -239,39 +230,6 @@ void PipelineRH2DQueueConsumer::RemoveCallback(uint32_t requestId)
 {
     std::lock_guard<std::mutex> l(mutex_);
     msgHandlers_.erase(requestId);
-}
-
-Status PipelineRH2DQueueConsumer::RegisterHostMemory(int workerFd, void *ptr, size_t size)
-{
-    CHECK_FAIL_RETURN_STATUS(workerFd >= 0, StatusCode::K_INVALID, "invalid worker shm fd for cudaHostRegister");
-    CHECK_FAIL_RETURN_STATUS(ptr != nullptr, StatusCode::K_INVALID, "nullptr host pointer for cudaHostRegister");
-    CHECK_FAIL_RETURN_STATUS(size > 0, StatusCode::K_INVALID, "zero host memory size for cudaHostRegister");
-    std::lock_guard<std::mutex> l(pinnedHostMemoryMutex_);
-    if (workerStop_)
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "connection lost");
-    auto it = pinnedHostMemories_.find(workerFd);
-    if (it != pinnedHostMemories_.end()) {
-        if (it->second.ptr == ptr && it->second.size == size) {
-            return Status::OK();
-        }
-        std::stringstream ss;
-        ss << "worker shm fd has already been cudaHostRegister'ed with another address or size old: " << it->second.ptr
-           << "(size:" << it->second.size << ")"
-           << " new " << ptr << "(size:" << size << ")";
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, ss.str());
-    }
-
-    auto ret = CudaRH2DDriver::RegisterHostMemory(ptr, size);
-    if (ret.IsError()) {
-        LOG(WARNING) << PIPLN_LOG_PREFIX "cudaHostRegister failed: fd=" << workerFd << ", size=" << size
-                     << ", error=" << ret.GetMsg();
-        return ret;
-    } else {
-        VLOG(1) << "Pipeline RH2D cudaHostRegister success, worker fd: " << workerFd << " ptr " << ptr
-                << "(size:" << size << ")";
-        pinnedHostMemories_.emplace(workerFd, PinnedHostMemoryInfo{ ptr, size });
-        return Status::OK();
-    }
 }
 
 void PipelineRH2DQueueConsumer::ConsumeOne(uint8_t *element)

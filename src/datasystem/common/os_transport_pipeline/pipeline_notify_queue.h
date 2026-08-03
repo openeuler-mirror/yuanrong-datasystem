@@ -115,7 +115,6 @@ public:
     Status InitQueue(std::shared_ptr<ShmUnitInfo> shmUnitInfo, std::shared_ptr<ShmConvertHookFunc> converter);
     void AddCallback(uint32_t requestId, std::shared_ptr<PipelineMsgHandler> callback);
     void RemoveCallback(uint32_t requestId);
-    Status RegisterHostMemory(int workerFd, void *ptr, size_t size);
 
 private:
     void ConsumeOne(uint8_t *element);
@@ -128,13 +127,6 @@ private:
 
     std::mutex mutex_;
     std::map<uint32_t, std::shared_ptr<PipelineMsgHandler>> msgHandlers_;
-
-    struct PinnedHostMemoryInfo {
-        void *ptr = nullptr;
-        size_t size = 0;
-    };
-    std::mutex pinnedHostMemoryMutex_;
-    std::unordered_map<int, PinnedHostMemoryInfo> pinnedHostMemories_;
 };
 
 }  // namespace OsXprtPipln

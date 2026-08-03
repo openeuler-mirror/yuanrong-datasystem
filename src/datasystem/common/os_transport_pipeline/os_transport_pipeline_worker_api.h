@@ -55,10 +55,6 @@ DEFINE_HOOK(Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::st
 
 DEFINE_HOOK(Status SetClientPipelineThreadNum(int32_t threadNum));
 
-DEFINE_HOOK(Status RegisterHostMemory(void *ptr, size_t size));
-
-DEFINE_HOOK_WITH_RETTYPE(void, UnRegisterHostMemory(void *ptr));
-
 DEFINE_HOOK(Status InitOsPiplnRH2DEnv(void *ctx, void *jfc, void *jfce, uint32_t jettySize));
 
 DEFINE_HOOK(Status DoPiplnStep1_StartSender(PiplnSndArgs &args));

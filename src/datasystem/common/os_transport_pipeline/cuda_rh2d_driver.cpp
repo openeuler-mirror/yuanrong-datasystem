@@ -34,11 +34,8 @@ namespace OsXprtPipln {
 
 static inline std::string CudaErrToString(cudaError_t code, const std::string &symbol)
 {
-    if (IS_VALID_DYNFUNC(CudaRTLibLoader, cudaGetErrorString)) {
-        return CudaRTLibLoader::Instance()->cudaGetErrorStringFunc_(code);
-    } else {
-        return std::string("symbol ") + symbol + " is not loaded";
-    }
+    static auto getErrorString = LoadCudaRuntimeFunc<decltype(&cudaGetErrorString)>("cudaGetErrorString");
+    return getErrorString == nullptr ? std::string("symbol ") + symbol + " is not loaded" : getErrorString(code);
 }
 
 static Status CallCudaRTHook(const std::function<cudaError_t(void)> &hook, const std::string &funcName)
@@ -93,7 +90,7 @@ cudaEvent_t CudaRH2DDriver::GetSelfEvent(bool createIfNotExists)
     }
 
     cudaEvent_t e = nullptr;
-    Status rc = CUDA_CALL_WRAPPER(cudaEventCreate, &e, cudaEventDisableTiming);
+    Status rc = CUDA_CALL_WRAPPER(cudaEventCreateWithFlags, &e, cudaEventDisableTiming);
     if (rc.IsOk()) {
         event_ = e;
         return event_;
@@ -114,27 +111,6 @@ void CudaRH2DDriver::RemoveSelfStream()
     if (stream_ != nullptr) {
         CUDA_CALL_WRAPPER(cudaStreamDestroy, stream_);
         stream_ = nullptr;
-    }
-}
-
-Status CudaRH2DDriver::RegisterHostMemory(void *ptr, size_t size)
-{
-    if (!IS_VALID_DYNFUNC(CudaRTLibLoader, cudaHostRegister)) {
-        DO_LOAD_DYNLIB(CudaRTLibLoader);
-    }
-    cudaError_t cudaRet;
-    CALL_CUDA_RT_FUNC(cudaRet, cudaHostRegister, ptr, size, cudaHostRegisterPortable);
-    if (cudaRet != cudaSuccess && cudaRet != cudaErrorHostMemoryAlreadyRegistered) {
-        return Status(StatusCode::K_RUNTIME_ERROR,
-                      "cudaHostRegister failed: " + CudaErrToString(cudaRet, "cudaHostRegister"));
-    }
-    return Status::OK();
-}
-
-void CudaRH2DDriver::UnRegisterHostMemory(void *ptr)
-{
-    if (ptr) {
-        CUDA_CALL_WRAPPER(cudaHostUnregister, ptr);
     }
 }
 

@@ -56,6 +56,7 @@ public:
 
 private:
     const std::string clientId_;
+    bool cudaHostMemoryRegistered_{ false };
 };
 }  // namespace client
 }  // namespace datasystem

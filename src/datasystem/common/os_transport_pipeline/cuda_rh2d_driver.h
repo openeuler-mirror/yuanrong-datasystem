@@ -50,9 +50,6 @@ public:
     Status WaitIO() override;
     Status Release() override;
 
-    static Status RegisterHostMemory(void *ptr, size_t size);
-    static void UnRegisterHostMemory(void *ptr);
-
 private:
     cudaEvent_t GetSelfEvent(bool createIfNotExists);
     void RemoveSelfEvent();
@@ -94,16 +91,6 @@ public:
     Status Release() override
     {
         return Status::OK();
-    }
-    static Status RegisterHostMemory(void *ptr, size_t size)
-    {
-        (void)ptr;
-        (void)size;
-        return Status::OK();
-    }
-    static void UnRegisterHostMemory(void *ptr)
-    {
-        (void)ptr;
     }
 };
 }  // namespace OsXprtPipln

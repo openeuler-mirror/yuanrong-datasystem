@@ -48,6 +48,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/numa_util.h"
+#include "datasystem/common/util/cuda_host_memory.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/request_context.h"
@@ -181,11 +182,9 @@ UrmaManager::~UrmaManager()
     }
     {
         std::lock_guard<std::mutex> lock(clientTransportMemoryPinMutex_);
-#ifdef BUILD_PIPLN_H2D
         if (clientTransportMemoryPinned_ && memoryBuffer_ != nullptr) {
-            OsXprtPipln::UnRegisterHostMemory(memoryBuffer_);
+            UnregisterCudaHostMemory(memoryBuffer_);
         }
-#endif
         clientTransportMemoryPinned_ = false;
         clientTransportMemoryPinRef_ = 0;
     }
@@ -369,23 +368,20 @@ Status UrmaManager::EnsureClientPipelineH2DEnv()
 
 Status UrmaManager::RegisterClientTransportMemoryForH2D()
 {
-#ifdef BUILD_PIPLN_H2D
     std::lock_guard<std::mutex> lock(clientTransportMemoryPinMutex_);
     if (clientTransportMemoryPinRef_ > 0) {
         ++clientTransportMemoryPinRef_;
         return Status::OK();
     }
     RETURN_RUNTIME_ERROR_IF_NULL(memoryBuffer_);
-    RETURN_IF_NOT_OK(OsXprtPipln::RegisterHostMemory(memoryBuffer_, ubTransportMemSize_.load()));
+    RETURN_IF_NOT_OK(RegisterCudaHostMemory(memoryBuffer_, ubTransportMemSize_.load()));
     clientTransportMemoryPinned_ = true;
     clientTransportMemoryPinRef_ = 1;
-#endif
     return Status::OK();
 }
 
 void UrmaManager::UnregisterClientTransportMemoryForH2D()
 {
-#ifdef BUILD_PIPLN_H2D
     std::lock_guard<std::mutex> lock(clientTransportMemoryPinMutex_);
     if (clientTransportMemoryPinRef_ == 0) {
         return;
@@ -394,10 +390,9 @@ void UrmaManager::UnregisterClientTransportMemoryForH2D()
         return;
     }
     if (clientTransportMemoryPinned_ && memoryBuffer_ != nullptr) {
-        OsXprtPipln::UnRegisterHostMemory(memoryBuffer_);
+        UnregisterCudaHostMemory(memoryBuffer_);
     }
     clientTransportMemoryPinned_ = false;
-#endif
 }
 
 Status UrmaManager::GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle, uint64_t size)

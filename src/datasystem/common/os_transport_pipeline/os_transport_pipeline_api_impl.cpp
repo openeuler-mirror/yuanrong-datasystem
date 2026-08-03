@@ -21,7 +21,6 @@
 #include <mutex>
 #include <set>
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
-#include "datasystem/common/os_transport_pipeline/cuda_rh2d_driver.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -257,16 +256,6 @@ Status SetClientPipelineThreadNum(int32_t threadNum)
                      << ", but it is already set to " << g_clientPipelineThreadNum;
     }
     return Status::OK();
-}
-
-Status RegisterHostMemory(void *ptr, size_t size)
-{
-    return CudaRH2DDriver::RegisterHostMemory(ptr, size);
-}
-
-void UnRegisterHostMemory(void *ptr)
-{
-    CudaRH2DDriver::UnRegisterHostMemory(ptr);
 }
 
 Status InitOsPiplnRH2DEnv(void *ctx, void *jfc, void *jfce, uint32_t jettySize)
