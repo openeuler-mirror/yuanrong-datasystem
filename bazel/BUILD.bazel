@@ -198,7 +198,7 @@ py_wheel(
         "//:version_file",
         "//:worker_config_file",
     ] + select({
-        "//:enable_urma": ["//:urma_libs_files"],
+        "//:enable_urma": ["@local_urma//:urma_libs"],
         "//conditions:default": [],
     }),
 )
