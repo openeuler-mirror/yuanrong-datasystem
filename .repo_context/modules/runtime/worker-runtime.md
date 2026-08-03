@@ -102,6 +102,11 @@
     keeps Engine `NOT_READY` while the co-located Controller establishes authority. The Worker publishes READY only after
     the first membership lease succeeds, and writes the ready-check file only after committed membership, a placement
     probe, and Worker RPC health all succeed. No Worker-local topology authority is persisted.
+  - Coordinator-mode witness probing uses three fixed Worker-owned loops, a bounded FIFO event queue, and an in-flight
+    count. Every watch PUT contributes one independent single-target request; later target events do not cancel earlier
+    work. Shutdown first rejects new probe events and clears pending work, then closes Engine watch ingress, waits for
+    in-flight probe/report work to drain, and finally destroys the joined probe pool. A finite-deadline failure retains
+    the Engine, pool, proxy, and callback dependencies so the same shutdown sequence can be retried safely.
   - when `enable_urma=true`, URMA connection warmup runs after object-cache startup/restart handling and before
     `ReadinessProbe()`: it synchronously prepares the local warmup object, then starts best-effort async peer warmup
     without delaying readiness

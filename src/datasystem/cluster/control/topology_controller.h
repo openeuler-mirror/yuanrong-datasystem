@@ -27,6 +27,7 @@
 #include "datasystem/cluster/repository/topology_repository.h"
 #include "datasystem/cluster/runtime/control_backend_state.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
+#include "datasystem/cluster/runtime/worker_liveness.h"
 #include "datasystem/common/util/thread.h"
 
 namespace datasystem::cluster {
@@ -60,8 +61,13 @@ struct TopologyControllerOptions {
     std::chrono::milliseconds scaleInCollectWindow{ DEFAULT_ORDINARY_COLLECT_WINDOW_MS };
     // Absolute budget for one memberLivenessProbe call, including all targets and cleanup.
     std::chrono::seconds failureProbeTimeout{ 2 };
+    std::chrono::seconds witnessProbeRoundTimeout{ 10 };
+    size_t failureProbeWitnessCount{ 3 };
     // Existing Worker identity used to deterministically assign one cluster-wide probe owner per missing member.
     std::string localAddress;
+    std::string probeEpoch;
+    // First round ID reserved for this Controller runtime; Coordinator runtimes use disjoint generation ranges.
+    uint64_t initialProbeRound{ 1 };
     size_t maxMembersPerBatch{ 2'500 };
     size_t maxDerivedOperationsPerTick{ 512 };
     size_t maxProgressReadsPerTick{ 512 };
@@ -166,6 +172,11 @@ public:
      */
     Status SubmitCoordinationEvent(CoordinationEvent &&event);
 
+    /**
+     * @brief Enqueue one witness report for serial Controller processing.
+     */
+    Status SubmitWorkerLivenessReport(WorkerLivenessReport report);
+
     int64_t GetBootstrapRevision() const noexcept;  // Immutable revision for external watch registration.
 
     /**
@@ -227,6 +238,16 @@ private:
     Status TryConfirmFailures(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
     Status ConfirmMissingMembersUnreachable(const TopologySnapshot &latest, FailureClassification &classification);
+
+    struct SuspectProbeRound;
+
+    Status RefreshWitnessProbes(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships,
+                                const FailureClassification &classification);
+    Status StartWitnessProbeRound(const TopologySnapshot &latest, const std::vector<std::string> &eligibleWitnesses,
+                                  const MemberIdentity &target);
+    Status PublishWitnessProbeEvent(const std::string &witness, const SuspectProbeRound &round);
+    void ApplyWorkerLivenessReport(const WorkerLivenessReport &report);
+    void ApplyWitnessFailureGate(FailureClassification &classification);
 
     Status CommitClusterShutdown(const TopologySnapshot &latest);
 
@@ -292,6 +313,22 @@ private:
     Status CommitAndReadBack(uint64_t expectedVersion, const TopologyState &desired,
                              std::shared_ptr<const TopologySnapshot> &committed);
 
+    struct ProbeReport {
+        WorkerLivenessResult result{ WorkerLivenessResult::UNKNOWN };
+        std::chrono::steady_clock::time_point reportedAt;
+    };
+
+    struct SuspectProbeRound {
+        MemberIdentity target;
+        uint64_t probeRound{ 0 };
+        std::unordered_set<std::string> witnesses;
+        std::chrono::steady_clock::time_point startedAt;
+        std::chrono::steady_clock::time_point deadline;
+        std::unordered_map<std::string, ProbeReport> reports;
+    };
+
+    bool HasReachableWitness(const SuspectProbeRound &round) const;
+
     ICoordinationBackend &backend_;
     TopologyRepository &repository_;
     const TopologyKeyHelper &keys_;
@@ -349,6 +386,8 @@ private:
     bool externalEventSourceReady_{ false };
     // State-thread-owned admission quarantine for exhausted READY process generations.
     std::unordered_map<std::string, int64_t> quarantinedReadyTimestampByAddress_;
+    std::unordered_map<std::string, SuspectProbeRound> suspectRoundsByTarget_;
+    uint64_t nextProbeRound_{ 1 };
     std::string lastMembershipObservationDigest_;
     TopologyControllerDiagnostics diagnostics_;
 };

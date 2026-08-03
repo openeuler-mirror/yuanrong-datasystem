@@ -181,6 +181,13 @@ public:
                                                    coordinator::ReportTopologyRecoveryCandidateRspPb &rsp,
                                                    int32_t timeoutMs) = 0;
 
+    virtual Status ReportWorkerLiveness(const coordinator::ReportWorkerLivenessReqPb &,
+                                        coordinator::ReportWorkerLivenessRspPb &,
+                                        int32_t = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS)
+    {
+        return Status(K_NOT_SUPPORTED, "worker liveness report is not supported by this proxy");
+    }
+
     virtual Status EnsureLeaderMembership(const coordinator::EnsureLeaderMembershipReqPb &,
                                           coordinator::EnsureLeaderMembershipRspPb &,
                                           int32_t = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS)
@@ -289,6 +296,9 @@ public:
     Status ReportTopologyRecoveryCandidate(const coordinator::ReportTopologyRecoveryCandidateReqPb &req,
                                            coordinator::ReportTopologyRecoveryCandidateRspPb &rsp,
                                            int32_t timeoutMs) override;
+
+    Status ReportWorkerLiveness(const coordinator::ReportWorkerLivenessReqPb &req,
+                                coordinator::ReportWorkerLivenessRspPb &rsp, int32_t timeoutMs) override;
 
     Status EnsureLeaderMembership(const coordinator::EnsureLeaderMembershipReqPb &req,
                                   coordinator::EnsureLeaderMembershipRspPb &rsp, int32_t timeoutMs) override;

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -40,6 +41,7 @@ constexpr size_t COORDINATOR_JANITOR_DELETE_BATCH = 8'192;
 constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
 constexpr size_t HOST_CAPACITY_LOG_INTERVAL = 128;
 constexpr size_t HOST_LIFECYCLE_LOG_INTERVAL = 100;
+constexpr size_t MAX_PENDING_LIVENESS_REPORTS = 1'024;
 constexpr int RETRY_BACKOFF_MULTIPLIER = 2;
 constexpr int64_t RUNTIME_START_WARN_MS = 500;
 constexpr int64_t RUNTIME_STOP_WARN_MS = 1'000;
@@ -204,6 +206,24 @@ void TopologyControlHost::NotifyStoreMutation(WatchEvent::Type type,
     if (!debounceMembershipPut) {
         wakeCv_.notify_all();
     }
+}
+
+Status TopologyControlHost::EnqueueWorkerLivenessReport(const std::string &clusterName,
+                                                        cluster::WorkerLivenessReport report)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(started_ && !stopping_, K_SHUTTING_DOWN,
+                             "topology Control Host does not accept liveness reports");
+    auto found = entries_.find(clusterName);
+    CHECK_FAIL_RETURN_STATUS(found != entries_.end() && found->second->state == EntryState::RUNNING, K_NOT_READY,
+                             "cluster Controller runtime is not running");
+    CHECK_FAIL_RETURN_STATUS(found->second->pendingLivenessReports.size()
+                                     + found->second->deliveringLivenessReports
+                                 < MAX_PENDING_LIVENESS_REPORTS,
+                             K_TRY_AGAIN, "worker liveness report queue is full");
+    found->second->pendingLivenessReports.emplace_back(std::move(report));
+    wakeCv_.notify_all();
+    return Status::OK();
 }
 
 void TopologyControlHost::Run() noexcept
@@ -380,6 +400,7 @@ void TopologyControlHost::ReconcileRunningEntry(const std::string &clusterName, 
                 << "CLUSTER_CONTROL_HOST cluster=" << clusterName
                 << " action=retain_runtime reason=topology_authority_not_empty recovery_state=RECOVERING";
         }
+        SubmitWorkerLivenessReports(entry);
         SubmitDoorbell(entry);
         return;
     }
@@ -390,6 +411,40 @@ void TopologyControlHost::ReconcileRunningEntry(const std::string &clusterName, 
     LOG(WARNING) << "CLUSTER_CONTROL_HOST cluster=" << clusterName << " state=stopping reason=" << entry.stopReason
                  << " recovery_state=" << static_cast<int>(recoveryState)
                  << " runtime_error=" << diagnostics.lastError;
+}
+
+void TopologyControlHost::SubmitWorkerLivenessReports(ClusterEntry &entry)
+{
+    std::deque<cluster::WorkerLivenessReport> reports;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        reports.swap(entry.pendingLivenessReports);
+        entry.deliveringLivenessReports += reports.size();
+    }
+    while (!reports.empty()) {
+        auto report = std::move(reports.front());
+        reports.pop_front();
+        ++report.deliveryAttempts;
+        auto status = entry.runtime->SubmitWorkerLivenessReport(report);
+        const auto probeId = cluster::WorkerProbeIdForLog(report.probeEpoch, report.probeRound);
+        if (status.IsOk()) {
+            LOG(INFO) << "CLUSTER_CONTROL_HOST cluster=" << entry.clusterName
+                      << " action=WITNESS_PROBE_REPORT_DELIVERED probe_id=" << probeId
+                      << " witness=" << report.witnessAddress << " target=" << report.target.address
+                      << " result=" << cluster::WorkerLivenessResultName(report.result)
+                      << " attempts=" << report.deliveryAttempts;
+            std::lock_guard<std::mutex> lock(mutex_);
+            --entry.deliveringLivenessReports;
+            continue;
+        }
+        LOG(WARNING) << "CLUSTER_CONTROL_HOST cluster=" << entry.clusterName
+                     << " action=WITNESS_PROBE_REPORT_DELIVERY_FAILED probe_id=" << probeId
+                     << " witness=" << report.witnessAddress << " target=" << report.target.address
+                     << " result=" << cluster::WorkerLivenessResultName(report.result)
+                     << " attempts=" << report.deliveryAttempts << " retry=false status=" << status.ToString();
+        std::lock_guard<std::mutex> lock(mutex_);
+        --entry.deliveringLivenessReports;
+    }
 }
 
 void TopologyControlHost::ReconcileStoppingEntry(const std::string &clusterName, ClusterEntry &entry)
@@ -421,6 +476,10 @@ Status TopologyControlHost::StartRuntime(ClusterEntry &entry)
     runtimeOptions.controller = options_.controller;
     runtimeOptions.controller.eventSourceMode = cluster::TopologyEventSourceMode::EXTERNAL;
     runtimeOptions.controller.localAddress.clear();
+    runtimeOptions.controller.probeEpoch = coordinatorId_;
+    CHECK_FAIL_RETURN_STATUS(nextRuntimeGeneration_ <= std::numeric_limits<uint32_t>::max(), K_RUNTIME_ERROR,
+                             "topology Runtime probe generation space is exhausted");
+    runtimeOptions.controller.initialProbeRound = (nextRuntimeGeneration_++ << 32U) + 1U;
     runtimeOptions.controller.memberLivenessProbe = {};
     runtimeOptions.controller.membershipRestartHandler = {};
     runtimeOptions.controller.materializeRestartFacts = true;
@@ -533,6 +592,8 @@ void TopologyControlHost::FinishStoppedEntry(const std::string &clusterName, Clu
     if (found == entries_.end()) {
         return;
     }
+    entry.pendingLivenessReports.clear();
+    entry.deliveringLivenessReports = 0;
     if (releaseStatus.IsOk() && released && IsEmptyObservationCurrent(entry, observationGeneration)) {
         LOG(INFO) << "CLUSTER_CONTROL_HOST cluster=" << clusterName << " state=released";
         entries_.erase(found);

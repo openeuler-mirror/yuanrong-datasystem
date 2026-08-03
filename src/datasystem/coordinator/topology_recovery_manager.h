@@ -42,6 +42,7 @@ enum class TopologyCoordinationKeyKind : uint8_t {
     MIGRATE_TASK,
     DELETE_TASK,
     NOTIFY,
+    PROBE,
     MEMBERSHIP,
     SCALE_IN_METADATA_DONE
 };

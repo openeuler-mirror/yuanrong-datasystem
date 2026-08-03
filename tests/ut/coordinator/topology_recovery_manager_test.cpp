@@ -202,9 +202,23 @@ TEST_F(TopologyRecoveryManagerTest, RejectsReservedClusterNames)
     EXPECT_EQ(parsed.kind, TopologyCoordinationKeyKind::TOPOLOGY);
 
     std::unique_ptr<cluster::TopologyKeyHelper> keys;
-    for (const std::string name : { "topology", "tasks", "notify", "cluster", "scale-in-metadata-done" }) {
+    for (const std::string name : { "topology", "tasks", "notify", "probe", "cluster", "scale-in-metadata-done" }) {
         EXPECT_EQ(cluster::TopologyKeyHelper::Create(name, keys).GetCode(), K_INVALID);
     }
+}
+
+TEST_F(TopologyRecoveryManagerTest, ParsesExactWorkerProbeKeys)
+{
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    DS_ASSERT_OK(cluster::TopologyKeyHelper::Create("blue", keys));
+    const std::string physicalKey = keys->ProbeTable() + "/" + MEMBER_A;
+    ParsedTopologyCoordinationKey parsed;
+    DS_ASSERT_OK(manager_->ParseKey(physicalKey, parsed));
+    EXPECT_EQ(parsed.clusterName, "blue");
+    EXPECT_EQ(parsed.kind, TopologyCoordinationKeyKind::PROBE);
+    EXPECT_EQ(parsed.relativeKey, MEMBER_A);
+    DS_ASSERT_OK(manager_->ValidateWatchRange(physicalKey, ""));
+    EXPECT_EQ(manager_->ValidateWatchRange(keys->ProbeTable() + "/invalid", "").GetCode(), K_INVALID);
 }
 
 TEST_F(TopologyRecoveryManagerTest, ParsesScaleInMetadataDoneMarkersInDefaultAndNamedClusters)

@@ -94,6 +94,7 @@ public:
             .SetLocalAddress(localAddress.ToString())
             .UseCoordinator(proxy_, std::move(ingress))
             .SetPhaseCallbacks(callbacks_)
+            .SetWorkerProbeHandler([](cluster::WorkerProbeRequest) { return Status::OK(); })
             .SetNodeDeadTimeout(std::chrono::seconds(30));
         return builder.Build(engine_);
     }

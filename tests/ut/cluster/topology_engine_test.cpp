@@ -24,6 +24,7 @@
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/protos/coordinator.pb.h"
 #include "gtest/gtest.h"
 #include "ut/cluster/testing/fake_coordinator_service_proxy.h"
 #include "ut/common.h"
@@ -248,14 +249,16 @@ void PutTopology(testing::FakeCoordinatorServiceProxy &proxy, const std::string 
     DS_ASSERT_OK(proxy.PutRaw(keys->TopologyTable() + "/" + TopologyKeyHelper::TopologyKey(), encoded));
 }
 
-void ConfigureBuilder(TopologyEngine::Builder &builder, testing::FakeCoordinatorServiceProxy &proxy,
-                      TestWatchIngress &ingress, NoopTopologyCallbacks &callbacks,
-                      const std::string &clusterName)
+void ConfigureBuilder(
+    TopologyEngine::Builder &builder, testing::FakeCoordinatorServiceProxy &proxy, TestWatchIngress &ingress,
+    NoopTopologyCallbacks &callbacks, const std::string &clusterName,
+    std::function<Status(WorkerProbeRequest)> probeHandler = [](WorkerProbeRequest) { return Status::OK(); })
 {
     builder.SetClusterName(clusterName)
         .SetLocalAddress(LOCAL_ADDRESS)
         .UseCoordinator(proxy, ingress.Contract())
         .SetPhaseCallbacks(callbacks)
+        .SetWorkerProbeHandler(std::move(probeHandler))
         .SetNodeDeadTimeout(std::chrono::seconds(30));
 }
 
@@ -418,6 +421,115 @@ TEST(TopologyEngineTest, StartPublishesCapabilitiesAndShutdownDrainsOwnedRoles)
     EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPED);
     EXPECT_FALSE(ingress.IsBound());
     EXPECT_GT(proxy.CancelledWatchCount(), 0U);
+}
+
+TEST(TopologyEngineTest, ProbeEventInvokesOnlyWorkerProbeHandler)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "probe-event";
+    auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology());
+    std::mutex mutex;
+    std::vector<WorkerProbeRequest> requests;
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, clusterName, [&](WorkerProbeRequest request) {
+        std::lock_guard<std::mutex> lock(mutex);
+        requests.emplace_back(std::move(request));
+        return Status::OK();
+    });
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+
+    coordinator::WorkerProbeEventValuePb value;
+    value.set_cluster_name(clusterName);
+    value.set_probe_round(7);
+    value.set_target_address("127.0.0.1:2");
+    value.set_target_member_id(std::string(16, 'b'));
+    value.set_coordinator_id("coordinator-test");
+    std::string encoded;
+    ASSERT_TRUE(value.SerializeToString(&encoded));
+    const auto probeKey = keys->ProbeTable() + "/" + LOCAL_ADDRESS;
+    const auto watchId = FindWatchId(proxy, probeKey);
+    DS_ASSERT_OK(ingress.Emit("coordinator-test", watchId,
+                              { CoordinationEventType::PUT, probeKey, encoded, 1, 1 }));
+    value.set_probe_round(8);
+    value.set_target_address("127.0.0.1:3");
+    value.set_target_member_id(std::string(16, 'c'));
+    ASSERT_TRUE(value.SerializeToString(&encoded));
+    DS_ASSERT_OK(ingress.Emit("coordinator-test", watchId,
+                              { CoordinationEventType::PUT, probeKey, encoded, 2, 2 }));
+    EXPECT_TRUE(WaitFor([&] {
+        std::lock_guard<std::mutex> lock(mutex);
+        return requests.size() == 2;
+    }));
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        ASSERT_EQ(requests.size(), 2U);
+        EXPECT_EQ(requests.front().probeEpoch, "coordinator-test");
+        EXPECT_EQ(requests.front().probeRound, 7U);
+        EXPECT_EQ(requests.front().target.address, "127.0.0.1:2");
+        EXPECT_EQ(requests.front().target.id, std::string(16, 'b'));
+        EXPECT_EQ(requests.back().probeRound, 8U);
+        EXPECT_EQ(requests.back().target.address, "127.0.0.1:3");
+    }
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, ProbeEventsRemainIndependentAcrossReset)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "probe-reset";
+    auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology());
+    std::mutex mutex;
+    std::vector<WorkerProbeRequest> requests;
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, clusterName, [&](WorkerProbeRequest request) {
+        std::lock_guard<std::mutex> lock(mutex);
+        requests.emplace_back(std::move(request));
+        return Status::OK();
+    });
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+
+    coordinator::WorkerProbeEventValuePb value;
+    value.set_cluster_name(clusterName);
+    value.set_probe_round(7);
+    value.set_target_address("127.0.0.1:2");
+    value.set_target_member_id(std::string(16, 'b'));
+    value.set_coordinator_id("coordinator-test");
+    std::string encoded;
+    ASSERT_TRUE(value.SerializeToString(&encoded));
+    const auto probeKey = keys->ProbeTable() + "/" + LOCAL_ADDRESS;
+    const auto watchId = FindWatchId(proxy, probeKey);
+    DS_ASSERT_OK(ingress.Emit("coordinator-test", watchId,
+                              { CoordinationEventType::PUT, probeKey, encoded, 1, 1 }));
+    ASSERT_TRUE(WaitFor([&] {
+        std::lock_guard<std::mutex> lock(mutex);
+        return requests.size() == 1;
+    }));
+
+    DS_ASSERT_OK(ingress.Emit("coordinator-test", watchId, { CoordinationEventType::RESET, "", "", 0, 0 }));
+    value.set_probe_round(8);
+    ASSERT_TRUE(value.SerializeToString(&encoded));
+    DS_ASSERT_OK(ingress.Emit("coordinator-test", watchId,
+                              { CoordinationEventType::PUT, probeKey, encoded, 2, 2 }));
+    ASSERT_TRUE(WaitFor([&] {
+        std::lock_guard<std::mutex> lock(mutex);
+        return requests.size() == 2;
+    }));
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        EXPECT_EQ(requests.front().probeRound, 7U);
+        EXPECT_EQ(requests.back().probeRound, 8U);
+    }
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
 TEST(TopologyEngineTest, InitialSnapshotWithoutLocalMemberRemainsNotReady)

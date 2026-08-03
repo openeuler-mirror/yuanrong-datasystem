@@ -21,7 +21,6 @@
 #include <chrono>
 #include <exception>
 #include <functional>
-#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -37,6 +36,7 @@
 
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
+#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/encrypt/secret_manager.h"
@@ -233,6 +233,14 @@ std::string BuildUbHealthSidecarTable(const std::string &membershipTable)
 }
 
 namespace {
+constexpr size_t WORKER_PROBE_THREAD_COUNT = 3;
+constexpr size_t MAX_PENDING_WORKER_PROBES = 2'500;
+constexpr auto WORKER_PROBE_TIMEOUT = std::chrono::seconds(2);
+constexpr auto WORKER_PROBE_POLL_INTERVAL = std::chrono::milliseconds(1);
+constexpr auto WORKER_PROBE_REPORT_BUDGET = std::chrono::seconds(3);
+constexpr auto WORKER_PROBE_REPORT_RETRY_DELAY = std::chrono::milliseconds(100);
+constexpr int32_t WORKER_PROBE_REPORT_ATTEMPT_TIMEOUT_MS = 1'000;
+
 /**
  * @brief Verify local committed membership and placement readiness using one immutable Snapshot.
  * @param[in] engine Running topology Engine that owns the immutable Snapshot.
@@ -352,6 +360,20 @@ Status FinishControlBackendProbe(PendingControlBackendProbe &pending, cluster::C
     pending.tag = -1;
     return object_cache::FillControlBackendObservationFromGetClusterStateRspPb(
         pending.peer.address, response, observation);
+}
+
+Status FinishWorkerReachabilityProbe(PendingControlBackendProbe &pending, cluster::MemberIdentity &identity)
+{
+    GetClusterStateRspPb response;
+    auto rc = pending.api->GetClusterStateAsyncRead(pending.tag, response, RpcRecvFlags::DONTWAIT);
+    if (rc.GetCode() == K_TRY_AGAIN) {
+        return rc;
+    }
+    RETURN_IF_NOT_OK(rc);
+    pending.tag = -1;
+    CHECK_FAIL_RETURN_STATUS(!response.node_id().empty(), K_INVALID, "cluster-state response has no member identity");
+    identity = { response.node_id(), pending.peer.address };
+    return Status::OK();
 }
 
 cluster::ControlBackendProbeOutcome ProbeOutcomeFromStatus(const Status &status)
@@ -1319,11 +1341,184 @@ cluster::CoordinatorWatchIngress WorkerOCServer::BuildCoordinatorWatchIngress()
     return ingress;
 }
 
+Status WorkerOCServer::EnqueueWorkerProbe(cluster::WorkerProbeRequest request)
+{
+    CHECK_FAIL_RETURN_STATUS(coordinatorServiceProxy_ != nullptr && workerProbeThreadPool_ != nullptr, K_NOT_READY,
+                             "worker probe reporter is not ready");
+    const auto probeId = cluster::WorkerProbeIdForLog(request.probeEpoch, request.probeRound);
+    const auto clusterName = request.clusterName;
+    const auto target = request.target;
+    size_t queueDepth = 0;
+    {
+        std::lock_guard<std::mutex> lock(workerProbeMutex_);
+        CHECK_FAIL_RETURN_STATUS(!workerProbeStopping_, K_SHUTTING_DOWN, "worker probe reporter is stopping");
+        CHECK_FAIL_RETURN_STATUS(pendingWorkerProbes_.size() < MAX_PENDING_WORKER_PROBES, K_TRY_AGAIN,
+                                 "worker probe queue exceeds bounded capacity");
+        pendingWorkerProbes_.emplace_back(std::move(request));
+        queueDepth = pendingWorkerProbes_.size();
+    }
+    LOG(INFO) << "CLUSTER_WORKER_PROBE cluster=" << clusterName
+              << " action=WITNESS_PROBE_ENQUEUED probe_id=" << probeId << " witness=" << hostPort_.ToString()
+              << " target=" << target.address << " target_id_prefix=" << cluster::MemberIdForLog(target.id)
+              << " queue_depth=" << queueDepth;
+    workerProbeCv_.notify_one();
+    return Status::OK();
+}
+
+void WorkerOCServer::RunWorkerProbeLoop()
+{
+    while (true) {
+        cluster::WorkerProbeRequest request;
+        {
+            std::unique_lock<std::mutex> lock(workerProbeMutex_);
+            workerProbeCv_.wait(lock, [this] { return workerProbeStopping_ || !pendingWorkerProbes_.empty(); });
+            if (workerProbeStopping_) {
+                return;
+            }
+            request = std::move(pendingWorkerProbes_.front());
+            pendingWorkerProbes_.pop_front();
+            ++inFlightWorkerProbeCount_;
+        }
+        ProbeAndReportWorker(std::move(request));
+    }
+}
+
+void WorkerOCServer::ProbeAndReportWorker(cluster::WorkerProbeRequest request)
+{
+    const auto startedAt = std::chrono::steady_clock::now();
+    const auto probeId = cluster::WorkerProbeIdForLog(request.probeEpoch, request.probeRound);
+    LOG(INFO) << "CLUSTER_WORKER_PROBE cluster=" << request.clusterName
+              << " action=WITNESS_PROBE_STARTED probe_id=" << probeId << " witness=" << hostPort_.ToString()
+              << " target=" << request.target.address
+              << " target_id_prefix=" << cluster::MemberIdForLog(request.target.id);
+    auto result = cluster::WorkerLivenessResult::UNREACHABLE;
+    const char *reason = "START_FAILED";
+    const auto deadline = std::chrono::steady_clock::now() + WORKER_PROBE_TIMEOUT;
+    PendingControlBackendProbe pending;
+    auto status = StartControlBackendProbe(hostPort_, akSkManager_, request.target, deadline, pending);
+    if (status.IsOk()) {
+        reason = "TIMEOUT";
+    }
+    while (status.IsOk() && std::chrono::steady_clock::now() < deadline) {
+        {
+            std::lock_guard<std::mutex> lock(workerProbeMutex_);
+            if (workerProbeStopping_) {
+                reason = "SHUTTING_DOWN";
+                break;
+            }
+        }
+        cluster::MemberIdentity identity;
+        status = FinishWorkerReachabilityProbe(pending, identity);
+        if (status.GetCode() == K_TRY_AGAIN) {
+            std::this_thread::sleep_for(WORKER_PROBE_POLL_INTERVAL);
+            status = Status::OK();
+            continue;
+        }
+        if (status.IsError()) {
+            reason = "RPC_ERROR";
+        } else if (identity == request.target) {
+            result = cluster::WorkerLivenessResult::REACHABLE;
+            reason = "REACHABLE";
+        } else {
+            reason = "IDENTITY_MISMATCH";
+        }
+        break;
+    }
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()
+                                                                                - startedAt)
+                               .count();
+    if (result == cluster::WorkerLivenessResult::REACHABLE) {
+        LOG(INFO) << "CLUSTER_WORKER_PROBE cluster=" << request.clusterName
+                  << " action=WITNESS_PROBE_FINISHED probe_id=" << probeId << " witness=" << hostPort_.ToString()
+                  << " target=" << request.target.address << " result=" << cluster::WorkerLivenessResultName(result)
+                  << " elapsed_ms=" << elapsedMs << " reason=" << reason << " status=" << status.ToString();
+    } else {
+        LOG(WARNING) << "CLUSTER_WORKER_PROBE cluster=" << request.clusterName
+                     << " action=WITNESS_PROBE_FINISHED probe_id=" << probeId << " witness=" << hostPort_.ToString()
+                     << " target=" << request.target.address << " result=" << cluster::WorkerLivenessResultName(result)
+                     << " elapsed_ms=" << elapsedMs << " reason=" << reason << " status=" << status.ToString();
+    }
+    static_cast<void>(ReportWorkerProbeResult(request, result));
+    {
+        std::lock_guard<std::mutex> lock(workerProbeMutex_);
+        --inFlightWorkerProbeCount_;
+    }
+    workerProbeCv_.notify_all();
+}
+
+bool WorkerOCServer::ReportWorkerProbeResult(const cluster::WorkerProbeRequest &request,
+                                             cluster::WorkerLivenessResult result)
+{
+    coordinator::ReportWorkerLivenessReqPb report;
+    report.set_cluster_name(request.clusterName);
+    report.set_witness_address(hostPort_.ToString());
+    report.set_target_address(request.target.address);
+    report.set_target_member_id(request.target.id);
+    report.set_probe_round(request.probeRound);
+    report.set_result(result == cluster::WorkerLivenessResult::REACHABLE ? coordinator::WORKER_REACHABLE
+                                                                        : coordinator::WORKER_UNREACHABLE);
+    report.set_coordinator_id(request.probeEpoch);
+
+    Status reportStatus(K_RUNTIME_ERROR, "worker liveness report was not attempted");
+    const auto reportStartedAt = std::chrono::steady_clock::now();
+    const auto reportDeadline = reportStartedAt + WORKER_PROBE_REPORT_BUDGET;
+    uint32_t attempts = 0;
+    while (std::chrono::steady_clock::now() < reportDeadline) {
+        {
+            std::lock_guard<std::mutex> lock(workerProbeMutex_);
+            if (workerProbeStopping_) {
+                break;
+            }
+        }
+        const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     reportDeadline - std::chrono::steady_clock::now())
+                                     .count();
+        const auto timeout = static_cast<int32_t>(
+            std::min<int64_t>(WORKER_PROBE_REPORT_ATTEMPT_TIMEOUT_MS, std::max<int64_t>(remainingMs, 1)));
+        coordinator::ReportWorkerLivenessRspPb response;
+        ++attempts;
+        reportStatus = coordinatorServiceProxy_->ReportWorkerLiveness(report, response, timeout);
+        if (reportStatus.IsOk()) {
+            break;
+        }
+        std::this_thread::sleep_for(WORKER_PROBE_REPORT_RETRY_DELAY);
+    }
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()
+                                                                                - reportStartedAt)
+                               .count();
+    const auto probeId = cluster::WorkerProbeIdForLog(request.probeEpoch, request.probeRound);
+    if (reportStatus.IsError()) {
+        LOG(WARNING) << "CLUSTER_WORKER_PROBE cluster=" << request.clusterName
+                     << " action=WITNESS_PROBE_REPORT_FAILED probe_id=" << probeId
+                     << " witness=" << hostPort_.ToString() << " target=" << request.target.address
+                     << " result=" << cluster::WorkerLivenessResultName(result) << " attempts=" << attempts
+                     << " elapsed_ms=" << elapsedMs << " status=" << reportStatus.ToString();
+    } else {
+        LOG(INFO) << "CLUSTER_WORKER_PROBE cluster=" << request.clusterName
+                  << " action=WITNESS_PROBE_REPORT_SUCCEEDED probe_id=" << probeId
+                  << " witness=" << hostPort_.ToString() << " target=" << request.target.address
+                  << " result=" << cluster::WorkerLivenessResultName(result) << " attempts=" << attempts
+                  << " elapsed_ms=" << elapsedMs;
+    }
+    return reportStatus.IsOk();
+}
+
 Status WorkerOCServer::ConstructTopologyRuntime()
 {
     RETURN_IF_NOT_OK(ConstructTopologyCallbacks());
     if (coordinatorDiscovery_ != nullptr) {
         coordinatorWatchSvc_ = std::make_unique<coordinator::CoordinatorWatchServiceImpl>(hostPort_);
+        {
+            std::lock_guard<std::mutex> lock(workerProbeMutex_);
+            workerProbeStopping_ = false;
+            pendingWorkerProbes_.clear();
+            inFlightWorkerProbeCount_ = 0;
+        }
+        RETURN_IF_EXCEPTION_OCCURS(workerProbeThreadPool_ = std::make_shared<ThreadPool>(
+                                       WORKER_PROBE_THREAD_COUNT, WORKER_PROBE_THREAD_COUNT, "WorkerProbe"));
+        for (size_t index = 0; index < WORKER_PROBE_THREAD_COUNT; ++index) {
+            workerProbeThreadPool_->Execute([this] { RunWorkerProbeLoop(); });
+        }
     }
     cluster::TopologyEngine::Builder builder;
     // Membership lease TTL already equals FLAGS_node_timeout_s. Classifier waits only the remaining
@@ -1375,7 +1570,10 @@ Status WorkerOCServer::ConstructTopologyRuntime()
             SetTopologyServingAdmission(allowBusiness);
         });
     if (coordinatorServiceProxy_ != nullptr) {
-        builder.UseCoordinator(*coordinatorServiceProxy_, BuildCoordinatorWatchIngress());
+        builder
+            .SetWorkerProbeHandler(
+                [this](cluster::WorkerProbeRequest request) { return EnqueueWorkerProbe(std::move(request)); })
+            .UseCoordinator(*coordinatorServiceProxy_, BuildCoordinatorWatchIngress());
     } else {
         builder.UseEtcd(*etcdStore_);
     }
@@ -1603,7 +1801,24 @@ Status WorkerOCServer::StopTopologyRuntime(std::chrono::steady_clock::time_point
         ubHealthLeaseSync_->Stop();
         ubHealthLeaseSync_.reset();
     }
-    return topologyEngine_ == nullptr ? Status::OK() : topologyEngine_->Shutdown(deadline);
+    {
+        std::lock_guard<std::mutex> lock(workerProbeMutex_);
+        workerProbeStopping_ = true;
+        pendingWorkerProbes_.clear();
+    }
+    workerProbeCv_.notify_all();
+    const auto status = topologyEngine_ == nullptr ? Status::OK() : topologyEngine_->Shutdown(deadline);
+    if (status.IsError()) {
+        return status;
+    }
+    {
+        std::unique_lock<std::mutex> lock(workerProbeMutex_);
+        if (!workerProbeCv_.wait_until(lock, deadline, [this] { return inFlightWorkerProbeCount_ == 0; })) {
+            RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "worker probe drain exceeded shutdown deadline");
+        }
+    }
+    workerProbeThreadPool_.reset();
+    return status;
 }
 
 Status WorkerOCServer::StartMetaStoreService()

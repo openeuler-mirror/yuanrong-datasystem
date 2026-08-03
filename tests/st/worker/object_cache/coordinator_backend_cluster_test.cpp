@@ -18,6 +18,7 @@
  * Description: ST for coordinator-backed worker cluster coordination.
  */
 #include <chrono>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <set>
@@ -38,6 +39,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
+#include "datasystem/protos/coordinator.pb.h"
 
 namespace datasystem {
 namespace st {
@@ -46,8 +48,97 @@ constexpr int WAIT_TOPOLOGY_TIMEOUT_SEC = 10;
 constexpr int WAIT_SCALE_TIMEOUT_SEC = 30;
 constexpr int WAIT_TOPOLOGY_INTERVAL_MS = 100;
 constexpr int TARGET_WORKER_COORDINATOR_BLINK_SEC = 3;
+constexpr int INJECT_EXECUTION_TIMEOUT_SEC = 5;
+constexpr int COORDINATOR_EVIDENCE_TIMEOUT_SEC = 30;
+constexpr int WITNESS_ROUND_ROLLOVER_TIMEOUT_SEC = 75;
+constexpr int REAL_FAILURE_REMOVAL_TIMEOUT_SEC = 150;
+constexpr int THREE_WORKER_TEST_TIMEOUT_SEC = 240;
 constexpr size_t TEST_KEY_COUNT = 100;
 constexpr char COORDINATION_KEEPALIVE_FAILURE_INJECT[] = "CoordinationBackend.KeepAlive.returnError";
+constexpr char COORDINATOR_KEEPALIVE_INJECT_NAME[] = "CoordinationBackend.KeepAlive.returnError";
+constexpr char COORDINATOR_KEEPALIVE_INJECT_ACTION[] = "return(K_RPC_UNAVAILABLE)";
+
+class CoordinatorIsolationGuard {
+public:
+    explicit CoordinatorIsolationGuard(BaseCluster &cluster) : cluster_(cluster)
+    {
+    }
+
+    ~CoordinatorIsolationGuard()
+    {
+        auto rc = Clear();
+        if (!rc.IsOk()) {
+            LOG(ERROR) << "Failed to clear Coordinator isolation injections: " << rc;
+        }
+    }
+
+    CoordinatorIsolationGuard(const CoordinatorIsolationGuard &) = delete;
+    CoordinatorIsolationGuard &operator=(const CoordinatorIsolationGuard &) = delete;
+
+    Status Start(std::initializer_list<uint32_t> workerIndexes)
+    {
+        CHECK_FAIL_RETURN_STATUS(workerIndexes_.empty(), K_RUNTIME_ERROR,
+                                 "Coordinator isolation guard is already active");
+        for (auto workerIndex : workerIndexes) {
+            workerIndexes_.emplace_back(workerIndex);
+            auto rc = cluster_.SetInjectAction(WORKER, workerIndex, COORDINATOR_KEEPALIVE_INJECT_NAME,
+                                               COORDINATOR_KEEPALIVE_INJECT_ACTION);
+            if (!rc.IsOk()) {
+                return Rollback(rc);
+            }
+        }
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(INJECT_EXECUTION_TIMEOUT_SEC);
+        while (std::chrono::steady_clock::now() < deadline) {
+            bool allExecuted = true;
+            for (auto workerIndex : workerIndexes_) {
+                uint64_t executeCount = 0;
+                auto rc = cluster_.GetInjectActionExecuteCount(WORKER, workerIndex, COORDINATOR_KEEPALIVE_INJECT_NAME,
+                                                               executeCount);
+                if (!rc.IsOk() || executeCount == 0) {
+                    allExecuted = false;
+                    break;
+                }
+            }
+            if (allExecuted) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Rollback(Status(K_RUNTIME_ERROR, "Timed out waiting for Coordinator isolation injection execution"));
+    }
+
+    Status Clear()
+    {
+        Status firstError = Status::OK();
+        for (auto workerIndex : workerIndexes_) {
+            auto rc = cluster_.ClearInjectAction(WORKER, workerIndex, COORDINATOR_KEEPALIVE_INJECT_NAME);
+            if (!rc.IsOk() && firstError.IsOk()) {
+                firstError = rc;
+            }
+        }
+        workerIndexes_.clear();
+        return firstError;
+    }
+
+    void ReleaseWithoutClear()
+    {
+        workerIndexes_.clear();
+    }
+
+private:
+    Status Rollback(const Status &cause)
+    {
+        auto clearRc = Clear();
+        if (!clearRc.IsOk()) {
+            LOG(ERROR) << "Failed to roll back Coordinator isolation injections: " << clearRc;
+        }
+        return cause;
+    }
+
+    BaseCluster &cluster_;
+    std::vector<uint32_t> workerIndexes_;
+};
 
 std::string WorkerStateToString(MembershipPb::StatePb state)
 {
@@ -78,6 +169,12 @@ std::string WorkerStatesToString(const std::map<std::string, MembershipPb::State
     }
     return VectorToString(workerStates);
 }
+
+std::string AddressesToString(const std::set<std::string> &addresses)
+{
+    return VectorToString(std::vector<std::string>(addresses.begin(), addresses.end()));
+}
+
 }  // namespace
 
 class CoordinatorBackendClusterTest : public OCClientCommon {
@@ -122,16 +219,15 @@ protected:
         return Status::OK();
     }
 
-    Status GetTopologyWorkers(ICoordinatorServiceProxy &proxy,
-                              std::map<std::string, MembershipPb::StatePb> &outWorkers)
+    Status GetTopologyWorkers(ICoordinatorServiceProxy &proxy, std::map<std::string, MembershipPb::StatePb> &outWorkers)
     {
         std::unique_ptr<cluster::TopologyKeyHelper> topologyKeys;
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(GetTestClusterName(), topologyKeys));
 
         std::vector<KeyValueEntry> kvs;
         int64_t revision = 0;
-        RETURN_IF_NOT_OK(proxy.Range(topologyKeys->TopologyTable() + "/", "", kvs, revision,
-                                     DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
+        RETURN_IF_NOT_OK(
+            proxy.Range(topologyKeys->TopologyTable() + "/", "", kvs, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
         CHECK_FAIL_RETURN_STATUS(kvs.size() == 1, K_RUNTIME_ERROR,
                                  "Unexpected topology entry count: " + std::to_string(kvs.size()));
 
@@ -327,6 +423,184 @@ public:
         CoordinatorBackendClusterTest::SetClusterSetupOptions(opts);
         opts.numWorkers = 3;
     }
+
+protected:
+    int GetTestCaseTimeoutSecs() const override
+    {
+        return THREE_WORKER_TEST_TIMEOUT_SEC;
+    }
+
+    Status GetWorkerAddresses(std::initializer_list<uint32_t> workerIndexes, std::set<std::string> &addresses)
+    {
+        addresses.clear();
+        for (auto workerIndex : workerIndexes) {
+            HostPort workerAddress;
+            RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
+            addresses.emplace(workerAddress.ToString());
+        }
+        return Status::OK();
+    }
+
+    Status ReadMembershipAddresses(std::set<std::string> &addresses)
+    {
+        RETURN_IF_NOT_OK(GetCoordinatorProxy());
+        CHECK_FAIL_RETURN_STATUS(coordinatorProxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator proxy is null");
+        std::unique_ptr<cluster::TopologyKeyHelper> topologyKeys;
+        RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(GetTestClusterName(), topologyKeys));
+        const std::string prefix = topologyKeys->MembershipTable() + "/";
+        const std::string rangeEnd = StringPlusOne(prefix);
+        CHECK_FAIL_RETURN_STATUS(!rangeEnd.empty(), K_RUNTIME_ERROR, "Failed to build membership range end");
+
+        std::vector<KeyValueEntry> kvs;
+        int64_t revision = 0;
+        RETURN_IF_NOT_OK(coordinatorProxy_->Range(prefix, rangeEnd, kvs, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
+        addresses.clear();
+        for (const auto &entry : kvs) {
+            CHECK_FAIL_RETURN_STATUS(entry.key.rfind(prefix, 0) == 0 && entry.key.size() > prefix.size(),
+                                     K_RUNTIME_ERROR, "Unexpected membership key: " + entry.key);
+            addresses.emplace(entry.key.substr(prefix.size()));
+        }
+        return Status::OK();
+    }
+
+    Status WaitForMembershipLayout(std::initializer_list<uint32_t> presentWorkerIndexes,
+                                   std::initializer_list<uint32_t> absentWorkerIndexes)
+    {
+        std::set<std::string> expectedPresent;
+        std::set<std::string> expectedAbsent;
+        RETURN_IF_NOT_OK(GetWorkerAddresses(presentWorkerIndexes, expectedPresent));
+        RETURN_IF_NOT_OK(GetWorkerAddresses(absentWorkerIndexes, expectedAbsent));
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(COORDINATOR_EVIDENCE_TIMEOUT_SEC);
+        Status lastRc(K_RUNTIME_ERROR, "Membership layout has not been read");
+        std::set<std::string> lastAddresses;
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::set<std::string> addresses;
+            lastRc = ReadMembershipAddresses(addresses);
+            lastAddresses = addresses;
+            if (lastRc.IsOk() && addresses == expectedPresent) {
+                bool allAbsent = true;
+                for (const auto &address : expectedAbsent) {
+                    if (addresses.count(address) > 0) {
+                        allAbsent = false;
+                        break;
+                    }
+                }
+                if (allAbsent) {
+                    return Status::OK();
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR, "Timed out waiting for Coordinator membership layout. expected present: "
+                                           + AddressesToString(expectedPresent) + ", expected absent: "
+                                           + AddressesToString(expectedAbsent) + ", last addresses: "
+                                           + AddressesToString(lastAddresses) + ", last status: " + lastRc.ToString());
+    }
+
+    Status ReadWitnessProbeEvent(uint32_t witnessWorkerIndex, coordinator::WorkerProbeEventValuePb &value,
+                                 int64_t &modRevision)
+    {
+        RETURN_IF_NOT_OK(GetCoordinatorProxy());
+        CHECK_FAIL_RETURN_STATUS(coordinatorProxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator proxy is null");
+        HostPort witnessAddress;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(witnessWorkerIndex, witnessAddress));
+        std::unique_ptr<cluster::TopologyKeyHelper> topologyKeys;
+        RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(GetTestClusterName(), topologyKeys));
+        std::string probeKey;
+        RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::ProbeKey(witnessAddress.ToString(), probeKey));
+        const std::string exactKey = topologyKeys->ProbeTable() + "/" + probeKey;
+
+        std::vector<KeyValueEntry> kvs;
+        int64_t revision = 0;
+        RETURN_IF_NOT_OK(coordinatorProxy_->Range(exactKey, "", kvs, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
+        CHECK_FAIL_RETURN_STATUS(
+            kvs.size() == 1, K_RUNTIME_ERROR,
+            "Unexpected Witness probe entry count for " + exactKey + ": " + std::to_string(kvs.size()));
+        CHECK_FAIL_RETURN_STATUS(value.ParseFromString(kvs.front().value), K_RUNTIME_ERROR,
+                                 "Failed to parse Witness probe event for " + exactKey);
+        CHECK_FAIL_RETURN_STATUS(
+            value.cluster_name() == GetTestClusterName() && !value.coordinator_id().empty()
+                && !value.target_address().empty() && !value.target_member_id().empty() && value.probe_round() > 0,
+            K_RUNTIME_ERROR, "Invalid Witness probe event: " + value.ShortDebugString());
+        modRevision = kvs.front().modRevision;
+        return Status::OK();
+    }
+
+    Status WaitForWitnessProbeEvent(uint32_t witnessWorkerIndex, uint32_t targetWorkerIndex,
+                                    coordinator::WorkerProbeEventValuePb &event, int64_t &modRevision)
+    {
+        HostPort targetAddress;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(targetWorkerIndex, targetAddress));
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(COORDINATOR_EVIDENCE_TIMEOUT_SEC);
+        Status lastRc(K_RUNTIME_ERROR, "Witness probe event has not been read");
+        while (std::chrono::steady_clock::now() < deadline) {
+            lastRc = ReadWitnessProbeEvent(witnessWorkerIndex, event, modRevision);
+            if (lastRc.IsOk() && event.target_address() == targetAddress.ToString()) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR, "Timed out waiting for Witness probe event for " + targetAddress.ToString()
+                                           + ", last event: " + event.ShortDebugString()
+                                           + ", last status: " + lastRc.ToString());
+    }
+
+    Status WaitForWitnessProbeRoundRollover(uint32_t witnessWorkerIndex, const std::string &targetAddress,
+                                            uint64_t initialRound, int64_t initialRevision)
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(WITNESS_ROUND_ROLLOVER_TIMEOUT_SEC);
+        Status lastRc(K_RUNTIME_ERROR, "Witness probe rollover has not been read");
+        coordinator::WorkerProbeEventValuePb event;
+        int64_t modRevision = 0;
+        while (std::chrono::steady_clock::now() < deadline) {
+            lastRc = ReadWitnessProbeEvent(witnessWorkerIndex, event, modRevision);
+            if (lastRc.IsOk() && event.target_address() == targetAddress && event.probe_round() != initialRound
+                && modRevision > initialRevision) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR, "Timed out waiting for Witness probe round rollover. target: " + targetAddress
+                                           + ", initial round: " + std::to_string(initialRound)
+                                           + ", last event: " + event.ShortDebugString()
+                                           + ", last status: " + lastRc.ToString());
+    }
+
+    void AssertBidirectionalAccess(uint32_t first, uint32_t second, const std::string &prefix)
+    {
+        std::shared_ptr<KVClient> firstClient;
+        std::shared_ptr<KVClient> secondClient;
+        InitKVClient(first, firstClient);
+        InitKVClient(second, secondClient);
+
+        const auto firstKeys = BuildKeys(prefix + "_first_to_second");
+        const auto firstValues = BuildValues(firstKeys, prefix + "_first_to_second");
+        AssertSetKeys(firstClient, firstKeys, firstValues);
+        AssertGetKeysEventually(secondClient, firstKeys, firstValues);
+
+        const auto secondKeys = BuildKeys(prefix + "_second_to_first");
+        const auto secondValues = BuildValues(secondKeys, prefix + "_second_to_first");
+        AssertSetKeys(secondClient, secondKeys, secondValues);
+        AssertGetKeysEventually(firstClient, secondKeys, secondValues);
+    }
+
+    void RestartAllWorkersWithCoordinatorRunning()
+    {
+        auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+        ASSERT_NE(externalCluster, nullptr);
+        DS_ASSERT_OK(externalCluster->KillWorker(0));
+        DS_ASSERT_OK(externalCluster->KillWorker(1));
+        DS_ASSERT_OK(externalCluster->KillWorker(2));
+
+        DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+        DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+        DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
+
+        DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0, WAIT_SCALE_TIMEOUT_SEC));
+        DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1, WAIT_SCALE_TIMEOUT_SEC));
+        DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2, WAIT_SCALE_TIMEOUT_SEC));
+    }
 };
 
 TEST_F(CoordinatorBackendClusterTest, TwoWorkersCanReadKeysAcrossWorkers)
@@ -480,6 +754,89 @@ TEST_F(CoordinatorBackendClusterTest, AddedWorkerCanWriteKeysReadableFromExistin
     const auto scaleUpValues = BuildValues(scaleUpKeys, "scale_up_new_worker");
     AssertSetKeys(client2, scaleUpKeys, scaleUpValues);
     AssertGetKeysEventually(client1, scaleUpKeys, scaleUpValues);
+}
+
+TEST_F(CoordinatorBackendClusterThreeWorkerTest, AllWorkersRestartWithCoordinatorRunning)
+{
+    AssertWorkersInCluster({ 0, 1, 2 });
+    AssertBidirectionalAccess(0, 1, "all_worker_restart_before");
+
+    RestartAllWorkersWithCoordinatorRunning();
+
+    AssertWorkersInCluster({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC);
+    AssertBidirectionalAccess(0, 2, "all_worker_restart_after");
+}
+
+TEST_F(CoordinatorBackendClusterThreeWorkerTest, TransientCoordinatorIsolationKeepsTopologyStable)
+{
+    AssertWorkersInCluster({ 0, 1, 2 });
+    AssertBidirectionalAccess(0, 1, "transient_coordinator_isolation_baseline");
+
+    CoordinatorIsolationGuard guard(*cluster_);
+    DS_ASSERT_OK(guard.Start({ 1 }));
+    DS_ASSERT_OK(guard.Clear());
+
+    AssertWorkersInCluster({ 0, 1, 2 });
+    AssertBidirectionalAccess(0, 1, "transient_coordinator_isolation_recovered");
+}
+
+TEST_F(CoordinatorBackendClusterThreeWorkerTest, SingleWorkerCoordinatorIsolationIsProtectedByWitness)
+{
+    CoordinatorIsolationGuard guard(*cluster_);
+    DS_ASSERT_OK(guard.Start({ 1 }));
+    DS_ASSERT_OK(WaitForMembershipLayout({ 0, 2 }, { 1 }));
+
+    coordinator::WorkerProbeEventValuePb initialEvent;
+    int64_t initialRevision = 0;
+    DS_ASSERT_OK(WaitForWitnessProbeEvent(0, 1, initialEvent, initialRevision));
+    DS_ASSERT_OK(WaitForWitnessProbeRoundRollover(0, initialEvent.target_address(), initialEvent.probe_round(),
+                                                  initialRevision));
+
+    AssertWorkersInCluster({ 0, 1, 2 });
+    AssertBidirectionalAccess(0, 1, "single_worker_coordinator_isolation");
+    DS_ASSERT_OK(guard.Clear());
+    AssertWorkersInCluster({ 0, 1, 2 });
+}
+
+TEST_F(CoordinatorBackendClusterThreeWorkerTest, MultipleWorkersCoordinatorIsolationIsProtectedByWitness)
+{
+    CoordinatorIsolationGuard guard(*cluster_);
+    DS_ASSERT_OK(guard.Start({ 1, 2 }));
+    DS_ASSERT_OK(WaitForMembershipLayout({ 0 }, { 1, 2 }));
+
+    std::this_thread::sleep_for(std::chrono::seconds(WITNESS_ROUND_ROLLOVER_TIMEOUT_SEC));
+    AssertWorkersInCluster({ 0, 1, 2 });
+    AssertBidirectionalAccess(0, 1, "multiple_workers_coordinator_isolation_worker1");
+    AssertBidirectionalAccess(0, 2, "multiple_workers_coordinator_isolation_worker2");
+    DS_ASSERT_OK(guard.Clear());
+    AssertWorkersInCluster({ 0, 1, 2 });
+}
+
+TEST_F(CoordinatorBackendClusterThreeWorkerTest, ProtectedWorkerIsRemovedAfterRealFailure)
+{
+    CoordinatorIsolationGuard guard(*cluster_);
+    DS_ASSERT_OK(guard.Start({ 2 }));
+    DS_ASSERT_OK(WaitForMembershipLayout({ 0, 1 }, { 2 }));
+
+    coordinator::WorkerProbeEventValuePb initialEvent;
+    int64_t initialRevision = 0;
+    DS_ASSERT_OK(WaitForWitnessProbeEvent(0, 2, initialEvent, initialRevision));
+    AssertBidirectionalAccess(0, 2, "protected_worker_before_real_failure");
+    DS_ASSERT_OK(WaitForWitnessProbeRoundRollover(0, initialEvent.target_address(), initialEvent.probe_round(),
+                                                  initialRevision));
+    AssertWorkersInCluster({ 0, 1, 2 });
+
+    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    ASSERT_NE(externalCluster, nullptr);
+    auto killRc = externalCluster->KillWorker(2);
+    if (killRc.IsOk()) {
+        guard.ReleaseWithoutClear();
+    }
+    DS_ASSERT_OK(killRc);
+
+    AssertWorkersNotInCluster({ 2 }, REAL_FAILURE_REMOVAL_TIMEOUT_SEC);
+    AssertWorkersInCluster({ 0, 1 });
+    AssertBidirectionalAccess(0, 1, "protected_worker_after_real_failure");
 }
 
 TEST_F(CoordinatorBackendClusterThreeWorkerTest, GracefulWorkerExitKeepsExistingKeysReadable)

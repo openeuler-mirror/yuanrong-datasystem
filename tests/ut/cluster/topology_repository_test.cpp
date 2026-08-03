@@ -57,6 +57,8 @@ TEST(TopologyRepositoryTest, TopologyCasCommitsAndReadsBackConflict)
     EXPECT_EQ(result.observed->version, 4);
 }
 
+
+
 TEST(TopologyRepositoryTest, DerivedRecordsCannotReplaceTopologyAuthority)
 {
     FakeCoordinationBackend backend;

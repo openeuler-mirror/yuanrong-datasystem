@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -20,6 +21,7 @@
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/control/topology_controller_runtime.h"
+#include "datasystem/cluster/runtime/worker_liveness.h"
 #include "datasystem/common/coordinator/watch_event.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/coordinator/coordinator_store_backend.h"
@@ -111,6 +113,14 @@ public:
     void NotifyStoreMutation(WatchEvent::Type type, const ParsedTopologyCoordinationKey &parsed) noexcept;
 
     /**
+     * @brief Enqueue one validated witness report for Host-thread delivery.
+     * @param[in] clusterName Target cluster runtime.
+     * @param[in] report Report to consume.
+     * @return K_OK on admission or bounded queue/lifecycle status.
+     */
+    Status EnqueueWorkerLivenessReport(const std::string &clusterName, cluster::WorkerLivenessReport report);
+
+    /**
      * @brief Stop ingress, stop every Runtime and join the Host thread.
      * @param[in] deadline Absolute steady deadline.
      * @return First stop error after all clusters were attempted.
@@ -155,6 +165,8 @@ private:
         bool emptyCheckPending{ false };
         bool releaseAfterStop{ false };
         uint64_t mutationGeneration{ 0 };
+        std::deque<cluster::WorkerLivenessReport> pendingLivenessReports;
+        size_t deliveringLivenessReports{ 0 };
         std::chrono::steady_clock::time_point retryAt;
         std::chrono::milliseconds retryBackoff{ 0 };
         std::string stopReason;
@@ -189,6 +201,11 @@ private:
      * @param[in,out] entry Running entry.
      */
     void ReconcileRunningEntry(const std::string &clusterName, ClusterEntry &entry);
+
+    /**
+     * @brief Deliver queued witness reports without holding the Host mutex.
+     */
+    void SubmitWorkerLivenessReports(ClusterEntry &entry);
 
     /**
      * @brief Advance one bounded Runtime Stop slice.
@@ -259,6 +276,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable wakeCv_;
     std::unordered_map<std::string, std::unique_ptr<ClusterEntry>> entries_;
+    uint64_t nextRuntimeGeneration_{ 1 };
     size_t reconcileCursor_{ 0 };
     Thread thread_;
     bool started_{ false };

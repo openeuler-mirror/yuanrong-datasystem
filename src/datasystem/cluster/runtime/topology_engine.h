@@ -28,6 +28,8 @@
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/cluster/runtime/topology_role_watch_plan.h"
 #include "datasystem/cluster/runtime/topology_runtime_types.h"
+#include "datasystem/cluster/runtime/topology_snapshot_state.h"
+#include "datasystem/cluster/runtime/worker_liveness.h"
 #include "datasystem/common/util/thread.h"
 
 namespace datasystem {
@@ -133,6 +135,13 @@ public:
          * @return This Builder.
          */
         Builder &SetPeerTopologyRefresh(PeerTopologyRefresh refresh);
+
+        /**
+         * @brief Register the non-blocking Coordinator Witness probe request handler.
+         * @param[in] handler Handler that must enqueue bounded asynchronous probe work.
+         * @return This Builder.
+         */
+        Builder &SetWorkerProbeHandler(std::function<Status(WorkerProbeRequest)> handler);
 
         /**
          * @brief Register the non-blocking business-admission callback.
@@ -373,6 +382,7 @@ private:
         std::chrono::seconds stopGrace{ 10 };
         ControlBackendProbe controlBackendProbe;
         PeerTopologyRefresh peerTopologyRefresh;
+        std::function<Status(WorkerProbeRequest)> workerProbeHandler;
         std::function<void(TopologyAvailabilityLevel)> availabilityHandler;
         std::function<void(std::shared_ptr<const TopologySnapshot>)> snapshotPublishedHandler;
         TopologyTaskExecutorOptions executor;
@@ -509,6 +519,13 @@ private:
      * @return Callback completion, topology reload, notify read, or task admission status.
      */
     Status HandleRuntimeEvent(RuntimeEvent event);
+
+    /**
+     * @brief Decode and enqueue one exact local probe event.
+     * @param[in] event Probe PUT event carrying a WorkerProbeEventValuePb payload.
+     * @return Validation or handler admission status.
+     */
+    Status HandleWorkerProbeEvent(const CoordinationEvent &event);
 
     /**
      * @brief Enter global degraded or local isolation after backend loss.

@@ -62,17 +62,36 @@ TEST(CoordinationEventDispatcherTest, RestartDropsEventsFromThePreviousExecution
     dispatcher.ShutdownIngress();
 }
 
+TEST(CoordinationEventDispatcherTest, UncoalescedValueEventsPreserveSameKeyRequests)
+{
+    CoordinationEventDispatcher dispatcher(2);
+    DS_ASSERT_OK(dispatcher.Start());
+    DS_ASSERT_OK(dispatcher.SubmitCoordinationUncoalesced(
+        { CoordinationEventType::PUT, "/datasystem/probe/127.0.0.1:1", "target-a", 1, 1 }));
+    DS_ASSERT_OK(dispatcher.SubmitCoordinationUncoalesced(
+        { CoordinationEventType::PUT, "/datasystem/probe/127.0.0.1:1", "target-b", 2, 2 }));
+    RuntimeEvent first;
+    RuntimeEvent second;
+    DS_ASSERT_OK(dispatcher.WaitPop(std::chrono::steady_clock::now(), first));
+    DS_ASSERT_OK(dispatcher.WaitPop(std::chrono::steady_clock::now(), second));
+    EXPECT_EQ(std::get<CoordinationEvent>(first.payload).value, "target-a");
+    EXPECT_EQ(std::get<CoordinationEvent>(second.payload).value, "target-b");
+    dispatcher.ShutdownIngress();
+}
+
 TEST(TopologyRoleWatchPlanTest, BuildsOnlyRoleRequiredExactAndPrefixWatches)
 {
     std::unique_ptr<TopologyKeyHelper> keys;
     DS_ASSERT_OK(TopologyKeyHelper::Create("watch", keys));
     std::vector<WatchKey> watches;
     DS_ASSERT_OK(BuildTopologyRoleWatchPlan(TopologyRuntimeRole::WORKER, "127.0.0.1:1", *keys, 7, watches));
-    ASSERT_EQ(watches.size(), 2);
+    ASSERT_EQ(watches.size(), 3);
     EXPECT_EQ(watches[0].tableName, keys->TopologyTable());
     EXPECT_EQ(watches[0].key, TopologyKeyHelper::TopologyKey());
     EXPECT_EQ(watches[1].tableName, keys->NotifyTable());
     EXPECT_EQ(watches[1].key, "127.0.0.1:1");
+    EXPECT_EQ(watches[2].tableName, keys->ProbeTable());
+    EXPECT_EQ(watches[2].key, "127.0.0.1:1");
     DS_ASSERT_OK(BuildTopologyRoleWatchPlan(TopologyRuntimeRole::CONTROLLER, "", *keys, 7, watches));
     ASSERT_EQ(watches.size(), 2);
     EXPECT_EQ(watches[0].tableName, keys->TopologyTable());
@@ -97,7 +116,10 @@ TEST(TopologyRoleWatchPlanTest, PropagatesAuthorityRevisionToAllCurrentUnifiedEt
     EXPECT_EQ(watches[1].key, "127.0.0.1:1");
     EXPECT_EQ(watches[2].tableName, keys->MembershipTable());
     EXPECT_TRUE(watches[2].key.empty());
-    EXPECT_TRUE(std::all_of(watches.begin(), watches.end(), [authorityRevision](const WatchKey &watch) {
+    EXPECT_TRUE(std::none_of(watches.begin(), watches.end(), [&](const WatchKey &watch) {
+        return watch.tableName == keys->ProbeTable();
+    }));
+    EXPECT_TRUE(std::all_of(watches.begin(), watches.end(), [](const WatchKey &watch) {
         return watch.startRevision == authorityRevision;
     }));
 }
@@ -114,6 +136,9 @@ TEST(TopologyRoleWatchPlanTest, PropagatesFromNowAndRejectsRevisionBelowSentinel
     EXPECT_EQ(watches[0].tableName, keys->TopologyTable());
     EXPECT_EQ(watches[1].tableName, keys->NotifyTable());
     EXPECT_EQ(watches[2].tableName, keys->MembershipTable());
+    EXPECT_TRUE(std::none_of(watches.begin(), watches.end(), [&](const WatchKey &watch) {
+        return watch.tableName == keys->ProbeTable();
+    }));
     EXPECT_TRUE(std::all_of(watches.begin(), watches.end(), [](const WatchKey &watch) {
         return watch.startRevision == WATCH_FROM_NOW;
     }));

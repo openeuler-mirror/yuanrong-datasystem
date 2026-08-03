@@ -39,8 +39,8 @@ constexpr size_t HEX_HIGH_NIBBLE_SHIFT = 4;
 constexpr unsigned char HEX_LOW_NIBBLE_MASK = 0x0f;
 constexpr char LOWER_HEX[] = "0123456789abcdef";
 constexpr char ROOT_PREFIX[] = "/datasystem";
-constexpr std::array<const char *, 5> RESERVED_CLUSTER_NAMES = {
-    "topology", "tasks", "notify", "cluster", "scale-in-metadata-done"
+constexpr std::array<const char *, 6> RESERVED_CLUSTER_NAMES = {
+    "topology", "tasks", "notify", "probe", "cluster", "scale-in-metadata-done"
 };
 const std::string EMPTY_KEY;
 
@@ -160,6 +160,7 @@ TopologyKeyHelper::TopologyKeyHelper(std::string clusterName) : clusterName_(std
     migrateTaskTable_ = root + "/tasks/migrate";
     deleteTaskTable_ = root + "/tasks/delete";
     notifyTable_ = root + "/notify";
+    probeTable_ = root + "/probe";
     membershipTable_ = root + "/cluster";
     const std::string legacyMembershipTable = "/" + std::string(COORDINATION_CLUSTER_TABLE);
     etcdMembershipTablePrefix_ =
@@ -192,6 +193,11 @@ const std::string &TopologyKeyHelper::NotifyTable() const noexcept
     return notifyTable_;
 }
 
+const std::string &TopologyKeyHelper::ProbeTable() const noexcept
+{
+    return probeTable_;
+}
+
 const std::string &TopologyKeyHelper::MembershipTable() const noexcept
 {
     return membershipTable_;
@@ -202,25 +208,29 @@ const std::string &TopologyKeyHelper::EtcdMembershipTablePrefix() const noexcept
     return etcdMembershipTablePrefix_;
 }
 
-TopologyEtcdKeyKind TopologyKeyHelper::ClassifyEtcdWatchKey(const std::string &physicalKey,
-                                                            const std::string &localAddress) const noexcept
+TopologyPhysicalKeyKind TopologyKeyHelper::ClassifyPhysicalKey(const std::string &physicalKey,
+                                                               const std::string &localAddress) const noexcept
 {
     if (MatchesExactPhysicalKey(physicalKey, topologyTable_, TopologyKey())) {
-        return TopologyEtcdKeyKind::TOPOLOGY;
+        return TopologyPhysicalKeyKind::TOPOLOGY;
     }
     if (MatchesExactPhysicalKey(physicalKey, notifyTable_, localAddress)) {
-        return TopologyEtcdKeyKind::LOCAL_NOTIFY;
+        return TopologyPhysicalKeyKind::LOCAL_NOTIFY;
     }
-    if (MatchesPhysicalTablePrefix(physicalKey, etcdMembershipTablePrefix_)) {
-        return TopologyEtcdKeyKind::MEMBERSHIP;
+    if (MatchesExactPhysicalKey(physicalKey, probeTable_, localAddress)) {
+        return TopologyPhysicalKeyKind::LOCAL_PROBE;
+    }
+    if (MatchesPhysicalTablePrefix(physicalKey, membershipTable_)
+        || MatchesPhysicalTablePrefix(physicalKey, etcdMembershipTablePrefix_)) {
+        return TopologyPhysicalKeyKind::MEMBERSHIP;
     }
     if (MatchesPhysicalTablePrefix(physicalKey, migrateTaskTable_)) {
-        return TopologyEtcdKeyKind::MIGRATE_TASK;
+        return TopologyPhysicalKeyKind::MIGRATE_TASK;
     }
     if (MatchesPhysicalTablePrefix(physicalKey, deleteTaskTable_)) {
-        return TopologyEtcdKeyKind::DELETE_TASK;
+        return TopologyPhysicalKeyKind::DELETE_TASK;
     }
-    return TopologyEtcdKeyKind::UNKNOWN;
+    return TopologyPhysicalKeyKind::UNKNOWN;
 }
 
 const std::string &TopologyKeyHelper::ScaleInMetadataDoneTable() const noexcept
@@ -244,6 +254,13 @@ Status TopologyKeyHelper::TaskKey(const std::string &taskId, std::string &key)
 }
 
 Status TopologyKeyHelper::NotifyKey(const std::string &address, std::string &key)
+{
+    RETURN_IF_NOT_OK(ValidateAddress(address));
+    key = address;
+    return Status::OK();
+}
+
+Status TopologyKeyHelper::ProbeKey(const std::string &address, std::string &key)
 {
     RETURN_IF_NOT_OK(ValidateAddress(address));
     key = address;

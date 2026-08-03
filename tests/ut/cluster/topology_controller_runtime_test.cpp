@@ -315,6 +315,7 @@ TEST(TopologyControllerRuntimeTest, ExternalEventSourceSkipsBackendWatchAndAccep
     auto options = MakeOptions("external-event-source");
     options.controller.reconcileTick = TEST_SLOW_RECONCILE_TICK;
     options.controller.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.controller.probeEpoch = "coordinator-test";
     PutEmptyTopology(backend, options.clusterName);
     std::unique_ptr<TopologyControllerRuntime> runtime;
     DS_ASSERT_OK(TopologyControllerRuntime::Create(std::move(options), backend, algorithm, runtime));

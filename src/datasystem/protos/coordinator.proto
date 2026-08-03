@@ -106,6 +106,34 @@ message EnsureLeaderMembershipRspPb {
   int64 membership_mod_revision = 4;
 }
 
+message WorkerProbeEventValuePb {
+  string cluster_name = 1;
+  uint64 probe_round = 2;
+  string target_address = 3;
+  bytes target_member_id = 4;
+  bytes coordinator_id = 5;
+}
+
+enum WorkerLivenessResultPb {
+  WORKER_LIVENESS_UNKNOWN = 0;
+  WORKER_REACHABLE = 1;
+  WORKER_UNREACHABLE = 2;
+}
+
+message ReportWorkerLivenessReqPb {
+  string cluster_name = 1;
+  string witness_address = 2;
+  string target_address = 3;
+  bytes target_member_id = 4;
+  uint64 probe_round = 5;
+  WorkerLivenessResultPb result = 6;
+  bytes coordinator_id = 7;
+}
+
+message ReportWorkerLivenessRspPb {
+  ResponseHeader header = 1;
+}
+
 message PutReqPb {
   bytes key = 1;
   bytes value = 2;
@@ -260,6 +288,7 @@ service CoordinatorService {
   rpc GetRaftBootstrapState(GetRaftBootstrapStateReqPb) returns (GetRaftBootstrapStateRspPb) {}
   // Append-only: ZMQ dispatch uses the service method index for the existing RPCs above.
   rpc EnsureLeaderMembership(EnsureLeaderMembershipReqPb) returns (EnsureLeaderMembershipRspPb) {}
+  rpc ReportWorkerLiveness(ReportWorkerLivenessReqPb) returns (ReportWorkerLivenessRspPb) {}
 }
 
 message EventPb {

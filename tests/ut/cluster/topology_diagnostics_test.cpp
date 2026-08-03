@@ -14,11 +14,14 @@
 #include <vector>
 
 #include "datasystem/cluster/model/topology_snapshot.h"
+#include "datasystem/cluster/runtime/worker_liveness.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "gtest/gtest.h"
 
 namespace datasystem::cluster {
 namespace {
 constexpr size_t CURRENT_OPERATIONAL_MEMBER_COUNT = 32;
+constexpr uint64_t WORKER_PROBE_ROUND = 42;
 
 std::vector<MemberIdentity> MakeIdentities(size_t count)
 {
@@ -61,6 +64,16 @@ std::shared_ptr<const TopologySnapshot> MakeScaleInSnapshot()
     return snapshot;
 }
 }  // namespace
+
+TEST(TopologyDiagnosticsTest, FormatsWorkerProbeIdFromCoordinatorEpochAndRound)
+{
+    std::string probeEpoch(UUID_SIZE, '\0');
+    probeEpoch.back() = 1;
+    EXPECT_EQ(WorkerProbeIdForLog(probeEpoch, WORKER_PROBE_ROUND),
+              "00000000-0000-0000-0000-000000000001-42");
+    EXPECT_STREQ(WorkerLivenessResultName(WorkerLivenessResult::REACHABLE), "REACHABLE");
+    EXPECT_STREQ(WorkerLivenessResultName(WorkerLivenessResult::UNREACHABLE), "UNREACHABLE");
+}
 
 TEST(TopologyDiagnosticsTest, PrintsAllCurrentOperationalMembersByDefault)
 {

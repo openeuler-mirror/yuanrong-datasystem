@@ -26,12 +26,13 @@
 namespace datasystem::cluster {
 
 /**
- * @brief Schema kind for one raw ETCD topology watch key.
+ * @brief Schema kind for one raw Coordinator or ETCD topology physical key.
  */
-enum class TopologyEtcdKeyKind : uint8_t {
+enum class TopologyPhysicalKeyKind : uint8_t {
     UNKNOWN = 0,
     TOPOLOGY,
     LOCAL_NOTIFY,
+    LOCAL_PROBE,
     MEMBERSHIP,
     MIGRATE_TASK,
     DELETE_TASK
@@ -86,6 +87,12 @@ public:
     const std::string &NotifyTable() const noexcept;
 
     /**
+     * @brief Return the logical per-witness probe collection.
+     * @return Stable table-name reference.
+     */
+    const std::string &ProbeTable() const noexcept;
+
+    /**
      * @brief Return the logical membership-lease collection.
      * @return Stable table-name reference.
      */
@@ -98,13 +105,13 @@ public:
     const std::string &EtcdMembershipTablePrefix() const noexcept;
 
     /**
-     * @brief Classify one raw physical key from the unified ETCD watch.
-     * @param[in] physicalKey Physical ETCD key including its table prefix.
-     * @param[in] localAddress Canonical local Worker address used for the exact notify match.
+     * @brief Classify one raw physical key from a Coordinator or ETCD watch.
+     * @param[in] physicalKey Physical coordination key including its table prefix.
+     * @param[in] localAddress Canonical local Worker address used for exact notify and probe matches.
      * @return Backend-schema key kind, or UNKNOWN for a key outside the registered topology keyspace.
      */
-    TopologyEtcdKeyKind ClassifyEtcdWatchKey(const std::string &physicalKey,
-                                             const std::string &localAddress) const noexcept;
+    TopologyPhysicalKeyKind ClassifyPhysicalKey(const std::string &physicalKey,
+                                                const std::string &localAddress) const noexcept;
 
     /**
      * @brief Return the logical ScaleIn metadata-done marker collection.
@@ -135,6 +142,14 @@ public:
     static Status NotifyKey(const std::string &address, std::string &key);
 
     /**
+     * @brief Validate a canonical witness address and build its exact probe key.
+     * @param[in] address Canonical witness address.
+     * @param[out] key Exact relative key; unchanged on failure.
+     * @return K_OK on success; K_INVALID for an invalid address.
+     */
+    static Status ProbeKey(const std::string &address, std::string &key);
+
+    /**
      * @brief Validate a canonical address and build its exact membership key.
      * @param[in] address Canonical member address.
      * @param[out] key Exact relative key; unchanged on failure.
@@ -150,8 +165,8 @@ public:
      * @param[out] key Exact relative key; unchanged on failure.
      * @return K_OK on success; K_INVALID for invalid marker identity.
      */
-    static Status ScaleInMetadataDoneKey(uint64_t batchEpoch, const std::string &sourceId,
-                                         const std::string &taskId, std::string &key);
+    static Status ScaleInMetadataDoneKey(uint64_t batchEpoch, const std::string &sourceId, const std::string &taskId,
+                                         std::string &key);
 
     /**
      * @brief Validate a ScaleIn metadata-done source scope and build its relative key prefix.
@@ -174,6 +189,7 @@ private:
     std::string migrateTaskTable_;
     std::string deleteTaskTable_;
     std::string notifyTable_;
+    std::string probeTable_;
     std::string membershipTable_;
     std::string etcdMembershipTablePrefix_;
     std::string scaleInMetadataDoneTable_;

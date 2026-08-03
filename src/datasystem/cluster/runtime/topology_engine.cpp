@@ -30,6 +30,7 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/protos/coordinator.pb.h"
 
 namespace datasystem::cluster {
 namespace {
@@ -165,6 +166,7 @@ struct TopologyEngine::Builder::Config {
     ITopologyPhaseCallbacks *callbacks{ nullptr };
     ControlBackendProbe controlBackendProbe;
     PeerTopologyRefresh peerTopologyRefresh;
+    std::function<Status(WorkerProbeRequest)> workerProbeHandler;
     std::function<void(TopologyAvailabilityLevel)> availabilityHandler;
     std::function<Status()> membershipRecreateGate;
     std::function<Status(const std::map<std::string, int64_t> &, RestartEffectMode)> membershipRestartHandler;
@@ -255,6 +257,15 @@ TopologyEngine::Builder &TopologyEngine::Builder::SetPeerTopologyRefresh(PeerTop
     return *this;
 }
 
+TopologyEngine::Builder &TopologyEngine::Builder::SetWorkerProbeHandler(
+    std::function<Status(WorkerProbeRequest)> handler)
+{
+    if (config_ != nullptr) {
+        config_->workerProbeHandler = std::move(handler);
+    }
+    return *this;
+}
+
 TopologyEngine::Builder &TopologyEngine::Builder::SetAvailabilityHandler(
     std::function<void(TopologyAvailabilityLevel)> handler)
 {
@@ -337,8 +348,9 @@ Status TopologyEngine::Builder::Validate() const
                                  "ETCD topology Engine requires one shared Store and one Worker liveness probe");
     } else if (config_->backendKind == Config::BackendKind::COORDINATOR) {
         CHECK_FAIL_RETURN_STATUS(config_->coordinatorProxy != nullptr && config_->ingress.bind != nullptr
-                                     && config_->ingress.unbindAndDrain != nullptr,
-                                 K_INVALID, "Coordinator topology Engine requires a complete ingress binding");
+                                     && config_->ingress.unbindAndDrain != nullptr
+                                     && config_->workerProbeHandler != nullptr,
+                                 K_INVALID, "Coordinator topology Engine requires ingress and worker probe handlers");
     } else {
         RETURN_STATUS(K_INVALID, "cluster topology Engine backend is not selected");
     }
@@ -419,6 +431,7 @@ TopologyEngine::RuntimeOptions TopologyEngine::ConsumeRuntimeOptions(Builder::Co
     options.scopeProbeInterval = config.scopeProbeInterval;
     options.controlBackendProbe = std::move(config.controlBackendProbe);
     options.peerTopologyRefresh = std::move(config.peerTopologyRefresh);
+    options.workerProbeHandler = std::move(config.workerProbeHandler);
     options.availabilityHandler = std::move(config.availabilityHandler);
     options.snapshotPublishedHandler = std::move(config.snapshotPublishedHandler);
     return options;
@@ -582,7 +595,14 @@ Status TopologyEngine::EnqueueCoordinationEvent(CoordinationEvent &&event)
 {
     LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
         << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName << " role=worker event=" << event.ToString();
-    auto rc = dispatcher_.SubmitCoordination(std::move(event));
+    const bool probeEvent = coordinatorProxy_ != nullptr && event.type != CoordinationEventType::RESET
+                            && keys_->ClassifyPhysicalKey(event.key, options_.localAddress)
+                                   == TopologyPhysicalKeyKind::LOCAL_PROBE;
+    auto rc = probeEvent ? dispatcher_.SubmitCoordinationUncoalesced(std::move(event))
+                         : dispatcher_.SubmitCoordination(std::move(event));
+    if (probeEvent && rc.GetCode() == K_TRY_AGAIN && coordinatorProxy_ != nullptr) {
+        static_cast<DsCoordinationBackend *>(memberBackend_.get())->InvalidateWatches();
+    }
     if (rc.IsError() && rc.GetCode() != K_TRY_AGAIN && rc.GetCode() != K_NOT_READY) {
         RecordError(rc);
     }
@@ -594,19 +614,19 @@ Status TopologyEngine::RouteUnifiedEtcdWatchEvent(CoordinationEvent &&event)
     CHECK_FAIL_RETURN_STATUS(controllerRuntime_ != nullptr, K_NOT_READY,
                              "unified ETCD Controller runtime is not ready");
     const auto kind = event.type == CoordinationEventType::RESET
-                          ? TopologyEtcdKeyKind::TOPOLOGY
-                          : keys_->ClassifyEtcdWatchKey(event.key, options_.localAddress);
-    if (kind == TopologyEtcdKeyKind::TOPOLOGY) {
+                          ? TopologyPhysicalKeyKind::TOPOLOGY
+                          : keys_->ClassifyPhysicalKey(event.key, options_.localAddress);
+    if (kind == TopologyPhysicalKeyKind::TOPOLOGY) {
         CoordinationEvent controllerEvent = event;
         auto memberStatus = EnqueueCoordinationEvent(std::move(event));
         auto controllerStatus = controllerRuntime_->SubmitCoordinationEvent(std::move(controllerEvent));
         return memberStatus.IsError() ? memberStatus : controllerStatus;
     }
-    if (kind == TopologyEtcdKeyKind::LOCAL_NOTIFY) {
+    if (kind == TopologyPhysicalKeyKind::LOCAL_NOTIFY) {
         return EnqueueCoordinationEvent(std::move(event));
     }
-    if (kind == TopologyEtcdKeyKind::MEMBERSHIP || kind == TopologyEtcdKeyKind::MIGRATE_TASK
-        || kind == TopologyEtcdKeyKind::DELETE_TASK) {
+    if (kind == TopologyPhysicalKeyKind::MEMBERSHIP || kind == TopologyPhysicalKeyKind::MIGRATE_TASK
+        || kind == TopologyPhysicalKeyKind::DELETE_TASK) {
         return controllerRuntime_->SubmitCoordinationEvent(std::move(event));
     }
     RETURN_STATUS(K_INVALID, "unified ETCD watch received an unregistered physical key");
@@ -1187,6 +1207,12 @@ Status TopologyEngine::HandleRuntimeEvent(RuntimeEvent event)
     if (auto *completion = std::get_if<TopologyCallbackCompletion>(&event.payload)) {
         return executor_.HandleCompletion(std::move(*completion));
     }
+    auto coordination = std::get<CoordinationEvent>(std::move(event.payload));
+    if (coordinatorProxy_ != nullptr && coordination.type == CoordinationEventType::PUT
+        && keys_->ClassifyPhysicalKey(coordination.key, options_.localAddress)
+               == TopologyPhysicalKeyKind::LOCAL_PROBE) {
+        return HandleWorkerProbeEvent(coordination);
+    }
     auto rc = ReloadTopologyAndNotify();
     if (rc.IsError()) {
         if (IsBackendAccessFailure(rc)) {
@@ -1194,6 +1220,35 @@ Status TopologyEngine::HandleRuntimeEvent(RuntimeEvent event)
         }
     }
     return rc;
+}
+
+Status TopologyEngine::HandleWorkerProbeEvent(const CoordinationEvent &event)
+{
+    CHECK_FAIL_RETURN_STATUS(options_.workerProbeHandler != nullptr, K_NOT_SUPPORTED,
+                             "worker probe handler is not configured");
+    coordinator::WorkerProbeEventValuePb value;
+    CHECK_FAIL_RETURN_STATUS(value.ParseFromString(event.value), K_INVALID, "invalid worker probe event value");
+    CHECK_FAIL_RETURN_STATUS(value.cluster_name() == options_.clusterName && !value.coordinator_id().empty(), K_INVALID,
+                             "worker probe event cluster or CoordinatorId is invalid");
+    CHECK_FAIL_RETURN_STATUS(value.probe_round() > 0 && !value.target_address().empty()
+                                 && !value.target_member_id().empty(),
+                             K_INVALID, "invalid worker probe target fields");
+    WorkerProbeRequest request{ value.cluster_name(), value.coordinator_id(), value.probe_round(),
+                                { value.target_member_id(), value.target_address() } };
+    const auto probeId = WorkerProbeIdForLog(request.probeEpoch, request.probeRound);
+    LOG(INFO) << "CLUSTER_WORKER_PROBE cluster=" << request.clusterName
+              << " action=WITNESS_PROBE_EVENT_RECEIVED probe_id=" << probeId
+              << " witness=" << options_.localAddress << " target=" << request.target.address
+              << " target_id_prefix=" << MemberIdForLog(request.target.id) << " revision=" << event.revision;
+    auto status = options_.workerProbeHandler(std::move(request));
+    if (status.IsError()) {
+        LOG(WARNING) << "CLUSTER_WORKER_PROBE cluster=" << value.cluster_name()
+                     << " action=WITNESS_PROBE_ENQUEUE_FAILED probe_id=" << probeId
+                     << " witness=" << options_.localAddress << " target=" << value.target_address()
+                     << " target_id_prefix=" << MemberIdForLog(value.target_member_id())
+                     << " status=" << status.ToString();
+    }
+    return status;
 }
 
 Status TopologyEngine::HandleBackendUnavailable()

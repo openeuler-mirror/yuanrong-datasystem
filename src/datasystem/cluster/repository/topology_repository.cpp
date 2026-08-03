@@ -490,6 +490,19 @@ Status TopologyRepository::ListTaskCandidatesForJanitor(TopologyTaskKind kind, s
     return Status::OK();
 }
 
+Status TopologyRepository::PutProbeValue(const std::string &witnessAddress, const std::string &value)
+{
+    std::string key;
+    RETURN_IF_NOT_OK(TopologyKeyHelper::ProbeKey(witnessAddress, key));
+    ICoordinationBackend::ProcessFunction process =
+        [&value](const std::string &, std::unique_ptr<std::string> &next, bool &retry) {
+            retry = false;
+            next = std::make_unique<std::string>(value);
+            return Status::OK();
+        };
+    return backend_.CAS(keys_.ProbeTable(), key, process);
+}
+
 Status TopologyRepository::ListNotifyCandidatesForJanitor(size_t limit, std::string &cursor,
                                                           std::vector<NotifyJanitorCandidate> &notifies) const
 {

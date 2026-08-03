@@ -233,6 +233,14 @@ private:
                            const char *tombstonePrefix, bool &deleted);
 
     /**
+     * @brief Publish one opaque probe request value to an exact witness key.
+     * @param[in] witnessAddress Canonical witness address.
+     * @param[in] value Serialized probe event value.
+     * @return Backend CAS status.
+     */
+    Status PutProbeValue(const std::string &witnessAddress, const std::string &value);
+
+    /**
      * @brief Select a fixed task table.
      * @param[in] kind Task kind.
      * @return Stable table reference.

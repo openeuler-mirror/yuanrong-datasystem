@@ -47,6 +47,7 @@ const char *TopologyCallbackStageName(TopologyCallbackPhase phase, bool scaleInD
 std::string TopologyDiagnosticPrefix(const std::string &value,
                                      size_t prefixSize = TOPOLOGY_DIGEST_DIAGNOSTIC_PREFIX_SIZE);
 std::string MemberIdForLog(const std::string &id, size_t prefixSize = TOPOLOGY_DIGEST_DIAGNOSTIC_PREFIX_SIZE);
+std::string WorkerProbeIdForLog(const std::string &probeEpoch, uint64_t probeRound);
 std::string MemberIdentitySample(const std::vector<MemberIdentity> &members,
                                  size_t limit = TOPOLOGY_MEMBER_LOG_SAMPLE_LIMIT);
 std::string MembershipSample(const std::vector<MembershipRecord> &memberships,
