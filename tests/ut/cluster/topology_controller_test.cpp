@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <atomic>
 #include <functional>
+#include <iterator>
+#include <set>
 #include <stdexcept>
 #include <thread>
 
@@ -53,6 +55,9 @@ constexpr uint32_t LARGE_PORT_BASE = 20'000;
 constexpr auto LARGE_COLLECT_WINDOW = std::chrono::seconds(1);
 constexpr auto LARGE_CONTROL_BUDGET = std::chrono::seconds(3);
 constexpr auto DEFAULT_COLLECT_WINDOW = std::chrono::seconds(3);
+constexpr size_t STALE_TOPOLOGY_PROBE_SAMPLE_COUNT = 5;
+constexpr uint32_t STALE_TOPOLOGY_OLD_PORT_BASE = 10'000;
+constexpr uint32_t STALE_TOPOLOGY_NEW_PORT_BASE = 30'000;
 
 class CountingPlanningAlgorithm final : public IPlanningAlgorithm {
 public:
@@ -134,6 +139,51 @@ void PutMembership(FakeCoordinationBackend &backend, const TopologyKeyHelper &ke
                    MemberLifecycleState state)
 {
     backend.PutBytes(keys.MembershipTable(), address, EncodeMembership(state));
+}
+
+TopologyState MakeActiveTopology(size_t memberCount, uint32_t portBase)
+{
+    TopologyState topology;
+    topology.version = 1;
+    topology.clusterHasInit = true;
+    topology.members.reserve(memberCount);
+    for (size_t index = 0; index < memberCount; ++index) {
+        topology.members.push_back(
+            { { std::string(MEMBER_ID_SIZE, static_cast<char>('a' + index)),
+                "127.0.0.1:" + std::to_string(portBase + index) },
+              MemberState::ACTIVE,
+              { static_cast<uint32_t>(index + 1) } });
+    }
+    return topology;
+}
+
+std::set<std::string> MemberAddresses(const TopologyState &topology)
+{
+    std::set<std::string> addresses;
+    for (const auto &member : topology.members) {
+        addresses.insert(member.identity.address);
+    }
+    return addresses;
+}
+
+std::set<std::string> PutReadyReplacementMemberships(FakeCoordinationBackend &backend,
+                                                      const TopologyKeyHelper &keys, size_t memberCount)
+{
+    std::set<std::string> addresses;
+    for (size_t index = 0; index < memberCount; ++index) {
+        const auto address = "127.0.0.1:" + std::to_string(STALE_TOPOLOGY_NEW_PORT_BASE + index);
+        PutMembership(backend, keys, address, MemberLifecycleState::READY);
+        addresses.insert(address);
+    }
+    return addresses;
+}
+
+bool IsExactActiveTopology(const TopologyState &topology, const std::set<std::string> &expectedAddresses)
+{
+    return !topology.activeBatch.has_value() && topology.members.size() == expectedAddresses.size()
+           && MemberAddresses(topology) == expectedAddresses
+           && std::all_of(topology.members.begin(), topology.members.end(),
+                          [](const Member &member) { return member.state == MemberState::ACTIVE; });
 }
 
 std::vector<ControlBackendProbeResult> RespondedProbe(ControlBackendObservation observation,
@@ -1893,12 +1943,13 @@ TEST(TopologyControllerTest, SingleMemberNotReadyResponseStartsNewAbsenceWindow)
     latest.clusterHasInit = true;
     latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    const auto replacements = PutReadyReplacementMemberships(backend, *keys, 1);
 
     TopologyControllerOptions options;
     options.nodeDeadTimeout = std::chrono::seconds(1);
     options.failureProbeTimeout = std::chrono::seconds(2);
     options.reconcileTick = std::chrono::milliseconds(1);
-    options.localAddress = latest.members.front().identity.address;
+    options.localAddress = *replacements.begin();
     std::atomic<int64_t> clockSeconds{ 0 };
     std::atomic<size_t> clockCalls{ 0 };
     options.now = [&] {
@@ -2078,30 +2129,169 @@ TEST(TopologyControllerTest, RepeatedEmptyMembershipDoesNotStartFailureBatch)
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
 }
 
-TEST(TopologyControllerTest, OnlyCommittedMemberIsNotCollectiveAbsence)
+TEST(TopologyControllerTest, CollectiveStaleTopologyBootstrapsReadyReplacementMembers)
 {
+    constexpr size_t memberCount = 4;
     FakeCoordinationBackend backend;
     std::unique_ptr<TopologyKeyHelper> keys;
-    DS_ASSERT_OK(TopologyKeyHelper::Create("one-committed-member", keys));
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collective-stale-bootstrap", keys));
     TopologyRepository repository(backend, *keys);
     HashAlgorithm algorithm;
     CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
-    TopologyState latest;
-    latest.version = 1;
-    latest.clusterHasInit = true;
-    latest.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, latest.version };
-    latest.members = {
-        Member{ { std::string(MEMBER_ID_SIZE, 'a'), "127.0.0.1:1" }, MemberState::FAILED, { 1 } },
-        Member{ { std::string(MEMBER_ID_SIZE, 'b'), "127.0.0.1:2" }, MemberState::FAILED, { 2 } },
-        Member{ { std::string(MEMBER_ID_SIZE, 'c'), "127.0.0.1:3" }, MemberState::ACTIVE, { 3 } }
-    };
+    auto latest = MakeActiveTopology(memberCount, STALE_TOPOLOGY_OLD_PORT_BASE);
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    const auto replacements = PutReadyReplacementMemberships(backend, *keys, memberCount);
 
     TopologyControllerOptions options;
     options.nodeDeadTimeout = std::chrono::seconds(1);
-    options.failureProbeTimeout = std::chrono::seconds(2);
     options.reconcileTick = std::chrono::milliseconds(1);
-    options.localAddress = latest.members.back().identity.address;
+    options.localAddress = *replacements.begin();
+    std::atomic<int64_t> clockSeconds{ 0 };
+    options.now = [&] {
+        return std::chrono::steady_clock::time_point(std::chrono::seconds(clockSeconds.load()));
+    };
+    std::atomic<size_t> probeCalls{ 0 };
+    std::set<std::string> probedAddresses;
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        EXPECT_EQ(targets.size(), 1U);
+        if (targets.size() == 1) {
+            probedAddresses.insert(targets.front().address);
+        }
+        const auto call = probeCalls.fetch_add(1);
+        auto results = NoResponseProbe(targets);
+        if (call % 2 == 1 && !results.empty()) {
+            results.front().outcome = ControlBackendProbeOutcome::UNAVAILABLE;
+        }
+        return results;
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(backend.WaitForGetAttempts(COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW,
+                                           std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT));
+    EXPECT_EQ(probeCalls.load(), 0U);
+    clockSeconds.store(2);
+    EXPECT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT,
+                                [&](const TopologyState &state) {
+                                    return IsExactActiveTopology(state, replacements);
+                                }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+    EXPECT_EQ(probeCalls.load(), memberCount);
+    EXPECT_EQ(probedAddresses, MemberAddresses(latest));
+}
+
+TEST(TopologyControllerTest, ExternalCollectiveControlEpochFencesProbeProgress)
+{
+    constexpr size_t memberCount = STALE_TOPOLOGY_PROBE_SAMPLE_COUNT;
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collective-control-epoch", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    const auto latest = MakeActiveTopology(memberCount, STALE_TOPOLOGY_OLD_PORT_BASE);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    const auto replacements = PutReadyReplacementMemberships(backend, *keys, memberCount);
+
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(0);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "coordinator-test";
+    std::atomic<uint64_t> controlEpoch{ 0 };
+    std::atomic<size_t> epochReads{ 0 };
+    options.collectiveControlEpoch = [&]() -> std::optional<uint64_t> {
+        ++epochReads;
+        const auto epoch = controlEpoch.load();
+        return epoch == 0 ? std::nullopt : std::optional<uint64_t>{ epoch };
+    };
+    WaitPost rejectedEpochTwoEntered;
+    WaitPost releaseRejectedEpochTwo;
+    std::atomic<size_t> rejectedEpochTwo{ 0 };
+    std::atomic<size_t> allowedEpochThree{ 0 };
+    options.collectiveReplacementFence =
+        [&](uint64_t expectedEpoch, const std::function<Status()> &mutation) {
+            if (controlEpoch.load() != expectedEpoch) {
+                if (expectedEpoch == 2) {
+                    ++rejectedEpochTwo;
+                    rejectedEpochTwoEntered.Set();
+                    releaseRejectedEpochTwo.Wait();
+                }
+                return Status(K_NOT_READY, "injected stale collective control epoch");
+            }
+            if (expectedEpoch == 3) {
+                ++allowedEpochThree;
+            }
+            return mutation();
+        };
+    std::atomic<size_t> probeCalls{ 0 };
+    std::vector<std::string> probedAddresses;
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        EXPECT_EQ(targets.size(), 1U);
+        if (targets.empty()) {
+            return std::vector<ControlBackendProbeResult>{};
+        }
+        probedAddresses.push_back(targets.front().address);
+        const auto call = probeCalls.fetch_add(1) + 1;
+        if (call == memberCount) {
+            controlEpoch.store(3);
+        }
+        return NoResponseProbe(targets, ControlBackendProbeOutcome::UNAVAILABLE);
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(WaitForCondition([&] {
+        return epochReads.load() >= COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW;
+    }));
+    EXPECT_EQ(probeCalls.load(), 0U);
+    TopologyState observed;
+    int64_t revision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    ExpectActiveTopologyUnchanged(observed, latest.version, memberCount);
+
+    controlEpoch.store(2);
+    const bool staleFenceEntered = rejectedEpochTwoEntered.WaitFor(RECOVERY_STOP_TIMEOUT.count() * 1'000);
+    EXPECT_TRUE(staleFenceEntered);
+    if (!staleFenceEntered) {
+        releaseRejectedEpochTwo.Set();
+        DS_EXPECT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+        return;
+    }
+    EXPECT_EQ(probeCalls.load(), memberCount);
+    EXPECT_EQ(rejectedEpochTwo.load(), 1U);
+    DS_EXPECT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    ExpectActiveTopologyUnchanged(observed, latest.version, memberCount);
+    releaseRejectedEpochTwo.Set();
+    EXPECT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT,
+                                [&](const TopologyState &state) {
+                                    return IsExactActiveTopology(state, replacements);
+                                }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+
+    EXPECT_EQ(probeCalls.load(), 10U);
+    EXPECT_EQ(rejectedEpochTwo.load(), 1U);
+    EXPECT_EQ(allowedEpochThree.load(), 1U);
+    ASSERT_EQ(probedAddresses.size(), 10U);
+    EXPECT_EQ(probedAddresses[0], probedAddresses[5]);
+}
+
+TEST(TopologyControllerTest, SingleStaleTopologyBootstrapsReadyReplacementMember)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("single-stale-bootstrap", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    auto latest = MakeActiveTopology(1, STALE_TOPOLOGY_OLD_PORT_BASE);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    const auto replacements = PutReadyReplacementMemberships(backend, *keys, 1);
+
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.localAddress = *replacements.begin();
     std::atomic<int64_t> clockSeconds{ 0 };
     options.now = [&] {
         return std::chrono::steady_clock::time_point(std::chrono::seconds(clockSeconds.load()));
@@ -2109,26 +2299,340 @@ TEST(TopologyControllerTest, OnlyCommittedMemberIsNotCollectiveAbsence)
     std::atomic<size_t> probeCalls{ 0 };
     options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
         ++probeCalls;
-        EXPECT_EQ(targets.size(), 1);
-        if (targets.empty()) {
-            return std::vector<ControlBackendProbeResult>{};
-        }
-        EXPECT_EQ(targets.front(), latest.members.back().identity);
-        return RespondedProbe(
-            { targets.front(), ControlBackendState::UNKNOWN, 0, 0, "", std::chrono::steady_clock::now() }
-        );
+        return NoResponseProbe(targets, ControlBackendProbeOutcome::UNAVAILABLE);
     };
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
 
     DS_ASSERT_OK(controller.Start());
     ASSERT_TRUE(backend.WaitForGetAttempts(COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW,
                                            std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT));
-    clockSeconds.store(COLLECTIVE_ABSENCE_FIRST_WINDOW_SECONDS);
-    const auto deadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
-    while (std::chrono::steady_clock::now() < deadline && probeCalls.load() == 0) {
-        std::this_thread::yield();
+    clockSeconds.store(2);
+    EXPECT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT,
+                                [&](const TopologyState &state) {
+                                    return IsExactActiveTopology(state, replacements);
+                                }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+    EXPECT_GE(probeCalls.load(), 1U);
+}
+
+TEST(TopologyControllerTest, CollectiveBootstrapUsesFiveEvenlySpacedAddressSamples)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collective-stale-sampling", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    auto latest = MakeLargeActiveTopology(LARGE_STEADY_MEMBER_COUNT);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    const auto replacements = PutReadyReplacementMemberships(backend, *keys, 4);
+
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.localAddress = *replacements.begin();
+    std::atomic<int64_t> clockSeconds{ 0 };
+    options.now = [&] {
+        return std::chrono::steady_clock::time_point(std::chrono::seconds(clockSeconds.load()));
+    };
+    std::atomic<size_t> probeCalls{ 0 };
+    std::set<std::string> sampledAddresses;
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        EXPECT_EQ(targets.size(), 1U);
+        if (targets.size() == 1) {
+            sampledAddresses.insert(targets.front().address);
+        }
+        ++probeCalls;
+        return NoResponseProbe(targets);
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(backend.WaitForGetAttempts(COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW,
+                                           std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT));
+    clockSeconds.store(2);
+    EXPECT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT,
+                                [&](const TopologyState &state) {
+                                    return IsExactActiveTopology(state, replacements);
+                                }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+
+    EXPECT_EQ(probeCalls.load(), STALE_TOPOLOGY_PROBE_SAMPLE_COUNT);
+    const auto sortedAddresses = MemberAddresses(latest);
+    std::vector<std::string> addresses(sortedAddresses.begin(), sortedAddresses.end());
+    std::set<std::string> expected;
+    for (size_t index = 0; index < STALE_TOPOLOGY_PROBE_SAMPLE_COUNT; ++index) {
+        expected.insert(addresses[index * (addresses.size() - 1) / (STALE_TOPOLOGY_PROBE_SAMPLE_COUNT - 1)]);
     }
-    EXPECT_EQ(probeCalls.load(), 1);
+    EXPECT_EQ(sampledAddresses, expected);
+}
+
+TEST(TopologyControllerTest, ExternalEtcdOwnerRoundTripInvalidatesCollectiveProbeProgress)
+{
+    constexpr size_t memberCount = 4;
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collective-owner-round-trip", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    const auto latest = MakeActiveTopology(memberCount, STALE_TOPOLOGY_OLD_PORT_BASE);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    const auto replacements = PutReadyReplacementMemberships(backend, *keys, 2);
+    const auto ownerA = *replacements.begin();
+    backend.SetStorePrefix(keys->MembershipTable(), keys->EtcdMembershipTablePrefix());
+
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
+    options.localAddress = ownerA;
+    std::atomic<size_t> clockCalls{ 0 };
+    options.now = [&] {
+        return std::chrono::steady_clock::time_point(
+            clockCalls.fetch_add(1) == 0 ? std::chrono::seconds(0) : std::chrono::seconds(2));
+    };
+    std::atomic<size_t> probeCalls{ 0 };
+    std::vector<std::string> probedAddresses;
+    TopologyController *controllerPtr = nullptr;
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        EXPECT_EQ(targets.size(), 1U);
+        if (targets.empty()) {
+            return std::vector<ControlBackendProbeResult>{};
+        }
+        probedAddresses.push_back(targets.front().address);
+        if (probeCalls.fetch_add(1) == 0) {
+            DS_EXPECT_OK(backend.Delete(keys->MembershipTable(), ownerA));
+            DS_EXPECT_OK(controllerPtr->SubmitCoordinationEvent(
+                { CoordinationEventType::DELETE, keys->EtcdMembershipTablePrefix() + "/" + ownerA, {}, 0,
+                  backend.CurrentRevision() }));
+        }
+        return NoResponseProbe(targets, ControlBackendProbeOutcome::UNAVAILABLE);
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    controllerPtr = &controller;
+
+    DS_ASSERT_OK(controller.Start());
+    for (const auto &address : replacements) {
+        DS_ASSERT_OK(controller.SubmitCoordinationEvent(
+            { CoordinationEventType::PUT, keys->EtcdMembershipTablePrefix() + "/" + address,
+              EncodeMembership(MemberLifecycleState::READY), 0, backend.CurrentRevision() }));
+    }
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 1U; }));
+    const auto callsWithOwnerB = clockCalls.load() + COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW;
+    ASSERT_TRUE(WaitForCondition([&] { return clockCalls.load() >= callsWithOwnerB; }));
+    EXPECT_EQ(probeCalls.load(), 1U);
+
+    PutMembership(backend, *keys, ownerA, MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent(
+        { CoordinationEventType::PUT, keys->EtcdMembershipTablePrefix() + "/" + ownerA,
+          EncodeMembership(MemberLifecycleState::READY), 0, backend.CurrentRevision() }));
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 2U; }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+
+    ASSERT_EQ(probedAddresses.size(), 2U);
+    EXPECT_EQ(probedAddresses[0], probedAddresses[1]);
+}
+
+TEST(TopologyControllerTest, ReachableCollectiveBootstrapSamplePreservesStaleTopology)
+{
+    constexpr size_t memberCount = 4;
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collective-stale-reachable", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    auto latest = MakeActiveTopology(memberCount, STALE_TOPOLOGY_OLD_PORT_BASE);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    const auto replacements = PutReadyReplacementMemberships(backend, *keys, memberCount);
+
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.localAddress = *replacements.begin();
+    std::atomic<int64_t> clockSeconds{ 0 };
+    options.now = [&] {
+        return std::chrono::steady_clock::time_point(std::chrono::seconds(clockSeconds.load()));
+    };
+    std::atomic<size_t> probeCalls{ 0 };
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        EXPECT_EQ(targets.size(), 1U);
+        ++probeCalls;
+        if (targets.empty()) {
+            return std::vector<ControlBackendProbeResult>{};
+        }
+        const auto &target = targets.front();
+        return std::vector<ControlBackendProbeResult>{
+            { target,
+              ControlBackendObservation{ target, ControlBackendState::UNKNOWN, 0, 0, "",
+                                         std::chrono::steady_clock::now() },
+              ControlBackendProbeOutcome::ERROR,
+              std::chrono::milliseconds(1) }
+        };
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(backend.WaitForGetAttempts(COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW,
+                                           std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT));
+    clockSeconds.store(2);
+    EXPECT_TRUE(WaitForCondition([&] { return probeCalls.load() == 1U; }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+    EXPECT_EQ(probeCalls.load(), 1U);
+    TopologyState observed;
+    int64_t revision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    EXPECT_EQ(MemberAddresses(observed), MemberAddresses(latest));
+}
+
+TEST(TopologyControllerTest, CollectiveBootstrapRetriesNeutralProbeResults)
+{
+    constexpr size_t memberCount = 4;
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collective-stale-neutral-retry", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    auto latest = MakeActiveTopology(memberCount, STALE_TOPOLOGY_OLD_PORT_BASE);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    const auto replacements = PutReadyReplacementMemberships(backend, *keys, memberCount);
+
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.localAddress = *replacements.begin();
+    std::atomic<int64_t> clockSeconds{ 0 };
+    options.now = [&] {
+        return std::chrono::steady_clock::time_point(std::chrono::seconds(clockSeconds.load()));
+    };
+    std::atomic<size_t> probeCalls{ 0 };
+    std::vector<std::string> probedAddresses;
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        EXPECT_EQ(targets.size(), 1U);
+        if (targets.size() == 1) {
+            probedAddresses.push_back(targets.front().address);
+        }
+        const auto call = probeCalls.fetch_add(1);
+        clockSeconds.fetch_add(2);
+        if (call == 0) {
+            return NoResponseProbe(targets, ControlBackendProbeOutcome::CANCELLED);
+        }
+        if (call == 1) {
+            return std::vector<ControlBackendProbeResult>{};
+        }
+        return NoResponseProbe(targets);
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(backend.WaitForGetAttempts(COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW,
+                                           std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT));
+    clockSeconds.store(2);
+    EXPECT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT,
+                                [&](const TopologyState &state) {
+                                    return IsExactActiveTopology(state, replacements);
+                                }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+    EXPECT_EQ(probeCalls.load(), memberCount + 2);
+    ASSERT_GE(probedAddresses.size(), 3U);
+    EXPECT_EQ(probedAddresses[0], probedAddresses[1]);
+    EXPECT_EQ(probedAddresses[1], probedAddresses[2]);
+}
+
+TEST(TopologyControllerTest, CollectiveBootstrapStopsWhenExactReadFindsOldMember)
+{
+    constexpr size_t memberCount = 4;
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collective-stale-exact-recovery", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    const auto latest = MakeActiveTopology(memberCount, STALE_TOPOLOGY_OLD_PORT_BASE);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    const auto replacements = PutReadyReplacementMemberships(backend, *keys, memberCount);
+
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.localAddress = *replacements.begin();
+    std::atomic<int64_t> clockSeconds{ 0 };
+    options.now = [&] {
+        return std::chrono::steady_clock::time_point(std::chrono::seconds(clockSeconds.load()));
+    };
+    std::atomic<size_t> probeCalls{ 0 };
+    std::atomic<size_t> membershipReadsBeforeExact{ 0 };
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        EXPECT_EQ(targets.size(), 1U);
+        if (probeCalls.fetch_add(1) + 1 == memberCount) {
+            for (const auto &address : replacements) {
+                DS_EXPECT_OK(backend.Delete(keys->MembershipTable(), address));
+            }
+            for (const auto &member : latest.members) {
+                PutMembership(backend, *keys, member.identity.address, MemberLifecycleState::READY);
+            }
+            membershipReadsBeforeExact.store(backend.GetAllCount(keys->MembershipTable()));
+        }
+        return NoResponseProbe(targets, ControlBackendProbeOutcome::UNAVAILABLE);
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(backend.WaitForGetAttempts(COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW,
+                                           std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT));
+    clockSeconds.store(2);
+    ASSERT_TRUE(WaitForCondition([&] {
+        return membershipReadsBeforeExact.load() > 0
+               && backend.GetAllCount(keys->MembershipTable()) > membershipReadsBeforeExact.load();
+    }));
+    TopologyState observed;
+    int64_t revision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    EXPECT_EQ(observed.version, latest.version);
+    EXPECT_EQ(MemberAddresses(observed), MemberAddresses(latest));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+}
+
+TEST(TopologyControllerTest, SingleCommittedAbsenceWithoutReadyReplacementPreservesTopology)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("single-committed-no-replacement", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    const auto latest = MakeActiveTopology(1, STALE_TOPOLOGY_OLD_PORT_BASE);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.localAddress = latest.members.front().identity.address;
+    std::atomic<int64_t> clockSeconds{ 0 };
+    options.now = [&] {
+        return std::chrono::steady_clock::time_point(std::chrono::seconds(clockSeconds.load()));
+    };
+    std::atomic<size_t> probeCalls{ 0 };
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        ++probeCalls;
+        return NoResponseProbe(targets);
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(backend.WaitForGetAttempts(COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW,
+                                           std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT));
+    clockSeconds.store(2);
+    const auto attempts = backend.GetAttemptCount() + COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW;
+    ASSERT_TRUE(backend.WaitForGetAttempts(attempts,
+                                           std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT));
+    TopologyState observed;
+    int64_t revision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    EXPECT_EQ(observed.version, latest.version);
+    EXPECT_EQ(MemberAddresses(observed), MemberAddresses(latest));
+    EXPECT_EQ(probeCalls.load(), 0U);
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
 }
 
@@ -2249,6 +2753,11 @@ TEST(TopologyControllerTest, ExternalEventSourceConfirmsMultipleFailuresWithoutW
     options.reconcileTick = std::chrono::milliseconds(1);
     options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
     options.probeEpoch = "coordinator-test";
+    std::atomic<size_t> probeCalls{ 0 };
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &, auto) {
+        ++probeCalls;
+        return std::vector<ControlBackendProbeResult>{};
+    };
     const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
     std::atomic<int64_t> elapsedSeconds{ 0 };
     options.now = [&] { return start + std::chrono::seconds(elapsedSeconds.load()); };
@@ -2269,6 +2778,7 @@ TEST(TopologyControllerTest, ExternalEventSourceConfirmsMultipleFailuresWithoutW
         });
         return failed == 2;
     }));
+    EXPECT_EQ(probeCalls.load(), 0U);
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 

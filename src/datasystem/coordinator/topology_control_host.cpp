@@ -480,7 +480,6 @@ Status TopologyControlHost::StartRuntime(ClusterEntry &entry)
     CHECK_FAIL_RETURN_STATUS(nextRuntimeGeneration_ <= std::numeric_limits<uint32_t>::max(), K_RUNTIME_ERROR,
                              "topology Runtime probe generation space is exhausted");
     runtimeOptions.controller.initialProbeRound = (nextRuntimeGeneration_++ << 32U) + 1U;
-    runtimeOptions.controller.memberLivenessProbe = {};
     runtimeOptions.controller.membershipRestartHandler = {};
     runtimeOptions.controller.materializeRestartFacts = true;
     runtimeOptions.janitor = cluster::TopologyTaskJanitorOptions{

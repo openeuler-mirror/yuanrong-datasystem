@@ -132,5 +132,51 @@ TEST(TopologyFailureClassifierTest, ZeroTimeoutConfirmsOnFirstSuccessfulAbsenceO
     EXPECT_EQ(result.confirmedFailure.front().address, "127.0.0.1:1");
 }
 
+TEST(TopologyFailureClassifierTest, MissingSubsetConfirmsOnlyFiveSamplesFromLargeTopologyInInputOrder)
+{
+    std::vector<MemberAbsenceSample> universe;
+    universe.reserve(2'000);
+    for (size_t index = 0; index < 2'000; ++index) {
+        universe.push_back({ { std::string(16, static_cast<char>('a' + index % 26)),
+                               "127.0.0.1:" + std::to_string(10'000 + index) },
+                             MemberState::ACTIVE });
+    }
+    const std::vector<MemberAbsenceSample> samples{ universe[1'999], universe[0], universe[999], universe[499],
+                                                    universe[1'499] };
+    TopologyFailureClassifier classifier(std::chrono::seconds(5));
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+    std::vector<MemberAbsenceObservation> confirmed;
+
+    DS_ASSERT_OK(classifier.ObserveMissingSamples(samples, start, confirmed));
+    EXPECT_TRUE(confirmed.empty());
+    DS_ASSERT_OK(classifier.ObserveMissingSamples(samples, start + std::chrono::seconds(5), confirmed));
+    ASSERT_EQ(confirmed.size(), samples.size());
+    for (size_t index = 0; index < samples.size(); ++index) {
+        EXPECT_EQ(confirmed[index].identity, samples[index].identity);
+    }
+
+    DS_ASSERT_OK(classifier.ObserveMissingSamples({ universe[1] }, start + std::chrono::seconds(6), confirmed));
+    DS_ASSERT_OK(classifier.ObserveMissingSamples(samples, start + std::chrono::seconds(10), confirmed));
+    EXPECT_TRUE(confirmed.empty());
+}
+
+TEST(TopologyFailureClassifierTest, MissingSubsetExcludesPausedIntervalFromTimeout)
+{
+    const std::vector<MemberAbsenceSample> samples{
+        { { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE }
+    };
+    TopologyFailureClassifier classifier(std::chrono::seconds(5));
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+    std::vector<MemberAbsenceObservation> confirmed;
+
+    DS_ASSERT_OK(classifier.ObserveMissingSamples(samples, start, confirmed));
+    classifier.Pause(start + std::chrono::seconds(2));
+    DS_ASSERT_OK(classifier.ObserveMissingSamples(samples, start + std::chrono::seconds(20), confirmed));
+    EXPECT_TRUE(confirmed.empty());
+    DS_ASSERT_OK(classifier.ObserveMissingSamples(samples, start + std::chrono::seconds(23), confirmed));
+    ASSERT_EQ(confirmed.size(), 1U);
+    EXPECT_EQ(confirmed.front().missingMs, 5'000);
+}
+
 }  // namespace
 }  // namespace datasystem::cluster

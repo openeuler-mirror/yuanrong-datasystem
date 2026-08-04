@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COORDINATOR_WATCH_DISPATCHER_IMPL_H
 #define DATASYSTEM_COORDINATOR_WATCH_DISPATCHER_IMPL_H
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <utility>
@@ -29,6 +30,15 @@
 
 namespace datasystem {
 namespace coordinator {
+class EventReqPb;
+
+// rpcDispatched is true only immediately before HandleEvent on a validated stub. Any other error is local,
+// unattributed evidence and must not be interpreted as a Worker application response.
+struct WorkerReachabilityProbeResult {
+    Status status;
+    bool rpcDispatched{ false };
+};
+
 class WatchDispatcherImpl : public WatchDispatcher {
 public:
     /**
@@ -46,6 +56,10 @@ public:
      */
     ~WatchDispatcherImpl() override;
 
+    // The absolute deadline covers endpoint parsing, stub acquisition/cast, and HandleEvent.
+    WorkerReachabilityProbeResult ProbeWorkerReachable(
+        const std::string &watcherAddr, std::chrono::steady_clock::time_point absoluteDeadline);
+
 protected:
     /**
      * @brief Deliver a watch-event batch to one worker RPC endpoint.
@@ -58,6 +72,11 @@ protected:
                     std::vector<std::shared_ptr<WatchEvent>> &events) override;
 
 private:
+    Status SendEventRequest(
+        const std::string &watcherAddr, const EventReqPb &req, int32_t timeoutMs,
+        std::chrono::steady_clock::time_point absoluteDeadline = std::chrono::steady_clock::time_point::max(),
+        bool *rpcDispatched = nullptr);
+
     const std::string coordinatorId_;
 };
 }  // namespace coordinator

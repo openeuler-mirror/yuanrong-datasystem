@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <exception>
 #include <iterator>
+#include <sstream>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -162,15 +163,23 @@ bool IsCollectiveCommittedMembershipMissing(const TopologySnapshot &latest,
                                             const std::vector<MembershipRecord> &memberships)
 {
     const auto &committed = latest.CommittedMembers();
-    if (committed.size() <= 1) {
+    if (committed.empty()) {
         return false;
     }
-    return std::none_of(committed.begin(), committed.end(), [&](const Member *member) {
-        return std::any_of(memberships.begin(), memberships.end(), [&](const MembershipRecord &membership) {
-            return membership.address == member->identity.address;
-        });
-    });
+    for (const auto &membership : memberships) {
+        const Member *member = nullptr;
+        if (latest.FindMemberByAddress(membership.address, member).IsOk() && member != nullptr
+            && (member->state == MemberState::ACTIVE || member->state == MemberState::PRE_LEAVING
+                || member->state == MemberState::LEAVING)) {
+            return false;
+        }
+    }
+    return true;
 }
+
+constexpr size_t COLLECTIVE_PROBE_SAMPLE_COUNT = 5;
+static_assert(COLLECTIVE_PROBE_SAMPLE_COUNT > 1, "collective probe sampling requires at least two samples");
+constexpr char COORDINATOR_COLLECTIVE_PROBE_OWNER[] = "coordinator";
 
 void LogMemberTransition(const std::string &clusterName, const char *action, size_t count,
                          const std::vector<MemberIdentity> &members, uint64_t committedVersion)
@@ -207,7 +216,8 @@ bool TopologyControllerOptions::IsValid() const noexcept
            && derivedSliceBudget.count() > 0 && now && scaleOutCollectWindow.count() >= 0
            && scaleOutCollectWindow.count() <= MAX_SCALE_OUT_COLLECT_WINDOW_MS && scaleInCollectWindow.count() >= 0
            && scaleInCollectWindow.count() <= MAX_SCALE_IN_COLLECT_WINDOW_MS
-           && (!memberLivenessProbe || !localAddress.empty())
+           && (!memberLivenessProbe || !localAddress.empty() || eventSourceMode == TopologyEventSourceMode::EXTERNAL)
+           && static_cast<bool>(collectiveControlEpoch) == static_cast<bool>(collectiveReplacementFence)
            && (eventSourceMode != TopologyEventSourceMode::EXTERNAL || !probeEpoch.empty())
            && (eventSourceMode == TopologyEventSourceMode::SELF_MANAGED
                || eventSourceMode == TopologyEventSourceMode::EXTERNAL
@@ -893,15 +903,23 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
         return CommitClusterShutdown(latest);
     }
     if (IsCollectiveCommittedMembershipMissing(latest, memberships)) {
-        failureClassifier_.Reset();
-        LOG_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL)
-            << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
-            << " action=collective_membership_absence_suppressed committed_count=" << latest.CommittedMembers().size()
-            << " membership_count=" << memberships.size();
-        return Status::OK();
+        const auto samples = SelectCollectiveProbeSamples(latest);
+        std::vector<MemberAbsenceSample> missingSamples;
+        missingSamples.reserve(samples.size());
+        for (const auto &sample : samples) {
+            const Member *member = nullptr;
+            RETURN_IF_NOT_OK(latest.FindMemberByAddress(sample.address, member));
+            CHECK_FAIL_RETURN_STATUS(member != nullptr, K_RUNTIME_ERROR,
+                                     "collective probe sample missing from topology snapshot");
+            missingSamples.push_back({ sample, member->state });
+        }
+        std::vector<MemberAbsenceObservation> confirmedMissing;
+        RETURN_IF_NOT_OK(failureClassifier_.ObserveMissingSamples(missingSamples, options_.now(), confirmedMissing));
+        return HandleCollectiveMembershipAbsence(latest, memberships, samples, confirmedMissing);
     }
     FailureClassification classification;
     RETURN_IF_NOT_OK(failureClassifier_.Observe(latest, memberships, options_.now(), classification));
+    ResetCollectiveProbeProgress();
     for (const auto &observed : classification.newlyMissing) {
         LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
                      << " address=" << observed.identity.address
@@ -1152,9 +1170,303 @@ void TopologyController::ApplyWitnessFailureGate(FailureClassification &classifi
         classification.confirmedFailure.end());
 }
 
+void TopologyController::ResetCollectiveProbeProgress() noexcept
+{
+    collectiveProbeTopologyVersion_.reset();
+    collectiveProbeOwner_.reset();
+    collectiveProbeControlEpoch_.reset();
+    collectiveUnreachableSamples_.clear();
+}
+
+void TopologyController::SummarizeCollectiveReadyMemberships(
+    const std::vector<MembershipRecord> &memberships, size_t &readyCount, std::optional<std::string> &owner) const
+{
+    readyCount = 0;
+    owner.reset();
+    for (const auto &record : memberships) {
+        if (record.state != MemberLifecycleState::READY) {
+            continue;
+        }
+        const auto quarantined = quarantinedReadyTimestampByAddress_.find(record.address);
+        if (quarantined != quarantinedReadyTimestampByAddress_.end()
+            && record.timestamp <= quarantined->second) {
+            continue;
+        }
+        ++readyCount;
+        if (!owner.has_value() || record.address < *owner) {
+            owner = record.address;
+        }
+    }
+    if (readyCount > 0 && options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL) {
+        owner = COORDINATOR_COLLECTIVE_PROBE_OWNER;
+    }
+}
+
+void TopologyController::LogCollectiveDecision(
+    const TopologySnapshot &latest, size_t membershipCount, size_t readyCount, const std::string &owner,
+    size_t progress, size_t sampleCount, const char *action, const char *decision, const char *reason,
+    bool sampled, const std::string &details) const
+{
+    std::ostringstream message;
+    message << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+            << " action=" << action << " committed=" << latest.CommittedMembers().size()
+            << " membership=" << membershipCount << " ready=" << readyCount << " owner=" << owner
+            << " progress=" << progress << "/" << sampleCount << " decision=" << decision
+            << " reason=" << reason << details;
+    if (sampled) {
+        LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL) << message.str();
+    } else {
+        LOG(WARNING) << message.str();
+    }
+}
+
+std::vector<MemberIdentity> TopologyController::SelectCollectiveProbeSamples(const TopologySnapshot &latest) const
+{
+    const auto &committed = latest.CommittedMembers();  // Snapshot indexes preserve canonical address order.
+    if (committed.size() <= COLLECTIVE_PROBE_SAMPLE_COUNT) {
+        std::vector<MemberIdentity> samples;
+        for (const auto *member : committed) {
+            samples.push_back(member->identity);
+        }
+        return samples;
+    }
+    std::vector<MemberIdentity> samples;
+    samples.reserve(COLLECTIVE_PROBE_SAMPLE_COUNT);
+    for (size_t index = 0; index < COLLECTIVE_PROBE_SAMPLE_COUNT; ++index) {
+        const auto position = index * (committed.size() - 1) / (COLLECTIVE_PROBE_SAMPLE_COUNT - 1);
+        samples.push_back(committed[position]->identity);
+    }
+    return samples;
+}
+
+Status TopologyController::ProbeCollectiveSample(const TopologySnapshot &latest,
+                                                 const std::vector<MemberIdentity> &samples,
+                                                 size_t membershipCount, size_t readyCount)
+{
+    const auto target = std::find_if(samples.begin(), samples.end(), [&](const auto &sample) {
+        return collectiveUnreachableSamples_.count(sample.address) == 0;
+    });
+    if (target == samples.end()) {
+        return Status::OK();
+    }
+    std::vector<ControlBackendProbeResult> results;
+    try {
+        results = options_.memberLivenessProbe({ *target },
+                                               std::chrono::steady_clock::now() + options_.failureProbeTimeout);
+    } catch (const std::exception &error) {
+        RETURN_STATUS(K_RUNTIME_ERROR, std::string("member liveness probe threw: ") + error.what());
+    } catch (...) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "member liveness probe threw an unknown exception");
+    }
+    const bool matched = results.size() == 1 && results.front().target == *target;
+    const auto outcome = matched ? results.front().outcome : ControlBackendProbeOutcome::CANCELLED;
+    const auto owner = collectiveProbeOwner_.value_or("none");
+    if (matched && (outcome == ControlBackendProbeOutcome::RESPONSE
+                    || outcome == ControlBackendProbeOutcome::ERROR)) {
+        failureClassifier_.ResetMissing(target->address);
+        ResetCollectiveProbeProgress();
+    } else if (matched && (outcome == ControlBackendProbeOutcome::DEADLINE_EXCEEDED
+                           || outcome == ControlBackendProbeOutcome::UNAVAILABLE)) {
+        collectiveUnreachableSamples_.emplace(target->address);
+    }
+    const bool allUnreachable = collectiveUnreachableSamples_.size() == samples.size();
+    const bool neutral = !matched || (outcome != ControlBackendProbeOutcome::DEADLINE_EXCEEDED
+                                      && outcome != ControlBackendProbeOutcome::UNAVAILABLE);
+    auto details = " target=" + target->address + " result=" + std::to_string(static_cast<uint32_t>(outcome));
+    if (matched) {
+        details += " probe_elapsed_ms=" + std::to_string(results.front().elapsed.count());
+    }
+    LogCollectiveDecision(latest, membershipCount, readyCount, owner, collectiveUnreachableSamples_.size(),
+                          samples.size(), "collective_direct_probe",
+                          allUnreachable ? "exact_reread" : "preserve",
+                          neutral ? "neutral_probe_result" : "probe_unreachable", neutral, details);
+    return Status::OK();
+}
+
+Status TopologyController::BootstrapCollectiveReplacement(const TopologySnapshot &latest)
+{
+    const auto sampleCount = std::min(COLLECTIVE_PROBE_SAMPLE_COUNT, latest.CommittedMembers().size());
+    const auto probeProgress = collectiveUnreachableSamples_.size();
+    std::vector<MembershipRecord> exactMemberships;
+    auto rc = repository_.ReadMemberships(exactMemberships);
+    if (rc.IsError()) {
+        failureClassifier_.Pause(options_.now());
+        LogCollectiveDecision(latest, 0, 0, collectiveProbeOwner_.value_or("none"),
+                              probeProgress, sampleCount,
+                              "collective_exact_reread", "preserve", "read_error", true,
+                              " evidence=unavailable status=" + rc.ToString());
+        return rc;
+    }
+    size_t exactReadyCount = 0;
+    std::optional<std::string> exactOwner;
+    SummarizeCollectiveReadyMemberships(exactMemberships, exactReadyCount, exactOwner);
+    bool oldMemberReturned = false;
+    for (const auto &membership : exactMemberships) {
+        const Member *member = nullptr;
+        if (latest.FindMemberByAddress(membership.address, member).IsOk() && member != nullptr
+            && (member->state == MemberState::ACTIVE || member->state == MemberState::PRE_LEAVING
+                || member->state == MemberState::LEAVING)) {
+            failureClassifier_.ResetMissing(membership.address);
+            oldMemberReturned = true;
+        }
+    }
+    const char *preserveReason = oldMemberReturned ? "old_member_returned"
+                                 : exactReadyCount == 0 ? "no_ready"
+                                 : exactOwner != collectiveProbeOwner_ ? "owner_mismatch"
+                                                                       : nullptr;
+    if (preserveReason != nullptr) {
+        LogCollectiveDecision(latest, exactMemberships.size(), exactReadyCount, exactOwner.value_or("none"),
+                              probeProgress, sampleCount, "collective_exact_reread", "preserve", preserveReason,
+                              false, exactOwner != collectiveProbeOwner_
+                                         ? " expected_owner=" + collectiveProbeOwner_.value_or("none")
+                                         : "");
+        ResetCollectiveProbeProgress();
+        return Status::OK();
+    }
+    std::unordered_set<std::string> exiting;
+    std::vector<MembershipRecord> ready;
+    CollectMembershipFacts(exactMemberships, exiting, ready);
+    TopologyState empty{ latest.ClusterHasInit(), latest.Version(), {}, std::nullopt };
+    std::unordered_set<std::string> known;
+    std::vector<MemberIdentity> admitted;
+    size_t changed = 0;
+    RETURN_IF_NOT_OK(ApplyReadyMembershipFacts(empty, ready, known, admitted, changed));
+    TopologyState next;
+    RETURN_IF_NOT_OK(planBuilder_.BuildBootstrap(empty, admitted, next));
+    std::shared_ptr<const TopologySnapshot> committed;
+    const auto commit = [&] { return CommitAndReadBack(latest.Version(), next, committed); };
+    if (options_.collectiveReplacementFence) {
+        if (!collectiveProbeControlEpoch_.has_value()) {
+            LogCollectiveDecision(latest, exactMemberships.size(), exactReadyCount, exactOwner.value_or("none"),
+                                  probeProgress, sampleCount, "collective_replacement", "preserve",
+                                  "control_epoch_unbound", true);
+            RETURN_STATUS(K_NOT_READY, "collective replacement control epoch is not bound");
+        }
+        try {
+            rc = options_.collectiveReplacementFence(*collectiveProbeControlEpoch_, commit);
+        } catch (const std::exception &error) {
+            RETURN_STATUS(K_RUNTIME_ERROR,
+                          std::string("collective replacement fence threw: ") + error.what());
+        } catch (...) {
+            RETURN_STATUS(K_RUNTIME_ERROR, "collective replacement fence threw an unknown exception");
+        }
+    } else {
+        rc = commit();
+    }
+    if (rc.IsOk() || rc.GetCode() == K_TRY_AGAIN) {
+        ResetCollectiveProbeProgress();
+    }
+    if (rc.IsOk()) {
+        LogCollectiveDecision(latest, exactMemberships.size(), exactReadyCount, exactOwner.value_or("none"),
+                              probeProgress, sampleCount, "collective_replacement", "replace",
+                              "exact_reread_confirmed", false,
+                              " committed_version=" + std::to_string(committed->Version()));
+    }
+    return rc;
+}
+
+Status TopologyController::PrepareCollectiveProbeContext(
+    const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships,
+    const std::vector<MemberIdentity> &samples, size_t &readyCount, std::optional<std::string> &owner,
+    bool &hasControlAuthority)
+{
+    SummarizeCollectiveReadyMemberships(memberships, readyCount, owner);
+    hasControlAuthority = true;
+    std::optional<uint64_t> controlEpoch;
+    if (options_.collectiveControlEpoch) {
+        try {
+            controlEpoch = options_.collectiveControlEpoch();
+        } catch (const std::exception &error) {
+            ResetCollectiveProbeProgress();
+            RETURN_STATUS(K_RUNTIME_ERROR, std::string("collective control epoch callback threw: ") + error.what());
+        } catch (...) {
+            ResetCollectiveProbeProgress();
+            RETURN_STATUS(K_RUNTIME_ERROR, "collective control epoch callback threw an unknown exception");
+        }
+        if (!controlEpoch.has_value()) {
+            const auto progress = collectiveUnreachableSamples_.size();
+            ResetCollectiveProbeProgress();
+            LogCollectiveDecision(latest, memberships.size(), readyCount, owner.value_or("none"), progress,
+                                  samples.size(), "collective_probe_fence", "preserve", "no_control_authority",
+                                  true);
+            hasControlAuthority = false;
+            return Status::OK();
+        }
+    }
+    const bool topologyChanged = collectiveProbeTopologyVersion_ != latest.Version();
+    const bool ownerChanged = collectiveProbeOwner_ != owner;
+    const bool epochChanged = options_.collectiveControlEpoch && collectiveProbeControlEpoch_ != controlEpoch;
+    if (topologyChanged || ownerChanged || epochChanged) {
+        const auto oldOwner = collectiveProbeOwner_.value_or("none");
+        collectiveUnreachableSamples_.clear();
+        collectiveProbeTopologyVersion_ = latest.Version();
+        collectiveProbeOwner_ = owner;
+        collectiveProbeControlEpoch_ = controlEpoch;
+        const char *reason = topologyChanged ? "start_or_topology_change"
+                             : ownerChanged ? "owner_change"
+                                            : "control_epoch_change";
+        LogCollectiveDecision(latest, memberships.size(), readyCount, owner.value_or("none"), 0,
+                              std::min(COLLECTIVE_PROBE_SAMPLE_COUNT, latest.CommittedMembers().size()),
+                              "collective_probe_fence", "preserve", reason, false,
+                              " previous_owner=" + oldOwner);
+    }
+    return Status::OK();
+}
+
+Status TopologyController::HandleCollectiveMembershipAbsence(
+    const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships,
+    const std::vector<MemberIdentity> &samples,
+    const std::vector<MemberAbsenceObservation> &confirmedMissing)
+{
+    size_t readyCount = 0;
+    std::optional<std::string> owner;
+    bool hasControlAuthority = true;
+    RETURN_IF_NOT_OK(
+        PrepareCollectiveProbeContext(latest, memberships, samples, readyCount, owner, hasControlAuthority));
+    if (!hasControlAuthority) {
+        return Status::OK();
+    }
+    const auto waitDetails = [&](int64_t missingMs) {
+        return " missing_ms=" + std::to_string(missingMs) + " timeout_ms="
+               + std::to_string(
+                   std::chrono::duration_cast<std::chrono::milliseconds>(options_.nodeDeadTimeout).count());
+    };
+    if (readyCount == 0) {
+        LogCollectiveDecision(latest, memberships.size(), 0, "none", collectiveUnreachableSamples_.size(),
+                              samples.size(), "collective_wait", "preserve", "no_ready", true, waitDetails(0));
+        return Status::OK();
+    }
+    const bool allTimedOut = std::all_of(samples.begin(), samples.end(), [&](const auto &sample) {
+        return std::any_of(confirmedMissing.begin(), confirmedMissing.end(),
+                           [&](const auto &missing) { return missing.identity.address == sample.address; });
+    });
+    const bool ownsProbe = options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL
+                           || owner == options_.localAddress;
+    int64_t missingMs = 0;
+    for (const auto &missing : confirmedMissing) {
+        missingMs = std::max(missingMs, missing.missingMs);
+    }
+    const char *waitReason = !allTimedOut ? "absence_timeout_pending"
+                             : !ownsProbe ? "not_probe_owner"
+                             : !options_.memberLivenessProbe ? "probe_callback_missing"
+                                                            : nullptr;
+    if (waitReason != nullptr) {
+        LogCollectiveDecision(latest, memberships.size(), readyCount, owner.value_or("none"),
+                              collectiveUnreachableSamples_.size(), samples.size(), "collective_wait", "preserve",
+                              waitReason, true, waitDetails(missingMs));
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(ProbeCollectiveSample(latest, samples, memberships.size(), readyCount));
+    return collectiveUnreachableSamples_.size() == samples.size() ? BootstrapCollectiveReplacement(latest)
+                                                                  : Status::OK();
+}
+
 Status TopologyController::ConfirmMissingMembersUnreachable(const TopologySnapshot &latest,
                                                             FailureClassification &classification)
 {
+    if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL) {
+        return Status::OK();
+    }
     if (!options_.memberLivenessProbe || classification.confirmedMissing.empty()) {
         return Status::OK();
     }
