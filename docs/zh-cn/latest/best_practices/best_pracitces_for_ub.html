@@ -320,6 +320,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../design_document/cluster_management.html">集群管理</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/shm_get_fd_passing.html">同节点多 Worker SHM Get fd-passing 方案设计</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../api_reference/index.html">API 参考</a><input aria-label="Toggle navigation of API 参考" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -682,14 +683,64 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 </section>
 <section id="id4">
-<h3>安装<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<h3>通过下载包编译（可选）<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<p>默认情况下，编译时 URMA 的头文件和共享库来自编译环境的系统路径（<code class="docutils literal notranslate"><span class="pre">/usr/include</span></code>、<code class="docutils literal notranslate"><span class="pre">/usr/lib64</span></code>），要求编译机预先安装 URMA SDK。若编译环境不便于安装 URMA SDK，可改用下载包方式：编译时从指定 URL 下载 URMA 头文件与共享库压缩包，自动定位并使用，编译产物（whl 包与 SDK 的 <code class="docutils literal notranslate"><span class="pre">lib/</span></code> 目录）会内置 URMA 相关的 6 个共享库（<code class="docutils literal notranslate"><span class="pre">libtpsa.so</span></code>、<code class="docutils literal notranslate"><span class="pre">libummu.so</span></code>、<code class="docutils literal notranslate"><span class="pre">liburma.so</span></code>、<code class="docutils literal notranslate"><span class="pre">liburma_common.so</span></code>、<code class="docutils literal notranslate"><span class="pre">liburma_ubagg.so</span></code>、<code class="docutils literal notranslate"><span class="pre">liburma-udma.so</span></code>），运行环境无需再单独安装 URMA 库。</p>
+<p>下载包的内部布局应为：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&lt;任意顶层目录&gt;/
+├── include/
+│   ├── urma_api.h
+│   ├── urma_perf.h
+│   └── urma_ubagg.h
+└── lib/
+    ├── libtpsa.so / libtpsa.so.0
+    ├── libummu.so / libummu.so.0
+    ├── liburma.so / liburma.so.0
+    ├── liburma_common.so / liburma_common.so.0
+    ├── liburma_ubagg.so / liburma_ubagg.so.0
+    └── liburma-udma.so / liburma-udma.so.0
+</pre></div>
+</div>
+<blockquote>
+<div><p>说明：压缩包内部的中间层目录名（如示例中的 <code class="docutils literal notranslate"><span class="pre">umdk_lib</span></code>）不做硬性要求，编译脚本会递归搜索 <code class="docutils literal notranslate"><span class="pre">urma_api.h</span></code> 与 <code class="docutils literal notranslate"><span class="pre">liburma.so</span></code> 自动定位 <code class="docutils literal notranslate"><span class="pre">include</span></code> 与 <code class="docutils literal notranslate"><span class="pre">lib</span></code> 根，头文件会被重组到 <code class="docutils literal notranslate"><span class="pre">ub/umdk/urma/</span></code> 路径下以匹配源码的 <code class="docutils literal notranslate"><span class="pre">#include</span> <span class="pre">&lt;ub/umdk/urma/*.h&gt;</span></code>。只需保证压缩包内同时存在上述头文件与 6 个共享库即可。</p>
+</div></blockquote>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-2" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-2">
+CMake 编译</label><div class="sd-tab-content docutils">
+<p>编辑 <code class="docutils literal notranslate"><span class="pre">cmake/external_libs/urma.cmake</span></code>，将 <code class="docutils literal notranslate"><span class="pre">URMA_PKG_URL</span></code> 与 <code class="docutils literal notranslate"><span class="pre">URMA_PKG_SHA256</span></code> 设置为压缩包的下载地址与 SHA256 校验值（文件顶部已有默认的空值声明，取消注释或直接修改即可）：</p>
+<div class="highlight-cmake notranslate"><div class="highlight"><pre><span></span><span class="nb">set</span><span class="p">(</span><span class="s">URMA_PKG_URL</span><span class="w"> </span><span class="s2">&quot;https://example.com/urma_package.zip&quot;</span><span class="w"> </span><span class="s">CACHE</span><span class="w"> </span><span class="s">STRING</span><span class="w"> </span><span class="s2">&quot;URMA package download URL (empty = use system URMA SDK)&quot;</span><span class="p">)</span>
+<span class="nb">set</span><span class="p">(</span><span class="s">URMA_PKG_SHA256</span><span class="w"> </span><span class="s2">&quot;&lt;sha256-of-the-zip&gt;&quot;</span><span class="w"> </span><span class="s">CACHE</span><span class="w"> </span><span class="s">STRING</span><span class="w"> </span><span class="s2">&quot;URMA package SHA256 checksum&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>留空则回退到系统路径方式（默认行为）。设置后执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>build.sh<span class="w"> </span>-M<span class="w"> </span>on<span class="w"> </span>-X<span class="w"> </span>off
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-3">
+Bazel 编译</label><div class="sd-tab-content docutils">
+<p>编辑 <code class="docutils literal notranslate"><span class="pre">.bazelrc</span></code>，在 <code class="docutils literal notranslate"><span class="pre">build:urma</span></code> 段下取消注释（或新增）两行 <code class="docutils literal notranslate"><span class="pre">--repo_env</span></code>，填入压缩包的下载地址与 SHA256 校验值：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>build:urma --repo_env=URMA_PKG_URL=https://example.com/urma_package.zip
+build:urma --repo_env=URMA_PKG_SHA256=&lt;sha256-of-the-zip&gt;
+</pre></div>
+</div>
+<p>注释掉这两行则回退到系统路径方式（默认行为）。设置后执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>urma<span class="w"> </span>--config<span class="o">=</span>release
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="id5">
+<h3>安装<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>output/openyuanrong_datasystem-*.whl
 </pre></div>
 </div>
 </section>
 </section>
-<section id="id5">
-<h2>部署指南<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h2>
+<section id="id6">
+<h2>部署指南<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
 <p>部署前，请确保满足以下必要条件：</p>
 <ol class="arabic simple">
 <li><p>节点准备：须至少在 2 个 已配备 UB 硬件并安装相应软件的节点上部署服务端组件。</p></li>
@@ -701,8 +752,8 @@ document.addEventListener('DOMContentLoaded', function() {
 </pre></div>
 </div>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="sd-tab-item-2" name="sd-tab-set-1" type="radio">
-<label class="sd-tab-label" for="sd-tab-item-2">
+<input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-4">
 进程部署</label><div class="sd-tab-content docutils">
 <p>openYuanrong datasystem 进程部署主要通过dscli工具，在使用前请确保在两个节点中已安装 openYuanrong datasystem wheel 包。</p>
 <blockquote>
@@ -742,8 +793,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>：ETCD集群的访问地址列表。格式为多个 <code class="docutils literal notranslate"><span class="pre">IP:Port</span></code> 的逗号分隔字符串，例如：<code class="docutils literal notranslate"><span class="pre">192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379</span></code>。</p></li>
 </ul>
 </div>
-<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
-<label class="sd-tab-label" for="sd-tab-item-3">
+<input id="sd-tab-item-5" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-5">
 K8S部署</label><div class="sd-tab-content docutils">
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 通过dscli获取helm chart包</span>
 dscli<span class="w"> </span>generate_helm_chart<span class="w"> </span>-o<span class="w"> </span>/tmp
@@ -800,8 +851,8 @@ cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/k8s/helm
 </div>
 </div>
 </section>
-<section id="id6">
-<h2>快速验证<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<section id="id7">
+<h2>快速验证<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
 <p>通过跨节点拉取数据的样例可快速验证UB的能力。</p>
 <p>在节点1执行以下Python脚本：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="n">KVClient</span>
@@ -832,8 +883,8 @@ cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/k8s/helm
 </div></blockquote>
 <p>当脚本执行完均打印OK时说明验证成功。</p>
 </section>
-<section id="id7">
-<h2>推荐配置<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
+<section id="id8">
+<h2>推荐配置<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h2>
 <p>为确保灵衢（UB）组件在生产环境中达到最佳性能与稳定性，请参考以下配置建议。</p>
 <section id="lpi">
 <h3>关闭LPI<a class="headerlink" href="#lpi" title="Link to this heading">¶</a></h3>
@@ -842,13 +893,13 @@ cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/k8s/helm
 </pre></div>
 </div>
 </section>
-<section id="id8">
-<h3>开启大页内存<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<section id="id9">
+<h3>开启大页内存<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <p>开启大页内存可有效提升内存的分配与拷贝性能，开启大页内存可参考附录文档：<a class="reference internal" href="../appendix/hugepage_guide.html"><span class="std std-doc">大页内存配置指南</span></a>。</p>
 <p>运行环境开启大页内存之后，启动数据系统服务端组件时需要启用大页内存配置项：</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
-<label class="sd-tab-label" for="sd-tab-item-4">
+<input checked="checked" id="sd-tab-item-6" name="sd-tab-set-3" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-6">
 进程部署</label><div class="sd-tab-content docutils">
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--worker_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">node_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
@@ -858,8 +909,8 @@ cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/k8s/helm
 </pre></div>
 </div>
 </div>
-<input id="sd-tab-item-5" name="sd-tab-set-2" type="radio">
-<label class="sd-tab-label" for="sd-tab-item-5">
+<input id="sd-tab-item-7" name="sd-tab-set-3" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-7">
 K8s部署</label><div class="sd-tab-content docutils">
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
 <span class="w">  </span><span class="c1"># 其他配置项...</span>
@@ -897,7 +948,7 @@ K8s部署</label><div class="sd-tab-content docutils">
 </pre></div>
 </div>
 <p>表示绑定到 NUMA 节点 0 的 CPU，并在节点 NUMA 0 分配内存。
-更多 dscli绑定numa节点 部署详细信息请参考：<a class="reference internal" href="../deployment/dscli.html#id18"><span class="std std-ref">dscli命令参数说明</span></a>。</p>
+更多 dscli绑定numa节点 部署详细信息请参考：<a class="reference internal" href="../deployment/dscli.html#id19"><span class="std std-ref">dscli命令参数说明</span></a>。</p>
 </section>
 </section>
 </section>
@@ -961,14 +1012,15 @@ K8s部署</label><div class="sd-tab-content docutils">
 <li><a class="reference internal" href="#id1">源码编译安装</a><ul>
 <li><a class="reference internal" href="#id2">下载源码</a></li>
 <li><a class="reference internal" href="#id3">编译</a></li>
-<li><a class="reference internal" href="#id4">安装</a></li>
+<li><a class="reference internal" href="#id4">通过下载包编译（可选）</a></li>
+<li><a class="reference internal" href="#id5">安装</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id5">部署指南</a></li>
-<li><a class="reference internal" href="#id6">快速验证</a></li>
-<li><a class="reference internal" href="#id7">推荐配置</a><ul>
+<li><a class="reference internal" href="#id6">部署指南</a></li>
+<li><a class="reference internal" href="#id7">快速验证</a></li>
+<li><a class="reference internal" href="#id8">推荐配置</a><ul>
 <li><a class="reference internal" href="#lpi">关闭LPI</a></li>
-<li><a class="reference internal" href="#id8">开启大页内存</a></li>
+<li><a class="reference internal" href="#id9">开启大页内存</a></li>
 <li><a class="reference internal" href="#numa">绑定NUMA节点</a></li>
 </ul>
 </li>

@@ -320,6 +320,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../design_document/cluster_management.html">集群管理</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../design_document/shm_get_fd_passing.html">同节点多 Worker SHM Get fd-passing 方案设计</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../api_reference/index.html">API 参考</a><input aria-label="Toggle navigation of API 参考" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -1273,7 +1274,7 @@ build:urma --copt=-DURMA_OVER_UB
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>上述无参<code class="docutils literal notranslate"><span class="pre">InitAndRun()</span></code>是兼容入口，不启用Coordinator选举。需要启用选举时应使用下一节的参数化入口。</p>
+<p>上述无参<code class="docutils literal notranslate"><span class="pre">InitAndRun()</span></code>是兼容入口。默认 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 为空时按单节点无选主模式启动；如果通过进程 flag 配置了多个静态 peers，则会使用该列表启动 Raft 选主。需要自定义 Discovery、成员注册回调或配置文件解析流程时，应使用下一节的参数化入口。</p>
 </section>
 <section id="id25">
 <h3>5. 配置文件启动方式<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>

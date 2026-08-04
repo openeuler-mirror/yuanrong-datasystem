@@ -187,13 +187,10 @@ dscli generate_config -o ./
 # [INFO] Configuration generation completed successfully
 ```
 
-按需修改 `coordinator_config.json` 中的 Coordinator 服务地址。`service_type` 必须为 `coordinator`，以便 `dscli start -f` 和 `dscli stop -f` 识别需要操作的服务类型：
+按需修改 `coordinator_config.json` 中的 Coordinator 服务地址：
 
 ```json
 {
-    "service_type": {
-        "value": "coordinator"
-    },
     "coordinator_address": {
         "value": "127.0.0.1:31511"
     }
@@ -203,7 +200,7 @@ dscli generate_config -o ./
 使用配置文件启动 Coordinator：
 
 ```bash
-dscli start -f ./coordinator_config.json
+dscli start --coordinator_config_path ./coordinator_config.json
 # [INFO] [  OK  ] Start coordinator service @ 127.0.0.1:31511 success, PID: 38100
 ```
 
@@ -212,10 +209,14 @@ dscli start -f ./coordinator_config.json
 使用同一配置文件停止 Coordinator：
 
 ```bash
-dscli stop -f ./coordinator_config.json
+dscli stop --config_path ./coordinator_config.json
 ```
 
 Coordinator 的完整启停方式和配置项说明参见 [使用Coordinator部署](../deployment/dscli.md#openyuanrong-datasystem集群使用coordinator部署)和 [Coordinator配置项](../deployment/dscli.md#coordinator配置项)。
+
+#### Coordinator 多节点部署
+
+如需部署多个 Coordinator 并启用 Raft 选主，使用 `coordinator_raft_initial_peers` 配置静态初始成员列表。该参数为空时，Coordinator 按单节点无选主模式启动；配置多个 `host:port` 成员时，各 Coordinator 节点必须使用相同的 peers 列表、本机唯一的 `coordinator_address`，并为 `coordinator_raft_data_dir` 配置节点独占的本地目录。首次启动多个 Coordinator 时，应并发或近同时启动各节点，避免只启动单个节点后长时间等待。详细三节点示例参见 [Coordinator 多节点部署](../deployment/dscli.md#coordinator-多节点部署)。
 
 ### SSH互信配置
 SSH互信可以让服务器之间无需密码即可登录，多机集群部署必须配置SSH互信，步骤如下：
@@ -328,7 +329,7 @@ dscli generate_config -o ./
 配置完成后，启动 Worker：
 
 ```bash
-dscli start -f ./worker_config.json
+dscli start --worker_config_path ./worker_config.json
 # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
 ```
 
@@ -439,7 +440,7 @@ client.init()
 
     ```bash
     # 卸载使用配置项部署的集群
-    dscli stop -f ./worker_config.json
+    dscli stop --config_path ./worker_config.json
     # [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100
     ```
 
