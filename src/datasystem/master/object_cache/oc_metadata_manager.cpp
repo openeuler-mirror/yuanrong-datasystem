@@ -3744,7 +3744,11 @@ Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bo
     }
     LOG(WARNING) << "ProcessWorkerTimeout start. lost worker : " << workerAddr
                  << ", isDead:" << removeFailWorkerMetaData;
-    notifyWorkerManager_->SetFaultWorker(workerAddr);
+    notifyWorkerManager_->SetFaultWorker(workerAddr, removeFailWorkerMetaData);
+    if (removeFailWorkerMetaData) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr),
+                                         "ClearAsyncWorkerOp failed in ProcessWorkerTimeout");
+    }
     if (changePrimaryCopy) {
         ProcessPrimaryCopyByWorkerTimeout(workerAddr);
     }
@@ -3768,8 +3772,6 @@ Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bo
         RETURN_IF_NOT_OK(OCMetadataManager::GDecreaseRef(req, resp));
         Status respRc(static_cast<StatusCode>(resp.last_rc().error_code()), resp.last_rc().error_msg());
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(respRc, "GDecreaseRef failed in ProcessWorkerTimeout");
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr),
-                                         "ClearAsyncWorkerOp failed in ProcessWorkerTimeout");
     }
     return Status::OK();
 }
@@ -3779,11 +3781,11 @@ Status OCMetadataManager::ProcessWorkerRestart(const std::string &workerAddr, in
     INJECT_POINT("ProcessWorkerRestart");
     LOG(INFO) << "ProcessWorkerRestart. lost worker : " << workerAddr << ", workerId:" << workerId_;
     WaitInitializaiton();
-    notifyWorkerManager_->RemoveFaultWorker(workerAddr);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveMetaByWorker(workerAddr),
                                      "RemoveMetaByWorker failed in ProcessWorkerRestart");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr),
                                      "ClearAsyncWorkerOp failed in ProcessWorkerRestart");
+    notifyWorkerManager_->RemoveFaultWorker(workerAddr);
     if (FLAGS_enable_reconciliation) {
         if (sync) {
             notifyWorkerManager_->PushMetaToWorker(workerAddr, timestamp, true);
