@@ -12,13 +12,16 @@
 // limitations under the License.
 
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#define private public
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#undef private
 
 #include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/status.h"
@@ -37,6 +40,7 @@ constexpr char ADDRESS_A[] = "127.0.0.1:31501";
 constexpr char ADDRESS_B[] = "127.0.0.1:31502";
 constexpr char ADDRESS_C[] = "127.0.0.1:31503";
 constexpr char RANGE_KEY[] = "/range";
+constexpr char COORDINATOR_ID[] = "0123456789abcdef";
 
 struct DiscoveryReply {
     Status status;
@@ -207,6 +211,23 @@ TEST(CoordinatorServiceProxyTest, FailedInitCanRetryDiscovery)
     EXPECT_EQ(firstStatus.GetMsg(), discoveryError.GetMsg());
     EXPECT_TRUE(secondStatus.IsOk()) << secondStatus.ToString();
     EXPECT_EQ(discovery->GetCallCount(), 2UL);
+}
+
+TEST(CoordinatorServiceProxyTest, RecoveringResponseRequiresExplicitAcceptance)
+{
+    auto discovery = MakeDiscovery(Status::OK(), { ADDRESS_A });
+    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    coordinator::ResponseHeader header;
+    header.set_coordinator_id(COORDINATOR_ID);
+    header.set_is_leader(false);
+    header.set_leader_term(7);
+    header.set_serving_state(coordinator::ResponseHeader::LEADER_RECOVERING);
+
+    EXPECT_EQ(proxy.AcceptResponse(header, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, nullptr, false).GetCode(), K_NOT_READY);
+    DS_ASSERT_OK(proxy.AcceptResponse(header, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, nullptr, true));
+    std::string observedCoordinatorId;
+    proxy.GetObservedCoordinatorId(observedCoordinatorId);
+    EXPECT_EQ(observedCoordinatorId, COORDINATOR_ID);
 }
 
 TEST(CoordinatorServiceProxyTest, RpcBeforeInitDoesNotDiscover)

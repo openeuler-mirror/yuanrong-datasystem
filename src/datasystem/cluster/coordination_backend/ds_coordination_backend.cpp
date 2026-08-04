@@ -896,8 +896,16 @@ Status DsCoordinationBackend::PrepareMembershipRecreate()
 void DsCoordinationBackend::InstallEnsuredMembership(const std::string &coordinatorId, int64_t membershipModRevision)
 {
     std::lock_guard<std::mutex> mutationLock(membershipMutationMutex_);
-    // Ensure can return after a newer local membership mutation completed. Revisions are globally monotonic.
-    keepAliveModRevision_ = std::max(membershipModRevision, keepAliveModRevision_);
+    bool sameCoordinatorLifetime = false;
+    {
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        sameCoordinatorLifetime = lastMembershipCoordinatorId_ == coordinatorId;
+    }
+    // Revisions are monotonic only within one Coordinator lifetime. A replacement Coordinator owns a new Store and may
+    // legitimately return a lower revision, while a delayed Ensure from the same lifetime must not roll back newer
+    // state.
+    keepAliveModRevision_ = sameCoordinatorLifetime ? std::max(membershipModRevision, keepAliveModRevision_)
+                                                    : membershipModRevision;
     keepAliveTimeout_ = false;
     firstKeepAliveSent_.store(true, std::memory_order_release);
     HandleMembershipSuccess(coordinatorId, true);

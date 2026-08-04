@@ -68,6 +68,14 @@ coordinator::ResponseHeader LeaderHeader(uint64_t term, coordinator::ResponseHea
     return header;
 }
 
+coordinator::ResponseHeader RecoveringLeaderHeader(uint64_t term)
+{
+    auto header = LeaderHeader(term, coordinator::ResponseHeader::LEADER_RECOVERING);
+    header.set_is_leader(false);
+    header.set_leader_address("127.0.0.1:30001");
+    return header;
+}
+
 TEST(CoordinatorLeaderRouterTest, RetriesFollowerRedirectWithinOneLogicalCall)
 {
     auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001" });
@@ -92,6 +100,22 @@ TEST(CoordinatorLeaderRouterTest, RetriesFollowerRedirectWithinOneLogicalCall)
     ASSERT_EQ(attempted.size(), 2);
     EXPECT_EQ(attempted[1], "127.0.0.1:30002");
     EXPECT_EQ(router.GetLeaderCache().address.ToString(), "127.0.0.1:30002");
+}
+
+TEST(CoordinatorLeaderRouterTest, RecoveringLeaderRequiresRecoveryControlRequest)
+{
+    auto now = std::chrono::steady_clock::time_point{};
+    auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001" });
+    CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001") }, [&now] { return now; },
+                                   [&now](std::chrono::milliseconds) { now += std::chrono::seconds(3); });
+    const auto attempt = [](const HostPort &, int32_t, coordinator::ResponseHeader &header, bool &hasHeader) {
+        hasHeader = true;
+        header = RecoveringLeaderHeader(7);
+        return Status::OK();
+    };
+
+    EXPECT_EQ(router.Execute(attempt).GetCode(), K_NOT_READY);
+    EXPECT_TRUE(router.Execute(attempt, true).IsOk());
 }
 
 TEST(CoordinatorLeaderRouterTest, RejectsLateLowerTermHeaderWithoutReplacingCache)

@@ -19,7 +19,16 @@
   restarted Coordinator fences its new lifetime with `CoordinatorId`, gates topology/task/notify access, accepts
   Worker-reported last-good topology candidates, installs one canonical highest version, and regenerates derived work.
   Membership mutation and keepalive RPCs additionally carry the exact key modification revision, so a delayed RPC from
-  an older same-address Worker incarnation cannot overwrite or renew the current membership record.
+  an older same-address Worker incarnation cannot overwrite or renew the current membership record. Revisions are
+  monotonic only within one Coordinator lifetime: a same-lifetime delayed Ensure retains the newer local revision, while
+  a changed `CoordinatorId` replaces it with the new in-memory Store's ensured revision even when that number is lower.
+  Worker Leader reconciliation installs ensured membership outside its state mutex because installation synchronously
+  publishes membership readiness; it then rechecks Router identity before reporting so a successor lifetime can enqueue
+  its fenced Ensure without recursive locking or a stale recovery report. Coordinator-side `EnsureLeaderMembership`
+  uses the same `TopologyControlHost` reservation/completion transaction as normal membership Put, so topology recovery
+  cannot become READY with committed memberships but no Controller runtime owner. Reconciler shutdown transfers its
+  Ensure pool under the scheduling mutex and joins outside the lock, fencing already copied membership callbacks from
+  pool destruction without deadlocking the Ensure loop.
   `TopologyControlHost` then creates one centralized `TopologyControllerRuntime` per admitted cluster inside
   `datasystem_coordinator`; a Coordinator-backed Worker only consumes topology/own-notify and executes business effects.
 

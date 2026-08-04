@@ -90,6 +90,10 @@ public:
     // Parameters for starting the coordinator.
     std::string coordinatorGflagParams;
 
+    bool enableCoordinatorElection = false;
+
+    std::string coordinatorBinPath = "";
+
     // Path for writing to NAS.  Special keyword of "none" means read-only NAS
     std::string nasDir;
 

@@ -918,6 +918,7 @@ Status WorkerWorkerOCServiceImpl::CheckCoordinatorState(const CheckCoordinatorSt
 Status WorkerWorkerOCServiceImpl::GetClusterState(const GetClusterStateReqPb &req, GetClusterStateRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    INJECT_POINT("WorkerWorkerOCServiceImpl.GetClusterState.returnError");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(backendObservationProvider_), K_NOT_READY,
                              "Control-backend observation provider is not initialized.");

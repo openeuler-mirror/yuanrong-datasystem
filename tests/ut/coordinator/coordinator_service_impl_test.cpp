@@ -20,8 +20,10 @@
 
 #include "ut/common.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
 #define private public
 #include "datasystem/coordinator/coordinator_service_impl.h"
+#include "datasystem/coordinator/topology_control_host.h"
 #undef private
 
 namespace datasystem {
@@ -76,6 +78,13 @@ protected:
         return bytes;
     }
 
+    std::string MembershipKey(std::string_view workerAddress) const
+    {
+        std::unique_ptr<cluster::TopologyKeyHelper> keys;
+        EXPECT_TRUE(cluster::TopologyKeyHelper::Create(VALID_CLUSTER_NAME, keys).IsOk());
+        return keys->MembershipTable() + "/" + std::string(workerAddress);
+    }
+
     void ExpectHeader(const coordinator::ResponseHeader &header, bool isLeader,
                       coordinator::ResponseHeader::ServingStatePb servingState, uint64_t term,
                       std::string_view leaderAddress) const
@@ -125,6 +134,25 @@ TEST_F(CoordinatorServiceImplTest, RecoveringLeaderAcceptsOnlyEnsureAndExistingR
     EXPECT_GT(ensureResponse.membership_mod_revision(), 0);
     ExpectHeader(ensureResponse.header(), false, coordinator::ResponseHeader::LEADER_RECOVERING,
                  RECOVERING_TERM, RECOVERING_LEADER_ADDRESS);
+    {
+        std::lock_guard<std::mutex> lock(service_->topologyControlHost_->mutex_);
+        const auto entry = service_->topologyControlHost_->entries_.find(VALID_CLUSTER_NAME);
+        ASSERT_NE(entry, service_->topologyControlHost_->entries_.end());
+        EXPECT_EQ(entry->second->state, coordinator::TopologyControlHost::EntryState::WAITING_RECOVERY);
+        EXPECT_TRUE(entry->second->hasCommittedMembership);
+        EXPECT_EQ(entry->second->pendingMembershipPuts, 0UL);
+    }
+
+    coordinator::KeepAliveReqPb keepAliveRequest;
+    keepAliveRequest.set_key(MembershipKey(ensureRequest.reporter_address()));
+    keepAliveRequest.set_expected_coordinator_id(ensureResponse.header().coordinator_id());
+    keepAliveRequest.set_expected_mod_revision(ensureResponse.membership_mod_revision());
+    coordinator::KeepAliveRspPb keepAliveResponse;
+    DS_ASSERT_OK(service_->KeepAlive(keepAliveRequest, keepAliveResponse));
+    EXPECT_GT(keepAliveResponse.ttl(), 0);
+    EXPECT_GT(keepAliveResponse.remaining_ttl(), 0);
+    ExpectHeader(keepAliveResponse.header(), false, coordinator::ResponseHeader::LEADER_RECOVERING, RECOVERING_TERM,
+                 RECOVERING_LEADER_ADDRESS);
 
     coordinator::ReportTopologyRecoveryCandidateReqPb reportRequest;
     reportRequest.set_cluster_name(VALID_CLUSTER_NAME);

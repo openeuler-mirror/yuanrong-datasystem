@@ -196,14 +196,12 @@ public:
     /**
      * @brief Recreate exactly one Worker's membership while the elected Leader recovers its memory state.
      */
-    Status EnsureLeaderMembership(const EnsureLeaderMembershipReqPb &req,
-                                  EnsureLeaderMembershipRspPb &rsp) override;
+    Status EnsureLeaderMembership(const EnsureLeaderMembershipReqPb &req, EnsureLeaderMembershipRspPb &rsp) override;
 
     /**
      * @brief Accept one witness result for a Controller-owned worker probe round.
      */
-    Status ReportWorkerLiveness(const ReportWorkerLivenessReqPb &req,
-                                ReportWorkerLivenessRspPb &rsp) override;
+    Status ReportWorkerLiveness(const ReportWorkerLivenessReqPb &req, ReportWorkerLivenessRspPb &rsp) override;
 
     /**
      * @brief Read raw topology and membership facts without recovery gating or domain projection.
@@ -217,14 +215,14 @@ private:
     friend class ::datasystem::st::CoordinatorServiceElectionTestBase;
 
     enum class ServingState : uint8_t {
-        CREATED,      // Constructed but not initialized.
-        INITIALIZED,  // Components are initialized but the RPC service is not started.
-        STARTING,     // RPC and Raft startup are in progress.
+        CREATED,            // Constructed but not initialized.
+        INITIALIZED,        // Components are initialized but the RPC service is not started.
+        STARTING,           // RPC and Raft startup are in progress.
         FOLLOWER_SERVING,   // Running with Raft enabled, but this Coordinator is not the Leader.
         LEADER_RECOVERING,  // Elected Leader rebuilding topology state; only recovery control RPCs are admitted.
         LEADER_SERVING,     // Business RPCs are admitted; non-Raft mode is always in this state after startup.
-        STOPPING,     // Shutdown has started and no new work may be admitted.
-        STOPPED,      // Shutdown has completed.
+        STOPPING,           // Shutdown has started and no new work may be admitted.
+        STOPPED,            // Shutdown has completed.
     };
 
     /**
@@ -274,12 +272,13 @@ private:
     void FillResponseHeader(ResponseHeader *header) const;
     /**
      * @brief Fill response metadata and apply the serving gate for one RPC class.
+     * @param[in] allowLeaderRecovering Whether allow business logic to execute during Leader recovery.
      * @param[out] header Response header to fill.
      * @param[out] businessAllowed True only when this request may execute against local business state.
      * @return K_OK with a routeable envelope for Followers, recovering Leaders, or the current serving Leader;
      *         lifecycle and stale-local-leadership gate status otherwise.
      */
-    Status PrepareRpcResponse(ResponseHeader *header, bool &businessAllowed) const;
+    Status PrepareRpcResponse(bool allowLeaderRecovering, ResponseHeader *header, bool &businessAllowed) const;
     Status RequireRecoveryLeader(uint64_t term, std::string_view coordinatorId) const;
     void RunRecoveryGate();
     void StopRecoveryGate();

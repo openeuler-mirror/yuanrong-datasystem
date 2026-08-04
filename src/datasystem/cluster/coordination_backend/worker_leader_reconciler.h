@@ -39,8 +39,8 @@ public:
     // Router callbacks use this non-blocking entry point; Ensure is always done by ensurePool_.
     void OnLeaderChanged(const CoordinatorLeaderIdentity &identity);
 
-    // Preserve the legacy single-Coordinator startup path, which has no Raft term to reconcile.
-    void NotifyLegacyMembershipReady(const std::string &coordinatorId);
+    // Complete initial membership publication against the observed Coordinator lifetime.
+    void NotifyMembershipReady(const std::string &coordinatorId);
     Status Reconcile(bool waitForCompletion);
     void Shutdown();
 
@@ -63,7 +63,7 @@ private:
     bool forceEnsurePending_{ false };  // Protected by mutex_; coalesces explicit membership-loss signals.
     bool ensureScheduled_{ false };
     std::unique_ptr<ICoordinatorLeaderRouteProvider::Subscription> subscription_;
-    std::unique_ptr<ThreadPool> ensurePool_;
+    std::unique_ptr<ThreadPool> ensurePool_;  // Access and ownership transfer are protected by mutex_.
     std::atomic<bool> stopping_{ false };
 };
 

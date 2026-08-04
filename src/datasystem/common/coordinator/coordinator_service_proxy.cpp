@@ -41,9 +41,12 @@ Status CheckCoordinatorAddress(const HostPort &coordinatorAddr)
     return Status::OK();
 }
 
-Status CheckResponseHeader(const coordinator::ResponseHeader &header)
+Status CheckResponseHeader(const coordinator::ResponseHeader &header, bool allowLeaderRecovering = false)
 {
-    CHECK_FAIL_RETURN_STATUS(header.is_leader(), StatusCode::K_NOT_READY,
+    const bool accepted =
+        header.is_leader()
+        || (allowLeaderRecovering && header.serving_state() == coordinator::ResponseHeader::LEADER_RECOVERING);
+    CHECK_FAIL_RETURN_STATUS(accepted, StatusCode::K_NOT_READY,
                              "coordinator is not leader, leader address: " + header.leader_address());
     CHECK_FAIL_RETURN_STATUS(header.coordinator_id().size() == UUID_SIZE, StatusCode::K_INVALID,
                              "Coordinator response contains an invalid CoordinatorId");
@@ -146,9 +149,10 @@ public:
         }
     }
 
-    Status Accept(const coordinator::ResponseHeader &header, std::string *coordinatorId)
+    Status Accept(const coordinator::ResponseHeader &header, std::string *coordinatorId,
+                  bool allowLeaderRecovering = false)
     {
-        return owner_->AcceptResponse(header, timeoutMs_, coordinatorId);
+        return owner_->AcceptResponse(header, timeoutMs_, coordinatorId, allowLeaderRecovering);
     }
 
     const std::string &StartedCoordinatorId() const
@@ -229,9 +233,9 @@ void CoordinatorServiceProxyBase::CompleteRpc(const std::string &startedCoordina
 }
 
 Status CoordinatorServiceProxyBase::AcceptResponse(const coordinator::ResponseHeader &header, int32_t timeoutMs,
-                                                   std::string *coordinatorId)
+                                                   std::string *coordinatorId, bool allowLeaderRecovering)
 {
-    RETURN_IF_NOT_OK(CheckResponseHeader(header));
+    RETURN_IF_NOT_OK(CheckResponseHeader(header, allowLeaderRecovering));
     const std::string &responseId = header.coordinator_id();
     {
         std::lock_guard<std::mutex> lock(identityMutex_);
@@ -248,14 +252,15 @@ Status CoordinatorServiceProxyBase::AcceptResponse(const coordinator::ResponseHe
             return IdentityChangedStatus();
         }
     }
-    RETURN_IF_NOT_OK(ConfirmResponseIdentity(responseId, timeoutMs));
+    RETURN_IF_NOT_OK(ConfirmResponseIdentity(responseId, timeoutMs, allowLeaderRecovering));
     if (coordinatorId != nullptr) {
         *coordinatorId = responseId;
     }
     return Status::OK();
 }
 
-Status CoordinatorServiceProxyBase::ConfirmResponseIdentity(const std::string &responseId, int32_t timeoutMs)
+Status CoordinatorServiceProxyBase::ConfirmResponseIdentity(const std::string &responseId, int32_t timeoutMs,
+                                                            bool allowLeaderRecovering)
 {
     std::lock_guard<std::mutex> refreshLock(identityRefreshMutex_);
     {
@@ -268,12 +273,13 @@ Status CoordinatorServiceProxyBase::ConfirmResponseIdentity(const std::string &r
         }
     }
     std::string probedId;
-    RETURN_IF_NOT_OK(ProbeCoordinatorId(timeoutMs, probedId));
+    RETURN_IF_NOT_OK(ProbeCoordinatorId(timeoutMs, probedId, allowLeaderRecovering));
     RETURN_IF_NOT_OK(InstallProbedIdentity(probedId));
     return probedId == responseId ? Status::OK() : IdentityChangedStatus();
 }
 
-Status CoordinatorServiceProxyBase::ProbeCoordinatorId(int32_t timeoutMs, std::string &coordinatorId)
+Status CoordinatorServiceProxyBase::ProbeCoordinatorId(int32_t timeoutMs, std::string &coordinatorId,
+                                                       bool allowLeaderRecovering)
 {
     // Router owns the fixed logical RPC deadline, including identity probes.
     static_cast<void>(timeoutMs);
@@ -292,8 +298,8 @@ Status CoordinatorServiceProxyBase::ProbeCoordinatorId(int32_t timeoutMs, std::s
         header = rsp.header();
         hasHeader = header.coordinator_id().size() == UUID_SIZE;
         return status;
-    }));
-    RETURN_IF_NOT_OK(CheckResponseHeader(rsp.header()));
+    }, allowLeaderRecovering));
+    RETURN_IF_NOT_OK(CheckResponseHeader(rsp.header(), allowLeaderRecovering));
     coordinatorId = rsp.header().coordinator_id();
     return Status::OK();
 }
@@ -432,10 +438,13 @@ Status CoordinatorServiceProxyBase::KeepAlive(const std::string &key, int64_t &t
     coordinator::KeepAliveRspPb rsp;
     RpcOptions options;
     options.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
-        return stub.KeepAlive(opts, request, response);
-    }));
-    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), coordinatorId));
+    RETURN_IF_NOT_OK(CallRaw(
+        options, req, rsp,
+        [](auto &stub, auto &opts, const auto &request, auto &response) {
+            return stub.KeepAlive(opts, request, response);
+        },
+        true));
+    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), coordinatorId, true));
     ttlMs = rsp.ttl();
     remainingTtlMs = rsp.remaining_ttl();
     return Status::OK();
@@ -446,7 +455,7 @@ Status CoordinatorServiceProxyBase::GetCoordinatorId(std::string &coordinatorId,
     auto inFlight = BeginRpc(timeoutMs);
     std::lock_guard<std::mutex> refreshLock(identityRefreshMutex_);
     std::string probedId;
-    RETURN_IF_NOT_OK(ProbeCoordinatorId(timeoutMs, probedId));
+    RETURN_IF_NOT_OK(ProbeCoordinatorId(timeoutMs, probedId, false));
     RETURN_IF_NOT_OK(InstallProbedIdentity(probedId));
     coordinatorId = std::move(probedId);
     return Status::OK();
@@ -499,6 +508,13 @@ Status CoordinatorServiceProxyBase::EnsureLeaderMembership(const coordinator::En
             return stub.EnsureLeaderMembership(opts, request, response);
         },
         true);
+    if (status.IsOk() && localRsp.result() == coordinator::EnsureLeaderMembershipRspPb::ACCEPTED) {
+        RETURN_IF_NOT_OK(CheckResponseHeader(localRsp.header(), true));
+        CHECK_FAIL_RETURN_STATUS(localRsp.header().coordinator_id() == req.coordinator_id()
+                                     && localRsp.header().leader_term() == req.leader_term(),
+                                 K_TRY_AGAIN, "accepted membership Ensure response identity does not match request");
+        RETURN_IF_NOT_OK(InstallProbedIdentity(localRsp.header().coordinator_id()));
+    }
     if (!localRsp.header().coordinator_id().empty()) {
         rsp = std::move(localRsp);
     }

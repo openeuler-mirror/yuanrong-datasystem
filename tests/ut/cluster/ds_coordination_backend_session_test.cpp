@@ -715,6 +715,26 @@ TEST(DsCoordinationBackendSessionTest, StaleEnsuredRevisionCannotRollbackNewerMe
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
+TEST(DsCoordinationBackendSessionTest, NewCoordinatorLifetimeAcceptsLowerEnsuredRevision)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+
+    proxy.SetMembershipRevision(17);
+    ASSERT_TRUE(backend.OnMembershipEnsured(COORDINATOR_A, 17).IsOk());
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 17);
+
+    proxy.SetPutCoordinatorId(COORDINATOR_B);
+    proxy.SetMembershipRevision(2);
+    ASSERT_TRUE(backend.OnMembershipEnsured(COORDINATOR_B, 2).IsOk());
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 2);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
 TEST(DsCoordinationBackendSessionTest, RenewalPayloadDoesNotExposePhysicalMembershipKey)
 {
     DeterministicCoordinatorProxy proxy;

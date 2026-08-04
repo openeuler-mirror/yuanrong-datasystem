@@ -649,7 +649,7 @@ Status TopologyEngine::Start()
                 return;
             }
             if (workerLeaderReconciler_ != nullptr) {
-                workerLeaderReconciler_->NotifyLegacyMembershipReady(coordinatorId);
+                workerLeaderReconciler_->NotifyMembershipReady(coordinatorId);
             } else {
                 recoveryReporter_->NotifyMembershipReady(coordinatorId);
             }
