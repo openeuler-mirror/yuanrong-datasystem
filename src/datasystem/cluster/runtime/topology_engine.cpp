@@ -943,6 +943,7 @@ Status TopologyEngine::MarkExiting()
 {
     CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
                              "cluster topology Engine is not running");
+    localVoluntaryExitRequested_.store(true);
     auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::EXITING);
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
               << " role=worker action=mark_exiting address=" << options_.localAddress << " status=" << rc.ToString();
@@ -1155,13 +1156,19 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
             localMemberExistedInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
         const bool localMemberWasLeaving =
             localMemberWasLeavingInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
+        const bool localVoluntaryExitRequested = localVoluntaryExitRequested_.load();
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             backendObservation_ = {};
         }
-        if (!localMemberExisted || localMemberWasLeaving) {
+        if (!localMemberExisted || localMemberWasLeaving || localVoluntaryExitRequested) {
             membershipRejoinRequired_.store(false, std::memory_order_relaxed);
             SetAvailability(TopologyAvailabilityLevel::NOT_READY, "local_member_missing");
+            if (localMemberWasLeaving || localVoluntaryExitRequested) {
+                LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
+                          << " role=worker state=local_member_missing action=continue_voluntary_exit address="
+                          << options_.localAddress;
+            }
             return Status::OK();
         }
         LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
@@ -1361,6 +1368,15 @@ Status TopologyEngine::RefreshPeerTopology()
     }
     if (localMissing || local->state == MemberState::FAILED) {
         const auto reason = localMissing ? "missing" : "failed";
+        if (localVoluntaryExitRequested_.load()) {
+            membershipRejoinRequired_.store(false, std::memory_order_relaxed);
+            SetAvailability(TopologyAvailabilityLevel::NOT_READY, "peer_observed_local_member_unavailable");
+            LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
+                      << " role=worker state=peer_observed_local_member_unavailable action=continue_voluntary_exit"
+                      << " reason=" << reason << " address=" << options_.localAddress
+                      << " peer_version=" << peerSnapshot->Version();
+            return Status::OK();
+        }
         LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
                    << " role=worker state=peer_observed_local_member_unavailable action=require_rejoin"
                    << " reason=" << reason << " address=" << options_.localAddress
