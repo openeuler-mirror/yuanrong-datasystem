@@ -786,6 +786,11 @@ Status OCNotifyWorkerManager::InsertAsyncWorkerOp(const std::string &workerId, c
     Timer timer;
     NotifyWorkerOp opAfterModify = op;
     {
+        std::shared_lock<std::shared_timed_mutex> faultLck(faultWorkerMutex_);
+        auto faultWorker = faultWorkers_.find(workerId);
+        if (faultWorker != faultWorkers_.end() && faultWorker->second) {
+            return Status::OK();
+        }
         std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
         GetMasterTimeCost().Append("InsertAsyncWorkerOp get lock", timer.ElapsedMilliSecond());
         TbbNotifyWorkerOpTable::accessor accessor;
@@ -811,19 +816,37 @@ Status OCNotifyWorkerManager::InsertAsyncWorkerOp(const std::string &workerId, c
     return !needPersist ? Status::OK() : objectStore_->AddAsyncWorkerOp(workerId, objectKey, opAfterModify, type);
 }
 
-void OCNotifyWorkerManager::PersistAsyncWorkerOpRequests(const std::vector<AsyncWorkerOpPersistRequest> &requests)
+Status OCNotifyWorkerManager::CommitAsyncWorkerOpRequests(const std::vector<AsyncWorkerOpPersistRequest> &requests)
 {
     for (const auto &request : requests) {
         if (request.action == AsyncWorkerOpPersistAction::REMOVE) {
-            LOG_IF_ERROR(objectStore_->RemoveAsyncWorkerOp(request.workerId, request.objectKey,
-                                                           request.needRemoveEtcdData),
-                         "remove async worker op in l2 cacahe failed, key: " + request.objectKey);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                objectStore_->RemoveAsyncWorkerOp(request.workerId, request.objectKey, request.needRemoveEtcdData),
+                "remove async worker op in l2 cache failed, key: " + request.objectKey);
             continue;
         }
-        LOG_IF_ERROR(objectStore_->AddAsyncWorkerOp(request.workerId, request.objectKey, request.op,
-                                                    request.writeType),
-                     "modify async worker op in l2 cacahe failed, key: " + request.objectKey);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            objectStore_->AddAsyncWorkerOp(request.workerId, request.objectKey, request.op, request.writeType),
+            "modify async worker op in l2 cache failed, key: " + request.objectKey);
     }
+    std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+    for (const auto &request : requests) {
+        TbbNotifyWorkerOpTable::accessor accessor;
+        if (!notifyWorkerOpTable_.find(accessor, request.workerId)) {
+            continue;
+        }
+        auto iter = accessor->second.find(request.objectKey);
+        if (iter == accessor->second.end() || iter->second.epoch != request.expectedEpoch) {
+            continue;
+        }
+        if (request.action == AsyncWorkerOpPersistAction::REMOVE) {
+            (void)accessor->second.erase(iter);
+        } else {
+            iter->second.op = request.op;
+            iter->second.epoch = NextNotifyWorkerOpEpoch();
+        }
+    }
+    return Status::OK();
 }
 
 uint64_t OCNotifyWorkerManager::NextNotifyWorkerOpEpoch()
@@ -851,22 +874,23 @@ Status OCNotifyWorkerManager::ClearAsyncWorkerOpSnapshots(
             }
             auto afterModify = iter->second.op.type;
             if (static_cast<uint32_t>(CLEARFLAG(afterModify, notifiedWorkerOp)) == 0) {
-                (void)accessor->second.erase(iter);
                 persistRequests.emplace_back(AsyncWorkerOpPersistRequest{ AsyncWorkerOpPersistAction::REMOVE,
-                                                                          workerAddr, snapshot.objectKey });
+                                                                          workerAddr, snapshot.objectKey, {},
+                                                                          ObjectMetaStore::WriteType::ROCKS_ONLY, true,
+                                                                          snapshot.epoch });
                 continue;
             }
             if (iter->second.op.type != afterModify) {
-                iter->second.op.type = afterModify;
-                iter->second.epoch = NextNotifyWorkerOpEpoch();
+                auto opAfterModify = iter->second.op;
+                opAfterModify.type = afterModify;
                 persistRequests.emplace_back(AsyncWorkerOpPersistRequest{ AsyncWorkerOpPersistAction::ADD,
                                                                           workerAddr, snapshot.objectKey,
-                                                                          iter->second.op, iter->second.writeType });
+                                                                          opAfterModify, iter->second.writeType, true,
+                                                                          snapshot.epoch });
             }
         }
     }
-    PersistAsyncWorkerOpRequests(persistRequests);
-    return Status::OK();
+    return CommitAsyncWorkerOpRequests(persistRequests);
 }
 
 Status OCNotifyWorkerManager::RemoveAsyncWorkerOp(const std::string &workerId,
@@ -887,25 +911,23 @@ Status OCNotifyWorkerManager::RemoveAsyncWorkerOp(const std::string &workerId,
             auto beforeModify = itr->second.op.type;
             auto afterModify = beforeModify;
             if (static_cast<uint32_t>(CLEARFLAG(afterModify, op)) == 0) {
-                (void)accessor->second.erase(id);
                 persistRequests.emplace_back(AsyncWorkerOpPersistRequest{
                     AsyncWorkerOpPersistAction::REMOVE, workerId, id, {}, ObjectMetaStore::WriteType::ROCKS_ONLY,
-                    !isDataMigration });
+                    !isDataMigration, itr->second.epoch });
                 continue;
             }
             if (beforeModify != afterModify) {
                 auto writeType =
                     isDataMigration ? ObjectMetaStore::WriteType::ROCKS_ONLY : itr->second.writeType;
-                itr->second.op.type = afterModify;
-                itr->second.epoch = NextNotifyWorkerOpEpoch();
+                auto opAfterModify = itr->second.op;
+                opAfterModify.type = afterModify;
                 persistRequests.emplace_back(AsyncWorkerOpPersistRequest{ AsyncWorkerOpPersistAction::ADD,
-                                                                          workerId, itr->first, itr->second.op,
-                                                                          writeType });
+                                                                          workerId, itr->first, opAfterModify,
+                                                                          writeType, true, itr->second.epoch });
             }
         }
     }
-    PersistAsyncWorkerOpRequests(persistRequests);
-    return Status::OK();
+    return CommitAsyncWorkerOpRequests(persistRequests);
 }
 
 Status OCNotifyWorkerManager::ClearAddressCacheInvalid(const std::string &workerId,
@@ -934,11 +956,16 @@ Status OCNotifyWorkerManager::FillUpdateObjectInfoPb(const std::string &objectKe
     return Status::OK();
 }
 
-void OCNotifyWorkerManager::SetFaultWorker(const std::string &workerAddr)
+void OCNotifyWorkerManager::SetFaultWorker(const std::string &workerAddr, bool isDead)
 {
-    LOG(INFO) << "add fault worker: " << workerAddr;
+    LOG(INFO) << "add fault worker: " << workerAddr << ", isDead:" << isDead;
     std::lock_guard<std::shared_timed_mutex> lck(faultWorkerMutex_);
-    (void)faultWorkers_.emplace(workerAddr);
+    auto iter = faultWorkers_.find(workerAddr);
+    if (iter == faultWorkers_.end()) {
+        (void)faultWorkers_.emplace(workerAddr, isDead);
+    } else {
+        iter->second = iter->second || isDead;
+    }
 }
 
 void OCNotifyWorkerManager::RemoveFaultWorker(const std::string &workerAddr)

@@ -3778,7 +3778,11 @@ Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bo
     }
     LOG(WARNING) << "ProcessWorkerTimeout start. lost worker : " << workerAddr
                  << ", isDead:" << removeFailWorkerMetaData;
-    notifyWorkerManager_->SetFaultWorker(workerAddr);
+    notifyWorkerManager_->SetFaultWorker(workerAddr, removeFailWorkerMetaData);
+    if (removeFailWorkerMetaData) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr),
+                                         "ClearAsyncWorkerOp failed in ProcessWorkerTimeout");
+    }
     if (changePrimaryCopy) {
         ProcessPrimaryCopyByWorkerTimeout(workerAddr);
     }
@@ -3802,8 +3806,6 @@ Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bo
         RETURN_IF_NOT_OK(OCMetadataManager::GDecreaseRef(req, resp));
         Status respRc(static_cast<StatusCode>(resp.last_rc().error_code()), resp.last_rc().error_msg());
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(respRc, "GDecreaseRef failed in ProcessWorkerTimeout");
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr),
-                                         "ClearAsyncWorkerOp failed in ProcessWorkerTimeout");
     }
     return Status::OK();
 }
@@ -3813,11 +3815,11 @@ Status OCMetadataManager::ProcessWorkerRestart(const std::string &workerAddr, in
     INJECT_POINT("ProcessWorkerRestart");
     LOG(INFO) << "ProcessWorkerRestart. lost worker : " << workerAddr << ", workerId:" << workerId_;
     WaitInitializaiton();
-    notifyWorkerManager_->RemoveFaultWorker(workerAddr);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveMetaByWorker(workerAddr),
                                      "RemoveMetaByWorker failed in ProcessWorkerRestart");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr),
                                      "ClearAsyncWorkerOp failed in ProcessWorkerRestart");
+    notifyWorkerManager_->RemoveFaultWorker(workerAddr);
     if (FLAGS_enable_reconciliation) {
         if (sync) {
             RETURN_IF_NOT_OK(notifyWorkerManager_->PushMetaToWorker(workerAddr, timestamp, true));
@@ -3837,10 +3839,6 @@ Status OCMetadataManager::ProcessWorkerRestarts(const std::map<std::string, int6
     INJECT_POINT("ProcessWorkerRestart");
     Timer timer;
     WaitInitializaiton();
-    for (const auto &[workerAddr, timestamp] : restartFacts) {
-        (void)timestamp;
-        notifyWorkerManager_->RemoveFaultWorker(workerAddr);
-    }
     const auto removeStatus = RemoveMetaByWorkers(restartFacts);
     if (removeStatus.IsError()) {
         LOG(ERROR) << "CLUSTER_RESTART_NOTIFY action=master_metadata_remove_failed"
@@ -3872,6 +3870,7 @@ Status OCMetadataManager::ProcessWorkerRestarts(const std::map<std::string, int6
 Status OCMetadataManager::CompleteWorkerRestartEffect(const std::string &workerAddr, int64_t timestamp, bool sync)
 {
     RETURN_IF_NOT_OK(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr));
+    notifyWorkerManager_->RemoveFaultWorker(workerAddr);
     if (FLAGS_enable_reconciliation) {
         if (sync) {
             RETURN_IF_NOT_OK(notifyWorkerManager_->PushMetaToWorker(workerAddr, timestamp, true));

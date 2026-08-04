@@ -25,6 +25,17 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "worker_oc_server_test",
+    srcs = ["worker_oc_server_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:worker_oc_server",
+        "//tests/ut:ut_common",
+    ],
+)
+
 ds_cc_test_library(
     name = "test_metadata_route",
     hdrs = ["object_cache/test_metadata_route.h"],
@@ -612,6 +623,7 @@ test_suite(
         "worker_oc_service_impl_header_test",
         "worker_oc_service_impl_test",
         "worker_oc_service_get_ub_admission_test",
+        "worker_oc_server_test",
         "worker_oc_spill_eviction_test",
         "worker_oc_spill_test",
         "worker_worker_peer_state_codec_test",
