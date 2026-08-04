@@ -65,6 +65,67 @@ output/
 └── yr-datasystem-vx.x.x.tar.gz
 ```
 
+### 通过下载包编译（可选）
+
+默认情况下，编译时 URMA 的头文件和共享库来自编译环境的系统路径（`/usr/include`、`/usr/lib64`），要求编译机预先安装 URMA SDK。若编译环境不便于安装 URMA SDK，可改用下载包方式：编译时从指定 URL 下载 URMA 头文件与共享库压缩包，自动定位并使用，编译产物（whl 包与 SDK 的 `lib/` 目录）会内置 URMA 相关的 6 个共享库（`libtpsa.so`、`libummu.so`、`liburma.so`、`liburma_common.so`、`liburma_ubagg.so`、`liburma-udma.so`），运行环境无需再单独安装 URMA 库。
+
+下载包的内部布局应为：
+
+```text
+<任意顶层目录>/
+├── include/
+│   ├── urma_api.h
+│   ├── urma_perf.h
+│   └── urma_ubagg.h
+└── lib/
+    ├── libtpsa.so / libtpsa.so.0
+    ├── libummu.so / libummu.so.0
+    ├── liburma.so / liburma.so.0
+    ├── liburma_common.so / liburma_common.so.0
+    ├── liburma_ubagg.so / liburma_ubagg.so.0
+    └── liburma-udma.so / liburma-udma.so.0
+```
+
+> 说明：压缩包内部的中间层目录名（如示例中的 `umdk_lib`）不做硬性要求，编译脚本会递归搜索 `urma_api.h` 与 `liburma.so` 自动定位 `include` 与 `lib` 根，头文件会被重组到 `ub/umdk/urma/` 路径下以匹配源码的 `#include <ub/umdk/urma/*.h>`。只需保证压缩包内同时存在上述头文件与 6 个共享库即可。
+
+::::{tab-set}
+
+:::{tab-item} CMake 编译
+
+编辑 `cmake/external_libs/urma.cmake`，将 `URMA_PKG_URL` 与 `URMA_PKG_SHA256` 设置为压缩包的下载地址与 SHA256 校验值（文件顶部已有默认的空值声明，取消注释或直接修改即可）：
+
+```cmake
+set(URMA_PKG_URL "https://example.com/urma_package.zip" CACHE STRING "URMA package download URL (empty = use system URMA SDK)")
+set(URMA_PKG_SHA256 "<sha256-of-the-zip>" CACHE STRING "URMA package SHA256 checksum")
+```
+
+留空则回退到系统路径方式（默认行为）。设置后执行：
+
+```bash
+bash build.sh -M on -X off
+```
+
+:::
+
+:::{tab-item} Bazel 编译
+
+编辑 `.bazelrc`，在 `build:urma` 段下取消注释（或新增）两行 `--repo_env`，填入压缩包的下载地址与 SHA256 校验值：
+
+```text
+build:urma --repo_env=URMA_PKG_URL=https://example.com/urma_package.zip
+build:urma --repo_env=URMA_PKG_SHA256=<sha256-of-the-zip>
+```
+
+注释掉这两行则回退到系统路径方式（默认行为）。设置后执行：
+
+```bash
+bazel build //bazel:datasystem_wheel --config=urma --config=release
+```
+
+:::
+
+::::
+
 ### 安装
 
 ```bash

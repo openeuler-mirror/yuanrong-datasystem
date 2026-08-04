@@ -320,6 +320,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../design_document/cluster_management.html">集群管理</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/shm_get_fd_passing.html">同节点多 Worker SHM Get fd-passing 方案设计</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../api_reference/index.html">API 参考</a><input aria-label="Toggle navigation of API 参考" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -610,11 +611,11 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><a class="reference internal" href="#openyuanrong-datasystemcoordinator">openYuanrong datasystem集群使用Coordinator部署</a></p></li>
 <li><p><a class="reference internal" href="#helm-chart">生成Helm Chart模板</a></p></li>
 <li><p><a class="reference internal" href="#cpp">生成Cpp样例代码</a></p></li>
-<li><p><a class="reference internal" href="#id16">日志收集</a></p></li>
-<li><p><a class="reference internal" href="#id17">多机命令运行</a></p></li>
+<li><p><a class="reference internal" href="#id17">日志收集</a></p></li>
+<li><p><a class="reference internal" href="#id18">多机命令运行</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#id18">命令行参数说明</a></p>
+<li><p><a class="reference internal" href="#id19">命令行参数说明</a></p>
 <ul>
 <li><p><a class="reference internal" href="#dscli-start">dscli start</a></p></li>
 <li><p><a class="reference internal" href="#dscli-stop">dscli stop</a></p></li>
@@ -628,10 +629,10 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><a class="reference internal" href="#dscli-query">dscli query</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#id19">配置项说明</a></p>
+<li><p><a class="reference internal" href="#id20">配置项说明</a></p>
 <ul>
-<li><p><a class="reference internal" href="#id20">集群配置项</a></p></li>
-<li><p><a class="reference internal" href="#id21">命令行参数配置项</a></p></li>
+<li><p><a class="reference internal" href="#id21">集群配置项</a></p></li>
+<li><p><a class="reference internal" href="#id22">命令行参数配置项</a></p></li>
 </ul>
 </li>
 </ul>
@@ -832,7 +833,7 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 <p>openYuanrong datasystem 单机部署依赖 <a class="reference internal" href="#dscli-start">dscli start</a> 命令。</p>
 <ul>
 <li><p>快速部署：</p>
-<p><a class="reference internal" href="#dscli-start">dscli start -w</a> 命令可在后面添加 datasystem_worker 初始化启动参数。使用 ETCD 时至少需要指定以下两个参数：</p>
+<p><a class="reference internal" href="#dscli-start">dscli start –worker_args</a> 命令可在后面添加 datasystem_worker 初始化启动参数。使用 ETCD 时至少需要指定以下两个参数：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -846,23 +847,23 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 <td><p>string</p></td>
 <td><p>datasystem_worker IP 地址与监听端口号</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#id24">–etcd_address</a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#id25">–etcd_address</a></p></td>
 <td><p>string</p></td>
 <td><p>ETCD 服务端访问地址</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
 <span class="c1"># [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100</span>
 </pre></div>
 </div>
 <p>输出 OK 说明部署成功。默认情况下，datasystem_worker 最大可使用 1GB 共享内存空间用于缓存数据；如需调整，可以指定 <code class="docutils literal notranslate"><span class="pre">--shared_memory_size_mb</span></code>：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span><span class="w"> </span>--shared_memory_size_mb<span class="w"> </span><span class="m">4096</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span><span class="w"> </span>--shared_memory_size_mb<span class="w"> </span><span class="m">4096</span>
 <span class="c1"># [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100</span>
 </pre></div>
 </div>
-<p>更多 datasystem_worker 参数说明参见<a class="reference internal" href="#id21">命令行参数配置项</a>。</p>
+<p>更多 datasystem_worker 参数说明参见<a class="reference internal" href="#id22">命令行参数配置项</a>。</p>
 </li>
 <li><p>通过配置项部署：</p>
 <p>在当前目录生成配置模板：</p>
@@ -875,10 +876,6 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 </div>
 <p>修改 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code>，配置 ETCD 地址，并确保 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 和 <code class="docutils literal notranslate"><span class="pre">metastore_address</span></code> 为空：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;service_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;worker&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Service type. Valid values: coordinator or worker. Empty or missing means worker. This field is used by dscli and is not passed to the service process.&quot;</span>
-<span class="w">  </span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;worker_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Address of worker in &#39;host:port&#39; format (e.g., \&quot;127.0.0.1:31501\&quot;). The value cannot be empty.&quot;</span>
@@ -891,7 +888,7 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 </pre></div>
 </div>
 <p>启动 Worker：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-f<span class="w"> </span>./worker_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_config_path<span class="w"> </span>./worker_config.json
 <span class="c1"># [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100</span>
 </pre></div>
 </div>
@@ -904,7 +901,7 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>更多 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 配置说明参见<a class="reference internal" href="#id21">命令行参数配置项</a>。</p>
+<p>更多 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 配置说明参见<a class="reference internal" href="#id22">命令行参数配置项</a>。</p>
 </li>
 </ul>
 </section>
@@ -922,7 +919,7 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 </li>
 <li><p>卸载通过配置项部署方式部署的 Worker：</p>
 <p>此种方式需要指定 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 文件。</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>-f<span class="w"> </span>./worker_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./worker_config.json
 <span class="c1"># [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100</span>
 </pre></div>
 </div>
@@ -961,7 +958,7 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">cluster_config.json</span></code> 用于配置 SSH 互信和 Worker 部署节点，更多说明参见<a class="reference internal" href="#id20">集群配置项</a>。</p>
+<p><code class="docutils literal notranslate"><span class="pre">cluster_config.json</span></code> 用于配置 SSH 互信和 Worker 部署节点，更多说明参见<a class="reference internal" href="#id21">集群配置项</a>。</p>
 </li>
 <li><p>编辑 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code>，配置所有 Worker 使用的 ETCD 地址，并确保 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 和 <code class="docutils literal notranslate"><span class="pre">metastore_address</span></code> 为空：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
@@ -976,7 +973,7 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 用于配置 datasystem_worker 启动参数，更多说明参见<a class="reference internal" href="#id21">命令行参数配置项</a>。</p>
+<p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 用于配置 datasystem_worker 启动参数，更多说明参见<a class="reference internal" href="#id22">命令行参数配置项</a>。</p>
 <blockquote>
 <div><p><strong>注意事项：</strong></p>
 <p><code class="docutils literal notranslate"><span class="pre">cluster_config.json</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">worker_nodes</span></code> 和 <code class="docutils literal notranslate"><span class="pre">worker_port</span></code> 会覆盖 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">worker_address</span></code>。</p>
@@ -1002,13 +999,13 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 <li><p>通过在多个节点执行 <a class="reference internal" href="#dscli-start">dscli start</a> 命令部署。以下示例在 127.0.0.1 和 127.0.0.2 部署两个 Worker：</p>
 <ol class="arabic">
 <li><p>在 127.0.0.1 节点执行：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
 <span class="c1"># [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100</span>
 </pre></div>
 </div>
 </li>
 <li><p>在 127.0.0.2 节点执行：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.2:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.2:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
 <span class="c1"># [INFO] [  OK  ] Start worker service @ 127.0.0.2:31501 success, PID: 38101</span>
 </pre></div>
 </div>
@@ -1050,8 +1047,8 @@ dscli<span class="w"> </span>stop<span class="w"> </span>--worker_address<span c
 <li><p>默认路径过长导致 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 执行失败</p>
 <p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 默认使用当前目录作为 home 目录。如果当前目录路径过长，可能导致 datasystem_worker 启动失败。</p>
 <p>使用 <code class="docutils literal notranslate"><span class="pre">--datasystem_home_dir</span></code>（短参数：<code class="docutils literal notranslate"><span class="pre">-d</span></code>）明确指定较短的 datasystem home 目录：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-f<span class="w"> </span>~/worker_config.json<span class="w"> </span>-d<span class="w"> </span>/home/usr1/dscli
-dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </span>/home/usr1/dscli<span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_config_path<span class="w"> </span>~/worker_config.json<span class="w"> </span>--datasystem_home_dir<span class="w"> </span>/home/usr1/dscli
+dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<span class="w"> </span>/home/usr1/dscli<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
 </pre></div>
 </div>
 </li>
@@ -1084,12 +1081,8 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <span class="c1"># [INFO] Configuration generation completed successfully</span>
 </pre></div>
 </div>
-<p>按需修改 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code>。其中 <code class="docutils literal notranslate"><span class="pre">service_type</span></code> 必须为 <code class="docutils literal notranslate"><span class="pre">coordinator</span></code>：</p>
+<p>按需修改 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code> 中的 Coordinator 服务地址：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;service_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;coordinator&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Service type. Valid values: coordinator or worker. This field is used by dscli and is not passed to the service process.&quot;</span>
-<span class="w">  </span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;coordinator_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Address of coordinator in &#39;host:port&#39; format (e.g., \&quot;127.0.0.1:31511\&quot;). The value cannot be empty.&quot;</span>
@@ -1098,20 +1091,96 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </pre></div>
 </div>
 <p>启动 Coordinator：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-f<span class="w"> </span>./coordinator_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--coordinator_config_path<span class="w"> </span>./coordinator_config.json
 <span class="c1"># [INFO] [  OK  ] Start coordinator service @ 127.0.0.1:31511 success, PID: 38100</span>
 </pre></div>
 </div>
 <p>应在所有 Worker 停止后，使用同一配置文件停止 Coordinator：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>-f<span class="w"> </span>./coordinator_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./coordinator_config.json
 </pre></div>
 </div>
 </li>
 </ul>
-<p>更多 Coordinator 配置说明参见<a class="reference internal" href="#id22">Coordinator配置项</a>。</p>
+<p>更多 Coordinator 配置说明参见<a class="reference internal" href="#id23">Coordinator配置项</a>。</p>
 </section>
 <section id="id11">
-<h4>单机部署<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h4>
+<h4>Coordinator 多节点部署<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h4>
+<p><code class="docutils literal notranslate"><span class="pre">dscli</span></code> 支持通过静态 peers 启动多个 Coordinator 并启用 Raft 选主。每个节点都需要独立启动一个 Coordinator 进程，要求：</p>
+<ul class="simple">
+<li><p>所有 Coordinator 节点的 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 配置完全相同，格式为逗号分隔的 <code class="docutils literal notranslate"><span class="pre">host:port</span></code> 列表。</p></li>
+<li><p>每个节点的 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 必须是本机对其他 Coordinator 和 Worker 可访问的地址，并且必须包含在 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 中。</p></li>
+<li><p>每个节点的 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_data_dir</span></code> 必须是该节点独占的本地目录，不能在多个 Coordinator 进程之间共享。</p></li>
+<li><p>启用选主时必须设置 <code class="docutils literal notranslate"><span class="pre">use_brpc=true</span></code>。<code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 为空时按单节点无选主模式启动。</p></li>
+<li><p>Worker 侧 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 仍配置为可访问的 Coordinator 地址；如果需要客户端/Worker 自动发现多个 Coordinator，应使用支持多地址的 Coordinator Discovery 接入方式。</p></li>
+</ul>
+<p>三节点示例的静态 peers 列表如下：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511
+</pre></div>
+</div>
+<p>节点 1 的 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code> 关键配置示例：</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;coordinator_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;192.0.2.10:31511&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;coordinator_raft_initial_peers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;coordinator_raft_data_dir&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./datasystem/coordinator_raft_node1&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;use_brpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>节点 2 和节点 3 使用相同的 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code>，但分别修改本机地址和 Raft 数据目录：</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;coordinator_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;192.0.2.11:31511&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;coordinator_raft_initial_peers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;coordinator_raft_data_dir&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./datasystem/coordinator_raft_node2&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;use_brpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;coordinator_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;192.0.2.12:31511&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;coordinator_raft_initial_peers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;coordinator_raft_data_dir&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./datasystem/coordinator_raft_node3&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;use_brpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>首次启动三节点 Coordinator 时，应在三个节点上并发或近同时执行启动命令，避免只启动单个节点后长时间等待：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--coordinator_config_path<span class="w"> </span>./coordinator_config.json
+</pre></div>
+</div>
+<p>停止时应先停止所有 Worker，再在每个 Coordinator 节点使用对应配置文件停止本机进程：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./coordinator_config.json
+</pre></div>
+</div>
+<blockquote>
+<div><p>注意：首次启动时，各节点应使用同一组静态 peers，并发或近同时完成启动。已有 Raft 数据目录的节点会优先从本地 Raft 状态恢复，不应通过删除 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_data_dir</span></code> 强行重建成员关系。</p>
+</div></blockquote>
+</section>
+<section id="id12">
+<h4>单机部署<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h4>
 <p>Coordinator 启动后，可以单独启动 Worker，也可以使用一条命令依次启动 Coordinator 和 Worker。</p>
 <ul>
 <li><p>快速部署 Worker：</p>
@@ -1134,10 +1203,6 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <li><p>通过配置项部署 Worker：</p>
 <p>如果尚未生成配置模板，先执行 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">generate_config</span> <span class="pre">-o</span> <span class="pre">./</span></code>。修改 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code>，配置 Coordinator 地址，并确保 <code class="docutils literal notranslate"><span class="pre">etcd_address</span></code> 和 <code class="docutils literal notranslate"><span class="pre">metastore_address</span></code> 为空：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;service_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;worker&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Service type. Valid values: coordinator or worker. Empty or missing means worker. This field is used by dscli and is not passed to the service process.&quot;</span>
-<span class="w">  </span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;worker_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Address of worker in &#39;host:port&#39; format (e.g., \&quot;127.0.0.1:31501\&quot;). The value cannot be empty.&quot;</span>
@@ -1154,16 +1219,16 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </pre></div>
 </div>
 <p>启动 Worker：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-f<span class="w"> </span>./worker_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_config_path<span class="w"> </span>./worker_config.json
 <span class="c1"># [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38101</span>
 </pre></div>
 </div>
 </li>
 </ul>
-<p>更多 datasystem_worker 参数说明参见<a class="reference internal" href="#id21">命令行参数配置项</a>。</p>
+<p>更多 datasystem_worker 参数说明参见<a class="reference internal" href="#id22">命令行参数配置项</a>。</p>
 </section>
-<section id="id12">
-<h4>单机卸载<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h4>
+<section id="id13">
+<h4>单机卸载<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h4>
 <ul>
 <li><p>通过地址停止 Worker 和 Coordinator。两个地址同时指定时，<code class="docutils literal notranslate"><span class="pre">dscli</span></code> 会先停止 Worker，再停止 Coordinator：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--coordinator_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
@@ -1171,16 +1236,16 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </div>
 </li>
 <li><p>使用配置文件时，先停止 Worker，再停止 Coordinator：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>-f<span class="w"> </span>./worker_config.json
-dscli<span class="w"> </span>stop<span class="w"> </span>-f<span class="w"> </span>./coordinator_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./worker_config.json
+dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./coordinator_config.json
 </pre></div>
 </div>
 </li>
 </ul>
 <p>当 Worker 和 Coordinator 均停止后，说明单机集群卸载成功。</p>
 </section>
-<section id="id13">
-<h4>多机部署<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h4>
+<section id="id14">
+<h4>多机部署<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h4>
 <p>多机部署只批量启动 Worker。请先按照<a class="reference internal" href="#coordinator">Coordinator部署</a>启动一个所有 Worker 均可访问的 Coordinator。</p>
 <ul>
 <li><p>通过执行 <a class="reference internal" href="#dscli-up">dscli up</a> 命令部署：</p>
@@ -1253,8 +1318,8 @@ dscli<span class="w"> </span>start<span class="w"> </span>--worker_args<span cla
 </li>
 </ul>
 </section>
-<section id="id14">
-<h4>多机卸载<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h4>
+<section id="id15">
+<h4>多机卸载<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h4>
 <p>卸载时先停止所有 Worker，最后停止 Coordinator。</p>
 <ul>
 <li><p>通过执行 <a class="reference internal" href="#dscli-down">dscli down</a> 命令停止 Worker，然后停止 Coordinator：</p>
@@ -1273,14 +1338,14 @@ dscli<span class="w"> </span>stop<span class="w"> </span>--coordinator_address<s
 </ul>
 <p>当所有 Worker 和 Coordinator 均停止后，说明集群卸载成功。</p>
 </section>
-<section id="id15">
-<h4>部署问题汇总<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h4>
+<section id="id16">
+<h4>部署问题汇总<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h4>
 <ol class="arabic">
 <li><p>默认路径过长导致 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 执行失败</p>
 <p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 默认使用当前目录作为 home 目录。如果当前目录路径过长，可能导致 datasystem_worker 启动失败。</p>
 <p>使用 <code class="docutils literal notranslate"><span class="pre">--datasystem_home_dir</span></code>（短参数：<code class="docutils literal notranslate"><span class="pre">-d</span></code>）明确指定较短的 datasystem home 目录：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-f<span class="w"> </span>~/worker_config.json<span class="w"> </span>-d<span class="w"> </span>/home/usr1/dscli
-dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </span>/home/usr1/dscli<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--coordinator_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_config_path<span class="w"> </span>~/worker_config.json<span class="w"> </span>--datasystem_home_dir<span class="w"> </span>/home/usr1/dscli
+dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<span class="w"> </span>/home/usr1/dscli<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--coordinator_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
 </pre></div>
 </div>
 </li>
@@ -1331,16 +1396,16 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </div>
 <p>运行前需要先拉起 openYuanrong datasystem 集群。</p>
 </section>
-<section id="id16">
-<h3>日志收集<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<section id="id17">
+<h3>日志收集<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
 <p>通过 <a class="reference internal" href="#dscli-collect-log">dscli collect_log</a> 命令可快速收集集群日志：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>collect_log<span class="w"> </span>--cluster_config_path<span class="w"> </span>./cluster_config.json
 </pre></div>
 </div>
 <p>更多关于 dscli collect_log 命令的使用请参考：<a class="reference internal" href="#dscli-collect-log">dscli collect_log</a>。</p>
 </section>
-<section id="id17">
-<h3>多机命令运行<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
+<section id="id18">
+<h3>多机命令运行<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
 <p>通过 <a class="reference internal" href="#dscli-runscript">dscli runscript</a> 命令可快速在多个节点上执行脚本命令。以在多个机器上安装 dscli 命令行工具为例：</p>
 <ol class="arabic">
 <li><p>编写数据系统安装脚本：</p>
@@ -1372,8 +1437,8 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <p>更多关于 dscli runscript 命令的使用请参考：<a class="reference internal" href="#dscli-runscript">dscli runscript</a>。</p>
 </section>
 </section>
-<section id="id18">
-<h2>命令行参数说明<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h2>
+<section id="id19">
+<h2>命令行参数说明<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h2>
 <p>本节包含用于管理 openYuanrong datasystem 集群的命令。</p>
 <section id="dscli-start">
 <h3>dscli start<a class="headerlink" href="#dscli-start" title="Link to this heading">¶</a></h3>
@@ -1390,74 +1455,98 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <td><p>-t &lt;SECONDS&gt;</p></td>
 <td><p>等待服务就绪的最大时间（默认：90秒）</p></td>
 </tr>
-<tr class="row-odd"><td><p>–config_path &lt;FILE&gt;</p></td>
-<td><p>-f &lt;FILE&gt;</p></td>
-<td><p>使用配置文件（JSON格式）启动worker或coordinator，配置文件可通过generate_config命令生成。<code class="docutils literal notranslate"><span class="pre">--worker_config_path</span></code> 保留为兼容别名</p></td>
+<tr class="row-odd"><td><p>–worker_config_path &lt;FILE&gt; / –config_path &lt;FILE&gt;</p></td>
+<td><p>-W &lt;FILE&gt; / -f &lt;FILE&gt;</p></td>
+<td><p>使用 Worker 配置文件（JSON格式）启动 Worker，配置文件可通过 generate_config 命令生成</p></td>
 </tr>
-<tr class="row-even"><td><p>–worker_args &lt;…&gt;</p></td>
+<tr class="row-even"><td><p>–coordinator_config_path &lt;FILE&gt;</p></td>
+<td><p>-C &lt;FILE&gt;</p></td>
+<td><p>使用 Coordinator 配置文件（JSON格式）启动 Coordinator，配置文件可通过 generate_config 命令生成</p></td>
+</tr>
+<tr class="row-odd"><td><p>–worker_args &lt;…&gt;</p></td>
 <td><p>-w &lt;…&gt;</p></td>
 <td><p>使用参数启动数据系统worker, 以 “–<Args>  <Value>”为格式。比如–worker_address “127.0.0.1:31501” –coordinator_address “127.0.0.1:31511”<br><strong>注意</strong>：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数</p></td>
 </tr>
-<tr class="row-odd"><td><p>–coordinator_args &lt;…&gt;</p></td>
-<td><p>无</p></td>
+<tr class="row-even"><td><p>–coordinator_args &lt;…&gt;</p></td>
+<td><p>-c &lt;…&gt;</p></td>
 <td><p>使用参数启动coordinator，比如–coordinator_address “127.0.0.1:31511”。此选项必须是命令行的最后一个参数选项</p></td>
 </tr>
-<tr class="row-even"><td><p>–coordinator_worker_args &lt;…&gt;</p></td>
-<td><p>无</p></td>
+<tr class="row-odd"><td><p>–coordinator_worker_args &lt;…&gt;</p></td>
+<td><p>-a &lt;…&gt;</p></td>
 <td><p>先启动coordinator再启动worker，比如–worker_address “127.0.0.1:31501” –coordinator_address “127.0.0.1:31511”。此选项必须是命令行的最后一个参数选项。参数会按 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code> 和 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 分别过滤后传给对应进程</p></td>
 </tr>
-<tr class="row-odd"><td><p>–datasystem_home_dir</p></td>
+<tr class="row-even"><td><p>–datasystem_home_dir</p></td>
 <td><p>-d &lt;DIR&gt;</p></td>
 <td><p>指定基础路径，将配置文件中的相对路径转换为绝对路径。例如当配置中包含 ‘./yr_datasystem/log_dir’，其中的 ‘.’ 将被替换为 <code class="docutils literal notranslate"><span class="pre">datasystem_home_dir</span></code> 的值</p></td>
 </tr>
-<tr class="row-even"><td><p>–cpunodebind</p></td>
+<tr class="row-odd"><td><p>–cpunodebind</p></td>
 <td><p>-N</p></td>
 <td><p>numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点</p></td>
 </tr>
-<tr class="row-odd"><td><p>–physcpubind</p></td>
-<td><p>-C</p></td>
+<tr class="row-even"><td><p>–physcpubind</p></td>
+<td><p>无</p></td>
 <td><p>按物理 CPU 编号将进程绑定到指定核心</p></td>
 </tr>
-<tr class="row-even"><td><p>–interleave</p></td>
+<tr class="row-odd"><td><p>–interleave</p></td>
 <td><p>-i</p></td>
 <td><p>设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面</p></td>
 </tr>
-<tr class="row-odd"><td><p>–preferred</p></td>
+<tr class="row-even"><td><p>–preferred</p></td>
 <td><p>-p</p></td>
 <td><p>设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点</p></td>
 </tr>
-<tr class="row-even"><td><p>–membind</p></td>
+<tr class="row-odd"><td><p>–membind</p></td>
 <td><p>-m</p></td>
 <td><p>强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败</p></td>
 </tr>
-<tr class="row-odd"><td><p>–localalloc</p></td>
+<tr class="row-even"><td><p>–localalloc</p></td>
 <td><p>-l</p></td>
 <td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点</p></td>
 </tr>
-<tr class="row-even"><td><p>–enable_ums</p></td>
+<tr class="row-odd"><td><p>–enable_ums</p></td>
 <td><p>无</p></td>
 <td><p>启用ums后，datasystem worker之间的rpc消息将通过 ub 传输</p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<p>常用启动方式的短参数和长参数等价示例如下：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 使用命令行参数启动 Worker</span>
+dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+dscli<span class="w"> </span>start<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+
+<span class="c1"># 使用配置文件启动 Worker</span>
+dscli<span class="w"> </span>start<span class="w"> </span>-W<span class="w"> </span>worker_config.json
+dscli<span class="w"> </span>start<span class="w"> </span>--worker_config_path<span class="w"> </span>worker_config.json
+dscli<span class="w"> </span>start<span class="w"> </span>-f<span class="w"> </span>worker_config.json
+dscli<span class="w"> </span>start<span class="w"> </span>--config_path<span class="w"> </span>worker_config.json
+
+<span class="c1"># 使用命令行参数启动 Coordinator</span>
+dscli<span class="w"> </span>start<span class="w"> </span>-c<span class="w"> </span>--coordinator_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
+dscli<span class="w"> </span>start<span class="w"> </span>--coordinator_args<span class="w"> </span>--coordinator_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
+
+<span class="c1"># 使用配置文件启动 Coordinator</span>
+dscli<span class="w"> </span>start<span class="w"> </span>-C<span class="w"> </span>coordinator_config.json
+dscli<span class="w"> </span>start<span class="w"> </span>--coordinator_config_path<span class="w"> </span>coordinator_config.json
+</pre></div>
+</div>
 <blockquote>
 <div><p><strong>配置文件启动注意事项</strong>：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-f</span></code> 根据配置文件中的 <code class="docutils literal notranslate"><span class="pre">service_type</span></code> 选择启动 Coordinator 或 Worker。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">service_type</span></code> 为 <code class="docutils literal notranslate"><span class="pre">coordinator</span></code> 时启动 Coordinator，为 <code class="docutils literal notranslate"><span class="pre">worker</span></code> 时启动 Worker；字段缺失或值为空时按 Worker 处理。</p></li>
-<li><p>其他取值会导致命令失败。<code class="docutils literal notranslate"><span class="pre">service_type</span></code> 仅由 <code class="docutils literal notranslate"><span class="pre">dscli</span></code> 使用，不会传递给 Coordinator 或 Worker 进程。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--worker_config_path</span></code> / <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--config_path</span></code> 使用 Worker 配置文件启动 Worker。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--coordinator_config_path</span></code> 使用 Coordinator 配置文件启动 Coordinator。</p></li>
+<li><p>配置文件中不再需要 <code class="docutils literal notranslate"><span class="pre">service_type</span></code> 字段；服务类型由 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 的启动选项决定。</p></li>
 </ul>
 </div></blockquote>
 <blockquote>
 <div><p><strong>绑核配置项注意事项</strong>：</p>
 <ul class="simple">
 <li><p>使用绑核功能前请确保机器上已安装numactl命令。</p></li>
-<li><p>绑核配置项（cpunodebind，physcpubind，interleave，preferred，membind，localalloc）需要位于 <code class="docutils literal notranslate"><span class="pre">--worker_args</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--coordinator_worker_args</span></code> 参数之前。</p></li>
+<li><p>绑核配置项（cpunodebind，physcpubind，interleave，preferred，membind，localalloc）需要位于 <code class="docutils literal notranslate"><span class="pre">--worker_args</span></code>、<code class="docutils literal notranslate"><span class="pre">--coordinator_args</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--coordinator_worker_args</span></code> 参数之前。</p></li>
 </ul>
 <p>例子：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 绑定到 NUMA 节点 0 的 CPU，并优先在 NUMA 节点 1 分配内存</span>
-dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span>--preferred<span class="w"> </span><span class="m">1</span><span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span>--preferred<span class="w"> </span><span class="m">1</span><span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
 </pre></div>
 </div>
 <p><strong>启用ums注意事项</strong>：</p>
@@ -1472,7 +1561,7 @@ modprobe<span class="w"> </span>ums
 </pre></div>
 </div>
 <p>例子：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--enable_ums<span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--enable_ums<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
 </pre></div>
 </div>
 </div></blockquote>
@@ -1506,9 +1595,8 @@ modprobe<span class="w"> </span>ums
 <blockquote>
 <div><p><strong>配置文件停止注意事项</strong>：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span> <span class="pre">-f</span></code> 根据配置文件中的 <code class="docutils literal notranslate"><span class="pre">service_type</span></code> 选择停止 Coordinator 或 Worker。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">service_type</span></code> 为 <code class="docutils literal notranslate"><span class="pre">coordinator</span></code> 时停止 Coordinator，为 <code class="docutils literal notranslate"><span class="pre">worker</span></code> 时停止 Worker；字段缺失或值为空时按 Worker 处理。</p></li>
-<li><p>其他取值会导致命令失败。<code class="docutils literal notranslate"><span class="pre">service_type</span></code> 仅由 <code class="docutils literal notranslate"><span class="pre">dscli</span></code> 使用，不会传递给 Coordinator 或 Worker 进程。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span> <span class="pre">--config_path</span></code> 根据配置文件中的服务地址字段选择停止服务：配置中包含 <code class="docutils literal notranslate"><span class="pre">worker_address</span></code> 时停止 Worker；不包含 <code class="docutils literal notranslate"><span class="pre">worker_address</span></code> 但包含 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 时停止 Coordinator。</p></li>
+<li><p>为避免歧义，Worker 配置文件应包含 <code class="docutils literal notranslate"><span class="pre">worker_address</span></code>，Coordinator 配置文件应包含 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>。</p></li>
 </ul>
 </div></blockquote>
 <p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span></code> 会先向 worker 发送 <code class="docutils literal notranslate"><span class="pre">SIGTERM</span></code>，等待超时后再发送 <code class="docutils literal notranslate"><span class="pre">SIGKILL</span></code>。等待超时时间按以下公式动态计算（单位：秒）：</p>
@@ -1793,10 +1881,10 @@ Coordinator 使用与服务部署相同的基础地址，查询客户端按 <cod
 <p>查询不会猜测或输出部分节点、部分路由。只有 <code class="docutils literal notranslate"><span class="pre">status=OK</span></code> 且退出码为 0 的结果可用于自动化。</p>
 </section>
 </section>
-<section id="id19">
-<h2>配置项说明<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h2>
 <section id="id20">
-<h3>集群配置项<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
+<h2>配置项说明<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h2>
+<section id="id21">
+<h3>集群配置项<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
 <p>集群相关配置项位于 <code class="docutils literal notranslate"><span class="pre">cluster_config.json</span></code> 文件中，如下表所示：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
@@ -1843,15 +1931,13 @@ Coordinator 使用与服务部署相同的基础地址，查询客户端按 <cod
 </table>
 </div>
 </section>
-<section id="id21">
-<h3>命令行参数配置项<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
-<p>服务启动配置项分别位于 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 和 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code>。两个配置文件都包含仅供 <code class="docutils literal notranslate"><span class="pre">dscli</span></code>
-识别的 <code class="docutils literal notranslate"><span class="pre">service_type</span></code>：取值为 <code class="docutils literal notranslate"><span class="pre">coordinator</span></code> 时处理 Coordinator，取值为 <code class="docutils literal notranslate"><span class="pre">worker</span></code> 时处理 Worker；字段缺失或
-值为空时按 Worker 处理。<code class="docutils literal notranslate"><span class="pre">service_type</span></code> 不会作为命令行参数传递给服务进程。</p>
 <section id="id22">
-<h4>Coordinator配置项<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h4>
-<p><code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code> 包含 Coordinator 启动参数。可以使用 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-f</span> <span class="pre">./coordinator_config.json</span></code> 启动，
-使用 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span> <span class="pre">-f</span> <span class="pre">./coordinator_config.json</span></code> 停止。</p>
+<h3>命令行参数配置项<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h3>
+<p>服务启动配置项分别位于 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 和 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code>。配置文件只包含对应服务进程的启动参数；服务类型由 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 的启动选项决定，例如使用 <code class="docutils literal notranslate"><span class="pre">--worker_config_path</span></code> 启动 Worker，使用 <code class="docutils literal notranslate"><span class="pre">--coordinator_config_path</span></code> 启动 Coordinator。</p>
+<section id="id23">
+<h4>Coordinator配置项<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h4>
+<p><code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code> 包含 Coordinator 启动参数。可以使用 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--coordinator_config_path</span> <span class="pre">./coordinator_config.json</span></code> 启动，
+使用 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span> <span class="pre">--config_path</span> <span class="pre">./coordinator_config.json</span></code> 停止。</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1863,35 +1949,35 @@ Coordinator 使用与服务部署相同的基础地址，查询客户端按 <cod
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>service_type</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;coordinator&quot;</span></code></p></td>
-<td><p>否</p></td>
-<td><p>供 <code class="docutils literal notranslate"><span class="pre">dscli</span></code> 识别服务类型，不传递给 Coordinator 进程</p></td>
-</tr>
-<tr class="row-odd"><td><p>coordinator_address</p></td>
+<tr class="row-even"><td><p>coordinator_address</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;127.0.0.1:31511&quot;</span></code></p></td>
 <td><p>否</p></td>
 <td><p>Coordinator 服务地址，格式为 <code class="docutils literal notranslate"><span class="pre">host:port</span></code>，不能为空</p></td>
 </tr>
-<tr class="row-even"><td><p>coordinator_rpc_stub_cache_size</p></td>
+<tr class="row-odd"><td><p>coordinator_rpc_stub_cache_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">4096</span></code></p></td>
 <td><p>否</p></td>
 <td><p>Coordinator RPC Stub 缓存数量上限</p></td>
 </tr>
-<tr class="row-odd"><td><p>coordinator_topology_max_active_clusters</p></td>
+<tr class="row-even"><td><p>coordinator_topology_max_active_clusters</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>否</p></td>
 <td><p>Coordinator 同时承载的集群拓扑上限，取值范围为 <code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">32]</span></code>；超限时拒绝新集群准入，修改后需重启 Coordinator</p></td>
 </tr>
+<tr class="row-odd"><td><p>coordinator_raft_initial_peers</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
+<td><p>Coordinator Raft 静态初始成员列表，格式为逗号分隔的 <code class="docutils literal notranslate"><span class="pre">host:port</span></code>。为空时按单节点无选主模式启动；配置多个成员时启用静态 peers Raft 选主，各节点必须配置相同列表</p></td>
+</tr>
 <tr class="row-even"><td><p>coordinator_raft_data_dir</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;./datasystem/coordinator_raft&quot;</span></code></p></td>
 <td><p>否</p></td>
-<td><p>Coordinator本地braft状态目录；参数化入口启用选举时不能为空，且每个Coordinator节点必须独占一个目录</p></td>
+<td><p>Coordinator本地braft状态目录；启用选主时不能为空，且每个Coordinator节点必须独占一个目录</p></td>
 </tr>
 <tr class="row-odd"><td><p>coordinator_raft_heartbeat_interval_ms</p></td>
 <td><p>int</p></td>
@@ -2040,35 +2126,25 @@ Coordinator 使用与服务部署相同的基础地址，查询客户端按 <cod
 </tbody>
 </table>
 </div>
-<p>Coordinator 日志和采样配置的详细语义参见<a class="reference internal" href="#id25">日志与可观测相关配置</a>。</p>
-<p>当前<code class="docutils literal notranslate"><span class="pre">dscli</span></code>通过单例<code class="docutils literal notranslate"><span class="pre">CoordinatorServer</span></code>façade调用无参<code class="docutils literal notranslate"><span class="pre">InitAndRun()</span></code>兼容入口，因此不启用Coordinator选举；
-实际生命周期实现由非单例<code class="docutils literal notranslate"><span class="pre">CoordinatorRuntime</span></code>承担。上表中的7个<code class="docutils literal notranslate"><span class="pre">coordinator_raft_*</span></code>/
-<code class="docutils literal notranslate"><span class="pre">coordinator_election_*</span></code>参数在使用<code class="docutils literal notranslate"><span class="pre">CoordinatorOptions</span></code>的参数化嵌入式入口启用选举时生效。仅在
-<code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code>中填写这些参数或设置<code class="docutils literal notranslate"><span class="pre">use_brpc=true</span></code>，不会让当前<code class="docutils literal notranslate"><span class="pre">dscli</span></code>入口启用选举。</p>
-<p>生产部署每个进程只运行一个Coordinator Runtime。参数化<code class="docutils literal notranslate"><span class="pre">CoordinatorServer::InitAndRun(options)</span></code>要求
-<code class="docutils literal notranslate"><span class="pre">configFilePath</span></code>非空；文件访问、JSON解析和flag校验由<code class="docutils literal notranslate"><span class="pre">FlagManager</span></code>及Runtime启动流程负责。Runtime在路径非空时
-解析配置文件，随后调用一次<code class="docutils literal notranslate"><span class="pre">GetRaftFlags()</span></code>取得本机地址、独占Raft数据目录和选举时序快照。文件解析失败统一
-返回不包含路径和parser原文的错误。达到<code class="docutils literal notranslate"><span class="pre">RUNNING</span></code>前的失败完成回调和Service清理后可重试；达到<code class="docutils literal notranslate"><span class="pre">RUNNING</span></code>后该
-Runtime保持one-shot。</p>
-<p>直接使用空<code class="docutils literal notranslate"><span class="pre">configFilePath</span></code>启动<code class="docutils literal notranslate"><span class="pre">CoordinatorRuntime</span></code>仅用于内部同进程测试：Runtime跳过文件解析并使用调用方
-预先设置的进程flags。测试fixture必须在启动任何Runtime前设置公共flags，在任一Runtime活动期间保持这些flags
-不变，并在所有Runtime停止和线程join后恢复；各实例的endpoint、Raft数据目录和选举时序通过各自的
-<code class="docutils literal notranslate"><span class="pre">GetRaftFlags()</span></code>快照隔离。</p>
-<p>参数化入口的当前顺序为：解析非空配置路径并取得Raft快照；Service <code class="docutils literal notranslate"><span class="pre">Init</span></code>；Service <code class="docutils literal notranslate"><span class="pre">Start</span></code>注册业务和braft
-services、开始监听并保持<code class="docutils literal notranslate"><span class="pre">STARTING</span></code>；Runtime <code class="docutils literal notranslate"><span class="pre">onStart</span></code>注册endpoint；Service <code class="docutils literal notranslate"><span class="pre">StartElectionManager</span></code>启动后台
-Manager并发布<code class="docutils literal notranslate"><span class="pre">RUNNING</span></code>；进入event loop。<code class="docutils literal notranslate"><span class="pre">STARTING</span></code>窗口内业务RPC返回<code class="docutils literal notranslate"><span class="pre">K_NOT_READY</span></code>。Manager随后异步执行
-Discovery/bootstrap或recover，启动Node再启动Membership。同步启动失败时，Runtime先调用<code class="docutils literal notranslate"><span class="pre">onStop</span></code>，再由
-Service shutdown依次停止Membership、drain Node、关闭shared server并释放其余components。进程signal handler
-只设置<code class="docutils literal notranslate"><span class="pre">g_exitFlag</span></code>；显式Runtime <code class="docutils literal notranslate"><span class="pre">Stop</span></code>只唤醒本实例。</p>
+<p>Coordinator 日志和采样配置的详细语义参见<a class="reference internal" href="#id26">日志与可观测相关配置</a>。</p>
+<p><code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 为空时，Coordinator 按单节点无选主模式启动；配置多个静态 peers 时，
+Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class="docutils literal notranslate"><span class="pre">coordinator_raft_data_dir</span></code>、
+<code class="docutils literal notranslate"><span class="pre">coordinator_raft_heartbeat_interval_ms</span></code>、<code class="docutils literal notranslate"><span class="pre">coordinator_raft_election_timeout_ms</span></code>、
+<code class="docutils literal notranslate"><span class="pre">coordinator_member_failure_grace_ms</span></code> 和 <code class="docutils literal notranslate"><span class="pre">coordinator_discovery_retry_interval_ms</span></code> 用于配置本节点 Raft 状态目录
+和选举时序。仅设置 <code class="docutils literal notranslate"><span class="pre">use_brpc=true</span></code> 不会启用选主，仍需配置 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code>。</p>
+<p>生产部署中，一个 Coordinator 配置文件对应一个 Coordinator 进程。多节点部署时，每个节点应使用自己的
+<code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 和独占的 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_data_dir</span></code>，并配置相同的 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code>。配置
+文件解析或参数校验失败时，Coordinator 启动失败；修改 Raft 成员、地址或数据目录类参数后，应停止相关节点并
+按部署规划重新启动。</p>
 <p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 包含 datasystem_worker 的命令行参数相关配置项。启动 Worker 时，必须在
 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>、<code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>、<code class="docutils literal notranslate"><span class="pre">metastore_address</span></code> 中配置且仅配置一个集群管理后端。</p>
 <blockquote>
 <div><p><strong>注意事项：</strong></p>
-<p>单机快速部署 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-w</span></code> 该命令支持直接传入 datasystem_worker 的参数进行配置。表格中的配置项需要映射为命令行长参数。以配置项 <code class="docutils literal notranslate"><span class="pre">max_client_num</span></code> 为例，如需在启动时配置该项，应当写为 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-w</span> <span class="pre">--max_client_num</span> <span class="pre">200</span></code>。</p>
+<p>单机快速部署 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--worker_args</span></code> 该命令支持直接传入 datasystem_worker 的参数进行配置。表格中的配置项需要映射为命令行长参数。以配置项 <code class="docutils literal notranslate"><span class="pre">max_client_num</span></code> 为例，如需在启动时配置该项，应当写为 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--worker_args</span> <span class="pre">--max_client_num</span> <span class="pre">200</span></code>。</p>
 </div></blockquote>
 </section>
-<section id="id23">
-<h4>资源相关配置<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h4>
+<section id="id24">
+<h4>资源相关配置<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2324,8 +2400,8 @@ Service shutdown依次停止Membership、drain Node、关闭shared server并释�
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">kv_events_config</span></code> 为空时 KV event publisher 保持关闭。配置为非空 JSON 对象时，字段类型、必填字段和取值校验全部通过后自动启用；校验失败时保持关闭并记录错误日志。<code class="docutils literal notranslate"><span class="pre">enabled</span></code> 是内部派生状态，不是 JSON 配置字段。</p>
 </section>
-<section id="id24">
-<h4>ETCD相关配置<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h4>
+<section id="id25">
+<h4>ETCD相关配置<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2555,8 +2631,8 @@ Service shutdown依次停止Membership、drain Node、关闭shared server并释�
 </table>
 </div>
 </section>
-<section id="id25">
-<h4>日志与可观测相关配置<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h4>
+<section id="id26">
+<h4>日志与可观测相关配置<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2684,8 +2760,8 @@ Service shutdown依次停止Membership、drain Node、关闭shared server并释�
 <div><p><strong>升级提示</strong>：日志压缩默认关闭后，新部署或升级集群的历史日志不会再自动压缩，日志磁盘占用可能增加且滚动更快。如需保持历史压缩行为，请显式配置 <code class="docutils literal notranslate"><span class="pre">log_compress</span></code> 为 <code class="docutils literal notranslate"><span class="pre">true</span></code>；同时建议根据不压缩场景重新评估 <code class="docutils literal notranslate"><span class="pre">max_log_file_num</span></code> 和 <code class="docutils literal notranslate"><span class="pre">max_log_size</span></code> 的容量设置。</p>
 </div></blockquote>
 </section>
-<section id="id26">
-<h4>二级缓存相关配置<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h4>
+<section id="id27">
+<h4>二级缓存相关配置<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2797,8 +2873,8 @@ Service shutdown依次停止Membership、drain Node、关闭shared server并释�
 </table>
 </div>
 </section>
-<section id="id27">
-<h4>元数据相关配置<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h4>
+<section id="id28">
+<h4>元数据相关配置<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2856,8 +2932,8 @@ Service shutdown依次停止Membership、drain Node、关闭shared server并释�
 </table>
 </div>
 </section>
-<section id="id28">
-<h4>可靠性相关配置<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h4>
+<section id="id29">
+<h4>可靠性相关配置<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2927,8 +3003,8 @@ Service shutdown依次停止Membership、drain Node、关闭shared server并释�
 </table>
 </div>
 </section>
-<section id="id29">
-<h4>优雅退出相关配置<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h4>
+<section id="id30">
+<h4>优雅退出相关配置<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2968,8 +3044,8 @@ Service shutdown依次停止Membership、drain Node、关闭shared server并释�
 </table>
 </div>
 </section>
-<section id="id30">
-<h4>性能相关配置<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h4>
+<section id="id31">
+<h4>性能相关配置<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -3245,20 +3321,21 @@ Service shutdown依次停止Membership、drain Node、关闭shared server并释�
 </li>
 <li><a class="reference internal" href="#openyuanrong-datasystemcoordinator">openYuanrong datasystem集群使用Coordinator部署</a><ul>
 <li><a class="reference internal" href="#coordinator">Coordinator部署</a></li>
-<li><a class="reference internal" href="#id11">单机部署</a></li>
-<li><a class="reference internal" href="#id12">单机卸载</a></li>
-<li><a class="reference internal" href="#id13">多机部署</a></li>
-<li><a class="reference internal" href="#id14">多机卸载</a></li>
-<li><a class="reference internal" href="#id15">部署问题汇总</a></li>
+<li><a class="reference internal" href="#id11">Coordinator 多节点部署</a></li>
+<li><a class="reference internal" href="#id12">单机部署</a></li>
+<li><a class="reference internal" href="#id13">单机卸载</a></li>
+<li><a class="reference internal" href="#id14">多机部署</a></li>
+<li><a class="reference internal" href="#id15">多机卸载</a></li>
+<li><a class="reference internal" href="#id16">部署问题汇总</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#helm-chart">生成Helm Chart模板</a></li>
 <li><a class="reference internal" href="#cpp">生成Cpp样例代码</a></li>
-<li><a class="reference internal" href="#id16">日志收集</a></li>
-<li><a class="reference internal" href="#id17">多机命令运行</a></li>
+<li><a class="reference internal" href="#id17">日志收集</a></li>
+<li><a class="reference internal" href="#id18">多机命令运行</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id18">命令行参数说明</a><ul>
+<li><a class="reference internal" href="#id19">命令行参数说明</a><ul>
 <li><a class="reference internal" href="#dscli-start">dscli start</a></li>
 <li><a class="reference internal" href="#dscli-stop">dscli stop</a></li>
 <li><a class="reference internal" href="#dscli-up">dscli up</a></li>
@@ -3271,21 +3348,21 @@ Service shutdown依次停止Membership、drain Node、关闭shared server并释�
 <li><a class="reference internal" href="#dscli-query">dscli query</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id19">配置项说明</a><ul>
-<li><a class="reference internal" href="#id20">集群配置项</a></li>
-<li><a class="reference internal" href="#id21">命令行参数配置项</a><ul>
-<li><a class="reference internal" href="#id22">Coordinator配置项</a></li>
-<li><a class="reference internal" href="#id23">资源相关配置</a></li>
+<li><a class="reference internal" href="#id20">配置项说明</a><ul>
+<li><a class="reference internal" href="#id21">集群配置项</a></li>
+<li><a class="reference internal" href="#id22">命令行参数配置项</a><ul>
+<li><a class="reference internal" href="#id23">Coordinator配置项</a></li>
+<li><a class="reference internal" href="#id24">资源相关配置</a></li>
 <li><a class="reference internal" href="#ipc-rpc">IPC/RPC相关配置</a></li>
-<li><a class="reference internal" href="#id24">ETCD相关配置</a></li>
+<li><a class="reference internal" href="#id25">ETCD相关配置</a></li>
 <li><a class="reference internal" href="#spill">Spill相关配置</a></li>
 <li><a class="reference internal" href="#memory-rebalance">Memory Rebalance相关配置</a></li>
-<li><a class="reference internal" href="#id25">日志与可观测相关配置</a></li>
-<li><a class="reference internal" href="#id26">二级缓存相关配置</a></li>
-<li><a class="reference internal" href="#id27">元数据相关配置</a></li>
-<li><a class="reference internal" href="#id28">可靠性相关配置</a></li>
-<li><a class="reference internal" href="#id29">优雅退出相关配置</a></li>
-<li><a class="reference internal" href="#id30">性能相关配置</a></li>
+<li><a class="reference internal" href="#id26">日志与可观测相关配置</a></li>
+<li><a class="reference internal" href="#id27">二级缓存相关配置</a></li>
+<li><a class="reference internal" href="#id28">元数据相关配置</a></li>
+<li><a class="reference internal" href="#id29">可靠性相关配置</a></li>
+<li><a class="reference internal" href="#id30">优雅退出相关配置</a></li>
+<li><a class="reference internal" href="#id31">性能相关配置</a></li>
 <li><a class="reference internal" href="#ak-sk">AK/SK相关配置</a></li>
 </ul>
 </li>
