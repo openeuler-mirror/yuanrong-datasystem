@@ -16,6 +16,8 @@
  */
 #include <dirent.h>
 #include <gtest/gtest.h>
+#include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -42,6 +44,36 @@ constexpr int64_t NON_SHM_SIZE = 499 * 1024;
 constexpr int64_t SHM_SIZE = 500 * 1024;
 constexpr int64_t BIG_STR_SIZE = 50 * 1024 * 1024;
 constexpr int64_t DEFAULT_TIMEOUT_MS = 1000;
+
+class ScopedUnsetEnv {
+public:
+    explicit ScopedUnsetEnv(const char *name) : name_(name)
+    {
+        const char *value = std::getenv(name_.c_str());
+        if (value != nullptr) {
+            oldValue_ = value;
+            hadOldValue_ = true;
+        }
+        (void)unsetenv(name_.c_str());
+    }
+
+    ~ScopedUnsetEnv()
+    {
+        if (hadOldValue_) {
+            (void)setenv(name_.c_str(), oldValue_.c_str(), 1);
+        } else {
+            (void)unsetenv(name_.c_str());
+        }
+    }
+
+    ScopedUnsetEnv(const ScopedUnsetEnv &) = delete;
+    ScopedUnsetEnv &operator=(const ScopedUnsetEnv &) = delete;
+
+private:
+    std::string name_;
+    std::string oldValue_;
+    bool hadOldValue_ = false;
+};
 }  // namespace
 class ObjectClientTest : public OCClientCommon {
 public:
@@ -1526,6 +1558,47 @@ TEST_F(ObjectClientTest, LEVEL1_HugeMemoryCopyTest)
     AssertBufferEqual(*buffers[0], data);
     DS_ASSERT_OK(client->GDecreaseRef({ objKey }, failedObjectKeys));
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
+}
+
+TEST_F(ObjectClientTest, MemoryCopyUses32MiBDefaultParallelThreshold)
+{
+    constexpr uint64_t threshold = 32ULL * 1024 * 1024;
+    constexpr uint64_t parallelSize = threshold + 1;
+    ScopedUnsetEnv thresholdEnv("CLIENT_MEMCOPY_PARALLEL_THRESHOLD");
+    ScopedUnsetEnv threadNumEnv("CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY");
+
+    std::shared_ptr<ObjectClient> client;
+    InitTestClient(0, client);
+
+    const std::string directKey = NewObjectKey();
+    const std::string directData(threshold, 'a');
+    std::shared_ptr<Buffer> directBuffer;
+    DS_ASSERT_OK(client->Create(directKey, threshold, CreateParam{}, directBuffer));
+    DS_ASSERT_OK(inject::Set("HugeMemoryCopy", "1*return(K_RUNTIME_ERROR)"));
+    Status directRc = directBuffer->MemoryCopy(directData.data(), directData.size());
+    inject::Clear("HugeMemoryCopy");
+    DS_ASSERT_OK(directRc);
+    DS_ASSERT_OK(directBuffer->Publish());
+
+    const std::string parallelKey = NewObjectKey();
+    const std::string parallelData(parallelSize, 'b');
+    std::shared_ptr<Buffer> parallelBuffer;
+    DS_ASSERT_OK(client->Create(parallelKey, parallelSize, CreateParam{}, parallelBuffer));
+    DS_ASSERT_OK(inject::Set("HugeMemoryCopy", "1*return(K_RUNTIME_ERROR)"));
+    Status injectedRc = parallelBuffer->MemoryCopy(parallelData.data(), parallelData.size());
+    inject::Clear("HugeMemoryCopy");
+    DS_ASSERT_NOT_OK(injectedRc);
+    DS_ASSERT_OK(parallelBuffer->MemoryCopy(parallelData.data(), parallelData.size()));
+    DS_ASSERT_OK(parallelBuffer->Publish());
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(client->Get({ directKey, parallelKey }, 0, buffers));
+    ASSERT_TRUE(NotExistsNone(buffers));
+    ASSERT_EQ(buffers.size(), 2UL);
+    ASSERT_EQ(buffers[0]->GetSize(), static_cast<int64_t>(directData.size()));
+    ASSERT_EQ(std::memcmp(buffers[0]->ImmutableData(), directData.data(), directData.size()), 0);
+    ASSERT_EQ(buffers[1]->GetSize(), static_cast<int64_t>(parallelData.size()));
+    ASSERT_EQ(std::memcmp(buffers[1]->ImmutableData(), parallelData.data(), parallelData.size()), 0);
 }
 
 TEST_F(ObjectClientTest, InvalidTimeoutGetTest)

@@ -17,9 +17,13 @@
 /**
  * Description: Test memory util function.
  */
+#include <cstring>
+#include <vector>
+
 #include <securec.h>
 
 #include "ut/common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/random_data.h"
 
@@ -75,6 +79,27 @@ TEST_F(MemoryTest, MemoryCopySuccess)
     std::string result((const char *)dst, src.length());
     ASSERT_EQ(src, result);
     FreeMemory(dst);
+}
+
+TEST_F(MemoryTest, MemoryCopyUses32MiBDefaultParallelThreshold)
+{
+    constexpr uint64_t expectedThreshold = 32ULL * 1024 * 1024;
+    constexpr uint64_t copySize = expectedThreshold + 1;
+    ASSERT_EQ(static_cast<uint64_t>(MEMCOPY_PARALLEL_THRESHOLD), expectedThreshold);
+
+    std::vector<uint8_t> src(copySize, 2);
+    std::vector<uint8_t> dst(copySize, 0);
+
+    DS_ASSERT_OK(inject::Set("HugeMemoryCopy", "1*return(K_RUNTIME_ERROR)"));
+    Status directRc = MemoryCopy(dst.data(), expectedThreshold, src.data(), expectedThreshold, threadPool);
+    inject::Clear("HugeMemoryCopy");
+    DS_ASSERT_OK(directRc);
+    ASSERT_EQ(std::memcmp(dst.data(), src.data(), expectedThreshold), 0);
+
+    DS_ASSERT_OK(inject::Set("HugeMemoryCopy", "1*return(K_RUNTIME_ERROR)"));
+    Status parallelRc = MemoryCopy(dst.data(), copySize, src.data(), copySize, threadPool);
+    inject::Clear("HugeMemoryCopy");
+    DS_ASSERT_NOT_OK(parallelRc);
 }
 
 TEST_F(MemoryTest, MemoryCopyFailed)

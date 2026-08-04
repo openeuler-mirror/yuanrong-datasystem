@@ -35,7 +35,7 @@
 namespace datasystem {
 static constexpr uintptr_t MEMCOPY_BLOCK_SIZE = 64;             // The default block size of memory alignment.
 static constexpr int MEMCOPY_THREAD_NUM = 8;                    // The default number of memcpy threads.
-static constexpr int MEMCOPY_PARALLEL_THRESHOLD = 256 * 1024;   // The default data size by parallel memcopy.
+static constexpr int MEMCOPY_PARALLEL_THRESHOLD = 32 * 1024 * 1024;  // The default data size by parallel memcopy.
 static constexpr int MEMCOPY_CHUNK_SIZE = 32 * 1024 * 1024;     // The default chunk size of memory split.
 static constexpr uint64_t SHM_THRESHOLD = 500 * 1024;           // The default threshold of choosing shm is 500KB.
 static constexpr uint64_t MEMCOPY_SIZE_LIMIT = 0x7fffffffUL;    // 0x7fffffffUL bytes = 2GB.
@@ -69,7 +69,7 @@ Status ParallelMemoryCopy(uint8_t *dst, uint64_t dstMaxSize, const uint8_t *src,
 
 /**
  * @brief This is a common function which choose a better performance copy function based on the input data size.
- * If the data size is greater than MEMCOPY_PARALLEL_THRESHOLD(1 MB), the parallel copy function will be used.
+ * If the data size is greater than MEMCOPY_PARALLEL_THRESHOLD(32 MiB), the parallel copy function will be used.
  * Otherwise, the native memory copy function will be used.
  * @param[out] dst The destination address.
  * @param[in] dstMaxSize The maximum length of destination buffer.
