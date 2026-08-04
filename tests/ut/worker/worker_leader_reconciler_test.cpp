@@ -31,6 +31,7 @@ using namespace std::chrono_literals;
 constexpr char kWorkerAddress[] = "127.0.0.1:31501";
 constexpr char kClusterName[] = "cluster-a";
 constexpr char kCoordinatorId[] = "0123456789abcdef";
+constexpr char kNextCoordinatorId[] = "fedcba9876543210";
 
 TEST(WorkerWorkerOCServiceProtocolTest, KeepsLegacyZmqMethodIndexesStable)
 {
@@ -76,6 +77,11 @@ public:
         if (callback != nullptr) {
             callback(identity_);
         }
+    }
+    void SetCacheWithoutCallback(CoordinatorLeaderIdentity identity)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        identity_ = std::move(identity);
     }
     void SetAndWaitBeforeCallback(CoordinatorLeaderIdentity identity, std::mutex &waitMutex,
                                   std::condition_variable &waitCv, bool &ready, bool &resume)
@@ -207,6 +213,11 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         return ensureRequests_.at(index);
     }
+    coordinator::ReportTopologyRecoveryCandidateReqPb ReportAt(size_t index) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return reportRequests_.at(index);
+    }
     size_t ReportCount() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -249,9 +260,10 @@ TopologyRecoveryReporterOptions ReporterOptions()
     return options;
 }
 
-CoordinatorLeaderIdentity Identity(uint64_t term, uint64_t epoch)
+CoordinatorLeaderIdentity Identity(uint64_t term, uint64_t epoch,
+                                   const std::string &coordinatorId = kCoordinatorId)
 {
-    return { HostPort("127.0.0.1", 30001), kCoordinatorId, term, epoch, true };
+    return { HostPort("127.0.0.1", 30001), coordinatorId, term, epoch, true };
 }
 
 TEST(WorkerLeaderReconcilerTest, EnsureAcceptancePrecedesReporterAndUsesObservedLeaderIdentity)
@@ -325,7 +337,7 @@ TEST(WorkerLeaderReconcilerTest, NewRouteEpochDiscardsOldEnsureCompletion)
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
-TEST(WorkerLeaderReconcilerTest, RouteChangeDuringRecreateGateDiscardsOldEnsureCompletion)
+TEST(WorkerLeaderReconcilerTest, RouteChangeDuringRecreateGateRetriesWithLatestIdentity)
 {
     constexpr uint64_t OLD_LEADER_TERM = 9;
     constexpr uint64_t OLD_ROUTE_EPOCH = 1;
@@ -374,8 +386,9 @@ TEST(WorkerLeaderReconcilerTest, RouteChangeDuringRecreateGateDiscardsOldEnsureC
     gateCv.notify_all();
 
     reconcileThread.join();
-    EXPECT_EQ(reconcileStatus.GetCode(), K_TRY_AGAIN);
-    EXPECT_EQ(proxy.EnsureCount(), 0UL);
+    EXPECT_TRUE(reconcileStatus.IsOk());
+    ASSERT_EQ(proxy.EnsureCount(), 1UL);
+    EXPECT_EQ(proxy.EnsureAt(0).leader_term(), NEW_LEADER_TERM);
     EXPECT_EQ(proxy.ReportCount(), 0UL);
     {
         std::lock_guard<std::mutex> lock(gateMutex);
@@ -478,7 +491,116 @@ TEST(WorkerLeaderReconcilerTest, InitialMembershipPublicationDoesNotTriggerEnsur
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
-TEST(WorkerLeaderReconcilerTest, LegacyLeaderInitialMembershipWakesReporterWithoutEnsure)
+TEST(WorkerLeaderReconcilerTest, TermfulLeaderInitialMembershipWakesReporterWithoutEnsure)
+{
+    FakeProxy proxy;
+    DsCoordinationBackend backend(&proxy, kWorkerAddress);
+    TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
+                                      [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
+                                      ReporterOptions());
+    reporter.NotifyRuntimeReady();
+    proxy.routes_.Set(Identity(9, 1));
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    backend.SetMembershipReadyHandler(
+        [&reconciler](const std::string &coordinatorId, bool) { reconciler.NotifyMembershipReady(coordinatorId); });
+
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
+
+    ASSERT_TRUE(proxy.WaitForReports(1));
+    EXPECT_EQ(proxy.EnsureCount(), 0UL);
+    const auto report = proxy.ReportAt(0);
+    EXPECT_EQ(report.coordinator_id(), kCoordinatorId);
+    EXPECT_EQ(report.leader_term(), 9UL);
+    reconciler.Shutdown();
+    EXPECT_TRUE(reporter.Shutdown().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(WorkerLeaderReconcilerTest, MembershipSuccessForOldLifetimeEnsuresCurrentLeaderBeforeReporting)
+{
+    FakeProxy proxy;
+    DsCoordinationBackend backend(&proxy, kWorkerAddress);
+    TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
+                                      [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
+                                      ReporterOptions());
+    reporter.NotifyRuntimeReady();
+    proxy.routes_.Set(Identity(10, 2, kNextCoordinatorId));
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    backend.SetMembershipReadyHandler(
+        [&reconciler](const std::string &coordinatorId, bool) { reconciler.NotifyMembershipReady(coordinatorId); });
+
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
+
+    ASSERT_TRUE(proxy.WaitForEnsures(1));
+    ASSERT_TRUE(proxy.WaitForReports(1));
+    EXPECT_EQ(proxy.EnsureAt(0).coordinator_id(), kNextCoordinatorId);
+    EXPECT_EQ(proxy.EnsureAt(0).leader_term(), 10UL);
+    EXPECT_EQ(proxy.ReportAt(0).coordinator_id(), kNextCoordinatorId);
+    EXPECT_EQ(proxy.ReportAt(0).leader_term(), 10UL);
+    reconciler.Shutdown();
+    EXPECT_TRUE(reporter.Shutdown().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(WorkerLeaderReconcilerTest, SynchronousMembershipReconcileConvergesAfterSuccessorCallback)
+{
+    FakeProxy proxy;
+    DsCoordinationBackend backend(&proxy, kWorkerAddress);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
+    TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
+                                      [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
+                                      ReporterOptions());
+    reporter.NotifyRuntimeReady();
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    backend.SetMembershipReadyHandler([&](const std::string &coordinatorId, bool) {
+        if (coordinatorId == kCoordinatorId) {
+            // Reproduce a successor Router observation whose callback was delayed or dropped by the startup gate.
+            proxy.routes_.SetCacheWithoutCallback(Identity(10, 2, kNextCoordinatorId));
+        }
+        reconciler.NotifyMembershipReady(coordinatorId);
+    });
+    proxy.routes_.SetCacheWithoutCallback(Identity(9, 1));
+
+    const auto reconcileStatus = reconciler.Reconcile(true);
+    ASSERT_TRUE(reconcileStatus.IsOk()) << reconcileStatus.ToString();
+
+    ASSERT_TRUE(proxy.WaitForEnsures(2));
+    ASSERT_TRUE(proxy.WaitForReports(1));
+    EXPECT_EQ(proxy.EnsureAt(0).coordinator_id(), kCoordinatorId);
+    EXPECT_EQ(proxy.EnsureAt(1).coordinator_id(), kNextCoordinatorId);
+    EXPECT_EQ(proxy.ReportAt(0).coordinator_id(), kNextCoordinatorId);
+    reconciler.Shutdown();
+    EXPECT_TRUE(reporter.Shutdown().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(WorkerLeaderReconcilerTest, TermZeroMembershipForOldLifetimeEnsuresCurrentCoordinator)
+{
+    FakeProxy proxy;
+    DsCoordinationBackend backend(&proxy, kWorkerAddress);
+    TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
+                                      [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
+                                      ReporterOptions());
+    reporter.NotifyRuntimeReady();
+    proxy.routes_.Set(Identity(0, 1, kNextCoordinatorId));
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    backend.SetMembershipReadyHandler(
+        [&reconciler](const std::string &coordinatorId, bool) { reconciler.NotifyMembershipReady(coordinatorId); });
+
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
+
+    ASSERT_TRUE(proxy.WaitForEnsures(1));
+    ASSERT_TRUE(proxy.WaitForReports(1));
+    EXPECT_EQ(proxy.EnsureAt(0).coordinator_id(), kNextCoordinatorId);
+    EXPECT_EQ(proxy.EnsureAt(0).leader_term(), 0UL);
+    EXPECT_EQ(proxy.ReportAt(0).coordinator_id(), kNextCoordinatorId);
+    EXPECT_EQ(proxy.ReportAt(0).leader_term(), 0UL);
+    reconciler.Shutdown();
+    EXPECT_TRUE(reporter.Shutdown().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(WorkerLeaderReconcilerTest, TermZeroLeaderInitialMembershipWakesReporterWithoutEnsure)
 {
     FakeProxy proxy;
     DsCoordinationBackend backend(&proxy, kWorkerAddress);
@@ -489,7 +611,7 @@ TEST(WorkerLeaderReconcilerTest, LegacyLeaderInitialMembershipWakesReporterWitho
     proxy.routes_.Set(Identity(0, 1));
     WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
     backend.SetMembershipReadyHandler(
-        [&reconciler](const std::string &coordinatorId, bool) { reconciler.NotifyLegacyMembershipReady(coordinatorId); });
+        [&reconciler](const std::string &coordinatorId, bool) { reconciler.NotifyMembershipReady(coordinatorId); });
 
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
 

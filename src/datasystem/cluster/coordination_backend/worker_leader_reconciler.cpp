@@ -16,6 +16,7 @@
 #include <chrono>
 #include <functional>
 #include <string_view>
+#include <thread>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
@@ -26,6 +27,7 @@ constexpr auto ENSURE_MIN_RETRY_BACKOFF = std::chrono::milliseconds(50);
 constexpr auto ENSURE_MAX_RETRY_BACKOFF = std::chrono::milliseconds(2'000);
 constexpr std::chrono::milliseconds::rep ENSURE_RETRY_BACKOFF_MULTIPLIER = 2;
 constexpr size_t ENSURE_POOL_SIZE = 1;
+constexpr size_t SYNC_ENSURE_MAX_ATTEMPTS = 3;
 
 bool IsRetryableEnsureStatus(const Status &status)
 {
@@ -115,7 +117,7 @@ void WorkerLeaderReconciler::ScheduleEnsure(const CoordinatorLeaderIdentity &ide
     }
 }
 
-void WorkerLeaderReconciler::NotifyLegacyMembershipReady(const std::string &coordinatorId)
+void WorkerLeaderReconciler::NotifyMembershipReady(const std::string &coordinatorId)
 {
     if (stopping_.load(std::memory_order_acquire) || coordinatorId.empty()) {
         return;
@@ -125,9 +127,14 @@ void WorkerLeaderReconciler::NotifyLegacyMembershipReady(const std::string &coor
         return;
     }
     const auto identity = routes->GetLeaderCache();
-    if (identity.hasLeader && identity.leaderTerm == 0 && identity.coordinatorId == coordinatorId) {
-        reporter_.NotifyMembershipReady(identity);
+    if (!identity.hasLeader || identity.coordinatorId.empty()) {
+        return;
     }
+    if (identity.coordinatorId == coordinatorId) {
+        reporter_.NotifyMembershipReady(identity);
+        return;
+    }
+    ScheduleEnsure(identity, false);
 }
 
 Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
@@ -136,7 +143,7 @@ Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
                              "Worker Leader reconciler is shutting down");
     auto *routes = proxy_.GetLeaderRouteProvider();
     CHECK_FAIL_RETURN_STATUS(routes != nullptr, K_NOT_READY, "Coordinator Leader route is unavailable");
-    const auto identity = routes->GetLeaderCache();
+    auto identity = routes->GetLeaderCache();
     CHECK_FAIL_RETURN_STATUS(identity.hasLeader && !identity.coordinatorId.empty(), K_NOT_READY,
                              "Coordinator Leader identity is unavailable");
     if (!waitForCompletion) {
@@ -145,11 +152,24 @@ Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
         ScheduleEnsure(identity, true);
         return Status::OK();
     }
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pendingIdentity_ = identity;
+    Status lastStatus(K_TRY_AGAIN, "Coordinator Leader changed during synchronous membership reconciliation");
+    for (size_t attempt = 0; attempt < SYNC_ENSURE_MAX_ATTEMPTS; ++attempt) {
+        identity = routes->GetLeaderCache();
+        CHECK_FAIL_RETURN_STATUS(identity.hasLeader && !identity.coordinatorId.empty(), K_NOT_READY,
+                                 "Coordinator Leader identity is unavailable");
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pendingIdentity_ = identity;
+        }
+        lastStatus = ReconcileIdentity(identity, true);
+        if (lastStatus.IsOk() || lastStatus.GetCode() != K_TRY_AGAIN) {
+            return lastStatus;
+        }
+        if (attempt + 1 < SYNC_ENSURE_MAX_ATTEMPTS) {
+            std::this_thread::sleep_for(EnsureRetryBackoff(identity, backend_.GetWatcherAddr(), attempt));
+        }
     }
-    return ReconcileIdentity(identity, true);
+    return lastStatus;
 }
 
 Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity &identity, bool forceEnsure)
@@ -198,9 +218,19 @@ Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity
         std::lock_guard<std::mutex> lock(mutex_);
         CHECK_FAIL_RETURN_STATUS(!stopping_.load(std::memory_order_acquire) && IsCurrentIdentityLocked(identity),
                                  K_TRY_AGAIN, "Coordinator Leader changed during membership ensure");
-        backend_.InstallEnsuredMembership(identity.coordinatorId, response.membership_mod_revision());
-        reporter_.NotifyMembershipReady(identity);
-        lastEnsuredIdentity_ = identity;
+    }
+    // Installation synchronously publishes membership readiness. Do not hold mutex_ across that callback: when the
+    // Router already observes a successor lifetime, NotifyMembershipReady must be able to queue its fenced Ensure.
+    backend_.InstallEnsuredMembership(identity.coordinatorId, response.membership_mod_revision());
+    const auto currentAfterInstall = routes->GetLeaderCache();
+    CHECK_FAIL_RETURN_STATUS(SameIdentity(currentAfterInstall, identity), K_TRY_AGAIN,
+                             "Coordinator Leader changed during membership installation");
+    reporter_.NotifyMembershipReady(identity);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!stopping_.load(std::memory_order_acquire) && IsCurrentIdentityLocked(identity)) {
+            lastEnsuredIdentity_ = identity;
+        }
     }
     return Status::OK();
 }
@@ -269,6 +299,11 @@ void WorkerLeaderReconciler::Shutdown()
     stopping_.store(true, std::memory_order_release);
     retryCv_.notify_all();
     subscription_.reset();
-    ensurePool_.reset();
+    std::unique_ptr<ThreadPool> ensurePool;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ensurePool = std::move(ensurePool_);
+    }
+    ensurePool.reset();
 }
 }  // namespace datasystem::cluster

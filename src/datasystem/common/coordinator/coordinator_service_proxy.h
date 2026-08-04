@@ -358,25 +358,29 @@ private:
      * @param[in] header Response metadata.
      * @param[in] timeoutMs Identity-probe deadline.
      * @param[out] coordinatorId Accepted identity; nullptr ignores it.
+     * @param[in] allowLeaderRecovering Whether a recovering Leader may answer this recovery-control request.
      * @return Header or identity status.
      */
-    Status AcceptResponse(const coordinator::ResponseHeader &header, int32_t timeoutMs, std::string *coordinatorId);
+    Status AcceptResponse(const coordinator::ResponseHeader &header, int32_t timeoutMs, std::string *coordinatorId,
+                          bool allowLeaderRecovering = false);
 
     /**
      * @brief Confirm an unfamiliar response identity through one raw probe.
      * @param[in] responseId Unfamiliar response identity.
      * @param[in] timeoutMs Probe deadline.
+     * @param[in] allowLeaderRecovering Whether the identity probe may accept a recovering Leader.
      * @return K_OK only when the probe confirms responseId.
      */
-    Status ConfirmResponseIdentity(const std::string &responseId, int32_t timeoutMs);
+    Status ConfirmResponseIdentity(const std::string &responseId, int32_t timeoutMs, bool allowLeaderRecovering);
 
     /**
      * @brief Read the current CoordinatorId without entering the normal response fence.
      * @param[in] timeoutMs Probe deadline.
      * @param[out] coordinatorId Validated current identity.
+     * @param[in] allowLeaderRecovering Whether the probe may route to and accept a recovering Leader.
      * @return Transport or response-validation status.
      */
-    Status ProbeCoordinatorId(int32_t timeoutMs, std::string &coordinatorId);
+    Status ProbeCoordinatorId(int32_t timeoutMs, std::string &coordinatorId, bool allowLeaderRecovering);
 
     /**
      * @brief Replace current identity while rejecting an in-flight retired identity.

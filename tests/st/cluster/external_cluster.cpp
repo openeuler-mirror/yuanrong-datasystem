@@ -16,10 +16,12 @@
  */
 #include "cluster/external_cluster.h"
 
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <fstream>
 #include <mutex>
+#include <thread>
 #include <netdb.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
@@ -53,6 +55,22 @@ namespace st {
 namespace {
 constexpr int PORT_LISTEN_POLL_INTERVAL_MS = 10;
 constexpr int TOPOLOGY_READER_RPC_STUB_CACHE_SIZE = 100;
+constexpr int COORDINATOR_ELECTION_READY_TIMEOUT_SEC = 10;
+constexpr int COORDINATOR_ELECTION_PROBE_TIMEOUT_MS = 500;
+constexpr int COORDINATOR_ELECTION_POLL_INTERVAL_MS = 50;
+
+std::string BuildCoordinatorAddressList(const std::vector<HostPort> &coordinatorConfigs, size_t firstIndex = 0)
+{
+    std::string addresses;
+    for (size_t offset = 0; offset < coordinatorConfigs.size(); ++offset) {
+        const auto index = (firstIndex + offset) % coordinatorConfigs.size();
+        if (!addresses.empty()) {
+            addresses += ",";
+        }
+        addresses += coordinatorConfigs[index].ToString();
+    }
+    return addresses;
+}
 
 Status InitTopologyReaderRpcCache()
 {
@@ -73,6 +91,37 @@ std::string ResolveWorkerBinPath()
         return workerBin;
     }
     return WORKER_BIN_PATH;
+}
+
+Status FindReadyCoordinatorLeader(const std::vector<HostPort> &coordinatorConfigs, size_t coordinatorCount,
+                                  size_t &leaderIndex)
+{
+    RETURN_IF_NOT_OK(InitTopologyReaderRpcCache());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(COORDINATOR_ELECTION_READY_TIMEOUT_SEC);
+    Status lastRc = Status::OK();
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (size_t i = 0; i < coordinatorCount; ++i) {
+            auto discovery = std::make_shared<StaticCoordinatorDiscovery>(coordinatorConfigs[i].ToString());
+            std::unique_ptr<ICoordinatorServiceProxy> proxy;
+            if (FLAGS_use_brpc) {
+                proxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(discovery));
+            } else {
+                proxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(discovery));
+            }
+            lastRc = proxy->Init();
+            if (lastRc.IsError()) {
+                continue;
+            }
+            std::string coordinatorId;
+            lastRc = proxy->GetCoordinatorId(coordinatorId, COORDINATOR_ELECTION_PROBE_TIMEOUT_MS);
+            if (lastRc.IsOk()) {
+                leaderIndex = i;
+                return Status::OK();
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(COORDINATOR_ELECTION_POLL_INTERVAL_MS));
+    }
+    return Status(K_NOT_READY, "Timed out waiting for Coordinator election leader, last status: " + lastRc.ToString());
 }
 
 Status TryConnectTcpPort(const HostPort &addr)
@@ -346,6 +395,13 @@ Status ExternalCluster::ShutdownNode(ClusterNodeType nodeType, uint32_t idx)
         auto etcdProcess = etcdProcesses_[idx].get();
         if (etcdProcess->IsProcessAlive()) {
             ASSIGN_IF_NOT_OK(rc, etcdProcess->Shutdown());
+        }
+    }
+
+    if (ClusterNodeType::COORDINATOR == nodeType) {
+        auto coordinatorProcess = coordinatorProcesses_[idx].get();
+        if (coordinatorProcess->IsProcessAlive()) {
+            ASSIGN_IF_NOT_OK(rc, coordinatorProcess->Shutdown());
         }
     }
     return rc;
@@ -774,6 +830,13 @@ Status ExternalCluster::StartCoordinatorCluster()
     for (size_t i = 0; i < opts_.numCoordinators; ++i) {
         RETURN_IF_NOT_OK(StartCoordinatorNode(i));
     }
+    if (opts_.enableCoordinatorElection) {
+        size_t leaderIndex = 0;
+        RETURN_IF_NOT_OK(FindReadyCoordinatorLeader(opts_.coordinatorConfigs, opts_.numCoordinators, leaderIndex));
+        if (leaderIndex != 0) {
+            std::swap(opts_.coordinatorConfigs[0], opts_.coordinatorConfigs[leaderIndex]);
+        }
+    }
     return Status::OK();
 }
 
@@ -1059,9 +1122,35 @@ Status ExternalCluster::StartCoordinatorNode(int index)
 {
     std::string coordinatorCmd = COORDINATOR_BIN_PATH;
     std::string rootDir = opts_.rootDir + "/coordinator" + std::to_string(index);
+    if (opts_.enableCoordinatorElection) {
+        if (!opts_.coordinatorBinPath.empty()) {
+            coordinatorCmd = opts_.coordinatorBinPath;
+        }
+        std::string coordinatorPeers;
+        for (const auto &config : opts_.coordinatorConfigs) {
+            if (!coordinatorPeers.empty()) {
+                coordinatorPeers += ",";
+            }
+            coordinatorPeers += config.ToString();
+        }
+        coordinatorCmd += " -use_brpc=true -coordinator_raft_initial_peers=" + coordinatorPeers
+                          + " -coordinator_raft_data_dir=" + rootDir
+                          + "/raft -coordinator_raft_heartbeat_interval_ms=50"
+                            " -coordinator_raft_election_timeout_ms=300"
+                            " -coordinator_member_failure_grace_ms=5000"
+                            " -coordinator_discovery_retry_interval_ms=100";
+    }
     coordinatorCmd += " -coordinator_address=" + opts_.coordinatorConfigs[index].ToString() + " -log_dir=" + rootDir
                       + "/log -v=" + std::to_string(opts_.vLogLevel) + " " + opts_.coordinatorGflagParams
                       + " -rpc_thread_num=" + std::to_string(opts_.numRpcThreads);
+    if (!opts_.enableCoordinatorElection && opts_.numCoordinators > 1
+        && opts_.coordinatorGflagParams.find("-coordinator_raft_initial_peers=") == std::string::npos) {
+        coordinatorCmd += " -coordinator_raft_initial_peers=" + BuildCoordinatorAddressList(opts_.coordinatorConfigs);
+    }
+    if (!opts_.enableCoordinatorElection && opts_.numCoordinators > 1
+        && opts_.coordinatorGflagParams.find("-coordinator_raft_data_dir=") == std::string::npos) {
+        coordinatorCmd += " -coordinator_raft_data_dir=" + rootDir + "/raft";
+    }
     LOG(INFO) << "Launch coordinator [" << index << "] command: " << coordinatorCmd;
     auto coordinatorProcess = std::make_unique<CoordinatorProcess>(coordinatorCmd, opts_.coordinatorConfigs[index]);
     RETURN_IF_NOT_OK(coordinatorProcess->Start());
@@ -1275,7 +1364,11 @@ Status ExternalCluster::AppendWorkerBackendFlags(int index, const HostPort &addr
 {
     if (opts_.numCoordinators > 0) {
         CHECK_FAIL_RETURN_STATUS(!opts_.coordinatorConfigs.empty(), K_RUNTIME_ERROR, "Coordinator address is empty.");
-        cmd += " -coordinator_address=" + opts_.coordinatorConfigs[0].ToString();
+        size_t coordinatorIndex = 0;
+        if (opts_.enableCoordinatorElection) {
+            RETURN_IF_NOT_OK(FindReadyCoordinatorLeader(opts_.coordinatorConfigs, opts_.numCoordinators, coordinatorIndex));
+        }
+        cmd += " -coordinator_address=" + BuildCoordinatorAddressList(opts_.coordinatorConfigs, coordinatorIndex);
     }
 
     if (opts_.numEtcd > 0) {

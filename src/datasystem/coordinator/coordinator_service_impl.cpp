@@ -274,7 +274,8 @@ Status CoordinatorServiceImpl::CheckServing() const
     return Status(K_NOT_READY, "Coordinator service is in an unknown serving state");
 }
 
-Status CoordinatorServiceImpl::PrepareRpcResponse(ResponseHeader *header, bool &businessAllowed) const
+Status CoordinatorServiceImpl::PrepareRpcResponse(bool allowLeaderRecovering, ResponseHeader *header,
+                                                  bool &businessAllowed) const
 {
     FillResponseHeader(header);
     const auto servingStatus = CheckServing();
@@ -287,6 +288,9 @@ Status CoordinatorServiceImpl::PrepareRpcResponse(ResponseHeader *header, bool &
     // No known Leader and lifecycle states preserve their original failure status.
     const auto state = servingState_.load(std::memory_order_acquire);
     if (IsElectionConfigured() && state == ServingState::LEADER_RECOVERING) {
+        if (allowLeaderRecovering) {
+            businessAllowed = true;
+        }
         return Status::OK();
     }
     if (IsElectionConfigured() && state == ServingState::FOLLOWER_SERVING && header != nullptr
@@ -386,7 +390,7 @@ void CoordinatorServiceImpl::RunRecoveryGate()
             lock.unlock();
             CompleteRecoveryWindow(term);
             lock.lock();
-            delay = std::chrono::seconds(FLAGS_node_timeout_s);
+            delay = std::chrono::seconds(1);
         }
     }
 }
@@ -419,8 +423,10 @@ void CoordinatorServiceImpl::CompleteRecoveryWindow(uint64_t term)
         LOG(INFO) << "CLUSTER_COORDINATOR_RECOVERY_COMPLETE term=" << term
                   << ", discovered_clusters=" << summary.contextCount;
     } else {
-        LOG(ERROR) << "CLUSTER_COORDINATOR_RECOVERY_BLOCKED term=" << term << ", recovering=" << summary.recoveringCount
-                   << ", installing=" << summary.installingCount << ", blocked=" << summary.blockedCount;
+        const int logTimeLimit = 30;
+        LOG_EVERY_T(ERROR, logTimeLimit)
+            << "CLUSTER_COORDINATOR_RECOVERY_BLOCKED term=" << term << ", recovering=" << summary.recoveringCount
+            << ", installing=" << summary.installingCount << ", blocked=" << summary.blockedCount;
     }
 }
 
@@ -984,10 +990,8 @@ Status CoordinatorServiceImpl::Put(const PutReqPb &req, PutRspPb &rsp)
 {
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
-    if (!businessAllowed) {
-        return Status::OK();
-    }
+    RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
+    RETURN_OK_IF_TRUE(!businessAllowed);
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
     CHECK_FAIL_RETURN_STATUS(req.expected_coordinator_id().empty() || req.expected_coordinator_id() == coordinatorId_,
                              K_TRY_AGAIN, "Put CoordinatorId fence no longer matches this process");
@@ -1032,10 +1036,8 @@ Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
 {
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
-    if (!businessAllowed) {
-        return Status::OK();
-    }
+    RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
+    RETURN_OK_IF_TRUE(!businessAllowed);
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
     CHECK_FAIL_RETURN_STATUS(topologyRecoveryManager_ != nullptr, K_NOT_READY, "recovery manager is not bound");
     RETURN_IF_NOT_OK(topologyRecoveryManager_->CheckReadAllowed(req.key(), req.range_end()));
@@ -1054,10 +1056,8 @@ Status CoordinatorServiceImpl::DeleteRange(const DeleteRangeReqPb &req, DeleteRa
 {
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
-    if (!businessAllowed) {
-        return Status::OK();
-    }
+    RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
+    RETURN_OK_IF_TRUE(!businessAllowed);
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
     CHECK_FAIL_RETURN_STATUS(req.expected_coordinator_id().empty() || req.expected_coordinator_id() == coordinatorId_,
                              K_TRY_AGAIN, "DeleteRange CoordinatorId fence no longer matches this process");
@@ -1079,10 +1079,8 @@ Status CoordinatorServiceImpl::WatchRange(const WatchRangeReqPb &req, WatchRange
 {
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
-    if (!businessAllowed) {
-        return Status::OK();
-    }
+    RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
+    RETURN_OK_IF_TRUE(!businessAllowed);
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
     CHECK_FAIL_RETURN_STATUS(!req.registration_id().empty(), K_INVALID, "watch registration ID is empty");
     CHECK_FAIL_RETURN_STATUS(topologyRecoveryManager_ != nullptr, K_NOT_READY, "recovery manager is not bound");
@@ -1124,10 +1122,8 @@ Status CoordinatorServiceImpl::CancelWatch(const CancelWatchReqPb &req, CancelWa
 {
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
-    if (!businessAllowed) {
-        return Status::OK();
-    }
+    RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
+    RETURN_OK_IF_TRUE(!businessAllowed);
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
     CHECK_FAIL_RETURN_STATUS(req.expected_coordinator_id() == coordinatorId_, K_TRY_AGAIN,
                              "CancelWatch CoordinatorId no longer owns these watch IDs");
@@ -1141,10 +1137,8 @@ Status CoordinatorServiceImpl::KeepAlive(const KeepAliveReqPb &req, KeepAliveRsp
 {
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
-    if (!businessAllowed) {
-        return Status::OK();
-    }
+    RETURN_IF_NOT_OK(PrepareRpcResponse(true, rsp.mutable_header(), businessAllowed));
+    RETURN_OK_IF_TRUE(!businessAllowed);
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
     CHECK_FAIL_RETURN_STATUS(req.expected_coordinator_id().empty() || req.expected_coordinator_id() == coordinatorId_,
                              K_TRY_AGAIN, "KeepAlive CoordinatorId fence no longer matches this process");
@@ -1165,10 +1159,8 @@ Status CoordinatorServiceImpl::GetCoordinatorId(const GetCoordinatorIdReqPb &req
     (void)req;
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
-    if (!businessAllowed) {
-        return Status::OK();
-    }
+    RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
+    RETURN_OK_IF_TRUE(!businessAllowed);
     CHECK_FAIL_RETURN_STATUS(coordinatorId_.size() == UUID_SIZE, K_NOT_READY, "CoordinatorId is not initialized");
     return Status::OK();
 }
@@ -1269,8 +1261,16 @@ Status CoordinatorServiceImpl::EnsureLeaderMembership(const EnsureLeaderMembersh
         return Status::OK();
     }
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
+    std::string clusterName;
+    bool reserved = false;
+    RETURN_IF_NOT_OK(PrepareTopologyMembershipPut(physicalKey, clusterName, reserved));
     int64_t version = 0;
     int64_t revision = 0;
+    Raii reservationCompletion([this, &clusterName, &reserved, &version, &revision] {
+        if (reserved && topologyControlHost_ != nullptr) {
+            topologyControlHost_->CompleteMembershipPut(clusterName, version > 0 && revision > 0);
+        }
+    });
     RETURN_IF_NOT_OK(store_->Put(physicalKey, req.membership_value(), req.ttl_ms(), COORDINATOR_NO_VERSION_CHECK,
                                  version, revision));
     if (RequireRecoveryLeader(req.leader_term(), req.coordinator_id()).IsError()) {
@@ -1296,7 +1296,7 @@ Status CoordinatorServiceImpl::ReportWorkerLiveness(const ReportWorkerLivenessRe
 {
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
+    RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
     if (!businessAllowed) {
         return Status::OK();
     }
@@ -1340,10 +1340,8 @@ Status CoordinatorServiceImpl::GetClusterRawSnapshot(const GetClusterRawSnapshot
 {
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(rsp.mutable_header(), businessAllowed));
-    if (!businessAllowed) {
-        return Status::OK();
-    }
+    RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
+    RETURN_OK_IF_TRUE(!businessAllowed);
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
     std::string topologyKey;
     std::string membershipKey;
