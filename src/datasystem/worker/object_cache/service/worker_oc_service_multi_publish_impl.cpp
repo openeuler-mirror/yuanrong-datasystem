@@ -183,6 +183,16 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishNtx(std::vector<std::string>
         BatchRollBackEntries(namespaceUri, ifInserts, entries);
         return rc;
     }
+    if (req.return_local_published_indexes()) {
+        for (size_t i = 0; i < namespaceUri.size(); ++i) {
+            const auto &key = namespaceUri[i];
+            if (failedKeys.find(key) != failedKeys.end() || rollbackOnlyKeys.find(key) != rollbackOnlyKeys.end()
+                || localExistKeys.find(key) != localExistKeys.end()) {
+                continue;
+            }
+            resp.add_local_published_indexes(static_cast<uint32_t>(i));
+        }
+    }
     resp.mutable_last_rc()->set_error_code(lastRc.GetCode());
     resp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
     // Roll back local objects that should not be published.

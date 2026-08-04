@@ -157,11 +157,17 @@ message MultiPublishReqPb {
   uint64 timestamp = 100;
   string signature = 101;
   string access_key = 102;
+  // Whether the caller needs indexes confirmed published by this request. The high field number preserves the
+  // serialization order used by old peers during AK/SK verification when this field is unknown to them.
+  bool return_local_published_indexes = 103;
 }
 
 message MultiPublishRspPb {
   repeated string failed_object_keys = 1;
   ErrorInfoPb last_rc = 2;
+  // Request indexes whose objects were confirmed published on the receiving worker by this request.
+  // NX-existing objects and objects with uncertain publish results are excluded.
+  repeated uint32 local_published_indexes = 3;
 }
 
 message ProviderUbFailureDetailPb {

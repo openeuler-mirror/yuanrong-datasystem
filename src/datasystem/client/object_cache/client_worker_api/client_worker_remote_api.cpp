@@ -120,6 +120,7 @@ void InitMultiPublishReq(const std::vector<std::shared_ptr<ObjectBufferInfo>> &b
     req.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
     req.set_is_replica(param.isReplica);
     req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
+    req.set_return_local_published_indexes(param.returnLocalPublishedIndexes);
 }
 
 void LogClientWorkerRpcDone(const char *operation, size_t count, const char *path, uint64_t elapsedUs,

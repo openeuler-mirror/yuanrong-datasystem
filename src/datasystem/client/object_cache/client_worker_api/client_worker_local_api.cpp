@@ -128,6 +128,7 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
     req.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
     req.set_is_replica(param.isReplica);
     req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
+    req.set_return_local_published_indexes(param.returnLocalPublishedIndexes);
     std::vector<MemView> mvs;
     uint64_t payloadBytes = 0;
     uint64_t shmBytes = 0;
