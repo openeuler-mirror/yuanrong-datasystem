@@ -29,6 +29,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/device/device_resource_manager.h"
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
+#include "datasystem/client/object_cache/device/device_object_view.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/device/device_manager_factory.h"
@@ -151,6 +152,27 @@ public:
      */
     Status MemCopyBetweenDevAndHost(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList,
                                     MemcpyKind copyKind, bool enableHugeTlb);
+
+    /**
+     * @brief View-based memory copy between devBlobList and bufferList. Adapts non-owning H2DObjectView
+     * entries into pointer/reference arrays and dispatches to the resource manager's pointer-reference H2D
+     * overload, avoiding any DeviceBlobList/Blob copy. Only HOST_TO_DEVICE is supported (D2H callers use the
+     * D2HObjectView overload below).
+     * @param[in] objects Non-owning object views; hostBuffer may be nullptr for missing keys.
+     * @param[in] enableHugeTlb The memory is enable huge tlb.
+     * @return Status K_OK on success; the error code otherwise.
+     */
+    Status MemCopyBetweenDevAndHost(const std::vector<H2DObjectView> &objects, bool enableHugeTlb);
+
+    /**
+     * @brief D2H view-based memory copy. Adapts non-owning D2HObjectView entries into pointer/reference
+     * arrays and dispatches to the resource manager's pointer-reference D2H overload, avoiding any
+     * DeviceBlobList/Blob copy. Only DEVICE_TO_HOST is supported.
+     * @param[in] objects Non-owning object views; hostBuffer may be nullptr for missing keys.
+     * @param[in] enableHugeTlb The memory is enable huge tlb.
+     * @return Status K_OK on success; the error code otherwise.
+     */
+    Status MemCopyBetweenDevAndHost(const std::vector<D2HObjectView> &objects, bool enableHugeTlb);
 
     /**
      * @brief Set the interrupt flag of the thread to true.

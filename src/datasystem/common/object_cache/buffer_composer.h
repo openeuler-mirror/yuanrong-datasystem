@@ -82,13 +82,20 @@ Status PrepareDataSizeList(std::vector<size_t> &sizeList, const std::vector<Devi
                            BlobListInfo &blobInfo, uint32_t memoryAlignment);
 
 /**
- * @brief Compose buffer list by user data list
- * @param[out] bufferList Compose the user data to bufferList
- * @param[in] devBlobList The user data list
+ * @brief Compose buffer list from non-owning DeviceBlobList references.
+ *
+ * Reads DeviceBlobList by const pointer so callers that already hold a request-owned vector (synchronous
+ * MSetD2H view path, async MSetD2H ownership copy) never copy a DeviceBlobList or Blob. Validation covers
+ * object count match, non-null views, blob count > 0, and whether each composed object's total size fits in
+ * the allocated buffer.
+ *
+ * @param[in] deviceBlobRefs Non-owning pointers into a request-owned DeviceBlobList vector.
+ * @param[in] bufferList The host buffers to compose into (same length as deviceBlobRefs).
  * @param[in] memoryAlignment The payload alignment.
+ * @return K_OK on success; the error code otherwise.
  */
-void ComposeBufferData(std::vector<std::shared_ptr<Buffer>> &bufferList,
-                       const std::vector<DeviceBlobList> &devBlobList, uint32_t memoryAlignment);
+Status ComposeBufferDataRefs(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                             const std::vector<std::shared_ptr<Buffer>> &bufferList, uint32_t memoryAlignment);
 
 }  // namespace object_cache
 }  // namespace datasystem

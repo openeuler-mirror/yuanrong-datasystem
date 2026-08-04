@@ -41,6 +41,10 @@ public:
 
     Status MemcpyBatchD2H(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList) override;
     Status MemcpyBatchH2D(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList) override;
+    Status MemcpyBatchH2D(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                          const std::vector<Buffer *> &bufferList) override;
+    Status MemcpyBatchD2H(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                          const std::vector<Buffer *> &bufferList) override;
     void SetPolicyByHugeTlb(bool enableHugeTlb) override;
 
 private:
@@ -49,6 +53,8 @@ private:
 
     Status CudaMemcpyBatch(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList,
                            MemcpyKind copyKind);
+    Status CudaMemcpyBatchRefs(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                              const std::vector<Buffer *> &bufferList, MemcpyKind copyKind);
     Status CudaMemcpyBatchSync(DeviceBatchCopyHelper &helper, MemcpyKind copyKind);
     Status SubmitBatchH2D(DeviceBatchCopyHelper &helper, int32_t deviceId);
     Status SubmitBatchD2H(DeviceBatchCopyHelper &helper, int32_t deviceId);

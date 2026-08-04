@@ -21,6 +21,7 @@
 
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -64,6 +65,18 @@ Status CudaResourceManager::MemcpyBatchH2D(const std::vector<DeviceBlobList> &de
     return CudaMemcpyBatch(devBlobList, bufferList, MemcpyKind::HOST_TO_DEVICE);
 }
 
+Status CudaResourceManager::MemcpyBatchH2D(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                                           const std::vector<Buffer *> &bufferList)
+{
+    return CudaMemcpyBatchRefs(deviceBlobRefs, bufferList, MemcpyKind::HOST_TO_DEVICE);
+}
+
+Status CudaResourceManager::MemcpyBatchD2H(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                                           const std::vector<Buffer *> &bufferList)
+{
+    return CudaMemcpyBatchRefs(deviceBlobRefs, bufferList, MemcpyKind::DEVICE_TO_HOST);
+}
+
 void CudaResourceManager::SetPolicyByHugeTlb(bool enableHugeTlb)
 {
     // CUDA does not support FFTS/HUGE_FFTS, no policy change needed.
@@ -90,6 +103,40 @@ Status CudaResourceManager::CudaMemcpyBatch(const std::vector<DeviceBlobList> &d
 
     DeviceBatchCopyHelper helper;
     RETURN_IF_NOT_OK(helper.Prepare(devBlobList, bufferList, copyKind));
+    RETURN_OK_IF_TRUE(helper.batchSize == 0);
+
+    if (copyKind == MemcpyKind::HOST_TO_DEVICE) {
+        return SubmitBatchH2D(helper, deviceId);
+    }
+    return SubmitBatchD2H(helper, deviceId);
+}
+
+Status CudaResourceManager::CudaMemcpyBatchRefs(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                                                const std::vector<Buffer *> &bufferList, MemcpyKind copyKind)
+{
+    CHECK_FAIL_RETURN_STATUS(!deviceBlobRefs.empty(), K_INVALID, "The devBlobList is empty.");
+    CHECK_FAIL_RETURN_STATUS(!bufferList.empty(), K_INVALID, "The bufferList is empty.");
+    CHECK_FAIL_RETURN_STATUS(deviceBlobRefs.size() == bufferList.size(), K_INVALID,
+                             FormatString("The devBlobList size %zu is not equal to bufferList size %zu",
+                                          deviceBlobRefs.size(), bufferList.size()));
+    CHECK_FAIL_RETURN_STATUS(devManager_ != nullptr, K_RUNTIME_ERROR, "Failed to get device manager.");
+
+    CHECK_FAIL_RETURN_STATUS(deviceBlobRefs[0] != nullptr, K_INVALID, "deviceBlobRefs[0] is null");
+    auto deviceId = deviceBlobRefs[0]->deviceIdx;
+    RETURN_IF_NOT_OK(devManager_->SetDevice(deviceId));
+    for (size_t i = 0; i < deviceBlobRefs.size(); i++) {
+        CHECK_FAIL_RETURN_STATUS(deviceBlobRefs[i] != nullptr, K_INVALID,
+                                 FormatString("deviceBlobRefs[%zu] is null", i));
+        CHECK_FAIL_RETURN_STATUS(deviceBlobRefs[i]->deviceIdx == deviceId, K_INVALID,
+                                 FormatString("Device index mismatch in batch: expect %d, actual %d, index %zu",
+                                              deviceId, deviceBlobRefs[i]->deviceIdx, i));
+    }
+
+    DeviceBatchCopyHelper helper;
+    PerfPoint preparePoint(copyKind == MemcpyKind::DEVICE_TO_HOST ? PerfKey::CLIENT_D2H_HELPER_PREPARE
+                                                                  : PerfKey::CLIENT_H2D_HELPER_PREPARE);
+    RETURN_IF_NOT_OK(helper.PrepareRefs(deviceBlobRefs, bufferList, copyKind));
+    preparePoint.Record();
     RETURN_OK_IF_TRUE(helper.batchSize == 0);
 
     if (copyKind == MemcpyKind::HOST_TO_DEVICE) {

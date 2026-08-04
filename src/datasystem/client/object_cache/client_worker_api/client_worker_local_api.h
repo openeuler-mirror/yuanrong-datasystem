@@ -80,7 +80,8 @@ public:
                    const std::unordered_set<std::string> &nestedKeys = {}, uint32_t ttlSecond = 0,
                    int existence = 0) override;
     Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param,
-                        MultiPublishRspPb &rsp, const std::vector<std::vector<uint64_t>> &blobSizes = {}) override;
+                        MultiPublishRspPb &rsp,
+                        const std::vector<const DeviceBlobList *> &deviceBlobRefs = {}) override;
     Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override;
 
     Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) override;

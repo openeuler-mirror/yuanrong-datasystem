@@ -22,6 +22,7 @@
 
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/object/buffer.h"
+#include "datasystem/utils/device_blob.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/hetero/device_common.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
@@ -96,6 +97,20 @@ public:
                                   std::vector<Buffer *> &bufferList) = 0;
     virtual Status MemcpyBatchH2D(const std::vector<DeviceBlobList> &devBlobList,
                                   std::vector<Buffer *> &bufferList) = 0;
+    /**
+     * @brief Pointer-reference H2D overload. Same semantics as MemcpyBatchH2D but reads DeviceBlobList by
+     * const pointer, so request-owned callers avoid copying DeviceBlobList/Blob. The caller retains the
+     * referenced lists and buffers until this synchronous copy returns.
+     */
+    virtual Status MemcpyBatchH2D(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                                  const std::vector<Buffer *> &bufferList) = 0;
+    /**
+     * @brief Pointer-reference D2H overload. Same semantics as MemcpyBatchD2H but reads DeviceBlobList by
+     * const pointer, so request-owned callers avoid copying DeviceBlobList/Blob. The caller retains the
+     * referenced lists and buffers until this synchronous copy returns.
+     */
+    virtual Status MemcpyBatchD2H(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                                  const std::vector<Buffer *> &bufferList) = 0;
     virtual void SetPolicyByHugeTlb(bool enableHugeTlb) = 0;
 
     Status EnsureInitialized()

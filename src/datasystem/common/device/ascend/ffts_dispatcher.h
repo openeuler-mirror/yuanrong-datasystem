@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_CLIENT_OBJECT_CACHE_DEVICE_FFTS_DISPATCHER_H
 #define DATASYSTEM_CLIENT_OBJECT_CACHE_DEVICE_FFTS_DISPATCHER_H
 
+#include <memory>
 #include <vector>
 
 #include "datasystem/common/device/ascend/acl_device_manager.h"
@@ -30,7 +31,7 @@ using rtStream_t = void *;
 #ifndef USE_NPU
 class FftsDispatcher {
 public:
-    FftsDispatcher(uint32_t, acl::AclDeviceManager *){};
+    FftsDispatcher(uint32_t, acl::AclDeviceManager *) {};
     ~FftsDispatcher() = default;
     HcclResult Init()
     {
@@ -125,8 +126,8 @@ private:
     HcclResult RtFftsPlusTaskLaunchWithFlag(rtFftsPlusTaskInfo_t *fftsPlusTaskInfo, rtStream_t stm, uint32_t flag);
     HcclResult RtGetDeviceInfo(uint32_t deviceId, int32_t moduleType, int32_t infoType, int64_t &val);
 
-    HcclFftsContextsInfo *fftsCtxsPtr_;
-    std::vector<HcclFftsContextsInfo *> fftsCtxs_;
+    HcclFftsContextsInfo *fftsCtxsPtr_ = nullptr;
+    std::vector<std::unique_ptr<HcclFftsContextsInfo> > fftsCtxs_;
     int32_t devLogID_;
     int64_t chipId_;
     acl::AclDeviceManager *aclDeviceManager_;

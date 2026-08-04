@@ -324,5 +324,117 @@ TEST_F(HeteroD2HTest, TestMSetD2HMsgWithInvalidDeviceId)
     ASSERT_TRUE(s1.IsError());
     ASSERT_TRUE(localSetKeys.empty());
 }
+
+TEST_F(HeteroD2HTest, TestMSetD2HRejectsInvalidMultiBlobInput)
+{
+    std::shared_ptr<HeteroClient> client;
+    InitAcl(0);
+    InitTestHeteroClient(0, client);
+
+    DeviceBlobList emptyBlobs;
+    emptyBlobs.deviceIdx = 0;
+    ASSERT_TRUE(client->MSetD2H({ GetStringUuid() }, { emptyBlobs }).IsError());
+
+    DeviceBlobList nullPointer;
+    nullPointer.deviceIdx = 0;
+    nullPointer.blobs.push_back({ nullptr, 1 });
+    ASSERT_TRUE(client->MSetD2H({ GetStringUuid() }, { nullPointer }).IsError());
+
+    DeviceBlobList zeroSize;
+    zeroSize.deviceIdx = 0;
+    zeroSize.blobs.push_back({ reinterpret_cast<void *>(static_cast<uintptr_t>(64)), 0 });
+    ASSERT_TRUE(client->MSetD2H({ GetStringUuid() }, { zeroSize }).IsError());
+
+    DeviceBlobList firstDevice;
+    firstDevice.deviceIdx = 0;
+    firstDevice.blobs.push_back({ reinterpret_cast<void *>(static_cast<uintptr_t>(64)), 1 });
+    DeviceBlobList secondDevice = firstDevice;
+    secondDevice.deviceIdx = 1;
+    ASSERT_TRUE(
+        client->MSetD2H({ GetStringUuid(), GetStringUuid() }, { firstDevice, secondDevice }).IsError());
+    client->ShutDown();
+}
+
+// Multi-blob per object with a partial-existing mix: the second MSetD2H must filter existing keys and
+// serialize the remaining objects' blob sizes directly from filtered refs into MultiPublish. The subsequent
+// MGetH2D must read back byte-identical, per-blob content for every object.
+TEST_F(HeteroD2HTest, TestPartExistMultiBlobRoundTrip)
+{
+    const size_t numOfObjs = 64;
+    const size_t blksPerObj = 4;  // multi-blob per object exercises per-object blob_sizes serialization
+    const size_t blkSz = 1024;
+    std::shared_ptr<HeteroClient> client;
+    InitAcl(0);
+    InitTestHeteroClient(0, client);
+    std::vector<std::string> inObjectKeys, failedKeys, partKeys;
+    std::vector<DeviceBlobList> devGetBlobList, devSetBlobList, partDevBlobList;
+    for (auto j = 0ul; j < numOfObjs; j++) {
+        inObjectKeys.emplace_back(FormatString("mb_key_%lu", j));
+    }
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, 0);
+    // Pre-publish a sparse subset so the second MSetD2H hits the partial-existing filtering path.
+    std::vector<uint64_t> randIdxs = { 1, 5, 6, 7, 10, 33, 50 };
+    for (auto randIdx : randIdxs) {
+        partKeys.push_back(inObjectKeys[randIdx]);
+        partDevBlobList.push_back(devSetBlobList[randIdx]);
+    }
+    DS_ASSERT_OK(client->MSetD2H(partKeys, partDevBlobList));
+    DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
+    DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
+    DS_ASSERT_TRUE(failedKeys.empty(), true);
+    DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
+    client->ShutDown();
+}
+
+// Larger workload (many objects, multiple blobs each) exercising the filtered-refs + MultiPublish
+// serialization at scale and confirming no ordering/content regression after the metadata refactor.
+TEST_F(HeteroD2HTest, TestMultiBlobScaleRoundTrip)
+{
+    const size_t numOfObjs = 512;
+    const size_t blksPerObj = 4;
+    const size_t blkSz = 256;
+    std::shared_ptr<HeteroClient> client;
+    InitAcl(0);
+    InitTestHeteroClient(0, client);
+    std::vector<std::string> inObjectKeys, failedKeys;
+    std::vector<DeviceBlobList> devGetBlobList, devSetBlobList;
+    for (auto j = 0ul; j < numOfObjs; j++) {
+        inObjectKeys.emplace_back(FormatString("scale_key_%lu", j));
+    }
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, 0);
+    DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
+    DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
+    DS_ASSERT_TRUE(failedKeys.empty(), true);
+    DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
+    client->ShutDown();
+}
+
+TEST_F(HeteroD2HTest, TestAsyncMultiBlobInputLifetimeRoundTrip)
+{
+    const size_t numOfObjs = 8;
+    const size_t blksPerObj = 4;
+    const size_t blkSz = 1024;
+    std::shared_ptr<HeteroClient> client;
+    InitAcl(0);
+    InitTestHeteroClient(0, client);
+    std::vector<std::string> objectKeys;
+    std::vector<DeviceBlobList> devGetBlobList, callerBlobList;
+    for (size_t i = 0; i < numOfObjs; ++i) {
+        objectKeys.emplace_back(GetStringUuid());
+    }
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, callerBlobList, 0);
+    auto expectedBlobList = callerBlobList;
+
+    auto future = client->AsyncMSetD2H(objectKeys, callerBlobList);
+    callerBlobList.clear();
+    callerBlobList.shrink_to_fit();
+    DS_ASSERT_OK(future.get().status);
+
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client->MGetH2D(objectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
+    ASSERT_TRUE(failedKeys.empty());
+    DS_ASSERT_OK(IsSameContent(devGetBlobList, expectedBlobList, 'b'));
+    client->ShutDown();
+}
 }  // namespace st
 }  // namespace datasystem

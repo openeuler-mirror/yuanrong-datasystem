@@ -37,10 +37,12 @@
 
 namespace datasystem {
 namespace {
-constexpr size_t DEFAULT_PARALLEL_FFTS_WORKER_NUM = 1;
+constexpr size_t DEFAULT_PARALLEL_FFTS_H2D_WORKER_NUM = 4;
+constexpr size_t DEFAULT_PARALLEL_FFTS_D2H_WORKER_NUM = 4;
 constexpr size_t MAX_PARALLEL_FFTS_WORKER_NUM = 16;
 constexpr size_t FFTS_PIPELINE_DEPTH = 2;
-constexpr uint64_t DEFAULT_PARALLEL_FFTS_MIN_BYTES = 24ULL * 1024ULL * 1024ULL;
+constexpr uint64_t DEFAULT_PARALLEL_FFTS_H2D_MIN_BYTES = 128ULL * 1024ULL * 1024ULL;
+constexpr uint64_t DEFAULT_PARALLEL_FFTS_D2H_MIN_BYTES = 48ULL * 1024ULL * 1024ULL;
 constexpr char H2D_FFTS_PARALLEL_WORKER_NUM_ENV[] = "DS_H2D_FFTS_PARALLEL_WORKER_NUM";
 constexpr char H2D_FFTS_PARALLEL_MIN_BYTES_ENV[] = "DS_H2D_FFTS_PARALLEL_MIN_BYTES";
 constexpr char D2H_FFTS_PARALLEL_WORKER_NUM_ENV[] = "DS_D2H_FFTS_PARALLEL_WORKER_NUM";
@@ -170,7 +172,7 @@ Status BuildParallelFftsShard(const DeviceBatchCopyHelper &helper, MemcpyKind ki
 }  // namespace
 
 ParallelFftsH2DConfig::ParallelFftsH2DConfig()
-    : workerNum(DEFAULT_PARALLEL_FFTS_WORKER_NUM), minBytes(DEFAULT_PARALLEL_FFTS_MIN_BYTES)
+    : workerNum(DEFAULT_PARALLEL_FFTS_H2D_WORKER_NUM), minBytes(DEFAULT_PARALLEL_FFTS_H2D_MIN_BYTES)
 {
 }
 
@@ -196,7 +198,7 @@ std::string ParallelFftsH2DConfig::ToString() const
 }
 
 ParallelFftsD2HConfig::ParallelFftsD2HConfig()
-    : workerNum(DEFAULT_PARALLEL_FFTS_WORKER_NUM), minBytes(DEFAULT_PARALLEL_FFTS_MIN_BYTES)
+    : workerNum(DEFAULT_PARALLEL_FFTS_D2H_WORKER_NUM), minBytes(DEFAULT_PARALLEL_FFTS_D2H_MIN_BYTES)
 {
 }
 
@@ -279,9 +281,10 @@ struct AclParallelFftsExecutor::Impl {
         PerfPoint point(perfKeys_.partition);
         RETURN_IF_NOT_OK(PrepareShards(helper, point, shards, deviceStagingBytes));
         if (deviceStagingBytes > resourceManager_->GetDeviceMemSize()) {
-            VLOG(1) << FormatString("Use serial FFTS %s because parallel staging needs %llu bytes, pool has %llu bytes",
-                                    direction_, static_cast<unsigned long long>(deviceStagingBytes),
-                                    static_cast<unsigned long long>(resourceManager_->GetDeviceMemSize()));
+            LOG(WARNING) << FormatString(
+                "Fallback to serial FFTS %s because parallel staging needs %llu bytes, pool has %llu bytes",
+                direction_, static_cast<unsigned long long>(deviceStagingBytes),
+                static_cast<unsigned long long>(resourceManager_->GetDeviceMemSize()));
             return ExecuteSerial(deviceId, helper);
         }
 
@@ -353,9 +356,18 @@ private:
     Status ExecuteShard(uint32_t deviceId, DeviceBatchCopyHelper &shard) const
     {
         try {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                deviceManager_->SetDevice(static_cast<int32_t>(deviceId)),
-                FormatString("Set device %u for parallel FFTS %s task failed", deviceId, direction_));
+            // Each executor owns these worker threads for their full lifetime. Cache the binding per thread, while
+            // keeping the manager identity in the key so a recreated executor cannot inherit a stale binding.
+            thread_local DeviceManagerBase *boundManager = nullptr;
+            thread_local int32_t boundDeviceId = -1;
+            const auto requestedDeviceId = static_cast<int32_t>(deviceId);
+            if (boundManager != deviceManager_ || boundDeviceId != requestedDeviceId) {
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                    deviceManager_->SetDevice(requestedDeviceId),
+                    FormatString("Set device %u for parallel FFTS %s task failed", deviceId, direction_));
+                boundManager = deviceManager_;
+                boundDeviceId = requestedDeviceId;
+            }
             return copyFunction_(deviceId, shard, true, devicePool_.get());
         } catch (const std::bad_alloc &) {
             RETURN_STATUS(K_OUT_OF_MEMORY, FormatString("Parallel FFTS %s task allocation failed", direction_));

@@ -253,6 +253,15 @@
   and size vectors, and then reuses the existing C++ `MGetH2D` or `MSetD2H` implementation. Python `batch_is_exist`
   returns native integer indicators for batch consumers while the existing `exist` boolean contract remains unchanged;
   the public C++ API and descriptor ownership rules do not change.
+- Synchronous `MGetH2D` keeps the caller-owned `DeviceBlobList` input read-only and uses request-scoped non-owning
+  `H2DObjectView` entries for local/remote source grouping; async calls retain their existing owning state copy.
+  Same-node H2D prepares flat pointer/reference arrays without copying `DeviceBlobList::blobs`, while RH2D uses one
+  flat backing allocation for all `P2pScatterEntry` destination pointers and sizes in a source group.
+- Synchronous `MSetD2H` filters existing objects with request-scoped non-owning `D2HObjectView`/descriptor references
+  and moves the selected Buffer owners instead of deep-copying `DeviceBlobList::blobs`; async calls build the same
+  views from `AsyncMSetD2HState`'s owning copy. The D2H composer and ACL/CUDA resource managers consume these refs,
+  while local/remote `MultiPublish` serializes protobuf `blob_sizes` directly from them with pre-reserved
+  `RepeatedField` capacity. D2H does not initialize RH2D/HIXL configuration.
 - Python exposes both ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`. When a
   `KVClient` is constructed with either discovery wrapper, the Python layer passes the native `IServiceDiscovery`
   object from the wrapper's public `native_discovery` property into the pybind `KVClient` constructor so the C++
@@ -260,11 +269,18 @@
   `ConnectOptions.serviceDiscovery`. Python callers must call `service_discovery.init()` before constructing
   `KVClient`. Existing-client failover to another discovered Worker still follows the shared client contract: callers
   must set `enable_cross_node_connection=True` / `ConnectOptions::enableCrossNodeConnection=true`.
-- Ascend `MSetD2H` can opt into bounded Direct descriptor parallelism with `DS_D2H_PARALLEL_WORKER_NUM>1`, or
-  object-level FFTS parallelism with `DS_D2H_FFTS_PARALLEL_WORKER_NUM>1`; D2H uses its own `DS_D2H_PARALLEL_*` and
+- Ascend `MSetD2H` can opt into bounded Direct descriptor parallelism with `DS_D2H_PARALLEL_WORKER_NUM>1`.
+  Object-level FFTS parallelism defaults to four workers for requests meeting `DS_D2H_FFTS_PARALLEL_MIN_BYTES`
+  (default 48 MiB), and
+  `DS_D2H_FFTS_PARALLEL_WORKER_NUM=1` restores serial execution. D2H uses its own `DS_D2H_PARALLEL_*` and
   `DS_D2H_FFTS_PARALLEL_*` namespaces so Set tuning does not change the H2D Get path. Both remain synchronous at the
   public API boundary and drain accepted tasks before returning. Parallel D2H FFTS keeps separate control and
-  device-submit pools so each object shard preserves the existing device-to-host/host-to-host pipeline overlap.
+  device-submit pools. After stream synchronization, dispatcher/context, two streams, and four notifies return as one
+  control-resource bundle to a per-device cache; Huge FFTS device staging buffers use a separate capacity-aware cache.
+  Ordinary D2H callback records are preallocated runtime userData with weak state references, so a failed stream
+  synchronization can detach callback state without creating a shared-pointer cycle; a late callback safely no-ops.
+  Huge FFTS directly targets the destination huge-page buffer and therefore skips callback/CV signaling and H2H future
+  creation.
 
 ### Verified Python/C++ differences to remember
 

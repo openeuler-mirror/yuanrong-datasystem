@@ -310,6 +310,51 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
     }
 }
 
+Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<H2DObjectView> &objects,
+                                                           bool enableHugeTlb)
+{
+    RETURN_IF_NOT_OK(CheckDeviceRuntimeAvailable("MemCopyBetweenDevAndHost"));
+    resourceMgr_->SetPolicyByHugeTlb(enableHugeTlb);
+
+    INJECT_POINT("NO_USE_FFTS", [this]() {
+        resourceMgr_->SetPolicyDirect();
+        return Status::OK();
+    });
+    // Adapt non-owning views into pointer/reference arrays. These contain only pointers; no DeviceBlobList or
+    // Blob is copied. The resource manager resolves deviceIdx from the first referenced DeviceBlobList.
+    std::vector<const DeviceBlobList *> deviceBlobRefs;
+    std::vector<Buffer *> hostBuffers;
+    deviceBlobRefs.reserve(objects.size());
+    hostBuffers.reserve(objects.size());
+    for (const auto &view : objects) {
+        deviceBlobRefs.emplace_back(view.deviceBlobs);
+        hostBuffers.emplace_back(view.hostBuffer);
+    }
+    return resourceMgr_->MemcpyBatchH2D(deviceBlobRefs, hostBuffers);
+}
+
+Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<D2HObjectView> &objects,
+                                                           bool enableHugeTlb)
+{
+    RETURN_IF_NOT_OK(CheckDeviceRuntimeAvailable("MemCopyBetweenDevAndHost"));
+    resourceMgr_->SetPolicyByHugeTlb(enableHugeTlb);
+
+    INJECT_POINT("NO_USE_FFTS", [this]() {
+        resourceMgr_->SetPolicyDirect();
+        return Status::OK();
+    });
+    // Adapt non-owning D2H views into pointer/reference arrays (pointers only; no DeviceBlobList/Blob copy).
+    std::vector<const DeviceBlobList *> deviceBlobRefs;
+    std::vector<Buffer *> hostBuffers;
+    deviceBlobRefs.reserve(objects.size());
+    hostBuffers.reserve(objects.size());
+    for (const auto &view : objects) {
+        deviceBlobRefs.emplace_back(view.deviceBlobs);
+        hostBuffers.emplace_back(view.hostBuffer);
+    }
+    return resourceMgr_->MemcpyBatchD2H(deviceBlobRefs, hostBuffers);
+}
+
 void ClientDeviceObjectManager::SetThreadInterruptFlag2True()
 {
     for (const auto &item : subscribeTable_) {

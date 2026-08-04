@@ -21,6 +21,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <shared_mutex>
 #include <utility>
 #include <vector>
@@ -36,6 +38,96 @@ using datasystem::client::ClientWorkerRemoteCommonApi;
 
 namespace datasystem {
 namespace object_cache {
+
+namespace {
+struct MultiPublishRequestContext {
+    const std::string &clientId;
+    const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo;
+    const PublishParam &param;
+    const std::vector<const DeviceBlobList *> &deviceBlobRefs;
+    MultiPublishReqPb &req;
+    std::vector<MemView> &mvs;
+    uint64_t &payloadBytes;
+    uint64_t &shmBytes;
+};
+
+Status ValidateDeviceBlobRefs(const std::vector<const DeviceBlobList *> &deviceBlobRefs, size_t bufferCount)
+{
+    if (deviceBlobRefs.empty()) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(deviceBlobRefs.size() == bufferCount, K_INVALID,
+                             FormatString("deviceBlobRefs size %zu does not match bufferInfo size %zu",
+                                          deviceBlobRefs.size(), bufferCount));
+    for (size_t i = 0; i < deviceBlobRefs.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS(deviceBlobRefs[i] != nullptr, K_INVALID,
+                                 FormatString("deviceBlobRefs[%zu] is null", i));
+        CHECK_FAIL_RETURN_STATUS(
+            deviceBlobRefs[i]->blobs.size() <= static_cast<size_t>(std::numeric_limits<int>::max()), K_INVALID,
+            FormatString("blob count %zu exceeds int limit, index %zu", deviceBlobRefs[i]->blobs.size(), i));
+    }
+    return Status::OK();
+}
+
+Status AppendMultiPublishObjects(MultiPublishRequestContext &context)
+{
+    for (size_t i = 0; i < context.bufferInfo.size(); ++i) {
+        if (context.bufferInfo[i]->shmId.Empty()) {
+            context.mvs.emplace_back(context.bufferInfo[i]->pointer, context.bufferInfo[i]->dataSize);
+            context.payloadBytes += context.bufferInfo[i]->dataSize;
+        } else {
+            context.shmBytes += context.bufferInfo[i]->dataSize;
+        }
+        MultiPublishReqPb::ObjectInfoPb objectInfoPb;
+        if (!context.deviceBlobRefs.empty()) {
+            const auto &blobs = context.deviceBlobRefs[i]->blobs;
+            auto mutableBlobSizes = objectInfoPb.mutable_blob_sizes();
+            mutableBlobSizes->Reserve(static_cast<int>(blobs.size()));
+            for (const auto &blob : blobs) {
+                mutableBlobSizes->Add(blob.size);
+            }
+        }
+        objectInfoPb.set_object_key(context.bufferInfo[i]->objectKey);
+        objectInfoPb.set_data_size(context.bufferInfo[i]->dataSize);
+        objectInfoPb.set_shm_id(context.bufferInfo[i]->shmId);
+        context.req.mutable_object_info()->Add(std::move(objectInfoPb));
+    }
+    return Status::OK();
+}
+
+void SetMultiPublishRequestOptions(MultiPublishRequestContext &context)
+{
+    context.req.set_client_id(context.clientId);
+    context.req.set_ttl_second(context.param.ttlSecond);
+    context.req.set_write_mode(static_cast<uint32_t>(context.bufferInfo[0]->objectMode.GetWriteMode()));
+    context.req.set_consistency_type(static_cast<uint32_t>(context.bufferInfo[0]->objectMode.GetConsistencyType()));
+    context.req.set_cache_type(static_cast<uint32_t>(context.bufferInfo[0]->objectMode.GetCacheType()));
+    context.req.set_existence(static_cast<::datasystem::ExistenceOptPb>(context.param.existence));
+    context.req.set_is_replica(context.param.isReplica);
+    context.req.set_auto_release_memory_ref(!context.bufferInfo[0]->shmId.Empty());
+    context.req.set_return_local_published_indexes(context.param.returnLocalPublishedIndexes);
+}
+
+Status BuildMultiPublishRequest(MultiPublishRequestContext &context)
+{
+    SetMultiPublishRequestOptions(context);
+    CHECK_FAIL_RETURN_STATUS(
+        context.bufferInfo.size() <= static_cast<size_t>(std::numeric_limits<int>::max()), K_INVALID,
+        FormatString("bufferInfo count %zu exceeds protobuf int limit", context.bufferInfo.size()));
+    RETURN_IF_NOT_OK(ValidateDeviceBlobRefs(context.deviceBlobRefs, context.bufferInfo.size()));
+    context.req.mutable_object_info()->Reserve(static_cast<int>(context.bufferInfo.size()));
+    std::optional<PerfPoint> serializePoint;
+    if (!context.deviceBlobRefs.empty()) {
+        serializePoint.emplace(PerfKey::CLIENT_D2H_SERIALIZE_BLOB_SIZES);
+    }
+    RETURN_IF_NOT_OK(AppendMultiPublishObjects(context));
+    if (serializePoint.has_value()) {
+        serializePoint->Record();
+    }
+    return Status::OK();
+}
+}  // namespace
+
 ClientWorkerLocalApi::ClientWorkerLocalApi(HostPort hostPort,
                                            std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api,
                                            void *worker, HeartbeatType heartbeatType, Signature *signature,
@@ -115,41 +207,17 @@ Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bu
 
 Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
                                           const PublishParam &param, MultiPublishRspPb &rsp,
-                                          const std::vector<std::vector<uint64_t>> &blobSizes)
+                                          const std::vector<const DeviceBlobList *> &deviceBlobRefs)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
     GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     MultiPublishReqPb req;
-    req.set_client_id(clientId_);
-    req.set_ttl_second(param.ttlSecond);
-    req.set_write_mode(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetWriteMode()));
-    req.set_consistency_type(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetConsistencyType()));
-    req.set_cache_type(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetCacheType()));
-    req.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
-    req.set_is_replica(param.isReplica);
-    req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
-    req.set_return_local_published_indexes(param.returnLocalPublishedIndexes);
     std::vector<MemView> mvs;
     uint64_t payloadBytes = 0;
     uint64_t shmBytes = 0;
-    req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
-    for (size_t i = 0; i < bufferInfo.size(); ++i) {
-        if (bufferInfo[i]->shmId.Empty()) {
-            mvs.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
-            payloadBytes += bufferInfo[i]->dataSize;
-        } else {
-            shmBytes += bufferInfo[i]->dataSize;
-        }
-        MultiPublishReqPb::ObjectInfoPb objectInfoPb;
-        auto mutableBlobSizes = objectInfoPb.mutable_blob_sizes();
-        if (blobSizes.size() != 0) {
-            mutableBlobSizes->Add(blobSizes[i].begin(), blobSizes[i].end());
-        }
-        objectInfoPb.set_object_key(bufferInfo[i]->objectKey);
-        objectInfoPb.set_data_size(bufferInfo[i]->dataSize);
-        objectInfoPb.set_shm_id(bufferInfo[i]->shmId);
-        req.mutable_object_info()->Add(std::move(objectInfoPb));
-    }
+    MultiPublishRequestContext context{ clientId_, bufferInfo, param, deviceBlobRefs, req, mvs, payloadBytes,
+                                        shmBytes };
+    RETURN_IF_NOT_OK(BuildMultiPublishRequest(context));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when multi publish.");
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     std::vector<RpcMessage> rms;

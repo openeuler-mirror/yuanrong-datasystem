@@ -388,6 +388,30 @@ struct AsyncMGetH2DState {
     }
 };
 
+// A remote source group: objects sharing one remote root identity. Owns only fixed-size H2DObjectView
+// entries and never copies a DeviceBlobList or Blob. Defined
+// unconditionally because the grouping containers in HostDataCopy2Device are parsed on every build (the
+// RH2D branch is only reachable when IsRemoteH2DEnabled() is true, but the compiler must still resolve the
+// type).
+struct RemoteH2DGroup {
+    std::string rootInternal;
+    std::vector<datasystem::object_cache::H2DObjectView> objects;
+};
+
+constexpr size_t REMOTE_H2D_GROUP_INITIAL_RESERVE = 8;
+
+#ifdef USE_NPU
+// One request-owned flat allocation backing the P2pScatterEntry array for a synchronous ScatterBatch call.
+// Replaces the former per-object std::vector<std::vector<void*>> dstBufs / counts. entries[i].dstBufs/counts
+// point into dstBuffers/sizes; no vector may resize after the pointers are assigned. Storage lives on the
+// builder's stack and outlives the synchronous ScatterBatch call.
+struct ScatterBatchStorage {
+    std::vector<P2pScatterEntry> entries;
+    std::vector<void *> dstBuffers;
+    std::vector<uint64_t> sizes;
+};
+#endif
+
 struct AsyncMSetD2HState {
     std::vector<std::string> objectKeys;
     std::vector<DeviceBlobList> devBlobList;
@@ -2157,6 +2181,112 @@ std::shared_future<AsyncResult> MakeFailedAsyncH2DFuture(ObjectAccessRecorder &a
         .Record();
     return FastFailAsyncResult(rc, std::move(failedKeys));
 }
+
+void GroupH2DObjects(const std::vector<DeviceBlobList> &devBlobList,
+                     const std::vector<Buffer *> &existBufferList,
+                     std::vector<object_cache::H2DObjectView> &localObjects,
+                     std::vector<RemoteH2DGroup> &remoteGroups)
+{
+    const size_t objectCount = devBlobList.size();
+    localObjects.reserve(objectCount);
+    std::unordered_map<std::string, size_t> rootInfoToIndexMapping;
+    rootInfoToIndexMapping.reserve(objectCount);
+    for (size_t i = 0; i < objectCount; i++) {
+        auto *buffer = existBufferList[i];
+        if (buffer == nullptr) {
+            continue;
+        }
+        object_cache::H2DObjectView view{ &devBlobList[i], buffer, i };
+        if (buffer->GetRemoteHostInfo() == nullptr) {
+            localObjects.emplace_back(view);
+            continue;
+        }
+        const std::string &rootInternal = buffer->GetRemoteHostInfo()->root_info().internal();
+        auto iter = rootInfoToIndexMapping.find(rootInternal);
+        if (iter == rootInfoToIndexMapping.end()) {
+            iter = rootInfoToIndexMapping.emplace(rootInternal, remoteGroups.size()).first;
+            remoteGroups.emplace_back(RemoteH2DGroup{ rootInternal, {} });
+            remoteGroups.back().objects.reserve(REMOTE_H2D_GROUP_INITIAL_RESERVE);
+        }
+        remoteGroups[iter->second].objects.emplace_back(view);
+    }
+}
+
+Status ValidateDeviceDataCreateBlobs(const std::vector<DeviceBlobList> &devBlobList, int32_t expectedDeviceIdx)
+{
+    for (size_t i = 0; i < devBlobList.size(); i++) {
+        // The device copy manager submits one batch with the first device index; accepting mixed indices here would
+        // route part of the batch to the wrong device rather than preserve the old copy-stage failure.
+        CHECK_FAIL_RETURN_STATUS(devBlobList[i].deviceIdx == expectedDeviceIdx, K_INVALID,
+                                 FormatString("Device index mismatch in batch: expect %d, actual %d, index %zu",
+                                              expectedDeviceIdx, devBlobList[i].deviceIdx, i));
+        CHECK_FAIL_RETURN_STATUS(
+            devBlobList[i].srcOffset >= 0, K_INVALID,
+            FormatString("Invalid srcOffset: %d, which must be non-negative.", devBlobList[i].srcOffset));
+    }
+    return Status::OK();
+}
+
+Status ValidateDeviceBlobDeviceIdxBatch(const std::vector<DeviceBlobList> &devBlobList)
+{
+    CHECK_FAIL_RETURN_STATUS(!devBlobList.empty(), K_INVALID, "The devBlobList is empty");
+    const auto expectedDeviceIdx = devBlobList.front().deviceIdx;
+    for (size_t i = 1; i < devBlobList.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS(devBlobList[i].deviceIdx == expectedDeviceIdx, K_INVALID,
+                                 FormatString("Device index mismatch in batch: expect %d, actual %d, index %zu",
+                                              expectedDeviceIdx, devBlobList[i].deviceIdx, i));
+    }
+    return Status::OK();
+}
+
+Status ValidateDeviceDataCreatePayload(const std::vector<DeviceBlobList> &devBlobList,
+                                       const std::vector<bool> &exists)
+{
+    CHECK_FAIL_RETURN_STATUS(devBlobList.size() == exists.size(), K_INVALID,
+                             "The size of devBlobList and exists does not match");
+    for (size_t i = 0; i < devBlobList.size(); ++i) {
+        // Existing objects are filtered before the device copy. Keep accepting their legacy placeholder
+        // descriptors (including empty lists, null pointers and zero sizes); only data that will actually be
+        // published must describe a valid device memory range.
+        if (exists[i]) {
+            continue;
+        }
+        CHECK_FAIL_RETURN_STATUS(!devBlobList[i].blobs.empty(), K_INVALID,
+                                 FormatString("DeviceBlobList.blobs cannot be empty, object index: %zu", i));
+        for (size_t j = 0; j < devBlobList[i].blobs.size(); ++j) {
+            const auto &blob = devBlobList[i].blobs[j];
+            CHECK_FAIL_RETURN_STATUS(
+                blob.pointer != nullptr, K_INVALID,
+                FormatString("Device blob pointer is null, object index: %zu, blob index: %zu", i, j));
+            CHECK_FAIL_RETURN_STATUS(
+                blob.size > 0, K_INVALID,
+                FormatString("Device blob size is zero, object index: %zu, blob index: %zu", i, j));
+        }
+    }
+    return Status::OK();
+}
+
+void BuildD2HObjectViews(const std::vector<DeviceBlobList> &devBlobList, const std::vector<bool> &exists,
+                         std::vector<std::shared_ptr<Buffer>> &bufferList,
+                         std::vector<const DeviceBlobList *> &filteredDeviceBlobRefs,
+                         std::vector<D2HObjectView> &d2hObjects)
+{
+    std::vector<std::shared_ptr<Buffer>> filterBufferList;
+    filterBufferList.reserve(bufferList.size());
+    filteredDeviceBlobRefs.clear();
+    filteredDeviceBlobRefs.reserve(bufferList.size());
+    d2hObjects.reserve(bufferList.size());
+    for (size_t idx = 0; idx < exists.size(); idx++) {
+        if (exists[idx]) {
+            continue;
+        }
+        filterBufferList.emplace_back(std::move(bufferList[idx]));
+        // Non-owning ref into devBlobList; the caller-owned list outlives the synchronous compose, copy and publish.
+        filteredDeviceBlobRefs.emplace_back(&devBlobList[idx]);
+        d2hObjects.emplace_back(D2HObjectView{ filteredDeviceBlobRefs.back(), filterBufferList.back().get(), idx });
+    }
+    bufferList = std::move(filterBufferList);
+}
 }  // namespace
 
 std::shared_future<AsyncResult> ObjectClientImpl::AsyncMGetH2D(const std::vector<std::string> &objectKeys,
@@ -2258,8 +2388,9 @@ Status ObjectClientImpl::MGetH2DImpl(const std::vector<std::string> &objectKeys,
     }
 
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid(devices), "Check device failed.");
-    std::vector<DeviceBlobList> devBlobListCopy = devBlobList;
-    auto rc = HostDataCopy2Device(devBlobListCopy, existBufferList);
+    // The synchronous caller retains devBlobList until MGetH2D returns, so HostDataCopy2Device may use a
+    // read-only view instead of a deep copy.
+    auto rc = HostDataCopy2Device(devBlobList, existBufferList);
     stagePoint.Record();
     return rc;
 }
@@ -2332,139 +2463,141 @@ static Status InitRemoteH2DComm(const std::vector<Buffer *> &existBufferList,
     return Status::OK();
 }
 
-static Status FillScatterEntry(size_t index, DeviceBlobList *devBlobList, Buffer *buffer,
-                               const std::shared_ptr<RemoteH2DContext> &p2pComm, P2pScatterEntry &entry,
-                               std::vector<void *> &dstBufs, std::vector<uint64_t> &counts)
+// The per-entry scatter preparation that previously lived in FillScatterEntry/FillScatterEntries is now
+// inlined into ImportSegAndReadHostMemory below as a two-pass flat-storage builder.
+static Status ValidateRemoteH2DObjects(const std::vector<H2DObjectView> &objects, size_t &totalDescriptorCount)
 {
-    auto *remoteHostInfo = buffer->GetRemoteHostInfo();
-    auto &seg = remoteHostInfo->remote_host_segment();
-    auto &hostDataInfo = remoteHostInfo->data_info();
-    auto &blobs = devBlobList->blobs;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        RemoteH2DManager::Instance().ImportHostSegment(p2pComm->remoteEndpoint, seg),
-        FormatString("[RH2D][ScatterBatch][Client] ImportHostSegment failed, index=%zu, segLen=%zu, "
-                     "dataOffset=%zu",
-                     index, seg.seg_len(), seg.seg_data_offset()));
-
-    CHECK_FAIL_RETURN_STATUS(
-        seg.seg_data_offset() + hostDataInfo.offset() < seg.seg_len(), K_RUNTIME_ERROR,
-        FormatString("The offset overflow, starting point:%zu + blob offset:%zu > segment size:%zu",
-                     seg.seg_data_offset(), hostDataInfo.offset(), seg.seg_len()));
-    entry.ddrBuf = reinterpret_cast<void *>(seg.seg_va() + seg.seg_data_offset() + hostDataInfo.offset());
-    entry.numEl = hostDataInfo.sizes_size();
-    CHECK_FAIL_RETURN_STATUS(
-        entry.numEl == blobs.size() && entry.numEl > 0, K_INVALID,
-        FormatString("Blobs count mismatch in devBlobList between sender and receiver, sender count is: %ld, "
-                     "receiver count is: %ld, mismatch devBlobList index: %zu, mismatch key index: %zu",
-                     entry.numEl, blobs.size(), index, index));
-
-    dstBufs.resize(entry.numEl);
-    counts.resize(entry.numEl);
-    for (size_t j = 0; j < entry.numEl; j++) {
-        // Double check the sizes and offsets, and prepare the dstBufs and counts for the Get Scatter.
-        auto hostDataSize = hostDataInfo.sizes(j);
-        auto deviceDataSize = blobs[j].size;
-        CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(hostDataSize) == deviceDataSize, K_RUNTIME_ERROR,
-                                 "The data size of device and host is not equal.");
-        dstBufs[j] = blobs[j].pointer;
-        counts[j] = deviceDataSize;
-    }
-    entry.dstBufs = dstBufs.data();
-    entry.counts = counts.data();
-    entry.dataType = HCCL_DATA_TYPE_UINT8;
-    return Status::OK();
-}
-
-static Status FillScatterEntries(std::vector<DeviceBlobList *> &devBlobList, std::vector<Buffer *> &existBufferList,
-                                 const std::shared_ptr<RemoteH2DContext> &p2pComm,
-                                 std::vector<P2pScatterEntry> &entries,
-                                 std::vector<std::vector<void *>> &dstBufs,
-                                 std::vector<std::vector<uint64_t>> &counts)
-{
-    for (size_t i = 0; i < existBufferList.size(); i++) {
-        RETURN_IF_NOT_OK(FillScatterEntry(i, devBlobList[i], existBufferList[i], p2pComm, entries[i], dstBufs[i],
-                                          counts[i]));
+    totalDescriptorCount = 0;
+    for (size_t i = 0; i < objects.size(); i++) {
+        const auto &view = objects[i];
+        CHECK_FAIL_RETURN_STATUS(view.hostBuffer != nullptr, K_INVALID,
+                                 FormatString("RH2D view hostBuffer is null, index=%zu", i));
+        CHECK_FAIL_RETURN_STATUS(view.deviceBlobs != nullptr, K_INVALID,
+                                 FormatString("RH2D view deviceBlobs is null, index=%zu", i));
+        const auto numEl = view.hostBuffer->GetRemoteHostInfo()->data_info().sizes_size();
+        const auto blobCount = view.deviceBlobs->blobs.size();
+        CHECK_FAIL_RETURN_STATUS(
+            static_cast<size_t>(numEl) == blobCount && numEl > 0,
+            K_INVALID,
+            FormatString("Blobs count mismatch in devBlobList between sender and receiver, sender count is: %ld, "
+                         "receiver count is: %ld, mismatch devBlobList index: %zu, mismatch key index: %zu",
+                         numEl, blobCount, i, view.requestIndex));
+        CHECK_FAIL_RETURN_STATUS(totalDescriptorCount <= SIZE_MAX - static_cast<size_t>(numEl), K_INVALID,
+                                 "Total RH2D descriptor count overflows size_t");
+        totalDescriptorCount += static_cast<size_t>(numEl);
     }
     return Status::OK();
 }
-#endif
 
-static Status ImportSegAndReadHostMemory(std::vector<DeviceBlobList *> &devBlobList,
-                                         std::vector<Buffer *> &existBufferList)
+static Status BuildRemoteH2DScatterEntries(const std::vector<H2DObjectView> &objects,
+                                           const std::shared_ptr<RemoteH2DContext> &p2pComm,
+                                           ScatterBatchStorage &storage)
 {
-    (void)devBlobList;
-    (void)existBufferList;
+    size_t flatOffset = 0;
+    for (size_t i = 0; i < objects.size(); i++) {
+        const auto &view = objects[i];
+        auto *buffer = view.hostBuffer;
+        auto *remoteHostInfo = buffer->GetRemoteHostInfo();
+        auto &seg = remoteHostInfo->remote_host_segment();
+        auto &hostDataInfo = remoteHostInfo->data_info();
+        auto &blobs = view.deviceBlobs->blobs;
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            RemoteH2DManager::Instance().ImportHostSegment(p2pComm->remoteEndpoint, seg),
+            FormatString("[RH2D][ScatterBatch][Client] ImportHostSegment failed, index=%zu, segLen=%zu, "
+                         "dataOffset=%zu",
+                         i, seg.seg_len(), seg.seg_data_offset()));
+        CHECK_FAIL_RETURN_STATUS(
+            seg.seg_data_offset() + hostDataInfo.offset() < seg.seg_len(), K_RUNTIME_ERROR,
+            FormatString("The offset overflow, starting point:%zu + blob offset:%zu > segment size:%zu",
+                         seg.seg_data_offset(), hostDataInfo.offset(), seg.seg_len()));
+        auto &entry = storage.entries[i];
+        entry.ddrBuf = reinterpret_cast<void *>(seg.seg_va() + seg.seg_data_offset() + hostDataInfo.offset());
+        entry.numEl = hostDataInfo.sizes_size();
+        entry.dstBufs = storage.dstBuffers.data() + flatOffset;
+        entry.counts = storage.sizes.data() + flatOffset;
+        entry.dataType = HCCL_DATA_TYPE_UINT8;
+        for (size_t j = 0; j < entry.numEl; j++) {
+            auto hostDataSize = hostDataInfo.sizes(j);
+            auto deviceDataSize = blobs[j].size;
+            CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(hostDataSize) == deviceDataSize, K_RUNTIME_ERROR,
+                                     "The data size of device and host is not equal.");
+            storage.dstBuffers[flatOffset + j] = blobs[j].pointer;
+            storage.sizes[flatOffset + j] = deviceDataSize;
+        }
+        flatOffset += entry.numEl;
+    }
+    return Status::OK();
+}
+#endif  // USE_NPU
+
+static Status ImportSegAndReadHostMemory(const std::vector<H2DObjectView> &objects)
+{
+    (void)objects;
 #ifdef USE_NPU
     // 1. Initialize communicator connection.
     // Note that client uses worker side root info as the key.
     PerfPoint point(PerfKey::CLIENT_IMPORT_SEG_AND_READ);
     std::shared_ptr<RemoteH2DContext> p2pComm;
+    // Buffers are grouped by data source, so root info should be the same for these objects.
+    std::vector<Buffer *> existBufferList;
+    existBufferList.reserve(objects.size());
+    for (const auto &view : objects) {
+        existBufferList.emplace_back(view.hostBuffer);
+    }
     RETURN_IF_NOT_OK(InitRemoteH2DComm(existBufferList, p2pComm));
-
-    // 2. Import the remote host segment.
-    // 3. Read from remote host memory.
-
-    // Initialize vectors to keep entry data in scope
-    std::vector<P2pScatterEntry> entries(existBufferList.size());
-    std::vector<std::vector<void *>> dstBufs(existBufferList.size());
-    std::vector<std::vector<uint64_t>> counts(existBufferList.size());
-
-    RETURN_IF_NOT_OK(FillScatterEntries(devBlobList, existBufferList, p2pComm, entries, dstBufs, counts));
-
+    size_t totalDescriptorCount = 0;
+    RETURN_IF_NOT_OK(ValidateRemoteH2DObjects(objects, totalDescriptorCount));
+    ScatterBatchStorage storage;
+    storage.entries.resize(objects.size());
+    storage.dstBuffers.resize(totalDescriptorCount);
+    storage.sizes.resize(totalDescriptorCount);
+    RETURN_IF_NOT_OK(BuildRemoteH2DScatterEntries(objects, p2pComm, storage));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        RemoteH2DManager::Instance().ScatterBatch(entries.data(), entries.size(), p2pComm),
-        FormatString("[RH2D][ScatterBatch][Client] ScatterBatch failed, entries=%zu", entries.size()));
+        RemoteH2DManager::Instance().ScatterBatch(storage.entries.data(), storage.entries.size(), p2pComm),
+        FormatString("[RH2D][ScatterBatch][Client] ScatterBatch failed, entries=%zu", storage.entries.size()));
 #endif
     return Status::OK();
 }
 
-Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlobList,
+Status ObjectClientImpl::HostDataCopy2Device(const std::vector<DeviceBlobList> &devBlobList,
                                              std::vector<Buffer *> &existBufferList)
 {
     PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY);
+    RETURN_IF_NOT_OK(ValidateDeviceBlobDeviceIdxBatch(devBlobList));
+    CHECK_FAIL_RETURN_STATUS(devBlobList.size() == existBufferList.size(), K_INVALID,
+                             "The size of devBlobList and existBufferList does not match");
     PerfPoint stagePoint(PerfKey::CLIENT_H2D_GROUP_SOURCES);
     if (!IsRemoteH2DEnabled()) {
+        // Pure same-node H2D. Build non-owning object views directly from the caller's input without copying
+        // DeviceBlobList, then dispatch via the view overload. The synchronous copy finishes before the views expire.
         stagePoint.RecordAndReset(PerfKey::CLIENT_H2D_LOCAL_COPY);
-        RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(devBlobList, existBufferList, MemcpyKind::HOST_TO_DEVICE,
-                                                              workerApi_[LOCAL_WORKER]->enableHugeTlb_));
+        std::vector<object_cache::H2DObjectView> localObjects;
+        localObjects.reserve(devBlobList.size());
+        for (size_t i = 0; i < devBlobList.size(); i++) {
+            if (existBufferList[i] == nullptr) {
+                continue;
+            }
+            localObjects.emplace_back(object_cache::H2DObjectView{ &devBlobList[i], existBufferList[i], i });
+        }
+        if (!localObjects.empty()) {
+            RETURN_IF_NOT_OK(
+                devOcImpl_->MemCopyBetweenDevAndHost(localObjects, workerApi_[LOCAL_WORKER]->enableHugeTlb_));
+        }
         stagePoint.RecordAndReset(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_GET);
     } else {
-        // Group buffers by data source in RH2D scenario
-        std::vector<DeviceBlobList> localSourceDevBlobList;
-        std::vector<Buffer *> localSourceBufferList;
-        std::vector<std::vector<DeviceBlobList *>> remoteSourceDevBlobList;
-        std::vector<std::vector<Buffer *>> remoteSourceBufferList;
-        std::unordered_map<std::string, int> rootInfoToIndexMapping;
-        for (size_t i = 0; i < devBlobList.size(); i++) {
-            auto &buffer = existBufferList[i];
-            // Skip the non-existent buffers
-            if (buffer == nullptr) {
-                continue;
-            }
-            if (buffer->GetRemoteHostInfo() == nullptr) {
-                localSourceDevBlobList.emplace_back(devBlobList[i]);
-                localSourceBufferList.emplace_back(buffer);
-                continue;
-            }
-            const std::string &rootInternal = buffer->GetRemoteHostInfo()->root_info().internal();
-            auto iter = rootInfoToIndexMapping.find(rootInternal);
-            if (iter == rootInfoToIndexMapping.end()) {
-                iter = rootInfoToIndexMapping.emplace(rootInternal, remoteSourceBufferList.size()).first;
-                remoteSourceDevBlobList.emplace_back();
-                remoteSourceBufferList.emplace_back();
-            }
-            remoteSourceDevBlobList[iter->second].emplace_back(&devBlobList[i]);
-            remoteSourceBufferList[iter->second].emplace_back(buffer);
-        }
+        // Group buffers by data source in RH2D scenario with non-owning object views. Views contain only
+        // pointers and a requestIndex; no DeviceBlobList or Blob is copied during grouping (design 6.2).
+        std::vector<object_cache::H2DObjectView> localObjects;
+        std::vector<RemoteH2DGroup> remoteGroups;
+        GroupH2DObjects(devBlobList, existBufferList, localObjects, remoteGroups);
         stagePoint.RecordAndReset(PerfKey::CLIENT_H2D_LOCAL_COPY);
-        if (!localSourceDevBlobList.empty()) {
-            RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(localSourceDevBlobList, localSourceBufferList,
-                                                                  MemcpyKind::HOST_TO_DEVICE,
-                                                                  workerApi_[LOCAL_WORKER]->enableHugeTlb_));
+        if (!localObjects.empty()) {
+            RETURN_IF_NOT_OK(
+                devOcImpl_->MemCopyBetweenDevAndHost(localObjects, workerApi_[LOCAL_WORKER]->enableHugeTlb_));
         }
         stagePoint.RecordAndReset(PerfKey::CLIENT_H2D_REMOTE_COPY);
-        for (size_t i = 0; i < remoteSourceDevBlobList.size(); i++) {
-            RETURN_IF_NOT_OK(ImportSegAndReadHostMemory(remoteSourceDevBlobList[i], remoteSourceBufferList[i]));
+        for (auto &group : remoteGroups) {
+            RETURN_IF_NOT_OK(ImportSegAndReadHostMemory(group.objects));
         }
         stagePoint.RecordAndReset(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_GET);
     }
@@ -2478,56 +2611,47 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
 
 Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &objectKeys,
                                           const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam,
-                                          std::vector<std::shared_ptr<Buffer>> &bufferList, std::vector<bool> &exists)
+                                          std::vector<std::shared_ptr<Buffer>> &bufferList, std::vector<bool> &exists,
+                                          std::vector<const DeviceBlobList *> &filteredDeviceBlobRefs)
 {
     PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_OBJECT);
     CHECK_FAIL_RETURN_STATUS(!objectKeys.empty(), K_INVALID, "The keys are empty");
     CHECK_FAIL_RETURN_STATUS(objectKeys.size() == devBlobList.size(), K_INVALID,
                              "The size of objectKeys and devBlobList does not match");
+    CHECK_FAIL_RETURN_STATUS(!devBlobList.empty(), K_INVALID, "The devBlobList is empty");
 
     FullParam param;
     param.writeMode = setParam.writeMode;
     param.cacheType = setParam.cacheType;
     std::vector<size_t> dataSizeList;
     dataSizeList.reserve(objectKeys.size());
-    for (size_t i = 0; i < devBlobList.size(); i++) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid({ static_cast<uint32_t>(devBlobList[i].deviceIdx) }),
-                                         "Check device failed.");
-    }
+    const auto expectedDeviceIdx = devBlobList.front().deviceIdx;
+    RETURN_IF_NOT_OK(ValidateDeviceDataCreateBlobs(devBlobList, expectedDeviceIdx));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid({ static_cast<uint32_t>(expectedDeviceIdx) }),
+                                     "Check device failed.");
     BlobListInfo blobInfo;
     const auto memoryAlignment = workerApi_[LOCAL_WORKER]->GetMemoryAlignment();
+    PerfPoint prepareInputPoint(PerfKey::CLIENT_D2H_PREPARE_INPUT);
     RETURN_IF_NOT_OK(PrepareDataSizeList(dataSizeList, devBlobList, blobInfo, memoryAlignment));
-    LOG(INFO) << blobInfo.ToString(true);
+    prepareInputPoint.Record();
+    VLOG(1) << blobInfo.ToString(true);
     exists.resize(objectKeys.size(), false);
     RETURN_IF_NOT_OK(MultiCreate(objectKeys, dataSizeList, param, false, bufferList, exists));
-    std::vector<std::shared_ptr<Buffer>> filterBufferList;
-    std::vector<DeviceBlobList> filterDevBlobList;
-    filterBufferList.reserve(objectKeys.size());
-    filterDevBlobList.reserve(objectKeys.size());
-    for (auto idx = 0u; idx < objectKeys.size(); idx++) {
-        CHECK_FAIL_RETURN_STATUS(
-            devBlobList[idx].srcOffset >= 0, K_INVALID,
-            FormatString("Invalid srcOffset: %d, which must be non-negative.", devBlobList[idx].srcOffset));
-        if (exists[idx]) {
-            continue;
-        }
-        filterBufferList.emplace_back(bufferList[idx]);
-        filterDevBlobList.emplace_back(devBlobList[idx]);
-    }
-
-    bufferList = filterBufferList;
+    RETURN_IF_NOT_OK(ValidateDeviceDataCreatePayload(devBlobList, exists));
+    PerfPoint filterPoint(PerfKey::CLIENT_D2H_FILTER_SOURCES);
+    std::vector<D2HObjectView> d2hObjects;
+    BuildD2HObjectViews(devBlobList, exists, bufferList, filteredDeviceBlobRefs, d2hObjects);
+    filterPoint.Record();
     if (bufferList.empty()) {
         return Status::OK();
     }
     point.RecordAndReset(PerfKey::CLIENT_D2H_MEMCPY);
-    ComposeBufferData(bufferList, filterDevBlobList, memoryAlignment);
-    std::vector<Buffer *> bufferRawPtrList;
-    bufferRawPtrList.reserve(bufferList.size());
-    for (auto &buff : bufferList) {
-        bufferRawPtrList.emplace_back(buff.get());
-    }
-    RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(
-        filterDevBlobList, bufferRawPtrList, MemcpyKind::DEVICE_TO_HOST, workerApi_[LOCAL_WORKER]->enableHugeTlb_));
+    // Compose from refs and run D2H via the views built during filtering. The Buffer pointees remain stable
+    // when filterBufferList is moved into bufferList.
+    PerfPoint composePoint(PerfKey::CLIENT_D2H_COMPOSE_PREFIX);
+    RETURN_IF_NOT_OK(ComposeBufferDataRefs(filteredDeviceBlobRefs, bufferList, memoryAlignment));
+    composePoint.Record();
+    RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(d2hObjects, workerApi_[LOCAL_WORKER]->enableHugeTlb_));
 
     return Status::OK();
 }
@@ -2548,11 +2672,9 @@ Status ObjectClientImpl::MSetD2H(const std::vector<std::string> &objectKeys,
         access.Result(rc).Record();
         return rc;
     }
-    auto cfgRc = UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
-    if (cfgRc.IsError()) {
-        access.Result(cfgRc).Record();
-        return cfgRc;
-    }
+    // D2H never touches RemoteH2DManager, so this path must not initialize or update RH2D configuration.
+    // Device-id consistency is enforced later in DeviceDataCreate: ValidateDeviceDataCreateBlobs checks the
+    // whole batch shares one deviceIdx, and CheckDeviceValid verifies that device is available.
     auto status = MSetD2HImpl(objectKeys, devBlobList, setParam, outLocalSetKeys);
     access.Result(status).Record();
     return status;
@@ -2570,11 +2692,9 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMSetD2H(const std::vector
         return MakeFailedAsyncH2DFuture(*access, rc, devBlobList, objectKeys, objectKeys);
     }
 
-    auto cfgRc = UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
-    if (cfgRc.IsError()) {
-        return MakeFailedAsyncH2DFuture(*access, cfgRc, devBlobList, objectKeys, objectKeys);
-    }
-
+    // D2H never touches RemoteH2DManager, so this path must not initialize or update RH2D configuration.
+    // Device-id consistency is enforced later in DeviceDataCreate (ValidateDeviceDataCreateBlobs +
+    // CheckDeviceValid), matching the synchronous MSetD2H path above.
     auto asyncState = std::make_shared<AsyncMSetD2HState>(objectKeys, devBlobList, setParam);
     access->ObjectKeysSummaryRef(asyncState->objectKeys)
         .DataSizeProvider([asyncState] { return CalculateDeviceBlobSize(asyncState->devBlobList); });
@@ -2597,37 +2717,17 @@ Status ObjectClientImpl::MSetD2HImpl(const std::vector<std::string> &objectKeys,
     // Step1: execute Exist check
     std::vector<std::shared_ptr<Buffer>> bufferList;
     std::vector<bool> exists;
-    RETURN_IF_NOT_OK(DeviceDataCreate(objectKeys, devBlobList, setParam, bufferList, exists));
-
-    std::vector<uint32_t> devices;
-    for (size_t i = 0; i < objectKeys.size(); ++i) {
-        if (!exists[i]) {
-            devices.emplace_back(devBlobList[i].deviceIdx);
-        }
-    }
-    RETURN_IF_NOT_OK(CheckDeviceValid(devices));
+    std::vector<const DeviceBlobList *> filteredDeviceBlobRefs;
+    RETURN_IF_NOT_OK(DeviceDataCreate(objectKeys, devBlobList, setParam, bufferList, exists, filteredDeviceBlobRefs));
 
     // If all objects already exist, return success immediately
-    if (devices.empty()) {
+    if (filteredDeviceBlobRefs.empty()) {
         return Status::OK();
     }
-    // Step3: Execute final MultiPublish operation
+    // Step3: Execute final MultiPublish operation. Serialize blob sizes directly from the filtered
+    // device-blob refs; the synchronous request construction does not retain them.
     PerfPoint point(PerfKey::CLIENT_MULTI_PUBLISH_OBJECT);
-    std::vector<std::vector<std::uint64_t>> blobSizes;
-    blobSizes.reserve(devices.size());
-    for (size_t i = 0; i < objectKeys.size(); ++i) {
-        if (exists[i]) {
-            continue;
-        }
-        const auto &devblob = devBlobList[i];
-        std::vector<uint64_t> sizeList;
-        sizeList.reserve(devblob.blobs.size());
-        for (auto &blob : devblob.blobs) {
-            sizeList.emplace_back(blob.size);
-        }
-        blobSizes.emplace_back(std::move(sizeList));
-    }
-    return MultiPublish(bufferList, setParam, blobSizes, outLocalSetKeys);
+    return MultiPublish(bufferList, setParam, filteredDeviceBlobRefs, outLocalSetKeys);
 }
 
 Status ObjectClientImpl::CheckMSetD2HInput(const std::vector<std::string> &objectKeys,
@@ -7099,15 +7199,30 @@ Status ObjectClientImpl::HandleShmRefCountAfterMultiPublish(const std::vector<st
                                                             const MultiPublishRspPb &rsp)
 {
     Status lastRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    auto markPublished = [this](const std::shared_ptr<Buffer> &buffer) {
+        (void)memoryRefCount_.DecreaseRef(buffer->bufferInfo_->shmId);
+        buffer->isReleased_ = true;
+        buffer->SetVisibility(true);
+    };
+    if (rsp.failed_object_keys().empty()) {
+        for (auto &buffer : bufferList) {
+            if (buffer != nullptr && !buffer->bufferInfo_->shmId.Empty()) {
+                markPublished(buffer);
+            }
+        }
+        if (lastRc.IsError()) {
+            LOG(WARNING) << "Cannot set all the objects from worker, status:" << lastRc.ToString();
+        }
+        return lastRc;
+    }
+
     auto failedSet = std::set<std::string>{ rsp.failed_object_keys().begin(), rsp.failed_object_keys().end() };
     for (auto &buffer : bufferList) {
         if (buffer != nullptr && !buffer->bufferInfo_->shmId.Empty()) {
             // If the objectKey is not in the failed set, it means the worker has successfully decreased the reference
             // count. The buffer should not notify the worker again when it is being destructed.
             if (failedSet.find(buffer->bufferInfo_->objectKey) == failedSet.end()) {
-                (void)memoryRefCount_.DecreaseRef(buffer->bufferInfo_->shmId);
-                buffer->isReleased_ = true;
-                buffer->SetVisibility(true);
+                markPublished(buffer);
             }
         }
     }
@@ -7121,7 +7236,7 @@ Status ObjectClientImpl::HandleShmRefCountAfterMultiPublish(const std::vector<st
 }
 
 Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>> &bufferList, const SetParam &setParam,
-                                      const std::vector<std::vector<uint64_t>> &blobSizes,
+                                      const std::vector<const DeviceBlobList *> &deviceBlobRefs,
                                       std::vector<std::string> *outLocalSetKeys)
 {
     std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList;
@@ -7145,7 +7260,7 @@ Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>>
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, param, rsp, blobSizes));
+    RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, param, rsp, deviceBlobRefs));
     auto publishStatus = HandleShmRefCountAfterMultiPublish(bufferList, rsp);
     if (outLocalSetKeys != nullptr) {
         outLocalSetKeys->clear();
