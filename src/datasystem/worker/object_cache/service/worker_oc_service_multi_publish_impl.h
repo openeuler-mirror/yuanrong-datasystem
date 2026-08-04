@@ -69,6 +69,13 @@ public:
     {
         UpdateObjectAfterCreatingMeta(objectKeys, objectEntries, versions, ttlSecond);
     }
+
+    Status RetryCreateMultiMetaForTest(std::shared_ptr<worker::WorkerMasterOCApi> api,
+                                       master::CreateMultiMetaReqPb &req, master::CreateMultiMetaRspPb &rsp,
+                                       std::unordered_map<std::string, uint64_t> &versionsByKey)
+    {
+        return RetryCreateMultiMeta(std::move(api), req, rsp, versionsByKey);
+    }
 #endif
 
 private:
@@ -78,6 +85,7 @@ private:
         Status rc;
         master::CreateMultiMetaRspPb rsp;
         HostPort masterAddr;
+        std::unordered_map<std::string, uint64_t> versionsByKey;
     };
 
     struct CreateMultiMetaAttemptResult {
@@ -147,7 +155,24 @@ private:
      * @return Status of the call.
      */
     Status RetryCreateMultiMeta(std::shared_ptr<worker::WorkerMasterOCApi> api, master::CreateMultiMetaReqPb &req,
-                                master::CreateMultiMetaRspPb &rsp);
+                                master::CreateMultiMetaRspPb &rsp,
+                                std::unordered_map<std::string, uint64_t> &versionsByKey);
+
+    Status FollowCreateMultiMetaRedirects(const std::shared_ptr<worker::WorkerMasterOCApi> &api,
+                                          const master::CreateMultiMetaReqPb &req,
+                                          const master::CreateMultiMetaRspPb &rsp,
+                                          master::CreateMultiMetaRspPb &finalResponse,
+                                          std::unordered_map<std::string, uint64_t> &versionsByKey);
+
+    Status PartitionCreateMultiMetaRedirects(
+        const master::CreateMultiMetaReqPb &req, const master::CreateMultiMetaRspPb &rsp,
+        master::CreateMultiMetaReqPb &localRequest,
+        std::unordered_map<HostPort, master::CreateMultiMetaReqPb> &redirectRequests);
+
+    Status SendCreateMultiMetaSubRequest(const std::shared_ptr<worker::WorkerMasterOCApi> &api,
+                                         master::CreateMultiMetaReqPb &req,
+                                         master::CreateMultiMetaRspPb &finalResponse,
+                                         std::unordered_map<std::string, uint64_t> &versionsByKey);
 
     /**
      * @brief Construct the request info for create multiple meta.

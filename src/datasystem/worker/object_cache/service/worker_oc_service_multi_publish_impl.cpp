@@ -340,8 +340,9 @@ WorkerOcServiceMultiPublishImpl::CreateMultiMetaResult WorkerOcServiceMultiPubli
         std::min<int64_t>(requestTimeout.CalcRealRemainingTime(), CREATE_MULTI_META_ATTEMPT_TIMEOUT_MS));
     CreateMultiMetaRspPb rsp;
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
-    rc = RetryCreateMultiMeta(api, req, rsp);
-    return CreateMultiMetaResult{ rc, rsp, masterAddr };
+    std::unordered_map<std::string, uint64_t> versionsByKey;
+    rc = RetryCreateMultiMeta(api, req, rsp, versionsByKey);
+    return CreateMultiMetaResult{ rc, rsp, masterAddr, std::move(versionsByKey) };
 }
 
 Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<HostPort> &masterAddrs,
@@ -393,23 +394,126 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vecto
 }
 
 Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMeta(std::shared_ptr<WorkerMasterOCApi> api,
-                                                             CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp)
+                                                             CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp,
+                                                             std::unordered_map<std::string, uint64_t> &versionsByKey)
 {
-    while (true) {
+    do {
         CHECK_FAIL_RETURN_STATUS(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
                                  K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        rsp.Clear();
         RETURN_IF_NOT_OK(api->CreateMultiMeta(req, rsp, true));
-        if (rsp.info().empty()) {
-            return Status::OK();
-        }
         if (rsp.meta_is_moving()) {
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
-            rsp.Clear();
             SleepForMetaMovingRetry(std::min<int64_t>(RETRY_INTERNAL_MS_META_MOVING, remainingTimeMs));
+        }
+    } while (rsp.meta_is_moving());
+    if (rsp.info().empty()) {
+        return Status::OK();
+    }
+
+    CreateMultiMetaRspPb finalResponse;
+    RETURN_IF_NOT_OK(FollowCreateMultiMetaRedirects(api, req, rsp, finalResponse, versionsByKey));
+    rsp = std::move(finalResponse);
+    return Status::OK();
+}
+
+Status WorkerOcServiceMultiPublishImpl::FollowCreateMultiMetaRedirects(
+    const std::shared_ptr<WorkerMasterOCApi> &api, const CreateMultiMetaReqPb &req, const CreateMultiMetaRspPb &rsp,
+    CreateMultiMetaRspPb &finalResponse, std::unordered_map<std::string, uint64_t> &versionsByKey)
+{
+    CreateMultiMetaReqPb localRequest;
+    std::unordered_map<HostPort, CreateMultiMetaReqPb> redirectRequests;
+    RETURN_IF_NOT_OK(PartitionCreateMultiMetaRedirects(req, rsp, localRequest, redirectRequests));
+    if (localRequest.metas_size() != 0) {
+        RETURN_IF_NOT_OK(SendCreateMultiMetaSubRequest(api, localRequest, finalResponse, versionsByKey));
+    }
+    CHECK_FAIL_RETURN_STATUS(workerMasterApiManager_ != nullptr, K_RUNTIME_ERROR,
+                             "worker master api manager is nullptr");
+    for (auto &[targetAddress, targetRequest] : redirectRequests) {
+        if (targetRequest.metas_size() == 0) {
             continue;
         }
-        return Status(K_SCALING, "The cluster is scaling, please try again.");
+        std::shared_ptr<WorkerMasterOCApi> targetApi;
+        RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(targetAddress, targetApi));
+        RETURN_IF_NOT_OK(SendCreateMultiMetaSubRequest(targetApi, targetRequest, finalResponse, versionsByKey));
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceMultiPublishImpl::PartitionCreateMultiMetaRedirects(
+    const CreateMultiMetaReqPb &req, const CreateMultiMetaRspPb &rsp, CreateMultiMetaReqPb &localRequest,
+    std::unordered_map<HostPort, CreateMultiMetaReqPb> &redirectRequests)
+{
+    std::unordered_map<std::string, const ObjectBaseInfoPb *> metasByKey;
+    metasByKey.reserve(req.metas_size());
+    for (const auto &meta : req.metas()) {
+        metasByKey.emplace(meta.object_key(), &meta);
+    }
+    std::unordered_set<std::string> redirectedKeys;
+    redirectedKeys.reserve(req.metas_size());
+    localRequest.CopyFrom(req);
+    localRequest.clear_metas();
+    localRequest.set_redirect(false);
+    redirectRequests.reserve(rsp.info_size());
+    for (const auto &redirectInfo : rsp.info()) {
+        HostPort targetAddress;
+        RETURN_IF_NOT_OK(targetAddress.ParseString(redirectInfo.redirect_meta_address()));
+        auto [iter, inserted] = redirectRequests.try_emplace(targetAddress);
+        if (inserted) {
+            iter->second.CopyFrom(req);
+            iter->second.clear_metas();
+            iter->second.set_redirect(false);
+        }
+        for (const auto &objectKey : redirectInfo.change_meta_ids()) {
+            auto meta = metasByKey.find(objectKey);
+            if (meta != metasByKey.end()) {
+                redirectedKeys.emplace(objectKey);
+                *iter->second.add_metas() = *meta->second;
+            }
+        }
+    }
+    for (const auto &meta : req.metas()) {
+        if (redirectedKeys.count(meta.object_key()) == 0) {
+            *localRequest.add_metas() = meta;
+        }
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceMultiPublishImpl::SendCreateMultiMetaSubRequest(
+    const std::shared_ptr<WorkerMasterOCApi> &api, CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &finalResponse,
+    std::unordered_map<std::string, uint64_t> &versionsByKey)
+{
+    CHECK_FAIL_RETURN_STATUS(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                             K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+    CHECK_FAIL_RETURN_STATUS(api != nullptr, K_RUNTIME_ERROR, "worker master api is nullptr");
+    CreateMultiMetaRspPb response;
+    do {
+        response.Clear();
+        RETURN_IF_NOT_OK(api->CreateMultiMeta(req, response, true));
+        if (response.meta_is_moving()) {
+            int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            SleepForMetaMovingRetry(std::min<int64_t>(RETRY_INTERNAL_MS_META_MOVING, remainingTimeMs));
+        }
+    } while (response.meta_is_moving());
+    CHECK_FAIL_RETURN_STATUS(response.info().empty(), K_RUNTIME_ERROR,
+                             "CreateMultiMeta returned an unexpected redirect for a non-redirect request");
+    finalResponse.mutable_failed_object_keys()->Add(response.failed_object_keys().begin(),
+                                                    response.failed_object_keys().end());
+    finalResponse.mutable_existing_object_keys()->Add(response.existing_object_keys().begin(),
+                                                      response.existing_object_keys().end());
+    if (response.has_last_rc()) {
+        *finalResponse.mutable_last_rc() = response.last_rc();
+    }
+    std::unordered_set<std::string> excluded(response.failed_object_keys().begin(),
+                                             response.failed_object_keys().end());
+    excluded.insert(response.existing_object_keys().begin(), response.existing_object_keys().end());
+    for (const auto &meta : req.metas()) {
+        if (excluded.count(meta.object_key()) == 0) {
+            versionsByKey.emplace(meta.object_key(), response.version());
+        }
     }
     return Status::OK();
 }
@@ -548,7 +652,9 @@ void WorkerOcServiceMultiPublishImpl::MergeCreateMultiMetaResult(
         } else if (existingKeys.find(object.first) != existingKeys.end()) {
             totalResp.add_existing_object_keys(object.first);
         } else {
-            versions[originalIndexes[object.second]] = result.rsp.version();
+            auto version = result.versionsByKey.find(object.first);
+            versions[originalIndexes[object.second]] =
+                version == result.versionsByKey.end() ? result.rsp.version() : version->second;
         }
     }
     if (responseRc.IsError() && !retryResponse) {

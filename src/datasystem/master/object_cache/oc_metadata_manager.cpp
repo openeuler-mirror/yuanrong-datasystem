@@ -432,7 +432,7 @@ Status OCMetadataManager::IncreaseNestedRefCnt(const GIncNestedRefReqPb &req, GI
 {
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     Status rc = Status::OK();
-    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
+    RETURN_IF_NOT_OK(RedirectObjectRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
         return Status::OK();
     }
@@ -450,7 +450,7 @@ Status OCMetadataManager::DecreaseNestedRefCnt(const GDecNestedRefReqPb &req, GD
 {
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     Status rc = Status::OK();
-    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
+    RETURN_IF_NOT_OK(RedirectObjectRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
         return Status::OK();
     }
@@ -761,7 +761,7 @@ Status OCMetadataManager::CreateMultiMeta(const CreateMultiMetaReqPb &req, Creat
     }
     LOG(INFO) << FormatString("Processing CreateMultiMeta objectKeys: %s, source: %s", VectorToString(objectKeys),
                               req.address());
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, objectKeys, req.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, objectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(rsp.meta_is_moving() || !rsp.info().empty());
     return CreateMultiMetaNtx(req, rsp);
 }
@@ -1012,7 +1012,7 @@ Status OCMetadataManager::CreateMeta(const CreateMetaReqPb &request, CreateMetaR
     bool redirect = request.redirect();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!objectKey.empty() && !request.address().empty(), K_INVALID,
                                          "CreateMeta: Cannot CreateMeta with empty objectKey or server address.");
-    RETURN_IF_NOT_OK(FillRedirectResponseInfo(response, objectKey, redirect));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponse(response, objectKey, redirect));
     RETURN_OK_IF_TRUE(redirect);
     int64_t version = 0;
     bool firstOne = false;
@@ -1062,7 +1062,7 @@ Status OCMetadataManager::CreateCopyMeta(const CreateCopyMetaReqPb &request, Cre
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         !objectKey.empty() && !address.empty(), K_INVALID,
         "CreateCopyMeta: Cannot CreateCopyMeta with empty objectKey or server address.");
-    RETURN_IF_NOT_OK(FillRedirectResponseInfo(response, objectKey, redirect));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponse(response, objectKey, redirect));
     RETURN_OK_IF_TRUE(redirect);
     {
         // Check meta info in cache and rocksdb.
@@ -1095,7 +1095,7 @@ Status OCMetadataManager::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &re
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         !ids.empty() && !request.address().empty(), K_INVALID,
         "CreateMultiCopyMeta: Cannot CreateMultiCopyMeta with empty ids or server address.");
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, ids, request.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, ids, request.redirect()));
     RETURN_OK_IF_TRUE(response.meta_is_moving() || !response.info().empty());
     std::unordered_map<std::string, std::string> updateKeyLocations;  // key: objectKey, value: workerAddr
     {
@@ -1222,13 +1222,15 @@ Status OCMetadataManager::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &r
     std::vector<std::string> notRedirectObjectKeys = { req.ids().begin(), req.ids().end() };
     const auto &address = req.address();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!address.empty(), StatusCode::K_RUNTIME_ERROR, "Address is empty");
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, notRedirectObjectKeys, req.redirect()));
+    RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     INJECT_POINT("OCMetadataManager.QueryMeta,wait");
     point.RecordAndReset(PerfKey::MASTER_QUERY_META_FROM_META_TABLE);
     std::vector<std::string> tmpNotExistObjectKeys;
     RETURN_IF_NOT_OK(QueryMetaFromMetaTable(req, notRedirectObjectKeys, rsp, payloads, tmpNotExistObjectKeys));
     point.RecordAndReset(PerfKey::MASTER_QUERY_META_FILL_REDIRECT_AGAIN);
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, tmpNotExistObjectKeys, req.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, tmpNotExistObjectKeys, req.redirect()));
+    RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     point.RecordAndReset(PerfKey::MASTER_QUERY_META_SET_RSP);
     std::list<std::string> notExistObjectKeys = { tmpNotExistObjectKeys.begin(), tmpNotExistObjectKeys.end() };
     std::vector<uint64_t> deletingVersions;
@@ -1440,7 +1442,7 @@ Status OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, 
 {
     std::vector<std::string> notRedirectObjectKeys = { request.ids().begin(), request.ids().end() };
     PrimaryChangeMap workerForChangePrimaryIds;
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, notRedirectObjectKeys, request.redirect()));
     if (response.meta_is_moving()) {
         return Status::OK();
     }
@@ -1653,7 +1655,7 @@ Status OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, con
             objectsKeyAndVersion.emplace(idWithVersion.id(), idWithVersion.version());
         }
     }
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, notRedirectObjectKeys, request.redirect()));
     if (response.meta_is_moving()) {
         return Status::OK();
     }
@@ -1730,7 +1732,7 @@ Status OCMetadataManager::RemoveMetaForInvalidateBuffer(const RemoveMetaReqPb &r
 {
     std::vector<std::string> notRedirectObjectKeys = { request.ids().begin(), request.ids().end() };
     std::unordered_map<std::string, std::unordered_set<std::string>> toBeChanged;
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, notRedirectObjectKeys, request.redirect()));
     if (response.meta_is_moving()) {
         return Status::OK();
     }
@@ -1839,7 +1841,8 @@ Status OCMetadataManager::DeleteAllCopyMetaImpl(
         }
         return Status(K_INVALID, "Cannot RemoveMeta with empty server address.");
     }
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, objectKeys, request.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, objectKeys, request.redirect()));
+    RETURN_OK_IF_TRUE(response.meta_is_moving());
     VLOG(1) << "DeleteAllCopyMeta begin, sourceWorker: " << sourceWorker;
     std::unordered_map<std::string, bool> requestObjKeyMap;
     std::transform(objectKeys.begin(), objectKeys.end(), std::inserter(requestObjKeyMap, requestObjKeyMap.end()),
@@ -2328,7 +2331,7 @@ Status OCMetadataManager::UpdateMeta(const UpdateMetaReqPb &request, UpdateMetaR
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!objectKey.empty() && !address.empty(), K_INVALID,
                                          "UpdateMeta: Cannot UpdateMeta with empty objectKey or server address.");
     bool redirect = request.redirect();
-    RETURN_IF_NOT_OK(FillRedirectResponseInfo(response, objectKey, redirect));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponse(response, objectKey, redirect));
     RETURN_OK_IF_TRUE(redirect);
 
     RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
@@ -2694,7 +2697,7 @@ void OCMetadataManager::RemoveSubscribeCache(const std::string &requestId)
 Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &rsp)
 {
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, objectKeys, req.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, objectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     for (const auto &objectKey : objectKeys) {
         TbbMetaTable::const_accessor accessor;
@@ -2722,7 +2725,7 @@ Status OCMetadataManager::QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRs
     INJECT_POINT("client.transport.query_and_get", []() { return Status::OK(); });
     RETURN_IF_NOT_OK(ValidateQueryAndGetDataRequest(req));
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, objectKeys, req.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, objectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(rsp.meta_is_moving());
 
     std::unordered_map<std::string, bool> redirectedKeys;
@@ -3139,7 +3142,7 @@ Status OCMetadataManager::GIncreaseRefWithRemoteClientId(const GIncreaseReqPb &r
     LOG(INFO) << "GIncreaseRefWithRemoteClientId remoteClientId:" << remoteClientId;
     // If object is migrating, return rsp and let worker retry later
     bool needRedirect = req.redirect();
-    RETURN_IF_NOT_OK(RedirectObjRefs(resp, needRedirect, objectKeys));
+    RETURN_IF_NOT_OK(RedirectObjectRefs(resp, needRedirect, objectKeys));
     if (resp.ref_is_moving()) {
         return Status::OK();
     }
@@ -3216,18 +3219,11 @@ Status OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedi
     }
     MetaRedirectDecision route;
     RETURN_IF_NOT_OK(EvaluateMetadataRedirect(objectKey, route));
+    RETURN_IF_NOT_OK(ApplyObjectMetadataAvailability(objectKey, route));
     bool resolvedMoving = route.moving;
-    bool resolvedRedirect = route.redirect || resolvedMoving;
+    bool resolvedRedirect = route.redirect;
     if (resolvedMoving) {
-        // Placement says this key range is migrating, but verify the key exists —
-        // metadata may have been deleted (e.g. GDecreaseRef to zero refs).
-        TbbMetaTable::const_accessor accessor;
-        if (!metaShards_[GetShardIndex(objectKey)].table.find(accessor, objectKey)) {
-            resolvedMoving = false;
-            resolvedRedirect = route.redirect;
-        } else {
-            VLOG(1) << FormatString("objectKey %s is waiting for ScaleOut metadata migration", objectKey);
-        }
+        VLOG(1) << FormatString("objectKey %s is waiting for ScaleOut metadata migration", objectKey);
     } else if (!resolvedRedirect) {
         // No reference-state lookup is needed for local ownership.
     } else if (globalRefTable_->GetRefWorkerCount(objectKey) > 0) {
@@ -3254,13 +3250,35 @@ Status OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedi
     return Status::OK();
 }
 
+Status OCMetadataManager::ApplyObjectMetadataAvailability(const std::string &objectKey, MetaRedirectDecision &decision)
+{
+    if (!decision.scaleOutWait) {
+        return ApplyMetadataAvailability(objectKey, decision);
+    }
+    if (ItemIsMigrating(objectKey)) {
+        decision.redirect = false;
+        decision.moving = true;
+        return Status::OK();
+    }
+    if (MetaIsFound(objectKey)) {
+        decision.redirect = false;
+        decision.moving = false;
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(!decision.targetAddress.empty(), K_RUNTIME_ERROR,
+                             "ScaleOut Object metadata redirect target is empty");
+    decision.redirect = true;
+    decision.moving = false;
+    return Status::OK();
+}
+
 Status OCMetadataManager::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRspPb &resp)
 {
     if (!req.remote_client_id().empty()) {
         return GIncreaseRefWithRemoteClientId(req, resp);
     }
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
+    RETURN_IF_NOT_OK(RedirectObjectRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
         return Status::OK();
     }
@@ -3384,7 +3402,7 @@ Status OCMetadataManager::GDecreaseRefImplWithRemoteClientId(
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     std::vector<std::string> failedDecIds;
     std::vector<std::string> finishDecIds;
-    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
+    RETURN_IF_NOT_OK(RedirectObjectRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
         if (serverApi != nullptr) {
             LOG_IF_ERROR(serverApi->Write(resp), "Write reply to client stream failed.");
@@ -3452,7 +3470,7 @@ Status OCMetadataManager::GDecreaseRefImpl(
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     std::vector<std::string> failedDecIds;
     std::vector<std::string> finishDecIds;
-    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
+    RETURN_IF_NOT_OK(RedirectObjectRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
         return Status::OK();
     }
@@ -4915,7 +4933,7 @@ Status OCMetadataManager::ReplacePrimary(const ReplacePrimaryReqPb &req, Replace
     std::vector<std::string> notRedirectObjectKeys;
     std::transform(req.object_infos().begin(), req.object_infos().end(), std::back_inserter(notRedirectObjectKeys),
                    [](const ReplacePrimaryReqPb::ObjectInfoPb &info) { return info.object_key(); });
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, notRedirectObjectKeys, req.redirect()));
     if (rsp.meta_is_moving()) {
         return Status::OK();
     }
@@ -4990,7 +5008,7 @@ void OCMetadataManager::ReplacePrimaryObject(const ReplacePrimaryReqPb &req,
 Status OCMetadataManager::PureQueryMeta(const PureQueryMetaReqPb &req, PureQueryMetaRspPb &rsp)
 {
     std::vector<std::string> notRedirectObjectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, notRedirectObjectKeys, req.redirect()));
     if (rsp.meta_is_moving()) {
         return Status::OK();
     }
@@ -5029,7 +5047,7 @@ Status OCMetadataManager::CheckObjectDataLocation(const CheckObjectDataLocationR
         notRedirectObjectKeys.emplace_back(objectVersion.object_key());
         versionByObjectKey[objectVersion.object_key()] = objectVersion.version();
     }
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, notRedirectObjectKeys, req.redirect()));
     if (rsp.meta_is_moving() || !rsp.info().empty()) {
         return Status::OK();
     }
@@ -5067,8 +5085,8 @@ Status OCMetadataManager::RollbackMultiMeta(const RollbackMultiMetaReqPb &req, R
         objectKeys.emplace_back(objKey);
     }
     std::sort(objectKeys.begin(), objectKeys.end());  // To prevent deadlock.
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, objectKeys, req.redirect()));
-    RETURN_OK_IF_TRUE(!rsp.info().empty());
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, objectKeys, req.redirect()));
+    RETURN_OK_IF_TRUE(rsp.meta_is_moving() || !rsp.info().empty());
     for (int i = 0; (size_t)i < objectKeys.size(); ++i) {
         const auto &objKey = objectKeys[i];
         if (req.persistence_only()) {
@@ -5127,7 +5145,7 @@ bool OCMetadataManager::GetObjectVersion(const std::string &objKey, int64_t &ver
 Status OCMetadataManager::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
     std::vector<std::string> notRedirectObjectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, notRedirectObjectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     Status lastRc;
     std::vector<std::string> notExistObjectKeys;
