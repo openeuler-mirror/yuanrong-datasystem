@@ -332,7 +332,7 @@ Status StartControlBackendProbe(const HostPort &localAddress, const std::shared_
     RETURN_IF_NOT_OK(api->Init(deadline));
     if (FLAGS_use_brpc) {
         CHECK_FAIL_RETURN_STATUS(
-            WaitForBrpcSocketUntil(HostPort(peerAddress.Host(), peerAddress.Port() + kBrpcPortOffset), deadline),
+            WaitForBrpcSocketUntil(HostPort(peerAddress.Host(), peerAddress.Port()), deadline),
             K_RPC_UNAVAILABLE, "cluster-state brpc connection unavailable");
     }
     const auto now = std::chrono::steady_clock::now();
@@ -400,7 +400,7 @@ cluster::ControlBackendProbeResult BuildFailedProbeResult(const cluster::MemberI
                                                           std::chrono::steady_clock::time_point startedAt)
 {
     std::optional<cluster::ControlBackendObservation> observation;
-    if (!IsRpcTimeout(status)) {
+    if (!IsRetryableRpcError(status)) {
         observation = { peer, cluster::ControlBackendState::UNKNOWN, 0, 0, "", std::chrono::steady_clock::now() };
     }
     return { peer, std::move(observation), ProbeOutcomeFromStatus(status), ProbeElapsedSince(startedAt) };
@@ -1874,7 +1874,7 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetRH2DLocalEndpointIp(hostPort_.Host()), "Failed to configure HCCS worker IP");
 
     if (FLAGS_use_brpc) {
-        int brpcPort = bindHostPort_.Port() + kBrpcPortOffset;
+        int brpcPort = bindHostPort_.Port();
         builder_.SetUseBrpc(true).SetBrpcAddr(bindHostPort_.Host(), brpcPort);
         // Exclusive mode: brpc uses the same port as ZMQ would. ZMQ server is
         // not started (see rpc_server.cpp BuildAndSTart: skips server->Run()
@@ -1954,7 +1954,7 @@ Status WorkerOCServer::StartBrpcIfEnabled()
     // BuildAndStart() in CommonServer::Init() skips brpc start because
     // services are added later via AddBrpcService() calls.
     if (FLAGS_use_brpc && rpcServer_) {
-        int brpcPort = bindHostPort_.Port() + kBrpcPortOffset;
+        int brpcPort = bindHostPort_.Port();
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rpcServer_->StartBrpcServer(bindHostPort_.Host(), brpcPort),
                                          "Failed to start brpc server");
     }

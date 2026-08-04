@@ -460,7 +460,8 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
 static Status CheckAndResetStatus(const Status &status, std::set<StatusCode> &bypassCode)
 {
     // If the error is RPC error, return them directly, other error would be covered up as RUNTIME_ERROR.
-    return (bypassCode.count(status.GetCode()) > 0 || IsRpcTimeoutOrTryAgain(status))
+    return (bypassCode.count(status.GetCode()) > 0 || status.GetCode() == K_TRY_AGAIN || IsRetryableRpcError(status)
+            || IsNonRetryableRpcError(status))
                ? status
                : Status(K_RUNTIME_ERROR, status.GetMsg());
 }
@@ -878,7 +879,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
         lastRc = result;
         // If we query meta from master meets RPC error, do not add these objects to failedIds,
         // otherwise other concurrent get operations would failed, so we just notify ourselves.
-        if (IsRpcTimeoutOrTryAgain(result)) {
+        if (result.GetCode() == K_TRY_AGAIN || IsRetryableRpcError(result) || IsNonRetryableRpcError(result)) {
             for (const auto &objectKey : needRemoteGetObjects) {
                 LOG_IF_ERROR(request->MarkFailed(objectKey, result), "MarkFailed failed");
             }
@@ -2320,7 +2321,8 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
             status =
                 GetObjectFromRemoteWorkerAndDump(address, meta.primary_address(), meta.data_size(), objectKV, false);
-            if (status.GetCode() == K_OUT_OF_MEMORY || IsRpcTimeoutOrTryAgain(status)) {
+            if (status.GetCode() == K_OUT_OF_MEMORY || status.GetCode() == K_TRY_AGAIN
+                || IsRetryableRpcError(status) || IsNonRetryableRpcError(status)) {
                 return status;
             }
             if (entry.Get() == nullptr) {
@@ -2520,7 +2522,7 @@ void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&
             return workerMasterApi->CreateCopyMeta(req, rsp);
         };
     Status rc = RedirectRetryWhenMetaMoving(req, rsp, workerMasterApi, func);
-    if (IsRpcTimeout(rc)) {
+    if (IsRetryableRpcError(rc) || IsNonRetryableRpcError(rc)) {
         Status status = asyncUpdateLocationManager_->AddTask(std::move(task));
         if (status.IsError()) {
             LOG(WARNING) << FormatString("Add retry task failed: %s", status.ToString());
@@ -2618,7 +2620,7 @@ void WorkerOcServiceGetImpl::GroupSendCreateMultiCopyMeta(
         Status status = RedirectRetryWhenMetasMoving(req, rsp, func);
         if (status.IsError()) {
             VLOG(1) << "CreateMultiCopyMeta failed, status: " << status.ToString();
-            if (IsRpcTimeout(status)) {
+            if (IsRetryableRpcError(status) || IsNonRetryableRpcError(status)) {
                 retryParams.insert(retryParams.end(), group.second.begin(), group.second.end());
             } else {
                 for (const auto &param : group.second) {

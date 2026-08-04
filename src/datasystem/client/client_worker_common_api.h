@@ -764,6 +764,17 @@ private:
      * @brief Schedule URMA handshake retry.
      */
     void ScheduleUrmaHandshakeRetry(uint32_t workerVersion);
+
+    /**
+     * @brief Loop body of the URMA handshake async retry (backoff, stale-version check, retry-stop).
+     */
+    void UrmaHandshakeRetryLoop(uint32_t workerVersion);
+
+    /**
+     * @brief Classify a URMA handshake retry result and emit the matching log. Returns true if the
+     *        result is retryable (caller continues the backoff loop), false otherwise (caller stops).
+     */
+    bool LogUrmaHandshakeRetryResult(const Status &status);
 };
 }  // namespace client
 }  // namespace datasystem

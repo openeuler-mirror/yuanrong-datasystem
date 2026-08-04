@@ -61,6 +61,7 @@ inline constexpr int kBrpcReject = 1018;         // brpc::EREJECT
 inline constexpr int kBrpcInternal = 2001;       // brpc::EINTERNAL
 inline constexpr int kBrpcLogoff = 2003;         // brpc::ELOGOFF
 inline constexpr int kBrpcClose = 2005;          // brpc::ECLOSE
+inline constexpr int kBrpcShutdownWrite = 2007; // brpc::ESHUTDOWNWRITE — peer shut down the write side
 inline constexpr int kBrpcDetailLogLevel = 2;
 inline constexpr int kDecimalRadix = 10;
 inline constexpr char kBrpcRequestNotSentExtra[] = "brpc_request_not_sent";
@@ -74,7 +75,7 @@ inline constexpr char kBrpcRequestNotSentExtra[] = "brpc_request_not_sent";
  */
 inline bool IsBrpcRequestDefinitelyNotSent(const Status &status)
 {
-    return status.GetCode() == K_RPC_UNAVAILABLE && status.GetExtra() == kBrpcRequestNotSentExtra;
+    return status.GetExtra() == kBrpcRequestNotSentExtra;
 }
 
 inline bool IsBrpcConnectionEstablishmentError(int errorCode)
@@ -143,16 +144,25 @@ inline bool AreBrpcAttemptsDefinitelyNotSent(int finalErrorCode, const std::stri
  * Mapping (kBrpc* constants mirror the brpc enum names shown in comments):
  *   - timeouts (kBrpcErpcTimedOut / ERPCTIMEDOUT, ETIMEDOUT)
  *                                              → K_RPC_DEADLINE_EXCEEDED
- *   - peer-unreachable (kBrpcFailedSocket / EFAILEDSOCKET,
- *     kBrpcLogoff / ELOGOFF, ECONNREFUSED, ECONNRESET, ECONNABORTED,
- *     EHOSTUNREACH, ENETUNREACH, ENOTCONN, EPIPE, EHOSTDOWN, ESHUTDOWN,
- *     kBrpcEof / EEOF, kBrpcClose / ECLOSE, kBrpcSsl / ESSL,
- *     kBrpcReject / EREJECT, kBrpcInternal / EINTERNAL)
- *                                              → K_RPC_UNAVAILABLE
+ *   - peer-dead/unreachable (kBrpcFailedSocket / EFAILEDSOCKET,
+ *     kBrpcLogoff / ELOGOFF, kBrpcClose / ECLOSE, ECONNREFUSED, ENOTCONN,
+ *     EPIPE, EHOSTDOWN, ESHUTDOWN, kBrpcReject / EREJECT,
+ *     kBrpcInternal / EINTERNAL)               → K_RPC_PEER_DEAD
+ *   - transient network blips (kBrpcEof / EEOF, kBrpcSsl / ESSL,
+ *     ECONNRESET, ECONNABORTED, EHOSTUNREACH, ENETUNREACH)
+ *                                              → K_RPC_NETWORK_BLIP
  *   - ECANCELED (brpc/OS cancellation)         → K_RPC_CANCELLED (genuine)
  *   - everything else                          → K_RPC_CANCELLED (fallback,
  *     preserves prior behavior; message carries the raw code + text so the
  *     failure is no longer opaque)
+ *
+ * Note on ECONNREFUSED / ENOTCONN / EHOSTDOWN: these map to PEER_DEAD (not
+ * NETWORK_BLIP) because a refused connection / "not connected yet" / host-down
+ * means the peer process is not listening — the canonical signal of a killed or
+ * crashed peer. The fast-fail contract (dead_peer_fast_fail_test) requires that a
+ * KillWorker'd peer returns K_RPC_PEER_DEAD without retrying out the budget. Worker
+ * restart recovery is handled by the transport-layer rebuild path (Teardown +
+ * GetOrCreate), not by treating these as retryable blips.
  *
  * @param errorCode brpc::Controller::ErrorCode().
  * @param errorText brpc::Controller::ErrorText() (for the diagnostic message).
@@ -184,26 +194,34 @@ inline Status MapBrpcErrorCodeToStatus(int errorCode, const std::string &errorTe
         case kBrpcErpcTimedOut:
         case ETIMEDOUT:
             return makeStatus(StatusCode::K_RPC_DEADLINE_EXCEEDED, "RPC timed out");
-        // Peer not reachable → unavailable
+        // Peer is dead or explicitly unavailable. Application retry loops must
+        // observe this as a terminal transport failure instead of sleeping out
+        // their full retry budget. ECONNREFUSED / ENOTCONN / EHOSTDOWN are peer-dead:
+        // a refused/not-connected/down host means the peer process is gone (kill/crash),
+        // so the caller fast-fails instead of retrying the same dead target.
         case kBrpcFailedSocket:
-        case kBrpcEof:
-        case kBrpcSsl:
         case kBrpcReject:
         case kBrpcInternal:
         case kBrpcLogoff:
         case kBrpcClose:
-        case ECONNRESET:
-        case ECONNABORTED:
+        case kBrpcShutdownWrite:
         case EPIPE:
-        case ESHUTDOWN:
-            return makeStatus(StatusCode::K_RPC_UNAVAILABLE, "RPC peer unavailable");
-        // Connection establishment failed, so application code was not reached.
+        case ESHUTDOWN:  // system errno 108 (POSIX socket "transport endpoint shutdown"), brpc may pass through
         case ECONNREFUSED:
-        case EHOSTUNREACH:
-        case ENETUNREACH:
         case ENOTCONN:
         case EHOSTDOWN:
-            return makeStatus(StatusCode::K_RPC_UNAVAILABLE, "RPC peer unavailable",
+            return makeStatus(StatusCode::K_RPC_PEER_DEAD, "RPC peer dead",
+                              AreBrpcAttemptsDefinitelyNotSent(errorCode, errorText));
+        // Ambiguous network failures may be transient, so callers that used to
+        // retry K_RPC_UNAVAILABLE can still retry K_RPC_NETWORK_BLIP.
+        case kBrpcEof:
+        case kBrpcSsl:
+        case ECONNRESET:
+        case ECONNABORTED:
+            return makeStatus(StatusCode::K_RPC_NETWORK_BLIP, "RPC network blip");
+        case EHOSTUNREACH:
+        case ENETUNREACH:
+            return makeStatus(StatusCode::K_RPC_NETWORK_BLIP, "RPC network blip",
                               AreBrpcAttemptsDefinitelyNotSent(errorCode, errorText));
         // Genuine cancellation (brpc/OS) — keep K_RPC_CANCELLED
         case ECANCELED:
@@ -309,9 +327,9 @@ inline bool TryParseDsErrCode(const std::string &codeStr, long &codeOut)
  * error (connection refused, timeout, peer down, ...) rather than a server
  * application error. In that case the server never ran application code, so
  * there is no embedded code to recover — fall back to MapBrpcErrorCodeToStatus()
- * which maps the brpc ErrorCode() to K_RPC_UNAVAILABLE / K_RPC_DEADLINE_EXCEEDED
- * / K_RPC_CANCELLED so the failure class is visible instead of being masked as
- * a generic "rpc cancelled".
+ * which maps the brpc ErrorCode() to K_RPC_PEER_DEAD / K_RPC_NETWORK_BLIP /
+ * K_RPC_DEADLINE_EXCEEDED / K_RPC_CANCELLED so the failure class is visible
+ * instead of being masked as a generic "rpc cancelled".
  *
  * @param errorText The error text from brpc::Controller::ErrorText().
  * @param errorCode brpc::Controller::ErrorCode() (0 = caller did not capture it;

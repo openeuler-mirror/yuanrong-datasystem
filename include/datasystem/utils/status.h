@@ -70,6 +70,7 @@ enum StatusCode : uint32_t {
     // rpc error code, range: [1000, 2000)
     K_RPC_CANCELLED = 1000,
     K_RPC_DEADLINE_EXCEEDED = 1001,
+    // Legacy or generic peer-unavailable RPC status.
     K_RPC_UNAVAILABLE = 1002,
     K_RPC_STREAM_END = 1003,
     K_URMA_ERROR = 1004,
@@ -79,6 +80,10 @@ enum StatusCode : uint32_t {
     K_URMA_TRY_AGAIN = 1008,
     K_URMA_CONNECT_FAILED = 1009,
     K_URMA_WAIT_TIMEOUT = 1010,
+    // The peer process or endpoint is dead or explicitly unavailable.
+    K_RPC_PEER_DEAD = 1011,
+    // The RPC failed because of an ambiguous transient network interruption.
+    K_RPC_NETWORK_BLIP = 1012,
 
     // object error code, range: [2000, 3000)
     K_OC_ALREADY_SEALED = 2000,

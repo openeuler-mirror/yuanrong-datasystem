@@ -108,7 +108,9 @@ ds_cc_test(
     srcs = ["brpc_status_util_test.cpp"],
     tags = ["level0", "ut", "asan", "tsan"],
     deps = [
+        "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/rpc:brpc_status_util",
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//tests/ut:ut_common",
     ],
 )

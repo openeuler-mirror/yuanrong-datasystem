@@ -147,6 +147,10 @@ add_executable(coordinator_service_election_test
 add_executable(coordinator_runtime_election_test
         common/raft/coordinator_runtime_election_test.cpp
         $<TARGET_OBJECTS:_ds_st_main_obj>)
+add_executable(dead_peer_fast_fail_test
+        common/rpc/brpc/dead_peer_fast_fail_test.cpp
+        $<TARGET_OBJECTS:_ds_st_main_obj>
+        $<TARGET_OBJECTS:_ds_st_group_common_obj>)
 
 # Heavy ST link targets (ds_st / ds_st_stream_cache / ds_st_object_cache /
 # ds_st_kv_cache) pull in worker+master+rocksdb+zmq and trip the OOM killer on
@@ -160,6 +164,8 @@ target_link_libraries(ds_st_embedded_client GTest::gtest GTest::gmock common_etc
         generic_service_protos datasystem cluster cluster_topology_protos_client)
 target_link_libraries(ds_st_coordinator_backend_manual PRIVATE
         ${DS_ST_DEPEND_LIBS} binmock static_coordinator_discovery -Wl,--reduce-memory-overheads)
+target_link_libraries(dead_peer_fast_fail_test PRIVATE
+        ${DS_ST_DEPEND_LIBS} binmock -Wl,--reduce-memory-overheads)
 target_link_libraries(braft_cluster_test PRIVATE GTest::gtest GTest::gmock common_test test_port_allocator datasystem_braft
         coordinator_raft_state_machine)
 target_link_libraries(coordinator_raft_node_test PRIVATE GTest::gtest GTest::gmock common_test test_port_allocator
@@ -172,10 +178,12 @@ target_link_libraries(coordinator_runtime_election_test PRIVATE GTest::gtest GTe
         common_rpc_zmq common_util datasystem_braft ${BRPC_LIBRARIES})
 if (BUILD_WITH_URMA_MOCK)
     target_compile_definitions(ds_st_coordinator_backend_manual PRIVATE USE_URMA USE_URMA_MOCK)
+    target_compile_definitions(dead_peer_fast_fail_test PRIVATE USE_URMA USE_URMA_MOCK)
     target_link_libraries(ds_st PRIVATE common_urma_mock_obj)
     target_link_libraries(ds_st_object_cache PRIVATE common_urma_mock_obj)
     target_link_libraries(ds_st_kv_cache PRIVATE common_urma_mock_obj)
     target_link_libraries(ds_st_coordinator_backend_manual PRIVATE common_urma_mock_obj)
+    target_link_libraries(dead_peer_fast_fail_test PRIVATE common_urma_mock_obj)
 endif()
 
 find_package(absl PATHS absl_PKG_PATH)
@@ -335,6 +343,7 @@ add_datasystem_test(braft_cluster_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_raft_node_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_service_election_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_runtime_election_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(dead_peer_fast_fail_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 file(GLOB_RECURSE DS_DEVICE_TEST_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cpp"

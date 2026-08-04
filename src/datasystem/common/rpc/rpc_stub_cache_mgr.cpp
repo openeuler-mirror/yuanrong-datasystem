@@ -306,7 +306,7 @@ bool WaitForTcpPortAvailable(const HostPort &addr, int timeoutMs)
 Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_ptr<brpc::Channel> &brpcChannel)
 {
     CHECK_FAIL_RETURN_STATUS(brpcChannel == nullptr, K_RUNTIME_ERROR, "brpc channel is not nullptr");
-    HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
+    HostPort brpcAddr(hostPort.Host(), hostPort.Port());
     BrpcChannelConfig cfg;
     cfg.endpoint = brpcAddr.ToString();
     cfg.connect_timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
@@ -451,7 +451,7 @@ void RpcStubCacheMgr::InitCreators()
 void RpcStubCacheMgr::MaybeEvictStaleBrpcStub(const HostPort &hostPort, StubType type,
                                               std::shared_ptr<RpcStubBase> &rpcStub)
 {
-    HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
+    HostPort brpcAddr(hostPort.Host(), hostPort.Port());
     // Single non-blocking check: IsAvailable() costs <1us. If the socket is
     // dead, evict the stub so the next access creates a fresh one. No retries —
     // blocking 3s on the hot path would stall all concurrent RPCs after worker
@@ -560,7 +560,7 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                              "Get RPC stub deadline exceeded");
     if (FLAGS_use_brpc) {
-        HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
+        HostPort brpcAddr(hostPort.Host(), hostPort.Port());
         (void)WaitForBrpcSocketAvailable(brpcAddr, 1, 0);
     }
     LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs, accessElapsedMs,

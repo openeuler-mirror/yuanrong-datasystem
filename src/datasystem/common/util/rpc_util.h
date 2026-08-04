@@ -40,16 +40,47 @@
 const static int32_t MAX_RPC_TIMEOUT_MS = 600'000;  // 10min
 
 namespace datasystem {
-inline bool IsRpcTimeout(const Status &status)
+// Retryable RPC/transport failures are safe for an idempotent caller to retry within
+// its existing retry budget. RetryOnError still requires the caller's retry policy to
+// include the returned code, except that K_RPC_NETWORK_BLIP is accepted by legacy
+// K_RPC_UNAVAILABLE policies.
+inline bool IsRetryableRpcError(StatusCode code)
 {
-    return status.GetCode() == StatusCode::K_RPC_CANCELLED || status.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED
-           || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE
-           || status.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT;
+    switch (code) {
+        case StatusCode::K_RPC_CANCELLED:
+        case StatusCode::K_RPC_DEADLINE_EXCEEDED:
+        case StatusCode::K_RPC_UNAVAILABLE:
+        case StatusCode::K_RPC_NETWORK_BLIP:
+        case StatusCode::K_URMA_WAIT_TIMEOUT:
+            return true;
+        default:
+            return false;
+    }
 }
 
-inline bool IsRpcTimeoutOrTryAgain(const Status &status)
+inline bool IsRetryableRpcError(const Status &status)
 {
-    return status.GetCode() == StatusCode::K_TRY_AGAIN || IsRpcTimeout(status);
+    return IsRetryableRpcError(status.GetCode());
+}
+
+// Non-retryable RPC failures must fail fast. A dead peer may be rerouted by a
+// higher-level owner, but RetryOnError must not sleep and retry the same target.
+inline bool IsNonRetryableRpcError(StatusCode code)
+{
+    return code == StatusCode::K_RPC_PEER_DEAD;
+}
+
+inline bool IsNonRetryableRpcError(const Status &status)
+{
+    return IsNonRetryableRpcError(status.GetCode());
+}
+
+inline bool ShouldRetryOnStatusCode(StatusCode code, const std::unordered_set<StatusCode> &retryCode)
+{
+    return !IsNonRetryableRpcError(code)
+           && (retryCode.find(code) != retryCode.end()
+               || (code == StatusCode::K_RPC_NETWORK_BLIP
+                   && retryCode.find(StatusCode::K_RPC_UNAVAILABLE) != retryCode.end()));
 }
 
 inline Status ConstructErrorMsg(Status status, const std::unordered_map<StatusCode, uint32_t> errorMap,
@@ -114,8 +145,9 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
     if (timeoutMs <= 0) {
         RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
     }
-    // The retries last for four times, and the interval is continuously extended,
-    // which are 1, 5, 50, 200, 1000, 5000 according to the rpc timeout setting
+    // timeoutMs is the aggregate retry budget. Each attempt receives a per-RPC timeout
+    // clipped by maxRpcTimeoutMs, and failed retryable attempts sleep with this bounded
+    // backoff sequence while enough budget remains for one more call.
     static std::vector<int32_t> retryIntervalsMs = { 1, 5, 50, 200, 1000, 5000 };
     auto startTime = std::chrono::steady_clock::now();
     uint64_t retryCount = 0;
@@ -123,14 +155,7 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
     std::unordered_map<StatusCode, uint32_t> errorMap;
     int32_t remainTimeMs = timeoutMs;
     do {
-        auto f = [&func](int32_t rpcTimeoutMs) {
-            INJECT_POINT("rpc_util.retry_on_error_before_func");
-            Status rc = func(rpcTimeoutMs);
-            INJECT_POINT("rpc_util.retry_on_error_after_func");
-            return rc;
-        };
-        int32_t rpcTimeoutMs = std::min<int32_t>(remainTimeMs, maxRpcTimeoutMs);
-        rpcTimeoutMs = std::max<int32_t>(rpcTimeoutMs, 1);
+        int32_t rpcTimeoutMs = std::max<int32_t>(std::min<int32_t>(remainTimeMs, maxRpcTimeoutMs), 1);
         // Check the per-request API deadline before each attempt. brpc set_timeout_ms only
         // truncates blocking inside CallMethod; synchronous SDK-side code outside CallMethod
         // (between this lambda's entry and DS_OC_DISPATCH) is NOT covered. A deadline already
@@ -141,34 +166,42 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
         // a genuine expiry exits cleanly rather than spinning.
         RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
         auto iterStartTime = std::chrono::steady_clock::now();
-        status = f(rpcTimeoutMs);
+        // Wrap the inject points in a lambda so an injected `return(...)` only
+        // exits the lambda (yielding that status as the attempt's result), not
+        // the whole RetryOnError function. Placing them at function scope would
+        // short-circuit the retry loop: the first injected error would return
+        // immediately without any retry, breaking callers that inject
+        // K_RPC_UNAVAILABLE to exercise the retry/backoff path.
+        auto invoke = [&func](int32_t rpcTimeoutMs) -> Status {
+            INJECT_POINT("rpc_util.retry_on_error_before_func");
+            Status rc = func(rpcTimeoutMs);
+            INJECT_POINT("rpc_util.retry_on_error_after_func");
+            return rc;
+        };
+        status = invoke(rpcTimeoutMs);
         UpdateNetworkLatencyEstimate(rpcTimeoutMs, iterStartTime);
-        if (exceptionCode.find(status.GetCode()) != exceptionCode.end()) {
-            // If an exception code is received during retry, the retry is considered successful.
-            if (retryCount > 0) {
-                LOG(INFO) << "The retry succeeds and the response received is: " << status.ToString();
-                return Status::OK();
-            }
-        } else if (retryCode.find(status.GetCode()) == retryCode.end()) {
-            // If a retry code is not received, stop retrying and return the error code.
+        if (IsNonRetryableRpcError(status)) {
+            // Peer-dead must fast-fail: never sleep or retry the same dead target. The stale
+            // stub cache (if any) is dropped by the single errorHandler call in the post-loop
+            // cleanup below, so the caller's next attempt builds a fresh stub → new connection.
             break;
         }
-        errorMap[status.GetCode()]++;
-
-        remainTimeMs =
-            timeoutMs
-            - std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime)
-                  .count();
-
-        int32_t retryIntervalMs =
-            retryCount < retryIntervalsMs.size() ? retryIntervalsMs[retryCount] : retryIntervalsMs.back();
-        VLOG(1) << "retryCount: " << retryCount << ", retryIntervalMs: " << retryIntervalMs
-                << ", remainTimeMs: " << remainTimeMs;
-
-        if (remainTimeMs <= minOnceRpcTimeoutMs) {
-            // If the remaining time is not enough to execute the function once, here need to exit.
-            break;
+        StatusCode code = status.GetCode();
+        bool isException = exceptionCode.find(code) != exceptionCode.end();
+        if (isException && retryCount > 0) {  // exception on a retry is treated as success
+            LOG(INFO) << "The retry succeeds and the response received is: " << status.ToString();
+            return Status::OK();
         }
+        if (!isException && !ShouldRetryOnStatusCode(code, retryCode)) {
+            break;  // non-retryable, non-exception code stops the loop
+        }
+        errorMap[code]++;
+        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startTime).count();
+        remainTimeMs = timeoutMs - static_cast<int32_t>(elapsedMs);
+        int32_t retryIntervalMs = retryIntervalsMs[std::min<uint64_t>(retryCount, retryIntervalsMs.size() - 1)];
+        VLOG(1) << "retryCount: " << retryCount << ", interval: " << retryIntervalMs << ", remain: " << remainTimeMs;
+        if (remainTimeMs <= minOnceRpcTimeoutMs) { break; }  // not enough time for one more call
         HandleRetryTime(retryIntervalMs, remainTimeMs, retryCount, minOnceRpcTimeoutMs);
     } while (remainTimeMs > 0);
 

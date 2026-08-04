@@ -64,6 +64,17 @@ Status InitTopologyReaderRpcCache()
     return status;
 }
 
+constexpr char WORKER_BIN_ENV[] = "DATASYSTEM_WORKER_BIN";
+
+std::string ResolveWorkerBinPath()
+{
+    const char *workerBin = std::getenv(WORKER_BIN_ENV);
+    if (workerBin != nullptr && workerBin[0] != '\0') {
+        return workerBin;
+    }
+    return WORKER_BIN_PATH;
+}
+
 Status TryConnectTcpPort(const HostPort &addr)
 {
     struct addrinfo hints = {};
@@ -852,9 +863,8 @@ Status ExternalCluster::WaitUntilClusterReadyOrTimeout(int timeoutSecs)
     }
 
     // Check whether the RPC service is started by verifying the process listens on the IP port.
-    // In both ZMQ-only mode and brpc mode (kBrpcPortOffset=0), the same port is used, so a
-    // single CheckIpPortListen suffices.  If kBrpcPortOffset ever becomes non-zero, add a
-    // second CheckIpPortListen for addr.Port() + kBrpcPortOffset.
+    // In both ZMQ-only mode and brpc mode, the same configured port is used, so a
+    // single CheckIpPortListen suffices.
     for (auto addr : allAddrs) {
         timeval curr;
         gettimeofday(&curr, nullptr);
@@ -1183,7 +1193,8 @@ Status ExternalCluster::FinishForkWorkerProcess()
 
 Status ExternalCluster::StartWorker(int index, const HostPort &address, std::string gFlag)
 {
-    std::string cmd = WORKER_BIN_PATH;
+    std::string cmd = ResolveWorkerBinPath();
+    CHECK_FAIL_RETURN_STATUS(FileExist(cmd), K_NOT_FOUND, "Cannot find worker binary: " + cmd);
     std::string rootDir = opts_.rootDir + "/worker" + std::to_string(index);
     (void)DeleteFile(rootDir + "/health");
     AppendWorkerRuntimeFlags(index, rootDir, gFlag, cmd);

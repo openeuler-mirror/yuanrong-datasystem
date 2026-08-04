@@ -28,7 +28,7 @@ class DeadlineRetry {
 public:
     ~DeadlineRetry() = default;
 
-    /** @brief Return whether an RPC status is safe to retry for an idempotent operation. */
+    /** @brief Return whether a status is safe to retry for an idempotent operation. */
     bool IsRetryableRpcError(const Status &status) const;
 
     /** @brief Check the shared API deadline. */

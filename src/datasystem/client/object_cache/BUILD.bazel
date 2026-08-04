@@ -3,12 +3,36 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//src/datasystem:__subpackages__"])
 
 ds_cc_library(
+    name = "exist_handler",
+    srcs = [
+        "exist_handler.cpp",
+    ],
+    hdrs = [
+        "exist_handler.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/client:transport_exist_types",
+        "//src/datasystem/client/routing:select_strategy",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "@nlohmann_json//:json",
+    ],
+)
+
+ds_cc_library(
     name = "object_client",
-    srcs = glob(["*.cpp"]),
-    hdrs = glob(["*.h"]),
+    srcs = glob(["*.cpp"], exclude = ["exist_handler.cpp"]),
+    hdrs = glob(["*.h"], exclude = ["exist_handler.h"]),
     visibility = ["//visibility:public"],
     alwayslink = True,
     deps = [
+        ":exist_handler",
         "//include/datasystem:headers",
         "//include/datasystem/object:object_headers",
         "//src/datasystem/client:client_flags_monitor",

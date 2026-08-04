@@ -32,3 +32,34 @@ ds_cc_test(
         "@com_github_apache_brpc//:brpc",
     ],
 )
+
+ds_cc_test(
+    name = "dead_peer_fast_fail_test",
+    srcs = ["dead_peer_fast_fail_test.cpp"],
+    data = [
+        "//src/datasystem/worker:datasystem_worker",
+    ],
+    # Like all ST targets under tests/st/, this is excluded from bazel CI by the
+    # "manual" tag (bazel ST has a pre-existing include-path gap: st_common uses
+    # copts instead of includes, so "#include \"common.h\"" does not resolve).
+    # The test runs under CMake CI instead (see tests/st/CMakeLists.txt).
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:add_client_miss_libs_fixme",
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:request_context",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/protos:object_posix_zmq_cc_proto",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+        "//tests/st:st_common",
+    ],
+)

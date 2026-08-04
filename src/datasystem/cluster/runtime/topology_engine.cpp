@@ -29,6 +29,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/coordinator.pb.h"
 
@@ -82,8 +83,7 @@ void PreserveFirstError(const Status &candidate, Status &firstError)
 
 bool IsBackendAccessFailure(const Status &status)
 {
-    return status.GetCode() == K_RPC_UNAVAILABLE || status.GetCode() == K_RPC_DEADLINE_EXCEEDED
-           || status.GetCode() == K_RPC_CANCELLED;
+    return IsRetryableRpcError(status) || IsNonRetryableRpcError(status);
 }
 
 Status SelectProbeTargets(const TopologySnapshot &snapshot, const std::string &localAddress,

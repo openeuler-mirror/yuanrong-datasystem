@@ -189,7 +189,7 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
         connectTimeoutMs = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs));
     }
     if (FLAGS_use_brpc) {
-        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
+        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
         BrpcChannelConfig cfg;
         cfg.endpoint = brpcAddr.ToString();
         cfg.timeout_ms = requestTimeoutMs;
@@ -303,7 +303,7 @@ void ClientWorkerRemoteApi::RecreateOCStub()
         stubTimeout = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs_));
     }
     if (FLAGS_use_brpc) {
-        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
+        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
         BrpcChannelConfig cfg;
         cfg.endpoint = brpcAddr.ToString();
         cfg.timeout_ms = requestTimeoutMs_;
@@ -588,7 +588,8 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
             INJECT_POINT("Get.RetryOnError.retry_on_error_after_func");
             RETURN_IF_NOT_OK(getStatus);
             Status recvStatus = Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-            if (IsRpcTimeoutOrTryAgain(recvStatus)
+            if (recvStatus.GetCode() == StatusCode::K_TRY_AGAIN || IsRetryableRpcError(recvStatus)
+                || IsNonRetryableRpcError(recvStatus)
                 || (recvStatus.GetCode() == StatusCode::K_OUT_OF_MEMORY && IsAllGetFailed(rsp))) {
                 return recvStatus;
             }
@@ -1452,7 +1453,8 @@ Status ClientWorkerRemoteApi::QuerySize(const std::vector<std::string> &objectKe
                 return WithRpcDiag(rc, "QuerySize", hostPort_);
             }
             Status recvStatus = Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-            if (IsRpcTimeoutOrTryAgain(recvStatus)) {
+            if (recvStatus.GetCode() == StatusCode::K_TRY_AGAIN || IsRetryableRpcError(recvStatus)
+                || IsNonRetryableRpcError(recvStatus)) {
                 return recvStatus;
             }
             return Status::OK();

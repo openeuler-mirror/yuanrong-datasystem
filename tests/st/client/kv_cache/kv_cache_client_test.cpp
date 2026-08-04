@@ -2234,9 +2234,61 @@ TEST_F(KVClientShutdownTest, TestMulInvokeShutdownWithNullPtr)
 
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
 
-    ASSERT_EQ(client->ShutDown().GetCode(), K_RPC_UNAVAILABLE);
-    ASSERT_EQ(client->ShutDown().GetCode(), K_RPC_UNAVAILABLE);
+    // After the worker is shut down, the RPC failure (ECONNREFUSED/EHOSTDOWN while the
+    // port is down) maps to K_RPC_PEER_DEAD under the new peer-dead/network-blip split
+    // (was K_RPC_UNAVAILABLE pre-MR): the peer process is gone, so ShutDown fast-fails
+    // instead of retrying. Both calls must observe the same dead-peer failure.
+    ASSERT_EQ(client->ShutDown().GetCode(), K_RPC_PEER_DEAD);
+    ASSERT_EQ(client->ShutDown().GetCode(), K_RPC_PEER_DEAD);
     client.reset();
+}
+
+TEST_F(KVClientShutdownTest, SetGetFastFailAfterWorkerKilledWithLongRequestTimeout)
+{
+    // requestTimeoutMs = 30s. Killing the worker that serves this client must make the next
+    // Set/Get return immediately with K_RPC_PEER_DEAD (ECONNREFUSED/EHOSTDOWN while the peer
+    // process is gone), instead of stalling the full 30s RPC budget. This is the end-to-end
+    // guarantee of the brpc peer-dead split: a dead worker is detected instantly, not via the
+    // request timeout. The client has no standby worker configured, so it does not fail over to
+    // the other worker; both Set and Get must observe the dead-peer fast-fail.
+    ConnectOptions opts;
+    InitConnectOpt(0, opts);
+    constexpr int32_t kRequestTimeoutMs = 30000;
+    opts.requestTimeoutMs = kRequestTimeoutMs;
+    auto client = std::make_shared<KVClient>(opts);
+    DS_ASSERT_OK(client->Init());
+
+    // Pre-place a key on the (soon-to-be-killed) worker so Get targets a concrete dead owner.
+    std::string key;
+    DS_ASSERT_OK(client->GenerateKey("fastfail", key));
+    DS_ASSERT_OK(client->Set(key, "value"));
+
+    // SIGKILL the worker that owns the key and serves this client (abrupt process death, like a
+    // crash/OOM-kill — not a graceful shutdown). The listening port dies with the process, so the
+    // next connect/RPC surfaces ECONNREFUSED/EHOSTDOWN -> K_RPC_PEER_DEAD and fast-fails.
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+
+    // Get must fast-fail with peer-dead, not stall ~30s. Measured elapsed is sub-millisecond
+    // (ECONNREFUSED returns immediately), so 100ms is a generous upper bound that still catches
+    // any regression to deadline-based timeout (~30s) or bounded retry.
+    constexpr int32_t kFastFailMaxMs = 100;
+    std::string val;
+    Timer getTimer;
+    Status getRc = client->Get(key, val);
+    int64_t getElapsedMs = getTimer.ElapsedMilliSecond();
+    ASSERT_EQ(getRc.GetCode(), K_RPC_PEER_DEAD) << getRc.ToString();
+    ASSERT_LT(getElapsedMs, kFastFailMaxMs)
+        << "Get expected fast-fail after worker kill, elapsed=" << getElapsedMs << "ms";
+
+    // Set of a new key must also fast-fail with peer-dead, not stall ~30s.
+    std::string newKey;
+    DS_ASSERT_OK(client->GenerateKey("fastfail2", newKey));
+    Timer setTimer;
+    Status setRc = client->Set(newKey, "value");
+    int64_t setElapsedMs = setTimer.ElapsedMilliSecond();
+    ASSERT_EQ(setRc.GetCode(), K_RPC_PEER_DEAD) << setRc.ToString();
+    ASSERT_LT(setElapsedMs, kFastFailMaxMs)
+        << "Set expected fast-fail after worker kill, elapsed=" << setElapsedMs << "ms";
 }
 
 class KVClientDfxTest : public OCClientCommon {

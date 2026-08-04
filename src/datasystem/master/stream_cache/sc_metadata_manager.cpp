@@ -1127,7 +1127,7 @@ void SCMetadataManager::CheckMetadataWithAsyncRetry(const HostPort &workerAddr, 
         return;
     }
     Status rc = CheckMetadata({ workerAddr });
-    if (IsRpcTimeoutOrTryAgain(rc)) {
+    if (rc.GetCode() == K_TRY_AGAIN || IsRetryableRpcError(rc)) {
         static std::vector<uint64_t> retryDelaySec = { 1, 2, 4, 8, 16, 32, 64 };
         uint64_t delaySec = retryTimes < retryDelaySec.size() ? retryDelaySec[retryTimes] : retryDelaySec.back();
         uint64_t delayMs = std::min<uint64_t>(remaining, delaySec * secToMs);

@@ -46,6 +46,7 @@
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/request_context.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
@@ -262,11 +263,7 @@ inline ZmqMessage ZmqInt64ToMessage(int64_t val)
  */
 inline bool IsRpcError(const Status &status)
 {
-    if (status.GetCode() == StatusCode::K_RPC_CANCELLED || status.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED
-        || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE || status.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT) {
-        return true;
-    }
-    return false;
+    return IsRetryableRpcError(status) || IsNonRetryableRpcError(status);
 }
 
 /**

@@ -314,7 +314,7 @@ Status WorkerOcServicePublishImpl::RequestingToMaster(ObjectKV &objectKV, const 
     } else {
         LOG_IF_ERROR(safeObj->FreeResources(), "SafeObj free failed");
         LOG(ERROR) << FormatString("[ObjectKey %s] RequestingToMaster failed, status: %s", objectKey, rc.ToString());
-        if (IsRpcTimeout(rc)) {
+        if (IsRetryableRpcError(rc) || IsNonRetryableRpcError(rc)) {
             return Status(rc.GetCode(), FormatString("Create meta to master failed. detail: %s", rc.ToString()));
         }
         const std::unordered_set<StatusCode> passthroughError{

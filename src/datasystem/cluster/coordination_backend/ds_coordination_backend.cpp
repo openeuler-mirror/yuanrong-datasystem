@@ -324,7 +324,7 @@ Status DsCoordinationBackend::RewatchIfNeeded()
 void DsCoordinationBackend::RefreshWatchIdentity(const Status &status)
 {
     std::string coordinatorId;
-    const bool probe = status.GetCode() == K_NOT_READY || IsRpcTimeout(status);
+    const bool probe = status.GetCode() == K_NOT_READY || IsRetryableRpcError(status) || IsNonRetryableRpcError(status);
     std::unique_lock<std::mutex> probeLock(rewatchMutex_, std::defer_lock);
     if (status.IsError() && !probe && status.GetCode() != K_TRY_AGAIN) {
         return;

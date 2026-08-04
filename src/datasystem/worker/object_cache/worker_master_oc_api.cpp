@@ -26,6 +26,7 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/common/signal/signal.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -193,6 +194,38 @@ Status WorkerRemoteMasterOCApi::Init()
         RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
     }
     return Status::OK();
+}
+
+Status WorkerRemoteMasterOCApi::RebuildStub()
+{
+    (void)RpcStubCacheMgr::Instance().Remove(hostPort_, StubType::WORKER_MASTER_OC_SVC);
+    return Init();
+}
+
+Status WorkerRemoteMasterOCApi::RetryWithStubRebuild(int64_t timeoutMs,
+                                                     const std::function<Status(int32_t)> &func,
+                                                     const std::unordered_set<StatusCode> &retryOn,
+                                                     const char *diagName)
+{
+    // RetryOnError fast-fails K_RPC_PEER_DEAD by contract. On peer-dead/blip the cached
+    // brpcSession_ holds a failed socket against a restarting master; rebuild the stub and
+    // retry until the deadline so a brief boot window does not surface as a permanent
+    // metadata-recovery failure. `func` reads this->brpcSession_ so the rebuilt stub is used.
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    Status rc;
+    do {
+        if (IsTermSignalReceived()) {
+            break;
+        }
+        int32_t remainMs = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count());
+        rc = RetryOnError(std::max<int32_t>(remainMs, 0), func, []() { return Status::OK(); }, retryOn);
+        if (rc.GetCode() != StatusCode::K_RPC_PEER_DEAD && rc.GetCode() != StatusCode::K_RPC_NETWORK_BLIP) {
+            break;
+        }
+        (void)RebuildStub();
+    } while (std::chrono::steady_clock::now() < deadline);
+    return WithRpcDiag(rc, diagName, localHostPort_, hostPort_);
 }
 
 Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response)
@@ -405,8 +438,9 @@ Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint6
     RpcOptions opts;
     auto &reqTimeoutDuration = GetRequestContext()->reqTimeoutDuration;
     int64_t timeoutMs = TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
-    Status status = RetryOnErrorRepent(
-        timeoutMs,
+    static const std::unordered_set<StatusCode> queryMetaRetryOn{ StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
+        StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE };
+    Status status = RetryWithStubRebuild(timeoutMs,
         [this, &opts, &request, &response, &payloads](int32_t) {
             CHECK_AND_SET_TIMEOUT(&GetRequestContext()->reqTimeoutDuration, request, opts);
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
@@ -416,12 +450,10 @@ Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint6
             GetWorkerTimeCost().Append("Worker to master rpc QueryMeta", timer.ElapsedMilliSecond());
             return rc;
         },
-        []() { return Status::OK(); },
-        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE });
+        queryMetaRetryOn, "QueryMeta");
 
     point.Record();
-    return WithRpcDiag(status, "QueryMeta", localHostPort_, hostPort_);
+    return status;
 }
 
 Status WorkerRemoteMasterOCApi::RemoveMeta(master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response)
@@ -653,17 +685,24 @@ Status WorkerRemoteMasterOCApi::PushMetadataToMaster(master::PushMetaToMasterReq
                                                      master::PushMetaToMasterRspPb &rsp)
 {
     INJECT_POINT("WorkerRemote.PushMetadataToMaster");
-    // Single attempt: app-level retry (RetryOnRPCError) was removed and mesh channels
-    // run with brpc max_retry=0, so give the one call the full RPC_TIMEOUT budget.
+    // Mesh channels run with brpc max_retry=0. RetryOnError fast-fails K_RPC_PEER_DEAD, so
+    // wrap with stub-rebuild retry: a restarting master briefly reports peer-dead while
+    // booting, and dropping the stale stub lets the next attempt rebuild the channel.
     constexpr int64_t timeoutMs = RPC_TIMEOUT;
-    RpcOptions opts;
-    opts.SetTimeout(timeoutMs + WORKER_ADD_MILLISECOND);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    Timer timer;
-    Status status = (brpcSession_ ? brpcSession_->PushMetaToMaster(opts, req, rsp)
-                                    : rpcSession_->PushMetaToMaster(opts, req, rsp));
-    GetWorkerTimeCost().Append("Worker to master rpc PushMetadataToMaster", timer.ElapsedMilliSecond());
-    return WithRpcDiag(status, "PushMetadataToMaster", localHostPort_, hostPort_);
+    static const std::unordered_set<StatusCode> pushMetaRetryOn{ StatusCode::K_TRY_AGAIN,
+        StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE };
+    return RetryWithStubRebuild(timeoutMs,
+        [this, &req, &rsp](int32_t rpcTimeoutMs) {
+            RpcOptions opts;
+            opts.SetTimeout(rpcTimeoutMs + WORKER_ADD_MILLISECOND);
+            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+            Timer timer;
+            Status rc = (brpcSession_ ? brpcSession_->PushMetaToMaster(opts, req, rsp)
+                                        : rpcSession_->PushMetaToMaster(opts, req, rsp));
+            GetWorkerTimeCost().Append("Worker to master rpc PushMetadataToMaster", timer.ElapsedMilliSecond());
+            return rc;
+        },
+        pushMetaRetryOn, "PushMetadataToMaster");
 }
 
 Status WorkerRemoteMasterOCApi::RollbackSeal(const std::string &objectKey, uint32_t oldLifeState)
@@ -711,6 +750,12 @@ Status WorkerRemoteMasterOCApi::ReconcileMembershipChange(master::Reconciliation
         retryTimeout = timeout;
         return Status::OK();
     });
+    // RetryOnError contractually fast-fails K_RPC_PEER_DEAD, so wrap with stub-rebuild retry
+    // (same as PushMetadataToMaster): a restarting metadata owner briefly reports peer-dead
+    // while booting, and the cached brpcSession_ holds the failed socket. Without rebuilding,
+    // reconciliation never succeeds, the worker stays Not-ready, and client ops block until the
+    // ST timeout (LEVEL1_MultiClientOneWorkerRestartTest). RetryWithStubRebuild drops the stale
+    // stub on peer-dead/blip and retries until the 60s budget; reconciliation is idempotent.
     const std::unordered_set<StatusCode> &retryOn = { StatusCode::K_NOT_FOUND, StatusCode::K_RPC_CANCELLED,
                                                       StatusCode::K_RPC_DEADLINE_EXCEEDED,
                                                       StatusCode::K_RPC_UNAVAILABLE };
@@ -722,8 +767,8 @@ Status WorkerRemoteMasterOCApi::ReconcileMembershipChange(master::Reconciliation
         GetWorkerTimeCost().Append("Worker to master rpc ReconcileMembershipChange", timer.ElapsedMilliSecond());
         return rc;
     };
-    RETURN_IF_NOT_OK(RetryOnError(
-        retryTimeout, retryFun, []() { return Status::OK(); }, retryOn));
+    RETURN_IF_NOT_OK(RetryWithStubRebuild(
+        retryTimeout, retryFun, retryOn, "ReconcileMembershipChange"));
     // If needed, reconciliation should have been done. Otherwise, no-op and OK was returned.
     return Status::OK();
 }

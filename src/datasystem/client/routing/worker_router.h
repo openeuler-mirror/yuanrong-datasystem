@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "datasystem/client/routing/i_worker_filter.h"
+#include "datasystem/client/routing/select_strategy.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
@@ -39,12 +40,6 @@ namespace datasystem {
 namespace client {
 
 enum class DataPlacementPolicy : uint8_t;
-
-// Legacy compatibility enum. New routing code must use DataPlacementPolicy so REQUIRED_SAME_NODE remains expressible.
-enum class SelectStrategy {
-    HASH_RING_AFFINITY,     // Select by key hash on ring (metadata owner)
-    SAME_NODE_PREFERRED,    // Prefer same-node worker, fallback to ring
-};
 
 enum class WorkerRingState {
     UNKNOWN,

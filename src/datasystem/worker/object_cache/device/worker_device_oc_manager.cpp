@@ -247,7 +247,10 @@ Status WorkerDeviceOcManager::TryGetDeviceObjectFromRemote(const int64_t subTime
         }
         if (status.IsError()) {
             // If the error is RPC error, return them directly, other error would be covered up as RUNTIME_ERROR.
-            Status lastRc = IsRpcTimeoutOrTryAgain(status) ? status : Status(K_RUNTIME_ERROR, status.GetMsg());
+            Status lastRc =
+                (status.GetCode() == K_TRY_AGAIN || IsRetryableRpcError(status) || IsNonRetryableRpcError(status))
+                    ? status
+                    : Status(K_RUNTIME_ERROR, status.GetMsg());
             for (const auto &id : failedIds) {
                 LOG_IF_ERROR(deviceReqManager_.UpdateRequestForFailed(id, lastRc), "UpdateRequestForFailed failed");
             }

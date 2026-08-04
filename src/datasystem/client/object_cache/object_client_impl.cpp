@@ -85,8 +85,8 @@
 #endif
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
-#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/rpc_constants.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/flags/dynamic_config_updater.h"
@@ -96,6 +96,7 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/request_context.h"
@@ -428,6 +429,45 @@ void NotifySwitchToExpectedWorker(const HostPort &target)
 static constexpr int32_t INIT_SELECT_WORKER_RETRY_INTERVAL_MS = 100;
 static constexpr int32_t INIT_SELECT_WORKER_NO_WORKER_RETRY_INTERVAL_MS = 500;
 static constexpr int32_t INIT_SELECT_WORKER_TRIES = 6;
+
+class RoutingExistAdapter : public IExistRouting {
+public:
+    explicit RoutingExistAdapter(std::shared_ptr<client::Routing> routing) : routing_(std::move(routing)) {}
+    ~RoutingExistAdapter() override = default;
+
+    Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups) override
+    {
+        RETURN_RUNTIME_ERROR_IF_NULL(routing_);
+        return routing_->SelectWorkers(keys, strategy, groups);
+    }
+
+    void UpdateState(const HostPort &addr, StatusCode status) override
+    {
+        if (routing_ != nullptr) {
+            routing_->UpdateState(addr, status);
+        }
+    }
+
+private:
+    std::shared_ptr<client::Routing> routing_;
+};
+
+class TransportLayerExistAdapter : public IExistTransport {
+public:
+    explicit TransportLayerExistAdapter(client::TransportLayer *transport) : transport_(transport) {}
+    ~TransportLayerExistAdapter() override = default;
+
+    Status Exist(const HostPort &workerAddr, const client::TransportExistRequest &input,
+                 client::TransportExistResult &output) override
+    {
+        RETURN_RUNTIME_ERROR_IF_NULL(transport_);
+        return transport_->Exist(workerAddr, input, output);
+    }
+
+private:
+    client::TransportLayer *transport_;
+};
 
 }  // namespace
 
@@ -946,11 +986,20 @@ Status ObjectClientImpl::InitPreferredRemoteFallback(const HostPort &remoteAddre
 
 bool ObjectClientImpl::ShouldRetryInit(const Status &status) const
 {
+    if (IsRetryableRpcError(status)) {
+        return true;
+    }
     switch (status.GetCode()) {
         case K_CLIENT_WORKER_DISCONNECT:
         case K_TRY_AGAIN:
-        case K_RPC_UNAVAILABLE:
-        case K_RPC_DEADLINE_EXCEEDED:
+            return true;
+        // During init, a peer-dead (ECONNREFUSED/ENOTCONN/EHOSTDOWN from a worker that is
+        // mid-restart) must be retried within the connect budget — the peer is booting, not
+        // gone. Master treated these as K_RPC_UNAVAILABLE and retried; this PR's remap to
+        // K_RPC_PEER_DEAD would otherwise abort init on the first refused connection. The
+        // runtime fast-fail contract (dead_peer_fast_fail_test) covers steady-state RPCs,
+        // not init, so retrying here does not weaken it.
+        case K_RPC_PEER_DEAD:
             return true;
         default:
             return false;
@@ -3475,8 +3524,11 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
         excludeWorker();
         return true;
     }
+    // CANCELLED (brpc-internal cancellation) is excluded: it is not a transport
+    // connection failure, so it must not evict the worker from the routing table.
     const bool connectionFailure = status.GetCode() == K_CLIENT_WORKER_DISCONNECT
-                                   || status.GetCode() == K_RPC_UNAVAILABLE;
+                                   || (IsRetryableRpcError(status) && status.GetCode() != K_RPC_CANCELLED)
+                                   || IsNonRetryableRpcError(status);
     const bool transferFailure = status.GetCode() == K_URMA_NEED_CONNECT;
     const bool workerNotReady = status.GetCode() == K_NOT_READY
                                 && (failureStage == SetFailureStage::CREATE
@@ -4181,9 +4233,11 @@ void SubmitDirectOneShotH2D(DirectPipelineItem &item, H2DChunkManager &manager)
 
 bool IsRetryableDirectReplicaError(const Status &status)
 {
+    if (IsRetryableRpcError(status)) {
+        return true;
+    }
     switch (status.GetCode()) {
         case K_TRY_AGAIN:
-        case K_RPC_UNAVAILABLE:
         case K_URMA_NEED_CONNECT:
         case K_URMA_CONNECT_FAILED:
         case K_WORKER_PULL_OBJECT_NOT_FOUND:
@@ -7591,7 +7645,12 @@ Status ObjectClientImpl::RunExist(std::shared_ptr<client::Routing> routing,
     if (routing != nullptr && transportLayer != nullptr) {
         ExistHandlerRequest request{ keys, queryL2Cache, isLocal, requestTimeoutMs_, GetClientId(),
             GetRequestContext()->tenantId.empty() ? tenantId_ : GetRequestContext()->tenantId, token };
-        ExistHandler flow(routing, transportLayer.get(), asyncGetRPCPool_);
+        // Stack-allocated adapters: avoids two make_shared control-block allocations per
+        // Exist call. The handler holds non-owning aliased shared_ptr to them; Run is
+        // synchronous so the adapters outlive the handler.
+        RoutingExistAdapter existRouting(std::move(routing));
+        TransportLayerExistAdapter existTransport(transportLayer.get());
+        ExistHandler flow(&existRouting, &existTransport, asyncGetRPCPool_);
         return flow.Run(request, exists);
     }
     return workerApi->Exist(keys, exists, queryL2Cache, isLocal);

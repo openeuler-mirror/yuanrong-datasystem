@@ -143,6 +143,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "object_client_impl_exist_test",
+    srcs = ["object_client_impl_exist_test.cpp"],
+    deps = [
+        "//src/datasystem/client/object_cache:exist_handler",
+        "//src/datasystem/common/util:thread_pool",
+        "@nlohmann_json//:json",
+    ],
+)
+
+ds_cc_test(
     name = "urma_send_lane_test",
     srcs = ["urma_send_lane_test.cpp"],
     deps = [

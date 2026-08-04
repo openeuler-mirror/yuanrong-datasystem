@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
+#include "datasystem/client/transport/rpc/exist_types.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/transport_kind.h"
 #include "datasystem/common/object_cache/ireceive_buffer_owner.h"
@@ -74,36 +75,6 @@ struct DataGetResult {
     AccessTransportKind kind = AccessTransportKind::TCP;
 };
 
-struct TransportExistRequest {
-    // objectKeys is a const reference; the caller's vector must outlive all uses of this struct.
-    // The rvalue constructor is deleted to prevent binding to temporaries.
-    TransportExistRequest(const std::vector<std::string> &keys, bool queryL2, bool isLocal, int64_t timeoutMs,
-                          std::string clientId, std::string tenantId, SensitiveValue token)
-        : objectKeys(keys),
-          queryL2Cache(queryL2),
-          isLocal(isLocal),
-          subTimeoutMs(timeoutMs),
-          clientId(std::move(clientId)),
-          tenantId(std::move(tenantId)),
-          token(std::move(token))
-    {
-    }
-    TransportExistRequest(std::vector<std::string> &&keys, bool, bool, int64_t, std::string, std::string,
-                          SensitiveValue) = delete;
-
-    const std::vector<std::string> &objectKeys;
-    bool queryL2Cache;
-    bool isLocal;
-    int64_t subTimeoutMs;
-    std::string clientId;
-    std::string tenantId;
-    SensitiveValue token;
-};
-
-struct TransportExistResult {
-    std::vector<bool> exists;
-};
-
 /** @brief One ordered result from a data-worker batch read. */
 struct DataGetItemResult {
     Status status = Status(K_NOT_READY, "Object data is not read");
@@ -149,7 +120,8 @@ public:
      * @brief Commit an ObjectBuffer via transport (URMA write + Publish RPC / TCP payload).
      * @param[in] buffer ObjectBuffer created by this transporter's Create.
      * @param[in] param Set parameters (nested keys, TTL, existence, seal, keep, timeout, isRetry).
-     * @return K_OK on success; rebuild-trigger errors (K_URMA_NEED_CONNECT, K_RPC_UNAVAILABLE) on failure.
+     * @return K_OK on success; rebuild/teardown-trigger errors (K_URMA_NEED_CONNECT, retryable RPC failures,
+     *         K_RPC_PEER_DEAD) on failure. K_RPC_PEER_DEAD is terminal for the current request.
      */
     virtual Status Set(ObjectBuffer &buffer, const TransportSetParam &param) = 0;
 
@@ -160,8 +132,8 @@ public:
      * @param[in] sizes Object sizes corresponding positionally to keys.
      * @param[in] param Create parameters and client identity.
      * @param[out] buffers Caller-owned buffers consumed by MSet; partial output is not returned on failure.
-     * @return K_OK on success. Ambiguous K_RPC_UNAVAILABLE is not replayed because MultiCreate has no idempotency
-     *         marker and the worker may already have allocated memory.
+     * @return K_OK on success. Ambiguous peer-unavailable RPC failures are not replayed because MultiCreate has no
+     *         idempotency marker and the worker may already have allocated memory.
      */
     virtual Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
                            const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
@@ -173,7 +145,8 @@ public:
      * @param[in] param Publish parameters and client identity.
      * @param[out] result Failed keys, worker status, and actual transport when at least one object succeeds.
      * @return K_OK if at least one object succeeds; K_URMA_NEED_CONNECT requests one UB data-plane rebuild. A
-     *  pre-Publish K_RPC_UNAVAILABLE may be replayed once; an attempted publish is ambiguous and is not replayed.
+     *  pre-Publish retryable peer-unavailable RPC failure may be replayed once; an attempted publish is ambiguous and
+     *  is not replayed.
      *  TransportLayer schedules release of every worker allocation before returning.
      */
     virtual Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,

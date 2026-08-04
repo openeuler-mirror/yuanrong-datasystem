@@ -169,7 +169,9 @@ private:
     Status RetrySet(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
                     TransportHint hint);
     // Rebuilds the data plane after a Set failure (K_URMA_NEED_CONNECT -> ResetDataPlane;
-    // K_RPC_UNAVAILABLE -> Teardown). Returns true if rebuilt (caller retries), false otherwise.
+    // K_RPC_UNAVAILABLE -> Teardown). A non-retryable RPC error (dead peer) tears down the stale
+    // connection but returns false so the caller does not retry. Returns true if rebuilt (caller
+    // retries), false otherwise.
     bool RebuildPlaneOnSetFailure(const Status &rc, const HostPort &workerAddr);
     // Sampled triage log for the routed Set hot path: transport kind (SHM/UB/TCP) + result + latency,
     // so operators can localize which transport a write used and how long it took. Sampled (every N) to

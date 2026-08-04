@@ -166,13 +166,13 @@ public:
     // control-plane RPCs (SetInjectAction / ClearInjectAction /
     // GetInjectActionExecuteCount / GcovFlush) reach a handler the server
     // actually registered. brpc mode registers GenericServiceBrpcAdapter on the
-    // worker; ZMQ mode uses the ZMQ GenericService. kBrpcPortOffset is 0 so the
-    // same worker port is used for both.
+    // worker; ZMQ mode uses the ZMQ GenericService. brpc shares the configured
+    // port so the same worker port is used for both.
     void InitRpcSession(const RpcCredential &cred = RpcCredential())
     {
         if (FLAGS_use_brpc) {
             BrpcChannelConfig cfg;
-            cfg.endpoint = HostPort(addr_.Host(), addr_.Port() + kBrpcPortOffset).ToString();
+            cfg.endpoint = HostPort(addr_.Host(), addr_.Port()).ToString();
             cfg.timeout_ms = 500;
             cfg.connect_timeout_ms = 500;
             // Disable the circuit breaker on the test control-plane channel. ST tests

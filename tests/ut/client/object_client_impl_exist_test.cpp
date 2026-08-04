@@ -26,7 +26,6 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include "common.h"
 #include "datasystem/client/object_cache/exist_handler.h"
 #include "datasystem/common/util/thread_pool.h"
 
@@ -121,11 +120,10 @@ public:
     std::mutex mutex;
 };
 
-class ExistHandlerTest : public ut::CommonTest {
+class ExistHandlerTest : public testing::Test {
 public:
     void SetUp() override
     {
-        ut::CommonTest::SetUp();
         taskPool_ = std::make_shared<ThreadPool>(0, 2, "exist_test_rpc");
         routing_ = std::make_shared<FakeExistRouting>();
         transport_ = std::make_shared<FakeExistTransport>();
@@ -134,7 +132,6 @@ public:
     void TearDown() override
     {
         taskPool_.reset();
-        ut::CommonTest::TearDown();
     }
 
     Status RunFlow(const std::vector<std::string> &keys, std::vector<bool> &exists, bool queryL2Cache = true,
@@ -240,6 +237,27 @@ TEST_F(ExistHandlerTest, ExistUpdatesRoutingAfterConnectionFailureRetry)
     EXPECT_EQ(routing_->updatedStatuses[0], K_CLIENT_WORKER_DISCONNECT);
     EXPECT_EQ(routing_->updatedStatuses[1], K_CLIENT_WORKER_DISCONNECT);
     EXPECT_EQ(routing_->selectWorkersCount, 2);
+}
+
+TEST_F(ExistHandlerTest, ExistPeerDeadUpdatesRoutingWithoutProbeOrReroute)
+{
+    HostPort workerA = MakeWorker(18481);
+    routing_->groups[workerA] = { "k1" };
+    transport_->results = {
+        { Status(K_RPC_PEER_DEAD, "peer dead"), {} },
+    };
+    std::vector<bool> exists;
+
+    Status rc = RunFlow({ "k1" }, exists);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD);
+    ASSERT_EQ(transport_->workers.size(), 1ul);
+    EXPECT_EQ(transport_->workers[0], workerA);
+    EXPECT_EQ(transport_->subTimeouts, std::vector<int64_t>({ requestTimeoutMs_ }));
+    ASSERT_EQ(routing_->updatedWorkers.size(), 1ul);
+    EXPECT_EQ(routing_->updatedWorkers[0], workerA);
+    EXPECT_EQ(routing_->updatedStatuses[0], K_CLIENT_WORKER_DISCONNECT);
+    EXPECT_EQ(routing_->selectWorkersCount, 1);
 }
 
 TEST_F(ExistHandlerTest, ExistReroutesAfterDeadlineExceeded)
