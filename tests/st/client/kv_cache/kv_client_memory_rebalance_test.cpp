@@ -740,7 +740,7 @@ public:
         opts.numOBS = 0;
         opts.workerGflagParams =
             "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
-            "-rebalance_usage_gap_percent=30 -rebalance_source_usage_percent=70 "
+            "-rebalance_usage_gap_percent=30 -rebalance_source_usage_percent=80 "
             "-rebalance_cooldown_s=1 -rebalance_task_report_grace_ms=500 "
             "-data_migrate_rate_limit_mb=20";
         opts.injectActions = BuildRebalanceInjectActions();
@@ -756,7 +756,9 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceLowRateTest, LowRateMigrateSucceedsAfterBus
     // Pre-load worker2 so worker1 is the unambiguous lowest-usage target.
     auto pressureBatch = WriteObjects(client2_, "rebalance_low_rate_pressure", 1, 'p');
     SleepMs(WORKER_RECEIVE_RING_DELAY_MS);
-    // 9 * 5MB = 45MB > 70% of 64MB (~44.8MB) -> triggers rebalance to worker1.
+    // A 5MB payload occupies a 6MB jemalloc size class. The 80% threshold keeps 8 objects
+    // below the trigger (48MB/64MB=75%) and triggers only after all 9 objects are present.
+    // This guarantees the task selects enough data to exercise a second migration batch.
     // With rate=20, maxBatchSize=20MB; the first full 20MB batch saturates the 20MB/s sliding
     // window and forces the self-heal path on the next batch.
     auto sourceBatch = WriteObjects(client0_, "rebalance_low_rate_source", 9, 'l');

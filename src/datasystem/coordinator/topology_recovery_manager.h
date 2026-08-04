@@ -23,6 +23,7 @@ namespace datasystem {
 class CoordinatorStore;
 class SteadyClock;
 class ThreadPool;
+struct TraceContext;
 namespace cluster {
 struct TopologyState;
 }
@@ -286,11 +287,12 @@ private:
      * @param[in] clusterName Cluster scope.
      * @param[in] contextGeneration Recovery-context generation that admitted the payload.
      * @param[in] report Validated payload to consume.
+     * @param[in] traceContext Trace context captured when the payload was submitted.
      * @return Recording status.
      */
     Status RecordPayload(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity,
-                         uint64_t contextGeneration,
-                         TopologyRecoveryCandidateReport report);
+                         uint64_t contextGeneration, TopologyRecoveryCandidateReport report,
+                         TraceContext traceContext);
 
     /**
      * @brief Release admission budget and block an invalid selected candidate.
@@ -378,10 +380,12 @@ private:
      * @param[in] clusterName Logical cluster name.
      * @param[out] payload Frozen canonical topology payload.
      * @param[out] version Frozen topology version; zero means no installation is ready.
+     * @param[out] traceContext Trace context of the selected payload submission.
      * @return Arbitration status.
      */
     Status PrepareInstallationLocked(const std::string &clusterName, const TopologyRecoveryRoundIdentity &identity,
-                                     std::shared_ptr<const std::string> &payload, uint64_t &version);
+                                     std::shared_ptr<const std::string> &payload, uint64_t &version,
+                                     TraceContext &traceContext);
 
     /**
      * @brief Apply an installation result while mutex_ is held.

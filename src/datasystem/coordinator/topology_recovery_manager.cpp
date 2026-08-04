@@ -238,6 +238,7 @@ struct TopologyRecoveryManager::ClusterRecoveryContext {
     std::shared_ptr<const std::string> selectedCanonicalTopology;
     std::string selectedCanonicalDigest;
     uint64_t selectedVersion{ 0 };
+    TraceContext selectedPayloadTraceContext;
     std::optional<std::chrono::steady_clock::time_point> discoveryDeadline;
     std::optional<TopologyRecoveryRoundIdentity> delayedReconcileIdentity;
     bool payloadValidationPending{ false };
@@ -746,7 +747,8 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
                         status = Status(K_RUNTIME_ERROR, "candidate validation failed with an unknown exception");
                     }
                     if (status.IsOk()) {
-                        return RecordPayload(clusterName, identity, contextGeneration, std::move(report));
+                        return RecordPayload(clusterName, identity, contextGeneration, std::move(report),
+                                             std::move(traceContext));
                     }
                     return RejectPayload(clusterName, identity, contextGeneration, report, payloadBytes, status);
                 });
@@ -766,7 +768,7 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
 Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName,
                                               const TopologyRecoveryRoundIdentity &identity,
                                               uint64_t contextGeneration,
-                                              TopologyRecoveryCandidateReport report)
+                                              TopologyRecoveryCandidateReport report, TraceContext traceContext)
 {
     const size_t payloadBytes = report.canonicalTopology.size();
     bool schedule = false;
@@ -803,6 +805,7 @@ Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName,
                 std::make_shared<const std::string>(std::move(report.canonicalTopology));
             context.selectedCanonicalDigest = std::move(report.canonicalDigest);
             context.selectedVersion = report.topologyVersion;
+            context.selectedPayloadTraceContext = std::move(traceContext);
             retainedCandidateBytes_ += payloadBytes;
             VLOG(1) << "CLUSTER_RECOVERY_PAYLOAD_ACCEPTED cluster=" << clusterName
                     << ", reporter=" << report.reporterAddress << ", version=" << report.topologyVersion
@@ -863,6 +866,7 @@ void TopologyRecoveryManager::ReleaseSelectedPayload(ClusterRecoveryContext &con
     context.selectedCanonicalTopology.reset();
     context.selectedCanonicalDigest.clear();
     context.selectedVersion = 0;
+    context.selectedPayloadTraceContext = TraceContext{};
 }
 
 void TopologyRecoveryManager::CompleteRecoveryWorkLocked()
@@ -1052,6 +1056,10 @@ Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName,
         auto found = contexts_.find(clusterName);
         if (found != contexts_.end() && found->second->state == TopologyRecoveryState::RECOVERING
             && found->second->discoveryDeadline.has_value() && clock_->Now() < *found->second->discoveryDeadline) {
+            if (!found->second->payloadValidationPending
+                && !HasOutstandingPayloadRequest(found->second->reporterEvidence)) {
+                ScheduleDelayedReconcileLocked(clusterName, *found->second);
+            }
             return Status::OK();
         }
     }
@@ -1062,12 +1070,13 @@ Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName,
     }
     std::shared_ptr<const std::string> payload;
     uint64_t version = 0;
+    TraceContext payloadTraceContext;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!activeRound_.has_value() || *activeRound_ != identity) {
             return Status(K_TRY_AGAIN, "leader round changed before installation");
         }
-        RETURN_IF_NOT_OK(PrepareInstallationLocked(clusterName, identity, payload, version));
+        RETURN_IF_NOT_OK(PrepareInstallationLocked(clusterName, identity, payload, version, payloadTraceContext));
         auto found = contexts_.find(clusterName);
         if (version == 0 && found != contexts_.end() && found->second->state == TopologyRecoveryState::RECOVERING) {
             ScheduleDelayedReconcileLocked(clusterName, *found->second);
@@ -1076,6 +1085,7 @@ Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName,
     if (version == 0) {
         return Status::OK();
     }
+    TraceGuard payloadTraceGuard = Trace::Instance().SetTraceContext(payloadTraceContext);
     Status installStatus;
     try {
         if (leaderRoundFenceMutex_ != nullptr) {
@@ -1198,7 +1208,7 @@ void TopologyRecoveryManager::ApplyStoredAuthorityLocked(const std::string &clus
 Status TopologyRecoveryManager::PrepareInstallationLocked(const std::string &clusterName,
                                                           const TopologyRecoveryRoundIdentity &identity,
                                                           std::shared_ptr<const std::string> &payload,
-                                                          uint64_t &version)
+                                                          uint64_t &version, TraceContext &traceContext)
 {
     if (!activeRound_.has_value() || *activeRound_ != identity) {
         return Status(K_TRY_AGAIN, "leader round changed before preparation");
@@ -1242,6 +1252,7 @@ Status TopologyRecoveryManager::PrepareInstallationLocked(const std::string &clu
     context.state = TopologyRecoveryState::INSTALLING;
     payload = context.selectedCanonicalTopology;
     version = selected.highestVersion;
+    traceContext = context.selectedPayloadTraceContext;
     LOG(INFO) << "CLUSTER_RECOVERY_STATE cluster=" << clusterName << ", coordinator_id="
               << CoordinatorIdLogPrefix(coordinatorId_)
               << ", old=RECOVERING, new=INSTALLING, version=" << version
