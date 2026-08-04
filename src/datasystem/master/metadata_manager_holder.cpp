@@ -164,6 +164,14 @@ void MetadataManagerHolder::Shutdown()
     LOG(INFO) << "Metadata manager holder shutdown, cost:" << timer.ElapsedMilliSecond() << "ms";
 }
 
+void MetadataManagerHolder::PrepareForFullClusterShutdown()
+{
+    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    if (ocMetadataManager_ != nullptr) {
+        ocMetadataManager_->PrepareForFullClusterShutdown();
+    }
+}
+
 Status MetadataManagerHolder::GetDeviceOcManager(std::shared_ptr<master::MasterDevOcManager> &devOcManager)
 {
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
