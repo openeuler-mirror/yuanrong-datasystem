@@ -85,6 +85,8 @@ build --action_env=CC=gcc
 build --action_env=CXX=g++
 build --action_env=DS_JEMALLOC_LG_PAGE
 common --enable_bzlmod=false
+# Disable brpc's process-wide pthread mutex symbol interposition.
+build --define=BRPC_WITH_NO_PTHREAD_MUTEX_HOOK=true
 build --define=grpc_no_xds=true
 build --define=grpc_no_binder=true
 build --define=grpc_no_ares=true
