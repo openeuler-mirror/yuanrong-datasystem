@@ -1291,7 +1291,9 @@ void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnap
         knownFailedAddresses_.insert(member->identity.address);
     }
     for (const auto &member : snapshot.ActiveMembers()) {
-        knownFailedAddresses_.erase(member->identity.address);
+        if (knownFailedAddresses_.erase(member->identity.address) > 0) {
+            RemoveDeadWorkerEvent::GetInstance().NotifyAll(member->identity.address);
+        }
     }
     for (const auto &addrStr : knownFailedAddresses_) {
         HostPort addr;
@@ -1710,6 +1712,7 @@ void WorkerOCServer::ReconcileUbAdmissionTopology(const cluster::TopologySnapsho
 void WorkerOCServer::HandleTopologySnapshotPublished(std::shared_ptr<const cluster::TopologySnapshot> snapshot)
 {
     if (snapshot != nullptr) {
+        CleanupRpcStubsForFailedMembers(*snapshot);
         ReconcileUbAdmissionTopology(*snapshot);
     }
     ScheduleTopologySnapshotWarmup(std::move(snapshot));

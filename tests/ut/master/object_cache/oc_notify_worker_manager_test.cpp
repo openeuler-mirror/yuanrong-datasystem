@@ -30,6 +30,7 @@
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
+#include "datasystem/worker/cluster_event_type.h"
 
 DS_DECLARE_string(rocksdb_store_dir);
 DS_DECLARE_string(rocksdb_write_mode);
@@ -54,6 +55,7 @@ public:
     void TearDown() override
     {
         (void)inject::Clear("master.rocksdb.put");
+        (void)inject::Clear("master.rocksdb.delete");
         objectStore_.reset();
         rocksStore_.reset();
         FLAGS_rocksdb_write_mode = rocksdbWriteMode_;
@@ -185,6 +187,121 @@ TEST_F(OCNotifyWorkerManagerTest, TestSnapshotClearKeepsNewerAsyncWorkerOp)
 
     ASSERT_FALSE(manager->CheckExistAsyncWorkerOp(worker, clearedObjectKey, NotifyWorkerOpType::CACHE_INVALID));
     ASSERT_TRUE(manager->CheckExistAsyncWorkerOp(worker, newerObjectKey, NotifyWorkerOpType::CACHE_INVALID));
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestClearAsyncWorkerOpKeepsRetryStateOnPersistenceFailure)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "clear_persistence_failure";
+    NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
+
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, op));
+    DS_ASSERT_OK(inject::Set("master.rocksdb.delete", "1*return(K_KVSTORE_ERROR)"));
+
+    EXPECT_EQ(manager->ClearAsyncWorkerOp(worker).GetCode(), StatusCode::K_KVSTORE_ERROR);
+    EXPECT_TRUE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
+    std::vector<std::pair<std::string, std::string>> persistedOps;
+    DS_ASSERT_OK(objectStore_->GetAllFromRocks(ASYNC_WORKER_OP_TABLE, persistedOps));
+    EXPECT_EQ(persistedOps.size(), 1);
+
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.delete"));
+    DS_ASSERT_OK(manager->ClearAsyncWorkerOp(worker));
+    EXPECT_FALSE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
+    persistedOps.clear();
+    DS_ASSERT_OK(objectStore_->GetAllFromRocks(ASYNC_WORKER_OP_TABLE, persistedOps));
+    EXPECT_TRUE(persistedOps.empty());
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestDeadWorkerRejectsDelayedAsyncWorkerOp)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "dead_worker_delayed_op";
+    NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
+
+    manager->SetFaultWorker(worker, true);
+    DS_ASSERT_OK(manager->ClearAsyncWorkerOp(worker));
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, op));
+
+    EXPECT_FALSE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
+    std::vector<std::pair<std::string, std::string>> persistedOps;
+    DS_ASSERT_OK(objectStore_->GetAllFromRocks(ASYNC_WORKER_OP_TABLE, persistedOps));
+    EXPECT_TRUE(persistedOps.empty());
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestTransientFaultWorkerRetainsAsyncWorkerOp)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "transient_fault_worker_op";
+    NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
+
+    manager->SetFaultWorker(worker, false);
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, op));
+
+    EXPECT_TRUE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestFaultWorkerCanOnlyUpgradeToDead)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "upgraded_dead_worker_op";
+    NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
+
+    manager->SetFaultWorker(worker, false);
+    manager->SetFaultWorker(worker, true);
+    manager->SetFaultWorker(worker, false);
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, op));
+
+    EXPECT_FALSE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestRemoveDeadWorkerEventClearsFaultWorker)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+
+    DS_ASSERT_OK(manager->Init());
+    manager->SetFaultWorker(worker, true);
+    EXPECT_TRUE(manager->CheckWorkerIsHealthy(worker).IsError());
+
+    RemoveDeadWorkerEvent::GetInstance().NotifyAll(worker);
+
+    EXPECT_TRUE(manager->CheckWorkerIsHealthy(worker).IsOk());
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestDeadWorkerClearsConcurrentAsyncWorkerOp)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "concurrent_dead_worker_op";
+    NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
+    constexpr int rocksPutSleepMs = 300;
+    constexpr int pollIntervalMs = 5;
+    constexpr int maxPollMs = 1000;
+
+    DS_ASSERT_OK(inject::Set("master.rocksdb.put", FormatString("1*sleep(%d)", rocksPutSleepMs)));
+    Status insertRc;
+    std::thread insertThread([&] { insertRc = manager->InsertAsyncWorkerOp(worker, objectKey, op); });
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(maxPollMs);
+    bool observedPendingOp = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        observedPendingOp = manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID);
+        if (observedPendingOp) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
+    }
+
+    manager->SetFaultWorker(worker, true);
+    DS_ASSERT_OK(manager->ClearAsyncWorkerOp(worker));
+    insertThread.join();
+
+    EXPECT_TRUE(observedPendingOp);
+    DS_ASSERT_OK(insertRc);
+    EXPECT_FALSE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
 }
 
 TEST_F(OCNotifyWorkerManagerTest, TestChangePrimaryCopy)
