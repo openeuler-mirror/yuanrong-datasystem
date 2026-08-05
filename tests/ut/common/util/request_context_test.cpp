@@ -164,6 +164,97 @@ TEST_F(RequestContextTest, NestedScopedContextInheritsApiDeadlineState)
     ApiDeadline::Instance().Pop();
 }
 
+TEST_F(RequestContextTest, ClientScopeDoesNotInheritFallbackState)
+{
+    InitRequestContext();
+    SetRequestContext(nullptr);
+
+    RequestContext *fallbackContext = GetRequestContext();
+    ASSERT_TRUE(fallbackContext->isFallbackContext);
+    TraceGuard fallbackTraceGuard = Trace::Instance().SetTraceNewID("fallback_trace");
+    ApiDeadline::Instance().Reset();
+    ApiDeadline::Instance().InitUs(0);
+
+    {
+        ScopedClientRequestContext clientScope;
+        EXPECT_NE(GetRequestContext(), fallbackContext);
+        EXPECT_FALSE(GetRequestContext()->isFallbackContext);
+        EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
+        EXPECT_FALSE(ApiDeadline::Instance().IsInitialized());
+    }
+
+    EXPECT_EQ(GetRequestContext(), fallbackContext);
+    EXPECT_EQ(Trace::Instance().GetTraceID(), "fallback_trace");
+    EXPECT_EQ(ApiDeadline::Instance().CheckApiDeadline().GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    ApiDeadline::Instance().Reset();
+}
+
+TEST_F(RequestContextTest, ClientScopeInheritsFallbackTenantId)
+{
+    InitRequestContext();
+    SetRequestContext(nullptr);
+
+    RequestContext *fallbackContext = GetRequestContext();
+    fallbackContext->tenantId = "caller_tenant";
+
+    {
+        ScopedClientRequestContext clientScope;
+        EXPECT_EQ(GetRequestContext()->tenantId, "caller_tenant");
+    }
+
+    fallbackContext->tenantId.clear();
+}
+
+TEST_F(RequestContextTest, ClientScopeInheritsFallbackTracePrefix)
+{
+    InitRequestContext();
+    SetRequestContext(nullptr);
+    Trace::Instance().SetPrefix("caller_trace");
+
+    {
+        ScopedClientRequestContext clientScope;
+        TraceGuard clientTraceGuard = Trace::Instance().SetTraceUUID();
+        EXPECT_EQ(Trace::Instance().GetTraceID().find("caller_trace;"), 0);
+    }
+
+    Trace::Instance().SetPrefix("");
+}
+
+TEST_F(RequestContextTest, ClientScopePreservesActiveRequestContext)
+{
+    InitRequestContext();
+    ScopedRequestContext outer("outer_trace");
+    RequestContext *outerContext = GetRequestContext();
+    ApiDeadline::Instance().InitUs(5 * 1000 * 1000);
+    ApiDeadline *outerDeadline = &ApiDeadline::Instance();
+
+    {
+        ScopedClientRequestContext clientScope;
+        EXPECT_EQ(GetRequestContext(), outerContext);
+        EXPECT_EQ(&ApiDeadline::Instance(), outerDeadline);
+        EXPECT_EQ(Trace::Instance().GetTraceID(), "outer_trace");
+    }
+
+    EXPECT_EQ(GetRequestContext(), outerContext);
+    EXPECT_EQ(&ApiDeadline::Instance(), outerDeadline);
+    EXPECT_EQ(Trace::Instance().GetTraceID(), "outer_trace");
+}
+
+TEST_F(RequestContextTest, ClientScopeIsNoOpForZmq)
+{
+    InitRequestContext();
+    SetRequestContext(nullptr);
+    FLAGS_use_brpc = false;
+    RequestContext *fallbackContext = GetRequestContext();
+
+    {
+        ScopedClientRequestContext clientScope;
+        EXPECT_EQ(GetRequestContext(), fallbackContext);
+    }
+
+    EXPECT_EQ(GetRequestContext(), fallbackContext);
+}
+
 // ============================================================================
 // Test 4: TimeCost isolation between two contexts on same thread
 // ============================================================================

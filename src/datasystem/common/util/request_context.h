@@ -42,6 +42,8 @@
 #ifndef DATASYSTEM_COMMON_UTIL_REQUEST_CONTEXT_H
 #define DATASYSTEM_COMMON_UTIL_REQUEST_CONTEXT_H
 
+#include <optional>
+
 // thread_local.h pulls <bthread/bthread.h> -> bvar, whose percentile.h uses
 // CHECK_EQ << "...". That must be parsed with butil's CHECK_EQ (supports <<) BEFORE
 // log.h (via time_cost.h) redefines CHECK_EQ as a do{}while(0) that breaks the <<.
@@ -63,6 +65,7 @@ struct RequestContext {
     // Per-request transport kind tracked by AccessTransportTracker.
     // Default SHM=0; full enum definition in access_recorder.h.
     AccessTransportKind accessTransportKind = static_cast<AccessTransportKind>(0);
+    bool accessTransportTracked = false;
 
     // API-level deadline owned by this request. ApiDeadline::Instance() resolves to this object
     // while the RequestContext is active, so it remains stable across BRPC bthread migration.
@@ -106,6 +109,17 @@ void SetRequestContext(RequestContext* ctx);
 // file/line parameters use __builtin_FILE()/__builtin_LINE() defaults so
 // error logs identify the exact call site when no ScopedRequestContext is active.
 RequestContext* GetRequestContext(const char* file = __builtin_FILE(), int line = __builtin_LINE());
+
+// Return the active non-fallback BRPC request context, or nullptr when the
+// current execution context only has the unsafe pthread fallback.
+RequestContext* GetActiveRequestContext();
+
+// Preserve only the completed standalone KVClient call's transport result in
+// bthread-local storage. Other request-scoped fields remain isolated in the
+// temporary ScopedClientRequestContext.
+void PublishClientAccessTransportKind(AccessTransportKind kind);
+bool TryGetClientAccessTransportKind(AccessTransportKind &kind);
+void ClearClientAccessTransportKind();
 
 // RAII wrapper that creates a RequestContext on the stack, registers it via
 // SetRequestContext(), and restores the previous context on destruction.
@@ -194,6 +208,24 @@ public:
 private:
     RequestContext ctx_;
     RequestContext* saved_;
+};
+
+// Client API boundary for BRPC mode. It keeps an already-active request context
+// unchanged for nested calls, but installs a fresh context when the caller only
+// has the unsafe per-pthread fallback. ZMQ keeps using its pthread-local context.
+class ScopedClientRequestContext {
+public:
+    ScopedClientRequestContext();
+    ~ScopedClientRequestContext();
+
+    ScopedClientRequestContext(const ScopedClientRequestContext&) = delete;
+    ScopedClientRequestContext& operator=(const ScopedClientRequestContext&) = delete;
+    ScopedClientRequestContext(ScopedClientRequestContext&&) = delete;
+    ScopedClientRequestContext& operator=(ScopedClientRequestContext&&) = delete;
+
+private:
+    std::optional<RequestContext> context_;
+    RequestContext* saved_ = nullptr;
 };
 
 // Convenience: get worker TimeCost (always valid, never nullptr).
