@@ -566,6 +566,33 @@ TEST(TopologyEngineTest, LocalMemberRemovedFromSnapshotRequiresRejoinWithoutSigk
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
+TEST(TopologyEngineTest, VoluntaryExitDoesNotRequireRejoinWhenLocalMemberIsRemoved)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "voluntary-removed-local";
+    auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology());
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    ASSERT_NE(engine, nullptr);
+    DS_ASSERT_OK(engine->Start());
+    DS_ASSERT_OK(engine->MarkExiting());
+
+    PutTopology(proxy, clusterName, MakeTopologyWithoutLocal(2));
+    DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
+    ASSERT_TRUE(WaitFor([&engine] {
+        std::shared_ptr<const TopologySnapshot> snapshot;
+        return engine->GetSnapshot(snapshot).IsOk() && snapshot->Version() == 2
+               && engine->GetAvailability() == TopologyAvailabilityLevel::NOT_READY
+               && !engine->RequiresMembershipRejoin();
+    }));
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NOT_READY);
+    EXPECT_FALSE(engine->RequiresMembershipRejoin());
+
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
 TEST(TopologyEngineTest, SnapshotPublicationCallbackRunsOnlyAfterStartPublishes)
 {
     testing::FakeCoordinatorServiceProxy proxy;
@@ -930,6 +957,37 @@ TEST(TopologyEngineTest, PeerHashRingRefreshMissingLocalMemberRequiresRejoin)
     ASSERT_TRUE(WaitFor([&] { return engine->RequiresMembershipRejoin(); }));
     EXPECT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::ROLE_ISOLATED; }));
     EXPECT_EQ(engine->GetDiagnostics().peerObservedTopologyVersion, 4);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, PeerHashRingRefreshMissingLocalMemberDoesNotRequireRejoinDuringVoluntaryExit)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const auto keys = MakeKeys("peer-missing-local-voluntary-exit");
+    PutTopology(proxy, "peer-missing-local-voluntary-exit", MakeTopologyWithPeer(3));
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, "peer-missing-local-voluntary-exit");
+    builder.SetFailureScopeProbeInterval(std::chrono::milliseconds(20));
+    builder.SetPeerTopologyRefresh(
+        [](uint64_t currentVersion, const auto &, auto, std::shared_ptr<const TopologySnapshot> &peerSnapshot) {
+            return TopologySnapshot::Create(MakeTopologyWithoutLocal(currentVersion + 1), 0, std::string(64, 'b'),
+                                            peerSnapshot);
+        });
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+    DS_ASSERT_OK(engine->MarkExiting());
+
+    proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 100);
+    DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
+    ASSERT_TRUE(WaitFor([&] {
+        return engine->GetDiagnostics().peerObservedTopologyVersion == 4
+               && engine->GetAvailability() == TopologyAvailabilityLevel::NOT_READY;
+    }));
+    EXPECT_FALSE(engine->RequiresMembershipRejoin());
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NOT_READY);
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

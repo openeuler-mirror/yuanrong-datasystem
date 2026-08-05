@@ -633,6 +633,8 @@ private:
     std::atomic<bool> localMemberExistedInPreviousSnapshot_{ false };
     // Records whether that local member was leaving voluntarily in the previous Snapshot.
     std::atomic<bool> localMemberWasLeavingInPreviousSnapshot_{ false };
+    // Records process-local voluntary exit intent before publishing EXITING membership.
+    std::atomic<bool> localVoluntaryExitRequested_{ false };
     std::string isolationReason_;
     std::string lastError_;
     ControlBackendObservation backendObservation_;
