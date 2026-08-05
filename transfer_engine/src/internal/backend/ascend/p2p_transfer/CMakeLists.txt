@@ -35,7 +35,9 @@ include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/runtime)
 include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/msprof)
 include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/slog/toolchain)
 if(EXISTS ${ASCEND_INCLUDE_DIR}/../pkg_inc/runtime)
+    include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/../pkg_inc)
     include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/../pkg_inc/runtime)
+    include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/../pkg_inc/runtime/runtime)
 endif()
 
 # ---- Libraries ----

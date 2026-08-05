@@ -103,7 +103,9 @@ def _ascend_configure_impl(repository_ctx):
         includes.append("ascend/include/experiment/runtime")
 
     if repository_ctx.path(root + "/pkg_inc/runtime").exists:
+        includes.append("ascend/pkg_inc")
         includes.append("ascend/pkg_inc/runtime")
+        includes.append("ascend/pkg_inc/runtime/runtime")
 
     if lib_dir_path.exists:
         ascend_linkopts.extend([
