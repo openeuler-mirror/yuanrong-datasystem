@@ -99,6 +99,10 @@ std::string Rh2dWorkerFlags()
     if (bufferPool && strlen(bufferPool) > 0) {
         flags += std::string(" -remote_h2d_hccs_buffer_pool=") + bufferPool + " ";
     }
+    const char *hixlCsEnable = std::getenv("DS_HIXL_CS_ENABLE");
+    if (hixlCsEnable && strlen(hixlCsEnable) > 0) {
+        flags += std::string(" -hixl_cs_enable=") + hixlCsEnable + " ";
+    }
     return flags;
 }
 

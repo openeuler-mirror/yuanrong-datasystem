@@ -232,7 +232,7 @@ public:
     /**
      * @brief Configure the local H2D endpoint IP for HCCS.
      *        Called before RemoteH2DManager singleton is created. Only the IP is stored;
-     *        per-device ports are allocated lazily inside HCCSTransport::Init().
+     *        per-device ports are allocated lazily inside HixlTransport::Init().
      * @param[in] localIp The local IP address to use as the endpoint base.
      * @return Status of the call.
      */

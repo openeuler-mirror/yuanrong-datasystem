@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
-#include "datasystem/common/rdma/npu/hccs_transport.h"
+#include "datasystem/common/rdma/npu/hixl_transport.h"
 
 #include <algorithm>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <random>
 #include <securec.h>
+#include <sstream>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -34,6 +35,7 @@
 #include "datasystem/common/util/status_helper.h"
 
 DS_DECLARE_string(remote_h2d_hccs_buffer_pool);
+DS_DECLARE_bool(hixl_cs_enable);
 
 namespace {
 
@@ -45,6 +47,8 @@ constexpr int K_EPHEMERAL_PORT_END = 65535;
 constexpr int K_MAX_PORT_ALLOC_ATTEMPTS = 5;
 const std::string K_HCCL_INTRA_ROCE_ENABLE = "HCCL_INTRA_ROCE_ENABLE";
 const std::string K_HIXL_DIRECT_ROCE_BUFFER_POOL = "0:0";
+const std::string K_HIXL_OPTION_LOCAL_COMM_RES = "LocalCommRes";
+const std::string K_HIXL_CS_LOCAL_COMM_RES = R"({"version":"1.3"})";
 
 // HCCL registration limit: keep a small reserve under the 256 MEM_DEVICE limit.
 // Long-lived pre-registrations and temporary fallback registrations share this budget.
@@ -115,24 +119,24 @@ int AllocateRandomPort()
 
 namespace datasystem {
 
-HCCSTransport::~HCCSTransport()
+HixlTransport::~HixlTransport()
 {
     ClearRegisteredDeviceMemory();
     ClearRegisteredHostMemory();
 }
 
-void HCCSTransport::SetLocalEndpoint(const std::string &ep, bool isClient)
+void HixlTransport::SetLocalEndpoint(const std::string &ep, bool isClient)
 {
     localIp_ = ep;
     isClient_ = isClient;
 }
 
-bool HCCSTransport::IsHixlRoceDirectMode() const
+bool HixlTransport::IsHixlRoceDirectMode() const
 {
     return hixlMemoryMode_ == HixlMemoryMode::ROCE_DIRECT;
 }
 
-Status HCCSTransport::InitializeSingleDevice(int32_t devId, const std::string &bufferPool)
+Status HixlTransport::InitializeSingleDevice(int32_t devId, const std::string &bufferPool)
 {
     Status setDevSt = acl::AclDeviceManager::Instance()->SetDeviceIdx(devId);
     if (setDevSt.IsError()) {
@@ -152,6 +156,11 @@ Status HCCSTransport::InitializeSingleDevice(int32_t devId, const std::string &b
     auto engine = std::make_unique<::hixl::Hixl>();
     std::map<::hixl::AscendString, ::hixl::AscendString> options;
     options[::hixl::AscendString(::hixl::OPTION_BUFFER_POOL)] = ::hixl::AscendString(bufferPool.c_str());
+    if (FLAGS_hixl_cs_enable) {
+        options[::hixl::AscendString(K_HIXL_OPTION_LOCAL_COMM_RES.c_str())] =
+            ::hixl::AscendString(K_HIXL_CS_LOCAL_COMM_RES.c_str());
+        LOG(INFO) << "[HCCS] HIXL CS enabled with LocalCommRes version 1.3";
+    }
     if (!isClient_) {
         std::string resourceConfig =
             R"({"comm_resource_config.listen_port":")" + std::to_string(K_WORKER_DEVICE_COMM_PORT) + R"("})";
@@ -172,7 +181,7 @@ Status HCCSTransport::InitializeSingleDevice(int32_t devId, const std::string &b
     return Status::OK();
 }
 
-Status HCCSTransport::Init(const std::vector<int32_t> &deviceIds)
+Status HixlTransport::Init(const std::vector<int32_t> &deviceIds)
 {
     LOG(INFO) << "[HCCS] Init localIp=" << localIp_ << " numDevices=" << deviceIds.size();
     RETURN_OK_IF_TRUE(initialized_);
@@ -213,9 +222,9 @@ Status HCCSTransport::Init(const std::vector<int32_t> &deviceIds)
     return Status::OK();
 }
 
-Status HCCSTransport::GetConnectionIdentity(std::string *identity)
+Status HixlTransport::GetConnectionIdentity(std::string *identity)
 {
-    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HCCSTransport not initialized");
+    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HixlTransport not initialized");
     CHECK_FAIL_RETURN_STATUS(!engines_.empty(), StatusCode::K_RUNTIME_ERROR, "No HCCS engines available");
 
     // Round-robin across engines so each new p2p connection is distributed
@@ -227,12 +236,12 @@ Status HCCSTransport::GetConnectionIdentity(std::string *identity)
     return Status::OK();
 }
 
-Status HCCSTransport::Connect(const std::string &remoteIdentity, P2pKind kind, std::function<int()> *heartbeatCallback)
+Status HixlTransport::Connect(const std::string &remoteIdentity, P2pKind kind, std::function<int()> *heartbeatCallback)
 {
     (void)heartbeatCallback;
     LOG(INFO) << "[HCCS] Connect enter, remote=" << remoteIdentity
               << " kind=" << (kind == P2P_SENDER ? "SENDER" : "RECEIVER");
-    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HCCSTransport not initialized");
+    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HixlTransport not initialized");
 
     // Sender just listens (Init set up the HIXL engine); only receiver calls Hixl::Connect.
     if (kind == P2P_SENDER) {
@@ -274,7 +283,7 @@ Status HCCSTransport::Connect(const std::string &remoteIdentity, P2pKind kind, s
     return Status::OK();
 }
 
-Status HCCSTransport::Disconnect(const std::string &remoteIdentity)
+Status HixlTransport::Disconnect(const std::string &remoteIdentity)
 {
     std::lock_guard<std::mutex> lock(connMutex_);
     RETURN_OK_IF_TRUE(activeEndpoints_.erase(remoteIdentity) == 0);
@@ -291,7 +300,7 @@ Status HCCSTransport::Disconnect(const std::string &remoteIdentity)
     return Status::OK();
 }
 
-Status HCCSTransport::DisconnectAll()
+Status HixlTransport::DisconnectAll()
 {
     if (!initialized_)
         return Status::OK();
@@ -325,7 +334,7 @@ Status HCCSTransport::DisconnectAll()
     return Status::OK();
 }
 
-Status HCCSTransport::RegisterMemory(void *addr, uint64_t size, P2pSegmentInfo *segInfo)
+Status HixlTransport::RegisterMemory(void *addr, uint64_t size, P2pSegmentInfo *segInfo)
 {
     if (segInfo != nullptr) {
         int ret = memset_s(segInfo, sizeof(*segInfo), 0, sizeof(*segInfo));
@@ -337,7 +346,7 @@ Status HCCSTransport::RegisterMemory(void *addr, uint64_t size, P2pSegmentInfo *
     // buffer-pool relay. HIXL ROCE direct mode requires the worker host buffer to be registered before Connect.
     RETURN_OK_IF_TRUE(!IsHixlRoceDirectMode());
     RETURN_OK_IF_TRUE(isClient_);
-    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HCCSTransport not initialized");
+    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HixlTransport not initialized");
     CHECK_FAIL_RETURN_STATUS(addr != nullptr, StatusCode::K_INVALID, "HCCS host memory address cannot be null");
     CHECK_FAIL_RETURN_STATUS(size > 0, StatusCode::K_INVALID, "HCCS host memory size must be greater than 0");
 
@@ -361,7 +370,7 @@ Status HCCSTransport::RegisterMemory(void *addr, uint64_t size, P2pSegmentInfo *
     return Status::OK();
 }
 
-bool HCCSTransport::HasRegisteredHostMemoryLocked(int32_t devId, uintptr_t addr, uint64_t size) const
+bool HixlTransport::HasRegisteredHostMemoryLocked(int32_t devId, uintptr_t addr, uint64_t size) const
 {
     return std::any_of(registeredHostMemories_.begin(), registeredHostMemories_.end(),
                        [devId, addr, size](const RegisteredHostMemory &registered) {
@@ -370,7 +379,7 @@ bool HCCSTransport::HasRegisteredHostMemoryLocked(int32_t devId, uintptr_t addr,
                         });
 }
 
-bool HCCSTransport::HasRegisteredDeviceMemoryLocked(uintptr_t addr, uint64_t size) const
+bool HixlTransport::HasRegisteredDeviceMemoryLocked(uintptr_t addr, uint64_t size) const
 {
     return std::any_of(registeredDeviceMemories_.begin(), registeredDeviceMemories_.end(),
                        [addr, size](const RegisteredDeviceMemory &registered) {
@@ -379,7 +388,7 @@ bool HCCSTransport::HasRegisteredDeviceMemoryLocked(uintptr_t addr, uint64_t siz
                         });
 }
 
-Status HCCSTransport::RegisterDeviceMemoryLocked(uintptr_t addr, uint64_t size)
+Status HixlTransport::RegisterDeviceMemoryLocked(uintptr_t addr, uint64_t size)
 {
     CHECK_FAIL_RETURN_STATUS(!engines_.empty(), StatusCode::K_RUNTIME_ERROR, "No HCCS engines available");
 
@@ -393,7 +402,7 @@ Status HCCSTransport::RegisterDeviceMemoryLocked(uintptr_t addr, uint64_t size)
     return Status::OK();
 }
 
-Status HCCSTransport::ReleaseDeviceMemoryLocked(uintptr_t addr)
+Status HixlTransport::ReleaseDeviceMemoryLocked(uintptr_t addr)
 {
     auto registered = std::find_if(registeredDeviceMemories_.begin(), registeredDeviceMemories_.end(),
                                    [addr](const RegisteredDeviceMemory &memory) { return memory.addr == addr; });
@@ -408,25 +417,47 @@ Status HCCSTransport::ReleaseDeviceMemoryLocked(uintptr_t addr)
     return Status::OK();
 }
 
-Status HCCSTransport::PreRegisterDeviceMemory(const std::vector<void *> &addrs, const std::vector<uint64_t> &sizes)
+Status HixlTransport::ValidateDeviceMemoryRegistrationInputs(const std::vector<void *> &addrs,
+                                                             const std::vector<uint64_t> &sizes) const
 {
     CHECK_FAIL_RETURN_STATUS(!addrs.empty(), StatusCode::K_INVALID, "Device memory address list cannot be empty.");
     CHECK_FAIL_RETURN_STATUS(
         addrs.size() == sizes.size(), StatusCode::K_INVALID,
         FormatString("Device memory address count %zu does not match size count %zu.", addrs.size(), sizes.size()));
-    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HCCSTransport not initialized");
+    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HixlTransport not initialized");
     for (size_t i = 0; i < addrs.size(); ++i) {
         CHECK_FAIL_RETURN_STATUS(addrs[i] != nullptr, StatusCode::K_INVALID,
                                  FormatString("Device memory address cannot be null, index: %zu.", i));
         CHECK_FAIL_RETURN_STATUS(sizes[i] > 0, StatusCode::K_INVALID,
                                  FormatString("Device memory size must be greater than 0, index: %zu.", i));
     }
+    return Status::OK();
+}
 
-    std::lock_guard<std::mutex> lock(transferMutex_);
+std::string HixlTransport::FormatDeviceMemoryRanges(const std::vector<RegisteredDeviceMemory> &registrations)
+{
+    std::ostringstream ranges;
+    ranges << "[";
+    for (size_t i = 0; i < registrations.size(); ++i) {
+        const auto &registration = registrations[i];
+        if (i > 0) {
+            ranges << ",";
+        }
+        ranges << "{addr:0x" << std::hex << registration.addr << std::dec << ",size:" << registration.size << "}";
+    }
+    ranges << "]";
+    return ranges.str();
+}
+
+Status HixlTransport::PreRegisterDeviceMemory(const std::vector<void *> &addrs, const std::vector<uint64_t> &sizes)
+{
+    RETURN_IF_NOT_OK(ValidateDeviceMemoryRegistrationInputs(addrs, sizes));
+
+    std::vector<RegisteredDeviceMemory> newRegistrations;
+    std::unique_lock<std::mutex> lock(transferMutex_);
     // Build the exact set of ranges that will create new long-lived HIXL registrations first.
     // This keeps duplicate/covered inputs idempotent and lets us fail before partially registering
     // when the total MEM_DEVICE registration budget would be exceeded.
-    std::vector<RegisteredDeviceMemory> newRegistrations;
     for (size_t i = 0; i < addrs.size(); ++i) {
         uintptr_t addr = reinterpret_cast<uintptr_t>(addrs[i]);
         bool alreadyRegistered = HasRegisteredDeviceMemoryLocked(addr, sizes[i]);
@@ -458,10 +489,18 @@ Status HCCSTransport::PreRegisterDeviceMemory(const std::vector<void *> &addrs, 
         }
         retainedAddrs.emplace_back(registration.addr);
     }
+    size_t totalRegistered = registeredDeviceMemories_.size();
+    lock.unlock();
+
+    LOG(INFO) << "[HCCS] PreRegisterDeviceMemory done, requested=" << addrs.size()
+              << ", newlyRegistered=" << newRegistrations.size()
+              << ", alreadyCovered=" << addrs.size() - newRegistrations.size()
+              << ", totalRegistered=" << totalRegistered
+              << ", ranges=" << FormatDeviceMemoryRanges(newRegistrations);
     return Status::OK();
 }
 
-Status HCCSTransport::UnregisterDeviceMemory(const std::vector<void *> &addrs)
+Status HixlTransport::UnregisterDeviceMemory(const std::vector<void *> &addrs)
 {
     RETURN_OK_IF_TRUE(addrs.empty());
     std::lock_guard<std::mutex> lock(transferMutex_);
@@ -475,7 +514,7 @@ Status HCCSTransport::UnregisterDeviceMemory(const std::vector<void *> &addrs)
     return firstError;
 }
 
-void HCCSTransport::ClearRegisteredDeviceMemory()
+void HixlTransport::ClearRegisteredDeviceMemory()
 {
     std::lock_guard<std::mutex> lock(transferMutex_);
     if (registeredDeviceMemories_.empty()) {
@@ -496,7 +535,7 @@ void HCCSTransport::ClearRegisteredDeviceMemory()
     registeredDeviceMemories_.clear();
 }
 
-void HCCSTransport::ClearRegisteredHostMemory()
+void HixlTransport::ClearRegisteredHostMemory()
 {
     std::lock_guard<std::mutex> lock(transferMutex_);
     if (registeredHostMemories_.empty()) {
@@ -515,7 +554,7 @@ void HCCSTransport::ClearRegisteredHostMemory()
     registeredHostMemories_.clear();
 }
 
-Status HCCSTransport::ImportRemoteAddressInfo(const std::string &remoteEndpoint, const RemoteHostSegmentPb &seg)
+Status HixlTransport::ImportRemoteAddressInfo(const std::string &remoteEndpoint, const RemoteHostSegmentPb &seg)
 {
     (void)remoteEndpoint;
     (void)seg;
@@ -589,11 +628,11 @@ static Status RegisterTemporaryDeviceMemoryForBatch(Batch &batch, uintptr_t loca
     return Status::OK();
 }
 
-Status HCCSTransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, const std::string &remoteEndpoint,
+Status HixlTransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, const std::string &remoteEndpoint,
                                    std::shared_ptr<aclrtStream> stream)
 {
     (void)stream;
-    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HCCSTransport not initialized");
+    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HixlTransport not initialized");
 
     std::lock_guard<std::mutex> lock(transferMutex_);
 
@@ -629,7 +668,7 @@ Status HCCSTransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, con
     return FlushHixlBatch(batch);
 }
 
-P2pLink HCCSTransport::LinkType() const
+P2pLink HixlTransport::LinkType() const
 {
     return P2P_LINK_HCCS;
 }

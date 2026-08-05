@@ -48,6 +48,13 @@ namespace {
 constexpr char LOG_SAMPLED_MARK[] = "logSampled:true";
 constexpr size_t EMPTY_REQ_MSG_SIZE = 2;
 
+void AppendRequestParam(std::string &output, const char *name, const std::string &value)
+{
+    if (!value.empty()) {
+        output.append(name).append(value).append(",");
+    }
+}
+
 #define ACCESS_RECORDER_KEY_DEF(keyEnum, keyType) #keyEnum,
 static const char *g_keyNames[] = {
 #include "datasystem/common/log/access_point.def"
@@ -378,6 +385,15 @@ ObjectAccessRecorder &ObjectAccessRecorder::NestedKeysRef(const char *const *key
     return *this;
 }
 
+ObjectAccessRecorder &ObjectAccessRecorder::Count(uint64_t count)
+{
+    if (!core_.ShouldRecordInternal()) {
+        return *this;
+    }
+    state_.count.SetOwned(std::to_string(count));
+    return *this;
+}
+
 ObjectAccessRecorder &ObjectAccessRecorder::Keep(bool keep)
 {
     if (!core_.ShouldRecordInternal()) {
@@ -597,6 +613,7 @@ void ObjectAccessRecorder::Record()
     RequestParam req;
     state_.objectKey.FillObjectKey(req);
     state_.nestedKey.FillNestedKey(req);
+    state_.count.Fill(req.count);
     state_.writeMode.Fill(req.writeMode);
     state_.consistencyType.Fill(req.consistencyType);
     state_.remoteClientId.Fill(req.remoteClientId);
@@ -1149,45 +1166,20 @@ std::string RequestParam::ToString() const
         ret.append(outReq).append("}");
         return ret;
     }
-    if (!objectKey.empty()) {
-        ret.append("Object_key:").append(objectKey).append(",");
-    }
-    if (!nestedKey.empty()) {
-        ret.append("Nested_keys:").append(nestedKey).append(",");
-    }
-    if (!keep.empty()) {
-        ret.append("keep:").append(keep).append(",");
-    }
-    if (!writeMode.empty()) {
-        ret.append("Write_mode:").append(writeMode).append(",");
-    }
-    if (!consistencyType.empty()) {
-        ret.append("consistency_type:").append(consistencyType).append(",");
-    }
-    if (!isSeal.empty()) {
-        ret.append("is_seal:").append(isSeal).append(",");
-    }
-    if (!isRetry.empty()) {
-        ret.append("is_retry:").append(isRetry).append(",");
-    }
-    if (!ttlSecond.empty()) {
-        ret.append("ttl_second:").append(ttlSecond).append(",");
-    }
-    if (!subTimeout.empty()) {
-        ret.append("sub_timeout:").append(subTimeout).append(",");
-    }
-    if (!timeout.empty()) {
-        ret.append("timeout:").append(timeout).append(",");
-    }
-    if (!cacheType.empty()) {
-        ret.append("cacheType:").append(cacheType).append(",");
-    }
-    if (!transportType.empty()) {
-        ret.append("transportType:").append(transportType).append(",");
-    }
-    if (!latencySummary.empty()) {
-        ret.append("latencySummary:").append(latencySummary).append(",");
-    }
+    AppendRequestParam(ret, "Object_key:", objectKey);
+    AppendRequestParam(ret, "Nested_keys:", nestedKey);
+    AppendRequestParam(ret, "count:", count);
+    AppendRequestParam(ret, "keep:", keep);
+    AppendRequestParam(ret, "Write_mode:", writeMode);
+    AppendRequestParam(ret, "consistency_type:", consistencyType);
+    AppendRequestParam(ret, "is_seal:", isSeal);
+    AppendRequestParam(ret, "is_retry:", isRetry);
+    AppendRequestParam(ret, "ttl_second:", ttlSecond);
+    AppendRequestParam(ret, "sub_timeout:", subTimeout);
+    AppendRequestParam(ret, "timeout:", timeout);
+    AppendRequestParam(ret, "cacheType:", cacheType);
+    AppendRequestParam(ret, "transportType:", transportType);
+    AppendRequestParam(ret, "latencySummary:", latencySummary);
     if (ret.length() > 1) {
         ret.pop_back();
     }

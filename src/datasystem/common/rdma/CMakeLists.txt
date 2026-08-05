@@ -61,8 +61,8 @@ if (BUILD_HETERO AND BUILD_HETERO_NPU)
     )
     # HCCS transport requires cann_hixl with GlobalResourceConfig support.
     if (ASCEND_HIXL_HCCS_SUPPORTED)
-        list(APPEND URMA_SRCS npu/hccs_transport.cpp)
-        # HIXL symbols are used by HCCSTransport; common_rdma's users need to link hixl as well
+        list(APPEND URMA_SRCS npu/hixl_transport.cpp)
+        # HIXL symbols are used by HixlTransport; common_rdma's users need to link hixl as well
         set(HCCS_EXTRA_LIBS ${ASCEND_HIXL_LIBRARIES})
     else()
         message(WARNING "cann_hixl not found or HIXL version is lower than 8.5.2, HCCS transport will be disabled")

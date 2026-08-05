@@ -33,7 +33,7 @@ namespace datasystem {
  * @brief Strategy interface for RH2D transport protocols.
  *
  * Provides a unified abstraction for different P2P protocols (RoCE, HCCS).
- * Concrete implementations: RoCETransport, HCCSTransport.
+ * Concrete implementations: RoCETransport, HixlTransport.
  */
 class RH2DTransportStrategy {
 public:

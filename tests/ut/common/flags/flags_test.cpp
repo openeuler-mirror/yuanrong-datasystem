@@ -335,6 +335,20 @@ TEST_F(FlagsTest, TestDefaultValue)
     ASSERT_EQ(modifyCount, 0);
 }
 
+TEST_F(FlagsTest, HixlCsEnableIsDisabledByDefaultAndCanBeEnabled)
+{
+    ASSERT_FALSE(FLAGS_hixl_cs_enable);
+
+    std::string errMsg;
+    ASSERT_TRUE(SetCommandLineOption("hixl_cs_enable", "true", errMsg));
+    ASSERT_TRUE(errMsg.empty());
+    ASSERT_TRUE(FLAGS_hixl_cs_enable);
+
+    ASSERT_TRUE(SetCommandLineOption("hixl_cs_enable", "false", errMsg));
+    ASSERT_TRUE(errMsg.empty());
+    ASSERT_FALSE(FLAGS_hixl_cs_enable);
+}
+
 TEST_F(FlagsTest, EmbeddedConfigKeepsArgs)
 {
     EmbeddedConfig config;

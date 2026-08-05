@@ -88,6 +88,7 @@ struct RequestParam {
     std::string ToString() const;
     std::string objectKey;
     std::string nestedKey;
+    std::string count;
     std::string keep;
     std::string writeMode;
     std::string consistencyType;
@@ -216,6 +217,7 @@ struct DataSizeState {
 struct ObjectAccessState {
     ObjectKeyState objectKey;
     ObjectKeyState nestedKey;
+    FieldEntry count;
     FieldEntry writeMode;
     FieldEntry consistencyType;
     FieldEntry remoteClientId;
@@ -348,6 +350,7 @@ public:
     ObjectAccessRecorder &ObjectKeysSummaryRef(const std::vector<std::string> &keys);
     ObjectAccessRecorder &NestedKeysRef(const std::vector<std::string> &keys);
     ObjectAccessRecorder &NestedKeysRef(const char *const *keys, const size_t *keyLens, uint64_t keyCount);
+    ObjectAccessRecorder &Count(uint64_t count);
     template <typename Provider>
     ObjectAccessRecorder &NestedKeyProvider(Provider &&provider)
     {
