@@ -168,6 +168,7 @@ size_t ThreadPool::GetRunningTasksNum()
 
 size_t ThreadPool::GetWaitingTasksNum()
 {
+    std::lock_guard<std::mutex> lock(mtx_);
     return taskQ_.size();
 }
 

@@ -18,6 +18,7 @@ add_compile_definitions(DATASYSTEM_VERSION="${DATASYSTEM_VERSION}")
 message(STATUS "Datasystem version is ${DATASYSTEM_VERSION}")
 
 include(CMakePackageConfigHelpers)
+include(CheckCXXCompilerFlag)
 
 # Options for build.
 include(cmake/options.cmake)
@@ -38,6 +39,21 @@ if (USE_SANITIZER)
         set(SANITIZER_FLAGS "-fsanitize=thread -g3")
     elseif (${USE_SANITIZER} STREQUAL "UNDEFINED")
         set(SANITIZER_FLAGS "-fsanitize=undefined -fno-sanitize=alignment -fsanitize=float-cast-overflow -fno-sanitize-recover=all -O0")
+        # GCC 14 UBSAN injects non-constant instrumentation around function-pointer
+        # comparisons, which breaks constexpr evaluation in
+        # absl::container_internal::raw_hash_set (hash_policy_traits.h:
+        # `get_hash_slot_fn<Hash>() == nullptr` -> "is not a constant expression").
+        # The fix is `-fno-sanitize=function`, but only GCC versions that recognize
+        # the `function` sub-check name accept this flag; older / stripped-down GCC
+        # builds reject it with `unrecognized argument to '-fno-sanitize=' option:
+        # 'function'`. Detect support and add it conditionally. The Bazel path
+        # (`.bazelrc build:ubsan`) instead disables UBSAN on all external repos via
+        # `--per_file_copt=external/.*@-fno-sanitize=undefined`, which is more
+        # robust because it is compiler-version-independent.
+        check_cxx_compiler_flag("-fno-sanitize=function" CXX_COMPILER_SUPPORTS_FNO_SANITIZE_FUNCTION)
+        if (CXX_COMPILER_SUPPORTS_FNO_SANITIZE_FUNCTION)
+            set(SANITIZER_FLAGS "${SANITIZER_FLAGS} -fno-sanitize=function")
+        endif ()
     else ()
         message(FATAL_ERROR "Unrecognized google sanitizers mode: ${USE_SANITIZER}")
     endif ()

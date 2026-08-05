@@ -26,6 +26,13 @@ def ds_cc_test(
         deps = deps + [
             "@com_google_googletest//:gtest",
             "@com_google_googletest//:gtest_main",
+            # Compiled-in TSAN suppressions for brpc / bthread third-party
+            # init-time races. Harmless under non-tsan builds (the
+            # __tsan_default_suppressions symbol is only called by the
+            # TSAN runtime, which is not linked otherwise). Kept here so
+            # every C++ test gets the same baseline as datasystem_worker
+            # without per-target plumbing.
+            "//tools/tsan:default_suppressions",
         ],
         data = data,
         copts = copts + [

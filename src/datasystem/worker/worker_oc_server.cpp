@@ -62,6 +62,7 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/rpc/brpc_stream_close_helper.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -1881,6 +1882,18 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
         // when useBrpc_=true). No dual-listen.
         LOG(INFO) << "brpc mode enabled, brpc listening on " << bindHostPort_.Host() << ":" << brpcPort
                   << " (exclusive mode, ZMQ not started)";
+        // Force brpc's global one-shot init (brpc::GlobalInitializeOrDie,
+        // pthread_once-guarded) to run on THIS main thread NOW, before any
+        // topology/RPC code can trigger it lazily inside a multi-threaded
+        // context. ConstructTopologyRuntime below sends the first RPC
+        // (CoordinatorServiceProxyBase::Range via TopologyRepository::
+        // ReadTopology), which would otherwise be the first Channel::Init
+        // and thus the first call to GlobalInitializeOrDie — spawning the
+        // bthread worker pool races with the spawning thread under TSAN
+        // (bthread::TaskGroup::ready_to_run_remote, brpc 1.15.0). Pre-warming
+        // here isolates the racy init to a quiet single-threaded point; the
+        // race itself is silenced by //tools/tsan:default_suppressions.
+        BrpcChannelFactory::EnsureGlobalInitialized();
     }
 
     // Init shared memory

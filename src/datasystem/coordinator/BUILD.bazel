@@ -134,6 +134,9 @@ cc_binary(
     srcs = ["coordinator_main.cpp"],
     deps = [
         ":coordinator_server",
+        # Compiled-in TSAN suppressions for brpc / bthread third-party
+        # init-time races. Harmless under non-tsan builds.
+        "//tools/tsan:default_suppressions",
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:uuid_generator",

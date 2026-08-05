@@ -61,12 +61,52 @@ build:tsan --copt=-g3
 build:tsan --linkopt=-fsanitize=thread
 build:tsan --define=tsan=1
 
+# ThreadSanitizer policy for this repo:
+#   - Known-benign third-party (brpc / bthread) init-time and M:N-scheduler
+#     races are silenced by COMPILED-IN defaults from
+#     //tools/tsan:default_suppressions, linked into datasystem_worker,
+#     datasystem_coordinator, and every ds_cc_test target. See
+#     tools/tsan/brpc_suppressions.txt for the same entries with full
+#     justification.
+#   - TSAN's default halt_on_error=1 is INTENTIONALLY preserved so that
+#     any REAL race in datasystem::* code still aborts the test/binary.
+#   - Operators who need to add more suppressions can extend the
+#     compiled-in baseline at runtime:
+#       TSAN_OPTIONS=suppressions=<path>/extra_suppressions.txt
+#     TSAN merges env-supplied suppressions on top of the compiled-in ones,
+#     it does not replace them.
+
+# UBSan policy:
+#   - `-fno-sanitize=alignment`: known false positives on aligned-but-not-declared-aligned third-party code.
+#   - `--per_file_copt=external/.*@-fno-sanitize=undefined`: disable UBSan instrumentation on every
+#     external repository (absl, grpc, rocksdb, ...). This is a compiler-version-independent
+#     workaround for the GCC 14 + absl `raw_hash_set` bug where `-fsanitize=undefined` (specifically
+#     the `function` sub-check) injects non-constant instrumentation around function-pointer
+#     comparisons and breaks `constexpr` evaluation
+#     (`absl/container/internal/hash_policy_traits.h`: `get_hash_slot_fn<Hash>() == nullptr`
+#     -> "is not a constant expression"). The previous approach of adding
+#     `-fno-sanitize=function` is rejected by GCC versions that do not recognize the `function`
+#     sub-check name. Disabling UBSan on third-party deps is intentional: UBSan is meant to catch
+#     bugs in `datasystem::*` code, not to re-validate well-tested libraries.
+#   - `--per_file_copt=third_party/protos/etcd/.*@-fno-sanitize=undefined`: disable UBSan on the
+#     etcd proto grpc-generated stubs (`rpc.grpc.pb.cc`, `v3election.grpc.pb.cc`). With UBSan
+#     `vptr` enabled on these stubs, GCC emits additional references in `.data.rel` to
+#     `typeinfo for grpc::internal::ClientReactor` (declared in
+#     `include/grpcpp/support/client_callback.h` with `virtual ~ClientReactor() = default`, i.e. no
+#     key function). Because grpc itself is not UBSan-instrumented (see above), and
+#     `ClientReactor` has no key function, GCC's `vptr` path expects the typeinfo to be emitted by
+#     the class's defining TU and does not emit it as a weak/comdat symbol in the stubs, producing
+#     `undefined reference to 'typeinfo for grpc::internal::ClientReactor'` at link time. Disabling
+#     UBSan on the etcd stubs restores the normal weak-symbol typeinfo emission path.
+#   - Linker still links libubsan so ubsan-instrumented `datasystem::*` code is checked at runtime.
 build:ubsan --cxxopt=-fsanitize=undefined
 build:ubsan --cxxopt=-fno-sanitize=alignment
 build:ubsan --cxxopt=-fsanitize=float-cast-overflow
 build:ubsan --cxxopt=-fno-sanitize-recover=all
 build:ubsan --cxxopt=-O0
 build:ubsan --linkopt=-fsanitize=undefined
+build:ubsan --per_file_copt=external/.*@-fno-sanitize=undefined
+build:ubsan --per_file_copt=third_party/protos/etcd/.*@-fno-sanitize=undefined
 
 build:coverage --cxxopt=-fprofile-arcs --cxxopt=-ftest-coverage
 build:coverage --linkopt=-fprofile-arcs --linkopt=-ftest-coverage --linkopt=-lgcov

@@ -203,6 +203,7 @@ ds_cc_library(
         "//src/datasystem/common/object_cache:safe_table",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rpc:brpc_factory",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/rpc:unix_sock_fd",
@@ -516,6 +517,9 @@ cc_binary(
     ],
     deps = [
         ":worker_main",
+        # Compiled-in TSAN suppressions for brpc / bthread third-party
+        # init-time races. Harmless under non-tsan builds.
+        "//tools/tsan:default_suppressions",
         "//src/datasystem/common/util:request_context",
     ] + select({
         "//:enable_pipeline_h2d": [

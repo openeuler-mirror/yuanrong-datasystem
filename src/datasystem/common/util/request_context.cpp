@@ -58,7 +58,14 @@ static std::once_flag g_initFlag;
 // impossible to express.
 ApiDeadline *GetBthreadApiDeadline()
 {
-    if (!FLAGS_use_brpc || g_requestContextKey == INVALID_BTHREAD_KEY) {
+    if (!FLAGS_use_brpc) {
+        return nullptr;
+    }
+    // Ensure the bthread key is created (with call_once synchronization)
+    // before reading g_requestContextKey. See GetBthreadTrace for the
+    // TSAN rationale.
+    InitRequestContext();
+    if (g_requestContextKey == INVALID_BTHREAD_KEY) {
         return nullptr;
     }
     auto *ctx = static_cast<RequestContext *>(bthread_getspecific(g_requestContextKey));
@@ -77,8 +84,18 @@ Trace* GetBthreadTrace()
     if (!FLAGS_use_brpc) {
         return nullptr;
     }
+    // Ensure the bthread key is created before reading it. InitRequestContext
+    // is idempotent (std::call_once) and provides the release/acquire pair
+    // that synchronizes the key write in the once body with this read.
+    // Without this, a background thread started by Logging::Start (e.g.
+    // MetricsFlush) can call GetBthreadTrace -> reads g_requestContextKey
+    // before CommonServer::Init -> InitRequestContext creates it on the main
+    // thread, and TSAN reports a data race on the global key. Calling
+    // InitRequestContext here lets whichever thread reaches this first do
+    // the once-init, and all later callers synchronize via call_once.
+    InitRequestContext();
     if (g_requestContextKey == INVALID_BTHREAD_KEY) {
-        return nullptr;  // InitRequestContext() not called (minimal test binary).
+        return nullptr;  // bthread_key_create failed
     }
     auto* ctx = static_cast<RequestContext*>(bthread_getspecific(g_requestContextKey));
     return ctx ? &ctx->trace : nullptr;
@@ -106,6 +123,13 @@ void SetRequestContext(RequestContext* ctx)
 
 RequestContext* GetRequestContext(const char* file, int line)
 {
+    // Ensure the bthread key is created before reading it. Idempotent via
+    // std::call_once. See GetBthreadTrace for the TSAN rationale: without
+    // this, a background thread (ExpiredObject, MetricsFlush, etc.) can
+    // call GetRequestContext -> reads g_requestContextKey before
+    // CommonServer::Init -> InitRequestContext creates it on the main
+    // thread, and TSAN reports a data race on the global key.
+    InitRequestContext();
     // brpc path: handler called SetRequestContext(), bthread_getspecific returns the pointer.
     if (g_requestContextKey != INVALID_BTHREAD_KEY) {
         auto* p = static_cast<RequestContext*>(bthread_getspecific(g_requestContextKey));
@@ -130,9 +154,10 @@ RequestContext* GetRequestContext(const char* file, int line)
         }
         // ZMQ / test: fall through to thread_local fallback (safe under usercode_in_pthread=true).
     }
-    // ZMQ / pthread / test path (InitRequestContext never called, or no active context):
-    // use per-pthread fallback.  ZMQ uses usercode_in_pthread=true, so each handler
-    // has a dedicated pthread and thread_local is safe.
+    // No active ScopedRequestContext on this thread: use per-pthread fallback.
+    // ZMQ uses usercode_in_pthread=true, so each handler has a dedicated pthread
+    // and thread_local is safe. brpc background threads (EvictionTask, etc.) also
+    // land here — they never set a ScopedRequestContext.
     static thread_local RequestContext fallbackCtx;
     fallbackCtx.isFallbackContext = true;
     return &fallbackCtx;
