@@ -60,8 +60,19 @@ Status PeerUbAdmission::CheckReadSource(const HostPort &peer) const
     return BuildUnavailableStatus(peer, StatusCode::K_URMA_DATA_WORKER_UNAVAILABLE);
 }
 
+void PeerUbAdmission::SetSelfWorker(const HostPort &self)
+{
+    // Write-once during construction, read-only afterwards: no lock is required.
+    self_ = self;
+}
+
 void PeerUbAdmission::ReportOutcome(const UbOpOutcome &outcome)
 {
+    // self_ is write-once (set during construction), so this check does not need the admission lock.
+    if (!self_.Empty() && outcome.peer == self_) {
+        INJECT_POINT_NO_RETURN("PeerUbAdmission.ReportOutcome.self_skipped");
+        return;
+    }
     auto failureClass = classifier_.Classify(outcome);
     if (failureClass == UbFailureClass::SUCCESS || failureClass == UbFailureClass::LOCAL_RESOURCE_PRESSURE
         || failureClass == UbFailureClass::NON_UB_FAILURE) {
