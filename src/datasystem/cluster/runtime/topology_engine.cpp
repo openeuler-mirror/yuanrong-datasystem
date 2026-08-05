@@ -871,6 +871,7 @@ Status TopologyEngine::MarkExiting()
 {
     CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
                              "cluster topology Engine is not running");
+    localVoluntaryExitRequested_.store(true);
     auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::EXITING);
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
               << " role=worker action=mark_exiting address=" << options_.localAddress << " status=" << rc.ToString();
@@ -1064,11 +1065,12 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
             localMemberExistedInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
         const bool localMemberWasLeaving =
             localMemberWasLeavingInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
+        const bool localVoluntaryExitRequested = localVoluntaryExitRequested_.load();
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             backendObservation_ = {};
         }
-        if (!localMemberExisted || localMemberWasLeaving) {
+        if (!localMemberExisted || localMemberWasLeaving || localVoluntaryExitRequested) {
             SetAvailability(TopologyAvailabilityLevel::NOT_READY, "local_member_missing");
             return Status::OK();
         }

@@ -38,6 +38,9 @@ constexpr int BUILD_ENGINE_FAILED_EXIT = 1;
 constexpr int START_FAILED_EXIT = 2;
 constexpr int START_RETURNED_EXIT = 3;
 constexpr int EMIT_EVENT_FAILED_EXIT = 4;
+constexpr int MARK_EXITING_FAILED_EXIT = 5;
+constexpr int SNAPSHOT_WAIT_FAILED_EXIT = 6;
+constexpr int SHUTDOWN_FAILED_EXIT = 7;
 constexpr auto TEST_WAIT = std::chrono::seconds(3);
 
 class NoopTopologyCallbacks final : public ITopologyPhaseCallbacks {
@@ -460,6 +463,46 @@ TEST(TopologyEngineDeathTest, LocalMemberRemovedFromSnapshotTriggersSigkill)
             std::exit(START_RETURNED_EXIT);
         },
         ::testing::KilledBySignal(SIGKILL), "");
+}
+
+TEST(TopologyEngineDeathTest, VoluntaryExitAllowsLocalMemberRemovalWithoutLeavingSnapshot)
+{
+    ASSERT_EXIT(
+        {
+            testing::FakeCoordinatorServiceProxy proxy;
+            TestWatchIngress ingress;
+            NoopTopologyCallbacks callbacks;
+            const std::string clusterName = "voluntary-removed-local";
+            auto keys = MakeKeys(clusterName);
+            PutTopology(proxy, clusterName, MakeTopology());
+            auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+            if (engine == nullptr) {
+                std::exit(BUILD_ENGINE_FAILED_EXIT);
+            }
+            if (engine->Start().IsError()) {
+                std::exit(START_FAILED_EXIT);
+            }
+            if (engine->MarkExiting().IsError()) {
+                std::exit(MARK_EXITING_FAILED_EXIT);
+            }
+            auto empty = MakeTopology(2);
+            empty.members.clear();
+            PutTopology(proxy, clusterName, empty);
+            if (EmitTopologyEvent(proxy, ingress, *keys, 2).IsError()) {
+                std::exit(EMIT_EVENT_FAILED_EXIT);
+            }
+            if (!WaitFor([&engine] {
+                    std::shared_ptr<const TopologySnapshot> snapshot;
+                    return engine->GetSnapshot(snapshot).IsOk() && snapshot->Version() == 2;
+                })) {
+                std::exit(SNAPSHOT_WAIT_FAILED_EXIT);
+            }
+            if (engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT).IsError()) {
+                std::exit(SHUTDOWN_FAILED_EXIT);
+            }
+            std::exit(EXIT_SUCCESS);
+        },
+        ::testing::ExitedWithCode(EXIT_SUCCESS), "");
 }
 
 TEST(TopologyEngineTest, SnapshotPublicationCallbackRunsOnlyAfterStartPublishes)
