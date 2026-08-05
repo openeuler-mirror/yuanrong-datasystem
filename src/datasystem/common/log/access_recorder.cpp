@@ -1274,16 +1274,34 @@ const char *AccessTransportTracker::KindToName(AccessTransportKind kind)
 
 void AccessTransportTracker::Reset()
 {
-    GetRequestContext()->accessTransportKind = AccessTransportKind::SHM;
+    RequestContext *context = GetRequestContext();
+    context->accessTransportKind = AccessTransportKind::SHM;
+    context->accessTransportTracked = true;
+    if (context->isFallbackContext) {
+        ClearClientAccessTransportKind();
+    }
 }
 
 void AccessTransportTracker::Record(AccessTransportKind kind)
 {
-    GetRequestContext()->accessTransportKind = kind;
+    RequestContext *context = GetRequestContext();
+    context->accessTransportKind = kind;
+    context->accessTransportTracked = true;
+    if (context->isFallbackContext) {
+        ClearClientAccessTransportKind();
+    }
 }
 
 std::string AccessTransportTracker::ToString()
 {
+    RequestContext *context = GetActiveRequestContext();
+    if (context != nullptr) {
+        return KindToName(context->accessTransportKind);
+    }
+    AccessTransportKind clientKind;
+    if (TryGetClientAccessTransportKind(clientKind)) {
+        return KindToName(clientKind);
+    }
     return KindToName(GetRequestContext()->accessTransportKind);
 }
 }  // namespace datasystem

@@ -27,6 +27,8 @@
 
 #include "datasystem/common/util/request_context.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 
 #include <bthread/bthread.h>
@@ -44,7 +46,31 @@ namespace datasystem {
 constexpr int K_MISSING_CONTEXT_WARN_INTERVAL = 1000;
 
 static bthread_key_t g_requestContextKey = INVALID_BTHREAD_KEY;
+static bthread_key_t g_clientAccessTransportKey = INVALID_BTHREAD_KEY;
 static std::once_flag g_initFlag;
+
+constexpr uint8_t K_ACCESS_TRANSPORT_KIND_COUNT = 4;
+constexpr uint8_t K_UNKNOWN_ACCESS_TRANSPORT_KIND = 3;
+static const AccessTransportKind g_clientAccessTransportKinds[K_ACCESS_TRANSPORT_KIND_COUNT] = {
+    static_cast<AccessTransportKind>(0), static_cast<AccessTransportKind>(1), static_cast<AccessTransportKind>(2),
+    static_cast<AccessTransportKind>(3)
+};
+
+static void AbortOnBthreadKeyError(int rc, const char *operation)
+{
+    if (rc == 0) {
+        return;
+    }
+    std::fprintf(stderr, "FATAL: %s failed with rc=%d for client access transport context.\n", operation, rc);
+    std::abort();
+}
+
+static RequestContext* GetFallbackRequestContext()
+{
+    static thread_local RequestContext fallbackCtx;
+    fallbackCtx.isFallbackContext = true;
+    return &fallbackCtx;
+}
 
 // Strong override of the weak symbol declared in trace.h. Returns the
 // per-bthread Trace when a handler is active (ScopedRequestContext on the
@@ -109,7 +135,8 @@ void InitRequestContext()
         // The bthread_key stores a bare pointer for the lifetime of a single
         // request; ScopedRequestContext explicitly clears it via
         // SetRequestContext(nullptr) before the stack object goes out of scope.
-        bthread_key_create(&g_requestContextKey, nullptr);
+        AbortOnBthreadKeyError(bthread_key_create(&g_requestContextKey, nullptr), "bthread_key_create");
+        AbortOnBthreadKeyError(bthread_key_create(&g_clientAccessTransportKey, nullptr), "bthread_key_create");
     });
 }
 
@@ -119,6 +146,80 @@ void SetRequestContext(RequestContext* ctx)
         return;
     }
     bthread_setspecific(g_requestContextKey, ctx);
+}
+
+RequestContext* GetActiveRequestContext()
+{
+    if (!FLAGS_use_brpc || g_requestContextKey == INVALID_BTHREAD_KEY) {
+        return nullptr;
+    }
+    auto *context = static_cast<RequestContext*>(bthread_getspecific(g_requestContextKey));
+    return context == nullptr || context->isFallbackContext ? nullptr : context;
+}
+
+void PublishClientAccessTransportKind(AccessTransportKind kind)
+{
+    if (!FLAGS_use_brpc) {
+        return;
+    }
+    InitRequestContext();
+    uint8_t index = static_cast<uint8_t>(kind);
+    if (index >= K_ACCESS_TRANSPORT_KIND_COUNT) {
+        index = K_UNKNOWN_ACCESS_TRANSPORT_KIND;
+    }
+    auto *slot = const_cast<AccessTransportKind*>(&g_clientAccessTransportKinds[index]);
+    AbortOnBthreadKeyError(bthread_setspecific(g_clientAccessTransportKey, slot), "bthread_setspecific");
+}
+
+bool TryGetClientAccessTransportKind(AccessTransportKind &kind)
+{
+    if (!FLAGS_use_brpc || g_clientAccessTransportKey == INVALID_BTHREAD_KEY) {
+        return false;
+    }
+    auto *slot = static_cast<AccessTransportKind*>(bthread_getspecific(g_clientAccessTransportKey));
+    if (slot == nullptr) {
+        return false;
+    }
+    kind = *slot;
+    return true;
+}
+
+void ClearClientAccessTransportKind()
+{
+    if (!FLAGS_use_brpc || g_clientAccessTransportKey == INVALID_BTHREAD_KEY) {
+        return;
+    }
+    AbortOnBthreadKeyError(bthread_setspecific(g_clientAccessTransportKey, nullptr), "bthread_setspecific");
+}
+
+ScopedClientRequestContext::ScopedClientRequestContext()
+{
+    if (!FLAGS_use_brpc) {
+        return;
+    }
+    InitRequestContext();
+    saved_ = static_cast<RequestContext*>(bthread_getspecific(g_requestContextKey));
+    if (saved_ != nullptr && !saved_->isFallbackContext) {
+        return;
+    }
+    RequestContext *callerContext = saved_ == nullptr ? GetFallbackRequestContext() : saved_;
+    Trace &callerTrace = Trace::Instance();
+    context_.emplace();
+    context_->tenantId = callerContext->tenantId;
+    context_->trace.CopyPrefixFrom(callerTrace);
+    SetRequestContext(&context_.value());
+}
+
+ScopedClientRequestContext::~ScopedClientRequestContext()
+{
+    if (context_.has_value()) {
+        const bool accessTransportTracked = context_->accessTransportTracked;
+        const AccessTransportKind accessTransportKind = context_->accessTransportKind;
+        SetRequestContext(saved_);
+        if (accessTransportTracked) {
+            PublishClientAccessTransportKind(accessTransportKind);
+        }
+    }
 }
 
 RequestContext* GetRequestContext(const char* file, int line)
@@ -158,9 +259,7 @@ RequestContext* GetRequestContext(const char* file, int line)
     // ZMQ uses usercode_in_pthread=true, so each handler has a dedicated pthread
     // and thread_local is safe. brpc background threads (EvictionTask, etc.) also
     // land here — they never set a ScopedRequestContext.
-    static thread_local RequestContext fallbackCtx;
-    fallbackCtx.isFallbackContext = true;
-    return &fallbackCtx;
+    return GetFallbackRequestContext();
 }
 
 }  // namespace datasystem

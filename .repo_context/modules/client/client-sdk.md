@@ -43,6 +43,15 @@
     `TransportLayer`, which batches metadata queries by meta owner and reads successful keys independently, while the
     default path keeps the existing client-worker behavior.
   - KV and Object client code share the same deep backend implementation through `object_cache::ObjectClientImpl`.
+  - In BRPC mode, every public `KVClient` operation establishes a `ScopedClientRequestContext` before validation,
+    tracing, or backend calls. Standalone calls receive a fresh bthread-local context instead of inheriting pthread
+    fallback trace/deadline state after M:N migration. The fresh context selectively preserves the caller-owned tenant
+    id and trace prefix while resetting request-scoped trace ids, deadlines, latency, and auth state; calls made with an
+    active request context preserve that context. When a standalone call actually tracks a client-to-worker transport,
+    the scope publishes only its final transport kind to a separate bthread-local completed-call result so callers can
+    query it after the temporary context exits; no other request state is copied back. A fallback Reset/Record clears
+    this published result, which keeps non-KV client tracker behavior unchanged. The scope is a no-op in ZMQ mode. This
+    boundary currently covers `KVClient` only; the other SDK client families remain unchanged.
   - General batch APIs accept up to 10,000 keys. `Exist` accepts up to 100,000 keys, so one query can cover the
     32,768 cache blocks required by a 1 Mi-token context with 32 tokens per key.
   - `KVClient::MGetH2D` requires every input key to be unique and returns `K_INVALID` before pipeline dispatch when
