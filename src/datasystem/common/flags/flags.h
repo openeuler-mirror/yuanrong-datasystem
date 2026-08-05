@@ -41,9 +41,9 @@ class KVClientConfig;
         static FlagRegisterHelper helper_##name(#name, enumtype, meaning, __FILE__, (void *)&FLAGS_##name, \
                                                 (void *)&FLAGS_no##name, modifiable);                      \
     }                                                                                                      \
-    }                                                                                                      \
-    using ::datasystem::fl##shorttype::FLAGS_##name
-
+        using fl##shorttype::FLAGS_##name;                                                                 \
+    }
+    
 #define DS_DEFINE_TYPE(name, defvalue, meaning, type, shorttype, enumtype) \
     DS_DEFINE_TYPE_EX(name, defvalue, meaning, type, shorttype, enumtype, false)
 
@@ -52,8 +52,8 @@ class KVClientConfig;
     namespace fl##shorttype {                  \
         extern type FLAGS_##name;              \
     }                                          \
-    }                                          \
-    using ::datasystem::fl##shorttype::FLAGS_##name
+        using fl##shorttype::FLAGS_##name;     \
+    }
 
 #define DS_DEFINE_bool(name, defvalue, meaning) \
     DS_DEFINE_TYPE_EX(name, defvalue, meaning, bool, B, FLAG_BOOL, false)
@@ -120,7 +120,7 @@ class KVClientConfig;
 
 // Convenience macro for the registration of a flag validator
 #define DS_DEFINE_validator(name, func) \
-    static const bool is_##name = ::datasystem::RegisterValidator(&FLAGS_##name, func)
+    static const bool is_##name = ::datasystem::RegisterValidator(&::datasystem::FLAGS_##name, func)
 
 #define DS_DEFINE_environment(name, env_var)
 
