@@ -62,7 +62,6 @@ def _urma_pkg_repository_impl(repository_ctx):
         repository_ctx.download_and_extract(
             urma_pkg_url,
             sha256 = urma_pkg_sha256,
-            type = "zip",
         )
 
         # Auto-locate include root: find urma_api.h anchor.
