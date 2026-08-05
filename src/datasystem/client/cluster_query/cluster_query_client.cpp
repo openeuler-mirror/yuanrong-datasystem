@@ -215,10 +215,9 @@ Status ClusterQueryClient::Impl::InitEtcd()
 
 Status ClusterQueryClient::Impl::InitCoordinator()
 {
-    HostPort address;
-    RETURN_IF_NOT_OK(address.ParseString(options_.coordinatorAddress));
-    CHECK_FAIL_RETURN_STATUS(address.ToString() == options_.coordinatorAddress, K_INVALID,
-                             "coordinator address is not canonical");
+    CHECK_FAIL_RETURN_STATUS(
+        Validator::ValidateCoordinatorAddresses("coordinator_address", options_.coordinatorAddress), K_INVALID,
+        "invalid coordinator address");
     auto coordinatorDiscovery = std::make_shared<StaticCoordinatorDiscovery>(options_.coordinatorAddress);
     std::unique_ptr<ICoordinatorServiceProxy> coordinatorProxy;
     if (FLAGS_use_brpc) {

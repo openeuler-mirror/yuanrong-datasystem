@@ -1063,6 +1063,8 @@ dscli start --coordinator_config_path coordinator_config.json
 哈希区间计算和 key 路由。命令不会读取 `worker_config.json`，也不会自动探测后端类型；
 用户必须显式传入 ETCD 或 Coordinator 地址。
 Coordinator 使用与服务部署相同的基础地址，查询客户端按 `use_brpc` 配置选择 BRPC 或 ZMQ 传输。
+`--coordinator_address` 支持逗号分隔的 `host:port` 列表，用于多实例 Coordinator 部署场景；查询客户端会经由
+Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Worker 侧 `coordinator_address` 一致。
 整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
 当前 ETCD 查询仅支持未启用认证和 TLS 的集群。
 
@@ -1071,6 +1073,14 @@ Coordinator 使用与服务部署相同的基础地址，查询客户端按 `use
 ```bash
 dscli query cluster \
   --etcd_address 192.0.2.10:2379,192.0.2.11:2379 \
+  --cluster_name cluster-a
+```
+
+查询多实例 Coordinator 部署的集群节点（传入全部 Coordinator 节点地址）：
+
+```bash
+dscli query cluster \
+  --coordinator_address 192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511 \
   --cluster_name cluster-a
 ```
 
@@ -1102,11 +1112,11 @@ dscli query cluster \
 哈希区间采用左开右闭 `(start,end]`。当 `start > end` 时表示跨越 `UINT32_MAX` 到 `0` 的环回区间；
 单 token 全环固定输出 `[0,4294967295]`。`INITIAL`、`JOINING` 和 `FAILED` 节点不拥有 committed 区间。
 
-查询一批 key 当前路由到的 Worker：
+查询一批 key 当前路由到的 Worker（多实例 Coordinator 部署时传入全部节点地址，客户端自动路由到 Leader）：
 
 ```bash
 dscli query route \
-  --coordinator_address 192.0.2.10:31511 \
+  --coordinator_address 192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511 \
   --keys key-1 key-2 key-1
 ```
 

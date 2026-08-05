@@ -241,6 +241,34 @@ public:
     }
 
     /**
+     * @brief Validate a string is a valid set of coordinator addresses in the format "ip:port,ip:port".
+     * IPv6 formats are also supported, like "[ipv6]:port,[ipv6]:port".
+     *
+     * Coordinator endpoints only accept IP (or [IPv6]) plus port, mirroring HostPort::ParseString used by
+     * the coordinator service proxy. Domain names are not accepted here because the proxy silently drops
+     * any candidate that fails HostPort::ParseString.
+     * @param[in] flagName Coordinator address flag.
+     * @param[in] value The string to be checked.
+     * @return Returns true if the value is empty or all entries are valid ip:port addresses, false otherwise.
+     */
+    static bool ValidateCoordinatorAddresses(const char *flagName, const std::string &value)
+    {
+        char delimiter = ',';
+        std::stringstream sstream(value);
+        std::string word;
+        while (std::getline(sstream, word, delimiter)) {
+            if (ValidateHostPortString(flagName, word, false)) {
+                continue;
+            }
+            LOG(ERROR) << FormatString(
+                "The value of %s flag is %s, which contains some illegal [IPv6]:port or IPv4:Port address formats.",
+                flagName, value);
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * @brief Validate a string is a valid ip address with port as the format ipv4_format:port.
      * ipv6 formats are also allowed, with format: [ipv6_format]:port
      * @param[in] flagName IP address with port flag.
