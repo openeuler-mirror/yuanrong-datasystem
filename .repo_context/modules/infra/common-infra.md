@@ -59,7 +59,7 @@
 | `metrics`               | resource metrics and exporters                                                   | builds `common_metrics` and exporter base                                            |
 | `rdma`                  | fast transport wrappers and optional URMA/RDMA support                           | conditional build based on feature flags                                             |
 | `l2cache`               | persistence and secondary-storage support                                        | includes OBS/SFS clients, distributed-disk slot client, and persistence API dispatch |
-| `device`                | Ascend and optional Nvidia device support wrappers                               | builds `common_device` over backend-specific device libs                             |
+| `device`                | Ascend and optional Nvidia device support wrappers                               | builds `common_device`; CUDA host registration is an always-buildable Nvidia helper  |
 | `os_transport_pipeline` | optional pipeline H2D transport path                                             | only built when `BUILD_PIPLN_H2D` is enabled                                         |
 | `task_action`           | subscriber registry mirroring `HashRingEvent` migration/recovery/cleanup actions | builds `common_task_action`; callers use `datasystem::TaskActionRegistry`; subscribers are registered today by OC/SC metadata managers, `WorkerOcServiceClearDataFlow`, and `WorkerOCServer`, but `Dispatch` is not yet called by any production path (hash ring still drives execution via `HashRingEvent::NotifyAll`) |
 
@@ -156,6 +156,9 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     Recovery uses an explicit one-byte URMA WRITE to a manager-owned probe segment advertised by an ACTIVE Worker
     handshake, with bounded exponential retry. Business requests do not reopen the sender state.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
+  - CUDA host-memory registration lives under `common/device/nvidia` but remains independent of hetero GPU and Pipeline
+    H2D build switches. It uses CUDA Runtime API declarations when toolkit headers are available and builds as a no-op
+    registration helper when they are absent; runtime calls remain dynamically loaded rather than linked to libcudart.
   - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
     CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available
     because `hccs_transport.cpp` is not compiled and `ASCEND_HIXL_AVAILABLE` is not defined.

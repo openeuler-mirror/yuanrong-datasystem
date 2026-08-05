@@ -189,7 +189,6 @@ private:
     bool enableClientDirectPipelineH2D_ = false;
     int32_t pipelineThreadNum_ = 64;
     bthread::Mutex lifecycleMutex_;
-    bool h2dMemoryRegistered_ = false;
     std::atomic<bool> initialized_{ false };
     std::weak_ptr<ThreadPool> releasePool_;
 };

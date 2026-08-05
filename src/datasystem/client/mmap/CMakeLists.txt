@@ -5,7 +5,5 @@ list(APPEND CLIENT_MMAP_SRCS
         shm_mmap_table_entry.cpp
         shm_mmap_table.cpp)
 
-list(APPEND CLIENT_DEPEND_LIBS
-    common_util)
-
 add_library(client_mmap_static STATIC ${CLIENT_MMAP_SRCS})
+target_link_libraries(client_mmap_static PRIVATE common_cuda_host_memory common_util)

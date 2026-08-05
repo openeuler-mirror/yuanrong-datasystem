@@ -17,18 +17,24 @@
 /**
  * Description: CUDA host memory registration independent of RH2D.
  */
-#ifndef DATASYSTEM_COMMON_UTIL_CUDA_HOST_MEMORY_H
-#define DATASYSTEM_COMMON_UTIL_CUDA_HOST_MEMORY_H
+#ifndef DATASYSTEM_COMMON_DEVICE_NVIDIA_CUDA_HOST_MEMORY_H
+#define DATASYSTEM_COMMON_DEVICE_NVIDIA_CUDA_HOST_MEMORY_H
 
 #include <cstddef>
-
-#include "datasystem/utils/status.h"
+#include <string>
 
 namespace datasystem {
 
-void *GetCudaRuntimeSymbol(const char *name);
-Status RegisterCudaHostMemory(void *pointer, size_t size);
+void *GetCudaRuntimeSymbol(const std::string &name);
+
+/**
+ * @brief Register host memory when CUDA headers and runtime are available.
+ * @param[in] pointer Host memory address.
+ * @param[in] size Host memory size.
+ */
+void RegisterCudaHostMemory(void *pointer, size_t size);
+
 void UnregisterCudaHostMemory(void *pointer);
 
 }  // namespace datasystem
-#endif  // DATASYSTEM_COMMON_UTIL_CUDA_HOST_MEMORY_H
+#endif  // DATASYSTEM_COMMON_DEVICE_NVIDIA_CUDA_HOST_MEMORY_H

@@ -1084,10 +1084,6 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
     const bool useParallelBatchGet = !isPipelineH2DRequest
                                      && req.requests_size() > FLAGS_oc_worker_worker_parallel_min
                                      && IsFastTransportEnabled();
-    LOG(INFO) << PIPLN_LOG_PREFIX "BatchGetObjectRemote route: requestCount=" << req.requests_size()
-              << ", isPipelineH2D=" << isPipelineH2DRequest << ", useParallel=" << useParallelBatchGet
-              << ", parallelMin=" << FLAGS_oc_worker_worker_parallel_min
-              << ", parallelNums=" << FLAGS_oc_worker_worker_parallel_nums;
     if (useParallelBatchGet) {
         RETURN_IF_NOT_OK(ParallelBatchGetObject(req, rsp, parallelRes, batchTransportContext));
     } else {

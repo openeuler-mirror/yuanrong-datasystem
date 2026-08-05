@@ -1,9 +1,7 @@
 if (BUILD_HETERO_NPU OR WITH_TESTS)
     add_subdirectory(ascend)
 endif()
-if (BUILD_HETERO_GPU)
-    add_subdirectory(nvidia)
-endif()
+add_subdirectory(nvidia)
 
 add_library(common_device STATIC
     comm_wrapper.cpp
