@@ -97,6 +97,7 @@ public:
     Status CheckWriteTarget(const HostPort &peer, UbOperationKind op) const;
     Status CheckReadSource(const HostPort &peer) const;
     void ReportOutcome(const UbOpOutcome &outcome);
+    void SetSelfWorker(const HostPort &self);
     void ReplaceGlobalSummaries(const std::vector<UbHealthSummary> &summaries);
     void InitializeProbing(const HostPort &peer, uint64_t nowMs);
     std::optional<UbProbeToken> TryBeginProbe(const HostPort &peer, uint64_t nowMs);
@@ -141,6 +142,7 @@ private:
     uint64_t nextTombstoneExpiryMs_ = 0;
     bool topologyInitialized_ = false;
     UbFailureClassifier classifier_;
+    HostPort self_;
 };
 
 }  // namespace datasystem

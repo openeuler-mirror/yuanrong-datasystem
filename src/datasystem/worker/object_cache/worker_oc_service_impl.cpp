@@ -314,6 +314,9 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
 
     // Set async send manager and persistence api to eviction manager
     evictionManager_->SetAsyncSendManager(asyncSendManager_);
+    // Indirect failure observations reported for this worker itself (provider writeback / provider
+    // failure detail paths) must never quarantine the local UB data plane.
+    ubAdmission_->SetSelfWorker(localAddress_);
 }
 
 WorkerOCServiceImpl::~WorkerOCServiceImpl()

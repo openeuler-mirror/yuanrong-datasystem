@@ -73,6 +73,7 @@ constexpr char SHM_LATCH_FAIL_INJECT[] = "worker.ShmGuard.TryRLatch.Fail";
 constexpr char PROVIDER_GET_ENTER_INJECT[] = "worker.GetObjectRemote.afterRead";
 constexpr char PROVIDER_BATCH_GET_ENTER_INJECT[] = "worker.BatchGetObjectRemote.afterRead";
 constexpr char URMA_CQE_ERROR_INJECT[] = "UrmaManager.CheckCompletionRecordStatus";
+constexpr char SELF_OBSERVATION_SKIPPED_INJECT[] = "PeerUbAdmission.ReportOutcome.self_skipped";
 constexpr char LOCAL_OBSERVATION_INJECT[] = "client.ub_health_filter.local_observation";
 constexpr char LOCAL_READ_DENIED_INJECT[] = "client.ub_health_filter.local_read_denied";
 constexpr char GLOBAL_UNAVAILABLE_APPLIED_INJECT[] = "client.ub_health_filter.global_unavailable_applied";
@@ -1459,6 +1460,77 @@ TEST_F(KVClientTransportGetShmLatchTest, LatchFailureIsRetryableNotRuntimeError)
     ASSERT_EQ(recovered.size(), 1u);
     ASSERT_TRUE(recovered[0]);
     AssertBufferEqual(*recovered[0], value);
+}
+
+// Regression: a provider-local UB writeback failure observed while serving a remote Get must not
+// quarantine the provider against itself. WorkerWorkerOCServiceImpl::RecordProviderUbWriteFailure
+// reported the failure with operatorWorker == localAddress_ (the provider itself), which made the
+// provider mark itself UNAVAILABLE and publish writable=false. The data plane became healthy again
+// as soon as the injected failure window ended, but Get kept failing because the self-quarantine
+// could not be cleared by any peer probe (the global fact kept denying recovery). This test
+// reproduces the self-quarantine and requires automatic recovery after the failure window ends:
+// it fails on the unfixed build and passes once the self-observation exemption is in place.
+TEST_F(KVClientTransportGetTest, UbWritebackFailureDoesNotSelfQuarantineProvider)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "UB provider writeback failure ST requires USE_URMA.";
+#else
+    constexpr uint32_t INJECT_FAILURE_COUNT = 6;
+    constexpr int32_t RECOVERY_TIMEOUT_S = 60;
+
+    // Pin the data owner to worker0 so the reader (bound to worker1, enableLocalCache=false) exercises
+    // the remote GetObjectRemote path whose provider-side UB writeback is served by worker0.
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string &key = keys.front();
+    const std::string value(VALUE_SIZE, 'q');
+    DS_ASSERT_OK(writer_->Set(key, value));
+    {
+        std::string baseline;
+        DS_ASSERT_OK(reader_->Get(key, baseline));
+        ASSERT_EQ(baseline, value);
+    }
+
+    // Failure window: the provider-side UB writeback fails with cqeStatus=4 for the first N completions.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, URMA_CQE_ERROR_INJECT,
+                                           std::to_string(INJECT_FAILURE_COUNT) + "*call(0, 4)"));
+    // The inject framework only counts executions for inject points that have an action attached.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, SELF_OBSERVATION_SKIPPED_INJECT, "call()"));
+    {
+        std::string failedValue;
+        const Status failedRc = reader_->Get(key, failedValue);
+        ASSERT_TRUE(failedRc.IsError())
+            << "Get during the UB failure window must fail, got: " << failedRc.ToString();
+    }
+
+    // Recovery acceptance: Get must eventually succeed once the injected failure window is exhausted.
+    // Each polled Get itself consumes the remaining injected completions, so no separate wait for
+    // the window to drain is needed. The unfixed build stays self-quarantined (provider publishes
+    // writable=false) and keeps failing here until the timeout.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(RECOVERY_TIMEOUT_S);
+    bool recovered = false;
+    uint64_t finalExecuted = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::string recoveredValue;
+        if (reader_->Get(key, recoveredValue).IsOk() && recoveredValue == value) {
+            recovered = true;
+            break;
+        }
+        (void)cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, URMA_CQE_ERROR_INJECT, finalExecuted);
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    ASSERT_GE(finalExecuted, 1u) << "injected UB failure window was never triggered on the provider";
+    // The self-observation exemption is the core of the fix: when the provider reports a writeback
+    // failure whose peer is the provider itself, ReportOutcome must skip it. On the unfixed build
+    // this inject point does not exist (count stays 0) and the provider self-quarantines.
+    uint64_t selfSkippedCount = 0;
+    (void)cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, SELF_OBSERVATION_SKIPPED_INJECT,
+                                                selfSkippedCount);
+    ASSERT_GE(selfSkippedCount, 1u)
+        << "provider self observation was not exempted; provider self-quarantine occurred";
+    ASSERT_TRUE(recovered) << "Get did not recover after the UB data-plane failure window ended";
+#endif
 }
 
 }  // namespace st
