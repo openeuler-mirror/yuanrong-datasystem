@@ -64,6 +64,8 @@ DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DECLARE_uint32(max_client_num);
 DS_DECLARE_int64(batch_get_threshold_mb);
+DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
+DS_DECLARE_string(l2_cache_type);
 
 using namespace ::testing;
 using namespace datasystem::object_cache;
@@ -119,8 +121,14 @@ public:
         }
         return Status(K_RUNTIME_ERROR, "unsupported test master API: CreateMultiCopyMeta");
     }
-    RETURN_UNSUPPORTED_MASTER_API(QueryMeta, master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,
-                                  std::vector<RpcMessage> &)
+    Status QueryMeta(master::QueryMetaReqPb &req, uint64_t subTimeout, master::QueryMetaRspPb &rsp,
+                     std::vector<RpcMessage> &payloads) override
+    {
+        if (queryMeta_) {
+            return queryMeta_(req, subTimeout, rsp, payloads);
+        }
+        return Status(K_RUNTIME_ERROR, "unsupported test master API: QueryMeta");
+    }
     Status RemoveMeta(master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) override
     {
         if (removeMeta_) {
@@ -156,6 +164,8 @@ public:
         createMultiCopyMeta_;
     std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)> removeMeta_;
     std::function<Status(master::ReplacePrimaryReqPb &, master::ReplacePrimaryRspPb &)> replacePrimary_;
+    std::function<Status(master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &, std::vector<RpcMessage> &)>
+        queryMeta_;
 
     RETURN_UNSUPPORTED_MASTER_API(PutP2PMeta, PutP2PMetaReqPb &, PutP2PMetaRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(SubscribeReceiveEvent, SubscribeReceiveEventReqPb &,
@@ -1017,6 +1027,80 @@ protected:
     std::shared_ptr<WorkerOcServiceGetImpl> impl_;
     std::shared_ptr<MigrateDataRateController> rateController_;
 };
+
+TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataReturnsErrorWhenEtcdStoreUnavailable)
+{
+    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
+    const std::string oldL2CacheType = FLAGS_l2_cache_type;
+    Raii restoreFlags([oldNeedMetadata, oldL2CacheType]() {
+        FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata;
+        FLAGS_l2_cache_type = oldL2CacheType;
+    });
+    FLAGS_oc_io_from_l2cache_need_metadata = true;
+    FLAGS_l2_cache_type = "sfs";
+    WorkerOcServiceGetImpl::QueryMetadataFromMasterResult result;
+
+    auto rc = impl_->QueryMetadataFromMaster({ "route-failed-key" }, 0, result);
+
+    ASSERT_TRUE(rc.IsError());
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    EXPECT_TRUE(result.queryMetas.empty());
+    EXPECT_TRUE(result.absentObjectKeysWithVersion.empty());
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, MixedQueryMetadataReturnsErrorWhenEtcdStoreUnavailable)
+{
+    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
+    const std::string oldL2CacheType = FLAGS_l2_cache_type;
+    Raii restoreFlags([oldNeedMetadata, oldL2CacheType]() {
+        FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata;
+        FLAGS_l2_cache_type = oldL2CacheType;
+    });
+    FLAGS_oc_io_from_l2cache_need_metadata = true;
+    FLAGS_l2_cache_type = "sfs";
+    const std::string hitKey = "master-hit-key";
+    const std::string routeFailedKey = "route-failed-key";
+    const HostPort masterAddress("127.0.0.1", 18890);
+    RouteObjectToMaster(hitKey, masterAddress);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
+    api->queryMeta_ = [&hitKey](master::QueryMetaReqPb &req, uint64_t, master::QueryMetaRspPb &rsp,
+                               std::vector<RpcMessage> &) {
+        EXPECT_THAT(req.ids(), ElementsAre(hitKey));
+        auto *queryMeta = rsp.add_query_metas();
+        queryMeta->mutable_meta()->set_object_key(hitKey);
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetDefaultApi(api);
+    ScopedRequestContext requestContext;
+    WorkerOcServiceGetImpl::QueryMetadataFromMasterResult result;
+
+    auto rc = impl_->QueryMetadataFromMaster({ hitKey, routeFailedKey }, 0, result);
+
+    ASSERT_TRUE(rc.IsError());
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    ASSERT_EQ(result.queryMetas.size(), 1);
+    EXPECT_EQ(result.queryMetas.front().meta().object_key(), hitKey);
+    EXPECT_TRUE(result.absentObjectKeysWithVersion.empty());
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataMarksRouteFailureAbsentWhenEtcdFallbackDisabled)
+{
+    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
+    const std::string oldL2CacheType = FLAGS_l2_cache_type;
+    Raii restoreFlags([oldNeedMetadata, oldL2CacheType]() {
+        FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata;
+        FLAGS_l2_cache_type = oldL2CacheType;
+    });
+    FLAGS_oc_io_from_l2cache_need_metadata = true;
+    FLAGS_l2_cache_type = "sfs";
+    WorkerOcServiceGetImpl::QueryMetadataFromMasterResult result;
+
+    auto rc = impl_->QueryMetadataFromMaster({ "route-failed-key" }, 0, result, false);
+
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    EXPECT_TRUE(result.queryMetas.empty());
+    EXPECT_THAT(result.absentObjectKeysWithVersion, Contains(Key("route-failed-key")));
+}
 
 TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDeleteFlagWhenReplicationDisabled)
 {
