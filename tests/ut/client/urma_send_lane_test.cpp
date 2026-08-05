@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -204,6 +205,73 @@ TEST(SendLaneLeaseTest, RequestRetireDoesNotConsumePreviouslySubmittedWrs)
     EXPECT_EQ(lease.Seal(), UrmaSendLaneLease::SettleAction::NONE);
     EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::RETIRE);
     EXPECT_TRUE(lease.IsSettled());
+}
+
+TEST(SendLaneLeaseTest, ForceReleaseRequiresSealAndCannotReleaseTwice)
+{
+    auto jetty = MakeOpaqueJetty();
+    UrmaSendLaneLease lease(jetty, 100);
+    lease.AddWr();
+    lease.AddWr();
+
+    EXPECT_EQ(lease.ForceRelease(), UrmaSendLaneLease::SettleAction::NONE);
+    EXPECT_FALSE(lease.IsSettled());
+    EXPECT_EQ(lease.Seal(), UrmaSendLaneLease::SettleAction::NONE);
+
+    EXPECT_EQ(lease.ForceRelease(), UrmaSendLaneLease::SettleAction::RELEASE);
+    EXPECT_TRUE(lease.IsSettled());
+    EXPECT_TRUE(lease.IsForceReleased());
+    EXPECT_EQ(lease.GetPendingWrCount(), 2u);
+
+    EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::NONE);
+    EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::NONE);
+    EXPECT_EQ(lease.GetPendingWrCount(), 0u);
+    EXPECT_EQ(lease.ForceRelease(), UrmaSendLaneLease::SettleAction::NONE);
+}
+
+TEST(SendLaneLeaseTest, ForceReleaseDoesNotOverrideRequestedRetirement)
+{
+    auto jetty = MakeOpaqueJetty();
+    UrmaSendLaneLease lease(jetty);
+    lease.AddWr();
+    EXPECT_EQ(lease.RequestRetire(), UrmaSendLaneLease::SettleAction::NONE);
+    EXPECT_EQ(lease.Seal(), UrmaSendLaneLease::SettleAction::NONE);
+
+    EXPECT_EQ(lease.ForceRelease(), UrmaSendLaneLease::SettleAction::NONE);
+    EXPECT_FALSE(lease.IsSettled());
+    EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::RETIRE);
+}
+
+TEST(SendLaneLeaseTest, RequestIdFloorSeparatesLateCompletionFromCurrentGeneration)
+{
+    auto jetty = MakeOpaqueJetty();
+    UrmaSendLaneLease lease(jetty, 200);
+
+    EXPECT_FALSE(lease.OwnsRequestId(199));
+    EXPECT_TRUE(lease.OwnsRequestId(200));
+    EXPECT_TRUE(lease.OwnsRequestId(500));
+
+    lease.DisableRequestIdGenerationCheck();
+    EXPECT_TRUE(lease.OwnsRequestId(1));
+}
+
+TEST(SendLaneLeaseTest, FirstTimeoutContextWins)
+{
+    auto jetty = MakeOpaqueJetty();
+    UrmaSendLaneLease lease(jetty);
+    UrmaSendLaneLease::TimeoutInfo timeoutInfo;
+
+    EXPECT_TRUE(lease.TryMarkTimedOut({ 100, "peer", "instance", 123 }));
+    EXPECT_TRUE(lease.IsTimedOut());
+    ASSERT_TRUE(lease.GetTimeoutInfo(timeoutInfo));
+    EXPECT_EQ(timeoutInfo.requestId, 100u);
+    EXPECT_EQ(timeoutInfo.remoteAddress, "peer");
+    EXPECT_EQ(timeoutInfo.remoteInstanceId, "instance");
+    EXPECT_EQ(timeoutInfo.timeoutTimestampMs, 123u);
+
+    EXPECT_FALSE(lease.TryMarkTimedOut({ 200, "other-peer", "other-instance", 456 }));
+    ASSERT_TRUE(lease.GetTimeoutInfo(timeoutInfo));
+    EXPECT_EQ(timeoutInfo.requestId, 100u);
 }
 
 }  // namespace
