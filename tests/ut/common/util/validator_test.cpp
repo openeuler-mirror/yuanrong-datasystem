@@ -249,6 +249,30 @@ TEST_F(ValidatorTest, TestValidateEtcdAddresses)
         "FlagName", "huahuahua.com:6553,test:0,yr-core-etcd.default.svc.cluster.local:65536"));
 }
 
+TEST_F(ValidatorTest, TestValidateCoordinatorAddresses)
+{
+    // Coordinator endpoints only accept IP/[IPv6]:port (no domain names), matching HostPort::ParseString.
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255:"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255:65536"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255:65536"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255: 65535"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255:65535 "));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", " 255.255.255.255:65535"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255:65534, 255.255.255.255:65535"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "yr-core-coordinator.default.svc.cluster.local:65535"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses(
+        "FlagName", "255.255.255.255:65534,yr-core-coordinator.default.svc.cluster.local:65535"));
+
+    ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "0.0.0.0:0"));
+    ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255:65535"));
+    ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255:65534,255.255.255.255:65535"));
+    ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "0.0.0.0:0,0.0.0.0:1"));
+    ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "[::1]:65535,[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535"));
+    ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName",
+        "192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511"));
+}
+
 TEST_F(ValidatorTest, ValidateFailed)
 {
     const uint32_t invalidVal = 33;
