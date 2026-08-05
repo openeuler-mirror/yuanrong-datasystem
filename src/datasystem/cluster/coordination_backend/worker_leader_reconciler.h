@@ -47,6 +47,9 @@ public:
 private:
     void ScheduleEnsure(const CoordinatorLeaderIdentity &identity, bool forceEnsure);
     Status ReconcileIdentity(const CoordinatorLeaderIdentity &identity, bool forceEnsure);
+    Status SendMembershipEnsure(const CoordinatorLeaderIdentity &identity,
+                                const DsCoordinationBackend::MembershipRenewalPayload &payload,
+                                int64_t &membershipModRevision);
     void RunEnsureLoop(CoordinatorLeaderIdentity identity);
     bool IsCurrentIdentityLocked(const CoordinatorLeaderIdentity &identity) const;
     static bool SameIdentity(const CoordinatorLeaderIdentity &left, const CoordinatorLeaderIdentity &right);

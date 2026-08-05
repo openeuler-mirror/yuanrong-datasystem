@@ -174,6 +174,13 @@ Important nuance:
    into `ready` after reconciliation.
 8. A process can own several `EtcdStore` instances, but only the instance that calls `InitKeepAlive` installs the
    process-level graceful-exit keepalive-timeout handler. Watch/KV-only stores must not replace that authority.
+9. During graceful exit after a keepalive timeout, `GrpcSession` continues rejecting ordinary ETCD RPCs. Only an
+   existing member's typed, nonzero-lease membership rebind may pass the preflight gate; the timeout remains set until
+   that membership Put succeeds, and an actual RPC failure still maps to the leaving retry status.
+10. Membership recreation, lifecycle mutation, and reconciliation are serialized. EXITING is terminal for the current
+    process incarnation, so a recovered lease or delayed reconciliation cannot republish READY.
+11. Graceful-exit lifecycle publication supplies its remaining deadline budget to membership serialization and the
+    ETCD Put retry loop. A caller timeout therefore cannot silently expand back to the default 50-second RPC budget.
 
 Important nuance:
 

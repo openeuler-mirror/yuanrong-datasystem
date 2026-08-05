@@ -22,9 +22,11 @@
   an older same-address Worker incarnation cannot overwrite or renew the current membership record. Revisions are
   monotonic only within one Coordinator lifetime: a same-lifetime delayed Ensure retains the newer local revision, while
   a changed `CoordinatorId` replaces it with the new in-memory Store's ensured revision even when that number is lower.
-  Worker Leader reconciliation installs ensured membership outside its state mutex because installation synchronously
-  publishes membership readiness; it then rechecks Router identity before reporting so a successor lifetime can enqueue
-  its fenced Ensure without recursive locking or a stale recovery report. Coordinator-side `EnsureLeaderMembership`
+  Worker Leader reconciliation serializes payload capture, its bounded Ensure RPC, and revision installation with
+  ordinary membership mutations. This prevents an in-flight recovery payload from overwriting EXITING; the local
+  cleanup gate remains outside that serialization boundary. Installation stays outside the Reconciler state mutex
+  because it synchronously publishes membership readiness, then Router identity is rechecked before reporting.
+  Coordinator-side `EnsureLeaderMembership`
   uses the same `TopologyControlHost` reservation/completion transaction as normal membership Put, so topology recovery
   cannot become READY with committed memberships but no Controller runtime owner. Reconciler shutdown transfers its
   Ensure pool under the scheduling mutex and joins outside the lock, fencing already copied membership callbacks from
@@ -265,6 +267,10 @@
 - Unified-ETCD recovery reuses the normal exact topology reload. The membership lease recreates its key before
   `IsKeepAliveTimeout()` becomes false. A transient recovery ordering where another Controller still sees the key absent
   is covered by the same direct Worker liveness check; it cannot remove a responding member from topology.
+- Graceful scale-in publishes EXITING only after local admission and task drain. Publication and authoritative topology
+  removal share one bounded deadline: lock acquisition, the backend write, retry sleep, and topology polling consume the
+  same remaining budget. A failed publication is retried, but the first successful publication stops repeated writes;
+  the backend's terminal EXITING latch republishes that intent if later lease or Leader recovery occurs.
 - Coordinator watches bind both `CoordinatorId` and `watch_id`. Watch registration uses a client registration ID so an
   ambiguous WatchRange result retries idempotently. Initial/recreated membership invalidates both Worker and Controller
   role plans using O(1) RESET doorbells; lease threads never wait for watch-registration RPCs.

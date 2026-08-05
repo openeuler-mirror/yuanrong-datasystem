@@ -63,11 +63,12 @@ public:
         return Status::OK();
     }
 
-    Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &version, int64_t &revision, int32_t,
-               std::string *coordinatorId, const std::string &expectedCoordinatorId,
+    Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &version, int64_t &revision,
+               int32_t timeoutMs, std::string *coordinatorId, const std::string &expectedCoordinatorId,
                int64_t expectedModRevision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        lastPutTimeoutMs_ = timeoutMs;
         if (putStatus_.IsError()) {
             return putStatus_;
         }
@@ -280,6 +281,12 @@ public:
         return lastExpectedModRevision_;
     }
 
+    int32_t LastPutTimeoutMs() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lastPutTimeoutMs_;
+    }
+
     int64_t LastKeepAliveModRevision() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -332,6 +339,7 @@ private:
     std::string lastExpectedCoordinatorId_;
     std::string lastKeepAliveCoordinatorId_;
     int64_t lastExpectedModRevision_{ 0 };
+    int32_t lastPutTimeoutMs_{ 0 };
     int64_t lastKeepAliveModRevision_{ 0 };
     int64_t lastDeleteModRevision_{ 0 };
     size_t keepAliveCalls_{ 0 };
@@ -611,6 +619,40 @@ TEST(DsCoordinationBackendSessionTest, MembershipWritesCarryObservedCoordinatorF
     EXPECT_EQ(proxy.LastExpectedModRevision(), 2);
 }
 
+TEST(DsCoordinationBackendSessionTest, FailedExitRequestRemainsTerminalForMembershipPayload)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+
+    proxy.SetPutStatus(Status(K_RPC_UNAVAILABLE, "injected exit failure"));
+    EXPECT_TRUE(backend.UpdateNodeState(MemberLifecycleState::EXITING).IsError());
+    proxy.SetPutStatus(Status::OK());
+    EXPECT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+
+    DsCoordinationBackend::MembershipRenewalPayload payload;
+    ASSERT_TRUE(backend.GetMembershipRenewalPayload(payload).IsOk());
+    MembershipValue value;
+    ASSERT_TRUE(MembershipValueCodec::Decode(payload.encodedValue, value).IsOk());
+    EXPECT_EQ(value.lifecycleState, MemberLifecycleState::EXITING);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, ExitingPublicationUsesCallerTimeoutBudget)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+
+    ASSERT_TRUE(backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, 17).IsOk());
+    EXPECT_GT(proxy.LastPutTimeoutMs(), 0);
+    EXPECT_LE(proxy.LastPutTimeoutMs(), 17);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
 TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotOverwriteReplacement)
 {
     DeterministicCoordinatorProxy proxy;
@@ -721,6 +763,9 @@ TEST(DsCoordinationBackendSessionTest, NewCoordinatorLifetimeAcceptsLowerEnsured
     proxy.SetKeepAliveStatus(Status::OK());
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    // This test exercises revision installation synchronously; quiesce the independent renewal loop so it cannot
+    // legitimately recreate membership between the installation and the assertion below.
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
 
     proxy.SetMembershipRevision(17);
     ASSERT_TRUE(backend.OnMembershipEnsured(COORDINATOR_A, 17).IsOk());
@@ -732,7 +777,6 @@ TEST(DsCoordinationBackendSessionTest, NewCoordinatorLifetimeAcceptsLowerEnsured
     ASSERT_TRUE(backend.OnMembershipEnsured(COORDINATOR_B, 2).IsOk());
     ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
     EXPECT_EQ(proxy.LastExpectedModRevision(), 2);
-    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
 TEST(DsCoordinationBackendSessionTest, RenewalPayloadDoesNotExposePhysicalMembershipKey)

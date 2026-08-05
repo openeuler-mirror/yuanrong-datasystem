@@ -20,8 +20,10 @@
 
 #include "datasystem/worker/worker_oc_server.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -81,6 +83,14 @@ public:
         server_->HandleTopologySnapshotPublished(std::move(snapshot));
     }
 
+    Status WaitForExitingRemoval(std::chrono::steady_clock::time_point deadline,
+                                 const std::function<Status(int32_t)> &publish,
+                                 const std::function<Status()> &observe,
+                                 std::chrono::milliseconds retryInterval)
+    {
+        return server_->WaitForExitingMembershipAndTopologyRemoval(deadline, publish, observe, retryInterval);
+    }
+
 protected:
     std::unique_ptr<worker::WorkerOCServer> server_;
     std::string recoveredAddress_;
@@ -130,5 +140,54 @@ TEST_F(WorkerOCServerTest, FailedProbeResultAttachesObservationOnlyToErrorOutcom
         server_->BuildFailedProbeResultForTest(peer, Status(K_RPC_NETWORK_BLIP, "network blip"));
     EXPECT_EQ(networkBlip.outcome, cluster::ControlBackendProbeOutcome::ERROR);
     EXPECT_TRUE(networkBlip.observation.has_value());
+}
+
+TEST_F(WorkerOCServerTest, SuccessfulExitingPublicationIsNotRepeatedAndSleepHonorsDeadline)
+{
+    size_t publishCount = 0;
+    size_t observeCount = 0;
+    int32_t observedBudgetMs = 0;
+    const auto start = std::chrono::steady_clock::now();
+    const auto status = WaitForExitingRemoval(
+        start + std::chrono::milliseconds(30),
+        [&](int32_t timeoutMs) {
+            ++publishCount;
+            observedBudgetMs = timeoutMs;
+            return Status::OK();
+        },
+        [&] {
+            ++observeCount;
+            return Status(K_NOT_READY, "local member is still present");
+        },
+        std::chrono::seconds(1));
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_EQ(status.GetCode(), K_NOT_READY);
+    EXPECT_EQ(publishCount, 1UL);
+    EXPECT_EQ(observeCount, 1UL);
+    EXPECT_GT(observedBudgetMs, 0);
+    EXPECT_LE(observedBudgetMs, 30);
+    EXPECT_LT(elapsed, std::chrono::milliseconds(200));
+}
+
+TEST_F(WorkerOCServerTest, FailedExitingPublicationRetriesUntilSuccess)
+{
+    size_t publishCount = 0;
+    size_t observeCount = 0;
+    const auto status = WaitForExitingRemoval(
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(200),
+        [&](int32_t) {
+            ++publishCount;
+            return publishCount == 1 ? Status(K_RPC_UNAVAILABLE, "injected publish failure") : Status::OK();
+        },
+        [&] {
+            ++observeCount;
+            return observeCount == 1 ? Status(K_NOT_READY, "local member is still present") : Status::OK();
+        },
+        std::chrono::milliseconds(1));
+
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(publishCount, 2UL);
+    EXPECT_EQ(observeCount, 2UL);
 }
 }  // namespace datasystem::ut

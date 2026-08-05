@@ -941,10 +941,15 @@ Status TopologyEngine::MarkReady()
 
 Status TopologyEngine::MarkExiting()
 {
+    return MarkExiting(SEND_RPC_TIMEOUT_MS_DEFAULT);
+}
+
+Status TopologyEngine::MarkExiting(int32_t timeoutMs)
+{
     CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
                              "cluster topology Engine is not running");
     localVoluntaryExitRequested_.store(true);
-    auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::EXITING);
+    auto rc = memberBackend_->UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, timeoutMs);
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
               << " role=worker action=mark_exiting address=" << options_.localAddress << " status=" << rc.ToString();
     return rc;

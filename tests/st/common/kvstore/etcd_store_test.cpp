@@ -757,6 +757,22 @@ TEST_F(EtcdStoreTest, ShutdownEventSourcesPreservesSynchronousOperations)
     EXPECT_EQ(actual, expected);
 }
 
+TEST_F(EtcdStoreTest, ExitingStateUpdateHonorsTimeoutBudget)
+{
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    DS_ASSERT_OK(db_->InitKeepAlive(tableName_, "deadline-member", false));
+    Raii clearFailure([] { (void)inject::Clear("grpc_session.SendRpc.EtcdRequestFailed"); });
+    DS_ASSERT_OK(inject::Set("grpc_session.SendRpc.EtcdRequestFailed", "return()"));
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto status = db_->UpdateNodeState(cluster::MemberLifecycleState::EXITING, 30);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_TRUE(status.IsError());
+    EXPECT_LT(elapsed, std::chrono::milliseconds(300));
+}
+
 TEST_F(EtcdStoreTest, ExactWatchDoesNotReceiveNeighborPrefixKey)
 {
     struct EventState {

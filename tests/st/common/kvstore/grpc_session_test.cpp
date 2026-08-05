@@ -103,5 +103,41 @@ TEST_F(GrpcSessionTest, TestPutClusterTableWithoutLeaseId)
     DS_ASSERT_NOT_OK(kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, "",
                                         val.size(), timeoutMs));
 }
+
+TEST_F(GrpcSessionTest, MembershipLeaseRebindIsTheOnlyPutAllowedWhileLeavingAfterKeepAliveTimeout)
+{
+    std::unique_ptr<GrpcSession<etcdserverpb::KV>> kvSession;
+    DS_ASSERT_OK(GrpcSession<etcdserverpb::KV>::CreateSession(etcdAddr_, kvSession));
+    std::unique_ptr<GrpcSession<etcdserverpb::Lease>> leaseSession;
+    DS_ASSERT_OK(GrpcSession<etcdserverpb::Lease>::CreateSession(etcdAddr_, leaseSession));
+
+    etcdserverpb::LeaseGrantRequest leaseReq;
+    etcdserverpb::LeaseGrantResponse leaseRsp;
+    leaseReq.set_ttl(60);
+    leaseReq.set_id(0);
+    DS_ASSERT_OK(leaseSession->AsyncSendRpc("LeaseGrant", leaseReq, leaseRsp,
+                                            &etcdserverpb::Lease::Stub::AsyncLeaseGrant, "", 1'000));
+
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    DS_ASSERT_OK(cluster::TopologyKeyHelper::Create("grpc-session-rebind", keys));
+    etcdserverpb::PutRequest putReq;
+    putReq.set_key(keys->MembershipTable() + "/127.0.0.1:1");
+    putReq.set_value("recovering");
+    putReq.set_lease(leaseRsp.id());
+    etcdserverpb::PutResponse putRsp;
+
+    GrpcSessionBase::SetIsKeepAliveTimeoutHandler([] { return true; });
+    g_exitFlag = 1;
+    Raii resetSignal([] {
+        g_exitFlag = 0;
+        GrpcSessionBase::SetIsKeepAliveTimeoutHandler([] { return false; });
+    });
+    auto normal = kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, "",
+                                     putReq.value().size(), 1'000);
+    EXPECT_EQ(normal.GetCode(), K_RETRY_IF_LEAVING);
+    DS_ASSERT_OK(kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, "",
+                                    putReq.value().size(), 1'000, 0,
+                                    EtcdRpcIntent::MEMBERSHIP_LEASE_REBIND));
+}
 }  // namespace st
 }  // namespace datasystem

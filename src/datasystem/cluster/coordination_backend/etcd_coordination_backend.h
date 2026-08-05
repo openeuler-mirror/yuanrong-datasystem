@@ -164,6 +164,14 @@ public:
     Status UpdateNodeState(MemberLifecycleState state) override;
 
     /**
+     * @brief Update the lifecycle state within one aggregate timeout budget.
+     * @param[in] state New lifecycle state.
+     * @param[in] timeoutMs Aggregate timeout for membership serialization and ETCD Put retries.
+     * @return Backend operation status.
+     */
+    Status UpdateNodeStateWithTimeout(MemberLifecycleState state, int32_t timeoutMs) override;
+
+    /**
      * @brief Return the physical ETCD prefix for one logical table.
      * @param[in] tableName Logical table name.
      * @param[out] prefix Physical ETCD prefix.

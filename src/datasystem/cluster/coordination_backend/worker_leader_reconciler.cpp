@@ -184,15 +184,6 @@ Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity
             return Status::OK();
         }
     }
-    DsCoordinationBackend::MembershipRenewalPayload payload;
-    RETURN_IF_NOT_OK(backend_.GetMembershipRenewalPayload(payload));
-    coordinator::EnsureLeaderMembershipReqPb request;
-    request.set_cluster_name(clusterName_);
-    request.set_reporter_address(payload.reporterAddress);
-    request.set_coordinator_id(identity.coordinatorId);
-    request.set_leader_term(identity.leaderTerm);
-    request.set_membership_value(payload.encodedValue);
-    request.set_ttl_ms(payload.ttlMs);
     auto *routes = proxy_.GetLeaderRouteProvider();
     CHECK_FAIL_RETURN_STATUS(routes != nullptr, K_NOT_READY, "Coordinator Leader route is unavailable");
 
@@ -203,25 +194,11 @@ Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity
     CHECK_FAIL_RETURN_STATUS(SameIdentity(currentAfterCleanup, identity), K_TRY_AGAIN,
                              "Coordinator Leader changed during membership recreate cleanup");
 
-    coordinator::EnsureLeaderMembershipRspPb response;
-    RETURN_IF_NOT_OK(proxy_.EnsureLeaderMembership(request, response));
-    const auto currentAfterEnsure = routes->GetLeaderCache();
-    CHECK_FAIL_RETURN_STATUS(SameIdentity(currentAfterEnsure, identity), K_TRY_AGAIN,
-                             "Coordinator Leader changed during membership ensure");
-    CHECK_FAIL_RETURN_STATUS(
-        response.result() == coordinator::EnsureLeaderMembershipRspPb::ACCEPTED,
-        response.result() == coordinator::EnsureLeaderMembershipRspPb::STALE_EPOCH ? K_TRY_AGAIN : K_INVALID,
-        "Coordinator rejected membership ensure");
-    CHECK_FAIL_RETURN_STATUS(response.membership_mod_revision() > 0, K_TRY_AGAIN,
-                             "Coordinator accepted membership ensure without a revision");
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        CHECK_FAIL_RETURN_STATUS(!stopping_.load(std::memory_order_acquire) && IsCurrentIdentityLocked(identity),
-                                 K_TRY_AGAIN, "Coordinator Leader changed during membership ensure");
-    }
-    // Installation synchronously publishes membership readiness. Do not hold mutex_ across that callback: when the
-    // Router already observes a successor lifetime, NotifyMembershipReady must be able to queue its fenced Ensure.
-    backend_.InstallEnsuredMembership(identity.coordinatorId, response.membership_mod_revision());
+    RETURN_IF_NOT_OK(backend_.EnsureMembership(
+        identity.coordinatorId,
+        [this, &identity](const DsCoordinationBackend::MembershipRenewalPayload &payload, int64_t &revision) {
+            return SendMembershipEnsure(identity, payload, revision);
+        }));
     const auto currentAfterInstall = routes->GetLeaderCache();
     CHECK_FAIL_RETURN_STATUS(SameIdentity(currentAfterInstall, identity), K_TRY_AGAIN,
                              "Coordinator Leader changed during membership installation");
@@ -232,6 +209,35 @@ Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity
             lastEnsuredIdentity_ = identity;
         }
     }
+    return Status::OK();
+}
+
+Status WorkerLeaderReconciler::SendMembershipEnsure(
+    const CoordinatorLeaderIdentity &identity, const DsCoordinationBackend::MembershipRenewalPayload &payload,
+    int64_t &membershipModRevision)
+{
+    coordinator::EnsureLeaderMembershipReqPb request;
+    request.set_cluster_name(clusterName_);
+    request.set_reporter_address(payload.reporterAddress);
+    request.set_coordinator_id(identity.coordinatorId);
+    request.set_leader_term(identity.leaderTerm);
+    request.set_membership_value(payload.encodedValue);
+    request.set_ttl_ms(payload.ttlMs);
+    coordinator::EnsureLeaderMembershipRspPb response;
+    RETURN_IF_NOT_OK(proxy_.EnsureLeaderMembership(request, response));
+    auto *routes = proxy_.GetLeaderRouteProvider();
+    CHECK_FAIL_RETURN_STATUS(routes != nullptr && SameIdentity(routes->GetLeaderCache(), identity), K_TRY_AGAIN,
+                             "Coordinator Leader changed during membership ensure");
+    CHECK_FAIL_RETURN_STATUS(
+        response.result() == coordinator::EnsureLeaderMembershipRspPb::ACCEPTED,
+        response.result() == coordinator::EnsureLeaderMembershipRspPb::STALE_EPOCH ? K_TRY_AGAIN : K_INVALID,
+        "Coordinator rejected membership ensure");
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        CHECK_FAIL_RETURN_STATUS(!stopping_.load(std::memory_order_acquire) && IsCurrentIdentityLocked(identity),
+                                 K_TRY_AGAIN, "Coordinator Leader changed during membership ensure");
+    }
+    membershipModRevision = response.membership_mod_revision();
     return Status::OK();
 }
 
