@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef DATASYSTEM_COMMON_RDMA_NPU_HCCS_TRANSPORT_H
-#define DATASYSTEM_COMMON_RDMA_NPU_HCCS_TRANSPORT_H
+#ifndef DATASYSTEM_COMMON_RDMA_NPU_HIXL_TRANSPORT_H
+#define DATASYSTEM_COMMON_RDMA_NPU_HIXL_TRANSPORT_H
 
 #include "rh2d_transport_strategy.h"
 
@@ -35,10 +35,10 @@ namespace datasystem {
 
 enum class HixlMemoryMode { BUFFER_POOL, ROCE_DIRECT, FABRIC_MEM };
 
-class HCCSTransport : public RH2DTransportStrategy {
+class HixlTransport : public RH2DTransportStrategy {
 public:
-    HCCSTransport() = default;
-    ~HCCSTransport() override;
+    HixlTransport() = default;
+    ~HixlTransport() override;
 
     Status Init(const std::vector<int32_t> &deviceIds) override;
     Status GetConnectionIdentity(std::string *identity) override;
@@ -71,6 +71,9 @@ private:
     };
 
     Status InitializeSingleDevice(int32_t devId, const std::string &bufferPool);
+    Status ValidateDeviceMemoryRegistrationInputs(const std::vector<void *> &addrs,
+                                                  const std::vector<uint64_t> &sizes) const;
+    static std::string FormatDeviceMemoryRanges(const std::vector<RegisteredDeviceMemory> &registrations);
     Status RegisterDeviceMemoryLocked(uintptr_t addr, uint64_t size);
     Status ReleaseDeviceMemoryLocked(uintptr_t addr);
     bool HasRegisteredDeviceMemoryLocked(uintptr_t addr, uint64_t size) const;
@@ -101,4 +104,4 @@ private:
 
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_RDMA_NPU_HCCS_TRANSPORT_H
+#endif  // DATASYSTEM_COMMON_RDMA_NPU_HIXL_TRANSPORT_H

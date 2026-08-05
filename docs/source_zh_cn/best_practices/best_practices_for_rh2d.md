@@ -198,7 +198,8 @@ dscli start \
     --arena_per_tenant 1 \
     --remote_h2d_device_ids "0" \
     --remote_h2d_link_type "HCCS" \
-    --remote_h2d_hccs_buffer_pool "4:8"
+    --remote_h2d_hccs_buffer_pool "4:8" \
+    --hixl_cs_enable false
 ```
 
 Worker 参数说明：
@@ -211,6 +212,7 @@ Worker 参数说明：
 | `remote_h2d_device_ids` | 空 | 非空时启用 Worker RH2D；多个 device id 使用逗号分隔，例如：`0,1,2,3,4,5,6,7` |
 | `remote_h2d_link_type` | `ROCE` | 支持 `ROCE`、`HCCS`，区分大小写 |
 | `remote_h2d_hccs_buffer_pool` | `4:8` | HIXL buffer-pool 参数，仅 HCCS 使用，格式为两个正整数 `<count>:<size>`；无明确调优需求时保持默认值 |
+| `hixl_cs_enable` | `False` | 是否由 Worker 通过 HIXL `LocalCommRes` version 1.3 启用 HIXL CS；仅 HCCS 链路使用。启用后支持同节点跨进程、同 NPU 卡建链，并利用 CS 针对小数据传输的专项优化降低通信时延 |
 
 
 :::
@@ -226,15 +228,19 @@ P2P-Transfer RoCE 是 Client 默认链路，无需额外环境变量。HIXL HCCS
 ```bash
 export DS_RH2D_LINK_TYPE=HCCS
 export DS_RH2D_HCCS_BUFFER_POOL=4:8
+export DS_HIXL_CS_ENABLE=0
 ```
 
 如果使用 HIXL RoCE 直连模式，请在 Worker 和 Client 进程启动前都设置 `HCCL_INTRA_ROCE_ENABLE=1`。该模式不使用 HIXL buffer-pool relay，`DS_RH2D_HCCS_BUFFER_POOL`/`remote_h2d_hccs_buffer_pool` 不生效，要求两端 RoCE 网络已正确配置并可达。
+
+如果使用 HIXL CS RoCE，请在 Worker 设置 `--hixl_cs_enable=true`，并在 Client 设置 `DS_HIXL_CS_ENABLE=1`，同时保持两端 `HCCL_INTRA_ROCE_ENABLE=1`。HIXL 会根据各进程本地配置选择通信 Engine，因此 Worker 和 Client 的 CS 配置必须一致。CS RoCE 除了支持普通同节点通信无法覆盖的“跨进程、同 NPU 卡”场景，还针对小数据传输进行了专项优化，可降低通信时延。
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
 | `enable_remote_h2d` | `False` | Client API 的 RH2D 开关 |
 | `DS_RH2D_LINK_TYPE` | `ROCE` | Client 链路类型，支持 `ROCE`、`HCCS`，必须与 Worker 一致 |
 | `DS_RH2D_HCCS_BUFFER_POOL` | `4:8` | Client HIXL buffer-pool 参数，仅 HCCS buffer-pool 模式使用，应与 Worker 一致 |
+| `DS_HIXL_CS_ENABLE` | `0` | 是否通过 HIXL `LocalCommRes` version 1.3 启用 HIXL CS，必须与 Worker 的 `hixl_cs_enable` 一致 |
 | `HCCL_INTRA_ROCE_ENABLE` | 未设置 | HIXL HCCS 的 RoCE 直连模式开关。设置为 `1` 时启用 RoCE direct，Worker 和 Client 必须一致 |
 
 ## 快速验证

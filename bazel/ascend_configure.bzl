@@ -125,8 +125,8 @@ def _ascend_configure_impl(repository_ctx):
             "-lmetadef",
         ])
         hixl_defines.append("ASCEND_HIXL_AVAILABLE")
-        hixl_srcs.append("hccs_transport.cpp")
-        hixl_hdrs.append("hccs_transport.h")
+        hixl_srcs.append("hixl_transport.cpp")
+        hixl_hdrs.append("hixl_transport.h")
         hixl_deps.append("@local_ascend//:hixl")
 
     if acl_rt.exists and "aclrtMemRetainAllocationHandle" in repository_ctx.read(acl_rt):

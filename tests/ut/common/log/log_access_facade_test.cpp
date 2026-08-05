@@ -132,6 +132,19 @@ TEST_F(LogAccessFacadeTest, ObjectFacadeMultipleSetters)
           .Record();
 }
 
+TEST_F(LogAccessFacadeTest, ObjectFacadeRecordsRequestCount)
+{
+    RequestParam req;
+    req.count = "3";
+    ASSERT_EQ(req.ToString(), "{count:3}");
+
+    EnableSampler(1.0, 1.0, 1.0);
+    TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_PREREGISTERDEVICEMEMORY);
+    access.Count(3).DataSize(4096).Result(Status::OK()).Record();
+    ASSERT_EQ(GetAccessKeyType(AccessRecorderKey::DS_HETERO_CLIENT_PREREGISTERDEVICEMEMORY), AccessKeyType::CLIENT);
+}
+
 TEST_F(LogAccessFacadeTest, ObjectFacadeWriteModeText)
 {
     EnableSampler(1.0, 1.0, 1.0);

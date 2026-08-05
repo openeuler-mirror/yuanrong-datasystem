@@ -23,6 +23,7 @@
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -49,6 +50,16 @@ uint64_t CalculateDataSize(const std::vector<DeviceBlobList> &devBlobList)
                 totalSize += blob.size;
             }
         }
+    }
+    return totalSize;
+}
+
+uint64_t CalculateDataSize(const std::vector<uint64_t> &sizes)
+{
+    uint64_t totalSize = 0;
+    const uint64_t maxValue = std::numeric_limits<uint64_t>::max();
+    for (uint64_t size : sizes) {
+        totalSize = size > maxValue - totalSize ? maxValue : totalSize + size;
     }
     return totalSize;
 }
@@ -104,7 +115,13 @@ Status HeteroClient::PreRegisterDeviceMemory(const std::vector<void *> &devPtrs,
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    return impl_->PreRegisterDeviceMemory(devPtrs, sizes);
+    const uint64_t totalSize = CalculateDataSize(sizes);
+    LOG(INFO) << "[RH2D][PreRegisterDeviceMemory][Client] called, count=" << devPtrs.size()
+              << ", totalBytes=" << totalSize;
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_PREREGISTERDEVICEMEMORY);
+    auto rc = impl_->PreRegisterDeviceMemory(devPtrs, sizes);
+    access.Count(devPtrs.size()).DataSize(totalSize).Result(rc).Record();
+    return rc;
 }
 
 Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,

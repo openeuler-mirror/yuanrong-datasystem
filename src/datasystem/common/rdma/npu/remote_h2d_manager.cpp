@@ -45,7 +45,7 @@
 #include "datasystem/common/rdma/npu/rh2d_transport_strategy.h"
 #include "datasystem/common/rdma/npu/roce_transport.h"
 #ifdef ASCEND_HIXL_AVAILABLE
-#include "datasystem/common/rdma/npu/hccs_transport.h"
+#include "datasystem/common/rdma/npu/hixl_transport.h"
 #endif
 #include "datasystem/common/ak_sk/hasher.h"
 
@@ -126,6 +126,13 @@ Status RemoteH2DManager::SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t
         LOG(INFO) << "[RH2D] link_type overridden by DS_RH2D_LINK_TYPE=" << envLinkType;
     }
     if (FLAGS_remote_h2d_link_type == "HCCS") {
+        const char *envHixlCsEnable = std::getenv("DS_HIXL_CS_ENABLE");
+        if (envHixlCsEnable && strlen(envHixlCsEnable) > 0) {
+            if (!SetCommandLineOption("hixl_cs_enable", envHixlCsEnable, errMsg)) {
+                RETURN_STATUS_LOG_ERROR(K_INVALID, FormatString("Invalid DS_HIXL_CS_ENABLE: %s", errMsg));
+            }
+            LOG(INFO) << "[RH2D] hixl_cs_enable overridden by DS_HIXL_CS_ENABLE=" << envHixlCsEnable;
+        }
         const char *envBufferPool = std::getenv("DS_RH2D_HCCS_BUFFER_POOL");
         if (envBufferPool && strlen(envBufferPool) > 0) {
             if (!SetCommandLineOption("remote_h2d_hccs_buffer_pool", envBufferPool, errMsg)) {
@@ -745,7 +752,7 @@ std::unique_ptr<RH2DTransportStrategy> RemoteH2DManager::CreateTransport()
     }
     if (type == "HCCS") {
 #ifdef ASCEND_HIXL_AVAILABLE
-        auto transport = std::make_unique<HCCSTransport>();
+        auto transport = std::make_unique<HixlTransport>();
         if (!hccsLocalEndpointIp_.empty()) {
             transport->SetLocalEndpoint(hccsLocalEndpointIp_, isClient_);
         }
