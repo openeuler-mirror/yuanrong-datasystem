@@ -18,7 +18,7 @@ source /etc/profile.d/*.sh
 
 readonly USAGE="
 Usage: bash build.sh [-h] [-r] [-d] [-b cmake|bazel] [-c off/on/html] [-t off|build|run] [-s on|off] [-j <thread_num>]
-                     [-p on|off] [-S address|thread|undefined|off] [-o <install dir>] [-u <thread_num>]
+                     [-p on|off] [-S address|thread|undefined|address_undefined|off] [-o <install dir>] [-u <thread_num>]
                      [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-v <version>] [-X on/off|gpu|npu|all] [-e on/off]
                      [-R on/off] [-O on/off] [-I <observability install dir>] [-M off/on] [-T on/off]
                      [-A on/off] [-U on/off] [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
@@ -78,10 +78,13 @@ Options:
     -p Generate perf point logs, choose from: on/off, default: off.
     -s Use strip tool to export the symbol table as sym and erase symbols based on it, choose from: on/off,
        default: on.
-    -S Use Google Sanitizers tools to detect bugs. Choose from off/address/thread/undefined,
+    -S Use Google Sanitizers tools to detect bugs. Choose from off/address/thread/undefined/address_undefined,
        if set the value to 'address' enable AddressSanitizer,
        if set the value to 'thread' enable ThreadSanitizer,
        if set the value to 'undefined' enable UndefinedBehaviorSanitizer,
+       if set the value to 'address_undefined' enable both AddressSanitizer and UndefinedBehaviorSanitizer
+           (the two runtimes share libasan/libubsan and are designed by GCC/Clang to coexist; TSan is mutually
+           exclusive with both and cannot be combined),
        default off.
     -x Support jemalloc memory profiling.
 

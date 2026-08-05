@@ -21,7 +21,31 @@ function _sanitizer_to_bazel_config() {
     address)  echo "asan" ;;
     thread)   echo "tsan" ;;
     undefined) echo "ubsan" ;;
+    address_undefined) echo "asan_ubsan" ;;
     *)        echo "$1" ;;
+  esac
+}
+
+# Map sanitizer name from build.sh value to the bazel test-tag used by the
+# `bazel query` filter in `_bazel_test_query_expr`. The test-tag must be a
+# tag actually placed on cc_test targets (see tests/**/BUILD.bazel); the
+# repo only uses `asan` and `tsan` tags today.
+#
+# IMPORTANT: this function is ONLY reached from the filtered-test branch of
+# `run_bazel_testcases`, which is gated by `sanitizer_config in {asan, tsan,
+# asan_ubsan}`. UBSan-only builds (`-S undefined` -> config `ubsan`) take
+# the unfiltered branch and run ALL tests (no tag filter), because UBSan
+# has no ASan/TSan-style runtime-environment constraints (ASLR, shadow
+# memory, leak detection) that would require narrowing the test set. So
+# `undefined` is intentionally absent from this case list; the `*)` echo
+# fallback would return the raw value if it were ever reached, which is
+# safe but unused.
+function _sanitizer_to_bazel_test_tag() {
+  case "$1" in
+    address)          echo "asan" ;;
+    thread)           echo "tsan" ;;
+    address_undefined) echo "asan" ;;
+    *)                echo "$1" ;;
   esac
 }
 
@@ -87,7 +111,7 @@ function _bazel_test_query_expr() {
   local sanitizer_lower
   sanitizer_lower=$(echo "${USE_SANITIZER}" | tr '[:upper:]' '[:lower:]')
   local sanitizer_tag
-  sanitizer_tag=$(_sanitizer_to_bazel_config "${sanitizer_lower}")
+  sanitizer_tag=$(_sanitizer_to_bazel_test_tag "${sanitizer_lower}")
   local expr="attr(tags, '${sanitizer_tag}', ${base_expr})"
   if [[ "${sanitizer_tag}" != "sanitizer" ]]; then
     expr="(${expr}) union attr(tags, 'sanitizer', ${base_expr})"
@@ -373,7 +397,8 @@ function run_bazel_testcases() {
   sanitizer_config=$(_sanitizer_to_bazel_config "${sanitizer_lower}")
 
   cd "${DATASYSTEM_DIR}"
-  if [[ "${sanitizer_config}" != "asan" && "${sanitizer_config}" != "tsan" ]]; then
+  if [[ "${sanitizer_config}" != "asan" && "${sanitizer_config}" != "tsan" \
+        && "${sanitizer_config}" != "asan_ubsan" ]]; then
     echo -e "-- bazel test command: bazel test ${configs[*]} --jobs=${TEST_PARALLEL_JOBS} " \
       "--test_timeout=${LLT_TIMEOUT_S} //..."
     bazel test "${configs[@]}" --jobs="${TEST_PARALLEL_JOBS}" --test_timeout="${LLT_TIMEOUT_S}" //... \

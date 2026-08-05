@@ -108,6 +108,59 @@ build:ubsan --linkopt=-fsanitize=undefined
 build:ubsan --per_file_copt=external/.*@-fno-sanitize=undefined
 build:ubsan --per_file_copt=third_party/protos/etcd/.*@-fno-sanitize=undefined
 
+# Combined ASan + UBSan policy:
+#   - GCC and Clang explicitly support `-fsanitize=address,undefined` as a
+#     single composition: the ASan runtime (libasan) already pulls in libubsan,
+#     so the two sanitizers share interceptors and shadow-memory infrastructure.
+#     TSan is mutually exclusive with both runtimes and CANNOT be combined here
+#     (`-fsanitize=thread` + `-fsanitize=address` is rejected by the compiler).
+#   - Flag placement (`--copt` vs `--cxxopt`) intentionally mirrors the
+#     standalone `build:asan` and `build:ubsan` blocks above:
+#       * ASan-derived flags (`-fsanitize=address,undefined`, `-fno-omit-frame-pointer`,
+#         `-g3`) use `--copt` so they reach BOTH C and C++ compile actions.
+#         This is required because several third-party deps compile real C
+#         sources via `cc_library` (zlib's 15 `.c` files in third_party/zlib.BUILD,
+#         securec's `glob src/*.c`, libcurl's `glob lib/**/*.c`, ZeroMQ's
+#         `external/sha1/*.c`). Using `--cxxopt` here would silently drop ASan
+#         instrumentation on those C files, a regression vs `--config=asan`.
+#       * UBSan-specific tuning flags (`-fno-sanitize=alignment`,
+#         `-fsanitize=float-cast-overflow`, `-fno-sanitize-recover=all`, `-O0`)
+#         keep `--cxxopt` to match `build:ubsan` and because UBSan is disabled
+#         on external repos anyway via `--per_file_copt` below.
+#   - All UBSan sub-check tuning from `build:ubsan` above applies verbatim:
+#     `-fno-sanitize=alignment` (third-party aligned-but-not-declared-aligned
+#     false positives), `-fsanitize=float-cast-overflow`, `-fno-sanitize-recover=all`
+#     (halt on first UB), `-O0` (no optimisation-dependent UB elision), and the
+#     `--per_file_copt` third-party / etcd-stub exclusions (GCC 14 + absl
+#     raw_hash_set constexpr workaround and `typeinfo for grpc::internal::
+#     ClientReactor` link workaround). The `--per_file_copt=external/.*@
+#     -fno-sanitize=undefined` only removes the `undefined` sub-check group
+#     (it does NOT remove `address`), so external C/C++ files keep ASan
+#     instrumentation while UBSan is disabled on them.
+#   - `--define=asan=1` is set so `config_setting(name = "is_asan")` in the
+#     root BUILD.bazel matches: any `select()` that skips or adjusts behavior
+#     under ASan (e.g. tests tagged `noasan`) activates correctly. There is no
+#     equivalent `is_ubsan` config setting today, so combined mode is treated
+#     as ASan for select() purposes, which is the conservative choice.
+#   - `test:asan_ubsan` mirrors `test:asan` runtime env tuning: ASan's
+#     detect_leaks / detect_odr_violation defaults are reduced because the
+#     brpc / bthread third-party init paths trip them; LSAN is also disabled
+#     because the worker's background threads hold allocations whose lifetime
+#     outlives the test process.
+build:asan_ubsan --copt=-fsanitize=address,undefined
+build:asan_ubsan --copt=-fno-omit-frame-pointer
+build:asan_ubsan --copt=-g3
+build:asan_ubsan --cxxopt=-fno-sanitize=alignment
+build:asan_ubsan --cxxopt=-fsanitize=float-cast-overflow
+build:asan_ubsan --cxxopt=-fno-sanitize-recover=all
+build:asan_ubsan --cxxopt=-O0
+build:asan_ubsan --linkopt=-fsanitize=address,undefined
+build:asan_ubsan --define=asan=1
+build:asan_ubsan --per_file_copt=external/.*@-fno-sanitize=undefined
+build:asan_ubsan --per_file_copt=third_party/protos/etcd/.*@-fno-sanitize=undefined
+test:asan_ubsan --test_env=ASAN_OPTIONS=detect_leaks=0:detect_odr_violation=0
+test:asan_ubsan --test_env=LSAN_OPTIONS=detect_leaks=0
+
 build:coverage --cxxopt=-fprofile-arcs --cxxopt=-ftest-coverage
 build:coverage --linkopt=-fprofile-arcs --linkopt=-ftest-coverage --linkopt=-lgcov
 build:coverage --cxxopt=-DBUILD_COVERAGE

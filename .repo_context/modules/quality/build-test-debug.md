@@ -112,7 +112,7 @@ Backed by `CMakeLists.txt`:
 
 - warnings are treated as errors with `-Werror`;
 - release builds enable hardening flags such as `-fstack-protector-strong`, `-Wl,-z,relro`, `-Wl,-z,now`, `-Wl,-z,noexecstack`, `-D_FORTIFY_SOURCE=2`, and `-fPIE -pie`;
-- sanitizers are supported through `build.sh -S address|thread|undefined`;
+- sanitizers are supported through `build.sh -S address|thread|undefined|address_undefined`;
 - coverage mode is supported through `build.sh -c on|html`.
 
 Backed by `tools/tsan/BUILD.bazel`, `.bazelrc` (`build:tsan`), `bazel/build_defs.bzl`, and the
