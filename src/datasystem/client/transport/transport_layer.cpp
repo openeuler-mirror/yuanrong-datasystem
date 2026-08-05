@@ -168,6 +168,27 @@ Status TransportLayer::CheckLocalUbSenderAdmission(TransportHint hint) const
     return Status(K_URMA_WORKER_UNAVAILABLE, "Client-local UB sender is unavailable");
 }
 
+Status TransportLayer::CheckLocalUbSenderAdmission() const
+{
+    return CheckLocalUbSenderAdmission(TransportHint::UB_CANDIDATE);
+}
+
+Status TransportLayer::RunClientLocalUbWrite(const HostPort &workerAddr, ObjectBufferInfo &bufferInfo,
+                                             const std::function<Status()> &write)
+{
+    std::shared_lock<std::shared_mutex> admission;
+    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(TransportHint::UB_CANDIDATE, admission));
+    bufferInfo.ubFailureReportRc = Status::OK();
+    bufferInfo.ubProviderStatus.reset();
+    bufferInfo.ubCqeStatus.reset();
+    Status rc = write();
+    const Status &failureRc = bufferInfo.ubFailureReportRc.IsError() ? bufferInfo.ubFailureReportRc : rc;
+    (void)ReportLocalUbSenderFailure({ workerAddr, AccessTransportKind::UB, failureRc,
+                                      bufferInfo.ubProviderStatus, bufferInfo.ubCqeStatus },
+                                     admission);
+    return rc;
+}
+
 Status TransportLayer::AcquireLocalUbSenderAdmission(TransportHint hint,
                                                      std::shared_lock<std::shared_mutex> &admission) const
 {

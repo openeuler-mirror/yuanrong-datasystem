@@ -2493,6 +2493,27 @@ TEST_F(UrmaClientSenderRecoveryTest, ClientSenderProbeWaitsForUrmaDataPlaneRecov
     EXPECT_TRUE(recovered.IsOk()) << recovered.ToString();
 }
 
+TEST_F(UrmaClientSenderRecoveryTest, ClientSenderHardFailureBlocksNextSetWithDefaultLocalCache)
+{
+    ConnectOptions options;
+    InitConnectOpt(0, options);
+    auto client = std::make_shared<KVClient>(options);
+    DS_ASSERT_OK(client->Init());
+    const std::string value = GenRandomString(2 * UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes);
+    constexpr char cqeInject[] = "UrmaManager.CheckCompletionRecordStatus";
+    DS_ASSERT_OK(inject::Set(cqeInject, "1*call(0, 4)"));
+
+    Status firstFailure = client->Set(NewObjectKey(), value);
+    ASSERT_EQ(firstFailure.GetCode(), K_URMA_ERROR) << firstFailure.ToString();
+    EXPECT_EQ(inject::GetExecuteCount(cqeInject), 1u);
+    DS_ASSERT_OK(inject::Clear(cqeInject));
+    DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteError", "1*return()"));
+
+    Status fastFailure = client->Set(NewObjectKey(), value);
+    EXPECT_EQ(fastFailure.GetCode(), K_URMA_WORKER_UNAVAILABLE) << fastFailure.ToString();
+    EXPECT_EQ(inject::GetExecuteCount("UrmaManager.UrmaWriteError"), 0u);
+}
+
 TEST_F(UrmaDisableFallbackTest, TestUrmaRemoteGetFailed)
 {
     std::shared_ptr<KVClient> client1;

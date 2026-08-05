@@ -99,7 +99,10 @@
     the per-client `ConnectOptions::dataPlacementPolicy`, which defaults to `PREFERRED_SAME_NODE`. The option does not
     change Get/MGet routing.
     Unavailable workers are excluded during bounded pre-Publish retries. With local cache enabled, both APIs preserve
-    the legacy current-worker path and do not initialize the direct transport runtime.
+    the legacy current-worker data path and do not initialize Routing. When URMA is enabled, they initialize the
+    TransportLayer runtime only to share the same process-local UB sender admission and dedicated recovery probe used
+    by routed writes. A raw provider/CQE status 4 from a legacy UB write therefore quarantines the sender before the
+    next Create/MultiCreate and returns `K_URMA_WORKER_UNAVAILABLE` until the probe succeeds.
   - Routed transport requests carry the gateway client id, token snapshot, thread tenant context, and shared transport
     `Signature`. Target workers authenticate routed Create, Publish, and cleanup requests by signature without requiring
     endpoint-local client registration. UB allocations are released asynchronously after the final Publish attempt, or

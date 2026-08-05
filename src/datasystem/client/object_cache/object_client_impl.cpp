@@ -924,6 +924,17 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
     clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
     RETURN_IF_NOT_OK(InitListenWorkerAt(node, isLocalWorker));
     RETURN_IF_NOT_OK(workerApi->TryFastTransportAfterHeartbeat());
+    if (enableLocalCache_ && IsUrmaEnabled()) {
+        RETURN_IF_NOT_OK(InitTransportLayer());
+        client::WorkerSnapshot snapshot;
+        if (workerApi->IsShmEnable()) {
+            snapshot.sameHostAddrs.emplace_back(workerApi->hostPort_);
+        } else {
+            snapshot.otherAddrs.emplace_back(workerApi->hostPort_);
+        }
+        snapshot.writeProbeAddrs.emplace_back(workerApi->hostPort_);
+        RETURN_IF_NOT_OK(transportLayer_->ApplyWorkerSnapshot(std::move(snapshot)));
+    }
     if (!enableLocalCache_) {
         RETURN_IF_NOT_OK(InitRouting(workerApi->hostPort_, routedWorkerIsLocal));
     }
@@ -2942,6 +2953,10 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    if (IsUrmaEnabled() && !workerApi->IsShmEnable()) {
+        RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+        RETURN_IF_NOT_OK(transportLayer_->CheckLocalUbSenderAdmission());
+    }
     bool canUseShm = workerApi->IsShmEnable() && dataSizeSum >= workerApi->shmThreshold_;
     if (canUseShm || IsUrmaEnabled() || !skipCheckExistence) {
         if (!skipCheckExistence) {
@@ -3242,7 +3257,11 @@ Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo>
     std::shared_ptr<IClientWorkerApi> api;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(api, raii));
-    return api->SendBufferViaUb(bufferInfo, data, length, traceEnabled);
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    RETURN_RUNTIME_ERROR_IF_NULL(bufferInfo);
+    return transportLayer_->RunClientLocalUbWrite(api->hostPort_, *bufferInfo, [&] {
+        return api->SendBufferViaUb(bufferInfo, data, length, traceEnabled);
+    });
 }
 
 Status ObjectClientImpl::SendBufferViaUbFromPool(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
@@ -3251,7 +3270,11 @@ Status ObjectClientImpl::SendBufferViaUbFromPool(const std::shared_ptr<ObjectBuf
     std::shared_ptr<IClientWorkerApi> api;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(api, raii));
-    return api->SendBufferViaUbFromPool(bufferInfo, data, length, traceEnabled);
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    RETURN_RUNTIME_ERROR_IF_NULL(bufferInfo);
+    return transportLayer_->RunClientLocalUbWrite(
+        api->hostPort_, *bufferInfo,
+        [&] { return api->SendBufferViaUbFromPool(bufferInfo, data, length, traceEnabled); });
 }
 
 Status ObjectClientImpl::InvalidateBuffer(const std::string &objectKey)
@@ -3301,6 +3324,7 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
                                        uint32_t ttlSecond, const std::shared_ptr<IClientWorkerApi> &workerApi,
                                        int existence, SetFailureStage &failureStage)
 {
+    RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(workerApi));
     auto config = GetClientLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
     // Create a buffer first.
@@ -3358,6 +3382,15 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     // Destruct buffer with async
     buffer.reset();
     return Status::OK();
+}
+
+Status ObjectClientImpl::CheckLocalUbSenderAdmission(const std::shared_ptr<IClientWorkerApi> &workerApi) const
+{
+    if (!IsUrmaEnabled() || workerApi->IsShmEnable()) {
+        return Status::OK();
+    }
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    return transportLayer_->CheckLocalUbSenderAdmission();
 }
 
 Status ObjectClientImpl::Get(const std::vector<std::string> &objKeys, int32_t subTimeoutMs,

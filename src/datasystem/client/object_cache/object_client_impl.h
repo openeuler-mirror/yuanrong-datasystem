@@ -1491,6 +1491,8 @@ private:
                          const std::shared_ptr<IClientWorkerApi> &workerApi, int existence,
                          SetFailureStage &failureStage);
 
+    Status CheckLocalUbSenderAdmission(const std::shared_ptr<IClientWorkerApi> &workerApi) const;
+
     /**
      * @brief Mmap-lookup of a shared-memory object, bounded by the current API deadline.
      * @param[in] shmBuf The shared-memory unit info.
