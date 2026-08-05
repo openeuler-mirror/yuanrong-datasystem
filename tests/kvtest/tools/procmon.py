@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Monitor CPU, memory, file-descriptor, and TCP retransmission of a process by name."""
+"""Monitor CPU, memory, file-descriptor, and TCP connection-attempt failures of a process by name."""
 
 import argparse
 import atexit
@@ -37,28 +37,39 @@ def read_proc_stat(pid):
 
 
 def read_proc_mem_breakdown(pid):
-    """Read resident memory breakdown (RSS, private RSS, shared RSS) in bytes.
+    """Read resident memory breakdown (RSS, true anon, non-anon) in bytes.
 
     Returns (rss_bytes, anon_bytes, shared_bytes) where:
-      - rss_bytes: total resident set size (all resident pages in RAM).
-      - anon_bytes: private resident memory = Private_Clean + Private_Dirty
-        from smaps_rollup. These are pages unique to this process: heap,
-        stack, private anonymous mmap, and dirty private file-mmap pages.
-        Labeled "Anon" because it tracks the process's own footprint.
-      - shared_bytes: shared resident memory = Shared_Clean + Shared_Dirty
-        from smaps_rollup. These are pages shared with other processes:
-        shared library text, shmem, tmpfs, shared mmap.
+      - rss_bytes: total resident set size. All resident pages mapped by
+        this process: private anon + shmem + file-backed pages.
+      - anon_bytes: private anonymous resident memory, taken from the
+        `Anonymous` field of /proc/<pid>/smaps_rollup. Counts only
+        PageAnon pages: heap, stack, and private MAP_ANONYMOUS mmap.
+        Crucially, this EXCLUDES shmem and file-backed pages even when
+        this process is the only one currently mapping them. The earlier
+        Private_Clean + Private_Dirty formula was mapcount-based and
+        mistook single-attacher shmem (e.g. a worker that pins a shmem
+        segment only it attaches) for anon; the `Anonymous` field is
+        backed by page->mapping and does not have that blind spot.
+      - shared_bytes: derived as Rss - Anonymous. Includes shmem (tmpfs,
+        MAP_ANONYMOUS|MAP_SHARED, shm_open) and file-backed pages (shared
+        library text, file mmap) regardless of current mapcount. A worker
+        that pins a shmem segment only it attaches will see that segment
+        fully accounted under shared_bytes, not anon_bytes.
 
-    anon + shared approximates RSS exactly except for hugetlb pages (see
-    the Shared_Hugetlb / Private_Hugetlb fields), which are counted in RSS
-    but excluded from the four-way split. Most KV-test workloads do not
-    use hugepages, so the sum holds.
+    anon + shared equals RSS exactly except for hugetlb pages (see the
+    Shared_Hugetlb / Private_Hugetlb fields in smaps_rollup), which are
+    counted in Rss but excluded from `Anonymous`. Most KV-test workloads
+    do not use hugepages, so the sum holds; if hugetlb is in play the gap
+    appears as Rss > Anon + Shared and the missing bytes are in
+    Shared_Hugetlb + Private_Hugetlb.
 
-    Primary source is /proc/<pid>/smaps_rollup for the accurate four-way
-    split. Falls back to /proc/<pid>/statm when smaps_rollup is unavailable
-    (restricted container, pre-4.4 kernels): shared is read from statm's
-    `shared` field, anon is computed as RSS - shared. The fallback is
-    less precise but keeps the anon/shared split usable everywhere.
+    Primary source is /proc/<pid>/smaps_rollup. Falls back to
+    /proc/<pid>/statm when smaps_rollup is unavailable (restricted
+    container, pre-4.4 kernels): statm's `shared` field counts shmem +
+    file-backed pages, so anon = Rss - shared matches the new
+    smaps_rollup semantics. The fallback is coarser-grained but the
+    anon/shared split stays usable everywhere.
 
     Returns (None, None, None) if neither source can be read.
     """
@@ -75,8 +86,15 @@ def read_proc_mem_breakdown(pid):
                         continue
         if "Rss" in stats:
             rss_kb = stats["Rss"]
-            anon_kb = stats.get("Private_Clean", 0) + stats.get("Private_Dirty", 0)
-            shared_kb = stats.get("Shared_Clean", 0) + stats.get("Shared_Dirty", 0)
+            # `Anonymous` excludes single-attacher shmem; see docstring.
+            if "Anonymous" in stats:
+                anon_kb = stats["Anonymous"]
+                shared_kb = max(0, rss_kb - anon_kb)
+            else:
+                # Pre-4.4 kernel: no Anonymous field, fall back to the
+                # mapcount-based split (less accurate for shmem).
+                anon_kb = stats.get("Private_Clean", 0) + stats.get("Private_Dirty", 0)
+                shared_kb = stats.get("Shared_Clean", 0) + stats.get("Shared_Dirty", 0)
             return rss_kb * 1024, anon_kb * 1024, shared_kb * 1024
     except (FileNotFoundError, PermissionError, OSError):
         pass
@@ -109,16 +127,30 @@ def read_proc_fd_count(pid):
         return None
 
 
-def read_tcp_retrans_stats():
-    """Read cumulative TCP retransmit and OutSegs counters from /proc/net/snmp.
+def read_tcp_attempt_fails_stats():
+    """Read cumulative TCP AttemptFails and ActiveOpens from /proc/net/snmp.
 
-    Returns (retrans, outsegs) or (None, None) on read/parse failure.
-    /proc/net/snmp is network-namespace scoped: inside a container it reports
-    that container's TCP totals rather than a single process's. When the
-    monitored process is the dominant TCP user in the container (typical for
-    KV test workloads), container-level stats are an effective per-process
-    proxy. Counters are cumulative since the namespace's boot, so callers must
-    diff successive samples to get a rate.
+    Returns (attempt_fails, active_opens) or (None, None) on read/parse
+    failure.
+
+    - AttemptFails: number of failed active TCP connection attempts (SYN
+      sent but never reached ESTABLISHED - peer RST in response to SYN,
+      peer unreachable, connection timeout, etc.). Sustained growth
+      means the process is repeatedly trying to talk to nodes that do
+      not exist, are not listening, or are unreachable - exactly the
+      signal we want for catching stale membership / misconfigured
+      targets.
+    - ActiveOpens: total active TCP connections initiated in the same
+      interval, used as denominator for fail rate
+      (AttemptFails / ActiveOpens).
+
+    /proc/net/snmp is network-namespace scoped: inside a container it
+    reports that container's TCP totals rather than a single process's.
+    When the monitored process is the dominant TCP user in the container
+    (typical for KV test workloads), container-level stats are an
+    effective per-process proxy. Counters are cumulative since the
+    namespace's boot, so callers must diff successive samples to get a
+    rate.
     """
     try:
         header = None
@@ -135,9 +167,9 @@ def read_tcp_retrans_stats():
                     break
         if header is None or vals is None:
             return None, None
-        idx_retrans = header.index("RetransSegs")
-        idx_outsegs = header.index("OutSegs")
-        return int(vals[idx_retrans]), int(vals[idx_outsegs])
+        idx_fails = header.index("AttemptFails")
+        idx_opens = header.index("ActiveOpens")
+        return int(vals[idx_fails]), int(vals[idx_opens])
     except (FileNotFoundError, ValueError, IndexError):
         return None, None
 
@@ -180,7 +212,7 @@ def _daemonize():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Monitor process CPU, memory, file-descriptor, and TCP retransmission")
+    parser = argparse.ArgumentParser(description="Monitor process CPU, memory, file-descriptor, and TCP connection-attempt failures")
     parser.add_argument("-p", "--process", help="Process name to find and monitor")
     parser.add_argument("--pid", type=int, help="Monitor specific PID directly")
     parser.add_argument("-i", "--interval", type=float, default=1, help="Sample interval in seconds (default: 1)")
@@ -235,11 +267,11 @@ def main():
     samples_mem_anon = []
     samples_mem_shared = []
     samples_fd = []
-    samples_retrans = []
-    total_retrans = 0
+    samples_fails = []
+    total_fails = 0
     prev_cpu = read_proc_stat(pid)
     prev_time = time.monotonic()
-    prev_retrans, prev_outsegs = read_tcp_retrans_stats()
+    prev_fails, prev_opens = read_tcp_attempt_fails_stats()
     start_time = prev_time
 
     running = True
@@ -283,23 +315,23 @@ def main():
         if fd_count is not None:
             samples_fd.append(fd_count)
 
-        retrans, outsegs = read_tcp_retrans_stats()
+        fails, opens = read_tcp_attempt_fails_stats()
         tcp_str = ""
-        if retrans is not None and outsegs is not None:
-            if prev_retrans is not None and prev_outsegs is not None:
-                delta_retrans = max(0, retrans - prev_retrans)
-                delta_outsegs = max(0, outsegs - prev_outsegs)
+        if fails is not None and opens is not None:
+            if prev_fails is not None and prev_opens is not None:
+                delta_fails = max(0, fails - prev_fails)
+                delta_opens = max(0, opens - prev_opens)
             else:
-                delta_retrans = 0
-                delta_outsegs = 0
-            retrans_per_sec = delta_retrans / dt if dt > 0 else 0.0
-            retrans_rate = (delta_retrans / delta_outsegs * 100) if delta_outsegs > 0 else 0.0
-            samples_retrans.append(retrans_per_sec)
-            total_retrans += delta_retrans
-            tcp_str = (f" Retrans/s={retrans_per_sec:.2f}"
-                       f" Rate={retrans_rate:.2f}%")
-            prev_retrans = retrans
-            prev_outsegs = outsegs
+                delta_fails = 0
+                delta_opens = 0
+            fails_per_sec = delta_fails / dt if dt > 0 else 0.0
+            fail_rate = (delta_fails / delta_opens * 100) if delta_opens > 0 else 0.0
+            samples_fails.append(fails_per_sec)
+            total_fails += delta_fails
+            tcp_str = (f" Fails/s={fails_per_sec:.2f}"
+                       f" FailRate={fail_rate:.2f}%")
+            prev_fails = fails
+            prev_opens = opens
 
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         fd_str = f" FD={fd_count}" if fd_count is not None else ""
@@ -329,10 +361,10 @@ def main():
         avg_fd = sum(samples_fd) / len(samples_fd)
         peak_fd = max(samples_fd)
         emit(f"FD   avg={avg_fd:.0f} peak={peak_fd}")
-    if samples_retrans:
-        avg_retrans = sum(samples_retrans) / len(samples_retrans)
-        peak_retrans = max(samples_retrans)
-        emit(f"TCP  retrans total={total_retrans} avg={avg_retrans:.2f}/s peak={peak_retrans:.2f}/s")
+    if samples_fails:
+        avg_fails = sum(samples_fails) / len(samples_fails)
+        peak_fails = max(samples_fails)
+        emit(f"TCP  fails total={total_fails} avg={avg_fails:.2f}/s peak={peak_fails:.2f}/s")
 
 
 if __name__ == "__main__":
