@@ -384,6 +384,7 @@ cluster::ControlBackendProbeOutcome ProbeOutcomeFromStatus(const Status &status)
         case K_URMA_WAIT_TIMEOUT:
             return cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED;
         case K_RPC_UNAVAILABLE:
+        case K_RPC_PEER_DEAD:
             return cluster::ControlBackendProbeOutcome::UNAVAILABLE;
         case K_RPC_CANCELLED:
             return cluster::ControlBackendProbeOutcome::CANCELLED;
@@ -400,11 +401,12 @@ std::chrono::milliseconds ProbeElapsedSince(std::chrono::steady_clock::time_poin
 cluster::ControlBackendProbeResult BuildFailedProbeResult(const cluster::MemberIdentity &peer, const Status &status,
                                                           std::chrono::steady_clock::time_point startedAt)
 {
+    const auto outcome = ProbeOutcomeFromStatus(status);
     std::optional<cluster::ControlBackendObservation> observation;
-    if (!IsRetryableRpcError(status)) {
+    if (outcome == cluster::ControlBackendProbeOutcome::ERROR) {
         observation = { peer, cluster::ControlBackendState::UNKNOWN, 0, 0, "", std::chrono::steady_clock::now() };
     }
-    return { peer, std::move(observation), ProbeOutcomeFromStatus(status), ProbeElapsedSince(startedAt) };
+    return { peer, std::move(observation), outcome, ProbeElapsedSince(startedAt) };
 }
 
 std::vector<PendingControlBackendProbe> StartControlBackendProbes(
@@ -618,6 +620,14 @@ void SleepForWarmupScanInterval(const std::atomic<bool> &exitFlag, std::conditio
                     [&exitFlag]() { return exitFlag.load(); });
 }
 }  // namespace
+
+#ifdef WITH_TESTS
+cluster::ControlBackendProbeResult WorkerOCServer::BuildFailedProbeResultForTest(
+    const cluster::MemberIdentity &peer, const Status &status)
+{
+    return BuildFailedProbeResult(peer, status, std::chrono::steady_clock::now());
+}
+#endif
 
 static bool ValidateEtcdOrMetastoreAddress()
 {

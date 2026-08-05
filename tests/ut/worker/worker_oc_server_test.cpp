@@ -112,4 +112,23 @@ TEST_F(WorkerOCServerTest, ActiveAddressWithoutFailureDoesNotPublishRecovery)
 
     EXPECT_EQ(recoveryCount_, 0);
 }
+
+TEST_F(WorkerOCServerTest, FailedProbeResultAttachesObservationOnlyToErrorOutcome)
+{
+    const auto peer = MakeMember('a', "127.0.0.1:1", cluster::MemberState::ACTIVE, 0).identity;
+
+    const auto peerDead = server_->BuildFailedProbeResultForTest(peer, Status(K_RPC_PEER_DEAD, "peer dead"));
+    EXPECT_EQ(peerDead.outcome, cluster::ControlBackendProbeOutcome::UNAVAILABLE);
+    EXPECT_FALSE(peerDead.observation.has_value());
+
+    const auto applicationError =
+        server_->BuildFailedProbeResultForTest(peer, Status(K_RUNTIME_ERROR, "application error"));
+    EXPECT_EQ(applicationError.outcome, cluster::ControlBackendProbeOutcome::ERROR);
+    EXPECT_TRUE(applicationError.observation.has_value());
+
+    const auto networkBlip =
+        server_->BuildFailedProbeResultForTest(peer, Status(K_RPC_NETWORK_BLIP, "network blip"));
+    EXPECT_EQ(networkBlip.outcome, cluster::ControlBackendProbeOutcome::ERROR);
+    EXPECT_TRUE(networkBlip.observation.has_value());
+}
 }  // namespace datasystem::ut

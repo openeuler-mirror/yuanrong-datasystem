@@ -797,6 +797,28 @@ protected:
     }
 };
 
+TEST_P(StaleTopologyBootstrapTest, SingleCommittedWorkerFailureIsRemoved)
+{
+    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    ASSERT_NE(externalCluster, nullptr);
+
+    std::set<std::string> expectedWorkers;
+    for (size_t index = 0; index < STALE_TOPOLOGY_MEMBER_COUNT; ++index) {
+        HostPort address;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(index, address));
+        expectedWorkers.insert(address.ToString());
+    }
+    DS_ASSERT_OK(WaitForExactActiveWorkers(expectedWorkers));
+
+    const size_t failedWorkerIndex = STALE_TOPOLOGY_MEMBER_COUNT - 1;
+    HostPort failedWorkerAddress;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(failedWorkerIndex, failedWorkerAddress));
+    DS_ASSERT_OK(externalCluster->KillWorker(failedWorkerIndex));
+    expectedWorkers.erase(failedWorkerAddress.ToString());
+
+    DS_ASSERT_OK(WaitForExactActiveWorkers(expectedWorkers));
+}
+
 TEST_P(StaleTopologyBootstrapTest, EntireCommittedRingCanBootstrapFromReadyReplacementWorkers)
 {
     auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
