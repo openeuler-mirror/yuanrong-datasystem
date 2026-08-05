@@ -298,6 +298,9 @@ void OCMetadataManager::Shutdown()
     ChangePrimaryCopy::GetInstance().RemoveSubscriber(eventName_);
     RequestMetaFromWorkerEvent::GetInstance().RemoveSubscriber(eventName_);
     NodeRestartEvent::GetInstance().RemoveSubscriber(eventName_);
+    if (expiredObjectManager_ != nullptr) {
+        expiredObjectManager_->Shutdown();
+    }
     asyncPool_.reset();
     if (monitor_ != nullptr && monitor_->joinable()) {
         monitor_->join();
@@ -308,6 +311,28 @@ void OCMetadataManager::Shutdown()
     if (globalCacheDeleteManager_ != nullptr) {
         globalCacheDeleteManager_->Shutdown();
     }
+}
+
+void OCMetadataManager::PrepareForFullClusterShutdown()
+{
+    discardTtlTasks_.store(true);
+    if (expiredObjectManager_ != nullptr) {
+        expiredObjectManager_->Shutdown();
+    }
+}
+
+bool OCMetadataManager::ShouldContinueTtlDelete(const std::string &objectKey, uint64_t expireTime)
+{
+    if (discardTtlTasks_.load()) {
+        return false;
+    }
+    if (!IsLocalExitRequested()) {
+        return true;
+    }
+    auto &shard = metaShards_[GetShardIndex(objectKey)];
+    std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+    TbbMetaTable::const_accessor accessor;
+    return shard.table.find(accessor, objectKey) && accessor->second.meta.version() <= expireTime;
 }
 
 Status OCMetadataManager::InitGlobalRef()
@@ -1907,7 +1932,8 @@ void OCMetadataManager::NotifyDeleteAndClearMeta(DeleteObjectMediator &delMediat
     std::unordered_set<std::string> failedNotifyObjects;
     const auto &sendAllDelObjs = delMediator.GetIdsNeedToNotifyWorker();
     INJECT_POINT_NO_RETURN("NotifyDeleteAndClearMeta");
-    Status lastErr = NotifyWorkerDelete(delMediator.GetSourceWorker(), sendAllDelObjs, false, failedNotifyObjects);
+    Status lastErr =
+        NotifyWorkerDelete(delMediator.GetSourceWorker(), sendAllDelObjs, false, isExpired, failedNotifyObjects);
     Raii removeIsDeletingObjs([&sendAllDelObjs, this]() {
         for (const auto &info : sendAllDelObjs) {
             std::lock_guard<std::shared_mutex> l(isDeletingObjMutex_);
@@ -1970,6 +1996,9 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
     Status lastErr;
     for (auto const &info : sendAllDelObjs) {
         auto &objectKey = info.first;
+        if (isExpired && discardTtlTasks_.load()) {
+            continue;
+        }
         // isExpired is true: delete global cache for failed object.
         // isExpired is false: not delete global cache for failed object.
         if (!isExpired && failedObjects.count(objectKey) > 0) {
@@ -1987,6 +2016,11 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
         std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
         if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
             VLOG(1) << "meta not found in meta table";
+            // During graceful exit the metadata may have moved after the TTL task was admitted. Do not let that stale
+            // task delete the new owner's L2 data; ordinary TTL processing keeps the existing best-effort fallback.
+            if (isExpired && IsLocalExitRequested()) {
+                continue;
+            }
             // metadata is not present in master. If metadata is not stored in etcd,
             // try to delete all versions of the object from L2 Cache using async delete.
             if (!FLAGS_oc_io_from_l2cache_need_metadata) {
@@ -2145,7 +2179,8 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
 
 Status OCMetadataManager::NotifyWorkerDelete(const std::string &sourceWorker,
                                              const std::unordered_map<std::string, DeleteStruct> &sendAllDelObjs,
-                                             bool isAsync, std::unordered_set<std::string> &failedObjects)
+                                             bool isAsync, bool isExpired,
+                                             std::unordered_set<std::string> &failedObjects)
 {
     VLOG(1) << "NotifyWorkerDelete begin";
     std::unordered_map<std::string, std::unordered_map<std::string, std::pair<int64_t, uint32_t>>> replicas2Obj;
@@ -2163,14 +2198,43 @@ Status OCMetadataManager::NotifyWorkerDelete(const std::string &sourceWorker,
         return Status::OK();
     });
 
+    auto filterStaleTtlObjects = [this, isExpired, &failedObjects, &replicas2Obj]() {
+        if (!isExpired) {
+            return;
+        }
+        for (auto workerIt = replicas2Obj.begin(); workerIt != replicas2Obj.end();) {
+            auto &objects = workerIt->second;
+            for (auto objectIt = objects.begin(); objectIt != objects.end();) {
+                const auto expireTime = objectIt->second.first;
+                if (expireTime < 0
+                    || !ShouldContinueTtlDelete(objectIt->first, static_cast<uint64_t>(expireTime))) {
+                    failedObjects.erase(objectIt->first);
+                    objectIt = objects.erase(objectIt);
+                } else {
+                    ++objectIt;
+                }
+            }
+            workerIt = objects.empty() ? replicas2Obj.erase(workerIt) : std::next(workerIt);
+        }
+    };
+
     Status status = RetryOnErrorRepent(
         timeoutMs,
-        [this, &sourceWorker, &replicas2Obj, isAsync, &failedObjects](int32_t) {
+        [this, &sourceWorker, &replicas2Obj, isAsync, isExpired, &failedObjects, &filterStaleTtlObjects](int32_t) {
+            filterStaleTtlObjects();
+            if (isExpired && replicas2Obj.empty()) {
+                return Status::OK();
+            }
             return notifyWorkerManager_->DoNotifyWorkerDelete(sourceWorker, replicas2Obj, isAsync, failedObjects);
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE });
+
+    filterStaleTtlObjects();
+    if (isExpired && replicas2Obj.empty()) {
+        status = Status::OK();
+    }
 
     for (const auto &rpcFailedItem : replicas2Obj) {
         // rpc failed, actually it can't determine whether worker process success or not, in this scenario, we always

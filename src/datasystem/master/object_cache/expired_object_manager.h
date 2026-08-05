@@ -44,6 +44,7 @@
 namespace datasystem {
 namespace master {
 class OCMetadataManager;
+class DeleteObjectMediator;
 class ExpiredStatisticsInfo {
 public:
     /**
@@ -141,9 +142,9 @@ public:
 
     /**
      * @brief If master failed to delete the object, update the ttl second and retry again.
-     * @param[in] objectKeys The expired object keys.
+     * @param[in] objectKeys The expired object keys and their original expiration times.
      */
-    void AddFailedObject(const std::set<std::string> &objectKeys);
+    void AddFailedObject(const std::unordered_map<std::string, uint64_t> &objectKeys);
 
     /**
      * @brief Get the expired objects.
@@ -180,11 +181,15 @@ public:
 private:
     // 64-way sharded lock + data: eliminates global mutex contention on CreateMeta hot path.
     static constexpr size_t kExpiredShardCount = 64;
+    struct FailedObjectInfo {
+        uint64_t retryCount{ 0 };
+        uint64_t expireTime{ 0 };
+    };
     struct ExpiredShard {
         std::mutex mutex;
         std::multimap<uint64_t, ImmutableString> timedObj;
         std::unordered_map<ImmutableString, std::multimap<uint64_t, ImmutableString>::iterator> obj2Timed;
-        std::unordered_map<ImmutableString, uint64_t> failedObjects;
+        std::unordered_map<ImmutableString, FailedObjectInfo> failedObjects;
         std::set<ImmutableString> readyExpiredObjects;
     };
 
@@ -197,7 +202,9 @@ private:
     std::unordered_map<std::string, uint64_t> CleanupShardsAfterDelete(
         const std::unordered_map<std::string, bool>& requestObjectKeyMap,
         const std::set<std::string>& failedIds,
-        const std::unordered_map<std::string, uint64_t>& expiredObjMap);
+        DeleteObjectMediator &mediator);
+
+    void DiscardAsyncDeleteObjects(const std::vector<std::string> &objectKeys);
 
     size_t GetShardIndex(const std::string &key) const
     {

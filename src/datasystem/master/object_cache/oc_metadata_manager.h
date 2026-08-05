@@ -1117,6 +1117,12 @@ public:
     void Shutdown() override;
 
     /**
+     * @brief Stop processing queued TTL deletes after authoritative full-cluster removal is observed.
+     * This is called serially by the worker lifecycle owner before Shutdown().
+     */
+    void PrepareForFullClusterShutdown();
+
+    /**
      * @brief Get objects that meet the meta conditions
      * @param[in] matchFunc The conditions to meet.
      * @param[out] objKeys Objects that meet the meta conditions.
@@ -1601,12 +1607,18 @@ private:
      * @param[in] sourceWorker The worker initiates to delete object.
      * @param[in] sendAllDelObjs All holdings of obj that will be evicted and can send to sourceWorker.
      * @param[in] isAsync Is async process mode.
+     * @param[in] isExpired Whether this notification is triggered by TTL expiration.
      * @param[out] failedObjects The failed object list.
      * @return Status of the call.
      */
     Status NotifyWorkerDelete(const std::string &sourceWorker,
                               const std::unordered_map<std::string, DeleteStruct> &sendAllDelObjs, bool isAsync,
-                              std::unordered_set<std::string> &failedObjects);
+                              bool isExpired, std::unordered_set<std::string> &failedObjects);
+
+    /**
+     * @brief Check whether local metadata still owns an object version no newer than the TTL task.
+     */
+    bool ShouldContinueTtlDelete(const std::string &objectKey, uint64_t expireTime);
 
     /**
      * @brief Get deleted object meta infos.
@@ -2058,6 +2070,8 @@ private:
     std::shared_timed_mutex clientIdRefTableMutex_;  // mutex for clientIdRefTable
 
     std::atomic<bool> interruptFlag_{ false };
+    // Monotonic shutdown policy read by TTL tasks in asyncPool_.
+    std::atomic<bool> discardTtlTasks_{ false };
 
     std::shared_timed_mutex subTableMutex_;
     // The hash table maps the query request id to subscribe meta info.

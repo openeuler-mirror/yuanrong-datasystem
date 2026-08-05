@@ -92,6 +92,11 @@ public:
 
     void Shutdown();
 
+    /**
+     * @brief Stop producing and discard queued TTL deletes after full-cluster removal.
+     */
+    void PrepareForFullClusterShutdown();
+
     Status GetDeviceOcManager(std::shared_ptr<master::MasterDevOcManager> &devOcManager);
 
     Status InitLocalMetadataForStart(bool isRestart);
