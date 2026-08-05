@@ -1092,8 +1092,11 @@ void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnap
 {
     for (const auto &member : snapshot.FailedMembers())
         knownFailedAddresses_.insert(member->identity.address);
-    for (const auto &member : snapshot.ActiveMembers())
-        knownFailedAddresses_.erase(member->identity.address);
+    for (const auto &member : snapshot.ActiveMembers()) {
+        if (knownFailedAddresses_.erase(member->identity.address) > 0) {
+            RemoveDeadWorkerEvent::GetInstance().NotifyAll(member->identity.address);
+        }
+    }
     for (const auto &addrStr : knownFailedAddresses_) {
         HostPort addr;
         if (addr.ParseString(addrStr).IsError() || addr.Empty()) continue;

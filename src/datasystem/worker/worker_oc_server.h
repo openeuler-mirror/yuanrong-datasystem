@@ -80,6 +80,10 @@
 #include "datasystem/worker/perf_service/perf_service_impl.h"
 #endif
 
+namespace datasystem::ut {
+class WorkerOCServerTest;
+}
+
 namespace datasystem::worker {
 
 class WorkerOCServer : public CommonServer {
@@ -191,6 +195,8 @@ public:
     Status UpdateConfig(const std::string &configJson);
 
 private:
+    friend class ::datasystem::ut::WorkerOCServerTest;
+
     /**
      * @brief Initialize RPC credentials, transport selection, shared memory, and the CommonServer base.
      * @return Status of the initialization.

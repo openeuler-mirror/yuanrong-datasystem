@@ -170,8 +170,9 @@ public:
     /**
      * @brief Set the faulty worker.
      * @param[in] workerAddr Address of the worker.
+     * @param[in] isDead Whether the worker has been confirmed dead.
      */
-    void SetFaultWorker(const std::string &workerAddr);
+    void SetFaultWorker(const std::string &workerAddr, bool isDead);
 
     /**
      * @brief Remove the faulty worker.
@@ -367,6 +368,7 @@ private:
         NotifyWorkerOp op;
         ObjectMetaStore::WriteType writeType = ObjectMetaStore::WriteType::ROCKS_ONLY;
         bool needRemoveEtcdData = true;
+        uint64_t expectedEpoch = 0;
     };
 
     struct AsyncWorkerOpSnapshot {
@@ -492,7 +494,7 @@ private:
         return static_cast<NotifyWorkerOpType>(ClearUint32OddBits(static_cast<uint32_t>(notifyWorkerOp)));
     }
 
-    void PersistAsyncWorkerOpRequests(const std::vector<AsyncWorkerOpPersistRequest> &requests);
+    Status CommitAsyncWorkerOpRequests(const std::vector<AsyncWorkerOpPersistRequest> &requests);
 
     Status ClearAsyncWorkerOpSnapshots(const std::string &workerAddr,
                                        const std::vector<AsyncWorkerOpSnapshot> &snapshots);
@@ -520,7 +522,8 @@ private:
     std::atomic<bool> interruptFlag_;
 
     std::shared_timed_mutex faultWorkerMutex_;
-    std::unordered_set<std::string> faultWorkers_;
+    // The value is true only after the worker has been confirmed dead.
+    std::unordered_map<std::string, bool> faultWorkers_;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
     HostPort masterAddr_;
     const bool backendStoreExist_;

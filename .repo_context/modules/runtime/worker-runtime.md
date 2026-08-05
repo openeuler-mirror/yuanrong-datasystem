@@ -41,6 +41,11 @@
     `K_RPC_UNAVAILABLE`; affected ids enter the existing RPC-failure path instead of being silently skipped during a
     connection rebuild window.
   - `worker_oc_server.cpp` assembles object-cache and stream-cache related worker-side services and declares many worker runtime flags.
+  - topology Snapshot handling retains FAILED addresses for RPC-stub cleanup. When the same address later appears as
+    ACTIVE, `WorkerOCServer` publishes the existing `RemoveDeadWorkerEvent` so the local metadata service removes the
+    stale fault-worker entry.
+  - async Worker notification cleanup commits RocksDB/ETCD removal or update before applying the matching in-memory
+    epoch mutation. A persistence failure keeps the in-memory entry so the caller can retry without losing recovery state.
   - worker CLI helpers can export/import the v3 topology ring state through ETCD or Metastore-backed metadata.
   - topology member ids remain binary, topology-internal identities. Worker business UUIDs and public object-location
     ids remain printable and must not expose the topology id bytes.
@@ -212,6 +217,8 @@
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
   - `cd build && ./bin/ds_ut --gtest_filter=TopologyRepositoryTest.*:ClusterRegistryTest.*:ClusterMembershipTest.*:WorkerDirectoryTest.*:TopologyChangeHandlerTest.*`
+- Run focused fault-worker convergence coverage:
+  - `bazel test //tests/ut/worker:worker_oc_server_test //tests/ut/master/object_cache:oc_notify_worker_manager_test`
 - Run system tests that exercise worker/runtime paths:
   - `bash build.sh -t run_cases -l st`
 - Helpful binaries from test build:
