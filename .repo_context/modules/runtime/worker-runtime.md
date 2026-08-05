@@ -125,6 +125,12 @@
     alive until a current immutable snapshot no longer contains the local member; only then may process shutdown begin.
     This preserves the source for the whole ScaleIn task barrier. The external process manager remains the bounded final
     termination authority when the control plane cannot complete the transition.
+  - after authoritative topology removal, an empty membership snapshot marks full-cluster shutdown: the Worker
+    immediately tells object metadata to discard TTL work, and later shutdown stops the TTL producer before draining its
+    shared async pool. For partial removal, TTL work continues only while local metadata exists and its version does not
+    postdate the task's original expiration timestamp; retries preserve that original timestamp, and migrated or
+    recreated keys are pruned before each notification retry and before retry requeue. An already-running worker RPC is
+    not force-cancelled.
   - ordinary metadata mutations remain rejected after the local ScaleIn admission gate closes, but the fenced callback
     propagates its non-empty `businessOperationId` as `RemoveMetaReqPb.topology_operation_id`. Metadata owners use that
     marker only to allow the callback's own idempotent remove/give-up-primary effects. The data phase, final source

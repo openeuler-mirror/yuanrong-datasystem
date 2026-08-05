@@ -2249,6 +2249,10 @@ Status WorkerOCServer::WaitForTopologyRemoval()
         const cluster::Member *local = nullptr;
         auto rc = snapshot->FindMemberByAddress(hostPort_.ToString(), local);
         if (rc.GetCode() == K_NOT_FOUND) {
+            if (snapshot->Members().empty()) {
+                LOG(INFO) << "[Graceful exit] Empty authoritative topology observed; discard pending TTL deletes.";
+                metadataManagerHolder_->PrepareForFullClusterShutdown();
+            }
             return Status::OK();
         }
         RETURN_IF_NOT_OK(rc);

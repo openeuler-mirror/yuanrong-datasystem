@@ -7,24 +7,28 @@
  * Description: Test topology-fenced object metadata mutations.
  */
 #include <atomic>
+#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/routing/placement_facade.h"
-#include "datasystem/master/object_cache/expired_object_manager.h"
 #include "ut/common.h"
+
+#include "../../../common/binmock/binmock.h"
 
 #define private public
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #undef private
 
 DS_DECLARE_string(rocksdb_write_mode);
+DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 
 namespace datasystem::master {
 namespace {
@@ -44,6 +48,7 @@ public:
 
     void TearDown() override
     {
+        RELEASE_STUBS
         rocksStore_.reset();
         FLAGS_rocksdb_write_mode = oldWriteMode_;
     }
@@ -253,6 +258,243 @@ TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaQueuesRequestVersion
     auto expiredObjects = manager.expiredObjectManager_->GetExpiredObject();
     ASSERT_TRUE(expiredObjects.count(objectKey) > 0);
     EXPECT_EQ(expiredObjects.at(objectKey), uint64_t(1));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, FullClusterShutdownDiscardsTtlDelete)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    const std::string objectKey = "full_shutdown_ttl";
+    InsertPrimaryWithCopy(manager, objectKey);
+    manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
+    auto &expiredManager = *manager.expiredObjectManager_;
+    DS_ASSERT_OK(expiredManager.InsertObject(objectKey, 1, 1));
+    auto expiredObjects = expiredManager.GetExpiredObject();
+    ASSERT_EQ(expiredObjects.count(objectKey), 1U);
+    expiredManager.Init();
+
+    manager.PrepareForFullClusterShutdown();
+    EXPECT_TRUE(expiredManager.interruptFlag_.load());
+    manager.Shutdown();
+
+    EXPECT_FALSE(manager.ShouldContinueTtlDelete(objectKey, 1));
+    DS_ASSERT_OK(expiredManager.AsyncDelete(std::move(expiredObjects)));
+    EXPECT_FALSE(expiredManager.CheckObjectInAsyncDeleteWithLock(objectKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, OrdinaryTtlWithoutMetadataKeepsL2Fallback)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    manager.globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
+        manager.objectStore_, nullptr, false, LOCAL_ADDRESS, akSkManager_);
+    const auto oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
+    FLAGS_oc_io_from_l2cache_need_metadata = false;
+    Raii restoreFlag([oldNeedMetadata] { FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata; });
+    const std::string objectKey = "ordinary_ttl_without_metadata";
+    DeleteObjectMediator mediator(LOCAL_ADDRESS, { { objectKey, true } });
+    std::unordered_map<std::string, DeleteStruct> deleteObjects{ { objectKey, DeleteStruct{} } };
+    std::unordered_set<std::string> failedObjects;
+    const auto deletingCount = manager.globalCacheDeleteManager_->GetDeletingObjectCount();
+
+    EXPECT_TRUE(manager.ShouldContinueTtlDelete(objectKey, 1));
+    DS_ASSERT_OK(manager.ClearMetaInfo(deleteObjects, true, failedObjects, mediator));
+
+    EXPECT_EQ(manager.globalCacheDeleteManager_->GetDeletingObjectCount(), deletingCount + 1);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, FullClusterShutdownDrainsQueuedTtlDeletesAsNoOps)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    manager.asyncPool_ = std::make_unique<ThreadPool>(1, 1, "TtlShutdownTest");
+    ExpiredObjectManager expiredManager(LOCAL_ADDRESS, &manager);
+    for (size_t i = 0; i < 3; ++i) {
+        auto objectKey = "queued_ttl_" + std::to_string(i);
+        InsertPrimaryWithCopy(manager, objectKey);
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        TbbMetaTable::accessor accessor;
+        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.multiSetState = PENDING;
+        DS_ASSERT_OK(expiredManager.InsertObject(objectKey, 1, 1));
+    }
+    auto expiredObjects = expiredManager.GetExpiredObject();
+    ASSERT_EQ(expiredObjects.size(), 3U);
+
+    std::promise<void> blockerStarted;
+    auto blockerStartedFuture = blockerStarted.get_future();
+    std::promise<void> releaseBlocker;
+    auto releaseBlockerFuture = releaseBlocker.get_future().share();
+    manager.ExecuteAsyncTask([&blockerStarted, releaseBlockerFuture] {
+        blockerStarted.set_value();
+        releaseBlockerFuture.wait();
+    });
+    blockerStartedFuture.wait();
+    for (const auto &[objectKey, expireTime] : expiredObjects) {
+        manager.ExecuteAsyncTask([&expiredManager, objectKey, expireTime] {
+            (void)expiredManager.AsyncDelete({ { objectKey, expireTime } });
+        });
+    }
+
+    std::thread unblocker([&manager, &releaseBlocker] {
+        while (!manager.discardTtlTasks_.load()) {
+            std::this_thread::yield();
+        }
+        releaseBlocker.set_value();
+    });
+    manager.PrepareForFullClusterShutdown();
+    manager.Shutdown();
+    unblocker.join();
+
+    for (const auto &[objectKey, expireTime] : expiredObjects) {
+        (void)expireTime;
+        EXPECT_FALSE(expiredManager.CheckObjectInAsyncDeleteWithLock(objectKey));
+        uint32_t remainTimeSecond = 0;
+        EXPECT_EQ(expiredManager.GetObjectRemainTimeAndRemove(objectKey, remainTimeSecond).GetCode(), K_INVALID);
+    }
+}
+
+TEST_F(OCMetadataManagerTopologyTest, PartialShutdownOnlyKeepsLocallyOwnedTtlDelete)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    const std::string localObjectKey = "local_ttl";
+    const std::string migratedObjectKey = "migrated_ttl";
+    const uint64_t objectVersion = 10;
+    const uint64_t expireTime = 20;
+    InsertPrimaryWithCopy(manager, localObjectKey);
+    auto &shard = manager.metaShards_[manager.GetShardIndex(localObjectKey)];
+    {
+        TbbMetaTable::accessor accessor;
+        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, localObjectKey));
+        accessor->second.meta.set_version(objectVersion);
+    }
+
+    EXPECT_TRUE(manager.ShouldContinueTtlDelete(localObjectKey, expireTime));
+    {
+        TbbMetaTable::accessor accessor;
+        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, localObjectKey));
+        accessor->second.meta.set_version(expireTime + 1);
+    }
+    EXPECT_FALSE(manager.ShouldContinueTtlDelete(localObjectKey, expireTime));
+    EXPECT_FALSE(manager.ShouldContinueTtlDelete(migratedObjectKey, expireTime));
+
+    ExpiredObjectManager expiredManager(LOCAL_ADDRESS, &manager);
+    DS_ASSERT_OK(expiredManager.InsertObject(migratedObjectKey, 1, 1));
+    auto expiredObjects = expiredManager.GetExpiredObject();
+    ASSERT_EQ(expiredObjects.count(migratedObjectKey), 1U);
+    DS_ASSERT_OK(expiredManager.AsyncDelete(std::move(expiredObjects)));
+    EXPECT_FALSE(expiredManager.CheckObjectInAsyncDeleteWithLock(migratedObjectKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, PartialShutdownRequeuesLocallyOwnedFailedTtlDelete)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    const std::string objectKey = "local_failed_ttl";
+    InsertPrimaryWithCopy(manager, objectKey);
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    {
+        TbbMetaTable::accessor accessor;
+        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.multiSetState = PENDING;
+    }
+
+    ExpiredObjectManager expiredManager(LOCAL_ADDRESS, &manager);
+    BINEXPECT_CALL(&OCMetadataManager::FindNeedDeleteIds, (testing::_))
+        .WillRepeatedly(testing::Invoke([&objectKey](DeleteObjectMediator &mediator) {
+            mediator.AddFailedDelId(objectKey);
+            mediator.SetStatus(Status(K_RUNTIME_ERROR, "injected delete failure"));
+        }));
+    DS_ASSERT_OK(expiredManager.InsertObject(objectKey, 1, 1));
+    auto expiredObjects = expiredManager.GetExpiredObject();
+    ASSERT_EQ(expiredObjects.count(objectKey), 1U);
+    const uint64_t expireTime = expiredObjects.at(objectKey);
+    DS_ASSERT_OK(expiredManager.AsyncDelete(std::move(expiredObjects)));
+
+    auto &retryShard = expiredManager.shards_[expiredManager.GetShardIndex(objectKey)];
+    {
+        std::lock_guard<std::mutex> lock(retryShard.mutex);
+        auto failedIt = retryShard.failedObjects.find(objectKey);
+        ASSERT_NE(failedIt, retryShard.failedObjects.end());
+        EXPECT_EQ(failedIt->second.expireTime, expireTime);
+        auto timedIt = retryShard.obj2Timed.find(objectKey);
+        ASSERT_NE(timedIt, retryShard.obj2Timed.end());
+        (void)retryShard.timedObj.erase(timedIt->second);
+        timedIt->second = retryShard.timedObj.emplace(0, objectKey);
+    }
+    {
+        TbbMetaTable::accessor accessor;
+        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.meta.set_version(expireTime + 1);
+    }
+
+    auto retryObjects = expiredManager.GetExpiredObject();
+    ASSERT_EQ(retryObjects.at(objectKey), expireTime);
+    DS_ASSERT_OK(expiredManager.AsyncDelete(std::move(retryObjects)));
+    EXPECT_FALSE(expiredManager.CheckObjectInAsyncDeleteWithLock(objectKey));
+    {
+        std::lock_guard<std::mutex> lock(retryShard.mutex);
+        EXPECT_EQ(retryShard.failedObjects.count(objectKey), 0U);
+    }
+}
+
+TEST_F(OCMetadataManagerTopologyTest, SuccessfulTtlRetryClearsFailedState)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    const std::string objectKey = "successful_retry_ttl";
+    InsertPrimaryWithCopy(manager, objectKey);
+    auto &metaShard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    {
+        TbbMetaTable::accessor accessor;
+        std::unique_lock<std::shared_timed_mutex> lock(metaShard.mutex);
+        ASSERT_TRUE(metaShard.table.find(accessor, objectKey));
+        accessor->second.multiSetState = PENDING;
+    }
+
+    size_t deleteAttempts = 0;
+    BINEXPECT_CALL(&OCMetadataManager::FindNeedDeleteIds, (testing::_))
+        .WillRepeatedly(testing::Invoke([&objectKey, &deleteAttempts](DeleteObjectMediator &mediator) {
+            if (deleteAttempts++ == 0) {
+                mediator.AddFailedDelId(objectKey);
+                mediator.SetStatus(Status(K_RUNTIME_ERROR, "injected delete failure"));
+            }
+        }));
+    BINEXPECT_CALL(&OCMetadataManager::NotifyDeleteAndClearMeta, (testing::_, testing::_))
+        .WillRepeatedly(testing::Invoke([](DeleteObjectMediator &, bool) {}));
+
+    ExpiredObjectManager expiredManager(LOCAL_ADDRESS, &manager);
+    DS_ASSERT_OK(expiredManager.InsertObject(objectKey, 1, 1));
+    auto expiredObjects = expiredManager.GetExpiredObject();
+    ASSERT_EQ(expiredObjects.count(objectKey), 1U);
+    const uint64_t expireTime = expiredObjects.at(objectKey);
+    DS_ASSERT_OK(expiredManager.AsyncDelete(std::move(expiredObjects)));
+
+    auto &retryShard = expiredManager.shards_[expiredManager.GetShardIndex(objectKey)];
+    {
+        std::lock_guard<std::mutex> lock(retryShard.mutex);
+        ASSERT_EQ(retryShard.failedObjects.count(objectKey), 1U);
+        auto timedIt = retryShard.obj2Timed.find(objectKey);
+        ASSERT_NE(timedIt, retryShard.obj2Timed.end());
+        (void)retryShard.timedObj.erase(timedIt->second);
+        timedIt->second = retryShard.timedObj.emplace(0, objectKey);
+    }
+
+    auto retryObjects = expiredManager.GetExpiredObject();
+    ASSERT_EQ(retryObjects.at(objectKey), expireTime);
+    DS_ASSERT_OK(expiredManager.AsyncDelete(std::move(retryObjects)));
+    EXPECT_FALSE(expiredManager.CheckObjectInAsyncDeleteWithLock(objectKey));
+    {
+        std::lock_guard<std::mutex> lock(retryShard.mutex);
+        EXPECT_EQ(retryShard.failedObjects.count(objectKey), 0U);
+    }
 }
 }  // namespace
 }  // namespace datasystem::master

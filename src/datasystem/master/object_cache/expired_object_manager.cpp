@@ -212,8 +212,9 @@ void ExpiredObjectManager::AddSucceedObject(const std::unordered_map<std::string
                 (GetSystemClockTimeStampUs() - expiredTime) / TIME_UNIT_CONVERSION / TIME_UNIT_CONVERSION;
             statisticsInfo_.IncreaseDelayDeleteObj(delayTimeSecond);
             if (shard.failedObjects.count(objectKey)) {
+                auto retryCount = shard.failedObjects.at(objectKey).retryCount;
                 VLOG(1) << FormatString("The expired object: %s had been deleted after %llu times retry.", objectKey,
-                                        shard.failedObjects[objectKey]);
+                                        retryCount);
                 (void)shard.failedObjects.erase(objectKey);
             }
             VLOG(1) << FormatString("The object %s had been deleted, expireTime %llu, delay delete time %llu second",
@@ -222,30 +223,33 @@ void ExpiredObjectManager::AddSucceedObject(const std::unordered_map<std::string
     }
 }
 
-void ExpiredObjectManager::AddFailedObject(const std::set<std::string> &objectKeys)
+void ExpiredObjectManager::AddFailedObject(const std::unordered_map<std::string, uint64_t> &objectKeys)
 {
     if (objectKeys.empty()) {
         return;
     }
     std::unordered_map<size_t, std::vector<std::string>> byShard;
-    for (const auto &objectKey : objectKeys) {
+    for (const auto &[objectKey, expireTime] : objectKeys) {
+        (void)expireTime;
         byShard[GetShardIndex(objectKey)].push_back(objectKey);
     }
     for (auto &[shardIdx, keys] : byShard) {
         auto &shard = shards_[shardIdx];
         std::lock_guard<std::mutex> lock(shard.mutex);
         for (const auto &objectKey : keys) {
-            shard.failedObjects[objectKey]++;
-            uint64_t newTtlSecond = (UINT64_MAX - 1) / shard.failedObjects[objectKey] < RETRY_WAIT_TIME
+            auto &retryInfo = shard.failedObjects[objectKey];
+            retryInfo.retryCount++;
+            retryInfo.expireTime = objectKeys.at(objectKey);
+            uint64_t newTtlSecond = (UINT64_MAX - 1) / retryInfo.retryCount < RETRY_WAIT_TIME
                                         ? UINT64_MAX
-                                        : static_cast<uint64_t>(RETRY_WAIT_TIME) * shard.failedObjects[objectKey] + 1;
+                                        : static_cast<uint64_t>(RETRY_WAIT_TIME) * retryInfo.retryCount + 1;
             uint64_t expiredTime = CalcExpireTime(GetSystemClockTimeStampUs(), newTtlSecond);
             auto iter = shard.timedObj.insert({ expiredTime, objectKey });
             shard.obj2Timed[objectKey] = iter;
             LOG(INFO) << FormatString(
                 "The expired object: %s had been deleted failed with %llu times, "
-                "will retry again after %u seconds later.",
-                objectKey, shard.failedObjects[objectKey], newTtlSecond);
+                "will retry again after %llu seconds later.",
+                objectKey, retryInfo.retryCount, newTtlSecond);
         }
     }
     statisticsInfo_.IncreaseFailedDelObj(objectKeys.size());
@@ -288,7 +292,9 @@ std::unordered_map<std::string, uint64_t> ExpiredObjectManager::GetExpiredObject
              iter != shard.timedObj.end() && iter->first <= currentTime && popped < remaining && popped < kChunkSize;) {
             VLOG(1) << FormatString("Object %s, expire time: %llu, current time: %llu", iter->second, iter->first,
                                     currentTime);
-            expiredObject[iter->second] = iter->first;
+            auto failedIt = shard.failedObjects.find(iter->second);
+            expiredObject[iter->second] =
+                failedIt == shard.failedObjects.end() ? iter->first : failedIt->second.expireTime;
             uint64_t delayTimeSecond =
                 (GetSystemClockTimeStampUs() - iter->first) / TIME_UNIT_CONVERSION / TIME_UNIT_CONVERSION;
             statisticsInfo_.IncreaseDelayGetObj(delayTimeSecond);
@@ -310,7 +316,7 @@ std::unordered_map<std::string, uint64_t> ExpiredObjectManager::GetExpiredObject
 std::unordered_map<std::string, uint64_t> ExpiredObjectManager::CleanupShardsAfterDelete(
     const std::unordered_map<std::string, bool>& requestObjectKeyMap,
     const std::set<std::string>& failedIds,
-    const std::unordered_map<std::string, uint64_t>& expiredObjMap)
+    DeleteObjectMediator &mediator)
 {
     std::unordered_map<std::string, uint64_t> succeedIds;
     // Group by shard to minimize lock acquisitions.
@@ -323,9 +329,9 @@ std::unordered_map<std::string, uint64_t> ExpiredObjectManager::CleanupShardsAft
         std::lock_guard<std::mutex> lock(shard.mutex);
         for (const auto &key : keys) {
             if (failedIds.count(key) == 0) {
-                auto it = expiredObjMap.find(key);
-                if (it != expiredObjMap.end()) {
-                    succeedIds.emplace(key, it->second);
+                auto expireTime = mediator.GetObjectVersionInRequest(key);
+                if (expireTime >= 0) {
+                    succeedIds.emplace(key, static_cast<uint64_t>(expireTime));
                 }
             }
             (void)shard.readyExpiredObjects.erase(key);
@@ -334,8 +340,38 @@ std::unordered_map<std::string, uint64_t> ExpiredObjectManager::CleanupShardsAft
     return succeedIds;
 }
 
+void ExpiredObjectManager::DiscardAsyncDeleteObjects(const std::vector<std::string> &objectKeys)
+{
+    std::unordered_map<size_t, std::vector<std::string>> byShard;
+    for (const auto &objectKey : objectKeys) {
+        byShard[GetShardIndex(objectKey)].push_back(objectKey);
+    }
+    for (auto &[shardIdx, keys] : byShard) {
+        auto &shard = shards_[shardIdx];
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        for (const auto &objectKey : keys) {
+            (void)shard.readyExpiredObjects.erase(objectKey);
+            (void)shard.failedObjects.erase(objectKey);
+        }
+    }
+}
+
 Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_t> expiredObjMap)
 {
+    std::vector<std::string> discardedObjects;
+    for (auto it = expiredObjMap.begin(); it != expiredObjMap.end();) {
+        if (!ocMetadataManager_->ShouldContinueTtlDelete(it->first, it->second)) {
+            discardedObjects.emplace_back(it->first);
+            it = expiredObjMap.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    DiscardAsyncDeleteObjects(discardedObjects);
+    if (expiredObjMap.empty()) {
+        return Status::OK();
+    }
+
     INJECT_POINT("master.ExpiredObjectManager.AsyncDelete", [](int sleepTime) {
         std::this_thread::sleep_for(std::chrono::seconds(sleepTime));
         return Status::OK();
@@ -361,9 +397,23 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
         LOG(ERROR) << FormatString("ExpiredObjectManager failed with status:%s", mediator.GetStatus().ToString());
     }
     std::set<std::string> failedIds = { mediator.GetFailedObjs().begin(), mediator.GetFailedObjs().end() };
-    auto succeedIds = CleanupShardsAfterDelete(requestObjectKeyMap, failedIds, expiredObjMap);
+    auto succeedIds = CleanupShardsAfterDelete(requestObjectKeyMap, failedIds, mediator);
     AddSucceedObject(succeedIds);
-    AddFailedObject(failedIds);
+    std::vector<std::string> discardedFailedObjects;
+    std::unordered_map<std::string, uint64_t> retryObjects;
+    for (auto it = failedIds.begin(); it != failedIds.end();) {
+        auto expireTime = mediator.GetObjectVersionInRequest(*it);
+        if (expireTime < 0
+            || !ocMetadataManager_->ShouldContinueTtlDelete(*it, static_cast<uint64_t>(expireTime))) {
+            discardedFailedObjects.emplace_back(*it);
+            it = failedIds.erase(it);
+        } else {
+            retryObjects.emplace(*it, static_cast<uint64_t>(expireTime));
+            ++it;
+        }
+    }
+    DiscardAsyncDeleteObjects(discardedFailedObjects);
+    AddFailedObject(retryObjects);
     if (!succeedIds.empty()) {
         METRIC_ADD(metrics::KvMetricId::MASTER_TTL_DELETE_SUCCESS_TOTAL, succeedIds.size());
     }
