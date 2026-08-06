@@ -830,12 +830,10 @@ Status ExternalCluster::StartCoordinatorCluster()
     for (size_t i = 0; i < opts_.numCoordinators; ++i) {
         RETURN_IF_NOT_OK(StartCoordinatorNode(i));
     }
-    if (opts_.enableCoordinatorElection) {
-        size_t leaderIndex = 0;
-        RETURN_IF_NOT_OK(FindReadyCoordinatorLeader(opts_.coordinatorConfigs, opts_.numCoordinators, leaderIndex));
-        if (leaderIndex != 0) {
-            std::swap(opts_.coordinatorConfigs[0], opts_.coordinatorConfigs[leaderIndex]);
-        }
+    size_t leaderIndex = 0;
+    RETURN_IF_NOT_OK(FindReadyCoordinatorLeader(opts_.coordinatorConfigs, opts_.numCoordinators, leaderIndex));
+    if (leaderIndex != 0) {
+        std::swap(opts_.coordinatorConfigs[0], opts_.coordinatorConfigs[leaderIndex]);
     }
     return Status::OK();
 }

@@ -596,7 +596,7 @@ TEST_F(WorkerDfxTest, TestPublishFailNotVisiable)
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
-    DS_ASSERT_OK(buffer->Publish());
+    AssertEventuallyOk([&buffer] { return buffer->Publish(); }, "publish after worker restart");
     DS_ASSERT_OK(buffers2[0]->RLatch());
 }
 

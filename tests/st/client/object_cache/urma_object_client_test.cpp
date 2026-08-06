@@ -64,6 +64,10 @@ constexpr char PROVIDER_BATCH_GET_ENTER_INJECT[] = "worker.BatchGetObjectRemote.
 constexpr char GLOBAL_SUMMARY_COMMITTED_INJECT[] = "PeerUbAdmission.ReplaceGlobalSummaries.afterCommit";
 constexpr char UB_HEALTH_BEFORE_PUBLISH_INJECT[] = "UbHealthLeaseSync.beforePublish";
 constexpr char UB_HEALTH_SIDECAR_ROOT[] = "/datasystem_ub_health";
+constexpr char CLIENT_WARMUP_SET_DONE[] = "ObjectClientImpl.ClientWorkerWarmup.SetDone";
+constexpr char CLIENT_WARMUP_GET_DONE[] = "ObjectClientImpl.ClientWorkerWarmup.GetDone";
+constexpr char CLIENT_WARMUP_DELETE_DONE[] = "ObjectClientImpl.ClientWorkerWarmup.DeleteDone";
+constexpr uint64_t CLIENT_WARMUP_OBJECT_COUNT = 100;
 
 #ifdef USE_URMA
 std::string ReadFileContent(const std::string &path)
@@ -142,9 +146,13 @@ public:
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
+        std::string suiteName;
+        std::string caseName;
+        GetCurTestName(suiteName, caseName);
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
+        opts.enableDistributedMaster =
+            caseName == "ClientInitWarmsRoutedMetaOwnerSetGetAndBatchDelete" ? "true" : "false";
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         for (const auto &addr : opts.workerConfigs) {
@@ -176,6 +184,9 @@ public:
 
     void TearDown() override
     {
+        (void)inject::Clear(CLIENT_WARMUP_SET_DONE);
+        (void)inject::Clear(CLIENT_WARMUP_GET_DONE);
+        (void)inject::Clear(CLIENT_WARMUP_DELETE_DONE);
         ExternalClusterTest::TearDown();
 #ifdef USE_URMA_MOCK
         (void)unsetenv("URMA_MOCK_UDS_BASE_DIR");
@@ -238,6 +249,24 @@ public:
         DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
         ASSERT_GE(executeCount, expectedCount) << name;
     }
+
+    void AssertClientInitWarmup(bool enableLocalCache, DataPlacementPolicy policy)
+    {
+        DS_ASSERT_OK(inject::Set(CLIENT_WARMUP_SET_DONE, "call()"));
+        DS_ASSERT_OK(inject::Set(CLIENT_WARMUP_GET_DONE, "call()"));
+        DS_ASSERT_OK(inject::Set(CLIENT_WARMUP_DELETE_DONE, "call()"));
+
+        ConnectOptions options;
+        InitConnectOpt(0, options);
+        options.enableLocalCache = enableLocalCache;
+        options.dataPlacementPolicy = policy;
+        auto client = std::make_shared<ObjectClient>(options);
+        DS_ASSERT_OK(client->Init());
+
+        EXPECT_EQ(inject::GetExecuteCount(CLIENT_WARMUP_SET_DONE), CLIENT_WARMUP_OBJECT_COUNT);
+        EXPECT_EQ(inject::GetExecuteCount(CLIENT_WARMUP_GET_DONE), CLIENT_WARMUP_OBJECT_COUNT);
+        EXPECT_EQ(inject::GetExecuteCount(CLIENT_WARMUP_DELETE_DONE), 1u);
+    }
 };
 
 class UrmaConnectionWarmupTest : public UrmaObjectClientTest {
@@ -284,6 +313,24 @@ protected:
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
 };
+
+TEST_F(UrmaObjectClientTest, ClientInitWarmsLegacySameNodeSetGetAndBatchDelete)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Client init connection warmup requires USE_URMA.";
+#else
+    AssertClientInitWarmup(true, DataPlacementPolicy::PREFERRED_SAME_NODE);
+#endif
+}
+
+TEST_F(UrmaObjectClientTest, ClientInitWarmsRoutedMetaOwnerSetGetAndBatchDelete)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Client init connection warmup requires USE_URMA.";
+#else
+    AssertClientInitWarmup(false, DataPlacementPolicy::PREFERRED_META_OWNER);
+#endif
+}
 
 TEST_F(UrmaConnectionWarmupTest, StartupAndRestartTriggerWarmup)
 {
