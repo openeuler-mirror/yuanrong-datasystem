@@ -40,6 +40,8 @@ public:
         int64_t ttlMs{ 0 };
     };
 
+    using MembershipEnsureHandler = std::function<Status(const MembershipRenewalPayload &, int64_t &)>;
+
     /**
      * @brief Construct a Coordinator-backed coordination backend.
      * @param[in] proxy Coordinator proxy that must outlive this backend.
@@ -172,6 +174,14 @@ public:
     Status UpdateNodeState(MemberLifecycleState state) override;
 
     /**
+     * @brief Publish a new membership lifecycle state within one aggregate timeout budget.
+     * @param[in] state New lifecycle state.
+     * @param[in] timeoutMs Aggregate timeout for serialization and the Coordinator Put.
+     * @return Status of the call.
+     */
+    Status UpdateNodeStateWithTimeout(MemberLifecycleState state, int32_t timeoutMs) override;
+
+    /**
      * @brief Resolve one logical table to the physical Coordinator prefix.
      * @param[in] tableName Logical table name.
      * @param[out] prefix Physical Coordinator prefix.
@@ -241,6 +251,14 @@ public:
      * @brief Run the local cleanup gate before accepting a recreated membership.
      */
     Status PrepareMembershipRecreate();
+
+    /**
+     * @brief Serialize one remote Leader Ensure with ordinary membership mutations.
+     * @param[in] coordinatorId Coordinator lifetime that accepts the Ensure.
+     * @param[in] ensure Handler that sends and validates the bounded Ensure RPC using the latest payload.
+     * @return Status of the complete remote and local installation.
+     */
+    Status EnsureMembership(const std::string &coordinatorId, const MembershipEnsureHandler &ensure);
 
     /**
      * @brief Commit the local effects after a successful EnsureLeaderMembership RPC.
@@ -341,6 +359,11 @@ private:
      * @param[in] recreated True when the membership key was newly created or recreated.
      */
     void HandleMembershipSuccess(const std::string &coordinatorId, bool recreated = false);
+
+    /**
+     * @brief Install an ensured revision while membershipMutationMutex_ is held.
+     */
+    void InstallEnsuredMembershipLocked(const std::string &coordinatorId, int64_t membershipModRevision);
 
     /**
      * @brief Classify and handle one failed lease renewal.
@@ -464,8 +487,9 @@ private:
     std::string keepAliveTableName_;
     std::string keepAliveKey_;
     // Serializes membership RPC commit order and protects keepAliveModRevision_.
-    std::mutex membershipMutationMutex_;
+    std::timed_mutex membershipMutationMutex_;
     int64_t keepAliveModRevision_{ COORDINATOR_NO_MOD_REVISION_CHECK };
+    std::atomic<bool> exitMembershipRequested_{ false };
     // Protects keepAliveValue_; also used by keepAliveCv_ to interrupt its wait.
     mutable std::mutex keepAliveMutex_;
     MembershipValue keepAliveValue_;

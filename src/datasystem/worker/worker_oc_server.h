@@ -18,6 +18,7 @@
 #define DATASYSTEM_WORKER_WORKER_OC_SERVER_H
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -740,13 +741,19 @@ private:
      * @brief Publish EXITING after the local client and asynchronous-task drain completes.
      * @return K_OK after the membership session reaches EXITING.
      */
-    Status PublishExitingMembership();
+    Status PublishExitingMembershipAndWaitForTopologyRemoval(std::chrono::steady_clock::time_point deadline);
 
     /**
-     * @brief Keep the Worker alive until the authoritative topology removes the local member.
-     * @return K_OK after a current snapshot no longer contains the local address.
+     * @brief Retry a failed EXITING publication and poll authoritative removal within one deadline.
+     * @param[in] deadline Absolute exit deadline.
+     * @param[in] publish Publishes EXITING with the remaining aggregate timeout in milliseconds.
+     * @param[in] observe Returns K_OK once the local member is absent, K_NOT_READY while it remains, or an error.
+     * @param[in] retryInterval Poll/retry interval, exposed for deterministic unit tests.
+     * @return K_OK after removal, otherwise the last observation status at the deadline.
      */
-    Status WaitForTopologyRemoval();
+    static Status WaitForExitingMembershipAndTopologyRemoval(
+        std::chrono::steady_clock::time_point deadline, const std::function<Status(int32_t)> &publish,
+        const std::function<Status()> &observe, std::chrono::milliseconds retryInterval);
 
     /**
      * @brief Is async tasks running.

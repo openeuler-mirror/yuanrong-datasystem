@@ -55,6 +55,12 @@ DS_DECLARE_string(etcd_passphrase_path);
 
 namespace datasystem {
 static constexpr int SEND_RPC_TIMEOUT_MS_DEFAULT = 50000;
+
+enum class EtcdRpcIntent {
+    NORMAL,
+    MEMBERSHIP_LEASE_REBIND,
+};
+
 struct RouterClientCurveKit {
     std::string etcdCa;
     SensitiveValue etcdCert;
@@ -214,13 +220,21 @@ public:
               typename StubFunc = grpc::Status (*)(grpc::ClientContext *, const Request &, Response *)>
     Status SendRpc(const std::string &methodName, const Request &req, Response &rsp, StubFunc stubFunc,
                    const std::string &authToken = "", int dataSize = 0, int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT,
-                   uint64_t asyncElapse = 0)
+                   uint64_t asyncElapse = 0, EtcdRpcIntent intent = EtcdRpcIntent::NORMAL)
     {
         INJECT_POINT("etcd.sendrpc", [&timeoutMs](int32_t timeout) {
             timeoutMs = timeout;
             return Status::OK();
         });
-        auto checker = [&methodName, &req]() -> Status {
+        bool isMembershipLeaseRebind = false;
+        if constexpr (HasMemberFunc_lease<Request>::value) {
+            isMembershipLeaseRebind = methodName == "Put::etcd_kv_Put"
+                                      && req.key().find(ETCD_MEMBERSHIP_KEY_SEGMENT) != std::string::npos
+                                      && req.lease() != 0;
+        }
+        const bool bypassLeavingPreflight = intent == EtcdRpcIntent::MEMBERSHIP_LEASE_REBIND
+                                            && isMembershipLeaseRebind;
+        auto checker = [&methodName, &req, intent, isMembershipLeaseRebind]() -> Status {
             if constexpr (HasMemberFunc_lease<Request>::value) {
                 CHECK_FAIL_RETURN_STATUS(
                     !(methodName == "Put::etcd_kv_Put"
@@ -228,6 +242,8 @@ public:
                       && req.lease() == 0),
                     K_INVALID, "The key written to the cluster table must be bound to a lease");
             }
+            CHECK_FAIL_RETURN_STATUS(intent == EtcdRpcIntent::NORMAL || isMembershipLeaseRebind, K_INVALID,
+                                     "Membership lease rebind intent requires a leased membership Put");
             return Status::OK();
         };
         auto func = [&](int32_t rpcTimeoutMs) {
@@ -261,7 +277,8 @@ public:
             return Status::OK();
         };
         INJECT_POINT("SendRpc.Failed.isKeepAliveTimeoutHandler");
-        if (IsTermSignalReceived() && isKeepAliveTimeoutHandler_ && isKeepAliveTimeoutHandler_()) {
+        if (!bypassLeavingPreflight && IsTermSignalReceived() && isKeepAliveTimeoutHandler_
+            && isKeepAliveTimeoutHandler_()) {
             RETURN_STATUS(K_RETRY_IF_LEAVING, "During worker exit, avoid accessing etcd if etcd fails.");
         }
         int defaultTimeoutMs = 10000;  // 10s

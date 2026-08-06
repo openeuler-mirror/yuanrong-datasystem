@@ -367,7 +367,7 @@ Status EtcdStore::BatchPut(const std::unordered_map<std::string, BatchInfoPutToE
 }
 
 Status EtcdStore::PutWithLeaseId(const std::string &tableName, const std::string &key, const std::string &value,
-                                 const int64_t leaseId)
+                                 const int64_t leaseId, int32_t timeoutMs)
 {
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
     TableMap::const_iterator iter = tableMap_.find(tableName);
@@ -380,7 +380,23 @@ Status EtcdStore::PutWithLeaseId(const std::string &tableName, const std::string
     req.set_lease(leaseId);
     etcdserverpb::PutResponse rsp;
     return rpcSession_->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, GetAuthToken(),
-                                value.size());
+                                value.size(), timeoutMs);
+}
+
+Status EtcdStore::PutMembershipWithLeaseId(const std::string &value, EtcdRpcIntent intent)
+{
+    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    const auto iter = tableMap_.find(keepAliveTableName_);
+    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
+                             "The table does not exist. tableName:" + keepAliveTableName_);
+    etcdserverpb::PutRequest req;
+    req.set_key(iter->second + "/" + keepAliveKey_);
+    req.set_value(value);
+    req.set_lease(leaseId_);
+    etcdserverpb::PutResponse rsp;
+    constexpr int32_t membershipRecoveryTimeoutMs = 5'000;
+    return rpcSession_->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, GetAuthToken(),
+                                value.size(), membershipRecoveryTimeoutMs, 0, intent);
 }
 
 Status EtcdStore::PutWithKeepAliveLease(const std::string &tableName, const std::string &key,
@@ -471,13 +487,23 @@ Status EtcdStore::RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTim
 Status EtcdStore::AutoCreate()
 {
     INJECT_POINT("AutoCreate");
+    std::lock_guard<std::timed_mutex> mutationLock(membershipMutationMutex_);
     LOG(INFO) << "Sending cluster node to etcd and establish lease.";
     // set timestamp before each put
     int64_t timeStamp = std::chrono::system_clock::now().time_since_epoch().count();
-    keepAliveValue_.timestamp = timeStamp;
-    std::string valueStr = keepAliveValue_.ToString();
+    cluster::MemberServiceInfo value = keepAliveValue_;
+    value.timestamp = timeStamp;
+    if (exitMembershipRequested_.load(std::memory_order_acquire)) {
+        value.state = cluster::MemberLifecycleState::EXITING;
+    }
+    std::string valueStr = value.ToString();
     CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_INVALID, "Node state should not be empty.");
-    RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, valueStr, leaseId_));
+    const auto intent = firstKeepAliveSent_.load(std::memory_order_acquire)
+                            ? EtcdRpcIntent::MEMBERSHIP_LEASE_REBIND
+                            : EtcdRpcIntent::NORMAL;
+    RETURN_IF_NOT_OK(PutMembershipWithLeaseId(valueStr, intent));
+    keepAliveValue_ = value;
+    firstKeepAliveSent_.store(true, std::memory_order_release);
     // Only use "start" and "restart" tag the first time doing Put()
     // After that remove the tag and append "recover", because the next time using it should be something
     // like network recovery.
@@ -495,6 +521,8 @@ Status EtcdStore::InitKeepAlive(const std::string &tableName, const std::string 
     GrpcSessionBase::SetIsKeepAliveTimeoutHandler(std::bind(&EtcdStore::IsKeepAliveTimeout, this));
     keepAliveTableName_ = tableName;
     keepAliveKey_ = key;
+    firstKeepAliveSent_.store(false, std::memory_order_release);
+    exitMembershipRequested_.store(false, std::memory_order_release);
     std::string hostId;
     if (!FLAGS_host_id_env_name.empty()) {
         auto envHostId = GetStringFromEnv(FLAGS_host_id_env_name.c_str(), "");
@@ -523,15 +551,37 @@ Status EtcdStore::InitKeepAlive(const std::string &tableName, const std::string 
     return LaunchKeepAliveThreads();
 }
 
-Status EtcdStore::UpdateNodeState(cluster::MemberLifecycleState state)
+Status EtcdStore::UpdateNodeState(cluster::MemberLifecycleState state, int32_t timeoutMs)
 {
+    if (state == cluster::MemberLifecycleState::EXITING) {
+        exitMembershipRequested_.store(true, std::memory_order_release);
+    }
+    CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             "Membership lifecycle update timeout expired");
+    const auto effectiveTimeoutMs = std::min(timeoutMs, SEND_RPC_TIMEOUT_MS_DEFAULT);
+    const auto start = std::chrono::steady_clock::now();
+    std::unique_lock<std::timed_mutex> mutationLock(membershipMutationMutex_, std::defer_lock);
+    CHECK_FAIL_RETURN_STATUS(mutationLock.try_lock_for(std::chrono::milliseconds(effectiveTimeoutMs)),
+                             K_RPC_DEADLINE_EXCEEDED,
+                             "Membership lifecycle update timed out waiting for serialization");
+    if (exitMembershipRequested_.load(std::memory_order_acquire)
+        && state != cluster::MemberLifecycleState::EXITING) {
+        return Status::OK();
+    }
     CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
                              "The key written to the cluster table must be bound to a lease");
     cluster::MemberServiceInfo value = keepAliveValue_;
     value.state = state;
     auto valueStr = value.ToString();
     CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_INVALID, "Node state should not be empty.");
-    RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, valueStr, leaseId_));
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - start)
+                               .count();
+    const auto remainingMs = static_cast<int64_t>(effectiveTimeoutMs) - elapsedMs;
+    CHECK_FAIL_RETURN_STATUS(remainingMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             "Membership lifecycle update timeout expired before ETCD Put");
+    RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, valueStr, leaseId_,
+                                    static_cast<int32_t>(remainingMs)));
     return Status::OK();
 }
 
@@ -1117,6 +1167,8 @@ Status EtcdStore::GetEtcdPrefix(const std::string &tableName, std::string &prefi
 
 Status EtcdStore::InformReconciliationDone(const HostPort &workerAddr)
 {
+    std::lock_guard<std::timed_mutex> mutationLock(membershipMutationMutex_);
+    RETURN_OK_IF_TRUE(exitMembershipRequested_.load(std::memory_order_acquire));
     CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
                              "The key written to the cluster table must be bound to a lease");
     std::string valueStr;

@@ -216,6 +216,7 @@ constexpr uint32_t WARMUP_STABLE_ROUNDS = 3;
 constexpr int32_t MASTER_RPC_WARMUP_THREAD_NUM = 4;
 constexpr auto TOPOLOGY_CALLBACK_POLL_INTERVAL = std::chrono::milliseconds(100);
 constexpr auto TOPOLOGY_MEMBERSHIP_POLL_INTERVAL = std::chrono::milliseconds(100);
+constexpr auto EXITING_MEMBERSHIP_RETRY_INTERVAL = std::chrono::seconds(1);
 constexpr int64_t TOPOLOGY_READY_WAIT_TIMEOUT_S = 60;
 constexpr auto TOPOLOGY_STOP_GRACE = std::chrono::seconds(10);
 #ifdef WITH_TESTS
@@ -2830,35 +2831,64 @@ void WorkerOCServer::WaitClientsExit()
     checkAsyncTasksDoneCv_.notify_all();
 }
 
-Status WorkerOCServer::PublishExitingMembership()
+Status WorkerOCServer::PublishExitingMembershipAndWaitForTopologyRemoval(
+    std::chrono::steady_clock::time_point deadline)
 {
-    return RetryUntilSuccessDuringGracefulExit(
-        [this] {
-            CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_RUNTIME_ERROR, "Topology Engine is null");
-            return topologyEngine_->MarkExiting();
-        },
-        LOSSLESS_EXIT_GRACE);
-}
-
-Status WorkerOCServer::WaitForTopologyRemoval()
-{
-    return RetryUntilSuccessDuringGracefulExit(
+    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_RUNTIME_ERROR, "Topology Engine is null");
+    return WaitForExitingMembershipAndTopologyRemoval(
+        deadline, [this](int32_t timeoutMs) { return topologyEngine_->MarkExiting(timeoutMs); },
         [this] {
             std::shared_ptr<const cluster::TopologySnapshot> snapshot;
             RETURN_IF_NOT_OK(topologyEngine_->GetSnapshot(snapshot));
             const cluster::Member *local = nullptr;
-            auto rc = snapshot->FindMemberByAddress(hostPort_.ToString(), local);
-            if (rc.GetCode() == K_NOT_FOUND) {
-                if (snapshot->Members().empty()) {
-                    LOG(INFO) << "[Graceful exit] Empty authoritative topology observed; discard pending TTL deletes.";
-                    metadataManagerHolder_->PrepareForFullClusterShutdown();
-                }
-                return Status::OK();
+            auto findStatus = snapshot->FindMemberByAddress(hostPort_.ToString(), local);
+            if (findStatus.GetCode() != K_NOT_FOUND) {
+                return findStatus.IsOk()
+                           ? Status(K_NOT_READY, "local member is still present in the authoritative topology")
+                           : findStatus;
             }
-            RETURN_IF_NOT_OK(rc);
-            RETURN_STATUS(K_NOT_READY, "local member is still present in the authoritative topology");
+            if (snapshot->Members().empty()) {
+                LOG(INFO) << "[Graceful exit] Empty authoritative topology observed; discard pending TTL deletes.";
+                metadataManagerHolder_->PrepareForFullClusterShutdown();
+            }
+            return Status::OK();
         },
-        LOSSLESS_EXIT_GRACE);
+        EXITING_MEMBERSHIP_RETRY_INTERVAL);
+}
+
+Status WorkerOCServer::WaitForExitingMembershipAndTopologyRemoval(
+    std::chrono::steady_clock::time_point deadline, const std::function<Status(int32_t)> &publish,
+    const std::function<Status()> &observe, std::chrono::milliseconds retryInterval)
+{
+    CHECK_FAIL_RETURN_STATUS(publish != nullptr && observe != nullptr, K_INVALID,
+                             "Graceful exit publication callbacks must be set");
+    Status lastStatus(K_NOT_READY, "local member is still present in the authoritative topology");
+    bool exitingPublished = false;
+    while (true) {
+        auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            break;
+        }
+        const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+        const auto timeoutMs = static_cast<int32_t>(std::min<int64_t>(
+            std::max<int64_t>(remainingMs, 1), std::numeric_limits<int32_t>::max()));
+        if (!exitingPublished) {
+            auto publishStatus = publish(timeoutMs);
+            exitingPublished = publishStatus.IsOk();
+            LOG_IF_ERROR(publishStatus, "[Graceful exit] Failed to publish EXITING membership; will retry");
+        }
+        auto observeStatus = observe();
+        if (observeStatus.IsOk()) {
+            return Status::OK();
+        }
+        lastStatus = std::move(observeStatus);
+        now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            break;
+        }
+        std::this_thread::sleep_until(std::min(deadline, now + retryInterval));
+    }
+    return lastStatus;
 }
 
 Status WorkerOCServer::PreShutDown()
@@ -2871,10 +2901,8 @@ Status WorkerOCServer::PreShutDown()
     WaitForPreShutdownTasks(scaleIn);
     auto topoRc = Status::OK();
     if (scaleIn) {
-        LOG_IF_ERROR(PublishExitingMembership(),
-                     "[Graceful exit] local_address=" + hostPort_.ToString()
-                         + " PublishExitingMembership failed; continuing to WaitForTopologyRemoval");
-        topoRc = WaitForTopologyRemoval();
+        const auto exitDeadline = std::chrono::steady_clock::now() + LOSSLESS_EXIT_GRACE;
+        topoRc = PublishExitingMembershipAndWaitForTopologyRemoval(exitDeadline);
         LOG_IF_ERROR(topoRc,
                      "[Graceful exit] local_address=" + hostPort_.ToString()
                          + " WaitForTopologyRemoval failed; proceeding to cleanup");

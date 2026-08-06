@@ -227,6 +227,21 @@ public:
     virtual Status UpdateNodeState(MemberLifecycleState state) = 0;
 
     /**
+     * @brief Update the lifecycle state within one caller-supplied aggregate timeout budget.
+     * @param[in] state New lifecycle state.
+     * @param[in] timeoutMs Aggregate timeout for lock acquisition and the backend write.
+     * @return Backend operation status.
+     * @note Worker-role backends override this method. The default preserves compatibility for controller-only and
+     *       test adapters whose lifecycle update is non-blocking.
+     */
+    virtual Status UpdateNodeStateWithTimeout(MemberLifecycleState state, int32_t timeoutMs)
+    {
+        CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                                 "Membership lifecycle update timeout expired");
+        return UpdateNodeState(state);
+    }
+
+    /**
      * @brief Return the physical prefix assigned to one logical table.
      * @param[in] tableName Logical table name.
      * @param[out] prefix Physical table prefix.

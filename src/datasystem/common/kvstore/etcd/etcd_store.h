@@ -210,7 +210,7 @@ public:
      * @return Status of the call.
      */
     Status PutWithLeaseId(const std::string &tableName, const std::string &key, const std::string &value,
-                          const int64_t leaseId);
+                          const int64_t leaseId, int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT);
 
     Status PutWithKeepAliveLease(const std::string &tableName, const std::string &key, const std::string &value);
 
@@ -404,7 +404,8 @@ public:
      * @param[in] state worker state.
      * @return status of the call.
      */
-    Status UpdateNodeState(cluster::MemberLifecycleState state);
+    Status UpdateNodeState(cluster::MemberLifecycleState state,
+                           int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT);
 
     /**
      * @brief Get real etcd key prefix by tableName.
@@ -456,7 +457,7 @@ public:
 
     bool IsFirstKeepAliveSent()
     {
-        return keepAliveValue_.state == cluster::MemberLifecycleState::RECOVERING;
+        return firstKeepAliveSent_.load(std::memory_order_acquire);
     }
 
     /**
@@ -553,6 +554,8 @@ private:
      */
     Status AutoCreate();
 
+    Status PutMembershipWithLeaseId(const std::string &value, EtcdRpcIntent intent);
+
     /**
      * @brief Creates and initializes the watch
      * @param[in] prefixMap Prefix to watch for
@@ -625,6 +628,8 @@ private:
     RandomData randomData_{ RandomData::GetRandomSeed() };
     WriterPrefRWLock keepAliveLock_;  // protects the leaseKeepAlive_ ptr
     WriterPrefRWLock watchLock_;      // protects the watchEvents_ ptr
+    // Serializes membership recovery, lifecycle mutation and reconciliation.
+    std::timed_mutex membershipMutationMutex_;
 
     std::string username_;
     SensitiveValue password_;  // Ensure it supports safe copy or assignment for background use
@@ -643,6 +648,8 @@ private:
     std::function<bool()> checkEtcdStateWhenNetworkFailedHandler_;
 
     std::atomic<bool> keepAliveTimeout_{ true };
+    std::atomic<bool> firstKeepAliveSent_{ false };
+    std::atomic<bool> exitMembershipRequested_{ false };
 
     std::function<void(mvccpb::Event &&event)> eventHandler_;
     std::function<void()> watchFailureHandler_;

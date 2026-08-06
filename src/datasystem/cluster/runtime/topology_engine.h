@@ -279,6 +279,13 @@ public:
     Status MarkExiting();
 
     /**
+     * @brief Publish the local membership as EXITING within one aggregate timeout budget.
+     * @param[in] timeoutMs Aggregate timeout for membership serialization and the backend write.
+     * @return K_OK on update; lifecycle, timeout, or backend status otherwise.
+     */
+    Status MarkExiting(int32_t timeoutMs);
+
+    /**
      * @brief Inform the backend that restart reconciliation has completed.
      * @return K_OK on success; lifecycle, address, or backend status otherwise.
      */

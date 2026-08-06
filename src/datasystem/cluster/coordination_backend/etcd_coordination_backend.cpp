@@ -148,6 +148,12 @@ Status EtcdCoordinationBackend::UpdateNodeState(MemberLifecycleState state)
     return etcdStore_->UpdateNodeState(state);
 }
 
+Status EtcdCoordinationBackend::UpdateNodeStateWithTimeout(MemberLifecycleState state, int32_t timeoutMs)
+{
+    CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_RUNTIME_ERROR, "EtcdStore is null");
+    return etcdStore_->UpdateNodeState(state, timeoutMs);
+}
+
 Status EtcdCoordinationBackend::GetStorePrefix(const std::string &tableName, std::string &prefix)
 {
     CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_RUNTIME_ERROR, "EtcdStore is null");
