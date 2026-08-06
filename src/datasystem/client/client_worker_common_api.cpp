@@ -44,7 +44,9 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -99,6 +101,20 @@ const char *ShmEnableTypeName(ShmEnableType type)
         default:
             return "TCP";
     }
+}
+
+int32_t BoundFdPassingTimeoutMs(int32_t connectTimeoutMs)
+{
+    // Bound fd-passing by the in-flight request deadline (ApiDeadline) so a delayed fd fails
+    // fast near the client's requestTimeoutMs instead of blocking up to connectTimeoutMs
+    // (default 9s). ApiRemainingUs() returns the 60s default when no request deadline is
+    // active (background calls), so connectTimeoutMs stays the ceiling in that case.
+    int64_t fdTimeoutMs = static_cast<int64_t>(connectTimeoutMs);
+    int64_t apiRemainingMs = TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs());
+    if (apiRemainingMs < fdTimeoutMs) {
+        fdTimeoutMs = std::max<int64_t>(apiRemainingMs, MIN_WAIT_MS);
+    }
+    return static_cast<int32_t>(fdTimeoutMs);
 }
 
 }  // namespace
@@ -981,10 +997,11 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
 
     VLOG(1) << "Start to query page fd, socket fd: " << socketFd_
             << ", worker fds: " << VectorToString(req.worker_fds());
-    Timer time = Timer(recvClientFdState_.getClientFdTimeoutMs);
+    const int32_t fdTimeoutMs = BoundFdPassingTimeoutMs(recvClientFdState_.getClientFdTimeoutMs);
+    Timer time = Timer(fdTimeoutMs);
     RpcOptions opts;
-    opts.SetTimeout(recvClientFdState_.getClientFdTimeoutMs);
-    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(recvClientFdState_.getClientFdTimeoutMs));
+    opts.SetTimeout(fdTimeoutMs);
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(fdTimeoutMs));
     if (!tenantId.empty()) {
         req.set_tenant_id(tenantId);
         RETURN_IF_NOT_OK(SetToken(req));
