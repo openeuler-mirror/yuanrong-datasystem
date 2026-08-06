@@ -371,6 +371,8 @@ public:
     TopologyDiagnostics GetDiagnostics() const;
 
 private:
+    friend class TopologyEngineTestPeer;
+
     static constexpr int32_t ENGINE_READ_TIMEOUT_MS = 3'000;
 
     /**
@@ -417,6 +419,8 @@ private:
     Status InitializeOwnedComponents(std::chrono::seconds nodeDeadTimeout,
                                      std::chrono::milliseconds scaleInCollectWindow);
     void InitializeCoordinatorComponents();
+
+    Status RestoreReadyAfterLocalRecovery();
 
     /**
      * @brief Route one Coordinator watch event to its unique role backend.
@@ -611,6 +615,9 @@ private:
     std::unique_ptr<TopologyControllerRuntime> controllerRuntime_;
     std::unique_ptr<TopologyRecoveryReporter> recoveryReporter_;
     std::unique_ptr<WorkerLeaderReconciler> workerLeaderReconciler_;
+    // Monotonic while RUNNING after successful admission/reconciliation; shutdown clears it before backend teardown.
+    // Membership write order and terminal EXITING intent are owned by the coordination backend.
+    std::atomic<bool> readyMembershipPublished_{ false };
     // Protects lifecycle transactions, startAttempted_, ingressBound_, and thread join sequencing.
     // Backend IO, callbacks, drain, component Start/Stop, and thread join execute without this lock.
     std::mutex lifecycleMutex_;

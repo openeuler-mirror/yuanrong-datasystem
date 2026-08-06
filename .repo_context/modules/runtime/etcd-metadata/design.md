@@ -20,7 +20,7 @@
   - `src/datasystem/common/kvstore/metastore/metastore_server.cpp`
   - `src/datasystem/common/kvstore/metastore/manager/kv_manager.cpp`
 - Last verified against source:
-  - `2026-05-08`
+  - `2026-08-06`
 - Related context docs:
   - `.repo_context/modules/runtime/etcd-metadata/README.md`
   - `.repo_context/modules/runtime/topology/README.md`
@@ -66,7 +66,8 @@
 - Key persistent or backend state:
   - ETCD key prefixes for cluster table, ring, master address, metadata tables, and slot recovery.
 - Key in-memory state:
-  - `EtcdStore::tableMap_`, auth token, lease id, keepalive value, timers, watch instance;
+  - `EtcdStore::tableMap_`, auth token, lease id, keepalive value, monotonic first-publication fact, membership mutation
+    mutex, timers, watch instance;
   - `EtcdWatch::keyVersion_`, prefix map, event queues;
   - Metastore `KVManager::data_`, revisions, lease maps, watch registrations, and limited history.
 
@@ -142,16 +143,22 @@ Failure-sensitive steps:
 
 1. Prepare `KeepAliveValue`.
 2. Grant lease with TTL `node_timeout_s`.
-3. Put the cluster-table worker row with the lease.
+3. Put the cluster-table worker row with the lease and mark the first-publication fact only after success. Initial
+   `STARTING`/`RESTARTING` templates then become `RECOVERING` for later automatic lease recreation.
 4. Start stream keepalive; renewal interval is derived from node timeout and capped.
 5. On failure, retry lease recreation and consult backend writability.
 6. If backend appears writable while local keepalive failed, synthesize DELETE and rely on topology deletion handling.
 7. Kill local process if failure duration exceeds policy and `auto_del_dead_node=true`.
+8. Explicit READY/reconciliation, automatic recreation, and EXITING writes are serialized by the membership mutation
+   mutex. The template remains RECOVERING after READY; the topology runtime owns the guarded recovery-to-READY closure.
 
 Failure-sensitive steps:
 
 - This path blends liveness evidence and lifecycle action; keepalive transport failure can lead to local deletion behavior.
 - The lease id must be valid before `UpdateNodeState` or reconciliation writes.
+- Failed membership writes do not advance the first-publication fact or a caller's lifecycle-admission gate.
+- Membership mutation takes the store table shared mutex only in the outer-membership/inner-table direction; keepalive
+  recovery may take `keepAliveLock_` before membership mutation, and the inverse nesting is forbidden.
 
 ### Watch Recovery
 
@@ -258,6 +265,10 @@ Failure-sensitive steps:
 
 - ETCD proto files are a third-party wire-contract surface; changes require compatibility review.
 - `ETCD_CLUSTER_TABLE` key format and lease binding are topology membership contracts.
+- The first successful membership publication is monotonic for one initialized keepalive owner and is independent of
+  later lifecycle template transitions.
+- A post-READY lease recreation must publish RECOVERING first; only the local admitted Worker may restore READY, and a
+  later EXITING write must remain the final process-local lifecycle commit.
 - `TopologyKeyHelper::TopologyKey` is the canonical topology key contract.
 - Watch event handlers should tolerate duplicate or synthesized events.
 - `WorkerServiceInfo` parse/string/proto format is a compatibility surface for topology membership.

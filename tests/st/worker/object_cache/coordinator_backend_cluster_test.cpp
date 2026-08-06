@@ -32,6 +32,7 @@
 #include "common.h"
 #include "cluster/external_cluster.h"
 #include "oc_client_common.h"
+#include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/coordinator/key_value_entry.h"
@@ -260,6 +261,65 @@ protected:
         RETURN_IF_NOT_OK(externalCluster->GetCoordinatorAddr(leaderIndex, coordinatorAddr));
         RETURN_IF_NOT_OK(CreateCoordinatorProxy(coordinatorAddr.ToString(), coordinatorProxy_));
         return Status::OK();
+    }
+
+    Status ReadMembershipStates(std::map<std::string, cluster::MemberLifecycleState> &states)
+    {
+        RETURN_IF_NOT_OK(GetCoordinatorProxy());
+        CHECK_FAIL_RETURN_STATUS(coordinatorProxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator proxy is null");
+        std::unique_ptr<cluster::TopologyKeyHelper> topologyKeys;
+        RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(GetTestClusterName(), topologyKeys));
+        const std::string prefix = topologyKeys->MembershipTable() + "/";
+        const std::string rangeEnd = StringPlusOne(prefix);
+        CHECK_FAIL_RETURN_STATUS(!rangeEnd.empty(), K_RUNTIME_ERROR, "Failed to build membership range end");
+
+        std::vector<KeyValueEntry> kvs;
+        int64_t revision = 0;
+        RETURN_IF_NOT_OK(coordinatorProxy_->Range(prefix, rangeEnd, kvs, revision,
+                                                   DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
+        states.clear();
+        for (const auto &entry : kvs) {
+            CHECK_FAIL_RETURN_STATUS(entry.key.rfind(prefix, 0) == 0 && entry.key.size() > prefix.size(),
+                                     K_RUNTIME_ERROR, "Unexpected membership key: " + entry.key);
+            cluster::MembershipValue value;
+            RETURN_IF_NOT_OK(cluster::MembershipValueCodec::Decode(entry.value, value));
+            states.emplace(entry.key.substr(prefix.size()), value.lifecycleState);
+        }
+        return Status::OK();
+    }
+
+    Status WaitForReadyMemberships(std::initializer_list<uint32_t> workerIndexes, int timeoutSec,
+                                   size_t consecutiveSnapshots = 1)
+    {
+        std::set<std::string> expectedWorkers;
+        for (auto workerIndex : workerIndexes) {
+            HostPort workerAddress;
+            RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
+            expectedWorkers.emplace(workerAddress.ToString());
+        }
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+        Status lastRc(K_RUNTIME_ERROR, "Membership state has not been read");
+        std::map<std::string, cluster::MemberLifecycleState> lastStates;
+        size_t readySnapshots = 0;
+        while (std::chrono::steady_clock::now() < deadline) {
+            lastRc = ReadMembershipStates(lastStates);
+            const bool allReady = lastRc.IsOk()
+                                  && std::all_of(expectedWorkers.begin(), expectedWorkers.end(),
+                                                 [&lastStates](const std::string &address) {
+                                                     const auto found = lastStates.find(address);
+                                                     return found != lastStates.end()
+                                                            && found->second
+                                                                   == cluster::MemberLifecycleState::READY;
+                                                 });
+            readySnapshots = allReady ? readySnapshots + 1 : 0;
+            if (readySnapshots >= consecutiveSnapshots) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR, "Timed out waiting for READY membership snapshots; last status: "
+                                           + lastRc.ToString());
     }
 
     Status GetTopologyWorkers(ICoordinatorServiceProxy &proxy, std::map<std::string, MembershipPb::StatePb> &outWorkers)
@@ -1074,6 +1134,7 @@ TEST_F(CoordinatorBackendClusterThreeWorkerTest, AllWorkersRestartWithCoordinato
     RestartAllWorkersWithCoordinatorRunning();
 
     AssertWorkersInCluster({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC);
+    DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC));
     AssertBidirectionalAccess(0, 2, "all_worker_restart_after");
 }
 
@@ -1087,6 +1148,7 @@ TEST_F(CoordinatorBackendClusterThreeWorkerTest, TransientCoordinatorIsolationKe
     DS_ASSERT_OK(guard.Clear());
 
     AssertWorkersInCluster({ 0, 1, 2 });
+    DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC, 2));
     AssertBidirectionalAccess(0, 1, "transient_coordinator_isolation_recovered");
 }
 
@@ -1256,6 +1318,7 @@ TEST_F(CoordinatorBackendClusterTest, RestartWorkerPropagatesTopologyByCoordinat
               << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() << "ms";
 
     AssertWorkersInCluster({ 0, 1 }, WAIT_TOPOLOGY_TIMEOUT_SEC);
+    DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1 }, WAIT_TOPOLOGY_TIMEOUT_SEC));
     auto t3 = std::chrono::steady_clock::now();
     LOG(INFO) << "[TIMING] Cluster state after restart confirmed in "
               << std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count() << "ms";

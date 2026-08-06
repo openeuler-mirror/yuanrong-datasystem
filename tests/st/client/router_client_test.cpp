@@ -15,10 +15,13 @@
  * Description: rpc util test.
  */
  
+#include <algorithm>
 #include <memory>
+#include <set>
 #include <vector>
  
 #include "common.h"
+#include "datasystem/client/cluster_query/cluster_query_client.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "client/object_cache/oc_client_common.h"
@@ -146,7 +149,116 @@ protected:
     std::string etcdAddress_;
     std::string localNodeAddress_;
 };
- 
+
+class MembershipRecoveryQueryTest : public RouterClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numEtcd = 1;
+        opts.numWorkers = 2;
+        opts.enableDistributedMaster = "true";
+        opts.workerGflagParams =
+            "-v=1 -add_node_wait_time_s=1 -node_timeout_s=" + std::to_string(ETCD_TIME_OUT_SECOND);
+    }
+
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        DS_ASSERT_OK(Init());
+        ASSERT_NE(cluster_, nullptr);
+        DS_ASSERT_OK(cluster_->StartEtcdCluster());
+        DS_ASSERT_OK(cluster_->StartWorkers());
+        for (size_t workerIndex = 0; workerIndex < 2; ++workerIndex) {
+            DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, workerIndex));
+        }
+        InitEtcdAddress();
+        InitNodeAddress();
+    }
+
+protected:
+    int GetTestCaseTimeoutSecs() const override
+    {
+        return 180;
+    }
+
+    Status QueryExpectedWorkersHealthy(client::cluster_query::ClusterQueryClient &queryClient,
+                                       const std::set<std::string> &expectedWorkers)
+    {
+        client::cluster_query::ClusterQueryResult result;
+        RETURN_IF_NOT_OK(queryClient.QueryCluster(result));
+        if (result.nodes.size() != expectedWorkers.size()) {
+            return Status(K_NOT_READY, "Cluster query has not converged to the expected worker count");
+        }
+        for (const auto &node : result.nodes) {
+            if (expectedWorkers.count(node.workerAddress) == 0
+                || node.health != client::cluster_query::ClusterNodeHealth::HEALTHY) {
+                return Status(K_NOT_READY, "Cluster query still contains a non-healthy or unexpected worker");
+            }
+        }
+        return Status::OK();
+    }
+
+    void WaitForExpectedWorkersHealthy(client::cluster_query::ClusterQueryClient &queryClient,
+                                       const std::set<std::string> &expectedWorkers)
+    {
+        DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+            [this, &queryClient, &expectedWorkers] {
+                return QueryExpectedWorkersHealthy(queryClient, expectedWorkers);
+            },
+            30, K_OK));
+    }
+};
+
+TEST_F(MembershipRecoveryQueryTest, EtcdLeaseRecreationConvergesBackToHealthy)
+{
+    HostPort worker0;
+    HostPort worker1;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, worker0));
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1));
+    const std::set<std::string> expectedWorkers{ worker0.ToString(), worker1.ToString() };
+
+    client::cluster_query::ClusterQueryOptions queryOptions;
+    queryOptions.clusterName = GetTestClusterName();
+    queryOptions.etcdAddress = GetEtcdAddress();
+    client::cluster_query::ClusterQueryClient queryClient(std::move(queryOptions));
+    DS_ASSERT_OK(queryClient.Init());
+    WaitForExpectedWorkersHealthy(queryClient, expectedWorkers);
+
+    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    ASSERT_NE(externalCluster, nullptr);
+    DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({ 1 }));
+    WaitForExpectedWorkersHealthy(queryClient, expectedWorkers);
+
+    DS_ASSERT_OK(externalCluster->ShutdownEtcds());
+    DS_ASSERT_OK(externalCluster->StartEtcdCluster());
+    WaitForExpectedWorkersHealthy(queryClient, expectedWorkers);
+
+    RouterClient routerClient(GetTestClusterName(), GetEtcdAddress(), "", "", "", "");
+    DS_ASSERT_OK(routerClient.Init());
+    std::vector<std::string> candidates;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&routerClient, &candidates, &worker1] {
+            RETURN_IF_NOT_OK(routerClient.GetWorkerCandidates("", candidates));
+            return std::find(candidates.begin(), candidates.end(), worker1.ToString()) != candidates.end()
+                       ? Status::OK()
+                       : Status(K_NOT_READY, "Recovered worker is not a routing candidate yet");
+        },
+        30, K_OK));
+    EXPECT_NE(std::find(candidates.begin(), candidates.end(), worker1.ToString()), candidates.end());
+
+    std::shared_ptr<ObjectClient> objectClient;
+    InitTestClient(worker1.ToString(), objectClient);
+    const std::string objectKey = "membership_recovery_smoke";
+    const std::string value = "healthy_after_etcd_lease_recreation";
+    DS_ASSERT_OK(objectClient->Put(objectKey, reinterpret_cast<const uint8_t *>(value.data()), value.size(),
+                                   CreateParam{}));
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(objectClient->Get({ objectKey }, 0, buffers));
+    ASSERT_EQ(buffers.size(), 1);
+    ASSERT_TRUE(buffers.front());
+    AssertBufferEqual(*buffers.front(), value);
+}
+
 TEST_F(RouterClientTest, TestInitInvalidAz)
 {
     std::string azName = "AZ3";

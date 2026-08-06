@@ -39,6 +39,9 @@ constexpr auto BACKEND_EVIDENCE_MAX_AGE = std::chrono::seconds(10);
 constexpr uint32_t LOCAL_ISOLATION_CONFIRMATIONS = 3;
 constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
 constexpr int CONTROL_DEGRADED_ERROR_LOG_INTERVAL = 60;
+// This background write is retried by the Controller; keep one attempt below the default Engine stop grace so
+// Controller shutdown is not pinned by ETCD's 50-second default RPC timeout.
+constexpr int32_t LOCAL_RECOVERY_READY_TIMEOUT_MS = 3'000;
 
 Status RegisterEtcdTopologyTables(EtcdStore &store, const TopologyKeyHelper &keys)
 {
@@ -466,6 +469,8 @@ Status TopologyEngine::InitializeOwnedComponents(std::chrono::seconds nodeDeadTi
         runtimeOptions.controller.scaleInCollectWindow = scaleInCollectWindow;
         runtimeOptions.controller.failureProbeTimeout = options_.scopeProbeDeadline;
         runtimeOptions.controller.localAddress = options_.localAddress;
+        runtimeOptions.controller.localMembershipRecoveryHandler =
+            [this] { return RestoreReadyAfterLocalRecovery(); };
         if (membershipRestartHandler_ != nullptr) {
             runtimeOptions.controller.membershipRestartHandler =
                 [handler = membershipRestartHandler_](const std::string &address, int64_t timestamp) {
@@ -865,6 +870,9 @@ Status TopologyEngine::ShutdownComponents(std::chrono::steady_clock::time_point 
 
 Status TopologyEngine::Shutdown(std::chrono::steady_clock::time_point deadline)
 {
+    const auto effectiveDeadline = deadline == std::chrono::steady_clock::time_point::max()
+                                       ? deadline
+                                       : std::min(deadline, std::chrono::steady_clock::now() + options_.stopGrace);
     {
         std::lock_guard<std::mutex> lock(lifecycleMutex_);
         if (state_.load() == TopologyEngineState::STOPPED) {
@@ -874,11 +882,11 @@ Status TopologyEngine::Shutdown(std::chrono::steady_clock::time_point deadline)
                                  "cluster topology Engine lifecycle operation is in progress");
         lifecycleOperationInFlight_ = true;
     }
-    const auto effectiveDeadline = deadline == std::chrono::steady_clock::time_point::max()
-                                       ? deadline
-                                       : std::min(deadline, std::chrono::steady_clock::now() + options_.stopGrace);
     state_.store(TopologyEngineState::STOPPING);
     SetAvailability(TopologyAvailabilityLevel::SHUTTING_DOWN, "shutdown");
+    // Do not wait for an in-flight membership RPC before teardown: start backend cancellation promptly. The backend
+    // remains alive during shutdown, and lease expiry removes any READY write that raced the STOPPING transition.
+    readyMembershipPublished_.store(false, std::memory_order_release);
     auto rc = ShutdownComponents(effectiveDeadline);
     if (rc.IsError()) {
         std::lock_guard<std::mutex> lock(lifecycleMutex_);
@@ -930,9 +938,14 @@ Status TopologyEngine::MarkReady()
 {
     CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
                              "cluster topology Engine is not running");
+    CHECK_FAIL_RETURN_STATUS(!localVoluntaryExitRequested_.load(), K_NOT_READY, "local membership is exiting");
     CHECK_FAIL_RETURN_STATUS(HasEstablishedMemberLease(), K_NOT_READY,
                              "cluster topology member lease is not established");
     auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::READY);
+    if (rc.IsOk() && state_.load() == TopologyEngineState::RUNNING
+        && !localVoluntaryExitRequested_.load()) {
+        readyMembershipPublished_.store(true, std::memory_order_release);
+    }
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
               << " role=worker action=publish_ready_membership purpose=topology_admission address="
               << options_.localAddress << " status=" << rc.ToString();
@@ -957,13 +970,33 @@ Status TopologyEngine::MarkExiting(int32_t timeoutMs)
 
 Status TopologyEngine::NotifyReconciliationDone()
 {
-    CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
-                             "cluster topology Engine is not running");
     HostPort localAddress;
     RETURN_IF_NOT_OK(localAddress.ParseString(options_.localAddress));
+    CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
+                             "cluster topology Engine is not running");
+    CHECK_FAIL_RETURN_STATUS(!localVoluntaryExitRequested_.load(), K_NOT_READY, "local membership is exiting");
     auto rc = memberBackend_->InformReconciliationDone(localAddress);
+    if (rc.IsOk() && state_.load() == TopologyEngineState::RUNNING
+        && !localVoluntaryExitRequested_.load()) {
+        readyMembershipPublished_.store(true, std::memory_order_release);
+    }
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
               << " role=worker action=reconciliation_done address=" << options_.localAddress
+              << " status=" << rc.ToString();
+    return rc;
+}
+
+Status TopologyEngine::RestoreReadyAfterLocalRecovery()
+{
+    CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
+                             "cluster topology Engine is not running");
+    CHECK_FAIL_RETURN_STATUS(!localVoluntaryExitRequested_.load(), K_NOT_READY, "local membership is exiting");
+    CHECK_FAIL_RETURN_STATUS(readyMembershipPublished_.load(std::memory_order_acquire), K_NOT_READY,
+                             "local membership admission has not completed");
+    auto rc = memberBackend_->UpdateNodeStateWithTimeout(MemberLifecycleState::READY,
+                                                         LOCAL_RECOVERY_READY_TIMEOUT_MS);
+    LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+              << " role=worker action=restore_ready_after_local_recovery address=" << options_.localAddress
               << " status=" << rc.ToString();
     return rc;
 }

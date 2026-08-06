@@ -34,6 +34,7 @@ ds_cc_test(
     tags = ["manual"],
     deps = [
         "//src/datasystem/client:datasystem",
+        "//src/datasystem/client/cluster_query:cluster_query_client",
         "//src/datasystem/common/encrypt:common_encrypt",
         "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/flags:ds_flags",

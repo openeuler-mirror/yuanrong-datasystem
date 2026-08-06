@@ -865,6 +865,232 @@ TEST(TopologyControllerTest, ExternalControllerDoesNotReconcileBeforeWatchActiva
     ExpectActiveTopologyUnchanged(observed, initial.version, initial.members.size());
 }
 
+TEST(TopologyControllerTest, ExternalEtcdPromotesOnlyLocalActiveRecoveringMembership)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("local-recovery-active", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    auto initial = MakeActiveTopology(1, 16'000);
+    const auto &localAddress = initial.members.front().identity.address;
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, localAddress, MemberLifecycleState::RECOVERING);
+    std::atomic<size_t> recoveryCalls{ 0 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
+    options.localAddress = localAddress;
+    options.localMembershipRecoveryHandler = [&] {
+        ++recoveryCalls;
+        PutMembership(backend, *keys, localAddress, MemberLifecycleState::READY);
+        return Status::OK();
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] {
+        return recoveryCalls.load() == 1 && backend.RevisionGetAllCount(keys->MembershipTable()) >= 2U;
+    }));
+    EXPECT_EQ(recoveryCalls.load(), 1U);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+}
+
+TEST(TopologyControllerTest, LocalRecoveryNotReadyDoesNotBlockScaleInOrForceResync)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("local-recovery-not-ready", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    auto initial = MakeActiveTopology(3, 16'050);
+    const auto &localAddress = initial.members[0].identity.address;
+    const auto &exitingAddress = initial.members[2].identity.address;
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, localAddress, MemberLifecycleState::RECOVERING);
+    PutMembership(backend, *keys, initial.members[1].identity.address, MemberLifecycleState::READY);
+    PutMembership(backend, *keys, exitingAddress, MemberLifecycleState::EXITING);
+    std::atomic<size_t> recoveryCalls{ 0 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.scaleInCollectWindow = std::chrono::milliseconds(0);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
+    options.localAddress = localAddress;
+    options.localMembershipRecoveryHandler = [&] {
+        ++recoveryCalls;
+        return Status(K_NOT_READY, "local admission is still pending");
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    const auto readsBeforeReset = backend.RevisionGetAllCount(keys->MembershipTable());
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] {
+        TopologyState observed;
+        int64_t revision = 0;
+        return recoveryCalls.load() >= 3
+               && repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision).IsOk()
+               && observed.activeBatch.has_value()
+               && observed.activeBatch->type == TopologyChangeType::SCALE_IN;
+    }));
+    EXPECT_EQ(backend.RevisionGetAllCount(keys->MembershipTable()), readsBeforeReset + 1);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+}
+
+TEST(TopologyControllerTest, ExternalEtcdDoesNotPromoteBeforeLocalMembershipIsRecovering)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("local-recovery-restarting", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    auto initial = MakeActiveTopology(1, 16'100);
+    const auto &localAddress = initial.members.front().identity.address;
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, localAddress, MemberLifecycleState::RESTARTING);
+    std::atomic<size_t> recoveryCalls{ 0 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
+    options.localAddress = localAddress;
+    options.localMembershipRecoveryHandler = [&] {
+        ++recoveryCalls;
+        return Status::OK();
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition(
+        [&] { return backend.RevisionGetAllCount(keys->MembershipTable()) >= 2U; }));
+    EXPECT_EQ(recoveryCalls.load(), 0U);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+}
+
+TEST(TopologyControllerTest, ExternalEtcdDoesNotPromoteRemoteOrNonActiveMember)
+{
+    const auto runCase = [](const std::string &clusterName, TopologyState initial, const std::string &localAddress,
+                            const std::vector<std::pair<std::string, MemberLifecycleState>> &memberships) {
+        FakeCoordinationBackend backend;
+        std::unique_ptr<TopologyKeyHelper> keys;
+        ASSERT_TRUE(TopologyKeyHelper::Create(clusterName, keys).IsOk());
+        TopologyRepository repository(backend, *keys);
+        HashAlgorithm algorithm;
+        CoordinationEventDispatcher dispatcher(32);
+        backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+        for (const auto &[address, state] : memberships) {
+            PutMembership(backend, *keys, address, state);
+        }
+        std::atomic<size_t> recoveryCalls{ 0 };
+        TopologyControllerOptions options;
+        options.reconcileTick = std::chrono::milliseconds(5);
+        options.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
+        options.localAddress = localAddress;
+        options.localMembershipRecoveryHandler = [&] {
+            ++recoveryCalls;
+            return Status::OK();
+        };
+        TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+        ASSERT_TRUE(controller.Start().IsOk());
+        ASSERT_TRUE(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }).IsOk());
+        ASSERT_TRUE(WaitForCondition(
+            [&] { return backend.RevisionGetAllCount(keys->MembershipTable()) >= 2U; }));
+        EXPECT_EQ(recoveryCalls.load(), 0U);
+        EXPECT_TRUE(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT).IsOk());
+    };
+
+    auto remoteRecovering = MakeActiveTopology(2, 16'200);
+    const auto localAddress = remoteRecovering.members[0].identity.address;
+    const auto remoteAddress = remoteRecovering.members[1].identity.address;
+    runCase("remote-recovery-ignored", remoteRecovering, localAddress,
+            { { localAddress, MemberLifecycleState::READY },
+              { remoteAddress, MemberLifecycleState::RECOVERING } });
+
+    auto nonActive = MakeActiveTopology(1, 16'300);
+    nonActive.members.front().state = MemberState::INITIAL;
+    runCase("non-active-recovery-ignored", nonActive, nonActive.members.front().identity.address,
+            { { nonActive.members.front().identity.address, MemberLifecycleState::RECOVERING } });
+}
+
+TEST(TopologyControllerTest, SuccessfulLocalRecoveryForcesExactMembershipResync)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("local-recovery-resync", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    auto initial = MakeActiveTopology(1, 16'400);
+    const auto &localAddress = initial.members.front().identity.address;
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, localAddress, MemberLifecycleState::RECOVERING);
+    std::atomic<size_t> recoveryCalls{ 0 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
+    options.localAddress = localAddress;
+    options.localMembershipRecoveryHandler = [&] {
+        ++recoveryCalls;
+        PutMembership(backend, *keys, localAddress, MemberLifecycleState::READY);
+        return Status::OK();
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    const auto readsBeforeRecovery = backend.RevisionGetAllCount(keys->MembershipTable());
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] {
+        return recoveryCalls.load() == 1
+               && backend.RevisionGetAllCount(keys->MembershipTable()) >= readsBeforeRecovery + 2
+               && controller.GetDiagnostics().lastError.empty();
+    }));
+    EXPECT_EQ(recoveryCalls.load(), 1U);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+}
+
+TEST(TopologyControllerTest, FailedLocalRecoveryRetriesWithoutStartingControlBatch)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("local-recovery-retry", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    auto initial = MakeActiveTopology(1, 16'500);
+    const auto &localAddress = initial.members.front().identity.address;
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, localAddress, MemberLifecycleState::RECOVERING);
+    std::atomic<size_t> recoveryCalls{ 0 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
+    options.localAddress = localAddress;
+    options.localMembershipRecoveryHandler = [&] {
+        if (++recoveryCalls == 1) {
+            return Status(K_RPC_UNAVAILABLE, "injected local recovery failure");
+        }
+        PutMembership(backend, *keys, localAddress, MemberLifecycleState::READY);
+        return Status::OK();
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] {
+        return recoveryCalls.load() >= 2 && backend.RevisionGetAllCount(keys->MembershipTable()) >= 2U;
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+    TopologyState observed;
+    int64_t revision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    ExpectActiveTopologyUnchanged(observed, initial.version, initial.members.size());
+}
+
 TEST(TopologyControllerTest, ExternalResyncChurnUsesReconcileBackoff)
 {
     FakeCoordinationBackend backend;

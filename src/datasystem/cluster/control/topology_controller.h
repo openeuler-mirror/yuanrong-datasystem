@@ -81,6 +81,11 @@ struct TopologyControllerOptions {
     std::function<Status(const std::string &, int64_t)> membershipRestartHandler;
 
     /**
+     * @brief Promote this process's post-admission RECOVERING membership back to READY.
+     */
+    std::function<Status()> localMembershipRecoveryHandler;
+
+    /**
      * @brief Directly probe all supplied members before the absolute deadline.
      * @return One structured result per target, including an optional direct observation, completion reason and elapsed
      *         time. Incomplete evidence still proves transport reachability; an exception aborts the current reconcile
@@ -237,6 +242,9 @@ private:
     Status ReconcileOnce();
 
     Status RecoverFromLatestTopology();
+
+    Status RestoreReadyAfterLocalRecovery(const TopologySnapshot &latest,
+                                          const std::vector<MembershipRecord> &memberships);
 
     Status EnsureTopologyAuthority();
 

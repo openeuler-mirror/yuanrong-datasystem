@@ -15,6 +15,7 @@
  * Description: Coordinator-backed watch session and CoordinatorId fence tests.
  */
 #include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
+#include "datasystem/cluster/membership/membership_value_codec.h"
 
 #include <algorithm>
 #include <atomic>
@@ -63,7 +64,7 @@ public:
         return Status::OK();
     }
 
-    Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &version, int64_t &revision,
+    Status Put(const std::string &, const std::string &value, int64_t, int64_t, int64_t &version, int64_t &revision,
                int32_t timeoutMs, std::string *coordinatorId, const std::string &expectedCoordinatorId,
                int64_t expectedModRevision) override
     {
@@ -79,6 +80,7 @@ public:
         }
         version = ++putVersion_;
         revision = ++putRevision_;
+        lastPutValue_ = value;
         observedCoordinatorId_ = putCoordinatorId_;
         if (coordinatorId != nullptr) {
             *coordinatorId = putCoordinatorId_;
@@ -90,8 +92,8 @@ public:
                  int32_t, std::string *coordinatorId) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        entries.clear();
-        revision = 0;
+        entries = rangeEntries_;
+        revision = putRevision_;
         observedCoordinatorId_ = putCoordinatorId_;
         if (coordinatorId != nullptr) {
             *coordinatorId = putCoordinatorId_;
@@ -287,6 +289,12 @@ public:
         return lastPutTimeoutMs_;
     }
 
+    std::string LastPutValue() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lastPutValue_;
+    }
+
     int64_t LastKeepAliveModRevision() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -326,6 +334,12 @@ public:
         putRevision_ = revision;
     }
 
+    void SetRangeEntries(std::vector<KeyValueEntry> entries)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rangeEntries_ = std::move(entries);
+    }
+
 private:
     // Protects every fake response, observation and deterministic watch barrier below.
     mutable std::mutex mutex_;
@@ -345,6 +359,8 @@ private:
     size_t keepAliveCalls_{ 0 };
     int64_t putVersion_{ 0 };
     int64_t putRevision_{ 0 };
+    std::vector<KeyValueEntry> rangeEntries_;
+    std::string lastPutValue_;
     std::string putCoordinatorId_{ COORDINATOR_A };
     Status putStatus_{ Status::OK() };
     Status keepAliveStatus_{ Status(K_RUNTIME_ERROR, "unused fake KeepAlive") };
@@ -362,6 +378,13 @@ void AddSuccessfulBatch(DeterministicCoordinatorProxy &proxy, const std::string 
 {
     proxy.AddWatchStep(Status::OK(), coordinatorId);
     proxy.AddWatchStep(Status::OK(), coordinatorId);
+}
+
+Status ReadRenewalValue(const DsCoordinationBackend &backend, MembershipValue &value)
+{
+    DsCoordinationBackend::MembershipRenewalPayload payload;
+    RETURN_IF_NOT_OK(backend.GetMembershipRenewalPayload(payload));
+    return MembershipValueCodec::Decode(payload.encodedValue, value);
 }
 
 TEST(DsCoordinationBackendSessionTest, CommitsOnlyCompleteSameCoordinatorBatch)
@@ -791,6 +814,172 @@ TEST(DsCoordinationBackendSessionTest, RenewalPayloadDoesNotExposePhysicalMember
     EXPECT_GT(payload.ttlMs, 0);
     EXPECT_FALSE(payload.encodedValue.empty());
     EXPECT_EQ(payload.reporterAddress.find("/datasystem/"), std::string::npos);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, LocalReconciliationReadyUpdatesRenewalPayload)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
+
+    MembershipValue renewal;
+    ASSERT_TRUE(ReadRenewalValue(backend, renewal).IsOk());
+    ASSERT_EQ(renewal.lifecycleState, MemberLifecycleState::RECOVERING);
+    MembershipValue stored{ 123, MemberLifecycleState::RECOVERING, "host-a", "v1" };
+    std::string encoded;
+    ASSERT_TRUE(MembershipValueCodec::Encode(stored, encoded).IsOk());
+    proxy.SetRangeEntries({ { "/datasystem/c/cluster/" + std::string(WATCHER_ADDRESS), encoded, 1, 1 } });
+    HostPort localAddress;
+    ASSERT_TRUE(localAddress.ParseString(WATCHER_ADDRESS).IsOk());
+
+    ASSERT_TRUE(backend.InformReconciliationDone(localAddress).IsOk());
+
+    ASSERT_TRUE(ReadRenewalValue(backend, renewal).IsOk());
+    EXPECT_EQ(renewal.lifecycleState, MemberLifecycleState::READY);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, EnsureTransactionCannotReplayRecoveringAfterReady)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
+    MembershipValue recovering{ 123, MemberLifecycleState::RECOVERING, "host-a", "v1" };
+    std::string encoded;
+    ASSERT_TRUE(MembershipValueCodec::Encode(recovering, encoded).IsOk());
+    proxy.SetRangeEntries({ { "/datasystem/c/cluster/" + std::string(WATCHER_ADDRESS), encoded, 1, 1 } });
+    HostPort localAddress;
+    ASSERT_TRUE(localAddress.ParseString(WATCHER_ADDRESS).IsOk());
+
+    std::mutex barrierMutex;
+    std::condition_variable barrierCv;
+    bool payloadCaptured = false;
+    bool releaseEnsure = false;
+    auto ensure = std::async(std::launch::async, [&] {
+        return backend.EnsureMembership(
+            COORDINATOR_A,
+            [&](const DsCoordinationBackend::MembershipRenewalPayload &payload, int64_t &membershipModRevision) {
+                MembershipValue captured;
+                RETURN_IF_NOT_OK(MembershipValueCodec::Decode(payload.encodedValue, captured));
+                CHECK_FAIL_RETURN_STATUS(captured.lifecycleState == MemberLifecycleState::RECOVERING, K_INVALID,
+                                         "Ensure did not capture RECOVERING membership");
+                std::unique_lock<std::mutex> lock(barrierMutex);
+                payloadCaptured = true;
+                barrierCv.notify_all();
+                barrierCv.wait(lock, [&] { return releaseEnsure; });
+                membershipModRevision = 1;
+                return Status::OK();
+            });
+    });
+    bool reachedBarrier = false;
+    {
+        std::unique_lock<std::mutex> lock(barrierMutex);
+        reachedBarrier = barrierCv.wait_for(lock, std::chrono::seconds(2), [&] { return payloadCaptured; });
+        if (!reachedBarrier) {
+            releaseEnsure = true;
+            barrierCv.notify_all();
+        }
+    }
+    ASSERT_TRUE(reachedBarrier);
+    auto reconciliation =
+        std::async(std::launch::async, [&] { return backend.InformReconciliationDone(localAddress); });
+    {
+        std::lock_guard<std::mutex> lock(barrierMutex);
+        releaseEnsure = true;
+        barrierCv.notify_all();
+    }
+    ASSERT_TRUE(ensure.get().IsOk());
+    ASSERT_TRUE(reconciliation.get().IsOk());
+
+    MembershipValue renewal;
+    ASSERT_TRUE(ReadRenewalValue(backend, renewal).IsOk());
+    EXPECT_EQ(renewal.lifecycleState, MemberLifecycleState::READY);
+    MembershipValue stored;
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.LastPutValue(), stored).IsOk());
+    EXPECT_EQ(stored.lifecycleState, MemberLifecycleState::READY);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, FailedExitIntentFencesReconciliationAndEnsurePayload)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    proxy.SetPutStatus(Status(K_RPC_UNAVAILABLE, "injected exit failure"));
+    EXPECT_EQ(backend.UpdateNodeState(MemberLifecycleState::EXITING).GetCode(), K_RPC_UNAVAILABLE);
+    proxy.SetPutStatus(Status::OK());
+    EXPECT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    HostPort localAddress;
+    ASSERT_TRUE(localAddress.ParseString(WATCHER_ADDRESS).IsOk());
+    EXPECT_TRUE(backend.InformReconciliationDone(localAddress).IsOk());
+
+    ASSERT_TRUE(backend
+                    .EnsureMembership(
+                        COORDINATOR_A,
+                        [](const DsCoordinationBackend::MembershipRenewalPayload &payload,
+                           int64_t &membershipModRevision) {
+                            MembershipValue captured;
+                            RETURN_IF_NOT_OK(MembershipValueCodec::Decode(payload.encodedValue, captured));
+                            CHECK_FAIL_RETURN_STATUS(captured.lifecycleState == MemberLifecycleState::EXITING, K_INVALID,
+                                                     "Ensure did not preserve EXITING membership");
+                            membershipModRevision = 17;
+                            return Status::OK();
+                        })
+                    .IsOk());
+    MembershipValue renewal;
+    ASSERT_TRUE(ReadRenewalValue(backend, renewal).IsOk());
+    EXPECT_EQ(renewal.lifecycleState, MemberLifecycleState::EXITING);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, FailedLocalReconciliationDoesNotAdvanceRenewalPayload)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
+    MembershipValue stored{ 123, MemberLifecycleState::RECOVERING, "host-a", "v1" };
+    std::string encoded;
+    ASSERT_TRUE(MembershipValueCodec::Encode(stored, encoded).IsOk());
+    proxy.SetRangeEntries({ { "/datasystem/c/cluster/" + std::string(WATCHER_ADDRESS), encoded, 1, 1 } });
+    proxy.SetPutStatus(Status(K_RPC_UNAVAILABLE, "injected reconciliation failure"));
+    HostPort localAddress;
+    ASSERT_TRUE(localAddress.ParseString(WATCHER_ADDRESS).IsOk());
+
+    EXPECT_EQ(backend.InformReconciliationDone(localAddress).GetCode(), K_RPC_UNAVAILABLE);
+
+    MembershipValue renewal;
+    ASSERT_TRUE(ReadRenewalValue(backend, renewal).IsOk());
+    EXPECT_EQ(renewal.lifecycleState, MemberLifecycleState::RECOVERING);
+    proxy.SetPutStatus(Status::OK());
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::EXITING).IsOk());
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 1);
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, RemoteReconciliationDoesNotOverwriteLocalRenewalPayload)
+{
+    constexpr char REMOTE_ADDRESS[] = "127.0.0.1:31502";
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
+    MembershipValue stored{ 123, MemberLifecycleState::RECOVERING, "host-b", "v1" };
+    std::string encoded;
+    ASSERT_TRUE(MembershipValueCodec::Encode(stored, encoded).IsOk());
+    proxy.SetRangeEntries({ { "/datasystem/c/cluster/" + std::string(REMOTE_ADDRESS), encoded, 1, 1 } });
+    HostPort remoteAddress;
+    ASSERT_TRUE(remoteAddress.ParseString(REMOTE_ADDRESS).IsOk());
+
+    ASSERT_TRUE(backend.InformReconciliationDone(remoteAddress).IsOk());
+
+    MembershipValue renewal;
+    ASSERT_TRUE(ReadRenewalValue(backend, renewal).IsOk());
+    EXPECT_EQ(renewal.lifecycleState, MemberLifecycleState::RECOVERING);
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
