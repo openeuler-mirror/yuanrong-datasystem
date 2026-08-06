@@ -962,10 +962,15 @@ void RequestOutRecorder::Record()
     core_.MarkRecorded();
 }
 
-Status AccessRecorderManager::Init(bool isClient, bool isEmbeddedClient)
+AccessRecorderManager::AccessRecorderManager(LogProcessRole processRole)
+    : isClient_(processRole == LogProcessRole::CLIENT),
+      isAccessLogDisabled_(processRole == LogProcessRole::COORDINATOR)
 {
-    isClient_ = isClient;
-    if (FLAGS_log_monitor) {
+}
+
+Status AccessRecorderManager::Init(bool isEmbeddedClient)
+{
+    if (FLAGS_log_monitor && !isAccessLogDisabled_) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ResetWriteLogger(isEmbeddedClient), "AccessRecorder init failed");
     }
     return Status::OK();
@@ -973,6 +978,9 @@ Status AccessRecorderManager::Init(bool isClient, bool isEmbeddedClient)
 
 Status AccessRecorderManager::ResetWriteLogger(bool isEmbeddedClient)
 {
+    if (isAccessLogDisabled_) {
+        return Status::OK();
+    }
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Logging::CreateLogDir(), K_NOT_READY, "Log file creation failed");
 
     std::vector<std::pair<AccessKeyType, std::string>> typeList;
@@ -1005,6 +1013,9 @@ Status AccessRecorderManager::ResetWriteLogger(bool isEmbeddedClient)
 
 Status AccessRecorderManager::SubmitWriteMessage()
 {
+    if (isAccessLogDisabled_) {
+        return Status::OK();
+    }
     if (exporterMap_.empty()) {
         const std::string errMsg = "AccessRecorder is not init.";
         if (FLAGS_log_monitor) {
@@ -1025,6 +1036,9 @@ Status AccessRecorderManager::LogPerformance(const std::string &handleName, Acce
                                              int code, const std::string &dataSize, const std::string &reqMsg,
                                              const std::string &respMsg, uint64_t asyncElapseTime)
 {
+    if (isAccessLogDisabled_) {
+        return Status::OK();
+    }
     if (exporterMap_.empty()) {
         const std::string errMsg = "AccessRecorder is not init.";
         if (FLAGS_log_monitor) {

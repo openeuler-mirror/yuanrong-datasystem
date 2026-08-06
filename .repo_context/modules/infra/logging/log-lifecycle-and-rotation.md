@@ -53,7 +53,11 @@
     `LogProcessRole::CLIENT`; worker and coordinator callers pass `LogProcessRole::WORKER` and
     `LogProcessRole::COORDINATOR` respectively.
   - it sets `log_filename`, initializes the provider, starts `LogManager`, initializes `AccessRecorderManager`, and starts
-    the operation logger with an explicit `client`, `worker`, or `coordinator` role.
+    the operation logger with an explicit `client`, `worker`, or `coordinator` role;
+  - when `log_monitor` is enabled, `AccessRecorderManager` initializes exporters according to its construction-time
+    process role: clients create the client-access exporter, workers create access and request-out exporters, and
+    coordinators keep the manager disabled without creating `access.log` or `request_out.log`; disabled coordinator
+    reset, flush, and record calls are successful no-ops.
   - worker startup logs the Git commit/branch and non-default flag snapshot immediately after `Logging::Start()` so
     these process-identity signals stay near the beginning of the worker log.
   - operation records use the same source, pod, PID/TID, trace, and cluster context field layout as ordinary INFO logs;

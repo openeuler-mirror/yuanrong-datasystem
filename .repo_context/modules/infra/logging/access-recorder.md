@@ -74,8 +74,12 @@
 ## Export Path And Coupling
 
 - Verified:
-  - `AccessRecorderManager` owns the log-performance export path.
-  - `AccessRecorderManager` uses `HardDiskExporter`, so access/performance logs depend on the metrics exporter infrastructure.
+  - `AccessRecorderManager` owns the log-performance export path and binds its process role at construction.
+  - when `log_monitor` is enabled, client mode creates the client-access exporter and worker mode creates access and
+    request-out exporters; coordinator mode is immutable-disabled and does not create `access.log` or `request_out.log`.
+  - coordinator-mode reset, record, and flush calls are successful no-ops, so the shared `LogManager` background flush
+    can continue without treating the intentionally absent exporters as an initialization failure.
+  - enabled client and worker modes use `HardDiskExporter`, so access/performance logs depend on the metrics exporter infrastructure.
   - monitor/access log flush is later driven by the logging lifecycle path, not by each recorder doing synchronous file writes.
   - SDK client access logs and worker access logs append `logSampled:true` inside the existing request-parameter field when
     the current request trace was admitted by request log sampling. This does not add a new pipe-delimited column.
@@ -121,6 +125,6 @@
 
 ## Update Rules For This Document
 
-- Keep this file focused on access-recorder lifecycle, key space, and exporter coupling instead of repeating full module architecture from `design.md`.
-- Update this file when access-key families, record layout, exporter ownership, or relevant verification entrypoints change.
+- Keep this file focused on access-recorder lifecycle, key space, role behavior, and exporter coupling instead of repeating full module architecture from `design.md`.
+- Update this file when access-key families, record layout, process-role behavior, exporter ownership, or relevant verification entrypoints change.
 - If a behavior claim is not yet confirmed in source, move it to a clearly marked pending note rather than broadening the claim.

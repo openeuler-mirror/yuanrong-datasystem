@@ -280,7 +280,7 @@
 | `Trace` | thread-local correlation state | `src/datasystem/common/log/trace.h/.cpp` | supports generated/imported trace IDs, request-log markers, and sampling-decision snapshots |
 | `Context` | public API surface for setting trace prefix on current thread | `include/datasystem/context/context.h`, `src/datasystem/client/context/context.cpp` | validates format before feeding `Trace` |
 | `AccessRecorder` | scoped request latency recording | `src/datasystem/common/log/access_recorder.h/.cpp`, `src/datasystem/common/log/access_point.def` | destructor logs if `Record()` was skipped |
-| `AccessRecorderManager` | exporter ownership and record serialization | `src/datasystem/common/log/access_recorder.h/.cpp` | routes by `AccessKeyType` |
+| `AccessRecorderManager` | role-aware exporter ownership and record serialization | `src/datasystem/common/log/access_recorder.h/.cpp` | routes by `AccessKeyType`; coordinator mode is a successful no-op without exporters |
 | `FailureWriter` | crash-path file persistence | `src/datasystem/common/log/failure_handler.h/.cpp` | bypasses normal logger stack on fatal paths |
 | `ds_spdlog` wrapper | spdlog wrapper and provider abstraction | `src/datasystem/common/log/spdlog/*` | repository patches namespace and rotating sink behavior |
 
@@ -290,7 +290,7 @@
 
 1. Runtime or client code calls `Logging::Start(...)`.
 2. Client mode applies environment-driven config overrides before provider initialization.
-3. `InitLoggingWrapper(...)` creates the log directory, initializes the spdlog-backed provider, starts `LogManager`, and initializes `AccessRecorderManager`.
+3. `InitLoggingWrapper(...)` creates the log directory, initializes the spdlog-backed provider, starts `LogManager`, and initializes `AccessRecorderManager` for the process role. When `log_monitor` is enabled, client and worker roles create their corresponding access exporters; the coordinator role keeps access recording disabled and creates no access or request-out files.
 4. Ordinary `LOG`, `LOG_IF`, and `VLOG` macros first apply `minloglevel`, then call the lightweight `ShouldCreateLogMessage(...)` sampling precheck; suppressed logs do not evaluate their stream payload expressions.
 5. Admitted logs and non-sampled severities construct `LogMessage`, then emit through the configured provider and sinks; `LogMessageImpl` keeps a defensive sampling backstop for direct `LogMessage` construction outside the macros.
 
