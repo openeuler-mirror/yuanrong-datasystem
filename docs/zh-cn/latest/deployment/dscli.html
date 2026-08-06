@@ -1812,11 +1812,19 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 哈希区间计算和 key 路由。命令不会读取 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code>，也不会自动探测后端类型；
 用户必须显式传入 ETCD 或 Coordinator 地址。
 Coordinator 使用与服务部署相同的基础地址，查询客户端按 <code class="docutils literal notranslate"><span class="pre">use_brpc</span></code> 配置选择 BRPC 或 ZMQ 传输。
+<code class="docutils literal notranslate"><span class="pre">--coordinator_address</span></code> 支持逗号分隔的 <code class="docutils literal notranslate"><span class="pre">host:port</span></code> 列表，用于多实例 Coordinator 部署场景；查询客户端会经由
+Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Worker 侧 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 一致。
 整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
 当前 ETCD 查询仅支持未启用认证和 TLS 的集群。</p>
 <p>查询 ETCD 集群节点：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>query<span class="w"> </span>cluster<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--etcd_address<span class="w"> </span><span class="m">192</span>.0.2.10:2379,192.0.2.11:2379<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--cluster_name<span class="w"> </span>cluster-a
+</pre></div>
+</div>
+<p>查询多实例 Coordinator 部署的集群节点（传入全部 Coordinator 节点地址）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>query<span class="w"> </span>cluster<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--coordinator_address<span class="w"> </span><span class="m">192</span>.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--cluster_name<span class="w"> </span>cluster-a
 </pre></div>
 </div>
@@ -1845,9 +1853,9 @@ Coordinator 使用与服务部署相同的基础地址，查询客户端按 <cod
 </div>
 <p>哈希区间采用左开右闭 <code class="docutils literal notranslate"><span class="pre">(start,end]</span></code>。当 <code class="docutils literal notranslate"><span class="pre">start</span> <span class="pre">&gt;</span> <span class="pre">end</span></code> 时表示跨越 <code class="docutils literal notranslate"><span class="pre">UINT32_MAX</span></code> 到 <code class="docutils literal notranslate"><span class="pre">0</span></code> 的环回区间；
 单 token 全环固定输出 <code class="docutils literal notranslate"><span class="pre">[0,4294967295]</span></code>。<code class="docutils literal notranslate"><span class="pre">INITIAL</span></code>、<code class="docutils literal notranslate"><span class="pre">JOINING</span></code> 和 <code class="docutils literal notranslate"><span class="pre">FAILED</span></code> 节点不拥有 committed 区间。</p>
-<p>查询一批 key 当前路由到的 Worker：</p>
+<p>查询一批 key 当前路由到的 Worker（多实例 Coordinator 部署时传入全部节点地址，客户端自动路由到 Leader）：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>query<span class="w"> </span>route<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--coordinator_address<span class="w"> </span><span class="m">192</span>.0.2.10:31511<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--coordinator_address<span class="w"> </span><span class="m">192</span>.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--keys<span class="w"> </span>key-1<span class="w"> </span>key-2<span class="w"> </span>key-1
 </pre></div>
 </div>

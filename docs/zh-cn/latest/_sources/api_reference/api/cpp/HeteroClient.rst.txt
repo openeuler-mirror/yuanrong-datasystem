@@ -50,6 +50,19 @@ HeteroClient
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
+    .. cpp:function:: Status MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam, std::vector<std::string> *outLocalSetKeys)
+
+        批量将数据从异构设备(Device)缓存到数据系统主机(Host)侧，并返回本次调用在当前连接Worker上确认新写入的key。
+
+        参数：
+            - **keys** - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为1024字节。推荐单次设置的key个数 `<=64`。出于性能考虑，只校验第一个key的有效性。
+            - **devBlobList** - 传入参数，描述用于发送的异构设备内存结构的列表，数据从 `devBlobList` 中的指针获取。详见 :cpp:class:`DeviceBlobList` 章节。
+            - **setParam** - 设置参数，详见 :cpp:class:`SetParam` 章节。
+            - **outLocalSetKeys** - 输出参数，调用开始时会先清空。已存在的本地key及未确认发布结果的key不返回。
+
+        返回：
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。返回 ``K_OK`` 时，如果没有key由当前Worker新写入，``outLocalSetKeys`` 可以为空；收到可信发布响应后发生部分失败时，接口返回错误，但 ``outLocalSetKeys`` 仍可包含已确认成功写入的key；未确认任何发布结果时，该列表保持为空。
+
     .. cpp:function:: Status MGetH2D(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList, std::vector<std::string> &failKeys, int32_t subTimeoutMs)
 
         批量从数据系统主机(Host)侧获取数据并直接写入到异构设备(Device)内存中。该接口与 :cpp:func:`MSetD2H` 配合使用。

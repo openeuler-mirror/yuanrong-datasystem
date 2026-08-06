@@ -281,6 +281,50 @@ bazel test //... --config=test --config=release --test_timeout=120
 | `--config=coverage` | 覆盖率 | `-fprofile-arcs -ftest-coverage` |
 | `--config=py39`~`py313` | Python 版本 | rules_python 版本选择 |
 
+> UBSan 说明：`build:ubsan` 在 `-fsanitize=undefined` 基础上额外排除 `alignment` 子检查，并通过
+> `--per_file_copt=external/.*@-fno-sanitize=undefined` 把 UBSan 对所有外部依赖（absl/grpc/rocksdb 等）
+> 整体关闭，仅保留对 `datasystem::*` 自有代码的检查。原因是 GCC 14 + absl `raw_hash_set` 存在已知
+> 兼容问题（`get_hash_slot_fn<Hash>() == nullptr` 在 `constexpr` 上下文中报 "is not a constant expression"）；
+> 之前的 `-fno-sanitize=function` 方案在系统 GCC（不识别 `function` 子检查名）下会报
+> `unrecognized argument to '-fno-sanitize=' option: 'function'`。`--per_file_copt` 方案与 GCC 版本无关，
+> 同时兼容 gcc-toolset-14 与系统 GCC。CMake 构建路径（`USE_SANITIZER=undefined`）则用
+> `check_cxx_compiler_flag` 检测后条件加 `-fno-sanitize=function`。
+>
+> 此外，`build:ubsan` 还通过 `--per_file_copt=third_party/protos/etcd/.*@-fno-sanitize=undefined`
+> 关闭 etcd proto 生成的 grpc stub 代码（`rpc.grpc.pb.cc` 等）的 UBSan 插桩。原因是这些 stub 引用了
+> `grpc::internal::ClientReactor` 的 typeinfo（其析构为 `= default`，无关键函数），在 stub 被插桩而 grpc
+> 库本身不插桩时，链接会报 `undefined reference to 'typeinfo for grpc::internal::ClientReactor'`。
+
+> TSan 平台支持说明：
+>
+> - **x86_64：已验证可用。** `bazel build --config=tsan` 构建的 worker 在 `enable_urma=false` 配置下
+>   可正常启动并稳定运行，无 TSAN race 报告。运行时需要：
+>   - `setarch x86_64 -R`（禁用 ASLR），否则 TSAN 报 "unexpected memory mapping"（ASLR 将共享内存 mmap
+>     落入 TSAN 影子内存区）。
+>   - `TSAN_OPTIONS='history_size=1:force_seq_cst=0'`，减小 TSAN 影子内存开销。
+>   - `shared_memory_size_mb` 建议不超过 256，`enable_urma` 设为 `false`。
+>
+> - **aarch64：不支持。** worker 在 TSAN 下启动时 `libtsan.so` 内部段错误（SEGV）。两个架构性根因：
+>
+>   1. **brpc 全局覆盖 `pthread_mutex_lock`**（`bthread/mutex.cpp`），TSAN 的拦截器被绕过，所有使用
+>      brpc 内部 mutex 的代码都被 TSAN 误报为 data race。`usercode_in_pthread=true` 无效，因为
+>      brpc 的内部任务（HealthCheckTask、TimerThread、bvar 采样器）仍使用 bthread::Mutex。
+>   2. **bthread 使用自定义汇编 fiber 栈切换**（`bthread_make_fcontext`，类似 boost::context 的
+>      fcontext_t），不走 POSIX `swapcontext`。TSAN 只能拦截 `swapcontext`，无法跟踪自定义汇编
+>      fiber 切换 → 切换后 TSAN 的 per-pthread ThreadState 持有过期栈指针 → 影子内存地址落入未映射区
+>      → `ThreadSanitizer: SEGV`。此问题仅在 aarch64 上出现（影子内存布局与 fiber 栈冲突）；
+>      x86_64 的影子内存布局不冲突，故 fiber 切换被容忍。
+>
+>   这是 brpc 社区的已知问题，3 个相关 issue（
+>   [#2864](https://github.com/apache/brpc/issues/2864)、
+>   [#3295](https://github.com/apache/brpc/issues/3295)、
+>   [#1687](https://github.com/apache/brpc/issues/1687)）均未修复。理论上的解法
+>   是在 bthread 的 fiber 切换代码中集成 Clang TSAN fiber API（`__tsan_switch_to_fiber`），
+>   但 brpc 社区未做此集成。
+>
+> - **aarch64 建议**：使用 `bazel build --config=asan`（AddressSanitizer）替代 TSAN。ASAN 不跟踪
+>   fiber 栈，不会 SEGV。并发安全验证在 x86_64 TSAN 上做，或依赖代码审查 + 单元测试。
+
 ### 组合示例
 
 ```bash

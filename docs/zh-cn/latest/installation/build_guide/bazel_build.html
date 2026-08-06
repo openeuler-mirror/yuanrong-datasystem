@@ -977,6 +977,54 @@ bazel<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 </tbody>
 </table>
 </div>
+<blockquote>
+<div><p>UBSan 说明：<code class="docutils literal notranslate"><span class="pre">build:ubsan</span></code> 在 <code class="docutils literal notranslate"><span class="pre">-fsanitize=undefined</span></code> 基础上额外排除 <code class="docutils literal notranslate"><span class="pre">alignment</span></code> 子检查，并通过
+<code class="docutils literal notranslate"><span class="pre">--per_file_copt=external/.*&#64;-fno-sanitize=undefined</span></code> 把 UBSan 对所有外部依赖（absl/grpc/rocksdb 等）
+整体关闭，仅保留对 <code class="docutils literal notranslate"><span class="pre">datasystem::*</span></code> 自有代码的检查。原因是 GCC 14 + absl <code class="docutils literal notranslate"><span class="pre">raw_hash_set</span></code> 存在已知
+兼容问题（<code class="docutils literal notranslate"><span class="pre">get_hash_slot_fn&lt;Hash&gt;()</span> <span class="pre">==</span> <span class="pre">nullptr</span></code> 在 <code class="docutils literal notranslate"><span class="pre">constexpr</span></code> 上下文中报 “is not a constant expression”）；
+之前的 <code class="docutils literal notranslate"><span class="pre">-fno-sanitize=function</span></code> 方案在系统 GCC（不识别 <code class="docutils literal notranslate"><span class="pre">function</span></code> 子检查名）下会报
+<code class="docutils literal notranslate"><span class="pre">unrecognized</span> <span class="pre">argument</span> <span class="pre">to</span> <span class="pre">'-fno-sanitize='</span> <span class="pre">option:</span> <span class="pre">'function'</span></code>。<code class="docutils literal notranslate"><span class="pre">--per_file_copt</span></code> 方案与 GCC 版本无关，
+同时兼容 gcc-toolset-14 与系统 GCC。CMake 构建路径（<code class="docutils literal notranslate"><span class="pre">USE_SANITIZER=undefined</span></code>）则用
+<code class="docutils literal notranslate"><span class="pre">check_cxx_compiler_flag</span></code> 检测后条件加 <code class="docutils literal notranslate"><span class="pre">-fno-sanitize=function</span></code>。</p>
+<p>此外，<code class="docutils literal notranslate"><span class="pre">build:ubsan</span></code> 还通过 <code class="docutils literal notranslate"><span class="pre">--per_file_copt=third_party/protos/etcd/.*&#64;-fno-sanitize=undefined</span></code>
+关闭 etcd proto 生成的 grpc stub 代码（<code class="docutils literal notranslate"><span class="pre">rpc.grpc.pb.cc</span></code> 等）的 UBSan 插桩。原因是这些 stub 引用了
+<code class="docutils literal notranslate"><span class="pre">grpc::internal::ClientReactor</span></code> 的 typeinfo（其析构为 <code class="docutils literal notranslate"><span class="pre">=</span> <span class="pre">default</span></code>，无关键函数），在 stub 被插桩而 grpc
+库本身不插桩时，链接会报 <code class="docutils literal notranslate"><span class="pre">undefined</span> <span class="pre">reference</span> <span class="pre">to</span> <span class="pre">'typeinfo</span> <span class="pre">for</span> <span class="pre">grpc::internal::ClientReactor'</span></code>。</p>
+</div></blockquote>
+<blockquote>
+<div><p>TSan 平台支持说明：</p>
+<ul>
+<li><p><strong>x86_64：已验证可用。</strong> <code class="docutils literal notranslate"><span class="pre">bazel</span> <span class="pre">build</span> <span class="pre">--config=tsan</span></code> 构建的 worker 在 <code class="docutils literal notranslate"><span class="pre">enable_urma=false</span></code> 配置下
+可正常启动并稳定运行，无 TSAN race 报告。运行时需要：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">setarch</span> <span class="pre">x86_64</span> <span class="pre">-R</span></code>（禁用 ASLR），否则 TSAN 报 “unexpected memory mapping”（ASLR 将共享内存 mmap
+落入 TSAN 影子内存区）。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TSAN_OPTIONS='history_size=1:force_seq_cst=0'</span></code>，减小 TSAN 影子内存开销。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">shared_memory_size_mb</span></code> 建议不超过 256，<code class="docutils literal notranslate"><span class="pre">enable_urma</span></code> 设为 <code class="docutils literal notranslate"><span class="pre">false</span></code>。</p></li>
+</ul>
+</li>
+<li><p><strong>aarch64：不支持。</strong> worker 在 TSAN 下启动时 <code class="docutils literal notranslate"><span class="pre">libtsan.so</span></code> 内部段错误（SEGV）。两个架构性根因：</p>
+<ol class="arabic simple">
+<li><p><strong>brpc 全局覆盖 <code class="docutils literal notranslate"><span class="pre">pthread_mutex_lock</span></code></strong>（<code class="docutils literal notranslate"><span class="pre">bthread/mutex.cpp</span></code>），TSAN 的拦截器被绕过，所有使用
+brpc 内部 mutex 的代码都被 TSAN 误报为 data race。<code class="docutils literal notranslate"><span class="pre">usercode_in_pthread=true</span></code> 无效，因为
+brpc 的内部任务（HealthCheckTask、TimerThread、bvar 采样器）仍使用 bthread::Mutex。</p></li>
+<li><p><strong>bthread 使用自定义汇编 fiber 栈切换</strong>（<code class="docutils literal notranslate"><span class="pre">bthread_make_fcontext</span></code>，类似 boost::context 的
+fcontext_t），不走 POSIX <code class="docutils literal notranslate"><span class="pre">swapcontext</span></code>。TSAN 只能拦截 <code class="docutils literal notranslate"><span class="pre">swapcontext</span></code>，无法跟踪自定义汇编
+fiber 切换 → 切换后 TSAN 的 per-pthread ThreadState 持有过期栈指针 → 影子内存地址落入未映射区
+→ <code class="docutils literal notranslate"><span class="pre">ThreadSanitizer:</span> <span class="pre">SEGV</span></code>。此问题仅在 aarch64 上出现（影子内存布局与 fiber 栈冲突）；
+x86_64 的影子内存布局不冲突，故 fiber 切换被容忍。</p></li>
+</ol>
+<p>这是 brpc 社区的已知问题，3 个相关 issue（
+<a class="reference external" href="https://github.com/apache/brpc/issues/2864">#2864</a>、
+<a class="reference external" href="https://github.com/apache/brpc/issues/3295">#3295</a>、
+<a class="reference external" href="https://github.com/apache/brpc/issues/1687">#1687</a>）均未修复。理论上的解法
+是在 bthread 的 fiber 切换代码中集成 Clang TSAN fiber API（<code class="docutils literal notranslate"><span class="pre">__tsan_switch_to_fiber</span></code>），
+但 brpc 社区未做此集成。</p>
+</li>
+<li><p><strong>aarch64 建议</strong>：使用 <code class="docutils literal notranslate"><span class="pre">bazel</span> <span class="pre">build</span> <span class="pre">--config=asan</span></code>（AddressSanitizer）替代 TSAN。ASAN 不跟踪
+fiber 栈，不会 SEGV。并发安全验证在 x86_64 TSAN 上做，或依赖代码审查 + 单元测试。</p></li>
+</ul>
+</div></blockquote>
 </section>
 <section id="id17">
 <h3>组合示例<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
