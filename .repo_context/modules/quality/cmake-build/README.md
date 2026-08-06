@@ -128,6 +128,9 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 
 ### GPU-Only Hetero Build Notes
 
+- `common_cuda_host_memory` is configured independently of `BUILD_HETERO_GPU` and `BUILD_PIPLN_H2D`. CMake probes only
+  for `cuda_runtime_api.h`; when it is absent the registration API compiles as a no-op, without requiring libcudart or
+  NCCL at build time. The existing `common_cuda_device` target remains gated by `BUILD_HETERO_GPU`.
 - Verified on `2026-06-15` from `build.sh`, top-level `CMakeLists.txt`, `src/datasystem/common/rdma/CMakeLists.txt`,
   `src/datasystem/common/device/CMakeLists.txt`, `tests/st/CMakeLists.txt`, and client/worker Remote H2D call sites:
   - `bash build.sh -X gpu ...` means `BUILD_HETERO=on`, `BUILD_HETERO_NPU=off`, and `BUILD_HETERO_GPU=on`.

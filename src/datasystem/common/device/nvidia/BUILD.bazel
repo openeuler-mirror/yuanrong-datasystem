@@ -3,6 +3,18 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//src/datasystem:__subpackages__"])
 
 ds_cc_library(
+    name = "cuda_host_memory",
+    srcs = ["cuda_host_memory.cpp"],
+    hdrs = ["cuda_host_memory.h"],
+    linkopts = ["-ldl"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:status_helper",
+        "@local_cuda//:cuda_headers",
+    ],
+)
+
+ds_cc_library(
     name = "cuda_resource_manager",
     srcs = [
         "cuda_resource_manager.cpp",

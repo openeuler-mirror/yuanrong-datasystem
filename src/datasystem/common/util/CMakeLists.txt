@@ -26,7 +26,6 @@ set(UTIL_SRCS
         safe_shm_lock.cpp
         locks.cpp
         rpc_diagnostic.cpp
-        cuda_host_memory.cpp
         sched_runtime_linux.cpp
         string_util.cpp)
 
@@ -41,8 +40,6 @@ set(UTIL_LIBS
         common_util_queue
         dynamic_flag_config
         common_rdma_util)
-
-list(APPEND UTIL_LIBS ${CMAKE_DL_LIBS})
 
 set_source_files_properties(version.cpp PROPERTIES
         COMPILE_DEFINITIONS "GIT_HASH=\"${GIT_HASH}\"")

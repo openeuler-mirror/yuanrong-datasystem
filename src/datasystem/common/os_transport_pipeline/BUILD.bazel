@@ -52,6 +52,7 @@ ds_cc_library(
         "//src/datasystem/protos:share_memory_cc_proto",
     ] + select({
         "//:enable_pipeline_h2d": [
+            "//src/datasystem/common/device/nvidia:cuda_host_memory",
             "//src/datasystem/common/rdma:urma_dlopen_util",
             "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
             "//src/datasystem/common/rdma:fast_transport_base_header",

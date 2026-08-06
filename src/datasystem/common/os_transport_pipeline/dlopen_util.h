@@ -22,11 +22,12 @@
 #define OS_XPRT_PIPLN_DLOPEN_UTIL
 
 #include <cstdint>
+#include <string>
 #ifndef PIPLN_USE_MOCK
 #include <cuda_runtime.h>
 #endif
 
-#include "datasystem/common/util/cuda_host_memory.h"
+#include "datasystem/common/device/nvidia/cuda_host_memory.h"
 #include "os-transport/os_transport.h"
 
 namespace OsXprtPipln {
@@ -49,7 +50,7 @@ namespace OsXprtPipln {
 
 #ifndef PIPLN_USE_MOCK
 template <typename T>
-T LoadCudaRuntimeFunc(const char *name)
+T LoadCudaRuntimeFunc(const std::string &name)
 {
     return reinterpret_cast<T>(reinterpret_cast<intptr_t>(datasystem::GetCudaRuntimeSymbol(name)));
 }

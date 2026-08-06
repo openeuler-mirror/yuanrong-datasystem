@@ -17,6 +17,7 @@ set(RDMA_DEPEND_LIBS
     common_rdma_util)
 set(HCCS_EXTRA_LIBS)
 if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
+    list(APPEND URMA_DEPEND_LIBS common_cuda_host_memory)
     list(APPEND URMA_SRCS
         urma_manager.cpp
         urma_async_event_handler.cpp

@@ -25,8 +25,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "datasystem/common/device/nvidia/cuda_host_memory.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/util/cuda_host_memory.h"
 #include "datasystem/common/util/strings_util.h"
 
 namespace datasystem {
@@ -58,9 +58,7 @@ Status ShmMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenantId)
         // Ignore and write log.
         LOG(WARNING) << "madvise DONTDUMP memory failed: " << StrErr(errno);
     }
-    Status registerRc = RegisterCudaHostMemory(pointer_, size_);
-    cudaHostMemoryRegistered_ = registerRc.IsOk();
-    LOG_IF_ERROR(registerRc, "[CudaHostMemory] Failed to register client shared memory");
+    RegisterCudaHostMemory(pointer_, size_);
 
     // Closing this fd has an effect on performance.
     RETRY_ON_EINTR(close(fd_));
@@ -72,9 +70,7 @@ ShmMmapTableEntry::~ShmMmapTableEntry()
 {
     // munmap fd.
     if (pointer_ != nullptr && pointer_ != MAP_FAILED) {
-        if (cudaHostMemoryRegistered_) {
-            UnregisterCudaHostMemory(pointer_);
-        }
+        UnregisterCudaHostMemory(pointer_);
         int ret = munmap(pointer_, size_);
         if (ret != 0) {
             LOG(ERROR) << FormatString("munmap failed, client id: %s, fd: %d, size: %zu, returned: [%d], errno = [%s]",

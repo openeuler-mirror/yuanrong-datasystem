@@ -198,10 +198,6 @@ public:
      */
     Status EnsureClientPipelineH2DEnv();
 
-    Status RegisterClientTransportMemoryForH2D();
-
-    void UnregisterClientTransportMemoryForH2D();
-
     Status GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle, uint64_t size);
 
     /**
@@ -823,9 +819,6 @@ private:
     std::string clientId_;
     static bool clientMode_;
     void *memoryBuffer_ = nullptr;
-    bool clientTransportMemoryPinned_ = false;
-    uint32_t clientTransportMemoryPinRef_ = 0;
-    std::mutex clientTransportMemoryPinMutex_;
     std::mutex recoveryProbeMutex_;
     void *recoveryProbeBuffer_ = nullptr;
     std::mutex recoveryProbeSourceMutex_;

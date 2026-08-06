@@ -23,6 +23,7 @@ ds_cc_library(
     ],
     deps = [
         ":immap_table_entry",
+        "//src/datasystem/common/device/nvidia:cuda_host_memory",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log_header",

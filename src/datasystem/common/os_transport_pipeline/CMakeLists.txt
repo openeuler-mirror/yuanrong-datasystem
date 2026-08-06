@@ -22,6 +22,7 @@ if (BUILD_PIPLN_H2D)
     endif()
     target_link_libraries(os_transport_pipeline PUBLIC
         mlcachedirect_os_transport_static
+        common_cuda_host_memory
         common_log
         common_perf
         common_util
