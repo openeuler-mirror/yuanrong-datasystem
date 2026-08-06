@@ -37,7 +37,7 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-design/scripts/mermaid_lint.py`
   - `.skills/ds-design/scripts/scope_check.py`
 - Last verified against source:
-  - `2026-07-22`
+  - `2026-08-06`
 
 ## Purpose
 
@@ -58,7 +58,7 @@ when a natural-language request should invoke one of them.
 | `ds-self-verify` | verify diff, tests, context updates, and infra risk before Codex claims work is complete or PR-ready, using the shared AI self-verification playbook | “完成前自检”, “self verify”, “准备提交/PR前检查”, Codex is about to claim completion after file changes | general questions about verification policy |
 | `ds-issue-intake` | fetch a GitCode issue, redact sensitive details, and write a structured task spec for AI-assisted implementation | “拉取 issue”, “分析 issue 572”, “从这个 issue 开始开发”, “issue intake”, “准备 issue 任务” | asking how issue templates work or discussing issue policy without asking to fetch/triage a concrete issue |
 | `ds-test` | plan and run configured validation for code changes, including local command selection and remote validation through private user-provided SSH config | “验证这个改动”, “跑远端验证”, “跑测试并给 PR 验证结果”, “validate this branch”, “run ds-test” | asking what tests should exist in general, or discussing validation policy without asking to run validation |
-| `ds-create-pr` | create a GitCode PR for a pushed branch with a template-compliant PR body | “创建PR”, “提交PR”, “开PR”, “create pull request”, “open a PR”, “发起合并请求” | mentions of PR review policy, PR template, or PR conflicts without asking to create a PR |
+| `ds-create-pr` | normalize the source branch to exactly one commit relative to the target base, push it safely to a fork, create a GitCode PR with a template-compliant body, then post `/retest` unless the target is `doc_pages` or all changes are limited to `.repo_context/` and `docs/` | “创建PR”, “提交PR”, “开PR”, “create pull request”, “open a PR”, “发起合并请求” | mentions of PR review policy, PR template, or PR conflicts without asking to create a PR |
 | `ds-pr-comment-proc` | fetch unresolved GitCode PR review comments, prepare replies, mark discussions resolved, and verify final resolved state | “拉取 PR 评论”, “处理 review comments”, “回复并 resolve 评论”, “address PR comments”, “verify resolved comments” | asking how review comments work, or discussing PR review policy without asking to process comments |
 | `ds-refresh-docs` | rebuild and publish online Chinese docs from the latest upstream `master` into `doc_pages`, then automatically open the GitCode PR | “更新在线文档”, “刷新在线文档”, “发布在线文档”, “refresh online docs”, “update zh-cn latest docs” | mentions of online docs, docs publishing, or `doc_pages` without clearly asking to refresh or publish |
 | `ds-log-analysis` | analyze KVCache access/resource logs and generate HTML reports | “日志分析”, “access log 分析”, “resource log 报告”, “QPS/延迟/错误率趋势”, “KVCache report” | asking what the log format means without requesting report generation |

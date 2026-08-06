@@ -1,4 +1,4 @@
 interface:
   display_name: "GitCode创建PR"
-  short_description: "使用GitCode API创建仓库Pull Request"
-  default_prompt: "Use $ds-create-pr to create a Pull Request for my pushed branch."
+  short_description: "压缩为单提交、创建GitCode PR并按需触发门禁"
+  default_prompt: "Use $ds-create-pr to prepare my committed source branch and create a Pull Request."

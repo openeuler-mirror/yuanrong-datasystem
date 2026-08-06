@@ -85,7 +85,7 @@ class ContextSurvivalTest(unittest.TestCase):
             "hook_event_name": "SessionStart",
             "source": "startup",
             "cwd": "/tmp/repo",
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-sol",
         }
 
         output = context_survival.handle_session_start(payload)
@@ -94,6 +94,7 @@ class ContextSurvivalTest(unittest.TestCase):
         specific = output["hookSpecificOutput"]
         self.assertEqual(specific["hookEventName"], "SessionStart")
         self.assertIn("Context survival", specific["additionalContext"])
+        self.assertIn("Active runtime model: `gpt-5.6-sol`", specific["additionalContext"])
 
     def test_post_compact_uses_common_output_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
