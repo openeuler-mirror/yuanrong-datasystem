@@ -140,6 +140,10 @@
     boundary. It reads one explicitly selected ETCD or Coordinator backend, decodes raw facts locally, and
     projects node health, committed hash ranges, and key routes from one immutable `TopologySnapshot`. It is linked only
     into `libds_client_py`; it is not part of the public C++ `datasystem` SDK ABI or the Worker request path.
+  - Synchronous `HeteroClient::MSetD2H(..., outLocalSetKeys)` writes device-memory data to host objects and returns, in
+    input order, keys that were absent from the connected worker and whose `MultiPublish` result was confirmed
+    successful. Existing local keys are excluded, and ambiguous RPC failures do not report unconfirmed keys. The async
+    and Python result surfaces are unchanged.
   - Python package `yr.datasystem` lazily exposes public SDK symbols, `DsTensorClient`, and optional transfer-engine
     bindings so importing `TransferEngine` alone does not eagerly load `libds_client_py` or its `libbrpc` dependency.
   - Client-direct pipeline RH2D serializes manager registration and response application, while independent worker

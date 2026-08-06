@@ -196,7 +196,9 @@ TEST_F(HeteroD2HGpuTest, TestAllExist)
 
         if (numOfObjs == 450) {
             // First iteration: set 450 keys with 'b' data
-            DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
+            std::vector<std::string> localSetKeys{ "stale_key" };
+            DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList, {}, &localSetKeys));
+            ASSERT_EQ(localSetKeys, inObjectKeys);
             DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
             DS_ASSERT_TRUE(failedKeys.empty(), true);
             DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
@@ -214,7 +216,13 @@ TEST_F(HeteroD2HGpuTest, TestAllExist)
             // MSetD2H semantics: if key exists, it will NOT update
             // Keys 0-449 already exist from first iteration (stay 'b')
             // Keys 450-499 are new and will be set with 'c'
-            DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
+            std::vector<std::string> localSetKeys{ "stale_key" };
+            DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList, {}, &localSetKeys));
+            std::vector<std::string> expectedLocalSetKeys(inObjectKeys.begin() + 450, inObjectKeys.end());
+            ASSERT_EQ(localSetKeys, expectedLocalSetKeys);
+            localSetKeys.emplace_back("stale_key");
+            DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList, {}, &localSetKeys));
+            ASSERT_TRUE(localSetKeys.empty());
 
             // Verify the results
             DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
@@ -308,10 +316,11 @@ TEST_F(HeteroD2HGpuTest, TestMSetD2HMsgWithInvalidDeviceId)
         it.deviceIdx = invalidDeviceId;
     }
 
-    std::vector<std::string> failedKeys;
-    Status s1 = client->MSetD2H(keys, swapInBlobList);
+    std::vector<std::string> localSetKeys{ "stale_key" };
+    Status s1 = client->MSetD2H(keys, swapInBlobList, {}, &localSetKeys);
     LOG(INFO) << "MSetD2H Status: " << s1.ToString();
     ASSERT_TRUE(s1.IsError());
+    ASSERT_TRUE(localSetKeys.empty());
 }
 }  // namespace st
 }  // namespace datasystem

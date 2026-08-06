@@ -127,10 +127,19 @@ Status HeteroClient::PreRegisterDeviceMemory(const std::vector<void *> &devPtrs,
 Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
                              const SetParam &setParam)
 {
+    return MSetD2H(keys, devBlobList, setParam, nullptr);
+}
+
+Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
+                             const SetParam &setParam, std::vector<std::string> *outLocalSetKeys)
+{
+    if (outLocalSetKeys != nullptr) {
+        outLocalSetKeys->clear();
+    }
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     PerfPoint point(PerfKey::CLIENT_MSET_D2H_ALL);
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    return impl_->MSetD2H(keys, devBlobList, setParam);
+    return impl_->MSetD2H(keys, devBlobList, setParam, outLocalSetKeys);
 }
 
 Status HeteroClient::Delete(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys)

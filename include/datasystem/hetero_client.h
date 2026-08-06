@@ -87,10 +87,24 @@ public:
     /// \param[in] devBlobList Pointers to the HBM memory in a group of devices. Data is obtained from these pointers
     ///     and written to the key of the host. If the DeviceBlobList contains multiple HBM pointers, the data is
     ///     combined and written to the shared memory corresponding to the host key.
-    /// \param[in] setParam Configuration parameters for the AsyncMSetD2H operation.
-    /// \return K_OK on any object success; the error code otherwise.
+    /// \param[in] setParam Configuration parameters for the MSetD2H operation.
+    /// \return K_OK when the operation completes successfully; the error code otherwise.
     Status MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
                    const SetParam &setParam = {});
+
+    /// \brief Write the data of the device to the host and return keys newly set on the connected Worker.
+    /// \param[in] keys Keys in the host. For performance reasons, only the validity of the first key is validated.
+    /// \param[in] devBlobList Pointers to the HBM memory in a group of devices.
+    /// \param[in] setParam Configuration parameters for the MSetD2H operation.
+    /// \param[out] outLocalSetKeys Optional keys confirmed to be newly set on the connected Worker by this call.
+    ///     The vector is cleared when the call begins. Existing local keys and unconfirmed publish results are
+    ///     excluded.
+    ///     It may be empty when K_OK is returned if no key was newly set. If an error is returned after a trusted
+    ///     publish response, it may contain keys confirmed successfully set by the partial operation; it remains empty
+    ///     when no publish result was confirmed.
+    /// \return K_OK when the operation completes successfully; the error code otherwise.
+    Status MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
+                   const SetParam &setParam, std::vector<std::string> *outLocalSetKeys);
 
     /// \brief Delete the key from the host.
     /// \param[in] keys Keys in the host

@@ -2533,12 +2533,16 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
 }
 
 Status ObjectClientImpl::MSetD2H(const std::vector<std::string> &objectKeys,
-                                 const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam)
+                                 const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam,
+                                 std::vector<std::string> *outLocalSetKeys)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_MSET_D2H);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_MSETD2H);
     access.ObjectKeysSummaryRef(objectKeys)
         .DataSizeProvider([&devBlobList] { return CalculateDeviceBlobSize(devBlobList); });
+    if (outLocalSetKeys != nullptr) {
+        outLocalSetKeys->clear();
+    }
     auto rc = CheckMSetD2HInput(objectKeys, devBlobList, setParam);
     if (rc.IsError()) {
         access.Result(rc).Record();
@@ -2549,7 +2553,7 @@ Status ObjectClientImpl::MSetD2H(const std::vector<std::string> &objectKeys,
         access.Result(cfgRc).Record();
         return cfgRc;
     }
-    auto status = MSetD2HImpl(objectKeys, devBlobList, setParam);
+    auto status = MSetD2HImpl(objectKeys, devBlobList, setParam, outLocalSetKeys);
     access.Result(status).Record();
     return status;
 }
@@ -2580,14 +2584,15 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMSetD2H(const std::vector
         [this, traceContext,
          asyncState = std::move(asyncState), access = std::move(access)]() mutable {
             TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
-            auto rc = MSetD2HImpl(asyncState->objectKeys, asyncState->devBlobList, asyncState->setParam);
+            auto rc = MSetD2HImpl(asyncState->objectKeys, asyncState->devBlobList, asyncState->setParam, nullptr);
             access->Result(rc).Record();
             return AsyncResult{ rc, {} };
         });
 }
 
 Status ObjectClientImpl::MSetD2HImpl(const std::vector<std::string> &objectKeys,
-                                     const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam)
+                                     const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam,
+                                     std::vector<std::string> *outLocalSetKeys)
 {
     // Step1: execute Exist check
     std::vector<std::shared_ptr<Buffer>> bufferList;
@@ -2622,7 +2627,7 @@ Status ObjectClientImpl::MSetD2HImpl(const std::vector<std::string> &objectKeys,
         }
         blobSizes.emplace_back(std::move(sizeList));
     }
-    return MultiPublish(bufferList, setParam, blobSizes);
+    return MultiPublish(bufferList, setParam, blobSizes, outLocalSetKeys);
 }
 
 Status ObjectClientImpl::CheckMSetD2HInput(const std::vector<std::string> &objectKeys,
@@ -7116,7 +7121,8 @@ Status ObjectClientImpl::HandleShmRefCountAfterMultiPublish(const std::vector<st
 }
 
 Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>> &bufferList, const SetParam &setParam,
-                                      const std::vector<std::vector<uint64_t>> &blobSizes)
+                                      const std::vector<std::vector<uint64_t>> &blobSizes,
+                                      std::vector<std::string> *outLocalSetKeys)
 {
     std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList;
     bufferInfoList.reserve(bufferList.size());
@@ -7130,14 +7136,31 @@ Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>>
     RETURN_IF_NOT_OK(CheckConnection());
 
     PublishParam param{
-        .isReplica = true, .existence = setParam.existence, .ttlSecond = setParam.ttlSecond
+        .isReplica = true,
+        .existence = setParam.existence,
+        .ttlSecond = setParam.ttlSecond,
+        .returnLocalPublishedIndexes = outLocalSetKeys != nullptr
     };
     MultiPublishRspPb rsp;
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, param, rsp, blobSizes));
-    return HandleShmRefCountAfterMultiPublish(bufferList, rsp);
+    auto publishStatus = HandleShmRefCountAfterMultiPublish(bufferList, rsp);
+    if (outLocalSetKeys != nullptr) {
+        outLocalSetKeys->clear();
+        for (auto index : rsp.local_published_indexes()) {
+            CHECK_FAIL_RETURN_STATUS(
+                index < bufferList.size(), K_RUNTIME_ERROR,
+                FormatString("The response local published index %u exceeds the request size %zu.", index,
+                             bufferList.size()));
+        }
+        outLocalSetKeys->reserve(rsp.local_published_indexes_size());
+        for (auto index : rsp.local_published_indexes()) {
+            outLocalSetKeys->emplace_back(bufferList[index]->bufferInfo_->objectKey);
+        }
+    }
+    return publishStatus;
 }
 
 Status ObjectClientImpl::QuerySize(const std::vector<std::string> &objectKeys, std::vector<uint64_t> &outSizes)

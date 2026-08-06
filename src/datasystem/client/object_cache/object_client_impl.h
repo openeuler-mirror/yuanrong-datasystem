@@ -609,10 +609,11 @@ public:
      * @param[in] objectKeys multiple keys support
      * @param[in] devBlobList vector of compose data
      * @param[in] param set parameter
+     * @param[out] outLocalSetKeys optional keys confirmed to be newly set on the connected worker
      * @return Status of the result.
      */
     Status MSetD2H(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
-                   const SetParam &param);
+                   const SetParam &param, std::vector<std::string> *outLocalSetKeys);
 
     /**
      * @brief For device object, to invoke worker client to create and async publish multiple objects
@@ -852,7 +853,7 @@ private:
      * @brief The core synchronous implementation shared by MSetD2H and AsyncMSetD2H.
      */
     Status MSetD2HImpl(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
-                       const SetParam &setParam);
+                       const SetParam &setParam, std::vector<std::string> *outLocalSetKeys);
 
     /**
      * @brief Validate MSetD2H input arguments.
@@ -927,10 +928,11 @@ private:
      * @param[in] bufferList The buffer list needs to store data information.
      * @param[in] setParam the set param of keys
      * @param[in] blobSizes the blob size list of keys
+     * @param[out] outLocalSetKeys optional keys confirmed to be newly set on the connected worker
      * @return Status of the result.
      */
     Status MultiPublish(const std::vector<std::shared_ptr<Buffer>> &bufferList, const SetParam &setParam,
-                        const std::vector<std::vector<uint64_t>> &blobSizes);
+                        const std::vector<std::vector<uint64_t>> &blobSizes, std::vector<std::string> *outLocalSetKeys);
 
     /**
      * @brief Check the client is ready to execute any api

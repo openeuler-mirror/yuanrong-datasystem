@@ -84,6 +84,7 @@ struct PublishParam {
     bool isReplica;
     ExistenceOpt existence;
     uint32_t ttlSecond;
+    bool returnLocalPublishedIndexes = false;
 };
 
 struct GetParam {

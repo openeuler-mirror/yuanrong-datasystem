@@ -684,6 +684,70 @@ TEST_F(DevObjectHeteroRH2DDistributedTest, DISABLED_RemoteH2DTest2)
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_, blksPerObj);
 }
 
+TEST_F(DevObjectHeteroRH2DDistributedTest, DISABLED_MSetD2HNxReturnsOnlyLocallyPublishedKeys)
+{
+    InitAcl(deviceId_);
+
+    std::shared_ptr<DsClient> d2hClient;
+    std::shared_ptr<DsClient> existingKeyClient;
+    InitTestDsClientForRemoteH2D(0, d2hClient);
+    InitTestDsClientForRemoteH2D(1, existingKeyClient);
+
+    const std::string existingKey = GetStringUuid();
+    const std::string newKey = GetStringUuid();
+    const std::vector<std::string> keys{ existingKey, newKey };
+    std::vector<DeviceBlobList> unusedGetBlobList;
+    std::vector<DeviceBlobList> setBlobList;
+    PrePareDevData(keys.size(), 1, 1024, unusedGetBlobList, setBlobList, deviceId_);
+
+    SetParam nxParam;
+    nxParam.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+    nxParam.existence = ExistenceOpt::NX;
+    nxParam.cacheType = CacheType::MEMORY;
+
+    const std::string injectPoint = "worker.before_CreateMultiMetaToMaster";
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, injectPoint, "1*sleep(1000)"));
+
+    Status d2hStatus;
+    std::vector<std::string> localPublishedKeys;
+    std::thread d2hThread([&]() {
+        d2hStatus = d2hClient->Hetero()->MSetD2H(keys, setBlobList, nxParam, &localPublishedKeys);
+    });
+
+    uint64_t executeCount = 0;
+    Status pollStatus;
+    constexpr int maxWaitTimes = 100;
+    for (int i = 0; i < maxWaitTimes; ++i) {
+        pollStatus = cluster_->GetInjectActionExecuteCount(WORKER, 0, injectPoint, executeCount);
+        if (pollStatus.IsError()) {
+            break;
+        }
+        if (executeCount > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    const std::string oldValue = "existing-causal-value";
+    Status existingSetStatus;
+    if (pollStatus.IsOk() && executeCount > 0) {
+        existingSetStatus = existingKeyClient->KV()->Set(existingKey, oldValue, nxParam);
+    }
+
+    d2hThread.join();
+    auto clearStatus = cluster_->ClearInjectAction(WORKER, 0, injectPoint);
+    DS_ASSERT_OK(pollStatus);
+    ASSERT_GT(executeCount, 0U);
+    DS_ASSERT_OK(existingSetStatus);
+    DS_ASSERT_OK(clearStatus);
+    DS_ASSERT_OK(d2hStatus);
+    ASSERT_EQ(localPublishedKeys, (std::vector<std::string>{ newKey }));
+
+    std::string actualValue;
+    DS_ASSERT_OK(existingKeyClient->KV()->Get(existingKey, actualValue));
+    ASSERT_EQ(actualValue, oldValue);
+}
+
 TEST_F(DevObjectHeteroRH2DNoNpuTest, DISABLED_RemoteH2DTestNoNpu)
 {
     // Test that Remote H2D is turned off when the workers have no npu's specified.
