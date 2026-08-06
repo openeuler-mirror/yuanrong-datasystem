@@ -99,8 +99,8 @@ def _symlink_urma_libs(repository_ctx, lib_dir):
                 repository_ctx.symlink(repository_ctx.path(line), target)
 
 def _urma_pkg_repository_impl(repository_ctx):
-    urma_pkg_url = repository_ctx.getenv("URMA_PKG_URL", "")
-    urma_pkg_sha256 = repository_ctx.getenv("URMA_PKG_SHA256", "")
+    urma_pkg_url = repository_ctx.os.environ.get("URMA_PKG_URL", "")
+    urma_pkg_sha256 = repository_ctx.os.environ.get("URMA_PKG_SHA256", "")
 
     if urma_pkg_url != "":
         # --- Download package ---
