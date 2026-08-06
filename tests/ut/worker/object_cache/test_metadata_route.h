@@ -17,9 +17,13 @@
 #ifndef DATASYSTEM_TESTS_UT_WORKER_OBJECT_CACHE_TEST_METADATA_ROUTE_H
 #define DATASYSTEM_TESTS_UT_WORKER_OBJECT_CACHE_TEST_METADATA_ROUTE_H
 
+#include <algorithm>
 #include <chrono>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
@@ -79,22 +83,38 @@ public:
 class ObjectTopologyTestRuntime final {
 public:
     ObjectTopologyTestRuntime() = default;
-    ~ObjectTopologyTestRuntime() = default;
+    ~ObjectTopologyTestRuntime()
+    {
+        if (engine_ != nullptr) {
+            constexpr auto shutdownWait = std::chrono::seconds(1);
+            (void)engine_->Shutdown(std::chrono::steady_clock::now() + shutdownWait);
+        }
+    }
 
-    Status Init(const HostPort &localAddress)
+    Status Init(const HostPort &localAddress,
+                std::function<void(cluster::TopologyAvailabilityLevel)> availabilityHandler = nullptr)
     {
         if (engine_ != nullptr) {
             return Status::OK();
         }
         cluster::CoordinatorWatchIngress ingress;
-        ingress.bind = [](cluster::CoordinatorWatchIngress::Handler) { return Status::OK(); };
-        ingress.unbindAndDrain = [](std::chrono::steady_clock::time_point) { return Status::OK(); };
+        ingress.bind = [this](cluster::CoordinatorWatchIngress::Handler handler) {
+            std::lock_guard<std::mutex> lock(ingressMutex_);
+            watchHandler_ = std::move(handler);
+            return Status::OK();
+        };
+        ingress.unbindAndDrain = [this](std::chrono::steady_clock::time_point) {
+            std::lock_guard<std::mutex> lock(ingressMutex_);
+            watchHandler_ = nullptr;
+            return Status::OK();
+        };
         cluster::TopologyEngine::Builder builder;
         builder.SetClusterName("")
             .SetLocalAddress(localAddress.ToString())
             .UseCoordinator(proxy_, std::move(ingress))
             .SetPhaseCallbacks(callbacks_)
             .SetWorkerProbeHandler([](cluster::WorkerProbeRequest) { return Status::OK(); })
+            .SetAvailabilityHandler(std::move(availabilityHandler))
             .SetNodeDeadTimeout(std::chrono::seconds(30));
         return builder.Build(engine_);
     }
@@ -122,10 +142,51 @@ public:
         return engine_->Start();
     }
 
+    Status TriggerAuthorityConflict(const HostPort &localAddress)
+    {
+        cluster::TopologyState topology;
+        topology.clusterHasInit = true;
+        topology.version = 1;
+        topology.members = {
+            cluster::Member{ { std::string(16, 'l'), localAddress.ToString() }, cluster::MemberState::ACTIVE, { 2 } }
+        };
+        std::unique_ptr<cluster::TopologyKeyHelper> keys;
+        RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create("", keys));
+        const auto topologyKey = keys->TopologyTable() + "/" + cluster::TopologyKeyHelper::TopologyKey();
+        std::string encoded;
+        RETURN_IF_NOT_OK(cluster::TopologyRepositoryCodec::EncodeTopology(topology, encoded));
+        RETURN_IF_NOT_OK(proxy_.PutRaw(topologyKey, encoded));
+        const auto watches = proxy_.WatchCalls();
+        const auto found = std::find_if(watches.begin(), watches.end(), [&topologyKey](const auto &watch) {
+            return watch.key == topologyKey;
+        });
+        CHECK_FAIL_RETURN_STATUS(found != watches.end(), K_NOT_FOUND, "topology watch is not registered");
+        cluster::CoordinatorWatchIngress::Handler handler;
+        {
+            std::lock_guard<std::mutex> lock(ingressMutex_);
+            handler = watchHandler_;
+        }
+        CHECK_FAIL_RETURN_STATUS(handler != nullptr, K_NOT_READY, "topology watch ingress is not bound");
+        RETURN_IF_NOT_OK(handler("coordinator-test", found->watchId,
+                                 { cluster::CoordinationEventType::PUT, topologyKey, "", 2, 2 }));
+        constexpr auto isolationWait = std::chrono::seconds(1);
+        constexpr auto pollingInterval = std::chrono::milliseconds(1);
+        const auto deadline = std::chrono::steady_clock::now() + isolationWait;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (engine_->GetAvailability() == cluster::TopologyAvailabilityLevel::ROLE_ISOLATED) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(pollingInterval);
+        }
+        RETURN_STATUS(K_RUNTIME_ERROR, "topology engine did not enter role isolation after authority conflict");
+    }
+
 private:
     cluster::testing::FakeCoordinatorServiceProxy proxy_;
     TestTopologyPhaseCallbacks callbacks_;
     std::unique_ptr<cluster::TopologyEngine> engine_;
+    std::mutex ingressMutex_;
+    cluster::CoordinatorWatchIngress::Handler watchHandler_;
 };
 
 inline ObjectTopologyTestRuntime &GetObjectTopologyTestRuntime()

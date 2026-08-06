@@ -31,6 +31,12 @@ Status ResetHealthProbe();
 Status SetHealthProbe();
 
 /**
+ * @brief Revoke the process health state and remove the persisted health marker.
+ * @return K_OK on success, the error otherwise.
+ */
+Status RevokeHealthProbe();
+
+/**
  * @brief Check is healthy.
  * @return true if healthy
  */

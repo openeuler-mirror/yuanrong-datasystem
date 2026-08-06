@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <sys/stat.h>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -61,6 +62,10 @@ using namespace ::testing;
 
 using namespace datasystem::object_cache;
 
+DS_DECLARE_string(health_check_path);
+DS_DECLARE_bool(enable_distributed_master);
+DS_DECLARE_bool(enable_reconciliation);
+
 namespace datasystem {
 namespace ut {
 namespace {
@@ -94,6 +99,18 @@ bool WaitForInjectPointExecuteCount(const std::string &name, uint64_t expectedCo
         std::this_thread::sleep_for(std::chrono::milliseconds(K_INJECT_WAIT_POLL_MS));
     }
     return inject::GetExecuteCount(name) >= expectedCount;
+}
+
+bool WaitForCondition(const std::function<bool()> &condition, std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (condition()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(K_INJECT_WAIT_POLL_MS));
+    }
+    return condition();
 }
 
 class FakeWorkerMasterOCApi final : public worker::WorkerLocalMasterOCApi {
@@ -875,6 +892,316 @@ TEST_F(WorkerOcServiceImplTest, RestartReconciliationWaitsForRejoinCleanupReconF
     EXPECT_NE(rc.GetCode(), StatusCode::K_NOT_READY);
     EXPECT_GE(elapsed.count(), 40);
     EXPECT_LT(elapsed.count(), K_REJOIN_RECONCILIATION_LOCK_UPPER_BOUND_MS);
+}
+
+TEST_F(WorkerOcServiceImplTest, HealthRemainsClosedWhileTopologyIsPending)
+{
+    SetUnhealthy();
+    Raii restoreHealth([] { SetUnhealthy(); });
+
+    const auto start = std::chrono::steady_clock::now();
+    DS_EXPECT_OK(impl_->WhetherNonRestart());
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    EXPECT_FALSE(IsHealthy());
+    EXPECT_FALSE(impl_->setHealthFile_.load(std::memory_order_acquire));
+    // This path used to poll for up to 60 seconds. Keep the assertion loose enough for loaded CI hosts while proving
+    // that startup merely records a pending topology gate instead of sleeping in the service method.
+    EXPECT_LT(elapsed.count(), 1'000);
+
+    placement_.SetOwner("topology-readiness-probe", localAddress_);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    DS_EXPECT_OK(impl_->RefreshStartupHealth());
+    EXPECT_TRUE(IsHealthy());
+    EXPECT_TRUE(impl_->setHealthFile_.load(std::memory_order_acquire));
+}
+
+TEST_F(WorkerOcServiceImplTest, ReconciliationAndTopologyJointlyGateHealthPublication)
+{
+    SetUnhealthy();
+    Raii restoreHealth([] { SetUnhealthy(); });
+    placement_.SetOwner("topology-readiness-probe", localAddress_);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    impl_->reconciliationReady_.store(true, std::memory_order_release);
+
+    DS_EXPECT_OK(impl_->RefreshStartupHealth());
+    EXPECT_FALSE(IsHealthy());
+    EXPECT_FALSE(impl_->setHealthFile_.load(std::memory_order_acquire));
+
+    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    impl_->reconciliationReady_.store(false, std::memory_order_release);
+
+    DS_EXPECT_OK(impl_->RefreshStartupHealth());
+    EXPECT_FALSE(IsHealthy());
+    EXPECT_FALSE(impl_->setHealthFile_.load(std::memory_order_acquire));
+
+    impl_->reconciliationReady_.store(true, std::memory_order_release);
+    DS_EXPECT_OK(impl_->RefreshStartupHealth());
+    EXPECT_TRUE(IsHealthy());
+    EXPECT_TRUE(impl_->setHealthFile_.load(std::memory_order_acquire));
+}
+
+TEST_F(WorkerOcServiceImplTest, ConcurrentTopologyNotificationsPublishHealthOnce)
+{
+    SetUnhealthy();
+    Raii restoreHealth([] { SetUnhealthy(); });
+    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    placement_.SetOwner("topology-readiness-probe", localAddress_);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    impl_->reconciliationReady_.store(true, std::memory_order_release);
+
+    constexpr size_t notificationCount = 8;
+    std::atomic<size_t> publicationCount{ 0 };
+    std::promise<void> publicationEntered;
+    auto publicationEnteredFuture = publicationEntered.get_future();
+    std::promise<void> releasePublication;
+    auto releasePublicationFuture = releasePublication.get_future().share();
+    impl_->healthPublisher_ = [&] {
+        if (publicationCount.fetch_add(1, std::memory_order_relaxed) == 0) {
+            publicationEntered.set_value();
+        }
+        releasePublicationFuture.wait();
+        return SetHealthProbe();
+    };
+    std::vector<std::future<Status>> notifications;
+    notifications.reserve(notificationCount);
+    for (size_t index = 0; index < notificationCount; ++index) {
+        notifications.emplace_back(
+            std::async(std::launch::async, [this] { return impl_->RefreshStartupHealth(); }));
+    }
+    constexpr auto publicationEntryTimeout = std::chrono::seconds(1);
+    EXPECT_EQ(publicationEnteredFuture.wait_for(publicationEntryTimeout), std::future_status::ready);
+    releasePublication.set_value();
+    for (auto &notification : notifications) {
+        DS_EXPECT_OK(notification.get());
+    }
+
+    EXPECT_EQ(publicationCount.load(std::memory_order_relaxed), 1UL);
+    EXPECT_TRUE(IsHealthy());
+    EXPECT_TRUE(impl_->setHealthFile_.load(std::memory_order_acquire));
+}
+
+TEST_F(WorkerOcServiceImplTest, FailedHealthPublicationRollsBackAndCanRetry)
+{
+    SetUnhealthy();
+    const auto savedHealthCheckPath = FLAGS_health_check_path;
+    const auto testHealthCheckPath = GetTestCaseDataDir() + "/issue873-health-probe";
+    Raii restoreHealth([savedHealthCheckPath, testHealthCheckPath] {
+        (void)DeleteFile(testHealthCheckPath);
+        FLAGS_health_check_path = savedHealthCheckPath;
+        SetUnhealthy();
+    });
+    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    impl_->reconciliationReady_.store(true, std::memory_order_release);
+    placement_.SetOwner("topology-readiness-probe", localAddress_);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+
+    FLAGS_health_check_path = "/proc/datasystem-issue873-health-probe";
+    EXPECT_TRUE(SetHealthProbe().IsError());
+    EXPECT_FALSE(IsHealthy());
+    EXPECT_FALSE(FileExist(FLAGS_health_check_path));
+
+    FLAGS_health_check_path = testHealthCheckPath;
+    (void)DeleteFile(FLAGS_health_check_path);
+    impl_->healthPublisher_ = [] {
+        RETURN_IF_NOT_OK(SetHealthProbe());
+        RETURN_STATUS(K_IO_ERROR, "injected failure after health marker publication");
+    };
+    EXPECT_TRUE(impl_->RefreshStartupHealth().IsError());
+    EXPECT_FALSE(IsHealthy());
+    EXPECT_FALSE(FileExist(FLAGS_health_check_path));
+    EXPECT_FALSE(impl_->setHealthFile_.load(std::memory_order_acquire));
+
+    impl_->healthPublisher_ = [] { return SetHealthProbe(); };
+    DS_EXPECT_OK(impl_->RefreshStartupHealth());
+    EXPECT_TRUE(IsHealthy());
+    EXPECT_TRUE(FileExist(FLAGS_health_check_path));
+    EXPECT_TRUE(impl_->setHealthFile_.load(std::memory_order_acquire));
+}
+
+TEST_F(WorkerOcServiceImplTest, RevokeHealthProbeReportsUnlinkFailureAndRetries)
+{
+    SetUnhealthy();
+    const auto savedHealthCheckPath = FLAGS_health_check_path;
+    const auto testDir = GetTestCaseDataDir() + "/issue873-revoke-probe";
+    const auto testHealthCheckPath = testDir + "/healthy";
+    DS_ASSERT_OK(CreateDir(testDir, true, 0700));
+    Raii restore([savedHealthCheckPath, testDir] {
+        (void)chmod(testDir.c_str(), 0700);
+        FLAGS_health_check_path = savedHealthCheckPath;
+        SetUnhealthy();
+    });
+    FLAGS_health_check_path = testHealthCheckPath;
+    DS_ASSERT_OK(SetHealthProbe());
+    ASSERT_TRUE(FileExist(testHealthCheckPath));
+
+    ASSERT_EQ(chmod(testDir.c_str(), 0200), 0);
+    EXPECT_TRUE(RevokeHealthProbe().IsError());
+    EXPECT_FALSE(IsHealthy());
+
+    ASSERT_EQ(chmod(testDir.c_str(), 0700), 0);
+    EXPECT_TRUE(FileExist(testHealthCheckPath));
+    DS_EXPECT_OK(RevokeHealthProbe());
+    EXPECT_FALSE(FileExist(testHealthCheckPath));
+    DS_EXPECT_OK(RevokeHealthProbe());
+}
+
+TEST_F(WorkerOcServiceImplTest, TopologyWatchIsolationRevokesPublishedHealth)
+{
+    SetUnhealthy();
+    const auto savedHealthCheckPath = FLAGS_health_check_path;
+    const auto testHealthCheckPath = GetTestCaseDataDir() + "/issue873-runtime-health-probe";
+    Raii restore([savedHealthCheckPath, testHealthCheckPath] {
+        (void)DeleteFile(testHealthCheckPath);
+        FLAGS_health_check_path = savedHealthCheckPath;
+        SetTopologyServingAdmission(true);
+        SetUnhealthy();
+    });
+    FLAGS_health_check_path = testHealthCheckPath;
+    (void)DeleteFile(testHealthCheckPath);
+
+    std::shared_ptr<WorkerOCServiceImpl> watchedImpl;
+    ObjectTopologyTestRuntime watchedRuntime;
+    DS_ASSERT_OK(watchedRuntime.Init(localAddress_, [&watchedImpl](cluster::TopologyAvailabilityLevel level) {
+        if (watchedImpl == nullptr) {
+            return;
+        }
+        const bool allowBusiness = level == cluster::TopologyAvailabilityLevel::NORMAL
+                                   || level == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED;
+        watchedImpl->NotifyTopologyAvailability(allowBusiness);
+    }));
+    WorkerTestPlacementFacade watchedPlacement;
+    worker::MetadataRouteResolver watchedRoute(&watchedPlacement, worker::MetadataRouteOptions{});
+    auto watchedObjectTable = std::make_shared<object_cache::ObjectTable>();
+    auto watchedEvictionManager = std::make_shared<WorkerOcEvictionManager>(
+        watchedObjectTable, localAddress_, localAddress_, watchedRoute, nullptr);
+    watchedImpl = std::make_shared<WorkerOCServiceImpl>(
+        localAddress_, localAddress_, watchedObjectTable, nullptr, watchedEvictionManager, nullptr, nullptr, nullptr,
+        watchedRuntime.Engine(), watchedRoute, watchedRuntime.Engine()->Membership(), &exitRequested_, false, false);
+    watchedImpl->healthPublicationEnabled_.store(true, std::memory_order_release);
+    watchedImpl->reconciliationReady_.store(true, std::memory_order_release);
+    DS_ASSERT_OK(watchedImpl->StartTopologyHealthCoordinator());
+    watchedPlacement.SetOwner("topology-readiness-probe", localAddress_);
+    DS_ASSERT_OK(watchedRuntime.StartWithActiveLocalMember(localAddress_));
+
+    constexpr auto healthTransitionTimeout = std::chrono::seconds(2);
+    ASSERT_TRUE(WaitForCondition(
+        [&] { return IsHealthy() && FileExist(testHealthCheckPath); }, healthTransitionTimeout));
+    ASSERT_TRUE(watchedImpl->setHealthFile_.load(std::memory_order_acquire));
+
+    // Only the real Coordinator watch drives isolation; no explicit health refresh is made by this test.
+    DS_ASSERT_OK(watchedRuntime.TriggerAuthorityConflict(localAddress_));
+
+    EXPECT_TRUE(WaitForCondition(
+        [&] {
+            return !IsHealthy() && !FileExist(testHealthCheckPath)
+                   && !watchedImpl->setHealthFile_.load(std::memory_order_acquire);
+        },
+        healthTransitionTimeout));
+}
+
+TEST_F(WorkerOcServiceImplTest, TopologyHealthRecoveryRevalidatesBeforeRepublish)
+{
+    SetUnhealthy();
+    const auto savedHealthCheckPath = FLAGS_health_check_path;
+    const auto testHealthCheckPath = GetTestCaseDataDir() + "/issue873-recovery-health-probe";
+    Raii restore([savedHealthCheckPath, testHealthCheckPath] {
+        (void)DeleteFile(testHealthCheckPath);
+        FLAGS_health_check_path = savedHealthCheckPath;
+        SetTopologyServingAdmission(true);
+        SetUnhealthy();
+    });
+    FLAGS_health_check_path = testHealthCheckPath;
+    (void)DeleteFile(testHealthCheckPath);
+    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    impl_->reconciliationReady_.store(true, std::memory_order_release);
+    DS_ASSERT_OK(impl_->StartTopologyHealthCoordinator());
+
+    impl_->NotifyTopologyAvailability(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(IsHealthy());
+    EXPECT_FALSE(FileExist(testHealthCheckPath));
+
+    placement_.SetOwner("topology-readiness-probe", localAddress_);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    constexpr auto healthTransitionTimeout = std::chrono::seconds(2);
+    ASSERT_TRUE(WaitForCondition(
+        [&] { return IsHealthy() && FileExist(testHealthCheckPath); }, healthTransitionTimeout));
+
+    impl_->NotifyTopologyAvailability(false);
+    ASSERT_TRUE(WaitForCondition(
+        [&] { return !IsHealthy() && !FileExist(testHealthCheckPath); }, healthTransitionTimeout));
+
+    impl_->NotifyTopologyAvailability(true);
+    EXPECT_TRUE(WaitForCondition(
+        [&] { return IsHealthy() && FileExist(testHealthCheckPath); }, healthTransitionTimeout));
+}
+
+TEST_F(WorkerOcServiceImplTest, ServingNotificationDoesNotClosePublishedHealth)
+{
+    const auto savedHealthCheckPath = FLAGS_health_check_path;
+    Raii restore([savedHealthCheckPath] {
+        FLAGS_health_check_path = savedHealthCheckPath;
+        SetTopologyServingAdmission(true);
+        SetUnhealthy();
+    });
+    FLAGS_health_check_path.clear();
+    SetTopologyServingAdmission(true);
+    DS_ASSERT_OK(SetHealthProbe());
+    ASSERT_TRUE(IsHealthy());
+    DS_ASSERT_OK(impl_->StartTopologyHealthCoordinator());
+
+    // A NORMAL callback can race with the startup thread immediately after it publishes health. It requests an
+    // asynchronous revalidation, but must not create a transient K_NOT_READY window for an already serving Worker.
+    impl_->NotifyTopologyAvailability(true);
+    uint64_t expectedGeneration;
+    {
+        std::lock_guard<std::mutex> lock(impl_->topologyHealthMutex_);
+        expectedGeneration = impl_->topologyHealthGeneration_;
+    }
+
+    ASSERT_TRUE(WaitForCondition(
+        [this, expectedGeneration] {
+            std::lock_guard<std::mutex> lock(impl_->topologyHealthMutex_);
+            return impl_->topologyHealthProcessedGeneration_ >= expectedGeneration;
+        },
+        std::chrono::milliseconds(200)));
+    EXPECT_TRUE(IsHealthy());
+    impl_->StopTopologyHealthCoordinator();
+
+    impl_->NotifyTopologyAvailability(false);
+    ASSERT_FALSE(IsHealthy());
+    impl_->NotifyTopologyAvailability(true);
+    EXPECT_FALSE(IsHealthy());
+}
+
+TEST_F(WorkerOcServiceImplTest, GiveUpReconciliationDoesNotBypassTopologyHealthGate)
+{
+    SetUnhealthy();
+    const bool savedDistributedMaster = FLAGS_enable_distributed_master;
+    const bool savedReconciliation = FLAGS_enable_reconciliation;
+    Raii restore([savedDistributedMaster, savedReconciliation] {
+        FLAGS_enable_distributed_master = savedDistributedMaster;
+        FLAGS_enable_reconciliation = savedReconciliation;
+        SetUnhealthy();
+    });
+    FLAGS_enable_distributed_master = true;
+    FLAGS_enable_reconciliation = true;
+    placement_.SetOwner("topology-readiness-probe", localAddress_);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    ASSERT_TRUE(topologyRuntime_.Engine()->HasEstablishedMemberLease());
+    auto restartImpl = std::make_shared<WorkerOCServiceImpl>(
+        localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
+        topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_, true,
+        true);
+    restartImpl->healthPublicationEnabled_.store(true, std::memory_order_release);
+
+    DS_EXPECT_OK(restartImpl->GiveUpReconciliation());
+
+    EXPECT_TRUE(restartImpl->reconciliationReady_.load(std::memory_order_acquire));
+    EXPECT_FALSE(restartImpl->setHealthFile_.load(std::memory_order_acquire));
+    EXPECT_FALSE(IsHealthy());
 }
 
 TEST_F(WorkerOcServiceImplTest, RejoinRequiredRejectsClientFacingRpc)

@@ -117,8 +117,25 @@
   - `WorkerOCServer::Init()` constructs and explicitly initializes a discovery-backed Coordinator proxy from the injected provider, or selects ETCD/metastore, then configures `TopologyEngine::Builder`. Coordinator proxy `Init` requires a non-empty provider result, caches only `front()`, and ignores the remaining candidates. All subsequent RPCs use that cached address once. Changing the provider output or selected endpoint requires rebuilding the runtime object or restarting the Worker, while multi-node Coordinator availability remains the responsibility of the Coordinator Raft layer. The Engine creates and owns both role backends, the hash algorithm, Worker runtime, Controller runtime, Janitor, and optional recovery reporter. Worker code does not assemble or retain those concrete components. Callback targets are initialized before
     `TopologyEngine::Start()`, so callbacks cannot run against partially constructed services. A missing initial topology
     keeps Engine `NOT_READY` while the co-located Controller establishes authority. The Worker publishes READY only after
-    the first membership lease succeeds, and writes the ready-check file only after committed membership, a placement
-    probe, and Worker RPC health all succeed. No Worker-local topology authority is persisted.
+    the first membership lease succeeds. Object-cache health remains closed until both startup reconciliation and
+    committed topology placement are ready. `TopologyEngine::CheckLocalServingReady` checks availability, committed
+    local membership, and placement against one immutable Snapshot, then rechecks availability; `ROLE_ISOLATED` and
+    stopping states therefore cannot publish or retain startup health from a last-good Snapshot. Serving availability
+    is publicly committed before its admission callback, while non-serving callbacks retain fail-close ordering. The
+    Engine availability callback closes admission only for non-serving states and posts a no-I/O request to a Worker-owned
+    coordinator. A serving notification does not transiently revoke an already published health state; when recovering
+    from isolation, the previously closed admission stays closed until the coordinator serializes health-file changes,
+    performs a fresh validation, and successfully republishes the marker. The coordinator continues low-frequency
+    single-Snapshot validation after startup, so local membership or placement loss also revokes health even without
+    another availability-level transition. The health marker is written by
+    atomic temporary-file replacement; revocation directly unlinks it and treats only `ENOENT` as idempotent success.
+    The startup poll has no fixed topology deadline, so a slow ScaleOut keeps the joining process alive and externally
+    unready instead of failing startup. `ReadinessProbe`
+    owns the single service-health wait even when no ready-check path is configured; brpc mode skips only the loopback
+    RPC after health opens. SIGTERM ends that wait successfully so shutdown does not turn an in-progress startup into a
+    process failure. The ready-check file is written only
+    after committed membership, a placement probe, and Worker RPC health all succeed. No Worker-local topology
+    authority is persisted.
   - Coordinator-mode witness probing uses three fixed Worker-owned loops, a bounded FIFO event queue, and an in-flight
     count. Every watch PUT contributes one independent single-target request; later target events do not cancel earlier
     work. Shutdown first rejects new probe events and clears pending work, then closes Engine watch ingress, waits for
