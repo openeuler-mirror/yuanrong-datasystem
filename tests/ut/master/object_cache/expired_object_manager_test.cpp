@@ -37,6 +37,27 @@ namespace datasystem {
 namespace ut {
 class ExpiredObjectManagerTest : public CommonTest {};
 
+TEST_F(ExpiredObjectManagerTest, TestZeroTtlExpiresImmediately)
+{
+    ExpiredObjectManager manager("127.0.0.1:10001", nullptr);
+    const std::string objectKey = "zero-ttl-object";
+    const uint64_t version = 1;
+
+    const auto oldVlogLevel = FLAGS_v;
+    FLAGS_v = 1;
+    testing::internal::CaptureStderr();
+    auto status = manager.InsertObject(objectKey, version, 0, true);
+    auto logOutput = testing::internal::GetCapturedStderr();
+    FLAGS_v = oldVlogLevel;
+
+    DS_ASSERT_OK(status);
+    EXPECT_NE(logOutput.find("remain time 0"), std::string::npos) << logOutput;
+
+    auto expiredObjects = manager.GetExpiredObject();
+    ASSERT_EQ(expiredObjects.count(objectKey), size_t(1));
+    EXPECT_EQ(expiredObjects.at(objectKey), version);
+}
+
 TEST_F(ExpiredObjectManagerTest, TestParallelInsert)
 {
     ExpiredObjectManager manager("127.0.0.1:10001", nullptr);

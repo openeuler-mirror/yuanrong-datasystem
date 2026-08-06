@@ -41,6 +41,13 @@ namespace master {
 static constexpr int THREAD_NUM = 1;
 static constexpr int RETRY_WAIT_TIME = 1;
 static constexpr int NOTIFY_DELETE_TIMEOUT = 10 * 1000;
+
+static uint64_t GetRemainTimeUs(const uint64_t expireTime)
+{
+    const uint64_t currentUs = GetSystemClockTimeStampUs();
+    return expireTime > currentUs ? expireTime - currentUs : 0;
+}
+
 void ExpiredStatisticsInfo::IncreaseObj()
 {
     (void)totalNum_.fetch_add(1);
@@ -120,10 +127,12 @@ void ExpiredObjectManager::Shutdown()
 
 uint64_t ExpiredObjectManager::CalcExpireTime(const uint64_t version, const uint64_t ttlSecond) const
 {
-    if (UINT64_MAX / (ttlSecond * TIME_UNIT_CONVERSION * TIME_UNIT_CONVERSION) < 1) {
+    const uint64_t microsecondsPerSecond =
+        static_cast<uint64_t>(TIME_UNIT_CONVERSION) * TIME_UNIT_CONVERSION;
+    if (ttlSecond > UINT64_MAX / microsecondsPerSecond) {
         return UINT64_MAX;
     }
-    uint64_t ttlUs = ttlSecond * TIME_UNIT_CONVERSION * TIME_UNIT_CONVERSION;
+    uint64_t ttlUs = ttlSecond * microsecondsPerSecond;
     return (UINT64_MAX - ttlUs < version) ? UINT64_MAX : (version + ttlUs);
 }
 
@@ -162,7 +171,7 @@ Status ExpiredObjectManager::InsertObjectUnlock(ExpiredShard &shard, const std::
     auto iter = shard.timedObj.insert({ expiredTime, objectKey });
     shard.obj2Timed[objectKey] = iter;
     VLOG(1) << FormatString("Insert the object %s with version %llu, ttl second %u, expireTime %llu, remain time %llu",
-                            objectKey, version, ttlSecond, expiredTime, expiredTime - GetSystemClockTimeStampUs());
+                            objectKey, version, ttlSecond, expiredTime, GetRemainTimeUs(expiredTime));
     statisticsInfo_.IncreaseObj();
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::MASTER_TTL_PENDING_SIZE)).Inc();
     return Status::OK();
