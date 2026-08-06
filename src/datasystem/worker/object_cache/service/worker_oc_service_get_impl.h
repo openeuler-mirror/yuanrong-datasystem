@@ -519,11 +519,11 @@ private:
                                      QueryMetadataFromMasterResult &result,
                                      ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
                                      std::map<std::string, uint64_t> &deletingObjectsWithVersion);
-    void FinalizeAbsentQueryMetadata(const std::unordered_set<std::string> &routeFailedObjectKeys,
-                                     ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed, bool queryEtcdMeta,
-                                     std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                     std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
-                                     const std::map<std::string, uint64_t> &deletingObjectsWithVersion);
+    Status FinalizeAbsentQueryMetadata(const std::unordered_set<std::string> &routeFailedObjectKeys,
+                                       ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed, bool queryEtcdMeta,
+                                       std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                       std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
+                                       const std::map<std::string, uint64_t> &deletingObjectsWithVersion);
 
     Status QueryExistMetadataViaPureQueryMeta(const std::vector<std::string> &objectKeys,
                                               std::vector<master::QueryMetaInfoPb> &queryMetas);
@@ -1005,11 +1005,12 @@ private:
      * @param[out] queryMetas The vector stored meta info.
      * @param[out] absentObjectKeys The objects whose metadata fails to be queried.
      */
-    void ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(const std::unordered_set<std::string> &routeFailedObjectKeys,
-                                                        std::unordered_set<std::string> &&objectKeysNotExist,
-                                                        const std::unordered_set<std::string> &objectKeysPuzzled,
-                                                        std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                                        std::vector<std::string> &absentObjectKeys);
+    Status ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
+        const std::unordered_set<std::string> &routeFailedObjectKeys,
+        std::unordered_set<std::string> &&objectKeysNotExist,
+        const std::unordered_set<std::string> &objectKeysPuzzled,
+        std::vector<master::QueryMetaInfoPb> &queryMetas,
+        std::vector<std::string> &absentObjectKeys);
 
     void HandleGetFailureHelper(const std::string &objectKey, uint64_t version, std::shared_ptr<SafeObjType> &entry,
                                 bool isInsert);

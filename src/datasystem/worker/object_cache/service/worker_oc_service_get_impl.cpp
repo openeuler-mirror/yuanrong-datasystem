@@ -1748,14 +1748,14 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destM
     return Status::OK();
 }
 
-void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
+Status WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
     const std::unordered_set<std::string> &routeFailedObjectKeys, std::unordered_set<std::string> &&objectKeysNotExist,
     const std::unordered_set<std::string> &objectKeysPuzzled, std::vector<master::QueryMetaInfoPb> &queryMetas,
     std::vector<std::string> &absentObjectKeys)
 {
     absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
     if (routeFailedObjectKeys.empty() && objectKeysPuzzled.empty()) {
-        return;
+        return Status::OK();
     }
 
     std::stringstream msg;
@@ -1765,13 +1765,14 @@ void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
     LOG(INFO) << msg.str();
 
     if (!objectKeysPuzzled.empty()) {
-        LOG_IF_ERROR(QueryMetaDataFromEtcd(objectKeysPuzzled, queryMetas, absentObjectKeys),
-                     "Query metadata from etcd for puzzled keys failed.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(QueryMetaDataFromEtcd(objectKeysPuzzled, queryMetas, absentObjectKeys),
+                                         "Query metadata from etcd for puzzled keys failed.");
     }
     if (!routeFailedObjectKeys.empty()) {
-        LOG_IF_ERROR(QueryMetaDataFromEtcd(routeFailedObjectKeys, queryMetas, absentObjectKeys),
-                     "Query metadata from etcd for route failed keys failed.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(QueryMetaDataFromEtcd(routeFailedObjectKeys, queryMetas, absentObjectKeys),
+                                         "Query metadata from etcd for route failed keys failed.");
     }
+    return Status::OK();
 }
 
 Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::string> &objectKeys, uint64_t subTimeout,
@@ -1815,13 +1816,14 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     });
 
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_NOT_FOUND);
-    FinalizeAbsentQueryMetadata(routeFailedObjectKeys, objectKeysQueryMetaFailed, queryEtcdMeta, queryMetas,
-                                absentObjectKeysWithVersion, deletingObjectsWithVersion);
+    RETURN_IF_NOT_OK(FinalizeAbsentQueryMetadata(routeFailedObjectKeys, objectKeysQueryMetaFailed, queryEtcdMeta,
+                                                 queryMetas, absentObjectKeysWithVersion,
+                                                 deletingObjectsWithVersion));
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_OTHER);
     return lastRc;
 }
 
-void WorkerOcServiceGetImpl::FinalizeAbsentQueryMetadata(
+Status WorkerOcServiceGetImpl::FinalizeAbsentQueryMetadata(
     const std::unordered_set<std::string> &routeFailedObjectKeys, ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
     bool queryEtcdMeta, std::vector<master::QueryMetaInfoPb> &queryMetas,
     std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
@@ -1834,8 +1836,8 @@ void WorkerOcServiceGetImpl::FinalizeAbsentQueryMetadata(
     bool metaStoredInEtcd = FLAGS_oc_io_from_l2cache_need_metadata;
     bool isL2CacheDisabled = FLAGS_l2_cache_type == "none" || FLAGS_l2_cache_type == "distributed_disk";
     if (metaStoredInEtcd && queryEtcdMeta && !isL2CacheDisabled) {
-        ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(routeFailedObjectKeys, std::move(objectKeysNotExist),
-                                                       objectKeysPuzzled, queryMetas, absentObjectKeys);
+        RETURN_IF_NOT_OK(ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
+            routeFailedObjectKeys, std::move(objectKeysNotExist), objectKeysPuzzled, queryMetas, absentObjectKeys));
     } else {
         absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
         absentObjectKeys.insert(absentObjectKeys.end(), objectKeysPuzzled.begin(), objectKeysPuzzled.end());
@@ -1846,6 +1848,7 @@ void WorkerOcServiceGetImpl::FinalizeAbsentQueryMetadata(
         uint64_t deletingVersion = iter == deletingObjectsWithVersion.end() ? 0 : iter->second;
         absentObjectKeysWithVersion.emplace(objectKey, deletingVersion);
     }
+    return Status::OK();
 }
 
 Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
@@ -1962,6 +1965,7 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<st
                                                      std::vector<std::string> &absentObjectKeys)
 {
     INJECT_POINT("worker.QueryMetaDataFromEtcd_failure");
+    RETURN_RUNTIME_ERROR_IF_NULL(etcdStore_);
     for (const std::string &objKey : objectKeys) {
         std::string etcdTableName = std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX;
         std::string hashValue = FormatString("%010u", MurmurHash3_32(objKey));
