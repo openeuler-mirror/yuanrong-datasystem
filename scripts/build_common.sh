@@ -82,7 +82,8 @@ function check_sanitizers() {
   typeset -u name
   local name
   name="$1"
-  if [[ "X$name" != "XADDRESS" && "X$name" != "XTHREAD" && "X$name" != "XUNDEFINED" && "X$name" != "XOFF" ]]; then
+  if [[ "X$name" != "XADDRESS" && "X$name" != "XTHREAD" && "X$name" != "XUNDEFINED" \
+        && "X$name" != "XADDRESS_UNDEFINED" && "X$name" != "XOFF" ]]; then
     echo -e "Invalid value $1 for option -$2"
     echo -e "${USAGE}"
     exit 1

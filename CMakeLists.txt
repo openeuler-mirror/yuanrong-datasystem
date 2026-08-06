@@ -54,6 +54,25 @@ if (USE_SANITIZER)
         if (CXX_COMPILER_SUPPORTS_FNO_SANITIZE_FUNCTION)
             set(SANITIZER_FLAGS "${SANITIZER_FLAGS} -fno-sanitize=function")
         endif ()
+    elseif (${USE_SANITIZER} STREQUAL "ADDRESS_UNDEFINED")
+        # Combined AddressSanitizer + UndefinedBehaviorSanitizer. ASAN and UBSAN
+        # share the same compiler runtime (libasan pulls in libubsan), so the
+        # GCC/Clang vendors explicitly support `-fsanitize=address,undefined` as
+        # a single composition. TSan is mutually exclusive with both runtimes
+        # and cannot be combined here. The combined mode is useful for CI gates
+        # that want memory-safety and UB coverage in a single build. See the
+        # standalone UNDEFINED branch above for the GCC 14 + absl raw_hash_set
+        # workaround justification; the same conditional `-fno-sanitize=function`
+        # is applied here because UBSAN instrumentation is active. A distinct
+        # cache variable name is used (rather than reusing
+        # CXX_COMPILER_SUPPORTS_FNO_SANITIZE_FUNCTION from the UNDEFINED branch)
+        # so the two branches remain independent and future restructuring that
+        # runs both in the same configure step stays unambiguous.
+        set(SANITIZER_FLAGS "-fsanitize=address,undefined -fno-omit-frame-pointer -g3 -fno-sanitize=alignment -fsanitize=float-cast-overflow -fno-sanitize-recover=all -O0")
+        check_cxx_compiler_flag("-fno-sanitize=function" CXX_COMPILER_SUPPORTS_FNO_SANITIZE_FUNCTION_ADDR_UNDEF)
+        if (CXX_COMPILER_SUPPORTS_FNO_SANITIZE_FUNCTION_ADDR_UNDEF)
+            set(SANITIZER_FLAGS "${SANITIZER_FLAGS} -fno-sanitize=function")
+        endif ()
     else ()
         message(FATAL_ERROR "Unrecognized google sanitizers mode: ${USE_SANITIZER}")
     endif ()

@@ -109,7 +109,7 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 | `build.sh` input | CMake variable | Default | Effect |
 | --- | --- | --- | --- |
 | `-d` / `-r` | `CMAKE_BUILD_TYPE` | `Release` | Selects Debug or Release flag set. |
-| `-S address/thread/undefined/off` | `USE_SANITIZER` | `off` | Adds Google sanitizer flags to project and selected third-party builds. |
+| `-S address/thread/undefined/address_undefined/off` | `USE_SANITIZER` | `off` | Adds Google sanitizer flags to project and selected third-party builds. `address_undefined` enables ASan + UBSan together via `-fsanitize=address,undefined` (the runtimes share `libasan`/`libubsan` and are designed by GCC/Clang to coexist; TSan is mutually exclusive with both). |
 | `-t != off` | `WITH_TESTS` | `off` | Adds GTest, test subdirectories/targets, CTest registration, and the `WITH_TESTS` define. braft and the Coordinator Raft product targets are unconditional. |
 | `-c on/html` | `BUILD_COVERAGE` | `off` | Adds gcov flags and `BUILD_COVERAGE` define. |
 | `-p on` | `ENABLE_PERF` | `off` | Adds `ENABLE_PERF`, perf service/client sources, and perf proto targets. |
