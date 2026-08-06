@@ -157,6 +157,8 @@ enum class KvMetricId : uint16_t {
     CLIENT_SHM_ZERO_COPY_SET_TOTAL,
     CLIENT_SHM_PAYLOAD_FALLBACK_SET_TOTAL,
     CLIENT_SHM_GET_DEGRADE_TO_TRANSPORT_TOTAL,
+    // ExpiredRequestInterceptor: count of client-expired brpc requests dropped before the handler.
+    BRPC_EXPIRED_REQUEST_DROP_TOTAL,
     KV_METRIC_END
 };
 

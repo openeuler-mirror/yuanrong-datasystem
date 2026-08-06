@@ -141,6 +141,7 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 112, "client_shm_zero_copy_set_total", MetricType::COUNTER, "count" },
     { 113, "client_shm_payload_fallback_set_total", MetricType::COUNTER, "count" },
     { 114, "client_shm_get_degrade_to_transport_total", MetricType::COUNTER, "count" },
+    { 115, "brpc_expired_request_drop_total", MetricType::COUNTER, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 

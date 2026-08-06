@@ -26,6 +26,7 @@
 #include "datasystem/common/log/log.h"
 
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/rpc/brpc_expired_request_interceptor.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_server_impl.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -135,6 +136,12 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port)
     if (brpc::FLAGS_max_body_size < kBrpcMaxBodySize) {
         brpc::FLAGS_max_body_size = kBrpcMaxBodySize;
     }
+    // Install a process-static interceptor that drops requests whose client deadline already
+    // elapsed while queued, before the handler runs (defense-in-depth against orphaned server
+    // work under load). The interceptor is a no-op when FLAGS_brpc_drop_expired_request is false.
+    static const ExpiredRequestInterceptor expiredRequestInterceptor;
+    options.interceptor = &expiredRequestInterceptor;
+    options.server_owns_interceptor = false;
     butil::EndPoint ep;
     if (!addr.empty()) {
         butil::str2ip(addr.c_str(), &ep.ip);

@@ -188,6 +188,11 @@ DS_DEFINE_bool(brpc_enable_builtin_services, false,
                "Default false to match the ZMQ security baseline (no HTTP endpoint); the /flags and "
                "/pprof endpoints allow gflag mutation and memory dumps. Set true only for debugging "
                "on a trusted network.");
+DS_DEFINE_bool(brpc_drop_expired_request, true,
+               "Server-side interceptor: reject brpc requests whose client deadline already elapsed "
+               "while queued, before the handler runs. The client receives ERPCTIMEDOUT -> "
+               "K_RPC_DEADLINE_EXCEEDED and stops (budget gone). Default true (safe, no false "
+               "positives - only drops requests the client has certainly timed out on).");
 DS_DEFINE_bool(brpc_enable_circuit_breaker, false,
                "Enable brpc circuit breaker on client->worker channels. Default false (off); set true to "
                "let brpc auto-isolate peers with high error rates (EMA window: 1500 samples / 10% short, "
