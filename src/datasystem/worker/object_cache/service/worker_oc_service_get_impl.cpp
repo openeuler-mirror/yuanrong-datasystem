@@ -263,7 +263,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                 auto config = GetServerLatencyTraceConfig();
                 SLOW_LOG_IF_OR_VLOG(
                     INFO,
-                    (config.processSlowerThanUs > 0 && static_cast<uint64_t>(getElapsedMs * 1000) >= config.processSlowerThanUs)
+                    (config.processSlowerThanUs > 0
+                        && static_cast<uint64_t>(getElapsedMs * US_PER_MS) >= config.processSlowerThanUs)
                         || FLAGS_enable_perf_trace_log,
                     1,
                     FormatString("[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, "
@@ -303,7 +304,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
         auto config = GetServerLatencyTraceConfig();
         SLOW_LOG_IF_OR_VLOG(
             INFO,
-            (config.processSlowerThanUs > 0 && static_cast<uint64_t>(getElapsedMs * 1000) >= config.processSlowerThanUs)
+            (config.processSlowerThanUs > 0
+                && static_cast<uint64_t>(getElapsedMs * US_PER_MS) >= config.processSlowerThanUs)
                 || FLAGS_enable_perf_trace_log,
             1,
             FormatString("[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, "

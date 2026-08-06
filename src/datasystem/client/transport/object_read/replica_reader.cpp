@@ -256,6 +256,7 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
         ++round;
         bool hasStaleLocation = false;
         Status staleLocationStatus;
+        int notFoundReplicas = 0;
         for (int replicaIndex = 0; replicaIndex < location.object_locations_size(); ++replicaIndex) {
             Status deadlineStatus = retry_->CheckDeadline();
             if (deadlineStatus.IsError()) {
@@ -276,6 +277,9 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
                 return rc;
             }
             lastError = rc;
+            if (rc.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
+                ++notFoundReplicas;
+            }
             if (IsTransportSnapshotStaleLocation(rc)) {
                 hasStaleLocation = true;
                 staleLocationStatus = rc;
@@ -286,6 +290,11 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
             if (rc.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE) {
                 continue;
             }
+        }
+        if (notFoundReplicas == location.object_locations_size()) {
+            LOG(WARNING) << "[TransportGet][Data] All replicas returned not-found in one round, fast-fail as deleted. "
+                         << "key: " << location.object_key() << ", round: " << round;
+            return Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "Object not found on any replica");
         }
         if (hasStaleLocation) {
             return staleLocationStatus;
@@ -507,6 +516,10 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                     if (state.replicaIndex >= static_cast<size_t>(state.location->object_locations_size())) {
                         if (state.hasStaleLocation) {
                             state.result->status = state.staleLocationStatus;
+                            state.completed = true;
+                        } else if (itemStatus.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
+                            state.result->status =
+                                Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "Object not found on any replica");
                             state.completed = true;
                         } else {
                             state.exhausted = true;
