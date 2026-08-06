@@ -891,23 +891,28 @@ private:
 
     /**
      * @brief For device object, to async get multiple objects
-     * @param[in] devBlobList The user blobInfo list of device data.
+     * @param[in] devBlobList The user blobInfo list of device data. Read-only view: synchronous callers retain
+     * ownership until MGetH2D returns; the asynchronous path retains ownership via AsyncMGetH2DState.
      * @param[in] existBufferList The tmp buffer list which will be decrease after memory copy
      * @return Status of the result.
      */
-    Status HostDataCopy2Device(std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &existBufferList);
+    Status HostDataCopy2Device(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &existBufferList);
 
     /**
      * @brief Multiple shared memory and copy data from device.
      * @param[in] objectKeys multiple keys support.
      * @param[in] devBlobList vector of compose data.
-     * @param[out] bufferList The buffer list after create.
-     * @param[out] destroyBufferList The tmp buffer list which will be decrease after memory copy.
+     * @param[out] bufferList The buffer list after create (filtered to non-existing objects; moved in).
+     * @param[out] exists The exist list of key.
+     * @param[out] filteredDeviceBlobRefs Non-owning pointers into devBlobList for the non-existing objects,
+     * in the same filtered order as bufferList. Used by MultiPublish to serialize blob sizes without a
+     * DeviceBlobList copy. Pointers are valid for the lifetime of devBlobList (synchronous caller or
+     * AsyncMSetD2HState ownership copy).
      * @return Status of the result.
      */
     Status DeviceDataCreate(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
                             const SetParam &setParam, std::vector<std::shared_ptr<Buffer>> &bufferList,
-                            std::vector<bool> &exists);
+                            std::vector<bool> &exists, std::vector<const DeviceBlobList *> &filteredDeviceBlobRefs);
 
     /**
      * @brief Create multiple objects at a time to the worker.
@@ -927,12 +932,14 @@ private:
      * @brief Publish multiple objects at a time to the worker.
      * @param[in] bufferList The buffer list needs to store data information.
      * @param[in] setParam the set param of keys
-     * @param[in] blobSizes the blob size list of keys
+     * @param[in] deviceBlobRefs Non-owning device-blob references for the published objects, in the same
+     * order as bufferList. The worker API serializes each object's blob sizes directly from these refs.
      * @param[out] outLocalSetKeys optional keys confirmed to be newly set on the connected worker
      * @return Status of the result.
      */
     Status MultiPublish(const std::vector<std::shared_ptr<Buffer>> &bufferList, const SetParam &setParam,
-                        const std::vector<std::vector<uint64_t>> &blobSizes, std::vector<std::string> *outLocalSetKeys);
+                        const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                        std::vector<std::string> *outLocalSetKeys);
 
     /**
      * @brief Check the client is ready to execute any api

@@ -21,8 +21,7 @@
 #include <future>
 #include <limits>
 #include <new>
-#include <securec.h>
-#include <cstring>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -45,6 +44,21 @@
 
 namespace datasystem {
 const size_t MAX_FFTS_TASKS_COUNT = 8;
+
+// Sums the bytes of a ShmUnit pool with overflow protection. Returns empty when the running total would exceed
+// uint64_t, so CacheFftsDeviceStaging can reject oversized pools without a hand-rolled overflow check at each call.
+std::optional<uint64_t> CalcShmUnitPoolBytes(const std::vector<ShmUnit> &pool)
+{
+    uint64_t total = 0;
+    for (const auto &unit : pool) {
+        const auto unitSize = unit.GetSize();
+        if (total > std::numeric_limits<uint64_t>::max() - unitSize) {
+            return std::nullopt;
+        }
+        total += unitSize;
+    }
+    return total;
+}
 AclResourceManager::AclResourceManager()
 {
     parallelH2DConfigStatus_ = parallelH2DConfig_.LoadFromEnv();
@@ -97,6 +111,30 @@ Status AclResourceManager::MemcpyBatchH2D(const std::vector<DeviceBlobList> &dev
     return swapInPool_->MemcpyBatchH2D(deviceId, helper, policyH2D);
 }
 
+Status AclResourceManager::MemcpyBatchH2D(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                                          const std::vector<Buffer *> &bufferList)
+{
+    DeviceBatchCopyHelper helper;
+    PerfPoint preparePoint(PerfKey::CLIENT_H2D_HELPER_PREPARE);
+    RETURN_IF_NOT_OK(helper.PrepareRefs(deviceBlobRefs, bufferList, MemcpyKind::HOST_TO_DEVICE));
+    preparePoint.Record();
+    auto deviceId = deviceBlobRefs[0]->deviceIdx;
+    helper.PrintGetPerfInfo(helper);
+    return swapInPool_->MemcpyBatchH2D(deviceId, helper, policyH2D);
+}
+
+Status AclResourceManager::MemcpyBatchD2H(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                                          const std::vector<Buffer *> &bufferList)
+{
+    DeviceBatchCopyHelper helper;
+    PerfPoint preparePoint(PerfKey::CLIENT_D2H_HELPER_PREPARE);
+    RETURN_IF_NOT_OK(helper.PrepareRefs(deviceBlobRefs, bufferList, MemcpyKind::DEVICE_TO_HOST));
+    preparePoint.Record();
+    auto deviceId = deviceBlobRefs[0]->deviceIdx;
+    helper.PrintGetPerfInfo(helper);
+    return swapOutPool_->MemcpyBatchD2H(deviceId, helper, policyD2H);
+}
+
 Status AclResourceManager::CreateAclRtStream(uint32_t deviceId, aclrtStream &stream, bool subscribeReport)
 {
     CHECK_FAIL_RETURN_STATUS(
@@ -133,6 +171,94 @@ Status AclResourceManager::FreeRtNotify(uint32_t deviceId, rtNotify_t notify)
     return deviceResource->FreeRtNotify(notify);
 }
 
+Status AclResourceManager::CreateFftsDispatcher(uint32_t deviceId,
+                                                std::unique_ptr<ffts::FftsDispatcher> &dispatcher)
+{
+    CHECK_FAIL_RETURN_STATUS(
+        deviceId < MAX_DEVICE_COUNT, K_INVALID,
+        FormatString("Invalid device id %u, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
+    return deviceResources_[deviceId]->CreateFftsDispatcher(dispatcher);
+}
+
+void AclResourceManager::FreeFftsDispatcher(uint32_t deviceId,
+                                            std::unique_ptr<ffts::FftsDispatcher> dispatcher)
+{
+    if (deviceId < MAX_DEVICE_COUNT) {
+        deviceResources_[deviceId]->FreeFftsDispatcher(std::move(dispatcher));
+    }
+}
+
+Status AclResourceManager::CreateFftsResourceBundle(uint32_t deviceId, bool subscribeReport,
+                                                    std::unique_ptr<FftsResourceBundle> &bundle)
+{
+    CHECK_FAIL_RETURN_STATUS(
+        deviceId < MAX_DEVICE_COUNT, K_INVALID,
+        FormatString("Invalid device id %u, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
+    return deviceResources_[deviceId]->CreateFftsResourceBundle(subscribeReport, bundle);
+}
+
+void AclResourceManager::FreeFftsResourceBundle(uint32_t deviceId, std::unique_ptr<FftsResourceBundle> bundle)
+{
+    if (bundle == nullptr) {
+        return;
+    }
+    if (deviceId >= MAX_DEVICE_COUNT) {
+        LOG(ERROR) << FormatString("Cannot free FFTS resource bundle for invalid device id %u", deviceId);
+        return;
+    }
+    const size_t cacheSize = std::max(parallelFftsH2DConfig_.workerNum, parallelFftsD2HConfig_.workerNum);
+    deviceResources_[deviceId]->FreeFftsResourceBundle(std::move(bundle), cacheSize);
+}
+
+Status AclResourceManager::AcquireFftsDeviceStaging(uint32_t deviceId,
+                                                    const std::vector<BufferMetaInfo> &bufferMetas,
+                                                    std::unique_ptr<std::vector<ShmUnit>> &memoryPool)
+{
+    CHECK_FAIL_RETURN_STATUS(
+        deviceId < MAX_DEVICE_COUNT, K_INVALID,
+        FormatString("Invalid device id %u, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
+    size_t minSize = 0;
+    for (const auto &meta : bufferMetas) {
+        minSize = std::max(minSize, meta.size);
+    }
+    std::unique_ptr<std::vector<ShmUnit>> undersizedPool;
+    memoryPool = deviceResources_[deviceId]->TakeFftsDeviceStaging(minSize, undersizedPool);
+    if (memoryPool == nullptr) {
+        if (undersizedPool != nullptr) {
+            RETURN_IF_NOT_OK(Device()->Free(*undersizedPool));
+        }
+        memoryPool = std::make_unique<std::vector<ShmUnit>>(FFTS_PIPELINE);
+        RETURN_IF_NOT_OK(Device()->Allocate(bufferMetas, *memoryPool));
+    }
+    return Status::OK();
+}
+
+Status AclResourceManager::ReleaseFftsDeviceStaging(uint32_t deviceId,
+                                                    std::unique_ptr<std::vector<ShmUnit>> memoryPool)
+{
+    RETURN_OK_IF_TRUE(memoryPool == nullptr);
+    CHECK_FAIL_RETURN_STATUS(
+        deviceId < MAX_DEVICE_COUNT, K_INVALID,
+        FormatString("Invalid device id %u, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
+    constexpr size_t maxCachedStagingPools = 8;
+    // H2D and D2H share this per-device staging cache. Retain enough pools for the more parallel direction so one
+    // direction's smaller worker count does not cause allocation churn in the other direction.
+    const size_t maxParallelWorkers =
+        std::max(parallelFftsH2DConfig_.workerNum, parallelFftsD2HConfig_.workerNum);
+    const size_t cacheSize = std::min(maxParallelWorkers, maxCachedStagingPools);
+    // Bound retained staging memory to a fraction of the device capacity. A pool larger than the budget is
+    // released immediately, while smaller pools can still be reused without allowing the count-based cache to pin
+    // an unbounded amount of HBM.
+    constexpr uint64_t maxCachedStagingFraction = 8;
+    const auto maxCacheBytes = GetDeviceMemSize() / maxCachedStagingFraction;
+    auto poolToFree =
+        deviceResources_[deviceId]->CacheFftsDeviceStaging(std::move(memoryPool), cacheSize, maxCacheBytes);
+    if (poolToFree != nullptr) {
+        RETURN_IF_NOT_OK(Device()->Free(*poolToFree));
+    }
+    return Status::OK();
+}
+
 Status AclResourceManager::DeviceResource::InitCallbackThread()
 {
     {
@@ -146,28 +272,201 @@ Status AclResourceManager::DeviceResource::InitCallbackThread()
     return Status::OK();
 }
 
-Status AclResourceManager::DeviceResource::InitFftsDispatcher()
+Status AclResourceManager::DeviceResource::CreateFftsDispatcher(
+    std::unique_ptr<ffts::FftsDispatcher> &dispatcher)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> rlocker(mutex_);
-        RETURN_OK_IF_TRUE(fftsDispatcher_ != nullptr);
+        std::lock_guard<std::shared_timed_mutex> locker(mutex_);
+        if (!fftsDispatcherQueue_.empty()) {
+            dispatcher = std::move(fftsDispatcherQueue_.front());
+            fftsDispatcherQueue_.pop_front();
+            return Status::OK();
+        }
     }
-
-    std::lock_guard<std::shared_timed_mutex> wlocker(mutex_);
-    RETURN_OK_IF_TRUE(fftsDispatcher_ != nullptr);
     auto aclDeviceManager = acl::AclDeviceManager::Instance();
-    auto dispatcher = std::make_unique<ffts::FftsDispatcher>(deviceId_, aclDeviceManager);
+    dispatcher = std::make_unique<ffts::FftsDispatcher>(deviceId_, aclDeviceManager);
     CHECK_ACL_RESULT(dispatcher->Init(), "FftsDispatcher init");
     CHECK_ACL_RESULT(dispatcher->CreateFftsCtxs(1), "FftsDispatcher CreateFftsCtxs");
     CHECK_ACL_RESULT(dispatcher->SetFftsCtx(0), "FftsDispatcher SetFftsCtx");
-    fftsDispatcher_ = std::move(dispatcher);
     return Status::OK();
+}
+
+void AclResourceManager::DeviceResource::FreeFftsDispatcher(
+    std::unique_ptr<ffts::FftsDispatcher> dispatcher)
+{
+    if (dispatcher == nullptr) {
+        return;
+    }
+    if (dispatcher->ReuseCtx(0) != HCCL_SUCCESS) {
+        LOG(WARNING) << "Drop FFTS dispatcher because resetting its context failed";
+        return;
+    }
+    std::lock_guard<std::shared_timed_mutex> locker(mutex_);
+    if (fftsDispatcherQueue_.size() < CACHE_SIZE) {
+        fftsDispatcherQueue_.emplace_back(std::move(dispatcher));
+    }
+}
+
+Status AclResourceManager::DeviceResource::CreateFftsResourceBundle(bool subscribeReport,
+                                                                    std::unique_ptr<FftsResourceBundle> &bundle)
+{
+    CHECK_FAIL_RETURN_STATUS(bundle == nullptr, K_INVALID, "Output FFTS resource bundle must be empty");
+    auto &queue = subscribeReport ? subscribeReportFftsResourceBundleQueue_ : fftsResourceBundleQueue_;
+    {
+        std::lock_guard<std::mutex> locker(fftsResourceBundleMutex_);
+        if (!queue.empty()) {
+            bundle = std::move(queue.front());
+            queue.pop_front();
+            return Status::OK();
+        }
+    }
+
+    // A cache miss is a cold-path operation. Reuse the individual resource factories so partial failures retain the
+    // existing cleanup semantics; after the first successful request the complete bundle is acquired with one lock.
+    bundle = std::make_unique<FftsResourceBundle>();
+    bundle->resource.subscribeReport = subscribeReport;
+    auto rollback = [&bundle, this]() { FreeFftsResourceBundle(std::move(bundle), 0); };
+    auto rc = CreateFftsDispatcher(bundle->dispatcher);
+    if (rc.IsError()) {
+        rollback();
+        return rc;
+    }
+    rc = CreateAclRtStream(subscribeReport, bundle->resource.primaryStream);
+    if (rc.IsError()) {
+        rollback();
+        return rc;
+    }
+    rc = CreateAclRtStream(false, bundle->resource.secondaryStream);
+    if (rc.IsError()) {
+        rollback();
+        return rc;
+    }
+    for (size_t i = 0; i < FFTS_PIPELINE; ++i) {
+        rc = CreateRtNotify(bundle->resource.toDestDone[i]);
+        if (rc.IsError()) {
+            rollback();
+            return rc;
+        }
+        rc = CreateRtNotify(bundle->resource.toPinDone[i]);
+        if (rc.IsError()) {
+            rollback();
+            return rc;
+        }
+    }
+    return Status::OK();
+}
+
+void AclResourceManager::DeviceResource::FreeFftsResourceBundle(std::unique_ptr<FftsResourceBundle> bundle,
+                                                                size_t cacheSize)
+{
+    if (bundle == nullptr) {
+        return;
+    }
+    auto &resource = bundle->resource;
+    bool complete =
+        bundle->dispatcher != nullptr && resource.primaryStream != nullptr && resource.secondaryStream != nullptr;
+    for (size_t i = 0; i < FFTS_PIPELINE; ++i) {
+        complete = complete && resource.toDestDone[i] != nullptr && resource.toPinDone[i] != nullptr;
+    }
+    if (complete && bundle->dispatcher->ReuseCtx(0) == HCCL_SUCCESS) {
+        auto &queue = resource.subscribeReport ? subscribeReportFftsResourceBundleQueue_ : fftsResourceBundleQueue_;
+        try {
+            std::lock_guard<std::mutex> locker(fftsResourceBundleMutex_);
+            if (queue.size() < cacheSize) {
+                queue.emplace_back(std::move(bundle));
+                return;
+            }
+        } catch (const std::bad_alloc &) {
+            LOG(WARNING) << "Cache FFTS resource bundle failed due to out of memory";
+        }
+    }
+
+    // Partial bundles and excess cache entries are rare. Return their valid members through the individual pools so
+    // no successfully created runtime handle is lost after a cold-path failure.
+    LOG_IF_ERROR(FreeAclRtStream(resource.subscribeReport, resource.primaryStream), "FreeAclRtStream failed");
+    LOG_IF_ERROR(FreeAclRtStream(false, resource.secondaryStream), "FreeAclRtStream failed");
+    for (size_t i = 0; i < FFTS_PIPELINE; ++i) {
+        LOG_IF_ERROR(FreeRtNotify(resource.toDestDone[i]), "FreeRtNotify failed");
+        LOG_IF_ERROR(FreeRtNotify(resource.toPinDone[i]), "FreeRtNotify failed");
+    }
+    FreeFftsDispatcher(std::move(bundle->dispatcher));
+}
+
+std::unique_ptr<std::vector<ShmUnit>> AclResourceManager::DeviceResource::TakeFftsDeviceStaging(
+    size_t minSize, std::unique_ptr<std::vector<ShmUnit>> &undersizedPool)
+{
+    std::lock_guard<std::shared_timed_mutex> locker(mutex_);
+    auto iter =
+        std::find_if(fftsDeviceStagingQueue_.begin(), fftsDeviceStagingQueue_.end(), [minSize](const auto &pool) {
+            return pool != nullptr && pool->size() == FFTS_PIPELINE && !pool->empty()
+                   && pool->front().GetSize() >= minSize;
+        });
+    if (iter == fftsDeviceStagingQueue_.end()) {
+        if (!fftsDeviceStagingQueue_.empty()) {
+            undersizedPool = std::move(fftsDeviceStagingQueue_.front());
+            fftsDeviceStagingQueue_.pop_front();
+        }
+        return nullptr;
+    }
+    auto pool = std::move(*iter);
+    fftsDeviceStagingQueue_.erase(iter);
+    return pool;
+}
+
+std::unique_ptr<std::vector<ShmUnit>> AclResourceManager::DeviceResource::CacheFftsDeviceStaging(
+    std::unique_ptr<std::vector<ShmUnit>> memoryPool, size_t cacheSize, uint64_t maxCacheBytes)
+{
+    if (memoryPool == nullptr || memoryPool->size() != FFTS_PIPELINE || memoryPool->empty() || cacheSize == 0) {
+        return memoryPool;
+    }
+    auto poolBytesOpt = CalcShmUnitPoolBytes(*memoryPool);
+    if (!poolBytesOpt.has_value() || maxCacheBytes == 0 || *poolBytesOpt > maxCacheBytes) {
+        return memoryPool;
+    }
+    auto poolBytes = *poolBytesOpt;
+    std::lock_guard<std::shared_timed_mutex> locker(mutex_);
+    uint64_t cachedBytes = 0;
+    for (const auto &pool : fftsDeviceStagingQueue_) {
+        if (pool == nullptr) {
+            continue;
+        }
+        for (const auto &unit : *pool) {
+            const auto unitSize = unit.GetSize();
+            if (cachedBytes > std::numeric_limits<uint64_t>::max() - unitSize) {
+                return memoryPool;
+            }
+            cachedBytes += unitSize;
+        }
+    }
+    if (fftsDeviceStagingQueue_.size() < cacheSize) {
+        if (cachedBytes > maxCacheBytes - poolBytes) {
+            return memoryPool;
+        }
+        fftsDeviceStagingQueue_.emplace_back(std::move(memoryPool));
+        return nullptr;
+    }
+    auto smallest = std::min_element(fftsDeviceStagingQueue_.begin(), fftsDeviceStagingQueue_.end(),
+                                     [](const auto &lhs, const auto &rhs) {
+                                         return lhs->front().GetSize() < rhs->front().GetSize();
+                                     });
+    auto smallestBytesOpt = CalcShmUnitPoolBytes(**smallest);
+    if (!smallestBytesOpt.has_value()) {
+        return memoryPool;
+    }
+    auto smallestBytes = *smallestBytesOpt;
+    if (smallestBytes < poolBytes && cachedBytes >= smallestBytes
+        && cachedBytes - smallestBytes <= maxCacheBytes - poolBytes) {
+        std::swap(*smallest, memoryPool);
+    }
+    return memoryPool;
 }
 
 Status AclResourceManager::DeviceResource::CreateAclRtStream(bool subscribeReport, aclrtStream &stream)
 {
     auto &queue = subscribeReport ? subscribeReportStreamQueue_ : streamQueue_;
-    RETURN_IF_NOT_OK(InitCallbackThread());
+    if (subscribeReport) {
+        RETURN_IF_NOT_OK(InitCallbackThread());
+    }
     auto aclDeviceManager = acl::AclDeviceManager::Instance();
     std::lock_guard<std::shared_timed_mutex> wlocker(mutex_);
     if (queue.empty()) {
@@ -186,7 +485,9 @@ Status AclResourceManager::DeviceResource::FreeAclRtStream(bool subscribeReport,
 {
     RETURN_OK_IF_TRUE(stream == nullptr);
     auto &queue = subscribeReport ? subscribeReportStreamQueue_ : streamQueue_;
-    RETURN_IF_NOT_OK(InitCallbackThread());
+    if (subscribeReport) {
+        RETURN_IF_NOT_OK(InitCallbackThread());
+    }
 
     auto aclDeviceManager = acl::AclDeviceManager::Instance();
     std::lock_guard<std::shared_timed_mutex> wlocker(mutex_);
@@ -358,8 +659,16 @@ Status AclMemCopyPool::ExecuteFftsD2H(uint32_t deviceId, DeviceBatchCopyHelper &
 {
     auto *submitPool = parallelShard ? deviceSubmitPool : fftsCopyPool_.get();
     CHECK_FAIL_RETURN_STATUS(submitPool != nullptr, K_INVALID, "D2H FFTS device submit pool is null");
-    FftsPipelineD2HCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(), submitPool);
-    return copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
+    try {
+        FftsPipelineD2HCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(), submitPool);
+        return copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
+    } catch (const std::bad_alloc &) {
+        return Status(K_OUT_OF_MEMORY, "Allocate FFTS D2H callback state failed");
+    } catch (const std::exception &e) {
+        return Status(K_RUNTIME_ERROR, FormatString("Create FFTS D2H copier failed: %s", e.what()));
+    } catch (...) {
+        return Status(K_RUNTIME_ERROR, "Create FFTS D2H copier failed with unknown exception");
+    }
 }
 
 Status AclMemCopyPool::GetOrCreateParallelDirectExecutor(uint32_t deviceId, MemcpyKind kind,
@@ -597,14 +906,11 @@ FftsPipelineCopierBase::FftsPipelineCopierBase(int32_t deviceId, AclResourceMana
       bufferMetas_(bufferMetas),
       h2hCopyPool_(h2hCopyPool),
       fftsCopyPool_(fftsCopyPool),
+      transferHostPool_(std::make_unique<std::vector<ShmUnit>>()),
+      transferDevicePool_(std::make_unique<std::vector<ShmUnit>>()),
       finishCount_(0)
 {
-    auto ret = memset_s(&resource_, sizeof(AclResource), 0, sizeof(AclResource));
-    if (ret != EOK) {
-        LOG(WARNING) << FormatString("Memset DeviceResource failed, ret = %d", ret);
-    }
     aclDeviceManager_ = acl::AclDeviceManager::Instance();
-    fftsDispatcher_ = std::make_unique<ffts::FftsDispatcher>(deviceId, aclDeviceManager_);
     skipH2HMemcpy_ = aclResourceMgr_->GetD2HPolicy() == aclResourceMgr_->GetH2DPolicy()
                      && aclResourceMgr_->GetD2HPolicy() == MemcopyPolicy::HUGE_FFTS;
 }
@@ -612,21 +918,38 @@ FftsPipelineCopierBase::FftsPipelineCopierBase(int32_t deviceId, AclResourceMana
 FftsPipelineCopierBase::~FftsPipelineCopierBase()
 {
     PerfPoint point(PerfKey::CLIENT_FREE_STREAM_NOTIFY);
-    try {
-        LOG_IF_ERROR(aclResourceMgr_->FreeAclRtStream(deviceId_, resource_.primaryStream, resource_.subscribeReport),
-                     "FreeAclRtStream failed");
-        LOG_IF_ERROR(aclResourceMgr_->FreeAclRtStream(deviceId_, resource_.secondaryStream, false),
-                     "FreeAclRtStream failed");
-        for (size_t i = 0; i < FFTS_PIPELINE; i++) {
-            LOG_IF_ERROR(aclResourceMgr_->FreeRtNotify(deviceId_, resource_.toDestDone[i]), "FreeRtNotify failed");
-            LOG_IF_ERROR(aclResourceMgr_->FreeRtNotify(deviceId_, resource_.toPinDone[i]), "FreeRtNotify failed");
+    if (resource_.primaryStream != nullptr && !primaryStreamSynchronized_) {
+        auto rc = WaitFinish();
+        if (rc.IsError()) {
+            // A callback may still be queued on this stream. Do not recycle the stream, notifies, staging buffers,
+            // or FFTS descriptors until the runtime can prove that the stream is quiescent. Callback userData is
+            // independently allocated and owns only a weak state reference, so releasing callbackState_ here breaks
+            // the old state <-> callback-data cycle without leaving a callback with a dangling state pointer.
+            LOG(ERROR) << "Abandon FFTS resources because synchronizing the primary stream failed: " << rc;
+            callbackState_.reset();
+            (void)fftsDispatcher_.release();
+            (void)transferHostPool_.release();
+            (void)transferDevicePool_.release();
+            return;
         }
-    } catch (const std::exception &e) {
-        LOG(ERROR) << e.what();
+    }
+    if (resourceBundle_ != nullptr) {
+        resourceBundle_->resource = resource_;
+        resourceBundle_->dispatcher = std::move(fftsDispatcher_);
+        try {
+            aclResourceMgr_->FreeFftsResourceBundle(deviceId_, std::move(resourceBundle_));
+        } catch (const std::exception &e) {
+            LOG(ERROR) << "Free FFTS resource bundle failed: " << e.what();
+        }
     }
     point.RecordAndReset(PerfKey::CLIENT_FREE_TRANS_BUFFERS);
-    LOG_IF_ERROR(aclResourceMgr_->Host()->Free(transferHostPool_), "Free transferHostMem failed");
-    LOG_IF_ERROR(aclResourceMgr_->Device()->Free(transferDevicePool_), "Free transferDeviceMem failed");
+    LOG_IF_ERROR(aclResourceMgr_->Host()->Free(*transferHostPool_), "Free transferHostMem failed");
+    if (cacheDeviceStaging_) {
+        LOG_IF_ERROR(aclResourceMgr_->ReleaseFftsDeviceStaging(deviceId_, std::move(transferDevicePool_)),
+                     "Release FFTS device staging failed");
+    } else {
+        LOG_IF_ERROR(aclResourceMgr_->Device()->Free(*transferDevicePool_), "Free transferDeviceMem failed");
+    }
     point.Record();
 }
 
@@ -648,20 +971,25 @@ Status FftsPipelineCopierBase::AllocAndInitTransferBuffers(const std::vector<Buf
     size_t count = bufferMetas_.size();
     std::vector<ShmUnit> transferHostPool(count);
     std::vector<ShmUnit> transferDevicePool(FFTS_PIPELINE);
-    transferHostPool_ = std::move(transferHostPool);
-    transferDevicePool_ = std::move(transferDevicePool);
+    *transferHostPool_ = std::move(transferHostPool);
+    *transferDevicePool_ = std::move(transferDevicePool);
 
     if (skipH2HMemcpy_) {
         transferHostBuffers_.clear();
         transferHostBuffers_.assign(hostBuffer.begin(), hostBuffer.end());
     } else {
-        RETURN_IF_NOT_OK(aclResourceMgr_->Host()->Allocate(bufferMetas_, transferHostPool_));
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GetBufferViews(count, transferHostPool_, transferHostBuffers_),
+        RETURN_IF_NOT_OK(aclResourceMgr_->Host()->Allocate(bufferMetas_, *transferHostPool_));
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GetBufferViews(count, *transferHostPool_, transferHostBuffers_),
                                          "GetBufferViews for host buffer failed.");
     }
 
-    RETURN_IF_NOT_OK(aclResourceMgr_->Device()->Allocate(bufferMetas_, transferDevicePool_));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GetBufferViews(FFTS_PIPELINE, transferDevicePool_, transferDeviceBuffers_),
+    if (skipH2HMemcpy_) {
+        RETURN_IF_NOT_OK(aclResourceMgr_->AcquireFftsDeviceStaging(deviceId_, bufferMetas_, transferDevicePool_));
+        cacheDeviceStaging_ = true;
+    } else {
+        RETURN_IF_NOT_OK(aclResourceMgr_->Device()->Allocate(bufferMetas_, *transferDevicePool_));
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GetBufferViews(FFTS_PIPELINE, *transferDevicePool_, transferDeviceBuffers_),
                                      "GetBufferViews for device buffer failed.");
 
     return Status::OK();
@@ -670,31 +998,27 @@ Status FftsPipelineCopierBase::AllocAndInitTransferBuffers(const std::vector<Buf
 Status FftsPipelineCopierBase::InitAclResource(bool subscribeReport)
 {
     PerfPoint point(PerfKey::CLIENT_SET_DEVICE_IDX);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclDeviceManager_->SetDeviceIdx(deviceId_), "SetDeviceIdx failed");
-    point.RecordAndReset(PerfKey::CLIENT_FFTS_INIT);
-    CHECK_ACL_RESULT(fftsDispatcher_->Init(), "FftsDispatcher init");
-    CHECK_ACL_RESULT(fftsDispatcher_->CreateFftsCtxs(1), "FftsDispatcher CreateFftsCtxs");
-    CHECK_ACL_RESULT(fftsDispatcher_->SetFftsCtx(0), "FftsDispatcher SetFftsCtx");
-
-    point.RecordAndReset(PerfKey::CLIENT_CREATE_STREAM_NOTIFY);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        aclResourceMgr_->CreateAclRtStream(deviceId_, resource_.primaryStream, subscribeReport),
-        "CreateAclRtStream failed");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclResourceMgr_->CreateAclRtStream(deviceId_, resource_.secondaryStream, false),
-                                     "CreateAclRtStream failed");
-
-    for (size_t i = 0; i < FFTS_PIPELINE; i++) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclResourceMgr_->CreateRtNotify(deviceId_, resource_.toDestDone[i]),
-                                         "CreateRtNotify failed");
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclResourceMgr_->CreateRtNotify(deviceId_, resource_.toPinDone[i]),
-                                         "CreateRtNotify failed");
+    // FFTS submit pools own their threads, so their device binding remains valid between requests.
+    thread_local acl::AclDeviceManager *boundManager = nullptr;
+    thread_local int32_t boundDeviceId = -1;
+    if (boundManager != aclDeviceManager_ || boundDeviceId != deviceId_) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclDeviceManager_->SetDeviceIdx(deviceId_), "SetDeviceIdx failed");
+        boundManager = aclDeviceManager_;
+        boundDeviceId = deviceId_;
     }
-    resource_.subscribeReport = subscribeReport;
+    point.RecordAndReset(PerfKey::CLIENT_FFTS_INIT);
+    auto rc = aclResourceMgr_->CreateFftsResourceBundle(deviceId_, subscribeReport, resourceBundle_);
+    if (resourceBundle_ != nullptr) {
+        resource_ = resourceBundle_->resource;
+        fftsDispatcher_ = std::move(resourceBundle_->dispatcher);
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "CreateFftsResourceBundle failed");
     return Status::OK();
 }
 
 Status FftsPipelineCopierBase::NotifyStart()
 {
+    primaryStreamSynchronized_ = false;
     for (size_t i = 0; i < FFTS_PIPELINE; i++) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
             aclDeviceManager_->RtNotifyRecord(resource_.toDestDone[i], resource_.secondaryStream),
@@ -705,7 +1029,11 @@ Status FftsPipelineCopierBase::NotifyStart()
 
 Status FftsPipelineCopierBase::WaitFinish()
 {
-    return aclDeviceManager_->RtSynchronizeStream(resource_.primaryStream);
+    auto rc = aclDeviceManager_->RtSynchronizeStream(resource_.primaryStream);
+    if (rc.IsOk()) {
+        primaryStreamSynchronized_ = true;
+    }
+    return rc;
 }
 
 FftsPipelineH2DCopier::FftsPipelineH2DCopier(int32_t deviceId, AclResourceManager *aclResourceMgr,
@@ -923,6 +1251,13 @@ FftsPipelineD2HCopier::FftsPipelineD2HCopier(int32_t deviceId, AclResourceManage
                                              ThreadPool *fftsCopyPool)
     : FftsPipelineCopierBase(deviceId, aclResourceMgr, bufferMetas, h2hCopyPool, fftsCopyPool)
 {
+    if (!skipH2HMemcpy_) {
+        callbackState_ = std::make_shared<D2HCallbackState>(bufferMetas.size());
+        auto *storage = new D2HCallbackDataStorage(bufferMetas.size());
+        callbackDataStorage_ = std::shared_ptr<D2HCallbackDataStorage>(storage, [](auto *value) {
+            value->Release();
+        });
+    }
 }
 
 Status FftsPipelineD2HCopier::ExecuteMemcpy(const std::vector<BufferView> &hostBuffers,
@@ -931,39 +1266,37 @@ Status FftsPipelineD2HCopier::ExecuteMemcpy(const std::vector<BufferView> &hostB
     PerfPoint point(PerfKey::CLIENT_D2H_ALLOC_TRANS_BUFFERS);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AllocAndInitTransferBuffers(hostBuffers), "AllocAndInitTransferBuffers failed");
     point.Record();
-    std::vector<NotifyH2HCallbackData> callbackDatas;
-    callbackDatas.reserve(bufferMetas_.size());
-    for (size_t index = 0; index < bufferMetas_.size(); index++) {
-        callbackDatas.emplace_back(NotifyH2HCallbackData{ .copier = this, .index = index });
-    }
     Timer afterFftsFinishTimer;
-    auto d2hTask = [this, &deviceBuffers, &callbackDatas, &afterFftsFinishTimer] {
+    auto d2hTask = [this, &deviceBuffers, &afterFftsFinishTimer] {
         PerfPoint point(PerfKey::CLIENT_D2H_FFTS_INIT);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitAclResource(true), "InitDeviceResource failed");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitAclResource(!skipH2HMemcpy_), "InitDeviceResource failed");
         point.RecordAndReset(PerfKey::CLIENT_D2H_FFTS_NOTIFY_START);
         RETURN_IF_NOT_OK(NotifyStart());
         point.RecordAndReset(PerfKey::CLIENT_D2H_FFTS_SUBMIT);
-        RETURN_IF_NOT_OK(
-            SubmitToStream(deviceBuffers, transferDeviceBuffers_, transferHostBuffers_, bufferMetas_, callbackDatas));
+        auto submitRc = SubmitToStream(deviceBuffers, transferDeviceBuffers_, transferHostBuffers_, bufferMetas_);
         point.RecordAndReset(PerfKey::CLIENT_D2H_FFTS_WAIT_FINISH);
         VLOG(1) << "Start WaitFinish";
-        auto rc = WaitFinish();
+        // aclrtLaunchCallback is asynchronous. Even after a partial submission failure, synchronize every callback
+        // that was successfully queued before allowing callback state or stream resources to be reclaimed.
+        auto syncRc = WaitFinish();
         point.Record();
         afterFftsFinishTimer.Reset();
-        return rc;
+        return submitRc.IsError() ? submitRc : syncRc;
     };
-
-    std::vector<std::future<Status>> futs;
-    try {
-        futs.reserve(hostBuffers.size());
-    } catch (const std::bad_alloc &) {
-        RETURN_STATUS(K_OUT_OF_MEMORY, "Reserve D2H H2H futures failed");
-    }
 
     std::future<Status> d2hFut;
     try {
         d2hFut = fftsCopyPool_->Submit([this, &d2hTask] {
-            auto rc = d2hTask();
+            Status rc;
+            try {
+                rc = d2hTask();
+            } catch (const std::bad_alloc &) {
+                rc = Status(K_OUT_OF_MEMORY, "FFTS D2H device task failed due to out of memory");
+            } catch (const std::exception &e) {
+                rc = Status(K_RUNTIME_ERROR, FormatString("FFTS D2H device task threw exception: %s", e.what()));
+            } catch (...) {
+                rc = Status(K_RUNTIME_ERROR, "FFTS D2H device task threw unknown exception");
+            }
             if (rc.IsError()) {
                 LOG(ERROR) << "force finish with rc:" << rc.GetMsg();
                 ForceFinish();
@@ -978,19 +1311,51 @@ Status FftsPipelineD2HCopier::ExecuteMemcpy(const std::vector<BufferView> &hostB
         RETURN_STATUS(K_RUNTIME_ERROR, "Submit FFTS D2H device task failed with unknown exception");
     }
 
+    auto waitD2H = [&d2hFut] {
+        try {
+            return d2hFut.get();
+        } catch (const std::bad_alloc &) {
+            return Status(K_OUT_OF_MEMORY, "FFTS D2H device task failed due to out of memory");
+        } catch (const std::exception &e) {
+            return Status(K_RUNTIME_ERROR, FormatString("FFTS D2H device task threw exception: %s", e.what()));
+        } catch (...) {
+            return Status(K_RUNTIME_ERROR, "FFTS D2H device task threw unknown exception");
+        }
+    };
+    // HUGE_FFTS writes directly into the destination huge-page buffers. There is no H2H phase to wake or schedule,
+    // so wait only for the device-submit task and avoid callback state, condition variables, and H2H futures.
+    if (skipH2HMemcpy_) {
+        return waitD2H();
+    }
+
+    std::vector<std::future<Status>> futs;
+    try {
+        futs.reserve(hostBuffers.size());
+    } catch (const std::bad_alloc &) {
+        ForceFinish();
+        (void)waitD2H();
+        RETURN_STATUS(K_OUT_OF_MEMORY, "Reserve D2H H2H futures failed");
+    }
+
     Status submitRc;
     while (true) {
         PerfPoint point(PerfKey::CLIENT_D2H_H2H_WAIT_START);
         PipelineH2HTasks tasks;
         {
-            std::unique_lock<std::mutex> locker(mutex_);
-            cv_.wait(locker, [this] { return !tasks_.IsEmpty() || IsFinish(); });
+            std::unique_lock<std::mutex> locker(callbackState_->mutex);
+            callbackState_->cv.wait(locker, [this] {
+                return callbackState_->forced || !callbackState_->tasks.IsEmpty()
+                       || callbackState_->finishCount >= callbackState_->expectedCount;
+            });
             point.Record();
-            if (IsFinish() && tasks_.IsEmpty()) {
+            if (callbackState_->forced) {
+                break;
+            }
+            if (callbackState_->finishCount >= callbackState_->expectedCount && callbackState_->tasks.IsEmpty()) {
                 VLOG(1) << "h2h finish";
                 break;
             }
-            std::swap(tasks, tasks_);
+            std::swap(tasks, callbackState_->tasks);
         }
         if (tasks.IsEmpty() || skipH2HMemcpy_ || submitRc.IsError()) {
             continue;
@@ -1022,16 +1387,7 @@ Status FftsPipelineD2HCopier::ExecuteMemcpy(const std::vector<BufferView> &hostB
         }
     }
 
-    Status lastRc;
-    try {
-        lastRc = d2hFut.get();
-    } catch (const std::bad_alloc &) {
-        lastRc = Status(K_OUT_OF_MEMORY, "FFTS D2H device task failed due to out of memory");
-    } catch (const std::exception &e) {
-        lastRc = Status(K_RUNTIME_ERROR, FormatString("FFTS D2H device task threw exception: %s", e.what()));
-    } catch (...) {
-        lastRc = Status(K_RUNTIME_ERROR, "FFTS D2H device task threw unknown exception");
-    }
+    Status lastRc = waitD2H();
     for (auto &fut : futs) {
         Status rc;
         try {
@@ -1053,8 +1409,7 @@ Status FftsPipelineD2HCopier::ExecuteMemcpy(const std::vector<BufferView> &hostB
 Status FftsPipelineD2HCopier::SubmitToStream(const std::vector<BufferView> &srcBuffers,
                                              const std::vector<BufferView> &transferBuffers,
                                              const std::vector<BufferView> &destBuffers,
-                                             const std::vector<BufferMetaInfo> &bufferMetas,
-                                             std::vector<NotifyH2HCallbackData> &callbackDatas)
+                                             const std::vector<BufferMetaInfo> &bufferMetas)
 {
     auto srcCount = srcBuffers.size();
     auto destCount = destBuffers.size();
@@ -1068,9 +1423,6 @@ Status FftsPipelineD2HCopier::SubmitToStream(const std::vector<BufferView> &srcB
     CHECK_FAIL_RETURN_STATUS(transferBuffers.size() == FFTS_PIPELINE, K_RUNTIME_ERROR,
                              FormatString("The transfer buffer size %zu and buffer meta size %zu mismatch.",
                                           FFTS_PIPELINE, bufferMetas.size()));
-    CHECK_FAIL_RETURN_STATUS(callbackDatas.size() == bufferMetas.size(), K_RUNTIME_ERROR,
-                             FormatString("The callbackDatas size %zu and buffer meta size %zu mismatch.",
-                                          callbackDatas.size(), bufferMetas.size()));
     for (size_t index = 0; index < destCount; index++) {
         size_t pipelineIndex = index % FFTS_PIPELINE;
 
@@ -1128,28 +1480,46 @@ Status FftsPipelineD2HCopier::SubmitToStream(const std::vector<BufferView> &srcB
                                                              objectSize, ACL_MEMCPY_DEVICE_TO_HOST, primaryStream));
 
         RETURN_IF_NOT_OK(aclDeviceManager_->RtNotifyRecord(toDestDone[pipelineIndex], primaryStream));
-        // launch callback to notify H2H start.
-        RETURN_IF_NOT_OK(aclDeviceManager_->AclrtLaunchCallback(
-            FftsPipelineD2HCopier::NotifyH2HCallback, &callbackDatas[index], ACL_CALLBACK_NO_BLOCK, primaryStream));
+        if (skipH2HMemcpy_) {
+            continue;
+        }
+        // The runtime retains the preallocated record until the callback executes. Keep the callback storage alive
+        // with one intrusive reference per queued callback, so an abandoned stream can release callbackState_
+        // without creating a shared_ptr cycle or allocating on every object.
+        auto *callbackData = callbackDataStorage_->At(index);
+        callbackData->state = callbackState_;
+        callbackData->storage->Acquire();
+        auto rc = aclDeviceManager_->AclrtLaunchCallback(FftsPipelineD2HCopier::NotifyH2HCallback, callbackData,
+                                                         ACL_CALLBACK_NO_BLOCK, primaryStream);
+        if (rc.IsError()) {
+            callbackData->state.reset();
+            callbackData->storage->Release();
+            return rc;
+        }
     }
     return Status::OK();
 }
 
 void FftsPipelineD2HCopier::NotifyH2HCallback(void *userData)
 {
-    auto callbackData = reinterpret_cast<NotifyH2HCallbackData *>(userData);
-    auto copier = callbackData->copier;
-    std::unique_lock<std::mutex> locker(copier->mutex_);
-    copier->tasks_.indexes.emplace_back(callbackData->index);
-    copier->finishCount_++;
-    copier->cv_.notify_one();
+    auto *callbackData = reinterpret_cast<NotifyH2HCallbackData *>(userData);
+    if (callbackData == nullptr) {
+        return;
+    }
+    auto state = callbackData->state.lock();
+    if (state != nullptr) {
+        state->Complete(callbackData->index);
+    }
+    callbackData->state.reset();
+    if (callbackData->storage != nullptr) {
+        callbackData->storage->Release();
+    }
 }
 
 void FftsPipelineD2HCopier::ForceFinish()
 {
-    std::unique_lock<std::mutex> locker(mutex_);
-    finishCount_ = bufferMetas_.size();
-    tasks_.indexes.clear();
-    cv_.notify_one();
+    if (callbackState_ != nullptr) {
+        callbackState_->ForceFinish();
+    }
 }
 }  // namespace datasystem

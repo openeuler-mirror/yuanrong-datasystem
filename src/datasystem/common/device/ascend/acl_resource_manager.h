@@ -21,6 +21,8 @@
 #ifndef DATASYSTEM_CLIENT_OBJECT_CACHE_DEVICE_ACL_MEM_MGR_H
 #define DATASYSTEM_CLIENT_OBJECT_CACHE_DEVICE_ACL_MEM_MGR_H
 
+#include <atomic>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -52,7 +54,21 @@ struct DataMetaInfo {
     size_t size;
 };
 
+struct AclResource {
+    void *primaryStream = nullptr;
+    void *secondaryStream = nullptr;
+    void *toDestDone[FFTS_PIPELINE]{};
+    void *toPinDone[FFTS_PIPELINE]{};
+    bool subscribeReport = false;
+};
+
+struct FftsResourceBundle {
+    AclResource resource;
+    std::unique_ptr<ffts::FftsDispatcher> dispatcher;
+};
+
 class AclResourceManager;
+class FftsPipelineCopierBase;
 
 class AclMemCopyPool {
 public:
@@ -116,12 +132,10 @@ public:
 
     Status MemcpyBatchD2H(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList) override;
     Status MemcpyBatchH2D(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList) override;
-
-    Status CreateAclRtStream(uint32_t deviceId, aclrtStream &stream, bool subscribeReport);
-    Status FreeAclRtStream(uint32_t deviceId, aclrtStream stream, bool subscribeReport);
-
-    Status CreateRtNotify(uint32_t deviceIdx, rtNotify_t &notify);
-    Status FreeRtNotify(uint32_t deviceId, rtNotify_t notify);
+    Status MemcpyBatchH2D(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                          const std::vector<Buffer *> &bufferList) override;
+    Status MemcpyBatchD2H(const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                          const std::vector<Buffer *> &bufferList) override;
 
     const ParallelH2DConfig &GetParallelH2DConfig() const
     {
@@ -186,21 +200,50 @@ public:
         Status FreeAclRtStream(bool subscribeReport, aclrtStream stream);
         Status CreateRtNotify(rtNotify_t &notify);
         Status FreeRtNotify(rtNotify_t notify);
+        Status CreateFftsDispatcher(std::unique_ptr<ffts::FftsDispatcher> &dispatcher);
+        void FreeFftsDispatcher(std::unique_ptr<ffts::FftsDispatcher> dispatcher);
+        Status CreateFftsResourceBundle(bool subscribeReport, std::unique_ptr<FftsResourceBundle> &bundle);
+        void FreeFftsResourceBundle(std::unique_ptr<FftsResourceBundle> bundle, size_t cacheSize);
+        std::unique_ptr<std::vector<ShmUnit>> TakeFftsDeviceStaging(
+            size_t minSize, std::unique_ptr<std::vector<ShmUnit>> &undersizedPool);
+        std::unique_ptr<std::vector<ShmUnit>> CacheFftsDeviceStaging(
+            std::unique_ptr<std::vector<ShmUnit>> memoryPool, size_t cacheSize, uint64_t maxCacheBytes);
 
     private:
         Status InitCallbackThread();
-        Status InitFftsDispatcher();
         const size_t CACHE_SIZE = 8;
         uint32_t deviceId_;
+        // Protects callback setup plus the legacy individual-resource and capacity-aware staging caches.
         std::shared_timed_mutex mutex_;
-        std::unique_ptr<ffts::FftsDispatcher> fftsDispatcher_;
+        // Complete control bundles never nest this lock with mutex_, so hot-path acquire/release cannot contend with
+        // staging-cache lookups or individual-resource cold-path cleanup.
+        std::mutex fftsResourceBundleMutex_;
         std::unique_ptr<acl::CallbackThread> callbackThread_;
+        std::deque<std::unique_ptr<ffts::FftsDispatcher>> fftsDispatcherQueue_;
+        std::deque<std::unique_ptr<FftsResourceBundle>> fftsResourceBundleQueue_;
+        std::deque<std::unique_ptr<FftsResourceBundle>> subscribeReportFftsResourceBundleQueue_;
+        std::deque<std::unique_ptr<std::vector<ShmUnit>>> fftsDeviceStagingQueue_;
         std::deque<aclrtStream> streamQueue_;
         std::deque<aclrtStream> subscribeReportStreamQueue_;
         std::deque<rtNotify_t> notifyQueue_;
     };
 
 private:
+    friend class FftsPipelineCopierBase;
+
+    Status CreateAclRtStream(uint32_t deviceId, aclrtStream &stream, bool subscribeReport);
+    Status FreeAclRtStream(uint32_t deviceId, aclrtStream stream, bool subscribeReport);
+    Status CreateRtNotify(uint32_t deviceIdx, rtNotify_t &notify);
+    Status FreeRtNotify(uint32_t deviceId, rtNotify_t notify);
+    Status CreateFftsDispatcher(uint32_t deviceId, std::unique_ptr<ffts::FftsDispatcher> &dispatcher);
+    void FreeFftsDispatcher(uint32_t deviceId, std::unique_ptr<ffts::FftsDispatcher> dispatcher);
+    Status CreateFftsResourceBundle(uint32_t deviceId, bool subscribeReport,
+                                    std::unique_ptr<FftsResourceBundle> &bundle);
+    void FreeFftsResourceBundle(uint32_t deviceId, std::unique_ptr<FftsResourceBundle> bundle);
+    Status AcquireFftsDeviceStaging(uint32_t deviceId, const std::vector<BufferMetaInfo> &bufferMetas,
+                                    std::unique_ptr<std::vector<ShmUnit>> &memoryPool);
+    Status ReleaseFftsDeviceStaging(uint32_t deviceId, std::unique_ptr<std::vector<ShmUnit>> memoryPool);
+
     ParallelH2DConfig parallelH2DConfig_;
     Status parallelH2DConfigStatus_;
     ParallelD2HConfig parallelD2HConfig_;
@@ -214,14 +257,6 @@ private:
     std::unique_ptr<AclMemCopyPool> swapInPool_;
 };
 
-struct AclResource {
-    void *primaryStream;
-    void *secondaryStream;
-    void *toDestDone[FFTS_PIPELINE];
-    void *toPinDone[FFTS_PIPELINE];
-    bool subscribeReport;
-};
-
 struct PipelineH2DTasks {
     std::vector<BufferView> srcBuffers;
     std::vector<BufferView> destBuffers;
@@ -231,6 +266,50 @@ struct PipelineH2DTasks {
         return srcBuffers.empty();
     }
 };
+
+struct PipelineH2HTasks {
+    std::vector<size_t> indexes;
+    bool IsEmpty()
+    {
+        return indexes.empty();
+    }
+};
+
+struct D2HCallbackState {
+    explicit D2HCallbackState(size_t expectedCount) : expectedCount(expectedCount)
+    {
+        // The C callback must not let an allocation exception cross the runtime callback boundary.
+        tasks.indexes.reserve(expectedCount);
+    }
+
+    void Complete(size_t index)
+    {
+        std::unique_lock<std::mutex> locker(mutex);
+        if (!forced) {
+            tasks.indexes.emplace_back(index);
+        }
+        finishCount++;
+        cv.notify_one();
+    }
+
+    void ForceFinish()
+    {
+        std::unique_lock<std::mutex> locker(mutex);
+        forced = true;
+        finishCount = expectedCount;
+        tasks.indexes.clear();
+        cv.notify_one();
+    }
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    PipelineH2HTasks tasks;
+    size_t finishCount = 0;
+    bool forced = false;
+    const size_t expectedCount;
+};
+
+struct D2HCallbackDataStorage;
 
 class FftsPipelineCopierBase {
 public:
@@ -264,13 +343,21 @@ protected:
     const std::vector<BufferMetaInfo> &bufferMetas_;
     AclResource resource_;
     std::unique_ptr<ffts::FftsDispatcher> fftsDispatcher_;
+    std::unique_ptr<FftsResourceBundle> resourceBundle_;
     ThreadPool *h2hCopyPool_;
     ThreadPool *fftsCopyPool_;
+    bool primaryStreamSynchronized_ = false;
 
     std::vector<BufferView> transferHostBuffers_;
     std::vector<BufferView> transferDeviceBuffers_;
-    std::vector<ShmUnit> transferHostPool_;
-    std::vector<ShmUnit> transferDevicePool_;
+    std::unique_ptr<std::vector<ShmUnit>> transferHostPool_;
+    std::unique_ptr<std::vector<ShmUnit>> transferDevicePool_;
+    bool cacheDeviceStaging_ = false;
+
+    // Only the D2H copier populates these. Kept on the base so the abandon path in ~FftsPipelineCopierBase can
+    // break the state <-> callback-data cycle when stream synchronization fails; H2D leaves them null.
+    std::shared_ptr<D2HCallbackState> callbackState_;
+    std::shared_ptr<D2HCallbackDataStorage> callbackDataStorage_;
 
     std::mutex mutex_;
     std::condition_variable cv_;
@@ -307,18 +394,43 @@ private:
     std::atomic<size_t> submitCount_;
 };
 
-class FftsPipelineD2HCopier;
 struct NotifyH2HCallbackData {
-    FftsPipelineD2HCopier *copier;
-    size_t index;
+    // The runtime retains this preallocated record until it invokes the callback. Keep only a weak state reference
+    // so an abandoned stream can release its state without creating a state <-> callback-data ownership cycle.
+    std::weak_ptr<D2HCallbackState> state;
+    D2HCallbackDataStorage *storage = nullptr;
+    size_t index = 0;
 };
 
-struct PipelineH2HTasks {
-    std::vector<size_t> indexes;
-    bool IsEmpty()
+struct D2HCallbackDataStorage {
+    explicit D2HCallbackDataStorage(size_t expectedCount) : callbackDatas(expectedCount)
     {
-        return indexes.empty();
+        for (size_t index = 0; index < expectedCount; ++index) {
+            callbackDatas[index].storage = this;
+            callbackDatas[index].index = index;
+        }
     }
+
+    void Acquire()
+    {
+        refs.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void Release()
+    {
+        if (refs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            delete this;
+        }
+    }
+
+    NotifyH2HCallbackData *At(size_t index)
+    {
+        return &callbackDatas[index];
+    }
+
+private:
+    std::atomic<size_t> refs{ 1 };
+    std::vector<NotifyH2HCallbackData> callbackDatas;
 };
 
 class FftsPipelineD2HCopier : public FftsPipelineCopierBase {
@@ -334,12 +446,9 @@ public:
 
 private:
     Status SubmitToStream(const std::vector<BufferView> &srcBuffers, const std::vector<BufferView> &transferBuffers,
-                          const std::vector<BufferView> &destBuffers, const std::vector<BufferMetaInfo> &bufferMetas,
-                          std::vector<NotifyH2HCallbackData> &callbackDatas);
+                          const std::vector<BufferView> &destBuffers, const std::vector<BufferMetaInfo> &bufferMetas);
     static void NotifyH2HCallback(void *userData);
     void ForceFinish();
-
-    PipelineH2HTasks tasks_;
 };
 }  // namespace datasystem
 #endif

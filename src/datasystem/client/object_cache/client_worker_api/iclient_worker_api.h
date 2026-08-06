@@ -163,11 +163,15 @@ public:
      * @param[in] bufferInfo Buffers information.
      * @param[in] param The publish param.
      * @param[out] rsp MultiPublishRspPb rsp.
+     * @param[in] deviceBlobRefs Optional non-owning device-blob references for hetero D2H publish. When
+     * non-empty, must match bufferInfo in length and order; the worker API serializes each object's
+     * blob_sizes directly from the referenced blobs during synchronous protobuf construction. Refs are
+     * never retained by an RPC callback or background queue. Empty = plain non-hetero MultiPublish.
      * @return K_OK on success; the error code otherwise.
      */
     virtual Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
                                 const PublishParam &param, MultiPublishRspPb &rsp,
-                                const std::vector<std::vector<uint64_t>> &blobSizes = {}) = 0;
+                                const std::vector<const DeviceBlobList *> &deviceBlobRefs = {}) = 0;
 
     /**
      * @brief Decrease the object worker reference count by one and if no client holds the object, release it.

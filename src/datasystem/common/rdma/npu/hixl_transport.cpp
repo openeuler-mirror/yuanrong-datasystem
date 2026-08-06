@@ -17,6 +17,8 @@
 #include "datasystem/common/rdma/npu/hixl_transport.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <random>
@@ -571,12 +573,19 @@ struct Batch {
     // These handles are temporary fallback registrations for the current batch only.
     std::vector<::hixl::MemHandle> handles;
 
-    Batch(::hixl::Hixl *hixlEngine, const std::string &endpoint, size_t tempBudget, size_t preRegistered)
+    Batch(::hixl::Hixl *hixlEngine, const std::string &endpoint, size_t tempBudget, size_t preRegistered,
+          size_t reserveCount = 0)
         : engine(hixlEngine),
           remoteEndpoint(endpoint),
           tempRegisterBudget(tempBudget),
           preRegisteredCount(preRegistered)
     {
+        // reserveCount is the flattened TransferOpDesc count for this request. Reserve once so the
+        // descriptor vector does not grow or relocate while appending. HIXL has no per-call descriptor cap;
+        // it splits submission across the SQ queue depth internally.
+        if (reserveCount > 0) {
+            descs.reserve(reserveCount);
+        }
     }
 
     void Reset()
@@ -642,10 +651,25 @@ Status HixlTransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, con
                              StatusCode::K_RUNTIME_ERROR,
                              FormatString("HCCS MEM_DEVICE pre-registration count %zu exceeds limit %zu.",
                                           registeredDeviceMemories_.size(), MAX_DEVICE_REGISTRATIONS));
+
+    // Pre-count the flattened descriptor count so the active HIXL batch reserves its TransferOpDesc vector
+    // once (no growth/relocation while appending). HIXL TransferOpDesc count has no upper bound: HIXL
+    // internally splits the submission across the SQ queue depth, so there is no operator-facing cap and no
+    // mid-loop descriptor-driven flush here. The only mid-loop flush is temporary registration budget
+    // exhaustion inside RegisterTemporaryDeviceMemoryForBatch.
+    size_t totalDescriptorCount = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto numEl = static_cast<size_t>(entries[i].numEl);
+        CHECK_FAIL_RETURN_STATUS(totalDescriptorCount <= SIZE_MAX - numEl, K_INVALID,
+                                 "Total HCCS descriptor count overflows size_t");
+        totalDescriptorCount += numEl;
+    }
+    const size_t reserveCount = totalDescriptorCount;
+
     // Long-lived pre-registered handles and short-lived fallback handles share the HIXL registration budget.
     const size_t preRegisteredCount = registeredDeviceMemories_.size();
     const size_t tempRegisterBudget = MAX_DEVICE_REGISTRATIONS - preRegisteredCount;
-    Batch batch(engine, remoteEndpoint, tempRegisterBudget, preRegisteredCount);
+    Batch batch(engine, remoteEndpoint, tempRegisterBudget, preRegisteredCount, reserveCount);
 
     for (uint32_t i = 0; i < count; ++i) {
         const auto &entry = entries[i];

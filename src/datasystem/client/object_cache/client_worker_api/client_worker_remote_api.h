@@ -98,7 +98,8 @@ public:
                    const std::unordered_set<std::string> &nestedKeys = {}, uint32_t ttlSecond = 0,
                    int existence = 0) override;
     Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param,
-                        MultiPublishRspPb &rsp, const std::vector<std::vector<uint64_t>> &blobSizes = {}) override;
+                        MultiPublishRspPb &rsp,
+                        const std::vector<const DeviceBlobList *> &deviceBlobRefs = {}) override;
     Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override;
     Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) override;
     Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &payloads) override;
@@ -220,7 +221,8 @@ private:
     /**
      * @brief Build payloads and per-path byte counters (TCP/SHM) for MultiPublish, and fill object info into req.
      * @param[in] bufferInfo List of objects to publish.
-     * @param[in] blobSizes Per-object blob sizes; empty if unused.
+     * @param[in] deviceBlobRefs Per-object non-owning device-blob references; empty if unused. When non-empty,
+     * must match bufferInfo in length; blob sizes are serialized directly into protobuf.
      * @param[out] payloads Constructed RPC payloads (TCP and UB-fallback entries).
      * @param[out] payloadBytes Bytes counted toward TCP metric (excludes UB memory-copy bytes).
      * @param[out] shmBytes Bytes counted toward SHM metric.
@@ -229,10 +231,10 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status BuildMultiPublishPayloads(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
-                                    const std::vector<std::vector<uint64_t>> &blobSizes,
-                                    std::vector<MemView> &payloads, uint64_t &payloadBytes, uint64_t &shmBytes,
-                                    MultiPublishReqPb &req,
-                                    std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets);
+                                     const std::vector<const DeviceBlobList *> &deviceBlobRefs,
+                                     std::vector<MemView> &payloads, uint64_t &payloadBytes, uint64_t &shmBytes,
+                                     MultiPublishReqPb &req,
+                                     std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets);
 
     void RecordMultiPublishWriteBytes(uint64_t payloadBytes, uint64_t shmBytes);
     

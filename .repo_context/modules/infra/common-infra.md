@@ -159,6 +159,12 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
     CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available
     because `hccs_transport.cpp` is not compiled and `ASCEND_HIXL_AVAILABLE` is not defined.
+  - HCCS RH2D pre-counts each scatter request's descriptors and reserves the active HIXL descriptor vector once so
+    it does not grow or relocate while appending. There is no operator-facing descriptor cap: HIXL
+    `TransferOpDesc` count is unbounded and HIXL splits the submission across the SQ queue depth internally, so
+    the client submits the complete request in one `TransferSync`. Temporary device-memory registration budget
+    exhaustion can still force an earlier flush, so pre-registered destination pools are required for the
+    single-submit performance baseline.
   - Ascend local Direct H2D supports opt-in descriptor parallelism through `DS_H2D_PARALLEL_WORKER_NUM`; the default
     value `1` keeps Direct serial. It preserves the synchronous `MGetH2D` contract and uses byte-balanced bounded ACL
     batches only when the configured worker count is greater than one and the estimated task count can cover all
@@ -167,10 +173,12 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     inflight limit, and a request drains all submitted tasks before returning the lowest-index failure. The default
     policy remains unchanged; focused mock-backed coverage lives in
     `tests/st/device/acl_resource_manager_fallback_test.cpp`.
-  - FFTS and Huge FFTS H2D additionally support default-off object-level parallelism through
-    `DS_H2D_FFTS_PARALLEL_WORKER_NUM` (default `1`) and `DS_H2D_FFTS_PARALLEL_MIN_BYTES` (default 24 MiB). Complete
-    objects are byte-balanced by `AclParallelFftsExecutor` across independent copier instances; every instance owns its
-    dispatcher, streams, notifies, and two device staging buffers. The executor validates the aggregate per-shard
+  - FFTS and Huge FFTS H2D additionally support object-level parallelism through
+    `DS_H2D_FFTS_PARALLEL_WORKER_NUM` (default `4`) and `DS_H2D_FFTS_PARALLEL_MIN_BYTES` (default 128 MiB). Complete
+    objects are byte-balanced by `AclParallelFftsExecutor` across independent copier instances; every active instance
+    exclusively owns a control-resource bundle (dispatcher/context, two streams, and four notifies) plus two device
+    staging buffers. Synchronized control bundles return atomically to a per-device cache, while staging buffers use a
+    separate capacity-aware cache. The executor validates the aggregate per-shard
     staging requirement against `DS_DEVICE_ACL_SIZE` before submitting work, drains all submitted shards before
     returning the first shard failure, and serializes calls so only one call can hold staging resources; insufficient
     work/resources uses serial FFTS. For object sizes `S[j]` and shard maxima `M[i]`, serial FFTS needs

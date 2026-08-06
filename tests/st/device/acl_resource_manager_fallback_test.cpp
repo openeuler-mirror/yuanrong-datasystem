@@ -33,7 +33,7 @@ namespace st {
 using namespace acl;
 
 namespace {
-constexpr auto PARALLEL_H2D_TEST_BARRIER_TIMEOUT = std::chrono::milliseconds(500);
+constexpr auto PARALLEL_H2D_TEST_BARRIER_TIMEOUT = std::chrono::seconds(2);
 
 class TestAclResourceManager : public AclResourceManager {
 public:
@@ -563,8 +563,8 @@ TEST_F(AclParallelMemcpyIntegrationTest, SmallParallelDirectRequestFallsBackToDi
 TEST_F(AclResourceManagerFallbackTest, ParallelFftsH2DConfigLoadsDefaultsOverridesAndRejectsInvalidValues)
 {
     ParallelFftsH2DConfig defaultConfig;
-    ASSERT_EQ(defaultConfig.workerNum, 1);
-    ASSERT_EQ(defaultConfig.minBytes, 24ULL * 1024ULL * 1024ULL);
+    ASSERT_EQ(defaultConfig.workerNum, 4);
+    ASSERT_EQ(defaultConfig.minBytes, 128ULL * 1024ULL * 1024ULL);
 
     ScopedEnv workerNum("DS_H2D_FFTS_PARALLEL_WORKER_NUM", "3");
     ScopedEnv minBytes("DS_H2D_FFTS_PARALLEL_MIN_BYTES", "0");
@@ -581,8 +581,8 @@ TEST_F(AclResourceManagerFallbackTest, ParallelFftsH2DConfigLoadsDefaultsOverrid
 TEST_F(AclResourceManagerFallbackTest, ParallelFftsD2HConfigLoadsDefaultsOverridesAndRejectsInvalidValues)
 {
     ParallelFftsD2HConfig defaultConfig;
-    ASSERT_EQ(defaultConfig.workerNum, 1);
-    ASSERT_EQ(defaultConfig.minBytes, 24ULL * 1024ULL * 1024ULL);
+    ASSERT_EQ(defaultConfig.workerNum, 4);
+    ASSERT_EQ(defaultConfig.minBytes, 48ULL * 1024ULL * 1024ULL);
 
     ScopedEnv workerNum("DS_D2H_FFTS_PARALLEL_WORKER_NUM", "3");
     ScopedEnv minBytes("DS_D2H_FFTS_PARALLEL_MIN_BYTES", "0");
@@ -668,6 +668,81 @@ TEST_F(AclResourceManagerFallbackTest, ParallelFftsD2HPartitionKeepsObjectsWhole
     ASSERT_EQ(deviceStagingBytes, 2 * (hostA.size() + hostC.size()));
 }
 
+TEST_F(AclResourceManagerFallbackTest, D2HCallbackDataUsesLiveStateWithoutOwningCycle)
+{
+    auto state = std::make_shared<D2HCallbackState>(1);
+    auto callbackData = std::make_unique<NotifyH2HCallbackData>(NotifyH2HCallbackData{ .state = state, .index = 0 });
+
+    auto callbackState = callbackData->state.lock();
+    ASSERT_NE(callbackState, nullptr);
+    callbackState->Complete(callbackData->index);
+    ASSERT_EQ(callbackState->finishCount, 1);
+    ASSERT_EQ(callbackState->tasks.indexes, std::vector<size_t>({ 0 }));
+}
+
+TEST_F(AclResourceManagerFallbackTest, D2HCallbackDataDoesNotKeepAbandonedStateAlive)
+{
+    std::weak_ptr<D2HCallbackState> weakState;
+    auto callbackData = std::make_unique<NotifyH2HCallbackData>();
+    {
+        auto state = std::make_shared<D2HCallbackState>(1);
+        weakState = state;
+        callbackData->state = state;
+    }
+
+    ASSERT_TRUE(weakState.expired());
+    ASSERT_EQ(callbackData->state.lock(), nullptr);
+}
+
+TEST_F(AclResourceManagerFallbackTest, D2HCallbackStateRejectsLateWorkAfterForceFinish)
+{
+    D2HCallbackState state(2);
+    state.Complete(0);
+    state.ForceFinish();
+    state.Complete(1);
+
+    ASSERT_TRUE(state.forced);
+    ASSERT_TRUE(state.tasks.IsEmpty());
+    ASSERT_GE(state.finishCount, state.expectedCount);
+}
+
+#ifdef USE_NPU
+TEST_F(AclResourceManagerFallbackTest, FftsResourceBundleReusesCompleteControlResources)
+{
+    constexpr uint32_t deviceId = 3;
+    InstrumentedAclDeviceManager deviceManager;
+    AclResourceManager::DeviceResource deviceResource(deviceId);
+    auto bundle = std::make_unique<FftsResourceBundle>();
+    bundle->dispatcher = std::make_unique<ffts::FftsDispatcher>(deviceId, &deviceManager);
+    ASSERT_EQ(bundle->dispatcher->CreateFftsCtxs(1), HCCL_SUCCESS);
+    ASSERT_EQ(bundle->dispatcher->SetFftsCtx(0), HCCL_SUCCESS);
+    char streamHandles[2]{};
+    char destNotifyHandles[FFTS_PIPELINE]{};
+    char pinNotifyHandles[FFTS_PIPELINE]{};
+    bundle->resource.primaryStream = &streamHandles[0];
+    bundle->resource.secondaryStream = &streamHandles[1];
+    for (size_t i = 0; i < FFTS_PIPELINE; ++i) {
+        bundle->resource.toDestDone[i] = &destNotifyHandles[i];
+        bundle->resource.toPinDone[i] = &pinNotifyHandles[i];
+    }
+    auto expectedResource = bundle->resource;
+
+    deviceResource.FreeFftsResourceBundle(std::move(bundle), 1);
+    std::unique_ptr<FftsResourceBundle> reusedBundle;
+    DS_ASSERT_OK(deviceResource.CreateFftsResourceBundle(false, reusedBundle));
+
+    ASSERT_NE(reusedBundle, nullptr);
+    ASSERT_EQ(reusedBundle->resource.primaryStream, expectedResource.primaryStream);
+    ASSERT_EQ(reusedBundle->resource.secondaryStream, expectedResource.secondaryStream);
+    ASSERT_FALSE(reusedBundle->resource.subscribeReport);
+    for (size_t i = 0; i < FFTS_PIPELINE; ++i) {
+        ASSERT_EQ(reusedBundle->resource.toDestDone[i], expectedResource.toDestDone[i]);
+        ASSERT_EQ(reusedBundle->resource.toPinDone[i], expectedResource.toPinDone[i]);
+    }
+    ASSERT_NE(reusedBundle->dispatcher, nullptr);
+}
+#endif
+
 TEST_F(AclResourceManagerFallbackTest, ParallelFftsH2DBindsDeviceBeforeShardWork)
 {
     constexpr uint32_t deviceId = 3;
@@ -724,6 +799,47 @@ TEST_F(AclResourceManagerFallbackTest, ParallelFftsD2HBindsDeviceBeforeShardWork
     ASSERT_TRUE(deviceManager.AllTasksSetDevice(deviceId, config.workerNum));
     ASSERT_EQ(deviceManager.GetCallCount(), 0);
     ASSERT_EQ(copyCallCount, 0);
+}
+
+TEST_F(AclResourceManagerFallbackTest, ParallelFftsWorkersReuseDeviceBinding)
+{
+    constexpr uint32_t deviceId = 5;
+    InstrumentedAclDeviceManager deviceManager;
+    TestAclResourceManager resourceMgr;
+    resourceMgr.Configure(1024, 1024, MemcopyPolicy::FFTS, MemcopyPolicy::FFTS);
+    ParallelFftsD2HConfig config;
+    config.workerNum = 2;
+    config.minBytes = 0;
+    std::mutex barrierMutex;
+    std::condition_variable barrierCv;
+    size_t firstWaveCount = 0;
+    size_t copyCallCount = 0;
+    auto copyFunction = [&](uint32_t, DeviceBatchCopyHelper &, bool, ThreadPool *) {
+        std::unique_lock<std::mutex> lock(barrierMutex);
+        ++copyCallCount;
+        if (firstWaveCount < config.workerNum) {
+            ++firstWaveCount;
+            if (firstWaveCount < config.workerNum) {
+                if (!barrierCv.wait_for(lock, PARALLEL_H2D_TEST_BARRIER_TIMEOUT,
+                                        [&] { return firstWaveCount >= config.workerNum; })) {
+                    return Status(K_RUNTIME_ERROR, "Timed out waiting for parallel FFTS workers");
+                }
+            } else {
+                barrierCv.notify_all();
+            }
+        }
+        return Status::OK();
+    };
+    AclParallelFftsExecutor executor(&resourceMgr, &deviceManager, std::move(copyFunction), config);
+    std::vector<std::string> payloads = { "parallel-ffts-a", "parallel-ffts-b" };
+    D2HTestBuffers buffers;
+    auto helper = BuildD2HHelper(payloads, buffers);
+
+    DS_ASSERT_OK(executor.Memcpy(deviceId, helper));
+    DS_ASSERT_OK(executor.Memcpy(deviceId, helper));
+
+    ASSERT_TRUE(deviceManager.AllTasksSetDevice(deviceId, config.workerNum));
+    ASSERT_EQ(copyCallCount, config.workerNum * 2);
 }
 
 TEST_F(AclParallelMemcpyIntegrationTest, ParallelFftsD2HFallsBackToDirectAfterOutOfMemory)

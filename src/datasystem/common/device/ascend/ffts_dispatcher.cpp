@@ -70,6 +70,8 @@ HcclResult hrtGetRdmaDoorbellAddr(int32_t devLogID, int64_t chipID, uint32_t dbI
 
 FftsDispatcher::~FftsDispatcher()
 {
+    fftsCtxsPtr_ = nullptr;
+    fftsCtxs_.clear();
 }
 
 HcclResult FftsDispatcher::Init()
@@ -85,7 +87,7 @@ HcclResult FftsDispatcher::SetFftsCtx(size_t index)
         return HCCL_E_RUNTIME;
     }
 
-    fftsCtxsPtr_ = fftsCtxs_[index];
+    fftsCtxsPtr_ = fftsCtxs_[index].get();
     return HCCL_SUCCESS;
 }
 
@@ -97,8 +99,7 @@ HcclResult FftsDispatcher::CreateFftsCtxs(int amount)
     }
 
     for (int i = 0; i < amount; i++) {
-        HcclFftsContextsInfo *ctx = new HcclFftsContextsInfo();
-        fftsCtxs_.push_back(ctx);
+        fftsCtxs_.emplace_back(std::make_unique<HcclFftsContextsInfo>());
     }
 
     return HCCL_SUCCESS;
@@ -111,9 +112,7 @@ HcclResult FftsDispatcher::ClearFftsCtx()
         return HCCL_E_RUNTIME;
     }
 
-    for (size_t i = 0; i < fftsCtxs_.size(); i++) {
-        delete fftsCtxs_[i];
-    }
+    fftsCtxsPtr_ = nullptr;
     fftsCtxs_.clear();
     return HCCL_SUCCESS;
 }
@@ -136,8 +135,7 @@ HcclResult FftsDispatcher::ReuseCtx(size_t index)
 HcclResult FftsDispatcher::LaunchFftsTask(rtStream_t stm, uint16_t readyContextNum, int ctxIndex)
 {
     HcclFftsContextsInfo *prevFftsCtxsPtr = fftsCtxsPtr_;
-    fftsCtxsPtr_ = fftsCtxs_[ctxIndex];
-
+    fftsCtxsPtr_ = fftsCtxs_[ctxIndex].get();
     if (!fftsCtxsPtr_->completed) {
         // Set amount of contexts ("tasks") to use for ffts = next context index
         fftsCtxsPtr_->ctxNum = fftsCtxsPtr_->refreshIndex;

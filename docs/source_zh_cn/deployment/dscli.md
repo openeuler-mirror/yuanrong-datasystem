@@ -946,7 +946,12 @@ dscli start --coordinator_config_path coordinator_config.json
 > ```bash
 > # 绑定到 NUMA 节点 0 的 CPU，并优先在 NUMA 节点 1 分配内存
 > dscli start --cpunodebind 0 --preferred 1 --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+>
+> # 在 NUMA 节点 0-7 间交错分配内存（多 NUMA 节点、大共享内存场景，如 KV Pool）
+> dscli start --interleave 0-7 --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
 > ```
+>
+> `--interleave` 的取值遵循 numactl 节点语法，支持单个节点（`0`）、列表（`0,1,2`）、范围（`0-7`）以及 `all`。跨全部 NUMA 节点交错分配可避免大块共享内存集中占用单个节点导致内存不均，建议在 Worker 共享内存较大（如 `shared_memory_size_mb` 取值较高）时使用。
 >
 > **启用ums注意事项**：
 >
@@ -1008,7 +1013,12 @@ dscli start --coordinator_config_path coordinator_config.json
 > ```bash
 > # 启动集群并绑核
 > dscli up --cpunodebind 0 --preferred 1 -f ./cluster_config.json
+>
+> # 在 NUMA 节点 0-7 间交错分配内存启动集群（多 NUMA 节点、大共享内存场景，如 KV Pool）
+> dscli up --interleave 0-7 -f ./cluster_config.json
 > ```
+>
+> `--interleave` 的取值遵循 numactl 节点语法，支持单个节点（`0`）、列表（`0,1,2`）、范围（`0-7`）以及 `all`。跨全部 NUMA 节点交错分配可避免大块共享内存集中占用单个节点导致内存不均，建议在 Worker 共享内存较大（如 `shared_memory_size_mb` 取值较高）时使用。
 >
 > **启用ums注意事项**：
 >

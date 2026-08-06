@@ -15,6 +15,7 @@ ds_cc_library(
         "//src/datasystem/common/device:device_manager_factory",
         "//src/datasystem/common/device:device_resource_manager",
         "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
     ],

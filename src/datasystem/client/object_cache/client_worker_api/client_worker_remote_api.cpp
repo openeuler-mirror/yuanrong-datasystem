@@ -25,7 +25,10 @@
 // Re-include log.h to restore datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <utility>
@@ -95,11 +98,19 @@ Status AppendPublishPayload(std::atomic<uint64_t> &pendingBytes, const std::shar
 }
 
 void FillMultiPublishObjectInfo(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                                const std::vector<uint64_t> *blobSizes, MultiPublishReqPb &req)
+                                const DeviceBlobList *deviceBlobList, MultiPublishReqPb &req)
 {
     MultiPublishReqPb::ObjectInfoPb objectInfoPb;
-    if (blobSizes != nullptr && !blobSizes->empty()) {
-        objectInfoPb.mutable_blob_sizes()->Add(blobSizes->begin(), blobSizes->end());
+    if (deviceBlobList != nullptr && !deviceBlobList->blobs.empty()) {
+        const auto &blobs = deviceBlobList->blobs;
+        // Serialize blob sizes directly from the referenced blobs; protobuf owns its own copy (wire
+        // requirement). Reserve once per object to avoid repeated RepeatedField growth; protobuf is
+        // int-indexed, so reject a blob count that would overflow int.
+        auto mutableBlobSizes = objectInfoPb.mutable_blob_sizes();
+        mutableBlobSizes->Reserve(static_cast<int>(blobs.size()));
+        for (const auto &blob : blobs) {
+            mutableBlobSizes->Add(blob.size);
+        }
     }
     objectInfoPb.set_object_key(bufferInfo->objectKey);
     objectInfoPb.set_data_size(bufferInfo->dataSize);
@@ -718,7 +729,7 @@ void ClientWorkerRemoteApi::RecordPublishWriteBytes(const std::shared_ptr<Object
 
 Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
                                            const PublishParam &param, MultiPublishRspPb &rsp,
-                                           const std::vector<std::vector<uint64_t>> &blobSizes)
+                                           const std::vector<const DeviceBlobList *> &deviceBlobRefs)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
     PerfPoint point(PerfKey::CLIENT_MULTI_PUBLISH_CONSTRUCT);
@@ -728,8 +739,8 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     std::vector<UrmaFallbackTcpLimiter::Ticket> fallbackTickets;
     uint64_t payloadBytes = 0;
     uint64_t shmBytes = 0;
-    RETURN_IF_NOT_OK(BuildMultiPublishPayloads(bufferInfo, blobSizes, payloads, payloadBytes, shmBytes, req,
-                                               fallbackTickets));
+    RETURN_IF_NOT_OK(
+        BuildMultiPublishPayloads(bufferInfo, deviceBlobRefs, payloads, payloadBytes, shmBytes, req, fallbackTickets));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when multi publish.");
     point.RecordAndReset(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);
     auto status =
@@ -767,12 +778,32 @@ void ClientWorkerRemoteApi::RecordMultiPublishWriteBytes(uint64_t payloadBytes, 
 
 Status ClientWorkerRemoteApi::BuildMultiPublishPayloads(
     const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
-    const std::vector<std::vector<uint64_t>> &blobSizes, std::vector<MemView> &payloads,
-    uint64_t &payloadBytes, uint64_t &shmBytes, MultiPublishReqPb &req,
-    std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets)
+    const std::vector<const DeviceBlobList *> &deviceBlobRefs, std::vector<MemView> &payloads, uint64_t &payloadBytes,
+    uint64_t &shmBytes, MultiPublishReqPb &req, std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets)
 {
     fallbackTickets.reserve(bufferInfo.size());
+    CHECK_FAIL_RETURN_STATUS(bufferInfo.size() <= static_cast<size_t>(std::numeric_limits<int>::max()), K_INVALID,
+                             FormatString("bufferInfo count %zu exceeds protobuf int limit", bufferInfo.size()));
     req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
+    // Raw-refs contract: when provided, deviceBlobRefs must match bufferInfo in length and every element
+    // must be non-null. Refs are consumed synchronously during request construction and never retained.
+    if (!deviceBlobRefs.empty()) {
+        CHECK_FAIL_RETURN_STATUS(deviceBlobRefs.size() == bufferInfo.size(), K_INVALID,
+                                 FormatString("deviceBlobRefs size %zu does not match bufferInfo size %zu",
+                                              deviceBlobRefs.size(), bufferInfo.size()));
+        for (size_t i = 0; i < deviceBlobRefs.size(); ++i) {
+            CHECK_FAIL_RETURN_STATUS(deviceBlobRefs[i] != nullptr, K_INVALID,
+                                     FormatString("deviceBlobRefs[%zu] is null", i));
+            CHECK_FAIL_RETURN_STATUS(
+                deviceBlobRefs[i]->blobs.size() <= static_cast<size_t>(std::numeric_limits<int>::max()), K_INVALID,
+                FormatString("blob count %zu exceeds int limit, index %zu", deviceBlobRefs[i]->blobs.size(), i));
+        }
+    }
+    std::optional<PerfPoint> serializePoint;
+    if (!deviceBlobRefs.empty()) {
+        // Measure once per D2H request. Do not emit this point for ordinary MultiPublish calls.
+        serializePoint.emplace(PerfKey::CLIENT_D2H_SERIALIZE_BLOB_SIZES);
+    }
     for (size_t i = 0; i < bufferInfo.size(); ++i) {
         if (bufferInfo[i]->shmId.Empty() || IsUrmaFallbackPayload(bufferInfo[i])) {
             if (IsUrmaFallbackPayload(bufferInfo[i])) {
@@ -788,8 +819,11 @@ Status ClientWorkerRemoteApi::BuildMultiPublishPayloads(
         } else {
             shmBytes += bufferInfo[i]->dataSize;
         }
-        const auto *currentBlobSizes = blobSizes.empty() ? nullptr : &blobSizes[i];
-        FillMultiPublishObjectInfo(bufferInfo[i], currentBlobSizes, req);
+        const auto *currentBlobList = deviceBlobRefs.empty() ? nullptr : deviceBlobRefs[i];
+        FillMultiPublishObjectInfo(bufferInfo[i], currentBlobList, req);
+    }
+    if (serializePoint.has_value()) {
+        serializePoint->Record();
     }
     return Status::OK();
 }
