@@ -1157,11 +1157,14 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
         const bool localMemberWasLeaving =
             localMemberWasLeavingInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
         const bool localVoluntaryExitRequested = localVoluntaryExitRequested_.load();
+        const bool rejoinAlreadyRequired = membershipRejoinRequired_.load(std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             backendObservation_ = {};
         }
-        if (!localMemberExisted || localMemberWasLeaving || localVoluntaryExitRequested) {
+        // Repeated missing Snapshots must not erase a rejoin decision made when the local member disappeared.
+        if (localMemberWasLeaving || localVoluntaryExitRequested
+            || (!localMemberExisted && !rejoinAlreadyRequired)) {
             membershipRejoinRequired_.store(false, std::memory_order_relaxed);
             SetAvailability(TopologyAvailabilityLevel::NOT_READY, "local_member_missing");
             if (localMemberWasLeaving || localVoluntaryExitRequested) {
@@ -1171,8 +1174,11 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
             }
             return Status::OK();
         }
-        LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
-                   << " role=worker state=local_member_missing action=require_rejoin address=" << options_.localAddress;
+        if (!rejoinAlreadyRequired) {
+            LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
+                       << " role=worker state=local_member_missing action=require_rejoin address="
+                       << options_.localAddress;
+        }
         membershipRejoinRequired_.store(true, std::memory_order_relaxed);
         SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "local_member_missing");
         return Status::OK();

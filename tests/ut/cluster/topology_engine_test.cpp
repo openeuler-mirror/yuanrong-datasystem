@@ -554,16 +554,34 @@ TEST(TopologyEngineTest, LocalMemberRemovedFromSnapshotRequiresRejoinWithoutSigk
     const std::string clusterName = "removed-local";
     auto keys = MakeKeys(clusterName);
     PutTopology(proxy, clusterName, MakeTopology());
-    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
-    ASSERT_NE(engine, nullptr);
+    std::atomic<uint64_t> publishedVersion{ 0 };
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, clusterName);
+    builder.SetSnapshotPublishedHandler([&publishedVersion](std::shared_ptr<const TopologySnapshot> snapshot) {
+        publishedVersion.store(snapshot->Version());
+    });
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
     DS_ASSERT_OK(engine->Start());
 
+    ::testing::internal::CaptureStderr();
     PutTopology(proxy, clusterName, MakeTopologyWithoutLocal(2));
     DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
     ASSERT_TRUE(WaitFor([&engine] { return engine->GetAvailability() == TopologyAvailabilityLevel::ROLE_ISOLATED; }));
     EXPECT_TRUE(engine->RequiresMembershipRejoin());
 
+    PutTopology(proxy, clusterName, MakeTopologyWithoutLocal(3));
+    DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 3));
+    ASSERT_TRUE(WaitFor([&publishedVersion] { return publishedVersion.load() == 3; }));
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::ROLE_ISOLATED);
+    EXPECT_TRUE(engine->RequiresMembershipRejoin());
+
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    const auto capturedStderr = ::testing::internal::GetCapturedStderr();
+    constexpr char requireRejoinLog[] = "state=local_member_missing action=require_rejoin";
+    const auto firstLog = capturedStderr.find(requireRejoinLog);
+    ASSERT_NE(firstLog, std::string::npos) << capturedStderr;
+    EXPECT_EQ(capturedStderr.find(requireRejoinLog, firstLog + 1), std::string::npos) << capturedStderr;
 }
 
 TEST(TopologyEngineTest, VoluntaryExitDoesNotRequireRejoinWhenLocalMemberIsRemoved)
