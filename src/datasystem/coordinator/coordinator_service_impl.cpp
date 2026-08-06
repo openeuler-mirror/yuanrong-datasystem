@@ -564,7 +564,8 @@ Status CoordinatorServiceImpl::BuildComponentTree()
                             outcome = cluster::ControlBackendProbeOutcome::RESPONSE;
                         } else if (status.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
                             outcome = cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED;
-                        } else if (status.GetCode() == K_RPC_UNAVAILABLE) {
+                        } else if (status.GetCode() == K_RPC_UNAVAILABLE
+                                   || status.GetCode() == K_RPC_PEER_DEAD) {
                             outcome = cluster::ControlBackendProbeOutcome::UNAVAILABLE;
                         } else if (status.GetCode() == K_RPC_CANCELLED) {
                             outcome = cluster::ControlBackendProbeOutcome::CANCELLED;

@@ -200,6 +200,14 @@ public:
      */
     Status UpdateConfig(const std::string &configJson);
 
+#ifdef WITH_TESTS
+    /**
+     * @brief Build a failed control-backend probe result for producer-semantics tests.
+     */
+    static cluster::ControlBackendProbeResult BuildFailedProbeResultForTest(
+        const cluster::MemberIdentity &peer, const Status &status);
+#endif
+
 private:
     friend class ::datasystem::ut::WorkerOCServerTest;
 
