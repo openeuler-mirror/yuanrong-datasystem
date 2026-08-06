@@ -45,6 +45,8 @@ namespace {
 constexpr auto kWaitTimeout = std::chrono::seconds(10);
 constexpr int kRecoverableCqeStatus = 9;  // Kept in sync with GetUrmaErrorHandlePolicy().
 constexpr int kNonRecoverableCqeStatus = 5;
+constexpr uint32_t kOrphanWrWarningThreshold = 16;
+constexpr uint32_t kOrphanWrRetireThreshold = 32;
 
 bool WaitUntil(const std::function<bool()> &predicate)
 {
@@ -365,22 +367,199 @@ TEST(UrmaSendJettyFaultTest, InFlightWaitTimeoutStatusIncludesPeerContext)
 
     std::shared_ptr<UrmaJetty> timedOutJetty;
     ASSERT_TRUE(resource.AcquireJetty(timedOutJetty).IsOk());
-    Raii releaseJetty([&resource, &timedOutJetty] { resource.ReleaseJetty(timedOutJetty); });
-    auto lease = std::make_shared<UrmaSendLaneLease>(timedOutJetty);
+    Raii cleanup([&resource, &timedOutJetty] {
+        if (timedOutJetty != nullptr) {
+            (void)resource.RetireActiveSendLane(timedOutJetty->GetJettyId());
+            resource.ReleaseJetty(timedOutJetty);
+        }
+    });
     constexpr uint64_t kRequestId = 1003;
     constexpr uint64_t kDataSize = 4096;
+    auto lease = std::make_shared<UrmaSendLaneLease>(timedOutJetty, kRequestId);
+    ASSERT_TRUE(resource.RegisterActiveSendLane(lease).IsOk());
+    lease->AddWr();
+    ASSERT_TRUE(resource.SealActiveSendLane(lease).IsOk());
     ASSERT_TRUE(manager.CreateEvent(kRequestId, MakeTestConnection(), lease, "127.0.0.1:29100", kDataSize,
                                     UrmaEvent::OperationType::WRITE, nullptr)
                     .IsOk());
 
-    // This case protects the business timeout status only. Real late-CQE lane accounting is covered by the
-    // timeout-storm ST, so the test does not reproduce that production path with a synthetic completion helper.
     const auto status = manager.WaitToFinish(kRequestId, 0);
     EXPECT_EQ(status.GetCode(), K_URMA_WAIT_TIMEOUT);
     EXPECT_EQ(status.GetMsg().find("RPC deadline exceeded"), std::string::npos) << status.ToString();
     ExpectStatusContains(status, { "requestId=1003", "srcAddress=", "targetAddress=127.0.0.1:29100",
                                    "dataSize=4096", "op=WRITE" });
     EXPECT_TRUE(timedOutJetty->IsValid());
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+    EXPECT_TRUE(lease->IsForceReleased());
+    EXPECT_EQ(timedOutJetty->GetOrphanWrCount(), 1u);
+    ASSERT_TRUE(resource.CompleteActiveSendLane(timedOutJetty->GetJettyId(), kRequestId, URMA_CR_SUCCESS).IsOk());
+    EXPECT_EQ(timedOutJetty->GetOrphanWrCount(), 0u);
+    timedOutJetty.reset();
+}
+
+TEST(UrmaSendJettyFaultTest, TimedOutLaneIsForceReleasedAndLateCqeDoesNotCompleteReplacementLane)
+{
+    if (!IsUrmaFaultTestEnvAvailable()) {
+        GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
+    }
+
+    auto &manager = UrmaManager::Instance();
+    ASSERT_TRUE(InitManagerForFaultTest(manager).IsOk());
+    auto &resource = *manager.urmaResource_;
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+
+    std::shared_ptr<UrmaJetty> jetty;
+    ASSERT_TRUE(resource.AcquireJetty(jetty).IsOk());
+    Raii cleanup([&resource, &jetty] {
+        if (jetty != nullptr) {
+            (void)resource.RetireActiveSendLane(jetty->GetJettyId());
+            resource.ReleaseJetty(jetty);
+        }
+    });
+
+    constexpr uint64_t kOldRequestId = 1000;
+    auto oldLane = std::make_shared<UrmaSendLaneLease>(jetty, kOldRequestId);
+    ASSERT_TRUE(resource.RegisterActiveSendLane(oldLane).IsOk());
+    oldLane->AddWr();
+    ASSERT_TRUE(resource.SealActiveSendLane(oldLane).IsOk());
+    resource.ScheduleTimedOutSendLane(oldLane, kOldRequestId, "127.0.0.1:29100", "timed-out-peer");
+
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+    EXPECT_TRUE(oldLane->IsForceReleased());
+    EXPECT_EQ(jetty->GetOrphanWrCount(), 1u);
+
+    std::shared_ptr<UrmaJetty> reusedJetty;
+    ASSERT_TRUE(resource.AcquireJetty(reusedJetty).IsOk());
+    ASSERT_EQ(reusedJetty.get(), jetty.get());
+    constexpr uint64_t kNewRequestId = 2000;
+    auto newLane = std::make_shared<UrmaSendLaneLease>(reusedJetty, kNewRequestId);
+    ASSERT_TRUE(resource.RegisterActiveSendLane(newLane).IsOk());
+    newLane->AddWr();
+    ASSERT_TRUE(resource.SealActiveSendLane(newLane).IsOk());
+
+    ASSERT_TRUE(resource.CompleteActiveSendLane(jetty->GetJettyId(), kOldRequestId, URMA_CR_SUCCESS).IsOk());
+    EXPECT_EQ(newLane->GetPendingWrCount(), 1u);
+    EXPECT_EQ(jetty->GetOrphanWrCount(), 0u);
+    ASSERT_TRUE(resource.CompleteActiveSendLane(jetty->GetJettyId(), kNewRequestId, URMA_CR_SUCCESS).IsOk());
+    EXPECT_TRUE(WaitForIdleSendLane(resource));
+    reusedJetty.reset();
+    jetty.reset();
+}
+
+TEST(UrmaSendJettyFaultTest, TimeoutBeforeSealForceReleasesImmediatelyWhenSealArrives)
+{
+    if (!IsUrmaFaultTestEnvAvailable()) {
+        GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
+    }
+
+    auto &manager = UrmaManager::Instance();
+    ASSERT_TRUE(InitManagerForFaultTest(manager).IsOk());
+    auto &resource = *manager.urmaResource_;
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+
+    std::shared_ptr<UrmaJetty> jetty;
+    ASSERT_TRUE(resource.AcquireJetty(jetty).IsOk());
+    Raii cleanup([&resource, &jetty] {
+        if (jetty != nullptr) {
+            (void)resource.RetireActiveSendLane(jetty->GetJettyId());
+            resource.ReleaseJetty(jetty);
+        }
+    });
+
+    constexpr uint64_t kRequestId = 2500;
+    auto lane = std::make_shared<UrmaSendLaneLease>(jetty, kRequestId);
+    ASSERT_TRUE(resource.RegisterActiveSendLane(lane).IsOk());
+    lane->AddWr();
+
+    resource.ScheduleTimedOutSendLane(lane, kRequestId, "127.0.0.1:29100", "timeout-before-seal-peer");
+    EXPECT_TRUE(lane->IsTimedOut());
+    EXPECT_FALSE(lane->IsForceReleased());
+    EXPECT_EQ(resource.GetSendJettyPoolStats().inUseCount, 1u);
+
+    ASSERT_TRUE(resource.SealActiveSendLane(lane).IsOk());
+    EXPECT_TRUE(lane->IsForceReleased());
+    EXPECT_EQ(jetty->GetOrphanWrCount(), 1u);
+    EXPECT_EQ(resource.GetSendJettyPoolStats().idleCount, 1u);
+    ASSERT_TRUE(resource.CompleteActiveSendLane(jetty->GetJettyId(), kRequestId, URMA_CR_SUCCESS).IsOk());
+    EXPECT_EQ(jetty->GetOrphanWrCount(), 0u);
+    jetty.reset();
+}
+
+TEST(UrmaSendJettyFaultTest, OrphanWrWarningThresholdKeepsJettyReusable)
+{
+    if (!IsUrmaFaultTestEnvAvailable()) {
+        GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
+    }
+
+    auto &manager = UrmaManager::Instance();
+    ASSERT_TRUE(InitManagerForFaultTest(manager).IsOk());
+    auto &resource = *manager.urmaResource_;
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+
+    std::shared_ptr<UrmaJetty> jetty;
+    ASSERT_TRUE(resource.AcquireJetty(jetty).IsOk());
+    Raii cleanup([&resource, &jetty] {
+        if (jetty != nullptr) {
+            (void)resource.RetireActiveSendLane(jetty->GetJettyId());
+            resource.ReleaseJetty(jetty);
+        }
+    });
+
+    constexpr uint64_t kRequestId = 2800;
+    constexpr uint32_t kOrphanWrs = kOrphanWrWarningThreshold + 1;
+    auto lane = std::make_shared<UrmaSendLaneLease>(jetty, kRequestId);
+    ASSERT_TRUE(resource.RegisterActiveSendLane(lane).IsOk());
+    for (uint32_t i = 0; i < kOrphanWrs; ++i) {
+        lane->AddWr();
+    }
+    ASSERT_TRUE(resource.SealActiveSendLane(lane).IsOk());
+    resource.ScheduleTimedOutSendLane(lane, kRequestId, "127.0.0.1:29100", "orphan-warning-peer");
+
+    EXPECT_TRUE(lane->IsForceReleased());
+    EXPECT_TRUE(jetty->IsValid());
+    EXPECT_EQ(jetty->GetOrphanWrCount(), kOrphanWrs);
+    EXPECT_EQ(resource.GetSendJettyPoolStats().idleCount, 1u);
+    for (uint32_t i = 0; i < kOrphanWrs; ++i) {
+        ASSERT_TRUE(resource.CompleteActiveSendLane(jetty->GetJettyId(), kRequestId, URMA_CR_SUCCESS).IsOk());
+    }
+    EXPECT_EQ(jetty->GetOrphanWrCount(), 0u);
+    jetty.reset();
+}
+
+TEST(UrmaSendJettyFaultTest, OrphanWrThresholdRetiresJettyAndTriggersRefill)
+{
+    if (!IsUrmaFaultTestEnvAvailable()) {
+        GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
+    }
+
+    auto &manager = UrmaManager::Instance();
+    ASSERT_TRUE(InitManagerForFaultTest(manager).IsOk());
+    auto &resource = *manager.urmaResource_;
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+
+    std::shared_ptr<UrmaJetty> jetty;
+    ASSERT_TRUE(resource.AcquireJetty(jetty).IsOk());
+    Raii cleanup([&resource, &jetty] {
+        if (jetty != nullptr) {
+            (void)resource.RetireActiveSendLane(jetty->GetJettyId());
+            resource.ReleaseJetty(jetty);
+        }
+    });
+
+    constexpr uint64_t kRequestId = 3000;
+    auto lane = std::make_shared<UrmaSendLaneLease>(jetty, kRequestId);
+    ASSERT_TRUE(resource.RegisterActiveSendLane(lane).IsOk());
+    for (uint32_t i = 0; i < kOrphanWrRetireThreshold; ++i) {
+        lane->AddWr();
+    }
+    ASSERT_TRUE(resource.SealActiveSendLane(lane).IsOk());
+    resource.ScheduleTimedOutSendLane(lane, kRequestId, "127.0.0.1:29100", "orphan-threshold-peer");
+
+    ASSERT_TRUE(WaitUntil([&jetty] { return !jetty->IsValid(); }));
+    EXPECT_TRUE(lane->IsForceReleased());
+    EXPECT_EQ(jetty->GetOrphanWrCount(), kOrphanWrRetireThreshold);
+    ExpectReplacementAfterRetire(resource, jetty);
+    jetty.reset();
 }
 
 TEST(UrmaSendJettyFaultTest, RefillCreateFailuresKeepSurvivingLaneAndRecoverAutomatically)

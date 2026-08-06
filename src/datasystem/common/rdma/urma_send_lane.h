@@ -27,6 +27,8 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -37,7 +39,15 @@ class UrmaSendLaneLease {
 public:
     enum class SettleAction : uint8_t { NONE = 0, RELEASE = 1, RETIRE = 2 };
 
-    explicit UrmaSendLaneLease(std::shared_ptr<UrmaJetty> jetty) : jetty_(std::move(jetty))
+    struct TimeoutInfo {
+        uint64_t requestId = 0;
+        std::string remoteAddress;
+        std::string remoteInstanceId;
+        uint64_t timeoutTimestampMs = 0;
+    };
+
+    explicit UrmaSendLaneLease(std::shared_ptr<UrmaJetty> jetty, uint64_t requestIdFloor = 0)
+        : jetty_(std::move(jetty)), requestIdFloor_(requestIdFloor)
     {
     }
 
@@ -88,6 +98,22 @@ public:
         return TrySettleLane();
     }
 
+    // A timed-out business request may return its Jetty to the reusable pool while provider WRs
+    // are still pending. This is only legal after Seal has closed the producer side. The resource
+    // transfers the remaining count to per-Jetty orphan accounting before publishing the release;
+    // laneSettled_ prevents a second pool release.
+    SettleAction ForceRelease()
+    {
+        if (!sealed_.load(std::memory_order_acquire) || retireRequested_.load(std::memory_order_acquire)) {
+            return SettleAction::NONE;
+        }
+        const auto action = TrySettleLane();
+        if (action == SettleAction::RELEASE) {
+            forceReleased_.store(true, std::memory_order_release);
+        }
+        return action;
+    }
+
     SettleAction Seal()
     {
         sealed_.store(true, std::memory_order_release);
@@ -110,6 +136,71 @@ public:
     bool IsSettled() const
     {
         return laneSettled_.load();
+    }
+
+    bool IsSealed() const
+    {
+        return sealed_.load(std::memory_order_acquire);
+    }
+
+    bool IsRetireRequested() const
+    {
+        return retireRequested_.load(std::memory_order_acquire);
+    }
+
+    bool IsForceReleased() const
+    {
+        return forceReleased_.load(std::memory_order_acquire);
+    }
+
+    // Only the first timed-out Event of a multi-WR lane records the timeout context. A timeout
+    // racing with Seal is safe because both paths retry force release after publishing their state.
+    bool TryMarkTimedOut(TimeoutInfo timeoutInfo)
+    {
+        std::lock_guard<std::mutex> lock(timeoutMutex_);
+        if (timedOut_.load(std::memory_order_acquire)) {
+            return false;
+        }
+        timeoutInfo_ = std::move(timeoutInfo);
+        timedOut_.store(true, std::memory_order_release);
+        return true;
+    }
+
+    bool IsTimedOut() const
+    {
+        return timedOut_.load(std::memory_order_acquire);
+    }
+
+    bool GetTimeoutInfo(TimeoutInfo &timeoutInfo) const
+    {
+        if (!IsTimedOut()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(timeoutMutex_);
+        timeoutInfo = timeoutInfo_;
+        return true;
+    }
+
+    uint64_t GetRequestIdFloor() const
+    {
+        return requestIdFloor_;
+    }
+
+    bool OwnsRequestId(uint64_t requestId) const
+    {
+        return !requestIdGenerationCheckEnabled_.load(std::memory_order_acquire) || requestId >= requestIdFloor_;
+    }
+
+    bool IsRequestIdGenerationCheckEnabled() const
+    {
+        return requestIdGenerationCheckEnabled_.load(std::memory_order_acquire);
+    }
+
+    // Pipeline H2D currently truncates request ids. Keep that compile-time path on its legacy
+    // local-id accounting until it adopts a non-wrapping 64-bit completion token.
+    void DisableRequestIdGenerationCheck()
+    {
+        requestIdGenerationCheckEnabled_.store(false, std::memory_order_release);
     }
 
 private:
@@ -146,6 +237,12 @@ private:
     std::atomic<bool> sealed_{ false };
     std::atomic<bool> retireRequested_{ false };
     std::atomic<bool> laneSettled_{ false };
+    std::atomic<bool> forceReleased_{ false };
+    mutable std::mutex timeoutMutex_;
+    std::atomic<bool> timedOut_{ false };
+    TimeoutInfo timeoutInfo_;
+    const uint64_t requestIdFloor_;
+    std::atomic<bool> requestIdGenerationCheckEnabled_{ true };
 };
 
 class SendJettyPool {

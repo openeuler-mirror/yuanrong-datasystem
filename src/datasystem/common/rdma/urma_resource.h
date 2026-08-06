@@ -183,6 +183,11 @@ public:
         return laneLease == nullptr ? std::weak_ptr<UrmaJetty>() : std::weak_ptr<UrmaJetty>(laneLease->GetJetty());
     }
 
+    std::weak_ptr<UrmaSendLaneLease> GetLaneLease() const
+    {
+        return laneLease_;
+    }
+
     /**
      * @brief Get the recorded Urma status code.
      * @return Urma completion status code.
@@ -549,6 +554,28 @@ public:
         return PostGate::IsFinalizerScheduled(postGate_.load(std::memory_order_acquire));
     }
 
+    uint32_t AddOrphanWrs(uint32_t count)
+    {
+        return orphanWrs_.fetch_add(count, std::memory_order_acq_rel) + count;
+    }
+
+    bool CompleteOrphanWr()
+    {
+        uint32_t pending = orphanWrs_.load(std::memory_order_acquire);
+        while (pending != 0) {
+            if (orphanWrs_.compare_exchange_weak(pending, pending - 1, std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    uint32_t GetOrphanWrCount() const
+    {
+        return orphanWrs_.load(std::memory_order_acquire);
+    }
+
     Status ModifyToError();
 
     uint32_t GetJettyId() const
@@ -575,6 +602,7 @@ private:
     std::atomic<uint64_t> postGate_{ 0 };
     std::atomic<LifecycleState> lifecycle_{ LifecycleState::ACTIVE };
     std::atomic<bool> flushSeen_{ false };
+    std::atomic<uint32_t> orphanWrs_{ 0 };
     bool counted_ = true;
 };
 
@@ -929,11 +957,14 @@ public:
     // One in-use SEND Jetty has exactly one strong lane owner. The map keeps the lane alive after
     // its business Events are deleted on timeout.
     Status RegisterActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
-    Status CompleteActiveSendLane(uint32_t jettyId);
+    Status CompleteActiveSendLane(uint32_t jettyId, uint64_t requestId, int cqeStatus);
     Status CancelActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
     Status SealActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
     Status RequestRetireActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
     Status RetireActiveSendLane(uint32_t jettyId);
+    void ScheduleTimedOutSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease, uint64_t requestId,
+                                  const std::string &remoteAddress, const std::string &remoteInstanceId);
+    bool IsStaleSendCompletion(uint32_t jettyId, uint64_t requestId, uint64_t &requestIdFloor);
 
     /**
      * @brief Register a Jetty in the resource-level registry for AE lookup.
@@ -983,6 +1014,7 @@ private:
     void QuarantineJetty(const std::shared_ptr<UrmaJetty> &jetty);
     Status ApplyActiveSendLaneAction(const std::shared_ptr<UrmaSendLaneLease> &laneLease,
                                      UrmaSendLaneLease::SettleAction action);
+    void TryForceReleaseTimedOutSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
 
     /**
      * @brief Pre-fill the send Jetty pool to FLAGS_urma_send_jetty_lane_pool_size at Init time.

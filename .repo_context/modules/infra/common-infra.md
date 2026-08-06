@@ -116,8 +116,11 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.
     `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; explicit provider/error
     retirement is bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap
-    is `200 + 200`. An upper-layer timeout deletes its business Event immediately; the resource-level active-lane
-    registry keeps the in-flight lane until all accepted WR CQEs arrive, then releases the valid Jetty without refill.
+    is `200 + 200`. An upper-layer timeout deletes its business Event immediately and records the first timeout context
+    on the RPC lane. Timeout and producer `Seal` form a two-sided handshake: whichever path observes both states calls
+    force release synchronously, so an already-sealed lane does not wait for a timer and a still-producing lane cannot
+    be reused early. Normal completion still releases the lane immediately. Force release is rejected for an unsealed
+    lane or a lane that already requested retirement.
     Every provider post first acquires a shared `UrmaJetty::PostPermit`. The Jetty uses one atomic gate word for
     `closing`, retire-finalizer arming/scheduling, and the active provider-call count: concurrent posts remain allowed,
     while retire closes admission and waits for already-admitted provider calls before `modify(ERROR)`.
@@ -128,9 +131,19 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     be consumed as an ordinary request completion. Modify/flush/delete failure is quarantined and
     remains inside the configured live-resource bound. A quarantined Jetty keeps its registry identity reserved:
     flush carries only `local_id`, so registration rejects a different live wrapper with the same ID to prevent ABA.
-    A send lane is leased once per logical transfer and shared by that transfer's chunk WRs; release or retirement
-    happens only after the shared request lease is sealed and all accepted WRs have completed. Event timeout is a
-    business-lifecycle transition and does not settle or retire the lane.
+    A send lane is leased once per logical transfer and shared by that transfer's chunk WRs. Its request-generation
+    floor snapshots the process-global monotonic 64-bit request ID before the lane creates WRs. After timeout force
+    release and Jetty reuse, CQEs below the replacement lane's floor are classified as stale and cannot decrement that
+    lane; remaining old WRs are tracked as per-Jetty orphan WRs for diagnostics. This fence relies on request IDs not
+    wrapping. The compile-time Pipeline H2D path truncates request IDs and therefore disables timeout force release for
+    the complete `BUILD_PIPLN_H2D` build, and disables generation checking on pipeline lanes, until it has a
+    non-wrapping completion token. A stale fatal CQE still retires the physical Jetty because its provider status invalidates the
+    reused transport object. Force release recovers logical pool availability but does not free provider SQ/JFS
+    credits. `URMA_SEND_JETTY_ORPHAN_PRESSURE` reports when the per-Jetty orphan count exceeds the internal warning
+    threshold of 16. The internal retire threshold is fixed at 32 against a JFS depth of 256; reaching it keeps the
+    Jetty out of the reusable pool, installs normal pending-retire ownership, and queues provider
+    modify/flush/delete work on the existing asynchronous finalizer. These thresholds are intentionally not exposed as
+    runtime flags.
     Worker-to-worker Batch Get is a narrower RPC-scoped exception: `BatchGetObjectRemoteImpl` attempts one shared-lane
     acquire before object processing. On success it passes the lane to ordinary and gather writes and seals it once
     after all sub-request WRs are created. When the acquire fails and transport fallback is enabled, the whole RPC is

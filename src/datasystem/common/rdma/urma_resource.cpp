@@ -125,6 +125,10 @@ std::atomic<uint32_t> UrmaJfr::counter_{ 0 };
 std::atomic<uint32_t> UrmaJetty::counter_{ 0 };
 
 const uint32_t JETTY_SIZE = 256;
+constexpr uint32_t K_SEND_JETTY_ORPHAN_WR_WARNING_THRESHOLD = 16;
+constexpr uint32_t K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD = 32;
+static_assert(K_SEND_JETTY_ORPHAN_WR_WARNING_THRESHOLD < K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD);
+static_assert(K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD <= JETTY_SIZE);
 const uint32_t SHARED_JFR_DEPTH = 32;
 const uint32_t RECV_JETTY_JFS_DEPTH = 32;
 
@@ -1033,6 +1037,140 @@ Status UrmaResource::HandleFlushErrDone(uint32_t jettyId)
     return Status::OK();
 }
 
+void UrmaResource::ScheduleTimedOutSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease, uint64_t requestId,
+                                            const std::string &remoteAddress,
+                                            const std::string &remoteInstanceId)
+{
+#ifdef BUILD_PIPLN_H2D
+    // Pipeline H2D truncates request IDs. Disable force release for the complete build: a Jetty
+    // carrying ordinary orphan WRs could otherwise be reused by a pipeline lane that cannot
+    // distinguish those late CQEs by request generation.
+    return;
+#endif
+    if (laneLease == nullptr || shuttingDown_.load(std::memory_order_acquire)
+        || !laneLease->IsRequestIdGenerationCheckEnabled()) {
+        return;
+    }
+    const auto jetty = laneLease->GetJetty();
+    if (jetty == nullptr) {
+        return;
+    }
+    UrmaSendLaneLease::TimeoutInfo timeoutInfo{ requestId, remoteAddress, remoteInstanceId,
+                                                static_cast<uint64_t>(GetSteadyClockTimeStampMs()) };
+    if (!laneLease->TryMarkTimedOut(std::move(timeoutInfo))) {
+        return;
+    }
+    LOG(WARNING) << "[URMA_SEND_LANE_TIMEOUT_OBSERVED] jettyId=" << jetty->GetJettyId()
+                 << ", requestId=" << requestId << ", requestIdFloor=" << laneLease->GetRequestIdFloor()
+                 << ", pendingWrs=" << laneLease->GetPendingWrCount()
+                 << ", sealed=" << laneLease->IsSealed()
+                 << ", targetAddress=" << remoteAddress << ", remoteInstanceId=" << remoteInstanceId;
+    TryForceReleaseTimedOutSendLane(laneLease);
+}
+
+void UrmaResource::TryForceReleaseTimedOutSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease)
+{
+    if (laneLease == nullptr) {
+        return;
+    }
+    UrmaSendLaneLease::TimeoutInfo timeoutInfo;
+    if (!laneLease->GetTimeoutInfo(timeoutInfo)) {
+        return;
+    }
+    const auto jetty = laneLease->GetJetty();
+    if (jetty == nullptr) {
+        VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_SKIP] requestId=" << timeoutInfo.requestId << ", reason=jetty_expired";
+        return;
+    }
+
+    const auto jettyId = jetty->GetJettyId();
+    const auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    const auto heldMs = nowMs >= timeoutInfo.timeoutTimestampMs ? nowMs - timeoutInfo.timeoutTimestampMs : 0;
+    uint32_t pendingWrs = 0;
+    uint32_t orphanWrsAtDecision = 0;
+    bool retireForOrphanPressure = false;
+    UrmaSendLaneLease::SettleAction action = UrmaSendLaneLease::SettleAction::NONE;
+    {
+        std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+        const auto iter = activeSendLanes_.find(jettyId);
+        if (iter == activeSendLanes_.end() || iter->second.get() != laneLease.get()) {
+            VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_SKIP] jettyId=" << jettyId
+                    << ", requestId=" << timeoutInfo.requestId
+                    << ", heldMs=" << heldMs << ", reason=lane_already_settled_or_replaced";
+            return;
+        }
+        pendingWrs = laneLease->GetPendingWrCount();
+        if (!laneLease->IsSealed()) {
+            VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_WAIT_SEAL] jettyId=" << jettyId
+                    << ", requestId=" << timeoutInfo.requestId << ", requestIdFloor=" << laneLease->GetRequestIdFloor()
+                    << ", pendingWrs=" << pendingWrs << ", targetAddress=" << timeoutInfo.remoteAddress
+                    << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
+            return;
+        }
+        if (laneLease->IsRetireRequested()) {
+            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+                << "[URMA_SEND_LANE_TIMEOUT_SKIP] jettyId=" << jettyId
+                << ", requestId=" << timeoutInfo.requestId
+                << ", pendingWrs=" << pendingWrs << ", heldMs=" << heldMs
+                << ", reason=retire_already_requested, targetAddress=" << timeoutInfo.remoteAddress
+                << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
+            return;
+        }
+        action = laneLease->ForceRelease();
+        if (action == UrmaSendLaneLease::SettleAction::RELEASE) {
+            // Register orphan ownership before publishing the lane as absent. Completion handling
+            // takes this same lock first, so a late CQE cannot slip between map removal and orphan
+            // accounting and leave a permanently inflated count.
+            orphanWrsAtDecision = jetty->AddOrphanWrs(pendingWrs);
+            retireForOrphanPressure = orphanWrsAtDecision >= K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD;
+            activeSendLanes_.erase(iter);
+        }
+    }
+    if (action != UrmaSendLaneLease::SettleAction::RELEASE) {
+        VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_SKIP] jettyId=" << jettyId
+                << ", requestId=" << timeoutInfo.requestId
+                << ", heldMs=" << heldMs << ", reason=lane_settlement_lost_race";
+        return;
+    }
+
+    if (retireForOrphanPressure) {
+        LOG_IF_ERROR(RetireJetty(jetty), "Failed to asynchronously retire orphan-saturated URMA send Jetty");
+    } else {
+        LOG_IF_ERROR(ApplyActiveSendLaneAction(laneLease, action),
+                     "Failed to force release timed-out URMA send lane");
+    }
+    const auto poolStats = GetSendJettyPoolStats();
+    const auto orphanWrs = jetty->GetOrphanWrCount();
+    LOG(WARNING) << "[URMA_SEND_LANE_FORCE_RELEASE] jettyId=" << jettyId
+                 << ", requestId=" << timeoutInfo.requestId
+                 << ", requestIdFloor=" << laneLease->GetRequestIdFloor() << ", pendingWrs=" << pendingWrs
+                 << ", orphanWrsAtDecision=" << orphanWrsAtDecision << ", orphanWrs=" << orphanWrs
+                 << ", jettyAction=" << (retireForOrphanPressure ? "retire" : "release") << ", heldMs=" << heldMs
+                 << ", poolSize=" << poolStats.poolSize << ", idleCount=" << poolStats.idleCount
+                 << ", inUseCount=" << poolStats.inUseCount << ", targetAddress=" << timeoutInfo.remoteAddress
+                 << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
+    if (retireForOrphanPressure) {
+        LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_SEND_JETTY_ORPHAN_RETIRE] Asynchronously retiring Jetty after force-released WR pressure, "
+            << "jettyId=" << jettyId << ", orphanWrsAtDecision=" << orphanWrsAtDecision
+            << ", remainingOrphanWrs=" << orphanWrs
+            << ", retireThreshold=" << K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD
+            << ", jfsDepth=" << JETTY_SIZE << ", requestId=" << timeoutInfo.requestId
+            << ", targetAddress=" << timeoutInfo.remoteAddress
+            << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
+    } else if (orphanWrsAtDecision > K_SEND_JETTY_ORPHAN_WR_WARNING_THRESHOLD) {
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_SEND_JETTY_ORPHAN_PRESSURE] Outstanding timed-out WRs exceeded the warning threshold, "
+            << "jettyId=" << jettyId << ", orphanWrsAtDecision=" << orphanWrsAtDecision
+            << ", remainingOrphanWrs=" << orphanWrs
+            << ", warningThreshold=" << K_SEND_JETTY_ORPHAN_WR_WARNING_THRESHOLD
+            << ", retireThreshold=" << K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD
+            << ", jfsDepth=" << JETTY_SIZE << ", requestId=" << timeoutInfo.requestId
+            << ", targetAddress=" << timeoutInfo.remoteAddress
+            << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
+    }
+}
+
 Status UrmaResource::RegisterActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease)
 {
     CHECK_FAIL_RETURN_STATUS(laneLease != nullptr, K_RUNTIME_ERROR, "Cannot register null URMA send lane");
@@ -1071,23 +1209,56 @@ Status UrmaResource::ApplyActiveSendLaneAction(const std::shared_ptr<UrmaSendLan
     return RetireJetty(jetty);
 }
 
-Status UrmaResource::CompleteActiveSendLane(uint32_t jettyId)
+Status UrmaResource::CompleteActiveSendLane(uint32_t jettyId, uint64_t requestId, int cqeStatus)
 {
     std::shared_ptr<UrmaSendLaneLease> laneLease;
     UrmaSendLaneLease::SettleAction action = UrmaSendLaneLease::SettleAction::NONE;
+    uint64_t requestIdFloor = 0;
+    bool staleCompletion = false;
     {
         std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
         const auto iter = activeSendLanes_.find(jettyId);
         if (iter == activeSendLanes_.end()) {
-            return Status::OK();
-        }
-        laneLease = iter->second;
-        action = laneLease->CompleteWr();
-        if (action != UrmaSendLaneLease::SettleAction::NONE) {
-            activeSendLanes_.erase(iter);
+            staleCompletion = true;
+        } else {
+            laneLease = iter->second;
+            requestIdFloor = laneLease->GetRequestIdFloor();
+            if (!laneLease->OwnsRequestId(requestId)) {
+                staleCompletion = true;
+            } else {
+                action = laneLease->CompleteWr();
+                if (action != UrmaSendLaneLease::SettleAction::NONE) {
+                    activeSendLanes_.erase(iter);
+                }
+            }
         }
     }
+    if (staleCompletion) {
+        std::shared_ptr<UrmaJetty> jetty;
+        bool orphanTracked = false;
+        if (GetJettyById(jettyId, jetty).IsOk() && jetty != nullptr) {
+            orphanTracked = jetty->CompleteOrphanWr();
+        }
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_STALE_CQE_DROPPED] jettyId=" << jettyId << ", requestId=" << requestId
+            << ", currentRequestIdFloor=" << requestIdFloor << ", cqeStatus=" << cqeStatus
+            << ", orphanTracked=" << orphanTracked
+            << ", remainingOrphanWrs=" << (jetty == nullptr ? 0 : jetty->GetOrphanWrCount());
+        return Status::OK();
+    }
     return ApplyActiveSendLaneAction(laneLease, action);
+}
+
+bool UrmaResource::IsStaleSendCompletion(uint32_t jettyId, uint64_t requestId, uint64_t &requestIdFloor)
+{
+    std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
+    const auto iter = activeSendLanes_.find(jettyId);
+    if (iter == activeSendLanes_.end()) {
+        requestIdFloor = 0;
+        return true;
+    }
+    requestIdFloor = iter->second->GetRequestIdFloor();
+    return !iter->second->OwnsRequestId(requestId);
 }
 
 Status UrmaResource::CancelActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease)
@@ -1135,7 +1306,13 @@ Status UrmaResource::SealActiveSendLane(const std::shared_ptr<UrmaSendLaneLease>
             activeSendLanes_.erase(iter);
         }
     }
-    return ApplyActiveSendLaneAction(laneLease, action);
+    RETURN_IF_NOT_OK(ApplyActiveSendLaneAction(laneLease, action));
+    if (action == UrmaSendLaneLease::SettleAction::NONE && laneLease->IsTimedOut()) {
+        // The timeout path makes the same attempt after publishing timeout state. Calling from
+        // both sides closes both timeout-before-seal and seal-before-timeout races.
+        TryForceReleaseTimedOutSendLane(laneLease);
+    }
+    return Status::OK();
 }
 
 Status UrmaResource::RequestRetireActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease)

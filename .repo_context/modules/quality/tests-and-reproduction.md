@@ -237,6 +237,15 @@ bazel test --config=release --config=test \
     `transfer_engine_cross_node_smoke`.
   - `transfer_engine/scripts/run_hixl_d2d_smoke_suite.sh`: same-node HIXL D2D suite covering batch reads, reverse
     direction, concurrent requesters, unregistered-address rejection, and a 4 x 16 MiB transfer.
+- URMA send-lane state-machine coverage:
+  - `//tests/ut/client:urma_send_lane_test` is hardware-independent and covers lane settlement, force-release
+    preconditions and idempotency, retirement precedence, request-generation ownership, and first-timeout context
+    publication. It needs no configured URMA device:
+
+```bash
+bazel test //tests/ut/client:urma_send_lane_test --config=test --test_output=streamed
+```
+
 - Manual URMA remote-Jetty reuse coverage:
   - `//tests/ut/client:urma_remote_jetty_reuse_test` is a Bazel `manual` target, deliberately separate from the
     header-only `urma_send_lane_test`.
@@ -276,9 +285,14 @@ bazel test //tests/ut/client:urma_jetty_gate_test --config=test --config=urma --
 - Manual URMA local send-Jetty fault coverage:
   - `//tests/ut/client:urma_send_jetty_fault_test` is a separate Bazel `manual` target. It covers manager-level
     pool exhaustion, repeated recoverable status-9 CQEs, non-recoverable CQE no-rebuild/no-leak behavior, and async
-    `JETTY_ERR`. Refill/capacity assertions use unique registry Jetty identities; retirement installs one pending
-    record synchronously rather than maintaining overlapping counters. The non-recoverable case drives the production
-    CQE path, transport-owned lane completion, and business Event notify/wait-delete before reacquiring the same Jetty.
+    `JETTY_ERR`. It also drives a real business Event timeout, verifies immediate force release once timeout and seal
+    are both observed, covers both timeout-before-seal and seal-before-timeout ordering, reuses the same local Jetty for
+    a replacement request generation, and proves the old CQE does not consume the replacement lane's WR count.
+    Orphan-pressure cases verify that 17 outstanding orphan WRs keep the Jetty reusable while emitting pressure DFX,
+    and that the fixed threshold of 32 triggers asynchronous retirement plus pool refill. Refill/capacity assertions
+    use unique registry Jetty identities; retirement installs one pending record synchronously rather than maintaining
+    overlapping counters. The non-recoverable case drives the production CQE path, transport-owned lane completion,
+    and business Event notify/wait-delete before reacquiring the same Jetty.
   - It needs the same URMA SDK/runtime and configured device:
 
 ```bash
@@ -307,9 +321,9 @@ DS_URMA_DEV_NAME=<device> \
     `LEVEL1_` 64 concurrently started Batch Get × 64 ordinary sub-object scenario with exactly 64 lane releases and zero
     observed pool exhaustion (without claiming all lanes were simultaneously held), recovery after an injected
     recoverable CQE retires a send Jetty, and `LEVEL1_ConcurrentBatchGetsRecoverFromInFlightTimeoutStorm`: timeout
-    deletes the business Event without retiring the Jetty, while late CQEs finish the transport-owned lanes and return
-    the original Jetties to the pool. The timeout-storm case pauses production CQE classification, observes all four
-    timed-out Events being deleted before polling resumes, and then verifies the same four lanes are drained and reused.
+    deletes the business Event and force-releases each sealed lane without waiting for CQE arrival. The timeout-storm
+    case pauses production CQE classification, observes all four timed-out Events being deleted and their Jettys being
+    returned before polling resumes, then verifies late CQEs are classified as stale and the same lanes remain usable.
   - It needs the same URMA SDK/runtime and configured device:
 
 ```bash

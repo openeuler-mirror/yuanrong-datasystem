@@ -1062,7 +1062,15 @@ Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::s
 Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
                                      const std::shared_ptr<UrmaEvent> &event, UrmaWriteFailure *failure)
 {
+    auto scheduleTimedOutLane = [this, requestId, &event]() {
+        auto laneLease = event->GetLaneLease().lock();
+        if (laneLease != nullptr) {
+            urmaResource_->ScheduleTimedOutSendLane(laneLease, requestId, event->GetRemoteAddress(),
+                                                    event->GetRemoteInstanceId());
+        }
+    };
     if (timeoutMs < 0) {
+        scheduleTimedOutLane();
         return CreateUrmaWaitTimeoutStatus(requestId, event, 0, "request deadline already expired");
     }
     // Test-only: simulate a real UB link-down (URMA completion never arrives).
@@ -1098,6 +1106,7 @@ Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
     const bool isUrmaWaitTimeout = waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT
                                    || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
     if (isUrmaWaitTimeout) {
+        scheduleTimedOutLane();
         return CreateUrmaWaitTimeoutStatus(requestId, event, totalElapsedMs, waitRc.GetMsg());
     }
     LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, waitElapsedMs, wakeSchedLatencyUs,
@@ -1242,12 +1251,20 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
             continue;
         }
 
-        // Settle transport ownership by Jetty identity before notifying the business request.
+        // Settle transport ownership by Jetty identity and request generation before notifying
+        // the business request. This prevents an old CQE from consuming a reused lane's WR count.
         if (crStatus == URMA_CR_SUCCESS ||
             GetUrmaErrorHandlePolicy(crStatus) != UrmaErrorHandlePolicy::RECREATE_JETTY) {
-            LOG_IF_ERROR(urmaResource_->CompleteActiveSendLane(jettyId),
+            LOG_IF_ERROR(urmaResource_->CompleteActiveSendLane(jettyId, userCtx, crStatus),
                          FormatString("[URMA_SEND_LANE_COMPLETE_FAILED] jettyId=%u", jettyId));
         } else {
+            uint64_t requestIdFloor = 0;
+            if (urmaResource_->IsStaleSendCompletion(jettyId, userCtx, requestIdFloor)) {
+                LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+                    << "[URMA_STALE_FATAL_CQE] A stale fatal CQE still invalidates the physical Jetty, jettyId="
+                    << jettyId << ", requestId=" << userCtx << ", currentRequestIdFloor=" << requestIdFloor
+                    << ", cqeStatus=" << crStatus;
+            }
             const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
             LOG_IF_ERROR(TryRecoverFailedJettyFromCompletion(userCtx, crStatus, jettyId),
                          FormatString("[URMA_RECREATE_JETTY_FAILED] requestId=%s, jettyId=%u, cqeStatus=%d",
@@ -1636,7 +1653,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     auto laneLease = externalLaneLease;
     if (ownsLaneLease) {
         RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(args.connection, jetty, targetJetty));
-        laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+        laneLease = std::make_shared<UrmaSendLaneLease>(jetty, requestId_.load(std::memory_order_relaxed));
         auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
         if (registerRc.IsError()) {
             LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
@@ -1807,7 +1824,7 @@ Status UrmaManager::AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo,
     RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR,
                                          "Batch Get got empty remote target Jetty");
-    laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+    laneLease = std::make_shared<UrmaSendLaneLease>(jetty, requestId_.load(std::memory_order_relaxed));
     auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
     if (registerRc.IsError()) {
         LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
@@ -1889,7 +1906,7 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
         auto laneLease = externalLaneLease;
         if (ownsLaneLease) {
             RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
-            laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+            laneLease = std::make_shared<UrmaSendLaneLease>(jetty, requestId_.load(std::memory_order_relaxed));
             auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
             if (registerRc.IsError()) {
                 LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
@@ -1916,6 +1933,7 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jetty != nullptr, K_RUNTIME_ERROR,
                                              "Write got empty URMA send lane Jetty.");
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR, "Write got empty remote jetty.");
+        laneLease->DisableRequestIdGenerationCheck();
         // The transport pipeline receives a raw handle and may issue several provider posts.
         // Keep one permit over the complete synchronous pipeline call, not merely argument setup.
         auto pipelinePermit = jetty->TryAcquirePostPermit();
@@ -2010,7 +2028,8 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     std::shared_ptr<UrmaJetty> jetty;
     urma_target_jetty_t *targetJetty = nullptr;
     RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
-    auto laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+    auto laneLease =
+        std::make_shared<UrmaSendLaneLease>(jetty, requestId_.load(std::memory_order_relaxed));
     auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
     if (registerRc.IsError()) {
         LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
@@ -2130,7 +2149,7 @@ Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
     auto laneLease = externalLaneLease;
     if (ownsLaneLease) {
         RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
-        laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+        laneLease = std::make_shared<UrmaSendLaneLease>(jetty, requestId_.load(std::memory_order_relaxed));
         auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
         if (registerRc.IsError()) {
             LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
