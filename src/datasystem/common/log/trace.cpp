@@ -177,6 +177,17 @@ void Trace::SetPrefix(const std::string &prefix)
     }
 }
 
+void Trace::CopyPrefixFrom(const Trace &source)
+{
+    if (this == &source) {
+        return;
+    }
+    int ret = strcpy_s(prefix_, sizeof(prefix_), source.prefix_);
+    if (ret != EOK) {
+        LOG(ERROR) << "Copy trace prefix failed: " << ret;
+    }
+}
+
 TraceGuard Trace::SetTraceNewID(const std::string &traceID, bool keep)
 {
     SetRequestLogTrace(false);
