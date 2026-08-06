@@ -95,6 +95,9 @@ enum StatusCode : uint32_t {
     K_BUFFER_DEPRECATED = 2006,
     K_URMA_WORKER_UNAVAILABLE = 2007,
     K_URMA_DATA_WORKER_UNAVAILABLE = 2008,
+    // Client-side UB read-source admission denial (distinct from the worker-authoritative 2008);
+    // emitted only by the client transport readSourceFilter. ReplicaReader fast-skips the replica.
+    K_URMA_READ_SOURCE_DENIED = 2009,
 
     // stream error code, range: [3000, 4000)
     K_SC_STREAM_NOT_FOUND = 3000,
