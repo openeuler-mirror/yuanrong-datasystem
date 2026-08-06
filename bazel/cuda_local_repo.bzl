@@ -11,9 +11,9 @@ def _cuda_local_repository_impl(repository_ctx):
       /usr/local/cuda-12.8/targets/sbsa-linux
     """
 
-    cuda_home_path = repository_ctx.getenv("CUDA_HOME_PATH")
-    cuda_custom_path = repository_ctx.getenv("CUDA_CUSTOM_PATH")
-    cuda_home = repository_ctx.getenv("CUDA_HOME")
+    cuda_home_path = repository_ctx.os.environ.get("CUDA_HOME_PATH")
+    cuda_custom_path = repository_ctx.os.environ.get("CUDA_CUSTOM_PATH")
+    cuda_home = repository_ctx.os.environ.get("CUDA_HOME")
 
     candidates = []
     for path in [

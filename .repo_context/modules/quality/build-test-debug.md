@@ -200,6 +200,9 @@ Backed by `.bazelrc`, `bazel/workspace_status.sh`, `bazel/git_version.bzl`, and 
 - worker startup logging and `datasystem::GetGitHash()` share the same generated Git version macros in Bazel builds.
 - the `@datasystem_sdk_validation` source SDK repository is registered by `bazel/sdk/workspace.bzl` with
   `repository_ctx.symlink()` for source-tree entries and does not require host `rsync`.
+- local CUDA and URMA repository rules read declared environment variables through
+  `repository_ctx.os.environ.get()` so the same Starlark works with Bazel 6.5 and 7.x; keep each variable in the
+  repository rule's `environ` list so value changes still invalidate and refetch the external repository.
 
 Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
 

@@ -12,7 +12,7 @@ yum install -y autoconf automake libtool m4
 
 ### 安装 Bazel
 
-参考 [Bazel 官方文档](https://bazel.build/install) 安装 Bazel 7.4 及以上版本。
+参考 [Bazel 官方文档](https://bazel.build/install) 安装 Bazel 6.5 或 7.x 版本（推荐 7.4 及以上版本）。
 
 ### Sanitizer 运行时（可选）
 
