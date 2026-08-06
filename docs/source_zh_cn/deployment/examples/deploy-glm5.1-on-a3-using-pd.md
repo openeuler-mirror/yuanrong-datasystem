@@ -171,7 +171,7 @@ git config --global user.name "deploy"
     | 补丁文件                                                     | 目标仓库                      | 用途                                      |
     | ------------------------------------------------------------ | ----------------------------- | ----------------------------------------- |
     | `0001-Bugfix-Fix-negative-local_cache_hit-in-P-D-disaggreg.patch` | `/vllm-workspace/vllm`        | 修复 `local_cache_hit` 指标出现负值的问题 |
-    | `0001-Implement-yuanrong-backend.patch`                      | `/vllm-workspace/vllm-ascend` | 补充 Yuanrong backend 支持                |
+    | `0001-Implement-yuanrong-backend.patch`                      | `/vllm-workspace/vllm-ascend` | 补充 openYuanrong backend 支持                |
     | `0001-fix-kv-pool-update-yuanrong-backend-handling.patch`    | `/vllm-workspace/vllm-ascend` | 修复超过10000个对象时分批传输问题         |
 
     ```bash
@@ -190,7 +190,7 @@ git config --global user.name "deploy"
     | 补丁文件                                                     | 目标仓库                      | 用途                                                         |
     | ------------------------------------------------------------ | ----------------------------- | ------------------------------------------------------------ |
     | `0001-Bugfix-Fix-negative-local_cache_hit-in-P-D-disaggreg.patch` | `/vllm-workspace/vllm`        | 修复 `local_cache_hit` 指标出现负值的问题                    |
-    | `0001-Implement-yuanrong-backend.patch`                      | `/vllm-workspace/vllm-ascend` | 补充 Yuanrong backend 支持                                   |
+    | `0001-Implement-yuanrong-backend.patch`                      | `/vllm-workspace/vllm-ascend` | 补充 openYuanrong backend 支持                                   |
     | `0001-BugFix-0.18.0-KV-Pool-Fix-KV-Pool-not-putting-kv-cac.patch` | `/vllm-workspace/vllm-ascend` | 修复 vLLM v0.18.0 在 speculative decoding 场景下 KV Pool 未正确执行 KV Cache put / finalize 的问题，并规避后续 vLLM metrics 统计相关报错 |
 
     ```bash
@@ -670,7 +670,7 @@ tail -f vllm_log.log | grep -E "Prefix cache hit rate|External prefix cache hit 
 
    请求中的 `model` 字段需要与启动参数 `--served-model-name glm-5.1` 保持一致。
 
-7. **Yuanrong Worker 注册失败**
+7. **openYuanrong Worker 注册失败**
 
    检查当前节点 Worker 是否监听，以及 `DS_WORKER_ADDR` 是否与 `dscli start -w` 的 `--worker_address` 一致：
 
