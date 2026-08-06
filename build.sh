@@ -94,8 +94,7 @@ Options:
     -t Compiling or running testcases, default off. Choose from: off/build/run/run_except_cpp/run_cases/run_cpp/run_java/run_python/run_example.
        Field 'off' indicates that testcases are not compiled and executed.
        Field not 'off', The 'tools' directory will be generated under the compilation result path
-             curve_keygen (generate zmq public and private keys) and
-             hashring_parser (parse hashringPb) will be generated under the 'tools' directory.
+             curve_keygen (generate zmq public and private keys) will be generated under the 'tools' directory.
        Field 'build' indicates that testcases are compiled but not run.
        Field 'run' indicates that testcases are compiled and run.
        Field 'run_except_cpp' indicates that testcases are run, except cpp ut.

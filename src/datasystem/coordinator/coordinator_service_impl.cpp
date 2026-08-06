@@ -115,6 +115,19 @@ Status BuildClusterReadKeys(const std::string &clusterName, std::string &topolog
     return Status::OK();
 }
 
+Status ReadMembershipRecord(CoordinatorStore &store, const std::string &physicalKey, const std::string &address,
+                            cluster::MembershipRecord &record)
+{
+    std::vector<KeyValueEntry> entries;
+    int64_t revision = 0;
+    RETURN_IF_NOT_OK(store.Range(physicalKey, "", entries, revision));
+    CHECK_FAIL_RETURN_STATUS(entries.size() == 1, K_NOT_FOUND, "membership key is absent");
+    cluster::MembershipValue value;
+    RETURN_IF_NOT_OK(cluster::MembershipValueCodec::Decode(entries.front().value, value));
+    record = cluster::MembershipRecord{ address, value.lifecycleState, value.timestamp, value.hostId };
+    return Status::OK();
+}
+
 bool BuildEnsureMembershipPhysicalKey(const EnsureLeaderMembershipReqPb &req, std::string &physicalKey)
 {
     std::unique_ptr<cluster::TopologyKeyHelper> keys;
@@ -481,6 +494,101 @@ Status CoordinatorServiceImpl::InitInternal()
     return Status::OK();
 }
 
+void CoordinatorServiceImpl::ConfigureTopologyHostOptions(TopologyControlHost::Options &options) const
+{
+    options.maxClusters = FLAGS_coordinator_topology_max_active_clusters;
+    options.activeFailureWindow = std::chrono::seconds(FLAGS_node_timeout_s);
+    const uint32_t classifierAbsenceS = FLAGS_node_dead_timeout_s > FLAGS_node_timeout_s
+                                            ? FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s
+                                            : 1U;
+    options.controller.nodeDeadTimeout = std::chrono::seconds(classifierAbsenceS);
+    options.controller.scaleInCollectWindow = std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms);
+    options.controller.eventSourceMode = cluster::TopologyEventSourceMode::EXTERNAL;
+    options.controller.probeEpoch = coordinatorId_;
+    options.controller.collectiveControlEpoch = [this]() { return GetCollectiveControlEpoch(); };
+    options.controller.collectiveReplacementFence =
+        [this](uint64_t expectedEpoch, const std::function<Status()> &mutation) {
+            return RunUnderCollectiveReplacementFence(expectedEpoch, mutation);
+        };
+    options.controller.memberLivenessProbe =
+        [this](const std::vector<cluster::MemberIdentity> &targets, std::chrono::steady_clock::time_point deadline) {
+            return ProbeMembersLiveness(targets, deadline);
+        };
+}
+
+std::optional<uint64_t> CoordinatorServiceImpl::GetCollectiveControlEpoch() const
+{
+    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    const auto state = servingState_.load(std::memory_order_acquire);
+    if (!IsElectionConfigured()) {
+        return state == ServingState::STOPPING || state == ServingState::STOPPED ? std::nullopt
+                                                                                 : std::optional<uint64_t>{ 1 };
+    }
+    if ((state != ServingState::LEADER_RECOVERING && state != ServingState::LEADER_SERVING) || !IsLeader()) {
+        return std::nullopt;
+    }
+    const auto term = leaderTerm_.load(std::memory_order_acquire);
+    return term == 0 ? std::nullopt : std::optional<uint64_t>{ term };
+}
+
+Status CoordinatorServiceImpl::RunUnderCollectiveReplacementFence(
+    uint64_t expectedEpoch, const std::function<Status()> &mutation) const
+{
+    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    const auto state = servingState_.load(std::memory_order_acquire);
+    if (!IsElectionConfigured()) {
+        CHECK_FAIL_RETURN_STATUS(
+            expectedEpoch == 1 && state != ServingState::STOPPING && state != ServingState::STOPPED, K_NOT_READY,
+            "Coordinator collective control epoch is stale");
+        return mutation();
+    }
+    CHECK_FAIL_RETURN_STATUS(
+        expectedEpoch != 0 && leaderTerm_.load(std::memory_order_acquire) == expectedEpoch
+            && (state == ServingState::LEADER_RECOVERING || state == ServingState::LEADER_SERVING) && IsLeader(),
+        K_NOT_READY, "Coordinator collective control term is stale");
+    return mutation();
+}
+
+std::vector<cluster::ControlBackendProbeResult> CoordinatorServiceImpl::ProbeMembersLiveness(
+    const std::vector<cluster::MemberIdentity> &targets, std::chrono::steady_clock::time_point deadline) const
+{
+    std::vector<cluster::ControlBackendProbeResult> results;
+    results.reserve(targets.size());
+    for (const auto &target : targets) {
+        results.push_back(
+            { target, std::nullopt, cluster::ControlBackendProbeOutcome::CANCELLED, std::chrono::milliseconds(0) });
+    }
+    const auto expectedEpoch = GetCollectiveControlEpoch();
+    if (!expectedEpoch.has_value()) {
+        return results;
+    }
+    static_cast<void>(RunUnderCollectiveReplacementFence(*expectedEpoch, [&] {
+        for (size_t index = 0; index < targets.size(); ++index) {
+            const auto &target = targets[index];
+            const auto startedAt = std::chrono::steady_clock::now();
+            const auto probe = watchDispatcher_->ProbeWorkerReachable(target.address, deadline);
+            const auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt);
+            auto outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
+            if (probe.rpcDispatched) {
+                outcome = cluster::ControlBackendProbeOutcome::ERROR;
+                if (probe.status.IsOk()) {
+                    outcome = cluster::ControlBackendProbeOutcome::RESPONSE;
+                } else if (probe.status.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
+                    outcome = cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED;
+                } else if (probe.status.GetCode() == K_RPC_UNAVAILABLE || probe.status.GetCode() == K_RPC_PEER_DEAD) {
+                    outcome = cluster::ControlBackendProbeOutcome::UNAVAILABLE;
+                } else if (probe.status.GetCode() == K_RPC_CANCELLED) {
+                    outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
+                }
+            }
+            results[index] = { target, std::nullopt, outcome, elapsed };
+        }
+        return Status::OK();
+    }));
+    return results;
+}
+
 Status CoordinatorServiceImpl::BuildComponentTree()
 {
     CHECK_FAIL_RETURN_STATUS(FLAGS_coordinator_topology_max_active_clusters >= MIN_ACTIVE_CLUSTERS
@@ -497,86 +605,7 @@ Status CoordinatorServiceImpl::BuildComponentTree()
     topologyRecoveryManager_ =
         std::make_unique<TopologyRecoveryManager>(coordinatorId_, *store_, clock_, recoveryOptions);
     TopologyControlHost::Options hostOptions;
-    hostOptions.maxClusters = FLAGS_coordinator_topology_max_active_clusters;
-    hostOptions.controller.nodeDeadTimeout = std::chrono::seconds(FLAGS_node_dead_timeout_s);
-    hostOptions.controller.scaleInCollectWindow = std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms);
-    hostOptions.controller.eventSourceMode = cluster::TopologyEventSourceMode::EXTERNAL;
-    hostOptions.controller.probeEpoch = coordinatorId_;
-    // The Service owns the Host/Runtime callbacks and shuts the Host down before clearing any captured fields.
-    const auto collectiveControlEpoch = [this]() -> std::optional<uint64_t> {
-        std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
-        const auto state = servingState_.load(std::memory_order_acquire);
-        if (!IsElectionConfigured()) {
-            return state == ServingState::STOPPING || state == ServingState::STOPPED
-                       ? std::nullopt
-                       : std::optional<uint64_t>{ 1 };
-        }
-        if ((state != ServingState::LEADER_RECOVERING && state != ServingState::LEADER_SERVING) || !IsLeader()) {
-            return std::nullopt;
-        }
-        const auto term = leaderTerm_.load(std::memory_order_acquire);
-        return term == 0 ? std::nullopt : std::optional<uint64_t>{ term };
-    };
-    const auto collectiveReplacementFence =
-        [this](uint64_t expectedEpoch, const std::function<Status()> &mutation) {
-            std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
-            const auto state = servingState_.load(std::memory_order_acquire);
-            if (!IsElectionConfigured()) {
-                CHECK_FAIL_RETURN_STATUS(expectedEpoch == 1 && state != ServingState::STOPPING
-                                             && state != ServingState::STOPPED,
-                                         K_NOT_READY, "Coordinator collective control epoch is stale");
-                return mutation();
-            }
-            CHECK_FAIL_RETURN_STATUS(
-                expectedEpoch != 0 && leaderTerm_.load(std::memory_order_acquire) == expectedEpoch
-                    && (state == ServingState::LEADER_RECOVERING || state == ServingState::LEADER_SERVING)
-                    && IsLeader(),
-                K_NOT_READY, "Coordinator collective control term is stale");
-            return mutation();
-        };
-    hostOptions.controller.collectiveControlEpoch = collectiveControlEpoch;
-    hostOptions.controller.collectiveReplacementFence = collectiveReplacementFence;
-    hostOptions.controller.memberLivenessProbe =
-        [dispatcher = watchDispatcher_, collectiveControlEpoch, collectiveReplacementFence](
-            const std::vector<cluster::MemberIdentity> &targets, std::chrono::steady_clock::time_point deadline) {
-            std::vector<cluster::ControlBackendProbeResult> results;
-            results.reserve(targets.size());
-            for (const auto &target : targets) {
-                results.push_back({ target, std::nullopt, cluster::ControlBackendProbeOutcome::CANCELLED,
-                                    std::chrono::milliseconds(0) });
-            }
-            const auto expectedEpoch = collectiveControlEpoch();
-            if (!expectedEpoch.has_value()) {
-                return results;
-            }
-            static_cast<void>(collectiveReplacementFence(*expectedEpoch, [&] {
-                for (size_t index = 0; index < targets.size(); ++index) {
-                    const auto &target = targets[index];
-                    const auto startedAt = std::chrono::steady_clock::now();
-                    const auto probe = dispatcher->ProbeWorkerReachable(target.address, deadline);
-                    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - startedAt);
-                    const auto &status = probe.status;
-                    auto outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
-                    if (probe.rpcDispatched) {
-                        outcome = cluster::ControlBackendProbeOutcome::ERROR;
-                        if (status.IsOk()) {
-                            outcome = cluster::ControlBackendProbeOutcome::RESPONSE;
-                        } else if (status.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
-                            outcome = cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED;
-                        } else if (status.GetCode() == K_RPC_UNAVAILABLE
-                                   || status.GetCode() == K_RPC_PEER_DEAD) {
-                            outcome = cluster::ControlBackendProbeOutcome::UNAVAILABLE;
-                        } else if (status.GetCode() == K_RPC_CANCELLED) {
-                            outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
-                        }
-                    }
-                    results[index] = { target, std::nullopt, outcome, elapsed };
-                }
-                return Status::OK();
-            }));
-            return results;
-        };
+    ConfigureTopologyHostOptions(hostOptions);
     topologyControlHost_ =
         std::make_unique<TopologyControlHost>(coordinatorId_, *store_, *topologyRecoveryManager_, hostOptions);
     RETURN_IF_NOT_OK(topologyControlHost_->Start());
@@ -1150,6 +1179,41 @@ Status CoordinatorServiceImpl::KeepAlive(const KeepAliveReqPb &req, KeepAliveRsp
     if (topologyRecoveryManager_ != nullptr) {
         topologyRecoveryManager_->NotifyMembershipActivity(req.key());
     }
+    if (topologyRecoveryManager_ != nullptr && topologyControlHost_ != nullptr && req.failed_targets_size() > 0) {
+        ParsedTopologyCoordinationKey parsed;
+        RETURN_IF_NOT_OK(topologyRecoveryManager_->ParseKey(req.key(), parsed));
+        if (parsed.kind == TopologyCoordinationKeyKind::MEMBERSHIP) {
+            cluster::MembershipRecord reporter;
+            auto reporterRc = ReadMembershipRecord(*store_, req.key(), parsed.relativeKey, reporter);
+            if (reporterRc.IsError()) {
+                LOG(WARNING) << "Skip worker failure summaries because reporter membership is unavailable, key="
+                             << req.key() << ", rc=" << reporterRc.ToString();
+                FillResponseHeader(rsp.mutable_header());
+                rsp.set_ttl(ttlMs);
+                rsp.set_remaining_ttl(remainingTtlMs);
+                return Status::OK();
+            }
+            std::unique_ptr<cluster::TopologyKeyHelper> keys;
+            RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(parsed.clusterName, keys));
+            std::vector<cluster::MembershipRecord> failedTargets;
+            failedTargets.reserve(req.failed_targets_size());
+            for (const auto &target : req.failed_targets()) {
+                std::string targetMembershipKey;
+                if (cluster::TopologyKeyHelper::MembershipKey(target, targetMembershipKey).IsError()) {
+                    continue;
+                }
+                cluster::MembershipRecord targetRecord;
+                if (ReadMembershipRecord(*store_, keys->MembershipTable() + "/" + targetMembershipKey, target,
+                                         targetRecord).IsOk()) {
+                    failedTargets.emplace_back(std::move(targetRecord));
+                } else {
+                    failedTargets.push_back({ target, cluster::MemberLifecycleState::READY, -1, "" });
+                }
+            }
+            topologyControlHost_->RecordWorkerFailureSummaries(parsed.clusterName, reporter, failedTargets);
+        }
+    }
+    FillResponseHeader(rsp.mutable_header());
     rsp.set_ttl(ttlMs);
     rsp.set_remaining_ttl(remainingTtlMs);
     return Status::OK();

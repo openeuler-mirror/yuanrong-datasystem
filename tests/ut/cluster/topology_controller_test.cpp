@@ -3008,6 +3008,49 @@ TEST(TopologyControllerTest, ExternalEventSourceConfirmsMultipleFailuresWithoutW
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
+TEST(TopologyControllerTest, ActiveFailureCandidateProviderCommitsFailureForReadyMember)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("active-failure-candidate-provider", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } },
+                       Member{ { std::string(16, 'c'), "127.0.0.1:3" }, MemberState::ACTIVE, { 3 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    for (const auto &member : latest.members) {
+        PutMembership(backend, *keys, member.identity.address, MemberLifecycleState::READY);
+    }
+
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "active-failure-candidate-provider";
+    options.activeFailureCandidateProvider = [&](const TopologySnapshot &, const std::vector<MembershipRecord> &,
+                                                 std::chrono::steady_clock::time_point) {
+        return std::vector<MemberIdentity>{ latest.members[1].identity };
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    const auto deadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
+    EXPECT_TRUE(WaitForTopology(repository, deadline, [](const auto &state) {
+        if (!state.activeBatch.has_value() || state.activeBatch->type != TopologyChangeType::FAILURE) {
+            return false;
+        }
+        return std::any_of(state.members.begin(), state.members.end(), [](const auto &member) {
+            return member.identity.address == "127.0.0.1:2" && member.state == MemberState::FAILED;
+        });
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
 TEST(TopologyControllerTest, CentralizedControllerMaterializesAndClearsRestartFacts)
 {
     FakeCoordinationBackend backend;
@@ -3048,6 +3091,44 @@ TEST(TopologyControllerTest, CentralizedControllerMaterializesAndClearsRestartFa
         std::this_thread::yield();
     }
     EXPECT_EQ(repository.ReadNotify("127.0.0.1:1", observed).GetCode(), K_NOT_FOUND);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, RestartingMemberAfterFailureFinalCanReenterScaleOut)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("centralized-restart-reenter", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState failedFinal;
+    failedFinal.version = 5;
+    failedFinal.clusterHasInit = true;
+    failedFinal.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), failedFinal);
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+    backend.PutBytes(keys->MembershipTable(), "127.0.0.1:2",
+                     EncodeMembership(MemberLifecycleState::RESTARTING, 200));
+
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "coordinator-test";
+    options.materializeRestartFacts = true;
+    options.scaleOutCollectWindow = std::chrono::seconds(0);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    const auto deadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
+    EXPECT_TRUE(WaitForTopology(repository, deadline, [](const auto &state) {
+        if (!state.activeBatch.has_value() || state.activeBatch->type != TopologyChangeType::SCALE_OUT) {
+            return false;
+        }
+        return std::any_of(state.members.begin(), state.members.end(), [](const auto &member) {
+            return member.identity.address == "127.0.0.1:2" && member.state == MemberState::JOINING;
+        });
+    }));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 

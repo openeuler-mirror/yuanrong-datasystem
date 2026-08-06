@@ -1515,7 +1515,7 @@ Status WorkerOCServer::ConstructTopologyRuntime()
     // budget so confirmed failure aligns with FLAGS_node_dead_timeout_s (not 2x node_timeout_s).
     const uint32_t classifierAbsenceS = FLAGS_node_dead_timeout_s > FLAGS_node_timeout_s
                                             ? FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s
-                                            : 0U;
+                                            : 1U;
     auto membershipRestartHandler = [this](const std::map<std::string, int64_t> &restartFacts,
                                            cluster::RestartEffectMode mode) {
         return HandleMembershipRestarts(restartFacts, mode == cluster::RestartEffectMode::WAIT_FOR_COMPLETION);
@@ -1722,7 +1722,9 @@ Status WorkerOCServer::PublishReadyMembership()
     while (std::chrono::steady_clock::now() < deadline) {
         if (topologyEngine_->HasEstablishedMemberLease()) {
             lastStatus = topologyEngine_->MarkReady();
-            if (lastStatus.IsOk() || lastStatus.GetCode() != K_NOT_READY) {
+            if (lastStatus.IsOk()
+                || (lastStatus.GetCode() != K_NOT_READY && lastStatus.GetCode() != K_TRY_AGAIN
+                    && !IsRetryableRpcError(lastStatus) && !IsNonRetryableRpcError(lastStatus))) {
                 return lastStatus;
             }
         }

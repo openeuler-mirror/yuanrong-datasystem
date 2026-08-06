@@ -92,10 +92,11 @@ void WorkerLeaderReconciler::OnLeaderChanged(const CoordinatorLeaderIdentity &id
     if (!backend_.IsFirstKeepAliveSent()) {
         return;
     }
-    ScheduleEnsure(identity, false);
+    ScheduleEnsure(identity, false, false);
 }
 
-void WorkerLeaderReconciler::ScheduleEnsure(const CoordinatorLeaderIdentity &identity, bool forceEnsure)
+void WorkerLeaderReconciler::ScheduleEnsure(const CoordinatorLeaderIdentity &identity, bool forceEnsure,
+                                            bool completeRejoin)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (stopping_.load(std::memory_order_relaxed)
@@ -104,6 +105,7 @@ void WorkerLeaderReconciler::ScheduleEnsure(const CoordinatorLeaderIdentity &ide
     }
     pendingIdentity_ = identity;
     forceEnsurePending_ = forceEnsurePending_ || forceEnsure;
+    completeRejoinPending_ = completeRejoinPending_ || completeRejoin;
     retryCv_.notify_all();
     if (ensureScheduled_ || ensurePool_ == nullptr) {
         return;
@@ -134,7 +136,7 @@ void WorkerLeaderReconciler::NotifyMembershipReady(const std::string &coordinato
         reporter_.NotifyMembershipReady(identity);
         return;
     }
-    ScheduleEnsure(identity, false);
+    ScheduleEnsure(identity, false, false);
 }
 
 Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
@@ -149,7 +151,7 @@ Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
     if (!waitForCompletion) {
         // Keepalive proved that the membership key or its revision is stale. Queue one more Ensure even when an
         // in-flight request later publishes the same Leader identity.
-        ScheduleEnsure(identity, true);
+        ScheduleEnsure(identity, true, true);
         return Status::OK();
     }
     Status lastStatus(K_TRY_AGAIN, "Coordinator Leader changed during synchronous membership reconciliation");
@@ -161,7 +163,7 @@ Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
             std::lock_guard<std::mutex> lock(mutex_);
             pendingIdentity_ = identity;
         }
-        lastStatus = ReconcileIdentity(identity, true);
+        lastStatus = ReconcileIdentity(identity, true, false);
         if (lastStatus.IsOk() || lastStatus.GetCode() != K_TRY_AGAIN) {
             return lastStatus;
         }
@@ -172,7 +174,8 @@ Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
     return lastStatus;
 }
 
-Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity &identity, bool forceEnsure)
+Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity &identity, bool forceEnsure,
+                                                 bool completeRejoin)
 {
     std::lock_guard<std::mutex> ensureLock(ensureMutex_);
     {
@@ -198,10 +201,16 @@ Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity
         identity.coordinatorId,
         [this, &identity](const DsCoordinationBackend::MembershipRenewalPayload &payload, int64_t &revision) {
             return SendMembershipEnsure(identity, payload, revision);
-        }));
+        },
+        completeRejoin));
     const auto currentAfterInstall = routes->GetLeaderCache();
     CHECK_FAIL_RETURN_STATUS(SameIdentity(currentAfterInstall, identity), K_TRY_AGAIN,
                              "Coordinator Leader changed during membership installation");
+    if (completeRejoin) {
+        HostPort localAddress;
+        RETURN_IF_NOT_OK(localAddress.ParseString(backend_.GetWatcherAddr()));
+        RETURN_IF_NOT_OK(backend_.InformReconciliationDone(localAddress));
+    }
     reporter_.NotifyMembershipReady(identity);
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -241,60 +250,88 @@ Status WorkerLeaderReconciler::SendMembershipEnsure(
     return Status::OK();
 }
 
+bool WorkerLeaderReconciler::TakePendingEnsure(EnsureWork &work)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopping_.load(std::memory_order_acquire)) {
+        ensureScheduled_ = false;
+        return false;
+    }
+    work.identity = pendingIdentity_;
+    work.forceEnsure = forceEnsurePending_;
+    work.completeRejoin = completeRejoinPending_;
+    forceEnsurePending_ = false;
+    completeRejoinPending_ = false;
+    return true;
+}
+
+bool WorkerLeaderReconciler::FinishSuccessfulEnsure(const EnsureWork &work, size_t &retryAttempt)
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (IsCurrentIdentityLocked(work.identity) && !forceEnsurePending_ && !completeRejoinPending_) {
+        ensureScheduled_ = false;
+        return true;
+    }
+    retryAttempt = 0;
+    auto hasMoreEnsure = [this] {
+        return stopping_.load(std::memory_order_acquire) || forceEnsurePending_ || completeRejoinPending_;
+    };
+    retryCv_.wait_for(lock, EnsureRetryBackoff(work.identity, backend_.GetWatcherAddr(), retryAttempt), hasMoreEnsure);
+    return false;
+}
+
+bool WorkerLeaderReconciler::FinishFailedEnsure(const EnsureWork &work, const Status &status, size_t &retryAttempt)
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (stopping_.load(std::memory_order_acquire)) {
+        ensureScheduled_ = false;
+        return true;
+    }
+    if (!IsCurrentIdentityLocked(work.identity)) {
+        retryAttempt = 0;
+        auto shouldStop = [this] {
+            return stopping_.load(std::memory_order_acquire);
+        };
+        retryCv_.wait_for(lock, EnsureRetryBackoff(work.identity, backend_.GetWatcherAddr(), retryAttempt), shouldStop);
+        return false;
+    }
+    if (forceEnsurePending_) {
+        completeRejoinPending_ = completeRejoinPending_ || work.completeRejoin;
+        retryAttempt = 0;
+        return false;
+    }
+    if (!IsRetryableEnsureStatus(status)) {
+        ensureScheduled_ = false;
+        LOG(ERROR) << "WORKER_LEADER_ENSURE_REJECTED cluster=" << clusterName_ << " status=" << status.ToString();
+        return true;
+    }
+    forceEnsurePending_ = forceEnsurePending_ || work.forceEnsure;
+    completeRejoinPending_ = completeRejoinPending_ || work.completeRejoin;
+    auto shouldRetry = [this, &work] {
+        const bool shouldStop = stopping_.load(std::memory_order_acquire);
+        if (shouldStop || forceEnsurePending_ || completeRejoinPending_) {
+            return true;
+        }
+        return !IsCurrentIdentityLocked(work.identity);
+    };
+    retryCv_.wait_for(lock, EnsureRetryBackoff(work.identity, backend_.GetWatcherAddr(), retryAttempt++), shouldRetry);
+    return false;
+}
+
 void WorkerLeaderReconciler::RunEnsureLoop(CoordinatorLeaderIdentity identity)
 {
     size_t retryAttempt = 0;
+    EnsureWork work{ std::move(identity), false, false };
     while (!stopping_.load(std::memory_order_acquire)) {
-        bool forceEnsure = false;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (stopping_.load(std::memory_order_acquire)) {
-                ensureScheduled_ = false;
-                break;
-            }
-            identity = pendingIdentity_;
-            forceEnsure = forceEnsurePending_;
-            forceEnsurePending_ = false;
-        }
-        const auto status = ReconcileIdentity(identity, forceEnsure);
-        if (status.IsOk()) {
-            std::unique_lock<std::mutex> lock(mutex_);
-            if (IsCurrentIdentityLocked(identity) && !forceEnsurePending_) {
-                ensureScheduled_ = false;
-                break;
-            }
-            retryAttempt = 0;
-            retryCv_.wait_for(lock, EnsureRetryBackoff(identity, backend_.GetWatcherAddr(), retryAttempt),
-                              [this] {
-                                  return stopping_.load(std::memory_order_acquire) || forceEnsurePending_;
-                              });
-            continue;
-        }
-        std::unique_lock<std::mutex> lock(mutex_);
-        if (stopping_.load(std::memory_order_acquire)) {
-            ensureScheduled_ = false;
+        if (!TakePendingEnsure(work)) {
             break;
         }
-        if (!IsCurrentIdentityLocked(identity)) {
-            retryAttempt = 0;
-            retryCv_.wait_for(lock, EnsureRetryBackoff(identity, backend_.GetWatcherAddr(), retryAttempt),
-                              [this] { return stopping_.load(std::memory_order_acquire); });
-            continue;
-        }
-        if (forceEnsurePending_) {
-            retryAttempt = 0;
-            continue;
-        }
-        if (!IsRetryableEnsureStatus(status)) {
-            ensureScheduled_ = false;
-            LOG(ERROR) << "WORKER_LEADER_ENSURE_REJECTED cluster=" << clusterName_ << " status=" << status.ToString();
+        const auto status = ReconcileIdentity(work.identity, work.forceEnsure, work.completeRejoin);
+        const bool exitLoop =
+            status.IsOk() ? FinishSuccessfulEnsure(work, retryAttempt) : FinishFailedEnsure(work, status, retryAttempt);
+        if (exitLoop) {
             break;
         }
-        retryCv_.wait_for(lock, EnsureRetryBackoff(identity, backend_.GetWatcherAddr(), retryAttempt++),
-                          [this, &identity] {
-                              return stopping_.load(std::memory_order_acquire) || forceEnsurePending_
-                                     || !IsCurrentIdentityLocked(identity);
-                          });
     }
     std::lock_guard<std::mutex> lock(mutex_);
     ensureScheduled_ = false;

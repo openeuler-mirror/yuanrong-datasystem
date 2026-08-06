@@ -25,6 +25,7 @@ ds_cc_library(
         "//src/datasystem/client/cluster_query:__pkg__",
         "//src/datasystem/coordinator:__pkg__",
         "//src/datasystem/worker:__pkg__",
+        "//tests/st/cluster:__pkg__",
         "//tests/st/worker/object_cache:__pkg__",
         "//tests/ut/common/coordinator:__pkg__",
     ],

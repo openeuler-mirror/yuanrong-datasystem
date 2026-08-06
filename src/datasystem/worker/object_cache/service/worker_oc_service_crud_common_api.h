@@ -107,6 +107,7 @@ struct WorkerOcServiceCrudParam {
     const ObjectEndpointPolicy *endpointPolicy;
     const std::atomic<bool> *exitRequested;
     PeerUbAdmission *ubAdmission{ nullptr };
+    std::function<void(const HostPort &, const Status &)> metadataRpcObserver;
     bool allowDirectoryLag;
 };
 
@@ -162,7 +163,9 @@ public:
             CHECK_FAIL_RETURN_STATUS(
                 GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
                 K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
-            RETURN_IF_NOT_OK(fun(req, rsp));
+            auto status = fun(req, rsp);
+            ObserveMetadataRpc(workerMasterApi, status);
+            RETURN_IF_NOT_OK(status);
             if (!rsp.meta_is_moving()) {
                 if (rsp.info().redirect_meta_address().empty()) {
                     return Status::OK();
@@ -174,7 +177,8 @@ public:
                 CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                          "hash master get failed, RedirectRetryWhenMetaMoving failed");
                 req.set_redirect(false);
-                auto status = fun(req, rsp);
+                status = fun(req, rsp);
+                ObserveMetadataRpc(workerMasterApi, status);
                 RETURN_IF_NOT_OK(status);
                 return Status::OK();
             }
@@ -442,6 +446,9 @@ protected:
 
     static void SleepForMetaMovingRetry(int64_t sleepTimeMs);
 
+    void ObserveMetadataRpc(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+                            const Status &status) const;
+
 private:
     /**
      * @brief Partition a multi-copy metadata request into local and redirected sub-requests.
@@ -504,6 +511,7 @@ protected:
     const worker::MetadataRouteResolver *metadataRouteResolver_{ nullptr };
     const ObjectEndpointPolicy *endpointPolicy_{ nullptr };
     const std::atomic<bool> *exitRequested_{ nullptr };
+    std::function<void(const HostPort &, const Status &)> metadataRpcObserver_;
     const bool allowDirectoryLag_{ false };
 
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager_{ nullptr };

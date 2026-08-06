@@ -12,6 +12,7 @@
 #include <exception>
 #include <limits>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -42,6 +43,7 @@ constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
 constexpr size_t HOST_CAPACITY_LOG_INTERVAL = 128;
 constexpr size_t HOST_LIFECYCLE_LOG_INTERVAL = 100;
 constexpr size_t MAX_PENDING_LIVENESS_REPORTS = 1'024;
+constexpr size_t MIN_ACTIVE_FAILURE_REPORTERS = 2;
 constexpr int RETRY_BACKOFF_MULTIPLIER = 2;
 constexpr int64_t RUNTIME_START_WARN_MS = 500;
 constexpr int64_t RUNTIME_STOP_WARN_MS = 1'000;
@@ -65,11 +67,11 @@ void PreserveFirstError(const Status &candidate, Status &firstError)
 bool TopologyControlHost::Options::IsValid() const noexcept
 {
     return maxClusters >= MIN_ACTIVE_CLUSTERS && maxClusters <= MAX_ACTIVE_CLUSTERS
-           && eventQueueCapacity >= MIN_EVENT_QUEUE_CAPACITY
-           && eventQueueCapacity <= MAX_EVENT_QUEUE_CAPACITY && reconcileInterval >= MIN_RECONCILE_INTERVAL
-           && reconcileInterval <= MAX_RECONCILE_INTERVAL && startRetryInitial >= MIN_START_RETRY
-           && startRetryInitial <= MAX_START_RETRY_INITIAL && startRetryMaximum >= startRetryInitial
-           && startRetryMaximum <= MAX_START_RETRY && controller.IsValid();
+           && eventQueueCapacity >= MIN_EVENT_QUEUE_CAPACITY && eventQueueCapacity <= MAX_EVENT_QUEUE_CAPACITY
+           && reconcileInterval >= MIN_RECONCILE_INTERVAL && reconcileInterval <= MAX_RECONCILE_INTERVAL
+           && startRetryInitial >= MIN_START_RETRY && startRetryInitial <= MAX_START_RETRY_INITIAL
+           && startRetryMaximum >= startRetryInitial && startRetryMaximum <= MAX_START_RETRY
+           && activeFailureWindow.count() > 0 && controller.IsValid();
 }
 
 TopologyControlHost::ClusterEntry::ClusterEntry(std::string name) : clusterName(std::move(name))
@@ -166,7 +168,6 @@ void TopologyControlHost::CompleteMembershipPut(const std::string &clusterName, 
     }
     auto &entry = *found->second;
     ++entry.mutationGeneration;
-    const bool shouldWake = entry.state != EntryState::RUNNING || !committed;
     if (entry.pendingMembershipPuts > 0) {
         --entry.pendingMembershipPuts;
     }
@@ -176,9 +177,7 @@ void TopologyControlHost::CompleteMembershipPut(const std::string &clusterName, 
         entry.state = EntryState::WAITING_RECOVERY;
     }
     entry.releaseAfterStop = !entry.hasCommittedMembership && entry.pendingMembershipPuts == 0;
-    if (shouldWake) {
-        wakeCv_.notify_all();
-    }
+    wakeCv_.notify_all();
 }
 
 void TopologyControlHost::NotifyStoreMutation(WatchEvent::Type type,
@@ -226,6 +225,170 @@ Status TopologyControlHost::EnqueueWorkerLivenessReport(const std::string &clust
     return Status::OK();
 }
 
+void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &clusterName, const std::string &reporter,
+                                                       const std::vector<std::string> &targets)
+{
+    cluster::MembershipRecord reporterRecord{ reporter, cluster::MemberLifecycleState::READY, 0, "" };
+    std::vector<cluster::MembershipRecord> targetRecords;
+    targetRecords.reserve(targets.size());
+    for (const auto &target : targets) {
+        targetRecords.push_back({ target, cluster::MemberLifecycleState::READY, 0, "" });
+    }
+    RecordWorkerFailureSummaries(clusterName, reporterRecord, targetRecords);
+}
+
+void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &clusterName,
+                                                       const cluster::MembershipRecord &reporter,
+                                                       const std::vector<cluster::MembershipRecord> &targets)
+{
+    if (reporter.address.empty() || targets.empty()) {
+        return;
+    }
+    const auto now = options_.controller.now();
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto &clusterReports = failureReportsByCluster_[clusterName];
+    bool shouldWake = false;
+    for (const auto &target : targets) {
+        if (target.address.empty() || target.address == reporter.address) {
+            continue;
+        }
+        auto &reporters = clusterReports[target.address];
+        const auto oldSize = reporters.size();
+        auto &state = reporters[reporter.address];
+        const bool newReporter = reporters.size() != oldSize;
+        state = FailureReportState{
+            now,
+            reporter.timestamp,
+            reporter.hostId,
+            target.timestamp,
+            target.hostId
+        };
+        shouldWake = shouldWake || newReporter;
+    }
+    if (shouldWake) {
+        auto entry = entries_.find(clusterName);
+        if (entry != entries_.end()) {
+            entry->second->storeDirty = true;
+        }
+        VLOG(1) << "CLUSTER_FAILURE_REPORT role=coordinator cluster=" << clusterName
+                << " reporter=" << reporter.address;
+        wakeCv_.notify_all();
+    }
+}
+
+std::unordered_map<std::string, cluster::MembershipRecord> TopologyControlHost::BuildReadyActiveMemberships(
+    const cluster::TopologySnapshot &latest, const std::vector<cluster::MembershipRecord> &memberships)
+{
+    std::unordered_set<std::string> activeMembers;
+    activeMembers.reserve(latest.ActiveMembers().size());
+    for (const auto *member : latest.ActiveMembers()) {
+        activeMembers.emplace(member->identity.address);
+    }
+    std::unordered_map<std::string, cluster::MembershipRecord> readyMemberships;
+    readyMemberships.reserve(memberships.size());
+    for (const auto &membership : memberships) {
+        if (membership.state == cluster::MemberLifecycleState::READY && activeMembers.count(membership.address) > 0) {
+            readyMemberships.emplace(membership.address, membership);
+        }
+    }
+    return readyMemberships;
+}
+
+size_t TopologyControlHost::ActiveFailureReporterThreshold(size_t totalWorkers)
+{
+    if (totalWorkers <= 1) {
+        return std::numeric_limits<size_t>::max();
+    }
+    const auto percentThreshold = (totalWorkers + 19) / 20;
+    const auto configuredThreshold = std::min(std::max<size_t>(percentThreshold, 5), totalWorkers - 1);
+    return std::max<size_t>(configuredThreshold, MIN_ACTIVE_FAILURE_REPORTERS);
+}
+
+size_t TopologyControlHost::PruneAndCountFailureReporters(
+    const cluster::TopologySnapshot &latest,
+    const std::unordered_map<std::string, cluster::MembershipRecord> &readyMemberships, const std::string &target,
+    std::unordered_map<std::string, FailureReportState> &reporters, std::chrono::steady_clock::time_point now) const
+{
+    size_t validReports = 0;
+    const cluster::Member *targetMember = nullptr;
+    const bool targetActive = latest.FindMemberByAddress(target, targetMember).IsOk() && targetMember != nullptr
+                              && targetMember->state == cluster::MemberState::ACTIVE;
+    const auto targetMembership = readyMemberships.find(target);
+    const bool targetReady = targetMembership != readyMemberships.end();
+    for (auto reporterIter = reporters.begin(); reporterIter != reporters.end();) {
+        const auto &reporter = reporterIter->first;
+        const bool expired = now - reporterIter->second.receiveTime > options_.activeFailureWindow;
+        const auto reporterMembership = readyMemberships.find(reporter);
+        const bool reporterActive = reporterMembership != readyMemberships.end();
+        const auto &state = reporterIter->second;
+        const bool reporterChanged =
+            reporterActive && state.reporterTimestamp != 0
+            && (state.reporterTimestamp != reporterMembership->second.timestamp
+                || state.reporterHostId != reporterMembership->second.hostId);
+        const bool targetChanged =
+            targetReady
+            && (state.targetTimestamp < 0
+                || (state.targetTimestamp > 0
+                    && (state.targetTimestamp != targetMembership->second.timestamp
+                        || state.targetHostId != targetMembership->second.hostId)));
+        if (expired || !targetActive || !reporterActive || reporter == target || reporterChanged || targetChanged) {
+            reporterIter = reporters.erase(reporterIter);
+            continue;
+        }
+        ++validReports;
+        ++reporterIter;
+    }
+    return validReports;
+}
+
+std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates(
+    const std::string &clusterName, const cluster::TopologySnapshot &latest,
+    const std::vector<cluster::MembershipRecord> &memberships, std::chrono::steady_clock::time_point now)
+{
+    const auto readyMemberships = BuildReadyActiveMemberships(latest, memberships);
+    size_t totalWorkers = 0;
+    for (const auto &member : latest.Members()) {
+        if (member.state == cluster::MemberState::ACTIVE) {
+            ++totalWorkers;
+        }
+    }
+    if (totalWorkers <= 1) {
+        return {};
+    }
+    const auto reporterThreshold = ActiveFailureReporterThreshold(totalWorkers);
+    if (reporterThreshold > totalWorkers - 1) {
+        return {};
+    }
+    std::vector<cluster::MemberIdentity> candidates;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto clusterIter = failureReportsByCluster_.find(clusterName);
+    if (clusterIter == failureReportsByCluster_.end()) {
+        return candidates;
+    }
+    auto &clusterReports = clusterIter->second;
+    for (auto targetIter = clusterReports.begin(); targetIter != clusterReports.end();) {
+        const auto &target = targetIter->first;
+        auto &reporters = targetIter->second;
+        const auto validReports = PruneAndCountFailureReporters(latest, readyMemberships, target, reporters, now);
+        if (validReports >= reporterThreshold) {
+            const cluster::Member *member = nullptr;
+            if (latest.FindMemberByAddress(target, member).IsOk() && member != nullptr
+                && member->state == cluster::MemberState::ACTIVE) {
+                candidates.push_back(member->identity);
+            }
+        }
+        if (reporters.empty()) {
+            targetIter = clusterReports.erase(targetIter);
+        } else {
+            ++targetIter;
+        }
+    }
+    if (clusterReports.empty()) {
+        failureReportsByCluster_.erase(clusterIter);
+    }
+    return candidates;
+}
+
 void TopologyControlHost::Run() noexcept
 {
     while (true) {
@@ -255,6 +418,7 @@ void TopologyControlHost::Run() noexcept
 
 void TopologyControlHost::ReconcileEntries()
 {
+    INJECT_POINT_NO_RETURN("TopologyControlHost.ReconcileEntries.enter");
     INJECT_POINT_NO_RETURN("TopologyControlHost.ReconcileEntries.exception", [](const std::string &) {
         throw std::runtime_error("injected Host reconcile exception");
     });
@@ -482,6 +646,12 @@ Status TopologyControlHost::StartRuntime(ClusterEntry &entry)
     runtimeOptions.controller.initialProbeRound = (nextRuntimeGeneration_++ << 32U) + 1U;
     runtimeOptions.controller.membershipRestartHandler = {};
     runtimeOptions.controller.materializeRestartFacts = true;
+    runtimeOptions.controller.activeFailureCandidateProvider =
+        [this, clusterName = entry.clusterName](const cluster::TopologySnapshot &latest,
+                                                const std::vector<cluster::MembershipRecord> &memberships,
+                                                std::chrono::steady_clock::time_point now) {
+            return GetIsolationCandidates(clusterName, latest, memberships, now);
+        };
     runtimeOptions.janitor = cluster::TopologyTaskJanitorOptions{
         COORDINATOR_JANITOR_INTERVAL, COORDINATOR_JANITOR_SCAN_LIMIT, COORDINATOR_JANITOR_DELETE_BATCH
     };

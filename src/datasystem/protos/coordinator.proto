@@ -235,6 +235,7 @@ message KeepAliveReqPb {
   bytes key = 1;
   bytes expected_coordinator_id = 2; // Required after the Worker observes one Coordinator process.
   int64 expected_mod_revision = 3; // Current membership incarnation; zero disables the fence.
+  repeated string failed_targets = 4; // Target workers observed as persistently unreachable by this member.
 }
 
 message KeepAliveRspPb {

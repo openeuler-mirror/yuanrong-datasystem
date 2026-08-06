@@ -31,7 +31,7 @@ DS_DECLARE_uint32(scale_in_collect_window_ms);
 
 namespace {
 constexpr uint32_t kMinNodeTimeoutS = 3;
-constexpr uint32_t kMinNodeDeadTimeoutS = 5;
+constexpr uint32_t kMinNodeDeadTimeoutS = 3;
 constexpr uint32_t kMaxLeaseRenewIntervalMs = 60 * MS_PER_SECOND;
 constexpr uint32_t kLeaseRenewRetryTimes = 4;
 constexpr uint32_t kMaxScaleInCollectWindowMs = 5'000;

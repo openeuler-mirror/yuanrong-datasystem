@@ -984,6 +984,29 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
     if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL) {
         ApplyWitnessFailureGate(classification);
     }
+    if (options_.activeFailureCandidateProvider) {
+        std::unordered_set<std::string> confirmedAddresses;
+        confirmedAddresses.reserve(classification.confirmedFailure.size());
+        for (const auto &identity : classification.confirmedFailure) {
+            confirmedAddresses.emplace(identity.address);
+        }
+        const auto activeCandidates = options_.activeFailureCandidateProvider(latest, memberships, options_.now());
+        for (const auto &identity : activeCandidates) {
+            if (confirmedAddresses.count(identity.address) > 0) {
+                continue;
+            }
+            const Member *member = nullptr;
+            if (latest.FindMemberByAddress(identity.address, member).IsError()
+                || member->state != MemberState::ACTIVE) {
+                continue;
+            }
+            classification.confirmedFailure.push_back(identity);
+            confirmedAddresses.emplace(identity.address);
+            LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+                         << " address=" << identity.address << " member_id_prefix=" << MemberIdForLog(identity.id)
+                         << " action=active_summary_confirmed";
+        }
+    }
     if (!classification.confirmedFailure.empty()) {
         return CommitConfirmedFailures(latest, classification);
     }
@@ -1765,7 +1788,7 @@ void TopologyController::CollectMembershipFacts(const std::vector<MembershipReco
         if (record.state == MemberLifecycleState::EXITING) {
             exiting.insert(record.address);
         }
-        if (record.state == MemberLifecycleState::READY) {
+        if (record.state == MemberLifecycleState::READY || record.state == MemberLifecycleState::RESTARTING) {
             auto quarantined = quarantinedReadyTimestampByAddress_.find(record.address);
             if (quarantined != quarantinedReadyTimestampByAddress_.end()) {
                 if (record.timestamp <= quarantined->second) {
@@ -1905,7 +1928,7 @@ Status TopologyController::TryFinalizeActiveBatch(const TopologySnapshot &latest
                   << " task_count=" << expected.tasks.size() << " notify_count=" << expected.notifiesByAddress.size();
     }
     if (complete) {
-        return CommitBatchFinal(latest);
+        return CommitBatchFinal(latest, memberships);
     }
     if (progressWorkPending_) {
         return Status::OK();
@@ -1944,7 +1967,7 @@ Status TopologyController::CommitExpiredBatch(const TopologySnapshot &latest,
         }
         return Status::OK();
     }
-    return CommitBatchFinal(latest);
+    return CommitBatchFinal(latest, memberships);
 }
 
 Status TopologyController::InspectBatchProgress(const TopologySnapshot &latest, const ExpectedDerivedState &expected,
@@ -2019,19 +2042,43 @@ Status TopologyController::RefreshTaskProgressCache(const ActiveBatch &batch, co
     return Status::OK();
 }
 
-Status TopologyController::CommitBatchFinal(const TopologySnapshot &latest)
+std::vector<MemberIdentity> TopologyController::CollectBatchParticipants(const TopologySnapshot &latest,
+                                                                         TopologyChangeType type) const
+{
+    std::vector<MemberIdentity> participants;
+    for (const auto &member : latest.Members()) {
+        if ((type == TopologyChangeType::SCALE_OUT && member.state == MemberState::JOINING)
+            || (type == TopologyChangeType::SCALE_IN && member.state == MemberState::LEAVING)
+            || (type == TopologyChangeType::FAILURE && member.state == MemberState::FAILED)) {
+            participants.push_back(member.identity);
+        }
+    }
+    return participants;
+}
+
+void TopologyController::RememberQuarantinedReadyMembers(const std::vector<MemberIdentity> &participants,
+                                                         const std::vector<MembershipRecord> &memberships)
+{
+    for (const auto &identity : participants) {
+        auto record = std::find_if(memberships.begin(), memberships.end(), [&](const auto &membership) {
+            return membership.address == identity.address && membership.state == MemberLifecycleState::READY;
+        });
+        if (record != memberships.end()) {
+            std::string memberId;
+            if (BuildMemberId(*record, memberId).IsOk() && memberId == identity.id) {
+                quarantinedReadyTimestampByAddress_[record->address] = record->timestamp;
+            }
+        }
+    }
+}
+
+Status TopologyController::CommitBatchFinal(const TopologySnapshot &latest,
+                                            const std::vector<MembershipRecord> &memberships)
 {
     TopologyState next;
     TopologyState state{ latest.ClusterHasInit(), latest.Version(), latest.Members(), latest.GetActiveBatch() };
     const auto batch = *latest.GetActiveBatch();
-    std::vector<MemberIdentity> participants;
-    for (const auto &member : latest.Members()) {
-        if ((batch.type == TopologyChangeType::SCALE_OUT && member.state == MemberState::JOINING)
-            || (batch.type == TopologyChangeType::SCALE_IN && member.state == MemberState::LEAVING)
-            || (batch.type == TopologyChangeType::FAILURE && member.state == MemberState::FAILED)) {
-            participants.push_back(member.identity);
-        }
-    }
+    auto participants = CollectBatchParticipants(latest, batch.type);
     if (batch.type == TopologyChangeType::SCALE_OUT) {
         RETURN_IF_NOT_OK(planBuilder_.BuildScaleOutFinal(state, next));
     } else if (batch.type == TopologyChangeType::SCALE_IN) {
@@ -2060,6 +2107,7 @@ Status TopologyController::CommitBatchFinal(const TopologySnapshot &latest)
                       << " sample=" << MemberIdentitySample(participants)
                       << " committed_version=" << committed->Version();
         } else {
+            RememberQuarantinedReadyMembers(participants, memberships);
             LOG(INFO) << "CLUSTER_FAILURE cluster=" << keys_.ClusterName()
                       << " outcome=finalized batch_epoch=" << batch.epoch << " failed_count=" << participants.size()
                       << " sample=" << MemberIdentitySample(participants)
@@ -2080,7 +2128,10 @@ Status TopologyController::CommitScaleOutExhaustion(const TopologySnapshot &late
             return membership.address == identity.address && membership.state == MemberLifecycleState::READY;
         });
         if (record != memberships.end()) {
-            quarantinedReadyTimestampByAddress_[record->address] = record->timestamp;
+            std::string memberId;
+            if (BuildMemberId(*record, memberId).IsOk() && memberId == identity.id) {
+                quarantinedReadyTimestampByAddress_[record->address] = record->timestamp;
+            }
         }
     }
     TopologyState state{ latest.ClusterHasInit(), latest.Version(), latest.Members(), latest.GetActiveBatch() };
@@ -2183,7 +2234,7 @@ void TopologyController::CollectNextBatchCandidates(const TopologySnapshot &late
 {
     std::unordered_set<std::string> ready;
     for (const auto &record : memberships) {
-        if (record.state == MemberLifecycleState::READY) {
+        if (record.state == MemberLifecycleState::READY || record.state == MemberLifecycleState::RESTARTING) {
             ready.insert(record.address);
         }
     }

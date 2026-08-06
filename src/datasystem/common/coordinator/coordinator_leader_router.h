@@ -74,7 +74,8 @@ public:
     using WaitFn = std::function<void(std::chrono::milliseconds)>;
 
     explicit CoordinatorLeaderRouter(std::shared_ptr<ICoordinatorDiscovery> discovery,
-                                    std::vector<HostPort> initialCandidates = {}, ClockFn clock = {}, WaitFn wait = {});
+                                    std::vector<HostPort> initialCandidates = {}, ClockFn clock = {}, WaitFn wait = {},
+                                    std::chrono::milliseconds totalTimeout = {});
     ~CoordinatorLeaderRouter() override = default;
 
     Status Execute(const AttemptFn &attempt, bool recoveryControl = false);
@@ -97,6 +98,7 @@ private:
         SUCCEEDED,
         EXHAUSTED,
         DEADLINE_EXCEEDED,
+        TERMINAL,
     };
 
     struct SubscriptionState {
@@ -110,6 +112,7 @@ private:
 
     Status RefreshCandidates(std::chrono::steady_clock::time_point deadline, std::vector<HostPort> &candidates);
     bool WaitBeforeRefresh(size_t retryCount, std::chrono::steady_clock::time_point deadline);
+    void LoadCandidateSnapshot(CoordinatorLeaderIdentity &cached, std::vector<HostPort> &candidates) const;
     CandidateRoundResult TryCandidates(const AttemptFn &attempt, bool recoveryControl,
                                        std::chrono::steady_clock::time_point deadline,
                                        const CoordinatorLeaderIdentity &cached, const std::vector<HostPort> &candidates,
@@ -130,6 +133,7 @@ private:
     uint64_t maxObservedTerm_{ 0 };
     ClockFn clock_;
     WaitFn wait_;
+    std::chrono::milliseconds totalTimeout_;
     std::atomic<bool> refreshInFlight_{ false };
     uint64_t nextSubscriptionId_{ 1 };
     std::unordered_map<uint64_t, std::shared_ptr<SubscriptionState>> subscriptions_;

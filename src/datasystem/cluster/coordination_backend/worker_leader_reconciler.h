@@ -45,12 +45,21 @@ public:
     void Shutdown();
 
 private:
-    void ScheduleEnsure(const CoordinatorLeaderIdentity &identity, bool forceEnsure);
-    Status ReconcileIdentity(const CoordinatorLeaderIdentity &identity, bool forceEnsure);
+    struct EnsureWork {
+        CoordinatorLeaderIdentity identity;
+        bool forceEnsure{ false };
+        bool completeRejoin{ false };
+    };
+
+    void ScheduleEnsure(const CoordinatorLeaderIdentity &identity, bool forceEnsure, bool completeRejoin);
+    Status ReconcileIdentity(const CoordinatorLeaderIdentity &identity, bool forceEnsure, bool completeRejoin);
     Status SendMembershipEnsure(const CoordinatorLeaderIdentity &identity,
                                 const DsCoordinationBackend::MembershipRenewalPayload &payload,
                                 int64_t &membershipModRevision);
     void RunEnsureLoop(CoordinatorLeaderIdentity identity);
+    bool TakePendingEnsure(EnsureWork &work);
+    bool FinishSuccessfulEnsure(const EnsureWork &work, size_t &retryAttempt);
+    bool FinishFailedEnsure(const EnsureWork &work, const Status &status, size_t &retryAttempt);
     bool IsCurrentIdentityLocked(const CoordinatorLeaderIdentity &identity) const;
     static bool SameIdentity(const CoordinatorLeaderIdentity &left, const CoordinatorLeaderIdentity &right);
 
@@ -64,6 +73,7 @@ private:
     CoordinatorLeaderIdentity pendingIdentity_;
     CoordinatorLeaderIdentity lastEnsuredIdentity_;
     bool forceEnsurePending_{ false };  // Protected by mutex_; coalesces explicit membership-loss signals.
+    bool completeRejoinPending_{ false };
     bool ensureScheduled_{ false };
     std::unique_ptr<ICoordinatorLeaderRouteProvider::Subscription> subscription_;
     std::unique_ptr<ThreadPool> ensurePool_;  // Access and ownership transfer are protected by mutex_.

@@ -17,6 +17,21 @@ ds_cc_test_library(
     ],
 )
 
+cc_library(
+    name = "st_common_headers",
+    hdrs = ["common.h"],
+    includes = ["."],
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        ":common_test",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
 # ST 公共基础库：common.h、kill_timer.h、st_oc_service_impl 等
 # includes = ["."] 将 tests/st/ 加入 include 路径，使得 "common.h"、
 # "cluster/xxx.h"、"client/xxx.h" 等相对于 tests/st/ 的 include 均可工作
@@ -28,7 +43,6 @@ ds_cc_test_library(
         "//tests/st/cluster:common.cpp",
     ],
     hdrs = [
-        "common.h",
         "common_distributed_ext.h",
         "kill_timer.h",
         "st_oc_service_impl.h",
@@ -38,6 +52,7 @@ ds_cc_test_library(
         '-DLLT_BIN_PATH=\\"/tmp/ds_llt\\"',
     ],
     deps = [
+        ":st_common_headers",
         ":common_test",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/log:common_log",

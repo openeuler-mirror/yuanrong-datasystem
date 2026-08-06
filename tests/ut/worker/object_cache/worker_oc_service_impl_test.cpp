@@ -188,9 +188,55 @@ public:
         return Status::OK();
     }
 
+    Status QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout, master::QueryMetaRspPb &response,
+                     std::vector<RpcMessage> &payloads) override
+    {
+        (void)request;
+        (void)subTimeout;
+        (void)payloads;
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++queryMetaCallCount_;
+        response = queryMetaResponse_;
+        return queryMetaStatus_;
+    }
+
+    Status GetObjectLocations(master::GetObjectLocationsReqPb &, master::GetObjectLocationsRspPb &response) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++getObjectLocationsCallCount_;
+        response = getObjectLocationsResponse_;
+        return getObjectLocationsStatus_;
+    }
+
+    Status GetObjectLocations(master::GetObjectLocationsReqPb &request, master::GetObjectLocationsRspPb &response,
+                              int64_t) override
+    {
+        return GetObjectLocations(request, response);
+    }
+
     void SetResponse(const master::GIncreaseRspPb &response)
     {
         response_ = response;
+    }
+
+    void SetQueryMetaStatus(const Status &status)
+    {
+        queryMetaStatus_ = status;
+    }
+
+    void SetQueryMetaResponse(const master::QueryMetaRspPb &response)
+    {
+        queryMetaResponse_ = response;
+    }
+
+    void SetGetObjectLocationsStatus(const Status &status)
+    {
+        getObjectLocationsStatus_ = status;
+    }
+
+    void SetGetObjectLocationsResponse(const master::GetObjectLocationsRspPb &response)
+    {
+        getObjectLocationsResponse_ = response;
     }
 
     void SetDecreaseResponse(const master::GDecreaseRspPb &response)
@@ -242,12 +288,28 @@ public:
         return createMultiMetaRequests_;
     }
 
+    int QueryMetaCallCount() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return queryMetaCallCount_;
+    }
+
+    int GetObjectLocationsCallCount() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return getObjectLocationsCallCount_;
+    }
+
 private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     master::GIncreaseRspPb response_;
     master::GDecreaseRspPb decreaseResponse_;
+    master::QueryMetaRspPb queryMetaResponse_;
+    master::GetObjectLocationsRspPb getObjectLocationsResponse_;
     Status status_{ Status::OK() };
+    Status queryMetaStatus_{ Status::OK() };
+    Status getObjectLocationsStatus_{ Status::OK() };
     std::vector<std::string> requestedObjectKeys_;
     bool returnRefMovingOnce_{ false };
     bool firstRefMovingCallSeen_{ false };
@@ -255,6 +317,8 @@ private:
     int decreaseCallCount_{ 0 };
     std::function<Status(master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &)> createMultiMetaHandler_;
     std::vector<master::CreateMultiMetaReqPb> createMultiMetaRequests_;
+    int queryMetaCallCount_{ 0 };
+    int getObjectLocationsCallCount_{ 0 };
 };
 
 class FakeWorkerMasterApiManager final : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
@@ -444,7 +508,8 @@ public:
 
     WorkerOcServiceCrudParam MakeCrudParam(std::shared_ptr<WorkerMasterOCApiManager> apiManager = nullptr,
                                            const worker::MetadataRouteResolver *metadataRoute = nullptr,
-                                           const ObjectEndpointPolicy *endpointPolicy = nullptr)
+                                           const ObjectEndpointPolicy *endpointPolicy = nullptr,
+                                           std::function<void(const HostPort &, const Status &)> observer = nullptr)
     {
         return WorkerOcServiceCrudParam{
             .workerMasterApiManager = std::move(apiManager),
@@ -460,6 +525,7 @@ public:
             .metadataRouteResolver = metadataRoute == nullptr ? &metadataRoute_ : metadataRoute,
             .endpointPolicy = endpointPolicy == nullptr ? endpointPolicy_.get() : endpointPolicy,
             .exitRequested = &exitRequested_,
+            .metadataRpcObserver = std::move(observer),
             .allowDirectoryLag = false,
         };
     }
@@ -1293,6 +1359,148 @@ TEST_F(WorkerOcServiceImplTest, GIncreaseMasterRefWithLockFailsWhenMasterReplyHa
     EXPECT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
     EXPECT_THAT(failedIds, UnorderedElementsAre(failedObject));
     EXPECT_THAT(api->RequestedObjectKeys(), UnorderedElementsAre(successObject, failedObject));
+}
+
+TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcFailure)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort masterAddress("127.0.0.1", 18482);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    api->SetQueryMetaStatus(Status(K_RPC_DEADLINE_EXCEEDED, "query meta timeout"));
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    std::vector<std::pair<std::string, StatusCode>> observations;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        apiManager, nullptr, nullptr,
+        [&observations](const HostPort &target, const Status &status) {
+            observations.emplace_back(target.ToString(), status.GetCode());
+        });
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    master::QueryMetaRspPb rsp;
+    std::vector<RpcMessage> payloads;
+
+    auto rc = getImpl.QueryMetaDataFromMasterImpl(masterAddress, K_META_MOVING_RETRY_TIMEOUT_MS, { "obj" }, rsp,
+                                                  payloads);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(api->QueryMetaCallCount(), 1);
+    EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_RPC_DEADLINE_EXCEEDED)));
+}
+
+TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcSuccess)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort masterAddress("127.0.0.1", 18482);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    std::vector<std::pair<std::string, StatusCode>> observations;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        apiManager, nullptr, nullptr,
+        [&observations](const HostPort &target, const Status &status) {
+            observations.emplace_back(target.ToString(), status.GetCode());
+        });
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    master::QueryMetaRspPb rsp;
+    std::vector<RpcMessage> payloads;
+
+    DS_ASSERT_OK(getImpl.QueryMetaDataFromMasterImpl(masterAddress, K_META_MOVING_RETRY_TIMEOUT_MS, { "obj" }, rsp,
+                                                     payloads));
+
+    EXPECT_EQ(api->QueryMetaCallCount(), 1);
+    EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_OK)));
+}
+
+TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterDoesNotReportLocalRetryBudgetTimeoutAsPeerFailure)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(1);
+    const HostPort masterAddress("127.0.0.1", 18482);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    master::QueryMetaRspPb movingRsp;
+    movingRsp.set_meta_is_moving(true);
+    api->SetQueryMetaResponse(movingRsp);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    std::vector<std::pair<std::string, StatusCode>> observations;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        apiManager, nullptr, nullptr,
+        [&observations](const HostPort &target, const Status &status) {
+            observations.emplace_back(target.ToString(), status.GetCode());
+        });
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    master::QueryMetaRspPb rsp;
+    std::vector<RpcMessage> payloads;
+
+    auto rc = getImpl.QueryMetaDataFromMasterImpl(masterAddress, K_META_MOVING_RETRY_TIMEOUT_MS, { "obj" }, rsp,
+                                                  payloads);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(api->QueryMetaCallCount(), 1);
+    EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_OK)));
+}
+
+TEST_F(WorkerOcServiceImplTest, RedirectGetObjectLocationsReportsMetadataRpcFailure)
+{
+    const HostPort redirectAddress("127.0.0.1", 18482);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(redirectAddress);
+    api->SetGetObjectLocationsStatus(Status(K_RPC_UNAVAILABLE, "redirect unavailable"));
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    std::vector<std::pair<std::string, StatusCode>> observations;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        apiManager, nullptr, nullptr,
+        [&observations](const HostPort &target, const Status &status) {
+            observations.emplace_back(target.ToString(), status.GetCode());
+        });
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    google::protobuf::RepeatedPtrField<RedirectMetaInfo> infos;
+    auto *info = infos.Add();
+    info->set_redirect_meta_address(redirectAddress.ToString());
+    info->add_change_meta_ids("obj");
+    std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
+    Status lastRc;
+
+    DS_ASSERT_OK(getImpl.QueryObjectLocationsFromRedirectMaster(infos, result, lastRc));
+
+    EXPECT_EQ(lastRc.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
+    EXPECT_THAT(observations, ElementsAre(Pair(redirectAddress.ToString(), K_RPC_UNAVAILABLE)));
+}
+
+TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysDoesNotReportLocalRetryBudgetTimeoutAsPeerFailure)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(1);
+    const HostPort masterAddress("127.0.0.1", 18482);
+    const std::string objectKey = "obj";
+    TestDistributedTopology topology(localAddress_, masterAddress);
+    DS_ASSERT_OK(topology.InitStatus());
+    topology.SetOwner(objectKey, masterAddress);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    master::GetObjectLocationsRspPb movingRsp;
+    movingRsp.set_meta_is_moving(true);
+    api->SetGetObjectLocationsResponse(movingRsp);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    std::vector<std::pair<std::string, StatusCode>> observations;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        apiManager, topology.Route(), topology.EndpointPolicy(),
+        [&observations](const HostPort &target, const Status &status) {
+            observations.emplace_back(target.ToString(), status.GetCode());
+        });
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
+    Status lastRc;
+
+    auto rc = getImpl.GetMapOfObjectKeys({ objectKey }, result, lastRc);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(lastRc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
+    EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_OK)));
 }
 
 TEST_F(WorkerOcServiceImplTest, UpdateMasterForFirstIdsRollsBackAllPendingGroupsOnRefMoving)

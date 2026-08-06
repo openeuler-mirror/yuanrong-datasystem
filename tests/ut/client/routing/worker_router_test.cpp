@@ -408,6 +408,18 @@ TEST_F(RoutingTest, TestBrokenFilterIgnoresOtherWorkers)
     EXPECT_TRUE(filter.IsAvailable(b));  // b unaffected
 }
 
+TEST_F(RoutingTest, TestBrokenFilterClearsOnHashRingUpdate)
+{
+    client::BrokenFilter filter;
+    HostPort addr("127.0.0.1", 1000);
+
+    MarkWorkerBroken(filter, addr);
+    EXPECT_FALSE(filter.IsAvailable(addr));
+
+    filter.OnHashRingUpdated(*BuildRing());
+    EXPECT_TRUE(filter.IsAvailable(addr));
+}
+
 TEST_F(RoutingTest, TestBrokenFilterConcurrentUpdatesAreNotLost)
 {
     client::BrokenFilter filter;

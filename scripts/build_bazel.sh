@@ -196,7 +196,7 @@ function build_datasystem_bazel() {
   fi
   # Tools (only when tests enabled, matching CMake behavior)
   if [[ "${RUN_TESTS}" != "off" ]]; then
-    targets+=("//:hashring_parser_file" "//:curve_keygen_file")
+    targets+=("//:curve_keygen_file")
   fi
   # Strip/sym artifacts (only for non-debug builds)
   if [[ "${BUILD_TYPE}" != "Debug" ]] && is_on "${ENABLE_STRIP}"; then

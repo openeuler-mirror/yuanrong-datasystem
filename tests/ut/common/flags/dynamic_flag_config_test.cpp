@@ -171,6 +171,20 @@ TEST_F(FlagsTest, TestWorkerFlagValidateSpecial)
     EXPECT_TRUE(WorkerFlagValidateSpecial(flagName, newVal));
 }
 
+TEST_F(FlagsTest, TestNodeDeadTimeoutMustBeGreaterThanNodeTimeout)
+{
+    auto oldNodeTimeoutS = FLAGS_node_timeout_s;
+    auto oldNodeDeadTimeoutS = FLAGS_node_dead_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    FLAGS_node_dead_timeout_s = 30;
+
+    EXPECT_FALSE(WorkerValidateNodeDeadTimeoutS(3));
+    EXPECT_TRUE(WorkerValidateNodeDeadTimeoutS(4));
+
+    FLAGS_node_timeout_s = oldNodeTimeoutS;
+    FLAGS_node_dead_timeout_s = oldNodeDeadTimeoutS;
+}
+
 TEST_F(FlagsTest, TestAdjustNodeTimeoutFlagsClampsHeartbeatIntervalMs)
 {
     auto oldNodeTimeoutS = FLAGS_node_timeout_s;

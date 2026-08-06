@@ -18,9 +18,13 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/control/topology_controller_runtime.h"
+#include "datasystem/cluster/membership/membership_types.h"
+#include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/cluster/runtime/worker_liveness.h"
 #include "datasystem/common/coordinator/watch_event.h"
 #include "datasystem/common/util/thread.h"
@@ -43,6 +47,7 @@ public:
         std::chrono::milliseconds reconcileInterval{ 100 };
         std::chrono::milliseconds startRetryInitial{ 100 };
         std::chrono::seconds startRetryMaximum{ 5 };
+        std::chrono::seconds activeFailureWindow{ 3 };
         cluster::TopologyControllerOptions controller;
 
         /**
@@ -112,6 +117,15 @@ public:
      */
     void NotifyStoreMutation(WatchEvent::Type type, const ParsedTopologyCoordinationKey &parsed) noexcept;
 
+    void RecordWorkerFailureSummaries(const std::string &clusterName, const std::string &reporter,
+                                      const std::vector<std::string> &targets);
+    void RecordWorkerFailureSummaries(const std::string &clusterName, const cluster::MembershipRecord &reporter,
+                                      const std::vector<cluster::MembershipRecord> &targets);
+
+    std::vector<cluster::MemberIdentity> GetIsolationCandidates(
+        const std::string &clusterName, const cluster::TopologySnapshot &latest,
+        const std::vector<cluster::MembershipRecord> &memberships, std::chrono::steady_clock::time_point now);
+
     /**
      * @brief Enqueue one validated witness report for Host-thread delivery.
      * @param[in] clusterName Target cluster runtime.
@@ -171,6 +185,25 @@ private:
         std::chrono::milliseconds retryBackoff{ 0 };
         std::string stopReason;
     };
+
+    struct FailureReportState {
+        std::chrono::steady_clock::time_point receiveTime;
+        int64_t reporterTimestamp{ 0 };
+        std::string reporterHostId;
+        int64_t targetTimestamp{ 0 };
+        std::string targetHostId;
+    };
+
+    static std::unordered_map<std::string, cluster::MembershipRecord> BuildReadyActiveMemberships(
+        const cluster::TopologySnapshot &latest, const std::vector<cluster::MembershipRecord> &memberships);
+
+    static size_t ActiveFailureReporterThreshold(size_t totalWorkers);
+
+    size_t PruneAndCountFailureReporters(
+        const cluster::TopologySnapshot &latest,
+        const std::unordered_map<std::string, cluster::MembershipRecord> &readyMemberships, const std::string &target,
+        std::unordered_map<std::string, FailureReportState> &reporters,
+        std::chrono::steady_clock::time_point now) const;
 
     /**
      * @brief Run the single Host lifecycle loop until Shutdown closes ingress.
@@ -277,6 +310,9 @@ private:
     std::condition_variable wakeCv_;
     std::unordered_map<std::string, std::unique_ptr<ClusterEntry>> entries_;
     uint64_t nextRuntimeGeneration_{ 1 };
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, std::unordered_map<std::string, FailureReportState>>>
+        failureReportsByCluster_;
     size_t reconcileCursor_{ 0 };
     Thread thread_;
     bool started_{ false };

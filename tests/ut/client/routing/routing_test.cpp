@@ -15,6 +15,8 @@
  */
 
 #include <atomic>
+#include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -37,6 +39,19 @@ namespace ut {
 // Matches BrokenFilter::EVICT_CONSECUTIVE_FAILURES (a worker is evicted only after this many
 // consecutive K_CLIENT_WORKER_DISCONNECT signals).
 constexpr int EVICTION_THRESHOLD = 100;
+namespace {
+bool WaitForCondition(const std::function<bool()> &predicate, std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return predicate();
+}
+}  // namespace
 
 class RoutingFacadeTest : public CommonTest {
 protected:
@@ -237,12 +252,12 @@ TEST_F(RoutingRpcClientTest, TestChannelCreationFailureIsReturned)
 TEST_F(RoutingFacadeTest, TestForwardsPolicyBatchAndStateUpdates)
 {
     auto router = std::make_shared<client::WorkerRouter>("");
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [](const HostPort &, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring, std::string &,
                     uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         FillRing(ring, hostIdMap);
         newVersion = 1;
-        changed = true;
+        changed = currentVersion == 0;
         return Status::OK();
     };
     auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch);
@@ -263,6 +278,35 @@ TEST_F(RoutingFacadeTest, TestForwardsPolicyBatchAndStateUpdates)
     }
     EXPECT_EQ(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, worker).GetCode(),
               K_NO_AVAILABLE_WORKER);
+}
+
+TEST_F(RoutingFacadeTest, TestWorkerDisconnectForcesHashRingRefresh)
+{
+    auto router = std::make_shared<client::WorkerRouter>("");
+    std::atomic<int> fetchCount{ 0 };
+    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                               uint64_t &newVersion, bool &changed,
+                               std::unordered_map<std::string, std::string> &hostIdMap) {
+        const int current = fetchCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+        FillRing(ring, hostIdMap);
+        newVersion = static_cast<uint64_t>(current);
+        changed = true;
+        return Status::OK();
+    };
+    auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch);
+    client::Routing routing(router, refresher, 60'000);
+    DS_ASSERT_OK(routing.Init("host-a", HostPort("127.0.0.1", 1000)));
+    ASSERT_TRUE(WaitForCondition([&fetchCount] {
+        return fetchCount.load(std::memory_order_acquire) >= 2;
+    }, std::chrono::seconds(2)));
+
+    const int beforeDisconnect = fetchCount.load(std::memory_order_acquire);
+    routing.UpdateState(HostPort("127.0.0.1", 1000), K_CLIENT_WORKER_DISCONNECT);
+
+    EXPECT_TRUE(WaitForCondition([&fetchCount, beforeDisconnect] {
+        return fetchCount.load(std::memory_order_acquire) > beforeDisconnect;
+    }, std::chrono::seconds(2)));
+    routing.Shutdown();
 }
 
 TEST_F(RoutingFacadeTest, TestShutdownRejectsSubsequentCalls)

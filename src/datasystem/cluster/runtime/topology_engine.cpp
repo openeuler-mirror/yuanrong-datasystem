@@ -389,9 +389,11 @@ Status TopologyEngine::Builder::ReadRestartFact()
         config_->isRestart = false;
         return Status::OK();
     }
-    if (config_->backendKind == Config::BackendKind::COORDINATOR && rc.GetCode() == K_NOT_READY) {
+    if (config_->backendKind == Config::BackendKind::COORDINATOR
+        && (rc.GetCode() == K_NOT_READY || IsBackendAccessFailure(rc))) {
         LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << config_->clusterName
-                  << " role=worker action=skip_restart_fact reason=coordinator_recovery_not_ready";
+                  << " role=worker action=skip_restart_fact reason=coordinator_bootstrap_read_unavailable"
+                  << " status=" << rc.ToString();
         config_->isRestart = false;
         return Status::OK();
     }
@@ -649,9 +651,12 @@ Status TopologyEngine::Start()
     }
     if (coordinatorProxy_ != nullptr) {
         auto *member = static_cast<DsCoordinationBackend *>(memberBackend_.get());
-        member->SetMembershipReadyHandler([this](const std::string &coordinatorId, bool) {
+        member->SetMembershipReadyHandler([this](const std::string &coordinatorId, bool refreshRequired) {
             if (recoveryReporter_ == nullptr) {
                 return;
+            }
+            if (refreshRequired) {
+                (void)EnqueueCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
             }
             if (workerLeaderReconciler_ != nullptr) {
                 workerLeaderReconciler_->NotifyMembershipReady(coordinatorId);
@@ -1059,6 +1064,16 @@ Status TopologyEngine::GetMembershipSidecar(
     return memberBackend_->GetAll(tableName, records);
 }
 
+void TopologyEngine::RecordPeerRpcFailure(const HostPort &target)
+{
+    memberBackend_->RecordPeerRpcFailure(target);
+}
+
+void TopologyEngine::RecordPeerRpcSuccess(const HostPort &target)
+{
+    memberBackend_->RecordPeerRpcSuccess(target);
+}
+
 Status TopologyEngine::GetRoutingHostIds(std::unordered_map<std::string, std::string> &hostIds) const
 {
     std::vector<std::pair<std::string, std::string>> members;
@@ -1138,6 +1153,8 @@ TopologyDiagnostics TopologyEngine::GetDiagnostics() const
 
 Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
 {
+    std::shared_ptr<const TopologySnapshot> previous;
+    const bool hasPrevious = snapshots_.Load(previous).IsOk();
     std::shared_ptr<const TopologySnapshot> candidate;
     auto rc = reader_.Read(ENGINE_READ_TIMEOUT_MS, candidate);
     if (rc.IsError()) {
@@ -1169,10 +1186,74 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
                                      << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest())
                                      << " status=published";
     RETURN_IF_NOT_OK(PublishBackendEvidence(*published));
+    RestoreReadyAfterCoordinatorTopologyReload(*published);
     if (newlyPublished) {
+        if (hasPrevious) {
+            for (const auto &member : previous->Members()) {
+                const Member *current = nullptr;
+                const auto currentStatus = published->FindMemberByAddress(member.identity.address, current);
+                if (currentStatus.IsOk() && current->state == MemberState::FAILED) {
+                    continue;
+                }
+                HostPort address;
+                if (address.ParseString(member.identity.address).IsOk()) {
+                    memberBackend_->RecordPeerRpcSuccess(address);
+                }
+            }
+        }
+        for (const auto &member : published->Members()) {
+            if (member.state == MemberState::FAILED || member.identity.address == options_.localAddress) {
+                continue;
+            }
+            HostPort address;
+            if (address.ParseString(member.identity.address).IsOk()) {
+                memberBackend_->RecordPeerRpcSuccess(address);
+            }
+        }
         LogAndNotifyPublishedSnapshot(std::move(published));
     }
     return Status::OK();
+}
+
+void TopologyEngine::RestoreReadyAfterCoordinatorTopologyReload(const TopologySnapshot &snapshot) noexcept
+{
+    if (options_.unifiedEtcdWatch || state_.load() != TopologyEngineState::RUNNING) {
+        return;
+    }
+    const Member *local = nullptr;
+    if (snapshot.FindMemberByAddress(options_.localAddress, local).IsError() || local == nullptr
+        || local->state != MemberState::ACTIVE) {
+        return;
+    }
+    std::vector<std::pair<std::string, std::string>> records;
+    auto rc = memberBackend_->GetAll(keys_->MembershipTable(), records);
+    if (rc.IsError()) {
+        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+            << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+            << " role=worker action=restore_ready_after_topology_reload status=" << rc.ToString();
+        return;
+    }
+    for (const auto &[address, encoded] : records) {
+        if (address != options_.localAddress) {
+            continue;
+        }
+        MembershipValue value;
+        rc = MembershipValueCodec::Decode(encoded, value);
+        if (rc.IsError()) {
+            LOG(WARNING) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+                         << " role=worker action=restore_ready_after_topology_reload"
+                         << " address=" << options_.localAddress << " status=" << rc.ToString();
+            return;
+        }
+        if (value.lifecycleState == MemberLifecycleState::RECOVERING
+            || value.lifecycleState == MemberLifecycleState::RESTARTING) {
+            LOG_IF_ERROR(RestoreReadyAfterLocalRecovery(),
+                         "CLUSTER_MEMBERSHIP cluster=" + options_.clusterName
+                             + " role=worker action=restore_ready_after_topology_reload"
+                             + " address=" + options_.localAddress);
+        }
+        return;
+    }
 }
 
 void TopologyEngine::LogAndNotifyPublishedSnapshot(std::shared_ptr<const TopologySnapshot> published)
@@ -1212,45 +1293,52 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
     const Member *local = nullptr;
     const auto findStatus = snapshot.FindMemberByAddress(options_.localAddress, local);
     if (findStatus.GetCode() == K_NOT_FOUND) {
-        const bool localMemberExisted =
-            localMemberExistedInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
-        const bool localMemberWasLeaving =
-            localMemberWasLeavingInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
-        const bool localVoluntaryExitRequested = localVoluntaryExitRequested_.load();
-        const bool rejoinAlreadyRequired = membershipRejoinRequired_.load(std::memory_order_relaxed);
-        {
-            std::lock_guard<std::mutex> lock(stateMutex_);
-            backendObservation_ = {};
-        }
-        // Repeated missing Snapshots must not erase a rejoin decision made when the local member disappeared.
-        if (localMemberWasLeaving || localVoluntaryExitRequested
-            || (!localMemberExisted && !rejoinAlreadyRequired)) {
-            membershipRejoinRequired_.store(false, std::memory_order_relaxed);
-            SetAvailability(TopologyAvailabilityLevel::NOT_READY, "local_member_missing");
-            if (localMemberWasLeaving || localVoluntaryExitRequested) {
-                LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
-                          << " role=worker state=local_member_missing action=continue_voluntary_exit address="
-                          << options_.localAddress;
-            }
-            return Status::OK();
-        }
-        if (!rejoinAlreadyRequired) {
-            LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
-                       << " role=worker state=local_member_missing action=require_rejoin address="
-                       << options_.localAddress;
-        }
-        membershipRejoinRequired_.store(true, std::memory_order_relaxed);
-        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "local_member_missing");
-        return Status::OK();
+        return PublishMissingLocalMemberEvidence();
     }
     RETURN_IF_NOT_OK(findStatus);
+    PublishFoundLocalMemberEvidence(snapshot, *local);
+    return Status::OK();
+}
+
+Status TopologyEngine::PublishMissingLocalMemberEvidence()
+{
+    const bool localMemberExisted = localMemberExistedInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
+    const bool localMemberWasLeaving =
+        localMemberWasLeavingInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
+    const bool localVoluntaryExitRequested = localVoluntaryExitRequested_.load();
+    const bool rejoinAlreadyRequired = membershipRejoinRequired_.load(std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        backendObservation_ = {};
+    }
+    // Repeated missing Snapshots must not erase a rejoin decision made when the local member disappeared.
+    if (localMemberWasLeaving || localVoluntaryExitRequested || (!localMemberExisted && !rejoinAlreadyRequired)) {
+        membershipRejoinRequired_.store(false, std::memory_order_relaxed);
+        SetAvailability(TopologyAvailabilityLevel::NOT_READY, "local_member_missing");
+        if (localMemberWasLeaving || localVoluntaryExitRequested) {
+            LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
+                      << " role=worker state=local_member_missing action=continue_voluntary_exit address="
+                      << options_.localAddress;
+        }
+        return Status::OK();
+    }
+    if (!rejoinAlreadyRequired) {
+        LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
+                   << " role=worker state=local_member_missing action=require_rejoin address=" << options_.localAddress;
+    }
+    RequireMembershipRejoinOnce("local_member_missing");
+    return Status::OK();
+}
+
+void TopologyEngine::PublishFoundLocalMemberEvidence(const TopologySnapshot &snapshot, const Member &local)
+{
     ResetLocalIsolationEvidence();
     bool identityChanged = false;
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         identityChanged =
-            !backendObservation_.reporter.id.empty() && backendObservation_.reporter.id != local->identity.id;
-        backendObservation_ = { local->identity,
+            !backendObservation_.reporter.id.empty() && backendObservation_.reporter.id != local.identity.id;
+        backendObservation_ = { local.identity,
                                 ControlBackendState::AVAILABLE,
                                 snapshot.Version(),
                                 snapshot.AuthorityRevision(),
@@ -1259,20 +1347,46 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
         lastError_.clear();
     }
     membershipView_.RemoveStaleObservations();
-    if (identityChanged || local->state == MemberState::FAILED) {
-        membershipRejoinRequired_.store(true, std::memory_order_relaxed);
-        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED,
-                        identityChanged ? "local_identity_changed" : "local_member_failed");
+    if (identityChanged || local.state == MemberState::FAILED) {
+        static_cast<void>(
+            RequireMembershipRejoinOnce(identityChanged ? "local_identity_changed" : "local_member_failed"));
     } else {
-        membershipRejoinRequired_.store(false, std::memory_order_relaxed);
-        SetAvailability(IsCommittedMemberState(local->state) ? TopologyAvailabilityLevel::NORMAL
+        const bool localCommitted = IsCommittedMemberState(local.state);
+        if (localCommitted && membershipRejoinRequired_.load(std::memory_order_relaxed)) {
+            auto rc = ScheduleMembershipRejoin("local_member_committed_after_rejoin");
+            if (rc.IsOk()) {
+                membershipRejoinRequired_.store(false, std::memory_order_relaxed);
+            }
+        } else {
+            membershipRejoinRequired_.store(false, std::memory_order_relaxed);
+        }
+        SetAvailability(IsCommittedMemberState(local.state) ? TopologyAvailabilityLevel::NORMAL
                                                              : TopologyAvailabilityLevel::NOT_READY,
-                        IsCommittedMemberState(local->state) ? "" : "local_member_not_committed");
+                        IsCommittedMemberState(local.state) ? "" : "local_member_not_committed");
     }
     localMemberExistedInPreviousSnapshot_.store(true, std::memory_order_relaxed);
     localMemberWasLeavingInPreviousSnapshot_.store(
-        local->state == MemberState::PRE_LEAVING || local->state == MemberState::LEAVING, std::memory_order_relaxed);
-    return Status::OK();
+        local.state == MemberState::PRE_LEAVING || local.state == MemberState::LEAVING, std::memory_order_relaxed);
+}
+
+Status TopologyEngine::ScheduleMembershipRejoin(const char *reason)
+{
+    if (workerLeaderReconciler_ == nullptr) {
+        return Status::OK();
+    }
+    auto rc = workerLeaderReconciler_->Reconcile(false);
+    LOG_IF_ERROR(rc, FormatString("CLUSTER_MEMBERSHIP_REJOIN_SCHEDULE_FAILED reason=%s", reason));
+    return rc;
+}
+
+bool TopologyEngine::RequireMembershipRejoinOnce(const char *reason)
+{
+    const bool rejoinAlreadyRequired = membershipRejoinRequired_.exchange(true, std::memory_order_relaxed);
+    SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, reason);
+    if (!rejoinAlreadyRequired) {
+        ScheduleMembershipRejoin(reason);
+    }
+    return !rejoinAlreadyRequired;
 }
 
 Status TopologyEngine::HandleRuntimeEvent(RuntimeEvent event)
@@ -1447,8 +1561,7 @@ Status TopologyEngine::RefreshPeerTopology()
                    << " role=worker state=peer_observed_local_member_unavailable action=require_rejoin"
                    << " reason=" << reason << " address=" << options_.localAddress
                    << " peer_version=" << peerSnapshot->Version();
-        membershipRejoinRequired_.store(true, std::memory_order_relaxed);
-        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "peer_observed_local_member_unavailable");
+        RequireMembershipRejoinOnce("peer_observed_local_member_unavailable");
         return Status::OK();
     }
     return Status::OK();

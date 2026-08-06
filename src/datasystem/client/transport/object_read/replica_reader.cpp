@@ -290,7 +290,10 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
             if (rc.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
                 ++notFoundReplicas;
             }
-            if (IsTransportSnapshotStaleLocation(rc)) {
+            if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+                hasStaleLocation = true;
+                staleLocationStatus = Status(K_NOT_READY, STALE_TRANSPORT_SNAPSHOT_MESSAGE);
+            } else if (IsTransportSnapshotStaleLocation(rc)) {
                 hasStaleLocation = true;
                 staleLocationStatus = rc;
             }

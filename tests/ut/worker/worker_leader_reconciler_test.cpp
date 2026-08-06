@@ -24,6 +24,8 @@
 #include <google/protobuf/descriptor.h>
 #include "gtest/gtest.h"
 
+#include "datasystem/cluster/membership/membership_value_codec.h"
+
 namespace datasystem::cluster {
 namespace {
 using namespace std::chrono_literals;
@@ -128,23 +130,30 @@ private:
 class FakeProxy final : public ICoordinatorServiceProxy {
 public:
     Status Init() override { return Status::OK(); }
-    Status Put(const std::string &, const std::string &value, int64_t, int64_t, int64_t &version, int64_t &revision,
-               int32_t, std::string *coordinatorId, const std::string &, int64_t) override
+    Status Put(const std::string &key, const std::string &value, int64_t, int64_t, int64_t &version,
+               int64_t &revision, int32_t, std::string *coordinatorId, const std::string &, int64_t) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         version = ++membershipVersion_;
         revision = ++membershipRevision_;
+        remoteMembershipKey_ = key;
         remoteMembershipValue_ = value;
         if (coordinatorId != nullptr) {
             *coordinatorId = kCoordinatorId;
         }
+        cv_.notify_all();
         return Status::OK();
     }
-    Status Range(const std::string &, const std::string &, std::vector<KeyValueEntry> &entries, int64_t &revision,
+    Status Range(const std::string &key, const std::string &, std::vector<KeyValueEntry> &entries, int64_t &revision,
                  int32_t, std::string *coordinatorId) override
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         entries.clear();
-        revision = 0;
+        if (!remoteMembershipValue_.empty() && key == remoteMembershipKey_) {
+            entries.push_back({ remoteMembershipKey_, remoteMembershipValue_, membershipVersion_,
+                                membershipRevision_ });
+        }
+        revision = membershipRevision_;
         if (coordinatorId != nullptr) {
             *coordinatorId = kCoordinatorId;
         }
@@ -156,10 +165,13 @@ public:
     }
     Status WatchRange(const std::string &, const std::string &, const std::string &, const std::string &, int64_t &,
                       std::vector<KeyValueEntry> &, int32_t, std::string *) override { return Unused(); }
-    Status CancelWatch(const std::string &, const std::vector<int64_t> &, const std::string &, int32_t) override { return Unused(); }
+    Status CancelWatch(const std::string &, const std::vector<int64_t> &, const std::string &, int32_t) override
+    {
+        return Unused();
+    }
     Status KeepAlive(const std::string &, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t,
-                     std::string *coordinatorId, const std::string &,
-                     int64_t) override
+                     std::string *coordinatorId, const std::string &, int64_t,
+                     const std::vector<std::string> & = {}) override
     {
         if (keepAliveSucceeds_) {
             remainingTtlMs = ttlMs;
@@ -265,12 +277,23 @@ public:
         return remoteMembershipValue_;
     }
 
+    bool WaitForMembershipState(MemberLifecycleState state) const
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return cv_.wait_for(lock, 2s, [&] {
+            MembershipValue value;
+            return MembershipValueCodec::Decode(remoteMembershipValue_, value).IsOk()
+                   && value.lifecycleState == state;
+        });
+    }
+
 private:
     static Status Unused() { return Status(K_RUNTIME_ERROR, "unused fake RPC"); }
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;
     std::vector<coordinator::EnsureLeaderMembershipReqPb> ensureRequests_;
     std::vector<coordinator::ReportTopologyRecoveryCandidateReqPb> reportRequests_;
+    std::string remoteMembershipKey_;
     std::string remoteMembershipValue_;
     int64_t membershipVersion_{ 0 };
     int64_t membershipRevision_{ 0 };
@@ -466,6 +489,52 @@ TEST(WorkerLeaderReconcilerTest, ExplicitMembershipLossResubmitsEnsureForSameLea
     ASSERT_TRUE(reconciler.Reconcile(false).IsOk());
     ASSERT_TRUE(proxy.WaitForEnsures(2));
     EXPECT_EQ(proxy.EnsureAt(1).leader_term(), 9UL);
+
+    reconciler.Shutdown();
+    EXPECT_TRUE(reporter.Shutdown().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(WorkerLeaderReconcilerTest, SynchronousForceEnsureDoesNotPublishRestarting)
+{
+    FakeProxy proxy;
+    DsCoordinationBackend backend(&proxy, kWorkerAddress);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
+    TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
+                                      [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
+                                      ReporterOptions());
+    proxy.routes_.SetCacheWithoutCallback(Identity(9, 2));
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+
+    ASSERT_TRUE(reconciler.Reconcile(true).IsOk());
+    ASSERT_EQ(proxy.EnsureCount(), 1UL);
+    MembershipValue payload;
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.EnsureAt(0).membership_value(), payload).IsOk());
+    EXPECT_NE(payload.lifecycleState, MemberLifecycleState::RESTARTING);
+
+    reconciler.Shutdown();
+    EXPECT_TRUE(reporter.Shutdown().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(WorkerLeaderReconcilerTest, AsyncRejoinCompletesMembershipReadyAfterEnsure)
+{
+    FakeProxy proxy;
+    DsCoordinationBackend backend(&proxy, kWorkerAddress);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
+    TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
+                                      [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
+                                      ReporterOptions());
+    reporter.NotifyRuntimeReady();
+    proxy.routes_.Set(Identity(9, 2));
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    ASSERT_TRUE(proxy.WaitForEnsures(1));
+    ASSERT_TRUE(proxy.WaitForReports(1));
+
+    ASSERT_TRUE(reconciler.Reconcile(false).IsOk());
+
+    ASSERT_TRUE(proxy.WaitForEnsures(2));
+    ASSERT_TRUE(proxy.WaitForMembershipState(MemberLifecycleState::READY));
 
     reconciler.Shutdown();
     EXPECT_TRUE(reporter.Shutdown().IsOk());

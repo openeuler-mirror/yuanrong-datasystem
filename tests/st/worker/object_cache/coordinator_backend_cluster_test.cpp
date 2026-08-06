@@ -18,11 +18,14 @@
  * Description: ST for coordinator-backed worker cluster coordination.
  */
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <thread>
@@ -39,6 +42,7 @@
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
@@ -60,6 +64,25 @@ constexpr int THREE_WORKER_TEST_TIMEOUT_SEC = 240;
 constexpr int COORDINATOR_LEADER_PROBE_TIMEOUT_MS = 500;
 constexpr int WAIT_COORDINATOR_LEADER_TIMEOUT_SEC = 15;
 constexpr int COORDINATOR_SD_CONNECT_TIMEOUT_MS = 60000;
+constexpr int FAULT_REQUEST_TIMEOUT_MS = 20;
+constexpr int FAULT_CONNECT_TIMEOUT_MS = 1000;
+constexpr int FAULT_NODE_TIMEOUT_SEC = 3;
+constexpr int FAULT_ACCESS_RECOVERY_EXPECT_MS = 3000;
+constexpr int FAULT_ISOLATION_EXPECT_MS = 3000;
+constexpr int FAULT_RECOVERY_TIMEOUT_MS = 12000;
+constexpr int FAULT_TRAFFIC_INTERVAL_MS = 20;
+constexpr int FAULT_BLINK_MAX_DURATION_MS = 8000;
+constexpr int FAULT_BLINK_REPEAT = 5;
+constexpr uint64_t FAULT_BLINK_KEEPALIVE_FAILURES = 5;
+constexpr int FAULT_BLINK_RECOVERY_TIMEOUT_MS = 3000;
+constexpr int FAULT_BLINK_TOPOLOGY_TIMEOUT_SEC = 4;
+constexpr int FAULT_TOPOLOGY_RPC_TIMEOUT_MS = 500;
+constexpr size_t FAULT_REQUIRED_CONSECUTIVE_SUCCESSES = 3;
+constexpr size_t FAULT_REPORT_LANES_PER_WORKER = 3;
+constexpr size_t FAULT_REPORT_KEY_COUNT = 32;
+constexpr uint64_t FAULT_RANDOM_KEY_SEED = 20260806;
+constexpr size_t FAULT_KEY_SEARCH_LIMIT = 100'000;
+constexpr char FAULT_META_VALUE[] = "x";
 constexpr size_t TEST_KEY_COUNT = 100;
 constexpr char COORDINATOR_KEEPALIVE_INJECT_NAME[] = "CoordinationBackend.KeepAlive.returnError";
 constexpr char COORDINATOR_KEEPALIVE_INJECT_ACTION[] = "return(K_RPC_UNAVAILABLE)";
@@ -212,7 +235,7 @@ public:
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -node_timeout_s=2 -node_dead_timeout_s=4 -add_node_wait_time_s=1"
             " -log_async=false -enable_reconciliation=false -enable_lossless_data_exit_mode=true";
-        opts.coordinatorGflagParams = " -v=1 -node_timeout_s=1 -node_dead_timeout_s=1 -scale_in_collect_window_ms=1000";
+        opts.coordinatorGflagParams = " -v=1 -node_timeout_s=1 -node_dead_timeout_s=2 -scale_in_collect_window_ms=1000";
         coordinatorCount_ = opts.numCoordinators;
     }
 
@@ -322,15 +345,15 @@ protected:
                                            + lastRc.ToString());
     }
 
-    Status GetTopologyWorkers(ICoordinatorServiceProxy &proxy, std::map<std::string, MembershipPb::StatePb> &outWorkers)
+    Status GetTopologyWorkers(ICoordinatorServiceProxy &proxy, std::map<std::string, MembershipPb::StatePb> &outWorkers,
+                              int64_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS)
     {
         std::unique_ptr<cluster::TopologyKeyHelper> topologyKeys;
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(GetTestClusterName(), topologyKeys));
 
         std::vector<KeyValueEntry> kvs;
         int64_t revision = 0;
-        RETURN_IF_NOT_OK(
-            proxy.Range(topologyKeys->TopologyTable() + "/", "", kvs, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
+        RETURN_IF_NOT_OK(proxy.Range(topologyKeys->TopologyTable() + "/", "", kvs, revision, timeoutMs));
         CHECK_FAIL_RETURN_STATUS(kvs.size() == 1, K_RUNTIME_ERROR,
                                  "Unexpected topology entry count: " + std::to_string(kvs.size()));
 
@@ -780,6 +803,213 @@ protected:
         DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1, WAIT_SCALE_TIMEOUT_SEC));
         DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2, WAIT_SCALE_TIMEOUT_SEC));
     }
+};
+
+class CoordinatorBackendFaultIsolationTest : public CoordinatorBackendClusterTest {
+public:
+    void SetUp() override
+    {
+#ifndef USE_URMA
+        GTEST_SKIP() << "Strict fast-failover timing ST requires USE_URMA or USE_URMA_MOCK.";
+#else
+        ExternalClusterTest::SetUp();
+#endif
+    }
+
+    void TearDown() override
+    {
+#ifdef USE_URMA
+        ExternalClusterTest::TearDown();
+#endif
+    }
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        CoordinatorBackendClusterTest::SetClusterSetupOptions(opts);
+        opts.numWorkers = 3;
+        opts.disableRocksDB = false;
+        opts.workerGflagParams =
+            " -shared_memory_size_mb=64 -ipc_through_shared_memory=false -arena_per_tenant=1 -use_brpc=true"
+            " -node_timeout_s=" + std::to_string(FAULT_NODE_TIMEOUT_SEC)
+            + " -node_dead_timeout_s=30 -client_dead_timeout_s=3"
+            " -add_node_wait_time_s=1 -log_async=false -enable_reconciliation=false"
+            " -enable_lossless_data_exit_mode=true";
+#ifdef USE_URMA
+        opts.workerGflagParams += " -enable_urma=true";
+#else
+        opts.workerGflagParams += " -enable_urma=false";
+#endif
+        opts.coordinatorGflagParams =
+            " -v=1 -use_brpc=true -node_timeout_s=3 -node_dead_timeout_s=30 -scale_in_collect_window_ms=0";
+    }
+
+protected:
+    int GetTestCaseTimeoutSecs() const override
+    {
+        return THREE_WORKER_TEST_TIMEOUT_SEC;
+    }
+
+    void InitRoutedClient(uint32_t workerIndex, bool enableLocalCache, std::shared_ptr<KVClient> &client,
+                          DataPlacementPolicy policy = DataPlacementPolicy::PREFERRED_META_OWNER)
+    {
+        ConnectOptions options;
+        InitConnectOpt(workerIndex, options, FAULT_CONNECT_TIMEOUT_MS, true);
+        options.enableLocalCache = enableLocalCache;
+        options.requestTimeoutMs = FAULT_REQUEST_TIMEOUT_MS;
+        options.dataPlacementPolicy = policy;
+        client = std::make_shared<KVClient>(options);
+        DS_ASSERT_OK(client->Init());
+    }
+
+    Status FindRouteKeyToWorker(uint32_t workerIndex, const std::string &prefix, std::string &key) const
+    {
+        ClusterTopologyPb ring;
+        RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
+        HostPort targetWorker;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
+
+        std::map<uint32_t, std::string> tokenWorkers;
+        for (const auto &worker : ring.members()) {
+            if (worker.second.state() != MembershipPb::ACTIVE) {
+                continue;
+            }
+            for (const auto token : worker.second.tokens()) {
+                tokenWorkers.emplace(token, worker.first);
+            }
+        }
+        CHECK_FAIL_RETURN_STATUS(!tokenWorkers.empty(), K_NOT_FOUND, "Hash ring has no active worker tokens");
+        for (size_t i = 0; i < FAULT_KEY_SEARCH_LIMIT; ++i) {
+            std::string candidate = prefix + std::to_string(i);
+            auto owner = tokenWorkers.lower_bound(MurmurHash3_32(candidate));
+            if (owner == tokenWorkers.end()) {
+                owner = tokenWorkers.begin();
+            }
+            if (owner->second == targetWorker.ToString()) {
+                key = std::move(candidate);
+                return Status::OK();
+            }
+        }
+        return Status(K_NOT_FOUND, "Unable to find a key for the target worker");
+    }
+
+    Status WaitWorkerNotInCluster(uint32_t workerIndex, int timeoutSec)
+    {
+        HostPort worker;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, worker));
+        RETURN_IF_NOT_OK(GetCoordinatorProxy());
+        CHECK_FAIL_RETURN_STATUS(coordinatorProxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator proxy is null");
+        return WaitWorkersNotInCluster(*coordinatorProxy_, { worker.ToString() }, timeoutSec);
+    }
+
+    Status WaitWorkerInCluster(uint32_t workerIndex, int timeoutSec)
+    {
+        HostPort worker;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, worker));
+        RETURN_IF_NOT_OK(GetCoordinatorProxy());
+        CHECK_FAIL_RETURN_STATUS(coordinatorProxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator proxy is null");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+        Status lastRc;
+        std::map<std::string, MembershipPb::StatePb> lastWorkers;
+        while (std::chrono::steady_clock::now() < deadline) {
+            lastRc = GetTopologyWorkers(*coordinatorProxy_, lastWorkers, FAULT_TOPOLOGY_RPC_TIMEOUT_MS);
+            if (lastRc.IsOk() && lastWorkers.find(worker.ToString()) != lastWorkers.end()) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR, "Timed out waiting for worker to stay in coordinator topology. Worker: "
+                                           + worker.ToString() + ", last workers: " + WorkerStatesToString(lastWorkers)
+                                           + ", last status: " + lastRc.ToString());
+    }
+
+    struct TimedRecoveryResult {
+        bool recovered = false;
+        int64_t elapsedMs = -1;
+        uint64_t attempts = 0;
+        uint64_t failures = 0;
+        int64_t lastFailureElapsedMs = -1;
+        int64_t noMoreFailAfterMs = -1;
+        std::string lastStatus;
+    };
+
+    struct FaultClients {
+        std::shared_ptr<KVClient> writer;
+        std::shared_ptr<KVClient> reader;
+        std::shared_ptr<KVClient> metadataReporter;
+    };
+
+    struct FaultTrafficState {
+        std::atomic<bool> stopTraffic{ false };
+        std::atomic<uint64_t> metadataAttempts{ 0 };
+        std::atomic<uint64_t> metadataFailures{ 0 };
+        std::mutex latestMutex;
+        std::string latestKey;
+        std::string latestValue;
+        TimedRecoveryResult setResult;
+        TimedRecoveryResult getResult;
+        std::vector<std::thread> metadataTraffic;
+    };
+
+    TimedRecoveryResult MeasureUntilConsecutiveSuccess(
+        const std::chrono::steady_clock::time_point &start,
+        const std::function<Status(uint64_t)> &operation,
+        int64_t timeoutMs = FAULT_RECOVERY_TIMEOUT_MS)
+    {
+        TimedRecoveryResult result;
+        uint64_t consecutiveSuccesses = 0;
+        int64_t currentSuccessStartMs = -1;
+        const auto deadline = start + std::chrono::milliseconds(timeoutMs);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto rc = operation(result.attempts);
+            const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            ++result.attempts;
+            result.lastStatus = rc.ToString();
+            if (rc.IsOk()) {
+                if (consecutiveSuccesses == 0) {
+                    currentSuccessStartMs = elapsedMs;
+                }
+                ++consecutiveSuccesses;
+                if (consecutiveSuccesses >= FAULT_REQUIRED_CONSECUTIVE_SUCCESSES) {
+                    result.recovered = true;
+                    result.noMoreFailAfterMs = currentSuccessStartMs;
+                    break;
+                }
+            } else {
+                ++result.failures;
+                result.lastFailureElapsedMs = elapsedMs;
+                consecutiveSuccesses = 0;
+                currentSuccessStartMs = -1;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(FAULT_TRAFFIC_INTERVAL_MS));
+        }
+        result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        return result;
+    }
+
+    FaultClients InitFaultClients(bool enableLocalCache);
+    void WarmupTargetMetadata(const FaultClients &clients, uint32_t workerIndex, const std::string &caseName,
+                              bool enableLocalCache, std::string &targetMetaKey);
+    void PrepareFailureReportKeys(uint32_t workerIndex, const std::string &caseName,
+                                  std::vector<std::string> &reportKeys);
+    void StartMetadataFailureTraffic(const FaultClients &clients, const std::vector<std::string> &reportKeys,
+                                     FaultTrafficState &state);
+    void StartKillRecoveryTraffic(const FaultClients &clients, const std::string &caseName, bool enableLocalCache,
+                                  const std::chrono::steady_clock::time_point &measureStartAt,
+                                  FaultTrafficState &state, std::thread &setThread, std::thread &getThread);
+    void StopAndJoinFaultTraffic(FaultTrafficState &state, std::thread &setThread, std::thread &getThread);
+    void LogKillWorkerResults(const std::string &caseName, const std::string &targetMetaKey,
+                              const FaultTrafficState &state, const Status &isolationRc, int64_t isolationMs,
+                              int64_t waitIsolationMs, int64_t totalMs);
+    void WarmupBlinkTraffic(const FaultClients &clients, uint32_t workerIndex, const std::string &caseName,
+                            bool enableLocalCache, std::string &latestKey, std::string &latestValue);
+    uint64_t InjectKeepaliveBlink(uint32_t workerIndex);
+    TimedRecoveryResult VerifyBlinkSetRecovery(const FaultClients &clients, const std::string &caseName, int round,
+                                               std::string &latestKey, std::string &latestValue);
+
+    void RunKillWorkerSetGetRecoverWithinTarget(bool enableLocalCache);
+    void RunBlinkWorkerDoesNotIsolate(bool enableLocalCache);
 };
 
 class StaleTopologyBootstrapTest : public CoordinatorBackendClusterTest,
@@ -1322,6 +1552,300 @@ TEST_F(CoordinatorBackendClusterTest, RestartWorkerPropagatesTopologyByCoordinat
     auto t3 = std::chrono::steady_clock::now();
     LOG(INFO) << "[TIMING] Cluster state after restart confirmed in "
               << std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count() << "ms";
+}
+
+CoordinatorBackendFaultIsolationTest::FaultClients CoordinatorBackendFaultIsolationTest::InitFaultClients(
+    bool enableLocalCache)
+{
+    FaultClients clients;
+    InitRoutedClient(1, enableLocalCache, clients.writer);
+    InitRoutedClient(2, enableLocalCache, clients.reader, DataPlacementPolicy::PREFERRED_SAME_NODE);
+    InitRoutedClient(0, enableLocalCache, clients.metadataReporter, DataPlacementPolicy::PREFERRED_SAME_NODE);
+    return clients;
+}
+
+void CoordinatorBackendFaultIsolationTest::WarmupTargetMetadata(const FaultClients &clients, uint32_t workerIndex,
+                                                               const std::string &caseName, bool enableLocalCache,
+                                                               std::string &targetMetaKey)
+{
+    DS_ASSERT_OK(FindRouteKeyToWorker(workerIndex, caseName + "_target_meta_", targetMetaKey));
+    DS_ASSERT_OK(clients.writer->Set(targetMetaKey, FAULT_META_VALUE));
+    if (!enableLocalCache) {
+        std::string warmupValue;
+        DS_ASSERT_OK(clients.metadataReporter->Get(targetMetaKey, warmupValue));
+        ASSERT_EQ(warmupValue, FAULT_META_VALUE);
+    }
+}
+
+void CoordinatorBackendFaultIsolationTest::PrepareFailureReportKeys(uint32_t workerIndex, const std::string &caseName,
+                                                                    std::vector<std::string> &reportKeys)
+{
+    reportKeys.reserve(FAULT_REPORT_KEY_COUNT);
+    for (size_t i = 0; i < FAULT_REPORT_KEY_COUNT; ++i) {
+        std::string key;
+        DS_ASSERT_OK(FindRouteKeyToWorker(workerIndex, caseName + "_failure_report_" + std::to_string(i) + "_", key));
+        reportKeys.emplace_back(std::move(key));
+    }
+}
+
+void CoordinatorBackendFaultIsolationTest::StartMetadataFailureTraffic(const FaultClients &clients,
+                                                                       const std::vector<std::string> &reportKeys,
+                                                                       FaultTrafficState &state)
+{
+    for (auto &client : { clients.metadataReporter, clients.reader }) {
+        for (size_t lane = 0; lane < FAULT_REPORT_LANES_PER_WORKER; ++lane) {
+            state.metadataTraffic.emplace_back([&, client, lane] {
+                size_t nextKey = lane;
+                while (!state.stopTraffic.load()) {
+                    auto rc = client->Set(reportKeys[nextKey % reportKeys.size()], FAULT_META_VALUE);
+                    nextKey += FAULT_REPORT_LANES_PER_WORKER;
+                    state.metadataAttempts.fetch_add(1);
+                    if (rc.IsError()) {
+                        state.metadataFailures.fetch_add(1);
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(FAULT_TRAFFIC_INTERVAL_MS));
+                }
+            });
+        }
+    }
+}
+
+void CoordinatorBackendFaultIsolationTest::StartKillRecoveryTraffic(
+    const FaultClients &clients, const std::string &caseName, bool enableLocalCache,
+    const std::chrono::steady_clock::time_point &measureStartAt, FaultTrafficState &state, std::thread &setThread,
+    std::thread &getThread)
+{
+    setThread = std::thread([&] {
+        RandomData randomData(FAULT_RANDOM_KEY_SEED);
+        state.setResult = MeasureUntilConsecutiveSuccess(measureStartAt, [&](uint64_t attempt) {
+            const auto key = caseName + "_traffic_" + randomData.GetRandomString(16) + "_" + std::to_string(attempt);
+            const auto value = "traffic-value-after-kill-" + std::to_string(attempt);
+            auto rc = clients.writer->Set(key, value);
+            if (rc.IsOk()) {
+                std::lock_guard<std::mutex> lock(state.latestMutex);
+                state.latestKey = key;
+                state.latestValue = value;
+            }
+            return rc;
+        });
+    });
+    getThread = std::thread([&] {
+        state.getResult = MeasureUntilConsecutiveSuccess(measureStartAt, [&](uint64_t) {
+            std::string key;
+            std::string expected;
+            {
+                std::lock_guard<std::mutex> lock(state.latestMutex);
+                key = state.latestKey;
+                expected = state.latestValue;
+            }
+            if (key.empty()) {
+                return Status(K_TRY_AGAIN, "No successful write after worker failure yet");
+            }
+            std::string actual;
+            auto rc = (enableLocalCache ? clients.writer : clients.reader)->Get(key, actual);
+            RETURN_IF_NOT_OK(rc);
+            CHECK_FAIL_RETURN_STATUS(actual == expected, K_RUNTIME_ERROR,
+                                     FormatString("Unexpected value for %s, expected %s, actual %s",
+                                                  key, expected, actual));
+            return Status::OK();
+        });
+    });
+}
+
+void CoordinatorBackendFaultIsolationTest::StopAndJoinFaultTraffic(FaultTrafficState &state, std::thread &setThread,
+                                                                   std::thread &getThread)
+{
+    state.stopTraffic.store(true);
+    setThread.join();
+    getThread.join();
+    for (auto &thread : state.metadataTraffic) {
+        thread.join();
+    }
+}
+
+void CoordinatorBackendFaultIsolationTest::LogKillWorkerResults(const std::string &caseName,
+                                                               const std::string &targetMetaKey,
+                                                               const FaultTrafficState &state,
+                                                               const Status &isolationRc, int64_t isolationMs,
+                                                               int64_t waitIsolationMs, int64_t totalMs)
+{
+    LOG(INFO) << "FAULT_ISOLATION_MEASURE phase=" << caseName << "_kill_set recovered=" << state.setResult.recovered
+              << " elapsed_ms=" << state.setResult.elapsedMs << " attempts=" << state.setResult.attempts
+              << " failures=" << state.setResult.failures << " last_failure_ms=" << state.setResult.lastFailureElapsedMs
+              << " no_more_fail_after_ms=" << state.setResult.noMoreFailAfterMs
+              << " last_status=" << state.setResult.lastStatus;
+    LOG(INFO) << "FAULT_ISOLATION_MEASURE phase=" << caseName << "_kill_metadata_traffic attempts="
+              << state.metadataAttempts.load() << " failures=" << state.metadataFailures.load()
+              << " target_key=" << targetMetaKey;
+    LOG(INFO) << "FAULT_ISOLATION_MEASURE phase=" << caseName << "_kill_get recovered=" << state.getResult.recovered
+              << " elapsed_ms=" << state.getResult.elapsedMs << " attempts=" << state.getResult.attempts
+              << " failures=" << state.getResult.failures << " last_failure_ms=" << state.getResult.lastFailureElapsedMs
+              << " no_more_fail_after_ms=" << state.getResult.noMoreFailAfterMs
+              << " last_status=" << state.getResult.lastStatus;
+    LOG(INFO) << "FAULT_ISOLATION_MEASURE phase=" << caseName << "_kill_isolation elapsed_ms=" << isolationMs
+              << " wait_after_traffic_ms=" << waitIsolationMs << " total_since_kill_start_ms=" << totalMs
+              << " rc=" << isolationRc;
+}
+
+void CoordinatorBackendFaultIsolationTest::WarmupBlinkTraffic(const FaultClients &clients, uint32_t workerIndex,
+                                                             const std::string &caseName, bool enableLocalCache,
+                                                             std::string &latestKey, std::string &latestValue)
+{
+    RandomData randomData(FAULT_RANDOM_KEY_SEED + (enableLocalCache ? 1 : 2));
+    latestKey = caseName + "_blink_warmup_" + randomData.GetRandomString(16);
+    latestValue = FAULT_META_VALUE;
+    DS_ASSERT_OK(clients.writer->Set(latestKey, latestValue));
+    std::string warmupValue;
+    if (!enableLocalCache) {
+        DS_ASSERT_OK(clients.reader->Get(latestKey, warmupValue));
+        ASSERT_EQ(warmupValue, latestValue);
+    }
+
+    std::string targetMetaKey;
+    DS_ASSERT_OK(FindRouteKeyToWorker(workerIndex, caseName + "_blink_target_meta_", targetMetaKey));
+    DS_ASSERT_OK(clients.writer->Set(targetMetaKey, FAULT_META_VALUE));
+    if (!enableLocalCache) {
+        DS_ASSERT_OK(clients.metadataReporter->Get(targetMetaKey, warmupValue));
+        ASSERT_EQ(warmupValue, FAULT_META_VALUE);
+    }
+}
+
+uint64_t CoordinatorBackendFaultIsolationTest::InjectKeepaliveBlink(uint32_t workerIndex)
+{
+    uint64_t injectCountBefore = 0;
+    DS_EXPECT_OK(cluster_->GetInjectActionExecuteCount(ClusterNodeType::WORKER, workerIndex,
+                                                       COORDINATOR_KEEPALIVE_INJECT_NAME, injectCountBefore));
+    DS_EXPECT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, workerIndex, COORDINATOR_KEEPALIVE_INJECT_NAME,
+                                           "100*return(K_RPC_UNAVAILABLE)"));
+    bool keepAliveFailureInjected = true;
+    Raii clearKeepAliveFailure([this, &keepAliveFailureInjected, workerIndex] {
+        if (keepAliveFailureInjected) {
+            (void)cluster_->ClearInjectAction(ClusterNodeType::WORKER, workerIndex, COORDINATOR_KEEPALIVE_INJECT_NAME);
+        }
+    });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(FAULT_BLINK_MAX_DURATION_MS);
+    uint64_t injectCountAfter = injectCountBefore;
+    while (std::chrono::steady_clock::now() < deadline
+           && injectCountAfter - injectCountBefore < FAULT_BLINK_KEEPALIVE_FAILURES) {
+        DS_EXPECT_OK(cluster_->GetInjectActionExecuteCount(ClusterNodeType::WORKER, workerIndex,
+                                                           COORDINATOR_KEEPALIVE_INJECT_NAME, injectCountAfter));
+        std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+    }
+    DS_EXPECT_OK(cluster_->GetInjectActionExecuteCount(ClusterNodeType::WORKER, workerIndex,
+                                                       COORDINATOR_KEEPALIVE_INJECT_NAME, injectCountAfter));
+    DS_EXPECT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, workerIndex, COORDINATOR_KEEPALIVE_INJECT_NAME));
+    keepAliveFailureInjected = false;
+    return injectCountAfter - injectCountBefore;
+}
+
+CoordinatorBackendFaultIsolationTest::TimedRecoveryResult CoordinatorBackendFaultIsolationTest::VerifyBlinkSetRecovery(
+    const FaultClients &clients, const std::string &caseName, int round, std::string &latestKey,
+    std::string &latestValue)
+{
+    RandomData randomData(FAULT_RANDOM_KEY_SEED + round);
+    const auto resumeAt = std::chrono::steady_clock::now();
+    return MeasureUntilConsecutiveSuccess(resumeAt, [&](uint64_t attempt) {
+        latestKey = caseName + "_blink_after_resume_" + std::to_string(round) + "_" + randomData.GetRandomString(16)
+                    + "_" + std::to_string(attempt);
+        latestValue = "resume-value-" + std::to_string(round) + "_" + std::to_string(attempt);
+        return clients.writer->Set(latestKey, latestValue);
+    }, FAULT_BLINK_RECOVERY_TIMEOUT_MS);
+}
+
+void CoordinatorBackendFaultIsolationTest::RunKillWorkerSetGetRecoverWithinTarget(bool enableLocalCache)
+{
+    constexpr uint32_t failedWorkerIndex = 1;
+    auto clients = InitFaultClients(enableLocalCache);
+    const auto caseName = std::string(enableLocalCache ? "local_cache_true" : "local_cache_false");
+
+    std::string targetMetaKey;
+    WarmupTargetMetadata(clients, failedWorkerIndex, caseName, enableLocalCache, targetMetaKey);
+    std::vector<std::string> reportKeys;
+    PrepareFailureReportKeys(failedWorkerIndex, caseName, reportKeys);
+
+    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    ASSERT_NE(externalCluster, nullptr);
+    const auto killStartAt = std::chrono::steady_clock::now();
+    DS_ASSERT_OK(externalCluster->KillWorker(failedWorkerIndex));
+    const auto trafficStartAt = std::chrono::steady_clock::now();
+    const auto killWorkerMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        trafficStartAt - killStartAt).count();
+    LOG(INFO) << "FAULT_ISOLATION_MEASURE phase=" << caseName << "_kill_worker elapsed_ms=" << killWorkerMs;
+
+    FaultTrafficState state;
+    std::thread setThread;
+    std::thread getThread;
+    StartMetadataFailureTraffic(clients, reportKeys, state);
+    StartKillRecoveryTraffic(clients, caseName, enableLocalCache, trafficStartAt, state, setThread, getThread);
+
+    const auto isolationStart = std::chrono::steady_clock::now();
+    auto isolationRc = WaitWorkerNotInCluster(failedWorkerIndex, WAIT_SCALE_TIMEOUT_SEC);
+    const auto isolationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - trafficStartAt).count();
+    const auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - killStartAt).count();
+    const auto waitIsolationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - isolationStart).count();
+    StopAndJoinFaultTraffic(state, setThread, getThread);
+    LogKillWorkerResults(caseName, targetMetaKey, state, isolationRc, isolationMs, waitIsolationMs, totalMs);
+
+    ASSERT_TRUE(isolationRc.IsOk()) << isolationRc;
+    ASSERT_TRUE(state.setResult.recovered) << state.setResult.lastStatus;
+    EXPECT_LE(state.setResult.elapsedMs, FAULT_ACCESS_RECOVERY_EXPECT_MS);
+    ASSERT_TRUE(state.getResult.recovered);
+    EXPECT_LE(state.getResult.elapsedMs, FAULT_ACCESS_RECOVERY_EXPECT_MS);
+    EXPECT_LE(isolationMs, FAULT_ISOLATION_EXPECT_MS);
+}
+
+void CoordinatorBackendFaultIsolationTest::RunBlinkWorkerDoesNotIsolate(bool enableLocalCache)
+{
+    constexpr uint32_t blinkWorkerIndex = 1;
+    auto clients = InitFaultClients(enableLocalCache);
+    const auto caseName = std::string(enableLocalCache ? "local_cache_true" : "local_cache_false");
+    std::string latestKey;
+    std::string latestValue;
+    WarmupBlinkTraffic(clients, blinkWorkerIndex, caseName, enableLocalCache, latestKey, latestValue);
+
+    for (int round = 0; round < FAULT_BLINK_REPEAT; ++round) {
+        const auto keepaliveFailures = InjectKeepaliveBlink(blinkWorkerIndex);
+        EXPECT_GE(keepaliveFailures, FAULT_BLINK_KEEPALIVE_FAILURES);
+        ASSERT_TRUE(WaitWorkerInCluster(blinkWorkerIndex, FAULT_BLINK_TOPOLOGY_TIMEOUT_SEC).IsOk());
+        auto setResult = VerifyBlinkSetRecovery(clients, caseName, round, latestKey, latestValue);
+
+        LOG(INFO) << "FAULT_ISOLATION_MEASURE phase=" << caseName << "_blink round=" << round
+                  << " keepalive_failures=" << keepaliveFailures << " set_recovered=" << setResult.recovered
+                  << " set_elapsed_ms=" << setResult.elapsedMs
+                  << " set_last_failure_ms=" << setResult.lastFailureElapsedMs
+                  << " set_no_more_fail_after_ms=" << setResult.noMoreFailAfterMs
+                  << " last_status=" << setResult.lastStatus;
+
+        ASSERT_TRUE(setResult.recovered) << setResult.lastStatus;
+        ASSERT_TRUE(WaitWorkerInCluster(blinkWorkerIndex, FAULT_BLINK_TOPOLOGY_TIMEOUT_SEC).IsOk());
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(FAULT_NODE_TIMEOUT_SEC + 1));
+    ASSERT_TRUE(WaitWorkerInCluster(blinkWorkerIndex, FAULT_BLINK_TOPOLOGY_TIMEOUT_SEC).IsOk());
+}
+
+TEST_F(CoordinatorBackendFaultIsolationTest, DISABLED_LEVEL1_LocalCacheFalseKillWorkerSetGetRecoverWithinTarget)
+{
+    RunKillWorkerSetGetRecoverWithinTarget(false);
+}
+
+TEST_F(CoordinatorBackendFaultIsolationTest, DISABLED_LEVEL1_LocalCacheTrueKillWorkerSetGetRecoverWithinTarget)
+{
+    RunKillWorkerSetGetRecoverWithinTarget(true);
+}
+
+TEST_F(CoordinatorBackendFaultIsolationTest, DISABLED_LEVEL1_LocalCacheFalseFiveKeepaliveBlinkDoesNotIsolate)
+{
+    RunBlinkWorkerDoesNotIsolate(false);
+}
+
+TEST_F(CoordinatorBackendFaultIsolationTest, DISABLED_LEVEL1_LocalCacheTrueFiveKeepaliveBlinkDoesNotIsolate)
+{
+    RunBlinkWorkerDoesNotIsolate(true);
 }
 
 TEST_F(CoordinatorBackendRaftClusterTest, ThreeCoordinatorsElectLeaderAndWorkersJoin)

@@ -316,6 +316,8 @@ public:
     Status PutWithMembershipLease(const std::string &tableName, const std::string &key, const std::string &value);
     Status GetMembershipSidecar(const std::string &tableName,
                                 std::vector<std::pair<std::string, std::string>> &records) const;
+    void RecordPeerRpcFailure(const HostPort &target);
+    void RecordPeerRpcSuccess(const HostPort &target);
 
     /**
      * @brief Read membership host identifiers for the existing routing response.
@@ -431,6 +433,9 @@ private:
     void InitializeCoordinatorComponents();
 
     Status RestoreReadyAfterLocalRecovery();
+    Status PublishMissingLocalMemberEvidence();
+    void PublishFoundLocalMemberEvidence(const TopologySnapshot &snapshot, const Member &local);
+    bool RequireMembershipRejoinOnce(const char *reason);
 
     /**
      * @brief Route one Coordinator watch event to its unique role backend.
@@ -510,6 +515,7 @@ private:
      * @return Read, validation, publish, or evidence status.
      */
     Status ReloadTopology(bool fullRebuildAllowed);
+    void RestoreReadyAfterCoordinatorTopologyReload(const TopologySnapshot &snapshot) noexcept;
 
     /**
      * @brief Exact-read topology and the local notify, then admit referenced tasks.
@@ -533,6 +539,7 @@ private:
     Status PublishBackendEvidence(const TopologySnapshot &snapshot);
 
     void LogAndNotifyPublishedSnapshot(std::shared_ptr<const TopologySnapshot> published);
+    Status ScheduleMembershipRejoin(const char *reason);
 
     /**
      * @brief Dispatch one queued event on the Worker state thread.

@@ -1747,15 +1747,18 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destM
         workerMasterApiManager_->GetWorkerMasterApi(destMasterHostPort);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Get masterApi failed, cannot queryMeta");
     std::function<Status(QueryMetaReqPb &, QueryMetaRspPb &, std::vector<RpcMessage> &)> func =
-        [&workerMasterApi, &subTimeout](QueryMetaReqPb &req, QueryMetaRspPb &rsp, std::vector<RpcMessage> &payloads) {
+        [this, &workerMasterApi, &subTimeout](QueryMetaReqPb &req, QueryMetaRspPb &rsp,
+                                              std::vector<RpcMessage> &payloads) {
             Status s = workerMasterApi->QueryMeta(req, subTimeout, rsp, payloads);
+            ObserveMetadataRpc(workerMasterApi, s);
             if (s.IsError()) {
                 payloads.clear();
             }
             return s;
-        };
+    };
     std::vector<RpcMessage> tmpPayloads;
-    RETURN_IF_NOT_OK(RedirectRetryWhenMetasMoving(req, rsp, tmpPayloads, func));
+    auto queryStatus = RedirectRetryWhenMetasMoving(req, rsp, tmpPayloads, func);
+    RETURN_IF_NOT_OK(queryStatus);
     RETURN_IF_NOT_OK(CorrectQueryMetaResponse(tmpPayloads, rsp, payloads));
     RETURN_IF_NOT_OK(QueryMetadataFromRedirectMaster(rsp, subTimeout, payloads));
     return Status::OK();
@@ -1955,8 +1958,10 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMeta
             workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
         CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "hash master get failed, QueryMetadataFromMaster failed");
-        RETURN_IF_NOT_OK(
-            redirectWorkerMasterApi->QueryMeta(redirectQueryReq, subTimeout, redirectQueryRsp, redirectPayloads));
+        auto queryStatus =
+            redirectWorkerMasterApi->QueryMeta(redirectQueryReq, subTimeout, redirectQueryRsp, redirectPayloads);
+        ObserveMetadataRpc(redirectWorkerMasterApi, queryStatus);
+        RETURN_IF_NOT_OK(queryStatus);
         // save the result to rsp and payload
         RETURN_IF_NOT_OK(CorrectQueryMetaResponse(redirectPayloads, redirectQueryRsp, payloads));
         std::copy(redirectQueryRsp.mutable_query_metas()->begin(), redirectQueryRsp.mutable_query_metas()->end(),
@@ -2881,6 +2886,7 @@ Status WorkerOcServiceGetImpl::QueryObjectLocationsFromRedirectMaster(
                                                redirectInfo.change_meta_ids().end() };
         redirectReq.set_redirect(false);
         rc = redirectWorkerMasterApi->GetObjectLocations(redirectReq, redirectRsp);
+        ObserveMetadataRpc(redirectWorkerMasterApi, rc);
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("Query locations from redirect master %s failed: %s",
                                        redirectMasterAddr.ToString(), rc.ToString());
@@ -2909,8 +2915,10 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
         CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "hash master get failed, GetObjMetaInfo failed");
         std::function<Status(master::GetObjectLocationsReqPb &, master::GetObjectLocationsRspPb &)> func =
-            [&workerMasterApi](master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &rsp) {
-                return workerMasterApi->GetObjectLocations(req, rsp);
+            [this, &workerMasterApi](master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &rsp) {
+                auto status = workerMasterApi->GetObjectLocations(req, rsp);
+                ObserveMetadataRpc(workerMasterApi, status);
+                return status;
             };
         auto status = RedirectRetryWhenMetasMoving(masterReq, masterRsp, func);
         if (status.IsError()) {

@@ -109,6 +109,13 @@ struct TopologyControllerOptions {
     std::function<Status(uint64_t, const std::function<Status()> &)> collectiveReplacementFence;
 
     /**
+     * @brief Host-supplied active failure candidates from multi-worker failure summaries.
+     */
+    std::function<std::vector<MemberIdentity>(const TopologySnapshot &, const std::vector<MembershipRecord> &,
+                                              std::chrono::steady_clock::time_point)>
+        activeFailureCandidateProvider;
+
+    /**
      * @brief Semantic policy clock; production uses steady time and tests may inject virtual time.
      */
     std::function<std::chrono::steady_clock::time_point()> now{ [] { return std::chrono::steady_clock::now(); } };
@@ -325,7 +332,16 @@ private:
 
     Status RefreshTaskProgressCache(const ActiveBatch &batch, const ExpectedDerivedState &expected);
 
-    Status CommitBatchFinal(const TopologySnapshot &latest);
+    /**
+     * @brief Collect participants of the active topology batch for admission, quarantine and final cleanup.
+     */
+    std::vector<MemberIdentity> CollectBatchParticipants(const TopologySnapshot &latest,
+                                                         TopologyChangeType type) const;
+
+    void RememberQuarantinedReadyMembers(const std::vector<MemberIdentity> &participants,
+                                         const std::vector<MembershipRecord> &memberships);
+
+    Status CommitBatchFinal(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
     Status CommitScaleOutExhaustion(const TopologySnapshot &latest, const std::vector<MemberIdentity> &failedJoining,
                                     const std::vector<MembershipRecord> &memberships);

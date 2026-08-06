@@ -342,6 +342,40 @@ TEST_F(HashRingRefresherTest, TestUnchangedResponseKeepsCurrentRing)
     EXPECT_EQ(selected.ToString(), "127.0.0.1:1000");
 }
 
+TEST_F(HashRingRefresherTest, TestForcedRefreshRetriesUntilRingChanges)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::mutex mutex;
+    std::condition_variable cv;
+    int fetchCount = 0;
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                     uint64_t &newVersion, bool &changed,
+                     std::unordered_map<std::string, std::string> &hostIdMap) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++fetchCount;
+        changed = fetchCount == 1 || fetchCount >= 5;
+        newVersion = changed && fetchCount >= 5 ? 2 : 1;
+        FillRing(ring, hostIdMap, newVersion == 2 ? "127.0.0.1:2000" : "127.0.0.1:1000");
+        cv.notify_all();
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+
+    refresher.ForceRefresh();
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(6), [&] { return fetchCount >= 5; }));
+    }
+    refresher.Stop();
+
+    HostPort selected;
+    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    EXPECT_EQ(selected.ToString(), "127.0.0.1:2000");
+}
+
 TEST_F(HashRingRefresherTest, TestAllWorkersUnreachableKeepsCurrentRing)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");

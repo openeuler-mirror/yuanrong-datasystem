@@ -97,8 +97,8 @@ public:
         return Unused("CancelWatch");
     }
 
-    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *, const std::string &,
-                     int64_t) override
+    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *, const std::string &, int64_t,
+                     const std::vector<std::string> & = {}) override
     {
         return Unused("KeepAlive");
     }

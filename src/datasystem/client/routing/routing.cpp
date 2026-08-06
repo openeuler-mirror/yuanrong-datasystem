@@ -171,6 +171,9 @@ void Routing::UpdateState(const HostPort &addr, StatusCode status)
 {
     if (initialized_.load()) {
         router_->UpdateState(addr, status);
+        if (status == K_CLIENT_WORKER_DISCONNECT && refresher_ != nullptr) {
+            refresher_->ForceRefresh();
+        }
     }
 }
 

@@ -87,5 +87,10 @@ void BrokenFilter::OnWorkerStateChange(const HostPort &addr, StatusCode status)
     }
 }
 
+void BrokenFilter::OnHashRingUpdated(const ::datasystem::ClusterTopologyPb &)
+{
+    std::atomic_store(&healthMap_, std::shared_ptr<const HealthMap>(std::make_shared<HealthMap>()));
+}
+
 }  // namespace client
 }  // namespace datasystem

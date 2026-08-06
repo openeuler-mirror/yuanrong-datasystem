@@ -50,11 +50,13 @@ bool AddAddress(const std::string &value, std::unordered_set<std::string> &seen,
 }  // namespace
 
 CoordinatorLeaderRouter::CoordinatorLeaderRouter(std::shared_ptr<ICoordinatorDiscovery> discovery,
-                                                 std::vector<HostPort> initialCandidates, ClockFn clock, WaitFn wait)
+                                                 std::vector<HostPort> initialCandidates, ClockFn clock, WaitFn wait,
+                                                 std::chrono::milliseconds totalTimeout)
     : discovery_(std::move(discovery)),
       candidates_(std::move(initialCandidates)),
       clock_(std::move(clock)),
-      wait_(std::move(wait))
+      wait_(std::move(wait)),
+      totalTimeout_(totalTimeout)
 {
     if (clock_ == nullptr) {
         clock_ = [] { return std::chrono::steady_clock::now(); };
@@ -62,19 +64,18 @@ CoordinatorLeaderRouter::CoordinatorLeaderRouter(std::shared_ptr<ICoordinatorDis
     if (wait_ == nullptr) {
         wait_ = [](std::chrono::milliseconds duration) { std::this_thread::sleep_for(duration); };
     }
+    if (totalTimeout_ <= std::chrono::milliseconds::zero()) {
+        totalTimeout_ = std::chrono::milliseconds(ROUTER_TOTAL_TIMEOUT_MS);
+    }
 }
 
 Status CoordinatorLeaderRouter::Execute(const AttemptFn &attempt, bool recoveryControl)
 {
     CHECK_FAIL_RETURN_STATUS(attempt != nullptr, K_INVALID, "Coordinator route attempt is null");
-    const auto deadline = clock_() + std::chrono::milliseconds(ROUTER_TOTAL_TIMEOUT_MS);
+    const auto deadline = clock_() + totalTimeout_;
     std::vector<HostPort> candidates;
     CoordinatorLeaderIdentity cached;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        cached = leader_;
-        candidates = candidates_;
-    }
+    LoadCandidateSnapshot(cached, candidates);
     std::unordered_set<std::string> attempted;
     Status lastStatus(K_NOT_READY, "no serving Coordinator leader");
     bool refreshImmediately = true;
@@ -85,7 +86,8 @@ Status CoordinatorLeaderRouter::Execute(const AttemptFn &attempt, bool recoveryC
         if (result == CandidateRoundResult::SUCCEEDED) {
             return Status::OK();
         }
-        if (result == CandidateRoundResult::DEADLINE_EXCEEDED || clock_() >= deadline) {
+        if (result == CandidateRoundResult::DEADLINE_EXCEEDED || result == CandidateRoundResult::TERMINAL
+            || clock_() >= deadline) {
             return lastStatus;
         }
         if (!refreshImmediately && !WaitBeforeRefresh(retryCount++, deadline)) {
@@ -94,9 +96,7 @@ Status CoordinatorLeaderRouter::Execute(const AttemptFn &attempt, bool recoveryC
         bool expected = false;
         if (!refreshInFlight_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
             refreshImmediately = false;
-            std::lock_guard<std::mutex> lock(mutex_);
-            candidates = candidates_;
-            cached = leader_;
+            LoadCandidateSnapshot(cached, candidates);
             continue;
         }
         struct RefreshGuard {
@@ -116,6 +116,14 @@ Status CoordinatorLeaderRouter::Execute(const AttemptFn &attempt, bool recoveryC
         refreshImmediately = false;
     }
     return Status(K_RPC_DEADLINE_EXCEEDED, "Coordinator routing deadline exceeded");
+}
+
+void CoordinatorLeaderRouter::LoadCandidateSnapshot(CoordinatorLeaderIdentity &cached,
+                                                    std::vector<HostPort> &candidates) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    cached = leader_;
+    candidates = candidates_;
 }
 
 bool CoordinatorLeaderRouter::WaitBeforeRefresh(size_t retryCount, std::chrono::steady_clock::time_point deadline)
@@ -164,6 +172,11 @@ CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandid
                 return CandidateRoundResult::SUCCEEDED;
             }
             InsertRedirectCandidate(header, index + 1, attempted, batch);
+            if (currentTerm && status.IsOk() && header.serving_state() == coordinator::ResponseHeader::LEADER_RECOVERING
+                && !recoveryControl) {
+                lastStatus = Status(K_NOT_READY, "Coordinator leader is recovering");
+                return CandidateRoundResult::TERMINAL;
+            }
         }
         lastStatus = status.IsOk() ? Status(K_NOT_READY, "Coordinator is not serving business RPCs") : status;
     }
