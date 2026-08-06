@@ -1,14 +1,15 @@
 ---
 name: ds-create-pr
-description: Create GitCode Pull Requests for openeuler/yuanrong-datasystem or other GitCode repositories by calling the GitCode OpenAPI. Use when the user asks to create, submit, or open a PR for a pushed branch, especially after preparing docs or code commits that must target doc_pages, master, or another GitCode branch. For openeuler/yuanrong-datasystem, the PR body must follow .gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md.
+description: Use when the user asks to create, submit, or open a GitCode Pull Request for a committed source branch in openeuler/yuanrong-datasystem or another GitCode repository, including changes targeting doc_pages, master, or another base branch.
 ---
 
 # GitCode Create PR
 
 ## Workflow
 
-1. Confirm the source branch is committed and pushed to GitCode.
-   For `openeuler/yuanrong-datasystem`, push the source branch only to your fork or another non-upstream remote. Do not push local branches to `git@gitcode.com:openeuler/yuanrong-datasystem.git` or `https://gitcode.com/openeuler/yuanrong-datasystem.git`.
+1. Confirm the source branch is committed and the worktree is clean. Do not push it yet. Fetch the latest target branch,
+   identify its local or remote-tracking ref for `--base-ref`, and select a fork remote for `--push-remote`. For
+   `openeuler/yuanrong-datasystem`, never select the upstream repository as the push remote.
 2. Read `references/create-pull-request-api.md` when parameter details are needed.
 3. Get the token from `GITCODE_TOKEN`, `GITCODE_ACCESS_TOKEN`, or `~/.local/gitcode_token`. Never print the token.
    Empty or whitespace-only token values are treated as configuration errors and will produce a clear prompt telling the caller what to fix.
@@ -50,13 +51,26 @@ description: Create GitCode Pull Requests for openeuler/yuanrong-datasystem or o
      --owner openeuler \
      --repo yuanrong-datasystem \
      --base doc_pages \
-     --head <source-branch> \
+     --base-ref <upstream-remote>/doc_pages \
+     --head <fork-owner>:<source-branch> \
+     --push-remote <fork-remote> \
+     --local-squash-message "docs: refresh zh-cn latest pages" \
      --title "docs: refresh zh-cn latest pages" \
      --body-file /tmp/pr-body.md
    ```
 
-7. Keep `--check-conflicts` enabled. If the script reports `CONFLICT_STATUS=conflict`, tell the caller to refresh from the latest upstream `doc_pages` and regenerate the docs refresh commit before opening a new PR.
-8. Report the returned `html_url`, `web_url`, or `url` to the user.
+7. Before calling GitCode, the bundled script counts commits in `merge-base(--base-ref, HEAD)..HEAD`. It rejects zero
+   commits; pushes one commit unchanged; and, for multiple commits, creates a `codex/pre-squash-*` recovery ref, creates
+   one Conventional Commit with `--local-squash-message`, and updates an existing fork branch only with an explicit
+   `--force-with-lease`. Continue only when it reports `SOURCE_COMMIT_COUNT_AFTER=1` and `SOURCE_PUSH_STATUS=verified`.
+8. After GitCode creates the PR, post `/retest` as a general PR comment unless either the target `--base` is
+   `doc_pages`, or every changed path is under `.repo_context/` or `docs/`. The bundled script evaluates paths with
+   rename detection disabled so both sides of a rename remain visible. It reports `RETEST_COMMENT_STATUS=skipped` and
+   `RETEST_SKIP_REASON=base_is_doc_pages|docs_or_repo_context_only` for an allowed skip; otherwise it posts the comment
+   and reports `RETEST_COMMENT_STATUS=posted`. If a required comment fails, the PR already exists: do not rerun PR
+   creation or create a duplicate PR; post `/retest` to the returned PR URL instead.
+9. Keep `--check-conflicts` enabled. If the script reports `CONFLICT_STATUS=conflict`, tell the caller to refresh from the latest upstream `doc_pages` and regenerate the docs refresh commit before opening a new PR.
+10. Report the source commit count, push status, returned PR URL, retest comment status, and conflict status to the user.
 
 ## Defaults For This Repository
 
@@ -64,6 +78,10 @@ description: Create GitCode Pull Requests for openeuler/yuanrong-datasystem or o
 - Repository: `yuanrong-datasystem`
 - API base URL: `https://api.gitcode.com/api/v5`
 - PR endpoint: `POST /repos/{owner}/{repo}/pulls`
+- Retest comment endpoints: first `POST /repos/{owner}/{repo}/issues/{number}/comments`; on an unsupported-endpoint
+  response, fall back to body-only `POST /repos/{owner}/{repo}/pulls/{number}/comments`, both with body `/retest`.
+- Retest skip policy: skip when `--base=doc_pages`, or when all changed paths are exclusively within `.repo_context/`
+  and `docs/`; any path outside those directories requires `/retest`.
 - Token transport: `access_token` query parameter.
 - PR body template for this repository: `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md`
 
@@ -72,8 +90,17 @@ For online documentation refreshes, use base branch `doc_pages` and the pushed d
 ## Safety
 
 - Do not push local branches to the upstream `openeuler/yuanrong-datasystem` repository when preparing the PR source branch. Push to a fork or another non-upstream remote instead.
-- Do not create a PR until the source branch exists on the remote.
+- Use an up-to-date `--base-ref` that is either identical to `--base` or ends with the complete `--base` branch name;
+  do not count or squash against a stale or different target branch.
+- Require a clean worktree, an attached source branch matching `--head`, and at least one source commit before rewriting or pushing history.
+- When multiple source commits exist, preserve the original HEAD under the reported `codex/pre-squash-*` backup ref and use only the script's explicit `--force-with-lease`; never use plain `--force`.
+- Do not create a PR until the script verifies exactly one source commit and confirms the pushed remote branch matches local HEAD.
 - Check the created PR for conflicts before declaring the workflow complete.
+- Do not declare the workflow complete unless the script reports `RETEST_COMMENT_STATUS=posted`, or reports
+  `RETEST_COMMENT_STATUS=skipped` with one of the two documented `RETEST_SKIP_REASON` values.
+- If a required `/retest` fails after PR creation, preserve and report the existing PR URL; do not create a duplicate PR.
 - Do not include sensitive or personal information in command output, PR body, commit messages, or logs. This includes server IPs or ports, local absolute paths, account names, passwords, tokens, SSH/private keys, AK/SK, and similar non-public details.
-- The bundled script rejects common sensitive patterns in PR title, PR body, and `--squash-commit-message`; still inspect regular commit messages separately because they may not be passed to the script.
+- The bundled script rejects common sensitive patterns in the PR title, PR body, `--squash-commit-message`, and any
+  required `--local-squash-message`; still inspect an unchanged single source commit separately because its message is
+  not passed to the script.
 - If the API fails, preserve the HTTP status and response body summary, but redact token-like values.

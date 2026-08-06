@@ -53,9 +53,46 @@ The bundled `create_pr.py` helper validates that required template sections are 
 Also, do not push local source branches to the upstream `openeuler/yuanrong-datasystem` repository. Push the branch to
 your fork or another non-upstream remote first, then open the PR against the upstream target branch.
 
+## Source Branch Preparation
+
+Before creating the PR, compare the current source branch with the merge-base of the up-to-date target `--base-ref`:
+
+- zero commits: stop because there is nothing to merge;
+- one commit: preserve it and push normally;
+- multiple commits: preserve the original HEAD under `codex/pre-squash-*`, create one Conventional Commit with the
+  same final tree and the merge-base as its parent, then update an existing fork branch with an explicit
+  `--force-with-lease` bound to the observed remote object ID.
+
+Require a clean worktree, an attached branch matching the PR `head`, a base ref matching the PR `base`, and a non-upstream
+push remote. Verify the remote branch resolves to local HEAD before calling the PR API.
+
 ## Expected Response
 
 Successful responses include PR identifiers and URLs such as `number`, `html_url`, `web_url`, or API `url`. Prefer reporting the browser URL (`html_url` or `web_url`) when available.
+
+## Trigger The Required Gate
+
+Skip `/retest` only when either condition is true:
+
+- the PR target branch is `doc_pages`;
+- every changed path is under `.repo_context/` or `docs/`.
+
+Compute the changed paths from the same merge-base range used for commit normalization. Disable rename detection so a
+rename from source code into a documentation directory still includes the source path and therefore still requires the
+gate. Report the machine-readable skip reason as `base_is_doc_pages` or `docs_or_repo_context_only`.
+
+For all other PRs, post the required comment after successful PR creation.
+
+After a successful PR creation response provides the PR number, create a general PR comment through the issue-comment
+endpoint used by GitCode PR timelines:
+
+`POST https://api.gitcode.com/api/v5/repos/{owner}/{repo}/issues/{number}/comments?access_token=<token>`
+
+Set the comment body to exactly `/retest`. If the deployment returns HTTP 404, 405, or 422 because it does not expose
+the issue-comment endpoint for PRs, retry once with a body-only request to
+`POST /repos/{owner}/{repo}/pulls/{number}/comments`. Do not retry ambiguous network failures because the first request
+may already have created the comment. Treat failure of the supported endpoint as partial success: the PR already exists,
+so report its URL and post `/retest` to that PR instead of rerunning PR creation.
 
 ## Conflict Detection
 

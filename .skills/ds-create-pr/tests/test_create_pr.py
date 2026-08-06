@@ -1,9 +1,11 @@
 import argparse
 import importlib.util
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "create_pr.py"
@@ -174,6 +176,273 @@ class SensitiveContentValidationTest(unittest.TestCase):
         self.assertIn("PR title", message)
         self.assertIn("squash commit message", message)
         self.assertNotIn("abc123", message)
+
+
+class RetestCommentTest(unittest.TestCase):
+    @mock.patch.object(MODULE, "build_payload", return_value={"title": "test"})
+    @mock.patch.object(MODULE, "load_token", return_value="test-token")
+    @mock.patch.object(MODULE, "request_json")
+    def test_create_pr_posts_retest_comment_after_creation(
+        self,
+        request_json: mock.Mock,
+        _load_token: mock.Mock,
+        _build_payload: mock.Mock,
+    ) -> None:
+        request_json.side_effect = [
+            {"number": 42, "html_url": "https://gitcode.com/example/repo/pull/42"},
+            {"id": 7, "body": "/retest"},
+        ]
+        args = argparse.Namespace(
+            owner="example",
+            repo="repo",
+            api_base="https://api.gitcode.com/api/v5",
+            token=None,
+            token_file=None,
+            timeout=30,
+            check_conflicts=False,
+        )
+
+        MODULE.create_pr(args)
+
+        self.assertEqual(request_json.call_count, 2)
+        request_json.assert_any_call(
+            "POST",
+            "https://api.gitcode.com/api/v5/repos/example/repo/issues/42/comments?access_token=test-token",
+            {"body": "/retest"},
+            30,
+        )
+
+    @mock.patch.object(MODULE, "request_json")
+    def test_retest_comment_falls_back_to_pull_comment_endpoint_on_404(
+        self,
+        request_json: mock.Mock,
+    ) -> None:
+        request_json.side_effect = [
+            SystemExit("GitCode API failed: HTTP 404"),
+            {"id": 8, "body": "/retest"},
+        ]
+        args = argparse.Namespace(
+            owner="example",
+            repo="repo",
+            api_base="https://api.gitcode.com/api/v5",
+            timeout=30,
+        )
+
+        result = MODULE.post_retest_comment(
+            args,
+            "test-token",
+            {"number": 42, "html_url": "https://gitcode.com/example/repo/pull/42"},
+        )
+
+        self.assertEqual(result["body"], "/retest")
+        self.assertEqual(request_json.call_count, 2)
+        request_json.assert_called_with(
+            "POST",
+            "https://api.gitcode.com/api/v5/repos/example/repo/pulls/42/comments?access_token=test-token",
+            {"body": "/retest"},
+            30,
+        )
+
+    @mock.patch.object(MODULE, "build_payload", return_value={"title": "test"})
+    @mock.patch.object(MODULE, "load_token", return_value="test-token")
+    @mock.patch.object(MODULE, "request_json")
+    def test_create_pr_skips_retest_when_branch_policy_allows_it(
+        self,
+        request_json: mock.Mock,
+        _load_token: mock.Mock,
+        _build_payload: mock.Mock,
+    ) -> None:
+        request_json.return_value = {
+            "number": 42,
+            "html_url": "https://gitcode.com/example/repo/pull/42",
+        }
+        args = argparse.Namespace(
+            owner="example",
+            repo="repo",
+            api_base="https://api.gitcode.com/api/v5",
+            token=None,
+            token_file=None,
+            timeout=30,
+            check_conflicts=False,
+            skip_retest=True,
+        )
+
+        MODULE.create_pr(args)
+
+        self.assertEqual(request_json.call_count, 1)
+
+
+class RetestPolicyTest(unittest.TestCase):
+    def test_skips_retest_for_docs_and_repo_context_only_changes(self) -> None:
+        policy = getattr(MODULE, "retest_skip_reason", None)
+        self.assertIsNotNone(policy, "create_pr.py must classify documentation-only PRs")
+
+        reason = policy(
+            "master",
+            ["docs/guide.md", ".repo_context/index.md", ".repo_context/modules/overview.md"],
+        )
+
+        self.assertEqual(reason, "docs_or_repo_context_only")
+
+    def test_requires_retest_when_any_source_path_changes(self) -> None:
+        policy = getattr(MODULE, "retest_skip_reason", None)
+        self.assertIsNotNone(policy, "create_pr.py must classify mixed PRs")
+
+        reason = policy("master", ["docs/guide.md", "src/datasystem/client/client.cc"])
+
+        self.assertIsNone(reason)
+
+    def test_skips_retest_for_doc_pages_base_even_with_source_changes(self) -> None:
+        policy = getattr(MODULE, "retest_skip_reason", None)
+        self.assertIsNotNone(policy, "create_pr.py must classify doc_pages PRs")
+
+        reason = policy("doc_pages", ["src/datasystem/client/client.cc"])
+
+        self.assertEqual(reason, "base_is_doc_pages")
+
+
+class GitBranchPreparationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        root = Path(self.tempdir.name)
+        self.worktree = root / "worktree"
+        self.remote = root / "fork.git"
+        subprocess.run(["git", "init", "--bare", str(self.remote)], check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "init", "--initial-branch=master", str(self.worktree)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.git("config", "user.name", "Skill Test")
+        self.git("config", "user.email", "skill-test@example.com")
+        (self.worktree / "data.txt").write_text("base\n", encoding="utf-8")
+        self.git("add", "data.txt")
+        self.git("commit", "-m", "chore: base")
+        self.git("switch", "-c", "feature")
+        self.git("remote", "add", "fork", str(self.remote))
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def git(self, *args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(self.worktree), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    def commit_change(self, content: str, message: str) -> None:
+        (self.worktree / "data.txt").write_text(content, encoding="utf-8")
+        self.git("add", "data.txt")
+        self.git("commit", "-m", message)
+
+    def prepare_args(self, *, push_remote: str = "fork", message: str | None = None) -> argparse.Namespace:
+        return argparse.Namespace(
+            owner="openeuler",
+            repo="yuanrong-datasystem",
+            head="example:feature",
+            base="master",
+            git_worktree=self.worktree,
+            base_ref="master",
+            push_remote=push_remote,
+            local_squash_message=message,
+        )
+
+    def test_squashes_multiple_commits_to_one_and_updates_existing_remote_branch(self) -> None:
+        self.commit_change("first\n", "fix: first change")
+        self.commit_change("second\n", "fix: second change")
+        old_head = self.git("rev-parse", "HEAD")
+        old_tree = self.git("rev-parse", "HEAD^{tree}")
+        self.git("push", "--set-upstream", "fork", "HEAD:refs/heads/feature")
+        prepare = getattr(MODULE, "prepare_branch_for_pr", None)
+        self.assertIsNotNone(prepare, "create_pr.py must prepare and squash the source branch")
+
+        result = prepare(self.prepare_args(message="fix: combine feature changes"))
+
+        new_head = self.git("rev-parse", "HEAD")
+        remote_head = subprocess.run(
+            ["git", "--git-dir", str(self.remote), "rev-parse", "refs/heads/feature"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        self.assertNotEqual(new_head, old_head)
+        self.assertEqual(self.git("rev-list", "--count", "master..HEAD"), "1")
+        self.assertEqual(self.git("rev-parse", "HEAD^{tree}"), old_tree)
+        self.assertEqual(remote_head, new_head)
+        self.assertEqual(self.git("rev-parse", result["backup_ref"]), old_head)
+        self.assertTrue(result["squashed"])
+        self.assertEqual(result["commit_count_before"], 2)
+        self.assertEqual(result["commit_count_after"], 1)
+
+    def test_keeps_single_commit_unchanged_and_pushes_it(self) -> None:
+        self.commit_change("single\n", "fix: single change")
+        old_head = self.git("rev-parse", "HEAD")
+        prepare = getattr(MODULE, "prepare_branch_for_pr", None)
+        self.assertIsNotNone(prepare, "create_pr.py must prepare the source branch")
+
+        result = prepare(self.prepare_args())
+
+        remote_head = subprocess.run(
+            ["git", "--git-dir", str(self.remote), "rev-parse", "refs/heads/feature"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        self.assertEqual(self.git("rev-parse", "HEAD"), old_head)
+        self.assertEqual(remote_head, old_head)
+        self.assertFalse(result["squashed"])
+        self.assertIsNone(result["backup_ref"])
+
+    def test_refuses_to_push_source_branch_to_upstream_repository(self) -> None:
+        self.commit_change("single\n", "fix: single change")
+        self.git("remote", "add", "upstream", "git@gitcode.com:openeuler/yuanrong-datasystem.git")
+        prepare = getattr(MODULE, "prepare_branch_for_pr", None)
+        self.assertIsNotNone(prepare, "create_pr.py must prepare the source branch")
+
+        with self.assertRaises(SystemExit) as exc:
+            prepare(self.prepare_args(push_remote="upstream"))
+
+        self.assertIn("upstream", str(exc.exception).lower())
+
+    def test_refuses_base_ref_that_does_not_match_pr_base_branch(self) -> None:
+        self.commit_change("single\n", "fix: single change")
+        self.git("branch", "other-base", "master")
+        args = self.prepare_args()
+        args.base_ref = "other-base"
+        prepare = getattr(MODULE, "prepare_branch_for_pr", None)
+        self.assertIsNotNone(prepare, "create_pr.py must prepare the source branch")
+
+        with self.assertRaises(SystemExit) as exc:
+            prepare(args)
+
+        self.assertIn("does not match", str(exc.exception))
+
+    def test_accepts_remote_tracking_ref_for_base_branch_with_slashes(self) -> None:
+        self.commit_change("single\n", "fix: single change")
+        self.git("branch", "release/0.9.1", "master")
+        args = self.prepare_args()
+        args.base = "release/0.9.1"
+        args.base_ref = "upstream/release/0.9.1"
+        self.git("update-ref", "refs/remotes/upstream/release/0.9.1", "release/0.9.1")
+
+        result = MODULE.prepare_branch_for_pr(args)
+
+        self.assertEqual(result["commit_count_after"], 1)
+
+    def test_rename_from_source_to_docs_still_requires_retest(self) -> None:
+        (self.worktree / "docs").mkdir()
+        self.git("mv", "data.txt", "docs/data.txt")
+        self.git("commit", "-m", "docs: move data file")
+
+        result = MODULE.prepare_branch_for_pr(self.prepare_args())
+
+        self.assertIn("changed_files", result)
+        self.assertEqual(set(result["changed_files"]), {"data.txt", "docs/data.txt"})
+        self.assertIsNone(result["retest_skip_reason"])
 
 
 if __name__ == "__main__":

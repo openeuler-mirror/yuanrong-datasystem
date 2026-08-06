@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PR_TEMPLATE_FILE = (
     REPO_ROOT / ".gitee" / "PULL_REQUEST_TEMPLATE" / "PULL_REQUEST_TEMPLATE.zh-cn.md"
 )
+RETEST_COMMENT = "/retest"
+CONVENTIONAL_COMMIT_PATTERN = re.compile(
+    r"^(?:feat|fix|docs|refactor|perf|test|build|chore)(?:\([^)]+\))?!?:\s+\S"
+)
+RETEST_SKIP_PATH_PREFIXES = (".repo_context/", "docs/")
 
 
 def redact_text(value: str) -> str:
@@ -227,6 +233,150 @@ def request_json(method: str, url: str, payload: dict[str, Any] | None, timeout:
     return json.loads(raw) if raw else {}
 
 
+def run_git(worktree: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = redact_text((exc.stderr or exc.stdout or "").strip())
+        command = " ".join(args)
+        raise SystemExit(f"Git command failed: git {command}\n{detail}".rstrip()) from exc
+    return result.stdout.strip()
+
+
+def is_upstream_repository_url(url: str, owner: str, repo: str) -> bool:
+    normalized = url.strip().rstrip("/")
+    return bool(
+        re.search(
+            rf"gitcode\.com[:/]{re.escape(owner)}/{re.escape(repo)}(?:\.git)?$",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
+
+
+def validate_local_squash_message(message: str | None) -> str:
+    normalized = (message or "").strip()
+    if not normalized:
+        raise SystemExit(
+            "Multiple source commits require --local-squash-message with one Conventional Commit message."
+        )
+    if not CONVENTIONAL_COMMIT_PATTERN.match(normalized):
+        raise SystemExit(
+            "--local-squash-message must use Conventional Commits: "
+            "type(scope): description, where type is feat/fix/docs/refactor/perf/test/build/chore."
+        )
+    if re.search(r"(?im)^Co-Authored-By:", normalized):
+        raise SystemExit("--local-squash-message must not include Co-Authored-By trailers.")
+    validate_no_sensitive_content({"local squash commit message": normalized})
+    return normalized
+
+
+def retest_skip_reason(base: str, changed_files: list[str]) -> str | None:
+    if base == "doc_pages":
+        return "base_is_doc_pages"
+    if changed_files and all(
+        path in {".repo_context", "docs"}
+        or path.startswith(RETEST_SKIP_PATH_PREFIXES)
+        for path in changed_files
+    ):
+        return "docs_or_repo_context_only"
+    return None
+
+
+def prepare_branch_for_pr(args: argparse.Namespace) -> dict[str, Any]:
+    worktree = Path(args.git_worktree).resolve()
+    if run_git(worktree, "status", "--porcelain"):
+        raise SystemExit("The source worktree must be clean before preparing and pushing a PR branch.")
+
+    branch = run_git(worktree, "branch", "--show-current")
+    if not branch:
+        raise SystemExit("Cannot prepare a PR branch from detached HEAD.")
+    remote_branch = str(args.head).rsplit(":", 1)[-1]
+    if branch != remote_branch:
+        raise SystemExit(
+            f"Current branch {branch!r} does not match the PR head branch {remote_branch!r}."
+        )
+    base_ref = str(args.base_ref).rstrip("/")
+    if base_ref != args.base and not base_ref.endswith(f"/{args.base}"):
+        raise SystemExit(
+            f"Base ref {args.base_ref!r} does not match the PR base branch {args.base!r}."
+        )
+
+    push_url = run_git(worktree, "remote", "get-url", "--push", args.push_remote)
+    if (args.owner, args.repo) == REPO_TEMPLATE_TARGET and is_upstream_repository_url(
+        push_url, args.owner, args.repo
+    ):
+        raise SystemExit(
+            f"Refusing to push the source branch to upstream remote {args.push_remote!r}; use a fork remote."
+        )
+
+    base_commit = run_git(worktree, "rev-parse", "--verify", f"{args.base_ref}^{{commit}}")
+    merge_base = run_git(worktree, "merge-base", base_commit, "HEAD")
+    commit_count_before = int(run_git(worktree, "rev-list", "--count", f"{merge_base}..HEAD"))
+    if commit_count_before == 0:
+        raise SystemExit(f"The source branch has no commits to merge relative to {args.base_ref!r}.")
+
+    old_head = run_git(worktree, "rev-parse", "HEAD")
+    backup_ref: str | None = None
+    squashed = commit_count_before > 1
+    if squashed:
+        message = validate_local_squash_message(args.local_squash_message)
+        branch_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-") or "branch"
+        backup_ref = f"refs/heads/codex/pre-squash-{branch_slug}-{old_head[:12]}"
+        run_git(worktree, "update-ref", backup_ref, old_head)
+        tree = run_git(worktree, "rev-parse", "HEAD^{tree}")
+        new_commit = run_git(worktree, "commit-tree", tree, "-p", merge_base, "-m", message)
+        run_git(worktree, "update-ref", f"refs/heads/{branch}", new_commit, old_head)
+        if run_git(worktree, "status", "--porcelain"):
+            raise SystemExit(
+                f"Squash created an unexpected dirty worktree. Restore with: git reset --hard {backup_ref}"
+            )
+
+    commit_count_after = int(run_git(worktree, "rev-list", "--count", f"{merge_base}..HEAD"))
+    if commit_count_after != 1:
+        raise SystemExit(
+            f"Expected exactly one source commit after preparation, found {commit_count_after}."
+        )
+
+    changed_files = run_git(
+        worktree,
+        "diff",
+        "--name-only",
+        "--no-renames",
+        f"{merge_base}..HEAD",
+    ).splitlines()
+    skip_reason = retest_skip_reason(args.base, changed_files)
+
+    remote_ref = f"refs/heads/{remote_branch}"
+    remote_line = run_git(worktree, "ls-remote", "--heads", args.push_remote, remote_ref)
+    remote_oid = remote_line.split()[0] if remote_line else ""
+    push_args = ["push", "--set-upstream"]
+    if squashed and remote_oid:
+        push_args.append(f"--force-with-lease={remote_ref}:{remote_oid}")
+    push_args.extend([args.push_remote, f"HEAD:{remote_ref}"])
+    run_git(worktree, *push_args)
+
+    head = run_git(worktree, "rev-parse", "HEAD")
+    pushed_line = run_git(worktree, "ls-remote", "--heads", args.push_remote, remote_ref)
+    pushed_oid = pushed_line.split()[0] if pushed_line else ""
+    if pushed_oid != head:
+        raise SystemExit("Remote branch verification failed after push; do not create the PR.")
+
+    return {
+        "backup_ref": backup_ref,
+        "commit_count_before": commit_count_before,
+        "commit_count_after": commit_count_after,
+        "changed_files": changed_files,
+        "retest_skip_reason": skip_reason,
+        "squashed": squashed,
+    }
+
+
 def pr_number(result: dict[str, Any]) -> Any:
     return result.get("number") or result.get("iid") or result.get("id")
 
@@ -255,6 +405,37 @@ def check_pr_conflict(args: argparse.Namespace, token: str, result: dict[str, An
         return result
 
 
+def post_retest_comment(args: argparse.Namespace, token: str, result: dict[str, Any]) -> dict[str, Any]:
+    number = pr_number(result)
+    pr_url = result.get("html_url") or result.get("web_url") or result.get("url") or "<unknown>"
+    if not number:
+        raise SystemExit(
+            f"PR created at {pr_url}, but the response did not contain a PR number; "
+            f"post {RETEST_COMMENT} manually to trigger the required gate."
+        )
+    owner = quote(args.owner, safe="")
+    repo = quote(args.repo, safe="")
+    base_url = args.api_base.rstrip("/")
+    query = urlencode({"access_token": token})
+    url = f"{base_url}/repos/{owner}/{repo}/issues/{quote(str(number), safe='')}/comments?{query}"
+    try:
+        return request_json("POST", url, {"body": RETEST_COMMENT}, args.timeout)
+    except SystemExit as exc:
+        if re.search(r"GitCode API failed: HTTP (?:404|405|422)\b", str(exc)):
+            fallback_url = (
+                f"{base_url}/repos/{owner}/{repo}/pulls/"
+                f"{quote(str(number), safe='')}/comments?{query}"
+            )
+            try:
+                return request_json("POST", fallback_url, {"body": RETEST_COMMENT}, args.timeout)
+            except SystemExit as fallback_exc:
+                exc = fallback_exc
+        raise SystemExit(
+            f"PR created at {pr_url}, but posting {RETEST_COMMENT} failed: {exc}. "
+            "Do not create a duplicate PR; post the comment to the existing PR."
+        ) from exc
+
+
 def create_pr(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any] | None]:
     token = load_token(args.token, args.token_file)
     owner = quote(args.owner, safe="")
@@ -263,6 +444,8 @@ def create_pr(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any] 
     query = urlencode({"access_token": token})
     url = f"{base_url}/repos/{owner}/{repo}/pulls?{query}"
     result = request_json("POST", url, build_payload(args), args.timeout)
+    if not getattr(args, "skip_retest", False):
+        post_retest_comment(args, token, result)
     conflict_info = check_pr_conflict(args, token, result) if args.check_conflicts else None
     return result, conflict_info
 
@@ -274,6 +457,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--title", required=True)
     parser.add_argument("--head", required=True)
     parser.add_argument("--base", required=True)
+    parser.add_argument("--base-ref", required=True, help="Local or remote-tracking ref for the target base branch.")
+    parser.add_argument("--push-remote", required=True, help="Fork remote that receives the prepared source branch.")
+    parser.add_argument("--git-worktree", type=Path, default=Path.cwd())
+    parser.add_argument("--local-squash-message")
     parser.add_argument("--body")
     parser.add_argument("--body-file")
     parser.add_argument("--milestone-number", type=int)
@@ -296,11 +483,27 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    result, conflict_info = create_pr(parse_args())
+    args = parse_args()
+    build_payload(args)
+    load_token(args.token, args.token_file)
+    branch_info = prepare_branch_for_pr(args)
+    print(f"SOURCE_COMMIT_COUNT_BEFORE={branch_info['commit_count_before']}")
+    print(f"SOURCE_COMMIT_COUNT_AFTER={branch_info['commit_count_after']}")
+    print(f"SOURCE_SQUASH_STATUS={'squashed' if branch_info['squashed'] else 'unchanged'}")
+    if branch_info["backup_ref"]:
+        print(f"SOURCE_SQUASH_BACKUP_REF={branch_info['backup_ref']}")
+    print("SOURCE_PUSH_STATUS=verified")
+    args.skip_retest = branch_info["retest_skip_reason"] is not None
+    result, conflict_info = create_pr(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     url = result.get("html_url") or result.get("web_url") or result.get("url")
     if url:
         print(f"PR URL: {url}")
+    if args.skip_retest:
+        print("RETEST_COMMENT_STATUS=skipped")
+        print(f"RETEST_SKIP_REASON={branch_info['retest_skip_reason']}")
+    else:
+        print("RETEST_COMMENT_STATUS=posted")
     info = conflict_info or result
     if detect_conflict(info):
         print("CONFLICT_STATUS=conflict")

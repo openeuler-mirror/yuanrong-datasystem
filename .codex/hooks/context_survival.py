@@ -326,8 +326,13 @@ def handle_session_start(payload: dict[str, Any]) -> dict[str, Any]:
     touched = git_touched_paths(repo_root)
     docs = route_context_docs(touched, repo_root)
     working_state = read_working_state(repo_root)
+    runtime_model = str(payload.get("model") or "").strip()
     lines = [
         "Context survival is active for this repository.",
+    ]
+    if runtime_model:
+        lines.extend(["", "Runtime information:", f"- Active runtime model: `{runtime_model}`"])
+    lines.extend([
         "",
         "Core rules:",
         "- Treat `.repo_context/` as an index; load only the smallest relevant docs.",
@@ -342,7 +347,7 @@ def handle_session_start(payload: dict[str, Any]) -> dict[str, Any]:
         *summarize_git(repo_root),
         "",
         "Likely relevant repo context:",
-    ]
+    ])
     lines.extend(f"- `{doc}`" for doc in docs)
     if working_state:
         lines.extend(["", "Existing working-state excerpt:", working_state])

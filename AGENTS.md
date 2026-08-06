@@ -46,6 +46,19 @@ Rules:
 - Prefer small, scoped changes that match existing style. Do not perform unrelated refactors or broad formatting churn.
 - Before claiming completion, use `.repo_context/playbooks/upkeep/ai-self-verification.md`.
 
+## GPT-5.6 Sol And Superpowers
+
+When the `SessionStart` hook reports `Active runtime model: gpt-5.6-sol`, treat that value as authoritative runtime model
+information and do not use the Superpowers plugin to take over or orchestrate the task's overall development workflow.
+This includes forcing the task through a brainstorming, specification, planning, execution, or review chain, or starting
+Superpowers-managed agent orchestration. The workflow defined by this `AGENTS.md` and `.repo_context/` remains
+authoritative.
+
+Individual skills provided by Superpowers may still be used when they offer a useful, scoped enhancement. Such use must
+not introduce additional workflow gates, require design documents or commits, expand the task scope automatically, or
+override the repository workflow unless the user explicitly requests the complete Superpowers workflow. If the active
+model is not reported by the `SessionStart` hook, do not infer that it is GPT-5.6 Sol.
+
 ## Pre-commit Self-Review
 
 Before creating a commit or claiming work is complete, run `$ds-self-verify` to review the diff, verify tests pass, check hot-path / concurrency / persistence-recovery risk, and confirm `.repo_context` updates are not stale.
