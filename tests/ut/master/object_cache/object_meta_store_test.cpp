@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <list>
 #include <memory>
 #include <string>
@@ -26,6 +27,11 @@
 #include <gtest/gtest.h>
 
 #include "ut/common.h"
+#include "datasystem/cluster/model/topology_types.h"
+#define private public
+#include "datasystem/cluster/executor/storage_scan_plan.h"
+#undef private
+#include "datasystem/cluster/executor/hash_key_filter.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -111,6 +117,23 @@ public:
 };
 
 RandomData ObjectMetaStoreTest::random_;
+
+TEST_F(ObjectMetaStoreTest, TopologyScanWithoutEtcdIsAnEmptyRecoverySet)
+{
+    const std::vector<cluster::TokenRange> ranges{ { 0, std::numeric_limits<uint32_t>::max() } };
+    auto plan = cluster::StorageScanPlan::CreateHash(ranges);
+    cluster::HashKeyFilter filter(ranges);
+    size_t visitorCalls = 0;
+
+    auto rc = ObjectMetaStore_->ScanTopologyScope(
+        *plan, filter, [&visitorCalls](const std::string &, const std::string &) {
+            ++visitorCalls;
+            return Status::OK();
+        });
+
+    EXPECT_EQ(rc, Status::OK());
+    EXPECT_EQ(visitorCalls, 0U);
+}
 
 TEST_F(ObjectMetaStoreTest, TestCreateQueryRemoveMeta)
 {

@@ -759,13 +759,12 @@ Status ObjectMetaStore::ScanTopologyScope(
     const cluster::StorageScanPlan &plan, const cluster::IKeyFilter &filter, TopologyScanTable table,
     const std::function<Status(const std::string &, const std::string &)> &visitor)
 {
-    CHECK_FAIL_RETURN_STATUS(isPersistenceEnabled_ && EtcdEnable(), K_NOT_SUPPORTED,
-                             "topology metadata scan requires ETCD persistence");
     CHECK_FAIL_RETURN_STATUS(visitor != nullptr, K_INVALID, "topology metadata scan visitor is empty");
     CHECK_FAIL_RETURN_STATUS(table <= TopologyScanTable::ASYNC_WORKER_OP, K_INVALID,
                              "unsupported topology metadata scan table");
     std::vector<cluster::StorageScanSegment> segments;
     RETURN_IF_NOT_OK(cluster::StorageScanPlanAccess::GetSegments(plan, segments));
+    RETURN_OK_IF_TRUE(!isPersistenceEnabled_ || !EtcdEnable());
     const char *tablePrefix = ETCD_META_TABLE_PREFIX;
     const std::string *rocksTable = &META_TABLE;
     if (table == TopologyScanTable::GLOBAL_CACHE_DELETE) {

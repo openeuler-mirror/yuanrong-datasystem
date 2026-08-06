@@ -222,7 +222,8 @@ public:
      * @param[in] filter Final logical object-key predicate for every candidate.
      * @param[in] table Approved metadata table whose keys have a known logical-key encoding.
      * @param[in] visitor Consumer invoked only after logical-key filtering.
-     * @return K_OK on a complete scan; storage, decoding or visitor error otherwise.
+     * @return K_OK on a complete scan or when no shared ETCD metadata backend is enabled; storage, decoding or visitor
+     *         error otherwise. A disabled backend is an empty recovery set and does not fall back to local RocksDB.
      */
     Status ScanTopologyScope(
         const cluster::StorageScanPlan &plan, const cluster::IKeyFilter &filter, TopologyScanTable table,
