@@ -131,6 +131,13 @@ target_link_libraries(datasystem_static PRIVATE "${CLIENT_DEPEND_LIBS}")
 add_library(datasystem SHARED ${CLIENT_SRCS})
 target_compile_options(datasystem PRIVATE "-fvisibility=hidden")
 target_link_libraries(datasystem PRIVATE "${CLIENT_DEPEND_LIBS}")
+add_custom_command(TARGET datasystem POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -D ELF_FILE=$<TARGET_FILE:datasystem>
+        -D ELF_ROLE=CORE
+        -P ${CMAKE_SOURCE_DIR}/cmake/tests/check_datasystem_cann_needed.cmake
+    COMMENT "Checking that libdatasystem.so has no direct CANN dependencies"
+    VERBATIM)
 
 if (BUILD_WITH_URMA)
     # Let the linker resolve liburma's transitive DT_NEEDED deps (liburma_common,

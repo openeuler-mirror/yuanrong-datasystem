@@ -2,7 +2,10 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "bool_setting")
 load("@bazel_skylib//rules:copy_directory.bzl", "copy_directory")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
+load("@local_ascend//:ascend_config.bzl", "ASCEND_HIXL_PLUGIN_TARGETS")
 load("@rules_cc//cc:defs.bzl", "cc_shared_library")
+load("//bazel:cann_dependency_audit.bzl", "cann_dependency_audit")
+load("//bazel:optional_copy_file.bzl", "optional_copy_file")
 
 licenses(["notice"])
 
@@ -412,6 +415,23 @@ copy_file(
     visibility = [
         "//bazel:__pkg__",
     ],
+)
+
+optional_copy_file(
+    name = "hixl_plugin_file",
+    srcs = ASCEND_HIXL_PLUGIN_TARGETS,
+    out = "yr/datasystem/lib/libds_hixl_plugin.so",
+    visibility = ["//bazel:__pkg__"],
+)
+
+cann_dependency_audit(
+    name = "cann_dependency_audit",
+    core_srcs = [
+        ":datasystem",
+        "//src/datasystem/worker:datasystem_worker_shared",
+    ],
+    plugin_srcs = ASCEND_HIXL_PLUGIN_TARGETS,
+    visibility = ["//bazel:__pkg__"],
 )
 
 # --- Coordinator shared library ---

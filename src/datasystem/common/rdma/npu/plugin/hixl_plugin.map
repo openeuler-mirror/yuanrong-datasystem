@@ -1,0 +1,6 @@
+{
+    global:
+        DsHixlGetApi;
+    local:
+        *;
+};

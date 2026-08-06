@@ -168,6 +168,7 @@ def get_all_dependencies():
         "libds_client_py.so",
         "libacl_plugin.so",
         "libcuda_plugin.so",
+        "libds_hixl_plugin.so",
         "libp2p_transfer.so",
     }
     src = os.path.join(os.path.dirname(__file__), "yr", "datasystem", "lib")

@@ -24,6 +24,8 @@ def _datasystem_sdk_tree_impl(ctx):
 
     urma_libs = ctx.files.urma_libs
     urma_libs_args = [f.path for f in urma_libs]
+    hixl_plugins = ctx.files.hixl_plugins
+    hixl_plugin_args = [f.path for f in hixl_plugins]
 
     command = """
 	set -euo pipefail
@@ -36,7 +38,8 @@ def _datasystem_sdk_tree_impl(ctx):
 	out_tar="$6"
 	header_count="$7"
 	urma_libs_count="$8"
-	shift 8
+	hixl_plugin_count="$9"
+	shift 9
 
 	mkdir -p "$out_dir/cpp/lib"
 	cp -f "$build_tpl" "$out_dir/cpp/BUILD.bazel"
@@ -54,6 +57,11 @@ def _datasystem_sdk_tree_impl(ctx):
 	    shift
 	    i=$((i + 1))
 	  done
+	fi
+
+	if [ "$hixl_plugin_count" -gt 0 ]; then
+	  cp -f "$1" "$out_dir/cpp/lib/libds_hixl_plugin.so"
+	  shift
 	fi
 
 	# Copy headers (header_count pairs of src,rel)
@@ -96,7 +104,8 @@ def _datasystem_sdk_tree_impl(ctx):
         out_tar.path,
         str(len(header_args) // 2),
         str(len(urma_libs_args)),
-    ] + urma_libs_args + header_args + cmake_args
+        str(len(hixl_plugin_args)),
+    ] + urma_libs_args + hixl_plugin_args + header_args + cmake_args
 
     inputs_list = [ctx.file.build_tpl, ctx.file.libdatasystem, ctx.file.libworker]
     if has_coordinator:
@@ -105,9 +114,11 @@ def _datasystem_sdk_tree_impl(ctx):
     inputs = depset(
         inputs_list,
         transitive = [
+            depset(ctx.files.audits),
             depset(ctx.files.headers),
             depset(ctx.files.cmake_config),
             depset(urma_libs),
+            depset(hixl_plugins),
         ],
     )
 
@@ -131,6 +142,8 @@ datasystem_sdk_tree = rule(
         "libworker": attr.label(allow_single_file = True, mandatory = True),
         "libcoordinator": attr.label(allow_single_file = True, mandatory = False),
         "cmake_config": attr.label_list(allow_files = True, default = []),
+        "audits": attr.label_list(allow_files = True, default = []),
         "urma_libs": attr.label_list(allow_files = True, default = []),
+        "hixl_plugins": attr.label_list(allow_files = True, default = []),
     },
 )

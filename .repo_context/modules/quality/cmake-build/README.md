@@ -177,6 +177,14 @@ braft 1.1.2 and every Coordinator Raft adapter target are built unconditionally 
 `coordinator_raft_node`; Bazel mirrors the same product dependency. There is no standalone braft shared library or direct
 braft install/package rule. `WITH_TESTS` only adds GTest and test targets/CTest registration.
 
+For CANN/HIXL `8.5.2+`, CMake builds `libds_hixl_plugin.so` as an optional leaf shared library. Only this plugin links
+`libascendcl.so`, `libcann_hixl.so`, and `libmetadef.so`; the client and Worker shared libraries load it through a
+versioned C function table and must not acquire those three `DT_NEEDED` entries. A post-link CMake guard enforces both
+sides of that boundary. The plugin is stripped before its SHA256 header is generated, is excluded from later package
+stripping, and is installed beside the core library in both C++ SDK layouts, the Service layout, and Python staging.
+The CANN libraries themselves remain deployment prerequisites on nodes that select HCCS and are not copied into the
+Datasystem package. `transfer_engine` retains its independent CANN dependency and is outside this boundary.
+
 ### Package Manifest Baselines
 
 | Baseline | Covered profile | Notes |
@@ -214,7 +222,9 @@ Rules for updating baselines:
     package validation.
   - `ASCEND_HIXL_FOUND` means basic HIXL headers and libraries were found. HCCS RH2D is gated separately by
     `ASCEND_HIXL_HCCS_SUPPORTED`, which requires detected HIXL version `8.5.2+`; lower versions skip
-    `hccs_transport.cpp` while retaining hetero, default ROCE builds, and the vendored `p2p-transfer` dependency. The
+    `hixl_transport.cpp` and `libds_hixl_plugin.so` while retaining hetero, default ROCE builds, and the vendored
+    `p2p-transfer` dependency. When enabled, the core targets depend on the generated plugin hash header but not on the
+    HIXL link libraries; only the plugin target owns those link items. The
     transfer_engine HIXL D2D backend has the same effective version floor and is disabled during configure when
     CANN/HIXL is missing, lower than `8.5.2`, or has an unknown version.
 - Good first files when a build regression appears:

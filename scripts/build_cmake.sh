@@ -40,7 +40,8 @@ function strip_symbols() {
     local basename
     basename=$(basename "${file}")
     if [[ ! -L "${file}" ]] && [[ ! -d "${file}" ]] && [[ "x${type}" != "xtext" ]] && [[ "${basename}" != *.json ]] \
-      && [[ "x${basename}" != "xlibacl_plugin.so" ]] && [[ "x${basename}" != "xlibcuda_plugin.so" ]]; then
+      && [[ "x${basename}" != "xlibacl_plugin.so" ]] && [[ "x${basename}" != "xlibcuda_plugin.so" ]] \
+      && [[ "x${basename}" != "xlibds_hixl_plugin.so" ]]; then
       echo "---- start to strip ${file}"
       objcopy --only-keep-debug "${file}" "${dest_dir}/${basename}.sym"
       objcopy --add-gnu-debuglink="${dest_dir}/${basename}.sym" "${file}"
@@ -149,6 +150,12 @@ function build_datasystem_cmake() {
         cp "${CUDA_SYM_FILE}" "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
       else
         echo "Notice: libcuda_plugin.so.sym not found, skipping (Normal for NPU build)."
+      fi
+      HIXL_SYM_FILE="${BUILD_DIR}/src/datasystem/common/rdma/npu/plugin/libds_hixl_plugin.so.sym"
+      if [ -f "${HIXL_SYM_FILE}" ]; then
+        cp "${HIXL_SYM_FILE}" "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
+      else
+        echo "Notice: libds_hixl_plugin.so.sym not found, skipping (Normal when HCCS is disabled)."
       fi
     fi
     if is_on "${PACKAGE_JAVA}"; then

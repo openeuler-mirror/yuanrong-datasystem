@@ -65,6 +65,9 @@ file(GLOB_RECURSE DS_TEST_UT_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}
 file(GLOB_RECURSE DS_UT_STREAM_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/**/stream_cache/*.cpp")
 file(GLOB_RECURSE DS_UT_OBJECT_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/**/object_cache/*.cpp")
 
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX "hixl_plugin_loader_test")
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX "hixl_transport_plugin_test")
+
 set(UT_COMMON_SRCS
         test_main.cpp
         common.cpp)
@@ -81,6 +84,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/topology_control_perf_t
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_election_manager_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/data_worker_options_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/test_main\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/rdma/hixl_plugin_api_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/stream_cache/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/object_cache/.*)
@@ -144,6 +148,48 @@ target_compile_definitions(_ds_ut_main_obj PRIVATE ${BIN_PATH_LIST})
 target_compile_definitions(_ds_ut_common_obj PRIVATE ${BIN_PATH_LIST})
 target_link_libraries(_ds_ut_main_obj PRIVATE GTest::gtest GTest::gmock)
 target_link_libraries(_ds_ut_common_obj PRIVATE ${DS_UT_DEPEND_LIBS})
+
+add_library(hixl_plugin_api_c_compile_test OBJECT common/rdma/hixl_plugin_api_c_compile_test.c)
+target_include_directories(hixl_plugin_api_c_compile_test PRIVATE ${PROJECT_DIR}/src)
+
+add_executable(hixl_plugin_api_test common/rdma/hixl_plugin_api_test.cpp)
+target_link_libraries(hixl_plugin_api_test PRIVATE GTest::gtest GTest::gtest_main)
+gtest_discover_tests(hixl_plugin_api_test)
+
+add_library(fake_hixl_plugin SHARED common/rdma/fake_hixl_plugin.cpp)
+target_include_directories(fake_hixl_plugin PRIVATE ${PROJECT_DIR}/src)
+set_target_properties(fake_hixl_plugin PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+
+add_executable(hixl_plugin_loader_test
+        common/rdma/hixl_plugin_loader_test.cpp
+        ${PROJECT_DIR}/src/datasystem/common/rdma/npu/hixl_plugin_loader.cpp)
+target_include_directories(hixl_plugin_loader_test BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/common/rdma)
+target_compile_definitions(hixl_plugin_loader_test PRIVATE
+        FAKE_HIXL_PLUGIN_PATH="$<TARGET_FILE:fake_hixl_plugin>")
+target_link_libraries(hixl_plugin_loader_test PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+        common_ak_sk
+        common_log
+        common_util
+        ${CMAKE_DL_LIBS})
+add_dependencies(hixl_plugin_loader_test fake_hixl_plugin)
+gtest_discover_tests(hixl_plugin_loader_test DISCOVERY_MODE PRE_TEST)
+
+add_executable(hixl_transport_plugin_test
+        common/rdma/hixl_transport_plugin_test.cpp
+        ${PROJECT_DIR}/src/datasystem/common/rdma/npu/hixl_transport.cpp
+        ${PROJECT_DIR}/src/datasystem/common/rdma/npu/hixl_plugin_loader.cpp)
+target_include_directories(hixl_transport_plugin_test BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/common/rdma)
+target_link_libraries(hixl_transport_plugin_test PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
+        GTest::gtest_main
+        ${DS_UT_DEPEND_LIBS}
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${DS_UT_HEAVY_LINK_END}
+        ${CMAKE_DL_LIBS}
+        -Wl,--reduce-memory-overheads)
+gtest_discover_tests(hixl_transport_plugin_test DISCOVERY_MODE PRE_TEST)
 
 function(add_ds_ut_executable TARGET_NAME)
     add_executable(${TARGET_NAME} ${ARGN})

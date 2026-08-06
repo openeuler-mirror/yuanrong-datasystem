@@ -64,6 +64,12 @@ Status SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId, const std:
 Status SetRH2DLocalEndpointIp(const std::string &localIp);
 
 /**
+ * @brief Initialize RemoteH2D after its worker endpoint has been configured.
+ * @return The preserved initialization error when HCCS plugin loading or transport initialization fails.
+ */
+Status InitializeRemoteH2DManager();
+
+/**
  * @brief Set the fast transport mode for the client.
  * @param[in] fastTransportMode The fast transport mode, e.g. UB.
  * @param[in] transportSize The size of the client transport.

@@ -15,7 +15,6 @@ set(URMA_DEPEND_LIBS
     common_rdma_util)
 set(RDMA_DEPEND_LIBS
     common_rdma_util)
-set(HCCS_EXTRA_LIBS)
 if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
     list(APPEND URMA_DEPEND_LIBS common_cuda_host_memory)
     list(APPEND URMA_SRCS
@@ -62,12 +61,13 @@ if (BUILD_HETERO AND BUILD_HETERO_NPU)
     )
     # HCCS transport requires cann_hixl with GlobalResourceConfig support.
     if (ASCEND_HIXL_HCCS_SUPPORTED)
-        list(APPEND URMA_SRCS npu/hixl_transport.cpp)
-        # HIXL symbols are used by HixlTransport; common_rdma's users need to link hixl as well
-        set(HCCS_EXTRA_LIBS ${ASCEND_HIXL_LIBRARIES})
+        list(APPEND URMA_SRCS
+            npu/hixl_transport.cpp
+            npu/hixl_plugin_loader.cpp)
+        list(APPEND URMA_DEPEND_LIBS common_ak_sk dl)
+        add_subdirectory(npu/plugin)
     else()
         message(WARNING "cann_hixl not found or HIXL version is lower than 8.5.2, HCCS transport will be disabled")
-        set(HCCS_EXTRA_LIBS "")
     endif()
 endif()
 if (BUILD_HETERO)
@@ -96,9 +96,11 @@ if (BUILD_WITH_URMA_MOCK)
 endif()
 target_link_libraries(common_rdma
     PRIVATE ${URMA_DEPEND_LIBS} ${RDMA_DEPEND_LIBS} meta_transport_protos_client share_memory_protos_client
-    PUBLIC ${HCCS_EXTRA_LIBS} ${BRPC_LIBRARIES})
+    PUBLIC ${BRPC_LIBRARIES})
 
 # Propagate HCCS transport availability to source files via compile definition
 if (ASCEND_HIXL_HCCS_SUPPORTED)
     target_compile_definitions(common_rdma PRIVATE ASCEND_HIXL_AVAILABLE)
+    target_include_directories(common_rdma PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/npu/plugin)
+    add_dependencies(common_rdma ds_hixl_plugin_hash)
 endif()

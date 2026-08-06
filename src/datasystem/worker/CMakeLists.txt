@@ -103,6 +103,13 @@ add_dependencies(datasystem_worker_static
 
 add_library(datasystem_worker_shared SHARED ${WORKER_SRCS})
 target_link_libraries(datasystem_worker_shared PUBLIC ${WORKER_DEPEND_LIBS})
+add_custom_command(TARGET datasystem_worker_shared POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -D ELF_FILE=$<TARGET_FILE:datasystem_worker_shared>
+        -D ELF_ROLE=CORE
+        -P ${CMAKE_SOURCE_DIR}/cmake/tests/check_datasystem_cann_needed.cmake
+    COMMENT "Checking that libdatasystem_worker.so has no direct CANN dependencies"
+    VERBATIM)
 add_dependencies(datasystem_worker_shared
         master_heartbeat_protos
         share_memory_protos

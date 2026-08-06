@@ -201,6 +201,12 @@ public:
     Status Init();
 
     /**
+     * @brief Return the result of singleton initialization.
+     * @return Initialization status. The original error is preserved for all later H2D operations.
+     */
+    Status GetInitStatus() const;
+
+    /**
      * @brief Uninitialization helper.
      * @return Status of the call.
      */
@@ -262,6 +268,7 @@ private:
     void DispatchPings();
     std::vector<std::string> CheckDisconnectedClients();
     void CleanupDisconnectedClients(const std::vector<std::string> &disconnected);
+    void EnsureStateMaps();
     static std::unique_ptr<RH2DTransportStrategy> CreateTransport();
 
     static std::string hccsLocalEndpointIp_;
@@ -297,6 +304,8 @@ private:
 
     // Transport strategy
     std::unique_ptr<RH2DTransportStrategy> transport_;
+    Status initStatus_;
+    bool aclInitialized_{ false };
 };
 }  // namespace datasystem
 

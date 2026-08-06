@@ -1887,6 +1887,7 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
 
     // Configure HCCS worker IP before any allocator/mmap path can trigger RemoteH2DManager::Instance()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetRH2DLocalEndpointIp(hostPort_.Host()), "Failed to configure HCCS worker IP");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeRemoteH2DManager(), "Remote H2D transport init failed");
 
     if (FLAGS_use_brpc) {
         int brpcPort = bindHostPort_.Port();

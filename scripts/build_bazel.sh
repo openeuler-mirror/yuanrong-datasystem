@@ -297,6 +297,11 @@ function _bazel_install_outputs() {
     cp -f "${bazel_bin}/src/datasystem/worker/libdatasystem_worker_shared.so" "${DS_DIR}/service/lib/libdatasystem_worker.so"
   fi
 
+  local hixl_plugin="${bazel_bin}/src/datasystem/common/rdma/npu/plugin/libds_hixl_plugin.so"
+  if [[ -f "${hixl_plugin}" ]]; then
+    cp -f "${hixl_plugin}" "${DS_DIR}/service/lib/libds_hixl_plugin.so"
+  fi
+
   # Coordinator binary (stripped if available)
   if [[ -f "${bazel_bin}/datasystem_coordinator.stripped" ]]; then
     cp -f "${bazel_bin}/datasystem_coordinator.stripped" "${DS_DIR}/service/datasystem_coordinator"
