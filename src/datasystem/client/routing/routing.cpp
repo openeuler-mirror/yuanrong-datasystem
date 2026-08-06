@@ -150,6 +150,15 @@ Status Routing::SelectWorkers(const std::vector<std::string> &keys, SelectStrate
     return router_->SelectWorkers(keys, strategy, groups);
 }
 
+Status Routing::SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
+                              std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                              const std::vector<HostPort> &exclude)
+{
+    auto policy = strategy == SelectStrategy::SAME_NODE_PREFERRED ? DataPlacementPolicy::PREFERRED_SAME_NODE
+                                                                  : DataPlacementPolicy::PREFERRED_META_OWNER;
+    return SelectWorkers(keys, policy, groups, exclude);
+}
+
 Status Routing::SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
                               std::unordered_map<HostPort, std::vector<std::string>> &groups,
                               const std::vector<HostPort> &exclude)

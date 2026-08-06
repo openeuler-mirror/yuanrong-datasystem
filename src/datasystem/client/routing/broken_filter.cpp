@@ -16,6 +16,7 @@
 
 #include "datasystem/client/routing/broken_filter.h"
 
+#include <cstdint>
 #include <thread>
 #include <utility>
 
@@ -24,45 +25,66 @@ namespace client {
 
 BrokenFilter::BrokenFilter()
 {
-    std::atomic_store(&brokenMap_, std::shared_ptr<const BrokenMap>(std::make_shared<BrokenMap>()));
+    std::atomic_store(&healthMap_, std::shared_ptr<const HealthMap>(std::make_shared<HealthMap>()));
 }
 
 bool BrokenFilter::IsAvailable(const HostPort &addr) const
 {
-    auto map = std::atomic_load(&brokenMap_);
+    auto map = std::atomic_load(&healthMap_);
     auto it = map->find(addr.ToString());
     if (it == map->end()) {
-        return true;  // Not marked -> available
+        return true;  // Never observed a failure -> available
     }
-    // TTL expired -> available (lazy expiry)
-    return std::chrono::steady_clock::now() >= it->second;
+    // Lazy TTL: available again once the broken window expires.
+    return std::chrono::steady_clock::now() >= it->second.brokenUntil;
 }
 
 void BrokenFilter::OnWorkerStateChange(const HostPort &addr, StatusCode status)
 {
     if (status != K_CLIENT_WORKER_DISCONNECT) {
-        return;  // Only handle connection failures
+        return;  // Only connection failures feed the eviction burst counter.
     }
-    auto old = std::atomic_load(&brokenMap_);
-    bool updated = false;
-    do {
-        auto newMap = std::make_shared<BrokenMap>(*old);
-        auto now = std::chrono::steady_clock::now();
-        for (auto it = newMap->begin(); it != newMap->end();) {
-            if (now >= it->second) {
-                it = newMap->erase(it);
+    const std::string key = addr.ToString();
+    const auto now = std::chrono::steady_clock::now();
+    bool done = false;
+    while (!done) {
+        auto old = std::atomic_load(&healthMap_);
+        auto existing = old->find(key);
+        if (existing != old->end() && now < existing->second.brokenUntil) {
+            done = true;  // Already broken within TTL; ignore further failure signals.
+        } else {
+            auto next = std::make_shared<HealthMap>(*old);
+            // Lazy-expire entries that are neither broken nor tracking a fresh burst.
+            for (auto it = next->begin(); it != next->end();) {
+                const auto &entry = it->second;
+                const bool brokenExpired = now >= entry.brokenUntil;
+                const bool burstExpired = entry.consecutiveFailures == 0
+                    || (now - entry.windowStart > FAILURE_BURST_WINDOW);
+                if (brokenExpired && burstExpired) {
+                    it = next->erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            auto &health = (*next)[key];
+            if (health.consecutiveFailures == 0 || (now - health.windowStart > FAILURE_BURST_WINDOW)) {
+                health.consecutiveFailures = 1;
+                health.windowStart = now;
             } else {
-                ++it;
+                health.consecutiveFailures += 1;
+            }
+            if (health.consecutiveFailures >= EVICT_CONSECUTIVE_FAILURES) {
+                health.brokenUntil = now + BROKEN_TTL;
+                health.consecutiveFailures = 0;  // Reset; worker must fail N times again after TTL.
+            }
+            done = std::atomic_compare_exchange_weak(&healthMap_, &old,
+                std::shared_ptr<const HealthMap>(std::move(next)));
+            if (!done) {
+                // CAS failed: another concurrent update won; yield and retry.
+                std::this_thread::yield();
             }
         }
-        (*newMap)[addr.ToString()] = now + BROKEN_TTL;
-        updated =
-            std::atomic_compare_exchange_weak(&brokenMap_, &old, std::shared_ptr<const BrokenMap>(std::move(newMap)));
-        if (!updated) {
-            // CAS failed: yield to reduce contention under high concurrent MarkBroken.
-            std::this_thread::yield();
-        }
-    } while (!updated);
+    }
 }
 
 }  // namespace client

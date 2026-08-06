@@ -41,10 +41,12 @@ HostPort MakeWorker(int port)
 class FakeExistRouting : public IExistRouting {
 public:
     Status SelectWorkers(const std::vector<std::string> &, client::SelectStrategy strategy,
-                         std::unordered_map<HostPort, std::vector<std::string>> &output) override
+                         std::unordered_map<HostPort, std::vector<std::string>> &output,
+                         const std::vector<HostPort> &exclude) override
     {
         ++selectWorkersCount;
         selectedStrategy = strategy;
+        excludeHistory.emplace_back(exclude);
         if (!groupSequence.empty()) {
             output = groupSequence.front();
             groupSequence.erase(groupSequence.begin());
@@ -66,6 +68,7 @@ public:
     std::vector<std::unordered_map<HostPort, std::vector<std::string>>> groupSequence;
     std::vector<HostPort> updatedWorkers;
     std::vector<StatusCode> updatedStatuses;
+    std::vector<std::vector<HostPort>> excludeHistory;
     int selectWorkersCount = 0;
 };
 
@@ -211,7 +214,7 @@ TEST_F(ExistHandlerTest, ExistRetriesNotOwnerExtraWithoutSelectingAgain)
     EXPECT_TRUE(routing_->updatedWorkers.empty());
 }
 
-TEST_F(ExistHandlerTest, ExistUpdatesRoutingAfterConnectionFailureRetry)
+TEST_F(ExistHandlerTest, ExistReroutesAfterUnavailableWithoutEviction)
 {
     HostPort workerA = MakeWorker(18481);
     routing_->groups[workerA] = { "k1" };
@@ -231,11 +234,9 @@ TEST_F(ExistHandlerTest, ExistUpdatesRoutingAfterConnectionFailureRetry)
     EXPECT_EQ(transport_->workers[1], workerA);
     EXPECT_EQ(transport_->workers[2], workerA);
     EXPECT_EQ(transport_->workers[3], workerA);
-    ASSERT_EQ(routing_->updatedWorkers.size(), 2ul);
-    EXPECT_EQ(routing_->updatedWorkers[0], workerA);
-    EXPECT_EQ(routing_->updatedWorkers[1], workerA);
-    EXPECT_EQ(routing_->updatedStatuses[0], K_CLIENT_WORKER_DISCONNECT);
-    EXPECT_EQ(routing_->updatedStatuses[1], K_CLIENT_WORKER_DISCONNECT);
+    // K_RPC_UNAVAILABLE is transient: Exist still probes + reroutes, but no longer evicts the
+    // worker from the routing table (IsRoutingEvictionFailure excludes it).
+    EXPECT_TRUE(routing_->updatedWorkers.empty());
     EXPECT_EQ(routing_->selectWorkersCount, 2);
 }
 
@@ -281,9 +282,8 @@ TEST_F(ExistHandlerTest, ExistReroutesAfterDeadlineExceeded)
 
     ASSERT_TRUE(rc.IsOk());
     EXPECT_EQ(exists, std::vector<bool>({ true }));
-    ASSERT_EQ(routing_->updatedWorkers.size(), 1ul);
-    EXPECT_EQ(routing_->updatedWorkers[0], workerA);
-    EXPECT_EQ(routing_->updatedStatuses[0], K_CLIENT_WORKER_DISCONNECT);
+    // K_RPC_DEADLINE_EXCEEDED is transient: reroute still happens, but no routing eviction.
+    EXPECT_TRUE(routing_->updatedWorkers.empty());
     ASSERT_EQ(transport_->workers.size(), 3ul);
     EXPECT_EQ(transport_->workers[0], workerA);
     EXPECT_EQ(transport_->workers[1], workerA);
@@ -320,6 +320,9 @@ TEST_F(ExistHandlerTest, ExistReroutesAfterWorkerNotReady)
     EXPECT_EQ(transport_->workers[1], workerB);
     EXPECT_EQ(transport_->subTimeouts, std::vector<int64_t>({ 1000, 1000 }));
     EXPECT_EQ(routing_->selectWorkersCount, 2);
+    // workerA (failed) is passed in the exclude list on the reroute attempt.
+    ASSERT_EQ(routing_->excludeHistory.size(), 2ul);
+    EXPECT_EQ(routing_->excludeHistory[1], std::vector<HostPort>({ workerA }));
 }
 
 TEST_F(ExistHandlerTest, ExistSplitsRedirectedKeysByOwnerAndKeepsInputOrder)

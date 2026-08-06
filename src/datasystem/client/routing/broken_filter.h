@@ -15,15 +15,17 @@
  */
 
 /**
- * Description: BrokenFilter - self-contained filter with its own brokenMap_.
- * Marks workers as broken (5s TTL) on RPC failures. LookupOwner skips broken workers.
- * Worker recovery relies on TTL natural expiry — no external cleanup needed.
+ * Description: BrokenFilter - counts consecutive K_CLIENT_WORKER_DISCONNECT signals per worker;
+ * only after EVICT_CONSECUTIVE_FAILURES (within FAILURE_BURST_WINDOW) is it marked broken for
+ * BROKEN_TTL. A single blip no longer evicts (prevents code=37); a dead peer reaches the
+ * threshold quickly. Recovery is lazy TTL.
  */
 #ifndef DATASYSTEM_CLIENT_ROUTING_BROKEN_FILTER_H
 #define DATASYSTEM_CLIENT_ROUTING_BROKEN_FILTER_H
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -43,9 +45,17 @@ public:
     void OnWorkerStateChange(const HostPort &addr, StatusCode status) override;
 
 private:
-    using BrokenMap = std::unordered_map<std::string, std::chrono::steady_clock::time_point>;
-    std::shared_ptr<const BrokenMap> brokenMap_;
-    static constexpr std::chrono::seconds BROKEN_TTL{ 5 };
+    // Per-worker consecutive-failure count (within FAILURE_BURST_WINDOW) and broken-until (TTL).
+    struct WorkerHealth {
+        uint32_t consecutiveFailures{ 0 };
+        std::chrono::steady_clock::time_point windowStart{};
+        std::chrono::steady_clock::time_point brokenUntil{};
+    };
+    using HealthMap = std::unordered_map<std::string, WorkerHealth>;
+    std::shared_ptr<const HealthMap> healthMap_;
+    static constexpr std::chrono::seconds BROKEN_TTL{ 3 };
+    static constexpr uint32_t EVICT_CONSECUTIVE_FAILURES{ 100 };
+    static constexpr std::chrono::seconds FAILURE_BURST_WINDOW{ 5 };
 };
 
 }  // namespace client

@@ -71,6 +71,11 @@ public:
     Status SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups);
 
+    // Legacy compatibility overload with per-request exclude list (Exist reroute).
+    Status SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                         const std::vector<HostPort> &exclude);
+
     Status SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups,
                          const std::vector<HostPort> &exclude = {});

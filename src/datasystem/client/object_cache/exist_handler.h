@@ -38,7 +38,8 @@ class IExistRouting {
 public:
     virtual ~IExistRouting() = default;
     virtual Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
-                                 std::unordered_map<HostPort, std::vector<std::string>> &groups) = 0;
+                                 std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                                 const std::vector<HostPort> &exclude = {}) = 0;
     virtual void UpdateState(const HostPort &addr, StatusCode status) = 0;
 };
 
@@ -114,7 +115,8 @@ private:
     };
 
     Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
-                         std::unordered_map<HostPort, std::vector<std::string>> &groups);
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                         const std::vector<HostPort> &exclude);
 
     void UpdateRoutingState(const HostPort &addr, StatusCode status);
 
@@ -141,6 +143,10 @@ private:
     std::shared_ptr<IExistTransport> transport_;
     std::shared_ptr<ThreadPool> taskPool_;
     ExistRedirectResolver redirectResolver_;
+    // Per-Run workers that failed and must be skipped on reroute. BrokenFilter no longer evicts
+    // on a single failure (debounce), so reroute needs its own exclude list, like Set's
+    // excludeWorker.
+    std::vector<HostPort> excludedWorkers_;
 };
 
 }  // namespace object_cache
