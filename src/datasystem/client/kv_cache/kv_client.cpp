@@ -534,6 +534,8 @@ Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_EXIST);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsExistBatchSizeUnderLimit(keys.size()), K_INVALID,
+                                         FormatString("The objectKeys size exceed %d.", EXIST_KEYS_MAX_SIZE_LIMIT));
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_EXIST);
     Status rc = impl_->Exist(keys, exists, true, false);
     METRIC_INC(metrics::KvMetricId::CLIENT_EXIST_REQUEST_TOTAL);
