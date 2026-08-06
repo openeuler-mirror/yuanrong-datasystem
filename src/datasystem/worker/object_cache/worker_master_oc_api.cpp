@@ -482,6 +482,13 @@ Status WorkerRemoteMasterOCApi::RemoveMeta(master::RemoveMetaReqPb &request, mas
 Status WorkerRemoteMasterOCApi::GIncNestedRef(master::GIncNestedRefReqPb &request, master::GIncNestedRefRspPb &response)
 {
     RpcOptions opts;
+    // GIncNestedRefReqPb has no timeout field (unlike GDecNestedRefReqPb), so set only the brpc
+    // transport timeout to avoid the 60s stub/channel default; request.set_timeout is N/A here.
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRemainingAfterDeductionUs();
+    CHECK_FAIL_RETURN_STATUS(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             FormatString("Request timeout, remaining %ld us.",
+                                          GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs()));
+    opts.SetTimeout(TimeoutDuration::CeilUsToMs(remainingUs));
     request.set_address(localHostPort_.ToString());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
     Timer timer;
@@ -494,6 +501,7 @@ Status WorkerRemoteMasterOCApi::GIncNestedRef(master::GIncNestedRefReqPb &reques
 Status WorkerRemoteMasterOCApi::GDecNestedRef(master::GDecNestedRefReqPb &request, master::GDecNestedRefRspPb &response)
 {
     RpcOptions opts;
+    CHECK_AND_SET_TIMEOUT(&GetRequestContext()->reqTimeoutDuration, request, opts);
     request.set_address(localHostPort_.ToString());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
     Timer timer;
