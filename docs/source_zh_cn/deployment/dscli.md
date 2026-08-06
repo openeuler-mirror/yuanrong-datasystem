@@ -327,7 +327,7 @@ openYuanrong datasystem 单机卸载依赖 [dscli stop](#dscli-stop) 命令。
     此种方式需要指定 `worker_config.json` 文件。
 
     ```bash
-    dscli stop --config_path ./worker_config.json
+    dscli stop --worker_config_path ./worker_config.json
     # [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100
     ```
 
@@ -513,7 +513,7 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
     应在所有 Worker 停止后，使用同一配置文件停止 Coordinator：
 
     ```bash
-    dscli stop --config_path ./coordinator_config.json
+    dscli stop --coordinator_config_path ./coordinator_config.json
     ```
 
 更多 Coordinator 配置说明参见[Coordinator配置项](#coordinator配置项)。
@@ -598,7 +598,7 @@ dscli start --coordinator_config_path ./coordinator_config.json
 停止时应先停止所有 Worker，再在每个 Coordinator 节点使用对应配置文件停止本机进程：
 
 ```bash
-dscli stop --config_path ./coordinator_config.json
+dscli stop --coordinator_config_path ./coordinator_config.json
 ```
 
 > 注意：首次启动时，各节点应使用同一组静态 peers，并发或近同时完成启动。已有 Raft 数据目录的节点会优先从本地 Raft 状态恢复，不应通过删除 `coordinator_raft_data_dir` 强行重建成员关系。
@@ -668,11 +668,18 @@ Coordinator 启动后，可以单独启动 Worker，也可以使用一条命令�
     dscli stop --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
     ```
 
+- 或分别停止（需要先停止 Worker，再停止 Coordinator ）：
+
+    ```bash
+    dscli stop --worker_address 127.0.0.1:31501
+    dscli stop --coordinator_address 127.0.0.1:31511
+    ```
+
 - 使用配置文件时，先停止 Worker，再停止 Coordinator：
 
     ```bash
-    dscli stop --config_path ./worker_config.json
-    dscli stop --config_path ./coordinator_config.json
+    dscli stop --worker_config_path ./worker_config.json
+    dscli stop --coordinator_config_path ./coordinator_config.json
     ```
 
 当 Worker 和 Coordinator 均停止后，说明单机集群卸载成功。
@@ -975,18 +982,46 @@ dscli start --coordinator_config_path coordinator_config.json
 
 |选项                         |等效短参数  |说明     |
 |-----------------------------|-----------|--------|
-|--config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 通过使用配置文件（JSON格式）停止worker或coordinator。`--worker_config_path` 保留为兼容别名 |
+|--worker_config_path &lt;FILE&gt;|-W &lt;FILE&gt;|--config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 通过使用 Worker 配置文件（JSON格式）仅停止 Worker |
+|--coordinator_config_path &lt;FILE&gt;|-C &lt;FILE&gt;| 通过使用 Coordinator 配置文件（JSON格式）仅停止 Coordinator |
 |--worker_address <ADDR>    |-w &lt;...&gt; | 通过指定worker地址（IP:PORT格式，如127.0.0.1:31501）来停止worker |
 |--coordinator_address <ADDR>|无| 通过指定coordinator地址（IP:PORT格式，如127.0.0.1:31511）来停止coordinator。与 `--worker_address` 同时指定时会先停止worker，再停止coordinator |
+|--timeout &lt;SECONDS&gt;|-t &lt;SECONDS&gt;| 覆盖动态计算的停止超时时间（有效范围：大于零）。适用于已知数据已迁移完成或测试环境无数据的快速停止场景 |
 
-> **配置文件停止注意事项**：
->
-> - `dscli stop --config_path` 根据配置文件中的服务地址字段选择停止服务：配置中包含 `worker_address` 时停止 Worker；不包含 `worker_address` 但包含 `coordinator_address` 时停止 Coordinator。
-> - 为避免歧义，Worker 配置文件应包含 `worker_address`，Coordinator 配置文件应包含 `coordinator_address`。
+常用停止方式的短参数和长参数等价示例如下：
 
-`dscli stop` 会先向 worker 发送 `SIGTERM`，等待超时后再发送 `SIGKILL`。等待超时时间按以下公式动态计算（单位：秒）：
+```bash
+# 通过地址停止 Worker
+dscli stop -w 127.0.0.1:31501
+dscli stop --worker_address 127.0.0.1:31501
+
+# 通过地址停止 Coordinator
+dscli stop -c 127.0.0.1:31511
+dscli stop --coordinator_address 127.0.0.1:31511
+
+# 同时停止 Coordinator 和 Worker
+dscli stop --worker_address 127.0.0.1:31501 --coordinator_address 127.0.0.1:31511
+
+# 通过配置文件停止 Worker
+dscli stop -f worker_config.json
+dscli stop --config_path worker_config.json
+dscli stop -W worker_config.json
+dscli stop --worker_config_path worker_config.json
+
+# 通过配置文件停止 Coordinator
+dscli stop -C coordinator_config.json
+dscli stop --coordinator_config_path coordinator_config.json
+
+# 指定超时时间快速停止（跳过动态超时计算）
+dscli stop -w 127.0.0.1:31501 -t 10
+dscli stop --worker_address 127.0.0.1:31501 --timeout 10
+```
+
+`dscli stop` 会先向服务进程发送 `SIGTERM`，等待超时后再发送 `SIGKILL`。Coordinator 的等待默认超时时间为180秒，Worker 等待超时时间默认按以下公式动态计算（单位：秒）：
 
 `180 + shared_memory_size_mb / data_migrate_rate_limit_mb`
+
+可通过 `-t`/`--timeout` 参数覆盖此动态超时。
 
 ### dscli up
 
@@ -1189,7 +1224,7 @@ dscli query route \
 #### Coordinator配置项
 
 `coordinator_config.json` 包含 Coordinator 启动参数。可以使用 `dscli start --coordinator_config_path ./coordinator_config.json` 启动，
-使用 `dscli stop --config_path ./coordinator_config.json` 停止。
+使用 `dscli stop --coordinator_config_path ./coordinator_config.json` 停止。
 
 | 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
 |-----|------|---------|-----|-------------|
