@@ -260,12 +260,17 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                 GetWorkerTimeCost().Append("ProcessGetObjectRequest", getElapsedMs);
                 auto inflightGaugeGet =
                     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
-                LOG(INFO) << FormatString(
-                    "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, inflightRemoteGet: "
-                    "%d %s",
-                    clientId, request->GetRawObjectKeys().size(),
-                    IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), getElapsedMs, inflightGauge.Get(),
-                    GetWorkerTimeCost().GetInfo());
+                auto config = GetServerLatencyTraceConfig();
+                SLOW_LOG_IF_OR_VLOG(
+                    INFO,
+                    (config.processSlowerThanUs > 0 && static_cast<uint64_t>(getElapsedMs * 1000) >= config.processSlowerThanUs)
+                        || FLAGS_enable_perf_trace_log,
+                    1,
+                    FormatString("[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, "
+                                 "inflightRemoteGet: %d %s",
+                                 clientId, request->GetRawObjectKeys().size(),
+                                 IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), getElapsedMs,
+                                 inflightGauge.Get(), GetWorkerTimeCost().GetInfo()));
             }
         });
     } else {
@@ -295,11 +300,17 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
         GetWorkerTimeCost().Append("ProcessGetObjectRequest", getElapsedMs);
         auto inflightGaugeGet =
             metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
-        LOG(INFO) << FormatString(
-            "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, inflightRemoteGet: "
-            "%d %s",
-            clientId, request->GetRawObjectKeys().size(), IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
-            getElapsedMs, inflightGauge.Get(), GetWorkerTimeCost().GetInfo());
+        auto config = GetServerLatencyTraceConfig();
+        SLOW_LOG_IF_OR_VLOG(
+            INFO,
+            (config.processSlowerThanUs > 0 && static_cast<uint64_t>(getElapsedMs * 1000) >= config.processSlowerThanUs)
+                || FLAGS_enable_perf_trace_log,
+            1,
+            FormatString("[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, "
+                         "inflightRemoteGet: %d %s",
+                         clientId, request->GetRawObjectKeys().size(),
+                         IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), getElapsedMs, inflightGauge.Get(),
+                         GetWorkerTimeCost().GetInfo()));
     }
     return Status::OK();
 }

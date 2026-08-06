@@ -647,8 +647,9 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
     }
 
     auto curIndex = outPayloads.size();
-    LOG(INFO) << FormatString("CopyShmUnitToPayloads, objectKey: %s, read offset: %ld, read size: %ld", objectKeyUri,
-                              readOffset, readSize);
+    SLOW_LOG_IF_OR_VLOG(INFO, FLAGS_enable_perf_trace_log, 1,
+        FormatString("CopyShmUnitToPayloads, objectKey: %s, read offset: %ld, read size: %ld", objectKeyUri,
+                     readOffset, readSize));
     METRIC_TIMER(metrics::KvMetricId::WORKER_TCP_WRITE_LATENCY);
     if (ubRc.IsError() || (IsUrmaEnabled() && !shmEnabled)) {
         RETURN_IF_NOT_OK(TrackWorkerToClientUrmaFallback(shmGuard, readSize, ubRc, resp, objectKeyUri));

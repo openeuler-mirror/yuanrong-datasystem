@@ -251,19 +251,26 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     // detached UUID that does not correlate with the SDK request.
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
+    Timer slowLogTimer;
     if (isQueryAndGet) {
         RETURN_IF_NOT_OK(CheckConnectionStable(req));
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const std::string callerAddress = GetRemoteAddressForLog(req);
-    LOG(INFO) << AppendSrcDstForLog(
-        FormatString(
-            "Processing pull object[%s] offset[%ld] size[%ld], expectedDataSize[%ld], version[%ld], hasUrmaInfo[%d]",
-            req.object_key(), req.read_offset(), req.read_size(), req.data_size(), req.version(), req.has_urma_info()),
-        callerAddress, FLAGS_worker_address);
     std::vector<uint64_t> eventKeys;
     RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys, nullptr, nullptr, nullptr,
                                             nullptr, isQueryAndGet));
+    auto config = GetServerLatencyTraceConfig();
+    uint64_t elapsedUs = static_cast<uint64_t>(slowLogTimer.ElapsedMicroSecond());
+    SLOW_LOG_IF_OR_VLOG(
+        INFO,
+        (config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs) || FLAGS_enable_perf_trace_log, 1,
+        AppendSrcDstForLog(
+            FormatString("Processing pull object[%s] offset[%ld] size[%ld], expectedDataSize[%ld], version[%ld], "
+                         "hasUrmaInfo[%d], cost: %.3fms",
+                         req.object_key(), req.read_offset(), req.read_size(), req.data_size(), req.version(),
+                         req.has_urma_info(), static_cast<double>(elapsedUs) / 1000.0),
+            callerAddress, FLAGS_worker_address));
     return Status::OK();
 }
 
