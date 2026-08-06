@@ -28,6 +28,7 @@
 #include <brpc/channel.h>
 #include <brpc/controller.h>
 #include <butil/iobuf.h>
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/brpc_perf_trace.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -190,6 +191,14 @@ private:
         pb.CopyFrom(response_);
         trace.MarkClientEnd();
         RecordBrpcRpcTrace(trace);
+        // Mirror BuildPostCallDeadlineCheckSnippet: a slow success whose e2e exceeds the per-request
+        // ApiDeadline must be reported as a deadline miss (brpc set_timeout_ms is a soft deadline that
+        // can leave cntl.Failed()=0 past the deadline on large-response paths). ApiDeadline is
+        // uninitialized on background / fan-out threads, where CheckApiDeadline() returns OK.
+        Status deadlineStatus = ApiDeadline::Instance().CheckApiDeadline();
+        if (deadlineStatus.IsError()) {
+            return deadlineStatus;
+        }
         return Status::OK();
     }
 
