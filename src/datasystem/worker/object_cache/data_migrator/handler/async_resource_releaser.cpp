@@ -26,6 +26,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -45,7 +46,8 @@ AsyncResourceReleaser::~AsyncResourceReleaser()
     Shutdown();
 }
 
-void AsyncResourceReleaser::Init(std::shared_ptr<ObjectTable> objectTable)
+void AsyncResourceReleaser::Init(std::shared_ptr<ObjectTable> objectTable,
+                                 std::shared_ptr<WorkerOcEvictionManager> evictionManager)
 {
     if (running_.load()) {
         LOG(WARNING) << "AsyncResourceReleaser already initialized";
@@ -53,6 +55,7 @@ void AsyncResourceReleaser::Init(std::shared_ptr<ObjectTable> objectTable)
     }
 
     objectTable_ = std::move(objectTable);
+    evictionManager_ = std::move(evictionManager);
     running_.store(true);
 
     workerThread_ = Thread(&AsyncResourceReleaser::WorkerThread, this);
@@ -74,6 +77,7 @@ void AsyncResourceReleaser::Shutdown()
     }
 
     objectTable_.reset();
+    evictionManager_.reset();
 
     LOG(INFO) << "AsyncResourceReleaser shutdown";
 }
@@ -163,6 +167,15 @@ Status AsyncResourceReleaser::Release(const ImmutableString &objectKey, uint64_t
         LOG(INFO) << FormatString("Release skipped: object %s version advanced: %ld -> %ld", objectKey, expectedVersion,
                                   currentVersion);
         return Status::OK();
+    }
+    // Keep the eviction list consistent with the object table. Every other removal path
+    // (worker_oc_service_crud_common_api, publish_impl, get_impl, migrate_impl rollback) pairs eviction-list Erase
+    // with object-table Erase; the SPILL success path used to erase only the object table, leaving stale eviction
+    // entries that made rebalance re-select gone objects and log "Key not found" every batch. Erase the eviction
+    // entry first (mirroring the rollback convention) under the held object write lock so the two removals are
+    // atomic with respect to concurrent object access; the worker thread retries the whole Release on lock failure.
+    if (evictionManager_ != nullptr) {
+        (void)evictionManager_->Erase(objectKey);
     }
     LOG_IF_ERROR(objectTable_->Erase(objectKey, *entry), FormatString("Erase object %s failed", objectKey));
     return Status::OK();

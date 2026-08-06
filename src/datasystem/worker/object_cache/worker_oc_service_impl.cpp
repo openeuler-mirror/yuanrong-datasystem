@@ -477,7 +477,7 @@ Status WorkerOCServiceImpl::InitRecoveryServices()
         std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, std::move(clusterAccess),
                                                   workerMasterApiManager_, metadataRoute_, metadataSize_,
                                                   evictionManager_, memCpyThreadPool_);
-    AsyncResourceReleaser::Instance().Init(objectTable_);
+    AsyncResourceReleaser::Instance().Init(objectTable_, evictionManager_);
     InitServiceImpl();
     NodeSelector::Instance().Init(localAddress_.ToString(), membership_, exitRequested_,
                                   workerMasterApiManager_);

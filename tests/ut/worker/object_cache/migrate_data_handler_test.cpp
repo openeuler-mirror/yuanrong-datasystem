@@ -41,6 +41,7 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
@@ -751,6 +752,59 @@ TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjectsByTCP)
     ASSERT_EQ(result.successIds.size(), count);
     ASSERT_TRUE(result.skipIds.empty());
     ASSERT_TRUE(result.failedIds.empty());
+}
+
+// Guards the SPILL migration eviction-cleanup contract: when MigrateDataToRemote succeeds, the source worker must
+// erase each migrated object from BOTH the ObjectTable and the EvictionList. Before the fix, AsyncResourceReleaser
+// erased only the ObjectTable and left stale EvictionList entries, which made rebalance re-select gone objects and
+// log "Skip rebalance candidate ... Key not found" every batch (issue #864). This case wires a real eviction
+// manager into the AsyncResourceReleaser singleton, adds the objects to the eviction list, runs a SPILL migration
+// whose mock remote reports all keys as migrated, then asserts both tables are empty afterward.
+TEST_F(MigrateDataHandlerSpillTest, SpillMigrationErasesEvictionEntryAlongsideObjectTable)
+{
+    // Reuse a real eviction manager for this case so the singleton's eviction-list Erase path is exercised.
+    // Order-independent: guarantee clean singleton state before Init (a prior case may have left it running).
+    AsyncResourceReleaser::Instance().Shutdown();
+    const HostPort localAddr("127.0.0.1", 18481);
+    const HostPort masterAddr("127.0.0.1", 18480);
+    auto akSkManager = std::make_shared<AkSkManager>(0);
+    auto evictionManager = std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddr, masterAddr,
+                                                                      GetTestMetadataRoute());
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
+    DS_ASSERT_OK(evictionManager->Init(globalRefTable, akSkManager));
+    Raii restore([]() { AsyncResourceReleaser::Instance().Shutdown(); });
+    AsyncResourceReleaser::Instance().Init(objectTable_, evictionManager);
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke(this, &MigrateDataHandlerTest::MockMigrateSmallData1));
+
+    constexpr uint64_t size = 100;
+    constexpr uint64_t count = 5;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("rebalance_evict_guard", size, count, objectKeys);
+    for (const auto &key : objectKeys) {
+        evictionManager->Add(static_cast<std::string>(key));
+    }
+    // Sanity: the eviction list now holds all migrated objects.
+    std::vector<EvictionList::Node> nodes;
+    EvictionList::Node oldest;
+    DS_ASSERT_OK(evictionManager->GetAllObjectsInfo(nodes, oldest));
+    ASSERT_EQ(nodes.size(), count);
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_, nullptr);
+    auto result = handler.MigrateDataToRemote();
+    DS_ASSERT_OK(result.status);
+    ASSERT_EQ(result.successIds.size(), count);
+    ASSERT_TRUE(result.failedIds.empty());
+
+    // After migration, both the ObjectTable and the EvictionList must have dropped every migrated object.
+    for (const auto &key : objectKeys) {
+        DS_ASSERT_NOT_OK(objectTable_->Contains(key));
+    }
+    std::vector<EvictionList::Node> after;
+    EvictionList::Node afterOldest;
+    DS_ASSERT_OK(evictionManager->GetAllObjectsInfo(after, afterOldest));
+    EXPECT_TRUE(after.empty()) << "stale eviction-list entries must be purged alongside the object-table entries";
 }
 
 TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestMigrateObjectsByFastTransport)
