@@ -838,6 +838,8 @@ Status DsCoordinationBackend::InformReconciliationDone(const HostPort &workerAdd
         RETURN_IF_NOT_OK(putStatus);
         if (workerAddr.ToString() == keepAliveKey_) {
             keepAliveModRevision_ = putRevision;
+            std::lock_guard<std::mutex> lock(keepAliveMutex_);
+            keepAliveValue_ = value;
         }
         HandleMembershipSuccess(coordinatorId);
     }

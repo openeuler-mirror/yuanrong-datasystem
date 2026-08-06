@@ -537,7 +537,7 @@ Status EtcdStore::InitKeepAlive(const std::string &tableName, const std::string 
             LOG(INFO) << "Host id is " << hostId << " from env " << FLAGS_host_id_env_name;
         }
     }
-    // "_" is a placeholder, it will be replaced by timestamp later when a connection to etcd is built.
+    // The timestamp is replaced when the first lease connection is established.
     keepAliveValue_.timestamp = 0;
     keepAliveValue_.hostId = hostId;
     keepAliveValue_.compatibilityVersion = CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString();
@@ -1175,7 +1175,7 @@ Status EtcdStore::InformReconciliationDone(const HostPort &workerAddr)
     RETURN_IF_NOT_OK(Get(keepAliveTableName_, workerAddr.ToString(), valueStr));
     cluster::MemberServiceInfo value;
     RETURN_IF_NOT_OK(cluster::MemberServiceInfo::FromString(valueStr, value));
-    INJECT_POINT("recover.toReady.delay");
+    INJECT_POINT("recover.toReady.beforeWrite");
     if (value.state == cluster::MemberLifecycleState::RESTARTING
         || value.state == cluster::MemberLifecycleState::RECOVERING) {
         value.state = cluster::MemberLifecycleState::READY;

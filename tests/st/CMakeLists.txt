@@ -156,7 +156,7 @@ add_executable(dead_peer_fast_fail_test
 # ds_st_kv_cache) pull in worker+master+rocksdb+zmq and trip the OOM killer on
 # CI runners with limited RAM. -Wl,--reduce-memory-overheads drops GNU ld RSS
 # by ~20-40% during the final link step (same pattern PR #1182 used for UT).
-target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
+target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS} cluster_query_client -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)

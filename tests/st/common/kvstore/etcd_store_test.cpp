@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cassert>
 #include <condition_variable>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -431,6 +432,84 @@ TEST_F(EtcdStoreTest, LEVEL1_TestPutLease3)
     DS_EXPECT_OK(rc);
     ExpectKeepAliveState(value2, cluster::MemberLifecycleState::STARTING);
     EXPECT_EQ(value, value2);
+}
+
+TEST_F(EtcdStoreTest, FirstMembershipPublicationFactDoesNotRegressAfterReady)
+{
+    constexpr char MEMBER_ADDRESS[] = "127.0.0.1:31001";
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    DS_ASSERT_OK(db_->InitKeepAlive(tableName_, MEMBER_ADDRESS, false));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this] {
+            return db_->IsFirstKeepAliveSent() ? Status::OK()
+                                               : Status(K_NOT_READY, "membership lease has not been published");
+        },
+        10, K_OK));
+
+    DS_ASSERT_OK(db_->UpdateNodeState(cluster::MemberLifecycleState::READY));
+    EXPECT_TRUE(db_->IsFirstKeepAliveSent());
+    DS_ASSERT_OK(db_->UpdateNodeState(cluster::MemberLifecycleState::EXITING));
+    EXPECT_TRUE(db_->IsFirstKeepAliveSent());
+    DS_ASSERT_OK(db_->UpdateNodeState(cluster::MemberLifecycleState::READY));
+    HostPort localAddress;
+    DS_ASSERT_OK(localAddress.ParseString(MEMBER_ADDRESS));
+    DS_ASSERT_OK(db_->InformReconciliationDone(localAddress));
+    std::string stored;
+    DS_ASSERT_OK(db_->Get(tableName_, MEMBER_ADDRESS, stored));
+    ExpectKeepAliveState(stored, cluster::MemberLifecycleState::EXITING);
+}
+
+TEST_F(EtcdStoreTest, ConcurrentLifecycleWritesPreserveDecodableMembership)
+{
+    constexpr char MEMBER_ADDRESS[] = "127.0.0.1:31002";
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    DS_ASSERT_OK(db_->InitKeepAlive(tableName_, MEMBER_ADDRESS, false));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this] {
+            return db_->IsFirstKeepAliveSent() ? Status::OK()
+                                               : Status(K_NOT_READY, "membership lease has not been published");
+        },
+        10, K_OK));
+    DS_ASSERT_OK(db_->UpdateNodeState(cluster::MemberLifecycleState::RECOVERING));
+    HostPort localAddress;
+    DS_ASSERT_OK(localAddress.ParseString(MEMBER_ADDRESS));
+    constexpr char RECONCILIATION_BARRIER[] = "recover.toReady.beforeWrite";
+    DS_ASSERT_OK(inject::Set(RECONCILIATION_BARRIER, "1*pause()"));
+    Raii clearBarrier([] { (void)inject::Clear("recover.toReady.beforeWrite"); });
+
+    auto reconciliation = std::async(std::launch::async, [&] { return db_->InformReconciliationDone(localAddress); });
+    const auto barrierDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (inject::GetExecuteCount(RECONCILIATION_BARRIER) == 0
+           && std::chrono::steady_clock::now() < barrierDeadline) {
+        std::this_thread::yield();
+    }
+    const bool reconciliationPaused = inject::GetExecuteCount(RECONCILIATION_BARRIER) == 1;
+    if (!reconciliationPaused) {
+        (void)inject::Clear(RECONCILIATION_BARRIER);
+    }
+    ASSERT_TRUE(reconciliationPaused);
+    std::atomic<bool> exitStarted{ false };
+    auto exiting = std::async(std::launch::async, [&] {
+        exitStarted = true;
+        return db_->UpdateNodeState(cluster::MemberLifecycleState::EXITING);
+    });
+    const auto exitDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!exitStarted.load() && std::chrono::steady_clock::now() < exitDeadline) {
+        std::this_thread::yield();
+    }
+    const bool exitAttempted = exitStarted.load();
+    (void)inject::Clear(RECONCILIATION_BARRIER);
+    ASSERT_TRUE(exitAttempted);
+    DS_ASSERT_OK(reconciliation.get());
+    DS_ASSERT_OK(exiting.get());
+
+    std::string stored;
+    DS_ASSERT_OK(db_->Get(tableName_, MEMBER_ADDRESS, stored));
+    cluster::MemberServiceInfo value;
+    DS_ASSERT_OK(cluster::MemberServiceInfo::FromString(stored, value));
+    EXPECT_EQ(value.state, cluster::MemberLifecycleState::EXITING);
 }
 
 TEST_F(EtcdStoreTest, TestWatchEvents1)

@@ -792,6 +792,7 @@ Status TopologyController::RecoverFromLatestTopology()
                       << " sample=" << MembershipSample(memberships);
         }
     }
+    RETURN_IF_NOT_OK(RestoreReadyAfterLocalRecovery(*latest, memberships));
     RETURN_IF_NOT_OK(TryConfirmFailures(*latest, memberships));
     if (topologyCommittedThisTick_) {
         return Status::OK();
@@ -802,6 +803,43 @@ Status TopologyController::RecoverFromLatestTopology()
         return Status::OK();
     }
     return TryStartNextBatch(*latest, memberships);
+}
+
+Status TopologyController::RestoreReadyAfterLocalRecovery(
+    const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships)
+{
+    if (options_.eventSourceMode != TopologyEventSourceMode::EXTERNAL_ETCD
+        || options_.localMembershipRecoveryHandler == nullptr || options_.localAddress.empty()) {
+        return Status::OK();
+    }
+    const auto membership = std::find_if(memberships.begin(), memberships.end(), [this](const auto &record) {
+        return record.address == options_.localAddress;
+    });
+    if (membership == memberships.end() || membership->state != MemberLifecycleState::RECOVERING) {
+        return Status::OK();
+    }
+    const Member *local = nullptr;
+    if (latest.FindMemberByAddress(options_.localAddress, local).IsError() || local == nullptr
+        || local->state != MemberState::ACTIVE) {
+        return Status::OK();
+    }
+    auto rc = options_.localMembershipRecoveryHandler();
+    if (rc.GetCode() == K_NOT_READY) {
+        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_RECONCILE_LOG_INTERVAL)
+            << "CLUSTER_MEMBERSHIP cluster=" << keys_.ClusterName()
+            << " role=controller action=restore_ready_after_local_recovery address=" << options_.localAddress
+            << " status=" << rc.ToString();
+        // Local admission can remain pending much longer than one Controller tick. It must not freeze failure
+        // confirmation or unrelated topology batches, and no exact resync is needed because no membership changed.
+        return Status::OK();
+    } else {
+        LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << keys_.ClusterName()
+                  << " role=controller action=restore_ready_after_local_recovery address=" << options_.localAddress
+                  << " status=" << rc.ToString();
+    }
+    RETURN_IF_NOT_OK(rc);
+    externalResyncRequired_ = true;
+    RETURN_STATUS(K_NOT_READY, "local recovered membership was promoted; exact resync required");
 }
 
 Status TopologyController::EnsureTopologyAuthority()

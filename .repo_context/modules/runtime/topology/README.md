@@ -26,7 +26,17 @@
   ordinary membership mutations. This prevents an in-flight recovery payload from overwriting EXITING; the local
   cleanup gate remains outside that serialization boundary. Installation stays outside the Reconciler state mutex
   because it synchronously publishes membership readiness, then Router identity is rechecked before reporting.
-  Coordinator-side `EnsureLeaderMembership`
+  A successful local reconciliation-to-READY write also replaces the local renewal payload and its modification
+  revision before later Ensure/keepalive activity can replay it. Ensure payload capture, the synchronous Ensure RPC and
+  returned-revision installation share that same membership mutation fence, so an earlier RECOVERING payload cannot be
+  committed after a later READY transition. Failed writes and reconciliation of another Worker do not change that
+  process-local payload. Voluntary EXITING intent is monotonic for one Worker process lifetime in both Coordinator and
+  ETCD backends: reconciliation, READY publication, Ensure and lease recreation cannot replace it with a non-EXITING
+  value, including when the first EXITING write fails. Engine shutdown publishes STOPPING and closes its local admission
+  gate before backend teardown; it does not wait for an in-flight membership RPC before canceling event sources.
+  Worker Leader reconciliation installs ensured membership outside its state mutex because installation synchronously
+  publishes membership readiness; it then rechecks Router identity before reporting so a successor lifetime can enqueue
+  its fenced Ensure without recursive locking or a stale recovery report. Coordinator-side `EnsureLeaderMembership`
   uses the same `TopologyControlHost` reservation/completion transaction as normal membership Put, so topology recovery
   cannot become READY with committed memberships but no Controller runtime owner. Reconciler shutdown transfers its
   Ensure pool under the scheduling mutex and joins outside the lock, fencing already copied membership callbacks from
@@ -271,6 +281,16 @@
   removal share one bounded deadline: lock acquisition, the backend write, retry sleep, and topology polling consume the
   same remaining budget. A failed publication is retried, but the first successful publication stops repeated writes;
   the backend's terminal EXITING latch republishes that intent if later lease or Leader recovery occurs.
+  After lease
+  recreation publishes the local ACTIVE member as `RECOVERING`, only that Worker's ETCD Controller requests restoration
+  to `READY`. `TopologyEngine` accepts the request only while RUNNING and after this process has already completed a
+  successful admission/reconciliation READY publication. The Controller then forces an exact membership resync before
+  making further control decisions; it never edits its fact cache optimistically. A not-yet-admitted local Worker does
+  not block failure confirmation or unrelated topology batches. Recovery READY writes use a bounded background retry
+  budget, the Engine gate is atomic, and no Engine lock is held across membership RPCs; backend mutation serialization
+  and the monotonic EXITING intent own final write ordering.
+  The query projector remains a truthful projection: an observed ACTIVE + RECOVERING member is reported as RECOVERING
+  until this backend transition succeeds.
 - Coordinator watches bind both `CoordinatorId` and `watch_id`. Watch registration uses a client registration ID so an
   ambiguous WatchRange result retries idempotently. Initial/recreated membership invalidates both Worker and Controller
   role plans using O(1) RESET doorbells; lease threads never wait for watch-registration RPCs.

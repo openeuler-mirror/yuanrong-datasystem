@@ -10,6 +10,8 @@
 #define DATASYSTEM_TESTS_UT_CLUSTER_TESTING_FAKE_COORDINATOR_SERVICE_PROXY_H
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -45,7 +47,22 @@ public:
                int64_t &version, int64_t &revision, int32_t, std::string *coordinatorId,
                const std::string &expectedCoordinatorId, int64_t expectedModRevision) override
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
+        ++putAttempts_;
+        putCv_.notify_all();
+        if (blockNextPut_) {
+            blockNextPut_ = false;
+            putBlocked_ = true;
+            putCv_.notify_all();
+            putCv_.wait(lock, [this] { return releasePut_; });
+            putBlocked_ = false;
+            releasePut_ = false;
+        }
+        if (nextPutStatus_.IsError()) {
+            const auto status = nextPutStatus_;
+            nextPutStatus_ = Status::OK();
+            return status;
+        }
         if (!expectedCoordinatorId.empty() && expectedCoordinatorId != coordinatorId_) {
             RETURN_STATUS(K_NOT_READY, "Coordinator identity changed");
         }
@@ -223,6 +240,33 @@ public:
         FailRangeForKeyTimes(std::move(key), code, 1);
     }
 
+    void FailNextPut(Status status)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        nextPutStatus_ = std::move(status);
+    }
+
+    void BlockNextPut()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        blockNextPut_ = true;
+        putBlocked_ = false;
+        releasePut_ = false;
+    }
+
+    bool WaitUntilPutBlocked(std::chrono::steady_clock::time_point deadline)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return putCv_.wait_until(lock, deadline, [this] { return putBlocked_; });
+    }
+
+    void ReleaseBlockedPut()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        releasePut_ = true;
+        putCv_.notify_all();
+    }
+
     void FailRangeForKeyTimes(std::string key, StatusCode code, uint32_t count)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -307,16 +351,22 @@ private:
 
     // Protects entries_, revision/watch identity allocation, and captured calls.
     mutable std::mutex mutex_;
+    std::condition_variable putCv_;
     std::map<std::string, Entry> entries_;
     std::vector<WatchCall> watchCalls_;
     std::vector<int64_t> cancelledWatchIds_;
     std::vector<coordinator::ReportTopologyRecoveryCandidateReqPb> recoveryRequests_;
     int64_t revision_{ 1 };
     int64_t nextWatchId_{ 1 };
+    size_t putAttempts_{ 0 };
     std::string coordinatorId_{ "coordinator-test" };
     std::string nextRangeFailureKey_;
     StatusCode nextRangeFailureCode_{ K_OK };
     uint32_t rangeFailureCount_{ 0 };
+    Status nextPutStatus_{ Status::OK() };
+    bool blockNextPut_{ false };
+    bool putBlocked_{ false };
+    bool releasePut_{ false };
     std::string nextWatchFailureKey_;
     StatusCode nextWatchFailureCode_{ K_OK };
     bool requireRecoveryPayload_{ false };

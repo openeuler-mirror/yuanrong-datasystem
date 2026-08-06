@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
@@ -30,6 +31,20 @@
 #include "ut/common.h"
 
 namespace datasystem::cluster {
+
+class TopologyEngineTestPeer final {
+public:
+    static Status RestoreReadyAfterLocalRecovery(TopologyEngine &engine)
+    {
+        return engine.RestoreReadyAfterLocalRecovery();
+    }
+
+    static bool ReadyMembershipPublished(const TopologyEngine &engine)
+    {
+        return engine.readyMembershipPublished_.load(std::memory_order_acquire);
+    }
+};
+
 namespace {
 
 constexpr char LOCAL_ADDRESS[] = "127.0.0.1:10001";
@@ -262,6 +277,20 @@ void ConfigureBuilder(
         .SetNodeDeadTimeout(std::chrono::seconds(30));
 }
 
+Status ReadCoordinatorMembershipState(testing::FakeCoordinatorServiceProxy &proxy, const std::string &clusterName,
+                                      MemberLifecycleState &state)
+{
+    auto keys = MakeKeys(clusterName);
+    std::vector<KeyValueEntry> entries;
+    int64_t revision = 0;
+    RETURN_IF_NOT_OK(proxy.Range(keys->MembershipTable() + "/" + LOCAL_ADDRESS, "", entries, revision, 0, nullptr));
+    CHECK_FAIL_RETURN_STATUS(entries.size() == 1, K_NOT_FOUND, "expected one local membership");
+    MembershipValue value;
+    RETURN_IF_NOT_OK(MembershipValueCodec::Decode(entries.front().value, value));
+    state = value.lifecycleState;
+    return Status::OK();
+}
+
 std::unique_ptr<TopologyEngine> BuildEngine(testing::FakeCoordinatorServiceProxy &proxy,
                                             TestWatchIngress &ingress, NoopTopologyCallbacks &callbacks,
                                             const std::string &clusterName)
@@ -415,12 +444,165 @@ TEST(TopologyEngineTest, StartPublishesCapabilitiesAndShutdownDrainsOwnedRoles)
     EXPECT_EQ(placement.committedOwnerAddress, LOCAL_ADDRESS);
     DS_ASSERT_OK(engine->MarkReady());
     DS_ASSERT_OK(engine->MarkExiting());
-    DS_ASSERT_OK(engine->NotifyReconciliationDone());
+    EXPECT_EQ(engine->NotifyReconciliationDone().GetCode(), K_NOT_READY);
+    EXPECT_EQ(engine->MarkReady().GetCode(), K_NOT_READY);
 
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
     EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPED);
     EXPECT_FALSE(ingress.IsBound());
     EXPECT_GT(proxy.CancelledWatchCount(), 0U);
+}
+
+TEST(TopologyEngineTest, LocalRecoveryCannotPublishReadyBeforeAdmissionCompletes)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    auto engine = BuildEngine(proxy, ingress, callbacks, "recovery-before-admission");
+    ASSERT_NE(engine, nullptr);
+    DS_ASSERT_OK(engine->Start());
+
+    EXPECT_EQ(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine).GetCode(), K_NOT_READY);
+
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, SuccessfulReadyPublicationEnablesLocalRecoveryRepublish)
+{
+    {
+        testing::FakeCoordinatorServiceProxy proxy;
+        TestWatchIngress ingress;
+        NoopTopologyCallbacks callbacks;
+        auto engine = BuildEngine(proxy, ingress, callbacks, "recovery-after-ready");
+        ASSERT_NE(engine, nullptr);
+        DS_ASSERT_OK(engine->Start());
+        DS_ASSERT_OK(engine->MarkReady());
+        DS_ASSERT_OK(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine));
+        DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    }
+    {
+        testing::FakeCoordinatorServiceProxy proxy;
+        TestWatchIngress ingress;
+        NoopTopologyCallbacks callbacks;
+        auto engine = BuildEngine(proxy, ingress, callbacks, "failed-recovery-keeps-gate-open");
+        ASSERT_NE(engine, nullptr);
+        DS_ASSERT_OK(engine->Start());
+        DS_ASSERT_OK(engine->MarkReady());
+        ASSERT_TRUE(TopologyEngineTestPeer::ReadyMembershipPublished(*engine));
+        proxy.FailNextPut(Status(K_RPC_UNAVAILABLE, "injected recovery failure"));
+        EXPECT_EQ(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine).GetCode(), K_RPC_UNAVAILABLE);
+        EXPECT_TRUE(TopologyEngineTestPeer::ReadyMembershipPublished(*engine));
+        DS_ASSERT_OK(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine));
+        DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    }
+    {
+        testing::FakeCoordinatorServiceProxy proxy;
+        TestWatchIngress ingress;
+        NoopTopologyCallbacks callbacks;
+        auto engine = BuildEngine(proxy, ingress, callbacks, "failed-ready-keeps-gate-closed");
+        ASSERT_NE(engine, nullptr);
+        DS_ASSERT_OK(engine->Start());
+        proxy.FailNextPut(Status(K_RPC_UNAVAILABLE, "injected ready failure"));
+        EXPECT_EQ(engine->MarkReady().GetCode(), K_RPC_UNAVAILABLE);
+        EXPECT_EQ(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine).GetCode(), K_NOT_READY);
+        DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    }
+    {
+        constexpr char CLUSTER_NAME[] = "recovery-after-reconciliation";
+        testing::FakeCoordinatorServiceProxy proxy;
+        TestWatchIngress ingress;
+        NoopTopologyCallbacks callbacks;
+        PutTopology(proxy, CLUSTER_NAME, MakeTopology());
+        auto engine = BuildEngine(proxy, ingress, callbacks, CLUSTER_NAME);
+        ASSERT_NE(engine, nullptr);
+        DS_ASSERT_OK(engine->Start());
+        DS_ASSERT_OK(engine->NotifyReconciliationDone());
+        DS_ASSERT_OK(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine));
+        DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    }
+    {
+        constexpr char CLUSTER_NAME[] = "failed-reconciliation-keeps-gate-closed";
+        testing::FakeCoordinatorServiceProxy proxy;
+        TestWatchIngress ingress;
+        NoopTopologyCallbacks callbacks;
+        PutTopology(proxy, CLUSTER_NAME, MakeTopology());
+        auto engine = BuildEngine(proxy, ingress, callbacks, CLUSTER_NAME);
+        ASSERT_NE(engine, nullptr);
+        DS_ASSERT_OK(engine->Start());
+        proxy.FailNextPut(Status(K_RPC_UNAVAILABLE, "injected reconciliation failure"));
+        EXPECT_EQ(engine->NotifyReconciliationDone().GetCode(), K_RPC_UNAVAILABLE);
+        EXPECT_EQ(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine).GetCode(), K_NOT_READY);
+        DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    }
+}
+
+TEST(TopologyEngineTest, ExitingAndStoppingDisableLocalRecoveryRepublish)
+{
+    constexpr char CLUSTER_NAME[] = "recovery-exit-serialization";
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    auto engine = BuildEngine(proxy, ingress, callbacks, CLUSTER_NAME);
+    ASSERT_NE(engine, nullptr);
+    DS_ASSERT_OK(engine->Start());
+    DS_ASSERT_OK(engine->MarkReady());
+    proxy.BlockNextPut();
+    auto recovery = std::async(std::launch::async,
+                               [&] { return TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine); });
+    const bool recoveryBlocked = proxy.WaitUntilPutBlocked(std::chrono::steady_clock::now() + TEST_WAIT);
+    if (!recoveryBlocked) {
+        proxy.ReleaseBlockedPut();
+    }
+    ASSERT_TRUE(recoveryBlocked);
+    auto exiting = std::async(std::launch::async, [&] { return engine->MarkExiting(); });
+
+    proxy.ReleaseBlockedPut();
+    DS_ASSERT_OK(recovery.get());
+    DS_ASSERT_OK(exiting.get());
+    MemberLifecycleState storedState = MemberLifecycleState::UNKNOWN;
+    DS_ASSERT_OK(ReadCoordinatorMembershipState(proxy, CLUSTER_NAME, storedState));
+    EXPECT_EQ(storedState, MemberLifecycleState::EXITING);
+    EXPECT_EQ(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine).GetCode(), K_NOT_READY);
+    EXPECT_EQ(engine->NotifyReconciliationDone().GetCode(), K_NOT_READY);
+    EXPECT_EQ(engine->MarkReady().GetCode(), K_NOT_READY);
+
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    EXPECT_EQ(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine).GetCode(), K_NOT_READY);
+}
+
+TEST(TopologyEngineTest, ShutdownDoesNotWaitForBlockedMembershipPublicationAndClosesRecoveryGate)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    auto engine = BuildEngine(proxy, ingress, callbacks, "bounded-membership-shutdown");
+    ASSERT_NE(engine, nullptr);
+    DS_ASSERT_OK(engine->Start());
+    DS_ASSERT_OK(engine->MarkReady());
+    ASSERT_TRUE(TopologyEngineTestPeer::ReadyMembershipPublished(*engine));
+
+    proxy.BlockNextPut();
+    auto publication = std::async(
+        std::launch::async, [&] { return TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine); });
+    const bool publicationBlocked = proxy.WaitUntilPutBlocked(std::chrono::steady_clock::now() + TEST_WAIT);
+    if (!publicationBlocked) {
+        proxy.ReleaseBlockedPut();
+    }
+    ASSERT_TRUE(publicationBlocked);
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    const auto shutdownStatus = engine->Shutdown(startedAt + std::chrono::milliseconds(500));
+    const auto elapsed = std::chrono::steady_clock::now() - startedAt;
+    EXPECT_TRUE(shutdownStatus.IsOk()) << shutdownStatus.ToString();
+    EXPECT_LT(elapsed, std::chrono::seconds(1));
+    EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPED);
+    EXPECT_FALSE(TopologyEngineTestPeer::ReadyMembershipPublished(*engine));
+    EXPECT_EQ(publication.wait_for(std::chrono::milliseconds(0)), std::future_status::timeout);
+
+    proxy.ReleaseBlockedPut();
+    DS_ASSERT_OK(publication.get());
+    EXPECT_FALSE(TopologyEngineTestPeer::ReadyMembershipPublished(*engine));
+    EXPECT_EQ(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine).GetCode(), K_NOT_READY);
 }
 
 TEST(TopologyEngineTest, ProbeEventInvokesOnlyWorkerProbeHandler)

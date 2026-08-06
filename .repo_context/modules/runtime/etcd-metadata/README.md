@@ -32,7 +32,7 @@
   - maps project table names to ETCD key prefixes through `EtcdStore::CreateTable`;
   - performs normal KV operations: `Put`, `PutWithLeaseId`, `Get`, `RawGet`, `GetAll`, `PrefixSearch`, `RangeSearch`, `Delete`, and `BatchPut`;
   - implements CAS through ETCD transaction compare-and-put semantics in `EtcdStore::CAS` and `Transaction`;
-  - owns lease-backed worker liveness writes through `EtcdStore::InitKeepAlive`, `RunKeepAliveTask`, `UpdateNodeState`, and `InformEtcdReconciliationDone`;
+  - owns lease-backed worker liveness writes through `EtcdStore::InitKeepAlive`, `RunKeepAliveTask`, `UpdateNodeState`, and `InformReconciliationDone`;
   - owns ETCD watch streams and local event compensation through `EtcdWatch`;
   - supports ETCD auth token acquisition/refresh and TLS channel creation;
   - supports deadline-aware `GetAll` for bounded read-only operator queries;
@@ -83,7 +83,7 @@
   - `EtcdStore::Get`, `RawGet`, `GetAll`, `PrefixSearch`, `RangeSearch`
   - `EtcdStore::Delete`
   - `EtcdStore::CAS`
-  - `EtcdStore::InitKeepAlive`, `UpdateNodeState`, `InformEtcdReconciliationDone`
+  - `EtcdStore::InitKeepAlive`, `UpdateNodeState`, `InformReconciliationDone`
   - `EtcdStore::WatchEvents`, `InitWatch`, `WatchRun`, `ReInitWatch`
   - `EtcdStore::Writable`
   - `EtcdStore::Authenticate`
@@ -164,15 +164,23 @@ Important nuance:
    legacy semicolon-delimited text format; Coordinator persists the same neutral value as protobuf, and
    `MembershipValueCodec` decodes both backend formats.
 2. Initial states are `start`, `restart`, or `d_rst`; after the first successful write, later automatic writes use `recover`.
-3. `RunKeepAliveTask` creates an ETCD lease with TTL `node_timeout_s`, creates `EtcdKeepAlive`, writes the cluster table key with that lease, then runs the keepalive loop.
+   The in-memory automatic-write template deliberately remains `recover` after an explicit READY publication so later
+   lease recreation is observable as recovery rather than silently claiming admission.
+3. `RunKeepAliveTask` creates an ETCD lease with TTL `node_timeout_s`, creates `EtcdKeepAlive`, writes the cluster table
+   key with that lease, then runs the keepalive loop. A dedicated monotonic atomic records the first successful
+   membership publication; callers do not infer that fact from the mutable automatic-write template.
 4. `EtcdKeepAlive::Run` periodically sends `LeaseKeepAlive` requests after `LivenessHealthCheckEvent` notifications.
 5. If keepalive fails longer than the lease-expiry threshold, the parent monitor keeps retrying and, after peer/store
-   evidence confirms local isolation, emits one fake DELETE event. It never terminates the process; readiness/admission
-   and external lifecycle management own isolation and restart policy.
+   evidence confirms local isolation, emits one fake DELETE event. Existing death-timer and `auto_del_dead_node` policy
+   can still terminate the locally isolated Worker with `SIGKILL`.
 6. `UpdateNodeState` rewrites the local cluster-table value with the active lease.
 7. `InformReconciliationDone` uses the keepalive table selected by `InitKeepAlive` and turns `restart` or `recover`
    into `ready` after reconciliation.
-8. A process can own several `EtcdStore` instances, but only the instance that calls `InitKeepAlive` installs the
+8. `AutoCreate`, `UpdateNodeState`, and `InformReconciliationDone` share `membershipMutationMutex_`. It protects the
+   membership template and serializes process-local membership RPC commit order, so a delayed recovery READY cannot
+   overwrite a later EXITING publication. A failed RPC advances neither the first-publication fact nor local lifecycle
+   state.
+9. A process can own several `EtcdStore` instances, but only the instance that calls `InitKeepAlive` installs the
    process-level graceful-exit keepalive-timeout handler. Watch/KV-only stores must not replace that authority.
 9. During graceful exit after a keepalive timeout, `GrpcSession` continues rejecting ordinary ETCD RPCs. Only an
    existing member's typed, nonzero-lease membership rebind may pass the preflight gate; the timeout remains set until
@@ -186,8 +194,12 @@ Important nuance:
 
 - Writes whose physical key contains the membership `/cluster/` segment must be bound to a lease.
   `GrpcSession::SendRpc` rejects matching `Put` requests whose lease is `0`.
+- Membership mutation holds `membershipMutationMutex_` before entering normal table operations, whose existing shared
+  mutex remains inner. Keepalive recovery may already own `keepAliveLock_` before taking the membership mutex; code must
+  not add a membership-mutex-to-keepalive-lock path.
 - Keepalive failure can synthesize a local DELETE event even before a real ETCD watch event arrives, so topology deletion
-  logic must treat the event as local control-plane evidence and remain idempotent. The monitor keeps the process alive.
+  logic must treat the event as local control-plane evidence and remain idempotent. If isolation persists, existing
+  death-timer policy can terminate the process.
 
 ### Watch And Event Compensation
 
@@ -295,8 +307,8 @@ Important nuance:
 - CAS is implemented as read-process-transaction over full values. Hot keys such as `/datasystem/ring` can create heavy ETCD load and high conflict rates during cluster scale or failure storms.
 - CAS conflict handling is bounded by a generic error retry counter, so large writer fanout can surface as operation failure rather than backpressure-aware convergence.
 - Watch compensation improves resilience but creates two event sources: ETCD stream events and synthesized fake events. This increases duplicate/order reasoning cost for topology handlers.
-- Keepalive failure handling still mixes transport diagnosis, local fake DELETE generation, and retry in the common ETCD
-  wrapper. It no longer owns death timers or `SIGKILL`; external lifecycle management owns process termination.
+- Keepalive failure handling still mixes transport diagnosis, local fake DELETE generation, retry, death timers, and
+  `SIGKILL` fallback in the common ETCD wrapper.
 - In-memory Metastore shares ETCD-compatible APIs but has limited history and no verified persistent durability in this layer, so behavior can differ from an external ETCD cluster under restart, compaction, or long watch gaps.
 - Table prefix mappings live only in `EtcdStore` memory while data lives in ETCD/Metastore, so callers must recreate identical table mappings before accessing data.
 - ETCD auth/TLS, router-client TLS, normal worker sessions, transaction static sessions, watch sessions, and keepalive sessions have different creation paths, which raises the risk of inconsistent backend or security behavior.
