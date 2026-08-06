@@ -1751,7 +1751,7 @@ Status WorkerOCServer::PublishReadyMembership()
 
 Status WorkerOCServer::StartUbHealthLeaseSync()
 {
-    if (objCacheClientWorkerSvc_ == nullptr) {
+    if (!IsUrmaEnabled() || objCacheClientWorkerSvc_ == nullptr) {
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr && !ubHealthTable_.empty(), K_NOT_READY,

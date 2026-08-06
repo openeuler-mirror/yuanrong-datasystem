@@ -240,10 +240,11 @@
   Controller does not reconcile the baseline; Engine submits RESET after registration to exact-resync the read-watch
   window before enabling control decisions. Revision-bearing `GetAll` does not fall back to an ordinary read: a backend
   without a consistent snapshot revision returns `K_NOT_SUPPORTED`.
-- UB health is a non-authoritative membership sidecar rather than topology state. Each Worker periodically publishes one
-  self-only summary under a separate keyspace using the active membership lease/TTL and consumes the bounded O(N)
-  snapshot into `PeerUbAdmission`. Missing leased records clear global quarantine, malformed live records preserve the
-  last accepted quarantine, and neither path erases process-local failure evidence. Topology membership and Failure
+- UB health is a non-authoritative membership sidecar rather than topology state. Each URMA-enabled Worker periodically
+  publishes one self-only summary under a separate keyspace using the active membership lease/TTL and consumes the
+  bounded O(N) snapshot into `PeerUbAdmission`. Workers with URMA disabled do not start the lease-sidecar sync loop.
+  Missing leased records clear global quarantine, malformed live records preserve the last accepted quarantine, and
+  neither path erases process-local failure evidence. Topology membership and Failure
   planning remain the only authoritative ownership inputs.
   - The Bazel `cluster_topology` target depends on the lightweight
     `//src/datasystem/common/object_cache:ub_health` target. Keep this boundary free of the full `common_object_cache`
