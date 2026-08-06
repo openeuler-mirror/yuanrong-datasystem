@@ -234,6 +234,7 @@ const std::string WorkerServiceImpl::GetLocalStandbyWorker()
 
 Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, RegisterClientRspPb &rsp)
 {
+    INJECT_POINT("WorkerServiceImpl.RegisterClient.begin");
     bool remainClient = !req.client_id().empty();
     auto clientId = ClientKey::Intern(remainClient ? req.client_id() : GetStringUuid());
     std::string tenantId;
@@ -457,6 +458,7 @@ std::set<int> WorkerServiceImpl::GetExpiredFdsForClient(const ClientKey &clientI
 
 Status WorkerServiceImpl::GetSocketPath(const GetSocketPathReqPb &req, GetSocketPathRspPb &rsp)
 {
+    INJECT_POINT("WorkerServiceImpl.GetSocketPath.begin");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
                                      "Authenticate failed");

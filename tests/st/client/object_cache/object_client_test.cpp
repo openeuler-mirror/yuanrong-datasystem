@@ -1880,6 +1880,44 @@ TEST_F(ObjectClientTest, TestInitDFXWithRegister)
     DS_ASSERT_OK(client->Init());
 }
 
+TEST_F(ObjectClientTest, TestInitGetSocketPathUsesConnectTimeout)
+{
+    constexpr int32_t connectTimeoutMs = 2'000;
+    constexpr int32_t requestTimeoutMs = 1;
+    constexpr int32_t controlRpcDelayMs = 50;
+    constexpr char getSocketPathInject[] = "WorkerServiceImpl.GetSocketPath.begin";
+
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions, connectTimeoutMs);
+    connectOptions.requestTimeoutMs = requestTimeoutMs;
+    auto client = std::make_shared<ObjectClient>(connectOptions);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, getSocketPathInject,
+                                           "sleep(" + std::to_string(controlRpcDelayMs) + ")"));
+    auto rc = client->Init();
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, getSocketPathInject));
+    DS_ASSERT_OK(rc);
+}
+
+TEST_F(ObjectClientTest, TestInitRegisterClientUsesConnectTimeout)
+{
+    constexpr int32_t connectTimeoutMs = 2'000;
+    constexpr int32_t requestTimeoutMs = 5;
+    constexpr int32_t controlRpcDelayMs = 50;
+    constexpr char registerClientInject[] = "WorkerServiceImpl.RegisterClient.begin";
+
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions, connectTimeoutMs);
+    connectOptions.requestTimeoutMs = requestTimeoutMs;
+    auto client = std::make_shared<ObjectClient>(connectOptions);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, registerClientInject,
+                                           "sleep(" + std::to_string(controlRpcDelayMs) + ")"));
+    auto rc = client->Init();
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, registerClientInject));
+    DS_ASSERT_OK(rc);
+}
+
 TEST_F(ObjectClientTest, TestInitRetryWithServiceDiscoveryRegisterFailure)
 {
     ASSERT_EQ(setenv("object_client_sd_host_id_env_0", "object_client_sd_host_id_0", 1), 0);
