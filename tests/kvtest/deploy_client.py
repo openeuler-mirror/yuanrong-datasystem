@@ -457,13 +457,24 @@ class Deployer:
 
             # Add custom environment variables from config
             custom_env = {k: v for k, v in config.get('env', {}).items() if k}
-            # Inject this node's address into the host-id env var (named by host_id_env_name) so the
-            # SDK resolves a non-empty hostId and ServiceDiscovery prefers same-host workers. Without
-            # this the SDK's hostId_ stays empty, HasHostAffinity() is false, and worker selection
-            # falls back to uniform-random across the whole cluster (cross-node binding + load skew).
+            # Inject this node's address into the host-id env var (named by
+            # host_id_env_name) so the SDK resolves a non-empty hostId and
+            # ServiceDiscovery prefers same-host workers. Without this the
+            # SDK's hostId_ stays empty, HasHostAffinity() is false, and
+            # worker selection falls back to uniform-random across the whole
+            # cluster (cross-node binding + load skew).
+            # Uses status.hostIP (k8s node InternalIP), NOT nodeName (hostname)
+            # — hostname would break coordinator/etcd registration which
+            # expects an IP address.
             host_id_env = config.get('host_id_env_name') or 'HOST_IP'
             if host_id_env and host_id_env not in custom_env:
-                custom_env[host_id_env] = node.get('host', '')
+                host_ip = node.get('host_ip', '')
+                if not host_ip:
+                    raise RuntimeError(
+                        f'{host_id_env} is empty: pod {node.get("pod_name", "?")} '
+                        f'(node {node.get("host", "?")}) has no status.hostIP; '
+                        f'cannot inject a valid node IP — check k8s node status')
+                custom_env[host_id_env] = host_ip
             if custom_env:
                 env_assignments = [f'{k}={shlex.quote(str(v))}' for k, v in custom_env.items()]
                 env_prefix += ' '.join(env_assignments) + ' '
@@ -862,7 +873,13 @@ def _get_pods(namespace, prefixes):
             continue
         seen.add(name)
         node_name = item.get('spec', {}).get('nodeName', '')
-        pods.append({'name': name, 'ip': pod_ip, 'node': node_name})
+        # status.hostIP is the k8s node's InternalIP (set by the kubelet);
+        # fall back to '' if absent (rare; logged by the caller when used
+        # as HOST_IP). This is the node IP, not the hostname — using nodeName
+        # (hostname) for HOST_IP would break coordinator/etcd registration.
+        host_ip = item.get('status', {}).get('hostIP', '')
+        pods.append({'name': name, 'ip': pod_ip, 'node': node_name,
+                     'host_ip': host_ip})
     pods.sort(key=lambda p: p['name'])
     for p in prefixes:
         if not any(pod['name'].startswith(p) for pod in pods):
@@ -971,6 +988,7 @@ def cmd_gen_config(args):
                 'pod_ip': pod['ip'],
                 'namespace': args.namespace,
                 'host': pod['node'],
+                'host_ip': pod.get('host_ip', ''),  # node InternalIP for HOST_IP env
                 'instance_id': i,
                 'role': 'writer' if is_writer else 'reader',
                 'pipeline': writer_pipeline if is_writer else notify_pipeline,
