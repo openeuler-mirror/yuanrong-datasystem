@@ -67,7 +67,7 @@ public:
     {
         master::TbbMetaTable::accessor accessor;
         auto &shard = metaShards_[GetShardIndex(objectKey)];
-        std::unique_lock<std::shared_timed_mutex> lck(shard.mutex);
+        bthread::RWLockWrGuard lck(shard.mutex);
         (void)shard.table.insert(accessor, objectKey);
     }
 
@@ -77,7 +77,7 @@ public:
         master::TbbMetaTable::accessor accessor;
         LOG(INFO) << "get the object key " << objectKey;
         auto &shard = metaShards_[GetShardIndex(objectKey)];
-        std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
+        bthread::RWLockRdGuard lck(shard.mutex);
         auto found = shard.table.find(accessor, objectKey);
         if (!found) {
             RETURN_STATUS(K_NOT_FOUND, "not found the object key");

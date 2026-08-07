@@ -62,6 +62,9 @@
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
+// Keep bthread headers after project RPC/log headers so brpc logging macros (CHECK_EQ etc.) are
+// established before bthread headers (which use but do not define them) avoid redefinition pitfalls.
+#include <bthread/rwlock.h>
 
 namespace datasystem {
 namespace object_cache {
@@ -1324,7 +1327,7 @@ public:
     static constexpr size_t kMetaTableShardCount = 64;
 
     struct MetaTableShard {
-        std::shared_timed_mutex mutex;
+        bthread::RWLock mutex;
         TbbMetaTable table;
     };
 
@@ -1341,7 +1344,7 @@ public:
         size_t lockedCount = 0;
         try {
             for (; lockedCount < kMetaTableShardCount; ++lockedCount) {
-                metaShards_[lockedCount].mutex.lock();
+                metaShards_[lockedCount].mutex.wrlock();
             }
             func();
         } catch (...) {
@@ -2229,7 +2232,7 @@ private:
     // Monotonic shutdown policy read by TTL tasks in asyncPool_.
     std::atomic<bool> discardTtlTasks_{ false };
 
-    std::shared_timed_mutex subTableMutex_;
+    bthread::RWLock subTableMutex_;
     // The hash table maps the query request id to subscribe meta info.
     TbbSubMetaTable request2SubMeta_;
     // The hash table maps the object key to a set of the query requests on this object.
