@@ -1378,12 +1378,12 @@ Direct。该能力默认不启用。需要回滚时将 <code class="docutils lit
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_FFTS_PARALLEL_WORKER_NUM</span></code></p></td>
-<td><p>1</p></td>
+<td><p>4</p></td>
 <td><p>FFTS H2D Worker 数，范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">16]</span></code>；<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示关闭并行</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_FFTS_PARALLEL_MIN_BYTES</span></code></p></td>
-<td><p>25165824</p></td>
-<td><p>低于该总字节数（24 MiB）时使用原串行 FFTS</p></td>
+<td><p>134217728</p></td>
+<td><p>低于该总字节数（128 MiB）时使用原串行 FFTS</p></td>
 </tr>
 </tbody>
 </table>
@@ -1443,18 +1443,21 @@ Direct。该能力默认不启用。需要回滚时将 <code class="docutils lit
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_FFTS_PARALLEL_WORKER_NUM</span></code></p></td>
-<td><p>1</p></td>
+<td><p>4</p></td>
 <td><p>FFTS D2H Worker 数，范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">16]</span></code>；<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示串行</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_FFTS_PARALLEL_MIN_BYTES</span></code></p></td>
-<td><p>25165824</p></td>
-<td><p>请求小于该字节数时使用串行 FFTS</p></td>
+<td><p>50331648</p></td>
+<td><p>请求小于该字节数（48 MiB）时使用串行 FFTS</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>D2H FFTS 仅按完整对象分片，不拆分同一对象的 Blob。每个分片独立持有 stream、notify 和 staging
-buffer；总 device staging 预算超过 <code class="docutils literal notranslate"><span class="pre">DS_DEVICE_ACL_SIZE</span></code> 时自动使用串行 FFTS。Direct 并行回滚时将
+<p>D2H FFTS 仅按完整对象分片，不拆分同一对象的 Blob。并发分片独占正在使用的 stream、notify、FFTS context 和
+staging buffer；调用结束且 stream 同步成功后，dispatcher/context、两条 stream 和四个 notify 作为一个控制资源
+bundle 返回每 Device 缓存，staging buffer 按容量独立复用。Huge FFTS 直接写入
+目标 HugeTLB Buffer，不提交 callback 或 H2H future。总 device staging 预算超过 <code class="docutils literal notranslate"><span class="pre">DS_DEVICE_ACL_SIZE</span></code> 时自动使用
+串行 FFTS。Direct 并行回滚时将
 <code class="docutils literal notranslate"><span class="pre">DS_D2H_PARALLEL_WORKER_NUM=1</span></code>；FFTS 并行回滚时将 <code class="docutils literal notranslate"><span class="pre">DS_D2H_FFTS_PARALLEL_WORKER_NUM=1</span></code>。运行时应分别通过
 <code class="docutils literal notranslate"><span class="pre">TOTAL_D2H_PARALLEL_MEMCPY</span></code> 和 <code class="docutils literal notranslate"><span class="pre">TOTAL_D2H_PARALLEL_FFTS_MEMCPY</span></code> 确认并行路径实际执行。</p>
 </section>

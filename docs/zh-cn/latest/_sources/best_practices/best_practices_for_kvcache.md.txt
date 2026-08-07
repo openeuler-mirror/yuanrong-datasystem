@@ -527,8 +527,8 @@ FFTS/Huge FFTS 也支持实验性的对象级并行。保持 `DS_H2D_MEMCPY_POLI
 
 | 环境变量                              | 默认值   | 说明                                           |
 | ------------------------------------- | -------- | ---------------------------------------------- |
-| `DS_H2D_FFTS_PARALLEL_WORKER_NUM`     | 1        | FFTS H2D Worker 数，范围 `[1, 16]`；`1` 表示关闭并行 |
-| `DS_H2D_FFTS_PARALLEL_MIN_BYTES`      | 25165824 | 低于该总字节数（24 MiB）时使用原串行 FFTS     |
+| `DS_H2D_FFTS_PARALLEL_WORKER_NUM`     | 4        | FFTS H2D Worker 数，范围 `[1, 16]`；`1` 表示关闭并行 |
+| `DS_H2D_FFTS_PARALLEL_MIN_BYTES`      | 134217728 | 低于该总字节数（128 MiB）时使用原串行 FFTS     |
 
 并行路径按完整对象进行字节均衡分片，每个分片独立持有 dispatcher、stream、notify 和两份 device staging buffer，
 不会拆分同一对象的 Blob。进入并行前会校验所有分片的 device staging 总预算；超过 `DS_DEVICE_ACL_SIZE` 时自动使用
@@ -555,11 +555,14 @@ FFTS/Huge FFTS 保持 `DS_D2H_MEMCPY_POLICY=ffts`，通过下列变量启用对�
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DS_D2H_FFTS_PARALLEL_WORKER_NUM` | 1 | FFTS D2H Worker 数，范围 `[1, 16]`；`1` 表示串行 |
-| `DS_D2H_FFTS_PARALLEL_MIN_BYTES` | 25165824 | 请求小于该字节数时使用串行 FFTS |
+| `DS_D2H_FFTS_PARALLEL_WORKER_NUM` | 4 | FFTS D2H Worker 数，范围 `[1, 16]`；`1` 表示串行 |
+| `DS_D2H_FFTS_PARALLEL_MIN_BYTES` | 50331648 | 请求小于该字节数（48 MiB）时使用串行 FFTS |
 
-D2H FFTS 仅按完整对象分片，不拆分同一对象的 Blob。每个分片独立持有 stream、notify 和 staging
-buffer；总 device staging 预算超过 `DS_DEVICE_ACL_SIZE` 时自动使用串行 FFTS。Direct 并行回滚时将
+D2H FFTS 仅按完整对象分片，不拆分同一对象的 Blob。并发分片独占正在使用的 stream、notify、FFTS context 和
+staging buffer；调用结束且 stream 同步成功后，dispatcher/context、两条 stream 和四个 notify 作为一个控制资源
+bundle 返回每 Device 缓存，staging buffer 按容量独立复用。Huge FFTS 直接写入
+目标 HugeTLB Buffer，不提交 callback 或 H2H future。总 device staging 预算超过 `DS_DEVICE_ACL_SIZE` 时自动使用
+串行 FFTS。Direct 并行回滚时将
 `DS_D2H_PARALLEL_WORKER_NUM=1`；FFTS 并行回滚时将 `DS_D2H_FFTS_PARALLEL_WORKER_NUM=1`。运行时应分别通过
 `TOTAL_D2H_PARALLEL_MEMCPY` 和 `TOTAL_D2H_PARALLEL_FFTS_MEMCPY` 确认并行路径实际执行。
 

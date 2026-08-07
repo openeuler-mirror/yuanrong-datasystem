@@ -1551,8 +1551,12 @@ dscli<span class="w"> </span>start<span class="w"> </span>--coordinator_config_p
 <p>例子：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 绑定到 NUMA 节点 0 的 CPU，并优先在 NUMA 节点 1 分配内存</span>
 dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span>--preferred<span class="w"> </span><span class="m">1</span><span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+
+<span class="c1"># 在 NUMA 节点 0-7 间交错分配内存（多 NUMA 节点、大共享内存场景，如 KV Pool）</span>
+dscli<span class="w"> </span>start<span class="w"> </span>--interleave<span class="w"> </span><span class="m">0</span>-7<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
 </pre></div>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">--interleave</span></code> 的取值遵循 numactl 节点语法，支持单个节点（<code class="docutils literal notranslate"><span class="pre">0</span></code>）、列表（<code class="docutils literal notranslate"><span class="pre">0,1,2</span></code>）、范围（<code class="docutils literal notranslate"><span class="pre">0-7</span></code>）以及 <code class="docutils literal notranslate"><span class="pre">all</span></code>。跨全部 NUMA 节点交错分配可避免大块共享内存集中占用单个节点导致内存不均，建议在 Worker 共享内存较大（如 <code class="docutils literal notranslate"><span class="pre">shared_memory_size_mb</span></code> 取值较高）时使用。</p>
 <p><strong>启用ums注意事项</strong>：</p>
 <ul class="simple">
 <li><p>启用ums功能请确保机器已安装ums相关rpm包</p></li>
@@ -1672,8 +1676,12 @@ modprobe<span class="w"> </span>ums
 <p>例子：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 启动集群并绑核</span>
 dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span>--preferred<span class="w"> </span><span class="m">1</span><span class="w"> </span>-f<span class="w"> </span>./cluster_config.json
+
+<span class="c1"># 在 NUMA 节点 0-7 间交错分配内存启动集群（多 NUMA 节点、大共享内存场景，如 KV Pool）</span>
+dscli<span class="w"> </span>up<span class="w"> </span>--interleave<span class="w"> </span><span class="m">0</span>-7<span class="w"> </span>-f<span class="w"> </span>./cluster_config.json
 </pre></div>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">--interleave</span></code> 的取值遵循 numactl 节点语法，支持单个节点（<code class="docutils literal notranslate"><span class="pre">0</span></code>）、列表（<code class="docutils literal notranslate"><span class="pre">0,1,2</span></code>）、范围（<code class="docutils literal notranslate"><span class="pre">0-7</span></code>）以及 <code class="docutils literal notranslate"><span class="pre">all</span></code>。跨全部 NUMA 节点交错分配可避免大块共享内存集中占用单个节点导致内存不均，建议在 Worker 共享内存较大（如 <code class="docutils literal notranslate"><span class="pre">shared_memory_size_mb</span></code> 取值较高）时使用。</p>
 <p><strong>启用ums注意事项</strong>：</p>
 <ul class="simple">
 <li><p>启用ums功能请确保机器已安装ums相关rpm包</p></li>
