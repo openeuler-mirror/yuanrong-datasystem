@@ -81,11 +81,20 @@ void PeerUbAdmission::ReportOutcome(const UbOpOutcome &outcome)
 
     const auto nextState =
         failureClass == UbFailureClass::TIMEOUT_SUSPECT ? UbAdmissionState::SUSPECT : UbAdmissionState::UNAVAILABLE;
-    bool stateChanged = false;
     {
         std::lock_guard<std::shared_mutex> lock(mutex_);
         auto &state = states_[outcome.peer];
-        stateChanged = state.state != nextState;
+        // A timeout is lower-confidence evidence than an explicit provider/CQE
+        // failure. Once hard evidence (or its recovery probe) has quarantined a
+        // peer, a late timeout from an older in-flight request must not reopen
+        // the SUSPECT -> UNAVAILABLE oscillation or invalidate the probe token.
+        if (failureClass == UbFailureClass::TIMEOUT_SUSPECT
+            && (state.state == UbAdmissionState::UNAVAILABLE || state.state == UbAdmissionState::PROBING)) {
+            return;
+        }
+        if (state.state == nextState) {
+            return;
+        }
         state.lastStatus = outcome.status;
         state.lastFailureClass = failureClass;
         state.providerStatus = outcome.providerStatus;
@@ -96,9 +105,6 @@ void PeerUbAdmission::ReportOutcome(const UbOpOutcome &outcome)
         }
         state.backoffDeadlineMs = GetSteadyClockTimeStampMs() + ProbeBackoffMs(state.backoffLevel);
         ++state.epoch;
-    }
-    if (!stateChanged) {
-        return;
     }
     if (nextState == UbAdmissionState::SUSPECT) {
         LOG(INFO) << "UB admission marked peer SUSPECT, peer=" << outcome.peer
@@ -416,6 +422,12 @@ bool PeerUbAdmission::IsReplayLocked(const HostPort &worker, const std::string &
 
 void PeerUbAdmission::ApplyGlobalRecoveryTransitionLocked(const UbHealthSummary &summary, uint64_t nowMs)
 {
+    if (!self_.Empty() && summary.worker == self_) {
+        // Lease sync publishes and then reads back this process's own
+        // summary. It must not turn a local PROBING token into UNAVAILABLE
+        // while consuming that self-summary.
+        return;
+    }
     auto local = states_.find(summary.worker);
     if (local == states_.end()) {
         return;

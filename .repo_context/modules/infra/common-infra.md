@@ -152,8 +152,9 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     after all sub-request WRs are created. When the acquire fails and transport fallback is enabled, the whole RPC is
     pinned to TCP before object processing; aggregate/GatherWrite and per-object URMA acquire/post are disabled, while
     the existing `TrackUrmaFallbackTcp` admission/accounting path remains in force. With fallback disabled, the original
-    acquire error is returned (`K_TRY_AGAIN` for pool exhaustion). Object WR creation/provider-post failures use release
-    cleanup in the shared-lease path. Same-Jetty concurrent post safety remains a provider contract; datasystem's gate
+    acquire error is returned (`K_URMA_TRY_AGAIN` for pool exhaustion), distinct from application-level
+    `K_TRY_AGAIN` so an SDK must not replay an already-saturated same-target request. Object WR
+    creation/provider-post failures use release cleanup in the shared-lease path. Same-Jetty concurrent post safety remains a provider contract; datasystem's gate
     specifically excludes post/modify and post/delete overlap.
   - URMA receive-side Jetty reuse is process-level: `UrmaResource::GetOrCreateSharedRecvJetty()` lazily creates the
     single RECV Jetty/JFR published by TCP handshake responses. Jetty role is immutable, so RECV async-event retirement

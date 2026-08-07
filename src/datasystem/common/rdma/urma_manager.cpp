@@ -69,6 +69,7 @@ namespace datasystem {
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr uint32_t K_URMA_ERROR_LOG_EVERY_N = 100;
+constexpr uint32_t K_URMA_POOL_EXHAUSTED_LOG_EVERY_N = 5000;
 constexpr uint32_t URMA_LOG_LIMIT_MS = 1;
 constexpr uint32_t URMA_LOG_LIMIT_US = 250;
 constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
@@ -1170,19 +1171,20 @@ Status UrmaManager::AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConn
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
     auto rc = urmaResource_->AcquireJetty(jetty);
     if (rc.IsError()) {
-        if (rc.GetCode() == K_TRY_AGAIN) {
+        if (rc.GetCode() == K_URMA_TRY_AGAIN) {
             INJECT_POINT("UrmaManager.AcquireSendLaneFromConnection.PoolExhausted");
             const auto stats = urmaResource_->GetSendJettyPoolStats();
             const auto &jfrInfo = connection->GetUrmaJfrInfo();
             const auto srcAddress = localUrmaInfo_.localAddress.ToString();
             const auto targetAddress = jfrInfo.localAddress.ToString();
-            RETURN_STATUS_LOG_ERROR(K_TRY_AGAIN,
-                                    FormatString("URMA send Jetty lane pool exhausted, poolSize=%zu, idleCount=%zu, "
-                                                 "inUseCount=%zu, srcAddress=%s, targetAddress=%s, "
-                                                 "remoteInstanceId=%s, cause=%s",
-                                                 stats.poolSize, stats.idleCount, stats.inUseCount,
-                                                 srcAddress.c_str(), targetAddress.c_str(),
-                                                 jfrInfo.uniqueInstanceId.c_str(), rc.ToString().c_str()));
+            const Status backpressure(
+                K_URMA_TRY_AGAIN,
+                FormatString("URMA send Jetty lane pool exhausted, poolSize=%zu, idleCount=%zu, inUseCount=%zu, "
+                             "srcAddress=%s, targetAddress=%s, remoteInstanceId=%s, cause=%s",
+                             stats.poolSize, stats.idleCount, stats.inUseCount, srcAddress.c_str(),
+                             targetAddress.c_str(), jfrInfo.uniqueInstanceId.c_str(), rc.ToString().c_str()));
+            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_POOL_EXHAUSTED_LOG_EVERY_N) << backpressure.ToString();
+            return backpressure;
         }
         return rc;
     }

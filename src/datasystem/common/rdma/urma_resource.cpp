@@ -1659,12 +1659,13 @@ Status UrmaResource::AcquireJetty(std::shared_ptr<UrmaJetty> &jetty)
         }
     }
 
-    // Pool is full but every Jetty is in use. With the 64-thread / 200-pool sizing this should not
-    // happen in practice; surface K_TRY_AGAIN so the caller can backpressure.
+    // Pool is full but every Jetty is in use. This is local URMA resource pressure, not generic
+    // request retry advice: callers must be able to distinguish it from an application-level
+    // K_TRY_AGAIN and avoid replaying the same request into an already saturated lane pool.
     const auto stats = sendJettyPool_.GetStats();
-    RETURN_STATUS(K_TRY_AGAIN, FormatString("No idle URMA send Jetty in pool, poolSize=%zu, idleCount=%zu, "
-                                            "inUseCount=%zu",
-                                            stats.poolSize, stats.idleCount, stats.inUseCount));
+    RETURN_STATUS(K_URMA_TRY_AGAIN, FormatString("No idle URMA send Jetty in pool, poolSize=%zu, idleCount=%zu, "
+                                                 "inUseCount=%zu",
+                                                 stats.poolSize, stats.idleCount, stats.inUseCount));
 }
 
 void UrmaResource::ReleaseJetty(const std::shared_ptr<UrmaJetty> &jetty)

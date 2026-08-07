@@ -904,7 +904,8 @@ public:
      *        The pool is pre-filled to capacity at Init time and refilled in the background
      *        after failures, so the hot path only pops from the idle list.
      * @param[out] jetty Acquired send Jetty (in-use until ReleaseJetty is called).
-     * @return Status: OK on success, K_TRY_AGAIN when all pool Jetties are in use.
+     * @return Status: OK on success, K_URMA_TRY_AGAIN when all pool Jetties are in use. This
+     *         resource-pressure status is not replayed as generic K_TRY_AGAIN by request retry layers.
      */
     Status AcquireJetty(std::shared_ptr<UrmaJetty> &jetty);
 

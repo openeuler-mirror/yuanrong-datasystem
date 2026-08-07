@@ -381,7 +381,7 @@ public:
      * @brief Acquire the single send lane owned by a worker-to-worker Batch Get RPC.
      * @param[in] urmaInfo Remote address information from one sub-request.
      * @param[out] laneLease RPC-scoped send lane lease.
-     * @return Status of the call (K_TRY_AGAIN if the pool is exhausted).
+     * @return Status of the call (K_URMA_TRY_AGAIN if the pool is exhausted).
      */
     Status AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo,
                            std::shared_ptr<UrmaSendLaneLease> &laneLease);
@@ -676,7 +676,7 @@ private:
      * @param[in] connection URMA connection (for target Jetty lookup).
      * @param[out] jetty Acquired local send Jetty from the UrmaResource pool.
      * @param[out] targetJetty Connection's imported remote target Jetty.
-     * @return Status of the call (K_TRY_AGAIN if pool exhausted).
+     * @return Status of the call (K_URMA_TRY_AGAIN if pool exhausted).
      */
     Status AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConnection> &connection,
                                          std::shared_ptr<UrmaJetty> &jetty, urma_target_jetty_t *&targetJetty);

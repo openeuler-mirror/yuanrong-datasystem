@@ -79,7 +79,6 @@ ds_cc_test(
     name = "peer_ub_admission_test",
     srcs = ["peer_ub_admission_test.cpp"],
     deps = [
-        "//src/datasystem/common/object_cache:common_object_cache",
-        "//tests/ut:ut_common",
+        "//src/datasystem/common/object_cache:ub_health",
     ],
 )
