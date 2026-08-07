@@ -48,6 +48,7 @@
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "tests/ut/worker/object_cache/test_metadata_route.h"
 #include "tests/ut/worker/object_cache/test_placement_facade.h"
@@ -158,6 +159,18 @@ public:
         return Status::OK();
     }
 
+    Status CreateMultiMeta(master::CreateMultiMetaReqPb &req, master::CreateMultiMetaRspPb &rsp,
+                           bool retry = true) override
+    {
+        (void)retry;
+        std::lock_guard<std::mutex> lock(mutex_);
+        createMultiMetaRequests_.emplace_back(req);
+        if (createMultiMetaHandler_) {
+            return createMultiMetaHandler_(req, rsp);
+        }
+        return Status::OK();
+    }
+
     void SetResponse(const master::GIncreaseRspPb &response)
     {
         response_ = response;
@@ -199,6 +212,19 @@ public:
         return decreaseCallCount_;
     }
 
+    void SetCreateMultiMetaHandler(
+        std::function<Status(master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &)> handler)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        createMultiMetaHandler_ = std::move(handler);
+    }
+
+    std::vector<master::CreateMultiMetaReqPb> CreateMultiMetaRequests() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return createMultiMetaRequests_;
+    }
+
 private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -210,6 +236,8 @@ private:
     bool firstRefMovingCallSeen_{ false };
     int increaseCallCount_{ 0 };
     int decreaseCallCount_{ 0 };
+    std::function<Status(master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &)> createMultiMetaHandler_;
+    std::vector<master::CreateMultiMetaReqPb> createMultiMetaRequests_;
 };
 
 class FakeWorkerMasterApiManager final : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
@@ -233,13 +261,26 @@ public:
         return api_;
     }
 
+    Status GetWorkerMasterApi(const HostPort &masterAddress, std::shared_ptr<worker::WorkerMasterOCApi> &api) override
+    {
+        auto iter = apis_.find(masterAddress);
+        api = iter == apis_.end() ? api_ : iter->second;
+        return api == nullptr ? Status(K_RUNTIME_ERROR, "test master api is nullptr") : Status::OK();
+    }
+
     void SetApi(std::shared_ptr<worker::WorkerMasterOCApi> api)
     {
         api_ = std::move(api);
     }
 
+    void SetApi(const HostPort &address, std::shared_ptr<worker::WorkerMasterOCApi> api)
+    {
+        apis_[address] = std::move(api);
+    }
+
 private:
     std::shared_ptr<worker::WorkerMasterOCApi> api_;
+    std::unordered_map<HostPort, std::shared_ptr<worker::WorkerMasterOCApi>> apis_;
 };
 
 class TestDistributedTopology final {
@@ -424,6 +465,216 @@ protected:
     std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc_;
     std::shared_ptr<WorkerOcServiceClearDataFlow> dataClearImpl_;
 };
+
+TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaFollowsRedirectToTarget)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort targetAddress("127.0.0.1", 18483);
+    const std::string objectKey = "scale-out-absent-key";
+    auto sourceApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    sourceApi->SetCreateMultiMetaHandler([&targetAddress, &objectKey](master::CreateMultiMetaReqPb &request,
+                                                                      master::CreateMultiMetaRspPb &response) {
+        EXPECT_TRUE(request.redirect());
+        auto *info = response.add_info();
+        info->set_redirect_meta_address(targetAddress.ToString());
+        info->add_change_meta_ids(objectKey);
+        return Status::OK();
+    });
+    auto targetApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    targetApi->SetCreateMultiMetaHandler([&objectKey](master::CreateMultiMetaReqPb &request,
+                                                      master::CreateMultiMetaRspPb &response) {
+        EXPECT_FALSE(request.redirect());
+        EXPECT_EQ(request.metas_size(), 1);
+        EXPECT_EQ(request.metas(0).object_key(), objectKey);
+        response.set_version(42);
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(targetAddress, targetApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
+    auto notifyThreadPool = std::make_shared<ThreadPool>(1);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
+                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    master::CreateMultiMetaReqPb request;
+    request.set_redirect(true);
+    request.add_metas()->set_object_key(objectKey);
+    master::CreateMultiMetaRspPb response;
+    std::unordered_map<std::string, uint64_t> versionsByKey;
+
+    DS_ASSERT_OK(multiPublish.RetryCreateMultiMetaForTest(sourceApi, request, response, versionsByKey));
+
+    EXPECT_TRUE(response.failed_object_keys().empty());
+    EXPECT_TRUE(response.existing_object_keys().empty());
+    EXPECT_EQ(versionsByKey.at(objectKey), 42U);
+    EXPECT_EQ(sourceApi->CreateMultiMetaRequests().size(), 1U);
+    EXPECT_EQ(targetApi->CreateMultiMetaRequests().size(), 1U);
+}
+
+TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaPartitionsLocalAndMultipleRedirectTargets)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort targetAAddress("127.0.0.1", 18483);
+    const HostPort targetBAddress("127.0.0.1", 18484);
+    const std::string localKey = "scale-out-local-key";
+    const std::string targetAKey = "scale-out-target-a-key";
+    const std::string targetBKey = "scale-out-target-b-key";
+    const std::string existingKey = "scale-out-target-b-existing-key";
+    auto sourceApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    sourceApi->SetCreateMultiMetaHandler([&](master::CreateMultiMetaReqPb &request,
+                                             master::CreateMultiMetaRspPb &response) {
+        if (!request.redirect()) {
+            EXPECT_EQ(request.metas_size(), 1);
+            EXPECT_EQ(request.metas(0).object_key(), localKey);
+            response.set_version(100);
+            return Status::OK();
+        }
+        auto *targetAInfo = response.add_info();
+        targetAInfo->set_redirect_meta_address(targetAAddress.ToString());
+        targetAInfo->add_change_meta_ids(targetAKey);
+        auto *targetBInfo = response.add_info();
+        targetBInfo->set_redirect_meta_address(targetBAddress.ToString());
+        targetBInfo->add_change_meta_ids(targetBKey);
+        targetBInfo->add_change_meta_ids(existingKey);
+        return Status::OK();
+    });
+    auto targetAApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    targetAApi->SetCreateMultiMetaHandler([&](master::CreateMultiMetaReqPb &request,
+                                              master::CreateMultiMetaRspPb &response) {
+        EXPECT_FALSE(request.redirect());
+        EXPECT_EQ(request.metas_size(), 1);
+        EXPECT_EQ(request.metas(0).object_key(), targetAKey);
+        response.set_version(101);
+        return Status::OK();
+    });
+    auto targetBApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    targetBApi->SetCreateMultiMetaHandler([&](master::CreateMultiMetaReqPb &request,
+                                              master::CreateMultiMetaRspPb &response) {
+        EXPECT_FALSE(request.redirect());
+        EXPECT_EQ(request.metas_size(), 2);
+        EXPECT_EQ(request.metas(0).object_key(), targetBKey);
+        EXPECT_EQ(request.metas(1).object_key(), existingKey);
+        response.set_version(102);
+        response.add_existing_object_keys(existingKey);
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(targetAAddress, targetAApi);
+    apiManager->SetApi(targetBAddress, targetBApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
+    auto notifyThreadPool = std::make_shared<ThreadPool>(1);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
+                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    master::CreateMultiMetaReqPb request;
+    request.set_redirect(true);
+    request.add_metas()->set_object_key(localKey);
+    request.add_metas()->set_object_key(targetAKey);
+    request.add_metas()->set_object_key(targetBKey);
+    request.add_metas()->set_object_key(existingKey);
+    master::CreateMultiMetaRspPb response;
+    std::unordered_map<std::string, uint64_t> versionsByKey;
+
+    DS_ASSERT_OK(multiPublish.RetryCreateMultiMetaForTest(sourceApi, request, response, versionsByKey));
+
+    ASSERT_EQ(sourceApi->CreateMultiMetaRequests().size(), 2U);
+    EXPECT_TRUE(sourceApi->CreateMultiMetaRequests()[0].redirect());
+    EXPECT_FALSE(sourceApi->CreateMultiMetaRequests()[1].redirect());
+    EXPECT_EQ(targetAApi->CreateMultiMetaRequests().size(), 1U);
+    EXPECT_EQ(targetBApi->CreateMultiMetaRequests().size(), 1U);
+    ASSERT_EQ(response.existing_object_keys_size(), 1);
+    EXPECT_EQ(response.existing_object_keys(0), existingKey);
+    EXPECT_EQ(versionsByKey.at(localKey), 100U);
+    EXPECT_EQ(versionsByKey.at(targetAKey), 101U);
+    EXPECT_EQ(versionsByKey.at(targetBKey), 102U);
+    EXPECT_EQ(versionsByKey.count(existingKey), 0U);
+}
+
+TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaRetriesTargetWhenMoving)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort targetAddress("127.0.0.1", 18483);
+    const std::string objectKey = "scale-out-target-moving-key";
+    auto sourceApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    sourceApi->SetCreateMultiMetaHandler([&targetAddress, &objectKey](master::CreateMultiMetaReqPb &,
+                                                                      master::CreateMultiMetaRspPb &response) {
+        auto *info = response.add_info();
+        info->set_redirect_meta_address(targetAddress.ToString());
+        info->add_change_meta_ids(objectKey);
+        return Status::OK();
+    });
+    auto targetApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    int targetCallCount = 0;
+    targetApi->SetCreateMultiMetaHandler([&targetCallCount](master::CreateMultiMetaReqPb &request,
+                                                            master::CreateMultiMetaRspPb &response) {
+        EXPECT_FALSE(request.redirect());
+        if (++targetCallCount == 1) {
+            response.set_meta_is_moving(true);
+            return Status::OK();
+        }
+        response.set_version(44);
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(targetAddress, targetApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
+    auto notifyThreadPool = std::make_shared<ThreadPool>(1);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
+                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    master::CreateMultiMetaReqPb request;
+    request.set_redirect(true);
+    request.add_metas()->set_object_key(objectKey);
+    master::CreateMultiMetaRspPb response;
+    std::unordered_map<std::string, uint64_t> versionsByKey;
+
+    DS_ASSERT_OK(multiPublish.RetryCreateMultiMetaForTest(sourceApi, request, response, versionsByKey));
+
+    EXPECT_EQ(sourceApi->CreateMultiMetaRequests().size(), 1U);
+    EXPECT_EQ(targetApi->CreateMultiMetaRequests().size(), 2U);
+    EXPECT_EQ(versionsByKey.at(objectKey), 44U);
+}
+
+TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaRetriesWholeBatchWhenMoving)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const std::string firstKey = "scale-out-moving-first";
+    const std::string secondKey = "scale-out-moving-second";
+    auto sourceApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    int callCount = 0;
+    sourceApi->SetCreateMultiMetaHandler([&callCount](master::CreateMultiMetaReqPb &request,
+                                                      master::CreateMultiMetaRspPb &response) {
+        ++callCount;
+        if (callCount == 1) {
+            response.set_meta_is_moving(true);
+            return Status::OK();
+        }
+        EXPECT_TRUE(request.redirect());
+        response.set_version(43);
+        return Status::OK();
+    });
+    WorkerOcServiceCrudParam param = MakeCrudParam();
+    auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
+    auto notifyThreadPool = std::make_shared<ThreadPool>(1);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
+                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    master::CreateMultiMetaReqPb request;
+    request.set_redirect(true);
+    request.add_metas()->set_object_key(firstKey);
+    request.add_metas()->set_object_key(secondKey);
+    master::CreateMultiMetaRspPb response;
+    std::unordered_map<std::string, uint64_t> versionsByKey;
+
+    DS_ASSERT_OK(multiPublish.RetryCreateMultiMetaForTest(sourceApi, request, response, versionsByKey));
+
+    EXPECT_EQ(sourceApi->CreateMultiMetaRequests().size(), 2U);
+    EXPECT_EQ(sourceApi->CreateMultiMetaRequests()[1].metas_size(), 2);
+    EXPECT_TRUE(versionsByKey.empty());
+}
 
 TEST_F(WorkerOcServiceImplTest, SingleMetaMovingWithoutRedirectInfoRetries)
 {

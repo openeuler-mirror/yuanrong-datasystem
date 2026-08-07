@@ -75,6 +75,16 @@ public:
     std::atomic<bool> localExiting_{ false };
 };
 
+class OCMetadataManagerForTopologyTest : public OCMetadataManager {
+public:
+    using OCMetadataManager::OCMetadataManager;
+
+    void MarkMigrating(const std::string &objectKey)
+    {
+        migratingItems_.insert({ objectKey, true });
+    }
+};
+
 TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdinaryExitingRequestIsFenced)
 {
     OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
@@ -203,7 +213,7 @@ TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailin
     EXPECT_EQ(response.success_ids_size(), 0);
 }
 
-TEST_F(OCMetadataManagerTopologyTest, CreateMultiMetaDoesNotMutateSourceDuringScaleOutWait)
+TEST_F(OCMetadataManagerTopologyTest, CreateMultiMetaRedirectsAbsentKeyDuringScaleOutWait)
 {
     cluster::TopologyState topology;
     topology.version = 2;
@@ -232,11 +242,110 @@ TEST_F(OCMetadataManagerTopologyTest, CreateMultiMetaDoesNotMutateSourceDuringSc
 
     DS_ASSERT_OK(manager.CreateMultiMeta(request, response));
 
-    EXPECT_TRUE(response.meta_is_moving());
+    EXPECT_FALSE(response.meta_is_moving());
+    ASSERT_EQ(response.info_size(), 1);
+    EXPECT_EQ(response.info(0).redirect_meta_address(), TARGET_ADDRESS);
+    EXPECT_EQ(response.info(0).topology_version(), 2U);
+    ASSERT_EQ(response.info(0).change_meta_ids_size(), 1);
+    EXPECT_EQ(response.info(0).change_meta_ids(0), objectKey);
     auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
     TbbMetaTable::const_accessor accessor;
     std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
     EXPECT_FALSE(shard.table.find(accessor, objectKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, ObjectRedirectProgressivelyHandlesScaleOutKeys)
+{
+    cluster::TopologyState topology;
+    topology.version = 2;
+    topology.clusterHasInit = true;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, 2 };
+    topology.members = {
+        cluster::Member{ { std::string(16, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(16, 'b'), TARGET_ADDRESS }, cluster::MemberState::JOINING,
+                         { std::numeric_limits<uint32_t>::max() } },
+    };
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
+    OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
+                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             "workerId");
+    const std::string existingKey = "scale_out_existing_local";
+    const std::string movingKey = "scale_out_moving_wait";
+    const std::string absentKey = "scale_out_absent_redirect";
+    InsertPrimaryWithCopy(manager, existingKey);
+    InsertPrimaryWithCopy(manager, movingKey);
+    manager.MarkMigrating(movingKey);
+    std::vector<std::string> objectKeys{ existingKey, movingKey, absentKey };
+    CreateMultiMetaRspPb response;
+
+    DS_ASSERT_OK(manager.FillObjectRedirectResponses(response, objectKeys, true));
+
+    EXPECT_TRUE(response.meta_is_moving());
+    EXPECT_TRUE(response.info().empty());
+    EXPECT_EQ(objectKeys.size(), 3U);
+
+    manager.CleanMigratingItems({ movingKey });
+    response.Clear();
+    DS_ASSERT_OK(manager.FillObjectRedirectResponses(response, objectKeys, true));
+
+    EXPECT_FALSE(response.meta_is_moving());
+    ASSERT_EQ(response.info_size(), 1);
+    EXPECT_EQ(response.info(0).redirect_meta_address(), TARGET_ADDRESS);
+    EXPECT_EQ(response.info(0).topology_version(), 2U);
+    ASSERT_EQ(response.info(0).change_meta_ids_size(), 1);
+    EXPECT_EQ(response.info(0).change_meta_ids(0), absentKey);
+    ASSERT_EQ(objectKeys.size(), 2U);
+    EXPECT_EQ(objectKeys[0], existingKey);
+    EXPECT_EQ(objectKeys[1], movingKey);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, QueryMetaRetriesWholeBatchWhenOneScaleOutKeyIsMoving)
+{
+    cluster::TopologyState topology;
+    topology.version = 2;
+    topology.clusterHasInit = true;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, 2 };
+    topology.members = {
+        cluster::Member{ { std::string(16, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(16, 'b'), TARGET_ADDRESS }, cluster::MemberState::JOINING,
+                         { std::numeric_limits<uint32_t>::max() } },
+    };
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
+    OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
+                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             "workerId");
+    const std::string localKey = "scale_out_query_local";
+    const std::string movingKey = "scale_out_query_moving";
+    InsertPrimaryWithCopy(manager, localKey);
+    InsertPrimaryWithCopy(manager, movingKey);
+    manager.MarkMigrating(movingKey);
+    QueryMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.set_redirect(true);
+    request.add_ids(localKey);
+    request.add_ids(movingKey);
+    QueryMetaRspPb response;
+    std::vector<RpcMessage> payloads;
+
+    DS_ASSERT_OK(manager.QueryMeta(request, response, payloads));
+
+    EXPECT_TRUE(response.meta_is_moving());
+    EXPECT_EQ(response.query_metas_size(), 0);
+    EXPECT_EQ(response.info_size(), 0);
+    EXPECT_EQ(response.not_exist_ids_size(), 0);
+    EXPECT_TRUE(payloads.empty());
 }
 
 TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaDoesNotQueueRedirectedKeys)
@@ -257,8 +366,9 @@ TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaDoesNotQueueRedirect
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, &placement, nullptr,
-                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
+                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             "workerId");
     manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
     const std::string objectKey = "async_delete_redirected_key";
     DeleteAllCopyMetaReqPb request;
@@ -279,6 +389,91 @@ TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaDoesNotQueueRedirect
     EXPECT_EQ(response.info(0).change_meta_ids(0), objectKey);
     EXPECT_EQ(response.failed_object_keys_size(), 0);
     EXPECT_EQ(manager.expiredObjectManager_->GetExpiredObject().count(objectKey), 0U);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaRetriesWholeBatchWhenOneScaleOutKeyIsMoving)
+{
+    cluster::TopologyState topology;
+    topology.version = 2;
+    topology.clusterHasInit = true;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, 2 };
+    topology.members = {
+        cluster::Member{ { std::string(16, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(16, 'b'), TARGET_ADDRESS }, cluster::MemberState::JOINING,
+                         { std::numeric_limits<uint32_t>::max() } },
+    };
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
+    OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
+                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             "workerId");
+    manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
+    const std::string localKey = "scale_out_delete_local";
+    const std::string movingKey = "scale_out_delete_moving";
+    InsertPrimaryWithCopy(manager, localKey);
+    InsertPrimaryWithCopy(manager, movingKey);
+    manager.MarkMigrating(movingKey);
+    DeleteAllCopyMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.set_redirect(true);
+    request.set_async_delete(true);
+    request.add_object_keys(localKey);
+    request.add_object_keys(movingKey);
+    DeleteAllCopyMetaRspPb response;
+
+    DS_ASSERT_OK(manager.DeleteAllCopyMeta(request, response));
+
+    EXPECT_TRUE(response.meta_is_moving());
+    EXPECT_TRUE(response.info().empty());
+    EXPECT_TRUE(manager.expiredObjectManager_->GetExpiredObject().empty());
+    EXPECT_TRUE(manager.MetaIsFound(localKey));
+    EXPECT_TRUE(manager.MetaIsFound(movingKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackMultiMetaRetriesWholeBatchWhenOneScaleOutKeyIsMoving)
+{
+    cluster::TopologyState topology;
+    topology.version = 2;
+    topology.clusterHasInit = true;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, 2 };
+    topology.members = {
+        cluster::Member{ { std::string(16, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(16, 'b'), TARGET_ADDRESS }, cluster::MemberState::JOINING,
+                         { std::numeric_limits<uint32_t>::max() } },
+    };
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
+    OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
+                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             "workerId");
+    const std::string localKey = "scale_out_rollback_local";
+    const std::string movingKey = "scale_out_rollback_moving";
+    InsertPrimaryWithCopy(manager, localKey);
+    InsertPrimaryWithCopy(manager, movingKey);
+    manager.MarkMigrating(movingKey);
+    RollbackMultiMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.set_redirect(true);
+    request.add_object_keys(localKey);
+    request.add_object_keys(movingKey);
+    RollbackMultiMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RollbackMultiMeta(request, response));
+
+    EXPECT_TRUE(response.meta_is_moving());
+    EXPECT_TRUE(response.info().empty());
+    EXPECT_TRUE(manager.MetaIsFound(localKey));
+    EXPECT_TRUE(manager.MetaIsFound(movingKey));
 }
 
 TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteMetadataThatReappeared)

@@ -57,6 +57,11 @@ using TbbMigratingTable = tbb::concurrent_hash_map<ImmutableString, bool>;
 struct MetaRedirectDecision {
     bool redirect{ false };
     bool moving{ false };
+    // True only when topology evaluation finds an active ScaleOut handoff at the
+    // local committed owner. At evaluation, this implies moving and a non-empty
+    // targetAddress; later local-availability refinement may clear moving. When
+    // false, moving may still indicate a range-level WAIT without a committed target.
+    bool scaleOutWait{ false };
     std::string targetAddress;
     uint64_t topologyVersion{ 0 };
     uint64_t batchEpoch{ 0 };

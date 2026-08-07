@@ -614,6 +614,111 @@ public:
     Status RedirectObjRefs(std::string &objectKey, bool &needRedirect, std::string &newAddr, bool &isMigrating);
 
     /**
+     * @brief Apply Object-only progressive ScaleOut availability to one routing decision.
+     * @param[in] objectKey Object metadata key.
+     * @param[in,out] decision Placement decision from one Snapshot.
+     * @return K_OK or placement availability status.
+     */
+    Status ApplyObjectMetadataAvailability(const std::string &objectKey, MetaRedirectDecision &decision);
+
+    /**
+     * @brief Fill one Object response using progressive ScaleOut routing.
+     */
+    template <typename Rsp>
+    Status FillObjectRedirectResponse(Rsp &response, const std::string &objectKey, bool &redirect)
+    {
+        if (!redirect || !FLAGS_enable_redirect) {
+            redirect = false;
+            return Status::OK();
+        }
+        MetaRedirectDecision decision;
+        RETURN_IF_NOT_OK(EvaluateMetadataRedirect(objectKey, decision));
+        RETURN_IF_NOT_OK(ApplyObjectMetadataAvailability(objectKey, decision));
+        INJECT_POINT("redirect.create.update.copy.meta", [&decision](std::string addr) {
+            decision.targetAddress = std::move(addr);
+            decision.redirect = true;
+            return Status::OK();
+        });
+        INJECT_POINT("meta.moving", [&decision]() {
+            decision.moving = true;
+            return Status::OK();
+        });
+        redirect = decision.redirect || decision.moving;
+        if (decision.moving) {
+            response.set_meta_is_moving(true);
+            return Status::OK();
+        }
+        if (!decision.redirect) {
+            return Status::OK();
+        }
+        RedirectMetaInfo *info = response.mutable_info();
+        info->set_redirect_meta_address(decision.targetAddress);
+        info->set_topology_version(decision.topologyVersion);
+        info->add_change_meta_ids(objectKey);
+        return Status::OK();
+    }
+
+    /**
+     * @brief Fill a batch Object response using one Snapshot and progressive ScaleOut routing.
+     * @note When redirect processing is enabled and return is not meta_is_moving,
+     * objectKeys contains only locally-owned keys; redirected keys are moved into
+     * response.info().
+     */
+    template <typename Rsp>
+    Status FillObjectRedirectResponses(Rsp &response, std::vector<std::string> &objectKeys, bool redirect)
+    {
+        if (!redirect || !FLAGS_enable_redirect) {
+            return Status::OK();
+        }
+        std::vector<std::string_view> keys;
+        keys.reserve(objectKeys.size());
+        for (const auto &objectKey : objectKeys) {
+            keys.emplace_back(objectKey);
+        }
+        std::vector<MetaRedirectDecision> decisions;
+        RETURN_IF_NOT_OK(EvaluateMetadataRedirectBatch(keys, decisions));
+        bool isMoving = false;
+        for (size_t index = 0; index < objectKeys.size(); ++index) {
+            auto &decision = decisions[index];
+            RETURN_IF_NOT_OK(ApplyObjectMetadataAvailability(objectKeys[index], decision));
+            INJECT_POINT("redirect.query.delete", [&decision](std::string addr) {
+                decision.targetAddress = std::move(addr);
+                decision.redirect = true;
+                return Status::OK();
+            });
+            if (decision.moving) {
+                isMoving = true;
+            }
+        }
+        if (isMoving) {
+            response.set_meta_is_moving(true);
+            return Status::OK();
+        }
+        std::map<std::pair<uint64_t, std::string>, std::vector<std::string>> redirects;
+        std::vector<std::string> localKeys;
+        localKeys.reserve(objectKeys.size());
+        for (size_t index = 0; index < objectKeys.size(); ++index) {
+            auto &decision = decisions[index];
+            if (decision.redirect) {
+                redirects[std::make_pair(decision.topologyVersion, std::move(decision.targetAddress))]
+                    .emplace_back(std::move(objectKeys[index]));
+            } else {
+                localKeys.emplace_back(std::move(objectKeys[index]));
+            }
+        }
+        objectKeys.swap(localKeys);
+        for (const auto &redirectInfo : redirects) {
+            RedirectMetaInfo *info = response.add_info();
+            info->set_topology_version(redirectInfo.first.first);
+            info->set_redirect_meta_address(redirectInfo.first.second);
+            for (const auto &objectKey : redirectInfo.second) {
+                info->add_change_meta_ids(objectKey);
+            }
+        }
+        return Status::OK();
+    }
+
+    /**
      * @brief Check whether object keys requires redirection. Put ids into resp if need, otherwise put ids into
      * objectKeys
      * @param[out] response Response of redirect.
@@ -667,6 +772,57 @@ public:
             RedirectMetaInfo *info = response.add_infos();
             info->set_redirect_meta_address(it.first);
             for (auto &objectKey : it.second) {
+                info->add_change_meta_ids(objectKey);
+            }
+        }
+        return Status::OK();
+    }
+
+    template <typename Rsp>
+    Status RedirectObjectRefs(Rsp &response, bool redirect, std::vector<std::string> &objectKeys)
+    {
+        INJECT_POINT("OCMetadataManager.Redirect.ConstructRsp",
+                     [&response, &objectKeys](const std::string &addr1, const std::string &addr2) {
+                         RedirectMetaInfo *info1 = response.add_infos();
+                         info1->set_redirect_meta_address(addr1);
+                         RedirectMetaInfo *info2 = response.add_infos();
+                         info2->set_redirect_meta_address(addr2);
+                         const int mod = 2;
+                         for (size_t i = 0; i < objectKeys.size(); i++) {
+                             if (i % mod == 0) {
+                                 info1->add_change_meta_ids(objectKeys[i]);
+                             } else {
+                                 info2->add_change_meta_ids(objectKeys[i]);
+                             }
+                         }
+                         return Status::OK();
+                     });
+        response.set_ref_is_moving(false);
+        if (!redirect || !FLAGS_enable_redirect) {
+            return Status::OK();
+        }
+        std::vector<std::string> localKeys;
+        std::unordered_map<std::string, std::vector<std::string>> redirects;
+        for (auto &objectKey : objectKeys) {
+            std::string newAddr;
+            bool needRedirect = false;
+            bool isMigrating = false;
+            RETURN_IF_NOT_OK(RedirectObjRefs(objectKey, needRedirect, newAddr, isMigrating));
+            if (isMigrating) {
+                response.set_ref_is_moving(true);
+                return Status::OK();
+            }
+            if (needRedirect) {
+                redirects[newAddr].emplace_back(objectKey);
+            } else {
+                localKeys.emplace_back(objectKey);
+            }
+        }
+        objectKeys.swap(localKeys);
+        for (const auto &redirectInfo : redirects) {
+            RedirectMetaInfo *info = response.add_infos();
+            info->set_redirect_meta_address(redirectInfo.first);
+            for (const auto &objectKey : redirectInfo.second) {
                 info->add_change_meta_ids(objectKey);
             }
         }

@@ -47,6 +47,7 @@ Status MetadataRedirectHelper::EvaluateMetadataRedirect(std::string_view key, Me
     RETURN_IF_NOT_OK(placement->EvaluateRedirect(key, route));
     built.redirect = route.action == cluster::RedirectAction::REDIRECT;
     built.moving = route.action == cluster::RedirectAction::WAIT;
+    built.scaleOutWait = built.moving && !route.redirectTargetAddress.empty();
     built.targetAddress = route.GetRedirectTargetAddress();
     built.topologyVersion = route.topologyVersion;
     built.batchEpoch = route.batchEpoch;
@@ -75,6 +76,7 @@ Status MetadataRedirectHelper::EvaluateMetadataRedirectBatch(
             MetaRedirectDecision item;
             item.redirect = route.action == cluster::RedirectAction::REDIRECT;
             item.moving = route.action == cluster::RedirectAction::WAIT;
+            item.scaleOutWait = item.moving && !route.redirectTargetAddress.empty();
             item.topologyVersion = route.topologyVersion;
             item.batchEpoch = route.batchEpoch;
             item.targetAddress = route.GetRedirectTargetAddress();
