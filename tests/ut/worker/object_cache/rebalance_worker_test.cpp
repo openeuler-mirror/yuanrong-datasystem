@@ -33,8 +33,10 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/master_object.pb.h"
+#include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/rebalance_candidate_provider.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/rebalance_executor.h"
@@ -216,6 +218,44 @@ TEST_F(RebalanceCandidateProviderTest, GetMigratableSizeDistinguishesStandaloneA
     constexpr uint64_t sliceSize = 256 * 1024;  // < 1MB, the aggregation threshold
     DS_ASSERT_OK(owner->DistributeMemory(sliceSize, slice));
     EXPECT_EQ(slice.GetMigratableSize(), sliceSize);  // aggregated branch returns the distributed slice size
+}
+
+// Integration guard for issue #864: after a SPILL migration completes (Release), the migrated object must not be
+// re-selected as a rebalance candidate. This reproduces the original failure (stale eviction-list entry re-scanned
+// every batch, logging "Key not found") and asserts the root-cause fix at the migration source keeps the eviction
+// list truthful, so rebalance never sees the gone object.
+TEST_F(RebalanceCandidateProviderTest, SelectDoesNotSeeStaleEntryAfterRelease)
+{
+    // Order-independent: guarantee clean singleton state before Init (a prior test suite may have left it running).
+    AsyncResourceReleaser::Instance().Shutdown();
+    AsyncResourceReleaser::Instance().Init(objectTable_, evictionManager_);
+    Raii releaserShutdown([]() { AsyncResourceReleaser::Instance().Shutdown(); });
+
+    CreateAndAdd("migrated", 10 * MB);
+    CreateAndAdd("alive", 20 * MB);
+
+    // Simulate SPILL migration success for "migrated": Release is the single point where the SPILL success path
+    // erases the object; with the fix it also erases the eviction-list entry.
+    DS_ASSERT_OK(AsyncResourceReleaser::Instance().Release("migrated", 1));
+    DS_ASSERT_NOT_OK(objectTable_->Contains("migrated"));
+
+    RebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    std::unordered_map<std::string, uint64_t> candidates;
+    DS_ASSERT_OK(provider.Select(30 * MB, 10, candidates));
+
+    EXPECT_EQ(candidates.count("migrated"), size_t(0));
+    EXPECT_GE(candidates["alive"], 20 * MB);
+
+    std::vector<EvictionList::Node> nodes;
+    EvictionList::Node oldest;
+    DS_ASSERT_OK(evictionManager_->GetAllObjectsInfo(nodes, oldest));
+    bool migratedStillPresent = false;
+    for (const auto &node : nodes) {
+        if (node.objectKey == "migrated") {
+            migratedStillPresent = true;
+        }
+    }
+    EXPECT_FALSE(migratedStillPresent) << "stale eviction-list entry for migrated object must be purged at source";
 }
 
 class RebalanceExecutorTest : public CommonTest {

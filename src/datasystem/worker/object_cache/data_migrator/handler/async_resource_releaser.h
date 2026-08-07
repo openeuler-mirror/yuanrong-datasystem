@@ -33,6 +33,8 @@
 namespace datasystem {
 namespace object_cache {
 
+class WorkerOcEvictionManager;
+
 class AsyncResourceReleaser {
 public:
     /**
@@ -42,10 +44,14 @@ public:
     static AsyncResourceReleaser &Instance();
 
     /**
-     * @brief Initialize the releaser with object table.
+     * @brief Initialize the releaser with object table and eviction manager.
      * @param[in] objectTable The object table.
+     * @param[in] evictionManager The eviction manager used to keep the eviction list consistent with the object
+     *            table when a SPILL-migrated object is released. Optional (nullptr for tests that do not exercise
+     *            eviction cleanup); when null, eviction-list cleanup is skipped.
      */
-    void Init(std::shared_ptr<ObjectTable> objectTable);
+    void Init(std::shared_ptr<ObjectTable> objectTable,
+              std::shared_ptr<WorkerOcEvictionManager> evictionManager = nullptr);
 
     /**
      * @brief Shutdown the releaser and cleanup resources.
@@ -89,6 +95,7 @@ private:
     void WorkerThread();
 
     std::shared_ptr<ObjectTable> objectTable_;
+    std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::atomic<bool> running_;
     Thread workerThread_;
 
