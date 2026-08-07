@@ -358,6 +358,24 @@ TEST_F(LoggingTest, TestFlagsLogDirEmpty)
     DS_EXPECT_OK(DeleteFile(FLAGS_log_dir + "/" + FLAGS_log_filename + ".INFO.log"));
 }
 
+TEST_F(LoggingTest, TestCoordinatorDoesNotCreateAccessLogs)
+{
+    FLAGS_log_monitor = true;
+    const std::string accessLogPath = FLAGS_log_dir + "/" + ACCESS_LOG_NAME + ".log";
+    const std::string requestOutLogPath = FLAGS_log_dir + "/" + REQUEST_OUT_LOG_NAME + ".log";
+    (void)DeleteFile(accessLogPath);
+    (void)DeleteFile(requestOutLogPath);
+
+    Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR, 1);
+
+    auto *manager = Logging::AccessRecorderManagerInstance();
+    DS_ASSERT_OK(manager->ResetWriteLogger(false));
+    DS_ASSERT_OK(manager->LogPerformance("coordinator", AccessKeyType::ACCESS, 1));
+    DS_ASSERT_OK(LogManager::DoLogMonitorWrite());
+    EXPECT_FALSE(FileExist(accessLogPath));
+    EXPECT_FALSE(FileExist(requestOutLogPath));
+}
+
 TEST_F(LoggingTest, TestClientLogWithoutPidByDefault)
 {
     const char *oldValue = getenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str());
@@ -639,8 +657,8 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     const std::string rejectedKey = "access-log-rejected";
     const std::string unlimitedKey = "access-log-unlimited";
     {
-        AccessRecorderManager clientManager;
-        DS_ASSERT_OK(clientManager.Init(true, false));
+        AccessRecorderManager clientManager(LogProcessRole::CLIENT);
+        DS_ASSERT_OK(clientManager.Init(false));
         TraceGuard sampledGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampleUserConfig sampledCfg;
         sampledCfg.requestSampleRate = 1.0;
@@ -656,8 +674,8 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     }
 
     {
-        AccessRecorderManager clientManager;
-        DS_ASSERT_OK(clientManager.Init(true, false));
+        AccessRecorderManager clientManager(LogProcessRole::CLIENT);
+        DS_ASSERT_OK(clientManager.Init(false));
         TraceGuard rejectedGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampleUserConfig rejectedCfg;
         rejectedCfg.requestSampleRate = 0.0;
@@ -672,8 +690,8 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     }
 
     {
-        AccessRecorderManager clientManager;
-        DS_ASSERT_OK(clientManager.Init(true, false));
+        AccessRecorderManager clientManager(LogProcessRole::CLIENT);
+        DS_ASSERT_OK(clientManager.Init(false));
         TraceGuard unlimitedGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampler::Instance().ResetForTest();
         DS_ASSERT_OK(clientManager.LogPerformance("unlimited", AccessKeyType::CLIENT, 1, 0, "1",
@@ -681,8 +699,8 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     }
 
     {
-        AccessRecorderManager workerManager;
-        DS_ASSERT_OK(workerManager.Init(false, false));
+        AccessRecorderManager workerManager(LogProcessRole::WORKER);
+        DS_ASSERT_OK(workerManager.Init(false));
         TraceGuard workerGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampleUserConfig workerCfg;
         workerCfg.requestSampleRate = 1.0;

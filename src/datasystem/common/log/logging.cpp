@@ -200,7 +200,8 @@ AccessRecorderManager *Logging::AccessRecorderManagerInstance()
 {
     auto *instance = GetInstance();
     if (!instance->accessRecorderManagerInstance_) {
-        instance->accessRecorderManagerInstance_ = std::make_unique<AccessRecorderManager>();
+        instance->accessRecorderManagerInstance_ =
+            std::make_unique<AccessRecorderManager>(instance->processRole_);
     }
 
     return instance->accessRecorderManagerInstance_.get();
@@ -317,8 +318,8 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
         LOG(ERROR) << "Failed to start log manager:" << status.ToString() << std::endl;
         return false;
     }
-    accessRecorderManagerInstance_ = std::make_unique<AccessRecorderManager>();
-    auto rc = accessRecorderManagerInstance_->Init(isClient_, isEmbeddedClient_);
+    accessRecorderManagerInstance_ = std::make_unique<AccessRecorderManager>(processRole_);
+    auto rc = accessRecorderManagerInstance_->Init(isEmbeddedClient_);
     if (rc.IsError()) {
         return false;
     }

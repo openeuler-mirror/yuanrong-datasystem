@@ -39,6 +39,8 @@
 
 namespace datasystem {
 
+enum class LogProcessRole : uint8_t;
+
 class HardDiskExporter;
 class ObjectAccessRecorder;
 class StreamAccessRecorder;
@@ -533,17 +535,16 @@ public:
 
     AccessRecorderManager &operator=(AccessRecorderManager &&) = delete;
 
-    AccessRecorderManager() = default;
+    explicit AccessRecorderManager(LogProcessRole processRole);
 
     ~AccessRecorderManager();
 
     /**
      * @brief Init time cost logger.
-     * @param[in] isClient Whether is client.
      * @param[in] isEmbeddedClient Whether is embedded client.
      * @return Status of the call.
      */
-    Status Init(bool isClient, bool isEmbeddedClient);
+    Status Init(bool isEmbeddedClient);
 
     /**
      * @brief Write the log message to log cache buffer.
@@ -575,7 +576,8 @@ public:
 
 private:
     std::unordered_map<AccessKeyType, std::unique_ptr<HardDiskExporter>> exporterMap_;
-    bool isClient_ = false;
+    const bool isClient_;
+    const bool isAccessLogDisabled_;
 };
 
 AccessKeyType GetAccessKeyType(AccessRecorderKey key);
