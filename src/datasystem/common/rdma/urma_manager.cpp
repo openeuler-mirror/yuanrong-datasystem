@@ -1610,32 +1610,21 @@ static urma_status_t PostJettyRw(const std::shared_ptr<UrmaJetty> &jetty, urma_o
         dst = { .sge = &remoteSge, .num_sge = 1 };
     }
 
-    urma_jfs_wr_t *badWr = nullptr;
-    if (useNumaAffinity) {
-        bondp_jfs_wr_t bondp_wr{};
-        urma_jfs_wr_t *base = &bondp_wr.base;
-        base->opcode = opcode;
-        base->flag = flag;
-        base->tjetty = targetJetty;
-        base->user_ctx = userCtx;
-        base->rw = { .src = src, .dst = dst, .target_hint = 0, .notify_data = 0 };
-        base->next = nullptr;
-        bondp_wr.src_chip_id = src_chip_id;
-        bondp_wr.dst_chip_id = dst_chip_id;
+    bondp_jfs_wr_t bondp_wr{};
+    urma_jfs_wr_t *base = &bondp_wr.base;
+    base->opcode = opcode;
+    base->flag = flag;
+    base->flag.bs.has_drv_ext = useNumaAffinity ? 1 : 0;
+    base->tjetty = targetJetty;
+    base->user_ctx = userCtx;
+    base->rw = { .src = src, .dst = dst, .target_hint = 0, .notify_data = 0 };
+    base->next = nullptr;
+    bondp_wr.src_chip_id = src_chip_id;
+    bondp_wr.dst_chip_id = dst_chip_id;
 
-        INJECT_POINT_NO_RETURN("UrmaManager.PostJettyRwWithPermit");
-        return ds_urma_post_jetty_send_wr(permit.Raw(), base, &badWr);
-    } else {
-        urma_jfs_wr_t wr{};
-        wr.opcode = opcode;
-        wr.flag = flag;
-        wr.tjetty = targetJetty;
-        wr.user_ctx = userCtx;
-        wr.rw = { .src = src, .dst = dst, .target_hint = 0, .notify_data = 0 };
-        wr.next = nullptr;
-        INJECT_POINT_NO_RETURN("UrmaManager.PostJettyRwWithPermit");
-        return ds_urma_post_jetty_send_wr(permit.Raw(), &wr, &badWr);
-    }
+    urma_jfs_wr_t *badWr = nullptr;
+    INJECT_POINT_NO_RETURN("UrmaManager.PostJettyRwWithPermit");
+    return ds_urma_post_jetty_send_wr(permit.Raw(), base, &badWr);
 }
 
 Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys,
@@ -1762,14 +1751,9 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                 cleanupSubmittedEvents();
                 return numaInjectRc;
             }
-            ret = PostJettyRw(jetty, URMA_OPC_WRITE, targetJetty, args.remoteSeg, args.localSeg,
-                              remoteAddress, localAddress, writeSize, flag, key, true, args.srcChipId, args.dstChipId);
-        } else {
-            ret = PostJettyRw(jetty, URMA_OPC_WRITE, targetJetty, args.remoteSeg, args.localSeg,
-                              remoteAddress, localAddress, writeSize, flag, key, false, args.srcChipId,
-                              args.dstChipId);
         }
-
+        ret = PostJettyRw(jetty, URMA_OPC_WRITE, targetJetty, args.remoteSeg, args.localSeg, remoteAddress,
+                          localAddress, writeSize, flag, key, useNumaAffinity, args.srcChipId, args.dstChipId);
         if (ret != URMA_SUCCESS) {
             if (failure != nullptr && !failure->providerStatus.has_value()) {
                 failure->providerStatus = static_cast<int>(ret);
