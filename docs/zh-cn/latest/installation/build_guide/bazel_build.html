@@ -604,7 +604,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </section>
 <section id="id2">
 <h3>安装 Bazel<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
-<p>参考 <a class="reference external" href="https://bazel.build/install">Bazel 官方文档</a> 安装 Bazel 7.4 及以上版本。</p>
+<p>参考 <a class="reference external" href="https://bazel.build/install">Bazel 官方文档</a> 安装 Bazel 6.5 或 7.x 版本（推荐 7.4 及以上版本）。</p>
 </section>
 <section id="sanitizer">
 <h3>Sanitizer 运行时（可选）<a class="headerlink" href="#sanitizer" title="Link to this heading">¶</a></h3>
@@ -715,7 +715,7 @@ bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> <
 <td><p>测试并行度</p></td>
 <td><p>8</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-S</span> <span class="pre">address|thread|undefined|off</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-S</span> <span class="pre">address|thread|undefined|address_undefined|off</span></code></p></td>
 <td><p>Sanitizer</p></td>
 <td><p>off</p></td>
 </tr>
@@ -744,6 +744,12 @@ bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> <
 <span class="c1"># 开启 TSan</span>
 bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-S<span class="w"> </span>thread
 
+<span class="c1"># 开启 UBSan</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-S<span class="w"> </span>undefined
+
+<span class="c1"># 同时开启 ASan + UBSan</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-S<span class="w"> </span>address_undefined
+
 <span class="c1"># 开启 URMA</span>
 bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-M<span class="w"> </span>on
 
@@ -754,18 +760,32 @@ bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> <
 </section>
 <section id="id7">
 <h3>Sanitizer 模式<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
-<p>Bazel 模式复用 CMake 的 <code class="docutils literal notranslate"><span class="pre">-S</span></code> 参数：<code class="docutils literal notranslate"><span class="pre">address</span></code> 对应 ASan，<code class="docutils literal notranslate"><span class="pre">thread</span></code> 对应 TSan。</p>
+<p>Bazel 模式复用 CMake 的 <code class="docutils literal notranslate"><span class="pre">-S</span></code> 参数：<code class="docutils literal notranslate"><span class="pre">address</span></code> 对应 ASan，<code class="docutils literal notranslate"><span class="pre">thread</span></code> 对应 TSan，<code class="docutils literal notranslate"><span class="pre">undefined</span></code> 对应 UBSan，
+<code class="docutils literal notranslate"><span class="pre">address_undefined</span></code> 同时开启 ASan + UBSan（对应 <code class="docutils literal notranslate"><span class="pre">.bazelrc</span></code> 的 <code class="docutils literal notranslate"><span class="pre">build:asan_ubsan</span></code>）。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># ASan level0 验证</span>
 bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-S<span class="w"> </span>address<span class="w"> </span>-t<span class="w"> </span>run<span class="w"> </span>-l<span class="w"> </span>level0
 
 <span class="c1"># TSan level0 验证</span>
 bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-S<span class="w"> </span>thread<span class="w"> </span>-t<span class="w"> </span>run<span class="w"> </span>-l<span class="w"> </span>level0
+
+<span class="c1"># ASan + UBSan level0 验证（ASan + UBSan 共享 libasan 运行时，可安全组合；</span>
+<span class="c1"># TSan 与 ASan/UBSAN 运行时互斥，不可叠加）</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-S<span class="w"> </span>address_undefined<span class="w"> </span>-t<span class="w"> </span>run<span class="w"> </span>-l<span class="w"> </span>level0
 </pre></div>
 </div>
-<p>启用 sanitizer 后，脚本会先用 <code class="docutils literal notranslate"><span class="pre">bazel</span> <span class="pre">query</span></code> 按测试标签筛选目标，而不是直接运行
-<code class="docutils literal notranslate"><span class="pre">bazel</span> <span class="pre">test</span> <span class="pre">//...</span></code>。测试需要同时满足本次指定的范围标签（如 <code class="docutils literal notranslate"><span class="pre">level0</span></code>、<code class="docutils literal notranslate"><span class="pre">ut</span></code>）和
-sanitizer 标签（如 <code class="docutils literal notranslate"><span class="pre">asan</span></code>、<code class="docutils literal notranslate"><span class="pre">tsan</span></code> 或 <code class="docutils literal notranslate"><span class="pre">sanitizer</span></code>），并且不能带有 <code class="docutils literal notranslate"><span class="pre">manual</span></code>
-标签。TSan 对线程调度更敏感，建议只给已确认稳定的测试添加 <code class="docutils literal notranslate"><span class="pre">tsan</span></code> 标签。</p>
+<p>启用 sanitizer 后，脚本对 <code class="docutils literal notranslate"><span class="pre">-S</span> <span class="pre">address|thread|address_undefined</span></code> 会先用 <code class="docutils literal notranslate"><span class="pre">bazel</span> <span class="pre">query</span></code>
+按测试标签筛选目标（而非直接跑 <code class="docutils literal notranslate"><span class="pre">bazel</span> <span class="pre">test</span> <span class="pre">//...</span></code>），测试需同时满足范围标签
+（如 <code class="docutils literal notranslate"><span class="pre">level0</span></code>、<code class="docutils literal notranslate"><span class="pre">ut</span></code>）和 sanitizer 标签（<code class="docutils literal notranslate"><span class="pre">asan</span></code>、<code class="docutils literal notranslate"><span class="pre">tsan</span></code> 或通用的 <code class="docutils literal notranslate"><span class="pre">sanitizer</span></code>），
+且不能带 <code class="docutils literal notranslate"><span class="pre">manual</span></code> 标签。具体匹配规则：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">-S</span> <span class="pre">address</span></code> 与 <code class="docutils literal notranslate"><span class="pre">-S</span> <span class="pre">address_undefined</span></code> 都按 <code class="docutils literal notranslate"><span class="pre">asan</span></code> tag 筛选。组合模式叠加了
+ASan 的运行时约束（ASLR、shadow memory、leak detection），是 binding 项，因此
+复用 ASan 的测试白名单。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-S</span> <span class="pre">thread</span></code> 按 <code class="docutils literal notranslate"><span class="pre">tsan</span></code> tag 筛选。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-S</span> <span class="pre">undefined</span></code> <strong>不做 tag 筛选</strong>，直接跑全部测试。UBSan 没有 ASan/TSan 那种
+运行时环境约束，所有测试都可在 UBSan 下运行，无需收窄测试集。</p></li>
+</ul>
+<p>TSan 对线程调度更敏感，建议只给已确认稳定的测试添加 <code class="docutils literal notranslate"><span class="pre">tsan</span></code> 标签。</p>
 </section>
 <section id="id8">
 <h3>参数兼容性说明<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
@@ -870,6 +890,9 @@ bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk
 
 <span class="c1"># Undefined Behavior Sanitizer（未定义行为）</span>
 bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>ubsan
+
+<span class="c1"># 同时开启 ASan + UBSan（共享 libasan 运行时，TSan 与二者互斥不可叠加）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>asan_ubsan
 </pre></div>
 </div>
 </section>
@@ -966,11 +989,15 @@ bazel<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 <td><p>UBSan</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">-fsanitize=undefined</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--config=coverage</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--config=asan_ubsan</span></code></p></td>
+<td><p>ASan + UBSan（组合）</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-fsanitize=address,undefined</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--config=coverage</span></code></p></td>
 <td><p>覆盖率</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">-fprofile-arcs</span> <span class="pre">-ftest-coverage</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--config=py39</span></code>~<code class="docutils literal notranslate"><span class="pre">py313</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--config=py39</span></code>~<code class="docutils literal notranslate"><span class="pre">py313</span></code></p></td>
 <td><p>Python 版本</p></td>
 <td><p>rules_python 版本选择</p></td>
 </tr>
@@ -990,6 +1017,26 @@ bazel<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 关闭 etcd proto 生成的 grpc stub 代码（<code class="docutils literal notranslate"><span class="pre">rpc.grpc.pb.cc</span></code> 等）的 UBSan 插桩。原因是这些 stub 引用了
 <code class="docutils literal notranslate"><span class="pre">grpc::internal::ClientReactor</span></code> 的 typeinfo（其析构为 <code class="docutils literal notranslate"><span class="pre">=</span> <span class="pre">default</span></code>，无关键函数），在 stub 被插桩而 grpc
 库本身不插桩时，链接会报 <code class="docutils literal notranslate"><span class="pre">undefined</span> <span class="pre">reference</span> <span class="pre">to</span> <span class="pre">'typeinfo</span> <span class="pre">for</span> <span class="pre">grpc::internal::ClientReactor'</span></code>。</p>
+</div></blockquote>
+<blockquote>
+<div><p>ASan + UBSan 组合说明：<code class="docutils literal notranslate"><span class="pre">build:asan_ubsan</span></code> 用单一 <code class="docutils literal notranslate"><span class="pre">-fsanitize=address,undefined</span></code> 编译/链接标志启用
+两个 sanitizer。GCC 与 Clang 都显式支持这种组合：ASan 运行时（<code class="docutils literal notranslate"><span class="pre">libasan</span></code>）已经把 <code class="docutils literal notranslate"><span class="pre">libubsan</span></code> 作为
+依赖一并加载，二者共享 shadow-memory 拦截器基础设施。TSan 与 ASan/UBSAN 运行时互斥，<strong>不能</strong>
+与二者组合。<code class="docutils literal notranslate"><span class="pre">build:asan_ubsan</span></code> 复用 <code class="docutils literal notranslate"><span class="pre">build:ubsan</span></code> 的全部 UBSAN 子检查调优（<code class="docutils literal notranslate"><span class="pre">-fno-sanitize=alignment</span></code>、
+<code class="docutils literal notranslate"><span class="pre">-fsanitize=float-cast-overflow</span></code>、<code class="docutils literal notranslate"><span class="pre">-fno-sanitize-recover=all</span></code>、<code class="docutils literal notranslate"><span class="pre">-O0</span></code>、外部依赖与 etcd stub 的
+<code class="docutils literal notranslate"><span class="pre">--per_file_copt</span></code> 关闭），并叠加 ASan 的 <code class="docutils literal notranslate"><span class="pre">-fno-omit-frame-pointer</span></code>、<code class="docutils literal notranslate"><span class="pre">-g3</span></code>、<code class="docutils literal notranslate"><span class="pre">--define=asan=1</span></code>（使根
+<code class="docutils literal notranslate"><span class="pre">BUILD.bazel</span></code> 的 <code class="docutils literal notranslate"><span class="pre">config_setting(name</span> <span class="pre">=</span> <span class="pre">&quot;is_asan&quot;)</span></code> 命中，所有 ASan 专属 <code class="docutils literal notranslate"><span class="pre">select()</span></code> 分支激活）以及
+<code class="docutils literal notranslate"><span class="pre">test:asan_ubsan</span></code> 运行时环境（<code class="docutils literal notranslate"><span class="pre">ASAN_OPTIONS=detect_leaks=0:detect_odr_violation=0</span></code>、
+<code class="docutils literal notranslate"><span class="pre">LSAN_OPTIONS=detect_leaks=0</span></code>，与 <code class="docutils literal notranslate"><span class="pre">test:asan</span></code> 一致）。</p>
+<p>Flag 放置：ASan 来源的标志（<code class="docutils literal notranslate"><span class="pre">-fsanitize=address,undefined</span></code>、<code class="docutils literal notranslate"><span class="pre">-fno-omit-frame-pointer</span></code>、<code class="docutils literal notranslate"><span class="pre">-g3</span></code>）用
+<code class="docutils literal notranslate"><span class="pre">--copt</span></code> 传给 C 和 C++ 编译器（与 <code class="docutils literal notranslate"><span class="pre">build:asan</span></code> 一致），目的是让第三方 C 源文件也获得 ASan 插桩——
+仓库中 zlib（15 个 <code class="docutils literal notranslate"><span class="pre">.c</span></code>）、securec（<code class="docutils literal notranslate"><span class="pre">glob</span> <span class="pre">src/*.c</span></code>）、libcurl（<code class="docutils literal notranslate"><span class="pre">glob</span> <span class="pre">lib/**/*.c</span></code>）、ZeroMQ
+（<code class="docutils literal notranslate"><span class="pre">external/sha1/*.c</span></code>）都通过 <code class="docutils literal notranslate"><span class="pre">cc_library</span></code> 编译 C 源码，若用 <code class="docutils literal notranslate"><span class="pre">--cxxopt</span></code> 这些 C 文件会静默丢失 ASan
+覆盖，是相对 <code class="docutils literal notranslate"><span class="pre">--config=asan</span></code> 的回归。UBSan 专属调优标志（<code class="docutils literal notranslate"><span class="pre">-fno-sanitize=alignment</span></code>、
+<code class="docutils literal notranslate"><span class="pre">-fsanitize=float-cast-overflow</span></code>、<code class="docutils literal notranslate"><span class="pre">-fno-sanitize-recover=all</span></code>、<code class="docutils literal notranslate"><span class="pre">-O0</span></code>）保持 <code class="docutils literal notranslate"><span class="pre">--cxxopt</span></code>，与
+<code class="docutils literal notranslate"><span class="pre">build:ubsan</span></code> 一致；由于 <code class="docutils literal notranslate"><span class="pre">--per_file_copt=external/.*&#64;-fno-sanitize=undefined</span></code> 已对全部外部依赖
+关闭 UBSan（仅移除 <code class="docutils literal notranslate"><span class="pre">undefined</span></code> 子检查组，不影响 <code class="docutils literal notranslate"><span class="pre">address</span></code>），UBSan 调优标志对外部 C 文件是否生效
+不影响最终行为。</p>
 </div></blockquote>
 <blockquote>
 <div><p>TSan 平台支持说明：</p>
@@ -1033,6 +1080,9 @@ bazel<span class="w"> </span>build<span class="w"> </span>//...<span class="w"> 
 
 <span class="c1"># Debug + ASan + 覆盖率</span>
 bazel<span class="w"> </span>build<span class="w"> </span>//...<span class="w"> </span>--config<span class="o">=</span>debug<span class="w"> </span>--config<span class="o">=</span>asan<span class="w"> </span>--config<span class="o">=</span>coverage<span class="w"> </span>-j<span class="w"> </span><span class="m">8</span>
+
+<span class="c1"># Debug + ASan + UBSan + 覆盖率（组合 sanitizer；不可再加 --config=tsan）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//...<span class="w"> </span>--config<span class="o">=</span>debug<span class="w"> </span>--config<span class="o">=</span>asan_ubsan<span class="w"> </span>--config<span class="o">=</span>coverage<span class="w"> </span>-j<span class="w"> </span><span class="m">8</span>
 
 <span class="c1"># Release wheel for Python 3.11 + glibc 2.34</span>
 bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>release<span class="w"> </span>--config<span class="o">=</span>py311<span class="w"> </span>--define<span class="w"> </span><span class="nv">glibc_version</span><span class="o">=</span><span class="m">2</span>.34

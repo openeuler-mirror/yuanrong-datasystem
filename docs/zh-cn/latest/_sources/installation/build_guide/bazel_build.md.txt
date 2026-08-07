@@ -12,7 +12,7 @@ yum install -y autoconf automake libtool m4
 
 ### 安装 Bazel
 
-参考 [Bazel 官方文档](https://bazel.build/install) 安装 Bazel 7.4 及以上版本。
+参考 [Bazel 官方文档](https://bazel.build/install) 安装 Bazel 6.5 或 7.x 版本（推荐 7.4 及以上版本）。
 
 ### Sanitizer 运行时（可选）
 
@@ -96,7 +96,7 @@ datasystem/
 | `-P on\|off` | 构建 Python wheel | on |
 | `-t build\|run\|off` | 测试构建/运行 | off |
 | `-u <N>` | 测试并行度 | 8 |
-| `-S address\|thread\|undefined\|off` | Sanitizer | off |
+| `-S address\|thread\|undefined\|address_undefined\|off` | Sanitizer | off |
 | `-c on\|off` | 覆盖率 | off |
 
 ### 使用示例
@@ -117,6 +117,12 @@ bash build.sh -b bazel -r -S address
 # 开启 TSan
 bash build.sh -b bazel -r -S thread
 
+# 开启 UBSan
+bash build.sh -b bazel -r -S undefined
+
+# 同时开启 ASan + UBSan
+bash build.sh -b bazel -r -S address_undefined
+
 # 开启 URMA
 bash build.sh -b bazel -r -M on
 
@@ -126,7 +132,8 @@ bash build.sh -b bazel -r -c on
 
 ### Sanitizer 模式
 
-Bazel 模式复用 CMake 的 `-S` 参数：`address` 对应 ASan，`thread` 对应 TSan。
+Bazel 模式复用 CMake 的 `-S` 参数：`address` 对应 ASan，`thread` 对应 TSan，`undefined` 对应 UBSan，
+`address_undefined` 同时开启 ASan + UBSan（对应 `.bazelrc` 的 `build:asan_ubsan`）。
 
 ```bash
 # ASan level0 验证
@@ -134,12 +141,25 @@ bash build.sh -b bazel -r -S address -t run -l level0
 
 # TSan level0 验证
 bash build.sh -b bazel -r -S thread -t run -l level0
+
+# ASan + UBSan level0 验证（ASan + UBSan 共享 libasan 运行时，可安全组合；
+# TSan 与 ASan/UBSAN 运行时互斥，不可叠加）
+bash build.sh -b bazel -r -S address_undefined -t run -l level0
 ```
 
-启用 sanitizer 后，脚本会先用 `bazel query` 按测试标签筛选目标，而不是直接运行
-`bazel test //...`。测试需要同时满足本次指定的范围标签（如 `level0`、`ut`）和
-sanitizer 标签（如 `asan`、`tsan` 或 `sanitizer`），并且不能带有 `manual`
-标签。TSan 对线程调度更敏感，建议只给已确认稳定的测试添加 `tsan` 标签。
+启用 sanitizer 后，脚本对 `-S address|thread|address_undefined` 会先用 `bazel query`
+按测试标签筛选目标（而非直接跑 `bazel test //...`），测试需同时满足范围标签
+（如 `level0`、`ut`）和 sanitizer 标签（`asan`、`tsan` 或通用的 `sanitizer`），
+且不能带 `manual` 标签。具体匹配规则：
+
+- `-S address` 与 `-S address_undefined` 都按 `asan` tag 筛选。组合模式叠加了
+  ASan 的运行时约束（ASLR、shadow memory、leak detection），是 binding 项，因此
+  复用 ASan 的测试白名单。
+- `-S thread` 按 `tsan` tag 筛选。
+- `-S undefined` **不做 tag 筛选**，直接跑全部测试。UBSan 没有 ASan/TSan 那种
+  运行时环境约束，所有测试都可在 UBSan 下运行，无需收窄测试集。
+
+TSan 对线程调度更敏感，建议只给已确认稳定的测试添加 `tsan` 标签。
 
 ### 参数兼容性说明
 
@@ -223,6 +243,9 @@ bazel build //bazel:datasystem_sdk --config=tsan
 
 # Undefined Behavior Sanitizer（未定义行为）
 bazel build //bazel:datasystem_sdk --config=ubsan
+
+# 同时开启 ASan + UBSan（共享 libasan 运行时，TSan 与二者互斥不可叠加）
+bazel build //bazel:datasystem_sdk --config=asan_ubsan
 ```
 
 #### 覆盖率
@@ -278,6 +301,7 @@ bazel test //... --config=test --config=release --test_timeout=120
 | `--config=asan` | Address Sanitizer | `-fsanitize=address` |
 | `--config=tsan` | Thread Sanitizer | `-fsanitize=thread` |
 | `--config=ubsan` | UBSan | `-fsanitize=undefined` |
+| `--config=asan_ubsan` | ASan + UBSan（组合） | `-fsanitize=address,undefined` |
 | `--config=coverage` | 覆盖率 | `-fprofile-arcs -ftest-coverage` |
 | `--config=py39`~`py313` | Python 版本 | rules_python 版本选择 |
 
@@ -294,6 +318,26 @@ bazel test //... --config=test --config=release --test_timeout=120
 > 关闭 etcd proto 生成的 grpc stub 代码（`rpc.grpc.pb.cc` 等）的 UBSan 插桩。原因是这些 stub 引用了
 > `grpc::internal::ClientReactor` 的 typeinfo（其析构为 `= default`，无关键函数），在 stub 被插桩而 grpc
 > 库本身不插桩时，链接会报 `undefined reference to 'typeinfo for grpc::internal::ClientReactor'`。
+
+> ASan + UBSan 组合说明：`build:asan_ubsan` 用单一 `-fsanitize=address,undefined` 编译/链接标志启用
+> 两个 sanitizer。GCC 与 Clang 都显式支持这种组合：ASan 运行时（`libasan`）已经把 `libubsan` 作为
+> 依赖一并加载，二者共享 shadow-memory 拦截器基础设施。TSan 与 ASan/UBSAN 运行时互斥，**不能**
+> 与二者组合。`build:asan_ubsan` 复用 `build:ubsan` 的全部 UBSAN 子检查调优（`-fno-sanitize=alignment`、
+> `-fsanitize=float-cast-overflow`、`-fno-sanitize-recover=all`、`-O0`、外部依赖与 etcd stub 的
+> `--per_file_copt` 关闭），并叠加 ASan 的 `-fno-omit-frame-pointer`、`-g3`、`--define=asan=1`（使根
+> `BUILD.bazel` 的 `config_setting(name = "is_asan")` 命中，所有 ASan 专属 `select()` 分支激活）以及
+> `test:asan_ubsan` 运行时环境（`ASAN_OPTIONS=detect_leaks=0:detect_odr_violation=0`、
+> `LSAN_OPTIONS=detect_leaks=0`，与 `test:asan` 一致）。
+>
+> Flag 放置：ASan 来源的标志（`-fsanitize=address,undefined`、`-fno-omit-frame-pointer`、`-g3`）用
+> `--copt` 传给 C 和 C++ 编译器（与 `build:asan` 一致），目的是让第三方 C 源文件也获得 ASan 插桩——
+> 仓库中 zlib（15 个 `.c`）、securec（`glob src/*.c`）、libcurl（`glob lib/**/*.c`）、ZeroMQ
+> （`external/sha1/*.c`）都通过 `cc_library` 编译 C 源码，若用 `--cxxopt` 这些 C 文件会静默丢失 ASan
+> 覆盖，是相对 `--config=asan` 的回归。UBSan 专属调优标志（`-fno-sanitize=alignment`、
+> `-fsanitize=float-cast-overflow`、`-fno-sanitize-recover=all`、`-O0`）保持 `--cxxopt`，与
+> `build:ubsan` 一致；由于 `--per_file_copt=external/.*@-fno-sanitize=undefined` 已对全部外部依赖
+> 关闭 UBSan（仅移除 `undefined` 子检查组，不影响 `address`），UBSan 调优标志对外部 C 文件是否生效
+> 不影响最终行为。
 
 > TSan 平台支持说明：
 >
@@ -333,6 +377,9 @@ bazel build //... --config=release --config=urma --config=test -j 16
 
 # Debug + ASan + 覆盖率
 bazel build //... --config=debug --config=asan --config=coverage -j 8
+
+# Debug + ASan + UBSan + 覆盖率（组合 sanitizer；不可再加 --config=tsan）
+bazel build //... --config=debug --config=asan_ubsan --config=coverage -j 8
 
 # Release wheel for Python 3.11 + glibc 2.34
 bazel build //bazel:datasystem_wheel --config=release --config=py311 --define glibc_version=2.34
