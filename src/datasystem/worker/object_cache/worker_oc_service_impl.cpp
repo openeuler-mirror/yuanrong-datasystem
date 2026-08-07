@@ -1376,7 +1376,7 @@ Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeou
     if (hasLoggedBeforeWait) {
         int reconciliationCount = 0;
         {
-            std::lock_guard<std::mutex> lock(reconciliationMutex_);
+            std::lock_guard<bthread::Mutex> lock(reconciliationMutex_);
             reconciliationCount = numRecon_;
         }
         LOG(INFO) << "Finished waiting for the reconFlag, elapsed ms: " << timer.ElapsedMilliSecond()
@@ -1495,7 +1495,7 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
     }
     WriteLock haveRecon;
     RETURN_IF_NOT_OK(LockReconciliationIfWorkerUnhealthy(haveRecon, req.is_restart()));
-    std::lock_guard<std::mutex> reconciliationLock(reconciliationMutex_);
+    std::lock_guard<bthread::Mutex> reconciliationLock(reconciliationMutex_);
     Status rc;
     if (req.event_timestamp() > timestamp_) {
         numRecon_ = 0;
@@ -2744,7 +2744,7 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
     if (!rec) {
         return Status::OK();  // loop back and try again later
     }
-    std::lock_guard<std::mutex> reconciliationLock(reconciliationMutex_);
+    std::lock_guard<bthread::Mutex> reconciliationLock(reconciliationMutex_);
     Timer holdReconFlagTimer;
     std::string finishReason = "unknown";
     Raii logReconFlagCost([&holdReconFlagTimer, &finishReason, this]() {

@@ -90,6 +90,9 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
+// Keep bthread headers after project RPC/log headers so brpc logging macros (CHECK_EQ etc.) are
+// established before bthread/mutex.h (which uses but does not define them) avoid redefinition pitfalls.
+#include <bthread/mutex.h>
 
 namespace datasystem {
 namespace master {
@@ -1358,9 +1361,10 @@ private:
     // Blocks ordinary RPCs while startup reconciliation owns the unhealthy Worker. Acquire before
     // reconciliationMutex_ when both locks are required.
     WriterPrefRWLock reconFlag_;
-    // Serializes reconciliation calls and protects numRecon_, reconciledSources_, lastReconTime_, timestamp_, and
-    // waited_.
-    std::mutex reconciliationMutex_;
+    // bthread::Mutex (not std::mutex): Reconciliation() holds this across worker->master sync RPCs in brpc bthread
+    // context; butex-yield lets other bthreads on the same pthread run during RetryOnError storms.
+    // Non-recursive: bthread::Mutex does not support re-locking from the same thread.
+    bthread::Mutex reconciliationMutex_;
     int numRecon_{ 0 };  // Successful distinct source count for timestamp_.
     std::unordered_set<std::string> reconciledSources_;  // Successful source addresses for timestamp_.
     int64_t lastReconTime_{ 0 };  // The last time when reconciliation was done.
