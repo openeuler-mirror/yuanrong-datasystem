@@ -34,6 +34,9 @@
 
 namespace datasystem {
 namespace ut {
+// Matches BrokenFilter::EVICT_CONSECUTIVE_FAILURES (a worker is evicted only after this many
+// consecutive K_CLIENT_WORKER_DISCONNECT signals).
+constexpr int EVICTION_THRESHOLD = 100;
 
 class RoutingFacadeTest : public CommonTest {
 protected:
@@ -254,7 +257,10 @@ TEST_F(RoutingFacadeTest, TestForwardsPolicyBatchAndStateUpdates)
     EXPECT_EQ(groups.begin()->second.size(), 2u);
 
     HostPort worker("127.0.0.1", 1000);
-    routing.UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
+    // BrokenFilter debounces: reach EVICT_CONSECUTIVE_FAILURES (100) before the worker is evicted.
+    for (int i = 0; i < EVICTION_THRESHOLD; ++i) {
+        routing.UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
+    }
     EXPECT_EQ(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, worker).GetCode(),
               K_NO_AVAILABLE_WORKER);
 }

@@ -75,6 +75,18 @@ inline bool IsNonRetryableRpcError(const Status &status)
     return IsNonRetryableRpcError(status.GetCode());
 }
 
+// The genuine-PEER-FAILURE subset of the global-eviction decision: an explicit disconnect or a
+// dead peer. Transient retryable errors (DEADLINE_EXCEEDED, NETWORK_BLIP, UNAVAILABLE,
+// URMA_WAIT_TIMEOUT, K_URMA_NEED_CONNECT) must NOT evict -- they indicate a slow peer and
+// evicting on them collapsed routing capacity under load (code=37, 083cc75bd4 regression). The
+// full eviction condition at the call site additionally includes workerNotReady (K_NOT_READY +
+// stage), which is not a peer-failure signal and so is kept out of this predicate.
+inline bool IsRoutingEvictionFailure(const Status &status)
+{
+    return status.GetCode() == StatusCode::K_CLIENT_WORKER_DISCONNECT
+           || IsNonRetryableRpcError(status);  // K_RPC_PEER_DEAD
+}
+
 inline bool ShouldRetryOnStatusCode(StatusCode code, const std::unordered_set<StatusCode> &retryCode)
 {
     return !IsNonRetryableRpcError(code)

@@ -31,6 +31,7 @@
 #include "datasystem/client/routing/state_filter.h"
 #include "datasystem/client/routing/worker_router.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "ut/common.h"
 
@@ -364,6 +365,22 @@ TEST_F(RoutingTest, TestGetRingState)
 
 // === BrokenFilter Tests ===
 
+// Reaches the debounce threshold (BrokenFilter::EVICT_CONSECUTIVE_FAILURES) so the worker is
+// actually marked broken. A single disconnect must NOT evict -- that was the code=37 cascade.
+constexpr int EVICTION_THRESHOLD = 100;
+void MarkWorkerBroken(client::BrokenFilter &filter, const HostPort &addr)
+{
+    for (int i = 0; i < EVICTION_THRESHOLD; ++i) {
+        filter.OnWorkerStateChange(addr, K_CLIENT_WORKER_DISCONNECT);
+    }
+}
+void MarkWorkerBroken(client::WorkerRouter &router, const HostPort &addr)
+{
+    for (int i = 0; i < EVICTION_THRESHOLD; ++i) {
+        router.UpdateState(addr, K_CLIENT_WORKER_DISCONNECT);
+    }
+}
+
 TEST_F(RoutingTest, TestBrokenFilter)
 {
     client::BrokenFilter filter;
@@ -371,12 +388,12 @@ TEST_F(RoutingTest, TestBrokenFilter)
     HostPort addr("127.0.0.1", 1000);
     EXPECT_TRUE(filter.IsAvailable(addr));
 
-    filter.OnWorkerStateChange(addr, K_CLIENT_WORKER_DISCONNECT);
+    MarkWorkerBroken(filter, addr);
     EXPECT_FALSE(filter.IsAvailable(addr));
 
     // Other status should be ignored
     filter.OnWorkerStateChange(addr, K_RUNTIME_ERROR);
-    EXPECT_FALSE(filter.IsAvailable(addr));  // Still broken from K_DISCONNECT
+    EXPECT_FALSE(filter.IsAvailable(addr));  // Still broken from the disconnect burst
 }
 
 TEST_F(RoutingTest, TestBrokenFilterIgnoresOtherWorkers)
@@ -386,7 +403,7 @@ TEST_F(RoutingTest, TestBrokenFilterIgnoresOtherWorkers)
     HostPort a("127.0.0.1", 1000);
     HostPort b("127.0.0.1", 2000);
 
-    filter.OnWorkerStateChange(a, K_CLIENT_WORKER_DISCONNECT);
+    MarkWorkerBroken(filter, a);
     EXPECT_FALSE(filter.IsAvailable(a));
     EXPECT_TRUE(filter.IsAvailable(b));  // b unaffected
 }
@@ -394,12 +411,12 @@ TEST_F(RoutingTest, TestBrokenFilterIgnoresOtherWorkers)
 TEST_F(RoutingTest, TestBrokenFilterConcurrentUpdatesAreNotLost)
 {
     client::BrokenFilter filter;
-    constexpr int workerCount = 64;
+    constexpr int workerCount = 16;
     std::vector<std::thread> threads;
     threads.reserve(workerCount);
     for (int i = 0; i < workerCount; ++i) {
         threads.emplace_back([&filter, i] {
-            filter.OnWorkerStateChange(HostPort("127.0.0.1", 1000 + i), K_CLIENT_WORKER_DISCONNECT);
+            MarkWorkerBroken(filter, HostPort("127.0.0.1", 1000 + i));
         });
     }
     for (auto &thread : threads) {
@@ -420,8 +437,8 @@ TEST_F(RoutingTest, TestBrokenFilterIntegrationWithRouter)
     HostPort first;
     DS_ASSERT_OK(router->SelectWorker("broken_key", client::SelectStrategy::HASH_RING_AFFINITY, first));
 
-    // Mark first worker as broken
-    router->UpdateState(first, K_CLIENT_WORKER_DISCONNECT);
+    // Mark first worker as broken (reach the debounce threshold)
+    MarkWorkerBroken(*router, first);
 
     // Subsequent SelectWorker should skip broken worker
     HostPort second;
@@ -539,6 +556,56 @@ TEST_F(RoutingTest, U7BatchSelectionNeverMixesConcurrentSnapshots)
     updater.join();
     DS_ASSERT_OK(selectionStatus);
     EXPECT_TRUE(snapshotsConsistent);
+}
+
+// Characterizes the code=37 ("All workers filtered or excluded") mechanism: when every ring
+// candidate is marked broken, WorkerRouter exhausts the ring and returns K_NO_AVAILABLE_WORKER.
+// This is the user-observable failure behind the field reports (8 MB / high-GET-pressure).
+//
+// Historically (083cc75bd4) a transient retryable RPC error reached `routing->UpdateState(...,
+// K_CLIENT_WORKER_DISCONNECT)` and pushed workers into BrokenFilter for BROKEN_TTL, so under load
+// the whole ring could be marked broken within seconds. The fix narrows global eviction to
+// genuine peer failures (see IsRoutingEvictionFailure + its classification test below); this
+// test now exercises the remaining legitimate eviction path (K_CLIENT_WORKER_DISCONNECT) to lock
+// the exhaustion contract in place.
+TEST_F(RoutingTest, AllWorkersBrokenExhaustsRingAndReturnsCode37)
+{
+    auto router = CreateRouter();
+    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+
+    // Sanity: routing succeeds before any worker is marked broken.
+    HostPort healthy;
+    DS_ASSERT_OK(router->SelectWorker("k", client::SelectStrategy::HASH_RING_AFFINITY, healthy));
+
+    const std::vector<HostPort> allWorkers{ HostPort("127.0.0.1", 1000), HostPort("127.0.0.1", 2000) };
+    // Mark every candidate broken via the genuine-disconnect path that HandleSetRouteFailure
+    // still feeds into BrokenFilter (object_client_impl.cpp, gated by IsRoutingEvictionFailure).
+    for (const auto &w : allWorkers) {
+        MarkWorkerBroken(*router, w);
+    }
+
+    // Every candidate filtered by BrokenFilter -> K_NO_AVAILABLE_WORKER (code 37).
+    HostPort selected;
+    auto rc = router->SelectWorker("k", client::SelectStrategy::HASH_RING_AFFINITY, selected);
+    EXPECT_EQ(rc.GetCode(), K_NO_AVAILABLE_WORKER);
+}
+
+// Guards the code=37 fix at the classification layer: only genuine peer/connection failures
+// (K_CLIENT_WORKER_DISCONNECT, K_RPC_PEER_DEAD) may evict a worker from the global routing
+// table. Every transient retryable error must classify as non-evicting -- evicting on them is
+// the 083cc75bd4 regression that collapsed routing capacity under load.
+TEST_F(RoutingTest, IsRoutingEvictionFailureExcludesTransientRetryableErrors)
+{
+    EXPECT_TRUE(IsRoutingEvictionFailure(Status(K_CLIENT_WORKER_DISCONNECT, "disconnect")));
+    EXPECT_TRUE(IsRoutingEvictionFailure(Status(K_RPC_PEER_DEAD, "peer dead")));
+    // Transient retryable errors: a slow/busy peer, must NOT evict globally.
+    EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_RPC_DEADLINE_EXCEEDED, "deadline")));
+    EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_RPC_NETWORK_BLIP, "blip")));
+    EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_RPC_UNAVAILABLE, "unavailable")));
+    EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_URMA_WAIT_TIMEOUT, "urma wait")));
+    EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_URMA_NEED_CONNECT, "urma need connect")));
+    EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_RPC_CANCELLED, "cancelled")));
+    EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_RUNTIME_ERROR, "runtime")));
 }
 
 // === Status.WithExtra Tests ===

@@ -30,6 +30,9 @@ namespace ut {
 namespace {
 constexpr auto BROKEN_FILTER_RECOVERY_TIMEOUT = std::chrono::seconds(6);
 constexpr auto BROKEN_FILTER_POLL_INTERVAL = std::chrono::milliseconds(20);
+// Must match BrokenFilter::EVICT_CONSECUTIVE_FAILURES. A single (or few) disconnect must NOT
+// evict a worker globally -- that was the code=37 cascade. Only a sustained burst evicts.
+constexpr int EVICT_THRESHOLD = 100;
 }  // namespace
 
 class BrokenFilterTest : public CommonTest {
@@ -37,11 +40,17 @@ protected:
     HostPort worker_{ "127.0.0.1", 1000 };
 };
 
-TEST_F(BrokenFilterTest, DisconnectMarksWorkerUnavailable)
+TEST_F(BrokenFilterTest, DisconnectsBelowThresholdDoNotEvict)
 {
     client::BrokenFilter filter;
 
     EXPECT_TRUE(filter.IsAvailable(worker_));
+    // A few transient blips (e.g. jitter-induced K_RPC_PEER_DEAD) must not evict the worker.
+    for (int i = 0; i < EVICT_THRESHOLD - 1; ++i) {
+        filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
+        EXPECT_TRUE(filter.IsAvailable(worker_)) << "evicted after only " << (i + 1) << " failures";
+    }
+    // Reaching the threshold within the burst window evicts the worker.
     filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
     EXPECT_FALSE(filter.IsAvailable(worker_));
 }
@@ -53,16 +62,20 @@ TEST_F(BrokenFilterTest, OtherStatusCodesAreIgnored)
     filter.OnWorkerStateChange(worker_, K_RUNTIME_ERROR);
     EXPECT_TRUE(filter.IsAvailable(worker_));
 
-    filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
-    filter.OnWorkerStateChange(worker_, K_NOT_OWNER);
-    EXPECT_FALSE(filter.IsAvailable(worker_));
+    for (int i = 0; i < EVICT_THRESHOLD; ++i) {
+        filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
+    }
+    filter.OnWorkerStateChange(worker_, K_NOT_OWNER);  // non-disconnect status is ignored
+    EXPECT_FALSE(filter.IsAvailable(worker_));  // still broken from the disconnect burst
 }
 
 TEST_F(BrokenFilterTest, WorkerBecomesAvailableAfterTtl)
 {
     client::BrokenFilter filter;
 
-    filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
+    for (int i = 0; i < EVICT_THRESHOLD; ++i) {
+        filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
+    }
     EXPECT_FALSE(filter.IsAvailable(worker_));
 
     const auto deadline = std::chrono::steady_clock::now() + BROKEN_FILTER_RECOVERY_TIMEOUT;
@@ -81,7 +94,10 @@ TEST_F(BrokenFilterTest, ConcurrentUpdatesAreNotLost)
 
     for (int i = 0; i < workerCount; ++i) {
         threads.emplace_back([&filter, i] {
-            filter.OnWorkerStateChange(HostPort("127.0.0.1", 1000 + i), K_CLIENT_WORKER_DISCONNECT);
+            const HostPort addr("127.0.0.1", 1000 + i);
+            for (int n = 0; n < EVICT_THRESHOLD; ++n) {
+                filter.OnWorkerStateChange(addr, K_CLIENT_WORKER_DISCONNECT);
+            }
         });
     }
     for (auto &thread : threads) {

@@ -36,6 +36,7 @@ namespace datasystem {
 namespace st {
 namespace {
 constexpr size_t KEY_SEARCH_LIMIT = 100'000;
+constexpr int EVICTION_THRESHOLD = 100;  // matches BrokenFilter::EVICT_CONSECUTIVE_FAILURES
 constexpr int64_t BROKEN_FILTER_RECOVERY_TIMEOUT_MS = 10'000;
 constexpr int64_t RETRY_INTERVAL_MS = 200;
 constexpr char ROUTE_KEY_PREFIX[] = "routing_failure_switch_";
@@ -138,7 +139,11 @@ protected:
     void VerifyDisconnectFallbackAndRecovery(client::WorkerRouter &router, const HostPort &remainingWorker,
                                                const HostPort &targetWorker, const std::string &key)
     {
-        router.UpdateState(targetWorker, K_CLIENT_WORKER_DISCONNECT);
+        // BrokenFilter debounces: a worker is evicted only after EVICT_CONSECUTIVE_FAILURES
+        // (100) disconnects, so reach the threshold before asserting it is skipped.
+        for (int i = 0; i < EVICTION_THRESHOLD; ++i) {
+            router.UpdateState(targetWorker, K_CLIENT_WORKER_DISCONNECT);
+        }
         HostPort selectedWorker;
         DS_ASSERT_OK(router.SelectWorker(key, client::SelectStrategy::HASH_RING_AFFINITY, selectedWorker));
         ASSERT_EQ(selectedWorker, remainingWorker);

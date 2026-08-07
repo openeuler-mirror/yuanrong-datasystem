@@ -795,7 +795,11 @@ TEST_F(KVClientTransportSetTest, AmbiguousPublishFailureIsNotReplayedOnAnotherWo
     DS_ASSERT_OK(routedClient_->Set(key, value));
     HostPort retryWorker;
     DS_ASSERT_OK(QueryPrimaryWorker(key, retryWorker));
-    ASSERT_NE(retryWorker, firstWorker);
+    // BrokenFilter debounces (EVICT_CONSECUTIVE_FAILURES) and K_RPC_UNAVAILABLE is no longer a
+    // global-eviction signal, so two transient publish failures do NOT evict firstWorker. The
+    // second Set re-routes to the same worker (the inject is exhausted, so it succeeds) instead
+    // of failing over to another.
+    ASSERT_EQ(retryWorker, firstWorker);
     AssertValue(key, value);
 }
 

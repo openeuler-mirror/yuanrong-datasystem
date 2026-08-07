@@ -460,10 +460,11 @@ public:
     ~RoutingExistAdapter() override = default;
 
     Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
-                         std::unordered_map<HostPort, std::vector<std::string>> &groups) override
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                         const std::vector<HostPort> &exclude) override
     {
         RETURN_RUNTIME_ERROR_IF_NULL(routing_);
-        return routing_->SelectWorkers(keys, strategy, groups);
+        return routing_->SelectWorkers(keys, strategy, groups, exclude);
     }
 
     void UpdateState(const HostPort &addr, StatusCode status) override
@@ -3673,7 +3674,10 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
                                     || failureStage == SetFailureStage::PUBLISH);
     const bool publishNotSent = failureStage == SetFailureStage::PUBLISH
                                 && IsBrpcRequestDefinitelyNotSent(status);
-    if (connectionFailure || transferFailure || workerNotReady) {
+    // Global eviction (BrokenFilter, 3s TTL): only genuine peer failures (IsRoutingEvictionFailure)
+    // or K_NOT_READY. Transient errors still steer THIS request via retry/excludeWorker but must not
+    // evict globally (code=37, 083cc75bd4 regression).
+    if (IsRoutingEvictionFailure(status) || workerNotReady) {
         routing->UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
     }
     const bool retry = (failureStage == SetFailureStage::CREATE && (connectionFailure || workerNotReady))

@@ -64,18 +64,9 @@ bool IsExistRetryableConnectionError(const Status &rc)
            || rc.GetCode() == K_CLIENT_WORKER_DISCONNECT;
 }
 
-// Errors that warrant marking the worker as disconnected in the routing table.
-// Includes: dead peer (K_RPC_PEER_DEAD), explicit client-worker disconnect, and the
-// legacy peer-unreachable codes (K_RPC_UNAVAILABLE / K_RPC_DEADLINE_EXCEEDED) that
-// master treated as connection failures. Transient blips (NETWORK_BLIP /
-// URMA_WAIT_TIMEOUT / K_RPC_CANCELLED) are excluded: a momentary hiccup must not
-// evict a healthy worker and shrink routable capacity.
-bool IsExistRoutingStale(const Status &rc)
-{
-    return IsNonRetryableRpcError(rc) || rc.GetCode() == K_CLIENT_WORKER_DISCONNECT
-           || rc.GetCode() == K_RPC_UNAVAILABLE || rc.GetCode() == K_RPC_DEADLINE_EXCEEDED;
-}
-
+// Errors for which Exist reroutes within the bounded retry loop. Transient errors are included
+// (a retry on a fresh worker may succeed); eviction is decided separately by
+// IsRoutingEvictionFailure in ContinueOwnerGroupAfterResult.
 bool IsExistReroutableError(const Status &rc)
 {
     return IsExistRetryableConnectionError(rc) || rc.GetCode() == K_NOT_READY;
@@ -345,10 +336,11 @@ ExistHandler::ExistHandler(IExistRouting *routing, IExistTransport *transport, s
 }
 
 Status ExistHandler::SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
-                                   std::unordered_map<HostPort, std::vector<std::string>> &groups)
+                                   std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                                   const std::vector<HostPort> &exclude)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(routing_);
-    return routing_->SelectWorkers(keys, strategy, groups);
+    return routing_->SelectWorkers(keys, strategy, groups, exclude);
 }
 
 void ExistHandler::UpdateRoutingState(const HostPort &addr, StatusCode status)
@@ -362,6 +354,7 @@ Status ExistHandler::Run(const ExistHandlerRequest &request, std::vector<bool> &
 {
     CHECK_FAIL_RETURN_STATUS(routing_ != nullptr, K_RUNTIME_ERROR, "Exist routing is unavailable");
     CHECK_FAIL_RETURN_STATUS(transport_ != nullptr, K_RUNTIME_ERROR, "Exist transport is unavailable");
+    excludedWorkers_.clear();  // fresh per Run; reroute skips workers that failed in this call
     auto keyIndexes = BuildExistKeyIndexes(request.keys);
     exists.assign(request.keys.size(), false);
     Status rc;
@@ -380,7 +373,8 @@ Status ExistHandler::RunSelectedWorkers(const ExistHandlerRequest &request,
                                         std::vector<bool> &exists)
 {
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    RETURN_IF_NOT_OK(SelectWorkers(request.keys, client::SelectStrategy::HASH_RING_AFFINITY, groups));
+    RETURN_IF_NOT_OK(SelectWorkers(request.keys, client::SelectStrategy::HASH_RING_AFFINITY, groups,
+                                   excludedWorkers_));
     std::vector<std::pair<HostPort, std::vector<std::string>>> orderedGroups(groups.begin(), groups.end());
     std::sort(orderedGroups.begin(), orderedGroups.end(), [](const auto &lhs, const auto &rhs) {
         return lhs.first.ToString() < rhs.first.ToString();
@@ -455,8 +449,9 @@ Status ExistHandler::ContinueOwnerGroupAfterResult(const Status &firstRc, const 
             batchExists = std::move(result.exists);
             continue;
         }
-        if (IsExistRoutingStale(rc) || rc.GetCode() == K_NOT_READY) {
+        if (IsRoutingEvictionFailure(rc) || rc.GetCode() == K_NOT_READY) {
             UpdateRoutingState(work.worker, K_CLIENT_WORKER_DISCONNECT);
+            excludedWorkers_.push_back(work.worker);  // skip this worker on reroute
         }
         return rc;
     }
