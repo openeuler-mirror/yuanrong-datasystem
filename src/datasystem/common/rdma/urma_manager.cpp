@@ -1037,7 +1037,7 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
         1,
         "[URMA_ELAPSED_TOTAL]: Time from urma_post_jetty_send_wr to urma_write completion total cost "
             << totalElapsedMs
-            << "ms, wait os sched thread finish time(std::condition_variable.wait_for): " << waitElapsedMs
+            << "ms, wait bthread completion time(bthread::ConditionVariable.wait_for): " << waitElapsedMs
             << "ms, request id:" << requestId << ", src address:" << localUrmaInfo_.localAddress.ToString()
             << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
             << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()

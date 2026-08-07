@@ -17,9 +17,9 @@
 #ifndef DATASYSTEM_COMMON_RDMA_RDMA_UTIL_H
 #define DATASYSTEM_COMMON_RDMA_RDMA_UTIL_H
 
+#include <algorithm>
 #include <chrono>
 #include <cerrno>
-#include <condition_variable>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -137,9 +137,10 @@ public:
 
     virtual Status WaitFor(std::chrono::milliseconds timeout)
     {
-        std::unique_lock<std::mutex> lock(eventMutex_);
-        bool gotNotification = cv_.wait_for(lock, timeout, [this] { return ready_; });
-        if (!gotNotification && !ready_) {
+        std::unique_lock<bthread::Mutex> lock(eventMutex_);
+        bool gotNotification = false;
+        RETURN_IF_NOT_OK(WaitUntilReadyLocked(lock, timeout, gotNotification));
+        if (!gotNotification) {
             const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId_));
             RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
                                     FormatString("Timed out waiting for request: %s", requestIdStr.c_str()));
@@ -150,7 +151,7 @@ public:
     virtual void NotifyAll()
     {
         {
-            std::unique_lock<std::mutex> lock(eventMutex_);
+            std::unique_lock<bthread::Mutex> lock(eventMutex_);
             ready_ = true;
         }
         if (waiter_) {
@@ -175,8 +176,50 @@ public:
     }
 
 protected:
-    std::condition_variable cv_;
-    mutable std::mutex eventMutex_;
+    Status WaitUntilReadyLocked(std::unique_lock<bthread::Mutex> &lock, std::chrono::milliseconds timeout,
+                                bool &gotNotification)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (!ready_) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                break;
+            }
+            const auto maxWaitSlice =
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(MAX_BTHREAD_EVENT_WAIT_SLICE);
+            const auto remaining = deadline - now;
+            const int waitRc = cv_.wait_for(lock, ToBthreadWaitUs(std::min(remaining, maxWaitSlice)));
+            if (waitRc == 0 || waitRc == EINTR) {
+                continue;
+            }
+            if (waitRc == ETIMEDOUT) {
+                continue;
+            }
+            RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
+                                    FormatString("Failed waiting for event, errno: %d", waitRc));
+        }
+        gotNotification = ready_;
+        return Status::OK();
+    }
+
+    // brpc timed waits use CLOCK_REALTIME. Periodically return to the steady-clock loop under normal clock operation
+    // without creating a high-frequency timer wakeup for every stalled transport event.
+    static constexpr auto MAX_BTHREAD_EVENT_WAIT_SLICE = std::chrono::seconds(1);
+
+    static long ToBthreadWaitUs(std::chrono::steady_clock::duration timeout)
+    {
+        const auto timeoutUs = std::chrono::duration_cast<std::chrono::microseconds>(timeout).count();
+        if (timeoutUs <= 0) {
+            return 0;
+        }
+        if (timeoutUs > std::numeric_limits<long>::max()) {
+            return std::numeric_limits<long>::max();
+        }
+        return static_cast<long>(timeoutUs);
+    }
+
+    bthread::ConditionVariable cv_;
+    mutable bthread::Mutex eventMutex_;
     uint64_t requestId_;
     bool ready_{ false };
     bool failed_{ false };

@@ -111,6 +111,9 @@ Detailed follow-up docs now exist for:
 MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when the mapping is not using
     `MAP_HUGETLB`.
   - `rdma` always builds fast-transport wrapper pieces and conditionally adds URMA and RDMA implementations.
+  - Fast-transport `Event` completion waits use `bthread::Mutex` and `bthread::ConditionVariable`. A BRPC handler waiting for
+    URMA or UCP completion therefore suspends its bthread instead of blocking the scheduler's worker pthread; completion
+    notifications from ordinary polling pthreads remain supported.
   - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
     to `4` MB and is validated in the range `[1, 2048]` MB.
   - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.

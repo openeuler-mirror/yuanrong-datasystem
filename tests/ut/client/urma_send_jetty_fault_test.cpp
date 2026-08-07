@@ -17,6 +17,7 @@
 // This is deliberately a URMA-backed fault test. It invokes production CQE, async-event, timeout, and pool-exhaustion
 // handlers with real local Jetties; keep SendJettyPool's pure state-machine cases in urma_send_lane_test.cpp.
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <functional>
@@ -27,6 +28,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include <bthread/bthread.h>
 #include <gtest/gtest.h>
 
 #ifdef USE_URMA
@@ -43,14 +45,17 @@ DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 namespace datasystem {
 namespace {
 constexpr auto kWaitTimeout = std::chrono::seconds(10);
+constexpr auto kBthreadEventWaitTimeout = std::chrono::seconds(1);
+constexpr auto kEventCompletionTimeout = std::chrono::milliseconds(20);
 constexpr int kRecoverableCqeStatus = 9;  // Kept in sync with GetUrmaErrorHandlePolicy().
 constexpr int kNonRecoverableCqeStatus = 5;
 constexpr uint32_t kOrphanWrWarningThreshold = 16;
 constexpr uint32_t kOrphanWrRetireThreshold = 32;
 
-bool WaitUntil(const std::function<bool()> &predicate)
+bool WaitUntil(const std::function<bool()> &predicate,
+               std::chrono::steady_clock::duration timeout = kWaitTimeout)
 {
-    const auto deadline = std::chrono::steady_clock::now() + kWaitTimeout;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
         if (predicate()) {
             return true;
@@ -129,6 +134,76 @@ size_t GetRegisteredJettyCount(UrmaResource &resource)
 {
     std::lock_guard<std::mutex> lock(resource.jettyRegistryMutex_);
     return resource.jettyRegistry_.size();
+}
+
+TEST(UrmaSendJettyFaultTest, EventWaitSupportsBthreadWaiterAndPthreadNotifier)
+{
+    constexpr uint64_t kRequestId = 1002;
+    constexpr auto notifyDelay = std::chrono::milliseconds(10);
+    struct WaitArgs {
+        std::shared_ptr<UrmaEvent> event;
+        std::atomic<bool> started{ false };
+        Status status = Status::OK();
+    };
+
+    WaitArgs args{ std::make_shared<UrmaEvent>(kRequestId, nullptr, "fault-test", "fault-test", 0,
+                                                UrmaEvent::OperationType::WRITE, nullptr) };
+    bthread_t tid;
+    auto waitEvent = [](void *arg) -> void * {
+        auto *waitArgs = static_cast<WaitArgs *>(arg);
+        waitArgs->started.store(true, std::memory_order_release);
+        waitArgs->status = waitArgs->event->WaitFor(kBthreadEventWaitTimeout);
+        return nullptr;
+    };
+    ASSERT_EQ(bthread_start_background(&tid, nullptr, waitEvent, &args), 0);
+    const bool waitStarted = WaitUntil(
+        [&args] { return args.started.load(std::memory_order_acquire); }, kBthreadEventWaitTimeout);
+    if (waitStarted) {
+        std::this_thread::sleep_for(notifyDelay);
+        std::thread notifier([&args] {
+            args.event->SetFailed(kNonRecoverableCqeStatus);
+            args.event->NotifyAll();
+        });
+        notifier.join();
+    } else {
+        args.event->NotifyAll();
+    }
+    const int joinRc = bthread_join(tid, nullptr);
+
+    ASSERT_TRUE(waitStarted);
+    ASSERT_EQ(joinRc, 0);
+    ASSERT_TRUE(args.status.IsOk()) << args.status.ToString();
+    EXPECT_TRUE(args.event->IsFailed());
+    EXPECT_EQ(args.event->GetStatusCode(), kNonRecoverableCqeStatus);
+    const auto trace = args.event->GetWriteTrace();
+    EXPECT_GT(trace.notifyUs, 0U);
+    EXPECT_GE(trace.awakeUs, trace.notifyUs);
+}
+
+TEST(UrmaSendJettyFaultTest, EventWaitTimeoutPreservesUrmaStatus)
+{
+    constexpr uint64_t kRequestId = 1003;
+    struct WaitArgs {
+        std::shared_ptr<UrmaEvent> event;
+        Status status = Status::OK();
+        std::chrono::steady_clock::duration elapsed{};
+    } args{ std::make_shared<UrmaEvent>(kRequestId, nullptr, "fault-test", "fault-test", 0,
+                                        UrmaEvent::OperationType::WRITE, nullptr) };
+
+    bthread_t tid;
+    auto waitEvent = [](void *arg) -> void * {
+        auto *waitArgs = static_cast<WaitArgs *>(arg);
+        const auto start = std::chrono::steady_clock::now();
+        waitArgs->status = waitArgs->event->WaitFor(kEventCompletionTimeout);
+        waitArgs->elapsed = std::chrono::steady_clock::now() - start;
+        return nullptr;
+    };
+    ASSERT_EQ(bthread_start_background(&tid, nullptr, waitEvent, &args), 0);
+    ASSERT_EQ(bthread_join(tid, nullptr), 0);
+
+    EXPECT_EQ(args.status.GetCode(), K_URMA_WAIT_TIMEOUT);
+    EXPECT_GE(args.elapsed, kEventCompletionTimeout);
+    EXPECT_LT(args.elapsed, kBthreadEventWaitTimeout);
 }
 
 TEST(UrmaSendJettyFaultTest, PoolExhaustionReturnsTryAgainFromManagerAcquirePath)
