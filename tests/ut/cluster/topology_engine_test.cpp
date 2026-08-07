@@ -1076,9 +1076,17 @@ TEST(TopologyEngineTest, BackendRecoveryBeforeThreeLocalConfirmationsStaysAvaila
     ConfigureBuilder(builder, proxy, ingress, callbacks, "transient-asymmetric");
     std::atomic<uint32_t> probeCalls{ 0 };
     std::atomic<bool> isolated{ false };
+    std::atomic<bool> degradationObserved{ false };
+    std::atomic<TopologyAvailabilityLevel> recoveryCallbackObserved{ TopologyAvailabilityLevel::NOT_READY };
+    TopologyEngine *engineView = nullptr;
     builder.SetFailureScopeProbeInterval(std::chrono::milliseconds(20));
     builder.SetAvailabilityHandler([&](TopologyAvailabilityLevel level) {
         isolated.store(isolated.load() || level == TopologyAvailabilityLevel::ROLE_ISOLATED);
+        if (level == TopologyAvailabilityLevel::CONTROL_DEGRADED) {
+            degradationObserved.store(true);
+        } else if (degradationObserved.load() && level == TopologyAvailabilityLevel::NORMAL) {
+            recoveryCallbackObserved.store(engineView->GetAvailability());
+        }
     });
     builder.SetControlBackendProbe([&](const ControlBackendObservation &local, const auto &peers, auto) {
         if (++probeCalls == 2) {
@@ -1094,12 +1102,16 @@ TEST(TopologyEngineTest, BackendRecoveryBeforeThreeLocalConfirmationsStaysAvaila
     });
     std::unique_ptr<TopologyEngine> engine;
     DS_ASSERT_OK(builder.Build(engine));
+    engineView = engine.get();
     DS_ASSERT_OK(engine->Start());
 
     proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 100);
     DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
     ASSERT_TRUE(WaitFor([&] { return probeCalls.load() == 2; }));
     ASSERT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::NORMAL; }));
+    ASSERT_TRUE(WaitFor(
+        [&] { return recoveryCallbackObserved.load() != TopologyAvailabilityLevel::NOT_READY; }));
+    EXPECT_EQ(recoveryCallbackObserved.load(), TopologyAvailabilityLevel::NORMAL);
     EXPECT_FALSE(isolated.load());
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
@@ -1326,6 +1338,30 @@ TEST(TopologyEngineTest, WorkerWatchStartFailureNeverPublishesHostAdmission)
 
     EXPECT_EQ(engine->Start().GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_EQ(normalAdmissions.load(), 0U);
+}
+
+TEST(TopologyEngineTest, ServingAvailabilityIsPublishedBeforeAdmissionCallback)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    PutTopology(proxy, "serving-publication-order", MakeTopology());
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, "serving-publication-order");
+    TopologyEngine *engineView = nullptr;
+    std::atomic<TopologyAvailabilityLevel> observed{ TopologyAvailabilityLevel::NOT_READY };
+    builder.SetAvailabilityHandler([&](TopologyAvailabilityLevel level) {
+        if (level == TopologyAvailabilityLevel::NORMAL || level == TopologyAvailabilityLevel::CONTROL_DEGRADED) {
+            observed.store(engineView->GetAvailability());
+        }
+    });
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    engineView = engine.get();
+
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_EQ(observed.load(), TopologyAvailabilityLevel::NORMAL);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
 TEST(TopologyEngineTest, StartRollbackCleanupFailureRemainsRetryable)

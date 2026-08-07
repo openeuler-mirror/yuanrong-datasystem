@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <future>
@@ -55,6 +56,7 @@
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/util/queue/shm_circular_queue.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/master_heartbeat.pb.h"
@@ -614,6 +616,24 @@ public:
     Status WhetherNonRestart();
 
     /**
+     * @brief Refresh startup health after reconciliation and committed topology placement become ready.
+     * @return K_OK when health is already published, newly published, or still legitimately pending; a topology or
+     *         health-file error otherwise.
+     * @note Called by the Worker startup thread. It may perform health-file I/O and must not run on a TopologyEngine
+     *       snapshot callback thread.
+     */
+    Status RefreshStartupHealth();
+
+    /**
+     * @brief Apply fail-close admission and asynchronously reconcile persisted health after a topology transition.
+     * @param[in] allowBusiness Whether the new topology availability permits business traffic.
+     * @note Non-serving transitions close admission immediately. Serving transitions preserve current admission until
+     *       the Worker-owned coordinator completes any required recovery. This path performs no file I/O and is safe to
+     *       invoke from the TopologyEngine state thread.
+     */
+    void NotifyTopologyAvailability(bool allowBusiness);
+
+    /**
      * @brief Prepare the local one-byte object used by URMA worker-worker connection warmup.
      * @param[in] objectKey Warmup object key.
      * @return K_OK on success; the error code otherwise.
@@ -638,7 +658,8 @@ public:
     /**
      * @brief Try to give up waiting for reconciliation to be done when using distributed master. If the local worker
      * needs reconciliation from distributed masters, but did not receive expected number of reconciliations and waiting
-     * time is too long (timeout), the local worker will give up waiting and set health file to process client requests.
+     * time is too long (timeout), the local worker will complete reconciliation readiness. The startup thread publishes
+     * health only after the topology gate also becomes ready.
      * @return K_OK on success; the error code otherwise.
      */
     Status GiveUpReconciliation();
@@ -1094,7 +1115,15 @@ private:
 
     Status GetExpectedReconciliationCount(int &expectedCount) const;
 
-    Status CheckTopologyServingReady() const;
+    Status RevokeStartupHealth();
+
+    Status HandleTopologyServingFailure(const Status &failure);
+
+    Status StartTopologyHealthCoordinator();
+
+    void StopTopologyHealthCoordinator();
+
+    void RunTopologyHealthCoordinator();
 
     /**
      * @brief Update object version from worker or redis when object is expired
@@ -1275,13 +1304,6 @@ private:
                                       std::vector<std::string> &objectKeysNotInRsp);
 
     /**
-     * @brief Check whether the size of the node table in TopologyEngine equals to the number of running workers.
-     * If not, wait until they are equal or time is out.
-     * @return Status
-     */
-    Status CheckWaitTopologyReady();
-
-    /**
      * @brief Get all objectKeys from objectTable_.
      * @param[out] objectKeys All objectKeys of objectTable_.
      */
@@ -1341,7 +1363,29 @@ private:
     int numRecon_{ 0 };  // Successful distinct source count for timestamp_.
     std::unordered_set<std::string> reconciledSources_;  // Successful source addresses for timestamp_.
     int64_t lastReconTime_{ 0 };  // The last time when reconciliation was done.
+    // Set only after CommonServer has started and WhetherNonRestart enters the Worker startup path. Topology callbacks
+    // may arrive earlier and must not enable health for an RPC server that is not serving yet.
+    std::atomic<bool> healthPublicationEnabled_{ false };
+    // True only after startup reconciliation is unnecessary or has reached its terminal handoff to topology control.
+    // Health publication additionally requires one committed local topology and a resolvable metadata placement.
+    std::atomic<bool> reconciliationReady_{ false };
+    // Serializes the cold-path health-file transaction. The publication flag is committed only after the file and
+    // process health state are updated successfully, so a failed attempt remains retryable by a later startup poll.
+    std::mutex healthPublicationMutex_;
+    // Injectable only for LLT verification of publication ordering and rollback. Production binds SetHealthProbe.
+    std::function<Status()> healthPublisher_;
     std::atomic<bool> setHealthFile_{ false };  // Whether the worker health probe has been published.
+    // The Engine callback only updates this request state. A Worker-owned thread performs health-file I/O and
+    // periodically revalidates local membership/placement even when the availability level itself does not change.
+    std::mutex topologyHealthMutex_;
+    std::condition_variable topologyHealthCv_;
+    uint64_t topologyHealthGeneration_{ 0 };
+    uint64_t topologyHealthProcessedGeneration_{ 0 };  // Latest generation with a completed refresh attempt.
+    bool topologyHealthAvailabilityObserved_{ false };
+    bool topologyHealthDesiredAdmission_{ false };
+    bool topologyHealthRefreshPending_{ false };
+    bool topologyHealthStopping_{ true };
+    std::unique_ptr<Thread> topologyHealthThread_;
     int64_t timestamp_{ 0 };  // Membership generation currently being reconciled.
 
     // this class manages list of all masters for our objects

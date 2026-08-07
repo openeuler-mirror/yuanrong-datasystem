@@ -800,8 +800,8 @@ void TopologyEngine::CommitSuccessfulStart()
     }
     const auto level = availability_.load();
     if (AllowsBusinessTraffic(level)) {
-        NotifyAvailability(level);
         publishedAvailability_.store(level);
+        NotifyAvailability(level);
     }
     {
         std::lock_guard<std::mutex> lock(lifecycleMutex_);
@@ -917,6 +917,28 @@ TopologyEngineState TopologyEngine::GetState() const noexcept
 TopologyAvailabilityLevel TopologyEngine::GetAvailability() const noexcept
 {
     return publishedAvailability_.load();
+}
+
+Status TopologyEngine::CheckLocalServingReady(std::string_view placementKey) const
+{
+    CHECK_FAIL_RETURN_STATUS(AllowsBusinessTraffic(GetAvailability()), K_NOT_READY,
+                             "cluster topology availability does not allow business traffic");
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
+    const Member *local = nullptr;
+    auto rc = snapshot->FindMemberByAddress(options_.localAddress, local);
+    if (rc.GetCode() == K_NOT_FOUND) {
+        RETURN_STATUS(K_NOT_READY, "local topology member is not admitted");
+    }
+    RETURN_IF_NOT_OK(rc);
+    CHECK_FAIL_RETURN_STATUS(IsCommittedMemberState(local->state), K_NOT_READY,
+                             "local topology member is not committed");
+    const Member *owner = nullptr;
+    RETURN_IF_NOT_OK(algorithm_->LocateOwner(*snapshot, algorithm_->Hash(placementKey), owner));
+    CHECK_FAIL_RETURN_STATUS(owner != nullptr, K_RUNTIME_ERROR, "routing algorithm returned a null owner");
+    CHECK_FAIL_RETURN_STATUS(AllowsBusinessTraffic(GetAvailability()), K_NOT_READY,
+                             "cluster topology availability changed while checking serving readiness");
+    return Status::OK();
 }
 
 bool TopologyEngine::RequiresMembershipRejoin() const noexcept
@@ -1494,11 +1516,14 @@ void TopologyEngine::SetAvailability(TopologyAvailabilityLevel level, std::strin
         availability_.store(level);
         isolationReason_ = reason;
     }
-    if (publish && AllowsBusinessTraffic(level)) {
-        NotifyAvailability(level);
-    }
     if (publish) {
         publishedAvailability_.store(level);
+    }
+    if (publish && AllowsBusinessTraffic(level)) {
+        // Serving callbacks may immediately validate readiness through GetAvailability(). Publish the committed level
+        // first; non-serving transitions retain the inverse order above so admission closes before public state
+        // changes.
+        NotifyAvailability(level);
     }
     LOG(INFO) << "CLUSTER_DEGRADED cluster=" << options_.clusterName << " role=worker"
               << " previous_level=" << static_cast<uint32_t>(previous) << " level=" << static_cast<uint32_t>(level)

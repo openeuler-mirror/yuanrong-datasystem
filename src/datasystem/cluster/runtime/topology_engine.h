@@ -19,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -145,7 +146,9 @@ public:
 
         /**
          * @brief Register the non-blocking business-admission callback.
-         * @param[in] handler Availability callback to consume.
+         * @param[in] handler Availability callback to consume. Non-serving callbacks run before public availability is
+         *                    changed; serving callbacks run after it is changed so readiness validation sees the new
+         *                    committed level.
          * @return This Builder.
          */
         Builder &SetAvailabilityHandler(std::function<void(TopologyAvailabilityLevel)> handler);
@@ -332,6 +335,13 @@ public:
      * @return Current process-local topology availability.
      */
     TopologyAvailabilityLevel GetAvailability() const noexcept;
+
+    /**
+     * @brief Check Worker-role serving readiness against one immutable Snapshot.
+     * @param[in] placementKey Key used to verify committed placement.
+     * @return K_OK only while availability allows traffic and the local committed member and placement are ready.
+     */
+    Status CheckLocalServingReady(std::string_view placementKey) const;
 
     /**
      * @brief Return whether this Engine has observed that the local membership identity must cold-rejoin.
@@ -623,7 +633,7 @@ private:
     std::mutex lifecycleMutex_;
     // Protects threadExited_, isolationReason_, lastError_, and backendObservation_.
     mutable std::mutex stateMutex_;
-    // Serializes availability_, publishedAvailability_, isolationReason_, and Host admission callback transitions.
+    // Serializes availability_, publishedAvailability_, isolationReason_, and Host admission callback ordering.
     // The successful-Start commit may acquire lifecycleMutex_ while holding this mutex; lifecycle paths never acquire
     // this mutex while holding lifecycleMutex_.
     std::mutex availabilityTransitionMutex_;
@@ -637,7 +647,7 @@ private:
     std::atomic<TopologyEngineState> state_{ TopologyEngineState::STOPPED };
     // Latest internal candidate; traffic-allowing candidates remain unpublished until Start commits RUNNING.
     std::atomic<TopologyAvailabilityLevel> availability_{ TopologyAvailabilityLevel::NOT_READY };
-    // Exposes availability only after the corresponding Host admission transition has completed.
+    // Exposes fail-closed levels after their callback and serving levels before their callback.
     std::atomic<TopologyAvailabilityLevel> publishedAvailability_{ TopologyAvailabilityLevel::NOT_READY };
     // Permanently fences this Engine lifetime after authoritative rollback or same-version content conflict.
     std::atomic<bool> authorityIsolated_{ false };

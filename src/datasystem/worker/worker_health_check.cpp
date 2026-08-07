@@ -12,12 +12,15 @@
  */
 #include "datasystem/worker/worker_health_check.h"
 
-#include <fstream>
+#include <cerrno>
+#include <unistd.h>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/format.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/utils/status.h"
@@ -35,7 +38,7 @@ std::atomic<bool> g_topologyServingAdmission{ true };
 
 Status ResetHealthProbe()
 {
-    g_health = false;
+    g_health.store(false, std::memory_order_release);
     if (FLAGS_health_check_path.empty()) {
         return Status::OK();
     }
@@ -47,25 +50,41 @@ Status ResetHealthProbe()
         const mode_t per = 0700;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateDir(fileDir, true, per), "Create healthy check file failed!");
     }
-    // delete health check flag when restart
-    if (FileExist(FLAGS_health_check_path)) {
-        LOG_IF_ERROR(DeleteFile(FLAGS_health_check_path), "Delete health check file failed.");  // Delete file if exist
-    }
-    return Status::OK();
+    return RevokeHealthProbe();
 }
 
 Status SetHealthProbe()
 {
-    g_health = true;
     if (FLAGS_health_check_path.empty()) {
+        g_health.store(true, std::memory_order_release);
         return Status::OK();
     }
     LOG(INFO) << "Worker is healthy, health probe set.";
-    std::ofstream outfile(FLAGS_health_check_path);
-    outfile << "health check success\n" << std::endl;
-    outfile.close();
-    const mode_t per = 0600;  // Change the permission of "~/.datasystem/probe/healthy" to 0600.
-    return ChangeFileMod(FLAGS_health_check_path, per);
+    auto rc = AtomicWriteTextFile(FLAGS_health_check_path, "health check success\n");
+    if (rc.IsError()) {
+        auto rollbackRc = RevokeHealthProbe();
+        if (rollbackRc.IsError()) {
+            return Status(rollbackRc.GetCode(),
+                          rollbackRc.GetMsg() + "; original health publication error: " + rc.ToString());
+        }
+        return rc;
+    }
+    g_health.store(true, std::memory_order_release);
+    return Status::OK();
+}
+
+Status RevokeHealthProbe()
+{
+    g_health.store(false, std::memory_order_release);
+    if (FLAGS_health_check_path.empty()) {
+        return Status::OK();
+    }
+    if (unlink(FLAGS_health_check_path.c_str()) == 0 || errno == ENOENT) {
+        return Status::OK();
+    }
+    const int error = errno;
+    RETURN_STATUS(K_IO_ERROR, FormatString("Delete health marker %s failed with errno: %d, errmsg: %s",
+                                           FLAGS_health_check_path, error, StrErr(error)));
 }
 
 bool IsHealthy()
@@ -84,6 +103,6 @@ void SetTopologyServingAdmission(bool allowed)
 void SetUnhealthy()
 {
     LOG(INFO) << "Worker is unhealthy now!";
-    g_health = false;
+    g_health.store(false, std::memory_order_release);
 }
 }  // namespace datasystem

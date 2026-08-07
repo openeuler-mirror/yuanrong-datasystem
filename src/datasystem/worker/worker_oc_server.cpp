@@ -243,30 +243,6 @@ constexpr auto WORKER_PROBE_REPORT_BUDGET = std::chrono::seconds(3);
 constexpr auto WORKER_PROBE_REPORT_RETRY_DELAY = std::chrono::milliseconds(100);
 constexpr int32_t WORKER_PROBE_REPORT_ATTEMPT_TIMEOUT_MS = 1'000;
 
-/**
- * @brief Verify local committed membership and placement readiness using one immutable Snapshot.
- * @param[in] engine Running topology Engine that owns the immutable Snapshot.
- * @param[in] localAddress Canonical local Worker address.
- * @return K_OK when the local member and placement are ready; K_NOT_READY or placement status otherwise.
- */
-Status CheckLocalTopologyServingReady(cluster::TopologyEngine &engine, const std::string &localAddress)
-{
-    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
-    RETURN_IF_NOT_OK(engine.GetSnapshot(snapshot));
-    const cluster::Member *local = nullptr;
-    auto rc = snapshot->FindMemberByAddress(localAddress, local);
-    if (rc.GetCode() == K_NOT_FOUND) {
-        RETURN_STATUS(K_NOT_READY, "local topology member is not admitted");
-    }
-    RETURN_IF_NOT_OK(rc);
-    const bool committed = local->state == cluster::MemberState::ACTIVE
-                           || local->state == cluster::MemberState::PRE_LEAVING
-                           || local->state == cluster::MemberState::LEAVING;
-    CHECK_FAIL_RETURN_STATUS(committed, K_NOT_READY, "local topology member is not committed");
-    cluster::PlacementDecision decision;
-    return engine.Placement().Locate(TOPOLOGY_READINESS_PROBE_KEY, decision);
-}
-
 struct PendingControlBackendProbe {
     cluster::MemberIdentity peer;
     std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
@@ -1578,10 +1554,17 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         })
         .SetControlBackendProbe(controlBackendProbe)
         .SetPeerTopologyRefresh(peerTopologyRefresh)
-        .SetAvailabilityHandler([](cluster::TopologyAvailabilityLevel level) {
+        .SetAvailabilityHandler([this](cluster::TopologyAvailabilityLevel level) {
             const bool allowBusiness = level == cluster::TopologyAvailabilityLevel::NORMAL
                                        || level == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED;
-            SetTopologyServingAdmission(allowBusiness);
+            if (objCacheClientWorkerSvc_ == nullptr) {
+                SetTopologyServingAdmission(allowBusiness);
+                if (!allowBusiness) {
+                    SetUnhealthy();
+                }
+                return;
+            }
+            objCacheClientWorkerSvc_->NotifyTopologyAvailability(allowBusiness);
         });
     if (coordinatorServiceProxy_ != nullptr) {
         builder
@@ -1791,20 +1774,12 @@ Status WorkerOCServer::WaitForTopologyReady()
     CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_NOT_READY, "topology engine is not constructed");
     constexpr int32_t logEveryCount = 50;
     while (!IsTermSignalReceived()) {
-        const auto availability = topologyEngine_->GetAvailability();
-        if (availability == cluster::TopologyAvailabilityLevel::NORMAL
-            || availability == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED) {
-            auto rc = CheckLocalTopologyServingReady(*topologyEngine_, hostPort_.ToString());
-            if (rc.IsOk()) {
-                return rc;
-            }
-            LOG_FIRST_AND_EVERY_N(INFO, logEveryCount)
-                << "External readiness remains closed while topology placement is unavailable: " << rc.ToString();
-        } else {
-            LOG_FIRST_AND_EVERY_N(INFO, logEveryCount)
-                << "External readiness remains closed while topology availability is "
-                << static_cast<uint32_t>(availability);
+        auto rc = topologyEngine_->CheckLocalServingReady(TOPOLOGY_READINESS_PROBE_KEY);
+        if (rc.IsOk()) {
+            return rc;
         }
+        LOG_FIRST_AND_EVERY_N(INFO, logEveryCount)
+            << "External readiness remains closed while topology serving is unavailable: " << rc.ToString();
         std::this_thread::sleep_for(TOPOLOGY_MEMBERSHIP_POLL_INTERVAL);
     }
     RETURN_STATUS(K_NOT_READY, "process termination interrupted topology readiness wait");
@@ -2165,36 +2140,54 @@ void WorkerOCServer::RegisteringThirdComponentCallbackFunc()
 
 Status WorkerOCServer::WaitForServiceReady()
 {
-    // In brpc exclusive mode ZMQ port is not listened (kBrpcPortOffset=0), so ZMQ-based
-    // HealthCheck RPC always fails. brpc exposes HTTP /status as the health interface;
-    // skip ZMQ probe and let ReadinessProbe fall through to writing the ready file.
-    if (FLAGS_use_brpc) {
-        return Status::OK();
-    }
     if (EnableOCService()) {
         RpcCredential cred;
-        RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateCredentials(WORKER_SERVER_NAME, cred));
-        auto channel = std::make_shared<RpcChannel>(hostPort_, cred);
-        std::unique_ptr<WorkerOCService::Stub> stub = std::make_unique<WorkerOCService_Stub>(channel);
+        std::unique_ptr<WorkerOCService::Stub> stub;
+        if (!FLAGS_use_brpc) {
+            RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateCredentials(WORKER_SERVER_NAME, cred));
+            auto channel = std::make_shared<RpcChannel>(hostPort_, cred);
+            stub = std::make_unique<WorkerOCService_Stub>(channel);
+        }
         HealthCheckRequestPb req;
         std::string msg = "hello";
         req.set_info(msg);
         HealthCheckReplyPb reply;
-        Status ws;
-        while (!IsTermSignalReceived()) {
-            ws = stub->HealthCheck(req, reply);
-            if (ws.IsOk()) {
-                break;
-            }
-            LOG(INFO) << "Readiness probe retrying, detail: " << ws.ToString();
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-        if (IsTermSignalReceived()) {
-            LOG(INFO) << "Meets SIGTERM and need to exit in advance, message: " << ws.ToString();
-        }
+        constexpr auto readinessRetryInterval = std::chrono::seconds(1);
+        RETURN_IF_NOT_OK(WaitForStartupHealth(
+            [this] { return objCacheClientWorkerSvc_->RefreshStartupHealth(); }, [] { return IsHealthy(); },
+            [&stub, &req, &reply] { return FLAGS_use_brpc ? Status::OK() : stub->HealthCheck(req, reply); },
+            [] { return IsTermSignalReceived(); }, readinessRetryInterval));
     } else {
-        LOG(INFO) << "Unable worker service, skip health check.";
+        LOG(INFO) << "Object cache worker service is disabled, skip health check.";
     }
+    return Status::OK();
+}
+
+Status WorkerOCServer::WaitForStartupHealth(const std::function<Status()> &refresh,
+                                            const std::function<bool()> &healthy,
+                                            const std::function<Status()> &probe,
+                                            const std::function<bool()> &interrupted,
+                                            std::chrono::milliseconds retryInterval)
+{
+    constexpr int readinessRetryLogEveryCount = 10;
+    Status lastStatus(K_NOT_READY, "Worker startup health is still gated");
+    while (!interrupted()) {
+        auto rc = refresh();
+        if (rc.IsError()) {
+            lastStatus = std::move(rc);
+        } else if (!healthy()) {
+            lastStatus = Status(K_NOT_READY, "Worker startup health is still gated");
+        } else {
+            lastStatus = probe();
+            if (lastStatus.IsOk()) {
+                return Status::OK();
+            }
+        }
+        LOG_FIRST_AND_EVERY_N(INFO, readinessRetryLogEveryCount)
+            << "Readiness probe retrying, detail: " << lastStatus.ToString();
+        std::this_thread::sleep_for(retryInterval);
+    }
+    LOG(INFO) << "Meets SIGTERM and need to exit in advance, message: " << lastStatus.ToString();
     return Status::OK();
 }
 
@@ -2724,6 +2717,7 @@ void WorkerOCServer::PruneWorkerMasterRpcWarmupCache(const std::unordered_map<st
 
 Status WorkerOCServer::ReadinessProbe()
 {
+    RETURN_IF_NOT_OK(WaitForServiceReady());
     // delete health check flag for worker service
     if (FLAGS_ready_check_path.empty()) {
         return Status::OK();
@@ -2735,7 +2729,6 @@ Status WorkerOCServer::ReadinessProbe()
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateDir(fileDir, true, 0700), "Create ready check file failed!");
     }
     (void)DeleteFile(FLAGS_ready_check_path);  // Delete file if exist
-    RETURN_IF_NOT_OK(WaitForServiceReady());
     RETURN_IF_NOT_OK(WaitForTopologyReady());
     std::ofstream outfile(FLAGS_ready_check_path);
     outfile << "health check success\n" << std::endl;

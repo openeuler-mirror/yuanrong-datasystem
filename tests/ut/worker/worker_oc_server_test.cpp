@@ -21,6 +21,7 @@
 #include "datasystem/worker/worker_oc_server.h"
 
 #include <chrono>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -89,6 +90,12 @@ public:
                                  std::chrono::milliseconds retryInterval)
     {
         return server_->WaitForExitingMembershipAndTopologyRemoval(deadline, publish, observe, retryInterval);
+    }
+
+    Status WaitForStartupHealth(const std::function<Status()> &refresh, const std::function<bool()> &healthy,
+                                const std::function<Status()> &probe, const std::function<bool()> &interrupted)
+    {
+        return server_->WaitForStartupHealth(refresh, healthy, probe, interrupted, std::chrono::milliseconds(1));
     }
 
 protected:
@@ -189,5 +196,44 @@ TEST_F(WorkerOCServerTest, FailedExitingPublicationRetriesUntilSuccess)
     EXPECT_TRUE(status.IsOk()) << status.ToString();
     EXPECT_EQ(publishCount, 2UL);
     EXPECT_EQ(observeCount, 2UL);
+}
+
+TEST_F(WorkerOCServerTest, StartupHealthPublicationFailureIsRetried)
+{
+    size_t refreshCount = 0;
+    size_t probeCount = 0;
+    const auto status = WaitForStartupHealth(
+        [&] {
+            ++refreshCount;
+            return refreshCount == 1 ? Status(K_IO_ERROR, "injected health publication failure") : Status::OK();
+        },
+        [] { return true; },
+        [&] {
+            ++probeCount;
+            return Status::OK();
+        },
+        [] { return false; });
+
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(refreshCount, 2UL);
+    EXPECT_EQ(probeCount, 1UL);
+}
+
+TEST_F(WorkerOCServerTest, StartupHealthWaitStopsCleanlyOnTermination)
+{
+    std::atomic<size_t> refreshCount{ 0 };
+    const auto start = std::chrono::steady_clock::now();
+    const auto status = WaitForStartupHealth(
+        [&] {
+            refreshCount.fetch_add(1, std::memory_order_relaxed);
+            return Status(K_IO_ERROR, "persistent health publication failure");
+        },
+        [] { return false; }, [] { return Status::OK(); },
+        [&] { return refreshCount.load(std::memory_order_relaxed) >= 2; });
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(refreshCount.load(std::memory_order_relaxed), 2UL);
+    EXPECT_LT(elapsed, std::chrono::milliseconds(100));
 }
 }  // namespace datasystem::ut
