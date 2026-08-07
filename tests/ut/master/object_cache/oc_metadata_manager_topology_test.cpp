@@ -61,7 +61,7 @@ public:
     {
         TbbMetaTable::accessor accessor;
         auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
-        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockWrGuard lock(shard.mutex);
         (void)shard.table.insert(accessor, objectKey);
         accessor->second.meta.set_object_key(objectKey);
         accessor->second.meta.set_primary_address(LOCAL_ADDRESS);
@@ -97,7 +97,7 @@ TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdi
     {
         TbbMetaTable::accessor accessor;
         auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
-        std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockRdGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         EXPECT_EQ(accessor->second.meta.primary_address(), LOCAL_ADDRESS);
     }
@@ -106,7 +106,7 @@ TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdi
     {
         TbbMetaTable::accessor accessor;
         auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
-        std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockRdGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         EXPECT_EQ(accessor->second.meta.primary_address(), TARGET_ADDRESS);
     }
@@ -122,7 +122,7 @@ TEST_F(OCMetadataManagerTopologyTest, RestartBatchRemovesAllAffectedLocationsInO
     {
         TbbMetaTable::accessor accessor;
         auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
-        std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockRdGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         accessor->second.locations[SURVIVOR_ADDRESS] = AckState::ACK;
         accessor->second.meta.set_primary_address(SURVIVOR_ADDRESS);
@@ -136,7 +136,7 @@ TEST_F(OCMetadataManagerTopologyTest, RestartBatchRemovesAllAffectedLocationsInO
 
     TbbMetaTable::const_accessor accessor;
     auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
-    std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+    bthread::RWLockRdGuard lock(shard.mutex);
     ASSERT_TRUE(shard.table.find(accessor, objectKey));
     EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), 0U);
     EXPECT_EQ(accessor->second.locations.count(TARGET_ADDRESS), 0U);
@@ -250,7 +250,7 @@ TEST_F(OCMetadataManagerTopologyTest, CreateMultiMetaRedirectsAbsentKeyDuringSca
     EXPECT_EQ(response.info(0).change_meta_ids(0), objectKey);
     auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
     TbbMetaTable::const_accessor accessor;
-    std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+    bthread::RWLockRdGuard lock(shard.mutex);
     EXPECT_FALSE(shard.table.find(accessor, objectKey));
 }
 
@@ -493,7 +493,7 @@ TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteMetadataThat
     EXPECT_EQ(failedObjects.count(objectKey), size_t(1));
     TbbMetaTable::const_accessor accessor;
     auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
-    std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+    bthread::RWLockRdGuard lock(shard.mutex);
     EXPECT_TRUE(shard.table.find(accessor, objectKey));
 }
 
@@ -506,7 +506,7 @@ TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteObjectAlread
     auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
     {
         TbbMetaTable::accessor accessor;
-        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockWrGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         accessor->second.multiSetState = PENDING;
     }
@@ -517,7 +517,7 @@ TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteObjectAlread
     EXPECT_EQ(mediator.GetFailedObjs().count(objectKey), size_t(1));
     {
         TbbMetaTable::accessor accessor;
-        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockWrGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         accessor->second.multiSetState = IDLE;
     }
@@ -528,7 +528,7 @@ TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteObjectAlread
     EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
     EXPECT_EQ(failedObjects.count(objectKey), size_t(1));
     TbbMetaTable::const_accessor accessor;
-    std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+    bthread::RWLockRdGuard lock(shard.mutex);
     EXPECT_TRUE(shard.table.find(accessor, objectKey));
 }
 
@@ -609,7 +609,7 @@ TEST_F(OCMetadataManagerTopologyTest, FullClusterShutdownDrainsQueuedTtlDeletesA
         InsertPrimaryWithCopy(manager, objectKey);
         auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
         TbbMetaTable::accessor accessor;
-        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockWrGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         accessor->second.multiSetState = PENDING;
         DS_ASSERT_OK(expiredManager.InsertObject(objectKey, 1, 1));
@@ -662,7 +662,7 @@ TEST_F(OCMetadataManagerTopologyTest, PartialShutdownOnlyKeepsLocallyOwnedTtlDel
     auto &shard = manager.metaShards_[manager.GetShardIndex(localObjectKey)];
     {
         TbbMetaTable::accessor accessor;
-        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockWrGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, localObjectKey));
         accessor->second.meta.set_version(objectVersion);
     }
@@ -670,7 +670,7 @@ TEST_F(OCMetadataManagerTopologyTest, PartialShutdownOnlyKeepsLocallyOwnedTtlDel
     EXPECT_TRUE(manager.ShouldContinueTtlDelete(localObjectKey, expireTime));
     {
         TbbMetaTable::accessor accessor;
-        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockWrGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, localObjectKey));
         accessor->second.meta.set_version(expireTime + 1);
     }
@@ -694,7 +694,7 @@ TEST_F(OCMetadataManagerTopologyTest, PartialShutdownRequeuesLocallyOwnedFailedT
     auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
     {
         TbbMetaTable::accessor accessor;
-        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockWrGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         accessor->second.multiSetState = PENDING;
     }
@@ -724,7 +724,7 @@ TEST_F(OCMetadataManagerTopologyTest, PartialShutdownRequeuesLocallyOwnedFailedT
     }
     {
         TbbMetaTable::accessor accessor;
-        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        bthread::RWLockWrGuard lock(shard.mutex);
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         accessor->second.meta.set_version(expireTime + 1);
     }
@@ -748,7 +748,7 @@ TEST_F(OCMetadataManagerTopologyTest, SuccessfulTtlRetryClearsFailedState)
     auto &metaShard = manager.metaShards_[manager.GetShardIndex(objectKey)];
     {
         TbbMetaTable::accessor accessor;
-        std::unique_lock<std::shared_timed_mutex> lock(metaShard.mutex);
+        bthread::RWLockWrGuard lock(metaShard.mutex);
         ASSERT_TRUE(metaShard.table.find(accessor, objectKey));
         accessor->second.multiSetState = PENDING;
     }

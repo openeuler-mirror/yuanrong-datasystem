@@ -56,6 +56,9 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
+// Keep bthread headers after project RPC/log headers so brpc logging macros (CHECK_EQ etc.) are
+// established before bthread headers (which use but do not define them) avoid redefinition pitfalls.
+#include <bthread/rwlock.h>
 
 DS_DECLARE_string(worker_address);
 
@@ -944,7 +947,7 @@ Status OCNotifyWorkerManager::ClearAddressCacheInvalid(const std::string &worker
 Status OCNotifyWorkerManager::FillUpdateObjectInfoPb(const std::string &objectKey, UpdateObjectInfoPb *objectInfoPb)
 {
     auto& shard = ocMetadataManager_->GetShardFor(objectKey);
-    std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
+    bthread::RWLockRdGuard lck(shard.mutex);
     TbbMetaTable ::const_accessor accessor;
     if (!shard.table.find(accessor, objectKey)) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "FillUpdateObjectInfoPb failed. objectKey:" + objectKey);
@@ -1053,7 +1056,7 @@ void OCNotifyWorkerManager::ProcessChangePrimaryCopy(
         for (auto &it : needReselectPrimary) {
             std::string newPrimaryCopy;
             auto& shard = ocMetadataManager_->GetShardFor(it.first);
-            std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
+            bthread::RWLockRdGuard lck(shard.mutex);
             TbbMetaTable::accessor accessor;
             if (ocMetadataManager_->ReselectPrimaryCopy(it.first, it.second, accessor, newPrimaryCopy).IsOk()) {
                 (void)toBeChanged[newPrimaryCopy].emplace(it.first);
