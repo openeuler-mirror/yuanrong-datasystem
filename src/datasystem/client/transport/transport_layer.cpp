@@ -131,8 +131,8 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
     auto checkReadSource = [healthFilter](const HostPort &workerAddr) {
         return healthFilter->IsAvailable(workerAddr)
                    ? Status::OK()
-                   : Status(K_URMA_DATA_WORKER_UNAVAILABLE,
-                            "Data Worker UB data plane is unavailable: " + workerAddr.ToString());
+                   : Status(K_URMA_READ_SOURCE_DENIED,
+                            "Client UB read source denied: " + workerAddr.ToString());
     };
     auto reportReadOutcome = [healthFilter](const HostPort &workerAddr, const GetObjectRemoteRspPb &response) {
         if (response.has_provider_ub_failure_detail()) {

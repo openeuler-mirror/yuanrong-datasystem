@@ -54,6 +54,7 @@ STATUS_CODE_DEF(K_OC_KEY_ALREADY_EXIST, "Object already exist error")
 STATUS_CODE_DEF(K_WORKER_PULL_OBJECT_NOT_FOUND, "Worker pull object not found error")
 STATUS_CODE_DEF(K_URMA_WORKER_UNAVAILABLE, "Worker UB data plane unavailable")
 STATUS_CODE_DEF(K_URMA_DATA_WORKER_UNAVAILABLE, "Data worker UB data plane unavailable")
+STATUS_CODE_DEF(K_URMA_READ_SOURCE_DENIED, "Client-side UB read-source admission denied")
 
 // device
 STATUS_CODE_DEF(K_FUTURE_TIMEOUT, "The future is timeout")

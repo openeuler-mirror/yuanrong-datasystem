@@ -449,6 +449,45 @@ TEST(ReplicaReaderAdmissionTest, BatchChecksUnavailableEndpointOnceAndContinuesH
     EXPECT_TRUE(results[2].status.IsOk());
 }
 
+TEST(ReplicaReaderAdmissionTest, ClientReadSourceDeniedFastSkipsToNextReplica)
+{
+    // The client-side admission denial (K_URMA_READ_SOURCE_DENIED) must fast-skip a replica
+    // exactly like the worker-authoritative K_URMA_DATA_WORKER_UNAVAILABLE, and the surfaced
+    // error must be the denial code (not 2008).
+    ApiDeadlineGuard deadline(1000);
+    const auto failedProvider = MakeAddress(34);
+    const auto healthyProvider = MakeAddress(35);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    std::unordered_map<HostPort, size_t> admissionChecks;
+    ReplicaReader reader(
+        executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2),
+        [&admissionChecks, failedProvider](const HostPort &address) {
+            ++admissionChecks[address];
+            return address == failedProvider
+                       ? Status(K_URMA_READ_SOURCE_DENIED, "client denied read source")
+                       : Status::OK();
+        });
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("denied-a", 1, { failedProvider }),
+        MakeReplicaLocation("denied-b", 1, { failedProvider }),
+        MakeReplicaLocation("good", 1, { healthyProvider }),
+    };
+    std::vector<ObjectReadItemResult> results(locations.size());
+    ReplicaReadBatch requests;
+    for (size_t i = 0; i < locations.size(); ++i) {
+        requests.push_back({ &locations[i], &results[i] });
+    }
+
+    EXPECT_TRUE(reader.ReadBatch(requests).IsOk());
+    EXPECT_EQ(admissionChecks[failedProvider], 1u);
+    EXPECT_EQ(admissionChecks[healthyProvider], 1u);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+    EXPECT_EQ(results[0].status.GetCode(), K_URMA_READ_SOURCE_DENIED);
+    EXPECT_EQ(results[1].status.GetCode(), K_URMA_READ_SOURCE_DENIED);
+    EXPECT_TRUE(results[2].status.IsOk());
+}
+
 TEST(UbHealthFilterTest, NewTopologyIncarnationClearsOldLocalObservation)
 {
     const auto provider = MakeAddress(32);

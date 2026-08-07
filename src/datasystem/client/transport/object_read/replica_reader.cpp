@@ -144,9 +144,18 @@ void AdvanceUnavailableReplica(ReadState &state, const Status &itemStatus)
     METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL);
 }
 
+// A replica whose UB read source is unavailable: either the worker reported it
+// (K_URMA_DATA_WORKER_UNAVAILABLE) or the client's UB health cache denied it pre-read
+// (K_URMA_READ_SOURCE_DENIED). Both fast-skip to the next replica.
+bool IsReadSourceUnavailable(const Status &status)
+{
+    return status.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE
+           || status.GetCode() == K_URMA_READ_SOURCE_DENIED;
+}
+
 bool IsLastUnavailableReplica(const Status &status, int replicaIndex, int replicaCount)
 {
-    return status.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE && replicaIndex + 1 >= replicaCount;
+    return IsReadSourceUnavailable(status) && replicaIndex + 1 >= replicaCount;
 }
 
 void LogReplicaReadFailure(const master::ObjectLocationInfoPb &location, const HostPort &workerAddr, size_t round,
@@ -187,6 +196,7 @@ bool ReplicaReader::IsRetryableLocationError(const Status &status) const
         case K_URMA_NEED_CONNECT:
         case K_URMA_CONNECT_FAILED:
         case K_URMA_DATA_WORKER_UNAVAILABLE:
+        case K_URMA_READ_SOURCE_DENIED:
         case K_WORKER_PULL_OBJECT_NOT_FOUND:
         case K_NOT_FOUND:
         case K_OUT_OF_MEMORY:
@@ -283,7 +293,7 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
             if (IsLastUnavailableReplica(rc, replicaIndex, location.object_locations_size())) {
                 return hasStaleLocation ? staleLocationStatus : rc;
             }
-            if (rc.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE) {
+            if (IsReadSourceUnavailable(rc)) {
                 continue;
             }
         }
@@ -483,7 +493,7 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                         }
                         continue;
                     }
-                    if (itemStatus.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE) {
+                    if (IsReadSourceUnavailable(itemStatus)) {
                         AdvanceUnavailableReplica(state, itemStatus);
                         if (state.completed && state.hasStaleLocation) {
                             state.result->status = state.staleLocationStatus;
