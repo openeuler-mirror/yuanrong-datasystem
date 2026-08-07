@@ -231,13 +231,13 @@ public:
 
     Status WaitFor(std::chrono::milliseconds timeout) override
     {
-        std::unique_lock<std::mutex> lock(eventMutex_);
-        bool gotNotification = cv_.wait_for(lock, timeout, [this] { return ready_; });
-        if (gotNotification || ready_) {
-            RecordWakeSchedLatencyLocked();
+        std::unique_lock<bthread::Mutex> lock(eventMutex_);
+        bool gotNotification = false;
+        RETURN_IF_NOT_OK(WaitUntilReadyLocked(lock, timeout, gotNotification));
+        RecordWakeSchedLatencyLocked();
+        if (gotNotification) {
             return Status::OK();
         }
-        RecordWakeSchedLatencyLocked();
         const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId_));
         // URMA wait timeout is a transport completion timeout, not an RPC API deadline.
         RETURN_STATUS_LOG_ERROR(K_URMA_WAIT_TIMEOUT,
@@ -247,7 +247,7 @@ public:
     void NotifyAll() override
     {
         {
-            std::unique_lock<std::mutex> lock(eventMutex_);
+            std::unique_lock<bthread::Mutex> lock(eventMutex_);
             notifyTimeUs_ = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
             if (operationType_ == OperationType::WRITE) {
                 writeTrace_.notifyUs = notifyTimeUs_;
