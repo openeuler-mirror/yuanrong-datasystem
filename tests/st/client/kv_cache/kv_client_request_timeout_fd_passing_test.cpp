@@ -24,11 +24,11 @@
  *
  * Fix: GetClientFd routes the timeout through BoundFdPassingTimeoutMs, which caps it by
  * ApiDeadline::ApiRemainingUs() (derived from requestTimeoutMs). With requestTimeoutMs=20 the fd
- * wait is bounded near 20 ms; the delayed fd never arrives in time and the Get fails fast.
+ * wait is bounded near the request budget instead of waiting for the long fd-passing timeout.
  *
  * Red/green:
- *   - Unfixed master: Get returns OK after ~FD_DELAY_MS (2 s)  -> ASSERT_FALSE(rc.IsOk()) FAILS.
- *   - Fixed tree:     Get fails near REQUEST_TIMEOUT_MS (20 ms) -> all asserts PASS.
+ *   - Unfixed master: Get completes after ~FD_DELAY_MS (2 s) -> latency assertion FAILS.
+ *   - Fixed tree:     Get completes near REQUEST_TIMEOUT_MS (20 ms) -> latency assertion PASS.
  *
  * Note: the inject point runs on the SDK client worker's recvPageThread_, which lives in-process in
  * the test binary (the KVClient SDK is a library). So the action is set on the in-process
@@ -60,14 +60,12 @@ constexpr char RECV_PAGE_FD_INJECT[] = "ClientWorkerCommonApi.RecvPageFd";
 // Tight client request timeout (ms). This is the budget the bug ignores.
 constexpr int32_t REQUEST_TIMEOUT_MS = 20;
 
-// How long (ms) the inject delays the fd signal. Well above REQUEST_TIMEOUT_MS so the fd cannot
-// arrive inside any reasonable request budget, and well below getClientFdTimeoutMs so the buggy
-// build returns OK promptly at ~2 s rather than hanging to the connect timeout.
+// How long (ms) the inject delays the fd signal. Well above REQUEST_TIMEOUT_MS and well below
+// getClientFdTimeoutMs so the buggy build finishes at ~2 s rather than hanging to connect timeout.
 constexpr int32_t FD_DELAY_MS = 2'000;
 
-// Upper bound for the FIXED build's fail-fast latency. The fixed Get fails near REQUEST_TIMEOUT_MS;
-// even with heavy CI jitter it stays far below 1 s. The buggy build (~FD_DELAY_MS) exceeds it, so
-// this threshold cleanly separates red from green with a large safety margin on both sides.
+// Upper bound for the fixed build's bounded latency. Even with heavy CI jitter it stays far below
+// 1 s. The buggy build (~FD_DELAY_MS) exceeds it, so this threshold separates red from green.
 constexpr int64_t MAX_FIXED_LATENCY_MS = 1'000;
 
 // Value size large enough to live in SHM (above any inline threshold) so the same-host Get exercises
@@ -90,7 +88,7 @@ public:
 };
 
 // Regression for T3: a Get whose fd-passing is delayed must honor the client's requestTimeoutMs and
-// fail fast, not block up to connectTimeoutMs and return OK.
+// return quickly, not block up to connectTimeoutMs.
 TEST_F(KVClientRequestTimeoutFdPassingTest, GetHonorsRequestTimeoutWhenFdPassingIsDelayed)
 {
     // Writer sets data and never reads, so it never triggers the read-side fd-passing. Created and
@@ -121,15 +119,16 @@ TEST_F(KVClientRequestTimeoutFdPassingTest, GetHonorsRequestTimeoutWhenFdPassing
     DS_ASSERT_OK(inject::InjectPointManager::Instance().ClearAction(RECV_PAGE_FD_INJECT));
     ASSERT_GE(injectCount, 1u) << "fd-passing inject never fired; Get did not reach GetClientFd";
 
-    // FIXED behaviour: the Get must fail fast near the 20 ms deadline.
-    // On unfixed master the Get returns OK at ~FD_DELAY_MS, failing the status check below.
-    ASSERT_FALSE(rc.IsOk()) << "Get succeeded in " << elapsedMs << " ms; requestTimeoutMs="
-                            << REQUEST_TIMEOUT_MS << " was ignored by GetClientFd (bug T3). rc="
-                            << rc.ToString();
+    // The fd map is the source of truth and notify is only the wake-up signal. Depending on the
+    // timing, Get may return OK if the fd was already published before the delayed notify runs.
+    // The regression contract is latency: fd-passing must be bounded by requestTimeoutMs.
     ASSERT_LT(elapsedMs, MAX_FIXED_LATENCY_MS)
-        << "Get ran " << elapsedMs << " ms; expected to fail fast near requestTimeoutMs="
+        << "Get ran " << elapsedMs << " ms; expected fd-passing to be bounded near requestTimeoutMs="
         << REQUEST_TIMEOUT_MS << " ms. rc=" << rc.ToString();
-    LOG(INFO) << "Get failed as expected in " << elapsedMs << " ms, rc=" << rc.ToString();
+    if (rc.IsOk()) {
+        ASSERT_EQ(out, value);
+    }
+    LOG(INFO) << "Get completed within bounded timeout in " << elapsedMs << " ms, rc=" << rc.ToString();
 }
 }  // namespace st
 }  // namespace datasystem
