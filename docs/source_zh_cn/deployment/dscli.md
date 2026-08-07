@@ -1450,7 +1450,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | enable_p2p_transfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | enable_worker_worker_batch_get | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
 | enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
-| enable_ub_numa_affinity | bool | `false` | 是否开启 UB NUMA 亲和优化。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
+| enable_ub_numa_affinity | bool | `false` | 是否开启 UB NUMA 亲和优化。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。Worker 集群必须保持一致；client 从首个返回 UB 配置的 worker 固化该值，后续不一致仅记录 WARNING，不会修改 client 进程配置。 |
 | shared_memory_distribution_policy | string | `none` | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
 | urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |

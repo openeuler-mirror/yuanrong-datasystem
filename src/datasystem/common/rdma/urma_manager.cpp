@@ -2437,7 +2437,6 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
         (void)enablePipelineH2D;
 #endif
         FLAGS_enable_urma = true;
-        FLAGS_enable_ub_numa_affinity = true;
         UrmaManager::clientMode_ = true;
         uint64_t expected = DEFAULT_TRANSPORT_MEM_SIZE;
         if (UrmaManager::ubTransportMemSize_.compare_exchange_strong(expected, transportSize)) {
@@ -2448,6 +2447,20 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
                 UrmaManager::ubTransportMemSize_);
         }
         // FLAGS_urma_connection_size is deprecated; JFS/JFR are created per-connection.
+    }
+}
+
+void UrmaManager::SetClientUbNumaAffinityConfig(bool enabled, const std::string &configSource)
+{
+    bool isFirstWorker = false;
+    std::call_once(Instance().clientUbNumaAffinityOnce_, [&]() {
+        FLAGS_enable_ub_numa_affinity = enabled;
+        isFirstWorker = true;
+        LOG(INFO) << "Set client UB NUMA affinity to " << enabled << " from worker " << configSource;
+    });
+    if (!isFirstWorker && FLAGS_enable_ub_numa_affinity != enabled) {
+        LOG(WARNING) << "Worker " << configSource << " reported UB NUMA affinity " << enabled
+                     << ", but the client keeps " << FLAGS_enable_ub_numa_affinity;
     }
 }
 

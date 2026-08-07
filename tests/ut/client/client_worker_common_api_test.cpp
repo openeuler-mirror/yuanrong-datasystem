@@ -52,6 +52,19 @@ TEST(ClientWorkerCommonApiTest, UsesWorkerMemoryAlignmentAndFallsBackForOldWorke
     EXPECT_EQ(api.GetMemoryAlignment(), 4096u);
 }
 
+TEST(ClientWorkerCommonApiTest, UsesFalseAsTheDefaultWorkerUrmaAffinityConfig)
+{
+    RegisterClientRspPb rsp;
+
+    EXPECT_FALSE(rsp.ub_numa_affinity_enabled());
+
+    rsp.set_ub_numa_affinity_enabled(true);
+    EXPECT_TRUE(rsp.ub_numa_affinity_enabled());
+
+    rsp.set_ub_numa_affinity_enabled(false);
+    EXPECT_FALSE(rsp.ub_numa_affinity_enabled());
+}
+
 class InvalidWorkerMemoryAlignmentTest : public ::testing::TestWithParam<uint32_t> {
 };
 

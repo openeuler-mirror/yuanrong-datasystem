@@ -237,6 +237,12 @@ public:
                                     bool enablePipelineH2D = false);
 
     /**
+     * @brief Set the client process affinity policy from a worker registration response.
+     * The first worker fixes the policy; later conflicts are logged and ignored.
+     */
+    static void SetClientUbNumaAffinityConfig(bool enabled, const std::string &configSource);
+
+    /**
      * @brief Get client id for current process; non-empty when set by SetClientUrmaConfig (client mode).
      * @return Client id string.
      */
@@ -818,6 +824,8 @@ private:
     WaitPost waitInit_;
     std::string clientId_;
     static bool clientMode_;
+    // The singleton freezes the process-global affinity flag on its first worker response.
+    std::once_flag clientUbNumaAffinityOnce_;
     void *memoryBuffer_ = nullptr;
     std::mutex recoveryProbeMutex_;
     void *recoveryProbeBuffer_ = nullptr;

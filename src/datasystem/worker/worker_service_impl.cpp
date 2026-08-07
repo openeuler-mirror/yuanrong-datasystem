@@ -374,6 +374,7 @@ void WorkerServiceImpl::PopulateRegisterClientResponse(
 #ifdef USE_URMA
     if (IsUrmaEnabled() && !shmEnabled) {
         rsp.set_fast_transport_mode(FastTransportMode::UB);
+        rsp.set_ub_numa_affinity_enabled(IsUbNumaAffinityEnabled());
     }
 #endif
 }
