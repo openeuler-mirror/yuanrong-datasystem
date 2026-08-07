@@ -269,7 +269,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
             FormatString("Processing pull object[%s] offset[%ld] size[%ld], expectedDataSize[%ld], version[%ld], "
                          "hasUrmaInfo[%d], cost: %.3fms",
                          req.object_key(), req.read_offset(), req.read_size(), req.data_size(), req.version(),
-                         req.has_urma_info(), static_cast<double>(elapsedUs) / 1000.0),
+                         req.has_urma_info(), static_cast<double>(elapsedUs) / US_PER_MS),
             callerAddress, FLAGS_worker_address));
     return Status::OK();
 }
