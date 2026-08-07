@@ -133,9 +133,11 @@ ds_cc_library(
         "rpc_server.cpp",
     ],
     hdrs = [
+        "brpc_expired_request_interceptor.h",
         "rpc_server.h",
     ],
     deps = [
+        ":brpc_status_util",
         ":bthread_utils",
         ":rpc_auth_key_manager",
         ":rpc_constants",

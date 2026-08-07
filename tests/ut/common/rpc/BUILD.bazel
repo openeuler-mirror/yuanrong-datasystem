@@ -116,6 +116,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "brpc_expired_request_interceptor_test",
+    srcs = ["brpc_expired_request_interceptor_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_server",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "brpc_perf_trace_test",
     srcs = ["brpc_perf_trace_test.cpp"],
     deps = [
