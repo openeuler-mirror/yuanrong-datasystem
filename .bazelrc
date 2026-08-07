@@ -53,6 +53,42 @@ build:asan --copt=-fno-omit-frame-pointer
 build:asan --copt=-g3
 build:asan --linkopt=-fsanitize=address
 build:asan --define=asan=1
+# Disable ASan instrumentation on brpc's bthread/context.cpp.
+#
+# brpc's `src/bthread/context.cpp` is a pure inline-assembly TU (one giant
+# `__asm(...)` block per supported arch, defining `bthread_jump_fcontext`
+# and `bthread_make_fcontext`). On aarch64 GCC emits an ASan module-init
+# constructor into `.init_array` whose relocation targets a local symbol
+# that the linker then discards together with its hosting section,
+# producing at link time:
+#   bthread/context.pic.o(.init_array.00099+0x0): error: relocation refers
+#   to local symbol "" [N], which is defined in a discarded section
+# This is a known ASan + aarch64 + assembly-only-fiber-context TU issue;
+# the file contains no C/C++ stack frames, globals, or heap access, so ASan
+# has nothing to instrument. Disabling ASan on this single file is both
+# safe and sufficient.
+#
+# The regex `external/.*bthread/context\.cpp` (rather than a repo-name-pinned
+# `external/com_github_apache_brpc/.*...`) is intentional: brpc 1.15.0 is
+# registered under TWO external repo names in this workspace. The main
+# build uses `@com_github_apache_brpc` (from `bazel/sdk/repositories.bzl`
+# `setup_brpc` default name), but `bazel/sdk/workspace.bzl`'s
+# `datasystem_source_sdk` rule declares a `repo_mapping` that re-exposes
+# brpc as `@ds_brpc` inside the `@datasystem_sdk_validation` source SDK
+# repository (`bazel/sdk/deps.bzl:34` calls `setup_brpc(name="ds_brpc")`).
+# Both instances emit the same `src/bthread/context.cpp` and both hit the
+# same `.init_array.00099` link error; pinning the regex to one repo name
+# would let the other repo's link silently regress (as observed when the
+# first attempt of this fix only matched `com_github_apache_brpc` and the
+# SDK-validation target `@@datasystem_sdk_validation//bazel/sdk:
+# client_build_validation` still failed). The broad pattern also covers any
+# future brpc repo_mapping additions without further edits.
+#
+# The CMake build path does not need the equivalent because
+# `cmake/external_libs/brpc.cmake` builds brpc with `THIRDPARTY_SAFE_FLAGS`
+# (which excludes `SANITIZER_FLAGS`), so brpc is never ASan-instrumented
+# under CMake; only the Bazel path applies `-fsanitize=address` globally.
+build:asan --per_file_copt=external/.*bthread/context\.cpp@-fno-sanitize=address
 test:asan --test_env=ASAN_OPTIONS=detect_leaks=0:detect_odr_violation=0
 test:asan --test_env=LSAN_OPTIONS=detect_leaks=0
 
@@ -158,6 +194,19 @@ build:asan_ubsan --linkopt=-fsanitize=address,undefined
 build:asan_ubsan --define=asan=1
 build:asan_ubsan --per_file_copt=external/.*@-fno-sanitize=undefined
 build:asan_ubsan --per_file_copt=third_party/protos/etcd/.*@-fno-sanitize=undefined
+# Same brpc bthread/context.cpp ASan workaround as in `build:asan` above:
+# the file is pure inline assembly, and on aarch64 + ASan its module-init
+# constructor's relocation lands in a discarded section and breaks the
+# link of `datasystem_coordinator` / `datasystem_worker` and the
+# `@@datasystem_sdk_validation//bazel/sdk:client_build_validation` target.
+# The `-fno-sanitize=undefined` per_file_copt above already removes UBSan
+# from this file (as part of `external/.*`); we additionally remove ASan
+# here so the combined ASan+UBSan mode does not regress vs standalone ASan.
+# The broad regex `external/.*bthread/context\.cpp` is required to cover
+# both `@com_github_apache_brpc` (main build) and `@ds_brpc` (SDK
+# validation repo_mapping); see the comment in `build:asan` above for the
+# full rationale.
+build:asan_ubsan --per_file_copt=external/.*bthread/context\.cpp@-fno-sanitize=address
 test:asan_ubsan --test_env=ASAN_OPTIONS=detect_leaks=0:detect_odr_violation=0
 test:asan_ubsan --test_env=LSAN_OPTIONS=detect_leaks=0
 
