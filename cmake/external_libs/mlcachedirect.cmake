@@ -14,8 +14,8 @@
 
 # Description: Build MLCacheDirect os_transport as a static CMake target for RH2D.
 
-set(MLCacheDirect_VERSION 0.1.4)
-set(MLCacheDirect_SHA256 2f0bfe52d858612b1e1a410143ff1e7f8c29aa9c84c92e7f4436dbb70c295540)
+set(MLCacheDirect_VERSION 0.1.6)
+set(MLCacheDirect_SHA256 392b21d7d73f3fb402eab14144c83a12e54b2ade605dfaee100e70a5eba820e2)
 
 if (MLCACHEDIRECT_URL)
     set(MLCacheDirect_URL "${MLCACHEDIRECT_URL}")

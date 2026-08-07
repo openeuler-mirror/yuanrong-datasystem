@@ -243,10 +243,10 @@ def setup_mlcachedirect():
     maybe(
         http_archive,
         name = "mlcachedirect",
-        sha256 = "2f0bfe52d858612b1e1a410143ff1e7f8c29aa9c84c92e7f4436dbb70c295540",
-        strip_prefix = "MLCacheDirect-0.1.4",
+        sha256 = "392b21d7d73f3fb402eab14144c83a12e54b2ade605dfaee100e70a5eba820e2",
+        strip_prefix = "MLCacheDirect-0.1.6",
         urls = [
-            "https://github.com/openeuler-mirror/MLCacheDirect/archive/refs/tags/v0.1.4.tar.gz",
+            "https://github.com/openeuler-mirror/MLCacheDirect/archive/refs/tags/v0.1.6.tar.gz",
         ],
     )
 
