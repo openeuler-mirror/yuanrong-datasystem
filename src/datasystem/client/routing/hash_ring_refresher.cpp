@@ -73,6 +73,8 @@ void HashRingRefresher::Stop()
 
 void HashRingRefresher::ForceRefresh()
 {
+    int expected = 0;
+    forceRefreshBudget_.compare_exchange_strong(expected, FORCED_REFRESH_RETRY_COUNT, std::memory_order_acq_rel);
     forceRefresh_.store(true, std::memory_order_release);
     cv_.notify_all();
 }
@@ -117,6 +119,7 @@ Status HashRingRefresher::DoRefresh()
             auto hostIdMapPtr = std::make_shared<const std::unordered_map<std::string, std::string>>(
                 std::move(hostIdMap));
             router_->UpdateHashRing(std::move(ringPtr), std::move(hostIdMapPtr));
+            forceRefreshBudget_.store(0, std::memory_order_release);
         }
         return Status::OK();
     }
@@ -150,8 +153,13 @@ void HashRingRefresher::RefreshLoop()
         forceRefresh_.exchange(false, std::memory_order_acq_rel);
         DoRefresh();
 
+        const bool retryForcedRefresh = forceRefreshBudget_.load(std::memory_order_acquire) > 0;
+        if (retryForcedRefresh) {
+            forceRefreshBudget_.fetch_sub(1, std::memory_order_acq_rel);
+        }
         std::unique_lock<std::mutex> lock(cvMutex_);
-        cv_.wait_for(lock, std::chrono::milliseconds(intervalMs_), [this] {
+        const auto waitMs = retryForcedRefresh ? FORCED_REFRESH_RETRY_INTERVAL_MS : intervalMs_;
+        cv_.wait_for(lock, std::chrono::milliseconds(waitMs), [this] {
             return !running_.load() || forceRefresh_.load(std::memory_order_acquire);
         });
     }

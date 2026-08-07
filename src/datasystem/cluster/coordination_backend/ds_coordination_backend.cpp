@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <thread>
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
@@ -37,11 +38,17 @@
 
 DS_DECLARE_string(host_id_env_name);
 DS_DECLARE_string(log_dir);
+DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(node_timeout_s);
 
 namespace datasystem::cluster {
 namespace {
 constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
+constexpr int64_t KEEP_ALIVE_INTERVAL_DIVISOR = 3;
+constexpr int64_t PEER_RPC_FAILURE_WINDOW_DIVISOR = 2;
+constexpr uint64_t MIN_PEER_RPC_FAILURES_TO_REPORT = 3;
+constexpr int64_t MIN_INITIAL_KEEPALIVE_RETRY_MS = 10'000;
+constexpr int64_t INITIAL_KEEPALIVE_RETRY_INTERVAL_MS = 200;
 }
 
 struct DsCoordinationBackend::KeepAliveFailureState {
@@ -387,25 +394,10 @@ Status DsCoordinationBackend::PutWithKeepAliveLease(const std::string &tableName
                        revision);
 }
 
-Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
-                                            bool isStoreAvailableWhenStart)
+std::string DsCoordinationBackend::ResolveKeepAliveHostId() const
 {
     std::string hostId;
-    if (!FLAGS_host_id_env_name.empty()) {
-        auto envHostId = GetStringFromEnv(FLAGS_host_id_env_name.c_str(), "");
-        auto envFilePath = GetWorkerEnvFilePath(FLAGS_log_dir);
-        hostId = GetStringFromEnvOrFile(FLAGS_host_id_env_name.c_str(), envFilePath, FLAGS_host_id_env_name, "");
-        if (hostId.empty()) {
-            LOG(WARNING) << FormatString(
-                "host_id env [%s] is empty when worker registers to coordinator. "
-                "Check --host_id_env_name config or the worker env file in --log_dir.",
-                FLAGS_host_id_env_name);
-        } else if (envHostId.empty()) {
-            LOG(INFO) << "Host id is " << hostId << " from persisted worker env file " << envFilePath;
-        } else {
-            LOG(INFO) << "Host id is " << hostId << " from env " << FLAGS_host_id_env_name;
-        }
-    } else {
+    if (FLAGS_host_id_env_name.empty()) {
         // host_id_env_name is unset: the worker registers an empty host_id, so clients cannot partition
         // same-node workers and sdk_data_placement_policy=PREFERRED_SAME_NODE silently degrades to the
         // hash ring (cross-node routing for every key, including large payloads that may time out).
@@ -413,13 +405,58 @@ Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const 
                         "worker affinity (sdk_data_placement_policy=PREFERRED_SAME_NODE) will be disabled. "
                         "Set --host_id_env_name=<ENV_VAR> and export <ENV_VAR>=<unique-per-host value> on each "
                         "worker host to enable same-node routing.";
+        return hostId;
     }
+    auto envHostId = GetStringFromEnv(FLAGS_host_id_env_name.c_str(), "");
+    auto envFilePath = GetWorkerEnvFilePath(FLAGS_log_dir);
+    hostId = GetStringFromEnvOrFile(FLAGS_host_id_env_name.c_str(), envFilePath, FLAGS_host_id_env_name, "");
+    if (hostId.empty()) {
+        LOG(WARNING) << FormatString(
+            "host_id env [%s] is empty when worker registers to coordinator. "
+            "Check --host_id_env_name config or the worker env file in --log_dir.",
+            FLAGS_host_id_env_name);
+    } else if (envHostId.empty()) {
+        LOG(INFO) << "Host id is " << hostId << " from persisted worker env file " << envFilePath;
+    } else {
+        LOG(INFO) << "Host id is " << hostId << " from env " << FLAGS_host_id_env_name;
+    }
+    return hostId;
+}
 
+Status DsCoordinationBackend::CreateKeepAliveKeyWithRetry()
+{
+    auto createStatus = AutoCreateKeepAliveKey(true);
+    const auto retryBudgetMs =
+        std::min<int64_t>(static_cast<int64_t>(FLAGS_node_dead_timeout_s) * MS_PER_SECOND,
+                          std::max<int64_t>(MIN_INITIAL_KEEPALIVE_RETRY_MS,
+                                            static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND
+                                                * KEEP_ALIVE_INTERVAL_DIVISOR));
+    const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryBudgetMs);
+    uint32_t retryAttempts = 0;
+    while (IsRetryableRpcError(createStatus) && std::chrono::steady_clock::now() < retryDeadline) {
+        ++retryAttempts;
+        LOG(WARNING) << "CLUSTER_MEMBERSHIP role=worker action=initial_keepalive_retry address=" << watcherAddr_
+                     << " attempt=" << retryAttempts << " status=" << createStatus.ToString();
+        std::this_thread::sleep_for(std::chrono::milliseconds(INITIAL_KEEPALIVE_RETRY_INTERVAL_MS));
+        createStatus = AutoCreateKeepAliveKey(true);
+    }
+    if (retryAttempts > 0) {
+        LOG(INFO) << "CLUSTER_MEMBERSHIP role=worker action=initial_keepalive_retry_finished address=" << watcherAddr_
+                  << " attempts=" << retryAttempts << " status=" << createStatus.ToString();
+    }
+    return createStatus;
+}
+
+Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
+                                            bool isStoreAvailableWhenStart)
+{
+    auto hostId = ResolveKeepAliveHostId();
     keepAliveTableName_ = tableName;
     keepAliveKey_ = key;
     firstKeepAliveSent_.store(false, std::memory_order_release);
     exitMembershipRequested_.store(false, std::memory_order_release);
     keepAliveTtlMs_ = static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND;
+    keepAliveIntervalMs_ = static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND / KEEP_ALIVE_INTERVAL_DIVISOR;
     // Keep one process incarnation across ambiguous lease-publication retries.
     keepAliveValue_.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
     keepAliveValue_.hostId = hostId;
@@ -428,7 +465,7 @@ Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const 
                                      : isRestart                ? MemberLifecycleState::RESTARTING
                                                                 : MemberLifecycleState::STARTING;
     // Publishing the lease can race the previous lease's TTL delete, which also removes this address's watch channels.
-    const auto createStatus = AutoCreateKeepAliveKey(true);
+    auto createStatus = CreateKeepAliveKeyWithRetry();
     MembershipReconcileHandler reconcile;
     if (createStatus.GetCode() == K_NOT_READY) {
         std::lock_guard<std::mutex> lock(eventHandlerMutex_);
@@ -529,9 +566,10 @@ Status DsCoordinationBackend::RenewKeepAliveOnce()
     std::string coordinatorId;
     std::string expectedCoordinatorId;
     proxy_->GetObservedCoordinatorId(expectedCoordinatorId);
+    const auto failedTargets = GetFailedTargets(std::chrono::steady_clock::now());
     auto rc = proxy_->KeepAlive(BuildRealKey(keepAliveTableName_, keepAliveKey_), ttlMs, remainingTtlMs,
                                 DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId, expectedCoordinatorId,
-                                keepAliveModRevision_);
+                                keepAliveModRevision_, failedTargets);
     if (rc.IsOk()) {
         HandleMembershipSuccess(coordinatorId);
     } else {
@@ -540,6 +578,117 @@ Status DsCoordinationBackend::RenewKeepAliveOnce()
         keepAliveTimeout_ = true;
     }
     return rc;
+}
+
+void DsCoordinationBackend::RecordPeerRpcFailure(const HostPort &target)
+{
+    RecordPeerRpcFailure(target, std::chrono::steady_clock::now());
+}
+
+void DsCoordinationBackend::RecordPeerRpcFailure(const HostPort &target, std::chrono::steady_clock::time_point now)
+{
+    const auto targetAddress = target.ToString();
+    if (targetAddress.empty()) {
+        return;
+    }
+    const auto failureWindow =
+        std::chrono::milliseconds(static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND
+                                  / PEER_RPC_FAILURE_WINDOW_DIVISOR);
+    bool shouldWake = false;
+    uint64_t failedCount = 0;
+    int64_t failedMs = 0;
+    {
+        std::lock_guard<std::mutex> lock(rpcFailedMutex_);
+        auto &state = rpcFailedStates_[targetAddress];
+        if (!state.reported && state.failedCount > 0 && now - state.lastFailedAt > failureWindow) {
+            state.failedCount = 0;
+            state.firstFailedAt = now;
+        }
+        if (state.failedCount == 0) {
+            state.firstFailedAt = now;
+        }
+        ++state.failedCount;
+        state.lastFailedAt = now;
+        hasRpcFailures_.store(true, std::memory_order_release);
+        if (!state.reported && state.failedCount >= MIN_PEER_RPC_FAILURES_TO_REPORT
+            && now - state.firstFailedAt >= failureWindow) {
+            state.reported = true;
+            immediateReportSignal_ = true;
+            shouldWake = true;
+        }
+        failedCount = state.failedCount;
+        failedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - state.firstFailedAt).count();
+    }
+    VLOG(1) << "CLUSTER_FAILURE_OBSERVE role=worker reporter=" << watcherAddr_ << " target=" << targetAddress
+            << " failed_count=" << failedCount << " failed_ms=" << failedMs << " wake=" << shouldWake;
+    if (shouldWake) {
+        keepAliveCv_.notify_all();
+    }
+}
+
+void DsCoordinationBackend::RecordPeerRpcSuccess(const HostPort &target)
+{
+    const auto targetAddress = target.ToString();
+    if (targetAddress.empty()) {
+        return;
+    }
+    if (!hasRpcFailures_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(rpcFailedMutex_);
+    const auto erased = rpcFailedStates_.erase(targetAddress);
+    if (erased > 0) {
+        VLOG(1) << "CLUSTER_FAILURE_OBSERVE role=worker reporter=" << watcherAddr_
+                << " target=" << targetAddress << " action=success_reset";
+    }
+    if (rpcFailedStates_.empty()) {
+        immediateReportSignal_ = false;
+        hasRpcFailures_.store(false, std::memory_order_release);
+    }
+}
+
+std::vector<std::string> DsCoordinationBackend::GetFailedTargets(std::chrono::steady_clock::time_point now)
+{
+    const auto failureWindow =
+        std::chrono::milliseconds(static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND
+                                  / PEER_RPC_FAILURE_WINDOW_DIVISOR);
+    const auto activeWindow = std::chrono::milliseconds(static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND * 2);
+    if (!hasRpcFailures_.load(std::memory_order_acquire)) {
+        return {};
+    }
+    std::vector<std::string> targets;
+    {
+        std::lock_guard<std::mutex> lock(rpcFailedMutex_);
+        for (auto iter = rpcFailedStates_.begin(); iter != rpcFailedStates_.end();) {
+            const auto &state = iter->second;
+            if (now - state.lastFailedAt > activeWindow) {
+                iter = rpcFailedStates_.erase(iter);
+                continue;
+            }
+            if (state.failedCount >= MIN_PEER_RPC_FAILURES_TO_REPORT && now - state.firstFailedAt >= failureWindow) {
+                targets.push_back(iter->first);
+            }
+            ++iter;
+        }
+        if (rpcFailedStates_.empty()) {
+            immediateReportSignal_ = false;
+            hasRpcFailures_.store(false, std::memory_order_release);
+        }
+    }
+    std::sort(targets.begin(), targets.end());
+    if (!targets.empty()) {
+        VLOG(1) << "CLUSTER_FAILURE_REPORT role=worker reporter=" << watcherAddr_
+                << " targets=" << VectorToString(targets);
+    }
+    return targets;
+}
+
+bool DsCoordinationBackend::ConsumeImmediateReportSignal()
+{
+    std::lock_guard<std::mutex> lock(rpcFailedMutex_);
+    const bool signal = immediateReportSignal_;
+    immediateReportSignal_ = false;
+    return signal;
 }
 
 void DsCoordinationBackend::LaunchKeepAliveThread()
@@ -552,7 +701,7 @@ void DsCoordinationBackend::LaunchKeepAliveThread()
 
 void DsCoordinationBackend::RunKeepAliveLoop()
 {
-    int64_t intervalMs = keepAliveTtlMs_ / 3;
+    int64_t intervalMs = keepAliveIntervalMs_;
     constexpr int64_t maxIntervalMs = 5'000;
     constexpr int64_t minIntervalMs = 100;
     intervalMs = std::max(minIntervalMs, std::min(intervalMs, maxIntervalMs));
@@ -575,7 +724,7 @@ void DsCoordinationBackend::RunKeepAliveLoop()
         }
         std::unique_lock<std::mutex> lock(keepAliveMutex_);
         keepAliveCv_.wait_for(lock, std::chrono::milliseconds(intervalMs), [this, wakeEpoch]() {
-            return keepAliveExit_.load() || keepAliveWakeEpoch_ != wakeEpoch;
+            return keepAliveExit_.load() || keepAliveWakeEpoch_ != wakeEpoch || ConsumeImmediateReportSignal();
         });
     }
 }
@@ -618,7 +767,7 @@ void DsCoordinationBackend::HandleMembershipSuccess(const std::string &coordinat
     }
     if (handler != nullptr) {
         try {
-            handler(coordinatorId, invalidated);
+            handler(coordinatorId, recreated || invalidated);
         } catch (const std::exception &error) {
             LOG(ERROR) << "Coordinator membership-ready handler threw: " << error.what();
         } catch (...) {
@@ -968,10 +1117,16 @@ void DsCoordinationBackend::InstallEnsuredMembershipLocked(const std::string &co
 }
 
 Status DsCoordinationBackend::EnsureMembership(const std::string &coordinatorId,
-                                               const MembershipEnsureHandler &ensure)
+                                               const MembershipEnsureHandler &ensure,
+                                               bool markRestarting)
 {
     CHECK_FAIL_RETURN_STATUS(ensure != nullptr, K_INVALID, "Membership Ensure handler is empty");
     std::lock_guard<std::timed_mutex> mutationLock(membershipMutationMutex_);
+    if (markRestarting && !exitMembershipRequested_.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(keepAliveMutex_);
+        keepAliveValue_.lifecycleState = MemberLifecycleState::RESTARTING;
+        keepAliveValue_.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
+    }
     MembershipRenewalPayload payload;
     RETURN_IF_NOT_OK(GetMembershipRenewalPayload(payload));
     int64_t membershipModRevision = 0;

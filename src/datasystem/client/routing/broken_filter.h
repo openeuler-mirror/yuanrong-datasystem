@@ -43,6 +43,7 @@ public:
 
     bool IsAvailable(const HostPort &addr) const override;
     void OnWorkerStateChange(const HostPort &addr, StatusCode status) override;
+    void OnHashRingUpdated(const ::datasystem::ClusterTopologyPb &ring) override;
 
 private:
     // Per-worker consecutive-failure count (within FAILURE_BURST_WINDOW) and broken-until (TTL).

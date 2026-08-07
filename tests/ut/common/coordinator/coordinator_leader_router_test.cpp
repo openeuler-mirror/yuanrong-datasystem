@@ -120,15 +120,21 @@ TEST(CoordinatorLeaderRouterTest, RecoveringLeaderRequiresRecoveryControlRequest
 
 TEST(CoordinatorLeaderRouterTest, RejectsLateLowerTermHeaderWithoutReplacingCache)
 {
-    auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002" });
-    CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001"), Address("127.0.0.1:30002") });
+    auto now = std::chrono::steady_clock::time_point{};
+    auto discovery =
+        std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002" });
+    CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001"), Address("127.0.0.1:30002") },
+                                   [&now] { return now; },
+                                   [&now](std::chrono::milliseconds delay) { now += delay; },
+                                   std::chrono::milliseconds(3'000));
 
     ASSERT_TRUE(router.Execute([](const HostPort &, int32_t, coordinator::ResponseHeader &header, bool &hasHeader) {
         hasHeader = true;
         header = LeaderHeader(9, coordinator::ResponseHeader::LEADER_SERVING);
         return Status::OK();
     }).IsOk());
-    const auto status = router.Execute([](const HostPort &, int32_t, coordinator::ResponseHeader &header, bool &hasHeader) {
+    const auto status = router.Execute([](const HostPort &, int32_t, coordinator::ResponseHeader &header,
+                                          bool &hasHeader) {
         hasHeader = true;
         header = LeaderHeader(8, coordinator::ResponseHeader::LEADER_SERVING);
         return Status::OK();
@@ -160,9 +166,11 @@ TEST(CoordinatorLeaderRouterTest, PublishesOnlyRealLeaderIdentityChanges)
 
 TEST(CoordinatorLeaderRouterTest, PrefersCachedLeaderBeforeDiscoveryCandidates)
 {
-    auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002" });
+    auto discovery =
+        std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002" });
     CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001"), Address("127.0.0.1:30002") });
-    ASSERT_TRUE(router.Execute([](const HostPort &address, int32_t, coordinator::ResponseHeader &header, bool &hasHeader) {
+    ASSERT_TRUE(router.Execute([](const HostPort &address, int32_t, coordinator::ResponseHeader &header,
+                                  bool &hasHeader) {
         hasHeader = true;
         if (address.ToString() == "127.0.0.1:30002") {
             header = LeaderHeader(4, coordinator::ResponseHeader::LEADER_SERVING);
@@ -191,8 +199,8 @@ TEST(CoordinatorLeaderRouterTest, UsesOneDiscoveryRefreshAfterCandidateAttemptsF
     CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001") });
     std::vector<std::string> attempts;
 
-    const auto status = router.Execute([&attempts](const HostPort &address, int32_t, coordinator::ResponseHeader &header,
-                                                    bool &hasHeader) {
+    const auto status = router.Execute([&attempts](const HostPort &address, int32_t,
+                                                   coordinator::ResponseHeader &header, bool &hasHeader) {
         attempts.emplace_back(address.ToString());
         hasHeader = true;
         if (address.ToString() == "127.0.0.1:30002") {
@@ -215,7 +223,8 @@ TEST(CoordinatorLeaderRouterTest, PreservesLastFailureWhenRefreshHasNoNewCandida
     auto now = std::chrono::steady_clock::time_point{};
     auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001" });
     CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001") }, [&now] { return now; },
-                                   [&now](std::chrono::milliseconds) { now += std::chrono::milliseconds(3'000); });
+                                   [&now](std::chrono::milliseconds) { now += std::chrono::milliseconds(3'000); },
+                                   std::chrono::milliseconds(3'000));
     size_t calls = 0;
 
     const auto status = router.Execute([&calls](const HostPort &, int32_t, coordinator::ResponseHeader &, bool &) {
@@ -244,8 +253,8 @@ TEST(CoordinatorLeaderRouterTest, RefreshesUntilDiscoveryReturnsANewLeaderBefore
         });
     std::vector<std::string> attempts;
 
-    const auto status = router.Execute([&attempts](const HostPort &address, int32_t, coordinator::ResponseHeader &header,
-                                                    bool &hasHeader) {
+    const auto status = router.Execute([&attempts](const HostPort &address, int32_t,
+                                                   coordinator::ResponseHeader &header, bool &hasHeader) {
         attempts.emplace_back(address.ToString());
         hasHeader = true;
         if (address.ToString() == "127.0.0.1:30002") {
@@ -261,6 +270,31 @@ TEST(CoordinatorLeaderRouterTest, RefreshesUntilDiscoveryReturnsANewLeaderBefore
     EXPECT_EQ(attempts[1], "127.0.0.1:30002");
 }
 
+TEST(CoordinatorLeaderRouterTest, ReturnsNotReadyImmediatelyForBusinessRpcToRecoveringLeader)
+{
+    auto now = std::chrono::steady_clock::time_point{};
+    auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001" });
+    bool waited = false;
+    CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001") }, [&now] { return now; },
+                                   [&now, &waited](std::chrono::milliseconds delay) {
+                                       waited = true;
+                                       now += delay;
+                                   });
+    size_t attempts = 0;
+
+    const auto status = router.Execute([&attempts](const HostPort &, int32_t, coordinator::ResponseHeader &header,
+                                           bool &hasHeader) {
+        ++attempts;
+        hasHeader = true;
+        header = RecoveringLeaderHeader(7);
+        return Status::OK();
+    });
+
+    EXPECT_EQ(status.GetCode(), K_NOT_READY);
+    EXPECT_EQ(attempts, 1UL);
+    EXPECT_FALSE(waited);
+}
+
 TEST(CoordinatorLeaderRouterTest, StopsBeforeDispatchWhenTheSharedDeadlineExpires)
 {
     auto now = std::chrono::steady_clock::time_point{};
@@ -269,7 +303,7 @@ TEST(CoordinatorLeaderRouterTest, StopsBeforeDispatchWhenTheSharedDeadlineExpire
         const auto result = now;
         now += std::chrono::milliseconds(3'000);
         return result;
-    });
+    }, {}, std::chrono::milliseconds(3'000));
     size_t calls = 0;
 
     const auto status = router.Execute([&calls](const HostPort &, int32_t, coordinator::ResponseHeader &, bool &) {

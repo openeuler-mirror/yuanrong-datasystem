@@ -27,10 +27,13 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
+#include "datasystem/cluster/control/topology_controller.h"
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/coordinator/memory_kv_store.h"
 #include "datasystem/common/coordinator/steady_clock.h"
@@ -39,6 +42,7 @@
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread.h"
+#include "datasystem/coordinator/topology_control_host.h"
 #include "datasystem/coordinator/raft/coordinator_election_manager.h"
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
 #include "datasystem/coordinator/watch_dispatcher_impl.h"
@@ -289,6 +293,11 @@ private:
     Status ValidateElectionConfiguration() const;
     Status BuildElectionStartupContext(CoordinatorElectionOptions &options) const;
     CoordinatorRaftEventCallbacks BuildRaftEventCallbacks();
+    void ConfigureTopologyHostOptions(TopologyControlHost::Options &options) const;
+    std::optional<uint64_t> GetCollectiveControlEpoch() const;
+    Status RunUnderCollectiveReplacementFence(uint64_t expectedEpoch, const std::function<Status()> &mutation) const;
+    std::vector<cluster::ControlBackendProbeResult> ProbeMembersLiveness(
+        const std::vector<cluster::MemberIdentity> &targets, std::chrono::steady_clock::time_point deadline) const;
     Status CheckServing() const;
     Status InitInternal();
     Status FinishSuccessfulStart();

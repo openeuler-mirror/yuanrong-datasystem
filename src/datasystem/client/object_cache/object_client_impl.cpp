@@ -175,6 +175,7 @@ constexpr size_t MIN_SHUFFLE_CANDIDATE_COUNT = 2;
 constexpr size_t SET_ROUTE_MAX_ATTEMPTS = 3;
 constexpr size_t STALE_LOCATION_REFRESH_ATTEMPTS = 5;
 constexpr int64_t STALE_LOCATION_REFRESH_INITIAL_BACKOFF_MS = 20;
+constexpr int32_t HASH_RING_RPC_MIN_TIMEOUT_MS = 100;
 constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 const std::unordered_set<std::string> NON_GFLAG_KV_CLIENT_CONFIG_KEYS = {
     "client_access_log_filename",
@@ -789,7 +790,8 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
     }
     RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
     BrpcChannelConfig channelConfig;
-    channelConfig.timeout_ms = requestTimeoutMs_;
+    channelConfig.timeout_ms =
+        requestTimeoutMs_ <= 0 ? requestTimeoutMs_ : std::max(requestTimeoutMs_, HASH_RING_RPC_MIN_TIMEOUT_MS);
     channelConfig.connect_timeout_ms = connectTimeoutMs_;
     channelConfig.max_retry = 0;
     channelConfig.enable_circuit_breaker = false;
@@ -817,7 +819,11 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
                              << " via UB/TCP. Set host_id_env_name on the client process to enable SHM.";
             }
         }
-        return ApplyRoutingWorkerSnapshot(ringVersion, ring, hostIdMap, *sdkHostIdCache);
+        if (transportLayer_ != nullptr) {
+            return ApplyRoutingWorkerSnapshot(ringVersion, ring, hostIdMap, *sdkHostIdCache);
+        }
+        ubHealthFilter_->ApplyTopologyIncarnations(ring);
+        return Status::OK();
     };
     auto routing = std::make_shared<client::Routing>(
         std::move(channelConfig), transportSignature_, std::move(ringUpdateHook),
@@ -960,7 +966,8 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
         snapshot.writeProbeAddrs.emplace_back(workerApi->hostPort_);
         RETURN_IF_NOT_OK(transportLayer_->ApplyWorkerSnapshot(std::move(snapshot)));
     }
-    if (!enableLocalCache_) {
+    const bool needsRouting = !enableLocalCache_ || enableCrossNodeConnection_;
+    if (needsRouting) {
         RETURN_IF_NOT_OK(InitRouting(workerApi->hostPort_, routedWorkerIsLocal));
     }
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
@@ -3559,7 +3566,8 @@ Status ObjectClientImpl::SelectSetRoute(const std::string &objectKey,
                                         SetRouteContext &routeContext)
 {
     SetRouteContext selected;
-    if (enableLocalCache_) {
+    // Keep the first local-cache Set colocated; retries with exclusions must use routing to avoid failed workers.
+    if (enableLocalCache_ && excludedWorkers.empty()) {
         RETURN_IF_NOT_OK(GetAvailableWorkerApi(selected.clientApi, selected.invokeGuard));
         selected.worker = selected.clientApi->hostPort_;
         selected.directWorkerApi = selected.clientApi;
@@ -5302,9 +5310,12 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     }
     std::vector<std::shared_ptr<Buffer>> objectBuffers(objectKeys.size());
     Status rc;
-    if (!enableLocalCache_) {
-        CHECK_FAIL_RETURN_STATUS(!isRH2DSupported, K_NOT_SUPPORTED,
-                                 "Remote H2D is not supported when local cache is disabled");
+    const bool useRoutedGet = std::atomic_load(&routing_) != nullptr && transportLayer_ != nullptr;
+    if (useRoutedGet) {
+        if (!enableLocalCache_) {
+            CHECK_FAIL_RETURN_STATUS(!isRH2DSupported, K_NOT_SUPPORTED,
+                                     "Remote H2D is not supported when local cache is disabled");
+        }
         // Routed same-host Get (shm zero-copy with transport fallback) is extracted into
         // RouteGetByShm to keep Get() within the function-size and nesting limits (codeCheck G.FUN.01).
         RETURN_IF_NOT_OK(RouteGetByShm(objectKeys, subTimeoutMs, queryL2Cache, isRH2DSupported, traceEnabled,

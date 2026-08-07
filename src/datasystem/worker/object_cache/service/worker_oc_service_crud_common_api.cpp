@@ -180,10 +180,24 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
       metadataRouteResolver_(initParam.metadataRouteResolver),
       endpointPolicy_(initParam.endpointPolicy),
       exitRequested_(initParam.exitRequested),
+      metadataRpcObserver_(initParam.metadataRpcObserver),
       allowDirectoryLag_(initParam.allowDirectoryLag),
       asyncPersistenceDelManager_(initParam.asyncPersistenceDelManager)
 {
     supportL2Storage_ = GetCurrentStorageType();
+}
+
+void WorkerOcServiceCrudCommonApi::ObserveMetadataRpc(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+                                                      const Status &status) const
+{
+    if (metadataRpcObserver_ == nullptr || workerMasterApi == nullptr) {
+        return;
+    }
+    HostPort target;
+    if (target.ParseString(workerMasterApi->GetHostPort()).IsError()) {
+        return;
+    }
+    metadataRpcObserver_(target, status);
 }
 
 Status WorkerOcServiceCrudCommonApi::PartitionMultiCopyMetaRequest(

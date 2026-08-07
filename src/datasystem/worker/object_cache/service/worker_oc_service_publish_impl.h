@@ -18,8 +18,11 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_PUBLISH_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_PUBLISH_IMPL_H
 
-#include <vector>
+#include <chrono>
 #include <future>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/log/latency_phase.h"
@@ -137,6 +140,11 @@ private:
      */
     Status UpdateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params, uint64_t &version);
 
+    Status CheckMasterRpcBudget(const std::string &objectKey);
+    Status RequestingToMasterCore(ObjectKV &objectKV, const PublishParams &params);
+    void ProbeMetadataOwnerAfterDeadlineGate(const std::string &objectKey);
+    bool ReserveMetadataOwnerProbe(const HostPort &owner, std::chrono::steady_clock::time_point now);
+
     /**
      * @brief Finalize latency trace after a worker-to-master RPC call.
      * @param[in] endKey The latency tick key for the RPC end.
@@ -204,6 +212,9 @@ private:
     Status TryDeleteObjFromEvictionAndSpillFile(ObjectKV &objectKV, bool isInsert);
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
+
+    std::mutex metadataOwnerProbeMutex_;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> metadataOwnerProbeAt_;
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 

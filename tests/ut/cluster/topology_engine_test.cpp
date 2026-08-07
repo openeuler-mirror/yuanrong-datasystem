@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
@@ -42,6 +43,14 @@ public:
     static bool ReadyMembershipPublished(const TopologyEngine &engine)
     {
         return engine.readyMembershipPublished_.load(std::memory_order_acquire);
+    }
+
+    static Status OnMembershipEnsured(TopologyEngine &engine, const std::string &coordinatorId,
+                                      int64_t membershipModRevision)
+    {
+        auto *backend = dynamic_cast<DsCoordinationBackend *>(engine.memberBackend_.get());
+        CHECK_FAIL_RETURN_STATUS(backend != nullptr, K_RUNTIME_ERROR, "expected Coordinator membership backend");
+        return backend->OnMembershipEnsured(coordinatorId, membershipModRevision);
     }
 };
 
@@ -291,6 +300,28 @@ Status ReadCoordinatorMembershipState(testing::FakeCoordinatorServiceProxy &prox
     return Status::OK();
 }
 
+Status SetCoordinatorMembershipState(testing::FakeCoordinatorServiceProxy &proxy, const std::string &clusterName,
+                                     MemberLifecycleState state, int64_t &modRevision)
+{
+    auto keys = MakeKeys(clusterName);
+    const auto key = keys->MembershipTable() + "/" + LOCAL_ADDRESS;
+    std::vector<KeyValueEntry> entries;
+    int64_t revision = 0;
+    RETURN_IF_NOT_OK(proxy.Range(key, "", entries, revision, 0, nullptr));
+    CHECK_FAIL_RETURN_STATUS(entries.size() == 1, K_NOT_FOUND, "expected one local membership");
+    MembershipValue value;
+    RETURN_IF_NOT_OK(MembershipValueCodec::Decode(entries.front().value, value));
+    value.lifecycleState = state;
+    std::string encoded;
+    RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, encoded));
+    RETURN_IF_NOT_OK(proxy.PutRaw(key, encoded));
+    entries.clear();
+    RETURN_IF_NOT_OK(proxy.Range(key, "", entries, revision, 0, nullptr));
+    CHECK_FAIL_RETURN_STATUS(entries.size() == 1, K_NOT_FOUND, "expected recreated local membership");
+    modRevision = entries.front().modRevision;
+    return Status::OK();
+}
+
 std::unique_ptr<TopologyEngine> BuildEngine(testing::FakeCoordinatorServiceProxy &proxy,
                                             TestWatchIngress &ingress, NoopTopologyCallbacks &callbacks,
                                             const std::string &clusterName)
@@ -345,6 +376,24 @@ TEST(TopologyEngineTest, BuilderUsesFreshStartWhileCoordinatorRecoveryIsNotReady
     proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_NOT_READY);
     TopologyEngine::Builder builder;
     ConfigureBuilder(builder, proxy, ingress, callbacks, "recovering");
+    std::unique_ptr<TopologyEngine> engine;
+
+    DS_ASSERT_OK(builder.Build(engine));
+    ASSERT_NE(engine, nullptr);
+    EXPECT_FALSE(engine->IsRestart());
+    EXPECT_FALSE(ingress.IsBound());
+    EXPECT_TRUE(proxy.WatchCalls().empty());
+}
+
+TEST(TopologyEngineTest, BuilderUsesFreshStartWhenCoordinatorBootstrapReadTimesOut)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    auto keys = MakeKeys("bootstrap-timeout");
+    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_RPC_DEADLINE_EXCEEDED);
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, "bootstrap-timeout");
     std::unique_ptr<TopologyEngine> engine;
 
     DS_ASSERT_OK(builder.Build(engine));
@@ -534,6 +583,33 @@ TEST(TopologyEngineTest, SuccessfulReadyPublicationEnablesLocalRecoveryRepublish
         EXPECT_EQ(TopologyEngineTestPeer::RestoreReadyAfterLocalRecovery(*engine).GetCode(), K_NOT_READY);
         DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
     }
+}
+
+TEST(TopologyEngineTest, CoordinatorTopologyReloadRestoresReadyAfterMembershipRecreateWithoutNewTopologyVersion)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "coordinator-recreate-ready";
+    auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology());
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    ASSERT_NE(engine, nullptr);
+    DS_ASSERT_OK(engine->Start());
+    DS_ASSERT_OK(engine->MarkReady());
+
+    int64_t membershipModRevision = 0;
+    DS_ASSERT_OK(SetCoordinatorMembershipState(proxy, clusterName, MemberLifecycleState::RECOVERING,
+                                               membershipModRevision));
+    DS_ASSERT_OK(TopologyEngineTestPeer::OnMembershipEnsured(*engine, "coordinator-test", membershipModRevision));
+
+    ASSERT_TRUE(WaitFor([&] {
+        MemberLifecycleState state = MemberLifecycleState::UNKNOWN;
+        return ReadCoordinatorMembershipState(proxy, clusterName, state).IsOk()
+               && state == MemberLifecycleState::READY;
+    }));
+
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
 TEST(TopologyEngineTest, ExitingAndStoppingDisableLocalRecoveryRepublish)

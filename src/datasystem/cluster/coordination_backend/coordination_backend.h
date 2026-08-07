@@ -207,6 +207,16 @@ public:
     virtual Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                                  bool isStoreAvailableWhenStart) = 0;
 
+    virtual void RecordPeerRpcFailure(const HostPort &target)
+    {
+        (void)target;
+    }
+
+    virtual void RecordPeerRpcSuccess(const HostPort &target)
+    {
+        (void)target;
+    }
+
     /**
      * @brief Idempotently stop asynchronous watch and keepalive callbacks while preserving synchronous operations.
      * @return Backend operation status.

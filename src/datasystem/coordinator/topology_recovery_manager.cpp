@@ -650,10 +650,14 @@ Status TopologyRecoveryManager::UpdateEvidenceLocked(ClusterRecoveryContext &con
         decision.state = context.state;
         return Status::OK();
     }
-    CHECK_FAIL_RETURN_STATUS(context.state != TopologyRecoveryState::INSTALLING, K_TRY_AGAIN,
-                             "topology candidate installation is in progress");
     const auto now = clock_->Now();
     auto old = context.reporterEvidence.find(report.reporterAddress);
+    if (context.state == TopologyRecoveryState::INSTALLING) {
+        CHECK_FAIL_RETURN_STATUS(old != context.reporterEvidence.end() && SameEvidence(old->second, report),
+                                 K_TRY_AGAIN, "topology candidate installation is in progress");
+        decision.state = context.state;
+        return Status::OK();
+    }
     if (context.state == TopologyRecoveryState::BLOCKED && old != context.reporterEvidence.end()
         && SameEvidence(old->second, report)) {
         decision.state = context.state;
@@ -686,14 +690,15 @@ Status TopologyRecoveryManager::UpdateEvidenceLocked(ClusterRecoveryContext &con
     if (evidence.hasSnapshot) {
         const bool alreadyRequested =
             HasPeerPayloadRequest(context.reporterEvidence, report.reporterAddress, selection);
-        evidence.payloadRequested = evidence.topologyVersion == selection.highestVersion
+        const bool payloadNeeded = context.selectedCanonicalTopology == nullptr
+                                   || context.selectedVersion != evidence.topologyVersion
+                                   || context.selectedCanonicalDigest != evidence.canonicalDigest;
+        evidence.payloadRequested = payloadNeeded && evidence.topologyVersion == selection.highestVersion
                                     && evidence.canonicalDigest == selection.highestDigest
                                     && !selection.conflictingHighest && !alreadyRequested;
         decision.payloadRequired = evidence.payloadRequested
                                    && !context.payloadValidationPending
-                                   && (context.selectedCanonicalTopology == nullptr
-                                       || context.selectedVersion != evidence.topologyVersion
-                                       || context.selectedCanonicalDigest != evidence.canonicalDigest);
+                                   && payloadNeeded;
     }
     decision.state = context.state;
     schedule = true;
@@ -1056,11 +1061,19 @@ Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName,
         auto found = contexts_.find(clusterName);
         if (found != contexts_.end() && found->second->state == TopologyRecoveryState::RECOVERING
             && found->second->discoveryDeadline.has_value() && clock_->Now() < *found->second->discoveryDeadline) {
-            if (!found->second->payloadValidationPending
-                && !HasOutstandingPayloadRequest(found->second->reporterEvidence)) {
+            const bool evidenceComplete = !found->second->observedMembers.empty()
+                                          && found->second->reporterEvidence.size()
+                                                 >= found->second->observedMembers.size();
+            const bool payloadComplete = !found->second->payloadValidationPending
+                                         && !HasOutstandingPayloadRequest(found->second->reporterEvidence);
+            if (evidenceComplete && payloadComplete) {
+                found->second->discoveryDeadline = clock_->Now();
+            } else if (payloadComplete) {
                 ScheduleDelayedReconcileLocked(clusterName, *found->second);
+                return Status::OK();
+            } else {
+                return Status::OK();
             }
-            return Status::OK();
         }
     }
     bool resolved = false;

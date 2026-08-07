@@ -63,6 +63,10 @@ private:
     Status DoRefresh();
     void UpdateWorkerList(const ::datasystem::ClusterTopologyPb &ring);
 
+    // Keep force refresh active for about 3s without turning worker disconnects into tight polling.
+    static constexpr int FORCED_REFRESH_RETRY_COUNT = 6;
+    static constexpr int64_t FORCED_REFRESH_RETRY_INTERVAL_MS = 500;
+
     std::shared_ptr<WorkerRouter> router_;
     FetchRpc fetchRpc_;
     RingUpdateHook ringUpdateHook_;
@@ -73,6 +77,8 @@ private:
 
     std::atomic<bool> running_{ false };
     std::atomic<bool> forceRefresh_{ false };
+    // Remaining retry slots after a worker disconnect forces topology refresh.
+    std::atomic<int> forceRefreshBudget_{ 0 };
     std::thread refreshThread_;
     std::mutex cvMutex_;
     std::condition_variable cv_;

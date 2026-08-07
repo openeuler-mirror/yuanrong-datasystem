@@ -936,6 +936,7 @@ public:
 private:
     Status InitThreadResources();
     Status InitRecoveryServices();
+    void ObserveMetadataRpc(const HostPort &target, const Status &status);
 
     struct PreparedScaleInCleanupState {
         std::vector<std::string> objectIds;
@@ -1435,6 +1436,7 @@ private:
     std::shared_ptr<AsyncRpcRequestManager> asyncRpcManager_{ nullptr };
 
     std::shared_ptr<std::atomic_bool> exitFlag_;
+    std::shared_ptr<std::atomic_bool> metadataRpcObserverAlive_{ std::make_shared<std::atomic_bool>(true) };
     // decThreadPool_ must be destruct before decreaseRPCQ_
     std::unique_ptr<ThreadPool> decThreadPool_{ nullptr };
     std::mutex circularQueueMutex_;  // To protect circularQueueManager_

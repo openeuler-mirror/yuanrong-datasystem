@@ -14,7 +14,9 @@
 #include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <atomic>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -233,6 +235,18 @@ public:
     void SetMembershipReadyHandler(MembershipReadyHandler handler);
 
     /**
+     * @brief Return the host id used by keepalive and peer-failure summary reports.
+     */
+    std::string ResolveKeepAliveHostId() const;
+    Status CreateKeepAliveKeyWithRetry();
+
+    void RecordPeerRpcFailure(const HostPort &target) override;
+    void RecordPeerRpcFailure(const HostPort &target, std::chrono::steady_clock::time_point now);
+    void RecordPeerRpcSuccess(const HostPort &target) override;
+    std::vector<std::string> GetFailedTargets(std::chrono::steady_clock::time_point now);
+    bool ConsumeImmediateReportSignal();
+
+    /**
      * @brief Copy the current membership lease value for the restricted Ensure RPC.
      */
     Status GetMembershipRenewalPayload(MembershipRenewalPayload &payload) const;
@@ -256,9 +270,11 @@ public:
      * @brief Serialize one remote Leader Ensure with ordinary membership mutations.
      * @param[in] coordinatorId Coordinator lifetime that accepts the Ensure.
      * @param[in] ensure Handler that sends and validates the bounded Ensure RPC using the latest payload.
+     * @param[in] markRestarting Whether this Ensure is recovering from a lost membership incarnation.
      * @return Status of the complete remote and local installation.
      */
-    Status EnsureMembership(const std::string &coordinatorId, const MembershipEnsureHandler &ensure);
+    Status EnsureMembership(const std::string &coordinatorId, const MembershipEnsureHandler &ensure,
+                            bool markRestarting = false);
 
     /**
      * @brief Commit the local effects after a successful EnsureLeaderMembership RPC.
@@ -306,6 +322,12 @@ private:
     struct WatchRegistration {
         int64_t watchId{ 0 };
         WatchedKey scope;
+    };
+    struct RpcFailedState {
+        uint64_t failedCount{ 0 };
+        std::chrono::steady_clock::time_point firstFailedAt;
+        std::chrono::steady_clock::time_point lastFailedAt;
+        bool reported{ false };
     };
 
     /**
@@ -484,6 +506,11 @@ private:
     size_t activeEventHandlers_{ 0 };
     size_t activeMembershipReadyHandlers_{ 0 };
 
+    std::mutex rpcFailedMutex_;
+    std::unordered_map<std::string, RpcFailedState> rpcFailedStates_;
+    std::atomic<bool> hasRpcFailures_{ false };
+    bool immediateReportSignal_{ false };
+
     std::string keepAliveTableName_;
     std::string keepAliveKey_;
     // Serializes membership RPC commit order and protects keepAliveModRevision_.
@@ -503,6 +530,7 @@ private:
     std::atomic<bool> firstKeepAliveSent_{ false };
     static constexpr int64_t MS_PER_SECOND = 1'000;
     int64_t keepAliveTtlMs_{ 0 };
+    int64_t keepAliveIntervalMs_{ 0 };
 };
 
 }  // namespace datasystem::cluster

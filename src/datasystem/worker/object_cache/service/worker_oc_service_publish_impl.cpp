@@ -28,6 +28,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/deadlock_util.h"
@@ -55,6 +56,8 @@ static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr double US_PER_MS = 1000.0;
 static constexpr int64_t META_ROUTE_ATTEMPT_TIMEOUT_MS = 2 * 1000;
 static constexpr int64_t META_ROUTE_RETRY_INTERVAL_MS = 100;
+static constexpr int64_t META_FAILURE_PROBE_TIMEOUT_MS = 200;
+static constexpr int64_t META_FAILURE_PROBE_INTERVAL_MS = 100;
 
 namespace {
 bool IsMetadataRouteRetryable(const Status &rc)
@@ -268,6 +271,71 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
     return Status::OK();
 }
 
+bool WorkerOcServicePublishImpl::ReserveMetadataOwnerProbe(const HostPort &owner,
+                                                           std::chrono::steady_clock::time_point now)
+{
+    const auto ownerAddress = owner.ToString();
+    const auto minInterval = std::chrono::milliseconds(META_FAILURE_PROBE_INTERVAL_MS);
+    std::lock_guard<std::mutex> lock(metadataOwnerProbeMutex_);
+    auto &lastProbeAt = metadataOwnerProbeAt_[ownerAddress];
+    if (lastProbeAt.time_since_epoch().count() != 0 && now - lastProbeAt < minInterval) {
+        return false;
+    }
+    lastProbeAt = now;
+    return true;
+}
+
+void WorkerOcServicePublishImpl::ProbeMetadataOwnerAfterDeadlineGate(const std::string &objectKey)
+{
+    if (metadataRpcObserver_ == nullptr || metadataRouteResolver_ == nullptr || workerMasterApiManager_ == nullptr) {
+        return;
+    }
+    HostPort owner;
+    Status rc = metadataRouteResolver_->ResolveOwner(objectKey, owner);
+    if (rc.IsError() || owner == localAddress_) {
+        return;
+    }
+    if (!ReserveMetadataOwnerProbe(owner, std::chrono::steady_clock::now())) {
+        return;
+    }
+
+    const auto apiManager = workerMasterApiManager_;
+    const auto observer = metadataRpcObserver_;
+    const auto sourceAddress = localAddress_.ToString();
+    auto startRc = StartBackgroundTask(nullptr, [apiManager, observer, owner, sourceAddress, objectKey]() {
+        ScopedRequestContext requestContext;
+        GetRequestContext()->reqTimeoutDuration.Init(META_FAILURE_PROBE_TIMEOUT_MS);
+
+        std::shared_ptr<WorkerMasterOCApi> api;
+        Status status = apiManager->GetWorkerMasterApi(owner, api);
+        if (status.IsOk()) {
+            master::PureQueryMetaReqPb req;
+            master::PureQueryMetaRspPb rsp;
+            req.set_redirect(true);
+            req.set_address(sourceAddress);
+            req.add_object_keys(objectKey);
+            status = api->PureQueryMeta(req, rsp);
+        }
+        observer(owner, status);
+    });
+    if (startRc != 0) {
+        VLOG(1) << "Failed to start metadata owner probe for " << owner.ToString() << ", objectKey: " << objectKey;
+    }
+}
+
+Status WorkerOcServicePublishImpl::CheckMasterRpcBudget(const std::string &objectKey)
+{
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
+    if (remainingUs > 0) {
+        return Status::OK();
+    }
+    ProbeMetadataOwnerAfterDeadlineGate(objectKey);
+    LOG(INFO) << FormatString("[ObjectKey %s] deadline gate: skip master RPC, client budget exhausted "
+                              "(remaining %ld us).", objectKey, remainingUs);
+    return Status(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                  FormatString("Request timeout before master RPC, remaining %ld us.", remainingUs));
+}
+
 Status WorkerOcServicePublishImpl::RequestingToMaster(ObjectKV &objectKV, const PublishParams &params)
 {
     const auto &objectKey = objectKV.GetObjKey();
@@ -287,16 +355,16 @@ Status WorkerOcServicePublishImpl::RequestingToMaster(ObjectKV &objectKV, const 
     // (brpc_service_generator), so it reflects the client-configured request
     // budget propagated through the worker. Use the real remaining (not the
     // network-latency-deducted one): this is a hard "budget exhausted" check.
-    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
-    if (remainingUs <= 0) {
-        LOG(INFO) << FormatString("[ObjectKey %s] deadline gate: skip master RPC, client budget exhausted "
-                                  "(remaining %ld us).", objectKey, remainingUs);
-        return Status(StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                      FormatString("Request timeout before master RPC, remaining %ld us.", remainingUs));
-    }
+    RETURN_IF_NOT_OK(CheckMasterRpcBudget(objectKey));
 
     INJECT_POINT("worker.publish.before_request_to_master");
+    return RequestingToMasterCore(objectKV, params);
+}
 
+Status WorkerOcServicePublishImpl::RequestingToMasterCore(ObjectKV &objectKV, const PublishParams &params)
+{
+    const auto &objectKey = objectKV.GetObjKey();
+    SafeObjType &safeObj = objectKV.GetObjEntry();
     Status rc;
     uint64_t publishVersion = 0;
     if (safeObj->IsInvalid()) {

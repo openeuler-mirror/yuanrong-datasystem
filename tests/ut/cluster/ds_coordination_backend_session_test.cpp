@@ -29,7 +29,12 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/raii.h"
+
 #include "gtest/gtest.h"
+
+DS_DECLARE_uint32(node_dead_timeout_s);
 
 namespace datasystem::cluster {
 namespace {
@@ -64,12 +69,22 @@ public:
         return Status::OK();
     }
 
-    Status Put(const std::string &, const std::string &value, int64_t, int64_t, int64_t &version, int64_t &revision,
+    Status Put(const std::string &, const std::string &value, int64_t ttlMs, int64_t, int64_t &version,
+               int64_t &revision,
                int32_t timeoutMs, std::string *coordinatorId, const std::string &expectedCoordinatorId,
                int64_t expectedModRevision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        ++putCalls_;
         lastPutTimeoutMs_ = timeoutMs;
+        lastPutTtlMs_ = ttlMs;
+        if (!putStatuses_.empty()) {
+            auto status = std::move(putStatuses_.front());
+            putStatuses_.erase(putStatuses_.begin());
+            if (status.IsError()) {
+                return status;
+            }
+        }
         if (putStatus_.IsError()) {
             return putStatus_;
         }
@@ -154,13 +169,14 @@ public:
         return Status::OK();
     }
 
-    Status KeepAlive(const std::string &, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t,
-                     std::string *coordinatorId, const std::string &expectedCoordinatorId,
-                     int64_t expectedModRevision) override
+    Status KeepAlive(const std::string &, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t, std::string *coordinatorId,
+                     const std::string &expectedCoordinatorId, int64_t expectedModRevision,
+                     const std::vector<std::string> &failedTargets = {}) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         lastKeepAliveCoordinatorId_ = expectedCoordinatorId;
         lastKeepAliveModRevision_ = expectedModRevision;
+        lastFailedTargets_ = failedTargets;
         ++keepAliveCalls_;
         watchCv_.notify_all();
         if (keepAliveStatus_.IsError()) {
@@ -225,6 +241,12 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         putStatus_ = std::move(status);
+    }
+
+    void AddPutStatus(Status status)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        putStatuses_.push_back(std::move(status));
     }
 
     void SetKeepAliveStatus(Status status)
@@ -295,6 +317,12 @@ public:
         return lastPutValue_;
     }
 
+    int64_t LastPutTtlMs() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lastPutTtlMs_;
+    }
+
     int64_t LastKeepAliveModRevision() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -315,10 +343,22 @@ public:
         return keepAliveCalls_;
     }
 
+    size_t PutCalls() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return putCalls_;
+    }
+
     int64_t LastDeleteModRevision() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
         return lastDeleteModRevision_;
+    }
+
+    std::vector<std::string> LastFailedTargets() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lastFailedTargets_;
     }
 
     void ReplaceMembershipIncarnation()
@@ -354,15 +394,19 @@ private:
     std::string lastKeepAliveCoordinatorId_;
     int64_t lastExpectedModRevision_{ 0 };
     int32_t lastPutTimeoutMs_{ 0 };
+    int64_t lastPutTtlMs_{ 0 };
     int64_t lastKeepAliveModRevision_{ 0 };
     int64_t lastDeleteModRevision_{ 0 };
+    size_t putCalls_{ 0 };
     size_t keepAliveCalls_{ 0 };
+    std::vector<std::string> lastFailedTargets_;
     int64_t putVersion_{ 0 };
     int64_t putRevision_{ 0 };
     std::vector<KeyValueEntry> rangeEntries_;
     std::string lastPutValue_;
     std::string putCoordinatorId_{ COORDINATOR_A };
     Status putStatus_{ Status::OK() };
+    std::vector<Status> putStatuses_;
     Status keepAliveStatus_{ Status(K_RUNTIME_ERROR, "unused fake KeepAlive") };
     std::function<void()> beforeWatchReturn_;
     bool blockWatch_{ false };
@@ -569,6 +613,18 @@ TEST(DsCoordinationBackendSessionTest, InitialSuccessfulLeaseDoesNotReconcileBef
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
+TEST(DsCoordinationBackendSessionTest, InitialKeepAliveRetriesRoutingDeadlineExceeded)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    proxy.AddPutStatus(Status(K_RPC_DEADLINE_EXCEEDED, "leader not ready within route deadline"));
+    proxy.AddPutStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    EXPECT_EQ(proxy.PutCalls(), 2U);
+}
+
 TEST(DsCoordinationBackendSessionTest, RecreatedMembershipIsBlockedUntilCleanupGatePasses)
 {
     DeterministicCoordinatorProxy proxy;
@@ -622,6 +678,133 @@ TEST(DsCoordinationBackendSessionTest, EnsuredMembershipIsBlockedUntilCleanupGat
     EXPECT_EQ(rc.GetCode(), K_NOT_READY);
     EXPECT_EQ(gateCalls.load(), 1U);
     EXPECT_FALSE(backend.IsFirstKeepAliveSent());
+}
+
+TEST(DsCoordinationBackendSessionTest, PeerRpcFailuresNeedCountAndWindowBeforeReporting)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(100));
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(1'499));
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(1'499)).empty());
+
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(1'500));
+    const auto failedTargets = backend.GetFailedTargets(start + std::chrono::milliseconds(1'500));
+    ASSERT_EQ(failedTargets.size(), 1);
+    EXPECT_EQ(failedTargets.front(), "127.0.0.1:12002");
+    EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
+    EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
+}
+
+TEST(DsCoordinationBackendSessionTest, PeerRpcSuccessClearsFailureSummary)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(750));
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(1'500));
+    ASSERT_FALSE(backend.GetFailedTargets(start + std::chrono::milliseconds(1'500)).empty());
+
+    backend.RecordPeerRpcSuccess(target);
+
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(1'501)).empty());
+    EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
+}
+
+TEST(DsCoordinationBackendSessionTest, PeerRpcFailureSummaryExpiresWithoutNewFailures)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(750));
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(1'500));
+    const auto failedTargets = backend.GetFailedTargets(start + std::chrono::milliseconds(1'500));
+    ASSERT_EQ(failedTargets.size(), 1);
+    EXPECT_EQ(failedTargets.front(), "127.0.0.1:12002");
+
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(4'501)),
+              (std::vector<std::string>{ "127.0.0.1:12002" }));
+    EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
+
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(7'501)).empty());
+    EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
+}
+
+TEST(DsCoordinationBackendSessionTest, SparsePeerRpcFailuresDoNotAccumulateAcrossFailureWindow)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(2'000));
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(4'000));
+
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(4'000)).empty());
+    EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
+}
+
+TEST(DsCoordinationBackendSessionTest, ContinuousPeerRpcFailuresReportAcrossFailureWindow)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(700));
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(1'400));
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(1'600));
+
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(1'600)),
+              (std::vector<std::string>{ "127.0.0.1:12002" }));
+    EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
+}
+
+TEST(DsCoordinationBackendSessionTest, CoordinatorKeepAliveLeaseTtlUsesNodeTimeoutBudget)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    const auto savedNodeDeadTimeout = FLAGS_node_dead_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    FLAGS_node_dead_timeout_s = 30;
+    Raii restore([savedNodeTimeout, savedNodeDeadTimeout] {
+        FLAGS_node_timeout_s = savedNodeTimeout;
+        FLAGS_node_dead_timeout_s = savedNodeDeadTimeout;
+    });
+    DeterministicCoordinatorProxy proxy;
+    AddSuccessfulBatch(proxy, COORDINATOR_A);
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+
+    EXPECT_EQ(proxy.LastPutTtlMs(), 3'000);
 }
 
 TEST(DsCoordinationBackendSessionTest, MembershipWritesCarryObservedCoordinatorFence)
@@ -924,7 +1107,8 @@ TEST(DsCoordinationBackendSessionTest, FailedExitIntentFencesReconciliationAndEn
                            int64_t &membershipModRevision) {
                             MembershipValue captured;
                             RETURN_IF_NOT_OK(MembershipValueCodec::Decode(payload.encodedValue, captured));
-                            CHECK_FAIL_RETURN_STATUS(captured.lifecycleState == MemberLifecycleState::EXITING, K_INVALID,
+                            CHECK_FAIL_RETURN_STATUS(captured.lifecycleState == MemberLifecycleState::EXITING,
+                                                     K_INVALID,
                                                      "Ensure did not preserve EXITING membership");
                             membershipModRevision = 17;
                             return Status::OK();

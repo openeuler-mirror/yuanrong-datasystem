@@ -228,7 +228,6 @@ static constexpr size_t MAX_TOPOLOGY_SCALE_IN_CLEANUP_STATES = 1'024;
 static constexpr int ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS = 10;
 static constexpr int64_t ORDINARY_RECONCILIATION_LOCK_TIMEOUT_MS = 500;
 static constexpr int64_t REJOIN_RECONCILIATION_LOCK_TIMEOUT_MS = 10'000;
-
 uint64_t PayloadBytes(const std::vector<RpcMessage> &payloads)
 {
     uint64_t bytes = 0;
@@ -273,6 +272,22 @@ void RecordMultiPublishTransportMetrics(const MultiPublishReqPb &req, uint64_t p
     }
     METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES, shmBytes);
     METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, urmaBytes);
+}
+
+void ObserveMetadataRpcOnTopology(cluster::TopologyEngine *topologyEngine, const HostPort &target, const Status &status)
+{
+    if (topologyEngine == nullptr) {
+        return;
+    }
+    if (status.IsOk()) {
+        topologyEngine->RecordPeerRpcSuccess(target);
+        return;
+    }
+    if (status.GetCode() != K_RPC_UNAVAILABLE && status.GetCode() != K_RPC_DEADLINE_EXCEEDED
+        && status.GetCode() != K_RPC_PEER_DEAD) {
+        return;
+    }
+    topologyEngine->RecordPeerRpcFailure(target);
 }
 
 static constexpr int OLD_VERSION_DEL_THREAD_MIN_NUM = 0;
@@ -332,6 +347,7 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
 {
     LOG(INFO) << "WorkerOCServiceImpl exit";
     StopTopologyHealthCoordinator();
+    metadataRpcObserverAlive_->store(false, std::memory_order_release);
     // Ensure that initOk_.set_value() is called to avoid suspension when MasterLocalWorkerOCApi inits.
     if (!setValue_) {
         initOk_.set_value(Status(K_RUNTIME_ERROR, "WorkerOCServiceImpl init fail"));
@@ -379,8 +395,16 @@ Status WorkerOCServiceImpl::InitL2Cache()
     return Status::OK();
 }
 
+void WorkerOCServiceImpl::ObserveMetadataRpc(const HostPort &target, const Status &status)
+{
+    ObserveMetadataRpcOnTopology(topologyEngine_, target, status);
+}
+
 void WorkerOCServiceImpl::InitServiceImpl()
 {
+    auto *topologyEngine = topologyEngine_;
+    auto *exitRequested = exitRequested_;
+    std::weak_ptr<std::atomic_bool> metadataRpcObserverAlive = metadataRpcObserverAlive_;
     WorkerOcServiceCrudParam param{
         .workerMasterApiManager = workerMasterApiManager_,
         .workerRequestManager = workerRequestManager_,
@@ -397,6 +421,15 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .endpointPolicy = &endpointPolicy_,
         .exitRequested = exitRequested_,
         .ubAdmission = ubAdmission_.get(),
+        .metadataRpcObserver = [topologyEngine, exitRequested, metadataRpcObserverAlive](const HostPort &target,
+                                                                                         const Status &status) {
+            auto alive = metadataRpcObserverAlive.lock();
+            if (alive == nullptr || !alive->load(std::memory_order_acquire)
+                || (exitRequested != nullptr && exitRequested->load(std::memory_order_acquire))) {
+                return;
+            }
+            ObserveMetadataRpcOnTopology(topologyEngine, target, status);
+        },
         .allowDirectoryLag = centralizedMetadata_,
     };
     createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, akSkManager_, localAddress_);
@@ -493,8 +526,7 @@ Status WorkerOCServiceImpl::InitRecoveryServices()
                                                   evictionManager_, memCpyThreadPool_);
     AsyncResourceReleaser::Instance().Init(objectTable_, evictionManager_);
     InitServiceImpl();
-    NodeSelector::Instance().Init(localAddress_.ToString(), membership_, exitRequested_,
-                                  workerMasterApiManager_);
+    NodeSelector::Instance().Init(localAddress_.ToString(), membership_, exitRequested_, workerMasterApiManager_);
     getProc_->Init();
     RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, membership_, persistenceApi_,
                                                 workerMasterApiManager_, etcdStore_, metadataRecoveryManager_.get()));

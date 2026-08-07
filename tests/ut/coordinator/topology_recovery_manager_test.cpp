@@ -378,6 +378,22 @@ TEST_F(TopologyRecoveryManagerTest, AcceptedPayloadInstallsAfterDiscoveryWindowW
     EXPECT_EQ(entries.front().value, payload.canonicalTopology);
 }
 
+TEST_F(TopologyRecoveryManagerTest, RepeatedEvidenceAfterAcceptedPayloadDoesNotBlockInstall)
+{
+    const std::string clusterName = "repeat-evidence";
+    ObserveMember(clusterName, MEMBER_A);
+    auto payload = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
+    TopologyRecoveryReportDecision decision;
+    ReportEvidence(clusterName, payload, decision);
+    ASSERT_TRUE(decision.payloadRequired);
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
+
+    ReportEvidence(clusterName, payload, decision);
+    EXPECT_FALSE(decision.payloadRequired);
+    clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
+    ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
+}
+
 TEST_F(TopologyRecoveryManagerTest, RecoveryTasksPreserveSubmittingTraceContext)
 {
     const std::string clusterName = "trace-context";
@@ -932,9 +948,11 @@ TEST_F(TopologyRecoveryManagerTest, StalePayloadValidationCannotPublishIntoRecre
 
     DS_ASSERT_OK(inject::Clear(injectPoint));
     EXPECT_EQ(validation.get().GetCode(), K_TRY_AGAIN);
-    EXPECT_EQ(manager_->GetState(clusterName), TopologyRecoveryState::RECOVERING);
-    clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     EXPECT_TRUE(DriveUntil(clusterName, MEMBER_B, TopologyRecoveryState::READY));
+    std::vector<KeyValueEntry> entries;
+    int64_t revision = 0;
+    DS_ASSERT_OK(store_->Range(TopologyKey(clusterName), "", entries, revision));
+    EXPECT_TRUE(entries.empty());
 }
 
 TEST_F(TopologyRecoveryManagerTest, RejectsNewReportsAfterShutdown)
