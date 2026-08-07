@@ -184,6 +184,53 @@ on both x86_64 and aarch64:
   on aarch64, rely on code review and unit tests; use x86_64 TSAN as the automated
   concurrency-safety gate.
 
+### AddressSanitizer platform support
+
+Backed by `.bazelrc` (`build:asan`, `build:asan_ubsan`):
+
+- ASan on aarch64 + brpc 1.15.0 needs a single per-file exclusion in
+  `.bazelrc` for `external/com_github_apache_brpc/src/bthread/context.cpp`.
+  brpc's `context.cpp` is a pure inline-assembly TU (one giant `__asm(...)`
+  block per supported arch, defining `bthread_jump_fcontext` and
+  `bthread_make_fcontext`). On aarch64 + `-fsanitize=address`, GCC emits
+  an ASan module-init constructor into `.init_array` whose relocation
+  targets a local symbol that the linker then discards together with its
+  hosting section, breaking the link of `datasystem_coordinator` /
+  `datasystem_worker` with:
+    ```
+    bthread/context.pic.o(.init_array.00099+0x0): error: relocation refers
+      to local symbol "" [N], which is defined in a discarded section
+    ```
+  The file contains no C/C++ stack frames, globals, or heap access, so ASan
+  has nothing to instrument; disabling ASan on this single file is safe and
+  sufficient. The exclusion is expressed with the same `--per_file_copt`
+  mechanism already used to disable UBSan on `external/.*`:
+    ```
+    build:asan       --per_file_copt=external/.*bthread/context\.cpp@-fno-sanitize=address
+    build:asan_ubsan --per_file_copt=external/.*bthread/context\.cpp@-fno-sanitize=address
+    ```
+  The regex `external/.*bthread/context\.cpp` (rather than a repo-name-pinned
+  `external/com_github_apache_brpc/.*...`) is intentional: brpc 1.15.0 is
+  registered under TWO external repo names in this workspace. The main build
+  uses `@com_github_apache_brpc` (from `bazel/sdk/repositories.bzl`
+  `setup_brpc` default name), but `bazel/sdk/workspace.bzl`'s
+  `datasystem_source_sdk` rule declares a `repo_mapping` that re-exposes
+  brpc as `@ds_brpc` inside the `@datasystem_sdk_validation` source SDK
+  repository (`bazel/sdk/deps.bzl:34` calls `setup_brpc(name="ds_brpc")`).
+  Both instances emit the same `src/bthread/context.cpp` and both hit the
+  same `.init_array.00099` link error. Pinning the regex to one repo name
+  lets the other repo's link silently regress; the broad pattern also
+  covers any future brpc repo_mapping additions without further edits.
+  `build:ubsan` standalone needs no equivalent because UBSan is already
+  disabled on all external repos via `--per_file_copt=external/.*@
+  -fno-sanitize=undefined`.
+- The CMake build path does not need the equivalent exclusion because
+  `cmake/external_libs/brpc.cmake` builds brpc with `THIRDPARTY_SAFE_FLAGS`
+  (defined in `cmake/util.cmake`, excludes `SANITIZER_FLAGS`), so brpc is
+  never ASan-instrumented under CMake. Only the Bazel path applies
+  `-fsanitize=address` globally via `--copt`, which is what triggers the
+  brpc `context.cpp` link error on aarch64 without the per-file exclusion.
+
 Backed by `bazel/BUILD.bazel` and `bazel/datasystem_sdk.bzl`:
 
 - `//bazel:datasystem_sdk` emits both `bazel-bin/bazel/datasystem_sdk` and `bazel-bin/bazel/datasystem_sdk.tar`;
