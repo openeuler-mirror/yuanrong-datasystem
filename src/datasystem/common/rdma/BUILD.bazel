@@ -90,6 +90,11 @@ ds_cc_library(
             "ucp_worker_pool.h",
         ],
     ),
+    copts=select({
+        "//:enable_urma": ["-DUSE_URMA"],
+        "//:enable_urma_mock": ["-DUSE_URMA", "-DUSE_URMA_MOCK"],
+        "//conditions:default": [],
+    }),
     deps=[
         ":fast_transport_base_header",
         ":urma_send_lane",

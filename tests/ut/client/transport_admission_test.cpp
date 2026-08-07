@@ -605,6 +605,31 @@ TEST(UbHealthFilterTest, SummaryIncarnationFencesLocalObservation)
     EXPECT_TRUE(filter.IsAvailable(provider));
 }
 
+TEST(UbHealthFilterTest, SameIncarnationWritableRecoveryClearsClientObservation)
+{
+    const auto provider = MakeAddress(37);
+    UbHealthFilter filter;
+    UbHealthSummary summary;
+    summary.worker = provider;
+    summary.incarnation = "incarnation-a";
+    summary.epoch = 1;
+    summary.writable = false;
+    ASSERT_TRUE(filter.ApplySummary(summary, summary.incarnation));
+
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+    ASSERT_TRUE(filter.GetLocalObservation(provider).has_value());
+    ASSERT_FALSE(filter.IsAvailable(provider));
+
+    ++summary.epoch;
+    summary.writable = true;
+    ASSERT_TRUE(filter.ApplySummary(summary, summary.incarnation));
+    EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
+    EXPECT_TRUE(filter.IsAvailable(provider));
+}
+
 TEST(TransportLayerAdmissionTest, HardUbSetFailureBlocksLaterSetAndAllocationBeforeTransport)
 {
     auto manager = std::make_shared<FakeDataPlaneManager>();

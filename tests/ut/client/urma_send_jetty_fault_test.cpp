@@ -206,7 +206,7 @@ TEST(UrmaSendJettyFaultTest, EventWaitTimeoutPreservesUrmaStatus)
     EXPECT_LT(args.elapsed, kBthreadEventWaitTimeout);
 }
 
-TEST(UrmaSendJettyFaultTest, PoolExhaustionReturnsTryAgainFromManagerAcquirePath)
+TEST(UrmaSendJettyFaultTest, PoolExhaustionReturnsUrmaBackpressureFromManagerAcquirePath)
 {
     if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
@@ -222,7 +222,7 @@ TEST(UrmaSendJettyFaultTest, PoolExhaustionReturnsTryAgainFromManagerAcquirePath
     std::shared_ptr<UrmaJetty> unavailableJetty;
     urma_target_jetty_t *targetJetty = nullptr;
     const auto status = manager.AcquireSendLaneFromConnection(MakeTestConnection(), unavailableJetty, targetJetty);
-    EXPECT_EQ(status.GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(status.GetCode(), K_URMA_TRY_AGAIN);
     ExpectStatusContains(status, { "srcAddress=", "targetAddress=127.0.0.1:29100",
                                    "remoteInstanceId=urma-send-jetty-fault-test" });
     EXPECT_EQ(unavailableJetty, nullptr);

@@ -70,10 +70,11 @@
     Worker incarnation plus monotonically increasing epoch before they can affect routing or replica admission. The
     requester tags local evidence with the latest trusted incarnation learned from topology membership or a validated
     heartbeat. Evidence learned before either source establishes the endpoint identity is unversioned and is cleared
-    when the first trusted incarnation arrives. A matching incarnation never clears later hard local evidence; a
-    different trusted incarnation clears evidence belonging to the old Worker process. Ordinary topology refresh and
-    Global Fact lease expiry do not silently clear versioned local evidence. Global summary reads use a shared lock
-    because Direct Read admission is a read-mostly foreground path.
+    when the first trusted incarnation arrives. A different trusted incarnation clears evidence belonging to the old
+    Worker process. For the same incarnation, repeated writable summaries preserve newer hard local evidence, while a
+    validated global unavailable-to-writable epoch transition clears the matching client-local quarantine. Ordinary
+    topology refresh and Global Fact lease expiry do not silently clear versioned local evidence. Global summary reads
+    use a shared lock because Direct Read admission is a read-mostly foreground path.
   - Routed same-host Get uses one endpoint-scoped SHM session per target Worker. Object metadata, reference acquisition,
     and `DecreaseReference` use the client-facing `WorkerOCService`; only fd-session bootstrap and control
     (`GetSocketPath`, `RegisterClient`, `GetClientFd`, `DisconnectClient`) use `WorkerService`.
@@ -355,6 +356,10 @@
     `K_NOT_FOUND` into stale-location retries.
   - Python-facing behavior can differ from C++ because pybind wrappers convert statuses into exceptions and sometimes rename methods;
   - context propagation changes can affect tracing and multi-tenant behavior across all client operations.
+  - `tools/perf/cpu_spike_capture.sh` is an operator-side event trigger for transient client CPU spikes. It samples
+    `/proc/<pid>/stat` at low cost and, only after consecutive high-CPU samples, stores a short `perf` recording plus
+    process/thread/socket and optional caller-provided metric snapshots. It intentionally does not bulk-copy SDK logs;
+    correlate logs afterward using the event timestamps.
 - Important invariants:
   - `DsClient` init order is KV -> Hetero -> Object; shutdown order is Object -> Hetero -> KV.
   - worker connectivity and auth material may come from explicit options or environment fallback in shared client backend code.
@@ -481,6 +486,10 @@
   - `bash build.sh -t run_cases -l st`
 - Narrow by test binary when iterating:
   - inspect `tests/ut/CMakeLists.txt` and `tests/st/CMakeLists.txt` for binaries such as `ds_ut`, `ds_ut_object`, `ds_st_object_cache`, `ds_st_kv_cache`
+- Run the hardware-independent UB admission benchmark with the URMA mock build configuration:
+  - `bazel run --define enable_urma_mock=true //tests/perf/client:peer_ub_admission_timeout_bench -- --threads=16 --reports-per-thread=30000`
+  - the admission tool executes the real `PeerUbAdmission::ReportOutcome` state-machine path and reports its state,
+    epoch, recovery-probe outcome, and process CPU time; it is not a bRPC or physical-UB CPU measurement.
 ## Open Questions
 
 - Should service discovery be documented as a C++-only advanced entrypoint for now, since Python constructors do not currently expose it directly?

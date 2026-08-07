@@ -1,0 +1,13 @@
+package(default_visibility = ["//visibility:public"])
+
+# Manual, deterministic A/B tool for the UB admission recovery path. It does
+# not create a real client/worker data path; see its output fields before
+# interpreting process CPU time as transport CPU.
+cc_binary(
+    name = "peer_ub_admission_timeout_bench",
+    srcs = ["peer_ub_admission_timeout_bench.cpp"],
+    copts = ["-std=c++17"],
+    deps = [
+        "//src/datasystem/common/object_cache:ub_health",
+    ],
+)

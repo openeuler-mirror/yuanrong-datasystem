@@ -25,10 +25,22 @@ bool UbHealthFilter::ApplySummary(const UbHealthSummary &summary, const std::str
             }
             expected = trusted->second;
         }
+        const auto previous = cache_.Get(summary.worker);
+        const bool sameIncarnationRecovery = previous.has_value() && previous->incarnation == summary.incarnation
+                                             && !previous->writable && summary.writable;
         if (!cache_.Apply(summary, expected)) {
             return false;
         }
-        ReconcileLocalObservationWithTrustedIncarnationLocked(summary.worker, summary.incarnation);
+        if (sameIncarnationRecovery) {
+            // A trusted writable summary marks recovery of the same worker
+            // incarnation. Drop the client-local quarantine learned from the
+            // earlier global-unavailable epoch; otherwise the client remains
+            // blocked forever even though the worker has recovered.
+            localAdmission_.ClearLocalState(summary.worker);
+            localObservationIncarnations_.erase(summary.worker);
+        } else {
+            ReconcileLocalObservationWithTrustedIncarnationLocked(summary.worker, summary.incarnation);
+        }
         trustedIncarnations_[summary.worker] = summary.incarnation;
     }
     if (!summary.writable) {

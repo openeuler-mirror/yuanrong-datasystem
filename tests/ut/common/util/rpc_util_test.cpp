@@ -127,6 +127,21 @@ TEST_F(RpcUtilTest, RetryPolicyKeepsPeerDeadOutOfLegacyUnavailablePolicy)
     ASSERT_FALSE(ShouldRetryOnStatusCode(StatusCode::K_RPC_PEER_DEAD, badExplicitPolicy));
 }
 
+TEST_F(RpcUtilTest, RetryOnErrorDoesNotReplayUrmaBackpressureAsGenericTryAgain)
+{
+    int calls = 0;
+    Status status = RetryOnError(
+        1000,
+        [&calls](int32_t) {
+            ++calls;
+            return Status(StatusCode::K_URMA_TRY_AGAIN, "send lane pool exhausted");
+        },
+        []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
+
+    ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_TRY_AGAIN);
+    ASSERT_EQ(calls, 1);
+}
+
 TEST_F(RpcUtilTest, RetryOnErrorDoesNotRetryPeerDeadForLegacyUnavailablePolicy)
 {
     int calls = 0;

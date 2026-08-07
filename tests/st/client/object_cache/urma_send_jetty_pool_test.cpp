@@ -19,6 +19,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <future>
 #include <memory>
 #include <string>
@@ -60,6 +61,15 @@ constexpr char kAsyncDeleteCompleteInject[] = "urma.SendJettyAsyncDeleteComplete
 constexpr char kRegistryUnregisterInject[] = "urma.SendJettyRegistryUnregister";
 constexpr char kRefillAddedInject[] = "urma.SendJettyPoolRefillAdded";
 
+bool IsUrmaTestEnvironmentAvailable()
+{
+#ifdef USE_URMA_MOCK
+    return true;
+#else
+    return std::getenv("DS_URMA_DEV_NAME") != nullptr;
+#endif
+}
+
 enum class PoolExhaustionFallbackOutcome {
     SUCCESS,
     LIMITER_REJECTED,
@@ -90,6 +100,9 @@ public:
 
     void SetUp() override
     {
+        if (!IsUrmaTestEnvironmentAvailable()) {
+            GTEST_SKIP() << "URMA ST requires DS_URMA_DEV_NAME and a usable local URMA device.";
+        }
         ImmutableStringPool::Instance().Init();
         intern::StringPool::InitAll();
         ExternalClusterTest::SetUp();
@@ -321,10 +334,9 @@ protected:
         ASSERT_TRUE(heldStatus.IsOk()) << heldStatus.ToString();
         ASSERT_EQ(unexpectedUrmaCount, 0U) << "TCP-only Batch Get attempted an object or aggregate URMA write";
         if (expectedOutcome == PoolExhaustionFallbackOutcome::LIMITER_REJECTED) {
-            // The worker preserves the pool-exhaustion K_TRY_AGAIN when the limiter rejects fallback. Higher request
-            // layers may retry it until their deadline, and the client RPC timeout can replace the inner error. The
-            // stable end-to-end contract is failure; the ordinary fallback test above is the below-limit success
-            // control for the same pool-exhaustion trigger.
+            // The worker preserves the pool-exhaustion K_URMA_TRY_AGAIN when the limiter rejects fallback. It must
+            // not be replayed as generic application K_TRY_AGAIN. The stable end-to-end contract is failure; the
+            // ordinary fallback test above is the below-limit success control for the same pool-exhaustion trigger.
             ASSERT_TRUE(getStatus.IsError()) << getStatus.ToString();
             ASSERT_GT(exhaustedCount, 0U);
         } else {
@@ -858,7 +870,7 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetAggregatePoolExhaustionFallsBackToTcpOnl
 }
 
 TEST_F(UrmaSendJettyPoolFallbackDisabledStTest,
-       BatchGetPoolExhaustionRetriesBackpressureWithoutTcpFallbackOrWrPost)
+       BatchGetPoolExhaustionReturnsBackpressureWithoutTcpFallbackOrWrPost)
 {
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
@@ -936,10 +948,11 @@ TEST_F(UrmaSendJettyPoolFallbackDisabledStTest,
     ASSERT_TRUE(clearExhausted.IsOk()) << clearExhausted.ToString();
     ASSERT_TRUE(clearWrite.IsOk()) << clearWrite.ToString();
     ASSERT_TRUE(heldStatus.IsOk()) << heldStatus.ToString();
-    // Worker-to-worker RPC returns K_TRY_AGAIN, but KVClient retries that code until this short request deadline.
-    // The stable end-to-end contract here is repeated pool backpressure, no object WR post, and no TCP success.
+    // Worker-to-worker RPC returns K_URMA_TRY_AGAIN, which preserves the explicit local-resource-pressure
+    // classification instead of replaying the request as generic application K_TRY_AGAIN. The stable end-to-end
+    // contract here is pool backpressure, no object WR post, and no TCP success.
     ASSERT_TRUE(getStatus.IsError());
-    ASSERT_GT(exhaustedCount, 0U);
+    ASSERT_EQ(exhaustedCount, 1U) << "pool exhaustion must not replay the same remote Get";
     ASSERT_EQ(writeCount, 0U) << "fallback-disabled Batch Get must fail before posting any object WR";
 }
 

@@ -1,0 +1,3 @@
+add_executable(peer_ub_admission_timeout_bench peer_ub_admission_timeout_bench.cpp)
+target_compile_features(peer_ub_admission_timeout_bench PRIVATE cxx_std_17)
+target_link_libraries(peer_ub_admission_timeout_bench PRIVATE common_buffer)

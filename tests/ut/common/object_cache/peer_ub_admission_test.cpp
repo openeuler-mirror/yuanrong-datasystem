@@ -60,6 +60,77 @@ TEST(PeerUbAdmissionTest, RpcTimeoutIsSuspectAndDoesNotHardBlock)
     EXPECT_EQ(state->state, UbAdmissionState::SUSPECT);
 }
 
+TEST(PeerUbAdmissionTest, LateTimeoutCannotDowngradeHardUnavailableEvidence)
+{
+    PeerUbAdmission admission;
+    UbOpOutcome hardFailure(PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                             Status(K_URMA_ERROR, "provider CQE status 4"));
+    hardFailure.cqeStatus = 4;
+    admission.ReportOutcome(hardFailure);
+    const auto hardState = admission.GetState(PEER);
+    ASSERT_TRUE(hardState.has_value());
+
+    UbOpOutcome lateTimeout(PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                            Status(K_RPC_DEADLINE_EXCEEDED, "late request timeout"));
+    admission.ReportOutcome(lateTimeout);
+
+    const auto state = admission.GetState(PEER);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, UbAdmissionState::UNAVAILABLE);
+    EXPECT_EQ(state->lastFailureClass, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
+    EXPECT_EQ(state->epoch, hardState->epoch);
+    EXPECT_EQ(admission.CheckReadSource(PEER).GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE);
+}
+
+TEST(PeerUbAdmissionTest, LateTimeoutCannotInvalidateRecoveryProbe)
+{
+    PeerUbAdmission admission;
+    admission.InitializeProbing(PEER, 10);
+    auto probe = admission.TryBeginProbe(PEER, 10);
+    ASSERT_TRUE(probe.has_value());
+
+    UbOpOutcome lateTimeout(PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                            Status(K_RPC_DEADLINE_EXCEEDED, "late request timeout"));
+    admission.ReportOutcome(lateTimeout);
+
+    const auto state = admission.GetState(PEER);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, UbAdmissionState::PROBING);
+    EXPECT_EQ(state->epoch, probe->epoch);
+    EXPECT_TRUE(admission.CompleteProbe(*probe, Status::OK(), 11, false));
+}
+
+TEST(PeerUbAdmissionTest, ConcurrentTimeoutReportsCannotDowngradeUnavailableState)
+{
+    constexpr size_t TIMEOUT_REPORTERS = 8;
+    constexpr uint32_t REPORTS_PER_THREAD = 100;
+    PeerUbAdmission admission;
+    UbOpOutcome hardFailure(PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                             Status(K_URMA_ERROR, "provider CQE status 4"));
+    hardFailure.cqeStatus = 4;
+    admission.ReportOutcome(hardFailure);
+
+    std::vector<std::thread> reporters;
+    reporters.reserve(TIMEOUT_REPORTERS);
+    for (size_t reporter = 0; reporter < TIMEOUT_REPORTERS; ++reporter) {
+        reporters.emplace_back([&] {
+            for (uint32_t report = 0; report < REPORTS_PER_THREAD; ++report) {
+                UbOpOutcome timeout(PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                                    Status(K_RPC_DEADLINE_EXCEEDED, "late request timeout"));
+                admission.ReportOutcome(timeout);
+            }
+        });
+    }
+    for (auto &reporter : reporters) {
+        reporter.join();
+    }
+
+    const auto state = admission.GetState(PEER);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, UbAdmissionState::UNAVAILABLE);
+    EXPECT_EQ(state->lastFailureClass, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
+}
+
 TEST(PeerUbAdmissionTest, LegacyUrmaErrorWithoutRawEvidenceDoesNotQuarantine)
 {
     PeerUbAdmission admission;
@@ -98,6 +169,27 @@ TEST(PeerUbAdmissionTest, SelfSummaryDoesNotExportObservedPeerFailure)
     EXPECT_EQ(summary.worker, self);
     EXPECT_TRUE(summary.writable);
     EXPECT_EQ(summary.epoch, 0u);
+}
+
+TEST(PeerUbAdmissionTest, LeaseSyncSelfSummaryDoesNotInvalidateActiveProbe)
+{
+    PeerUbAdmission admission;
+    const HostPort self("127.0.0.1", 31502);
+    admission.SetSelfWorker(self);
+    admission.InitializeProbing(self, 10);
+    auto probe = admission.TryBeginProbe(self, 10);
+    ASSERT_TRUE(probe.has_value());
+
+    auto selfSummary = admission.BuildSelfHealthSummary(self);
+    selfSummary.incarnation = "self-incarnation";
+    ASSERT_FALSE(selfSummary.writable);
+    admission.ReplaceGlobalSummaries({ selfSummary });
+
+    const auto state = admission.GetState(self);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, UbAdmissionState::PROBING);
+    EXPECT_EQ(state->epoch, probe->epoch);
+    EXPECT_TRUE(admission.CompleteProbe(*probe, Status::OK(), 11, false));
 }
 
 TEST(PeerUbAdmissionTest, GlobalSummaryUsesEpochAndIncarnationFencingAndExpiresIndependently)

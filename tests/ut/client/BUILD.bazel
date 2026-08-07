@@ -258,5 +258,9 @@ ds_cc_test(
         "//src/datasystem/common/rdma:urma_resource_header",
         "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/worker:add_miss_libs_fixme",
-    ],
+    ] + select({
+        # urma_dlopen_util discovers this provider through a weak symbol in mock builds.
+        "//:enable_urma_mock": ["//tests/support/datasystem/common/urma_mock:urma_mock_backend"],
+        "//conditions:default": [],
+    }),
 )

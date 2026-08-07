@@ -324,10 +324,10 @@ DS_URMA_DEV_NAME=<device> \
     objects in a Batch Get with pool size 1, shared-lane cleanup after an injected GatherWrite failure, TCP-only
     fallback for ordinary and aggregate Batch Get when the sole lane is held, rejection when that TCP fallback payload
     reaches the limiter's 1 MiB exclusive upper bound, and fallback-disabled repeated pool backpressure without object
-    WR post or TCP success. The fallback-disabled KVClient assertion expects an eventual error rather than a final
-    `K_TRY_AGAIN`, because its worker-to-worker layer retries `K_TRY_AGAIN` until the request deadline; the manager fault
-    UT checks the exact acquire error. The target also covers configured-capacity concurrent remote Get, a manual
-    `LEVEL1_` 64 concurrently started Batch Get × 64 ordinary sub-object scenario with exactly 64 lane releases and zero
+    WR post or TCP success. The fallback-disabled KVClient assertion expects an eventual `K_URMA_TRY_AGAIN` error rather
+    than TCP success; the dedicated status prevents replaying exhausted URMA lanes as generic application
+    `K_TRY_AGAIN`, while the manager fault UT checks the exact acquire error. The target also covers
+    configured-capacity concurrent remote Get, a manual `LEVEL1_` 64 concurrently started Batch Get × 64 ordinary sub-object scenario with exactly 64 lane releases and zero
     observed pool exhaustion (without claiming all lanes were simultaneously held), recovery after an injected
     recoverable CQE retires a send Jetty, and `LEVEL1_ConcurrentBatchGetsRecoverFromInFlightTimeoutStorm`: timeout
     deletes the business Event and force-releases each sealed lane without waiting for CQE arrival. The timeout-storm
