@@ -1,0 +1,71 @@
+diff -ruN a/include/spdlog/details/file_helper.h b/include/spdlog/details/file_helper.h
+--- a/include/spdlog/details/file_helper.h
++++ b/include/spdlog/details/file_helper.h
+@@ -32,6 +32,9 @@
+     size_t size() const;
+     const filename_t &filename() const;
+ 
++    // Whether the last file open attempt failed.
++    bool poisoned() const { return poisoned_; }
++
+     //
+     // return file path and its extension:
+     //
+@@ -53,6 +56,7 @@
+     std::FILE *fd_{nullptr};
+     filename_t filename_;
+     file_event_handlers event_handlers_;
++    bool poisoned_{false};
+ };
+ } // namespace details
+ } // namespace ds_spdlog
+diff -ruN a/include/spdlog/details/file_helper-inl.h b/include/spdlog/details/file_helper-inl.h
+--- a/include/spdlog/details/file_helper-inl.h
++++ b/include/spdlog/details/file_helper-inl.h
+@@ -31,6 +31,7 @@
+ 
+ SPDLOG_INLINE void file_helper::open(const filename_t &fname, bool truncate)
+ {
++    poisoned_ = false;
+     close();
+     filename_ = fname;
+ 
+@@ -70,6 +71,7 @@
+         details::os::sleep_for_millis(open_interval_);
+     }
+ 
++    poisoned_ = true;
+     throw_spdlog_ex("Failed opening file " + os::filename_to_str(filename_) + " for writing", errno);
+ }
+ 
+@@ -119,6 +121,10 @@
+ 
+ SPDLOG_INLINE void file_helper::write(const memory_buf_t &buf)
+ {
++    if (fd_ == nullptr)
++    {
++        throw_spdlog_ex("Cannot write to closed file " + os::filename_to_str(filename_));
++    }
+     size_t msg_size = buf.size();
+     auto data = buf.data();
+     if (std::fwrite(data, 1, msg_size, fd_) != msg_size)
+diff -ruN a/include/spdlog/sinks/rotating_file_sink-inl.h b/include/spdlog/sinks/rotating_file_sink-inl.h
+--- a/include/spdlog/sinks/rotating_file_sink-inl.h
++++ b/include/spdlog/sinks/rotating_file_sink-inl.h
+@@ -96,10 +96,12 @@
+     base_sink<Mutex>::formatter_->format(msg, formatted);
+     auto new_size = current_size_ + formatted.size();
+ 
+-    // rotate if the new estimated file size exceeds max size.
+-    // rotate only if the real size > 0 to better deal with full disk (see issue #2261).
+-    // we only check the real size when new_size > max_size_ because it is relatively expensive.
+-    if (new_size > max_size_)
++    if (file_helper_.poisoned())
++    {
++        rotate_();
++        new_size = formatted.size();
++    }
++    else if (new_size > max_size_)
+     {
+         file_helper_.flush();
+         if (file_helper_.size() > 0)

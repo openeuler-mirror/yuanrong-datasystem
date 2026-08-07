@@ -18,6 +18,7 @@ def setup_spdlog(name = "ds-spdlog"):
         patches = [
             Label("//third_party/patches/spdlog:change-namespace.patch"),
             Label("//third_party/patches/spdlog:change-rotating-file-sink.patch"),
+            Label("//third_party/patches/spdlog:recover-from-broken-sink.patch"),
         ],
         patch_args = ["-p1"],
         build_file = Label("//third_party:ds-spdlog.BUILD"),
