@@ -242,7 +242,7 @@ Status ChunkManager::DoPiplnStep2_FallbackConsume(uint64_t reqId, const void *da
         info->receivedChunks = 0;
         info->failedChunkId = -1;
         info->receivedChunksDetail.Resize(0);
-        ChunkTag tag{ .reqId = reqId, .chunkType = ChunkTag::lastChunkTag, .chunkId = 0 };
+        ChunkTag tag{ .reqId = reqId, .chunkType = ChunkTag::lastChunkTag, .chunkId = 0, .objectSize = 0 };
         ChunkTag::SetObjectSize(tag, dataSize);
         rc = DoPiplnStep2_ChunkConsumeLocked(reqId, *info, reinterpret_cast<uint64_t>(dataSrc), tag, dataSize,
                                              syncHandle);
