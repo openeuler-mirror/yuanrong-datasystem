@@ -24,3 +24,12 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "rotating_file_sink_repro_test",
+    srcs = ["rotating_file_sink_repro_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "@ds-spdlog//:ds-spdlog",
+    ],
+)

@@ -16,7 +16,8 @@ set(spdlog_CMAKE_OPTIONS
 set(spdlog_PATCHES 
     ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-filename.patch
     ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-namespace.patch 
-    ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-rotating-file-sink.patch)
+    ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-rotating-file-sink.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/recover-from-broken-sink.patch)
 
 add_thirdparty_lib(SPDLOG
     URL ${spdlog_URL}

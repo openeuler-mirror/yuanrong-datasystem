@@ -44,6 +44,7 @@ set(SPDLOG_PATCHES
     "${_TRANSFER_ENGINE_REPOSITORY_ROOT}/third_party/patches/spdlog/change-filename.patch"
     "${_SPDLOG_NAMESPACE_PATCH}"
     "${_TRANSFER_ENGINE_REPOSITORY_ROOT}/third_party/patches/spdlog/change-rotating-file-sink.patch"
+    "${_TRANSFER_ENGINE_REPOSITORY_ROOT}/third_party/patches/spdlog/recover-from-broken-sink.patch"
 )
 foreach(_SPDLOG_PATCH ${SPDLOG_PATCHES})
     if (NOT EXISTS "${_SPDLOG_PATCH}")
