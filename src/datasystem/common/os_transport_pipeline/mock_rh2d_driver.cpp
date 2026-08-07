@@ -34,7 +34,7 @@ Status MockRH2DDriver::Init()
     return Status::OK();
 }
 
-void MockRH2DDriver::SetReqId(uint32_t reqId)
+void MockRH2DDriver::SetReqId(uint64_t reqId)
 {
     reqId_ = reqId;
 }

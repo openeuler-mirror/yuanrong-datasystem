@@ -60,7 +60,7 @@ struct PipelineRH2DMsg {
 };
 
 using PipelineMsgHandler =
-    std::function<void(uint32_t /* requestId */, uint64_t /* dataSrc */, ChunkTag, uint32_t /* chunkSize */)>;
+    std::function<void(uint64_t /* requestId */, uint64_t /* dataSrc */, ChunkTag, uint32_t /* chunkSize */)>;
 
 struct PiplnMsgShmQueue : public ShmCircularQueue {
     PiplnMsgShmQueue(size_t capacity, uint32_t elementSize, std::shared_ptr<ShmUnitInfo> shmUnit, bool isClient = false)
@@ -113,8 +113,8 @@ public:
     ~PipelineRH2DQueueConsumer();
 
     Status InitQueue(std::shared_ptr<ShmUnitInfo> shmUnitInfo, std::shared_ptr<ShmConvertHookFunc> converter);
-    void AddCallback(uint32_t requestId, std::shared_ptr<PipelineMsgHandler> callback);
-    void RemoveCallback(uint32_t requestId);
+    void AddCallback(uint64_t requestId, std::shared_ptr<PipelineMsgHandler> callback);
+    void RemoveCallback(uint64_t requestId);
 
 private:
     void ConsumeOne(uint8_t *element);
@@ -126,7 +126,7 @@ private:
     bool workerStop_ = false;
 
     std::mutex mutex_;
-    std::map<uint32_t, std::shared_ptr<PipelineMsgHandler>> msgHandlers_;
+    std::map<uint64_t, std::shared_ptr<PipelineMsgHandler>> msgHandlers_;
 };
 
 }  // namespace OsXprtPipln

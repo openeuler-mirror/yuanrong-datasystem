@@ -156,6 +156,26 @@ Status UrmaContext::Create(urma_device_t *device, uint32_t eidIndex, std::unique
     return Status::OK();
 }
 
+Status UrmaContext::BondpDisableMSN() const
+{
+#ifdef BONDP_USER_CTL_BONDING
+    LOG(INFO) << "Try disable MSN";
+    CHECK_FAIL_RETURN_STATUS(raw_ != nullptr, K_INVALID, "URMA context is null");
+
+    urma_user_ctl_in_t in{ .addr = 0,
+                           .len = 0,
+                           .opcode = BONDP_USER_CTL_DISABLE_MSN };
+    urma_user_ctl_out_t out;
+    (void)memset_s(&out, sizeof(out), 0, sizeof(out));
+
+    const auto ret = ds_urma_user_ctl(raw_, &in, &out);
+    if (ret != URMA_SUCCESS) {
+        RETURN_STATUS(K_URMA_ERROR, FormatString("Failed to disable MSN, ret = %d", ret));
+    }
+#endif
+    return Status::OK();
+}
+
 Status UrmaContext::ChangeBondingBalanceMode() const
 {
 #ifdef BONDP_USER_CTL_BONDING
@@ -725,6 +745,9 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
               << ", useDefaultPriority=" << !foundPriority;
 
     RETURN_IF_NOT_OK(UrmaContext::Create(device, eidIndex, context_));
+    if (SupportPipelineRH2D()) {
+        RETURN_IF_NOT_OK(context_->BondpDisableMSN());
+    }
     if (isBondingDevice) {
         LOG_IF_ERROR(context_->ChangeBondingBalanceMode(), "Failed to change bonding balance mode");
     }

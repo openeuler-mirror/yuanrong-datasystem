@@ -23,7 +23,6 @@
 #include <fcntl.h>
 #include <fstream>
 #include <limits>
-#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -80,33 +79,11 @@ uint64_t BaseRH2DDriver::GetShmSize()
     return static_cast<uint64_t>(targetSize);
 }
 
-uint32_t ChunkManager::GenerateReqId()
-{
-    static constexpr uint32_t kMaxPipelineReqId = (1U << CHUNKTAG_REQID_LEN) - 1;
-    for (uint32_t i = 0; i < kMaxPipelineReqId; ++i) {
-        uint32_t ret = (++reqId_) & kMaxPipelineReqId;
-        if (ret == 0) {
-            continue;
-        }
-        std::lock_guard<std::mutex> l(reqIdToChkMgrMapMutex_);
-        if (reqIdToChkMgrMap_.find(ret) == reqIdToChkMgrMap_.end()) {
-            return ret;
-        }
-    }
-    uint32_t ret = (++reqId_) & kMaxPipelineReqId;
-    return ret == 0 ? 1 : ret;
-}
-
-std::atomic<uint32_t> ChunkManager::reqId_ = std::atomic<uint32_t>([]() {
-    std::random_device rd;
-    return rd() & ((1U << CHUNKTAG_REQID_LEN) - 1);
-}());
-
 void *ChunkManager::osPiplnH2DHandle_ = nullptr;
 std::mutex ChunkManager::reqIdToChkMgrMapMutex_;
-std::map<uint32_t, ChunkManager *> ChunkManager::reqIdToChkMgrMap_;
+std::map<uint64_t, ChunkManager *> ChunkManager::reqIdToChkMgrMap_;
 
-Status ChunkManager::AddKey(const std::string &key, uint32_t reqId, const DevShmInfo &devInfo, int index)
+Status ChunkManager::AddKey(const std::string &key, uint64_t reqId, const DevShmInfo &devInfo, int index)
 {
     auto it = reqInfos_.find(reqId);
     if (it != reqInfos_.end()) {
@@ -134,7 +111,7 @@ Status ChunkManager::AddKey(const std::string &key, uint32_t reqId, const DevShm
     return Status::OK();
 }
 
-void ChunkManager::AddReqIdMap(uint32_t serverReqId, uint32_t clientReqId)
+void ChunkManager::AddReqIdMap(uint64_t serverReqId, uint64_t clientReqId)
 {
     if (reqInfos_.find(serverReqId) == reqInfos_.end()) {
         LOG(WARNING) << PIPLN_LOG_PREFIX "Map reqId failed: serverReqId=" << serverReqId
@@ -147,7 +124,7 @@ void ChunkManager::RegisterPipelineConsumer(std::shared_ptr<PipelineRH2DQueueCon
 {
     pipelineConsumer_ = pipelineConsumer;
     auto callback = std::make_shared<PipelineMsgHandler>(
-        [this](uint32_t reqId, uint64_t dataSrc, ChunkTag chunkTag, uint32_t chunkSize) {
+        [this](uint64_t reqId, uint64_t dataSrc, ChunkTag chunkTag, uint32_t chunkSize) {
             std::shared_lock<std::shared_mutex> l(this->releaseMutex, std::try_to_lock);
             if (!l.owns_lock()) {
                 LOG(WARNING) << PIPLN_LOG_PREFIX "ChunkManager released, ignore chunk: "
@@ -161,7 +138,7 @@ void ChunkManager::RegisterPipelineConsumer(std::shared_ptr<PipelineRH2DQueueCon
     }
 }
 
-void ChunkManager::DoPiplnStep2_ChunkConsume(uint32_t reqId, uint64_t dataSrc, ChunkTag chunkTag, uint32_t chunkSize)
+void ChunkManager::DoPiplnStep2_ChunkConsume(uint64_t reqId, uint64_t dataSrc, ChunkTag chunkTag, uint32_t chunkSize)
 {
     auto it = reqInfos_.find(reqId);
     if (it == reqInfos_.end()) {
@@ -178,7 +155,7 @@ void ChunkManager::DoPiplnStep2_ChunkConsume(uint32_t reqId, uint64_t dataSrc, C
     CancelSyncHandle(reqId, syncHandle);
 }
 
-Status ChunkManager::DoPiplnStep2_ChunkConsumeLocked(uint32_t reqId, ReqInfo &info, uint64_t dataSrc, ChunkTag chunkTag,
+Status ChunkManager::DoPiplnStep2_ChunkConsumeLocked(uint64_t reqId, ReqInfo &info, uint64_t dataSrc, ChunkTag chunkTag,
                                                      size_t chunkSize, void *&syncHandle)
 {
     if (info.IsCanceledOrDone()) {
@@ -188,7 +165,7 @@ Status ChunkManager::DoPiplnStep2_ChunkConsumeLocked(uint32_t reqId, ReqInfo &in
     }
 
     int64_t dataOffset = -1;
-    int64_t objectSize = ChunkTag::GetReservePart(chunkTag);
+    int64_t objectSize = ChunkTag::GetObjectSize(chunkTag);
     if (ChunkTag::IsLastChunk(chunkTag)) {
         info.totalChunks = chunkTag.chunkId + 1;
         if (objectSize >= 0 && chunkSize <= static_cast<uint64_t>(objectSize)) {
@@ -240,7 +217,7 @@ Status ChunkManager::DoPiplnStep2_ChunkConsumeLocked(uint32_t reqId, ReqInfo &in
     return rc;
 }
 
-Status ChunkManager::DoPiplnStep2_FallbackConsume(uint32_t reqId, const void *dataSrc, size_t dataSize)
+Status ChunkManager::DoPiplnStep2_FallbackConsume(uint64_t reqId, const void *dataSrc, size_t dataSize)
 {
     ReqInfo *info = GetReqInfo(reqId);
     if (info == nullptr) {
@@ -265,8 +242,8 @@ Status ChunkManager::DoPiplnStep2_FallbackConsume(uint32_t reqId, const void *da
         info->receivedChunks = 0;
         info->failedChunkId = -1;
         info->receivedChunksDetail.Resize(0);
-        ChunkTag tag{ .reqId = reqId, .chunkType = ChunkTag::lastChunkTag, .chunkId = 0, .chunkSize = 0, .rsv = 0 };
-        ChunkTag::SetReservePart(tag, dataSize);
+        ChunkTag tag{ .reqId = reqId, .chunkType = ChunkTag::lastChunkTag, .chunkId = 0 };
+        ChunkTag::SetObjectSize(tag, dataSize);
         rc = DoPiplnStep2_ChunkConsumeLocked(reqId, *info, reinterpret_cast<uint64_t>(dataSrc), tag, dataSize,
                                              syncHandle);
     }
@@ -274,7 +251,7 @@ Status ChunkManager::DoPiplnStep2_FallbackConsume(uint32_t reqId, const void *da
     return rc;
 }
 
-void ChunkManager::RemoveConsumerCallback(uint32_t reqId)
+void ChunkManager::RemoveConsumerCallback(uint64_t reqId)
 {
     if (pipelineConsumer_)
         pipelineConsumer_->RemoveCallback(reqId);
@@ -316,7 +293,7 @@ Status ChunkManager::DoPiplnStep2_ChunkProduce(const ChunkTag &chunkTag)
     // change request id from server id to client id
     ChunkTag newTag = chunkTag;
     newTag.reqId = reqIdMap_[chunkTag.reqId];
-    ChunkTag::SetReservePart(newTag, info.objectSize);
+    ChunkTag::SetObjectSize(newTag, info.objectSize);
     // shmfd and shmoffset is set in DoPiplnStep1_StartReceiver
     PipelineRH2DMsg msg{ (int32_t)actualChunkSize, info.driver->GetShmFd(), info.driver->GetShmSize(),
                          info.driver->GetShmOffset(), newTag };
@@ -341,7 +318,7 @@ Status ChunkManager::DoPiplnStep2_ChunkProduce(const ChunkTag &chunkTag)
     return rc;
 }
 
-Status ChunkManager::GetReqId(const std::string &key, uint32_t &reqId)
+Status ChunkManager::GetReqId(const std::string &key, uint64_t &reqId)
 {
     auto it = keyToReqIdMap_.find(key);
     if (it == keyToReqIdMap_.end()) {
@@ -352,7 +329,7 @@ Status ChunkManager::GetReqId(const std::string &key, uint32_t &reqId)
     }
 }
 
-bool ChunkManager::CheckIsRequestSuccess(uint32_t reqId)
+bool ChunkManager::CheckIsRequestSuccess(uint64_t reqId)
 {
     auto info = GetReqInfo(reqId);
     if (info == nullptr) {
@@ -406,7 +383,7 @@ int ChunkManager::DoPiplnStep1_ReceiveCallback(void *arg)
                 return -1;
             }
             ChunkTag directTag = tag;
-            ChunkTag::SetReservePart(directTag, info->objectSize);
+            ChunkTag::SetObjectSize(directTag, info->objectSize);
             const uint32_t chunkSize = ChunkTag::ResolveChunkSize(directTag, info->objectSize);
             mgr->DoPiplnStep2_ChunkConsume(tag.reqId, info->receiveDataSrc, directTag, chunkSize);
         } else {
@@ -421,7 +398,7 @@ int ChunkManager::DoPiplnStep1_ReceiveCallback(void *arg)
     return 0;
 }
 
-Status ChunkManager::DoPiplnStep1_StartReceiver(uint32_t reqId, uint64_t dataSrc, uint64_t size,
+Status ChunkManager::DoPiplnStep1_StartReceiver(uint64_t reqId, uint64_t dataSrc, uint64_t size,
                                                 urma_target_seg_t *targetSeg, urma_jfr_t *targetJfr,
                                                 urma_jetty_t *targetJetty, int32_t shmFd, uint64_t shmSize,
                                                 uint64_t shmOffset)
@@ -465,7 +442,7 @@ Status ChunkManager::DoPiplnStep1_StartReceiver(uint32_t reqId, uint64_t dataSrc
     return Status::OK();
 }
 
-Status ChunkManager::RegisterReceiverReqId(uint32_t reqId)
+Status ChunkManager::RegisterReceiverReqId(uint64_t reqId)
 {
     std::lock_guard<std::mutex> l(reqIdToChkMgrMapMutex_);
     auto insertRet = reqIdToChkMgrMap_.emplace(reqId, this);
@@ -476,7 +453,7 @@ Status ChunkManager::RegisterReceiverReqId(uint32_t reqId)
     return Status::OK();
 }
 
-void ChunkManager::UnregisterReceiverReqId(uint32_t reqId)
+void ChunkManager::UnregisterReceiverReqId(uint64_t reqId)
 {
     std::lock_guard<std::mutex> l(reqIdToChkMgrMapMutex_);
     auto it = reqIdToChkMgrMap_.find(reqId);
@@ -485,7 +462,7 @@ void ChunkManager::UnregisterReceiverReqId(uint32_t reqId)
     }
 }
 
-ReqInfo *ChunkManager::GetReqInfo(uint32_t reqId)
+ReqInfo *ChunkManager::GetReqInfo(uint64_t reqId)
 {
     auto it = reqInfos_.find(reqId);
     if (it == reqInfos_.end()) {
@@ -561,7 +538,7 @@ void ChunkManager::UnInitOsPiplnRH2DEnv()
 
 Status ChunkManager::DoPiplnStep1_StartSender(PiplnSndArgs &args)
 {
-    uint32_t reqId = args.clientKey;
+    uint64_t reqId = args.clientKey;
 
     ReqInfo *info = GetReqInfo(reqId);
     if (!info) {
@@ -583,17 +560,25 @@ Status ChunkManager::DoPiplnStep1_StartSender(PiplnSndArgs &args)
     dst.tseg = args.remoteSeg;
 
     int ret;
+    urma_status_t urmaStatus = URMA_SUCCESS;
     {
         datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_SEND);
         CALL_OS_XPRT_FUNC(ret, DoSend, osPiplnH2DHandle_, &jettyInfo, &src, &dst, args.len, args.serverKey,
-                          args.clientKey, (task_sync **)&info->syncHandle);
+                          args.clientKey, (task_sync **)&info->syncHandle, &urmaStatus);
     }
     VLOG(1) << PIPLN_LOG_PREFIX "os_transport_send ret: " << ret << " reqId: " << reqId << " remote src "
             << args.remoteAddr << " targetSeg.seg.ubva.va " << args.remoteSeg->seg.ubva.va << " len " << args.len
-            << " segoff " << (args.remoteAddr - args.remoteSeg->seg.ubva.va);
+            << " segoff " << (args.remoteAddr - args.remoteSeg->seg.ubva.va) << " urma_status "
+            << static_cast<int>(urmaStatus);
 
     if (ret) {
-        return Status(StatusCode::K_RUNTIME_ERROR, "os_transport_send " + std::to_string(reqId) + " failed");
+        if (urmaStatus) {
+            // urma_status_t is not 0, means urma_post_jetty_send_wr failed, do something
+        }
+        const auto statusCode =
+            urmaStatus == URMA_SUCCESS ? StatusCode::K_RUNTIME_ERROR : StatusCode::K_URMA_ERROR;
+        return Status(statusCode, "os_transport_send " + std::to_string(reqId) + " failed, urma_status="
+                                      + std::to_string(static_cast<int>(urmaStatus)));
     }
 
     // trick CheckIsRequestSuccess to be success, because we cannot get chunk number from os_transport_send now.
@@ -618,30 +603,39 @@ Status ChunkManager::WaitPiplnStep12Done()
                                                                      + std::to_string(info.first)
                                                                      + ", key=" + info.second.key);
             }
-        } else {
-            // worker wait step 1,2 done
-            task_sync_t *syncHandle = (task_sync_t *)info.second.syncHandle;
-            if (syncHandle) {
-                int ret;
-
-                info.second.syncHandle = nullptr;
-                CALL_OS_XPRT_FUNC(ret, DoWaitTimeout, osPiplnH2DHandle_, syncHandle, remainingTimeMs);
-                if (ret == 0) {
-                    MarkCancelOrDone(info.first, true /* isDone */);
-                } else {
-                    MarkCancelOrDone(info.first, false /* isDone */);
-                    LOG_AND_SET_FIRST_ERROR(
-                        K_RPC_DEADLINE_EXCEEDED,
-                        PIPLN_LOG_PREFIX "Worker wait os_transport timeout/failed: reqId=" + std::to_string(info.first)
-                            + ", key=" + info.second.key + ", ret=" + std::to_string(ret));
-                }
-            }
+            continue;
         }
+
+        // worker wait step 1,2 done
+        task_sync_t *syncHandle = (task_sync_t *)info.second.syncHandle;
+        if (syncHandle == nullptr) {
+            continue;
+        }
+        int ret;
+        urma_status_t urmaStatus = URMA_SUCCESS;
+
+        info.second.syncHandle = nullptr;
+        CALL_OS_XPRT_FUNC(ret, DoWaitTimeout, osPiplnH2DHandle_, syncHandle, remainingTimeMs, &urmaStatus);
+        if (ret == 0) {
+            MarkCancelOrDone(info.first, true /* isDone */);
+            continue;
+        }
+
+        MarkCancelOrDone(info.first, false /* isDone */);
+        const auto errorMsg = PIPLN_LOG_PREFIX "Worker wait os_transport timeout/failed: reqId="
+                              + std::to_string(info.first) + ", key=" + info.second.key + ", ret=" + std::to_string(ret)
+                              + ", urma_status=" + std::to_string(static_cast<int>(urmaStatus));
+        if (urmaStatus == URMA_SUCCESS) {
+            LOG_AND_SET_FIRST_ERROR(K_RPC_DEADLINE_EXCEEDED, errorMsg);
+            continue;
+        }
+        LOG_AND_SET_FIRST_ERROR(K_URMA_ERROR, errorMsg);
+        // urma_status_t is not 0, means urma_post_jetty_send_wr failed, do something
     }
     return firstError;
 }
 
-Status ChunkManager::DoPiplnStep2_ProduceLocalChunk(uint32_t reqId, int32_t shmFd, uint64_t shmSize, uint64_t shmOffset,
+Status ChunkManager::DoPiplnStep2_ProduceLocalChunk(uint64_t reqId, int32_t shmFd, uint64_t shmSize, uint64_t shmOffset,
                                                     size_t srcSize)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(pipelineProducer_ != nullptr, StatusCode::K_RUNTIME_ERROR,
@@ -668,7 +662,7 @@ Status ChunkManager::DoPiplnStep2_ProduceLocalChunk(uint32_t reqId, int32_t shmF
     tag.reqId = clientReqId;
     tag.chunkId = 0;
     ChunkTag::SetIsLastChunk(tag);
-    ChunkTag::SetReservePart(tag, srcSize);
+    ChunkTag::SetObjectSize(tag, srcSize);
     info.driver->SetShmFd(shmFd);
     info.driver->SetShmSize(shmSize);
     info.driver->SetShmOffset(shmOffset);
@@ -764,7 +758,7 @@ void ChunkManager::CancelAll()
     }
 }
 
-void ChunkManager::CancelReceiver(uint32_t reqId)
+void ChunkManager::CancelReceiver(uint64_t reqId)
 {
     ReqInfo *info = GetReqInfo(reqId);
     if (info == nullptr) {
@@ -789,13 +783,13 @@ void ChunkManager::CancelReceiver(uint32_t reqId)
 
 void ChunkManager::MarkCancelOrDone(const std::string &key, bool isDone)
 {
-    uint32_t reqId;
+    uint64_t reqId;
     Status rc = GetReqId(key, reqId);
     if (rc.IsOk())
         MarkCancelOrDone(reqId, isDone);
 }
 
-void ChunkManager::LogCancelOrDone(uint32_t reqId, bool isDone, const ReqInfo &info, int64_t elapsedMs)
+void ChunkManager::LogCancelOrDone(uint64_t reqId, bool isDone, const ReqInfo &info, int64_t elapsedMs)
 {
     if (reqIdMap_.find(reqId) == reqIdMap_.end()) {
         VLOG(1) << PIPLN_LOG_PREFIX "Request " << (isDone ? "completed" : "canceled") << ": key=" << info.key
@@ -824,7 +818,7 @@ bool ChunkManager::MarkStateAndGetSyncHandle(ReqInfo &info, bool isDone, void *&
     return syncHandle != nullptr && osPiplnH2DHandle_ != nullptr;
 }
 
-void ChunkManager::MarkCancelOrDone(uint32_t reqId, bool isDone)
+void ChunkManager::MarkCancelOrDone(uint64_t reqId, bool isDone)
 {
     ReqInfo *info = GetReqInfo(reqId);
     if (info == nullptr) {
@@ -839,7 +833,7 @@ void ChunkManager::MarkCancelOrDone(uint32_t reqId, bool isDone)
     CancelSyncHandle(reqId, syncHandlePtr);
 }
 
-void ChunkManager::MarkCancelOrDoneLocked(uint32_t reqId, ReqInfo &info, bool isDone, void *&syncHandle)
+void ChunkManager::MarkCancelOrDoneLocked(uint64_t reqId, ReqInfo &info, bool isDone, void *&syncHandle)
 {
     // Calculate elapsed time for performance analysis
     int64_t elapsedMs = 0;
@@ -853,7 +847,7 @@ void ChunkManager::MarkCancelOrDoneLocked(uint32_t reqId, ReqInfo &info, bool is
     (void)MarkStateAndGetSyncHandle(info, isDone, syncHandle);
 }
 
-void ChunkManager::CancelSyncHandle(uint32_t reqId, void *syncHandlePtr)
+void ChunkManager::CancelSyncHandle(uint64_t reqId, void *syncHandlePtr)
 {
     if (syncHandlePtr == nullptr || osPiplnH2DHandle_ == nullptr) {
         return;
@@ -885,7 +879,7 @@ bool ChunkManager::DoPiplnStep1_ReceiveUrmaEventHook(urma_cr_t *cr)
     return true;
 }
 
-Status BaseRH2DDriver::GetDriver(const uint32_t reqId, const DevShmInfo &devInfo, bool isClient,
+Status BaseRH2DDriver::GetDriver(const uint64_t reqId, const DevShmInfo &devInfo, bool isClient,
                                  std::shared_ptr<BaseRH2DDriver> &driver)
 {
 #ifdef PIPLN_USE_MOCK

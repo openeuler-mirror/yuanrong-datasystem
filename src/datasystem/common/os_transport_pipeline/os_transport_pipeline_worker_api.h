@@ -27,8 +27,6 @@
 #include "datasystem/protos/share_memory.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 
-#define URMA_REQID_MASK ((uint32_t)0x3FF)
-
 using namespace datasystem;
 namespace OsXprtPipln {
 

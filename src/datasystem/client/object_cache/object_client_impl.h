@@ -1001,6 +1001,11 @@ private:
                                    std::vector<Status> &itemStatuses, int64_t subTimeoutMs,
                                    bool queryL2Cache);
 
+    void BuildClientDirectRH2DReadRequest(const std::vector<std::string> &objectKeys,
+                                          client::ObjectReadRequest &request,
+                                          std::vector<Status> &itemStatuses, int64_t subTimeoutMs,
+                                          bool queryL2Cache);
+
     Status GetFromTransportLayer(const std::vector<std::string> &objectKeys,
                                  std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled,
                                  int64_t subTimeoutMs, bool queryL2Cache);
@@ -1860,6 +1865,15 @@ private:
      */
     Status CheckLocalPipelineRH2DArgs(std::shared_ptr<IClientWorkerApi> &workerApi);
 
+    bool PostProcessShmPipelineKey(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
+                                   const std::shared_ptr<H2DChunkManager> &chunkManager, uint32_t version,
+                                   std::shared_ptr<Buffer> &buffer, std::vector<std::string> &failedKeys);
+
+    bool PostProcessNonShmPipelineKey(const std::string &objectKey, const GetRspPb::PayloadInfoPb &payloadInfo,
+                                      const std::shared_ptr<H2DChunkManager> &chunkManager, uint64_t reqId,
+                                      uint32_t version, std::vector<RpcMessage> &payloads,
+                                      std::shared_ptr<Buffer> &buffer, std::vector<std::string> &failedKeys);
+
     /**
      * @brief construct share memory buffer and find need wait keys
      *
@@ -1868,11 +1882,13 @@ private:
      * @param piplnRh2dParam Use chunkManager and payload member
      * @param version Key value version
      * @param failedKeys Failed to fetch value keys
-     * @return std::vector<std::pair<std::string *, uint32_t>> need to wait keys
+     * @return std::vector<std::pair<std::string *, uint64_t>> need to wait keys
      */
-    std::vector<std::pair<std::string *, uint32_t>> PostProcessPipelineKeys(
-        std::vector<std::string> &objectKeys, GetRspPb &rsp, PiplnRh2dParam &piplnRh2dParam, uint32_t version,
-        std::vector<std::string> &failedKeys);
+    std::vector<std::pair<std::string *, uint64_t>> PostProcessPipelineKeys(std::vector<std::string> &objectKeys,
+                                                                            GetRspPb &rsp,
+                                                                            PiplnRh2dParam &piplnRh2dParam,
+                                                                            uint32_t version,
+                                                                            std::vector<std::string> &failedKeys);
     /**
      * @brief post process rh2d response
      *

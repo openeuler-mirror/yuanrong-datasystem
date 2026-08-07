@@ -21,7 +21,6 @@
 #ifndef OS_XPRT_PIPLN_CHUNK_MANAGER
 #define OS_XPRT_PIPLN_CHUNK_MANAGER
 
-#include <atomic>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -62,7 +61,7 @@ public:
     {
         return Status::OK();
     };
-    static Status GetDriver(const uint32_t reqId, const DevShmInfo &devInfo, bool isClient,
+    static Status GetDriver(const uint64_t reqId, const DevShmInfo &devInfo, bool isClient,
                             std::shared_ptr<BaseRH2DDriver> &driver);
 
     void SetShmFd(int32_t shmId);
@@ -116,7 +115,7 @@ struct ReqInfo {
     uint64_t receiveDataSrc = 0;
     int shmFd;
     int shmOffset;
-    uint32_t reqId;
+    uint64_t reqId;
     /**
      * @brief step before doneStep is all done canceled
      * step1: worker2 -> worker1
@@ -143,13 +142,12 @@ public:
     }
 
     // common
-    Status AddKey(const std::string &key, uint32_t reqId, const DevShmInfo &devInfo, int index = -1);
-    void AddReqIdMap(uint32_t serverReqId, uint32_t clientReqId);
-    ReqInfo *GetReqInfo(uint32_t reqId);
+    Status AddKey(const std::string &key, uint64_t reqId, const DevShmInfo &devInfo, int index = -1);
+    void AddReqIdMap(uint64_t serverReqId, uint64_t clientReqId);
+    ReqInfo *GetReqInfo(uint64_t reqId);
     ReqInfo *GetReqInfoByIndex(int32_t keyIndex);
     Status ReleaseAll();
-    Status GetReqId(const std::string &key, uint32_t &reqId);
-    static uint32_t GenerateReqId();
+    Status GetReqId(const std::string &key, uint64_t &reqId);
     int32_t KeyNum() const
     {
         return reqInfos_.size();
@@ -158,14 +156,14 @@ public:
                                      int threadNum, bool needCuda);
     static void UnInitOsPiplnRH2DEnv();
     Status WaitAll();
-    void CancelReceiver(uint32_t reqId);
-    void MarkCancelOrDone(uint32_t reqId, bool isDone);
+    void CancelReceiver(uint64_t reqId);
+    void MarkCancelOrDone(uint64_t reqId, bool isDone);
     void MarkCancelOrDone(const std::string &key, bool isDone);
     void CancelAll();
 
     // dataSrc = shmPointer + shmOffset + metaSize
     // step 1
-    Status DoPiplnStep1_StartReceiver(uint32_t reqId, uint64_t dataSrc, uint64_t size, urma_target_seg_t *targetSeg,
+    Status DoPiplnStep1_StartReceiver(uint64_t reqId, uint64_t dataSrc, uint64_t size, urma_target_seg_t *targetSeg,
                                       urma_jfr_t *targetJfr, urma_jetty_t *targetJetty, int32_t shmFd, uint64_t shmSize,
                                       uint64_t shmOffset);
     Status DoPiplnStep1_StartSender(PiplnSndArgs &args);
@@ -175,19 +173,19 @@ public:
     static bool DoPiplnStep1_ReceiveUrmaEventHook(urma_cr_t *cr);
 
     // step 2
-    Status DoPiplnStep2_ProduceLocalChunk(uint32_t reqId, int32_t shmFd, uint64_t shmSize, uint64_t shmOffset,
+    Status DoPiplnStep2_ProduceLocalChunk(uint64_t reqId, int32_t shmFd, uint64_t shmSize, uint64_t shmOffset,
                                           size_t srcSize);
 
     void RegisterPipelineConsumer(std::shared_ptr<PipelineRH2DQueueConsumer> &pipelineConsumer);
-    void DoPiplnStep2_ChunkConsume(uint32_t reqId, uint64_t dataSrc, ChunkTag chunkTag, uint32_t chunkSize);
-    Status DoPiplnStep2_FallbackConsume(uint32_t reqId, const void *dataSrc, size_t dataSize);
-    void RemoveConsumerCallback(uint32_t reqId);
+    void DoPiplnStep2_ChunkConsume(uint64_t reqId, uint64_t dataSrc, ChunkTag chunkTag, uint32_t chunkSize);
+    Status DoPiplnStep2_FallbackConsume(uint64_t reqId, const void *dataSrc, size_t dataSize);
+    void RemoveConsumerCallback(uint64_t reqId);
 
     void RegisterPipelineProducer(std::shared_ptr<PipelineRH2DQueueProducer> &pipelineProducer, uint32_t queueId);
     Status DoPiplnStep2_ChunkProduce(const ChunkTag &chunkTag);
 
     // step 3
-    bool CheckIsRequestSuccess(uint32_t reqId);
+    bool CheckIsRequestSuccess(uint64_t reqId);
     // copy srcData -> destData + destOffset
     Status DoPiplnStep3_SubmitIO(ReqInfo &info, void *srcData, size_t srcSize, size_t destOffset);
 
@@ -197,31 +195,30 @@ public:
     std::shared_mutex releaseMutex;
 
 private:
-    static std::atomic<uint32_t> reqId_;
     bool isClient_;
     static void *osPiplnH2DHandle_;
-    std::map<uint32_t, ReqInfo> reqInfos_;
-    std::unordered_map<std::string, uint32_t> keyToReqIdMap_;
+    std::map<uint64_t, ReqInfo> reqInfos_;
+    std::unordered_map<std::string, uint64_t> keyToReqIdMap_;
     std::map<uint32_t, ReqInfo *> indexToReqIdMap_;
     bool allDone_ = false;
 
     static std::mutex reqIdToChkMgrMapMutex_;
-    static std::map<uint32_t, ChunkManager *> reqIdToChkMgrMap_;
+    static std::map<uint64_t, ChunkManager *> reqIdToChkMgrMap_;
 
-    Status RegisterReceiverReqId(uint32_t reqId);
-    void UnregisterReceiverReqId(uint32_t reqId);
-    void LogCancelOrDone(uint32_t reqId, bool isDone, const ReqInfo &info, int64_t elapsedMs);
+    Status RegisterReceiverReqId(uint64_t reqId);
+    void UnregisterReceiverReqId(uint64_t reqId);
+    void LogCancelOrDone(uint64_t reqId, bool isDone, const ReqInfo &info, int64_t elapsedMs);
     bool MarkStateAndGetSyncHandle(ReqInfo &info, bool isDone, void *&syncHandle);
-    void MarkCancelOrDoneLocked(uint32_t reqId, ReqInfo &info, bool isDone, void *&syncHandle);
-    void CancelSyncHandle(uint32_t reqId, void *syncHandlePtr);
-    Status DoPiplnStep2_ChunkConsumeLocked(uint32_t reqId, ReqInfo &info, uint64_t dataSrc, ChunkTag chunkTag,
+    void MarkCancelOrDoneLocked(uint64_t reqId, ReqInfo &info, bool isDone, void *&syncHandle);
+    void CancelSyncHandle(uint64_t reqId, void *syncHandlePtr);
+    Status DoPiplnStep2_ChunkConsumeLocked(uint64_t reqId, ReqInfo &info, uint64_t dataSrc, ChunkTag chunkTag,
                                            size_t chunkSize, void *&syncHandle);
     bool CheckIsRequestSuccessLocked(const ReqInfo &info) const;
 
     uint32_t queueId_;
     std::shared_ptr<PipelineRH2DQueueConsumer> pipelineConsumer_;
     std::shared_ptr<PipelineRH2DQueueProducer> pipelineProducer_;
-    std::map<uint32_t, uint32_t> reqIdMap_;
+    std::map<uint64_t, uint64_t> reqIdMap_;
 };
 
 }  // namespace OsXprtPipln

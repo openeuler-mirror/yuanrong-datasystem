@@ -35,7 +35,7 @@ public:
     {
         Release();
     }
-    void SetReqId(uint32_t reqId);
+    void SetReqId(uint64_t reqId);
     Status SubmitIO(void *srcData, size_t srcSize, size_t destOffset) override;
     Status Init() override;
     Status WaitIO() override;
@@ -43,7 +43,7 @@ public:
 
 private:
     static std::string mockFilePathPrefix;
-    uint32_t reqId_ = 0;
+    uint64_t reqId_ = 0;
     std::string mockFilePath;
 };
 }  // namespace OsXprtPipln

@@ -188,6 +188,17 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "urma_req_id_test",
+    srcs = ["urma_req_id_test.cpp"],
+    tags = ["manual", "urma"],
+    deps = [
+        "//src/datasystem/common/rdma:common_rdma",
+        "//src/datasystem/common/rdma:urma_manager",
+        "//src/datasystem/common/rdma:urma_resource_header",
+    ],
+)
+
 # Manual URMA-backed test. It starts a real peer process, imports its receive Jetty, and exercises the multi-chunk
 # UrmaWriteImpl path. Keep it separate from the header-only urma_send_lane_test above.
 ds_cc_test(

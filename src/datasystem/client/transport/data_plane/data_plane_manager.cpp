@@ -133,6 +133,18 @@ DataPlaneManager::DataPlaneManager(std::shared_ptr<Signature> signature, uint64_
 {
 }
 
+DataPlaneManager::DataPlaneLease::~DataPlaneLease() = default;
+
+const std::shared_ptr<IDataTransporter> &DataPlaneManager::DataPlaneLease::GetTransporter() const
+{
+    return transporter_;
+}
+
+const std::shared_ptr<WorkerRpcClient> &DataPlaneManager::DataPlaneLease::GetRpcClient() const
+{
+    return rpcClient_;
+}
+
 DataPlaneManager::~DataPlaneManager()
 {
     Shutdown();
@@ -180,26 +192,29 @@ Status DataPlaneManager::GetOrCreate(const HostPort &workerAddr, TransportHint h
     return GetOrBuildTransporter(context, entry, out);
 }
 
-Status DataPlaneManager::GetOrCreateEndpoint(const HostPort &workerAddr, TransportHint hint,
-                                             std::shared_ptr<IDataTransporter> &transporter,
-                                             std::shared_ptr<WorkerRpcClient> &rpcClient)
+Status DataPlaneManager::AcquireDataPlaneLease(const HostPort &workerAddr, TransportHint hint,
+                                               std::unique_ptr<DataPlaneLease> &lease)
 {
-    transporter.reset();
-    rpcClient.reset();
+    lease.reset();
     const AccessTransportKind expectedKind = KindForHint(hint);
     std::shared_ptr<WorkerTransportEntry> entry;
     RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
+    std::shared_ptr<IDataTransporter> transporter;
     const TransportBuildContext context{ workerAddr, hint, expectedKind, nullptr };
     RETURN_IF_NOT_OK(GetOrBuildTransporter(context, entry, transporter));
 
-    bthread::RWLockRdGuard lock(entry->mutex);
+    auto acquired = std::unique_ptr<DataPlaneLease>(new DataPlaneLease());
+    acquired->entry_ = entry;
+    acquired->entryLock_ = std::make_unique<bthread::RWLockRdGuard>(entry->mutex);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     CHECK_FAIL_RETURN_STATUS(entry->transporter == transporter && entry->HasAliveTransporter(expectedKind),
-                             K_URMA_NEED_CONNECT, "Data-plane transporter changed before endpoint acquisition");
+                             K_URMA_NEED_CONNECT, "Data-plane transporter changed before lease acquisition");
     CHECK_FAIL_RETURN_STATUS(entry->rpcClient != nullptr && entry->rpcClient->IsAlive(), K_RPC_UNAVAILABLE,
-                             "RPC client is unavailable while acquiring endpoint");
-    rpcClient = entry->rpcClient;
+                             "RPC client is unavailable while acquiring lease");
+    acquired->transporter_ = std::move(transporter);
+    acquired->rpcClient_ = entry->rpcClient;
+    lease = std::move(acquired);
     return Status::OK();
 }
 
@@ -209,21 +224,9 @@ Status DataPlaneManager::WithDataPlaneLease(
                                const std::shared_ptr<WorkerRpcClient> &)> &operation)
 {
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(operation), K_INVALID, "Data-plane lease operation is empty");
-    const AccessTransportKind expectedKind = KindForHint(hint);
-    std::shared_ptr<WorkerTransportEntry> entry;
-    RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
-    std::shared_ptr<IDataTransporter> transporter;
-    const TransportBuildContext context{ workerAddr, hint, expectedKind, nullptr };
-    RETURN_IF_NOT_OK(GetOrBuildTransporter(context, entry, transporter));
-
-    bthread::RWLockRdGuard lock(entry->mutex);
-    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
-                             "DataPlaneManager is shutting down");
-    CHECK_FAIL_RETURN_STATUS(entry->transporter == transporter && entry->HasAliveTransporter(expectedKind),
-                             K_URMA_NEED_CONNECT, "Data-plane transporter changed before lease acquisition");
-    CHECK_FAIL_RETURN_STATUS(entry->rpcClient != nullptr && entry->rpcClient->IsAlive(), K_RPC_UNAVAILABLE,
-                             "RPC client is unavailable while the data-plane lease is held");
-    return operation(transporter, entry->rpcClient);
+    std::unique_ptr<DataPlaneLease> lease;
+    RETURN_IF_NOT_OK(AcquireDataPlaneLease(workerAddr, hint, lease));
+    return operation(lease->GetTransporter(), lease->GetRpcClient());
 }
 
 Status DataPlaneManager::GetOrCreateRpcClient(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &out)

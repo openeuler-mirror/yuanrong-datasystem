@@ -325,14 +325,13 @@ Status TransportLayer::ResolveMetadata(const ObjectReadRequest &input,
     return objectRead_->ResolveMetadata(input, metadata);
 }
 
-Status TransportLayer::PrepareDirectUbEndpoint(const HostPort &workerAddr,
-                                               std::shared_ptr<WorkerRpcClient> &rpcClient)
+Status TransportLayer::AcquireDirectUbEndpointLease(
+    const HostPort &workerAddr, std::unique_ptr<DataPlaneManager::DataPlaneLease> &lease)
 {
-    std::shared_ptr<IDataTransporter> transporter;
-    RETURN_IF_NOT_OK(
-        manager_->GetOrCreateEndpoint(workerAddr, TransportHint::UB_CANDIDATE, transporter, rpcClient));
-    RETURN_RUNTIME_ERROR_IF_NULL(transporter);
-    CHECK_FAIL_RETURN_STATUS(transporter->Kind() == AccessTransportKind::UB, K_NOT_SUPPORTED,
+    RETURN_IF_NOT_OK(manager_->AcquireDataPlaneLease(workerAddr, TransportHint::UB_CANDIDATE, lease));
+    RETURN_RUNTIME_ERROR_IF_NULL(lease);
+    RETURN_RUNTIME_ERROR_IF_NULL(lease->GetTransporter());
+    CHECK_FAIL_RETURN_STATUS(lease->GetTransporter()->Kind() == AccessTransportKind::UB, K_NOT_SUPPORTED,
                              "Client direct pipeline H2D requires UB transport");
     return Status::OK();
 }

@@ -48,7 +48,29 @@ namespace datasystem {
 namespace client {
 
 class DataPlaneManager {
+private:
+    struct WorkerTransportEntry;
+
 public:
+    class DataPlaneLease {
+    public:
+        DataPlaneLease(const DataPlaneLease &) = delete;
+        DataPlaneLease &operator=(const DataPlaneLease &) = delete;
+        ~DataPlaneLease();
+
+        const std::shared_ptr<IDataTransporter> &GetTransporter() const;
+        const std::shared_ptr<WorkerRpcClient> &GetRpcClient() const;
+
+    private:
+        friend class DataPlaneManager;
+        DataPlaneLease() = default;
+
+        std::shared_ptr<WorkerTransportEntry> entry_;
+        std::shared_ptr<IDataTransporter> transporter_;
+        std::shared_ptr<WorkerRpcClient> rpcClient_;
+        std::unique_ptr<bthread::RWLockRdGuard> entryLock_;
+    };
+
     explicit DataPlaneManager(std::shared_ptr<Signature> signature, uint64_t fastTransportMemSize,
                               BrpcChannelConfig channelConfig = {},
                               std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider = nullptr,
@@ -71,16 +93,14 @@ public:
                        TransportPhaseLatencyRecorder *recorder = nullptr);
 
     /**
-     * @brief Get or lazily create both endpoint transports from one entry lookup.
+     * @brief Acquire an endpoint lease that prevents its data plane from being torn down.
      * @param[in] workerAddr Target worker address.
      * @param[in] hint Transport suggestion from the advisor.
-     * @param[out] transporter Cached or newly built data transporter.
-     * @param[out] rpcClient RPC client paired with the current transporter.
-     * @return K_OK when both endpoint transports are ready; the error code otherwise.
+     * @param[out] lease Lease owning the selected transporter and RPC client.
+     * @return K_OK when the endpoint is ready and leased; the error code otherwise.
      */
-    Status GetOrCreateEndpoint(const HostPort &workerAddr, TransportHint hint,
-                               std::shared_ptr<IDataTransporter> &transporter,
-                               std::shared_ptr<WorkerRpcClient> &rpcClient);
+    Status AcquireDataPlaneLease(const HostPort &workerAddr, TransportHint hint,
+                                 std::unique_ptr<DataPlaneLease> &lease);
 
     /**
      * @brief Run an operation while the selected data plane cannot be torn down.
