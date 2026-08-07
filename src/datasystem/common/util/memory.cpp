@@ -155,10 +155,15 @@ Status ParallelMemoryCopy(uint8_t *dst, uint64_t dstMaxSize, const uint8_t *src,
         futures.push_back(threadPool->Submit(HugeMemoryCopy, memCopyInfo.dst, memCopyInfo.dstSize, memCopyInfo.src,
                                              memCopyInfo.srcSize));
     }
+    bool hasCopyFailure = false;
+    // All submitted tasks borrow the caller's buffers, so drain them before returning an error.
     for (auto &future : futures) {
         Status rc = future.get();
-        CHECK_FAIL_RETURN_STATUS(rc.IsOk(), StatusCode::K_RUNTIME_ERROR, "Parallel memory copy failed");
+        if (!rc.IsOk()) {
+            hasCopyFailure = true;
+        }
     }
+    CHECK_FAIL_RETURN_STATUS(!hasCopyFailure, StatusCode::K_RUNTIME_ERROR, "Parallel memory copy failed");
     return Status::OK();
 }
 
