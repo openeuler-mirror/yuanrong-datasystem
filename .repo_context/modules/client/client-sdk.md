@@ -202,7 +202,9 @@
 
 - Verified in `ConnectOptions`:
   - direct worker address via `host` + `port`
-  - connection and request timeout controls
+  - connection and request timeout controls; the explicit `GetSocketPath` / `RegisterClient` initialization RPCs derive
+    their timeout from the current connection-attempt budget, while the long-lived channel default and runtime business
+    RPCs use `requestTimeoutMs`
   - token auth, curve key fields, AK/SK fields, tenant id
   - cross-node and exclusive connection toggles
   - `ConnectOptions::enableCrossNodeConnection` gates RUNTIME worker switching only (heartbeat-driven

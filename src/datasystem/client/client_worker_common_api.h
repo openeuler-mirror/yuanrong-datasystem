@@ -661,7 +661,7 @@ private:
     /**
      * @brief Registering the client with the worker
      * @param[in] req The register client request pb.
-     * @param[in] timeoutMs Register request timeout interval.
+     * @param[in] timeoutMs Aggregate retry budget used to derive the initialization RPC timeout.
      * @param[in] stateTimeoutMs Timeout used for client connection state after register.
      * @return Status of the call.
      */
@@ -688,7 +688,7 @@ private:
 
     /**
      * @brief Create a unix domain socket.
-     * @param[in] timeoutMs Register request timeout interval.
+     * @param[in] timeoutMs Aggregate retry budget for the initialization attempt.
      * @param[out] isConnectSuccess Check whether the UDS is successfully connected..
      * @param[out] serverFd Returns the FD of the worker server..
      * @param[out] socketFd FD of the UNIX socket.
@@ -700,8 +700,7 @@ private:
 
     /**
      * @brief Fetch the worker socket path via RPC.
-     * @param[in] timeoutMs Register request timeout interval (used to derive per-call timeout).
-     * @param[in] remainingMs Aggregate time budget for retries.
+     * @param[in] remainingMs Remaining initialization-attempt budget used for retries and the per-call timeout cap.
      * @param[out] reply Worker socket-path response.
      * @return Status of the call.
      */

@@ -27,6 +27,8 @@ ConnectOptions
     .. cpp:member:: int32_t connectTimeoutMs = 9 * 1000;
 
         客户端连接超时时间，单位为毫秒。默认值：9'000, 数值约束>=500。
+        初始化阶段的 ``GetSocketPath``、``RegisterClient`` 等控制 RPC 从当前连接尝试预算计算超时时间，
+        而不受 ``requestTimeoutMs`` 限制。
 
     .. cpp:member:: int32_t requestTimeoutMs;
 
@@ -34,7 +36,9 @@ ConnectOptions
 
         .. note::
 
-            此值为 client 全局 RPC 超时上限。Get 类接口的 ``subTimeoutMs`` 参数实际生效值不超过此值，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+            此值为 client 运行期业务 RPC 的全局超时上限，不限制客户端初始化阶段的控制 RPC。
+            Get 类接口的 ``subTimeoutMs`` 参数实际生效值不超过此值，
+            实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
 
 
     .. cpp:member:: std::string clientPublicKey = "";
