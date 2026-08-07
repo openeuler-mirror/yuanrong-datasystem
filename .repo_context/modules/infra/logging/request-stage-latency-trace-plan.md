@@ -3,9 +3,9 @@
 ## Metadata
 
 - Status:
-  - `planning`
+  - `in-progress` (issue #862 comm-gate, B-complete + MAX redesign; A-version was implemented+validated, now being reworked to B-complete+MAX)
 - Last updated:
-  - `2026-05-27`
+  - `2026-08-06`
 - Purpose:
   - persist the agreed plan for adding business-stage latency ticks and access-log summaries to Get, Set, Create, and
     Exist request flows.
@@ -45,6 +45,18 @@
   - `LatencyTraceEnabled()` is true only when at least one local/rpc threshold is positive.
   - The same local/rpc thresholds also drive the force condition for request-stage `SLOW_LOG` output; hard-coded
     `*_SLOW_US` constants must not remain the final control surface.
+  - RPC threshold semantics (issue #862 correction, **B-complete + MAX**): `slow_log_rpc_slower_than` gates on
+    **communication time** (network + RPC framework) and the displayed `*_RPC_*` phase value IS comm time (not the
+    full caller-side wall-clock). The full-duration tick pairs for `*_RPC_*` are removed from the tick-pair table, so
+    `worker.rpc.query_meta` / `client.rpc.get` etc. are populated solely from comm computed by the transport layer as
+    `comm = e2e - server_processing` (brpc `BrpcPerfTrace` 8-point trace / ZMQ `MetaPb.latency_ticks`), stashed on
+    `Trace::SetLastRpcCommUs`. **Aggregation = MAX** (not sum): for the concurrent QueryMeta fan-out to N masters,
+    the parent takes `max` of per-leg comm — sum would re-introduce the false-positive the issue fixes (N fast legs
+    summing past the threshold). Single-RPC paths store the single value. comm is NOT carried via the server response
+    `latency_phase_us`; single-RPC paths `Trace::AddDownstreamPhase(*_RPC_*, comm)` directly on the caller thread, and
+    QueryMeta carries per-leg comm in `BatchQueryMetaResult.commUs` with the parent setting the phase once (max).
+    Process thresholds still gate on `*_PROCESS_*`; business slowness is caught there. URMA transfer and the legacy
+    client direct-route RPC phases remain in the rpc gate.
   - The gate must run before summary string construction on each side; request paths must not call `getenv()` or parse
     strings.
 - Access-log shape:
@@ -159,8 +171,19 @@ Implementation guidance:
 - If Set with Create + memory copy + Publish + meta phases exceeds `LATENCY_TICK_MAX_NUM`, raise the capacity
   deliberately instead of dropping required phases.
 - `UNKNOWN` is a sentinel and should not be stored as a real tick.
-- Keep RPC framework latency metrics separate: existing ZMQ `MetaPb.latency_ticks` remains the RPC framework timeline;
-  Get/Set/Create/Exist business-stage ticks live in `Trace`.
+- Bridge RPC framework latency into the business trace: brpc `BrpcPerfTrace` (8-point trace) and ZMQ
+  `MetaPb.latency_ticks` both compute `comm = e2e - server_processing` and stash it on `Trace::SetLastRpcCommUs`.
+  The `*_RPC_*` phases are **redefined to comm** (their full-duration tick pairs removed from the tick-pair table);
+  they are NOT carried in the server response `latency_phase_us` (only server-side `master.process.*` /
+  `worker.process.remote_get` downstream phases ride that field). Single-RPC paths
+  `Trace::AddDownstreamPhase(*_RPC_*, comm)` directly on the caller thread; the QueryMeta concurrent fan-out stores
+  per-leg comm in `BatchQueryMetaResult.commUs` and the parent `MergeQueryMetadataResults` takes MAX and sets the
+  phase once. **Derived process-math fix**: split `ComputePhaseDurations` into `ComputeTickPhases` +
+  `ComputeDerivedPhases`; `Finalize*/Emit*` reorder to tick → `MergeDownstreamPhases` → derived, so the derived
+  `*_PROCESS_*` phases subtract the merged downstream server-exec phases (`master.process.*`,
+  `worker.process.remote_get`) AND the comm `*_RPC_*` phases — giving an additive breakdown
+  (process + comm + server-exec = total) with no double-count. `DerivedPhaseMapping.subPhases` expanded (`[5]→[12]`)
+  to hold the added downstream sub-phases. (issue #862)
 
 ## Summary Ownership
 
@@ -380,3 +403,87 @@ Implementation-readiness notes:
 - Do not emit raw tick timestamps.
 - Do not print segmented latency summaries from master or data worker access logs in this plan.
 - Missing stages should simply be omitted from the summary.
+
+## Implementation Plan — issue #862, B-complete + MAX
+
+> Working memory for the in-progress rework. The A-version (separate `*_RPC_COMM_*` field, comm carried via response
+> `latency_phase_us` and summed) was implemented and validated (compiles, links, UTs pass) but is being replaced by
+> B-complete+MAX per the agreed decision: redefining `*_RPC_*` to comm + fixing the derived process math + MAX
+> aggregation for the concurrent QueryMeta fan-out.
+
+### Decision recap
+- Display: `worker.rpc.*` / `client.rpc.*` themselves hold comm (network + RPC framework). No new `*_RPC_COMM_*`
+  field. Gate `slow_log_rpc_slower_than` checks `*_RPC_*` (= comm) directly.
+- comm formula: `comm = e2e - server_processing` where `server_processing = server_send - server_recv`
+  (= server req-queue + server-exec + server rsp-queue). Excludes remote business execution AND remote queue wait.
+- Aggregation: **MAX** of per-leg comm (correct for slow-log gate; sum on concurrent fan-out re-introduces the
+  issue's false-positive). Single-RPC paths = the single value.
+
+### Files & changes (B-complete + MAX)
+
+Source of truth checkout: `/home/liudongliang/Desktop/workspace/yhl_datasystem/fix-rpc-latency-trace` (branch
+`fix-rpc-latency-trace`). Build/validate worktree: `.../build_cmake_normal` (branch `build_cmake_normal`, Release,
+Unix Makefiles; thirdparty cached; build cmd `bash build.sh -t build -X off -b cmake -j2`; run UTs with
+`LD_LIBRARY_PATH` set to the `/tmp/2d13d9...` thirdparty lib dirs).
+
+1. `src/datasystem/common/log/latency_phase_types.h`
+   - **Revert** the `WORKER_RPC_COMM_*`/`CLIENT_RPC_COMM_*` enum additions (29-36) and `LATENCY_SUMMARY_PHASE_MAX`
+     back to 28 — B reuses the existing `*_RPC_*` ids; no new comm phases.
+   - `DerivedPhaseMapping.subPhases[5]` → `[12]` to hold added downstream sub-phases.
+2. `src/datasystem/common/log/trace.h` — keep `SetLastRpcCommUs`/`ConsumeLastRpcCommUs` + `lastRpcCommUs_` (unchanged
+   from A; reused by B).
+3. `src/datasystem/common/rpc/brpc_perf_trace.h` + `zmq_constants.h` — keep the comm stash in `RecordBrpcRpcTrace` /
+   `RecordRpcLatencyMetrics` (unchanged from A).
+4. `src/datasystem/common/log/latency_phase.h`
+   - **Remove** the `AppendRpcCommPhase` template (B does not carry comm via response proto).
+   - `FinalizeWorkerLatencyTrace` / `TryEncodeRemoteGetLatencySummary` / `EmitClientLatencySummary`: reorder to
+     `ComputeTickPhases` → `MergeDownstreamPhases` → `ComputeDerivedPhases` (so derived can subtract merged
+     downstream server-exec + comm).
+5. `src/datasystem/common/log/latency_phase.cpp`
+   - Split `ComputePhaseDurations` into `ComputeTickPhases` (TICK_PAIR_TABLE loop, **minus** the `*_RPC_*` full-dur
+     pairs which are removed) + `ComputeDerivedPhases` (DERIVED_PHASE_TABLE loop). Keep `ComputePhaseDurations` as a
+     thin wrapper (tick+derived, no downstream) for UTs that don't merge downstream.
+   - `TICK_PAIR_TABLE`: remove the 8 `*_RPC_*` full-duration pairs (CLIENT_GET_RPC, CLIENT_CREATE_RPC,
+     CLIENT_PUBLISH_RPC, CLIENT_EXIST_RPC, WORKER_QUERYMETA, WORKER_EXIST_QUERYMETA, WORKER_REMOTEGET,
+     WORKER_CREATE_META_RPC, WORKER_UPDATE_META_RPC). Keep URMA, l2cache, direct-route, memory-copy, etc.
+   - `DERIVED_PHASE_TABLE`: add downstream server-exec phases to the sub-lists:
+     `worker.process.get` += `MASTER_PROCESS_QUERY_META`, `WORKER_PROCESS_REMOTE_GET`;
+     `client.process.get` += the worker-side phases returned downstream (`WORKER_PROCESS_GET`, `WORKER_RPC_QUERY_META`,
+     `WORKER_RPC_REMOTE_GET`, `WORKER_URMA_URMA_TOTAL`, `MASTER_PROCESS_QUERY_META`, `WORKER_PROCESS_REMOTE_GET`); and
+     analogously for `client.process.set/create/exist`.
+   - `RPC_PHASES`: put back the original `*_RPC_*` ids (now = comm); **drop** the `*_RPC_COMM_*` ids. Keep URMA +
+     direct-route.
+   - `PHASE_NAME_TABLE`: drop the `*_RPC_COMM_*` names (names `worker.rpc.*` stay, now meaning comm).
+6. Business call sites — switch from A's `AppendRpcCommPhase(rsp, ...)` to direct `Trace::AddDownstreamPhase`:
+   - `worker_oc_service_publish_impl.cpp` CreateMetadataToMaster/UpdateMetadataToMaster: after the RPC,
+     `Trace::AddDownstreamPhase(WORKER_RPC_CREATE_META/UPDATE_META, Trace::Instance().ConsumeLastRpcCommUs())`.
+   - `worker_oc_service_get_impl.cpp` PullObjectDataFromRemoteWorker: after `clientApi->Read(rspPb)`,
+     `Trace::AddDownstreamPhase(WORKER_RPC_REMOTE_GET, ...)`.
+   - `client_worker_remote_api.cpp` Get/Create/Publish/Exist: after the retry,
+     `Trace::AddDownstreamPhase(CLIENT_RPC_GET/CREATE/PUBLISH/EXIST, ...)`.
+   - `worker_master_oc_api.cpp` QueryMeta: **remove** the `AppendRpcCommPhase(response, ...)` (comm now via struct);
+     the child `QueryMetaDataFromMasterImpl` instead does `result.commUs = Trace::Instance().ConsumeLastRpcCommUs()`.
+7. QueryMeta MAX fan-out:
+   - `worker_oc_service_get_impl.cpp`: add `uint64_t commUs = 0;` to `BatchQueryMetaResult`; in
+     `QueryMetaDataFromMasterImpl` (or the dispatch lambda) set `result.commUs = Trace::Instance().ConsumeLastRpcCommUs()`
+     after `WorkerRemoteMasterOCApi::QueryMeta`.
+   - `MergeQueryMetadataResults`: `uint64_t maxComm = 0; for (r : results) maxComm = std::max(maxComm, r.commUs);`
+     then `if (maxComm > 0) Trace::Instance().AddDownstreamPhase(WORKER_RPC_QUERY_META, maxComm);` (once).
+8. Tests:
+   - `latency_phase_test.cpp`: revert A's comm-field tests; add B tests — `worker.rpc.query_meta` populated from comm
+     (AddDownstreamPhase), not full-duration tick; derived `worker.process.get` subtracts downstream server-exec
+     (after merge); MAX aggregation test (two legs → max).
+   - `zmq_metrics_test.cpp`: keep `ConsumeLastRpcCommUs()==6500` assertion (transport formula unchanged).
+   - `latency_summary_st_test.cpp`: revert `*_rpc_comm.*` assertions; keep `worker.rpc.*`/`client.rpc.*` (now comm).
+
+### Commit hygiene
+- PR commit in `fix-rpc-latency-trace` includes ONLY the 13 src/test files + 2 `.repo_context` docs.
+- Do NOT commit the 4 local-build cmake files (CMakeLists.txt / brpc.cmake / gflags.cmake / leveldb.cmake — keep
+  modified-uncommitted) nor the migrate files (only in `build_cmake_normal` worktree).
+
+### Validation status (B-complete + MAX)
+- Full build in `build_cmake_normal`: EXIT=0, 100%, zero errors. All B source + UT + ST
+  compile & link.
+- UTs 34/34 PASSED (33 `LatencyPhaseTest` + 1 `ZmqMetricsTest.queue_flow_residual_network_matches_e2e_minus_framework`).
+  New B tests: `RpcCommPhaseDrivesRpcThresholdGate`, `ConsumeCommAndAddDownstreamPhase`,
+  `QueryMetaMaxAggregationConcurrentFanout`, `AdditiveDerivedMathWorkerGet`.

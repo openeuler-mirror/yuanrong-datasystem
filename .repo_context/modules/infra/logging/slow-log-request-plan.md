@@ -3,9 +3,9 @@
 ## Metadata
 
 - Status:
-  - `planning`
+  - `implemented` (comm-gate correction for issue #862)
 - Last updated:
-  - `2026-05-27`
+  - `2026-08-06`
 - Purpose:
   - preserve the design for request slow logs that bypass request log sampling when a configured request latency segment
     is slow.
@@ -56,6 +56,13 @@ this feature is `SLOW_LOG`.
   dynamic gflags, hot-reloadable via config file or UpdateConfig API.
 - A `0` threshold disables the matching `SLOW_LOG` force condition. Failed but fast requests must not use `SLOW_LOG` as an
   all-error diagnostic path.
+- RPC threshold reflects communication time (issue #862, B-complete + MAX): the per-segment `SLOW_LOG_IF` cost
+  used by `slow_log_rpc_slower_than` compares against `comm = e2e - server_processing` (network + RPC framework,
+  excluding remote business execution and remote queue wait), sourced from the brpc `BrpcPerfTrace` / ZMQ
+  `MetaPb.latency_ticks` 8-point trace. The displayed `*_RPC_*` phase IS comm (the full-duration tick pairs are
+  removed); it is not display-only — the field and the gate use the same comm value. Concurrent fan-out (QueryMeta to
+  N masters) aggregates comm as **MAX** (sum would re-introduce the false-positive the issue fixes); single-RPC paths
+  use the single value. See `request-stage-latency-trace-plan.md` "Implementation Plan — issue #862" for details.
 
 Minimal logging-module shape:
 

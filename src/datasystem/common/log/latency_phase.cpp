@@ -36,32 +36,14 @@ struct TickPairMapping {
 };
 
 constexpr TickPairMapping TICK_PAIR_TABLE[] = {
-    { LatencyTickKey::CLIENT_GET_RPC_START, LatencyTickKey::CLIENT_GET_RPC_END,
-      LatencySummaryPhase::CLIENT_RPC_GET },
     { LatencyTickKey::CLIENT_MEMORY_COPY_START, LatencyTickKey::CLIENT_MEMORY_COPY_END,
       LatencySummaryPhase::CLIENT_PROCESS_MEMORY_COPY },
     { LatencyTickKey::CLIENT_UB_TRANSFER_START, LatencyTickKey::CLIENT_UB_TRANSFER_END,
       LatencySummaryPhase::CLIENT_URMA_UB_TRANSFER },
-    { LatencyTickKey::CLIENT_PUBLISH_RPC_START, LatencyTickKey::CLIENT_PUBLISH_RPC_END,
-      LatencySummaryPhase::CLIENT_RPC_PUBLISH },
-    { LatencyTickKey::CLIENT_EXIST_RPC_START, LatencyTickKey::CLIENT_EXIST_RPC_END,
-      LatencySummaryPhase::CLIENT_RPC_EXIST },
-    { LatencyTickKey::CLIENT_CREATE_RPC_START, LatencyTickKey::CLIENT_CREATE_RPC_END,
-      LatencySummaryPhase::CLIENT_RPC_CREATE },
-    { LatencyTickKey::WORKER_QUERYMETA_START, LatencyTickKey::WORKER_QUERYMETA_END,
-      LatencySummaryPhase::WORKER_RPC_QUERY_META },
-    { LatencyTickKey::WORKER_EXIST_QUERYMETA_START, LatencyTickKey::WORKER_EXIST_QUERYMETA_END,
-      LatencySummaryPhase::WORKER_RPC_QUERY_META },
-    { LatencyTickKey::WORKER_REMOTEGET_START, LatencyTickKey::WORKER_REMOTEGET_END,
-      LatencySummaryPhase::WORKER_RPC_REMOTE_GET },
     { LatencyTickKey::WORKER_URMA_START, LatencyTickKey::WORKER_URMA_END,
       LatencySummaryPhase::WORKER_URMA_URMA_TOTAL },
     { LatencyTickKey::WORKER_L2CACHE_READ_START, LatencyTickKey::WORKER_L2CACHE_READ_END,
       LatencySummaryPhase::WORKER_PROCESS_L2CACHE_READ },
-    { LatencyTickKey::WORKER_CREATE_META_RPC_START, LatencyTickKey::WORKER_CREATE_META_RPC_END,
-      LatencySummaryPhase::WORKER_RPC_CREATE_META },
-    { LatencyTickKey::WORKER_UPDATE_META_RPC_START, LatencyTickKey::WORKER_UPDATE_META_RPC_END,
-      LatencySummaryPhase::WORKER_RPC_UPDATE_META },
     { LatencyTickKey::META_QUERYMETA_START, LatencyTickKey::META_QUERYMETA_END,
       LatencySummaryPhase::MASTER_PROCESS_QUERY_META },
     { LatencyTickKey::META_CREATE_META_START, LatencyTickKey::META_CREATE_META_END,
@@ -86,7 +68,7 @@ struct DerivedPhaseMapping {
     LatencyTickKey totalStartKey;
     LatencyTickKey totalEndKey;
     LatencySummaryPhase resultPhase;
-    LatencySummaryPhase subPhases[5];
+    LatencySummaryPhase subPhases[12];
     uint8_t subPhaseCount;
 };
 
@@ -96,30 +78,39 @@ constexpr DerivedPhaseMapping DERIVED_PHASE_TABLE[] = {
       LatencySummaryPhase::CLIENT_PROCESS_GET,
       { LatencySummaryPhase::CLIENT_RPC_GET, LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE,
         LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET, LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA,
-        LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE },
-      5 },
+        LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE,
+        LatencySummaryPhase::WORKER_PROCESS_GET, LatencySummaryPhase::WORKER_RPC_QUERY_META,
+        LatencySummaryPhase::WORKER_RPC_REMOTE_GET, LatencySummaryPhase::WORKER_URMA_URMA_TOTAL,
+        LatencySummaryPhase::WORKER_PROCESS_L2CACHE_READ, LatencySummaryPhase::MASTER_PROCESS_QUERY_META,
+        LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET },
+      12 },
     { LatencyTickKey::CLIENT_SET_START,
       LatencyTickKey::CLIENT_SET_END,
       LatencySummaryPhase::CLIENT_PROCESS_SET,
       { LatencySummaryPhase::CLIENT_RPC_CREATE, LatencySummaryPhase::CLIENT_PROCESS_MEMORY_COPY,
-        LatencySummaryPhase::CLIENT_URMA_UB_TRANSFER, LatencySummaryPhase::CLIENT_RPC_PUBLISH },
-      4 },
+        LatencySummaryPhase::CLIENT_URMA_UB_TRANSFER, LatencySummaryPhase::CLIENT_RPC_PUBLISH,
+        LatencySummaryPhase::WORKER_PROCESS_CREATE, LatencySummaryPhase::WORKER_RPC_CREATE_META,
+        LatencySummaryPhase::MASTER_PROCESS_CREATE_META, LatencySummaryPhase::WORKER_PROCESS_PUBLISH,
+        LatencySummaryPhase::WORKER_RPC_UPDATE_META, LatencySummaryPhase::MASTER_PROCESS_UPDATE_META },
+      10 },
     { LatencyTickKey::CLIENT_CREATE_START,
       LatencyTickKey::CLIENT_CREATE_END,
       LatencySummaryPhase::CLIENT_PROCESS_CREATE,
-      { LatencySummaryPhase::CLIENT_RPC_CREATE },
-      1 },
+      { LatencySummaryPhase::CLIENT_RPC_CREATE, LatencySummaryPhase::WORKER_PROCESS_CREATE },
+      2 },
     { LatencyTickKey::CLIENT_EXIST_START,
       LatencyTickKey::CLIENT_EXIST_END,
       LatencySummaryPhase::CLIENT_PROCESS_EXIST,
-      { LatencySummaryPhase::CLIENT_RPC_EXIST },
-      1 },
+      { LatencySummaryPhase::CLIENT_RPC_EXIST, LatencySummaryPhase::WORKER_PROCESS_EXIST,
+        LatencySummaryPhase::WORKER_RPC_QUERY_META, LatencySummaryPhase::MASTER_PROCESS_QUERY_META },
+      4 },
     { LatencyTickKey::WORKER_GET_START,
       LatencyTickKey::WORKER_GET_END,
       LatencySummaryPhase::WORKER_PROCESS_GET,
       { LatencySummaryPhase::WORKER_RPC_QUERY_META, LatencySummaryPhase::WORKER_RPC_REMOTE_GET,
-        LatencySummaryPhase::WORKER_URMA_URMA_TOTAL, LatencySummaryPhase::WORKER_PROCESS_L2CACHE_READ },
-      4 },
+        LatencySummaryPhase::WORKER_URMA_URMA_TOTAL, LatencySummaryPhase::WORKER_PROCESS_L2CACHE_READ,
+        LatencySummaryPhase::MASTER_PROCESS_QUERY_META, LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET },
+      6 },
     { LatencyTickKey::WORKER_CREATE_START,
       LatencyTickKey::WORKER_CREATE_END,
       LatencySummaryPhase::WORKER_PROCESS_CREATE,
@@ -128,13 +119,14 @@ constexpr DerivedPhaseMapping DERIVED_PHASE_TABLE[] = {
     { LatencyTickKey::WORKER_PUBLISH_START,
       LatencyTickKey::WORKER_PUBLISH_END,
       LatencySummaryPhase::WORKER_PROCESS_PUBLISH,
-      { LatencySummaryPhase::WORKER_RPC_CREATE_META, LatencySummaryPhase::WORKER_RPC_UPDATE_META },
-      2 },
+      { LatencySummaryPhase::WORKER_RPC_CREATE_META, LatencySummaryPhase::WORKER_RPC_UPDATE_META,
+        LatencySummaryPhase::MASTER_PROCESS_CREATE_META, LatencySummaryPhase::MASTER_PROCESS_UPDATE_META },
+      4 },
     { LatencyTickKey::WORKER_EXIST_START,
       LatencyTickKey::WORKER_EXIST_END,
       LatencySummaryPhase::WORKER_PROCESS_EXIST,
-      { LatencySummaryPhase::WORKER_RPC_QUERY_META },
-      1 },
+      { LatencySummaryPhase::WORKER_RPC_QUERY_META, LatencySummaryPhase::MASTER_PROCESS_QUERY_META },
+      2 },
 };
 
 constexpr size_t DERIVED_PHASE_TABLE_SIZE = sizeof(DERIVED_PHASE_TABLE) / sizeof(DERIVED_PHASE_TABLE[0]);
@@ -211,23 +203,33 @@ constexpr LatencySummaryPhase PROCESS_PHASES[] = {
     LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET,
     LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE,
     LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE,
+    LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET,
+    LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA,
 };
 
 constexpr size_t PROCESS_PHASES_SIZE = sizeof(PROCESS_PHASES) / sizeof(PROCESS_PHASES[0]);
 
+// RPC phases used by the slow-log gate. The *_RPC_* phases hold RPC
+// communication time (network + RPC framework, excluding remote business
+// execution and remote queue wait — issue #862), populated by the transport
+// layer's 8-point framework trace and attached via Trace::AddDownstreamPhase.
+// For concurrent fan-out (e.g. QueryMeta to N masters), the caller aggregates
+// per-leg comm with MAX so that N fast legs do not sum past the threshold.
+// URMA transfer phases are retained as RPC-side work (pure data transfer,
+// no remote business execution). The legacy client direct-route phases are
+// gated as process phases because they bundle remote business execution and
+// cannot yet be split into comm + server-exec (issue #862 review).
 constexpr LatencySummaryPhase RPC_PHASES[] = {
     LatencySummaryPhase::CLIENT_RPC_GET,
     LatencySummaryPhase::CLIENT_RPC_CREATE,
     LatencySummaryPhase::CLIENT_RPC_PUBLISH,
-    LatencySummaryPhase::CLIENT_URMA_UB_TRANSFER,
     LatencySummaryPhase::CLIENT_RPC_EXIST,
     LatencySummaryPhase::WORKER_RPC_QUERY_META,
     LatencySummaryPhase::WORKER_RPC_REMOTE_GET,
-    LatencySummaryPhase::WORKER_URMA_URMA_TOTAL,
     LatencySummaryPhase::WORKER_RPC_CREATE_META,
     LatencySummaryPhase::WORKER_RPC_UPDATE_META,
-    LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET,
-    LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA,
+    LatencySummaryPhase::CLIENT_URMA_UB_TRANSFER,
+    LatencySummaryPhase::WORKER_URMA_URMA_TOTAL,
 };
 
 constexpr size_t RPC_PHASES_SIZE = sizeof(RPC_PHASES) / sizeof(RPC_PHASES[0]);
@@ -343,7 +345,7 @@ const char *LatencySummaryPhaseName(LatencySummaryPhase phase)
     return "unknown";
 }
 
-PhaseDurationResult ComputePhaseDurations(const LatencyTick *ticks, uint16_t tickCount, uint16_t tickDroppedCount)
+PhaseDurationResult ComputeTickPhases(const LatencyTick *ticks, uint16_t tickCount, uint16_t tickDroppedCount)
 {
     PhaseDurationResult result;
     result.tickDroppedCount = tickDroppedCount;
@@ -365,6 +367,11 @@ PhaseDurationResult ComputePhaseDurations(const LatencyTick *ticks, uint16_t tic
         }
     }
 
+    return result;
+}
+
+void ComputeDerivedPhases(const LatencyTick *ticks, uint16_t tickCount, PhaseDurationResult &result)
+{
     for (size_t d = 0; d < DERIVED_PHASE_TABLE_SIZE; ++d) {
         TickMatches totalStarts = FindAllTickNs(ticks, tickCount, DERIVED_PHASE_TABLE[d].totalStartKey);
         TickMatches totalEnds = FindAllTickNs(ticks, tickCount, DERIVED_PHASE_TABLE[d].totalEndKey);
@@ -387,7 +394,12 @@ PhaseDurationResult ComputePhaseDurations(const LatencyTick *ticks, uint16_t tic
         uint64_t derivedUs = (subSumUs >= totalUs) ? 0 : (totalUs - subSumUs);
         result.Add(DERIVED_PHASE_TABLE[d].resultPhase, derivedUs);
     }
+}
 
+PhaseDurationResult ComputePhaseDurations(const LatencyTick *ticks, uint16_t tickCount, uint16_t tickDroppedCount)
+{
+    PhaseDurationResult result = ComputeTickPhases(ticks, tickCount, tickDroppedCount);
+    ComputeDerivedPhases(ticks, tickCount, result);
     return result;
 }
 
@@ -533,8 +545,9 @@ void EmitClientLatencySummary(LatencyTickKey startKey, LatencyTickKey endKey)
         auto ticks = Trace::Instance().GetLatencyTicks();
         auto tickCount = Trace::Instance().GetLatencyTickCount();
         auto droppedCount = Trace::Instance().GetLatencyTickDroppedCount();
-        PhaseDurationResult result = ComputePhaseDurations(ticks, tickCount, droppedCount);
+        PhaseDurationResult result = ComputeTickPhases(ticks, tickCount, droppedCount);
         MergeDownstreamPhases(result);
+        ComputeDerivedPhases(ticks, tickCount, result);
         if (CheckPhaseGate(result, config)) {
             Trace::Instance().SetLatencySummary(FormatLatencySummary(result));
         }
