@@ -32,8 +32,10 @@
  * and the ST validates the wrong code path (ZMQ does not exercise the
  * brpc_service_generator changes at all).
  */
+#include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include "common.h"
 #include "client/object_cache/oc_client_common.h"
@@ -86,12 +88,31 @@ public:
         // FLAGS_use_brpc was set true in SetClusterSetupOptions (called by Init),
         // so the KVClient picks up brpc transport.
         InitTestKVClient(1, client_, 60000, false, 20);
+        WaitWorkerMasterRpcReady();
     }
 
     void TearDown() override
     {
         client_.reset();
         ExternalClusterTest::TearDown();
+    }
+
+    void WaitWorkerMasterRpcReady()
+    {
+        constexpr auto timeout = std::chrono::seconds(15);
+        constexpr auto interval = std::chrono::milliseconds(100);
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        const std::string key = "worker_master_ready_" + RandomData().GetRandomString(10);
+        std::string value;
+        Status rc = client_->Get(key, value);
+        while (rc.GetCode() != StatusCode::K_NOT_FOUND && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(interval);
+            rc = client_->Get(key, value);
+        }
+        ASSERT_EQ(rc.GetCode(), StatusCode::K_NOT_FOUND)
+            << "Worker 1 to master RPC path was not ready within "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()
+            << " ms, last status: " << rc.ToString();
     }
 
 protected:

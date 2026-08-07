@@ -190,6 +190,12 @@ public:
     void SetPrefix(const std::string &prefix);
 
     /**
+     * @brief Copy only the caller-defined trace prefix from another Trace.
+     * @param[in] source Source Trace whose prefix is copied.
+     */
+    void CopyPrefixFrom(const Trace &source);
+
+    /**
      * @brief Set traceID to thread_local.
      * @note This method is used in the cross-thread scenario. A child thread obtains the TraceID of the parent thread
      * and sets the TraceID to the thread_local of the child thread.

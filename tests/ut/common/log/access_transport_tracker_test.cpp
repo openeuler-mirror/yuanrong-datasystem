@@ -23,11 +23,35 @@
 #include <string>
 #include <thread>
 
+#include "datasystem/common/flags/flags.h"
+#include "datasystem/common/util/request_context.h"
 #include "ut/common.h"
+
+DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 namespace ut {
-class AccessTransportTrackerTest : public CommonTest {};
+class AccessTransportTrackerTest : public CommonTest {
+protected:
+    void SetUp() override
+    {
+        oldUseBrpc_ = FLAGS_use_brpc;
+        FLAGS_use_brpc = true;
+        InitRequestContext();
+        SetRequestContext(nullptr);
+        AccessTransportTracker::Reset();
+    }
+
+    void TearDown() override
+    {
+        SetRequestContext(nullptr);
+        AccessTransportTracker::Reset();
+        FLAGS_use_brpc = oldUseBrpc_;
+    }
+
+private:
+    bool oldUseBrpc_ = false;
+};
 
 TEST_F(AccessTransportTrackerTest, DefaultIsShmAfterReset)
 {
@@ -70,6 +94,24 @@ TEST_F(AccessTransportTrackerTest, ThreadLocalIsolation)
     ASSERT_TRUE(childReady.load());
     EXPECT_EQ(childTransport, "TCP");
     EXPECT_EQ(AccessTransportTracker::ToString(), "SHM");
+}
+
+TEST_F(AccessTransportTrackerTest, ClientScopePublishesTransportResultWithoutMutatingFallback)
+{
+    RequestContext *fallbackContext = GetRequestContext();
+    ASSERT_TRUE(fallbackContext->isFallbackContext);
+    ASSERT_EQ(fallbackContext->accessTransportKind, AccessTransportKind::SHM);
+
+    {
+        ScopedClientRequestContext clientScope;
+        ASSERT_NE(GetRequestContext(), fallbackContext);
+        AccessTransportTracker::Reset();
+        AccessTransportTracker::Record(AccessTransportKind::TCP);
+        EXPECT_EQ(AccessTransportTracker::ToString(), "TCP");
+    }
+
+    EXPECT_EQ(fallbackContext->accessTransportKind, AccessTransportKind::SHM);
+    EXPECT_EQ(AccessTransportTracker::ToString(), "TCP");
 }
 }  // namespace ut
 }  // namespace datasystem

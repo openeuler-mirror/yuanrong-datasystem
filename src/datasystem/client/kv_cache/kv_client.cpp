@@ -32,6 +32,7 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -59,6 +60,7 @@ KVClient::~KVClient()
 
 Status KVClient::ShutDown()
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     if (impl_) {
         bool needRollbackState;
@@ -71,12 +73,14 @@ Status KVClient::ShutDown()
 
 Status KVClient::Init()
 {
+    ScopedClientRequestContext requestContext;
     KVClientConfig clientConfig;
     return Init(clientConfig);
 }
 
 Status KVClient::Init(const KVClientConfig &clientConfig)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     (void)metrics::InitKvMetrics();
     bool needRollbackState;
@@ -95,6 +99,7 @@ KVClient &KVClient::EmbeddedInstance()
 
 Status KVClient::InitEmbedded(const EmbeddedConfig &config)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     (void)metrics::InitKvMetrics();
     bool needRollbackState;
@@ -106,6 +111,7 @@ Status KVClient::InitEmbedded(const EmbeddedConfig &config)
 
 Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &param, std::shared_ptr<Buffer> &buffer)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_CREATE_BUFFER);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_CREATE);
@@ -130,6 +136,7 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
 Status KVClient::MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,
 const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MCREATE_BUFFERS);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MCREATE);
@@ -155,6 +162,7 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
 
 Status KVClient::Set(const std::shared_ptr<Buffer> &buffer)
 {
+    ScopedClientRequestContext requestContext;
     CHECK_FAIL_RETURN_STATUS(buffer != nullptr, K_INVALID, "Buffer must not be null.");
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_SET_BUFFER);
@@ -169,6 +177,7 @@ Status KVClient::Set(const std::shared_ptr<Buffer> &buffer)
 
 Status KVClient::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
 {
+    ScopedClientRequestContext requestContext;
     CHECK_FAIL_RETURN_STATUS(!buffers.empty(), K_INVALID, "Buffer list should not be empty.");
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MSET_BUFFERS);
@@ -188,6 +197,7 @@ Status KVClient::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
 
 Status KVClient::Get(const std::string &key, Optional<Buffer> &buffer, int32_t subTimeoutMs)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_BUFFER);
     std::vector<Optional<Buffer>> buffers;
@@ -207,6 +217,7 @@ Status KVClient::Get(const std::string &key, Optional<Buffer> &buffer, int32_t s
 Status KVClient::Get(const std::vector<std::string> &keys,
                      std::vector<Optional<Buffer>> &buffers, int32_t subTimeoutMs)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     std::vector<Optional<Buffer>> tmpBuffers;
@@ -222,6 +233,7 @@ Status KVClient::Get(const std::vector<std::string> &keys,
 
 Status KVClient::Set(const std::string &key, const StringView &val, const SetParam &setParam)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_SET_OBJECT);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
@@ -236,6 +248,7 @@ Status KVClient::Set(const std::string &key, const StringView &val, const SetPar
 
 std::string KVClient::Set(const StringView &val, const SetParam &setParam)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_SET_OBJECT);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
@@ -251,12 +264,14 @@ std::string KVClient::Set(const StringView &val, const SetParam &setParam)
 
 Status KVClient::UpdateToken(SensitiveValue token)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->UpdateToken(token);
 }
 
 Status KVClient::UpdateAkSk(const std::string accesskey, SensitiveValue secretkey)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->UpdateAkSk(accesskey, secretkey);
 }
@@ -265,6 +280,7 @@ Status KVClient::MGetH2D(const std::vector<std::string> &keys, const std::vector
                          std::vector<std::string> &outFailedKeys, void *h2dStream,
                          std::vector<Optional<ReadOnlyBuffer>> *readOnlyBuffers)
 {
+    ScopedClientRequestContext requestContext;
     if (h2dStream && !readOnlyBuffers) {
         return Status(K_INVALID, "readOnlyBuffers should not be null when h2dStream is not null");
     }
@@ -287,6 +303,7 @@ Status KVClient::MGetH2D(const std::vector<std::string> &keys, const std::vector
 
 Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_OBJECT);
     std::vector<Optional<Buffer>> buffers;
@@ -307,6 +324,7 @@ Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs
 
 Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::string> &vals, int32_t subTimeoutMs)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_OBJECTS);
     std::vector<Optional<Buffer>> buffers;
@@ -323,6 +341,7 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::stri
 
 Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer, int32_t subTimeoutMs)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_BUFFER);
     std::vector<Optional<Buffer>> buffers;
@@ -343,6 +362,7 @@ Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyB
 Status KVClient::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                          std::vector<std::string> &outFailedKeys, const MSetParam &param)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MSET_OBJECT);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
@@ -358,6 +378,7 @@ Status KVClient::MSet(const std::vector<std::string> &keys, const std::vector<St
 Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                         const MSetParam &param)
 {
+    ScopedClientRequestContext requestContext;
     (void)keys;
     (void)vals;
     (void)param;
@@ -368,6 +389,7 @@ Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<
 Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers,
                      int32_t subTimeoutMs)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     std::vector<Optional<Buffer>> buffers;
@@ -442,6 +464,7 @@ Status ValidateReadParams(const std::vector<ReadParam> &readParams, ObjectAccess
 
 Status KVClient::Read(const std::vector<ReadParam> &readParams, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(readParams.size()), K_INVALID,
@@ -472,6 +495,7 @@ Status KVClient::Read(const std::vector<ReadParam> &readParams, std::vector<Opti
 
 Status KVClient::Del(const std::string &key)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_DEL_OBJECT);
     std::vector<std::string> failedKeys;
@@ -483,6 +507,7 @@ Status KVClient::Del(const std::string &key)
 
 Status KVClient::Del(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_DEL_MUL_OBJECTS);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_DELETE);
@@ -493,6 +518,7 @@ Status KVClient::Del(const std::vector<std::string> &keys, std::vector<std::stri
 
 std::string KVClient::GenerateKey(const std::string &prefixKey)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     std::string key;
     (void)impl_->GenerateKey(key, prefixKey);
@@ -501,17 +527,20 @@ std::string KVClient::GenerateKey(const std::string &prefixKey)
 
 Status KVClient::GenerateKey(const std::string &prefixKey, std::string &key)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->GenerateKey(key, prefixKey);
 }
 
 Status KVClient::QuerySize(const std::vector<std::string> &objectKeys, std::vector<uint64_t> &outSizes)
 {
+    ScopedClientRequestContext requestContext;
     return impl_->QuerySize(objectKeys, outSizes);
 }
 
 Status KVClient::UpdateConfig(const std::string &configJson)
 {
+    ScopedClientRequestContext requestContext;
     if (!impl_) {
         return Status(StatusCode::K_INVALID, "UpdateConfig: client not initialized");
     }
@@ -520,6 +549,7 @@ Status KVClient::UpdateConfig(const std::string &configJson)
 
 Status KVClient::HealthCheck()
 {
+    ScopedClientRequestContext requestContext;
     ServerState state;
     return impl_->HealthCheck(state);
 }
@@ -532,6 +562,7 @@ Status KVClient::SetWorkerHealthCallback(std::function<void(const Status &)> cal
 
 Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_EXIST);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsExistBatchSizeUnderLimit(keys.size()), K_INVALID,
@@ -546,6 +577,7 @@ Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &
 
 Status KVClient::Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds, std::vector<std::string> &failedKeys)
 {
+    ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_EXPIRE_OBJECT);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_EXPIRE);
