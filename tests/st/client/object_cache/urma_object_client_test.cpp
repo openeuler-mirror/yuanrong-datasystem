@@ -1951,7 +1951,7 @@ public:
     }
 };
 
-TEST_F(UrmaNumaAffinityTest, WorkerToWorker)
+TEST_F(UrmaNumaAffinityTest, ClientAndWorkerUseAffinity)
 {
     FLAGS_v = 1;
     std::shared_ptr<KVClient> client1;
@@ -1983,8 +1983,7 @@ TEST_F(UrmaNumaAffinityTest, WorkerToWorker)
         ASSERT_EQ(value, getValue);
     }
 
-    uint64_t executeCountClient = inject::GetExecuteCount("UrmaManager.UrmaWriteNumaAffinity");
-    (void)executeCountClient;
+    const uint64_t executeCountClient = inject::GetExecuteCount("UrmaManager.UrmaWriteNumaAffinity");
 
     uint64_t executeCountWorker1;
     DS_ASSERT_OK(
@@ -1993,7 +1992,49 @@ TEST_F(UrmaNumaAffinityTest, WorkerToWorker)
     uint64_t executeCountWorker2;
     DS_ASSERT_OK(
         cluster_->GetInjectActionExecuteCount(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker2));
+    ASSERT_GT(executeCountClient, 0);
     ASSERT_GT(executeCountWorker1 + executeCountWorker2, 0);
+}
+
+class UrmaNumaAffinityDisabledTest : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams +=
+            " -enable_transport_fallback=false -enable_ub_numa_affinity=false "
+            "-shared_memory_distribution_policy=interleave_affinity_numa";
+        opts.numWorkers -= 1;
+    }
+};
+
+TEST_F(UrmaNumaAffinityDisabledTest, ClientAndWorkerSkipAffinity)
+{
+    FLAGS_v = 1;
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+    DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteNumaAffinity", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
+
+    const std::string value(8 * 1024 * 1024, 'a');
+    DS_ASSERT_OK(client2->Set("affinity-disabled-key", value));
+    std::string getValue;
+    DS_ASSERT_OK(client1->Get("affinity-disabled-key", getValue));
+    ASSERT_EQ(value, getValue);
+
+    const uint64_t executeCountClient = inject::GetExecuteCount("UrmaManager.UrmaWriteNumaAffinity");
+    uint64_t executeCountWorker1 = 0;
+    DS_ASSERT_OK(
+        cluster_->GetInjectActionExecuteCount(WORKER, 0, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker1));
+    uint64_t executeCountWorker2 = 0;
+    DS_ASSERT_OK(
+        cluster_->GetInjectActionExecuteCount(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker2));
+    ASSERT_EQ(executeCountClient, 0);
+    ASSERT_EQ(executeCountWorker1, 0);
+    ASSERT_EQ(executeCountWorker2, 0);
 }
 
 class UrmaFallbackTest : public UrmaObjectClientTest {

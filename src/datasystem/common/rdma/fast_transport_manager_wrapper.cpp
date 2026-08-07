@@ -77,6 +77,15 @@ void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t tr
 #endif
 }
 
+void SetClientUbNumaAffinityConfig(bool enabled, const std::string &configSource)
+{
+    (void)enabled;
+    (void)configSource;
+#ifdef USE_URMA
+    UrmaManager::SetClientUbNumaAffinityConfig(enabled, configSource);
+#endif
+}
+
 Status InitializeFastTransportManager(const HostPort &hostport)
 {
     (void)hostport;

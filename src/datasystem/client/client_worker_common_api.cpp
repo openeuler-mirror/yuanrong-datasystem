@@ -1153,6 +1153,9 @@ Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, ui
     // This only warms up local URMA hardware resources and memory pools.
     // The actual remote connection is established later during the handshake.
     SetClientFastTransportMode(rsp.fast_transport_mode(), fastTransportMemSize_);
+    if (rsp.fast_transport_mode() == FastTransportMode::UB) {
+        SetClientUbNumaAffinityConfig(rsp.ub_numa_affinity_enabled(), hostPort_.ToString());
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(), "Fast transport init failed");
 
     // This endpoint already uses SHM. Keep the process URMA capability for transport-layer access to other workers.

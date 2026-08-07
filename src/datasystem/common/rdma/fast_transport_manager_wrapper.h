@@ -72,6 +72,11 @@ void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t tr
                                 bool enablePipelineH2D = false);
 
 /**
+ * @brief Set the client process UB NUMA-affinity policy from a worker response.
+ */
+void SetClientUbNumaAffinityConfig(bool enabled, const std::string &configSource);
+
+/**
  * @brief Initialize Fast Transport Manager.
  * @param[in] hostport Local address for device lookup and identity. When empty (default),
  *            only local URMA resources are initialized without binding to a specific address.

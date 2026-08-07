@@ -114,6 +114,8 @@ message RegisterClientRspPb {
     repeated PipelineRH2DDataShmInfo pipeline_data_shm_infos = 26;
     string worker_compatibility_version = 27;
     uint32 memory_alignment = 28;
+    // Effective worker-side UB NUMA-affinity capability.
+    bool ub_numa_affinity_enabled = 29;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;
