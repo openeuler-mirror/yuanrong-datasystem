@@ -1327,7 +1327,10 @@ Status StreamManager::BlockProducer(const std::string &workerAddr, bool addCallB
     auto scSvc = scSvc_.lock();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
     auto streamName = streamName_;
-    scSvc->GetThreadPool()->Execute([scSvc, streamName, workerAddr, addCallBack]() {
+    auto traceID = Trace::Instance().GetTraceID();
+    scSvc->GetThreadPool()->Execute([scSvc, streamName, workerAddr, addCallBack, traceID]() {
+        SetRequestContext(nullptr);
+        ScopedRequestContext ctx(traceID);
         // Send the request
         StreamManagerMap::const_accessor accessor;
         Status rc = scSvc->GetStreamManager(streamName, accessor);
@@ -1407,7 +1410,10 @@ Status StreamManager::UnBlockProducer(const std::string &workerAddr)
     auto weakThis = weak_from_this();
     auto scSvc = scSvc_.lock();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
-    scSvc->GetThreadPool()->Execute([weakThis, workerAddr, streamName = streamName_]() {
+    auto traceID = Trace::Instance().GetTraceID();
+    scSvc->GetThreadPool()->Execute([weakThis, workerAddr, streamName = streamName_, traceID]() {
+        SetRequestContext(nullptr);
+        ScopedRequestContext ctx(traceID);
         auto streamManager = weakThis.lock();
         if (streamManager != nullptr) {
             LOG_IF_ERROR(streamManager->SendUnBlockProducerReq(workerAddr), "unblock error");

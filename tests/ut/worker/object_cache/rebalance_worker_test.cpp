@@ -32,6 +32,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/timer.h"
@@ -297,6 +298,7 @@ protected:
         reportCount_ = 0;
         reports_.clear();
         reportThreadIds_.clear();
+        reportTraceIds_.clear();
         executor_->SetTestHooks(
             [this](uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates) {
                 (void)maxBytes;
@@ -324,6 +326,7 @@ protected:
                 std::lock_guard<std::mutex> lock(mutex_);
                 reports_.push_back({ status, migratedBytes, migratedObjects, failedObjects, failedReason });
                 reportThreadIds_.push_back(std::this_thread::get_id());
+                reportTraceIds_.push_back(Trace::Instance().GetTraceID());
                 ++reportCount_;
                 cv_.notify_all();
             });
@@ -447,6 +450,7 @@ protected:
     size_t reportCount_ = 0;
     std::vector<ReportRecord> reports_;
     std::vector<std::thread::id> reportThreadIds_;
+    std::vector<std::string> reportTraceIds_;
 };
 
 TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterBecomesFailed)
@@ -562,6 +566,27 @@ TEST_F(RebalanceExecutorTest, SubmitReportsSucceededAndClearsRunningState)
     EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("obj2"));
     ASSERT_EQ(migratedObjectKeys_.size(), size_t(1));
     EXPECT_EQ(migratedObjectKeys_[0].size(), size_t(2));
+}
+
+// Verifies that Submit propagates the caller's traceId into the single-task executor pool, so worker-side
+// rebalance logs and the downstream ReportRebalanceResult RPC carry the same trace as the master scheduler logs.
+TEST_F(RebalanceExecutorTest, SubmitPropagatesCallerTraceIdToExecutorPool)
+{
+    // InstallHooks defaults ensureTopology=true -> publishes ACTIVE topology, and the success migrate
+    // result makes Execute reach ReportResult on the pool thread where the report hook captures the trace.
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+
+    const std::string knownTrace = "ut-rebalance;trace-prop";
+    {
+        TraceGuard guard = Trace::Instance().SetTraceNewID(knownTrace);
+        executor_->Submit(MakeTask("trace-prop-task", 10), MASTER_ADDR.ToString());
+        ASSERT_TRUE(WaitReports(1));
+        ASSERT_TRUE(WaitTaskDone());
+    }
+    ASSERT_EQ(reports_.size(), size_t(1));
+    ASSERT_EQ(reportTraceIds_.size(), size_t(1));
+    EXPECT_EQ(reportTraceIds_[0], knownTrace)
+        << "executorPool thread must inherit the caller's traceId via Submit propagation";
 }
 
 // Verifies the failed executor path: a migration error or failed object causes FAILED to be reported with accurate
@@ -729,6 +754,27 @@ TEST_F(RebalanceExecutorTest, BusySourceReportsFailedWithoutReplacingRunningTask
     EXPECT_NE(reportThreadIds_[0], submitThreadId);
     EXPECT_TRUE(executor_->IsRunningForTest());
     EXPECT_EQ(executor_->GetRunningTaskIdForTest(), "running-task");
+}
+
+// Verifies that SubmitBusyResult propagates the caller's traceId to the executor pool, mirroring Submit's propagation.
+// Reverting the SetRequestContext(nullptr)+ScopedRequestContext in SubmitBusyResult causes this assertion to fail.
+TEST_F(RebalanceExecutorTest, SubmitBusyResultPropagatesCallerTraceIdToExecutorPool)
+{
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+    executor_->SetRunningForTest(true, "running-task");
+
+    const std::string knownTrace = "ut-busy;trace-prop";
+    {
+        TraceGuard guard = Trace::Instance().SetTraceNewID(knownTrace);
+        executor_->Submit(MakeTask("busy-trace-task", 10), MASTER_ADDR.ToString());
+        ASSERT_TRUE(WaitReports(1));
+    }
+    ASSERT_EQ(reports_.size(), size_t(1));
+    ASSERT_EQ(reportTraceIds_.size(), size_t(1));
+    EXPECT_EQ(reportTraceIds_[0], knownTrace)
+        << "SubmitBusyResult must inherit the caller's traceId via executor pool propagation";
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_NE(reports_[0].failedReason.find("busy"), std::string::npos);
 }
 
 }  // namespace ut

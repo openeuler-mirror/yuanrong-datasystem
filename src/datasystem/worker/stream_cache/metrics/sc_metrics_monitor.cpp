@@ -21,6 +21,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/validator.h"
@@ -154,7 +155,9 @@ void ScMetricsMonitor::ExitStream(const std::string streamName, const std::strin
 {
     if (isEnabled_) {
         // Execute print in another thread to avoid destructor taking time
-        exitPrintThread_->Execute([this, msg]() {
+        auto traceID = Trace::Instance().GetTraceID();
+        exitPrintThread_->Execute([this, msg, traceID]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             Uri uri(__FILE__);
             exporter_->Send(msg, uri, __LINE__);
         });

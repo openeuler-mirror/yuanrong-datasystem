@@ -23,6 +23,7 @@
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
@@ -244,12 +245,12 @@ bool NodeSelector::HasEnoughAvailableMemory(size_t needMemory)
 
 void NodeSelector::WorkerThread()
 {
-    static const std::string nodeSelectorTraceID = "NodeSelector;" + GetStringUuid();
-    Trace::Instance().SetTraceNewID(nodeSelectorTraceID, true);
     LOG(INFO) << "Start worker thread to periodically collect cluster info";
     int64_t intervalMs = REPORT_RESOURCE_INTERVAL_TIME_MS;
     INJECT_POINT_NO_RETURN("NodeSelector.setInterval", [&intervalMs](int interval) { intervalMs = interval; });
     while (running_) {
+        SetRequestContext(nullptr);
+        ScopedRequestContext ctx("NodeSelector;" + GetStringUuid());
         auto rc = CollectClusterInfo();
         if (!token_->alive) {
             break;

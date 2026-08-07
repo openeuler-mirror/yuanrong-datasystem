@@ -22,6 +22,8 @@
 #include <vector>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
 
@@ -155,6 +157,7 @@ void EnsureReaperLocked()
         g_reaperRunning = true;
         g_reaperThread = std::thread([] {
             while (ProcessDeferredQueueBatch()) {
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID("StreamCloseReaper;" + GetStringUuid());
                 // Continue polling until the queue is empty.
             }
         });

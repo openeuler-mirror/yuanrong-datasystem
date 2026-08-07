@@ -25,6 +25,7 @@
 #include <bthread/bthread.h>
 
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "gtest/gtest.h"
 
 namespace datasystem {
@@ -522,6 +523,51 @@ TEST_F(RequestContextTest, BthreadMNIsolation)
         << "Bthread M:N isolation broken: " << violations.load() << " violations detected";
 }
 
+// ============================================================================
+// Test 10: SetRequestContext(nullptr) + ScopedRequestContext recovers trace
+//          after bthread-local slot pollution (simulates brpc M:N borrowing).
+// ============================================================================
+// Simulates the NodeSelector WorkerThread scenario: a background plain pthread
+// whose bthread-local keytable slot was polluted by a prior brpc RPC borrowing
+// the pthread. SetRequestContext(nullptr) clears the stale pointer, then
+// ScopedRequestContext installs a fresh ctx so Trace::Instance() routes to the
+// correct trace instead of the stale ctx's empty trace.
+//
+// A sentinel thread_local trace is used instead of the expected traceID to
+// prevent a conditional false-positive: if GetBthreadTrace routing degrades
+// (returns nullptr), Trace::Instance() falls back to the thread_local trace.
+// By setting the sentinel to a value that differs from the expected trace, the
+// test fails if routing does not work, rather than passing via the fallback.
+TEST_F(RequestContextTest, ScopedRequestContextRecoversFromPollutedSlot)
+{
+    InitRequestContext();
+    SetRequestContext(nullptr);
+
+    // Set a thread_local sentinel (not the expected traceID) so routing
+    // degradation would produce a different value and be caught.
+    const std::string sentinel = "sentinel;routing-degraded";
+    TraceGuard entryGuard = Trace::Instance().SetTraceNewID(sentinel, true);
+    ASSERT_EQ(Trace::Instance().GetTraceID(), sentinel);
+
+    // Simulate brpc M:N pollution: another bthread left a stale RequestContext
+    // pointer in the bthread-local keytable slot.
+    RequestContext staleCtx;
+    SetRequestContext(&staleCtx);
+    ASSERT_EQ(Trace::Instance().GetTraceID(), std::string())
+        << "Precondition: polluted slot should yield empty trace";
+
+    // The fix: clear the slot, then install a fresh ScopedRequestContext.
+    SetRequestContext(nullptr);
+    const std::string workerTraceID = "NodeSelector;test-uuid";
+    ScopedRequestContext ctx(workerTraceID);
+
+    EXPECT_EQ(Trace::Instance().GetTraceID(), workerTraceID)
+        << "ScopedRequestContext must override the polluted slot; if this equals '"
+        << sentinel << "' then bthread routing degraded to thread_local";
+
+    SetRequestContext(nullptr);
+}
+
 // ScopedRequestContext must be non-copyable and non-movable, so it can never
 // be moved out of its handler's stack frame (which would break the RAII
 // contract on early return).
@@ -533,5 +579,50 @@ static_assert(!std::is_copy_assignable<ScopedRequestContext>::value,
               "ScopedRequestContext must not be copy-assignable");
 static_assert(!std::is_move_assignable<ScopedRequestContext>::value,
               "ScopedRequestContext must not be move-assignable");
+
+// Regression test for the NodeSelector::WorkerThread loop pattern: each iteration
+// calls SetRequestContext(nullptr) then installs a fresh ScopedRequestContext with
+// a per-iteration UUID. This test asserts that successive iterations yield
+// DIFFERENT trace IDs (not the same stale value), which is the core fix for
+// "fixed traceId can't distinguish rounds". A sentinel thread_local trace is set
+// before the loop body so that if GetBthreadTrace routing degrades (returns
+// nullptr), Trace::Instance() would fall back to the sentinel and the assertions
+// would fail — preventing the conditional false-positive flagged in review.
+TEST_F(RequestContextTest, PerIterationScopedRequestContextYieldsDistinctTraces)
+{
+    InitRequestContext();
+    SetRequestContext(nullptr);
+
+    // Set a thread_local sentinel that differs from the expected per-iteration trace.
+    // If bthread routing degrades, Trace::Instance() returns this sentinel instead
+    // of the ScopedRequestContext's trace, and the ASSERT_NE below catches it.
+    const std::string sentinel = "sentinel;routing-degraded";
+    TraceGuard sentinelGuard = Trace::Instance().SetTraceNewID(sentinel, true);
+    ASSERT_EQ(Trace::Instance().GetTraceID(), sentinel);
+
+    std::string firstTrace;
+    std::string secondTrace;
+
+    // Simulate two iterations of the NodeSelector loop body.
+    {
+        SetRequestContext(nullptr);
+        ScopedRequestContext ctx("NodeSelector;" + GetStringUuid());
+        firstTrace = Trace::Instance().GetTraceID();
+        ASSERT_NE(firstTrace, sentinel) << "Routing must not degrade to thread_local sentinel";
+        ASSERT_NE(firstTrace.find("NodeSelector;"), std::string::npos);
+    }
+    {
+        SetRequestContext(nullptr);
+        ScopedRequestContext ctx("NodeSelector;" + GetStringUuid());
+        secondTrace = Trace::Instance().GetTraceID();
+        ASSERT_NE(secondTrace, sentinel) << "Routing must not degrade to thread_local sentinel";
+        ASSERT_NE(secondTrace.find("NodeSelector;"), std::string::npos);
+    }
+
+    EXPECT_NE(firstTrace, secondTrace)
+        << "Per-iteration ScopedRequestContext must produce distinct traces across rounds";
+
+    SetRequestContext(nullptr);
+}
 
 }  // namespace datasystem

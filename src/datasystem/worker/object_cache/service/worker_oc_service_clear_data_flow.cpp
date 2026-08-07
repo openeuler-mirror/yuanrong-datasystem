@@ -185,7 +185,9 @@ void WorkerOcServiceClearDataFlow::SubmitOwnedTopologyCleanup(OwnedTopologyClear
         return;
     }
     auto exitFlag = exitFlag_;
-    clearDataThreadPool_->Execute([this, request = std::move(request), exitFlag] {
+    auto traceID = Trace::Instance().GetTraceID();
+    clearDataThreadPool_->Execute([this, request = std::move(request), exitFlag, traceID] {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         if (exitFlag != nullptr && exitFlag->load()) {
             return;
         }

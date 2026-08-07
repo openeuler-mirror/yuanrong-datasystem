@@ -773,6 +773,7 @@ void RemoteH2DManager::ManageHeartbeats()
     INJECT_POINT("RH2D.ManageHeartbeats.heartbeat_timeout_s",
                  [this](int32_t timeout) { this->heartbeatTimeoutS_ = timeout; });
     while (!interrupted_.load()) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("H2DHeartbeat;" + GetStringUuid());
         std::this_thread::sleep_for(std::chrono::seconds(heartbeatIntervalS_));
         DispatchPings();
         std::vector<std::string> disconnected = CheckDisconnectedClients();

@@ -27,6 +27,8 @@
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -377,7 +379,10 @@ Status TopologyTaskExecutor::HandleRestartFacts(const std::map<std::string, int6
         ++callbackBodies_;
         diagnostics_.queuedCallbacks = callbackBodies_;
         try {
-            callbackPool_->Execute([this, batch] {
+            auto traceID = Trace::Instance().GetTraceID();
+            callbackPool_->Execute([this, batch, traceID] {
+                SetRequestContext(nullptr);
+                ScopedRequestContext ctx(traceID);
                 FinishRestartEffects(*batch, InvokeRestartEffects(*batch));
             });
         } catch (const std::exception &error) {
@@ -537,7 +542,10 @@ Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyEx
     }
     try {
         // Keep callbackPool_ protected until the work item is accepted so Stop() cannot reset it concurrently.
-        callbackPool_->Execute([this, fence = std::move(fence), operation, cancellation]() mutable {
+        auto traceID = Trace::Instance().GetTraceID();
+        callbackPool_->Execute([this, fence = std::move(fence), operation, cancellation, traceID]() mutable {
+            SetRequestContext(nullptr);
+            ScopedRequestContext ctx(traceID);
             ExecuteCallback(std::move(fence), std::move(operation), std::move(cancellation));
         });
     } catch (const std::exception &error) {
@@ -656,7 +664,9 @@ Status TopologyTaskExecutor::ValidateCallbackWindowLocked(const TopologyExecutio
 void TopologyTaskExecutor::ExecuteCallback(TopologyExecutionFence fence, std::string operation,
                                            std::shared_ptr<CancellationToken> cancellation) noexcept
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("task;" + GetStringUuid());
+    auto currentTrace = Trace::Instance().GetTraceID();
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(
+        currentTrace.empty() ? ("task;" + GetStringUuid()) : currentTrace);
     const auto phase = fence.phase;
     auto callbackStatus = Status::OK();
     auto submitStatus = Status(K_RUNTIME_ERROR, "topology callback completion was not submitted");
@@ -844,8 +854,12 @@ Status TopologyTaskExecutor::SubmitCleanupApply(const TopologyExecutionFence &fe
         ++callbackBodies_;
         diagnostics_.queuedCallbacks = callbackBodies_;
         try {
+            auto traceID = Trace::Instance().GetTraceID();
             callbackPool_->Execute(
-                [this, fence, operation, deadline, ownedCleanup, cancellation = iter->second.cancellation]() mutable {
+                [this, fence, operation, deadline, ownedCleanup,
+                 cancellation = iter->second.cancellation, traceID]() mutable {
+                    SetRequestContext(nullptr);
+                    ScopedRequestContext ctx(traceID);
                     ExecuteCleanupApply(std::move(fence), std::move(operation), deadline, std::move(ownedCleanup),
                                         std::move(cancellation));
                 });

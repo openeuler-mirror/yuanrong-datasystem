@@ -1358,6 +1358,7 @@ Status WorkerOCServer::EnqueueWorkerProbe(cluster::WorkerProbeRequest request)
 void WorkerOCServer::RunWorkerProbeLoop()
 {
     while (true) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("WorkerProbeLoop;" + GetStringUuid());
         cluster::WorkerProbeRequest request;
         {
             std::unique_lock<std::mutex> lock(workerProbeMutex_);
@@ -2438,7 +2439,7 @@ Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()
         auto warmupTraceID = Trace::Instance().GetTraceID();
         (void)warmupThreadPoolForSubmit->Submit([this, warmupTraceID]() {
             TraceGuard traceGuard = warmupTraceID.empty() ? Trace::Instance().SetTraceUUID()
-                                                          : Trace::Instance().SetTraceNewID(warmupTraceID, true);
+                                                           : Trace::Instance().SetTraceNewID(warmupTraceID);
             WarmupReadyWorkerMasterRpcOnStartup();
         });
     } catch (const std::exception &e) {
@@ -2640,6 +2641,7 @@ void WorkerOCServer::ScheduleTopologySnapshotWarmup(std::shared_ptr<const cluste
 void WorkerOCServer::DrainTopologySnapshotWarmup()
 {
     while (!masterRpcWarmupExit_) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("TopologySnapshotWarmup;" + GetStringUuid());
         std::shared_ptr<const cluster::TopologySnapshot> snapshot;
         {
             std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);

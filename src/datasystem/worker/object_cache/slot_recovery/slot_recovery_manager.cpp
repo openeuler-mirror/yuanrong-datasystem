@@ -647,7 +647,10 @@ Status SlotRecoveryManager::ScheduleLocalTasks(const std::string &incidentKey, c
         if (task.owner_worker() != localWorker || SlotRecoveryIncidentState::IsTaskTerminal(task)) {
             continue;
         }
-        const auto asyncTraceId = GetStringUuid().substr(0, SHORT_TRACEID_SIZE);
+        auto asyncTraceId = Trace::Instance().GetTraceID();
+        if (asyncTraceId.empty()) {
+            asyncTraceId = GetStringUuid().substr(0, SHORT_TRACEID_SIZE);
+        }
         LOG(INFO) << FormatString(
             "action=schedule_local_task incident_key=%s failed_worker=%s owner_worker=%s trace=%s task_status=%s",
             incidentKey, task.failed_worker(), task.owner_worker(), asyncTraceId, TaskStatusName(task.task_status()));

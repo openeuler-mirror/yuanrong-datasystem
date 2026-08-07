@@ -26,7 +26,10 @@
 #include <utility>
 #include "ut/common.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/thread_pool.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/usage_monitor.h"
 
@@ -308,5 +311,42 @@ TEST_F(UsageMonitorTest, TestLowerBound)
     usageMonitor_->IncUsage(streamName, remoteWorkerAddr1, 11);
     ASSERT_TRUE(usageMonitor_->CheckNIncOverUsedForStream(streamName, remoteWorkerAddr1, 1, 1, 0).IsError());
 }
+
+// Verifies the type-A pattern (SetRequestContext(nullptr) + ScopedRequestContext) on a pool thread
+// with the same configuration as the SC thread pool (ScThreads, min<max). This is the same pattern
+// that StreamManager::BlockProducer/UnBlockProducer use. Reverting the SetRequestContext(nullptr)
+// +ScopedRequestContext to TraceGuard-only would cause the pool thread's trace to be empty or stale,
+// failing the assertion.
+TEST_F(UsageMonitorTest, ScThreadPoolPropagatesCallerTraceViaTypeAPattern)
+{
+    // Create a pool with the same min<max config as ScThreads (min=4, max=128) to simulate the type-B RPC pool.
+    ThreadPool pool(4, 128, "ScThreads-test");
+
+    const std::string knownTrace = "ut-sc-pool;trace-prop";
+    std::string capturedTrace;
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool done = false;
+
+    {
+        TraceGuard guard = Trace::Instance().SetTraceNewID(knownTrace);
+        pool.Execute([&]() {
+            SetRequestContext(nullptr);
+            ScopedRequestContext ctx(knownTrace);
+            std::lock_guard<std::mutex> lk(mtx);
+            capturedTrace = Trace::Instance().GetTraceID();
+            done = true;
+            cv.notify_all();
+        });
+        std::unique_lock<std::mutex> lk(mtx);
+        ASSERT_TRUE(cv.wait_for(lk, std::chrono::seconds(3), [&] { return done; }))
+            << "Pool task did not complete within timeout";
+    }
+
+    EXPECT_EQ(capturedTrace, knownTrace)
+        << "Pool thread must inherit caller traceId via type-A pattern "
+        << "(SetRequestContext(nullptr)+ScopedRequestContext)";
+}
+
 }  // namespace ut
 }  // namespace datasystem

@@ -324,7 +324,12 @@ Status RocksStore::BatchPut(const std::string &tableName, std::unordered_map<std
         rc = BatchPut(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
-        auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, metaInfos]() {
+        auto callerTraceID = Trace::Instance().GetTraceID();
+        if (callerTraceID.empty()) {
+            callerTraceID = "RocksStoreAsync;" + GetStringUuid();
+        }
+        auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, metaInfos, callerTraceID]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
             rocksdb::Status rc = BatchPut(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
             if (!rc.ok()) {
                 FormatString("Async BatchPut failed: %s", rc.getState());
@@ -349,7 +354,12 @@ Status RocksStore::BatchDelete(const std::string &tableName, std::unordered_map<
         rocksdb::Status rc = BatchDelete(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
-        auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, metaInfos]() {
+        auto callerTraceID = Trace::Instance().GetTraceID();
+        if (callerTraceID.empty()) {
+            callerTraceID = "RocksStoreAsync;" + GetStringUuid();
+        }
+        auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, metaInfos, callerTraceID]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
             sleep(10);
             rocksdb::Status rc = BatchDelete(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
             if (!rc.ok()) {
@@ -409,7 +419,12 @@ Status RocksStore::Get(const std::string &tableName, const std::string &key, std
     if (mode_ == RocksdbWriteMode::SYNC) {
         rc = Get(tableHandle, key, value);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
-        auto future = asyncThreadPool_->Submit(key, [this, key, tableHandle, &rc, &value]() {
+        auto callerTraceID = Trace::Instance().GetTraceID();
+        if (callerTraceID.empty()) {
+            callerTraceID = "RocksStoreAsync;" + GetStringUuid();
+        }
+        auto future = asyncThreadPool_->Submit(key, [this, key, tableHandle, &rc, &value, callerTraceID]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
             rc = Get(tableHandle, key, value);
             if (!rc.ok()) {
                 LOG(ERROR) << FormatString("Async Get key %s failed: %s", key, rc.getState());
@@ -453,8 +468,14 @@ Status RocksStore::GetAll(const std::string &tableName, std::vector<std::pair<st
         GetMasterTimeCost().Append("RocksDB GetAll", timer.ElapsedMilliSecond());
         return Status::OK();
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
-        auto future = asyncThreadPool_->Submit(tableName, [this, readOptions, tableHandle, &outKeyValues]() {
-            std::unique_ptr<rocksdb::Iterator> iter2(db_->NewIterator(readOptions, tableHandle));
+        auto callerTraceID = Trace::Instance().GetTraceID();
+        if (callerTraceID.empty()) {
+            callerTraceID = "RocksStoreAsync;" + GetStringUuid();
+        }
+        auto future = asyncThreadPool_->Submit(tableName,
+            [this, readOptions, tableHandle, &outKeyValues, callerTraceID]() {
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
+                std::unique_ptr<rocksdb::Iterator> iter2(db_->NewIterator(readOptions, tableHandle));
             iter2->SeekToFirst();
             while (iter2->Valid()) {
                 outKeyValues.emplace_back(std::make_pair(iter2->key().ToString(), iter2->value().ToString()));
@@ -497,8 +518,14 @@ Status RocksStore::PrefixSearch(const std::string &tableName, const std::string 
         PrefixSearch(tableHandle, prefixKey, outKeyValues);
         return Status::OK();
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
-        auto future = asyncThreadPool_->Submit(tableName, [this, prefixKey, tableHandle, &outKeyValues]() {
-            PrefixSearch(tableHandle, prefixKey, outKeyValues);
+        auto callerTraceID = Trace::Instance().GetTraceID();
+        if (callerTraceID.empty()) {
+            callerTraceID = "RocksStoreAsync;" + GetStringUuid();
+        }
+        auto future = asyncThreadPool_->Submit(tableName,
+            [this, prefixKey, tableHandle, &outKeyValues, callerTraceID]() {
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
+                PrefixSearch(tableHandle, prefixKey, outKeyValues);
         });
         future.wait();
         return Status::OK();
@@ -527,7 +554,12 @@ Status RocksStore::Delete(const std::string &tableName, const std::string &key)
         // Deleting a key that does not exist in the database will NOT yield an error.
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
-        auto future = asyncThreadPool_->Submit(key, [this, tableHandle, key]() {
+        auto callerTraceID = Trace::Instance().GetTraceID();
+        if (callerTraceID.empty()) {
+            callerTraceID = "RocksStoreAsync;" + GetStringUuid();
+        }
+        auto future = asyncThreadPool_->Submit(key, [this, tableHandle, key, callerTraceID]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
             rocksdb::Status rc = Delete(tableHandle, key, FLAGS_rocksdb_sync_write);
             if (!rc.ok()) {
                 LOG(ERROR) << FormatString("Async Delete key %s failed: %s", key, rc.getState());
@@ -564,14 +596,20 @@ Status RocksStore::PrefixDelete(const std::string &tableName, const std::string 
         }
         return Status::OK();
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
-        auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, options, prefixKey, endKey]() {
-            rocksdb::Status rc =
-                db_->DeleteRange(options, tableHandle, rocksdb::Slice(prefixKey), rocksdb::Slice(endKey));
-            if (!rc.ok()) {
-                LOG(ERROR) << FormatString("Async PrefixDelete prefixKey %s to endKey %s failed: %s", prefixKey, endKey,
-                                           rc.getState());
-            }
-        });
+        auto callerTraceID = Trace::Instance().GetTraceID();
+        if (callerTraceID.empty()) {
+            callerTraceID = "RocksStoreAsync;" + GetStringUuid();
+        }
+        auto future = asyncThreadPool_->Submit(tableName,
+            [this, tableHandle, options, prefixKey, endKey, callerTraceID]() {
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
+                rocksdb::Status rc =
+                    db_->DeleteRange(options, tableHandle, rocksdb::Slice(prefixKey), rocksdb::Slice(endKey));
+                if (!rc.ok()) {
+                    LOG(ERROR) << FormatString("Async PrefixDelete prefixKey %s to endKey %s failed: %s", prefixKey,
+                                               endKey, rc.getState());
+                }
+            });
         return Status::OK();
     }
     GetMasterTimeCost().Append("RocksDB DeleteRange", timer.ElapsedMilliSecond());

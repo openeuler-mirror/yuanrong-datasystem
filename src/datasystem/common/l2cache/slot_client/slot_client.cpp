@@ -36,6 +36,8 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 DS_DEFINE_uint32(distributed_disk_max_data_file_size_mb, 1024,
                  "The target max size in MB of a rolling slot data file. Large objects may use a dedicated file.");
@@ -333,6 +335,7 @@ void SlotClient::BackgroundCompactLoop()
     auto nextCompactDeadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(ComputeNextCompactDelayMs());
     while (!ShouldStopBackgroundCompactThread()) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("SlotCompact;" + GetStringUuid());
         auto waitMs = std::max<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                             nextCompactDeadline - std::chrono::steady_clock::now())
                                             .count(),

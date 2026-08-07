@@ -833,7 +833,10 @@ Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const Reconciliation
 Status MasterOCServiceImpl::ReconcileMembershipChange(
     std::shared_ptr<ServerUnaryWriterReader<ReconciliationRspPb, ReconciliationQueryPb>> serverApi)
 {
-    (void)reconciliationAsyncPool_->Submit([this, serverApi] {
+    auto traceID = Trace::Instance().GetTraceID();
+    (void)reconciliationAsyncPool_->Submit([this, serverApi, traceID] {
+        SetRequestContext(nullptr);
+        ScopedRequestContext ctx(traceID);
         ReconciliationQueryPb req;
         ReconciliationRspPb rsp;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "ReconcileMembershipChange read request failed");

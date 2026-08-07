@@ -84,6 +84,7 @@ void P2PSubscribe::Init()
 
 void P2PSubscribe::RunP2PSendLoop()
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("P2PSend;" + GetStringUuid(), true);
     std::unordered_set<StatusCode> ignoreLogCodes = { K_OK, K_RPC_DEADLINE_EXCEEDED, K_NOT_FOUND };
     Timer lastGetTimer;
     bool first = true;
@@ -221,6 +222,7 @@ void P2PSubscribe::ProcessP2PSend(
 
 void P2PSubscribe::RunP2PRecvLoop()
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("P2PRecv;" + GetStringUuid(), true);
     std::queue<std::shared_ptr<P2PGetRequestsWrapper>> remainTaskQueue;  // to be optimized for scheduling
     Timer lastGetTimer;
     bool first = true;
@@ -293,6 +295,7 @@ void P2PSubscribe::P2PAckGet(std::shared_ptr<P2PGetRequest> &p2pGetRequest)
 
 void P2PSubscribe::RunP2PAckLoop()
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("P2PAck;" + GetStringUuid(), true);
     LOG(INFO) << "RunP2PAckLoop starts";
     while (!interruptFlag_) {
         std::shared_ptr<P2PAckReq> p2pAckReq;
@@ -616,6 +619,7 @@ void P2PSubscribe::ProcessHcclCommDestroy(const SubscribeReceiveNpuEventPb &npuE
 void P2PSubscribe::MonitorLoop()
 {
     while (monitorRun_ && !interruptFlag_) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("P2PMonitor;" + GetStringUuid());
         {
             auto commVec = commFactory_->GetAllComm();
             for (const auto &comm : commVec) {

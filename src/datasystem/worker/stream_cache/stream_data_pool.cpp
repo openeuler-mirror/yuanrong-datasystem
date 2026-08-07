@@ -23,6 +23,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/lock_helper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/request_counter.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
@@ -91,8 +92,13 @@ Status StreamDataPool::ObjectPartition::AddScanObject(const std::shared_ptr<T> &
     });
     auto it = objMap_.find(keyName);
     if (it == objMap_.end()) {
+        auto traceID = Trace::Instance().GetTraceID();
         auto future = std::make_unique<std::future<Status>>(
-            pool->Submit([this, keyName]() { return SendElementsToRemote(keyName); }));
+            pool->Submit([this, keyName, traceID]() {
+                SetRequestContext(nullptr);
+                ScopedRequestContext ctx(traceID);
+                return SendElementsToRemote(keyName);
+            }));
         std::shared_ptr<S> scanInfo = std::make_shared<S>(streamObj, lastAckCursor, dest, std::move(future));
         objMap_.emplace(keyName, std::static_pointer_cast<ScanInfo>(scanInfo));
         for (auto &rw : dest) {
@@ -138,8 +144,13 @@ void StreamDataPool::ObjectPartition::ScanChanges(std::unique_ptr<ThreadPool> &p
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count() >= FLAGS_sc_scan_interval_ms
             && !interrupt_) {
             scanInfo.start_ = now;
+            auto traceID = Trace::Instance().GetTraceID();
             scanInfo.future_ = std::make_unique<std::future<Status>>(
-                pool->Submit([this, streamName]() { return SendElementsToRemote(streamName); }));
+                pool->Submit([this, streamName, traceID]() {
+                    SetRequestContext(nullptr);
+                    ScopedRequestContext ctx(traceID);
+                    return SendElementsToRemote(streamName);
+                }));
         }
     });
     const uint32_t intervalMs = 1000;

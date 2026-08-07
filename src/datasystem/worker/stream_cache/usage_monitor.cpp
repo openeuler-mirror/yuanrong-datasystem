@@ -21,6 +21,8 @@
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
 namespace worker {
@@ -305,6 +307,7 @@ void UsageMonitor::BlockProducersIfNeeded()
     const auto unBlockThreshold = 0.7;
     const auto waitTimeSecs = 1;
     while (true) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("UsageMonitor;" + GetStringUuid());
         // Wait on the cv for 0.1s for work or interrupt
         auto overUsed = WaitForOverUseCondition(timeoutMs, blockThreshold);
         if (interrupt_) {
