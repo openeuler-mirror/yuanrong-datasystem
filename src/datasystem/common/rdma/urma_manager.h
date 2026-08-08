@@ -594,19 +594,25 @@ private:
     Status UnRegisterUrmaLog();
 
     /**
-     * @brief Gets Urma effective bonding device
-     * @param[out] urmaDevName Effective urma device name
+     * @brief Collects effective URMA bonding device candidates to try in order.
+     *
+     * The configured device name (env DS_UB_DEV_NAME, default bonding_dev_0) is placed first when it matches a live
+     * device, followed by every remaining device whose name starts with "bonding". On bare-metal hosts where the
+     * first bonding device is occupied by a container, the caller falls through to the next candidate so that worker
+     * startup can succeed without a restart.
+     * @param[in] configuredName Device name preferred by configuration (env or default).
+     * @param[out] candidates Ordered candidate device names to try.
      * @return Status of the call.
      */
-    Status UrmaGetEffectiveDevice(std::string &urmaDevName);
+    Status UrmaGetEffectiveDevices(const std::string &configuredName, std::vector<std::string> &candidates);
 
     /**
-     * @brief Get Urma device name and eid index for a given hostport
-     * @param[out] urmaDeviceName Urma device name
+     * @brief Collect URMA device candidates and eid index for a given hostport
+     * @param[out] candidates Ordered candidate device names to try.
      * @param[out] eidIndex Eid index to use for the device
      * @return Status of the call.
      */
-    Status GetUrmaDeviceName(std::string &urmaDeviceName, int &eidIndex);
+    Status GetUrmaDeviceName(std::vector<std::string> &candidates, int &eidIndex);
 
     /**
      * @brief Gets Urma effective device from devList

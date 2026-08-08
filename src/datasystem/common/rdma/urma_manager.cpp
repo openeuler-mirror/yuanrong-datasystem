@@ -226,15 +226,15 @@ Status UrmaManager::Stop()
     return Status::OK();
 }
 
-Status UrmaManager::GetUrmaDeviceName(std::string &urmaDeviceName, int &eidIndex)
+Status UrmaManager::GetUrmaDeviceName(std::vector<std::string> &candidates, int &eidIndex)
 {
-    urmaDeviceName = GetStringFromEnv(ENV_UB_DEVICE_NAME.c_str(), DEFAULT_UB_DEVICE_NAME.c_str());
+    std::string configuredName = GetStringFromEnv(ENV_UB_DEVICE_NAME.c_str(), DEFAULT_UB_DEVICE_NAME.c_str());
     eidIndex = GetInt32FromEnv(ENV_UB_DEVICE_EID.c_str(), 0);
-    if (urmaDeviceName.empty()) {
+    if (configuredName.empty()) {
         RETURN_STATUS(K_INVALID, "env DS_URMA_DEV_NAME is empty");
     }
-    RETURN_IF_NOT_OK(UrmaGetEffectiveDevice(urmaDeviceName));
-    LOG(INFO) << "urmaDeviceName = " << urmaDeviceName;
+    RETURN_IF_NOT_OK(UrmaGetEffectiveDevices(configuredName, candidates));
+    LOG(INFO) << FormatString("Got %zu urma device candidate(s)", candidates.size());
     return Status::OK();
 }
 
@@ -258,21 +258,50 @@ Status UrmaManager::Init(const HostPort &hostport)
         waitInit_.Set();
     });
     RETURN_IF_NOT_OK(UrmaInit());
-    std::string urmaDeviceName;
+    std::vector<std::string> candidates;
     int eidIndex = -1;
-    RETURN_IF_NOT_OK(GetUrmaDeviceName(urmaDeviceName, eidIndex));
-    const bool isBondingDevice = urmaDeviceName.find("bonding", 0) == 0;
-    urma_device_t *urmaDevice = nullptr;
-    RETURN_IF_NOT_OK(UrmaGetDeviceByName(urmaDeviceName, urmaDevice));
-    if (eidIndex < 0) {
-        RETURN_IF_NOT_OK(GetEidIndex(urmaDevice, eidIndex));
-    }
+    RETURN_IF_NOT_OK(GetUrmaDeviceName(candidates, eidIndex));
     if (FLAGS_urma_connection_size != 0) {
         LOG(WARNING) << "Flag urma_connection_size is deprecated and ignored. "
                      << "JFS/JFR are now created per-connection.";
     }
     OsXprtPipln::SetIsClientMode(clientMode_);
-    RETURN_IF_NOT_OK(urmaResource_->Init(urmaDevice, eidIndex, isBondingDevice));
+    // Try each candidate device in order. UrmaResource::Init starts with Clear() (urma_resource.cpp), so a failed
+    // attempt on one device is torn down before the next candidate is tried; the first device whose Init succeeds is
+    // used. This lets a bare-metal worker start when its default bonding device (EID 0) is occupied by a container.
+    Status lastErr(K_RUNTIME_ERROR, "No URMA device candidate available");
+    for (size_t i = 0; i < candidates.size(); i++) {
+        const std::string &candidate = candidates[i];
+        LOG(INFO) << FormatString("Trying URMA device candidate[%zu/%zu]: %s", i + 1, candidates.size(), candidate);
+        urma_device_t *device = nullptr;
+        Status s = UrmaGetDeviceByName(candidate, device);
+        if (!s.IsOk()) {
+            lastErr = s;
+            LOG(WARNING) << FormatString("UrmaGetDeviceByName failed for candidate %s: %s", candidate, s.GetMsg());
+            continue;
+        }
+        int candEidIndex = eidIndex;
+        if (candEidIndex < 0) {
+            s = GetEidIndex(device, candEidIndex);
+            if (!s.IsOk()) {
+                lastErr = s;
+                LOG(WARNING) << FormatString("GetEidIndex failed for device %s: %s", candidate, s.GetMsg());
+                continue;
+            }
+        }
+        const bool isBondingDevice = candidate.find("bonding", 0) == 0;
+        s = urmaResource_->Init(device, candEidIndex, isBondingDevice);
+        if (s.IsOk()) {
+            LOG(INFO) << FormatString("UrmaResource::Init succeeded with device %s (eid index %d)", candidate,
+                                      candEidIndex);
+            lastErr = Status::OK();
+            break;
+        }
+        LOG(WARNING) << FormatString("UrmaResource::Init failed for device %s: %s, trying next candidate", candidate,
+                                     s.GetMsg());
+        lastErr = s;
+    }
+    RETURN_IF_NOT_OK(lastErr);
     RETURN_IF_NOT_OK(InitLocalUrmaInfo(hostport));
     serverStop_ = false;
     serverEventThread_ = std::make_unique<Thread>(&UrmaManager::ServerEventHandleThreadMain, this);
@@ -500,9 +529,9 @@ int UrmaManager::CompareDeviceName(const std::string &urmaDevName, urma_device_t
     return -1;
 }
 
-Status UrmaManager::UrmaGetEffectiveDevice(std::string &urmaDevName)
+Status UrmaManager::UrmaGetEffectiveDevices(const std::string &configuredName, std::vector<std::string> &candidates)
 {
-    LOG(INFO) << FormatString("Start UrmaGetEffectiveDevice() with %d", urmaDevName);
+    LOG(INFO) << FormatString("Start UrmaGetEffectiveDevices() with %s", configuredName);
     int devNums = 0;
     urma_device_t **list = nullptr;
     list = ds_urma_get_device_list(&devNums);
@@ -510,14 +539,28 @@ Status UrmaManager::UrmaGetEffectiveDevice(std::string &urmaDevName)
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
                                 FormatString("Got empty[%d] ub device list with errno = %d", devNums, errno));
     }
-    int index = CompareDeviceName(urmaDevName, list, devNums);
+    // The configured name (env or default) is tried first to honor operator intent and preserve the previous
+    // default behavior when its device is available.
+    int index = CompareDeviceName(configuredName, list, devNums);
     if (index >= 0) {
-        return Status::OK();
+        candidates.emplace_back(reinterpret_cast<const char *>(list[index]->name));
     }
-    std::string prefixName = "bonding";
-    index = CompareDeviceName(prefixName, list, devNums);
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(index >= 0, K_RUNTIME_ERROR, "Cannot get effective bonding device");
-    urmaDevName = std::string(list[index]->name);
+    // Then collect every bonding device as a fallback for the bare-metal case where the first device is occupied
+    // by a container (its EID 0 is unavailable, so UrmaResource::Init fails and the next candidate is tried).
+    const std::string prefixName = "bonding";
+    for (int i = 0; i < devNums; i++) {
+        if (list[i] == nullptr) {
+            LOG(ERROR) << FormatString("Got empty device index %d from devList.", i);
+            continue;
+        }
+        if (strncmp(reinterpret_cast<const char *>(list[i]->name), prefixName.c_str(), prefixName.length()) == 0) {
+            std::string name = reinterpret_cast<const char *>(list[i]->name);
+            if (std::find(candidates.begin(), candidates.end(), name) == candidates.end()) {
+                candidates.emplace_back(std::move(name));
+            }
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!candidates.empty(), K_RUNTIME_ERROR, "Cannot get effective bonding device");
     return Status::OK();
 }
 
