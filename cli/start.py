@@ -58,6 +58,7 @@ class Command(BaseCommand):
     _READY_CONNECT_TIMEOUT_SECONDS = 1.0
     _CLEANUP_WAIT_SECONDS = 2.0
     _CLEANUP_CHECK_INTERVAL_SECONDS = 0.1
+    _WORKER_STORE_LOCK_RETRY_INTERVAL_SECONDS = 1.0
     _KV_EVENTS_CONFIG_PARAM = "kv_events_config"
 
     def __init__(self):
@@ -484,6 +485,19 @@ class Command(BaseCommand):
         if len(configured_backends) > 1:
             raise ValueError("Only one coordination backend can be specified")
 
+    @staticmethod
+    def is_retryable_worker_store_lock_error(output: str) -> bool:
+        """Return true when a just-stopped worker still owns the local metadata store lock."""
+        normalized = output.lower()
+        return (
+            "lock file:" in normalized
+            and "resource temporarily unavailable" in normalized
+            and (
+                "cannot open the key/value store" in normalized
+                or "kv store error" in normalized
+            )
+        )
+
     def start_worker(
         self,
         params: Dict[str, str],
@@ -516,34 +530,52 @@ class Command(BaseCommand):
             ready_check_path = self.valid_safe_path(ready_check_path)
             if os.path.exists(ready_check_path) and os.path.isfile(ready_check_path):
                 os.remove(ready_check_path)
-            process = subprocess.Popen(
-                cmd,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
-            self.logger.info(f"Starting worker service with PID: {process.pid}")
-            for _ in range(self._timeout):
-                return_code = process.poll()
-                if return_code is not None:
-                    stdout, stderr = process.communicate(timeout=10)
-                    self.logger.error(
-                        f"[  FAILED  ] Worker exited with code {return_code}\n output: {stdout + stderr}"
-                    )
-                    raise RuntimeError(
-                        f"Worker service exited abnormally with code {return_code}"
-                    )
-                if os.path.exists(ready_check_path):
-                    self.logger.info(
-                        "[  OK  ] Start worker service @ {} success, PID: {}".format(
-                            params["worker_address"], process.pid
+            deadline = time.monotonic() + self._timeout
+            while time.monotonic() < deadline:
+                process = subprocess.Popen(
+                    cmd,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+                self.logger.info(f"Starting worker service with PID: {process.pid}")
+                retry_start = False
+                while time.monotonic() < deadline:
+                    return_code = process.poll()
+                    if return_code is not None:
+                        stdout, stderr = process.communicate(timeout=10)
+                        output = stdout + stderr
+                        if self.is_retryable_worker_store_lock_error(output):
+                            self.logger.warning(
+                                "Worker metadata store lock is still held by the previous process; "
+                                "retrying startup."
+                            )
+                            retry_start = True
+                            break
+                        self.logger.error(
+                            f"[  FAILED  ] Worker exited with code {return_code}\n output: {output}"
+                        )
+                        raise RuntimeError(
+                            f"Worker service exited abnormally with code {return_code}"
+                        )
+                    if os.path.exists(ready_check_path):
+                        self.logger.info(
+                            "[  OK  ] Start worker service @ {} success, PID: {}".format(
+                                params["worker_address"], process.pid
+                            )
+                        )
+                        return
+                    time.sleep(min(1, max(0, deadline - time.monotonic())))
+                if retry_start:
+                    time.sleep(
+                        min(
+                            self._WORKER_STORE_LOCK_RETRY_INTERVAL_SECONDS,
+                            max(0, deadline - time.monotonic()),
                         )
                     )
-                    break
-                time.sleep(1)
-            else:
+                    continue
                 self.logger.error(
                     f"[  FAILED  ] Worker service is not ready within {self._timeout} seconds"
                 )
@@ -552,6 +584,7 @@ class Command(BaseCommand):
                 except ProcessLookupError:
                     pass
                 raise RuntimeError("Worker service startup timeout")
+            raise RuntimeError("Worker service startup timeout")
 
         except Exception as e:
             self.logger.error(

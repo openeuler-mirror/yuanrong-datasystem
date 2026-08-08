@@ -35,6 +35,7 @@ class Command(BaseCommand):
     _base_timeout = 180
     _timeout = _base_timeout
     _check_interval = 0.2
+    _force_kill_wait_timeout = 10
     _default_shared_memory_size_mb = 1024
     _default_data_migrate_rate_limit_mb = 40
     _service_type_key = "service_type"
@@ -318,10 +319,19 @@ class Command(BaseCommand):
             )
             return
         if self.force_kill(pid):
-            self.logger.info(
-                f"[  OK  ] Force stop {service_type} service @ {address}, PID: {pid}"
+            original_timeout = self._timeout
+            self._timeout = min(self._timeout, self._force_kill_wait_timeout)
+            try:
+                if self.wait_exit(pid):
+                    self.logger.info(
+                        f"[  OK  ] Force stop {service_type} service @ {address}, PID: {pid}"
+                    )
+                    return
+            finally:
+                self._timeout = original_timeout
+            raise RuntimeError(
+                f"[  FAILED  ] Force stop {service_type} sent but process still exists @ {address}, PID: {pid}"
             )
-            return
         raise RuntimeError(
             f"[  FAILED  ] Force stop {service_type} failed @ {address}, PID: {pid}"
         )
