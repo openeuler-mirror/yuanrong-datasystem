@@ -637,6 +637,45 @@ TEST(UrmaSendJettyFaultTest, OrphanWrThresholdRetiresJettyAndTriggersRefill)
     jetty.reset();
 }
 
+TEST(UrmaSendJettyFaultTest, DeletedProviderHandleSkipsTimeoutJettyIdLookup)
+{
+    if (!IsUrmaFaultTestEnvAvailable()) {
+        GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
+    }
+
+    auto &manager = UrmaManager::Instance();
+    ASSERT_TRUE(InitManagerForFaultTest(manager).IsOk());
+    auto &resource = *manager.urmaResource_;
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+
+    std::shared_ptr<UrmaJetty> jetty;
+    ASSERT_TRUE(resource.AcquireJetty(jetty).IsOk());
+    Raii cleanup([&resource, &jetty] {
+        if (jetty != nullptr) {
+            (void)resource.RetireActiveSendLane(jetty->GetJettyId());
+            resource.ReleaseJetty(jetty);
+        }
+    });
+
+    constexpr uint64_t kRequestId = 3100;
+    auto lane = std::make_shared<UrmaSendLaneLease>(jetty, kRequestId);
+    ASSERT_TRUE(resource.RegisterActiveSendLane(lane).IsOk());
+    lane->AddWr();
+    ASSERT_TRUE(resource.SealActiveSendLane(lane).IsOk());
+    ASSERT_NE(jetty->raw_, nullptr);
+
+    // DeleteAfterFlush() clears raw_ while shared_ptr owners such as this lease may remain alive.
+    // Run the injection in a child so the parent retains its provider handle for normal cleanup.
+    // Before the fix this dereferences raw_ in GetJettyId() and terminates with SIGSEGV.
+    ASSERT_EXIT(
+        {
+            jetty->raw_ = nullptr;
+            resource.ScheduleTimedOutSendLane(lane, kRequestId, "127.0.0.1:29100", "deleted-provider-handle");
+            std::_Exit(0);
+        },
+        ::testing::ExitedWithCode(0), "");
+}
+
 TEST(UrmaSendJettyFaultTest, RefillCreateFailuresKeepSurvivingLaneAndRecoverAutomatically)
 {
     if (!IsUrmaFaultTestEnvAvailable()) {
