@@ -13,8 +13,11 @@
 # limitations under the License.
 """Read-only coordination backend diagnostics."""
 
+import contextlib
 import json
+import os
 import sys
+import tempfile
 
 from yr.datasystem.cli.command import BaseCommand
 
@@ -64,6 +67,32 @@ def _write_json(payload):
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
+@contextlib.contextmanager
+def _suppress_native_stderr():
+    # dscli query must emit only the JSON result on stdout (#980). The native
+    # lib writes brpc / rpc_stub_cache_mgr INFO-level framework logs directly to
+    # std::cerr (fd 2) via LogMessageImpl::ToStderr when no logger provider is
+    # registered (cluster_query_client::Init does not call Logging::InitLogging).
+    # std::cerr bypasses glog flag checks (stderrthreshold / alsologtostderr),
+    # so env overrides cannot suppress it. Redirect fd 2 to a temp file for the
+    # duration of the native call. The caller inspects the captured logs by
+    # reading tmp_path before exiting this context, since the file is removed
+    # on exit.
+    saved_stderr = os.dup(2)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".log", prefix="dscli_query_")
+    try:
+        os.dup2(tmp_fd, 2)
+        yield tmp_path
+    finally:
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stderr)
+        os.close(tmp_fd)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
 def _load_native():
     from yr.datasystem.lib import libds_client_py
 
@@ -96,10 +125,19 @@ class Command(BaseCommand):
                 raise QueryInputError("--keys is required for route query")
             native = _load_native()
             options = _build_native_options(args, native)
-            if args.query_command == "cluster":
-                status, error, result = native.query_coordination_cluster(options)
-            else:
-                status, error, result = native.query_coordination_routes(options, args.keys)
+            with _suppress_native_stderr() as tmp_log_path:
+                if args.query_command == "cluster":
+                    status, error, result = native.query_coordination_cluster(options)
+                else:
+                    status, error, result = native.query_coordination_routes(options, args.keys)
+                if status != "OK":
+                    # Surface the captured framework logs so operators can diagnose
+                    # native failures without re-running with a debugger. The file
+                    # is removed on context exit, so read it now.
+                    with open(tmp_log_path, "r", errors="ignore") as log_file:
+                        captured = log_file.read().strip()
+                    if captured:
+                        error = f"{error}\n--- native framework logs ---\n{captured}"
             if status == "OK":
                 payload = {"schema_version": SCHEMA_VERSION, "cluster_name": cluster_name, **result}
                 exit_code = self.SUCCESS
