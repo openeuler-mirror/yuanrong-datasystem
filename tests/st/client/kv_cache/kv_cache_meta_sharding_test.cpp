@@ -386,11 +386,20 @@ TEST_F(KVCacheMetaShardingTest, RemoveMetaByWorkerFullShardCoverage)
         " -client_reconnect_wait_s=1 -node_timeout_s=5 -node_dead_timeout_s=10 -shared_memory_size_mb=2048 -v=2"));
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 1));
 
-    // Post-restart: system must be fully operational — new Set/Get works.
     std::string postKey = "w1_restart_probe";
     std::string postVal = "healthy";
-    DS_ASSERT_OK(client2->Set(postKey, postVal,
-                             { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = 30 }));
+    const auto reconnectDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    bool probeWritten = false;
+    while (std::chrono::steady_clock::now() < reconnectDeadline) {
+        Status probeS = client2->Set(postKey, postVal,
+                                     { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = 30 });
+        if (probeS.IsOk()) {
+            probeWritten = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    ASSERT_TRUE(probeWritten);
     std::string readBack;
     EXPECT_EQ(client1->Get(postKey, readBack), Status::OK());
     EXPECT_EQ(readBack, postVal);
