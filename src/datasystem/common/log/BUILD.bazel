@@ -94,6 +94,13 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "log_rotation_config",
+    hdrs = [
+        "log_rotation_config.h",
+    ],
+)
+
+ds_cc_library(
     name = "operation_logger",
     srcs = ["operation_logger.cpp"],
     hdrs = ["operation_logger.h"],

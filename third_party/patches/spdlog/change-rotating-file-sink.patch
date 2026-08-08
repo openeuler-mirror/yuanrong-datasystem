@@ -1,17 +1,21 @@
 diff -ruN a/include/spdlog/sinks/rotating_file_sink-inl.h b/include/spdlog/sinks/rotating_file_sink-inl.h
 --- a/include/spdlog/sinks/rotating_file_sink-inl.h	2026-05-01 01:01:26.663599812 +0800
 +++ b/include/spdlog/sinks/rotating_file_sink-inl.h	2026-05-01 01:01:26.667599778 +0800
-@@ -16,7 +16,9 @@
+@@ -16,7 +16,13 @@
++#include <algorithm>
  #include <cerrno>
  #include <chrono>
++#include <cstdio>
  #include <ctime>
++#include <dirent.h>
 +#include <iomanip>
  #include <mutex>
 +#include <sstream>
  #include <string>
  #include <tuple>
++#include <vector>
  
-@@ -64,6 +66,22 @@
+@@ -64,6 +70,22 @@
      return fmt_lib::format(SPDLOG_FILENAME_T("{}.{}{}"), basename, index, ext);
  }
  
@@ -34,7 +38,7 @@ diff -ruN a/include/spdlog/sinks/rotating_file_sink-inl.h b/include/spdlog/sinks
  template<typename Mutex>
  SPDLOG_INLINE filename_t rotating_file_sink<Mutex>::filename()
  {
-@@ -101,41 +119,53 @@
+@@ -101,41 +123,131 @@
  }
  
  // Rotate files:
@@ -110,6 +114,84 @@ diff -ruN a/include/spdlog/sinks/rotating_file_sink-inl.h b/include/spdlog/sinks
 +
      file_helper_.reopen(true);
 +    current_size_ = 0;
++
++    if (max_files_ == 0)
++    {
++        return;
++    }
++
++    const auto max_archives = max_files_ - 1;
++    filename_t basename;
++    filename_t ext;
++    std::tie(basename, ext) = details::file_helper::split_by_extension(base_filename_);
++    const auto slash_pos = basename.find_last_of(SPDLOG_FILENAME_T("/\\"));
++    const filename_t dir = slash_pos == filename_t::npos ? SPDLOG_FILENAME_T(".") : basename.substr(0, slash_pos);
++    const filename_t stem = slash_pos == filename_t::npos ? basename : basename.substr(slash_pos + 1);
++    const filename_t prefix = stem + SPDLOG_FILENAME_T(".");
++
++    auto is_digits = [](const filename_t &text, std::size_t begin, std::size_t end) {
++        for (std::size_t i = begin; i < end; ++i)
++        {
++            if (text[i] < '0' || text[i] > '9')
++            {
++                return false;
++            }
++        }
++        return true;
++    };
++
++    auto is_rotated_archive = [&](const filename_t &name) {
++        if (name.size() <= prefix.size() + ext.size() || name.compare(0, prefix.size(), prefix) != 0)
++        {
++            return false;
++        }
++        if (!ext.empty() && name.compare(name.size() - ext.size(), ext.size(), ext) != 0)
++        {
++            return false;
++        }
++
++        const auto payload_size = name.size() - prefix.size() - ext.size();
++        const filename_t payload = name.substr(prefix.size(), payload_size);
++        // Match YYYYMMDDHHMMSS_mmm and the rare fallback YYYYMMDDHHMMSS_mmm_N.
++        if (payload.size() != 18 && !(payload.size() > 19 && payload[18] == '_'))
++        {
++            return false;
++        }
++        if (!is_digits(payload, 0, 14) || payload[14] != '_' || !is_digits(payload, 15, 18))
++        {
++            return false;
++        }
++        return payload.size() == 18 || is_digits(payload, 19, payload.size());
++    };
++
++    std::vector<filename_t> archives;
++    DIR *dir_handle = opendir(dir.c_str());
++    if (dir_handle == nullptr)
++    {
++        return;
++    }
++    struct dirent *entry = nullptr;
++    while ((entry = readdir(dir_handle)) != nullptr)
++    {
++        filename_t name(entry->d_name);
++        if (is_rotated_archive(name))
++        {
++            archives.push_back(name);
++        }
++    }
++    closedir(dir_handle);
++
++    if (archives.size() <= max_archives)
++    {
++        return;
++    }
++    std::sort(archives.begin(), archives.end());
++    const auto prune_count = archives.size() - max_archives;
++    for (std::size_t i = 0; i < prune_count; ++i)
++    {
++        const filename_t path = dir + SPDLOG_FILENAME_T("/") + archives[i];
++        (void)std::remove(path.c_str());
++    }
  }
  
  // delete the target if exists, and rename the src file  to target

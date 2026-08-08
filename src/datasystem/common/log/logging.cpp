@@ -33,6 +33,7 @@
 #include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_manager.h"
+#include "datasystem/common/log/log_rotation_config.h"
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/log/log_time.h"
@@ -65,7 +66,6 @@ constexpr bool DEFAULT_LOG_TO_STDERR = false;
 constexpr bool DEFAULT_ENABLE_PERF_TRACE_LOG = false;
 constexpr int DEFAULT_STDERRTHRESHOLD = LogSeverity::ERROR;  // By default, errors always log to stderr.
 constexpr int HIGHEST_STDERRTHRESHOLD = LogSeverity::FATAL;  // The errors log won't print to stderr.
-constexpr std::size_t HIGHEST_SPDLOG_MAX_FILE_NUM = 200000;  // Maximum allowed by spdlog's rotating_file_sink.
 constexpr uint32_t DEFAULT_LOG_ASYNC_THREAD_COUNT = 2;
 
 DS_DEFINE_bool(log_async, DEFAULT_LOG_ASYNC_FLAG, "Enable asynchronous writing to log files.");
@@ -276,9 +276,9 @@ LogParam BuildLoggerParam(uint32_t maxLogSize)
     loggerParam.logLevel = GetLogSeverityName(FLAGS_minloglevel);
     loggerParam.logAsync = FLAGS_log_async;
     loggerParam.maxSize = maxLogSize;
-    // Disable spdlog's auto-deletion of old log files, only use its file splitting (by size/time).
-    // Log rotation is managed externally by the log manager.
-    loggerParam.maxFiles = HIGHEST_SPDLOG_MAX_FILE_NUM;
+    // LogManager still owns retention and compression. Passing the configured file-count limit to spdlog also keeps
+    // high-frequency local rotation from temporarily growing beyond max_log_file_num.
+    loggerParam.maxFiles = GetEffectiveSpdlogMaxFileNum(FLAGS_max_log_file_num);
     return loggerParam;
 }
 
