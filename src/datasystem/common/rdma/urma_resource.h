@@ -500,7 +500,8 @@ public:
 
     UrmaJetty(urma_jetty_t *raw, std::shared_ptr<UrmaJfr> sharedJfr, UrmaResource *resource,
               JettyType type = JettyType::SEND)
-        : raw_(raw),
+        : jettyId_(raw == nullptr ? 0 : raw->jetty_id.id),
+          raw_(raw),
           sharedJfr_(std::move(sharedJfr)),
           resource_(resource),
           type_(type)
@@ -586,7 +587,7 @@ public:
 
     uint32_t GetJettyId() const
     {
-        return raw_->jetty_id.id;
+        return jettyId_;
     }
 
     void BindConnection(const std::shared_ptr<UrmaConnection> &connection);
@@ -598,6 +599,9 @@ private:
     void ReleaseCounter();
     bool TryScheduleFinalizer();
     static std::atomic<uint32_t> counter_;
+    // Provider deletion clears raw_, but a wrapper can remain referenced by a timeout lease or
+    // pending-delete work. Keep its immutable provider-assigned identity separate from the handle.
+    const uint32_t jettyId_;
     urma_jetty_t *raw_ = nullptr;
     std::shared_ptr<UrmaJfr> sharedJfr_;
     UrmaResource *resource_ = nullptr;
