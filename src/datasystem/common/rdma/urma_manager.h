@@ -778,6 +778,7 @@ private:
 
     Status InitLocalUrmaInfo(const HostPort &hostport);
     Status RemoveRemoteResources(const std::string &connectionKey);
+    uint8_t GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity);
     std::atomic<int> *GetSrcChipInflightWrCounter(uint8_t chipId);
     const char *GetSrcChipInflightWrCountsString() const;
     void LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
@@ -814,6 +815,7 @@ private:
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_map<uint64_t, int> failedRequests_;
     std::atomic<bool> serverStop_{ false };
+    std::atomic<uint64_t> affinitySrcChipIdSequence_{ 0 };
     std::vector<std::atomic<int>> srcChipInflightWrCounts_;
     mutable std::mutex connectionKeyMutex_;
     std::unordered_map<UrmaConnection *, std::string> connectionKeys_;

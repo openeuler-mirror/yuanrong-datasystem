@@ -611,6 +611,10 @@
         "value": "false",
         "description": "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled."
     },
+    "ub_numa_rr": {
+        "value": "false",
+        "description": "Use round-robin source chips (1 and 2) for UB NUMA affinity writes instead of the transmitted chip."
+    },
     "shared_memory_distribution_policy": {
         "value": "none",
         "description": "Shared memory NUMA distribution policy. Optional values: none, interleave_all_numa, interleave_affinity_numa. This option takes effect only when both enable_urma and urma_register_whole_arena are true."

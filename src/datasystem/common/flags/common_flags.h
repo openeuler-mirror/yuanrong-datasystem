@@ -35,6 +35,7 @@ DS_DECLARE_bool(enable_data_replication);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_bool(enable_urma);
 DS_DECLARE_bool(enable_ub_numa_affinity);
+DS_DECLARE_bool(ub_numa_rr);
 DS_DECLARE_string(shared_memory_distribution_policy);
 DS_DECLARE_bool(urma_register_whole_arena);
 DS_DECLARE_uint32(urma_poll_size);

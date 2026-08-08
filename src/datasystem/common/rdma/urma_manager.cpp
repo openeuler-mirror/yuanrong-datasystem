@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
@@ -75,6 +76,8 @@ constexpr uint32_t URMA_LOG_LIMIT_US = 250;
 constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
 constexpr size_t URMA_CHIP_INFLIGHT_TRACKED_COUNT = 10;
 constexpr size_t URMA_CHIP_INFLIGHT_LOG_BUFFER_SIZE = 160;
+constexpr uint8_t URMA_AFFINITY_SRC_CHIP_MIN = 1;
+constexpr uint8_t URMA_AFFINITY_SRC_CHIP_COUNT = 2;
 constexpr uint64_t URMA_RECOVERY_PROBE_SEGMENT_SIZE = 4096;
 constexpr const char *URMA_ELAPSED_TOTAL_SUGGEST =
     "check whether URMA_ELAPSED_THREAD_SHED/URMA_ELAPSED_POLL_JFC/URMA_ELAPSED_NOTIFY logs appear in the "
@@ -1027,6 +1030,15 @@ std::atomic<int> *UrmaManager::GetSrcChipInflightWrCounter(uint8_t chipId)
     return &srcChipInflightWrCounts_[chipId];
 }
 
+uint8_t UrmaManager::GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity)
+{
+    if (!useNumaAffinity || !FLAGS_ub_numa_rr) {
+        return transmittedChipId;
+    }
+    const uint64_t sequence = affinitySrcChipIdSequence_.fetch_add(1, std::memory_order_relaxed);
+    return static_cast<uint8_t>(URMA_AFFINITY_SRC_CHIP_MIN + sequence % URMA_AFFINITY_SRC_CHIP_COUNT);
+}
+
 void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                              uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
                                              uint64_t wakeSchedLatencyUs, const Status &waitRc) const
@@ -1640,6 +1652,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     flag.bs.complete_enable = 1;
     const bool useNumaAffinity =
         IsUbNumaAffinityEnabled() && args.srcChipId != INVALID_CHIP_ID && args.dstChipId != INVALID_CHIP_ID;
+    const uint8_t srcChipId = GetAffinitySrcChipId(args.srcChipId, useNumaAffinity);
 
     uint64_t writtenSize = 0;
     uint64_t remainSize = args.size;
@@ -1694,7 +1707,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                      "Failed to cleanup submitted URMA write events");
         eventKeys.clear();
     };
-    auto *srcChipInflightCounter = GetSrcChipInflightWrCounter(args.srcChipId);
+    auto *srcChipInflightCounter = GetSrcChipInflightWrCounter(srcChipId);
     while (remainSize > 0) {
         const uint64_t writeSize = std::min(remainSize, urmaResource_->GetMaxWriteSize());
         const uint64_t key = GenerateReqId();
@@ -1732,7 +1745,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         METRIC_TIMER(metrics::KvMetricId::URMA_WRITE_LATENCY);
         auto jettyId = jetty->GetJettyId();
         LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL1)
-            << "URMA write useNumaAffinity:" << useNumaAffinity << ", src:" << static_cast<uint32_t>(args.srcChipId)
+            << "URMA write useNumaAffinity:" << useNumaAffinity << ", src:" << static_cast<uint32_t>(srcChipId)
             << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId
             << ", urma_inflight_wr_count:" << tbbEventMap_.size();
         if (useNumaAffinity) {
@@ -1755,7 +1768,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             }
         }
         ret = PostJettyRw(jetty, URMA_OPC_WRITE, targetJetty, args.remoteSeg, args.localSeg, remoteAddress,
-                          localAddress, writeSize, flag, key, useNumaAffinity, args.srcChipId, args.dstChipId);
+                          localAddress, writeSize, flag, key, useNumaAffinity, srcChipId, args.dstChipId);
         if (ret != URMA_SUCCESS) {
             if (failure != nullptr && !failure->providerStatus.has_value()) {
                 failure->providerStatus = static_cast<int>(ret);
@@ -1774,7 +1787,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                                                  "suggest: %s",
                                                  key, ret, srcAddress.c_str(), args.remoteAddress.c_str(),
                                                  remoteInstanceId, static_cast<size_t>(writeSize),
-                                                 static_cast<uint32_t>(args.srcChipId),
+                                                 static_cast<uint32_t>(srcChipId),
                                                  static_cast<uint32_t>(args.dstChipId),
                                                  useNumaAffinity ? "true" : "false", URMA_ERROR_SUGGEST));
         }
@@ -2439,6 +2452,13 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
         (void)enablePipelineH2D;
 #endif
         FLAGS_enable_urma = true;
+        const char *ubNumaRr = std::getenv("DATASYSTEM_UB_NUMA_RR");
+        if (ubNumaRr != nullptr) {
+            std::string errMsg;
+            if (!SetCommandLineOption("ub_numa_rr", ubNumaRr, errMsg)) {
+                LOG(WARNING) << "Ignore invalid DATASYSTEM_UB_NUMA_RR value '" << ubNumaRr << "': " << errMsg;
+            }
+        }
         UrmaManager::clientMode_ = true;
         uint64_t expected = DEFAULT_TRANSPORT_MEM_SIZE;
         if (UrmaManager::ubTransportMemSize_.compare_exchange_strong(expected, transportSize)) {
