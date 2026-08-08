@@ -355,9 +355,8 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
-    VLOG(1) << AppendSrcDstForLog(
-        FormatString("Begin to create object, client id: %s, object key: %s", clientId_, objectKey), "",
-        hostPort_.ToString());
+    VLOG(1) << AppendSrcDstForLog(FormatString("Begin to create object, client id: %s, object key: %s",
+        clientId_, objectKey), "", hostPort_.ToString());
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, StatusCode::K_INVALID,
                              FormatString("data size:%lld must be more than 0!", dataSize));
     CreateReqPb req;
@@ -389,6 +388,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     }
     LogClientWorkerRpcDone("Create", 1, IsUrmaEnabled() && rsp.has_urma_info() ? "UB" : "SHM",
                            static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
+    Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_CREATE, traceEnabled);
     if (traceEnabled && rsp.latency_phase_us_size() > 0) {
         std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
         MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
@@ -608,6 +608,7 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
             return Status::OK();
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);
+    Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_GET, traceEnabled);
     RETURN_IF_NOT_OK(getStatus);
     if (traceEnabled && rsp.latency_phase_us_size() > 0) {
         std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
@@ -704,6 +705,7 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
         status = WithRpcDiag(status, "Publish", hostPort_);
     }
     LogClientWorkerRpcDone("Publish", 1, path, static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
+    Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_PUBLISH, traceEnabled);
     if (traceEnabled && rsp.latency_phase_us_size() > 0) {
         std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
         MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
@@ -1539,6 +1541,7 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
             status = status.WithExtra(rsp.redirect_extra());
         }
     }
+    Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_EXIST, traceEnabled);
     if (traceEnabled && rsp.latency_phase_us_size() > 0) {
         MergeDecodedPhasesToTrace(
             std::vector<uint32_t>(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end()),

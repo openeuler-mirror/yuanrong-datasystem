@@ -219,6 +219,7 @@ private:
         datasystem::master::QueryMetaRspPb rsp;
         std::unordered_set<std::string> failedKeys;
         std::vector<RpcMessage> payloads;
+        uint64_t commUs = 0;
     };
 
     struct LockedEntity {

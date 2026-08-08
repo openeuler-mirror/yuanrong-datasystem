@@ -29,6 +29,7 @@
 #include <butil/iobuf.h>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/format.h"
 
@@ -307,6 +308,15 @@ inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
     uint64_t networkResidualNs = 0;
     if (remoteProcessingNs > 0 && serverProcessingNs > 0) {
         networkResidualNs = remoteProcessingNs > serverProcessingNs ? remoteProcessingNs - serverProcessingNs : 0;
+    }
+    // Communication time = network + RPC framework, excludes remote business
+    // execution and remote queue wait. Stash for the business layer to key into
+    // the correct latency phase. Only valid when server timestamps are present.
+    if (serverProcessingNs > 0) {
+        uint64_t commNs = e2eNs > serverProcessingNs ? e2eNs - serverProcessingNs : 0;
+        Trace::Instance().SetLastRpcCommUs(BrpcNsToUs(commNs));
+    } else {
+        Trace::Instance().SetLastRpcCommUs(0);
     }
     RecordBrpcTraceLatencyMetrics(clientReqFrameworkNs, remoteProcessingNs, clientRspFrameworkNs,
                                   serverReqQueueNs, serverExecNs, serverRspQueueNs, e2eNs,

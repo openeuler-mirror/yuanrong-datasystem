@@ -208,6 +208,7 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
         },
         [this](int64_t sleepTimeMs) { SleepForMetaMovingRetry(sleepTimeMs); });
     const auto rpcUs = static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond());
+    Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::WORKER_RPC_CREATE_META, traceEnabled);
     FinalizeMasterRpcLatency(LatencyTickKey::WORKER_CREATE_META_RPC_END, config, traceEnabled,
                              metaResp, objectKey, rpcUs, rc, workerMasterApi, "CreateMeta");
     RETURN_IF_NOT_OK(rc);
@@ -264,6 +265,7 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
         },
         [this](int64_t sleepTimeMs) { SleepForMetaMovingRetry(sleepTimeMs); });
     const auto rpcUs = static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond());
+    Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::WORKER_RPC_UPDATE_META, traceEnabled);
     FinalizeMasterRpcLatency(LatencyTickKey::WORKER_UPDATE_META_RPC_END, config, traceEnabled,
                              metaRsp, objectKey, rpcUs, rc, workerMasterApi, "UpdateMeta");
     RETURN_IF_NOT_OK(rc);

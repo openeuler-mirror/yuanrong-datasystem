@@ -354,6 +354,46 @@ public:
     const DownstreamPhaseResult &GetDownstreamPhases() const;
     void ClearDownstreamPhases();
 
+    /**
+     * @brief Stash the communication time (network + RPC framework, excluding
+     * remote business execution and remote queue wait) of the most recent RPC
+     * call, computed by the transport stub from its 8-point framework trace.
+     * Consumed by the business layer which keys it to the correct comm phase.
+     * Synchronous same-thread handoff: the stub and the business append run on
+     * the same bthread/thread for a given RPC call.
+     * @param[in] commUs Communication time in microseconds; 0 if unavailable.
+     */
+    void SetLastRpcCommUs(uint64_t commUs)
+    {
+        lastRpcCommUs_ = commUs;
+    }
+
+    /**
+     * @brief Read and reset the stashed communication time of the last RPC.
+     * @return Communication time in microseconds; 0 if none stashed.
+     */
+    uint64_t ConsumeLastRpcCommUs()
+    {
+        uint64_t v = lastRpcCommUs_;
+        lastRpcCommUs_ = 0;
+        return v;
+    }
+
+    /**
+     * @brief Consume the stashed RPC comm time and add it as a downstream
+     * phase when tracing is enabled. Always clears the stash to prevent
+     * cross-RPC leakage when traceEnabled toggles (issue #862 review).
+     * @param[in] phase The latency phase to key the comm time into.
+     * @param[in] traceEnabled Whether latency trace collection is enabled.
+     */
+    void AddCommPhaseIfEnabled(LatencySummaryPhase phase, bool traceEnabled)
+    {
+        uint64_t comm = ConsumeLastRpcCommUs();
+        if (traceEnabled) {
+            AddDownstreamPhase(phase, comm);
+        }
+    }
+
     static const int TRACEID_PREFIX_SIZE = 36;
     static const int SHORT_UUID_SIZE = 12;
     static const int TRACEID_MAX_SIZE = TRACEID_PREFIX_SIZE + SHORT_UUID_SIZE + 1;
@@ -382,6 +422,7 @@ private:
     std::array<char, LATENCY_SUMMARY_MAX_SIZE + 1> latencySummary_{};
     size_t latencySummarySize_ = 0;
     DownstreamPhaseResult downstreamPhases_{};
+    uint64_t lastRpcCommUs_ = 0;
 };
 
 /**

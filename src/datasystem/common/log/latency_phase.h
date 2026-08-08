@@ -28,6 +28,10 @@ namespace datasystem {
 
 PhaseDurationResult ComputePhaseDurations(const LatencyTick *ticks, uint16_t tickCount, uint16_t tickDroppedCount);
 
+PhaseDurationResult ComputeTickPhases(const LatencyTick *ticks, uint16_t tickCount, uint16_t tickDroppedCount);
+
+void ComputeDerivedPhases(const LatencyTick *ticks, uint16_t tickCount, PhaseDurationResult &result);
+
 std::string FormatLatencySummary(const PhaseDurationResult &result);
 
 bool ShouldPrintLatencySummary(uint64_t totalElapsedUs, const LatencyTraceConfig &config);
@@ -118,9 +122,10 @@ void TryEncodeRemoteGetLatencySummary(const LatencyTraceConfig &config, bool tra
     if (tickCount >= MIN_TICK_COUNT_FOR_SUMMARY) {
         uint64_t totalElapsedUs = (ticks[tickCount - 1].tick - ticks[0].tick) / NS_PER_US;
         if (ShouldPrintLatencySummary(totalElapsedUs, config)) {
-            PhaseDurationResult result = ComputePhaseDurations(ticks, tickCount, droppedCount);
+            PhaseDurationResult result = ComputeTickPhases(ticks, tickCount, droppedCount);
             bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
             MergeDownstreamPhases(result);
+            ComputeDerivedPhases(ticks, tickCount, result);
             if (CheckPhaseGate(result, config) || hasDownstream) {
                 EncodePhaseProto(rsp, result);
             }
@@ -153,11 +158,13 @@ void FinalizeWorkerLatencyTrace(LatencyTickKey endKey, const LatencyTraceConfig 
     if (!ShouldPrintLatencySummary(totalUs, config)) {
         return;
     }
-    PhaseDurationResult result = ComputePhaseDurations(
-        Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
-        Trace::Instance().GetLatencyTickDroppedCount());
+    auto ticks = Trace::Instance().GetLatencyTicks();
+    auto tickCount = Trace::Instance().GetLatencyTickCount();
+    auto droppedCount = Trace::Instance().GetLatencyTickDroppedCount();
+    PhaseDurationResult result = ComputeTickPhases(ticks, tickCount, droppedCount);
     bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
     MergeDownstreamPhases(result);
+    ComputeDerivedPhases(ticks, tickCount, result);
     bool gateHit = CheckPhaseGate(result, config);
     if (gateHit) {
         Trace::Instance().SetLatencySummary(FormatLatencySummary(result));

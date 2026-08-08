@@ -194,14 +194,18 @@ TEST_F(LatencySummaryStTest, CreateAccessLogLatencySummary)
 {
     const std::string key = ObjectKey();
     std::shared_ptr<Buffer> buffer;
-    DS_ASSERT_OK(client_->Create(key, 64, SetParam{}, buffer));
+    // Use a size above the shm_threshold (default 500KB) to force the RPC path
+    // through ClientWorkerRemoteApi::Create, which produces client.rpc.create comm phase.
+    constexpr int64_t createSize = 600 * 1024;
+    DS_ASSERT_OK(client_->Create(key, createSize, SetParam{}, buffer));
     DS_ASSERT_OK(buffer->WLatch());
-    const std::string val = "value_for_create_test";
+    const std::string val(createSize, 'x');
     DS_ASSERT_OK(buffer->MemoryCopy(val.data(), val.size()));
     DS_ASSERT_OK(buffer->Seal());
     DS_ASSERT_OK(buffer->UnWLatch());
 
-    AssertAccessLogContains(ClientAccessLogPath(), { "latencySummary:{", "client.process.create:" });
+    AssertAccessLogContains(ClientAccessLogPath(),
+                            { "latencySummary:{", "client.process.create:", "client.rpc.create:" });
 }
 
 TEST_F(LatencySummaryStTest, ExistAccessLogLatencySummary)
@@ -331,17 +335,25 @@ TEST_F(LatencySummaryStTest, ClientDisabledWorkerEnabledOnlyWorkerHasSummary)
     const std::string key = ObjectKey() + "_worker_only";
     DS_ASSERT_OK(client_->Set(key, "val_worker_only"));
 
+    // Use a second client connected to worker 1 to force a cross-worker Get,
+    // which exercises QueryMeta RPC (producing worker.rpc.query_meta comm phase).
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(1, client1);
     std::string out;
-    DS_ASSERT_OK(client_->Get(key, out));
+    DS_ASSERT_OK(client1->Get(key, out));
 
     AssertAccessLogNotContains(ClientAccessLogPath(), { key, "latencySummary:" });
 
     client_.reset();
+    client1.reset();
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
 
-    std::string workerLog = WorkerAccessLogPath();
-    AssertFileContains(workerLog, { "latencySummary:{", "worker.process.publish:" });
-    AssertFileContains(workerLog, { "latencySummary:{", "worker.process.get:" });
+    // Worker 0 did the Set (publish + create_meta); worker 1 did the cross-worker Get (query_meta).
+    std::string worker0Log = FormatString("%s/worker0/log/access.log", cluster_->GetRootDir());
+    AssertFileContains(worker0Log, { "latencySummary:{", "worker.process.publish:", "worker.rpc.create_meta:" });
+    std::string worker1Log = FormatString("%s/worker1/log/access.log", cluster_->GetRootDir());
+    AssertFileContains(worker1Log, { "latencySummary:{", "worker.process.get:", "worker.rpc.query_meta:" });
 }
 
 TEST_F(LatencySummaryStTest, WorkerDisabledClientEnabledOnlyClientHasSummary)

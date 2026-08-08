@@ -31,33 +31,25 @@ class LatencyPhaseTest : public CommonTest {};
 
 TEST_F(LatencyPhaseTest, ComputePhaseDurationsDirectAndDerived)
 {
+    // In B (issue #862), *_RPC_* phases hold comm (network + RPC framework),
+    // populated by the transport layer via Trace::AddDownstreamPhase — NOT from
+    // business tick pairs. So CLIENT_GET_RPC_START/END ticks no longer produce
+    // CLIENT_RPC_GET; only the derived CLIENT_PROCESS_GET is computed from
+    // CLIENT_GET_START/END. With no downstream phases merged, the derived
+    // residual equals the full total.
     LatencyTick ticks[] = {
         { LatencyTickKey::CLIENT_GET_START, 100000u },
-        { LatencyTickKey::CLIENT_GET_RPC_START, 200000u },
-        { LatencyTickKey::CLIENT_GET_RPC_END, 500000u },
         { LatencyTickKey::CLIENT_GET_END, 600000u },
     };
-    auto result = ComputePhaseDurations(ticks, 4, 0);
+    auto result = ComputePhaseDurations(ticks, 2, 0);
 
-    const auto *rpcGet = result.Find(LatencySummaryPhase::CLIENT_RPC_GET);
-    ASSERT_NE(rpcGet, nullptr);
-    EXPECT_EQ(rpcGet->durationUs, 300u);
+    EXPECT_EQ(result.Find(LatencySummaryPhase::CLIENT_RPC_GET), nullptr);
 
     const auto *localGet = result.Find(LatencySummaryPhase::CLIENT_PROCESS_GET);
     ASSERT_NE(localGet, nullptr);
-    EXPECT_EQ(localGet->durationUs, 200u);
+    EXPECT_EQ(localGet->durationUs, 500u);
 
     EXPECT_EQ(result.Find(LatencySummaryPhase::CLIENT_PROCESS_SET), nullptr);
-
-    LatencyTick partialTicks[] = {
-        { LatencyTickKey::CLIENT_GET_START, 100000u },
-        { LatencyTickKey::CLIENT_GET_END, 600000u },
-    };
-    auto partialResult = ComputePhaseDurations(partialTicks, 2, 0);
-    EXPECT_EQ(partialResult.Find(LatencySummaryPhase::CLIENT_RPC_GET), nullptr);
-    const auto *partialLocalGet = partialResult.Find(LatencySummaryPhase::CLIENT_PROCESS_GET);
-    ASSERT_NE(partialLocalGet, nullptr);
-    EXPECT_EQ(partialLocalGet->durationUs, 500u);
 
     LatencyTick emptyTicks[] = {};
     auto emptyResult = ComputePhaseDurations(emptyTicks, 0, 0);
@@ -98,22 +90,22 @@ TEST_F(LatencyPhaseTest, ComputeDirectGetPhaseDurations)
 
     EXPECT_TRUE(IsProcessPhase(LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE));
     EXPECT_TRUE(IsProcessPhase(LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE));
-    EXPECT_TRUE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET));
-    EXPECT_TRUE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA));
+    // Direct-route phases gate on process threshold, not rpc (issue #862 review).
+    EXPECT_TRUE(IsProcessPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET));
+    EXPECT_TRUE(IsProcessPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA));
+    EXPECT_FALSE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET));
+    EXPECT_FALSE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA));
 }
 
 TEST_F(LatencyPhaseTest, FormatLatencySummaryNoRawTickOrTotal)
 {
     LatencyTick ticks[] = {
         { LatencyTickKey::CLIENT_GET_START, 100000u },
-        { LatencyTickKey::CLIENT_GET_RPC_START, 200000u },
-        { LatencyTickKey::CLIENT_GET_RPC_END, 500000u },
         { LatencyTickKey::CLIENT_GET_END, 600000u },
     };
-    auto result = ComputePhaseDurations(ticks, 4, 0);
+    auto result = ComputePhaseDurations(ticks, 2, 0);
     std::string summary = FormatLatencySummary(result);
 
-    EXPECT_NE(summary.find("client.rpc.get"), std::string::npos);
     EXPECT_NE(summary.find("client.process.get"), std::string::npos);
     EXPECT_EQ(summary.find("tick"), std::string::npos);
     EXPECT_EQ(summary.find("total"), std::string::npos);
@@ -174,6 +166,101 @@ TEST_F(LatencyPhaseTest, CheckPhaseGateLocalRpcIndependent)
     PhaseDurationResult exactRpc;
     exactRpc.Add(LatencySummaryPhase::CLIENT_RPC_GET, 200u);
     EXPECT_TRUE(CheckPhaseGate(exactRpc, config));
+}
+
+// Issue #862: the *_RPC_* phases now hold RPC communication time (network + RPC
+// framework, excludes remote business execution and remote queue wait), so they
+// DO drive the slow_log_rpc_slower_than gate. Server-side execution shows up as
+// process phases (master.process.* / worker.process.remote_get), NOT as rpc
+// phases.
+TEST_F(LatencyPhaseTest, RpcCommPhaseDrivesRpcThresholdGate)
+{
+    LatencyTraceConfig config{ 0, 200 }; // rpc-only gate
+    PhaseDurationResult result;
+    result.Add(LatencySummaryPhase::CLIENT_RPC_GET, 5000u);
+    EXPECT_TRUE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_GET));
+    EXPECT_TRUE(CheckPhaseGate(result, config));
+
+    PhaseDurationResult workerResult;
+    workerResult.Add(LatencySummaryPhase::WORKER_RPC_QUERY_META, 5000u);
+    EXPECT_TRUE(IsRpcPhase(LatencySummaryPhase::WORKER_RPC_QUERY_META));
+    EXPECT_TRUE(CheckPhaseGate(workerResult, config));
+
+    // Server-side execution is a process phase, not an rpc phase.
+    PhaseDurationResult serverExecResult;
+    serverExecResult.Add(LatencySummaryPhase::MASTER_PROCESS_QUERY_META, 5000u);
+    EXPECT_FALSE(IsRpcPhase(LatencySummaryPhase::MASTER_PROCESS_QUERY_META));
+    EXPECT_TRUE(IsProcessPhase(LatencySummaryPhase::MASTER_PROCESS_QUERY_META));
+    EXPECT_FALSE(CheckPhaseGate(serverExecResult, config));
+
+    // Comm below threshold does not gate.
+    PhaseDurationResult fastResult;
+    fastResult.Add(LatencySummaryPhase::WORKER_RPC_QUERY_META, 50u);
+    EXPECT_FALSE(CheckPhaseGate(fastResult, config));
+
+    // Comm=0 (old server without 8-point trace) does not gate.
+    PhaseDurationResult oldServerResult;
+    oldServerResult.Add(LatencySummaryPhase::CLIENT_RPC_GET, 0u);
+    EXPECT_FALSE(CheckPhaseGate(oldServerResult, config));
+
+    // Legacy direct-route phases gate on process threshold, not rpc threshold
+    // (they bundle remote business execution, issue #862 review).
+    EXPECT_FALSE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET));
+    EXPECT_FALSE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA));
+    EXPECT_TRUE(IsProcessPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET));
+    EXPECT_TRUE(IsProcessPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA));
+}
+
+TEST_F(LatencyPhaseTest, ConsumeCommAndAddDownstreamPhase)
+{
+    Trace::Instance().ClearDownstreamPhases();
+    // comm=0 → AddDownstreamPhase with 0 is a no-op in effect (phase present, duration 0).
+    Trace::Instance().SetLastRpcCommUs(0);
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::CLIENT_RPC_GET,
+                                        Trace::Instance().ConsumeLastRpcCommUs());
+    auto &ds0 = Trace::Instance().GetDownstreamPhases();
+    ASSERT_EQ(ds0.count, 1u);
+    EXPECT_EQ(ds0.entries[0].phase, LatencySummaryPhase::CLIENT_RPC_GET);
+    EXPECT_EQ(ds0.entries[0].durationUs, 0u);
+    Trace::Instance().ClearDownstreamPhases();
+
+    // comm=750 → stashed by transport, consumed once, added as downstream phase.
+    Trace::Instance().SetLastRpcCommUs(750);
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::WORKER_RPC_QUERY_META,
+                                        Trace::Instance().ConsumeLastRpcCommUs());
+    auto &ds = Trace::Instance().GetDownstreamPhases();
+    ASSERT_EQ(ds.count, 1u);
+    EXPECT_EQ(ds.entries[0].phase, LatencySummaryPhase::WORKER_RPC_QUERY_META);
+    EXPECT_EQ(ds.entries[0].durationUs, 750u);
+    // Stash consumed exactly once.
+    EXPECT_EQ(Trace::Instance().ConsumeLastRpcCommUs(), 0u);
+
+    Trace::Instance().ClearDownstreamPhases();
+}
+
+// Issue #862 review: AddCommPhaseIfEnabled always clears the stash even when
+// tracing is disabled, preventing cross-RPC leakage when traceEnabled toggles.
+TEST_F(LatencyPhaseTest, AddCommPhaseIfEnabledClearsStashWhenDisabled)
+{
+    Trace::Instance().ClearDownstreamPhases();
+    // Stash from transport layer, tracing disabled.
+    Trace::Instance().SetLastRpcCommUs(500);
+    Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_GET, false);
+    // Stash must be cleared even though tracing was disabled.
+    EXPECT_EQ(Trace::Instance().ConsumeLastRpcCommUs(), 0u);
+    // No downstream phase added when disabled.
+    auto &ds = Trace::Instance().GetDownstreamPhases();
+    EXPECT_EQ(ds.count, 0u);
+
+    // Next call with tracing enabled does not see stale comm.
+    Trace::Instance().SetLastRpcCommUs(300);
+    Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_GET, true);
+    auto &ds2 = Trace::Instance().GetDownstreamPhases();
+    ASSERT_EQ(ds2.count, 1u);
+    EXPECT_EQ(ds2.entries[0].durationUs, 300u); // not 500 (stale) or 800 (sum)
+    EXPECT_EQ(Trace::Instance().ConsumeLastRpcCommUs(), 0u);
+
+    Trace::Instance().ClearDownstreamPhases();
 }
 
 TEST_F(LatencyPhaseTest, EncodeDecodePhasePairs)
@@ -343,17 +430,15 @@ TEST_F(LatencyPhaseTest, DownstreamMergeWithLocalPhases)
 
 TEST_F(LatencyPhaseTest, DerivedPhaseUnderflowClampToZero)
 {
+    // In B, *_RPC_* tick pairs are removed. Test underflow with memory_copy
+    // exceeding the derived total (subSum > total → clamp to 0).
     LatencyTick ticks[] = {
         { LatencyTickKey::CLIENT_SET_START, 100000u },
-        { LatencyTickKey::CLIENT_CREATE_RPC_START, 80000u },
-        { LatencyTickKey::CLIENT_CREATE_RPC_END, 500000u },
         { LatencyTickKey::CLIENT_MEMORY_COPY_START, 50000u },
-        { LatencyTickKey::CLIENT_MEMORY_COPY_END, 350000u },
-        { LatencyTickKey::CLIENT_PUBLISH_RPC_START, 100000u },
-        { LatencyTickKey::CLIENT_PUBLISH_RPC_END, 450000u },
+        { LatencyTickKey::CLIENT_MEMORY_COPY_END, 450000u }, // 400us > 300us total
         { LatencyTickKey::CLIENT_SET_END, 400000u },
     };
-    auto result = ComputePhaseDurations(ticks, 8, 0);
+    auto result = ComputePhaseDurations(ticks, 4, 0);
 
     const auto *localSet = result.Find(LatencySummaryPhase::CLIENT_PROCESS_SET);
     ASSERT_NE(localSet, nullptr);
@@ -531,21 +616,23 @@ TEST_F(LatencyPhaseTest, GetServerLatencyTraceConfigReadsGflags)
 
 TEST_F(LatencyPhaseTest, DuplicateTickKeyAggregation)
 {
+    // In B, *_RPC_* phases are not tick pairs. Test duplicate aggregation with
+    // URMA tick pairs instead.
     LatencyTick ticks[] = {
-        { LatencyTickKey::CLIENT_GET_START, 100000u },
-        { LatencyTickKey::CLIENT_GET_RPC_START, 200000u },
-        { LatencyTickKey::CLIENT_GET_RPC_END, 500000u },
-        { LatencyTickKey::CLIENT_GET_RPC_START, 600000u },
-        { LatencyTickKey::CLIENT_GET_RPC_END, 900000u },
-        { LatencyTickKey::CLIENT_GET_END, 1000000u },
+        { LatencyTickKey::WORKER_GET_START, 100000u },
+        { LatencyTickKey::WORKER_URMA_START, 200000u },
+        { LatencyTickKey::WORKER_URMA_END, 500000u },
+        { LatencyTickKey::WORKER_URMA_START, 600000u },
+        { LatencyTickKey::WORKER_URMA_END, 900000u },
+        { LatencyTickKey::WORKER_GET_END, 1000000u },
     };
     auto result = ComputePhaseDurations(ticks, 6, 0);
 
-    const auto *rpcGet = result.Find(LatencySummaryPhase::CLIENT_RPC_GET);
-    ASSERT_NE(rpcGet, nullptr);
-    EXPECT_EQ(rpcGet->durationUs, 600u);
+    const auto *urma = result.Find(LatencySummaryPhase::WORKER_URMA_URMA_TOTAL);
+    ASSERT_NE(urma, nullptr);
+    EXPECT_EQ(urma->durationUs, 600u);
 
-    const auto *localGet = result.Find(LatencySummaryPhase::CLIENT_PROCESS_GET);
+    const auto *localGet = result.Find(LatencySummaryPhase::WORKER_PROCESS_GET);
     ASSERT_NE(localGet, nullptr);
     EXPECT_EQ(localGet->durationUs, 300u);
 
@@ -554,21 +641,29 @@ TEST_F(LatencyPhaseTest, DuplicateTickKeyAggregation)
 
 TEST_F(LatencyPhaseTest, DuplicateTickKeyDerivedPhase)
 {
+    // In B, *_RPC_* comm phases come from AddDownstreamPhase, not tick pairs.
+    // Test the full three-step flow: tick → merge downstream → derive.
+    // worker total = 800us, comm_query_meta=100, comm_remote_get=350,
+    // server_exec(master)=50, server_exec(remote_worker)=50, urma=50, l2cache=50.
+    // worker.process.get = 800 - 100 - 350 - 50 - 50 - 50 - 50 = 150.
+    Trace::Instance().ClearDownstreamPhases();
+    Trace::Instance().ClearLatencyTicks();
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::WORKER_RPC_QUERY_META, 100u);
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::WORKER_RPC_REMOTE_GET, 350u);
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::MASTER_PROCESS_QUERY_META, 50u);
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET, 50u);
+
     LatencyTick ticks[] = {
         { LatencyTickKey::WORKER_GET_START, 100000u },
-        { LatencyTickKey::WORKER_QUERYMETA_START, 150000u },
-        { LatencyTickKey::WORKER_QUERYMETA_END, 250000u },
-        { LatencyTickKey::WORKER_REMOTEGET_START, 300000u },
-        { LatencyTickKey::WORKER_REMOTEGET_END, 500000u },
-        { LatencyTickKey::WORKER_REMOTEGET_START, 550000u },
-        { LatencyTickKey::WORKER_REMOTEGET_END, 700000u },
         { LatencyTickKey::WORKER_URMA_START, 720000u },
         { LatencyTickKey::WORKER_URMA_END, 770000u },
         { LatencyTickKey::WORKER_L2CACHE_READ_START, 780000u },
         { LatencyTickKey::WORKER_L2CACHE_READ_END, 830000u },
         { LatencyTickKey::WORKER_GET_END, 900000u },
     };
-    auto result = ComputePhaseDurations(ticks, 12, 0);
+    PhaseDurationResult result = ComputeTickPhases(ticks, 6, 0);
+    MergeDownstreamPhases(result);
+    ComputeDerivedPhases(ticks, 6, result);
 
     const auto *remoteGet = result.Find(LatencySummaryPhase::WORKER_RPC_REMOTE_GET);
     ASSERT_NE(remoteGet, nullptr);
@@ -588,9 +683,10 @@ TEST_F(LatencyPhaseTest, DuplicateTickKeyDerivedPhase)
 
     const auto *localGet = result.Find(LatencySummaryPhase::WORKER_PROCESS_GET);
     ASSERT_NE(localGet, nullptr);
-    EXPECT_EQ(localGet->durationUs, 250u);
+    EXPECT_EQ(localGet->durationUs, 150u);
 
-    EXPECT_EQ(result.count, 5u);
+    Trace::Instance().ClearDownstreamPhases();
+    Trace::Instance().ClearLatencyTicks();
 }
 
 TEST_F(LatencyPhaseTest, PhaseDurationResultMergeDuplicatePhase)
@@ -681,5 +777,77 @@ TEST_F(LatencyPhaseTest, FormatLatencySummaryDroppedCountLargeValueNoOverflow)
     EXPECT_TRUE(summary.find("tick_dropped:") != std::string::npos);
     EXPECT_TRUE(summary.find("phase_dropped:") != std::string::npos);
 }
+
+// Issue #862: concurrent QueryMeta fan-out to N masters aggregates per-leg comm
+// with MAX (not SUM) so that N fast legs do not sum past the rpc threshold.
+TEST_F(LatencyPhaseTest, QueryMetaMaxAggregationConcurrentFanout)
+{
+    Trace::Instance().ClearDownstreamPhases();
+    // Simulate two legs: comm_1=50, comm_2=80. MAX=80 (not SUM=130).
+    uint64_t comm[] = { 50, 80 };
+    uint64_t maxComm = 0;
+    for (uint64_t c : comm) {
+        maxComm = std::max(maxComm, c);
+    }
+    if (maxComm > 0) {
+        Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::WORKER_RPC_QUERY_META, maxComm);
+    }
+    auto &ds = Trace::Instance().GetDownstreamPhases();
+    ASSERT_EQ(ds.count, 1u);
+    EXPECT_EQ(ds.entries[0].phase, LatencySummaryPhase::WORKER_RPC_QUERY_META);
+    EXPECT_EQ(ds.entries[0].durationUs, 80u); // MAX not SUM
+
+    // With rpc threshold=100, MAX=80 does not gate; SUM=130 would falsely gate.
+    LatencyTraceConfig config{ 0, 100 };
+    PhaseDurationResult result;
+    MergeDownstreamPhases(result);
+    EXPECT_FALSE(CheckPhaseGate(result, config));
+
+    Trace::Instance().ClearDownstreamPhases();
+}
+
+// Issue #862: additive decomposition — process + comm + server-exec = total.
+TEST_F(LatencyPhaseTest, AdditiveDerivedMathWorkerGet)
+{
+    Trace::Instance().ClearDownstreamPhases();
+    Trace::Instance().ClearLatencyTicks();
+    // worker total = 1000us. comm_querymeta=100, comm_remoteget=200,
+    // server_exec(master)=50, server_exec(remote)=50, urma=50, l2cache=50.
+    // worker.process.get = 1000 - 100 - 200 - 50 - 50 - 50 - 50 = 500.
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::WORKER_RPC_QUERY_META, 100u);
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::WORKER_RPC_REMOTE_GET, 200u);
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::MASTER_PROCESS_QUERY_META, 50u);
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET, 50u);
+
+    LatencyTick ticks[] = {
+        { LatencyTickKey::WORKER_GET_START, 1000000u },
+        { LatencyTickKey::WORKER_URMA_START, 1800000u },
+        { LatencyTickKey::WORKER_URMA_END, 1850000u },
+        { LatencyTickKey::WORKER_L2CACHE_READ_START, 1860000u },
+        { LatencyTickKey::WORKER_L2CACHE_READ_END, 1910000u },
+        { LatencyTickKey::WORKER_GET_END, 2000000u },
+    };
+    PhaseDurationResult result = ComputeTickPhases(ticks, 6, 0);
+    MergeDownstreamPhases(result);
+    ComputeDerivedPhases(ticks, 6, result);
+
+    const auto *localGet = result.Find(LatencySummaryPhase::WORKER_PROCESS_GET);
+    ASSERT_NE(localGet, nullptr);
+    EXPECT_EQ(localGet->durationUs, 500u);
+
+    // Additive check: process + comm + server-exec + urma + l2cache = total.
+    uint64_t sum = localGet->durationUs;
+    sum += result.Find(LatencySummaryPhase::WORKER_RPC_QUERY_META)->durationUs;
+    sum += result.Find(LatencySummaryPhase::WORKER_RPC_REMOTE_GET)->durationUs;
+    sum += result.Find(LatencySummaryPhase::MASTER_PROCESS_QUERY_META)->durationUs;
+    sum += result.Find(LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET)->durationUs;
+    sum += result.Find(LatencySummaryPhase::WORKER_URMA_URMA_TOTAL)->durationUs;
+    sum += result.Find(LatencySummaryPhase::WORKER_PROCESS_L2CACHE_READ)->durationUs;
+    EXPECT_EQ(sum, 1000u);
+
+    Trace::Instance().ClearDownstreamPhases();
+    Trace::Instance().ClearLatencyTicks();
+}
+
 }  // namespace ut
 }  // namespace datasystem

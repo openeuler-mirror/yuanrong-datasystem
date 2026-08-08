@@ -16,6 +16,7 @@
  */
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <chrono>
 #include <iterator>
@@ -1470,6 +1471,8 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
             { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
               StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_WAIT_TIMEOUT },
             minRetryOnceRpcMs);
+        // Consume comm before any early return to avoid stash leak across RPCs (issue #862 review).
+        Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::WORKER_RPC_REMOTE_GET, traceEnabled);
         // In case of changed size, error will be returned as part of response PB and urma wont be written any data
         if (rspPb.error().error_code() == K_OC_REMOTE_GET_NOT_ENOUGH) {
             // If this error happens, remote worker should also sent the changed data size
@@ -1894,6 +1897,7 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
                                            queryMetaTimer.ElapsedMilliSecond());
                 result.failedKeys.insert(itemPtr->second.begin(), itemPtr->second.end());
             }
+            result.commUs = Trace::Instance().ConsumeLastRpcCommUs();
             return rc;
         };
         if (!useThreadPoolFanout || idx == objectKeysByMaster.size()) {
@@ -1938,6 +1942,13 @@ Status WorkerOcServiceGetImpl::MergeQueryMetadataResults(std::vector<BatchQueryM
         for (int index = 0; index < rsp.not_exist_ids_size(); ++index) {
             deletingObjectsWithVersion.emplace(rsp.not_exist_ids(index), rsp.deleting_versions(index));
         }
+    }
+    if (traceEnabled) {
+        uint64_t maxComm = 0;
+        for (const auto &r : batchQueryResults) {
+            maxComm = std::max(maxComm, r.commUs);
+        }
+        Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::WORKER_RPC_QUERY_META, maxComm);
     }
     return Status::OK();
 }

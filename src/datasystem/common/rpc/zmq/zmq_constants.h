@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/protos/meta_zmq.pb.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 
@@ -286,6 +287,16 @@ static inline void RecordRpcLatencyMetrics(MetaPb &meta)
     uint64_t networkResidualNs = 0U;
     if (remoteProcessingNs > 0 && serverProcessingNs > 0) {
         networkResidualNs = (remoteProcessingNs > serverProcessingNs) ? (remoteProcessingNs - serverProcessingNs) : 0U;
+    }
+
+    // Communication time = network + RPC framework, excludes remote business
+    // execution and remote queue wait. Stash for the business layer to key into
+    // the correct latency phase. Only valid when server timestamps are present.
+    if (serverProcessingNs > 0U) {
+        uint64_t commNs = (e2eNs > serverProcessingNs) ? (e2eNs - serverProcessingNs) : 0U;
+        Trace::Instance().SetLastRpcCommUs(NsToUs(commNs));
+    } else {
+        Trace::Instance().SetLastRpcCommUs(0U);
     }
 
     if (clientReqFrameworkNs > 0U) {

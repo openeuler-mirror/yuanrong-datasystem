@@ -425,6 +425,12 @@ TEST_F(ZmqMetricsTest, queue_flow_residual_network_matches_e2e_minus_framework)
 
     RecordRpcLatencyMetrics(meta);
 
+    // Communication time stashed for the business layer = e2e - server_processing
+    // (network + RPC framework, excludes remote business execution and remote
+    // queue wait). e2e=6572000ns, server_processing=72000ns -> 6500000ns = 6500us.
+    EXPECT_EQ(Trace::Instance().ConsumeLastRpcCommUs(), 6500u);
+    EXPECT_EQ(Trace::Instance().ConsumeLastRpcCommUs(), 0u);
+
     auto summary = DumpSummaryJson();
     EXPECT_EQ(HistogramField(summary, "zmq_rpc_e2e_latency", "total", "count"), 1u);
     EXPECT_EQ(HistogramField(summary, "zmq_rpc_e2e_latency", "total", "avg_us"), 6572u);
