@@ -50,6 +50,9 @@ target_link_libraries(coordinator_watch_dispatcher_impl
   PUBLIC coordinator_protos common_coordinator_store common_util common_flags rpc_stub_cache_mgr)
 add_dependencies(coordinator_watch_dispatcher_impl coordinator_protos)
 
+set_source_files_properties(coordinator_runtime.cpp PROPERTIES
+    COMPILE_DEFINITIONS "GIT_HASH=\"${GIT_HASH}\";GIT_BRANCH=\"${GIT_BRANCH}\"")
+
 add_library(coordinator_runtime STATIC coordinator_runtime.cpp)
 target_include_directories(coordinator_runtime PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
 target_link_libraries(coordinator_runtime PUBLIC
