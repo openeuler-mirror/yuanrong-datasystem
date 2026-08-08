@@ -1337,9 +1337,9 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | enable_memory_rebalance | bool | `false` | 否 | 是否开启由 master 调度的内存均衡能力。开启后，master 会将高共享内存使用率 worker 上的对象迁移到低使用率 worker，以均衡集群内 object cache 的共享内存压力 |
 | rebalance_source_usage_percent | uint32 | `70` | 否 | source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。取值范围：1-100 |
 | rebalance_usage_gap_percent | uint32 | `20` | 否 | source 与 target worker 之间的最小共享内存使用率差值（百分比）。仅当差值不小于该值时才下发迁移任务。取值范围：1-100 |
-| rebalance_cooldown_s | uint32 | `60` | 否 | worker 在一次失败或超时的均衡任务后的冷却时间（秒），冷却期内不再被选为均衡源 |
-| rebalance_task_report_grace_ms | uint32 | `60000` | 否 | 均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试 |
-| rebalance_max_migrate_bytes_per_round | uint64 | `1073741824` | 否 | 单次内存均衡任务最多迁移的数据量（字节），必须大于 0，默认 1GB（1073741824） |
+| rebalance_task_report_grace_ms | uint32 | `30000` | 否 | 均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试 |
+
+> 兼容性说明：`rebalance_cooldown_s` 与 `rebalance_max_migrate_bytes_per_round` 已移除，冷却时长固定为 60s、单次任务迁移上限固定为 1GB。升级前请从 worker 启动参数（如 `workerGflagParams`/`extraArgs`）和自定义 `worker_config.json` 中移除这两个配置项，否则 worker 会因识别到未知 flag 而启动失败。
 
 #### 日志与可观测相关配置
 

@@ -133,10 +133,7 @@ DS_DEFINE_uint32(rebalance_source_usage_percent, 70,
                  "Memory usage percent at or above which a ready worker can be selected as memory rebalance source.");
 DS_DEFINE_uint32(rebalance_usage_gap_percent, 20,
                  "Minimum memory usage percent gap between source and target for memory rebalance.");
-DS_DEFINE_uint64(rebalance_max_migrate_bytes_per_round, 1024ul * 1024ul * 1024ul,
-                 "Maximum bytes assigned to a single memory rebalance task.");
-DS_DEFINE_uint32(rebalance_cooldown_s, 60, "Cooldown seconds for workers after a failed or expired rebalance task.");
-DS_DEFINE_uint32(rebalance_task_report_grace_ms, 60000, "rebalance task report grace ms.");
+DS_DEFINE_uint32(rebalance_task_report_grace_ms, 30000, "rebalance task report grace ms.");
 DS_DEFINE_uint32(node_timeout_s, 60, "maximum time interval before a node is considered lost");
 DS_DEFINE_int32(io_thread_nice, 0,
                 "Nice value for selected IO threads. Valid range is [-20, 19]. 0 skips nice adjustment and preserves "

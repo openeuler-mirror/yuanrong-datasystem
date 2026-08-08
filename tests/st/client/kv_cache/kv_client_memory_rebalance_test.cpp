@@ -155,6 +155,7 @@ std::string BuildRebalanceInjectActions()
                          "TcpMigrateTransport.MigrateDataToRemote.delay:100000*call();"
                          "MemoryRebalanceScheduler.AssignTask:100000*call();"
                          "MemoryRebalanceScheduler.ExpireTask:100000*call();"
+                         "MemoryRebalanceScheduler.CooldownSeconds:call(1);"
                          "worker.migrate_service.return:100000*call()";
    if (IsSourceClockOffsetCase()) {
        actions += ";" + SOURCE_CLOCK_OFFSET_POINT + ":"
@@ -194,8 +195,8 @@ public:
            "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
            "-rebalance_usage_gap_percent=" + usageGapPercent + " -rebalance_source_usage_percent=" +
            sourceUsagePercent + " "
-           "-rebalance_cooldown_s=1 -rebalance_task_report_grace_ms=500 "
-           "-data_migrate_rate_limit_mb=1024" +
+            "-rebalance_task_report_grace_ms=500 "
+            "-data_migrate_rate_limit_mb=1024" +
            watermarkParams;
         if (IsUrmaScaleInCase()) {
 #ifdef USE_URMA
@@ -655,7 +656,8 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, BusyGuardSelfHealProbesAfterBudgetEla
     // which runs on the source worker (WORKER0), so the action must be set on WORKER0, not the targets.
     // SelfHealBusyRate fires 3 probes, all return K_NOT_READY -> rate=0 -> budget elapsed -> give up
     // -> SendDataToRemote returns without sending MigrateData -> handler reports FAILED -> master cooldowns
-    // source+target 1s -> next Schedule dispatches a new task with a fresh handler (selfHealAttempted_=false).
+    // source+target 1s (via CooldownSeconds inject) -> next Schedule dispatches a new task with a fresh
+    // handler (selfHealAttempted_=false).
     // Probe 4: inject exhausted -> target responds -> rate>0 -> self-heal succeeds -> migration proceeds.
     SetInjectAction(WORKER0, "worker.migrate_data_probe.return", "3*return(K_NOT_READY)");
 
@@ -741,7 +743,7 @@ public:
         opts.workerGflagParams =
             "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
             "-rebalance_usage_gap_percent=30 -rebalance_source_usage_percent=80 "
-            "-rebalance_cooldown_s=1 -rebalance_task_report_grace_ms=500 "
+            "-rebalance_task_report_grace_ms=500 "
             "-data_migrate_rate_limit_mb=20";
         opts.injectActions = BuildRebalanceInjectActions();
     }

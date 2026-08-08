@@ -72,8 +72,6 @@ DS_DECLARE_double(spill_low_watermark_ratio);
 DS_DECLARE_bool(enable_memory_rebalance);
 DS_DECLARE_uint32(rebalance_source_usage_percent);
 DS_DECLARE_uint32(rebalance_usage_gap_percent);
-DS_DECLARE_uint64(rebalance_max_migrate_bytes_per_round);
-DS_DECLARE_uint32(rebalance_cooldown_s);
 DS_DECLARE_uint32(rebalance_task_report_grace_ms);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(kv_events_config);

@@ -33,7 +33,6 @@
 DS_DECLARE_bool(enable_memory_rebalance);
 DS_DECLARE_uint32(rebalance_source_usage_percent);
 DS_DECLARE_uint32(rebalance_usage_gap_percent);
-DS_DECLARE_uint32(rebalance_cooldown_s);
 DS_DECLARE_uint32(rebalance_task_report_grace_ms);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DECLARE_uint32(node_dead_timeout_s);
@@ -89,7 +88,6 @@ public:
         oldEnable_ = FLAGS_enable_memory_rebalance;
         oldSourcePct_ = FLAGS_rebalance_source_usage_percent;
         oldGapPct_ = FLAGS_rebalance_usage_gap_percent;
-        oldCooldownS_ = FLAGS_rebalance_cooldown_s;
         oldGraceMs_ = FLAGS_rebalance_task_report_grace_ms;
         oldRateMb_ = FLAGS_data_migrate_rate_limit_mb;
         oldNodeDeadS_ = FLAGS_node_dead_timeout_s;
@@ -97,7 +95,6 @@ public:
         FLAGS_enable_memory_rebalance = true;
         FLAGS_rebalance_source_usage_percent = 70;
         FLAGS_rebalance_usage_gap_percent = 30;
-        FLAGS_rebalance_cooldown_s = 60;
         // Large grace keeps the active task from expiring mid-test (deterministic, no real timeout).
         FLAGS_rebalance_task_report_grace_ms = 60'000;
         // 1 MB/s so the transfer-time estimate stays bounded for any realistic max_bytes.
@@ -119,7 +116,6 @@ public:
         FLAGS_enable_memory_rebalance = oldEnable_;
         FLAGS_rebalance_source_usage_percent = oldSourcePct_;
         FLAGS_rebalance_usage_gap_percent = oldGapPct_;
-        FLAGS_rebalance_cooldown_s = oldCooldownS_;
         FLAGS_rebalance_task_report_grace_ms = oldGraceMs_;
         FLAGS_data_migrate_rate_limit_mb = oldRateMb_;
         FLAGS_node_dead_timeout_s = oldNodeDeadS_;
@@ -146,7 +142,6 @@ private:
     bool oldEnable_ = false;
     uint32_t oldSourcePct_ = 0;
     uint32_t oldGapPct_ = 0;
-    uint32_t oldCooldownS_ = 0;
     uint32_t oldGraceMs_ = 0;
     uint32_t oldRateMb_ = 0;
     uint32_t oldNodeDeadS_ = 0;
