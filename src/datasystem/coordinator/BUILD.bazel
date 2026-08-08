@@ -116,6 +116,7 @@ ds_cc_library(
         "//src/datasystem/common/signal:signal",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:version",
     ],
 )
 

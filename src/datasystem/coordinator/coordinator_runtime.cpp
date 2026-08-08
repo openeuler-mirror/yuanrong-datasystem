@@ -28,6 +28,7 @@
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/version.h"
 #include "datasystem/coordinator/coordinator_service_impl.h"
 
 DS_DECLARE_string(coordinator_address);
@@ -103,6 +104,7 @@ Status CoordinatorRuntime::InitAndRun(const CoordinatorOptions &options)
 Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
 {
     Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR);
+    LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
     Status firstError;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery;
     int expectedMemberCount = 0;
