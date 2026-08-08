@@ -114,6 +114,13 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - Fast-transport `Event` completion waits use `bthread::Mutex` and `bthread::ConditionVariable`. A BRPC handler waiting for
     URMA or UCP completion therefore suspends its bthread instead of blocking the scheduler's worker pthread; completion
     notifications from ordinary polling pthreads remain supported.
+  - URMA device selection (`UrmaManager::Init` in `src/datasystem/common/rdma/urma_manager.cpp`) collects an ordered
+    candidate list via `UrmaGetEffectiveDevices`: the configured name (`DS_UB_DEV_NAME`, default `bonding_dev_0`) is
+    tried first, then every remaining device whose name starts with `bonding`. `Init` tries each candidate through
+    `UrmaGetDeviceByName` + `UrmaResource::Init`; because `UrmaResource::Init` starts with `Clear()`, a failed attempt
+    is torn down before the next candidate. This lets a bare-metal worker start when its default bonding device
+    (EID 0, from `DS_UB_DEV_EID` default `0`) is occupied by a container; previous behavior selected only the first
+    `bonding*` device and failed startup when it was unavailable.
   - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
     to `4` MB and is validated in the range `[1, 2048]` MB.
   - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.
