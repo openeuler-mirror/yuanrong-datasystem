@@ -105,12 +105,22 @@ public:
         cntlErrorCode_ = errorCode;
         cntlFailed_ = failed;
         respAttachmentSize_ = respAttachmentSize;
+        // CntlFailed() is the authoritative failure signal for latency bucketing: failed requests
+        // (deadline-exceeded rejects, peer errors, etc.) must go into the *_FAIL histograms, not the
+        // success e2e/network_residual ones, otherwise overload failure residuals pollute the success
+        // view and operators misread a server-side bottleneck as network latency.
+        failed_ = failed;
     }
     int64_t CntlTimeoutMs() const { return cntlTimeoutMs_; }
     int64_t CntlDeadlineUs() const { return cntlDeadlineUs_; }
     int CntlErrorCode() const { return cntlErrorCode_; }
     bool CntlFailed() const { return cntlFailed_; }
     uint64_t RespAttachmentSize() const { return respAttachmentSize_; }
+    // Latency-bucketing failure flag. Set by SetCntlDiagnostics on the client path; may also be set
+    // directly by paths that record a trace without a Controller (e.g. stream destroy with a stale
+    // stream). Read by RecordBrpcRpcTrace to pick success vs *_FAIL histograms.
+    void MarkFailed() { failed_ = true; }
+    bool Failed() const { return failed_; }
 
     const std::string &TraceId() const { return traceId_; }
     const std::string &MethodName() const { return methodName_; }
@@ -139,6 +149,8 @@ private:
     int64_t cntlDeadlineUs_ { -1 };
     int cntlErrorCode_ { 0 };
     bool cntlFailed_ { false };
+    // Latency-bucketing flag; see MarkFailed()/Failed().
+    bool failed_ { false };
     uint64_t respAttachmentSize_ { 0 };
 };
 
@@ -267,7 +279,7 @@ inline bool ShouldRecordBrpcTraceOnDestroy(const BrpcPerfTrace &trace)
 
 inline void RecordBrpcTraceLatencyMetrics(uint64_t clientReqFrameworkNs, uint64_t remoteProcessingNs,
     uint64_t clientRspFrameworkNs, uint64_t serverReqQueueNs, uint64_t serverExecNs,
-    uint64_t serverRspQueueNs, uint64_t e2eNs, uint64_t networkResidualNs)
+    uint64_t serverRspQueueNs, uint64_t e2eNs, uint64_t networkResidualNs, bool failed)
 {
     if (clientReqFrameworkNs > 0) {
         RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_CLIENT_REQ_FRAMEWORK_LATENCY, clientReqFrameworkNs);
@@ -287,11 +299,22 @@ inline void RecordBrpcTraceLatencyMetrics(uint64_t clientReqFrameworkNs, uint64_
     if (serverRspQueueNs > 0) {
         RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_SERVER_RSP_QUEUE_LATENCY, serverRspQueueNs);
     }
+    // Bucket e2e and network_residual by success/failure so overload failure residuals (deadline
+    // rejects whose server trailer still carries a full server trace) do not pollute the success
+    // histograms. The *_FAIL histograms let operators see the failed-request latency separately.
     if (e2eNs > 0) {
-        RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_RPC_E2E_LATENCY, e2eNs);
+        if (failed) {
+            RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_RPC_E2E_FAIL_LATENCY, e2eNs);
+        } else {
+            RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_RPC_E2E_LATENCY, e2eNs);
+        }
     }
     if (networkResidualNs > 0) {
-        RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_RPC_NETWORK_RESIDUAL_LATENCY, networkResidualNs);
+        if (failed) {
+            RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_RPC_NETWORK_RESIDUAL_FAIL_LATENCY, networkResidualNs);
+        } else {
+            RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_RPC_NETWORK_RESIDUAL_LATENCY, networkResidualNs);
+        }
     }
 }
 
@@ -320,7 +343,7 @@ inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
     }
     RecordBrpcTraceLatencyMetrics(clientReqFrameworkNs, remoteProcessingNs, clientRspFrameworkNs,
                                   serverReqQueueNs, serverExecNs, serverRspQueueNs, e2eNs,
-                                  networkResidualNs);
+                                  networkResidualNs, trace.Failed());
     const uint64_t frameworkNs = e2eNs > serverExecNs ? e2eNs - serverExecNs : 0;
     const int vlogLevel =
         (frameworkNs > BRPC_RPC_FRAMEWORK_SLOW_LOG_THRESHOLD_NS || FLAGS_enable_perf_trace_log) ? 0 : 1;

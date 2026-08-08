@@ -190,6 +190,7 @@ private:
         MergeBrpcServerTraceTrailer(responseAttachment_, trace);
         pb.CopyFrom(response_);
         trace.MarkClientEnd();
+        trace.SetCntlDiagnostics(timeoutMs_, -1, cntl.ErrorCode(), false, responseAttachment_.size());
         RecordBrpcRpcTrace(trace);
         // Mirror BuildPostCallDeadlineCheckSnippet: a slow success whose e2e exceeds the per-request
         // ApiDeadline must be reported as a deadline miss (brpc set_timeout_ms is a soft deadline that
@@ -207,6 +208,7 @@ private:
         butil::IOBuf errorAttachment = cntl.response_attachment();
         MergeBrpcServerTraceTrailer(errorAttachment, trace);
         trace.MarkClientEnd();
+        trace.SetCntlDiagnostics(timeoutMs_, -1, cntl.ErrorCode(), true, errorAttachment.size());
         RecordBrpcRpcTrace(trace);
         Status embedded = TryExtractStatusFromResponse(response_);
         const auto &errorText = cntl.ErrorText();
