@@ -38,6 +38,8 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/coordinator/raft/coordinator_raft_peer.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem::coordinator {
 namespace {
@@ -553,6 +555,7 @@ Status CoordinatorElectionManager::Start()
 
 void CoordinatorElectionManager::RunBootstrapControl() noexcept
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("CoordinatorBootstrap;" + GetStringUuid(), true);
     Raii exitNotifier([callback = dependencies_.onBootstrapWorkerExit] {
         if (callback) {
             callback();

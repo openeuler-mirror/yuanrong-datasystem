@@ -20,6 +20,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/common/log/trace.h"
 
 namespace datasystem::cluster {
 namespace {
@@ -175,6 +176,7 @@ void TopologyRecoveryReporter::ScheduleReport()
     try {
         // scheduled_ bounds the single-thread pool to the current round plus at most one successor round.
         reportPool_->Execute([this] {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID("TopologyReport;" + GetStringUuid(), true);
             CoordinatorLeaderIdentity identity;
             bool completed = false;
             try {

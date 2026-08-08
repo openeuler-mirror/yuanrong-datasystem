@@ -247,11 +247,10 @@ RequestContext* GetRequestContext(const char* file, int line)
         // GetWorkerTimeCost() / AccessTransportTracker call on those threads would
         // otherwise emit one ERROR.
         if (FLAGS_use_brpc) {
-            LOG_EVERY_N(WARNING, K_MISSING_CONTEXT_WARN_INTERVAL)
-                << "GetRequestContext(): no active ScopedRequestContext on this bthread"
-                << " (called from " << file << ":" << line << "). "
-                << "Expected on background/client threads; for brpc handlers, declare "
-                << "ScopedRequestContext as the first line of the handler.";
+            VLOG_EVERY_N(1, K_MISSING_CONTEXT_WARN_INTERVAL) << "GetRequestContext(): no active "
+                "ScopedRequestContext on this bthread (called from " << file << ":" << line << "). "
+                "Expected on background/client threads; for brpc handlers, declare "
+                "ScopedRequestContext as the first line of the handler.";
         }
         // ZMQ / test: fall through to thread_local fallback (safe under usercode_in_pthread=true).
     }

@@ -23,6 +23,8 @@
 #include <chrono>
 #include <random>
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
 
@@ -142,6 +144,7 @@ void LeaseManager::StartExpirationCheck()
     running_.store(true);
     expirationThread_ = std::thread([this]() {
         while (running_.load()) {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID("LeaseManager;" + GetStringUuid());
             std::this_thread::sleep_for(std::chrono::seconds(1));
             CheckExpiration();
         }

@@ -125,6 +125,17 @@ void ClearClientAccessTransportKind();
 // SetRequestContext(), and restores the previous context on destruction.
 // Nested ScopedRequestContext is safe: the destructor restores the outer
 // context rather than clearing to nullptr.
+//
+// When to use ScopedRequestContext vs TraceGuard SetTraceNewID:
+//   - Use SetRequestContext(nullptr) + ScopedRequestContext(traceID) when the
+//     thread pool task body sends brpc RPCs. brpc may borrow the calling
+//     pthread to run other bthreads (M:N work-stealing), leaving a stale
+//     RequestContext pointer in the bthread-local keytable. Installing a
+//     fresh ScopedRequestContext protects against this pollution.
+//   - Use TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID)
+//     when the task body does NOT send brpc RPCs (e.g. local RocksDB ops,
+//     fire-and-forget logging, pure computation). The simpler TraceGuard is
+//     sufficient because there is no brpc borrowing to pollute the slot.
 // Usage in brpc handlers:
 //   ScopedRequestContext ctx;
 //   // ... handler logic, may return early ...

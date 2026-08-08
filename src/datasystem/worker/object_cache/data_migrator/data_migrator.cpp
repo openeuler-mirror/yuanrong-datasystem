@@ -198,6 +198,9 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToSpecificNo
     }
 
     auto traceID = Trace::Instance().GetTraceID();
+    if (traceID.empty()) {
+        traceID = "migr;" + GetStringUuid();
+    }
     return threadPool_->Submit([this, remoteWorkerStub, objectKeys, traceID, strategy]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         return MigrateDataByNodeImpl(remoteWorkerStub, objectKeys, strategy, true);
@@ -213,6 +216,9 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToTargetNode
     }
 
     auto traceID = Trace::Instance().GetTraceID();
+    if (traceID.empty()) {
+        traceID = "migr;" + GetStringUuid();
+    }
     return threadPool_->Submit([this, objectKeys, targetAddr, traceID, strategy, options]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
 
@@ -460,9 +466,11 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateDataByNode(
     std::shared_ptr<WorkerRemoteWorkerOCApi> remoteWorkerStub;
     Status rc = ConnectAndCreateRemoteApi(remoteWorkerStub, addr);
     auto traceID = Trace::Instance().GetTraceID();
+    if (traceID.empty()) {
+        traceID = "migr;" + GetStringUuid();
+    }
     return rc.IsOk() ? threadPool_->Submit([this, remoteWorkerStub, objectKeys, traceID, strategy]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("migr;" + GetStringUuid());
-        LOG(INFO) << "MigrateDataByNodeImpl started " << "parent trace: " << traceID;
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         return MigrateDataByNodeImpl(remoteWorkerStub, objectKeys, strategy);
     })
                      : ConstructFailedFuture(addr.ToString().empty() ? localAddress_.ToString() : addr.ToString(), rc,

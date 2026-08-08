@@ -20,6 +20,8 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem::cluster {
 namespace {
@@ -323,6 +325,7 @@ void WorkerLeaderReconciler::RunEnsureLoop(CoordinatorLeaderIdentity identity)
     size_t retryAttempt = 0;
     EnsureWork work{ std::move(identity), false, false };
     while (!stopping_.load(std::memory_order_acquire)) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("LeaderReconciler;" + GetStringUuid());
         if (!TakePendingEnsure(work)) {
             break;
         }

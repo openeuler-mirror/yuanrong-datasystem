@@ -22,10 +22,12 @@
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/math_util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
@@ -94,8 +96,11 @@ void RebalanceExecutor::Submit(const master::RebalanceTaskPb &task, std::string 
     }
 
     // Do not block the resource-report thread; run data migration in the single-task executor.
+    auto traceId = Trace::Instance().GetTraceID();
     try {
-        executorPool_.Execute([this, task, assignedMasterAddress = std::move(assignedMasterAddress)]() {
+        executorPool_.Execute([this, task, assignedMasterAddress = std::move(assignedMasterAddress), traceId]() {
+            SetRequestContext(nullptr);
+            ScopedRequestContext ctx(traceId);
             try {
                 Execute(task, assignedMasterAddress);
             } catch (const std::exception &e) {
@@ -120,7 +125,10 @@ void RebalanceExecutor::SubmitBusyResult(const master::RebalanceTaskPb &task, co
     LOG(WARNING) << FormatString("Reject rebalance task %s because task %s is still running", task.task_id(),
                                  runningTaskId);
     try {
-        executorPool_.Execute([this, task]() {
+        auto traceId = Trace::Instance().GetTraceID();
+        executorPool_.Execute([this, task, traceId]() {
+            SetRequestContext(nullptr);
+            ScopedRequestContext ctx(traceId);
             ReportResult(task, master::REBALANCE_TASK_FAILED, 0, 0, 0, "source worker is busy");
         });
     } catch (const std::exception &e) {

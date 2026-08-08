@@ -27,6 +27,8 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 DS_DECLARE_bool(enable_curve_zmq);
 DS_DECLARE_string(curve_key_dir);
@@ -205,6 +207,7 @@ Status RpcAuthKeyManager::StartAuthHandler()
 {
     RETURN_IF_EXCEPTION_OCCURS(thrdPool_ = std::make_unique<ThreadPool>(1, 0, "RpcAuth"));
     auto func = [this] {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("AuthHandler;" + GetStringUuid(), true);
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authHandler_->WorkerEntry(), "ZmqAuthHandler WorkerEntry failed");
         return Status::OK();
     };

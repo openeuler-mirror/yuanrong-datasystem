@@ -21,6 +21,8 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
 namespace client {
@@ -150,6 +152,7 @@ void HashRingRefresher::UpdateWorkerList(const ::datasystem::ClusterTopologyPb &
 void HashRingRefresher::RefreshLoop()
 {
     while (running_.load()) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("HashRingRefresh;" + GetStringUuid());
         forceRefresh_.exchange(false, std::memory_order_acq_rel);
         DoRefresh();
 

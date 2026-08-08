@@ -35,6 +35,8 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/protos/meta_zmq.pb.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 DS_DEFINE_int32(zmq_server_io_context, 5,
                 "Optimize the performance of the customer. Default server 5. "
@@ -327,6 +329,7 @@ Status ZmqServerImpl::Run()
     // Start a thread pool for these extra threads.
     RETURN_IF_EXCEPTION_OCCURS(thrdPool_ = std::make_unique<ThreadPool>(numThreadsNeeded, 0, "ZmqProxy"));
     auto func = [this] {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("ZmqProxy;" + GetStringUuid(), true);
         if (!Thread::SetCurrentThreadNice(FLAGS_io_thread_nice)) {
             LOG(WARNING) << "Failed to set nice for ZmqServerImpl proxy thread, nice=" << FLAGS_io_thread_nice
                          << ", errno=" << errno;

@@ -49,6 +49,7 @@
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 DS_DECLARE_bool(ipc_through_shared_memory);
 DS_DECLARE_bool(use_brpc);
@@ -141,6 +142,7 @@ void AsyncPersistenceDelManager::Stop()
 void AsyncPersistenceDelManager::ProcessDelPersistenceOldVerSion()
 {
     while (!exit_) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("DelOldVer;" + GetStringUuid());
         const int waitInterval = 100;
         std::unordered_map<std::string, std::uint64_t> needDelKeysWithVersion;
         {

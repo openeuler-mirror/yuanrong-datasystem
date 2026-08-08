@@ -16,6 +16,7 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:uuid_generator",
         "//third_party/protos/etcd:rpc_cc_proto",
         "//third_party/protos/etcd:rpc_cc_grpc",
         "//third_party/protos/etcd:kv_cc_proto",
