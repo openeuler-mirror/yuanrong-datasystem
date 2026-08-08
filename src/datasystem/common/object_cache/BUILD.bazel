@@ -87,11 +87,19 @@ ds_cc_library(
     ],
 )
 
-# alwayslink target for buffer and device_buffer (heavy client deps)
+# alwayslink target for buffer, device_buffer, and buffer_composer (heavy client deps).
+# buffer_composer.cpp is compiled here (alongside buffer.cpp) so its calls to
+# Buffer::GetSize / Buffer::MutableData resolve within the same alwayslink lib.
+# It cannot live in :common_object_cache because that target is a dependency of
+# :buffer (via the client/device chain), so pulling buffer_composer.cpp into it
+# would leave those Buffer symbols undefined when libcommon_object_cache.so is
+# linked. :buffer is the smallest target that already compiles buffer.cpp.
 ds_cc_library(
     name = "buffer",
-    srcs = ["buffer.cpp", "device_buffer.cpp"],
+    srcs = ["buffer.cpp", "buffer_composer.cpp", "device_buffer.cpp"],
     deps = [
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/object:object_headers",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/client/object_cache:object_client_impl",
         "//src/datasystem/client/object_cache/device:device_memory_unit",
@@ -116,18 +124,10 @@ alias(name = "object_ref_info", actual = ":common_object_cache")
 alias(name = "shm_guard", actual = ":common_object_cache")
 alias(name = "safe_object", actual = ":common_object_cache")
 alias(name = "safe_table", actual = ":common_object_cache")
-alias(name = "buffer_composer", actual = ":buffer_composer_impl")
-
-# Keep the implementation out of common_object_cache because it calls Buffer methods.
-# Do not depend on :buffer here: :buffer reaches client/device users of this target.
-ds_cc_library(
-    name = "buffer_composer_impl",
-    srcs = ["buffer_composer.cpp"],
-    deps = [
-        ":common_object_cache",
-    ],
-    visibility = ["//visibility:public"],
-)
+# buffer_composer resolves to :common_object_cache, which provides buffer_composer.h
+# (a header-only dependency for client/device targets). The buffer_composer.cpp
+# implementation lives in :buffer so its Buffer method calls resolve.
+alias(name = "buffer_composer", actual = ":common_object_cache")
 
 alias(name = "node_info", actual = ":common_object_cache")
 
