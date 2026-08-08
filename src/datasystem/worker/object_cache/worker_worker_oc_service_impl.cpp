@@ -845,8 +845,14 @@ Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
                                                        canPrepareFallbackPayload, objectKey));
         }
         if (canPrepareFallbackPayload) {
-            LOG_IF(WARNING, fastTransportStatus.IsError()) << FormatString(
-                "%s[%s] fallback to tcp, rc = %s", fastTransportName, objectKey, fastTransportStatus.ToString());
+            // Per-object-in-batch fallback diagnostic. Under a sustained URMA fault every object in every
+            // remote-get batch falls back here. The fast-transport failure root cause is already recorded in
+            // the response's provider_ub_failure_detail above (UpdateProviderUbFailureDetailForWrappedStatus),
+            // so this WARN is only the fallback notice -- throttle it like the batch-level fallback log,
+            // not a root-cause signal.
+            LOG_IF_EVERY_N(WARNING, fastTransportStatus.IsError(), K_URMA_WARNING_LOG_EVERY_N)
+                << FormatString("%s[%s] fallback to tcp, rc = %s", fastTransportName, objectKey,
+                                fastTransportStatus.ToString());
             RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
         }
     }
@@ -1249,8 +1255,12 @@ Status WorkerWorkerOCServiceImpl::HandleBatchWaitFailure(BatchWaitContext &conte
     HostPort requestAddress;
     LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(context.req, requestAddress),
                  "GetRemoteAddressFromBatchGetReq failed");
-    LOG(WARNING) << FormatString("fallback to tcp, srcAddress = %s, targetAddress = %s, rc = %s",
-                                 localAddress_.ToString(), requestAddress.ToString(), status.ToString());
+    // Throttle the per-batch fallback diagnostic: under a sustained URMA provider fault every
+    // BatchGetObjectRemote RPC falls back to TCP here, emitting one WARN per batch. Reuse the file's
+    // K_URMA_WARNING_LOG_EVERY_N convention (also used at the URMA_NEED_CONNECT site above).
+    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        << FormatString("fallback to tcp, srcAddress = %s, targetAddress = %s, rc = %s",
+                        localAddress_.ToString(), requestAddress.ToString(), status.ToString());
     return Status::OK();
 }
 
