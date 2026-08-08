@@ -214,30 +214,26 @@ TEST_F(ExistHandlerTest, ExistRetriesNotOwnerExtraWithoutSelectingAgain)
     EXPECT_TRUE(routing_->updatedWorkers.empty());
 }
 
-TEST_F(ExistHandlerTest, ExistReroutesAfterUnavailableWithoutEviction)
+TEST_F(ExistHandlerTest, ExistRetriesUnavailableOnSameWorkerWithoutReroute)
 {
     HostPort workerA = MakeWorker(18481);
     routing_->groups[workerA] = { "k1" };
-    transport_->results = {
+    transport_->resultsByWorker[workerA] = {
         { Status(K_RPC_UNAVAILABLE, "first"), {} },
         { Status(K_RPC_UNAVAILABLE, "second"), {} },
-        { Status(K_RPC_UNAVAILABLE, "third"), {} },
-        { Status(K_RPC_UNAVAILABLE, "fourth"), {} },
     };
     std::vector<bool> exists;
 
     Status rc = RunFlow({ "k1" }, exists);
 
+    // K_RPC_UNAVAILABLE is transient: retried on the same worker (probe retry), not rerouted, and
+    // not evicted from the routing table.
     EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE);
-    ASSERT_EQ(transport_->workers.size(), 4ul);
+    ASSERT_EQ(transport_->workers.size(), 2ul);
     EXPECT_EQ(transport_->workers[0], workerA);
     EXPECT_EQ(transport_->workers[1], workerA);
-    EXPECT_EQ(transport_->workers[2], workerA);
-    EXPECT_EQ(transport_->workers[3], workerA);
-    // K_RPC_UNAVAILABLE is transient: Exist still probes + reroutes, but no longer evicts the
-    // worker from the routing table (IsRoutingEvictionFailure excludes it).
     EXPECT_TRUE(routing_->updatedWorkers.empty());
-    EXPECT_EQ(routing_->selectWorkersCount, 2);
+    EXPECT_EQ(routing_->selectWorkersCount, 1);
 }
 
 TEST_F(ExistHandlerTest, ExistPeerDeadUpdatesRoutingWithoutProbeOrReroute)
@@ -261,7 +257,7 @@ TEST_F(ExistHandlerTest, ExistPeerDeadUpdatesRoutingWithoutProbeOrReroute)
     EXPECT_EQ(routing_->selectWorkersCount, 1);
 }
 
-TEST_F(ExistHandlerTest, ExistReroutesAfterDeadlineExceeded)
+TEST_F(ExistHandlerTest, ExistRetriesDeadlineExceededOnSameWorkerWithoutReroute)
 {
     HostPort workerA = MakeWorker(18481);
     HostPort workerB = MakeWorker(18482);
@@ -280,16 +276,13 @@ TEST_F(ExistHandlerTest, ExistReroutesAfterDeadlineExceeded)
 
     Status rc = RunFlow({ "k1" }, exists);
 
-    ASSERT_TRUE(rc.IsOk());
-    EXPECT_EQ(exists, std::vector<bool>({ true }));
-    // K_RPC_DEADLINE_EXCEEDED is transient: reroute still happens, but no routing eviction.
+    // K_RPC_DEADLINE_EXCEEDED is transient: retried on the same worker, not rerouted to workerB.
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_TRUE(routing_->updatedWorkers.empty());
-    ASSERT_EQ(transport_->workers.size(), 3ul);
+    ASSERT_EQ(transport_->workers.size(), 2ul);
     EXPECT_EQ(transport_->workers[0], workerA);
     EXPECT_EQ(transport_->workers[1], workerA);
-    EXPECT_EQ(transport_->workers[2], workerB);
-    EXPECT_EQ(transport_->subTimeouts, std::vector<int64_t>({ 1000, 1000, 1000 }));
-    EXPECT_EQ(routing_->selectWorkersCount, 2);
+    EXPECT_EQ(routing_->selectWorkersCount, 1);
 }
 
 TEST_F(ExistHandlerTest, ExistReroutesAfterWorkerNotReady)

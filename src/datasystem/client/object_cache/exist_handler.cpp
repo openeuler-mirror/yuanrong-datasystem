@@ -64,12 +64,12 @@ bool IsExistRetryableConnectionError(const Status &rc)
            || rc.GetCode() == K_CLIENT_WORKER_DISCONNECT;
 }
 
-// Errors for which Exist reroutes within the bounded retry loop. Transient errors are included
-// (a retry on a fresh worker may succeed); eviction is decided separately by
-// IsRoutingEvictionFailure in ContinueOwnerGroupAfterResult.
+// Reroute (switch worker) only on explicit disconnect or worker-not-ready; transient errors are
+// already retried on the same worker by DoExistTransportCallWithConnectionRetry, and
+// K_RPC_PEER_DEAD is a hard failure that does not reroute.
 bool IsExistReroutableError(const Status &rc)
 {
-    return IsExistRetryableConnectionError(rc) || rc.GetCode() == K_NOT_READY;
+    return rc.GetCode() == K_CLIENT_WORKER_DISCONNECT || rc.GetCode() == K_NOT_READY;
 }
 
 int32_t GetExistConnectionProbeTimeoutMs(int32_t requestTimeoutMs)
