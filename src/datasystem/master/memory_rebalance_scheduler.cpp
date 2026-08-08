@@ -50,6 +50,11 @@ constexpr uint64_t TRANSFER_TIME_MULTIPLIER = 2;
 // own report and re-picked on a stale snapshot. GC only -- alive targets release on their
 // own report (<=30s) well before this fires.
 constexpr uint64_t HOLD_TTL_MIN_S = 60;
+// Previously gflags rebalance_cooldown_s / rebalance_max_migrate_bytes_per_round; the knobs were
+// removed but the behavior (cooldown window and per-task migration cap) is retained as constants.
+// CooldownSeconds inject below lets tests shorten the cooldown without re-introducing a flag.
+constexpr uint32_t REBALANCE_COOLDOWN_S = 60;
+constexpr uint64_t REBALANCE_MAX_MIGRATE_BYTES_PER_ROUND = 1024ul * 1024ul * 1024ul;
 
 uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
 {
@@ -272,7 +277,10 @@ void MemoryRebalanceScheduler::AddCooldownLocked(const std::string &worker, uint
     if (worker.empty()) {
         return;
     }
-    cooldownUntilMs_[worker] = nowMs + static_cast<uint64_t>(FLAGS_rebalance_cooldown_s) * MS_PER_SECOND;
+    uint32_t cooldownS = REBALANCE_COOLDOWN_S;
+    INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.CooldownSeconds",
+                           [&cooldownS](uint32_t seconds) { cooldownS = seconds; });
+    cooldownUntilMs_[worker] = nowMs + static_cast<uint64_t>(cooldownS) * MS_PER_SECOND;
 }
 
 void MemoryRebalanceScheduler::RemoveTaskLocked(const std::string &sourceWorker, uint64_t nowMs, bool success)
@@ -563,7 +571,7 @@ uint64_t MemoryRebalanceScheduler::CalculateTaskBytesLocked(const NodeInfo &sour
     }
     const uint64_t usageGapBytes = (source.usedMemory - target.usedMemory) / 2;
     const uint64_t targetAvailableAfterInFlight = SubOrZero(target.availableMemory, targetInflightBytes);
-    return std::min({ usageGapBytes, targetAvailableAfterInFlight, FLAGS_rebalance_max_migrate_bytes_per_round });
+    return std::min({ usageGapBytes, targetAvailableAfterInFlight, REBALANCE_MAX_MIGRATE_BYTES_PER_ROUND });
 }
 
 uint64_t MemoryRebalanceScheduler::CalculateProjectedTargetUsageRate(const NodeInfo &target,

@@ -38,7 +38,6 @@
 DS_DECLARE_bool(enable_memory_rebalance);
 DS_DECLARE_uint32(rebalance_source_usage_percent);
 DS_DECLARE_uint32(rebalance_usage_gap_percent);
-DS_DECLARE_uint32(rebalance_cooldown_s);
 DS_DECLARE_uint32(rebalance_task_report_grace_ms);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DECLARE_uint32(node_dead_timeout_s);
@@ -125,7 +124,6 @@ public:
         oldEnableMemoryRebalance_ = FLAGS_enable_memory_rebalance;
         oldSourceUsagePercent_ = FLAGS_rebalance_source_usage_percent;
         oldUsageGapPercent_ = FLAGS_rebalance_usage_gap_percent;
-        oldCooldownS_ = FLAGS_rebalance_cooldown_s;
         oldTaskTimeoutS_ = FLAGS_rebalance_task_report_grace_ms;
         oldDataMigrateRate_ = FLAGS_data_migrate_rate_limit_mb;
         oldNodeDeadTimeoutS_ = FLAGS_node_dead_timeout_s;
@@ -133,7 +131,6 @@ public:
         FLAGS_enable_memory_rebalance = true;
         FLAGS_rebalance_source_usage_percent = 70;
         FLAGS_rebalance_usage_gap_percent = 30;
-        FLAGS_rebalance_cooldown_s = 60;
         FLAGS_rebalance_task_report_grace_ms = 300;
         FLAGS_data_migrate_rate_limit_mb = 500;
         FLAGS_node_dead_timeout_s = 0;  // TTL = max(0, HOLD_TTL_MIN_S) = 60s; flaky-safe with relative backdate
@@ -144,7 +141,6 @@ public:
         FLAGS_enable_memory_rebalance = oldEnableMemoryRebalance_;
         FLAGS_rebalance_source_usage_percent = oldSourceUsagePercent_;
         FLAGS_rebalance_usage_gap_percent = oldUsageGapPercent_;
-        FLAGS_rebalance_cooldown_s = oldCooldownS_;
         FLAGS_rebalance_task_report_grace_ms = oldTaskTimeoutS_;
         FLAGS_data_migrate_rate_limit_mb = oldDataMigrateRate_;
         FLAGS_node_dead_timeout_s = oldNodeDeadTimeoutS_;
@@ -205,7 +201,6 @@ private:
     bool oldEnableMemoryRebalance_ = false;
     uint32_t oldSourceUsagePercent_ = 0;
     uint32_t oldUsageGapPercent_ = 0;
-    uint32_t oldCooldownS_ = 0;
     uint32_t oldTaskTimeoutS_ = 0;
     uint32_t oldDataMigrateRate_ = 0;
     uint32_t oldNodeDeadTimeoutS_ = 0;

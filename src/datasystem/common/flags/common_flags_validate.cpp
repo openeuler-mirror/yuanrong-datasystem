@@ -181,15 +181,6 @@ bool ValidateUrmaFailoverSuccessRateRatio(const char *flagName, double value)
     return true;
 }
 
-bool ValidatePositiveUint64(const char *flagName, uint64_t value)
-{
-    if (value == 0) {
-        LOG(ERROR) << FormatString("The value of %s flag must be greater than 0.", flagName);
-        return false;
-    }
-    return true;
-}
-
 bool ValidateUrmaFailoverMinSampleCount(const char *flagName, uint32_t value)
 {
     if (value == 0) {
@@ -233,8 +224,6 @@ DS_DEFINE_validator(remote_h2d_hccs_buffer_pool, &ValidateRemoteH2DHccsBufferPoo
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);
 DS_DEFINE_validator(rebalance_source_usage_percent, &ValidatePercent);
 DS_DEFINE_validator(rebalance_usage_gap_percent, &ValidatePercent);
-DS_DEFINE_validator(rebalance_max_migrate_bytes_per_round, &ValidatePositiveUint64);
-DS_DEFINE_validator(rebalance_cooldown_s, &Validator::ValidateUint32);
 DS_DEFINE_validator(rebalance_task_report_grace_ms, &Validator::ValidateUint32);
 DS_DEFINE_validator(monitor_config_file, &Validator::ValidatePathString);
 DS_DEFINE_validator(unix_domain_socket_dir, &Validator::ValidateUnixDomainSocketDir);
