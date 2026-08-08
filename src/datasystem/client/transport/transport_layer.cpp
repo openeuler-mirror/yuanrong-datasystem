@@ -225,7 +225,12 @@ bool TransportLayer::ReportLocalUbSenderFailure(const LocalUbSenderFailureView &
         releaseAdmission();
         return false;
     }
-    localUbSenderUnavailable_.store(true, std::memory_order_release);
+    // Quarantine the client-local UB sender: every subsequent UB Create/Set/MSet is fast-failed by
+    // CheckLocalUbSenderAdmission until a recovery probe succeeds (TryRecoverLocalUbSender). Emit a
+    // one-shot ERROR so operators see the circuit break without counting the per-request
+    // "Create still failed" WARNING storm below (which is intentionally unthrottled to preserve
+    // the failure rate signal during the outage).
+    const bool wasUnavailable = localUbSenderUnavailable_.exchange(true, std::memory_order_acq_rel);
     releaseAdmission();
     {
         std::lock_guard<std::shared_mutex> lock(localUbSenderMutex_);
@@ -235,6 +240,15 @@ bool TransportLayer::ReportLocalUbSenderFailure(const LocalUbSenderFailureView &
         ++localUbSenderGeneration_;
         localUbProbeBackoffLevel_ = 1;
         localUbProbeDeadline_ = std::chrono::steady_clock::now() + localUbProbeBaseDelay_;
+    }
+    if (!wasUnavailable) {
+        // Only the first false->true transition trips the outage summary; concurrent failures that
+        // also reach here while unavailable already fast-fail via the admission check above.
+        LOG(ERROR) << "[LOCAL_UB_CIRCUIT_BREAK] Client-local UB sender quarantined, worker="
+                   << failure.workerAddr.ToString() << ", status=" << failure.status.ToString()
+                   << ", providerStatus=" << failure.providerStatus.value_or(0)
+                   << ", cqeStatus=" << failure.cqeStatus.value_or(0)
+                   << "; UB Create/Set/MSet will fast-fail K_URMA_WORKER_UNAVAILABLE until a recovery probe succeeds";
     }
     reconcileCv_.notify_one();
     return true;

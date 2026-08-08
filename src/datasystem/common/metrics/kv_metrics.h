@@ -159,6 +159,12 @@ enum class KvMetricId : uint16_t {
     CLIENT_SHM_GET_DEGRADE_TO_TRANSPORT_TOTAL,
     // ExpiredRequestInterceptor: count of client-expired brpc requests dropped before the handler.
     BRPC_EXPIRED_REQUEST_DROP_TOTAL,
+    // Brpc RPC latency for FAILED requests (cntl.Failed() == true). Separate buckets so overload
+    // failure residuals (e.g. deadline-exceeded rejects) do not pollute the success e2e/network
+    // residual histograms, which would mislead operators into blaming the network for a server-side
+    // reject/queue bottleneck. Appended at the end to preserve existing numeric IDs.
+    BRPC_RPC_E2E_FAIL_LATENCY,
+    BRPC_RPC_NETWORK_RESIDUAL_FAIL_LATENCY,
     KV_METRIC_END
 };
 

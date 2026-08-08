@@ -114,6 +114,8 @@ TEST_F(BrpcPerfTraceTest, metric_descs_register_brpc_rpc_phase_histograms)
     expectMetric(metrics::KvMetricId::BRPC_SERVER_RSP_QUEUE_LATENCY, "brpc_server_rsp_queue_latency");
     expectMetric(metrics::KvMetricId::BRPC_RPC_E2E_LATENCY, "brpc_rpc_e2e_latency");
     expectMetric(metrics::KvMetricId::BRPC_RPC_NETWORK_RESIDUAL_LATENCY, "brpc_rpc_network_residual_latency");
+    expectMetric(metrics::KvMetricId::BRPC_RPC_E2E_FAIL_LATENCY, "brpc_rpc_e2e_fail_latency");
+    expectMetric(metrics::KvMetricId::BRPC_RPC_NETWORK_RESIDUAL_FAIL_LATENCY, "brpc_rpc_network_residual_fail_latency");
 }
 
 TEST_F(BrpcPerfTraceTest, trace_timestamp_storage_is_not_copyable)
@@ -165,6 +167,61 @@ TEST_F(BrpcPerfTraceTest, record_unary_rpc_observes_zmq_equivalent_phase_metrics
     EXPECT_EQ(HistogramField(summary, "brpc_rpc_e2e_latency", "total", "avg_us"), 13'000u);
     EXPECT_EQ(HistogramField(summary, "brpc_rpc_network_residual_latency", "total", "count"), 1u);
     EXPECT_EQ(HistogramField(summary, "brpc_rpc_network_residual_latency", "total", "avg_us"), 3'000u);
+}
+
+// A failed request (cntl.Failed() == true, e.g. deadline-exceeded reject whose server trailer still
+// carries a full server trace) must record e2e and network_residual into the *_fail histograms, NOT
+// the success ones. Otherwise overload failure residuals pollute the success view and operators
+// misread a server-side reject bottleneck as network latency. See fix-brpc-latency plan defect A.
+TEST_F(BrpcPerfTraceTest, failed_trace_records_into_fail_histograms_not_success_ones)
+{
+    BrpcPerfTrace trace("trace-fail", "WorkerService.GetObject");
+    trace.MarkClientStart(1'000'000'000ULL);
+    trace.MarkClientSend(1'002'000'000ULL);
+    trace.MarkServerRecv(9'000'000'000ULL);
+    trace.MarkServerExecStart(9'001'000'000ULL);
+    trace.MarkServerExecEnd(9'006'000'000ULL);
+    trace.MarkServerSend(9'007'000'000ULL);
+    trace.MarkClientRecv(1'012'000'000ULL);
+    trace.MarkClientEnd(1'013'000'000ULL);
+    trace.SetCntlDiagnostics(1200, -1, 110, true, 0);
+    ASSERT_TRUE(trace.Failed());
+
+    RecordBrpcRpcTrace(trace);
+
+    auto summary = DumpSummaryJson();
+    // Success histograms must NOT see the failed request.
+    EXPECT_EQ(HistogramField(summary, "brpc_rpc_e2e_latency", "total", "count"), 0u);
+    EXPECT_EQ(HistogramField(summary, "brpc_rpc_network_residual_latency", "total", "count"), 0u);
+    // Fail histograms must capture e2e and network_residual.
+    EXPECT_EQ(HistogramField(summary, "brpc_rpc_e2e_fail_latency", "total", "count"), 1u);
+    EXPECT_EQ(HistogramField(summary, "brpc_rpc_e2e_fail_latency", "total", "avg_us"), 13'000u);
+    EXPECT_EQ(HistogramField(summary, "brpc_rpc_network_residual_fail_latency", "total", "count"), 1u);
+    EXPECT_EQ(HistogramField(summary, "brpc_rpc_network_residual_fail_latency", "total", "avg_us"), 3'000u);
+}
+
+// MarkFailed() alone (without SetCntlDiagnostics) is enough to route to fail histograms — used by
+// stream paths that know failure via a callback flag rather than a Controller.
+TEST_F(BrpcPerfTraceTest, mark_failed_alone_routes_to_fail_histograms)
+{
+    BrpcPerfTrace trace("trace-markfail", "WorkerService.GetObject");
+    trace.MarkClientStart(1'000'000'000ULL);
+    trace.MarkClientSend(1'002'000'000ULL);
+    trace.MarkServerRecv(9'000'000'000ULL);
+    trace.MarkServerExecStart(9'001'000'000ULL);
+    trace.MarkServerExecEnd(9'006'000'000ULL);
+    trace.MarkServerSend(9'007'000'000ULL);
+    trace.MarkClientRecv(1'012'000'000ULL);
+    trace.MarkClientEnd(1'013'000'000ULL);
+    trace.MarkFailed();
+    ASSERT_TRUE(trace.Failed());
+
+    RecordBrpcRpcTrace(trace);
+
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(HistogramField(summary, "brpc_rpc_e2e_latency", "total", "count"), 0u);
+    EXPECT_EQ(HistogramField(summary, "brpc_rpc_e2e_fail_latency", "total", "count"), 1u);
+    EXPECT_EQ(HistogramField(summary, "brpc_rpc_network_residual_fail_latency", "total", "count"), 1u);
 }
 
 TEST_F(BrpcPerfTraceTest, server_trace_trailer_round_trips_without_payload_corruption)

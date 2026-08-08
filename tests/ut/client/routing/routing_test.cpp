@@ -144,6 +144,65 @@ TEST_F(RoutingFacadeTest, TestCallsBeforeInitFail)
               K_NOT_READY);
 }
 
+// Defect B (fix-brpc-latency plan): the SDK's own host_id must be resolvable from a LATER ring
+// change when the first ring fetch lands before the bound worker's keepalive has populated
+// host_id_map. Previously hostIdResolutionAttempted_ was consumed (exchange(true)) on the first
+// changed ring fetch regardless of whether the bound worker was in host_id_map, so a missing
+// host_id on first fetch permanently disabled same-node affinity for the SDK's lifetime. Now the
+// flag is set only on a successful resolution, so a later ring change that finally carries the
+// bound worker's host_id must adopt it and restore same-node routing.
+TEST_F(RoutingFacadeTest, TestHostIdResolvesOnLaterRingChangeWhenFirstFetchMissedIt)
+{
+    const HostPort localWorker("127.0.0.1", 1000);
+    const HostPort remoteWorker("127.0.0.1", 2000);
+    std::atomic<int> fetchCount{ 0 };
+    auto fetch = [&localWorker, &remoteWorker, &fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
+                                                            std::string &, uint64_t &newVersion, bool &changed,
+                                                            std::unordered_map<std::string, std::string> &hostIdMap) {
+        const int n = fetchCount.fetch_add(1) + 1;
+        auto &local = (*ring.mutable_members())[localWorker.ToString()];
+        local.set_state(::datasystem::MembershipPb::ACTIVE);
+        local.add_tokens(1u);  // local owns few tokens so the hash ring strongly favors remote
+        auto &remote = (*ring.mutable_members())[remoteWorker.ToString()];
+        remote.set_state(::datasystem::MembershipPb::ACTIVE);
+        remote.add_tokens(1'000'000u);  // remote dominates the ring; without same-node affinity
+                                        // virtually every key hashes to remote
+        if (n == 1) {
+            // First fetch: bound (local) worker is ACTIVE in the ring but its host_id is absent from
+            // host_id_map (keepalive propagation lag). Same-node affinity cannot resolve yet.
+            hostIdMap.clear();
+        } else {
+            // Later fetch: host_id_map now carries the bound worker's host_id.
+            hostIdMap[localWorker.ToString()] = "host-local";
+            hostIdMap[remoteWorker.ToString()] = "host-remote";
+        }
+        newVersion = static_cast<uint64_t>(n);
+        changed = true;
+        return Status::OK();
+    };
+    auto router = std::make_shared<client::WorkerRouter>("");
+    auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch);
+    // Short refresh interval so a second fetch happens quickly after Init's InitialFetch.
+    client::Routing routing(router, refresher, 50);
+
+    // Empty host_id + is_local=true enters the resolve-from-hostIdMap path; Init's InitialFetch
+    // is the first fetch (host_id absent).
+    DS_ASSERT_OK(routing.Init("", localWorker, true));
+
+    // Wait for a second ring change to carry the bound worker's host_id and rebuild sameNodeWorkers.
+    const std::vector<std::string> keys = { "k0", "k1", "k2", "k3", "k4" };
+    EXPECT_TRUE(WaitForCondition([&] {
+        std::unordered_map<HostPort, std::vector<std::string>> groups;
+        if (routing.SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_SAME_NODE, groups).IsError()) {
+            return false;
+        }
+        // When same-node affinity resolves, all keys route to the local worker in a single group.
+        return groups.size() == 1 && groups.begin()->first == localWorker;
+    }, std::chrono::seconds(5)));
+
+    routing.Shutdown();
+}
+
 TEST_F(RoutingFacadeTest, TestInitRejectsInvalidDependenciesAndArguments)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
