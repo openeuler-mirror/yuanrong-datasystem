@@ -44,6 +44,12 @@ Rules:
 - For shared state, document ownership, protection, lock ordering, visibility, and lifetime assumptions in the design or
   working notes.
 - Prefer small, scoped changes that match existing style. Do not perform unrelated refactors or broad formatting churn.
+- Prefer no comments. Let code self-document via clear naming and structure. Add a comment only when omitting it
+  would lose non-obvious information that code alone cannot express (a subtle invariant, an external prerequisite
+  like a runtime flag, a lock-ordering constraint, a non-obvious reason for a workaround). When you do add one, keep
+  it to 1-3 lines stating the constraint and why — never restate what the code already says, and never paste analysis
+  reports or essays into source files. If a reviewer asks to "document an invariant in code", distill it to the
+  minimal non-obvious constraint, not a wall of text.
 - Before claiming completion, use `.repo_context/playbooks/upkeep/ai-self-verification.md`.
 
 ## GPT-5.6 Sol And Superpowers
