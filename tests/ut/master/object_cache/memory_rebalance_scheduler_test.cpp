@@ -81,7 +81,9 @@ master::ResourceReportReqPb MakeResourceReq(const std::string &reportingWorker)
 }
 
 master::ReportRebalanceResultReqPb MakeResultReq(const master::RebalanceTaskPb &task,
-                                                 master::RebalanceTaskStatusPb status)
+                                                 master::RebalanceTaskStatusPb status,
+                                                 master::RebalanceFailureSidePb failureSide =
+                                                     master::REBALANCE_FAILURE_UNKNOWN)
 {
     master::ReportRebalanceResultReqPb req;
     req.set_task_id(task.task_id());
@@ -90,6 +92,7 @@ master::ReportRebalanceResultReqPb MakeResultReq(const master::RebalanceTaskPb &
     req.set_status(status);
     req.set_migrated_bytes(task.max_bytes());
     req.set_migrated_objects(1);
+    req.set_failure_side(failureSide);
     return req;
 }
 
@@ -195,6 +198,23 @@ protected:
     static uint64_t GetHoldTs(const MemoryRebalanceScheduler &s, const std::string &worker)
     {
         return s.futureView_.at(worker).holdSinceMs;
+    }
+    static bool HasCooldown(const MemoryRebalanceScheduler &s, const std::string &worker)
+    {
+        const auto iter = s.cooldownUntilMs_.find(worker);
+        return iter != s.cooldownUntilMs_.end()
+               && iter->second > static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    }
+    static bool HasPairCooldown(const MemoryRebalanceScheduler &s, const std::string &source,
+                                const std::string &target)
+    {
+        const auto sourceIt = s.pairCooldownUntilMs_.find(source);
+        if (sourceIt == s.pairCooldownUntilMs_.end()) {
+            return false;
+        }
+        const auto targetIt = sourceIt->second.find(target);
+        return targetIt != sourceIt->second.end()
+               && targetIt->second > static_cast<uint64_t>(GetSteadyClockTimeStampMs());
     }
 
 private:
@@ -457,7 +477,8 @@ TEST_F(MemoryRebalanceSchedulerTest, CooldownWorkerAndRunningSourceAreNotSelecte
         ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
 
         master::ReportRebalanceResultRspPb reportRsp;
-        auto failedReq = MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_FAILED);
+        auto failedReq = MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_FAILED,
+                                       master::REBALANCE_FAILURE_TARGET);
         DS_ASSERT_OK(scheduler.ReportResult(failedReq, reportRsp));
 
         auto secondSnapshot = MakeSnapshot({
@@ -482,7 +503,8 @@ TEST_F(MemoryRebalanceSchedulerTest, CooldownWorkerAndRunningSourceAreNotSelecte
         ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
 
         master::ReportRebalanceResultRspPb reportRsp;
-        auto failedReq = MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_FAILED);
+        auto failedReq = MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_FAILED,
+                                       master::REBALANCE_FAILURE_TARGET);
         DS_ASSERT_OK(scheduler.ReportResult(failedReq, reportRsp));
 
         auto secondSnapshot = MakeSnapshot({
@@ -496,6 +518,95 @@ TEST_F(MemoryRebalanceSchedulerTest, CooldownWorkerAndRunningSourceAreNotSelecte
         EXPECT_EQ(secondRsp.rebalance_task().source_worker(), runningSource);
         EXPECT_EQ(secondRsp.rebalance_task().target_worker(), targetFree);
     }
+}
+
+// Issue #958 target-attributed failures must cooldown the TARGET, not the SOURCE. With the source
+// cooldowned too, the scheduler cannot switch that healthy source to another target.
+TEST_F(MemoryRebalanceSchedulerTest, FailedTaskCooldownsTargetButNotSource)
+{
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(WORKER_92, 920, 80),
+        MakeNode(WORKER_10, 100, 900),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+
+    master::ReportRebalanceResultRspPb reportRsp;
+    DS_ASSERT_OK(
+        scheduler.ReportResult(MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_FAILED,
+                                             master::REBALANCE_FAILURE_TARGET),
+                               reportRsp));
+
+    EXPECT_TRUE(HasCooldown(scheduler, WORKER_10));
+    EXPECT_FALSE(HasCooldown(scheduler, WORKER_92));
+}
+
+// Issue #958: after a failed rebalance task the TARGET's cooldown must survive the target's own
+// resource reports. ExpireTimeoutTasksLocked used to erase the cooldown entry of the reporting
+// worker (`iter->first == activeWorker`), so a UB-faulted target that still reports over TCP kept
+// clearing its own exclusion and was re-selected every round.
+TEST_F(MemoryRebalanceSchedulerTest, FailedTargetCooldownSurvivesTargetResourceReport)
+{
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(WORKER_92, 920, 80),
+        MakeNode(WORKER_78, 150, 850),
+        MakeNode(WORKER_10, 100, 900),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    ASSERT_EQ(firstRsp.rebalance_task().target_worker(), WORKER_10);
+
+    master::ReportRebalanceResultRspPb reportRsp;
+    DS_ASSERT_OK(
+        scheduler.ReportResult(MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_FAILED,
+                                             master::REBALANCE_FAILURE_TARGET),
+                               reportRsp));
+    ASSERT_TRUE(HasCooldown(scheduler, WORKER_10));
+
+    // The failed target reports its own resource usage. The cooldown must NOT be cleared by the
+    // report itself (the erase clause `iter->first == activeWorker` is removed).
+    master::ResourceReportRspPb targetRsp;
+    DS_ASSERT_OK(scheduler.Schedule(MakeResourceReq(WORKER_10), snapshot, targetRsp));
+    EXPECT_TRUE(HasCooldown(scheduler, WORKER_10));
+
+    // While the failed target is cooldowned, the next round from the source picks another target.
+    auto secondRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
+    ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
+    EXPECT_NE(secondRsp.rebalance_task().target_worker(), WORKER_10);
+    EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_78);
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, FailureAttributionControlsCooldownScope)
+{
+    const auto verifyNodeCooldown = [this](master::RebalanceFailureSidePb side, const std::string &expectedWorker) {
+        MemoryRebalanceScheduler scheduler;
+        auto snapshot = MakeSnapshot({ MakeNode(WORKER_92, 920, 80), MakeNode(WORKER_10, 100, 900) });
+        auto rsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
+        master::ReportRebalanceResultRspPb reportRsp;
+        DS_ASSERT_OK(scheduler.ReportResult(MakeResultReq(rsp.rebalance_task(), master::REBALANCE_TASK_FAILED, side),
+                                            reportRsp));
+        EXPECT_EQ(HasCooldown(scheduler, WORKER_92), expectedWorker == WORKER_92);
+        EXPECT_EQ(HasCooldown(scheduler, WORKER_10), expectedWorker == WORKER_10);
+    };
+    verifyNodeCooldown(master::REBALANCE_FAILURE_SOURCE, WORKER_92);
+    verifyNodeCooldown(master::REBALANCE_FAILURE_TARGET, WORKER_10);
+    verifyNodeCooldown(master::REBALANCE_FAILURE_NO_CANDIDATE, WORKER_92);
+    verifyNodeCooldown(master::REBALANCE_FAILURE_CONTROL_PLANE, "");
+
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({ MakeNode(WORKER_92, 920, 80), MakeNode(WORKER_78, 150, 850),
+                                   MakeNode(WORKER_10, 100, 900) });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
+    master::ReportRebalanceResultRspPb reportRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_FAILED),
+                                        reportRsp));
+    EXPECT_TRUE(HasPairCooldown(scheduler, WORKER_92, WORKER_10));
+    EXPECT_FALSE(HasCooldown(scheduler, WORKER_92));
+    EXPECT_FALSE(HasCooldown(scheduler, WORKER_10));
+    auto secondRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
+    EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_78);
 }
 
 TEST_F(MemoryRebalanceSchedulerTest, HeldInflightReducesBudgetForImmediateRepick)

@@ -245,6 +245,8 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToTargetNode
             return finalResult;
         }
         auto result = handler.MigrateDataToRemote(options.isSlotMigration);
+        bool localOperator = false;
+        (void)LearnStructuredUbFailure(result, localOperator);
         return result;
     });
 }
@@ -650,6 +652,7 @@ Status DataMigrator::ConfigureSendAdmission(MigrateDataHandler &handler, const s
     HostPort target;
     RETURN_IF_NOT_OK(target.ParseString(targetAddress));
     handler.SetSendAdmission([this, target] {
+        RETURN_IF_NOT_OK(CheckSourceAdmission());
         return CheckTargetAdmission(target, DataPlaneAdmissionRole::INCOMING_TARGET);
     });
     return Status::OK();

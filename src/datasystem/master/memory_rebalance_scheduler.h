@@ -89,11 +89,18 @@ private:
     static uint64_t CalculateUsageRate(uint64_t usedMemory, uint64_t memoryLimit);
     static uint64_t CalculateUsageRate(const NodeInfo &node);
 
-    void ExpireTimeoutTasksLocked(uint64_t nowMs, const std::string &activeWorker);
+    void ExpireTimeoutTasksLocked(uint64_t nowMs);
+    void ExpireCooldownsLocked(uint64_t nowMs);
     void GcHeldInflightLocked(uint64_t nowMs);
     bool IsInCooldownLocked(const std::string &worker, uint64_t nowMs) const;
+    bool IsPairInCooldownLocked(const std::string &source, const std::string &target, uint64_t nowMs) const;
+    static uint64_t CalculateCooldownDeadlineMs(uint64_t nowMs);
     void AddCooldownLocked(const std::string &worker, uint64_t nowMs);
-    void RemoveTaskLocked(const std::string &sourceWorker, uint64_t nowMs, bool success);
+    void AddPairCooldownLocked(const std::string &source, const std::string &target, uint64_t nowMs);
+    void ApplyFailureCooldownLocked(const master::RebalanceTaskPb &task,
+                                    master::RebalanceFailureSidePb failureSide, uint64_t nowMs);
+    void RemoveTaskLocked(const std::string &sourceWorker, uint64_t nowMs, bool success,
+                          master::RebalanceFailureSidePb failureSide = master::REBALANCE_FAILURE_UNKNOWN);
     void MarkTaskDispatchedLocked(RunningTask &runningTask);
     uint64_t GetTargetInflightBytesLocked(const std::string &targetWorker) const;
     // Release the reporting worker's held in-flight: its own report timestamp proves its
@@ -124,7 +131,7 @@ private:
                                        std::vector<const NodeInfo *> &targets) const;
     void CollectCandidatePairsLocked(const std::vector<const NodeInfo *> &sources,
                                      const std::vector<const NodeInfo *> &targets,
-                                     std::vector<CandidatePair> &targetPairs) const;
+                                     uint64_t nowMs, std::vector<CandidatePair> &targetPairs) const;
     void FillTaskFromPairLocked(const CandidatePair &bestPair, uint64_t nowMs, master::RebalanceTaskPb &task) const;
     Status TryBuildTaskLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
                               const std::string &sourceWorker, uint64_t nowMs,
@@ -139,6 +146,7 @@ private:
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::unordered_map<std::string, RunningTask> activeTasksBySource_;
     std::unordered_map<std::string, uint64_t> cooldownUntilMs_;
+    std::unordered_map<std::string, std::unordered_map<std::string, uint64_t>> pairCooldownUntilMs_;
     // Future table (FutureView): per-target in-flight migration deltas overlaid on the current
     // table (readSnapshot_) for projection decisions. Grouping the three legacy maps into one
     // struct keeps a single entry per target so active/held state cannot drift apart, and gives

@@ -108,7 +108,7 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
     auto topologySnapshot = GetTopologySnapshot();
     uint64_t nowMs = GetSteadyClockTimeStampMs();
     std::lock_guard<std::mutex> lock(mutex_);
-    ExpireTimeoutTasksLocked(nowMs, reportingWorker);
+    ExpireTimeoutTasksLocked(nowMs);
     ReleaseSnapshotHoldsLocked(snapshot);
 
     auto activeTask = activeTasksBySource_.find(reportingWorker);
@@ -157,7 +157,7 @@ bool MemoryRebalanceScheduler::NeedSnapshotForSchedule(const master::ResourceRep
     auto topologySnapshot = GetTopologySnapshot();
     uint64_t nowMs = GetSteadyClockTimeStampMs();
     std::lock_guard<std::mutex> lock(mutex_);
-    ExpireTimeoutTasksLocked(nowMs, reportingWorker);
+    ExpireTimeoutTasksLocked(nowMs);
     ReleaseReporterHoldsLocked(reportingWorker, reportingNode.timestamp);
 
     auto activeTask = activeTasksBySource_.find(reportingWorker);
@@ -179,7 +179,7 @@ Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResul
 
     uint64_t nowMs = GetSteadyClockTimeStampMs();
     std::lock_guard<std::mutex> lock(mutex_);
-    ExpireTimeoutTasksLocked(nowMs, req.source_worker());
+    ExpireTimeoutTasksLocked(nowMs);
 
     auto taskIt = activeTasksBySource_.find(req.source_worker());
     if (taskIt == activeTasksBySource_.end()) {
@@ -201,15 +201,16 @@ Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResul
                              "The rebalance result does not match the active task");
 
     LOG(INFO) << FormatString(
-        "[MemoryRebalance] finish task %s source=%s target=%s status=%d migrated_bytes=%lu migrated_objects=%lu "
-        "failed_objects=%lu reason=%s",
-        req.task_id(), req.source_worker(), req.target_worker(), static_cast<int>(req.status()), req.migrated_bytes(),
-        req.migrated_objects(), req.failed_objects(), req.failed_reason());
-    RemoveTaskLocked(req.source_worker(), nowMs, !IsFailedStatus(req.status()));
+        "[MemoryRebalance] finish task %s source=%s target=%s status=%d failure_side=%d migrated_bytes=%lu "
+        "migrated_objects=%lu failed_objects=%lu reason=%s",
+        req.task_id(), req.source_worker(), req.target_worker(), static_cast<int>(req.status()),
+        static_cast<int>(req.failure_side()), req.migrated_bytes(), req.migrated_objects(), req.failed_objects(),
+        req.failed_reason());
+    RemoveTaskLocked(req.source_worker(), nowMs, !IsFailedStatus(req.status()), req.failure_side());
     return Status::OK();
 }
 
-void MemoryRebalanceScheduler::ExpireTimeoutTasksLocked(uint64_t nowMs, const std::string &activeWorker)
+void MemoryRebalanceScheduler::ExpireTimeoutTasksLocked(uint64_t nowMs)
 {
     std::vector<std::string> expiredSources;
     expiredSources.reserve(activeTasksBySource_.size());
@@ -225,20 +226,36 @@ void MemoryRebalanceScheduler::ExpireTimeoutTasksLocked(uint64_t nowMs, const st
         }
         LOG(WARNING) << FormatString("[MemoryRebalance] expire task %s", taskIt->second.task.task_id());
         INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.ExpireTask");
-        RemoveTaskLocked(source, nowMs, false);
+        RemoveTaskLocked(source, nowMs, false, master::REBALANCE_FAILURE_CONTROL_PLANE);
     }
+    ExpireCooldownsLocked(nowMs);
+    // issue #685: GC held in-flight charges whose target never reported back.
+    GcHeldInflightLocked(nowMs);
+}
+
+void MemoryRebalanceScheduler::ExpireCooldownsLocked(uint64_t nowMs)
+{
     for (auto iter = cooldownUntilMs_.begin(); iter != cooldownUntilMs_.end();) {
-        if (iter->second <= nowMs || iter->first == activeWorker) {
+        if (iter->second <= nowMs) {
             iter = cooldownUntilMs_.erase(iter);
         } else {
             ++iter;
         }
     }
-    // issue #685: GC held in-flight charges whose target never reported back. Kept in a helper so
-    // ExpireTimeoutTasksLocked stays under the 50-line limit. With FutureDelta the active/held
-    // fields share one entry, so there is no orphan-map inconsistency to sweep -- the helper only
-    // applies the TTL release.
-    GcHeldInflightLocked(nowMs);
+    for (auto source = pairCooldownUntilMs_.begin(); source != pairCooldownUntilMs_.end();) {
+        for (auto target = source->second.begin(); target != source->second.end();) {
+            if (target->second <= nowMs) {
+                target = source->second.erase(target);
+            } else {
+                ++target;
+            }
+        }
+        if (source->second.empty()) {
+            source = pairCooldownUntilMs_.erase(source);
+        } else {
+            ++source;
+        }
+    }
 }
 
 void MemoryRebalanceScheduler::GcHeldInflightLocked(uint64_t nowMs)
@@ -272,18 +289,65 @@ bool MemoryRebalanceScheduler::IsInCooldownLocked(const std::string &worker, uin
     return iter != cooldownUntilMs_.end() && iter->second > nowMs;
 }
 
+bool MemoryRebalanceScheduler::IsPairInCooldownLocked(const std::string &source, const std::string &target,
+                                                      uint64_t nowMs) const
+{
+    auto sourceIt = pairCooldownUntilMs_.find(source);
+    if (sourceIt == pairCooldownUntilMs_.end()) {
+        return false;
+    }
+    auto targetIt = sourceIt->second.find(target);
+    return targetIt != sourceIt->second.end() && targetIt->second > nowMs;
+}
+
+uint64_t MemoryRebalanceScheduler::CalculateCooldownDeadlineMs(uint64_t nowMs)
+{
+    uint32_t cooldownS = REBALANCE_COOLDOWN_S;
+    INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.CooldownSeconds",
+                           [&cooldownS](uint32_t seconds) { cooldownS = seconds; });
+    return nowMs + static_cast<uint64_t>(cooldownS) * MS_PER_SECOND;
+}
+
 void MemoryRebalanceScheduler::AddCooldownLocked(const std::string &worker, uint64_t nowMs)
 {
     if (worker.empty()) {
         return;
     }
-    uint32_t cooldownS = REBALANCE_COOLDOWN_S;
-    INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.CooldownSeconds",
-                           [&cooldownS](uint32_t seconds) { cooldownS = seconds; });
-    cooldownUntilMs_[worker] = nowMs + static_cast<uint64_t>(cooldownS) * MS_PER_SECOND;
+    cooldownUntilMs_[worker] = CalculateCooldownDeadlineMs(nowMs);
 }
 
-void MemoryRebalanceScheduler::RemoveTaskLocked(const std::string &sourceWorker, uint64_t nowMs, bool success)
+void MemoryRebalanceScheduler::AddPairCooldownLocked(const std::string &source, const std::string &target,
+                                                     uint64_t nowMs)
+{
+    if (source.empty() || target.empty()) {
+        return;
+    }
+    pairCooldownUntilMs_[source][target] = CalculateCooldownDeadlineMs(nowMs);
+}
+
+void MemoryRebalanceScheduler::ApplyFailureCooldownLocked(const master::RebalanceTaskPb &task,
+                                                          master::RebalanceFailureSidePb failureSide,
+                                                          uint64_t nowMs)
+{
+    switch (failureSide) {
+        case master::REBALANCE_FAILURE_SOURCE:
+        case master::REBALANCE_FAILURE_NO_CANDIDATE:
+            AddCooldownLocked(task.source_worker(), nowMs);
+            break;
+        case master::REBALANCE_FAILURE_TARGET:
+            AddCooldownLocked(task.target_worker(), nowMs);
+            break;
+        case master::REBALANCE_FAILURE_CONTROL_PLANE:
+            break;
+        case master::REBALANCE_FAILURE_UNKNOWN:
+        default:
+            AddPairCooldownLocked(task.source_worker(), task.target_worker(), nowMs);
+            break;
+    }
+}
+
+void MemoryRebalanceScheduler::RemoveTaskLocked(const std::string &sourceWorker, uint64_t nowMs, bool success,
+                                                master::RebalanceFailureSidePb failureSide)
 {
     auto taskIt = activeTasksBySource_.find(sourceWorker);
     if (taskIt != activeTasksBySource_.end()) {
@@ -304,8 +368,7 @@ void MemoryRebalanceScheduler::RemoveTaskLocked(const std::string &sourceWorker,
         } else {
             // Failure/expire: data did not land on the target, so the in-flight charge is bogus.
             DecreaseInflightLocked(task.target_worker(), task.max_bytes());
-            AddCooldownLocked(task.source_worker(), nowMs);
-            AddCooldownLocked(task.target_worker(), nowMs);
+            ApplyFailureCooldownLocked(task, failureSide, nowMs);
         }
         activeTasksBySource_.erase(taskIt);
     }
@@ -468,12 +531,14 @@ void MemoryRebalanceScheduler::CollectWorkerCandidatesLocked(const std::unordere
 
 void MemoryRebalanceScheduler::CollectCandidatePairsLocked(const std::vector<const NodeInfo *> &sources,
                                                            const std::vector<const NodeInfo *> &targets,
+                                                           uint64_t nowMs,
                                                            std::vector<CandidatePair> &targetPairs) const
 {
     targetPairs.reserve(sources.size() * targets.size());
     for (const auto *source : sources) {
         for (const auto *target : targets) {
-            if (source->nodeId == target->nodeId) {
+            if (source->nodeId == target->nodeId
+                || IsPairInCooldownLocked(source->nodeId, target->nodeId, nowMs)) {
                 continue;
             }
             uint64_t targetInflightBytes = GetTargetInflightBytesLocked(target->nodeId);
@@ -533,7 +598,7 @@ Status MemoryRebalanceScheduler::TryBuildTaskLocked(const std::unordered_map<std
                              "No source or target worker is suitable for memory rebalance");
 
     std::vector<CandidatePair> targetPairs;
-    CollectCandidatePairsLocked(sources, targets, targetPairs);
+    CollectCandidatePairsLocked(sources, targets, nowMs, targetPairs);
     std::sort(targetPairs.begin(), targetPairs.end(), [](const CandidatePair &lhs, const CandidatePair &rhs) {
         if (lhs.usageGapRate != rhs.usageGapRate) {
             return lhs.usageGapRate > rhs.usageGapRate;

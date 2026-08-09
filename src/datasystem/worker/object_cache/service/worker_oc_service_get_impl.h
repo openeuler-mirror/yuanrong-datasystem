@@ -729,11 +729,16 @@ private:
      * @param[out] failedMetas Failed get object metas.
      * @return Status of the call.
      */
+    struct BatchGetObjectOutput {
+        std::vector<std::string> &successIds;
+        std::vector<ReadKey> &needRetryIds;
+        std::unordered_set<std::string> &failedIds;
+        std::list<GetObjectInfo> &failedMetas;
+        std::optional<ProviderUbFailureDetailPb> *ubFailureDetail = nullptr;
+    };
+
     Status BatchGetObjectFromRemoteOnLock(const std::string &address, std::list<GetObjectInfo> &infos,
-                                          const std::shared_ptr<GetRequest> &request,
-                                          std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-                                          std::unordered_set<std::string> &failedIds,
-                                          std::list<GetObjectInfo> &failedMetas);
+                                          const std::shared_ptr<GetRequest> &request, BatchGetObjectOutput output);
 
     /**
      * @brief Helper function to split query meta  based off address and threshold.
@@ -759,6 +764,7 @@ private:
     void BatchGetObjectHandleIndividualStatus(Status &status, const ReadKey &readKey,
                                               std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
                                               std::unordered_set<std::string> &failedIds);
+    static void UpdateLastBatchError(const Status &status, Status &lastError);
 
     /**
      * @brief Helper function to send batch get request to remote worker and dump the payload into shm.
@@ -774,10 +780,7 @@ private:
      * @return Status of the call.
      */
     Status BatchGetObjectFromRemoteWorker(const std::string &address, std::list<GetObjectInfo> &infos,
-                                          const std::shared_ptr<GetRequest> &request,
-                                          std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-                                          std::unordered_set<std::string> &failedIds,
-                                          std::list<GetObjectInfo> &failedMetas);
+                                          const std::shared_ptr<GetRequest> &request, BatchGetObjectOutput output);
 
     struct BatchGetRemoteRequestContext {
         const std::string &address;
@@ -1064,6 +1067,9 @@ private:
         const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>>
             &groupedQueryMetas) const;
     static void CollectRemoteGetFutureResults(std::vector<std::future<Status>> &futures, Status &lastStatus);
+    static void RecordBatchGetObjectError(Status status, Status &lastStatus);
+    static void CopyFirstNotifyRemoteGetUbFailure(
+        const std::vector<std::optional<ProviderUbFailureDetailPb>> &failureDetails, NotifyRemoteGetRspPb &rsp);
 
     void PostProcessRemoteGetInNotificationImpl(
         std::map<ReadKey, LockedEntity> &lockedEntries,

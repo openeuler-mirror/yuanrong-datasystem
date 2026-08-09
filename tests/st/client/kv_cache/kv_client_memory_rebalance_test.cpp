@@ -84,7 +84,6 @@ const std::string MIGRATE_DIRECT_AFTER_ADMISSION =
 const std::string URMA_CQE_ERROR_INJECT = "UrmaManager.CheckCompletionRecordStatus";
 const std::string BEFORE_TRANSPORT_SEND = "MigrateDataHandler.BeforeTransportSend";
 const std::string TRANSPORT_BATCH_STARTED = "MigrateDataHandler.TransportBatchStarted";
-const std::string LOCAL_OPERATOR_UNAVAILABLE = "DataMigrator.LocalOperatorUnavailable";
 const std::string REMOTE_OPERATOR_UNAVAILABLE = "DataMigrator.RemoteOperatorUnavailable";
 const std::string REDIRECT_MIGRATION_SUBMITTED = "DataMigrator.RedirectMigrationSubmitted";
 const std::string STOP_AFTER_TRANSPORT_FAILURE = "MigrateDataHandler.StopAfterTransportFailure";
@@ -1002,7 +1001,6 @@ public:
             " -data_migrate_urma_transport_mode=" + std::string(readMode ? "read" : "write");
         opts.injectActions +=
             ";PeerUbAdmission.CheckWriteTarget.blocked:100000*call()"
-            ";DataMigrator.LocalOperatorUnavailable:100000*call()"
             ";DataMigrator.RemoteOperatorUnavailable:100000*call()"
             ";DataMigrator.RedirectMigrationSubmitted:100000*call()"
             ";MigrateDataHandler.StopAfterTransportFailure:100000*call()"
@@ -1111,12 +1109,12 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, FastMigrationWriteError4Quaran
 {
 #ifdef USE_URMA
     WaitAllNodesActiveInHashRing(3);
-    auto localBaseline = GetInjectCount(WORKER0, LOCAL_OPERATOR_UNAVAILABLE);
+    auto blockedBaseline = GetInjectCount(WORKER0, WRITE_TARGET_BLOCKED);
     auto redirectBaseline = GetInjectCount(WORKER0, REDIRECT_MIGRATION_SUBMITTED);
     uint32_t operatorWorker = WORKER1;
     auto batch = TriggerError4("p3_write_error4", operatorWorker);
     ASSERT_EQ(operatorWorker, WORKER0);
-    WaitForInjectCount(WORKER0, LOCAL_OPERATOR_UNAVAILABLE, localBaseline + 1);
+    WaitForInjectCount(WORKER0, WRITE_TARGET_BLOCKED, blockedBaseline + 1);
     EXPECT_EQ(GetInjectCount(WORKER0, REDIRECT_MIGRATION_SUBMITTED), redirectBaseline);
     AssertReadable(client0_, batch);
 #else
@@ -1130,12 +1128,12 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, RebalanceError4StopsFollowingM
     WaitAllNodesActiveInHashRing(3);
     auto batchBaseline = GetInjectCount(WORKER0, TRANSPORT_BATCH_STARTED);
     auto stopBaseline = GetInjectCount(WORKER0, STOP_AFTER_TRANSPORT_FAILURE);
-    auto localBaseline = GetInjectCount(WORKER0, LOCAL_OPERATOR_UNAVAILABLE);
+    auto blockedBaseline = GetInjectCount(WORKER0, WRITE_TARGET_BLOCKED);
     uint32_t operatorWorker = WORKER1;
     auto batch = TriggerError4("p3_mid_batch_error4", operatorWorker);
     ASSERT_EQ(operatorWorker, WORKER0);
     WaitForInjectCount(WORKER0, STOP_AFTER_TRANSPORT_FAILURE, stopBaseline + 1);
-    WaitForInjectCount(WORKER0, LOCAL_OPERATOR_UNAVAILABLE, localBaseline + 1);
+    WaitForInjectCount(WORKER0, WRITE_TARGET_BLOCKED, blockedBaseline + 1);
     EXPECT_EQ(GetInjectCount(WORKER0, TRANSPORT_BATCH_STARTED), batchBaseline + 1);
     AssertReadable(client0_, batch);
 #else

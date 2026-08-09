@@ -279,6 +279,7 @@ protected:
         uint64_t migratedBytes = 0;
         uint64_t migratedObjects = 0;
         uint64_t failedObjects = 0;
+        master::RebalanceFailureSidePb failureSide = master::REBALANCE_FAILURE_UNKNOWN;
         std::string failedReason;
     };
 
@@ -321,10 +322,10 @@ protected:
                 }
                 return result;
             },
-            [this](const master::RebalanceTaskPb &, master::RebalanceTaskStatusPb status, uint64_t migratedBytes,
-                   uint64_t migratedObjects, uint64_t failedObjects, const std::string &failedReason) {
+            [this](const master::ReportRebalanceResultReqPb &req) {
                 std::lock_guard<std::mutex> lock(mutex_);
-                reports_.push_back({ status, migratedBytes, migratedObjects, failedObjects, failedReason });
+                reports_.push_back({ req.status(), req.migrated_bytes(), req.migrated_objects(), req.failed_objects(),
+                                     req.failure_side(), req.failed_reason() });
                 reportThreadIds_.push_back(std::this_thread::get_id());
                 reportTraceIds_.push_back(Trace::Instance().GetTraceID());
                 ++reportCount_;
@@ -464,6 +465,7 @@ TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterBecomesFailed)
     ASSERT_TRUE(WaitTaskDone());
     ASSERT_EQ(reports_.size(), size_t(1));
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_EXPIRED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_CONTROL_PLANE);
     EXPECT_EQ(migrateIndex_, size_t(0));
     EXPECT_NE(reports_[0].failedReason.find("unavailable"), std::string::npos);
 }
@@ -479,6 +481,7 @@ TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterIsUnreachable)
     ASSERT_TRUE(WaitTaskDone());
     ASSERT_EQ(reports_.size(), size_t(1));
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_EXPIRED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_CONTROL_PLANE);
     EXPECT_EQ(migrateIndex_, size_t(0));
     EXPECT_NE(reports_[0].failedReason.find("unavailable"), std::string::npos);
 }
@@ -494,6 +497,7 @@ TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterIsAbsentFromTopology)
     ASSERT_TRUE(WaitTaskDone());
     ASSERT_EQ(reports_.size(), size_t(1));
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_EXPIRED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_CONTROL_PLANE);
     EXPECT_EQ(migrateIndex_, size_t(0));
     EXPECT_NE(reports_[0].failedReason.find("not found"), std::string::npos);
 }
@@ -508,6 +512,7 @@ TEST_F(RebalanceExecutorTest, RejectsTargetBeforeTopologySnapshotIsReady)
     ASSERT_TRUE(WaitTaskDone());
     ASSERT_EQ(reports_.size(), size_t(1));
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_TARGET);
     EXPECT_EQ(reports_[0].migratedBytes, 0u);
     EXPECT_EQ(selectIndex_, 0u);
     EXPECT_EQ(migrateIndex_, 0u);
@@ -539,6 +544,7 @@ TEST_F(RebalanceExecutorTest, ExpiresWhenAssignedMasterFailsDuringLastBatch)
     ASSERT_TRUE(WaitTaskDone());
     ASSERT_EQ(reports_.size(), size_t(1));
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_EXPIRED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_CONTROL_PLANE);
     EXPECT_EQ(reports_[0].migratedBytes, uint64_t(10));
     EXPECT_EQ(migrateIndex_, size_t(1));
 }
@@ -604,6 +610,7 @@ TEST_F(RebalanceExecutorTest, SubmitReportsFailedAndClearsRunningState)
     ASSERT_TRUE(WaitTaskDone());
     ASSERT_EQ(reports_.size(), size_t(1));
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_UNKNOWN);
     EXPECT_EQ(reports_[0].migratedBytes, uint64_t(10));
     EXPECT_EQ(reports_[0].migratedObjects, uint64_t(1));
     EXPECT_EQ(reports_[0].failedObjects, uint64_t(1));
@@ -612,6 +619,28 @@ TEST_F(RebalanceExecutorTest, SubmitReportsFailedAndClearsRunningState)
     EXPECT_TRUE(executor_->GetRunningTaskIdForTest().empty());
     EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("obj1"));
     EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("obj2"));
+}
+
+TEST_F(RebalanceExecutorTest, AttributesStructuredUbFailureToOperatorWorker)
+{
+    const auto runCase = [this](const std::string &taskId, const HostPort &operatorWorker,
+                                master::RebalanceFailureSidePb expectedSide) {
+        auto result = MakeFailedMigrateResult({}, { "obj1" }, Status(K_URMA_ERROR, "provider error 4"));
+        result.ubFailureDetail.emplace();
+        result.ubFailureDetail->set_operator_worker(operatorWorker.ToString());
+        InstallHooks({ { { "obj1", 10 } } }, { result });
+
+        executor_->Submit(MakeTask(taskId, 10), MASTER_ADDR.ToString());
+
+        ASSERT_TRUE(WaitReports(1));
+        ASSERT_TRUE(WaitTaskDone());
+        ASSERT_EQ(reports_.size(), size_t(1));
+        EXPECT_EQ(reports_[0].failureSide, expectedSide);
+    };
+    runCase("source-operator-failure", LOCAL_ADDR, master::REBALANCE_FAILURE_SOURCE);
+    HostPort target;
+    DS_ASSERT_OK(target.ParseString(TARGET_ADDR));
+    runCase("target-operator-failure", target, master::REBALANCE_FAILURE_TARGET);
 }
 
 // Verifies multi-batch execution. If one batch does not satisfy task.max_bytes, the executor keeps selecting and
@@ -646,6 +675,7 @@ TEST_F(RebalanceExecutorTest, RejectsJoiningTargetBeforeSelectingCandidates)
     ASSERT_TRUE(WaitReports(1));
     ASSERT_TRUE(WaitTaskDone());
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_TARGET);
     EXPECT_EQ(reports_[0].migratedBytes, 0u);
     EXPECT_EQ(selectIndex_, 0u);
     EXPECT_EQ(migrateIndex_, 0u);
@@ -667,6 +697,7 @@ TEST_F(RebalanceExecutorTest, StopsBeforeNextBatchWhenTargetStartsLeaving)
     ASSERT_TRUE(WaitReports(1));
     ASSERT_TRUE(WaitTaskDone());
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_TARGET);
     EXPECT_EQ(reports_[0].migratedBytes, 50u);
     EXPECT_EQ(selectIndex_, 1u);
     EXPECT_EQ(migrateIndex_, 1u);
@@ -708,6 +739,7 @@ TEST_F(RebalanceExecutorTest, SubmitExpiredTaskReportsExpiredAndClearsRunningSta
     ASSERT_TRUE(WaitTaskDone());
     ASSERT_EQ(reports_.size(), size_t(1));
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_EXPIRED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_CONTROL_PLANE);
     EXPECT_EQ(reports_[0].migratedBytes, uint64_t(0));
     EXPECT_EQ(reports_[0].migratedObjects, uint64_t(0));
     EXPECT_EQ(reports_[0].failedObjects, uint64_t(0));
@@ -749,6 +781,7 @@ TEST_F(RebalanceExecutorTest, BusySourceReportsFailedWithoutReplacingRunningTask
     ASSERT_TRUE(WaitReports(1));
     ASSERT_EQ(reports_.size(), size_t(1));
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_SOURCE);
     EXPECT_NE(reports_[0].failedReason.find("busy"), std::string::npos);
     ASSERT_EQ(reportThreadIds_.size(), size_t(1));
     EXPECT_NE(reportThreadIds_[0], submitThreadId);
