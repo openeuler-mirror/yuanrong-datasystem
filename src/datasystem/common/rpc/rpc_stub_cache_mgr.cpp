@@ -519,8 +519,7 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
     }
     auto newEncapsulatedData = std::make_shared<RpcStubCacheMgrObj>(hostPort, type);
     Status rc;
-    const int maxRetries = 5;
-    const int retryIntervalMs = 100;
+    const int maxRetries = 2;
     int attempts = 0;
     {
         point.RecordAndReset(PerfKey::WORKER_RPC_STUB_CACHE_ACCESS);
@@ -531,11 +530,6 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
             if (rc.GetCode() == K_TRY_AGAIN) {
                 attempts++;
                 if (attempts < maxRetries) {
-                    const auto now = std::chrono::steady_clock::now();
-                    CHECK_FAIL_RETURN_STATUS(now < deadline, K_RPC_DEADLINE_EXCEEDED,
-                                             "Get RPC stub deadline exceeded");
-                    std::this_thread::sleep_until(
-                        std::min(deadline, now + std::chrono::milliseconds(retryIntervalMs)));
                     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline,
                                              K_RPC_DEADLINE_EXCEEDED, "Get RPC stub deadline exceeded");
                 } else {

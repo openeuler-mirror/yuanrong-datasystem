@@ -65,7 +65,8 @@ public:
 
     Status InitForTest(uint64_t maxStubCount, int maxFdNum = 100)
     {
-        // Reset lruCache_ before rebuilding to satisfy LruCache Build() requirement
+        // Reset init_ guard so Init() rebuilds lruCache_/creators_ with new params (singleton is reused).
+        init_ = false;
         lruCache_.reset();
         creators_.clear();
         RETURN_IF_NOT_OK(Init(maxStubCount));
