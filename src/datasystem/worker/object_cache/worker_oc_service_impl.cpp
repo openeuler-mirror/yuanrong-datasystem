@@ -2017,7 +2017,7 @@ Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const s
     for (const auto &shmId : shmIds) {
         Status rc = memoryRefTable_->RemoveShmUnit(clientId, shmId);
         if (rc.IsError()) {
-            LOG(WARNING) << FormatString("[ObjectKey %s] DoDecrease failed, error: %s", shmId, rc.ToString());
+            LOG(WARNING) << FormatString("[shmId %s] DoDecrease failed, error: %s", shmId, rc.ToString());
             decResult = rc;
         }
     }
