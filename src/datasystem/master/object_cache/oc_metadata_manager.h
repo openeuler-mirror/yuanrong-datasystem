@@ -1604,7 +1604,8 @@ private:
      * @return Status of call.
      */
     Status CreateMetaFirstTime(const ObjectMetaPb &newMeta, const std::string &address, int64_t version,
-                               const std::set<ImmutableString> &nestedObjectKeys, TbbMetaTable::accessor &accessor);
+                               const std::set<ImmutableString> &nestedObjectKeys, TbbMetaTable::accessor &accessor,
+                               ObjectMeta &outMetaCache);
 
     /**
      * @brief Persist first-time meta to the in-memory table and rocksdb.

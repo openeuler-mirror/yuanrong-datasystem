@@ -516,19 +516,10 @@ void OCMetadataManager::SetMetaInfo(const ObjectMetaPb &newMeta, const std::stri
 
 Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const std::string &address, int64_t version,
                                               const std::set<ImmutableString> &nestedObjectKeys,
-                                              TbbMetaTable::accessor &accessor)
+                                              TbbMetaTable::accessor &accessor, ObjectMeta &outMetaCache)
 {
-    const std::string &objectKey = newMeta.object_key();
-    ObjectMeta metaCache;
-    RETURN_IF_NOT_OK(PersistCreatedMeta(newMeta, address, version, accessor, metaCache));
-
-    // Update subscribeCache. if multiset_state == pending, create not finish, don't update subscribe.
-    UpdateSubscribeCache(objectKey, metaCache);
-
-    // Update nested reference count to maintain dependencies.
-    if ((ObjectLifeState(newMeta.life_state()) != ObjectLifeState::OBJECT_INVALID) && !nestedObjectKeys.empty()) {
-        RETURN_IF_NOT_OK(HandleNestedRefsOnCreate(objectKey, address, nestedObjectKeys));
-    }
+    (void)nestedObjectKeys;
+    RETURN_IF_NOT_OK(PersistCreatedMeta(newMeta, address, version, accessor, outMetaCache));
     return Status::OK();
 }
 
@@ -704,51 +695,53 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
                                                     bool &firstOne)
 {
     const std::string &objectKey = newMeta.object_key();
-    // Case 1: not first time create meta.
     size_t shardIdx = GetShardIndex(objectKey);
-    bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
-    TbbMetaTable::accessor accessor;
-    firstOne = metaShards_[shardIdx].table.insert(accessor, objectKey);
-    // In the NX Set scenario, when the worker restarts, if there is data in the L2 cache,
-    // it is not allowed to double Set.
-    RETURN_IF_NOT_OK(CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne));
-    version = static_cast<int64_t>(GetSystemClockTimeStampUs());
+    ObjectMeta metaCache;
+    {
+        bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
+        TbbMetaTable::accessor accessor;
+        firstOne = metaShards_[shardIdx].table.insert(accessor, objectKey);
+        RETURN_IF_NOT_OK(CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne));
+        version = static_cast<int64_t>(GetSystemClockTimeStampUs());
 
-    if (!firstOne) {
-        auto &prevMeta = accessor->second;
-        CHECK_FAIL_RETURN_STATUS(
-            prevMeta.multiSetState != PENDING, K_TRY_AGAIN,
-            FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
-        BinaryFormatParamsStruct newMateDate = { .writeMode = newMeta.config().write_mode(),
-                                                 .dataFormat = newMeta.config().data_format(),
-                                                 .consistencyType = newMeta.config().consistency_type(),
-                                                 .cacheType = newMeta.config().cache_type(),
-                                                 .isReplica = newMeta.config().is_replica() };
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            CheckBinaryFormatParamMatch(objectKey, prevMeta, newMateDate, nestedObjectKeys), "Check format failed");
+        if (!firstOne) {
+            auto &prevMeta = accessor->second;
+            CHECK_FAIL_RETURN_STATUS(
+                prevMeta.multiSetState != PENDING, K_TRY_AGAIN,
+                FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
+            BinaryFormatParamsStruct newMateDate = { .writeMode = newMeta.config().write_mode(),
+                                                     .dataFormat = newMeta.config().data_format(),
+                                                     .consistencyType = newMeta.config().consistency_type(),
+                                                     .cacheType = newMeta.config().cache_type(),
+                                                     .isReplica = newMeta.config().is_replica() };
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                CheckBinaryFormatParamMatch(objectKey, prevMeta, newMateDate, nestedObjectKeys), "Check format failed");
 
-        // Cache Invalidation Logic.
-        Status s = DoBinaryCacheInvalidationUnlocked(objectKey, prevMeta,
-                                                     { .newAddress = address,
-                                                       .newVersion = version,
-                                                       .newDataSz = newMeta.data_size(),
-                                                       .newLifeState = newMeta.life_state(),
-                                                       .newBlobSizes = newMeta.device_info().blob_sizes() });
-        if (s.IsError()) {
-            // If the cache invalid processing fails, delete the address from the meta.
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
-                                             "Remove location failed from rocksdb.");
-            (void)prevMeta.locations.erase(address);
+            Status s = DoBinaryCacheInvalidationUnlocked(objectKey, prevMeta,
+                                                         { .newAddress = address,
+                                                           .newVersion = version,
+                                                           .newDataSz = newMeta.data_size(),
+                                                           .newLifeState = newMeta.life_state(),
+                                                           .newBlobSizes = newMeta.device_info().blob_sizes() });
+            if (s.IsError()) {
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
+                                                 "Remove location failed from rocksdb.");
+                (void)prevMeta.locations.erase(address);
+            }
+
+            if (!nestedObjectKeys.empty() && nestedRefManager_->IsNestedKeysDiff(objectKey, nestedObjectKeys)) {
+                RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
+            }
+            RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
+            return s;
         }
-
-        if (!nestedObjectKeys.empty() && nestedRefManager_->IsNestedKeysDiff(objectKey, nestedObjectKeys)) {
-            RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
-        }
-        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
-        return s;
+        RETURN_IF_NOT_OK(CreateMetaFirstTime(newMeta, address, version, nestedObjectKeys, accessor, metaCache));
     }
-    // Case 2: first time creating meta.
-    RETURN_IF_NOT_OK(CreateMetaFirstTime(newMeta, address, version, nestedObjectKeys, accessor));
+    // Case 2 follow-up: subscribe notify + nested refs + expiry are outside shard lock.
+    UpdateSubscribeCache(objectKey, metaCache);
+    if ((ObjectLifeState(newMeta.life_state()) != ObjectLifeState::OBJECT_INVALID) && !nestedObjectKeys.empty()) {
+        RETURN_IF_NOT_OK(HandleNestedRefsOnCreate(objectKey, address, nestedObjectKeys));
+    }
     RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
     VLOG(1) << FormatString("[ObjectKey %s] CreateMeta finished: objectKey: %s, worker address: %s", objectKey,
                             objectKey, address);
@@ -894,15 +887,17 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
     ExecuteAsyncTask([this, objsFirst = std::move(objsFirst)]() {
         for (const auto &objKey : objsFirst) {
         size_t shardIdx = GetShardIndex(objKey);
-        bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
+        ObjectMeta metaCache;
+        {
+            bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::const_accessor accessor;
             if (!metaShards_[shardIdx].table.find(accessor, objKey)) {
                 LOG(WARNING) << "Object " << objKey << " can't found in metaTable, notify subscribe failed";
                 continue;
             }
-            ObjectMeta metaCache = accessor->second;
-            accessor.release();
-            UpdateSubscribeCache(objKey, metaCache);
+            metaCache = accessor->second;
+        }
+        UpdateSubscribeCache(objKey, metaCache);
         }
     });
     point.RecordAndReset(PerfKey::MASTER_CREATE_MULTI_META_POST_PROCESS);
@@ -960,7 +955,9 @@ Status OCMetadataManager::PublishMultiMeta(const std::vector<std::string> &objec
     std::unordered_map<std::string, std::string> metaInfos;
     for (const auto &objKey : objectKeys) {
     size_t shardIdx = GetShardIndex(objKey);
-    bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
+    ObjectMeta metaCopy;
+    {
+        bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
         TbbMetaTable::accessor accessor;
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             metaShards_[shardIdx].table.find(accessor, objKey), K_RUNTIME_ERROR,
@@ -970,13 +967,14 @@ Status OCMetadataManager::PublishMultiMeta(const std::vector<std::string> &objec
                                                           accessor->second.meta.primary_address()));
         accessor->second.meta.set_version(version);
         accessor->second.multiSetState = IDLE;
-        ObjectMetaPb &objectMeta = accessor->second.meta;
-        if (objectMeta.config().data_format() != (uint64_t)DataFormat::HASH_MAP) {
-            UpdateSubscribeCache(objKey, accessor->second);
-        }
-        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objKey, version, objectMeta.ttl_second()));
+        metaCopy = accessor->second;
+    }
+    if (metaCopy.meta.config().data_format() != (uint64_t)DataFormat::HASH_MAP) {
+        UpdateSubscribeCache(objKey, metaCopy);
+    }
+        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objKey, version, metaCopy.meta.ttl_second()));
         std::string serializedStr;
-        RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objKey, objectMeta, serializedStr));
+        RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objKey, metaCopy.meta, serializedStr));
         metaInfos.emplace(objKey, serializedStr);
     }
     rsp.set_version(version);
@@ -1375,14 +1373,16 @@ Status OCMetadataManager::TryToSubscribeCache(int64_t timeout, const QueryMetaRe
     RETURN_IF_NOT_OK(AddSubscribeCache(subMeta));
     for (const auto &objKey : objectKeys) {
     size_t shardIdx = GetShardIndex(objKey);
-    bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
+    ObjectMeta metaCache;
+    {
+        bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
         TbbMetaTable::const_accessor accessor;
         if (!metaShards_[shardIdx].table.find(accessor, objKey)) {
             continue;
         }
-        ObjectMeta metaCache = accessor->second;
-        accessor.release();
-        UpdateSubscribeCache(objKey, metaCache);
+        metaCache = accessor->second;
+    }
+    UpdateSubscribeCache(objKey, metaCache);
     }
     return Status::OK();
 }
@@ -2607,55 +2607,53 @@ Status OCMetadataManager::AddSubscribeCache(const std::shared_ptr<SubscribeMeta>
 void OCMetadataManager::UpdateSubscribeCache(const std::string &objectKey, const ObjectMeta &objectMeta)
 {
     VLOG(1) << "Update subscribe cache with key: " << objectKey;
-    // Query requests on objectKey.
-    bthread::RWLockRdGuard l(subTableMutex_);
-    TbbReqIdTable::accessor accessor;
-    auto found = objKey2ReqId_.find(accessor, objectKey);
-    if (!found || accessor->second.empty()) {
-        return;
-    }
-
-    for (const auto &reqId : accessor->second) {
-        TbbSubMetaTable::const_accessor subConstAccessor;
-        if (!request2SubMeta_.find(subConstAccessor, reqId)) {
-            continue;
+    struct NotifyItem {
+        std::string address;
+        uint64_t timeoutMs;
+    };
+    std::vector<NotifyItem> toNotify;
+    {
+        bthread::RWLockRdGuard l(subTableMutex_);
+        TbbReqIdTable::accessor accessor;
+        auto found = objKey2ReqId_.find(accessor, objectKey);
+        if (!found || accessor->second.empty()) {
+            return;
         }
 
-        VLOG(1) << "Notify the sub request: " << reqId;
-        auto subMeta = subConstAccessor->second;
-        // Notify subscribe meta info.
-        if (subMeta->address_ != objectMeta.meta.primary_address()) {
-            uint64_t timeoutMs = subMeta->timer_->GetTimestamp() > TimerQueue::GetInstance()->CurrentTimeMs()
-                                     ? subMeta->timer_->GetTimestamp() - TimerQueue::GetInstance()->CurrentTimeMs()
-                                     : 0;
-            Status status =
-                notifyWorkerManager_->NotifySubscribeMeta(objectKey, objectMeta, subMeta->address_, timeoutMs);
-            if (status.IsError()) {
-                LOG(ERROR) << FormatString("Notify subscribe of worker: %s for object: %s failed, status: %s.",
-                                           subMeta->address_, objectKey, status.ToString());
+        for (const auto &reqId : accessor->second) {
+            TbbSubMetaTable::const_accessor subConstAccessor;
+            if (!request2SubMeta_.find(subConstAccessor, reqId)) {
+                continue;
+            }
+            auto subMeta = subConstAccessor->second;
+            if (subMeta->address_ != objectMeta.meta.primary_address()) {
+                const auto now = TimerQueue::GetInstance()->CurrentTimeMs();
+                const auto deadline = subMeta->timer_ ? subMeta->timer_->GetTimestamp() : 0;
+                toNotify.push_back({ subMeta->address_, deadline > now ? deadline - now : 0 });
+            }
+            subConstAccessor.release();
+
+            TbbSubMetaTable::accessor subAccessor;
+            if (!request2SubMeta_.find(subAccessor, reqId)) {
+                continue;
+            }
+            subMeta = subAccessor->second;
+            subMeta->objects_.remove(objectKey);
+            if (subMeta->objects_.empty()) {
+                if (subMeta->timer_ != nullptr) {
+                    TimerQueue::GetInstance()->Cancel(*(subMeta->timer_));
+                    subMeta->timer_.reset();
+                }
+                request2SubMeta_.erase(subAccessor);
             }
         }
-        subConstAccessor.release();
 
-        TbbSubMetaTable::accessor subAccessor;
-        if (!request2SubMeta_.find(subAccessor, reqId)) {
-            continue;
-        }
-        subMeta = subAccessor->second;
-        // Update sub meta.
-        subMeta->objects_.remove(objectKey);
-        if (subMeta->objects_.empty()) {
-            // If all request object has been notified, clear cache and cancel timer.
-            if (subMeta->timer_ != nullptr) {
-                TimerQueue::GetInstance()->Cancel(*(subMeta->timer_));
-                subMeta->timer_.reset();
-            }
-            request2SubMeta_.erase(subAccessor);
-        }
+        (void)objKey2ReqId_.erase(accessor);
     }
-
-    // Remove requests on this object.
-    (void)objKey2ReqId_.erase(accessor);
+    for (auto &item : toNotify) {
+        LOG_IF_ERROR(notifyWorkerManager_->NotifySubscribeMeta(objectKey, objectMeta, item.address, item.timeoutMs),
+                     FormatString("Notify subscribe of worker: %s for object: %s failed", item.address, objectKey));
+    }
     VLOG(1) << "Update subscribe cache done.";
 }
 
@@ -2864,7 +2862,7 @@ void OCMetadataManager::FillSubMetas(const std::vector<std::string> &objKeys, st
         if (request2SubMeta_.find(accessor, info.first)) {
             meta.set_sub_address(accessor->second->address_);
             auto now = TimerQueue::GetInstance()->CurrentTimeMs();
-            auto subTime = accessor->second->timer_->GetTimestamp();
+            auto subTime = accessor->second->timer_ ? accessor->second->timer_->GetTimestamp() : 0;
             if (now < subTime) {
                 meta.set_timeout(subTime - now);
             }
