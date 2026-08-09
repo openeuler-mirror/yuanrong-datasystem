@@ -15,8 +15,69 @@
 
 import argparse
 import importlib.util
+import sys
+import types
 import unittest
 from pathlib import Path
+
+def install_cli_import_stubs_if_needed():
+    try:
+        import yr.datasystem.cli.common.util  # noqa: F401
+        from yr.datasystem.cli.command import BaseCommand  # noqa: F401
+        return
+    except ModuleNotFoundError:
+        pass
+
+    logger = types.SimpleNamespace(
+        info=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+        error=lambda *args, **kwargs: None,
+    )
+
+    class BaseCommand:
+        SUCCESS = 0
+        FAILURE = 1
+
+        def __init__(self):
+            self.logger = logger
+
+        @staticmethod
+        def valid_safe_path(path):
+            return path
+
+    def validate_no_injection(value):
+        text = str(value)
+        if any(token in text for token in (";", "`", "$(", "\n")):
+            raise ValueError("potential command-injection characters")
+        return text
+
+    yr = types.ModuleType("yr")
+    datasystem = types.ModuleType("yr.datasystem")
+    cli = types.ModuleType("yr.datasystem.cli")
+    common = types.ModuleType("yr.datasystem.cli.common")
+    util = types.ModuleType("yr.datasystem.cli.common.util")
+    command = types.ModuleType("yr.datasystem.cli.command")
+    util.valid_safe_path = lambda path: path
+    util.compare_and_process_config = lambda home_dir, config, default_config: {}
+    util.get_timestamped_path = lambda path: path
+    util.is_valid_address_port = lambda address: None
+    util.validate_no_injection = validate_no_injection
+    command.BaseCommand = BaseCommand
+
+    yr.datasystem = datasystem
+    datasystem.cli = cli
+    cli.common = common
+    cli.command = command
+    common.util = util
+    sys.modules.setdefault("yr", yr)
+    sys.modules.setdefault("yr.datasystem", datasystem)
+    sys.modules.setdefault("yr.datasystem.cli", cli)
+    sys.modules.setdefault("yr.datasystem.cli.common", common)
+    sys.modules.setdefault("yr.datasystem.cli.common.util", util)
+    sys.modules.setdefault("yr.datasystem.cli.command", command)
+
+
+install_cli_import_stubs_if_needed()
 
 START_PY = Path(__file__).resolve().parents[2] / "cli" / "start.py"
 spec = importlib.util.spec_from_file_location("datasystem_cli_start_under_test", START_PY)
@@ -89,6 +150,20 @@ class CliStartTest(unittest.TestCase):
         self.assertEqual(worker_args.worker_args, ["--worker_address", "127.0.0.1:31501"])
         self.assertEqual(coordinator_args.coordinator_args, ["--coordinator_address", "127.0.0.1:31511"])
         self.assertEqual(combined_args.coordinator_worker_args, ["--worker_address", "127.0.0.1:31501"])
+
+    def test_worker_store_lock_error_is_retryable(self):
+        output = (
+            "KV store error. Cannot open the key/value store. "
+            "Cannot create/open database: lock file: /tmp/rocksdb/LOCK: "
+            "Resource temporarily unavailable"
+        )
+
+        self.assertTrue(start.Command.is_retryable_worker_store_lock_error(output))
+
+    def test_unrelated_worker_exit_is_not_retryable(self):
+        output = "Worker runtime error: RPC deadline exceeded"
+
+        self.assertFalse(start.Command.is_retryable_worker_store_lock_error(output))
 
 
 if __name__ == "__main__":
