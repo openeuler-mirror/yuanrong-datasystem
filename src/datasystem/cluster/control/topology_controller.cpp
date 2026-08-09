@@ -2071,13 +2071,13 @@ Status TopologyController::TryStartNextBatch(const TopologySnapshot &latest,
         ClearBatchCollectState(TopologyChangeType::SCALE_IN, "bootstrap_candidate");
         return TryStartBatchAfterCollection(latest, state, joining, TopologyChangeType::SCALE_OUT, true);
     }
-    if (!leaving.empty()) {
-        ClearBatchCollectState(TopologyChangeType::SCALE_OUT, "scale_in_candidate");
-        return TryStartBatchAfterCollection(latest, state, leaving, TopologyChangeType::SCALE_IN, false);
-    }
     if (!joining.empty()) {
         ClearBatchCollectState(TopologyChangeType::SCALE_IN, "scale_out_candidate");
         return TryStartBatchAfterCollection(latest, state, joining, TopologyChangeType::SCALE_OUT, false);
+    }
+    if (!leaving.empty()) {
+        ClearBatchCollectState(TopologyChangeType::SCALE_OUT, "scale_in_candidate");
+        return TryStartBatchAfterCollection(latest, state, leaving, TopologyChangeType::SCALE_IN, false);
     }
     ClearBatchCollectState(TopologyChangeType::SCALE_IN, "no_candidate");
     ClearBatchCollectState(TopologyChangeType::SCALE_OUT, "no_candidate");
