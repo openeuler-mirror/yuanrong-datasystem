@@ -137,7 +137,10 @@
   described above.
 - Both backends use the same fixed three-second joining collection window beginning at the first eligible member.
   Later arrivals do not extend the deadline. An empty cluster admits the collected bootstrap members directly without
-  migration; an initialized cluster starts one multi-member ScaleOut batch. Failure remains higher priority.
+  migration; an initialized cluster starts one multi-member ScaleOut batch. While no batch is active, READY ScaleOut
+  candidates take priority over pending `PRE_LEAVING` ScaleIn candidates, so a replacement Worker reaches
+  `JOINING`/`ACTIVE` before old committed owners enter ScaleIn. Once any batch is active, later ordinary candidates wait
+  and never preempt it. Failure remains higher priority.
 - Repeated expected backend-access failures while already in `CONTROL_DEGRADED` still refresh the diagnostic
   `lastError`, but the warning log is sampled. State transitions and unexpected runtime failures remain unsampled.
 - Topology observability is carried by structured `CLUSTER_*` logs on the low-frequency control path: watch events and
@@ -373,7 +376,9 @@
   rounds keep producing fresh reachable evidence. Probe delivery and reporting are not end-to-end guaranteed.
 - Worker startup selects the coordination backend once: a non-null `ICoordinatorDiscovery` selects Coordinator mode, while a null pointer selects ETCD/metastore. All Worker composition branches use that constructor-selected pointer instead of independently re-reading `coordinator_address`.
 - At most one change type is active at a time; one batch may contain many members. Failure has highest priority and may
-  preempt ordinary work. Scale-in waits for an already-running scale-out batch to finish.
+  preempt ordinary work. With no active batch, a READY ScaleOut candidate starts before pending ScaleIn candidates;
+  ScaleIn then resumes after the replacement becomes `ACTIVE`. ScaleIn waits for an already-running ScaleOut batch, and
+  an already-running ScaleIn batch is never preempted by a later ordinary ScaleOut candidate.
 - Every Failure owner change must source from a member selected into that Failure batch, whose committed state becomes
   `FAILED`, and must target an `ACTIVE` member. Preserved `PRE_LEAVING`/`LEAVING` facts from preempted ordinary work
   must not become Failure task sources; `INITIAL`/`JOINING` crashes remain uncommitted-member cleanup.
@@ -416,6 +421,8 @@
   `test_cli_query.py`, and a packaged-wheel real-backend smoke test.
 - Failure-preemption coverage in `cluster_topology_contract_ut` exhausts unrelated member states and includes
   multi-crash scale-in, mixed scale-out/pending-scale-in, cascading Failure replans, and source/target diagnostics.
+- Replacement ordering coverage includes all committed owners becoming `PRE_LEAVING` while a READY `INITIAL` Worker
+  joins; the first batch must be ScaleOut, followed by ScaleIn after the replacement becomes `ACTIVE`.
 - State machine, CAS/fence, crash points, retry, resource limits, and Shutdown belong in UT/LLT/component tests. ST only
   proves representative process, ETCD watch/lease, network, and real callback wiring.
 - ETCD availability release validation uses a real three-member ETCD cluster and release-package Workers. A continuous
