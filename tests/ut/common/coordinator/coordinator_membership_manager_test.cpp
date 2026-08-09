@@ -891,7 +891,13 @@ TEST(CoordinatorMembershipManagerTest, RecoveredPeerWithoutProvenCandidateFailsC
     auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
 
     testing::internal::CaptureStderr();
-    ExpectReconcileOk(manager);
+    // The marker is logged via LOG_FIRST_AND_EVERY_N(ERROR, 100): its per-line counter is process-global, and
+    // earlier tests in this binary (e.g. RejectedReplacementDoesNotOwnExternallyCommittedCandidate) may advance
+    // it, so a single ReconcileOnce is not guaranteed to emit. Replaying up to 100 times always hits an
+    // emission (counter == 1 or counter % 100 == 0) regardless of the counter position.
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        ExpectReconcileOk(manager);
+    }
     const auto logs = testing::internal::GetCapturedStderr();
     EXPECT_NE(logs.find(kUnsafeOverTargetMarker), std::string::npos);
     EXPECT_EQ(dependencies.RemovePeerCalls(), 0);
