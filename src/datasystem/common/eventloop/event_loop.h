@@ -21,6 +21,7 @@
 #define DATASYSTEM_COMMON_EVENTLOOP_EVLOOP_H
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <list>
 #include <map>
@@ -84,10 +85,16 @@ protected:
     struct EventData {
         int fd;
         uint32_t events;  // The epoll events that we are interested in, e.g. EPOLLIN.
+        uint64_t token;
         std::function<void()> readCallBack;
         std::function<void()> writeCallBack;
-        EventData(int fd, uint32_t events, std::function<void()> readCallBack, std::function<void()> writeCallBack)
-            : fd(fd), events(events), readCallBack(std::move(readCallBack)), writeCallBack(std::move(writeCallBack))
+        EventData(int fd, uint32_t events, uint64_t token, std::function<void()> readCallBack,
+                  std::function<void()> writeCallBack)
+            : fd(fd),
+              events(events),
+              token(token),
+              readCallBack(std::move(readCallBack)),
+              writeCallBack(std::move(writeCallBack))
         {
         }
     };
@@ -113,6 +120,8 @@ protected:
      */
     Status UpdateFdEventUnlock(int operation, int fd, uint32_t tEvents);
 
+    std::shared_ptr<EventData> FindEventData(uint64_t token);
+
     /**
      * @brief Finish the eventloop.
      */
@@ -126,6 +135,8 @@ protected:
     std::vector<struct epoll_event> eventList_;
     std::mutex eventsLock_;
     std::map<int, std::shared_ptr<EventData>> eventMap_;
+    std::map<uint64_t, std::shared_ptr<EventData>> eventTokenMap_;
+    uint64_t nextEventToken_{ 1 };
 };
 
 class SockEventLoop : public EventLoop {
@@ -147,10 +158,9 @@ protected:
 
     /**
      * @brief Get the socket read result and call callback function.
-     * @param[in] tev The eventdata which will be read.
-     * @param[in] fd Snapshotted fd of tev; used after the callback, which may free tev (UAF-safe).
+     * @param[in] tev The eventdata which will be read. The shared pointer keeps it alive while callbacks remove it.
      */
-    void ReadSockAndCallBack(const EventData *tev, int fd);
+    void ReadSockAndCallBack(const std::shared_ptr<EventData> &tev);
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_EVENTLOOP_EVLOOP_H
