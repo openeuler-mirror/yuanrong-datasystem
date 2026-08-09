@@ -517,6 +517,13 @@ class Command(BaseCommand):
             RuntimeError: If the worker service fails to start or exits abnormally.
         """
         self.validate_worker_backend_params(params)
+        worker_address = params.get("worker_address")
+        if not worker_address:
+            raise ValueError("Missing required: worker_address must be specified")
+        bind_address = params.get("bind_address") or worker_address
+        util.is_valid_address_port(bind_address)
+        if self.is_tcp_ready(bind_address):
+            raise RuntimeError(f"Worker address {bind_address} is already in use")
 
         cmd = self.build_command(params, use_ums, use_numactl, numactl_opts)
         lib_dir = os.path.join(self._base_dir, "lib")
