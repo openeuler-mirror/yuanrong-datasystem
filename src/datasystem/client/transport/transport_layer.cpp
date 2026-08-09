@@ -459,7 +459,10 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
         }
     }
     if (rc.IsError()) {
-        LOG(WARNING) << "Create still failed for worker " << workerAddr.ToString() << ": " << rc;
+        // Throttle this terminal diagnostic like the SHM-unavailable fallback log above so a sustained UB
+        // outage (e.g. local UB sender circuit-break) does not emit one WARN per request.
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "Create still failed for worker " << workerAddr.ToString() << ": " << rc;
     }
     return rc;
 }
