@@ -552,7 +552,7 @@ Status DataPlaneManager::BuildUbTransporter(const HostPort &workerAddr,
     auto ubConnection = std::make_shared<UbConnection>(rpcClient);
     Status rc = ubConnection->Establish(workerAddr, recorder);
     if (rc.IsOk() && ubConnection->IsAlive()) {
-        out = std::make_shared<UbTransporter>(rpcClient, ubConnection, ubBufferProvider_);
+        out = std::make_shared<UbTransporter>(rpcClient, ubConnection, ubBufferProvider_, releasePool_);
         return Status::OK();
     }
     if (rc.GetCode() == K_NOT_SUPPORTED) {
