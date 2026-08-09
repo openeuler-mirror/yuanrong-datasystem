@@ -45,13 +45,19 @@ Status ShmGuard::TryRLatch(bool retry)
 
     static const int maxRetry = 20;
     static const int sleepTimeMs = 10;
+    // Throttle the per-retry diagnostic: under sustained SHM write-latch contention (eviction / migration /
+    // set storm) this loop runs up to maxRetry times per Get, and concurrent Gets multiply that into a WARN
+    // storm with no per-request context. A real failure (retries exhausted) is still surfaced as an ERROR by
+    // the CHECK_FAIL_RETURN_STATUS_PRINT_ERROR below, so throttling here only collapses repeated process noise
+    // and does not hide the contention signal -- its emission rate still tracks contention frequency.
+    static const int kLatchRetryWarnEveryN = 100;
     bool locked = false;
     for (int i = 0; i < maxRetry; i++) {
         locked = tmpLock->TryRLatch();
         if (locked || !retry) {
             break;
         }
-        LOG(WARNING) << "Try read latch failed, try again...";
+        LOG_EVERY_N(WARNING, kLatchRetryWarnEveryN) << "Try read latch failed, try again...";
         std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
     }
     // A failed read latch is a transient contention with writers (set/eviction/migration), not a fatal
