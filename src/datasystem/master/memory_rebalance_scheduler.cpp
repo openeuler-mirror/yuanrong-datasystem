@@ -226,7 +226,7 @@ void MemoryRebalanceScheduler::ExpireTimeoutTasksLocked(uint64_t nowMs)
         }
         LOG(WARNING) << FormatString("[MemoryRebalance] expire task %s", taskIt->second.task.task_id());
         INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.ExpireTask");
-        RemoveTaskLocked(source, nowMs, false, master::REBALANCE_FAILURE_CONTROL_PLANE);
+        RemoveTaskLocked(source, nowMs, false, master::REBALANCE_FAILURE_UNKNOWN);
     }
     ExpireCooldownsLocked(nowMs);
     // issue #685: GC held in-flight charges whose target never reported back.

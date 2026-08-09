@@ -216,6 +216,10 @@ protected:
         return targetIt != sourceIt->second.end()
                && targetIt->second > static_cast<uint64_t>(GetSteadyClockTimeStampMs());
     }
+    static void ExpireActiveTask(MemoryRebalanceScheduler &s, const std::string &source)
+    {
+        s.activeTasksBySource_.at(source).task.set_deadline_ms(0);
+    }
 
 private:
     bool oldEnableMemoryRebalance_ = false;
@@ -575,6 +579,27 @@ TEST_F(MemoryRebalanceSchedulerTest, FailedTargetCooldownSurvivesTargetResourceR
     auto secondRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
     ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
     EXPECT_NE(secondRsp.rebalance_task().target_worker(), WORKER_10);
+    EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_78);
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, ExpiredTaskCooldownsPairBeforeImmediateReschedule)
+{
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(WORKER_92, 920, 80),
+        MakeNode(WORKER_78, 150, 850),
+        MakeNode(WORKER_10, 100, 900),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
+    ASSERT_EQ(firstRsp.rebalance_task().target_worker(), WORKER_10);
+
+    ExpireActiveTask(scheduler, WORKER_92);
+    auto secondRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
+
+    EXPECT_TRUE(HasPairCooldown(scheduler, WORKER_92, WORKER_10));
+    EXPECT_FALSE(HasCooldown(scheduler, WORKER_92));
+    EXPECT_FALSE(HasCooldown(scheduler, WORKER_10));
+    ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
     EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_78);
 }
 
