@@ -489,7 +489,7 @@ Status DataMigrator::ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorke
                                    workerAddr.ToString(), localAddress_.ToString()));
     }
 
-    RETURN_IF_NOT_OK(CheckTargetAdmission(workerAddr, DataPlaneAdmissionRole::INCOMING_TARGET));
+    RETURN_IF_NOT_OK(CheckTargetAdmission(workerAddr, DataPlaneAdmissionRole::NEW_MIGRATION_TARGET));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), localAddress_, akSkManager_,
                                                            remoteWorkerStub),
                                      "[Migrate Data] Create remote worker api failed.");
@@ -653,7 +653,7 @@ Status DataMigrator::ConfigureSendAdmission(MigrateDataHandler &handler, const s
     RETURN_IF_NOT_OK(target.ParseString(targetAddress));
     handler.SetSendAdmission([this, target] {
         RETURN_IF_NOT_OK(CheckSourceAdmission());
-        return CheckTargetAdmission(target, DataPlaneAdmissionRole::INCOMING_TARGET);
+        return CheckTargetAdmission(target, DataPlaneAdmissionRole::NEW_MIGRATION_TARGET);
     });
     return Status::OK();
 }

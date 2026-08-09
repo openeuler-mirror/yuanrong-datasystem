@@ -64,6 +64,7 @@ using namespace datasystem::object_cache;
 
 DS_DECLARE_string(health_check_path);
 DS_DECLARE_bool(enable_distributed_master);
+DS_DECLARE_bool(enable_leaving_intercept);
 DS_DECLARE_bool(enable_reconciliation);
 
 namespace datasystem {
@@ -1929,16 +1930,89 @@ TEST_F(WorkerOcServiceImplTest, ClearDataRetryImplShouldRouteFailedIdsToRetrySta
     EXPECT_THAT(nextRetryIds.recoverAppRefFailedIds, UnorderedElementsAre("recover-next"));
 }
 
-TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetRejectsAfterLocalScaleInStarts)
+TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetRejectsAfterIncomingMigrationAdmissionCloses)
 {
     ASSERT_NE(impl_->gMigrateProc_, nullptr);
-    // Simulate voluntary scale-in by flipping the local exit flag that AcquireIncomingMigrationAdmission polls.
-    exitRequested_.store(true, std::memory_order_relaxed);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    constexpr std::chrono::seconds closeBudget(1);
+    DS_ASSERT_OK(impl_->gMigrateProc_->CloseIncomingMigrationAdmissionAndWait(
+        std::chrono::steady_clock::now() + closeBudget));
 
     NotifyRemoteGetReqPb req;
     req.add_object_keys("late-notify-remote-get-object");
     NotifyRemoteGetRspPb rsp;
     EXPECT_EQ(impl_->NotifyRemoteGet(req, rsp).GetCode(), StatusCode::K_NOT_READY);
+}
+
+TEST_F(WorkerOcServiceImplTest, ExitIntentRejectsClientHealthBeforeTopologyDrainStarts)
+{
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    Raii restoreHealth([] {
+        SetTopologyServingAdmission(true);
+        SetUnhealthy();
+    });
+    SetTopologyServingAdmission(true);
+    DS_ASSERT_OK(SetHealthProbe());
+    ASSERT_TRUE(IsHealthy());
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    exitRequested_.store(true, std::memory_order_relaxed);
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    HealthCheckRequestPb req;
+    HealthCheckReplyPb rsp;
+    EXPECT_EQ(impl_->HealthCheck(req, rsp).GetCode(), K_SCALE_DOWN);
+    EXPECT_FALSE(impl_->MigrateDataStarted());
+}
+
+TEST_F(WorkerOcServiceImplTest, IncomingMigrationGateClosureDoesNotImpersonateTopologyScaleInDrain)
+{
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    const bool savedLeavingIntercept = FLAGS_enable_leaving_intercept;
+    Raii restore([savedLeavingIntercept] { FLAGS_enable_leaving_intercept = savedLeavingIntercept; });
+    FLAGS_enable_leaving_intercept = false;
+    exitRequested_.store(true, std::memory_order_release);
+
+    constexpr std::chrono::seconds closeBudget(1);
+    DS_ASSERT_OK(impl_->gMigrateProc_->CloseIncomingMigrationAdmissionAndWait(
+        std::chrono::steady_clock::now() + closeBudget));
+
+    EXPECT_FALSE(impl_->MigrateDataStarted());
+    DS_EXPECT_OK(impl_->VerifyClientWriteAdmission());
+}
+
+TEST_F(WorkerOcServiceImplTest, DrainRejectsClientWritesWhenLeavingInterceptIsDisabled)
+{
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    const bool savedLeavingIntercept = FLAGS_enable_leaving_intercept;
+    Raii restore([savedLeavingIntercept] {
+        FLAGS_enable_leaving_intercept = savedLeavingIntercept;
+        SetTopologyServingAdmission(true);
+        SetUnhealthy();
+    });
+    FLAGS_enable_leaving_intercept = false;
+    SetTopologyServingAdmission(true);
+    DS_ASSERT_OK(SetHealthProbe());
+    ASSERT_TRUE(IsHealthy());
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    exitRequested_.store(true, std::memory_order_release);
+
+    cluster::TopologyPhaseAction action;
+    action.taskId = "client-write-fence-task";
+    cluster::CancellationToken cancellation;
+    constexpr std::chrono::seconds drainBudget(1);
+    DS_ASSERT_OK(impl_->DrainTopologyScaleInData(action, "client-write-fence-operation",
+                                                 std::chrono::steady_clock::now() + drainBudget, cancellation));
+    EXPECT_TRUE(impl_->MigrateDataStarted());
+    ASSERT_TRUE(IsHealthy());
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    CreateReqPb req;
+    req.set_object_key("write-after-drain");
+    req.set_data_size(1);
+    CreateRspPb rsp;
+    EXPECT_EQ(impl_->Create(req, rsp).GetCode(), K_SCALE_DOWN);
 }
 
 TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetHoldsAdmissionUntilRequestReturns)
@@ -2025,6 +2099,50 @@ TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetReturnsFailureWhenDrainTimesOut)
 
     EXPECT_TRUE(requestAdmitted);
     EXPECT_EQ(requestStatus.GetCode(), StatusCode::K_NOT_READY);
+}
+
+TEST_F(WorkerOcServiceImplTest, DrainWaitsForIncomingMigrationBeforeSnapshotCollection)
+{
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    constexpr std::chrono::seconds schedulingTimeout(1);
+    constexpr std::chrono::seconds drainBudget(2);
+    constexpr std::chrono::milliseconds observationWindow(50);
+    const std::string requestPoint = "WorkerOCServiceImpl.NotifyRemoteGet.afterAdmission";
+    const std::string closePoint = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.closed";
+    const std::string snapshotPoint = "WorkerOCServiceImpl.DrainTopologyScaleInData.beforeSnapshot";
+    Raii clearInjects([&] {
+        (void)inject::Clear(requestPoint);
+        (void)inject::Clear(closePoint);
+        (void)inject::Clear(snapshotPoint);
+    });
+    DS_ASSERT_OK(inject::Set(requestPoint, "pause()"));
+    DS_ASSERT_OK(inject::Set(closePoint, "call()"));
+    DS_ASSERT_OK(inject::Set(snapshotPoint, "call()"));
+
+    NotifyRemoteGetReqPb req;
+    req.add_object_keys("snapshot-order-object");
+    NotifyRemoteGetRspPb rsp;
+    auto requestFuture = std::async(std::launch::async, [this, &req, &rsp] {
+        return impl_->NotifyRemoteGet(req, rsp);
+    });
+    ASSERT_TRUE(WaitForInjectPointExecuteCount(requestPoint, 1, schedulingTimeout));
+
+    cluster::TopologyPhaseAction action;
+    action.taskId = "snapshot-order-task";
+    cluster::CancellationToken cancellation;
+    auto drainFuture = std::async(std::launch::async, [this, &action, &cancellation, drainBudget] {
+        return impl_->DrainTopologyScaleInData(action, "snapshot-order-operation",
+                                               std::chrono::steady_clock::now() + drainBudget, cancellation);
+    });
+    ASSERT_TRUE(WaitForInjectPointExecuteCount(closePoint, 1, schedulingTimeout));
+    std::this_thread::sleep_for(observationWindow);
+    EXPECT_EQ(inject::GetExecuteCount(snapshotPoint), 0U);
+
+    DS_ASSERT_OK(inject::Clear(requestPoint));
+    EXPECT_EQ(requestFuture.get().GetCode(), StatusCode::K_NOT_READY);
+    DS_EXPECT_OK(drainFuture.get());
+    EXPECT_EQ(inject::GetExecuteCount(snapshotPoint), 1U);
 }
 
 }  // namespace ut

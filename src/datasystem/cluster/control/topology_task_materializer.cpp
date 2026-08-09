@@ -142,8 +142,9 @@ Status ValidateOwnerChange(const TopologySnapshot &latest, TopologyChangeType ty
         CHECK_FAIL_RETURN_STATUS(target->state == MemberState::ACTIVE, K_INVALID,
                                  "Failure owner change target is not active");
     } else {
-        CHECK_FAIL_RETURN_STATUS(source->state == expectedSource && target->state == MemberState::ACTIVE, K_INVALID,
-                                 "ScaleIn owner change requires a leaving source and active target");
+        CHECK_FAIL_RETURN_STATUS(
+            source->state == expectedSource && IsAdmittedScaleInMigrationTargetState(target->state), K_INVALID,
+            "ScaleIn owner change requires a leaving source and an admitted target");
     }
     auto ranges = change.ranges;
     std::sort(ranges.begin(), ranges.end(), [](const auto &left, const auto &right) {

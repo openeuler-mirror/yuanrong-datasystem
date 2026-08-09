@@ -546,16 +546,16 @@ private:
     Status CheckResource(const MigrateDataReqPb &req, MigrateDataRspPb &rsp);
 
     /**
-     * @brief Reject an incoming migration after this Worker enters its local ScaleIn exit gate.
+     * @brief Reject an incoming migration after this Worker closes its local drain gate.
      * @param[in] req Migrate data request.
      * @param[out] rsp Migrate data response carrying retryable target state.
-     * @return K_OK while accepting migrations; K_NOT_READY after local ScaleIn starts.
+     * @return K_OK while accepting migrations; K_NOT_READY after local ScaleIn drain starts.
      */
     Status CheckMigrateDataAdmission(const MigrateDataReqPb &req, MigrateDataRspPb &rsp);
 
     /**
      * @brief Acquire one incoming migration admission slot.
-     * @return K_OK while the gate is open; K_NOT_READY after local ScaleIn starts.
+     * @return K_OK while the gate is open; K_NOT_READY after local ScaleIn drain starts.
      */
     Status AcquireIncomingMigrationAdmission(bool requireUbAdmission = false);
 

@@ -192,8 +192,10 @@
     or absent from the current topology; a successor master reconstructs scheduling from later resource reports rather
     than accepting completion for the predecessor's in-memory task.
   - Object migration combines topology role and UB admission. Ordinary sources and every new target must be `ACTIVE`;
-    topology ScaleIn sources may remain `ACTIVE/PRE_LEAVING/LEAVING`, while `JOINING/PRE_LEAVING/LEAVING/FAILED`
-    members cannot receive new migration. Rebalance rechecks before candidate selection and every bounded batch.
+    topology ScaleIn sources may remain `ACTIVE/PRE_LEAVING/LEAVING`. An incoming request already sent to a target is
+    admitted while that target is `ACTIVE/PRE_LEAVING`; `JOINING/LEAVING/FAILED` reject it. Sender connection creation
+    and per-batch admission, redirect, rebalance, recovery, and primary selection continue to require `ACTIVE`.
+    Rebalance rechecks before candidate selection and every bounded batch.
     FastMigration read failures preserve target-local raw CQE evidence; NotifyRemoteGet write failures preserve the
     source Provider operator. Every migration batch rechecks both source and target admission, so a source failure
     stops following batches instead of being misattributed to a target. Recovery
@@ -211,8 +213,15 @@
   - `DataWorker` relinquishes its `WorkerOCServer` owner before returning from `ShutDown`, including error paths. The
     server and topology component destructors provide the final safe-stop/join fallback, so runtime-owned objects are
     destroyed before later-created function-local singleton dependencies begin static teardown.
-  - voluntary ScaleIn first closes local client admission while the membership lease remains READY, drains existing
-    clients and asynchronous tasks, then publishes EXITING. The Worker keeps its Engine, callback executor, and lease
+  - voluntary ScaleIn records exit intent, immediately returns `K_SCALE_DOWN` from RPC health and, when the legacy
+    leaving intercept is enabled, client-facing writes. With that intercept disabled, client writes remain admitted
+    until the authoritative topology data drain begins; a dedicated process-local drain flag then fences writes even
+    while the drain waits for already-admitted incoming migrations. Incoming migration admission closure is deliberately
+    not reused as that write fence because failure/rejoin cleanup also closes the gate and must be able to resume ordinary
+    traffic after reconciliation. Voluntary ScaleIn waits for clients and
+    asynchronous tasks without marking the process health file unhealthy, then publishes EXITING; final process-health
+    termination happens after topology removal or the bounded removal attempt. The Worker keeps its Engine,
+    callback executor, and lease
     alive until a current immutable snapshot no longer contains the local member; only then may process shutdown begin.
     This preserves the source for the whole ScaleIn task barrier. The external process manager remains the bounded final
     termination authority when the control plane cannot complete the transition.
@@ -231,23 +240,27 @@
     postdate the task's original expiration timestamp; retries preserve that original timestamp, and migrated or
     recreated keys are pruned before each notification retry and before retry requeue. An already-running worker RPC is
     not force-cancelled.
-  - ordinary metadata mutations remain rejected after the local ScaleIn admission gate closes, but the fenced callback
+  - ordinary metadata mutations remain rejected after local ScaleIn exit intent, but the fenced callback
     propagates its non-empty `businessOperationId` as `RemoveMetaReqPb.topology_operation_id`. Metadata owners use that
     marker only to allow the callback's own idempotent remove/give-up-primary effects. The data phase, final source
     cleanup, and redirect retries must all preserve the same marker; ordinary requests leave the field unset.
   - when `enable_leaving_intercept` is enabled, the object-cache `Create`, `Publish`, `MultiCreate`, and `MultiPublish`
-    RPC entrypoints read the same local ScaleIn drain gate and return `K_SCALE_DOWN` before entering their write
-    processors. This gate marks topology scale-in draining, not process-level exit. Read-only RPCs keep their existing
-    behavior, and disabling the flag preserves the legacy write path.
+    RPC entrypoints read the process-local ScaleIn exit intent and return `K_SCALE_DOWN` before entering their write
+    processors. This client-facing gate is deliberately separate from incoming migration admission: a `PRE_LEAVING`
+    Worker stops new client writes while it can still finish an already-selected ScaleIn target task. Read-only RPCs
+    keep their existing behavior. Disabling the flag preserves the legacy write path only before data drain starts;
+    once incoming migration admission closes, all four write entrypoints reject requests unconditionally so no write can
+    arrive after the local drain snapshot.
   - metadata ownership task ranges do not describe where object data is physically resident. ScaleIn therefore drains
     the leaving Worker's complete local object table once per source/batch before task-scoped metadata migration. The
     Worker callback adapter coalesces concurrent disjoint tasks behind a deadline-aware process-local gate; metadata
     migration and prepared cleanup remain constrained by each task's `IKeyFilter`.
-  - topology-task ScaleIn data migration accepts only `ACTIVE` destinations. Standby selection excludes every member
-    leaving in the same batch. Before its local drain starts, a target closes socket/direct migration admission and
-    waits up to the 10-second topology stop budget for every already-admitted migration to finish; subsequent requests
-    are rejected. Timeout keeps the gate closed and returns an explicit error so the external lifecycle manager can
-    enforce final termination. Concurrent leavers cannot exchange objects after either member takes its drain snapshot.
+  - topology-task ScaleIn senders accept only `ACTIVE` destinations, while receivers tolerate `PRE_LEAVING` for
+    already-selected or in-flight socket/direct/NotifyRemoteGet work. At the start of its own ScaleIn data callback, a
+    source atomically closes incoming migration admission and waits within the callback deadline for every admitted
+    request to finish before selecting its local drain snapshot. Subsequent requests are rejected; timeout keeps the
+    gate closed and returns an explicit error. Concurrent leavers cannot exchange objects after either member takes its
+    drain snapshot.
   - tear down runtime services and service threads
   - `WorkerOCServer` first drains business RPC ingress and then calls only `TopologyEngine::Shutdown(deadline)`. In ETCD
     mode Engine closes the Worker-owned Store's unified watch and keepalive once, drains Worker execution, and stops the

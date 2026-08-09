@@ -2386,7 +2386,7 @@ void WorkerOCServer::RunOneUbRecoveryProbe()
     }
     HostPort endpoint;
     Status status = objectEndpointPolicy_->CheckDataPlaneAdmission(
-        *subject, object_cache::DataPlaneAdmissionRole::INCOMING_TARGET);
+        *subject, object_cache::DataPlaneAdmissionRole::NEW_MIGRATION_TARGET);
     if (status.IsOk()) {
         status = ResolveUbProbeEndpoint(*subject, endpoint);
     }
@@ -2395,7 +2395,7 @@ void WorkerOCServer::RunOneUbRecoveryProbe()
     }
     if (status.IsOk()) {
         status = objectEndpointPolicy_->CheckDataPlaneAdmission(
-            *subject, object_cache::DataPlaneAdmissionRole::INCOMING_TARGET);
+            *subject, object_cache::DataPlaneAdmissionRole::NEW_MIGRATION_TARGET);
     }
     const bool requireGlobalAvailable = *subject != hostPort_;
     (void)admission->CompleteProbe(*token, status, GetSteadyClockTimeStampMs(), requireGlobalAvailable);
@@ -2823,7 +2823,6 @@ void WorkerOCServer::WaitClientsExit()
     });
     LOG(INFO) << "[Graceful exit] All clients on this node have exited.";
 
-    SetUnhealthy();
     allClientsExited_ = true;
     checkAsyncTasksDoneCv_.notify_all();
 }
@@ -2903,6 +2902,7 @@ Status WorkerOCServer::PreShutDown()
         LOG_IF_ERROR(topoRc,
                      "[Graceful exit] local_address=" + hostPort_.ToString()
                          + " WaitForTopologyRemoval failed; proceeding to cleanup");
+        SetUnhealthy();
     }
     if (objCacheClientWorkerSvc_ != nullptr) {
         LOG_IF_ERROR(objCacheClientWorkerSvc_->RemoveWriteBackIdsLocation(), "RemoveWriteBackIdsLocation failed");
@@ -2913,13 +2913,8 @@ Status WorkerOCServer::PreShutDown()
 Status WorkerOCServer::StartPreShutdownWorkers(bool scaleIn, const std::string &traceId)
 {
     if (scaleIn) {
-        // Close local business and migration admission before starting the drain while membership remains READY.
+        // Stop new client traffic now; keep incoming migration open until topology drain starts.
         topologyExitRequested_.store(true);
-        if (objCacheClientWorkerSvc_ != nullptr) {
-            const auto deadline = std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE;
-            LOG_IF_ERROR(objCacheClientWorkerSvc_->CloseIncomingMigrationAdmissionAndWait(deadline),
-                         "CloseIncomingMigrationAdmissionAndWait failed");
-        }
     }
     if (EnableOCService() || EnableSCService()) {
         RETURN_IF_EXCEPTION_OCCURS(checkAsyncTasksThread_ = std::make_unique<Thread>([this, traceId]() {

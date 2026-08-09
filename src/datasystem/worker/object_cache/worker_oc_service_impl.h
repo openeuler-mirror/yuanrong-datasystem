@@ -913,12 +913,12 @@ public:
     Status MultiCreate(const MultiCreateReqPb &req, MultiCreateRspPb &resp) override;
 
     /**
-     * @brief Check local node is exiting or not.
-     * @return True if local node is exiting
+     * @brief Check whether local topology ScaleIn data draining has started.
+     * @return True after the topology ScaleIn data drain starts.
      */
     bool MigrateDataStarted()
     {
-        return exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed);
+        return topologyScaleInDataDrainStarted_.load(std::memory_order_acquire);
     }
 
     /**
@@ -939,6 +939,7 @@ public:
 private:
     Status InitThreadResources();
     Status InitRecoveryServices();
+    Status VerifyClientWriteAdmission();
     void ObserveMetadataRpc(const HostPort &target, const Status &status);
 
     struct PreparedScaleInCleanupState {
@@ -1420,6 +1421,10 @@ private:
     const cluster::MembershipEndpointView &membership_;
     ObjectEndpointPolicy endpointPolicy_;
     const std::atomic<bool> *exitRequested_{ nullptr };
+
+    // Closing incoming migration admission is also used by failure/rejoin cleanup. Keep the irreversible topology
+    // ScaleIn drain state separate so ordinary client writes are not permanently fenced after a successful rejoin.
+    std::atomic<bool> topologyScaleInDataDrainStarted_{ false };
     const bool isRestart_;
     const bool centralizedMetadata_;
     const bool controlBackendAvailableAtStartup_;

@@ -129,6 +129,12 @@ TEST(ObjectEndpointPolicyTest, AppliesMigrationSourceAndTargetRoleMatrix)
         { cluster::MemberState::PRE_LEAVING, DataPlaneAdmissionRole::TOPOLOGY_SCALE_IN_SOURCE, true },
         { cluster::MemberState::LEAVING, DataPlaneAdmissionRole::TOPOLOGY_SCALE_IN_SOURCE, true },
         { cluster::MemberState::JOINING, DataPlaneAdmissionRole::INCOMING_TARGET, false },
+        { cluster::MemberState::PRE_LEAVING, DataPlaneAdmissionRole::INCOMING_TARGET, true },
+        { cluster::MemberState::LEAVING, DataPlaneAdmissionRole::INCOMING_TARGET, false },
+        { cluster::MemberState::ACTIVE, DataPlaneAdmissionRole::NEW_MIGRATION_TARGET, true },
+        { cluster::MemberState::PRE_LEAVING, DataPlaneAdmissionRole::NEW_MIGRATION_TARGET, false },
+        { cluster::MemberState::PRE_LEAVING, DataPlaneAdmissionRole::REDIRECT_TARGET, false },
+        { cluster::MemberState::PRE_LEAVING, DataPlaneAdmissionRole::REBALANCE_TARGET, false },
         { cluster::MemberState::LEAVING, DataPlaneAdmissionRole::REBALANCE_TARGET, false },
         { cluster::MemberState::ACTIVE, DataPlaneAdmissionRole::REDIRECT_TARGET, true },
     };

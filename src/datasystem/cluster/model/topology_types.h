@@ -40,6 +40,12 @@ inline bool IsCommittedMemberState(MemberState state) noexcept
     return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING || state == MemberState::LEAVING;
 }
 
+// This is an admission check for an already-selected ScaleIn migration target, not a target-selection predicate.
+inline bool IsAdmittedScaleInMigrationTargetState(MemberState state) noexcept
+{
+    return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING;
+}
+
 /**
  * @brief Restart effect completion contract selected by its topology execution owner.
  */

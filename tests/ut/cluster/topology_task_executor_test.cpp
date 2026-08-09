@@ -564,7 +564,7 @@ TEST(TopologyTaskExecutorTest, RejectsLateCompletionAfterEpochChanges)
     DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
-TEST(TopologyTaskExecutorTest, RejectsScaleInTaskAfterTargetStartsLeaving)
+TEST(TopologyTaskExecutorTest, ExecutesScaleInTaskAfterTargetBecomesPreLeaving)
 {
     ExecutorScenario scenario;
     DS_ASSERT_OK(scenario.SetUp(TopologyChangeType::SCALE_IN));
@@ -572,6 +572,28 @@ TEST(TopologyTaskExecutorTest, RejectsScaleInTaskAfterTargetStartsLeaving)
     TopologyState changed = scenario.plan.next;
     ++changed.version;
     changed.members.back().state = MemberState::PRE_LEAVING;
+    std::shared_ptr<const TopologySnapshot> newer;
+    DS_ASSERT_OK(TopologySnapshot::Create(changed, 2, std::string(64, 'b'), newer));
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(scenario.snapshots.Publish(newer, outcome));
+    scenario.backend.PutRaw(scenario.keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), changed);
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, {});
+
+    DS_ASSERT_OK(executor.Start());
+    DS_ASSERT_OK(executor.HandleNotify(scenario.expected.notifiesByAddress.at(task.executorAddress)));
+    EXPECT_TRUE(WaitForCount(scenario.callbacks.scaleInCalls, 1, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyTaskExecutorTest, RejectsScaleInTaskAfterTargetStartsLeaving)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp(TopologyChangeType::SCALE_IN));
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    TopologyState changed = scenario.plan.next;
+    ++changed.version;
+    changed.members.back().state = MemberState::LEAVING;
     std::shared_ptr<const TopologySnapshot> newer;
     DS_ASSERT_OK(TopologySnapshot::Create(changed, 2, std::string(64, 'b'), newer));
     SnapshotUpdateOutcome outcome;

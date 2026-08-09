@@ -170,7 +170,7 @@ DS_DEFINE_uint64_dynamic(slow_log_rpc_slower_than, 5000,
                  "Default 5000 (5ms). 0 means disabled. When enabled, requests whose RPC phases exceed this threshold "
                  "will include a latency summary in the access log.");
 DS_DEFINE_bool(enable_leaving_intercept, false,
-               "Reject object-cache write requests after the local worker starts topology scale-in draining.");
+               "Reject object-cache write requests after the local worker records topology scale-in exit intent.");
 DS_DEFINE_string(sdk_data_placement_policy, "PREFERRED_SAME_NODE",
                  "SDK write placement policy, read once during routing initialization: PREFERRED_SAME_NODE, "
                  "REQUIRED_SAME_NODE, or PREFERRED_META_OWNER. Use PREFERRED_META_OWNER to preserve legacy "

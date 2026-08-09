@@ -185,8 +185,10 @@
   RPC fence validation may wait through a bthread-aware condition variable only for the process-local Snapshot to catch
   up within the existing request deadline; it never synchronously reads the backend. A newer Snapshot in the same
   active batch remains valid after epoch/type/participant revalidation.
-  ScaleIn revalidation requires the target to remain `ACTIVE`; a target that has entered `PRE_LEAVING` cannot accept
-  metadata or data handoff from another leaving member.
+  ScaleIn metadata/task revalidation admits an already-selected target while it remains `ACTIVE` or `PRE_LEAVING`;
+  source/target generations, batch epoch, topology version, a distinct source/target generation, and a `LEAVING`
+  source remain fenced. New migration, redirect, rebalance, recovery, and primary target selection still excludes
+  `PRE_LEAVING`.
 - Business migration/recovery is invoked through one opaque task callback. `IKeyFilter` and `StorageScanPlan` keep token
   representation internal, while callbacks receive stable operation identity, deadline, and cooperative cancellation.
   `TopologyTaskExecutor` owns one mutex-protected state record per business operation; retry timing, attempt count,
@@ -281,7 +283,9 @@
 - Unified-ETCD recovery reuses the normal exact topology reload. The membership lease recreates its key before
   `IsKeepAliveTimeout()` becomes false. A transient recovery ordering where another Controller still sees the key absent
   is covered by the same direct Worker liveness check; it cannot remove a responding member from topology.
-- Graceful scale-in publishes EXITING only after local admission and task drain. Publication and authoritative topology
+- Graceful scale-in rejects client writes and RPC health checks at exit intent/`PRE_LEAVING`, while incoming migration
+  admission stays open. The admitted ScaleIn callback closes incoming migration admission and drains in-flight requests
+  before selecting local data. EXITING publication and authoritative topology
   removal share one bounded deadline: lock acquisition, the backend write, retry sleep, and topology polling consume the
   same remaining budget. A failed publication is retried, but the first successful publication stops repeated writes;
   the backend's terminal EXITING latch republishes that intent if later lease or Leader recovery occurs.

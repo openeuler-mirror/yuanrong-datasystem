@@ -234,7 +234,7 @@ Status TopologyTaskExecutor::BuildExecutionFence(const TopologyTask &task, Topol
                                      K_INVALID, "invalid ScaleOut task participants");
         } else {
             CHECK_FAIL_RETURN_STATUS(phase == TopologyCallbackPhase::SCALE_IN && executor->state == MemberState::LEAVING
-                                         && target->state == MemberState::ACTIVE,
+                                         && IsAdmittedScaleInMigrationTargetState(target->state),
                                      K_INVALID, "invalid ScaleIn task participants");
         }
         built.source = executor->identity;
