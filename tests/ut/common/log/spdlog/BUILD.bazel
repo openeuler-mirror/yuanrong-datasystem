@@ -26,6 +26,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "log_rotation_config_test",
+    srcs = ["log_rotation_config_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:log_rotation_config",
+        "@ds-spdlog//:ds-spdlog",
+    ],
+)
+
+ds_cc_test(
     name = "rotating_file_sink_repro_test",
     srcs = ["rotating_file_sink_repro_test.cpp"],
     tags = ["manual"],
