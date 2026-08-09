@@ -349,6 +349,14 @@ public:
     Status GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq);
 
     /**
+     * @brief Fill one registered local segment into a handshake segment descriptor.
+     * @param[in] segmentAddress Starting virtual address of the registered segment.
+     * @param[out] segmentInfo The protobuf descriptor to fill.
+     * @return Status of the call.
+     */
+    Status GetSegmentInfo(uint64_t segmentAddress, UrmaImportSegmentPb &segmentInfo);
+
+    /**
      * @brief Fill local segment info into handshake response.
      */
     Status GetSegmentInfo(UrmaHandshakeRspPb &handshakeRsp);
@@ -501,6 +509,13 @@ public:
     Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
 
     /**
+     * @brief Import the peer Jetty and recovery segment without constructing a reverse handshake response.
+     * @param[in] req Minimal recovery-probe handshake request.
+     * @return Status of the call.
+     */
+    Status ImportRecoveryProbeHandshake(const UrmaHandshakeReqPb &req);
+
+    /**
      * @brief Get local URMA JFR info
      * @return local UrmaJfrInfo
      */
@@ -580,6 +595,7 @@ private:
     Status UrmaUninit();
 
     Status GetOrCreateRecoveryProbeBuffer(void *&probeBuffer, std::mutex &mutex, const std::string &purpose);
+    Status ProcessHandshakePeer(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb *rsp);
 
     /**
      * @brief Register log for urma.

@@ -28,10 +28,14 @@ TEST(UbHealthLeaseSyncTest, PublishesOneSelfRecordAndConsumesSelfOnlySnapshot)
 {
     FakeCoordinationBackend backend;
     std::vector<UbHealthSummary> consumed;
+    std::string selfIncarnation = "self-1";
     UbHealthLeaseSync::Config config{
         TABLE,
         SELF,
-        "self-1",
+        [&selfIncarnation](std::string &incarnation) {
+            incarnation = selfIncarnation;
+            return Status::OK();
+        },
         [] {
             UbHealthSummary summary;
             summary.writable = false;
@@ -52,6 +56,11 @@ TEST(UbHealthLeaseSyncTest, PublishesOneSelfRecordAndConsumesSelfOnlySnapshot)
     EXPECT_EQ(consumed.front().incarnation, "self-1");
     EXPECT_FALSE(consumed.front().writable);
     EXPECT_EQ(consumed.front().epoch, 4u);
+
+    selfIncarnation = "self-2";
+    ASSERT_TRUE(sync.SyncOnce().IsOk());
+    ASSERT_EQ(consumed.size(), 1u);
+    EXPECT_EQ(consumed.front().incarnation, "self-2");
 }
 
 TEST(UbHealthLeaseSyncTest, LeaseExpiryDropsGlobalObservationButPreservesLocalEvidence)
@@ -71,7 +80,10 @@ TEST(UbHealthLeaseSyncTest, LeaseExpiryDropsGlobalObservationButPreservesLocalEv
     UbHealthLeaseSync::Config config{
         TABLE,
         SELF,
-        "self-1",
+        [](std::string &incarnation) {
+            incarnation = "self-1";
+            return Status::OK();
+        },
         [] { return UbHealthSummary{}; },
         [&admission](const auto &snapshot) { admission.ReplaceGlobalSummaries(snapshot); }
     };

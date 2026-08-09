@@ -151,7 +151,7 @@ message HeartbeatReqPb{
 
 message UbHealthSummaryPb {
     string worker_address = 1;
-    string incarnation = 2;
+    bytes incarnation = 2;
     bool writable = 3;
     int32 state = 4;
     int32 reason = 5;

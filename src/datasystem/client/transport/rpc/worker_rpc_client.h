@@ -92,6 +92,10 @@ public:
     /** @brief Exchange URMA connection data over this worker's cached brpc channel. */
     virtual Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response);
 
+    /** @brief Pull Provider UB health and request a Worker-to-Client dedicated recovery probe. */
+    virtual Status ProbeProviderUbRecovery(const std::string &expectedWorkerIncarnation,
+                                           int32_t timeoutMs, ProviderUbRecoveryProbeRspPb &response);
+
     /** @brief Fetch the versioned routing hash ring through the cached worker channel. */
     virtual Status InvokeGetHashRing(uint64_t currentVersion, GetHashRingRspPb &response);
 

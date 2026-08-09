@@ -131,4 +131,56 @@ std::optional<UbPathState> UbHealthFilter::GetLocalObservation(const HostPort &a
 {
     return localAdmission_.GetState(addr);
 }
+
+std::optional<ProviderUbRecoveryCandidate> UbHealthFilter::TryBeginProviderRecovery(uint64_t nowMs)
+{
+    std::lock_guard<std::mutex> lock(incarnationMutex_);
+    auto worker = localAdmission_.NextProbeCandidate(nowMs);
+    if (!worker.has_value()) {
+        return std::nullopt;
+    }
+    auto token = localAdmission_.TryBeginProbe(*worker, nowMs);
+    if (!token.has_value()) {
+        return std::nullopt;
+    }
+    auto trusted = trustedIncarnations_.find(*worker);
+    return ProviderUbRecoveryCandidate{ *token,
+                                        trusted == trustedIncarnations_.end() ? std::string{} : trusted->second };
+}
+
+bool UbHealthFilter::CompleteProviderRecovery(const ProviderUbRecoveryCandidate &candidate,
+                                              const std::optional<UbHealthSummary> &summary,
+                                              const Status &probeStatus, uint64_t nowMs)
+{
+    std::lock_guard<std::mutex> lock(incarnationMutex_);
+    Status completion = probeStatus;
+    if (!summary.has_value() || summary->worker != candidate.token.peer || summary->incarnation.empty()
+        || (!candidate.expectedIncarnation.empty() && summary->incarnation != candidate.expectedIncarnation)) {
+        completion = Status(K_INVALID, "Provider UB recovery response identity does not match probe candidate");
+    } else {
+        auto trusted = trustedIncarnations_.find(candidate.token.peer);
+        if (topologyInitialized_
+            && (trusted == trustedIncarnations_.end() || trusted->second != summary->incarnation)) {
+            completion = Status(K_NOT_READY, "Provider UB recovery response does not match current topology");
+        } else if (!summary->writable) {
+            completion = Status(K_NOT_READY, "Provider UB admission is not writable");
+        }
+        if (!topologyInitialized_ || trusted != trustedIncarnations_.end()) {
+            const std::string &expected = topologyInitialized_ ? trusted->second : summary->incarnation;
+            (void)cache_.Apply(*summary, expected);
+        }
+    }
+    const bool recovered = localAdmission_.CompleteProbe(candidate.token, completion, nowMs, false);
+    if (recovered) {
+        localObservationIncarnations_.erase(candidate.token.peer);
+        INJECT_POINT_NO_RETURN("client.ub_health_filter.provider_probe_recovered");
+    }
+    return recovered;
+}
+
+std::optional<uint64_t> UbHealthFilter::NextProviderRecoveryDeadlineMs() const
+{
+    std::lock_guard<std::mutex> lock(incarnationMutex_);
+    return localAdmission_.NextProbeDeadlineMs();
+}
 }  // namespace datasystem::client

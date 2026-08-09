@@ -38,6 +38,7 @@
 #include "datasystem/client/transport/transport_phase_latency_recorder.h"
 #include "datasystem/client/transport/worker_snapshot.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 
@@ -123,6 +124,12 @@ public:
 
     /** @brief Validate a UB connection and commit recovery while the worker snapshot remains admitted. */
     Status ProbeUbConnection(const HostPort &workerAddr, const std::function<void()> &commitRecovery = {});
+
+    /**
+     * @brief Pull one Provider's UB health and verify its outbound Worker-to-Client UB path within a bounded timeout.
+     */
+    virtual Status ProbeProviderUbRecovery(const HostPort &workerAddr, const std::string &expectedIncarnation,
+                                           int32_t timeoutMs, UbHealthSummary &summary);
 
     /** @brief Drop only the selected data-plane transporter while retaining the shared RPC connection. */
     void ResetDataPlane(const HostPort &workerAddr);

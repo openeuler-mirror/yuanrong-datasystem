@@ -26,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -35,8 +36,12 @@
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/object_read/replica_reader.h"
 #include "datasystem/client/transport/transport_layer.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
+#include "datasystem/common/object_cache/ub_health_summary_codec.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/util/raii.h"
 #if defined(USE_URMA) || defined(USE_URMA_MOCK)
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
@@ -45,6 +50,21 @@ namespace datasystem {
 namespace client {
 namespace {
 constexpr std::chrono::seconds PROBE_OBSERVATION_TIMEOUT(3);
+constexpr char RECONCILE_AFTER_DEADLINE_CHECK_INJECT[] =
+    "TransportLayer.WaitForSnapshotOrStop.afterDeadlineCheck";
+
+template <typename Predicate>
+bool WaitUntil(Predicate predicate, std::chrono::milliseconds timeout = PROBE_OBSERVATION_TIMEOUT)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::yield();
+    }
+    return predicate();
+}
 
 HostPort MakeAddress(int port)
 {
@@ -103,6 +123,15 @@ public:
     {
         return alive_;
     }
+
+    Status ProbeProviderUbRecovery(const std::string &, int32_t, ProviderUbRecoveryProbeRspPb &response) override
+    {
+        response = providerProbeResponse;
+        return providerProbeStatus;
+    }
+
+    ProviderUbRecoveryProbeRspPb providerProbeResponse;
+    Status providerProbeStatus{ Status::OK() };
 
 protected:
     void Close() override
@@ -307,6 +336,29 @@ public:
         return probeCv.wait_for(lock, timeout, [&] { return probeCount >= expected; });
     }
 
+    bool WaitForProviderProbeCount(int expected, std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return probeCv.wait_for(lock, timeout, [&] { return providerProbeCount >= expected; });
+    }
+
+    Status ProbeProviderUbRecovery(const HostPort &workerAddr, const std::string &expectedIncarnation,
+                                   int32_t timeoutMs, UbHealthSummary &summary) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        providerProbedWorkers.emplace_back(workerAddr);
+        providerProbeExpectedIncarnations.emplace_back(expectedIncarnation);
+        providerProbeTimeouts.emplace_back(timeoutMs);
+        ++providerProbeCount;
+        summary = providerProbeSummary;
+        Status status = providerProbeStatuses.empty() ? Status::OK() : providerProbeStatuses.front();
+        if (!providerProbeStatuses.empty()) {
+            providerProbeStatuses.erase(providerProbeStatuses.begin());
+        }
+        probeCv.notify_all();
+        return status;
+    }
+
     std::vector<HostPort> GetProbedWorkers()
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -315,12 +367,18 @@ public:
 
     int transportBuildCount{ 0 };
     std::atomic<int> probeCount{ 0 };
+    std::atomic<int> providerProbeCount{ 0 };
     std::vector<std::vector<Status>> transporterSetStatuses;
     std::unordered_map<HostPort, std::vector<Status>> transporterGetStatuses;
     std::unordered_map<HostPort, int> transporterGetCqeStatuses;
     std::vector<Status> transporterMSetUbFailureReports;
     std::vector<Status> probeStatuses;
     std::vector<HostPort> probedWorkers;
+    std::vector<HostPort> providerProbedWorkers;
+    std::vector<std::string> providerProbeExpectedIncarnations;
+    std::vector<int32_t> providerProbeTimeouts;
+    UbHealthSummary providerProbeSummary;
+    std::vector<Status> providerProbeStatuses;
     std::vector<std::shared_ptr<FakeTransporter>> builtTransporters;
     std::condition_variable probeCv;
 
@@ -348,9 +406,16 @@ private:
 class TestTransportLayer : public TransportLayer {
 public:
     TestTransportLayer(std::shared_ptr<DataPlaneManager> manager, std::shared_ptr<TransportAdvisor> advisor,
-                       std::chrono::milliseconds localUbProbeBaseDelay = std::chrono::seconds(1))
-        : TransportLayer(std::move(manager), std::move(advisor), localUbProbeBaseDelay)
+                       std::chrono::milliseconds localUbProbeBaseDelay = std::chrono::seconds(1),
+                       std::shared_ptr<UbHealthFilter> readSourceFilter = nullptr)
+        : TransportLayer(std::move(manager), std::move(advisor), localUbProbeBaseDelay,
+                         std::move(readSourceFilter))
     {
+    }
+
+    bool ReportProviderFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail)
+    {
+        return ReportProviderUbFailure(provider, detail);
     }
 };
 
@@ -630,6 +695,165 @@ TEST(UbHealthFilterTest, SameIncarnationWritableRecoveryClearsClientObservation)
     EXPECT_TRUE(filter.IsAvailable(provider));
 }
 
+TEST(UbHealthFilterTest, OnDemandRecoveryRequiresWritableSummaryAndDirectionalProbe)
+{
+    const auto provider = MakeAddress(38);
+    UbHealthFilter filter;
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+
+    auto firstDeadline = filter.NextProviderRecoveryDeadlineMs();
+    ASSERT_TRUE(firstDeadline.has_value());
+    auto first = filter.TryBeginProviderRecovery(*firstDeadline);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(first->expectedIncarnation, "incarnation-a");
+    UbHealthSummary summary;
+    summary.worker = provider;
+    summary.incarnation = "incarnation-a";
+    summary.writable = false;
+    EXPECT_FALSE(filter.CompleteProviderRecovery(*first, summary, Status::OK(), *firstDeadline));
+    EXPECT_FALSE(filter.IsAvailable(provider));
+
+    auto secondDeadline = filter.NextProviderRecoveryDeadlineMs();
+    ASSERT_TRUE(secondDeadline.has_value());
+    auto second = filter.TryBeginProviderRecovery(*secondDeadline);
+    ASSERT_TRUE(second.has_value());
+    summary.writable = true;
+    EXPECT_FALSE(filter.CompleteProviderRecovery(*second, summary, Status(K_URMA_ERROR, "probe failed"),
+                                                 *secondDeadline));
+    EXPECT_FALSE(filter.IsAvailable(provider));
+
+    auto thirdDeadline = filter.NextProviderRecoveryDeadlineMs();
+    ASSERT_TRUE(thirdDeadline.has_value());
+    auto third = filter.TryBeginProviderRecovery(*thirdDeadline);
+    ASSERT_TRUE(third.has_value());
+    EXPECT_TRUE(filter.CompleteProviderRecovery(*third, summary, Status::OK(), *thirdDeadline));
+    EXPECT_TRUE(filter.IsAvailable(provider));
+}
+
+TEST(UbHealthFilterTest, NewFailureInvalidatesInFlightProviderRecovery)
+{
+    const auto provider = MakeAddress(39);
+    UbHealthFilter filter;
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+    auto deadline = filter.NextProviderRecoveryDeadlineMs();
+    ASSERT_TRUE(deadline.has_value());
+    auto stale = filter.TryBeginProviderRecovery(*deadline);
+    ASSERT_TRUE(stale.has_value());
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+
+    UbHealthSummary summary;
+    summary.worker = provider;
+    summary.incarnation = "incarnation-a";
+    EXPECT_FALSE(filter.CompleteProviderRecovery(*stale, summary, Status::OK(), *deadline));
+    EXPECT_FALSE(filter.IsAvailable(provider));
+}
+
+TEST(DataPlaneManagerAdmissionTest, ProviderProbeErrorPreservesValidatedSummaryAndTopologyFence)
+{
+    const auto provider = MakeAddress(43);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+    ASSERT_TRUE(manager->GetOrCreateRpcClient(provider, rpcClient).IsOk());
+    auto fakeRpcClient = std::dynamic_pointer_cast<FakeWorkerRpcClient>(rpcClient);
+    ASSERT_NE(fakeRpcClient, nullptr);
+
+    UbHealthFilter filter;
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+    auto deadline = filter.NextProviderRecoveryDeadlineMs();
+    ASSERT_TRUE(deadline.has_value());
+    auto candidate = filter.TryBeginProviderRecovery(*deadline);
+    ASSERT_TRUE(candidate.has_value());
+
+    UbHealthSummary responseSummary;
+    responseSummary.worker = provider;
+    responseSummary.incarnation = "incarnation-a";
+    responseSummary.writable = true;
+    responseSummary.state = UbAdmissionState::AVAILABLE;
+    responseSummary.reason = UbFailureClass::SUCCESS;
+    responseSummary.lastStatusCode = K_OK;
+    responseSummary.epoch = 7;
+    EncodeUbHealthSummary(responseSummary, *fakeRpcClient->providerProbeResponse.mutable_health_summary());
+    fakeRpcClient->providerProbeStatus = Status(K_NOT_READY, "Provider admission is unavailable");
+
+    UbHealthSummary actual;
+    Status rc = manager->DataPlaneManager::ProbeProviderUbRecovery(provider, "incarnation-a", 100, actual);
+
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+    EXPECT_EQ(actual.worker, provider);
+    EXPECT_EQ(actual.incarnation, "incarnation-a");
+    EXPECT_TRUE(actual.writable);
+    EXPECT_EQ(actual.epoch, 7u);
+    EXPECT_FALSE(filter.CompleteProviderRecovery(*candidate, actual, rc, *deadline));
+    EXPECT_FALSE(filter.IsAvailable(provider));
+
+    fakeRpcClient->providerProbeResponse.Clear();
+    fakeRpcClient->providerProbeStatus = Status(K_RPC_DEADLINE_EXCEEDED, "Provider probe timed out");
+    rc = manager->DataPlaneManager::ProbeProviderUbRecovery(provider, "incarnation-a", 100, actual);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_TRUE(actual.worker.Empty());
+    EXPECT_TRUE(actual.incarnation.empty());
+
+    responseSummary.incarnation = "incarnation-b";
+    ++responseSummary.epoch;
+    EncodeUbHealthSummary(responseSummary, *fakeRpcClient->providerProbeResponse.mutable_health_summary());
+    fakeRpcClient->providerProbeStatus = Status(K_NOT_READY, "Worker incarnation changed");
+    rc = manager->DataPlaneManager::ProbeProviderUbRecovery(provider, "incarnation-a", 100, actual);
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+    EXPECT_EQ(actual.incarnation, "incarnation-b");
+
+    auto mismatchDeadline = filter.NextProviderRecoveryDeadlineMs();
+    ASSERT_TRUE(mismatchDeadline.has_value());
+    auto mismatchCandidate = filter.TryBeginProviderRecovery(*mismatchDeadline);
+    ASSERT_TRUE(mismatchCandidate.has_value());
+    EXPECT_FALSE(filter.CompleteProviderRecovery(*mismatchCandidate, actual, Status::OK(), *mismatchDeadline));
+    EXPECT_FALSE(filter.IsAvailable(provider));
+}
+
+TEST(TransportLayerAdmissionTest, ProviderRecoveryDoesNotDependOnHeartbeatSummary)
+{
+    const auto provider = MakeAddress(44);
+    auto filter = std::make_shared<UbHealthFilter>();
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter->ApplyTopologyIncarnations(topology);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+    ASSERT_TRUE(filter->ReportProviderFailure(provider, detail));
+
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->providerProbeSummary.worker = provider;
+    manager->providerProbeSummary.incarnation = "incarnation-a";
+    manager->providerProbeSummary.writable = true;
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                             std::chrono::milliseconds(10), filter);
+    ASSERT_TRUE(layer.Init().IsOk());
+
+    ASSERT_TRUE(manager->WaitForProviderProbeCount(1, PROBE_OBSERVATION_TIMEOUT));
+    EXPECT_EQ(manager->providerProbedWorkers, std::vector<HostPort>{ provider });
+    EXPECT_EQ(manager->providerProbeExpectedIncarnations, std::vector<std::string>{ "incarnation-a" });
+    EXPECT_EQ(manager->providerProbeTimeouts, std::vector<int32_t>{ 3'000 });
+    EXPECT_TRUE(filter->IsAvailable(provider));
+}
+
 TEST(TransportLayerAdmissionTest, HardUbSetFailureBlocksLaterSetAndAllocationBeforeTransport)
 {
     auto manager = std::make_shared<FakeDataPlaneManager>();
@@ -713,6 +937,39 @@ TEST(TransportLayerAdmissionTest, DedicatedProbeRestoresClientLocalSenderWithout
         recoveredSetCount += manager->builtTransporters[i]->setCount;
     }
     EXPECT_EQ(recoveredSetCount, 2);
+}
+
+TEST(TransportLayerAdmissionTest, FailureNotificationCannotBeLostAfterDeadlineCheck)
+{
+    const auto provider = MakeAddress(46);
+    auto filter = std::make_shared<UbHealthFilter>();
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter->ApplyTopologyIncarnations(topology);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->providerProbeSummary.worker = provider;
+    manager->providerProbeSummary.incarnation = "incarnation-a";
+    manager->providerProbeSummary.writable = true;
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                             std::chrono::milliseconds(10), filter);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+
+    std::future<bool> reportFuture;
+    ASSERT_TRUE(inject::Set(RECONCILE_AFTER_DEADLINE_CHECK_INJECT, "1*pause()").IsOk());
+    Raii clearInject([] { (void)inject::Clear(RECONCILE_AFTER_DEADLINE_CHECK_INJECT); });
+    ASSERT_TRUE(layer.Init().IsOk());
+    ASSERT_TRUE(WaitUntil(
+        [] { return inject::GetExecuteCount(RECONCILE_AFTER_DEADLINE_CHECK_INJECT) == 1; }));
+
+    reportFuture = std::async(std::launch::async, [&] { return layer.ReportProviderFailure(provider, detail); });
+    ASSERT_TRUE(WaitUntil([&] { return !filter->IsAvailable(provider); }));
+    EXPECT_EQ(reportFuture.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+    ASSERT_TRUE(inject::Clear(RECONCILE_AFTER_DEADLINE_CHECK_INJECT).IsOk());
+
+    EXPECT_TRUE(reportFuture.get());
+    EXPECT_TRUE(manager->WaitForProviderProbeCount(1, PROBE_OBSERVATION_TIMEOUT));
 }
 
 TEST(TransportLayerAdmissionTest, GlobalSnapshotDenyKeepsClientLocalSenderQuarantinedUntilReadmitted)
@@ -834,17 +1091,32 @@ TEST(DataPlaneManagerAdmissionTest, ProbeRequiresPublishedWorkerSnapshot)
 TEST(UrmaRecoveryProbeBufferTest, ManagerOwnsStableDedicatedSegment)
 {
 #if defined(USE_URMA) || defined(USE_URMA_MOCK)
-    uint64_t segmentAddress = 0;
-    uint64_t dataOffset = 0;
-    ASSERT_TRUE(UrmaManager::Instance().GetRecoveryProbeSegmentInfo(segmentAddress, dataOffset).IsOk());
+    uint64_t sourceAddress = 0;
+    uint64_t sourceSize = 0;
+    uint64_t sourceDataAddress = 0;
+    ASSERT_TRUE(
+        UrmaManager::Instance().GetRecoveryProbeSourceInfo(sourceAddress, sourceSize, sourceDataAddress).IsOk());
+    UrmaHandshakeReqPb recoveryHandshake;
+    UrmaRemoteAddrPb recoveryAddress;
+    ASSERT_TRUE(ConstructRecoveryProbeHandshakePb(MakeAddress(52).ToString(), recoveryHandshake, recoveryAddress)
+                    .IsOk());
+    ASSERT_EQ(recoveryHandshake.seg_infos_size(), 1);
+    UrmaSeg recoverySegment;
+    ASSERT_TRUE(recoverySegment.FromProto(recoveryHandshake.seg_infos(0).seg()).IsOk());
+    const uint64_t segmentAddress = recoveryAddress.seg_va();
     ASSERT_NE(segmentAddress, 0u);
-    EXPECT_EQ(dataOffset, 0u);
+    EXPECT_NE(segmentAddress, sourceAddress);
+    EXPECT_EQ(recoverySegment.raw.ubva.va, segmentAddress);
+    EXPECT_EQ(recoveryAddress.seg_data_offset(), 0u);
+    EXPECT_EQ(recoveryAddress.request_address().host(), recoveryHandshake.address().host());
+    EXPECT_EQ(recoveryAddress.request_address().port(), recoveryHandshake.address().port());
+    EXPECT_EQ(recoveryAddress.client_id(), recoveryHandshake.client_id());
 
     uint64_t secondAddress = 0;
     uint64_t secondOffset = 0;
     ASSERT_TRUE(UrmaManager::Instance().GetRecoveryProbeSegmentInfo(secondAddress, secondOffset).IsOk());
     EXPECT_EQ(secondAddress, segmentAddress);
-    EXPECT_EQ(secondOffset, dataOffset);
+    EXPECT_EQ(secondOffset, 0u);
 
     auto containsSegment = [segmentAddress](const UrmaHandshakeReqPb &handshake) {
         for (const auto &info : handshake.seg_infos()) {
@@ -858,6 +1130,7 @@ TEST(UrmaRecoveryProbeBufferTest, ManagerOwnsStableDedicatedSegment)
     UrmaHandshakeReqPb handshake;
     ASSERT_TRUE(UrmaManager::Instance().GetSegmentInfo(handshake).IsOk());
     EXPECT_TRUE(containsSegment(handshake));
+    EXPECT_GT(handshake.seg_infos_size(), recoveryHandshake.seg_infos_size());
 #else
     GTEST_SKIP() << "URMA recovery probe segment is only available in URMA or URMA mock builds.";
 #endif

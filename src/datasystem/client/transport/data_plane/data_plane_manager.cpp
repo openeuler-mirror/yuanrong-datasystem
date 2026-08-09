@@ -32,6 +32,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #ifdef USE_URMA
@@ -292,6 +293,41 @@ Status DataPlaneManager::ProbeUbConnection(const HostPort &workerAddr, const std
     if (commitRecovery) {
         commitRecovery();
     }
+    return Status::OK();
+}
+
+Status DataPlaneManager::ProbeProviderUbRecovery(const HostPort &workerAddr, const std::string &expectedIncarnation,
+                                                 int32_t timeoutMs, UbHealthSummary &summary)
+{
+    summary = UbHealthSummary{};
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+    RETURN_IF_NOT_OK(GetOrCreateRpcClient(workerAddr, rpcClient));
+    ProviderUbRecoveryProbeRspPb response;
+    Status rpcRc = rpcClient->ProbeProviderUbRecovery(expectedIncarnation, timeoutMs, response);
+    if (!response.has_health_summary()) {
+        if (rpcRc.IsError()) {
+            return rpcRc;
+        }
+        RETURN_STATUS(K_INVALID, "Provider UB recovery response has no health summary");
+    }
+
+    UbHealthSummary decodedSummary;
+    Status decodeRc = DecodeUbHealthSummary(response.health_summary(), decodedSummary);
+    if (rpcRc.IsError()) {
+        if (decodeRc.IsOk() && decodedSummary.worker == workerAddr) {
+            summary = std::move(decodedSummary);
+        }
+        return rpcRc;
+    }
+    RETURN_IF_NOT_OK(decodeRc);
+    CHECK_FAIL_RETURN_STATUS(decodedSummary.worker == workerAddr, K_INVALID,
+                             "Provider UB recovery response Worker does not match RPC endpoint");
+    summary = std::move(decodedSummary);
+    CHECK_FAIL_RETURN_STATUS(expectedIncarnation.empty() || summary.incarnation == expectedIncarnation, K_NOT_READY,
+                             "Provider UB recovery response has a different Worker incarnation");
+    CHECK_FAIL_RETURN_STATUS(summary.writable, K_NOT_READY, "Provider UB admission is not writable");
+    CHECK_FAIL_RETURN_STATUS(response.probe_performed(), K_NOT_READY,
+                             "Provider did not perform the Worker-to-Client UB recovery probe");
     return Status::OK();
 }
 

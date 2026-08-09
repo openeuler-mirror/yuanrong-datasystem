@@ -74,7 +74,16 @@
     Worker process. For the same incarnation, repeated writable summaries preserve newer hard local evidence, while a
     validated global unavailable-to-writable epoch transition clears the matching client-local quarantine. Ordinary
     topology refresh and Global Fact lease expiry do not silently clear versioned local evidence. Global summary reads
-    use a shared lock because Direct Read admission is a read-mostly foreground path.
+    use a shared lock because Direct Read admission is a read-mostly foreground path. When heartbeat summaries are
+    disabled or delayed, a quarantined Provider is recovered by the existing TransportLayer reconcile thread rather
+    than business retries: after admission backoff expires, the Client sends an endpoint-scoped control RPC, capped at
+    three seconds independently of the SDK request timeout, that pulls the Worker's current self summary. A non-writable
+    summary keeps the endpoint quarantined and raises the next
+    backoff. A writable summary permits the Worker to perform a dedicated one-byte Worker-to-Client UB WRITE into the
+    Client's manager-owned probe segment. The recovery request creates that segment before handshake construction and
+    serializes only its descriptor, so probe control cost does not scale with the Client's complete registered-segment
+    table. Recovery commits only when that CQE succeeds and the endpoint, topology incarnation, and Client-local probe
+    epoch still match. Healthy endpoints are not polled, and the foreground Direct Read path performs no additional RPC.
   - Routed same-host Get uses one endpoint-scoped SHM session per target Worker. Object metadata, reference acquisition,
     and `DecreaseReference` use the client-facing `WorkerOCService`; only fd-session bootstrap and control
     (`GetSocketPath`, `RegisterClient`, `GetClientFd`, `DisconnectClient`) use `WorkerService`.

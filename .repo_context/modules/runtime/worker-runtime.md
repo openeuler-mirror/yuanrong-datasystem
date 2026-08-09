@@ -163,6 +163,11 @@
     before FastMigration admission reopens. Trusted provider-local ERROR 4 remains a Local Observation for the Worker
     itself; the Worker's own lease-published summary is treated as an echo rather than an external recovery fence, so a
     successful self probe can publish the next writable summary instead of deadlocking behind its previous deny fact.
+  - `WorkerWorkerTransportService.ProbeProviderUbRecovery` is the heartbeat-independent Client recovery control path.
+    It returns the current self summary with the topology membership id as incarnation, rejects a stale expected
+    incarnation, and skips data-plane work while the self summary is non-writable. Once writable, it imports the
+    requesting Client's Jetty and dedicated recovery segment without serializing an unused reverse segment table, then
+    issues one one-byte Worker-to-Client UB WRITE; it never substitutes a business response as recovery evidence.
   - object-cache worker-to-master RPC warmup also starts before `ReadinessProbe()`: a best-effort asynchronous startup
     task reads immutable topology snapshots until the ready member set is stable or the startup warmup window expires;
     later Snapshot publication callbacks enqueue bounded warmup for newly ready members

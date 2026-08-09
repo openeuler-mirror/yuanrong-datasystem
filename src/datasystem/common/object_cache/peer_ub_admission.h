@@ -104,6 +104,7 @@ public:
     bool CompleteProbe(const UbProbeToken &token, const Status &status, uint64_t nowMs,
                        bool requireGlobalAvailable = true);
     std::optional<HostPort> NextProbeCandidate(uint64_t nowMs) const;
+    std::optional<uint64_t> NextProbeDeadlineMs() const;
     void ReconcileTopologyWorkers(const std::unordered_set<HostPort> &workers, uint64_t nowMs,
                                   uint64_t cleanupGraceMs);
     void PruneExpiredTopologyState(uint64_t nowMs);

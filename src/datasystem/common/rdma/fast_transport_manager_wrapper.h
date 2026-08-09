@@ -238,6 +238,13 @@ Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize, const
 Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
 
 /**
+ * @brief Import a minimal recovery-probe handshake without producing a reverse segment table.
+ * @param[in] req Minimal recovery-probe handshake request.
+ * @return Status of the call.
+ */
+Status ImportRecoveryProbeHandshake(const UrmaHandshakeReqPb &req);
+
+/**
  * @brief Check if the connection is stable.
  * @param[in] hostAddress The dst port address.
  * @param[in] instanceId The unqiue instance uuid from dst port.
@@ -261,6 +268,16 @@ Status GetLocalTransportInstanceId(std::string &instanceId);
  */
 Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req,
                             const std::string &clientEntityId = "");
+
+/**
+ * @brief Construct a recovery handshake containing only the dedicated destination segment.
+ * @param[in] senderAddr Remote endpoint used to key the local receive Jetty.
+ * @param[out] req Minimal handshake request.
+ * @param[out] recoveryProbeAddr Address of the dedicated recovery destination segment.
+ * @return Status of the call.
+ */
+Status ConstructRecoveryProbeHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req,
+                                         UrmaRemoteAddrPb &recoveryProbeAddr);
 
 /**
  * @brief Finalize the initiator-side connection after receiving a handshake response.

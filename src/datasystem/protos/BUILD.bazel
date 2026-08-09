@@ -129,6 +129,7 @@ proto_library(
         ":meta_transport_proto",
         ":p2p_subscribe_proto",
         ":rpc_option_proto",
+        ":share_memory_proto",
         ":utils_proto",
     ],
 )
@@ -829,6 +830,7 @@ genrule(
         "object_posix.proto",
         "p2p_subscribe.proto",
         "rpc_option.proto",
+        "share_memory.proto",
         "utils.proto",
         "worker_object.proto",
     ],
@@ -864,7 +866,8 @@ cc_library(
     include_prefix = "datasystem/protos",
     deps = [
         ":worker_object_cc_proto", ":meta_transport_cc_proto",
-        ":object_posix_cc_proto", ":p2p_subscribe_cc_proto", ":rpc_option_cc_proto", ":utils_cc_proto",
+        ":object_posix_cc_proto", ":p2p_subscribe_cc_proto", ":rpc_option_cc_proto", ":share_memory_cc_proto",
+        ":utils_cc_proto",
         "@com_github_apache_brpc//:brpc",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
@@ -887,6 +890,7 @@ genrule(
         "object_posix.proto",
         "p2p_subscribe.proto",
         "rpc_option.proto",
+        "share_memory.proto",
         "utils.proto",
         "worker_object.proto",
     ],

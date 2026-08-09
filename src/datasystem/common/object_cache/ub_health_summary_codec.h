@@ -19,7 +19,7 @@ using UbHealthSummaryApplyHook = std::function<void(const UbHealthSummary &)>;
 void EncodeUbHealthSummary(const UbHealthSummary &summary, UbHealthSummaryPb &pb);
 Status DecodeUbHealthSummary(const UbHealthSummaryPb &pb, UbHealthSummary &summary);
 Status ApplyHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp, const HostPort &expectedWorker,
-                                     const std::string &expectedIncarnation, UbHealthSummaryCache &cache,
+                                     UbHealthSummaryCache &cache,
                                      const UbHealthSummaryApplyHook &hook = {});
 }  // namespace datasystem
 
