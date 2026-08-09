@@ -588,6 +588,14 @@ TEST_F(MigrateDataServiceTest, RejectsIncomingMigrationAfterLocalScaleInStarts)
     EXPECT_THAT(directRsp.failed_object_keys(), ElementsAre("late-direct-object"));
 }
 
+TEST_F(MigrateDataServiceTest, ExitIntentDoesNotCloseIncomingMigrationAdmission)
+{
+    localExiting_.store(true);
+
+    DS_ASSERT_OK(impl_->AcquireIncomingMigrationAdmission());
+    impl_->ReleaseIncomingMigrationAdmission();
+}
+
 TEST_F(MigrateDataServiceTest, SocketMigrationHoldsAdmissionUntilRequestReturns)
 {
     MigrateDataReqPb req;

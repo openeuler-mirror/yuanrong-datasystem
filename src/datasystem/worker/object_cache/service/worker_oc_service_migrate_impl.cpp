@@ -169,9 +169,8 @@ Status WorkerOcServiceMigrateImpl::AcquireIncomingMigrationAdmission(bool requir
         RETURN_IF_NOT_OK(ubAdmission_->CheckWriteTarget(local, UbOperationKind::MIGRATION_READ));
     }
     std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
-    const bool localExiting = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed);
-    CHECK_FAIL_RETURN_STATUS(!incomingMigrationAdmissionClosed_ && !localExiting, StatusCode::K_NOT_READY,
-                             "Target Worker is exiting and cannot accept migrated data");
+    CHECK_FAIL_RETURN_STATUS(!incomingMigrationAdmissionClosed_, StatusCode::K_NOT_READY,
+                             "Target Worker has started draining and cannot accept migrated data");
     ++incomingMigrationCount_;
     return Status::OK();
 }

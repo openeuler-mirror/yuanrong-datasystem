@@ -181,7 +181,7 @@ TEST(TopologySnapshotTest, RejectsWrongMigrationEpochIdentityAndParticipantState
     EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
 }
 
-TEST(TopologySnapshotTest, AcceptsScaleInFenceAndRejectsFailureBatch)
+TEST(TopologySnapshotTest, AcceptsScaleInActiveOrPreLeavingTargetAndRejectsInvalidParticipants)
 {
     TopologyState scaleIn;
     scaleIn.version = 12;
@@ -199,6 +199,11 @@ TEST(TopologySnapshotTest, AcceptsScaleInFenceAndRejectsFailureBatch)
     fence.target = scaleIn.members[0].identity;
     EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
     fence.target = scaleIn.members[3].identity;
+    DS_EXPECT_OK(snapshot->ValidateMigrationFence(fence));
+    fence.target.id = std::string(16, 'x');
+    EXPECT_TRUE(snapshot->ValidateMigrationFence(fence).IsError());
+    fence.target = scaleIn.members[3].identity;
+    fence.batchEpoch = 11;
     EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
 
     TopologyState failure;

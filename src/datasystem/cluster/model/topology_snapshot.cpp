@@ -332,7 +332,7 @@ Status TopologySnapshot::ValidateMigrationFence(const TopologyMigrationFence &fe
     const bool scaleOut = type == TopologyChangeType::SCALE_OUT && IsCommittedMemberState(source->state)
                           && target->state == MemberState::JOINING;
     const bool scaleIn = type == TopologyChangeType::SCALE_IN && source->state == MemberState::LEAVING
-                         && target->state == MemberState::ACTIVE
+                         && IsAdmittedScaleInMigrationTargetState(target->state)
                          && !(source->identity == target->identity);
     CHECK_FAIL_RETURN_STATUS(
         scaleOut || scaleIn, K_INVALID,

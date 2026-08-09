@@ -189,7 +189,8 @@ TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailin
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, &placement, nullptr,
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, &placement, &membership,
                               false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
 
     const std::string objectKey = "topology_remove_meta_handoff";

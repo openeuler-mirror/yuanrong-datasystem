@@ -273,7 +273,7 @@ TEST(TopologyTaskMaterializerTest, ReportsFailureTargetStateViolation)
     EXPECT_NE(rc.GetMsg().find("Failure owner change target is not active"), std::string::npos) << rc.GetMsg();
 }
 
-TEST(TopologyTaskMaterializerTest, RejectsScaleInTargetThatHasStartedLeaving)
+TEST(TopologyTaskMaterializerTest, KeepsScaleInTaskWhenTargetBecomesPreLeaving)
 {
     TopologyState state;
     state.version = 6;
@@ -282,6 +282,28 @@ TEST(TopologyTaskMaterializerTest, RejectsScaleInTargetThatHasStartedLeaving)
     state.members = {
         MakeMaterializerMember('a', 1, MemberState::LEAVING, { 10 }),
         MakeMaterializerMember('b', 2, MemberState::PRE_LEAVING, { 50 }),
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    TopologyPlan plan;
+    plan.next = state;
+    plan.ownerChanges.push_back({ state.members[0].identity, state.members[1].identity, { { 0, 20 } } });
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+
+    DS_ASSERT_OK(materializer.BuildExpected(*snapshot, plan, expected));
+    EXPECT_FALSE(expected.tasks.empty());
+}
+
+TEST(TopologyTaskMaterializerTest, RejectsScaleInTaskWhenTargetBecomesLeaving)
+{
+    TopologyState state;
+    state.version = 6;
+    state.clusterHasInit = true;
+    state.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_IN, 6 };
+    state.members = {
+        MakeMaterializerMember('a', 1, MemberState::LEAVING, { 10 }),
+        MakeMaterializerMember('b', 2, MemberState::LEAVING, { 50 }),
     };
     std::shared_ptr<const TopologySnapshot> snapshot;
     DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));

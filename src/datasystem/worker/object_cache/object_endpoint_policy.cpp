@@ -82,7 +82,11 @@ Status ObjectEndpointPolicy::CheckDataPlaneAdmission(const HostPort &address, Da
         || (scaleInSource && (endpoint.topologyState == cluster::MemberState::PRE_LEAVING
                               || endpoint.topologyState == cluster::MemberState::LEAVING));
     const bool sourceRole = role == DataPlaneAdmissionRole::ORDINARY_SOURCE || scaleInSource;
-    const bool allowed = sourceRole ? sourceAllowed : endpoint.topologyState == cluster::MemberState::ACTIVE;
+    const bool incomingTarget = role == DataPlaneAdmissionRole::INCOMING_TARGET;
+    const bool targetAllowed = incomingTarget
+                                   ? cluster::IsAdmittedScaleInMigrationTargetState(endpoint.topologyState)
+                                   : endpoint.topologyState == cluster::MemberState::ACTIVE;
+    const bool allowed = sourceRole ? sourceAllowed : targetAllowed;
     CHECK_FAIL_RETURN_STATUS(allowed, K_NOT_READY,
                              "Worker " + address.ToString() + " is not admitted for the requested data-plane role");
     return Status::OK();

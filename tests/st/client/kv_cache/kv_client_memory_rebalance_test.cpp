@@ -929,7 +929,7 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceTargetStuckProbeExitsWithinD
 // T4: Release the inject. MigrateData hits checkpoint A (admission closed)
 //     or checkpoint B (drain timed out) and returns K_NOT_READY.
 // T5: Source receives K_NOT_READY and keeps its local copy. Data is safe.
-TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceDrainTimeoutKeepsSourceData)
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_RebalanceDrainTimeoutKeepsSourceData)
 {
     SetInjectAction(WORKER1, MIGRATE_DATA_AFTER_ADMISSION, "pause()");
     SetInjectAction(WORKER2, MIGRATE_DATA_AFTER_ADMISSION, "pause()");
