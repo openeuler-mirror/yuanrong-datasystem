@@ -102,6 +102,36 @@ TEST(CoordinatorLeaderRouterTest, RetriesFollowerRedirectWithinOneLogicalCall)
     EXPECT_EQ(router.GetLeaderCache().address.ToString(), "127.0.0.1:30002");
 }
 
+TEST(CoordinatorLeaderRouterTest, PreservesFollowerRouteStatusWhenRedirectLeaderAndRemainingCandidatesAreDead)
+{
+    auto now = std::chrono::steady_clock::time_point{};
+    auto discovery =
+        std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30003" });
+    CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001"), Address("127.0.0.1:30003") },
+                                   [&now] { return now; },
+                                   [&now](std::chrono::milliseconds) { now += std::chrono::milliseconds(3'000); },
+                                   std::chrono::milliseconds(3'000));
+    std::vector<std::string> attempted;
+
+    const auto status = router.Execute([&attempted](const HostPort &address, int32_t,
+                                                    coordinator::ResponseHeader &header, bool &hasHeader) {
+        attempted.emplace_back(address.ToString());
+        if (address.ToString() == "127.0.0.1:30001") {
+            hasHeader = true;
+            header = LeaderHeader(7, coordinator::ResponseHeader::FOLLOWER_SERVING);
+            header.set_is_leader(false);
+            header.set_leader_address("127.0.0.1:30002");
+            return Status::OK();
+        }
+        hasHeader = false;
+        return Status(K_RPC_PEER_DEAD, "injected dead Coordinator");
+    });
+
+    EXPECT_EQ(status.GetCode(), K_NOT_READY);
+    EXPECT_EQ(attempted,
+              (std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003" }));
+}
+
 TEST(CoordinatorLeaderRouterTest, RecoveringLeaderRequiresRecoveryControlRequest)
 {
     auto now = std::chrono::steady_clock::time_point{};

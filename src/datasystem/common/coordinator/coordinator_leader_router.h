@@ -116,7 +116,8 @@ private:
     CandidateRoundResult TryCandidates(const AttemptFn &attempt, bool recoveryControl,
                                        std::chrono::steady_clock::time_point deadline,
                                        const CoordinatorLeaderIdentity &cached, const std::vector<HostPort> &candidates,
-                                       std::unordered_set<std::string> &attempted, Status &lastStatus);
+                                       std::unordered_set<std::string> &attempted, bool &hasCoordinatorResponse,
+                                       Status &lastStatus);
     bool ObserveHeader(const HostPort &address, const coordinator::ResponseHeader &header);
     static void NotifyLeaderChange(const CoordinatorLeaderIdentity &identity,
                                    const std::vector<std::shared_ptr<SubscriptionState>> &subscriptions);

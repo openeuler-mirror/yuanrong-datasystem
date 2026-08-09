@@ -78,11 +78,12 @@ Status CoordinatorLeaderRouter::Execute(const AttemptFn &attempt, bool recoveryC
     LoadCandidateSnapshot(cached, candidates);
     std::unordered_set<std::string> attempted;
     Status lastStatus(K_NOT_READY, "no serving Coordinator leader");
+    bool hasCoordinatorResponse = false;
     bool refreshImmediately = true;
     size_t retryCount = 0;
     while (clock_() < deadline) {
-        const auto result =
-            TryCandidates(attempt, recoveryControl, deadline, cached, candidates, attempted, lastStatus);
+        const auto result = TryCandidates(attempt, recoveryControl, deadline, cached, candidates, attempted,
+                                          hasCoordinatorResponse, lastStatus);
         if (result == CandidateRoundResult::SUCCEEDED) {
             return Status::OK();
         }
@@ -141,7 +142,7 @@ bool CoordinatorLeaderRouter::WaitBeforeRefresh(size_t retryCount, std::chrono::
 CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandidates(
     const AttemptFn &attempt, bool recoveryControl, std::chrono::steady_clock::time_point deadline,
     const CoordinatorLeaderIdentity &cached, const std::vector<HostPort> &candidates,
-    std::unordered_set<std::string> &attempted, Status &lastStatus)
+    std::unordered_set<std::string> &attempted, bool &hasCoordinatorResponse, Status &lastStatus)
 {
     std::vector<HostPort> batch;
     if (cached.hasLeader) {
@@ -163,7 +164,8 @@ CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandid
         coordinator::ResponseHeader header;
         bool hasHeader = false;
         const auto status = attempt(address, remaining, header, hasHeader);
-        if (hasHeader && IsUsableHeader(header)) {
+        const bool coordinatorResponded = hasHeader && IsUsableHeader(header);
+        if (coordinatorResponded) {
             const bool currentTerm = ObserveHeader(address, header);
             const bool acceptsRequest =
                 header.is_leader()
@@ -178,7 +180,10 @@ CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandid
                 return CandidateRoundResult::TERMINAL;
             }
         }
-        lastStatus = status.IsOk() ? Status(K_NOT_READY, "Coordinator is not serving business RPCs") : status;
+        if (coordinatorResponded || !hasCoordinatorResponse) {
+            lastStatus = status.IsOk() ? Status(K_NOT_READY, "Coordinator is not serving business RPCs") : status;
+        }
+        hasCoordinatorResponse = hasCoordinatorResponse || coordinatorResponded;
     }
     return CandidateRoundResult::EXHAUSTED;
 }
