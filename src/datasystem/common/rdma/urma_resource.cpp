@@ -757,7 +757,7 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
         RETURN_IF_NOT_OK(jfc_->Rearm());
     }
 
-    constexpr uint32_t threadCount = 1;
+    constexpr uint32_t threadCount = 4;
     deleteJettyThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJfs");
     if (SupportPipelineRH2D()) {
         RETURN_IF_NOT_OK(InitPipelineH2DEnv());
