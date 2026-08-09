@@ -3548,6 +3548,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(NotifyRemoteGe
     std::vector<std::vector<std::string>> tempSuccessIds(context.groups.size());
     std::vector<std::vector<ReadKey>> tempNeedRetryIds(context.groups.size());
     std::vector<std::unordered_set<std::string>> tempFailedIds(context.groups.size());
+    std::vector<std::optional<ProviderUbFailureDetailPb>> tempUbFailureDetails(context.groups.size());
     size_t index = 0;
     auto traceContext = Trace::Instance().GetContext();
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
@@ -3557,33 +3558,29 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(NotifyRemoteGe
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
         auto func = [this, address, &infoList, &fakeRequest, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
-                     &tempFailedMetas, index, traceContext, remainingUs, dispatchTime] {
+                     &tempFailedMetas, &tempUbFailureDetails, index, traceContext, remainingUs, dispatchTime] {
             RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
             TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
             Status lastRc;
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;
-                auto rc = BatchGetObjectFromRemoteOnLock(address, infos, fakeRequest, tempSuccessIds[index],
-                                                         tempNeedRetryIds[index], tempFailedIds[index],
-                                                         tempFailedMetas[index]);
-                if (rc.IsError()) {
-                    LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << rc.ToString();
-                    lastRc = std::move(rc);
-                }
+                auto rc = BatchGetObjectFromRemoteOnLock(
+                    address, infos, fakeRequest,
+                    { tempSuccessIds[index], tempNeedRetryIds[index], tempFailedIds[index], tempFailedMetas[index],
+                      &tempUbFailureDetails[index] });
+                RecordBatchGetObjectError(std::move(rc), lastRc);
             }
             return lastRc;
         };
         if (!ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc) || index + 1 == context.groups.size()) {
             auto rc = func();
-            if (rc.IsError()) {
-                LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << rc.ToString();
-                lastRc = std::move(rc);
-            }
+            RecordBatchGetObjectError(std::move(rc), lastRc);
         } else {
             futures.emplace_back(workerBatchRemoteGetThreadPool_->Submit(std::move(func)));
         }
     }
     CollectRemoteGetFutureResults(futures, lastRc);
+    CopyFirstNotifyRemoteGetUbFailure(tempUbFailureDetails, context.response);
     AttachNotifyRemoteGetUbFailure(epochsBefore, context.response);
     CleanupFailedRemoteGetMetas(tempFailedMetas, context.failedKeyVersions);
     PostProcessRemoteGetInNotificationImpl(
@@ -3591,6 +3588,25 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(NotifyRemoteGe
         context.pendingObjects, lastRc, context.response, context.queryMetas, context.migratedBytes,
         context.unconfirmedVersions, context.failedConfirmationOwners);
     return lastRc;
+}
+
+void WorkerOcServiceGetImpl::RecordBatchGetObjectError(Status status, Status &lastStatus)
+{
+    if (status.IsError()) {
+        LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << status.ToString();
+        lastStatus = std::move(status);
+    }
+}
+
+void WorkerOcServiceGetImpl::CopyFirstNotifyRemoteGetUbFailure(
+    const std::vector<std::optional<ProviderUbFailureDetailPb>> &failureDetails, NotifyRemoteGetRspPb &rsp)
+{
+    for (const auto &detail : failureDetails) {
+        if (detail.has_value()) {
+            rsp.mutable_provider_ub_failure_detail()->CopyFrom(*detail);
+            return;
+        }
+    }
 }
 
 std::unordered_map<std::string, uint64_t> WorkerOcServiceGetImpl::CaptureRemoteUbEpochs(
@@ -3624,7 +3640,7 @@ void WorkerOcServiceGetImpl::CollectRemoteGetFutureResults(std::vector<std::futu
 void WorkerOcServiceGetImpl::AttachNotifyRemoteGetUbFailure(
     const std::unordered_map<std::string, uint64_t> &epochsBefore, NotifyRemoteGetRspPb &rsp) const
 {
-    if (ubAdmission_ == nullptr) {
+    if (rsp.has_provider_ub_failure_detail() || ubAdmission_ == nullptr) {
         return;
     }
     for (const auto &[address, epochBefore] : epochsBefore) {

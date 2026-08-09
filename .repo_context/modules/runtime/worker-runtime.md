@@ -151,7 +151,7 @@
     provider Worker identity, failed write endpoint, and available raw provider/CQE status. Consumers only apply hard
     isolation when the detail identifies the actual responding Worker; RPC deadline/unavailable outcomes remain
     `SUSPECT` and do not close read-source admission. Batch and oversized Get paths preserve the matching structured
-    detail when all relevant objects fail.
+    detail, including a failed object in an otherwise partially successful NotifyRemoteGet migration batch.
   - Worker heartbeat and the UB-health membership sidecar publish exactly one self record. The service overwrites both
     Worker identity and incarnation at the publication boundary, so peer observations cannot leak into a self summary.
     Consumers reject stale epochs, retired incarnations, and summaries whose incarnation does not match the registered
@@ -159,8 +159,10 @@
     can be readmitted. Lease expiry alone removes only the global quarantine and retains process-local evidence.
   - Multi-Worker URMA startup places the local migration sender in `PROBING`; a single Worker skips this peer-dependent
     gate. The long-lived URMA warmup controller serializes dedicated one-byte recovery writes outside admission locks.
-    A successful CQE, current `ACTIVE` topology, unchanged probe epoch, and non-denying Global Fact are all required
-    before FastMigration admission reopens.
+    A successful CQE, current `ACTIVE` topology, unchanged probe epoch, and non-denying peer Global Fact are all required
+    before FastMigration admission reopens. Trusted provider-local ERROR 4 remains a Local Observation for the Worker
+    itself; the Worker's own lease-published summary is treated as an echo rather than an external recovery fence, so a
+    successful self probe can publish the next writable summary instead of deadlocking behind its previous deny fact.
   - object-cache worker-to-master RPC warmup also starts before `ReadinessProbe()`: a best-effort asynchronous startup
     task reads immutable topology snapshots until the ready member set is stable or the startup warmup window expires;
     later Snapshot publication callbacks enqueue bounded warmup for newly ready members
@@ -181,7 +183,10 @@
     pending signals coalesce on the existing single-thread ensure loop.
   - memory-rebalance scheduling cross-checks ResourceManager candidates against one current immutable topology
     Snapshot and assigns only `ACTIVE` sources and targets. Before the first Snapshot is available, it preserves the
-    legacy resource-readiness fallback instead of blocking scheduling.
+    legacy resource-readiness fallback instead of blocking scheduling. Failed workers report structured failure
+    attribution: source/no-candidate failures cool the source, target failures cool the target, control-plane failures
+    cool neither, and unknown/mixed-version reports cool only the attempted source-target pair. Cooldowns expire only
+    by their steady-clock TTL and are not erased by the affected Worker's next resource report.
   - NodeSelector passes the exact master address that returned each rebalance task to RebalanceExecutor. Before every
     bounded migration batch, the executor expires the task when that assigned master is `FAILED`, locally unreachable,
     or absent from the current topology; a successor master reconstructs scheduling from later resource reports rather
@@ -190,7 +195,8 @@
     topology ScaleIn sources may remain `ACTIVE/PRE_LEAVING/LEAVING`, while `JOINING/PRE_LEAVING/LEAVING/FAILED`
     members cannot receive new migration. Rebalance rechecks before candidate selection and every bounded batch.
     FastMigration read failures preserve target-local raw CQE evidence; NotifyRemoteGet write failures preserve the
-    source Provider operator, so source failure stops retries instead of being misattributed to a target. Recovery
+    source Provider operator. Every migration batch rechecks both source and target admission, so a source failure
+    stops following batches instead of being misattributed to a target. Recovery
     probes use a manager-owned, independently registered 4 KiB source segment; Worker startup does not initialize the
     client `UB_TRANSPORT` allocation pool solely for the one-byte probe.
   - Published full topology snapshots drive UB-state lifecycle reconciliation. Explicitly removed Worker addresses

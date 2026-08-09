@@ -33,8 +33,7 @@ Status PeerUbAdmission::CheckWriteTarget(const HostPort &peer, UbOperationKind o
 {
     (void)op;
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    auto global = globalSummaries_.find(peer);
-    if (global != globalSummaries_.end() && !global->second.writable) {
+    if (!IsGlobalWritableLocked(peer)) {
         INJECT_POINT_NO_RETURN("PeerUbAdmission.CheckWriteTarget.blocked");
         return BuildUnavailableStatus(peer, StatusCode::K_URMA_WORKER_UNAVAILABLE);
     }
@@ -49,8 +48,7 @@ Status PeerUbAdmission::CheckWriteTarget(const HostPort &peer, UbOperationKind o
 Status PeerUbAdmission::CheckReadSource(const HostPort &peer) const
 {
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    auto global = globalSummaries_.find(peer);
-    if (global != globalSummaries_.end() && !global->second.writable) {
+    if (!IsGlobalWritableLocked(peer)) {
         return BuildUnavailableStatus(peer, StatusCode::K_URMA_DATA_WORKER_UNAVAILABLE);
     }
     auto it = states_.find(peer);
@@ -62,33 +60,36 @@ Status PeerUbAdmission::CheckReadSource(const HostPort &peer) const
 
 void PeerUbAdmission::SetSelfWorker(const HostPort &self)
 {
-    // Write-once during construction, read-only afterwards: no lock is required.
+    // Write-once during construction, read-only afterwards. The identity distinguishes the
+    // process's local observation from the lease echo of its previously published summary.
     self_ = self;
 }
 
 void PeerUbAdmission::ReportOutcome(const UbOpOutcome &outcome)
 {
-    // self_ is write-once (set during construction), so this check does not need the admission lock.
-    if (!self_.Empty() && outcome.peer == self_) {
-        INJECT_POINT_NO_RETURN("PeerUbAdmission.ReportOutcome.self_skipped");
-        return;
-    }
     auto failureClass = classifier_.Classify(outcome);
     if (failureClass == UbFailureClass::SUCCESS || failureClass == UbFailureClass::LOCAL_RESOURCE_PRESSURE
         || failureClass == UbFailureClass::NON_UB_FAILURE) {
         return;
     }
 
+    // issue #958: CONNECT_OR_PATH_FAILURE (e.g. post failure ret=4096) cannot tell a local send
+    // fault from a peer receive fault, so hard-isolating on first sight over-blocks. Treat it as
+    // SUSPECT (record-only, no blocking) and let the recovery probe decide the verdict.
     const auto nextState =
-        failureClass == UbFailureClass::TIMEOUT_SUSPECT ? UbAdmissionState::SUSPECT : UbAdmissionState::UNAVAILABLE;
+        (failureClass == UbFailureClass::TIMEOUT_SUSPECT
+         || failureClass == UbFailureClass::CONNECT_OR_PATH_FAILURE)
+            ? UbAdmissionState::SUSPECT
+            : UbAdmissionState::UNAVAILABLE;
     {
         std::lock_guard<std::shared_mutex> lock(mutex_);
         auto &state = states_[outcome.peer];
-        // A timeout is lower-confidence evidence than an explicit provider/CQE
-        // failure. Once hard evidence (or its recovery probe) has quarantined a
-        // peer, a late timeout from an older in-flight request must not reopen
-        // the SUSPECT -> UNAVAILABLE oscillation or invalidate the probe token.
-        if (failureClass == UbFailureClass::TIMEOUT_SUSPECT
+        // A timeout or path failure is lower-confidence evidence than an explicit provider/CQE
+        // failure. Once hard evidence (or its recovery probe) has quarantined a peer, a late
+        // soft report from an older in-flight request must not reopen the SUSPECT -> UNAVAILABLE
+        // oscillation or invalidate the probe token.
+        if ((failureClass == UbFailureClass::TIMEOUT_SUSPECT
+             || failureClass == UbFailureClass::CONNECT_OR_PATH_FAILURE)
             && (state.state == UbAdmissionState::UNAVAILABLE || state.state == UbAdmissionState::PROBING)) {
             return;
         }
@@ -410,6 +411,12 @@ uint64_t PeerUbAdmission::ProbeBackoffMs(uint32_t level)
 
 bool PeerUbAdmission::IsGlobalWritableLocked(const HostPort &peer) const
 {
+    // The lease contains this process's own last published summary. Treating that echo as an
+    // external recovery fence creates a cycle: a local failure publishes writable=false, then
+    // the same stale fact prevents the successful self probe from publishing writable=true.
+    if (!self_.Empty() && peer == self_) {
+        return true;
+    }
     auto global = globalSummaries_.find(peer);
     return global == globalSummaries_.end() || global->second.writable;
 }

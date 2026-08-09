@@ -105,18 +105,18 @@ void RebalanceExecutor::Submit(const master::RebalanceTaskPb &task, std::string 
                 Execute(task, assignedMasterAddress);
             } catch (const std::exception &e) {
                 LOG(ERROR) << "Execute rebalance task " << task.task_id() << " failed by exception: " << e.what();
-                ReportResult(task, master::REBALANCE_TASK_FAILED, 0, 0, 0, e.what());
+                ReportFailure(task, master::REBALANCE_FAILURE_SOURCE, e.what());
                 MarkTaskDone();
             } catch (...) {
                 LOG(ERROR) << "Execute rebalance task " << task.task_id() << " failed by unknown exception";
-                ReportResult(task, master::REBALANCE_TASK_FAILED, 0, 0, 0, "unknown exception");
+                ReportFailure(task, master::REBALANCE_FAILURE_SOURCE, "unknown exception");
                 MarkTaskDone();
             }
         });
     } catch (const std::exception &e) {
         LOG(ERROR) << "Submit rebalance task " << task.task_id() << " failed: " << e.what();
         MarkTaskDone();
-        ReportResult(task, master::REBALANCE_TASK_FAILED, 0, 0, 0, e.what());
+        ReportFailure(task, master::REBALANCE_FAILURE_SOURCE, e.what());
     }
 }
 
@@ -129,7 +129,7 @@ void RebalanceExecutor::SubmitBusyResult(const master::RebalanceTaskPb &task, co
         executorPool_.Execute([this, task, traceId]() {
             SetRequestContext(nullptr);
             ScopedRequestContext ctx(traceId);
-            ReportResult(task, master::REBALANCE_TASK_FAILED, 0, 0, 0, "source worker is busy");
+            ReportFailure(task, master::REBALANCE_FAILURE_SOURCE, "source worker is busy");
         });
     } catch (const std::exception &e) {
         LOG(ERROR) << "Submit busy rebalance result " << task.task_id() << " failed: " << e.what();
@@ -139,17 +139,31 @@ void RebalanceExecutor::SubmitBusyResult(const master::RebalanceTaskPb &task, co
 }
 
 Status RebalanceExecutor::ValidateTask(const master::RebalanceTaskPb &task, HostPort &targetAddr,
-                                       uint64_t localDeadlineMs) const
+                                       uint64_t localDeadlineMs, master::RebalanceFailureSidePb &failureSide) const
 {
-    CHECK_FAIL_RETURN_STATUS(task.source_worker() == localAddress_.ToString(), K_INVALID,
-                             FormatString("Task source %s is not local worker %s", task.source_worker(),
-                                          localAddress_.ToString()));
-    CHECK_FAIL_RETURN_STATUS(!task.target_worker().empty(), K_INVALID, "Rebalance target worker is empty");
-    CHECK_FAIL_RETURN_STATUS(task.max_bytes() > 0, K_INVALID, "Rebalance max bytes is zero");
-    CHECK_FAIL_RETURN_STATUS(!IsExpired(localDeadlineMs), K_RUNTIME_ERROR, "Rebalance task is expired");
-    RETURN_IF_NOT_OK(targetAddr.ParseString(task.target_worker()));
-    CHECK_FAIL_RETURN_STATUS(targetAddr != localAddress_, K_INVALID,
-                             FormatString("Rebalance target %s can not be local worker", task.target_worker()));
+    if (task.source_worker() != localAddress_.ToString()) {
+        failureSide = master::REBALANCE_FAILURE_SOURCE;
+        RETURN_STATUS(K_INVALID, FormatString("Task source %s is not local worker %s", task.source_worker(),
+                                              localAddress_.ToString()));
+    }
+    if (task.target_worker().empty()) {
+        failureSide = master::REBALANCE_FAILURE_TARGET;
+        RETURN_STATUS(K_INVALID, "Rebalance target worker is empty");
+    }
+    if (task.max_bytes() == 0) {
+        failureSide = master::REBALANCE_FAILURE_SOURCE;
+        RETURN_STATUS(K_INVALID, "Rebalance max bytes is zero");
+    }
+    if (IsExpired(localDeadlineMs)) {
+        failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
+        RETURN_STATUS(K_RUNTIME_ERROR, "Rebalance task is expired");
+    }
+    auto rc = targetAddr.ParseString(task.target_worker());
+    if (rc.IsError() || targetAddr == localAddress_) {
+        failureSide = master::REBALANCE_FAILURE_TARGET;
+        return rc.IsError() ? rc : Status(K_INVALID, "Rebalance target can not be local worker");
+    }
+    failureSide = master::REBALANCE_FAILURE_TARGET;
     return CheckTargetAdmission(targetAddr);
 }
 
@@ -257,6 +271,7 @@ bool RebalanceExecutor::IsAssignedMasterUnavailable(const master::RebalanceTaskP
         return false;
     }
     stats.status = master::REBALANCE_TASK_EXPIRED;
+    stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
     stats.failedReason = FormatString("Assigned cluster master %s is unavailable: %s", stats.assignedMasterAddress,
                                       cause);
     LOG(WARNING) << FormatString(
@@ -270,9 +285,18 @@ bool RebalanceExecutor::IsAssignedMasterUnavailable(const master::RebalanceTaskP
 Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
                                        ExecutionStats &stats, object_cache::DataMigrator &migrator)
 {
-    RETURN_IF_NOT_OK(CheckTargetAdmission(targetAddr));
+    auto rc = CheckTargetAdmission(targetAddr);
+    if (rc.IsError()) {
+        stats.failureSide = master::REBALANCE_FAILURE_TARGET;
+        return rc;
+    }
     std::unordered_map<std::string, uint64_t> candidates;
-    RETURN_IF_NOT_OK(SelectCandidates(task.max_bytes() - stats.migratedBytes, candidates));
+    rc = SelectCandidates(task.max_bytes() - stats.migratedBytes, candidates);
+    if (rc.IsError()) {
+        stats.failureSide = rc.GetCode() == K_NOT_FOUND ? master::REBALANCE_FAILURE_NO_CANDIDATE
+                                                       : master::REBALANCE_FAILURE_SOURCE;
+        return rc;
+    }
     // SelectCandidates marks selected objects as rebalancing; the marks must be released after this batch.
     Raii unmarkRebalancingObjects([this, &candidates]() {
         if (evictionManager_ == nullptr) {
@@ -297,14 +321,17 @@ Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, cons
     stats.migratedObjects += result.successIds.size();
     stats.failedObjects += result.failedIds.size() + result.skipIds.size();
     if (result.status.IsError()) {
+        stats.failureSide = ClassifyMigrationFailure(result, targetAddr);
         stats.failedReason = result.status.ToString();
         return result.status;
     }
     if (!result.failedIds.empty() || !result.skipIds.empty()) {
+        stats.failureSide = ClassifyMigrationFailure(result, targetAddr);
         stats.failedReason = "some objects failed or skipped";
         RETURN_STATUS(K_RUNTIME_ERROR, stats.failedReason);
     }
     if (batchMigratedBytes == 0) {
+        stats.failureSide = master::REBALANCE_FAILURE_NO_CANDIDATE;
         stats.failedReason = "No object migrated in this batch";
         RETURN_STATUS(K_RUNTIME_ERROR, stats.failedReason);
     }
@@ -320,6 +347,7 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
     while (stats.migratedBytes < task.max_bytes()) {
         if (IsExpired(localDeadlineMs)) {
             stats.status = master::REBALANCE_TASK_EXPIRED;
+            stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
             stats.failedReason = "Rebalance task is expired";
             break;
         }
@@ -329,6 +357,7 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
         if (migrator == nullptr) {
             if (metadataRoute_ == nullptr || membership_ == nullptr || endpointPolicy_ == nullptr
                 || exitRequested_ == nullptr) {
+                stats.failureSide = master::REBALANCE_FAILURE_SOURCE;
                 stats.failedReason = "Rebalance topology dependencies are not initialized";
                 break;
             }
@@ -357,6 +386,7 @@ void RebalanceExecutor::Execute(master::RebalanceTaskPb task, std::string assign
     Timer timer;
     do {
         if (stats.assignedMasterAddress.empty()) {
+            stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
             stats.failedReason = "Assigned cluster master address is empty";
             break;
         }
@@ -364,7 +394,7 @@ void RebalanceExecutor::Execute(master::RebalanceTaskPb task, std::string assign
                                   stats.assignedMasterAddress);
         HostPort targetAddr;
         auto localDeadlineMs = BuildLocalDeadlineMs(task);
-        auto rc = ValidateTask(task, targetAddr, localDeadlineMs);
+        auto rc = ValidateTask(task, targetAddr, localDeadlineMs, stats.failureSide);
         if (rc.IsError()) {
             stats.failedReason = rc.ToString();
             if (IsExpired(localDeadlineMs)) {
@@ -382,6 +412,7 @@ void RebalanceExecutor::Execute(master::RebalanceTaskPb task, std::string assign
         if (stats.status != master::REBALANCE_TASK_EXPIRED && stats.failedObjects == 0
             && (targetReached || partialCompleted)) {
             stats.status = master::REBALANCE_TASK_SUCCEEDED;
+            stats.failureSide = master::REBALANCE_FAILURE_UNKNOWN;
             stats.failedReason.clear();
         }
     } while (false);
@@ -394,8 +425,7 @@ void RebalanceExecutor::Execute(master::RebalanceTaskPb task, std::string assign
         static_cast<unsigned long long>(stats.failedObjects),
             static_cast<unsigned long long>(timer.ElapsedMilliSecond()),
         stats.failedReason);
-    ReportResult(task, stats.status, stats.migratedBytes, stats.migratedObjects, stats.failedObjects,
-                 stats.failedReason);
+    ReportResult(task, stats);
     MarkTaskDone();
 }
 
@@ -419,26 +449,62 @@ Status RebalanceExecutor::GetWorkerMasterApi(std::shared_ptr<WorkerMasterOCApi> 
     return apiManager_->GetWorkerMasterApi(RESOURCE_MONITOR_MASTER, workerMasterApi);
 }
 
-void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, master::RebalanceTaskStatusPb status,
-                                     uint64_t migratedBytes, uint64_t migratedObjects, uint64_t failedObjects,
-                                     const std::string &failedReason)
+master::RebalanceFailureSidePb RebalanceExecutor::ClassifyMigrationFailure(const MigrateResult &result,
+                                                                           const HostPort &targetAddr) const
 {
-#ifdef WITH_TESTS
-    if (reportHook_ != nullptr) {
-        reportHook_(task, status, migratedBytes, migratedObjects, failedObjects, failedReason);
-        return;
+    if (result.ubFailureDetail.has_value()) {
+        HostPort operatorWorker;
+        if (operatorWorker.ParseString(result.ubFailureDetail->operator_worker()).IsOk()) {
+            if (operatorWorker == localAddress_) {
+                return master::REBALANCE_FAILURE_SOURCE;
+            }
+            if (operatorWorker == targetAddr) {
+                return master::REBALANCE_FAILURE_TARGET;
+            }
+        }
     }
-#endif
+    if (ubAdmission_ != nullptr) {
+        if (ubAdmission_->CheckWriteTarget(localAddress_, UbOperationKind::MIGRATION_WRITE).IsError()) {
+            return master::REBALANCE_FAILURE_SOURCE;
+        }
+        if (ubAdmission_->CheckWriteTarget(targetAddr, UbOperationKind::MIGRATION_WRITE).IsError()) {
+            return master::REBALANCE_FAILURE_TARGET;
+        }
+    }
+    if (result.status.GetCode() == K_OUT_OF_MEMORY || result.status.GetCode() == K_NO_SPACE) {
+        return master::REBALANCE_FAILURE_TARGET;
+    }
+    return master::REBALANCE_FAILURE_UNKNOWN;
+}
+
+void RebalanceExecutor::ReportFailure(const master::RebalanceTaskPb &task,
+                                      master::RebalanceFailureSidePb failureSide, const std::string &reason)
+{
+    ExecutionStats stats;
+    stats.failureSide = failureSide;
+    stats.failedReason = reason;
+    ReportResult(task, stats);
+}
+
+void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats)
+{
     master::ReportRebalanceResultReqPb req;
     master::ReportRebalanceResultRspPb rsp;
     req.set_task_id(task.task_id());
     req.set_source_worker(localAddress_.ToString());
     req.set_target_worker(task.target_worker());
-    req.set_status(status);
-    req.set_migrated_bytes(migratedBytes);
-    req.set_migrated_objects(migratedObjects);
-    req.set_failed_objects(failedObjects);
-    req.set_failed_reason(failedReason);
+    req.set_status(stats.status);
+    req.set_migrated_bytes(stats.migratedBytes);
+    req.set_migrated_objects(stats.migratedObjects);
+    req.set_failed_objects(stats.failedObjects);
+    req.set_failed_reason(stats.failedReason);
+    req.set_failure_side(stats.failureSide);
+#ifdef WITH_TESTS
+    if (reportHook_ != nullptr) {
+        reportHook_(req);
+        return;
+    }
+#endif
 
     for (int i = 0; i < REPORT_RESULT_RETRY_TIMES; ++i) {
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi;

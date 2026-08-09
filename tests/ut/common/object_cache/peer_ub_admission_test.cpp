@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "datasystem/common/object_cache/peer_ub_admission.h"
+#include "datasystem/common/util/timer.h"
 
 namespace datasystem {
 namespace {
@@ -143,6 +144,37 @@ TEST(PeerUbAdmissionTest, LegacyUrmaErrorWithoutRawEvidenceDoesNotQuarantine)
     EXPECT_FALSE(admission.GetState(PEER).has_value());
 }
 
+// Issue #958: CONNECT_OR_PATH_FAILURE (e.g. a post failure ret=4096) must be treated as SUSPECT,
+// not hard UNAVAILABLE -- the code value cannot tell a local send fault from a peer receive
+// fault, so hard-isolating on first sight over-blocks. SUSPECT records the failure without
+// blocking any read or write and leaves the verdict to the recovery probe.
+TEST(PeerUbAdmissionTest, ConnectOrPathFailureIsSuspectAndDoesNotHardBlock)
+{
+    PeerUbAdmission admission;
+    UbOpOutcome outcome(PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                        Status(K_URMA_ERROR, "post jetty send wr failed"));
+    outcome.providerStatus = 4096;
+
+    admission.ReportOutcome(outcome);
+
+    EXPECT_TRUE(admission.CheckReadSource(PEER).IsOk());
+    EXPECT_TRUE(admission.CheckWriteTarget(PEER, UbOperationKind::MIGRATION_WRITE).IsOk());
+    auto state = admission.GetState(PEER);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, UbAdmissionState::SUSPECT);
+    EXPECT_EQ(state->lastFailureClass, UbFailureClass::CONNECT_OR_PATH_FAILURE);
+
+    // The recovery probe decides the verdict: success recovers to AVAILABLE.
+    const uint64_t probeNow = GetSteadyClockTimeStampMs() + 1'000;
+    auto token = admission.TryBeginProbe(PEER, probeNow);
+    ASSERT_TRUE(token.has_value());
+    ASSERT_TRUE(admission.CompleteProbe(*token, Status::OK(), probeNow, false));
+    EXPECT_TRUE(admission.CheckReadSource(PEER).IsOk());
+    auto recovered = admission.GetState(PEER);
+    ASSERT_TRUE(recovered.has_value());
+    EXPECT_EQ(recovered->state, UbAdmissionState::AVAILABLE);
+}
+
 TEST(PeerUbAdmissionTest, ResourcePressureDoesNotQuarantine)
 {
     PeerUbAdmission admission;
@@ -176,20 +208,27 @@ TEST(PeerUbAdmissionTest, LeaseSyncSelfSummaryDoesNotInvalidateActiveProbe)
     PeerUbAdmission admission;
     const HostPort self("127.0.0.1", 31502);
     admission.SetSelfWorker(self);
-    admission.InitializeProbing(self, 10);
-    auto probe = admission.TryBeginProbe(self, 10);
-    ASSERT_TRUE(probe.has_value());
+
+    UbOpOutcome localFailure(self, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                             Status(K_URMA_ERROR, "self provider failed"));
+    localFailure.cqeStatus = 4;
+    admission.ReportOutcome(localFailure);
+    EXPECT_EQ(admission.CheckWriteTarget(self, UbOperationKind::MIGRATION_WRITE).GetCode(),
+              K_URMA_WORKER_UNAVAILABLE);
 
     auto selfSummary = admission.BuildSelfHealthSummary(self);
     selfSummary.incarnation = "self-incarnation";
     ASSERT_FALSE(selfSummary.writable);
     admission.ReplaceGlobalSummaries({ selfSummary });
 
-    const auto state = admission.GetState(self);
-    ASSERT_TRUE(state.has_value());
-    EXPECT_EQ(state->state, UbAdmissionState::PROBING);
-    EXPECT_EQ(state->epoch, probe->epoch);
-    EXPECT_TRUE(admission.CompleteProbe(*probe, Status::OK(), 11, false));
+    auto probe = admission.TryBeginProbe(self, std::numeric_limits<uint64_t>::max());
+    ASSERT_TRUE(probe.has_value());
+    EXPECT_TRUE(admission.CompleteProbe(*probe, Status::OK(), 11, true));
+    const auto recovered = admission.GetState(self);
+    ASSERT_TRUE(recovered.has_value());
+    EXPECT_EQ(recovered->state, UbAdmissionState::AVAILABLE);
+    EXPECT_TRUE(admission.BuildSelfHealthSummary(self).writable);
+    EXPECT_TRUE(admission.CheckWriteTarget(self, UbOperationKind::MIGRATION_WRITE).IsOk());
 }
 
 TEST(PeerUbAdmissionTest, GlobalSummaryUsesEpochAndIncarnationFencingAndExpiresIndependently)

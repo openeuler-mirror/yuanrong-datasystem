@@ -16,7 +16,9 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <unordered_map>
+#include <vector>
 
 #include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
@@ -492,6 +494,41 @@ TEST(WorkerOcServiceGetUbAdmissionTest, NotifyRemoteGetPropagatesNewSourceProvid
     EXPECT_EQ(rsp.provider_ub_failure_detail().operator_worker(), DATA_WORKER.ToString());
     EXPECT_EQ(rsp.provider_ub_failure_detail().provider_status(), 4);
     EXPECT_EQ(rsp.provider_ub_failure_detail().cqe_status(), 4);
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, NotifyRemoteGetPreservesDirectProviderError4)
+{
+    auto admission = std::make_shared<PeerUbAdmission>();
+    WorkerRequestManager requestManager;
+    auto param = BuildGetParam(requestManager, std::make_shared<ObjectTable>());
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, LOCAL_WORKER, nullptr, admission);
+    UbOpOutcome failure(DATA_WORKER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                        Status(K_URMA_ERROR, "inferred provider failure"));
+    failure.cqeStatus = 4;
+    admission->ReportOutcome(failure);
+
+    ProviderUbFailureDetailPb directDetail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "direct provider failure"), LOCAL_WORKER.ToString(),
+                                DATA_WORKER.ToString(), std::nullopt, 4, directDetail);
+    std::vector<std::optional<ProviderUbFailureDetailPb>> failureDetails{ std::nullopt, directDetail };
+    NotifyRemoteGetRspPb rsp;
+    getImpl.CopyFirstNotifyRemoteGetUbFailure(failureDetails, rsp);
+    getImpl.AttachNotifyRemoteGetUbFailure({ { DATA_WORKER.ToString(), 0 } }, rsp);
+
+    ASSERT_TRUE(rsp.has_provider_ub_failure_detail());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().message(), "direct provider failure");
+    EXPECT_EQ(rsp.provider_ub_failure_detail().operator_worker(), DATA_WORKER.ToString());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().cqe_status(), 4);
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, LaterSuccessDoesNotClearBatchError)
+{
+    Status lastError;
+    WorkerOcServiceGetImpl::UpdateLastBatchError(Status(K_URMA_ERROR, "first object failed"), lastError);
+    WorkerOcServiceGetImpl::UpdateLastBatchError(Status::OK(), lastError);
+
+    EXPECT_EQ(lastError.GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(lastError.GetMsg(), "first object failed");
 }
 }  // namespace object_cache
 }  // namespace datasystem

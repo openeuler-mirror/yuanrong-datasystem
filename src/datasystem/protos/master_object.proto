@@ -765,6 +765,16 @@ enum RebalanceTaskStatusPb {
   REBALANCE_TASK_EXPIRED = 4;
 }
 
+// Identifies which side caused a failed rebalance task. UNKNOWN is wire-compatible with
+// workers that predate structured attribution and is handled with pair-scoped cooldown.
+enum RebalanceFailureSidePb {
+  REBALANCE_FAILURE_UNKNOWN = 0;
+  REBALANCE_FAILURE_SOURCE = 1;
+  REBALANCE_FAILURE_TARGET = 2;
+  REBALANCE_FAILURE_CONTROL_PLANE = 3;
+  REBALANCE_FAILURE_NO_CANDIDATE = 4;
+}
+
 message ReportRebalanceResultReqPb {
   string task_id = 1;
   string source_worker = 2;
@@ -774,6 +784,7 @@ message ReportRebalanceResultReqPb {
   uint64 migrated_objects = 6;
   uint64 failed_objects = 7;
   string failed_reason = 8;
+  RebalanceFailureSidePb failure_side = 9;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

@@ -290,8 +290,9 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
                      &tempFailedMetas, index, traceContext, remainingUs, dispatchTime] {
             RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
             TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
-            return BatchGetObjectFromRemoteOnLock(address, *infos, request, tempSuccessIds[index],
-                                                 tempNeedRetryIds[index], tempFailedIds[index], tempFailedMetas[index]);
+            return BatchGetObjectFromRemoteOnLock(
+                address, *infos, request,
+                { tempSuccessIds[index], tempNeedRetryIds[index], tempFailedIds[index], tempFailedMetas[index] });
         };
         if (!useThreadPoolFanout || index + 1 == tasks.size()) {
             auto rc = func();
@@ -499,6 +500,13 @@ void WorkerOcServiceGetImpl::BatchGetObjectHandleIndividualStatus(Status &status
     failedIds.emplace(readKey.objectKey);
 }
 
+void WorkerOcServiceGetImpl::UpdateLastBatchError(const Status &status, Status &lastError)
+{
+    if (status.IsError()) {
+        lastError = status;
+    }
+}
+
 Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb &subResp,
                                                       const RemoteH2DRootInfoPb &batchRootInfo, ObjectMetaPb *meta,
                                                       ReadObjectKV &objectKV, std::vector<RpcMessage> &payloads,
@@ -592,7 +600,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedInfos, bool &dataSizeChange)
 {
     PerfPoint all(PerfKey::WORKER_HANDLE_BATCH_GET_RESPONSE);
-    Status lastRc = status;
+    Status lastRc;
     uint64_t payloadIndex = 0;
     auto iter = infos.begin();
     std::vector<std::string> needEvictObjs;
@@ -672,7 +680,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             dataSizeChange = true;
             iter++;
         }
-        lastRc = subRc;
+        UpdateLastBatchError(subRc, lastRc);
         if (subRc.IsOk()) {
             isFromL2 ? CacheHitInfo::Instance().IncL2Hit(1) : CacheHitInfo::Instance().IncRemoteHit(1);
         }
@@ -775,9 +783,12 @@ Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(
 
 Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
     const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
-    std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-    std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedMetas)
+    BatchGetObjectOutput output)
 {
+    auto &successIds = output.successIds;
+    auto &needRetryIds = output.needRetryIds;
+    auto &failedIds = output.failedIds;
+    auto &failedMetas = output.failedMetas;
     const auto traceConfig = GetServerLatencyTraceConfig();
     successIds.reserve(successIds.size() + infos.size());
     needRetryIds.reserve(needRetryIds.size() + infos.size());
@@ -810,6 +821,14 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
         } else {
             ReportRemoteReadOutcome(address, rspPb, "batch_remote_get_response");
         }
+        if (output.ubFailureDetail != nullptr && !output.ubFailureDetail->has_value()) {
+            for (const auto &response : rspPb.responses()) {
+                if (response.has_provider_ub_failure_detail()) {
+                    *output.ubFailureDetail = response.provider_ub_failure_detail();
+                    break;
+                }
+            }
+        }
         point.Record();
         point.RecordAndReset(PerfKey::WORKER_BATCH_GET_HANDLE_RESPONSE);
         lastRc = ProcessBatchResponse(address, checkConnectStatus, infos, request, rc, rspPb, payloads, successIds,
@@ -820,12 +839,11 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
 
 Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
     const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
-    std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-    std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedMetas)
+    BatchGetObjectOutput output)
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA);
     // Construct and send request for batch remote get.
-    return BatchGetObjectFromRemoteWorker(address, infos, request, successIds, needRetryIds, failedIds, failedMetas);
+    return BatchGetObjectFromRemoteWorker(address, infos, request, output);
 }
 
 Status WorkerOcServiceGetImpl::AggregateAllocateHelper(std::list<GetObjectInfo> &infos,
