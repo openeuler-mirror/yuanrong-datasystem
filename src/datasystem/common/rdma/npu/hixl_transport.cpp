@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <random>
@@ -30,8 +31,10 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "datasystem/common/rdma/npu/hixl_plugin_loader.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/common/util/status_helper.h"
@@ -44,13 +47,21 @@ namespace {
 // Fixed device-NIC listen port for worker one-sided comm. Each worker device has its own
 // device IP, so the same port across devices does not collide.
 constexpr int K_WORKER_DEVICE_COMM_PORT = 26666;
+#ifdef WITH_TESTS
+constexpr int K_FAKE_HIXL_TEST_PORT = 26667;
+#endif
 constexpr int K_EPHEMERAL_PORT_START = 49152;
 constexpr int K_EPHEMERAL_PORT_END = 65535;
 constexpr int K_MAX_PORT_ALLOC_ATTEMPTS = 5;
+constexpr int32_t K_HIXL_CONNECT_TIMEOUT_MS = 30 * 1000;
+constexpr int32_t K_HIXL_DISCONNECT_TIMEOUT_MS = 1000;
+constexpr int32_t K_HIXL_TRANSFER_TIMEOUT_MS = 10 * 1000;
 const std::string K_HCCL_INTRA_ROCE_ENABLE = "HCCL_INTRA_ROCE_ENABLE";
 const std::string K_HIXL_DIRECT_ROCE_BUFFER_POOL = "0:0";
+const std::string K_HIXL_OPTION_BUFFER_POOL = "BufferPool";
 const std::string K_HIXL_OPTION_LOCAL_COMM_RES = "LocalCommRes";
 const std::string K_HIXL_CS_LOCAL_COMM_RES = R"({"version":"1.3"})";
+const std::string K_HIXL_OPTION_GLOBAL_RESOURCE_CONFIG = "GlobalResourceConfig";
 
 // HCCL registration limit: keep a small reserve under the 256 MEM_DEVICE limit.
 // Long-lived pre-registrations and temporary fallback registrations share this budget.
@@ -76,6 +87,22 @@ std::string HixlMemoryModeName(datasystem::HixlMemoryMode mode)
         default:
             return "buffer_pool";
     }
+}
+
+datasystem::Status HixlResultToStatus(DsHixlResult result, uint32_t vendorStatus, const std::string &operation)
+{
+    if (result == DS_HIXL_OK) {
+        return datasystem::Status::OK();
+    }
+    const std::string message =
+        datasystem::FormatString("HIXL plugin %s failed, result=%d, vendor_status=%u", operation, result, vendorStatus);
+    if (result == DS_HIXL_INVALID_ARGUMENT) {
+        return datasystem::Status(datasystem::StatusCode::K_INVALID, message);
+    }
+    if (result == DS_HIXL_NOT_SUPPORTED) {
+        return datasystem::Status(datasystem::StatusCode::K_NOT_SUPPORTED, message);
+    }
+    return datasystem::Status(datasystem::StatusCode::K_RUNTIME_ERROR, message);
 }
 
 // Allocate a random available ephemeral port. Tries up to K_MAX_PORT_ALLOC_ATTEMPTS times.
@@ -117,14 +144,29 @@ int AllocateRandomPort()
     return 0;  // all attempts failed
 }
 
+std::vector<std::pair<std::string, std::string>> BuildHixlOptions(const std::string &bufferPool, bool isClient)
+{
+    std::vector<std::pair<std::string, std::string>> optionValues;
+    optionValues.emplace_back(K_HIXL_OPTION_BUFFER_POOL, bufferPool);
+    if (FLAGS_hixl_cs_enable) {
+        optionValues.emplace_back(K_HIXL_OPTION_LOCAL_COMM_RES, K_HIXL_CS_LOCAL_COMM_RES);
+        LOG(INFO) << "[HCCS] HIXL CS enabled with LocalCommRes version 1.3";
+    }
+    if (!isClient) {
+        std::string resourceConfig =
+            R"({"comm_resource_config.listen_port":")" + std::to_string(K_WORKER_DEVICE_COMM_PORT) + R"("})";
+        optionValues.emplace_back(K_HIXL_OPTION_GLOBAL_RESOURCE_CONFIG, std::move(resourceConfig));
+    }
+    return optionValues;
+}
+
 }  // namespace
 
 namespace datasystem {
 
 HixlTransport::~HixlTransport()
 {
-    ClearRegisteredDeviceMemory();
-    ClearRegisteredHostMemory();
+    LOG_IF_ERROR(DisconnectAll(), "Failed to release HIXL transport");
 }
 
 void HixlTransport::SetLocalEndpoint(const std::string &ep, bool isClient)
@@ -138,47 +180,75 @@ bool HixlTransport::IsHixlRoceDirectMode() const
     return hixlMemoryMode_ == HixlMemoryMode::ROCE_DIRECT;
 }
 
-Status HixlTransport::InitializeSingleDevice(int32_t devId, const std::string &bufferPool)
+void HixlTransport::DestroyEngine(DsHixlEngineHandle engine) const
 {
+    if (api_ == nullptr || engine == nullptr) {
+        return;
+    }
+    DsHixlResult finalizeResult = api_->finalize_engine(engine);
+    LOG_IF(WARNING, finalizeResult != DS_HIXL_OK)
+        << "HIXL plugin finalize_engine failed, result=" << finalizeResult;
+    DsHixlResult destroyResult = api_->destroy_engine(engine);
+    LOG_IF(WARNING, destroyResult != DS_HIXL_OK)
+        << "HIXL plugin destroy_engine failed, result=" << destroyResult;
+}
+
+Status HixlTransport::InitializeSingleDevice(int32_t devId, const std::string &bufferPool,
+                                             DsHixlEngineHandle &engine, std::string &endpoint)
+{
+    engine = nullptr;
+#ifdef WITH_TESTS
+    if (!skipDeviceBinding_) {
+#endif
     Status setDevSt = acl::AclDeviceManager::Instance()->SetDeviceIdx(devId);
     if (setDevSt.IsError()) {
-        LOG(WARNING) << "[HCCS] SetDeviceIdx failed for devId " << devId << ": " << setDevSt.GetMsg()
-                     << "; skipping this device";
+        LOG(WARNING) << "[HCCS] SetDeviceIdx failed for devId " << devId << ": " << setDevSt.GetMsg();
         return setDevSt;
     }
+#ifdef WITH_TESTS
+    }
+#endif
 
-    int port = AllocateRandomPort();
+    int port = 0;
+#ifdef WITH_TESTS
+    if (skipDeviceBinding_) {
+        // The fake test API does not bind a socket. Keep the test deterministic and avoid consuming a host port.
+        port = K_FAKE_HIXL_TEST_PORT;
+    } else {
+#endif
+        port = AllocateRandomPort();
+#ifdef WITH_TESTS
+    }
+#endif
     if (port <= 0) {
-        LOG(WARNING) << "[HCCS] Failed to allocate random port for devId " << devId << "; skipping this device";
+        LOG(WARNING) << "[HCCS] Failed to allocate random port for devId " << devId;
         return Status(StatusCode::K_RUNTIME_ERROR, "Failed to allocate port for at least one device");
     }
 
-    std::string endpoint = localIp_ + ":" + std::to_string(port);
+    endpoint = localIp_ + ":" + std::to_string(port);
     LOG(INFO) << "[HCCS] Hixl::Initialize start devId=" << devId << " endpoint=" << endpoint;
-    auto engine = std::make_unique<::hixl::Hixl>();
-    std::map<::hixl::AscendString, ::hixl::AscendString> options;
-    options[::hixl::AscendString(::hixl::OPTION_BUFFER_POOL)] = ::hixl::AscendString(bufferPool.c_str());
-    if (FLAGS_hixl_cs_enable) {
-        options[::hixl::AscendString(K_HIXL_OPTION_LOCAL_COMM_RES.c_str())] =
-            ::hixl::AscendString(K_HIXL_CS_LOCAL_COMM_RES.c_str());
-        LOG(INFO) << "[HCCS] HIXL CS enabled with LocalCommRes version 1.3";
-    }
-    if (!isClient_) {
-        std::string resourceConfig =
-            R"({"comm_resource_config.listen_port":")" + std::to_string(K_WORKER_DEVICE_COMM_PORT) + R"("})";
-        options[::hixl::AscendString(::hixl::OPTION_GLOBAL_RESOURCE_CONFIG)] =
-            ::hixl::AscendString(resourceConfig.c_str());
+    RETURN_IF_NOT_OK(HixlResultToStatus(api_->create_engine(&engine), 0, "create_engine"));
+    bool needRollback = true;
+    Raii rollback([this, &engine, &needRollback]() {
+        if (needRollback) {
+            DestroyEngine(engine);
+            engine = nullptr;
+        }
+    });
+
+    auto optionValues = BuildHixlOptions(bufferPool, isClient_);
+    std::vector<DsHixlOption> options;
+    options.reserve(optionValues.size());
+    for (const auto &option : optionValues) {
+        options.push_back(DsHixlOption{ { option.first.data(), option.first.size() },
+                                        { option.second.data(), option.second.size() } });
     }
 
-    ::hixl::Status ret = engine->Initialize(::hixl::AscendString(endpoint.c_str()), options);
-    if (ret != ::hixl::SUCCESS) {
-        LOG(WARNING) << "[HCCS] Hixl::Initialize failed on devId " << devId << " endpoint " << endpoint << ": " << ret
-                     << "; skipping this device";
-        return Status(StatusCode::K_RUNTIME_ERROR, "Hixl::Initialize failed for at least one device");
-    }
-
-    engines_[devId] = std::move(engine);
-    localEndpointById_[devId] = endpoint;
+    uint32_t vendorStatus = 0;
+    DsHixlResult result = api_->initialize_engine(
+        engine, DsHixlStringView{ endpoint.data(), endpoint.size() }, options.data(), options.size(), &vendorStatus);
+    RETURN_IF_NOT_OK(HixlResultToStatus(result, vendorStatus, "initialize_engine"));
+    needRollback = false;
     LOG(INFO) << "[HCCS] Engine created for devId " << devId << " at " << endpoint;
     return Status::OK();
 }
@@ -189,6 +259,9 @@ Status HixlTransport::Init(const std::vector<int32_t> &deviceIds)
     RETURN_OK_IF_TRUE(initialized_);
     CHECK_FAIL_RETURN_STATUS(!localIp_.empty(), StatusCode::K_INVALID,
                              "HCCS local IP not configured. Call SetLocalEndpoint()");
+    if (api_ == nullptr) {
+        RETURN_IF_NOT_OK(HixlPluginLoader::Instance().GetApi(api_));
+    }
 
     std::vector<int32_t> targetDevIds;
     if (!deviceIds.empty()) {
@@ -202,22 +275,34 @@ Status HixlTransport::Init(const std::vector<int32_t> &deviceIds)
     hixlMemoryMode_ = DetermineHixlMemoryMode();
     const std::string bufferPool =
         IsHixlRoceDirectMode() ? K_HIXL_DIRECT_ROCE_BUFFER_POOL : FLAGS_remote_h2d_hccs_buffer_pool;
-    Status firstError = Status::OK();
-    for (int32_t devId : targetDevIds) {
-        Status st = InitializeSingleDevice(devId, bufferPool);
-        if (st.IsError()) {
-            if (firstError.IsOk()) {
-                firstError = st;
+    std::map<int32_t, DsHixlEngineHandle> pendingEngines;
+    std::map<int32_t, std::string> pendingEndpoints;
+    std::vector<DsHixlEngineHandle> pendingOrder;
+    pendingOrder.reserve(targetDevIds.size());
+    bool needRollback = true;
+    Raii rollback([this, &pendingOrder, &needRollback]() {
+        if (needRollback) {
+            for (auto iter = pendingOrder.rbegin(); iter != pendingOrder.rend(); ++iter) {
+                DestroyEngine(*iter);
             }
-            continue;
         }
+    });
+    for (int32_t devId : targetDevIds) {
+        CHECK_FAIL_RETURN_STATUS(pendingEngines.find(devId) == pendingEngines.end(), K_INVALID,
+                                 "Duplicate HCCS device id: " + std::to_string(devId));
+        DsHixlEngineHandle engine = nullptr;
+        std::string endpoint;
+        RETURN_IF_NOT_OK(InitializeSingleDevice(devId, bufferPool, engine, endpoint));
+        // Record ownership before map insertion so allocation failures still destroy this engine.
+        pendingOrder.emplace_back(engine);
+        pendingEngines.emplace(devId, engine);
+        pendingEndpoints.emplace(devId, std::move(endpoint));
     }
 
-    if (engines_.empty()) {
-        return Status(StatusCode::K_RUNTIME_ERROR, "No HCCS engines could be initialized");
-    }
-
+    engines_ = std::move(pendingEngines);
+    localEndpointById_ = std::move(pendingEndpoints);
     initialized_ = true;
+    needRollback = false;
     LOG(INFO) << "[HCCS] Initialized with " << engines_.size() << " engine(s) on IP " << localIp_
               << " with hixl memory mode: " << HixlMemoryModeName(hixlMemoryMode_)
               << ", buffer pool config: " << bufferPool;
@@ -260,7 +345,7 @@ Status HixlTransport::Connect(const std::string &remoteIdentity, P2pKind kind, s
                              "Invalid HCCS remote endpoint port: " + remoteIdentity);
 
     CHECK_FAIL_RETURN_STATUS(!engines_.empty(), StatusCode::K_RUNTIME_ERROR, "No HCCS engines available");
-    ::hixl::Hixl *engine = engines_.begin()->second.get();
+    DsHixlEngineHandle engine = engines_.begin()->second;
 
     {
         std::lock_guard<std::mutex> lock(connMutex_);
@@ -272,12 +357,11 @@ Status HixlTransport::Connect(const std::string &remoteIdentity, P2pKind kind, s
         // One HIXL engine can manage connections to multiple remote endpoints.
         LOG(INFO) << "[HCCS] Connecting from local endpoint to " << remoteIdentity;
 
-        ::hixl::Status rc = engine->Connect(::hixl::AscendString(remoteIdentity.c_str()), 30000);
-        if (rc != ::hixl::SUCCESS && rc != ::hixl::ALREADY_CONNECTED) {
-            LOG(ERROR) << "[HCCS] Hixl::Connect failed to " << remoteIdentity << ", status=" << rc;
-            return Status(StatusCode::K_RUNTIME_ERROR,
-                          "Hixl::Connect failed: " + std::to_string(rc) + ", remote endpoint: " + remoteIdentity);
-        }
+        uint32_t vendorStatus = 0;
+        DsHixlResult result = api_->connect_engine(
+            engine, DsHixlStringView{ remoteIdentity.data(), remoteIdentity.size() }, K_HIXL_CONNECT_TIMEOUT_MS,
+            &vendorStatus);
+        RETURN_IF_NOT_OK(HixlResultToStatus(result, vendorStatus, "connect_engine"));
 
         activeEndpoints_.insert(remoteIdentity);
         LOG(INFO) << "[HCCS] Connected to " << remoteIdentity;
@@ -293,9 +377,11 @@ Status HixlTransport::Disconnect(const std::string &remoteIdentity)
     // Use the first engine, consistent with Connect and ScatterBatch
     auto eng = engines_.begin();
     if (eng != engines_.end()) {
-        ::hixl::Status ret = eng->second->Disconnect(::hixl::AscendString(remoteIdentity.c_str()), 1000);
-        CHECK_FAIL_RETURN_STATUS(ret == ::hixl::SUCCESS, StatusCode::K_RUNTIME_ERROR,
-                                 "Hixl::Disconnect from " + remoteIdentity + " failed: " + std::to_string(ret));
+        uint32_t vendorStatus = 0;
+        DsHixlResult result = api_->disconnect_engine(
+            eng->second, DsHixlStringView{ remoteIdentity.data(), remoteIdentity.size() },
+            K_HIXL_DISCONNECT_TIMEOUT_MS, &vendorStatus);
+        RETURN_IF_NOT_OK(HixlResultToStatus(result, vendorStatus, "disconnect_engine"));
         LOG(INFO) << "[HCCS] Disconnected from " + remoteIdentity;
     }
 
@@ -312,9 +398,13 @@ Status HixlTransport::DisconnectAll()
     if (eng != engines_.end()) {
         std::lock_guard<std::mutex> lock(connMutex_);
         for (const auto &remoteId : activeEndpoints_) {
-            ::hixl::Status ret = eng->second->Disconnect(::hixl::AscendString(remoteId.c_str()), 1000);
-            if (ret != ::hixl::SUCCESS) {
-                LOG(WARNING) << "[HCCS] Failed to disconnect from " << remoteId << ": " << ret;
+            uint32_t vendorStatus = 0;
+            DsHixlResult result = api_->disconnect_engine(
+                eng->second, DsHixlStringView{ remoteId.data(), remoteId.size() }, K_HIXL_DISCONNECT_TIMEOUT_MS,
+                &vendorStatus);
+            if (result != DS_HIXL_OK) {
+                LOG(WARNING) << "[HCCS] Failed to disconnect from " << remoteId << ", result=" << result
+                             << ", vendor_status=" << vendorStatus;
             } else {
                 LOG(INFO) << "[HCCS] Disconnected from " + remoteId;
             }
@@ -325,9 +415,9 @@ Status HixlTransport::DisconnectAll()
     ClearRegisteredDeviceMemory();
     ClearRegisteredHostMemory();
 
-    // Finalize all engines
-    for (auto &[devId, engine] : engines_) {
-        engine->Finalize();
+    for (const auto &[devId, engine] : engines_) {
+        (void)devId;
+        DestroyEngine(engine);
     }
     engines_.clear();
     localEndpointById_.clear();
@@ -363,11 +453,11 @@ Status HixlTransport::RegisterMemory(void *addr, uint64_t size, P2pSegmentInfo *
     CHECK_FAIL_RETURN_STATUS(engineIter != engines_.end(), StatusCode::K_RUNTIME_ERROR,
                              "No HCCS engine available for devId " + std::to_string(devId));
 
-    ::hixl::MemDesc memDesc{ hostAddr, size };
-    ::hixl::MemHandle handle = nullptr;
-    ::hixl::Status rc = engineIter->second->RegisterMem(memDesc, ::hixl::MEM_HOST, handle);
-    CHECK_FAIL_RETURN_STATUS(rc == ::hixl::SUCCESS, StatusCode::K_RUNTIME_ERROR,
-                             "Hixl::RegisterMem(MEM_HOST) failed: " + std::to_string(rc));
+    DsHixlMemHandle handle = nullptr;
+    uint32_t vendorStatus = 0;
+    DsHixlRegisterMemoryRequest request{ hostAddr, size, DS_HIXL_MEMORY_HOST };
+    DsHixlResult result = api_->register_memory(engineIter->second, &request, &handle, &vendorStatus);
+    RETURN_IF_NOT_OK(HixlResultToStatus(result, vendorStatus, "register_memory(MEM_HOST)"));
     registeredHostMemories_.push_back(RegisteredHostMemory{ devId, hostAddr, size, handle });
     return Status::OK();
 }
@@ -394,12 +484,12 @@ Status HixlTransport::RegisterDeviceMemoryLocked(uintptr_t addr, uint64_t size)
 {
     CHECK_FAIL_RETURN_STATUS(!engines_.empty(), StatusCode::K_RUNTIME_ERROR, "No HCCS engines available");
 
-    auto engine = engines_.begin()->second.get();
-    ::hixl::MemHandle handle = nullptr;
-    ::hixl::MemDesc memDesc{ addr, size };
-    ::hixl::Status rc = engine->RegisterMem(memDesc, ::hixl::MEM_DEVICE, handle);
-    CHECK_FAIL_RETURN_STATUS(rc == ::hixl::SUCCESS, StatusCode::K_RUNTIME_ERROR,
-                             "Hixl::RegisterMem(MEM_DEVICE) failed: " + std::to_string(rc));
+    DsHixlEngineHandle engine = engines_.begin()->second;
+    DsHixlMemHandle handle = nullptr;
+    uint32_t vendorStatus = 0;
+    DsHixlRegisterMemoryRequest request{ addr, size, DS_HIXL_MEMORY_DEVICE };
+    DsHixlResult result = api_->register_memory(engine, &request, &handle, &vendorStatus);
+    RETURN_IF_NOT_OK(HixlResultToStatus(result, vendorStatus, "register_memory(MEM_DEVICE)"));
     registeredDeviceMemories_.push_back(RegisteredDeviceMemory{ addr, size, handle });
     return Status::OK();
 }
@@ -412,9 +502,9 @@ Status HixlTransport::ReleaseDeviceMemoryLocked(uintptr_t addr)
 
     auto engineIter = engines_.begin();
     CHECK_FAIL_RETURN_STATUS(engineIter != engines_.end(), StatusCode::K_RUNTIME_ERROR, "No HCCS engines available");
-    ::hixl::Status rc = engineIter->second->DeregisterMem(registered->handle);
-    CHECK_FAIL_RETURN_STATUS(rc == ::hixl::SUCCESS, StatusCode::K_RUNTIME_ERROR,
-                             "Hixl::DeregisterMem(MEM_DEVICE) failed: " + std::to_string(rc));
+    uint32_t vendorStatus = 0;
+    DsHixlResult result = api_->deregister_memory(engineIter->second, registered->handle, &vendorStatus);
+    RETURN_IF_NOT_OK(HixlResultToStatus(result, vendorStatus, "deregister_memory(MEM_DEVICE)"));
     registeredDeviceMemories_.erase(registered);
     return Status::OK();
 }
@@ -529,10 +619,12 @@ void HixlTransport::ClearRegisteredDeviceMemory()
         return;
     }
 
-    auto engine = engineIter->second.get();
+    DsHixlEngineHandle engine = engineIter->second;
     for (auto &registered : registeredDeviceMemories_) {
-        ::hixl::Status rc = engine->DeregisterMem(registered.handle);
-        LOG_IF(WARNING, rc != ::hixl::SUCCESS) << "Failed to deregister HIXL memory handle: " << rc;
+        uint32_t vendorStatus = 0;
+        DsHixlResult result = api_->deregister_memory(engine, registered.handle, &vendorStatus);
+        LOG_IF(WARNING, result != DS_HIXL_OK)
+            << "Failed to deregister HIXL memory handle, result=" << result << ", vendor_status=" << vendorStatus;
     }
     registeredDeviceMemories_.clear();
 }
@@ -550,8 +642,10 @@ void HixlTransport::ClearRegisteredHostMemory()
             LOG(WARNING) << "Failed to find HIXL engine when deregistering MEM_HOST on devId " << registered.devId;
             continue;
         }
-        ::hixl::Status rc = engineIter->second->DeregisterMem(registered.handle);
-        LOG_IF(WARNING, rc != ::hixl::SUCCESS) << "Failed to deregister HIXL host memory handle: " << rc;
+        uint32_t vendorStatus = 0;
+        DsHixlResult result = api_->deregister_memory(engineIter->second, registered.handle, &vendorStatus);
+        LOG_IF(WARNING, result != DS_HIXL_OK) << "Failed to deregister HIXL host memory handle, result=" << result
+                                              << ", vendor_status=" << vendorStatus;
     }
     registeredHostMemories_.clear();
 }
@@ -565,35 +659,34 @@ Status HixlTransport::ImportRemoteAddressInfo(const std::string &remoteEndpoint,
 }
 
 struct Batch {
-    ::hixl::Hixl *engine = nullptr;
+    const DsHixlApi *api = nullptr;
+    DsHixlEngineHandle engine = nullptr;
     std::string remoteEndpoint;
     size_t tempRegisterBudget = 0;
     size_t preRegisteredCount = 0;
-    std::vector<::hixl::TransferOpDesc> descs;
+    std::vector<DsHixlTransferDesc> descs;
     // These handles are temporary fallback registrations for the current batch only.
-    std::vector<::hixl::MemHandle> handles;
+    std::vector<DsHixlMemHandle> handles;
 
-    Batch(::hixl::Hixl *hixlEngine, const std::string &endpoint, size_t tempBudget, size_t preRegistered,
-          size_t reserveCount = 0)
-        : engine(hixlEngine),
+    Batch(const DsHixlApi *hixlApi, DsHixlEngineHandle hixlEngine, const std::string &endpoint, size_t tempBudget,
+          size_t preRegistered)
+        : api(hixlApi),
+          engine(hixlEngine),
           remoteEndpoint(endpoint),
           tempRegisterBudget(tempBudget),
           preRegisteredCount(preRegistered)
     {
-        // reserveCount is the flattened TransferOpDesc count for this request. Reserve once so the
-        // descriptor vector does not grow or relocate while appending. HIXL has no per-call descriptor cap;
-        // it splits submission across the SQ queue depth internally.
-        if (reserveCount > 0) {
-            descs.reserve(reserveCount);
-        }
     }
 
     void Reset()
     {
-        if (engine != nullptr) {
+        if (api != nullptr && engine != nullptr) {
             for (auto handle : handles) {
-                ::hixl::Status rc = engine->DeregisterMem(handle);
-                LOG_IF(WARNING, rc != ::hixl::SUCCESS) << "Failed to deregister HIXL memory handle: " << rc;
+                uint32_t vendorStatus = 0;
+                DsHixlResult result = api->deregister_memory(engine, handle, &vendorStatus);
+                LOG_IF(WARNING, result != DS_HIXL_OK)
+                    << "Failed to deregister temporary HIXL memory handle, result=" << result
+                    << ", vendor_status=" << vendorStatus;
             }
         }
         handles.clear();
@@ -609,10 +702,16 @@ struct Batch {
 static Status FlushHixlBatch(Batch &batch)
 {
     RETURN_OK_IF_TRUE(batch.descs.empty());
-    ::hixl::Status ret = batch.engine->TransferSync(::hixl::AscendString(batch.remoteEndpoint.c_str()), ::hixl::READ,
-                                                    batch.descs, 10000);
-    CHECK_FAIL_RETURN_STATUS(ret == ::hixl::SUCCESS, K_RUNTIME_ERROR,
-                             "Hixl::TransferSync failed: " + std::to_string(ret));
+    CHECK_FAIL_RETURN_STATUS(batch.descs.size() <= std::numeric_limits<uint32_t>::max(), K_INVALID,
+                             "HIXL transfer descriptor count exceeds uint32 range");
+    uint32_t vendorStatus = 0;
+    DsHixlTransferRequest request{ DsHixlStringView{ batch.remoteEndpoint.data(), batch.remoteEndpoint.size() },
+                                   DS_HIXL_TRANSFER_READ,
+                                   batch.descs.data(),
+                                   static_cast<uint32_t>(batch.descs.size()),
+                                   K_HIXL_TRANSFER_TIMEOUT_MS };
+    DsHixlResult result = batch.api->transfer_sync(batch.engine, &request, &vendorStatus);
+    RETURN_IF_NOT_OK(HixlResultToStatus(result, vendorStatus, "transfer_sync"));
     batch.Reset();
     return Status::OK();
 }
@@ -628,11 +727,11 @@ static Status RegisterTemporaryDeviceMemoryForBatch(Batch &batch, uintptr_t loca
         RETURN_IF_NOT_OK(FlushHixlBatch(batch));
     }
 
-    ::hixl::MemHandle handle = nullptr;
-    ::hixl::MemDesc memDesc{ localAddr, len };
-    ::hixl::Status rc = batch.engine->RegisterMem(memDesc, ::hixl::MEM_DEVICE, handle);
-    CHECK_FAIL_RETURN_STATUS(rc == ::hixl::SUCCESS, StatusCode::K_RUNTIME_ERROR,
-                             "Hixl::RegisterMem(MEM_DEVICE) failed: " + std::to_string(rc));
+    DsHixlMemHandle handle = nullptr;
+    uint32_t vendorStatus = 0;
+    DsHixlRegisterMemoryRequest request{ localAddr, len, DS_HIXL_MEMORY_DEVICE };
+    DsHixlResult result = batch.api->register_memory(batch.engine, &request, &handle, &vendorStatus);
+    RETURN_IF_NOT_OK(HixlResultToStatus(result, vendorStatus, "register_memory(MEM_DEVICE)"));
     batch.handles.push_back(handle);
     return Status::OK();
 }
@@ -645,7 +744,8 @@ Status HixlTransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, con
 
     std::lock_guard<std::mutex> lock(transferMutex_);
 
-    auto engine = engines_.begin()->second.get();
+    CHECK_FAIL_RETURN_STATUS(!engines_.empty(), StatusCode::K_RUNTIME_ERROR, "No HCCS engines available");
+    DsHixlEngineHandle engine = engines_.begin()->second;
 
     CHECK_FAIL_RETURN_STATUS(registeredDeviceMemories_.size() <= MAX_DEVICE_REGISTRATIONS,
                              StatusCode::K_RUNTIME_ERROR,
@@ -669,7 +769,9 @@ Status HixlTransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, con
     // Long-lived pre-registered handles and short-lived fallback handles share the HIXL registration budget.
     const size_t preRegisteredCount = registeredDeviceMemories_.size();
     const size_t tempRegisterBudget = MAX_DEVICE_REGISTRATIONS - preRegisteredCount;
-    Batch batch(engine, remoteEndpoint, tempRegisterBudget, preRegisteredCount, reserveCount);
+    Batch batch(api_, engine, remoteEndpoint, tempRegisterBudget, preRegisteredCount);
+    // Reserve the flattened TransferOpDesc count once so the descriptor vector does not relocate while appending.
+    batch.descs.reserve(reserveCount);
 
     for (uint32_t i = 0; i < count; ++i) {
         const auto &entry = entries[i];
@@ -684,7 +786,7 @@ Status HixlTransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, con
             if (!registered) {
                 RETURN_IF_NOT_OK(RegisterTemporaryDeviceMemoryForBatch(batch, localAddr, len));
             }
-            batch.descs.push_back(::hixl::TransferOpDesc{ localAddr, remoteAddr, len });
+            batch.descs.push_back(DsHixlTransferDesc{ localAddr, remoteAddr, len });
             entryOffset += entry.counts[j];
         }
     }

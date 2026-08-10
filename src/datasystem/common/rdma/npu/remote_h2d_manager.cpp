@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <sys/mman.h>
 #include <tuple>
 #include <vector>
@@ -143,6 +144,9 @@ Status RemoteH2DManager::SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t
         // Configure the HCCS local IP for this client process.
         RETURN_IF_NOT_OK(SetRH2DLocalEndpointIp(localIp));
     }
+    if (enableRemoteH2D) {
+        RETURN_IF_NOT_OK(Instance().GetInitStatus());
+    }
     return Status::OK();
 }
 
@@ -182,6 +186,7 @@ Status RemoteH2DManager::SetDeviceIdx(std::optional<int32_t> specifiedDevId)
 Status RemoteH2DManager::GetClientCommUuid(std::string &commId)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+    RETURN_IF_NOT_OK(initStatus_);
     // Assume client works with one device id, so only one uuid to identify the client process.
     commId = commId_;
     return Status::OK();
@@ -248,6 +253,7 @@ Status RemoteH2DManager::GetWorkerDeviceIds(std::vector<int32_t> *devIds)
 Status RemoteH2DManager::P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+    RETURN_IF_NOT_OK(initStatus_);
 
     PerfPoint point(PerfKey::P2P_GET_ROOT_INFO);
     std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
@@ -405,6 +411,7 @@ Status RemoteH2DManager::P2PCommInitRootInfo(const std::string &key, const Remot
                                              std::shared_ptr<ThreadPool> threadPool)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+    RETURN_IF_NOT_OK(initStatus_);
 
     PerfPoint point(PerfKey::P2P_COMM_INIT_ROOT);
 
@@ -450,6 +457,7 @@ Status RemoteH2DManager::P2PCommInitRootInfo(const std::string &key, const Remot
 Status RemoteH2DManager::RegisterHostMemory(void *data, uint64_t dataSize)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+    RETURN_IF_NOT_OK(initStatus_);
     LOG(INFO) << "RemoteH2DManager::RegisterHostMemory addr=" << data << " size=" << dataSize
               << " link_type=" << FLAGS_remote_h2d_link_type;
 
@@ -520,6 +528,7 @@ Status RemoteH2DManager::PreRegisterDeviceMemory(const std::vector<void *> &data
                              "RemoteH2D is not enabled for device memory pre-registration.");
     CHECK_FAIL_RETURN_STATUS(FLAGS_remote_h2d_link_type == "HCCS", K_RUNTIME_ERROR,
                              "RemoteH2D device memory pre-registration is only supported for HCCS.");
+    RETURN_IF_NOT_OK(initStatus_);
     CHECK_FAIL_RETURN_STATUS(!data.empty(), K_INVALID, "Device memory address list cannot be empty.");
     CHECK_FAIL_RETURN_STATUS(data.size() == dataSize.size(), K_INVALID,
                              FormatString("Device memory address count %zu does not match size count %zu.",
@@ -541,6 +550,7 @@ Status RemoteH2DManager::UnregisterDeviceMemory(const std::vector<void *> &data)
                              "RemoteH2D is not enabled for device memory unregistration.");
     CHECK_FAIL_RETURN_STATUS(FLAGS_remote_h2d_link_type == "HCCS", K_RUNTIME_ERROR,
                              "RemoteH2D device memory unregistration is only supported for HCCS.");
+    RETURN_IF_NOT_OK(initStatus_);
     for (size_t i = 0; i < data.size(); ++i) {
         CHECK_FAIL_RETURN_STATUS(data[i] != nullptr, K_INVALID,
                                  FormatString("Device memory address cannot be null, index: %zu.", i));
@@ -588,14 +598,41 @@ Status RemoteH2DManager::FillDataInfo(uint64_t *dataPtr, RemoteH2DDataInfoPb &da
     return Status::OK();
 }
 
+void RemoteH2DManager::EnsureStateMaps()
+{
+    if (communicatorMap_ == nullptr) {
+        communicatorMap_ = std::make_unique<CommunicatorMap>();
+    }
+    if (hostSegmentMap_ == nullptr) {
+        hostSegmentMap_ = std::make_unique<HostSegmentMap>();
+    }
+    if (remoteSegmentMap_ == nullptr) {
+        remoteSegmentMap_ = std::make_unique<RemoteSegmentMap>();
+    }
+}
+
 Status RemoteH2DManager::Init()
 {
     LOG(INFO) << "RemoteH2DManager::Init enter, enabled=" << IsRemoteH2DEnabled()
               << " device_ids=" << FLAGS_remote_h2d_device_ids;
+    interrupted_.store(false);
+    EnsureStateMaps();
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
 
-    LOG(INFO) << "RemoteH2DManager::Init starting heartbeat thread";
-    heartbeatThread_ = std::thread(&RemoteH2DManager::ManageHeartbeats, this);
+    bool initCommitted = false;
+    Raii rollback([this, &initCommitted]() {
+        if (initCommitted) {
+            return;
+        }
+        if (transport_ != nullptr) {
+            LOG_IF_ERROR(transport_->DisconnectAll(), "Rollback RemoteH2D transport initialization failed");
+        }
+        if (aclInitialized_) {
+            LOG_IF_ERROR(acl::AclDeviceManager::Instance()->aclFinalize(),
+                         "Rollback RemoteH2D ACL initialization failed");
+            aclInitialized_ = false;
+        }
+    });
 
     LOG(INFO) << "RemoteH2DManager::Init calling AclDeviceManager::aclInit";
     Status rc = acl::AclDeviceManager::Instance()->aclInit(nullptr);
@@ -603,6 +640,7 @@ Status RemoteH2DManager::Init()
         LOG(INFO) << "RemoteH2DManager acl init failed. Repeated init with error code 100002 is acceptable. "
                   << rc.ToString();
     }
+    aclInitialized_ = true;
     LOG(INFO) << "RemoteH2DManager::Init aclInit returned";
 
     // Parse worker device IDs before initializing the transport, so that HCCS
@@ -616,8 +654,20 @@ Status RemoteH2DManager::Init()
 
     LOG(INFO) << "RemoteH2DManager::Init calling transport_->Init() with " << workerDevIdsForInit.size() << " devId(s)";
     RETURN_IF_NOT_OK(transport_->Init(workerDevIdsForInit));
+    LOG(INFO) << "RemoteH2DManager::Init starting heartbeat thread";
+    try {
+        heartbeatThread_ = std::thread(&RemoteH2DManager::ManageHeartbeats, this);
+    } catch (const std::system_error &error) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "Failed to start RemoteH2D heartbeat thread: " + std::string(error.what()));
+    }
+    initCommitted = true;
     LOG(INFO) << "RemoteH2DManager::Init done";
     return Status::OK();
+}
+
+Status RemoteH2DManager::GetInitStatus() const
+{
+    return initStatus_;
 }
 
 Status RemoteH2DManager::Uninit()
@@ -627,7 +677,15 @@ Status RemoteH2DManager::Uninit()
         heartbeatThread_.join();
     }
 
-    LOG_IF_ERROR(SetDeviceIdx(), "Set device index failed at RemoteH2DManager uninitialization");
+    if (aclInitialized_) {
+        LOG_IF_ERROR(SetDeviceIdx(), "Set device index failed at RemoteH2DManager uninitialization");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(heartbeatMutex_);
+        clientDisconnectChecks_.clear();
+        clientPingFunctions_.clear();
+    }
 
     {
         std::lock_guard<std::shared_timed_mutex> l(segmentMutex_);
@@ -647,14 +705,17 @@ Status RemoteH2DManager::Uninit()
                      "Failed to disconnect all transport connections at RemoteH2DManager uninitialization");
     }
 
-    RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
-    RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->aclFinalize());
+    if (aclInitialized_) {
+        RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->aclFinalize());
+        aclInitialized_ = false;
+    }
     return Status::OK();
 }
 
 Status RemoteH2DManager::ImportHostSegment(const std::string &remoteEndpoint, const RemoteHostSegmentPb &seg)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+    RETURN_IF_NOT_OK(initStatus_);
 
     PerfPoint point(PerfKey::P2P_IMPORT_HOST_SEG);
 
@@ -683,6 +744,7 @@ Status RemoteH2DManager::ScatterBatch(P2pScatterEntry *entries, uint32_t size,
                                       std::shared_ptr<RemoteH2DContext> p2pComm)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+    RETURN_IF_NOT_OK(initStatus_);
 
     PerfPoint point(PerfKey::P2P_SCATTER_BATCH);
 
@@ -700,6 +762,7 @@ Status RemoteH2DManager::ScatterBatch(P2pScatterEntry *entries, uint32_t size,
 
 Status RemoteH2DManager::GetDevIdForComm(const std::string &commId, int32_t &devId)
 {
+    RETURN_IF_NOT_OK(initStatus_);
     devId = -1;
     {
         // fast path: use const accessor
@@ -728,8 +791,13 @@ void RemoteH2DChildAfterFork()
 void RemoteH2DManager::AfterFork()
 {
     LOG(ERROR) << "Note: fork happens with RemoteH2DManager initialized";
-    LOG_IF_ERROR(Uninit(), "Uninitialize acl for Remote H2D at fork failed.");
-    LOG_IF_ERROR(Init(), "Initialize acl for Remote H2D at fork failed.");
+    initStatus_ = Uninit();
+    if (initStatus_.IsError()) {
+        LOG(ERROR) << "Uninitialize acl for Remote H2D at fork failed: " << initStatus_;
+        return;
+    }
+    initStatus_ = Init();
+    LOG_IF_ERROR(initStatus_, "Initialize acl for Remote H2D at fork failed.");
 }
 
 Status RemoteH2DManager::SetRH2DLocalEndpointIp(const std::string &localIp)
@@ -858,7 +926,8 @@ RemoteH2DManager::RemoteH2DManager() : transport_(CreateTransport())
     remoteSegmentMap_ = std::make_unique<RemoteSegmentMap>();
     commId_ = GetStringUuid();
     LOG(INFO) << "RemoteH2DManager::Constructor maps allocated, commId=" << commId_ << ", calling Init()";
-    LOG_IF_ERROR(Init(), "Initialize acl for Remote H2D failed.");
+    initStatus_ = Init();
+    LOG_IF_ERROR(initStatus_, "Initialize acl for Remote H2D failed.");
     LOG(INFO) << "RemoteH2DManager::Constructor done";
 }
 

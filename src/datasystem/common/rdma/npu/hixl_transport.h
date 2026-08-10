@@ -19,6 +19,7 @@
 
 #include "rh2d_transport_strategy.h"
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -26,10 +27,8 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
-#include <atomic>
 
-#include <hixl/hixl.h>
-#include <hixl/hixl_types.h>
+#include "datasystem/common/rdma/npu/hixl_plugin_api.h"
 
 namespace datasystem {
 
@@ -38,6 +37,11 @@ enum class HixlMemoryMode { BUFFER_POOL, ROCE_DIRECT, FABRIC_MEM };
 class HixlTransport : public RH2DTransportStrategy {
 public:
     HixlTransport() = default;
+#ifdef WITH_TESTS
+    HixlTransport(const DsHixlApi *api, bool skipDeviceBinding) : api_(api), skipDeviceBinding_(skipDeviceBinding)
+    {
+    }
+#endif
     ~HixlTransport() override;
 
     Status Init(const std::vector<int32_t> &deviceIds) override;
@@ -60,17 +64,19 @@ private:
     struct RegisteredDeviceMemory {
         uintptr_t addr;
         uint64_t size;
-        ::hixl::MemHandle handle;
+        DsHixlMemHandle handle;
     };
 
     struct RegisteredHostMemory {
         int32_t devId;
         uintptr_t addr;
         uint64_t size;
-        ::hixl::MemHandle handle;
+        DsHixlMemHandle handle;
     };
 
-    Status InitializeSingleDevice(int32_t devId, const std::string &bufferPool);
+    Status InitializeSingleDevice(int32_t devId, const std::string &bufferPool, DsHixlEngineHandle &engine,
+                                  std::string &endpoint);
+    void DestroyEngine(DsHixlEngineHandle engine) const;
     Status ValidateDeviceMemoryRegistrationInputs(const std::vector<void *> &addrs,
                                                   const std::vector<uint64_t> &sizes) const;
     static std::string FormatDeviceMemoryRanges(const std::vector<RegisteredDeviceMemory> &registrations);
@@ -82,8 +88,8 @@ private:
     void ClearRegisteredHostMemory();
     bool IsHixlRoceDirectMode() const;
 
-    // Per-device HIXL engines: devId -> engine
-    std::map<int32_t, std::unique_ptr<::hixl::Hixl>> engines_;
+    // Per-device plugin-owned HIXL engines: devId -> opaque engine handle.
+    std::map<int32_t, DsHixlEngineHandle> engines_;
     // Base local IP (shared across all devices)
     std::string localIp_;
     // Whether this process is a client
@@ -100,6 +106,10 @@ private:
     std::mutex transferMutex_;
     std::vector<RegisteredDeviceMemory> registeredDeviceMemories_;
     std::vector<RegisteredHostMemory> registeredHostMemories_;
+    const DsHixlApi *api_ = nullptr;
+#ifdef WITH_TESTS
+    bool skipDeviceBinding_ = false;
+#endif
 };
 
 }  // namespace datasystem

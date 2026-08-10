@@ -57,6 +57,16 @@ Status SetRH2DLocalEndpointIp(const std::string &localIp)
     return Status::OK();
 }
 
+Status InitializeRemoteH2DManager()
+{
+#ifdef USE_NPU
+    if (RemoteH2DManager::IsRemoteH2DEnabled()) {
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetInitStatus());
+    }
+#endif
+    return Status::OK();
+}
+
 uint64_t GenerateReqId()
 {
 #ifdef USE_URMA

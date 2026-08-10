@@ -10,6 +10,25 @@ load(
 package(default_visibility = ["//src/datasystem:__subpackages__"])
 
 ds_cc_library(
+    name = "hixl_plugin_api",
+    hdrs = ["hixl_plugin_api.h"],
+    visibility = [
+        "//src/datasystem:__subpackages__",
+        "//tests:__subpackages__",
+    ],
+)
+
+genrule(
+    name = "hixl_plugin_sha256",
+    srcs = ["//src/datasystem/common/rdma/npu/plugin:libds_hixl_plugin.so"],
+    outs = ["hixl_plugin_sha256.h"],
+    cmd = """
+hash_value=$$(sha256sum $(location //src/datasystem/common/rdma/npu/plugin:libds_hixl_plugin.so) | cut -d' ' -f1)
+printf '#ifndef HIXL_PLUGIN_SHA256_H\\n#define HIXL_PLUGIN_SHA256_H\\n\\n#define HIXL_PLUGIN_SHA256 "%s"\\n\\n#endif // HIXL_PLUGIN_SHA256_H\\n' "$$hash_value" > $@
+""",
+)
+
+ds_cc_library(
     name = "remote_h2d_manager_header",
     # srcs = [
     #     "remote_h2d_manager.cpp",

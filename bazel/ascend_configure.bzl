@@ -83,11 +83,13 @@ def _ascend_configure_impl(repository_ctx):
     ascend_linkopts = []
     hccl_linkopts = []
     hixl_linkopts = []
+    hixl_plugin_linkopts = []
     defines = []
     hixl_defines = []
     hixl_srcs = []
     hixl_hdrs = []
     hixl_deps = []
+    hixl_plugin_targets = []
 
     if root_path.exists:
         repository_ctx.symlink(root_path, "ascend")
@@ -126,10 +128,24 @@ def _ascend_configure_impl(repository_ctx):
             "-lcann_hixl",
             "-lmetadef",
         ])
+        hixl_plugin_linkopts.extend([
+            "-L" + lib_dir,
+            "-Wl,--no-as-needed",
+            "-lascendcl",
+            "-lcann_hixl",
+            "-lmetadef",
+            "-Wl,--as-needed",
+        ])
         hixl_defines.append("ASCEND_HIXL_AVAILABLE")
         hixl_srcs.append("hixl_transport.cpp")
-        hixl_hdrs.append("hixl_transport.h")
-        hixl_deps.append("@local_ascend//:hixl")
+        hixl_srcs.append("hixl_plugin_loader.cpp")
+        hixl_hdrs.extend([
+            "hixl_plugin_api.h",
+            "hixl_plugin_loader.h",
+            "hixl_transport.h",
+            ":hixl_plugin_sha256",
+        ])
+        hixl_plugin_targets.append("//src/datasystem/common/rdma/npu/plugin:libds_hixl_plugin.so")
 
     if acl_rt.exists and "aclrtMemRetainAllocationHandle" in repository_ctx.read(acl_rt):
         defines.append("ASCEND_SUPPORT_FABRIC_MEM")
@@ -158,12 +174,20 @@ cc_library(
     linkopts = {hixl_linkopts},
     deps = [":ascendcl"],
 )
+
+cc_library(
+    name = "hixl_plugin_sdk",
+    defines = {hixl_defines},
+    includes = {includes},
+    linkopts = {hixl_plugin_linkopts},
+)
 """.format(
             ascend_linkopts = _list(ascend_linkopts),
             defines = _list(defines),
             hccl_linkopts = _list(hccl_linkopts),
             hixl_defines = _list(hixl_defines),
             hixl_linkopts = _list(hixl_linkopts),
+            hixl_plugin_linkopts = _list(hixl_plugin_linkopts),
             includes = _list(includes),
         ),
     )
@@ -174,10 +198,12 @@ ASCEND_HIXL_SRCS = {hixl_srcs}
 ASCEND_HIXL_HDRS = {hixl_hdrs}
 ASCEND_HIXL_DEPS = {hixl_deps}
 ASCEND_HIXL_DEFINES = {hixl_defines}
+ASCEND_HIXL_PLUGIN_TARGETS = {hixl_plugin_targets}
 """.format(
             hixl_defines = _list(hixl_defines),
             hixl_deps = _list(hixl_deps),
             hixl_hdrs = _list(hixl_hdrs),
+            hixl_plugin_targets = _list(hixl_plugin_targets),
             hixl_srcs = _list(hixl_srcs),
         ),
     )

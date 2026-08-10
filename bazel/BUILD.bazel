@@ -8,6 +8,7 @@ load(
     "GLIBC_2_38_PLATFORM",
 )
 load("@local_python_info//:version.bzl", "PYTHON_MINOR")
+load("@local_ascend//:ascend_config.bzl", "ASCEND_HIXL_PLUGIN_TARGETS")
 load("@rules_python//python:defs.bzl", "py_library")
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
 load("//bazel:datasystem_sdk.bzl", "datasystem_sdk_tree")
@@ -58,12 +59,14 @@ py_package(
 
 datasystem_sdk_tree(
     name = "datasystem_sdk",
+    audits = ["//:cann_dependency_audit"],
     build_tpl = ":datasystem_sdk_cpp.BUILD.tpl",
     cmake_config = [":cmake_config_files"],
     headers = ["//include/datasystem:headers_srcs"],
     libdatasystem = "//:libdatasystem_file",
     libworker = "//:libdatasystem_worker_shared_file",
     libcoordinator = "//:libdatasystem_coordinator_shared_file",
+    hixl_plugins = ASCEND_HIXL_PLUGIN_TARGETS,
     urma_libs = select({
         "//:enable_urma": ["@local_urma//:urma_libs"],
         "//conditions:default": [],
@@ -183,6 +186,7 @@ py_wheel(
     deps = [
         ":datasystem_client",
         "//:cluster_config_file",
+        "//:cann_dependency_audit",
         "//:commit_id_file",
         "//:coordinator_config_file",
         "//:cpp_template_files",
@@ -194,6 +198,7 @@ py_wheel(
         "//:dockerentry_deployment_files",
         "//:dsbench_file",
         "//:helm_chart_files",
+        "//:hixl_plugin_file",
         "//:readme_file",
         "//:version_file",
         "//:worker_config_file",

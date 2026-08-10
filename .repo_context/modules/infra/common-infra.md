@@ -185,7 +185,14 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     registration helper when they are absent; runtime calls remain dynamically loaded rather than linked to libcudart.
   - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
     CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available
-    because `hccs_transport.cpp` is not compiled and `ASCEND_HIXL_AVAILABLE` is not defined.
+    because `hixl_transport.cpp` is not compiled and `ASCEND_HIXL_AVAILABLE` is not defined. In supported builds,
+    `libdatasystem.so` and `libdatasystem_worker.so` contain only the versioned C ABI loader and opaque HIXL handles;
+    `libds_hixl_plugin.so` is the leaf that links `libascendcl.so`, `libcann_hixl.so`, and `libmetadef.so`. The loader
+    resolves that fixed-name plugin beside the calling core library, verifies its build-time SHA256, uses
+    `RTLD_NOW | RTLD_LOCAL`, validates the v1 function table, and intentionally retains the mapping until process exit.
+    Selecting HCCS without a usable plugin fails RemoteH2D initialization; it does not fall back to ROCE. Worker startup
+    propagates this failure before allocator initialization, and client configuration preserves it for the first HCCS
+    operation. The plugin boundary does not apply to `transfer_engine`.
   - HCCS RH2D pre-counts each scatter request's descriptors and reserves the active HIXL descriptor vector once so
     it does not grow or relocate while appending. There is no operator-facing descriptor cap: HIXL
     `TransferOpDesc` count is unbounded and HIXL splits the submission across the SQ queue depth internally, so

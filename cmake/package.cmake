@@ -68,6 +68,15 @@ if (BUILD_HETERO AND BUILD_HETERO_NPU)
             PERMISSIONS OWNER_READ GROUP_READ)
 endif()
 
+if (ASCEND_HIXL_HCCS_SUPPORTED)
+    install(TARGETS ds_hixl_plugin
+            DESTINATION ${DATASYSTEM_SDK_USER_LIBPATH}
+            PERMISSIONS OWNER_READ GROUP_READ)
+    install(TARGETS ds_hixl_plugin
+            DESTINATION ${DATASYSTEM_SDK_USER_NEW_LIBPATH}
+            PERMISSIONS OWNER_READ GROUP_READ)
+endif()
+
 set(etcdapi_proto_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
 if (BUILD_HETERO AND BUILD_HETERO_GPU)
     # Set the permission of cuda_plugin to 440
@@ -172,6 +181,9 @@ if (BUILD_PYTHON_API)
 
     if (BUILD_HETERO AND BUILD_HETERO_NPU)
         list(APPEND DEPEND_TARGETS acl_plugin)
+    endif()
+    if (ASCEND_HIXL_HCCS_SUPPORTED)
+        list(APPEND DEPEND_TARGETS ds_hixl_plugin)
     endif()
     if (BUILD_HETERO AND BUILD_HETERO_GPU)
         list(APPEND DEPEND_TARGETS cuda_plugin)
@@ -290,6 +302,11 @@ install_datasystem_target(etcdapi_proto)
 install_datasystem_target(common_flags)
 install_datasystem_target(datasystem_worker_shared)
 install_datasystem_target(datasystem_coordinator_shared)
+if (ASCEND_HIXL_HCCS_SUPPORTED)
+    install(TARGETS ds_hixl_plugin
+            DESTINATION ${DATASYSTEM_SERVICE_LIBPATH}
+            PERMISSIONS OWNER_READ GROUP_READ)
+endif()
 set(common_flags_INSTALL_LIBPATH ${DATASYSTEM_SERVICE_LIBPATH})
 set(datasystem_worker_shared_INSTALL_LIBPATH ${DATASYSTEM_SERVICE_LIBPATH})
 set(datasystem_coordinator_shared_INSTALL_LIBPATH ${DATASYSTEM_SERVICE_LIBPATH})
@@ -394,6 +411,9 @@ if (BUILD_PYTHON_API)
 
         if (BUILD_HETERO AND BUILD_HETERO_NPU)
             list(APPEND DEPEND_TARGETS acl_plugin)
+        endif()
+        if (ASCEND_HIXL_HCCS_SUPPORTED)
+            list(APPEND DEPEND_TARGETS ds_hixl_plugin)
         endif()
         if (BUILD_HETERO AND BUILD_HETERO_GPU)
             list(APPEND DEPEND_TARGETS cuda_plugin)

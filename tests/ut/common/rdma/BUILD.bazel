@@ -1,0 +1,11 @@
+"""Unit tests for the CANN-independent HIXL plugin ABI."""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "hixl_plugin_api_test",
+    srcs = ["hixl_plugin_api_test.cpp"],
+    deps = ["//src/datasystem/common/rdma/npu:hixl_plugin_api"],
+)

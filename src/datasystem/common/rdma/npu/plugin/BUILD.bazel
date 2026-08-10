@@ -1,0 +1,19 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "libds_hixl_plugin.so",
+    srcs = ["hixl_plugin.cpp"],
+    additional_linker_inputs = ["hixl_plugin.map"],
+    copts = [
+        "-fvisibility=hidden",
+        "-fvisibility-inlines-hidden",
+    ],
+    linkopts = ["-Wl,--version-script,$(location hixl_plugin.map)"],
+    linkshared = True,
+    deps = [
+        "//src/datasystem/common/rdma/npu:hixl_plugin_api",
+        "@local_ascend//:hixl_plugin_sdk",
+    ],
+)
