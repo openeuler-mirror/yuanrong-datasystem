@@ -95,7 +95,16 @@ public:
     Status WaitForStartupHealth(const std::function<Status()> &refresh, const std::function<bool()> &healthy,
                                 const std::function<Status()> &probe, const std::function<bool()> &interrupted)
     {
-        return server_->WaitForStartupHealth(refresh, healthy, probe, interrupted, std::chrono::milliseconds(1));
+        return server_->WaitForStartupHealth([] { return Status::OK(); }, refresh, healthy, probe, interrupted,
+                                             std::chrono::milliseconds(1));
+    }
+
+    Status WaitForStartupHealth(const std::function<Status()> &reconcile, const std::function<Status()> &refresh,
+                                const std::function<bool()> &healthy, const std::function<Status()> &probe,
+                                const std::function<bool()> &interrupted)
+    {
+        return server_->WaitForStartupHealth(reconcile, refresh, healthy, probe, interrupted,
+                                             std::chrono::milliseconds(1));
     }
 
 protected:
@@ -217,6 +226,29 @@ TEST_F(WorkerOCServerTest, StartupHealthPublicationFailureIsRetried)
     EXPECT_TRUE(status.IsOk()) << status.ToString();
     EXPECT_EQ(refreshCount, 2UL);
     EXPECT_EQ(probeCount, 1UL);
+}
+
+TEST_F(WorkerOCServerTest, StartupHealthWaitReevaluatesReconciliationBeforeEachRefresh)
+{
+    size_t reconciliationCount = 0;
+    size_t refreshCount = 0;
+    bool reconciliationReady = false;
+    bool healthy = false;
+    const auto status = WaitForStartupHealth(
+        [&] {
+            reconciliationReady = ++reconciliationCount >= 2;
+            return Status::OK();
+        },
+        [&] {
+            ++refreshCount;
+            healthy = reconciliationReady;
+            return Status::OK();
+        },
+        [&] { return healthy; }, [] { return Status::OK(); }, [] { return false; });
+
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(reconciliationCount, 2UL);
+    EXPECT_EQ(refreshCount, 2UL);
 }
 
 TEST_F(WorkerOCServerTest, StartupHealthWaitStopsCleanlyOnTermination)

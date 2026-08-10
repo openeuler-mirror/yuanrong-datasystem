@@ -482,9 +482,9 @@ private:
      */
     Status WaitForServiceReady();
 
-    Status WaitForStartupHealth(const std::function<Status()> &refresh, const std::function<bool()> &healthy,
-                                const std::function<Status()> &probe, const std::function<bool()> &interrupted,
-                                std::chrono::milliseconds retryInterval);
+    Status WaitForStartupHealth(const std::function<Status()> &reconcile, const std::function<Status()> &refresh,
+                                const std::function<bool()> &healthy, const std::function<Status()> &probe,
+                                const std::function<bool()> &interrupted, std::chrono::milliseconds retryInterval);
 
     /**
      * @brief Prepare local warmup object and start async URMA peer connection warmup if enabled.

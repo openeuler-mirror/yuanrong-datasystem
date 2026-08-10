@@ -2158,6 +2158,7 @@ Status WorkerOCServer::WaitForServiceReady()
         HealthCheckReplyPb reply;
         constexpr auto readinessRetryInterval = std::chrono::seconds(1);
         RETURN_IF_NOT_OK(WaitForStartupHealth(
+            [this] { return objCacheClientWorkerSvc_->GiveUpReconciliation(); },
             [this] { return objCacheClientWorkerSvc_->RefreshStartupHealth(); }, [] { return IsHealthy(); },
             [&stub, &req, &reply] { return FLAGS_use_brpc ? Status::OK() : stub->HealthCheck(req, reply); },
             [] { return IsTermSignalReceived(); }, readinessRetryInterval));
@@ -2167,7 +2168,8 @@ Status WorkerOCServer::WaitForServiceReady()
     return Status::OK();
 }
 
-Status WorkerOCServer::WaitForStartupHealth(const std::function<Status()> &refresh,
+Status WorkerOCServer::WaitForStartupHealth(const std::function<Status()> &reconcile,
+                                            const std::function<Status()> &refresh,
                                             const std::function<bool()> &healthy,
                                             const std::function<Status()> &probe,
                                             const std::function<bool()> &interrupted,
@@ -2176,7 +2178,10 @@ Status WorkerOCServer::WaitForStartupHealth(const std::function<Status()> &refre
     constexpr int readinessRetryLogEveryCount = 10;
     Status lastStatus(K_NOT_READY, "Worker startup health is still gated");
     while (!interrupted()) {
-        auto rc = refresh();
+        auto rc = reconcile();
+        if (rc.IsOk()) {
+            rc = refresh();
+        }
         if (rc.IsError()) {
             lastStatus = std::move(rc);
         } else if (!healthy()) {
