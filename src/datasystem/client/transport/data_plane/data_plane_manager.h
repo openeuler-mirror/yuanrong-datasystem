@@ -192,15 +192,14 @@ private:
                               TransportPhaseLatencyRecorder *recorder, std::shared_ptr<IDataTransporter> &out);
 
     EntryMap entries_;
-    // Protects entries_, the published worker admission set, and its version.
-    bthread::RWLock mutex_;
-    std::unordered_set<std::string> liveWorkers_;
+    std::shared_ptr<const std::unordered_set<std::string>> liveWorkers_;
+    bthread::Mutex probeMutex_;
     std::vector<std::string> writeProbeWorkers_;
     std::unordered_map<std::string, size_t> writeProbeWorkerIndices_;
-    uint64_t workerSnapshotVersion_{ 0 };
-    bool hasWorkerSnapshot_{ false };
     std::string probePreferredWorker_;
     std::string lastProbeWorker_;
+    std::atomic<uint64_t> workerSnapshotVersion_{ 0 };
+    std::atomic<bool> hasWorkerSnapshot_{ false };
     std::atomic<bool> shutdown_{ false };
     std::shared_ptr<Signature> signature_;
     BrpcChannelConfig channelConfig_;
