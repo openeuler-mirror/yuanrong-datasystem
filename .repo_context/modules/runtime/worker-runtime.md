@@ -130,7 +130,9 @@
     another availability-level transition. The health marker is written by
     atomic temporary-file replacement; revocation directly unlinks it and treats only `ENOENT` as idempotent success.
     The startup poll has no fixed topology deadline, so a slow ScaleOut keeps the joining process alive and externally
-    unready instead of failing startup. `ReadinessProbe`
+    unready instead of failing startup. Before each health refresh, that poll also reevaluates the restart-reconciliation
+    give-up deadline; expiry can therefore open only the reconciliation gate even when no new topology snapshot arrives,
+    while committed membership and placement checks still control health publication. `ReadinessProbe`
     owns the single service-health wait even when no ready-check path is configured; brpc mode skips only the loopback
     RPC after health opens. SIGTERM ends that wait successfully so shutdown does not turn an in-progress startup into a
     process failure. The ready-check file is written only
