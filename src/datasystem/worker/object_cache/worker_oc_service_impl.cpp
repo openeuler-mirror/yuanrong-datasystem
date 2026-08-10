@@ -1545,7 +1545,9 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
     if ((hashWorkerNum > 0 && numRecon_ >= hashWorkerNum) || (hashWorkerNum < 0 && numRecon_ >= 1)) {
         LOG(INFO) << "Reconciliation with all masters is done.";
         if (req.is_restart()) {
-            LOG(INFO) << "Restart reconciliation finished. Keep health gated by committed topology.";
+            LOG(INFO) << "WORKER_STARTUP state=WAITING gate=topology reason=reconciliation_complete completed="
+                      << numRecon_ << " expected=" << hashWorkerNum << " health_published="
+                      << (setHealthFile_.load(std::memory_order_acquire) ? "true" : "false");
             if (!topologyEngine_->HasEstablishedMemberLease() && controlBackendAvailableAtStartup_) {
                 RETURN_STATUS(K_NOT_READY,
                               "Setting the health file is not allowed before the first lease is successfully created");
@@ -1559,7 +1561,9 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
             reconciliationReady_.store(true, std::memory_order_release);
         }
     } else {
-        LOG(INFO) << "Has finished reconciliation master num: " << numRecon_ << ", total expect num: " << hashWorkerNum;
+        LOG(INFO) << "WORKER_STARTUP state=WAITING gate=reconciliation completed=" << numRecon_
+                  << " expected=" << hashWorkerNum << " health_published="
+                  << (setHealthFile_.load(std::memory_order_acquire) ? "true" : "false");
     }
     INJECT_POINT("WorkerOCServiceImpl.Reconciliation.expectedReconNum", [this](int expectedReconNum) {
         if (!setHealthFile_.load() && expectedReconNum > 0 && numRecon_ >= expectedReconNum) {
@@ -2408,7 +2412,7 @@ Status WorkerOCServiceImpl::HandleTopologyServingFailure(const Status &failure)
     }
     if (IsTopologyPending(failure)) {
         LOG_FIRST_AND_EVERY_N(INFO, STARTUP_HEALTH_LOG_EVERY_COUNT)
-            << "Worker health remains closed while topology placement is pending: " << failure.ToString();
+            << "WORKER_STARTUP state=BLOCKED gate=topology reason=placement_pending detail=" << failure.ToString();
         return Status::OK();
     }
     return failure;
@@ -2531,7 +2535,8 @@ Status WorkerOCServiceImpl::RefreshStartupHealth()
     }
     if (!reconciliationReady_.load(std::memory_order_acquire)) {
         LOG_FIRST_AND_EVERY_N(INFO, STARTUP_HEALTH_LOG_EVERY_COUNT)
-            << "Worker health remains closed while startup reconciliation is incomplete.";
+            << "WORKER_STARTUP state=BLOCKED gate=reconciliation reason=incomplete health_published="
+            << (setHealthFile_.load(std::memory_order_acquire) ? "true" : "false");
         return Status::OK();
     }
     auto rc = topologyEngine_->CheckLocalServingReady(TOPOLOGY_READINESS_PROBE_KEY);
@@ -2555,7 +2560,7 @@ Status WorkerOCServiceImpl::RefreshStartupHealth()
         return HandleTopologyServingFailure(rc);
     }
     setHealthFile_.store(true, std::memory_order_release);
-    LOG(INFO) << "Worker health published after startup reconciliation and topology placement became ready.";
+    LOG(INFO) << "WORKER_STARTUP state=READY reconciliation_ready=true topology_ready=true health_published=true";
     return Status::OK();
 }
 
@@ -2596,7 +2601,8 @@ Status WorkerOCServiceImpl::ScheduleReconciliationRequest(const std::string &mas
         ReconciliationRspPb rsp;
         req.set_event_timestamp(eventTimestamp);
         LOG_IF_ERROR(api->ReconcileMembershipChange(req, rsp),
-                     "Restart reconciliation request failed for metadata owner " + masterAddress);
+                     FormatString("WORKER_STARTUP state=BLOCKED gate=reconciliation peer=%s reason=request_failed",
+                                  masterAddress));
     }));
     return Status::OK();
 }
@@ -2758,8 +2764,8 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
     Raii logReconFlagCost([&holdReconFlagTimer, &finishReason, this]() {
         constexpr int logPerCount = 10;
         LOG_FIRST_AND_EVERY_N(INFO, logPerCount)
-            << "GiveUpReconciliation held reconFlag, elapsed ms: " << holdReconFlagTimer.ElapsedMilliSecond()
-            << ", reason: " << finishReason << ", numRecon: " << numRecon_;
+            << "WORKER_STARTUP state=WAITING gate=reconciliation reason=" << finishReason
+            << " completed=" << numRecon_ << " check_elapsed_ms=" << holdReconFlagTimer.ElapsedMilliSecond();
     });
     bool shouldSetReady = false;
     RETURN_IF_NOT_OK(CheckGiveUpReconciliationAfterLock(waitMs, finishReason, shouldSetReady));
@@ -2785,25 +2791,24 @@ Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, s
     RETURN_IF_NOT_OK(GetExpectedReconciliationCount(hashWorkerNum));
     // no need to set health or not ready to set health
     if (setHealthFile_) {
-        finishReason = "health file has already been set";
+        finishReason = "health_already_published";
         return Status::OK();
     }
     if (numRecon_ < hashWorkerNum && GetSteadyClockTimeStampMs() - lastReconTime_ <= waitMs) {
-        finishReason = FormatString("waiting for reconciliation, expected: %d", hashWorkerNum);
+        finishReason = FormatString("reconciliation_incomplete expected=%d", hashWorkerNum);
         return Status::OK();
     }
     if (!topologyEngine_->HasEstablishedMemberLease()) {
-        finishReason = "first keepalive is not sent";
+        finishReason = "initial_keepalive_pending";
         return Status::OK();
     }
     shouldSetReady = true;
     if (numRecon_ < hashWorkerNum) {
-        finishReason = FormatString("give up waiting, expected: %d", hashWorkerNum);
-        LOG(ERROR) << "Did not finish reconciling with all masters within " << MAX_WAIT_TIME_SEC << " seconds. Give up."
-                   << " Plan to reconciliate with: " << hashWorkerNum << ", had reconciliated with: " << numRecon_;
-        LOG(WARNING) << "Topology reconciliation timed out before all expected masters replied.";
+        finishReason = FormatString("reconciliation_timeout expected=%d", hashWorkerNum);
+        LOG(ERROR) << "WORKER_STARTUP state=RECONCILIATION_TIMEOUT gate=reconciliation completed=" << numRecon_
+                   << " expected=" << hashWorkerNum << " timeout_s=" << MAX_WAIT_TIME_SEC << " action=give_up";
     } else {
-        finishReason = FormatString("all reconciliations received, expected: %d", hashWorkerNum);
+        finishReason = FormatString("reconciliation_complete expected=%d", hashWorkerNum);
     }
     return Status::OK();
 }
