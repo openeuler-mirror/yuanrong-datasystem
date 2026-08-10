@@ -292,9 +292,7 @@ Memory Rebalance 用于在 worker 之间均衡 Object/KV 缓存使用的共享�
 | global.memoryRebalance.enabled | bool | `false` | 是否开启由 master 调度的内存均衡能力。设置为 `true` 后，master 会尝试将高共享内存使用率 worker 上的对象迁移到低使用率 worker，以均衡集群内 object cache 的共享内存压力 |
 | global.memoryRebalance.rebalanceSourceUsagePercent | int | `70` | source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。取值范围：1-100 |
 | global.memoryRebalance.rebalanceUsageGapPercent | int | `20` | source 与 target worker 之间的最小共享内存使用率差值（百分比）。仅当差值不小于该值时才下发迁移任务。取值范围：1-100 |
-| global.memoryRebalance.rebalanceCooldownS | int | `60` | worker 在一次失败或超时的均衡任务后的冷却时间（秒），冷却期内不再被选为均衡源 |
-| global.memoryRebalance.rebalanceTaskReportGraceMs | int | `60000` | 均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试 |
-| global.memoryRebalance.rebalanceMaxMigrateBytesPerRound | string | `"1073741824"` | 单次内存均衡任务最多迁移的数据量（字节），必须大于 0，默认 1GB（1073741824）。超过 5 位的数字需配置为字符串以避免 helm 渲染为科学计数法 |
+| global.memoryRebalance.rebalanceTaskReportGraceMs | int | `30000` | 均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试 |
 
 **样例**：
 
@@ -304,11 +302,10 @@ global:
     enabled: true
     rebalanceSourceUsagePercent: 70
     rebalanceUsageGapPercent: 20
-    rebalanceCooldownS: 60
-    rebalanceTaskReportGraceMs: 60000
-    # 超过 5 位的数字需配置为字符串以避免被渲染为科学计数法。
-    rebalanceMaxMigrateBytesPerRound: "1073741824"
+    rebalanceTaskReportGraceMs: 30000
 ```
+
+> 兼容性说明：`rebalanceCooldownS` 与 `rebalanceMaxMigrateBytesPerRound` 已移除，冷却时长固定为 60s、单次任务迁移上限固定为 1GB。升级前请从自定义 `workerGflagParams`/`extraArgs` 及历史 `values.yaml` 中移除这两项，否则 worker 会因识别到未知 flag 而启动失败。
 
 ### 日志与可观测相关配置
 

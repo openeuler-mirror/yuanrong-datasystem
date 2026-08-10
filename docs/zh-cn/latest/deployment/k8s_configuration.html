@@ -1245,20 +1245,10 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">20</span></code></p></td>
 <td><p>source 与 target worker 之间的最小共享内存使用率差值（百分比）。仅当差值不小于该值时才下发迁移任务。取值范围：1-100</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.memoryRebalance.rebalanceCooldownS</p></td>
+<tr class="row-odd"><td><p>global.memoryRebalance.rebalanceTaskReportGraceMs</p></td>
 <td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
-<td><p>worker 在一次失败或超时的均衡任务后的冷却时间（秒），冷却期内不再被选为均衡源</p></td>
-</tr>
-<tr class="row-even"><td><p>global.memoryRebalance.rebalanceTaskReportGraceMs</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">60000</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">30000</span></code></p></td>
 <td><p>均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.memoryRebalance.rebalanceMaxMigrateBytesPerRound</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;1073741824&quot;</span></code></p></td>
-<td><p>单次内存均衡任务最多迁移的数据量（字节），必须大于 0，默认 1GB（1073741824）。超过 5 位的数字需配置为字符串以避免 helm 渲染为科学计数法</p></td>
 </tr>
 </tbody>
 </table>
@@ -1269,12 +1259,12 @@ document.addEventListener('DOMContentLoaded', function() {
 <span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 <span class="w">    </span><span class="nt">rebalanceSourceUsagePercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">70</span>
 <span class="w">    </span><span class="nt">rebalanceUsageGapPercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20</span>
-<span class="w">    </span><span class="nt">rebalanceCooldownS</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span>
-<span class="w">    </span><span class="nt">rebalanceTaskReportGraceMs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60000</span>
-<span class="w">    </span><span class="c1"># 超过 5 位的数字需配置为字符串以避免被渲染为科学计数法。</span>
-<span class="w">    </span><span class="nt">rebalanceMaxMigrateBytesPerRound</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1073741824&quot;</span>
+<span class="w">    </span><span class="nt">rebalanceTaskReportGraceMs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30000</span>
 </pre></div>
 </div>
+<blockquote>
+<div><p>兼容性说明：<code class="docutils literal notranslate"><span class="pre">rebalanceCooldownS</span></code> 与 <code class="docutils literal notranslate"><span class="pre">rebalanceMaxMigrateBytesPerRound</span></code> 已移除，冷却时长固定为 60s、单次任务迁移上限固定为 1GB。升级前请从自定义 <code class="docutils literal notranslate"><span class="pre">workerGflagParams</span></code>/<code class="docutils literal notranslate"><span class="pre">extraArgs</span></code> 及历史 <code class="docutils literal notranslate"><span class="pre">values.yaml</span></code> 中移除这两项，否则 worker 会因识别到未知 flag 而启动失败。</p>
+</div></blockquote>
 </section>
 <section id="id6">
 <h3>日志与可观测相关配置<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>

@@ -629,7 +629,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <dl class="cpp member">
 <dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions16connectTimeoutMsE">
 <span id="_CPPv3N14ConnectOptions16connectTimeoutMsE"></span><span id="_CPPv2N14ConnectOptions16connectTimeoutMsE"></span><span id="ConnectOptions::connectTimeoutMs__int32_t"></span><span class="n"><span class="pre">int32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">connectTimeoutMs</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">9</span></span><span class="w"> </span><span class="o"><span class="pre">*</span></span><span class="w"> </span><span class="m"><span class="pre">1000</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions16connectTimeoutMsE" title="Link to this definition">¶</a><br /></dt>
-<dd><p>客户端连接超时时间，单位为毫秒。默认值：9’000, 数值约束&gt;=500。</p>
+<dd><p>客户端连接超时时间，单位为毫秒。默认值：9’000, 数值约束&gt;=500。
+初始化阶段的 <code class="docutils literal notranslate"><span class="pre">GetSocketPath</span></code>、<code class="docutils literal notranslate"><span class="pre">RegisterClient</span></code> 等控制 RPC 从当前连接尝试预算计算超时时间，
+而不受 <code class="docutils literal notranslate"><span class="pre">requestTimeoutMs</span></code> 限制。</p>
 </dd></dl>
 
 <dl class="cpp member">
@@ -638,7 +640,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <dd><p>客户端请求超时时间，单位为毫秒。默认值0，表示与connectTimeoutMs一致，数值约束&gt;=0。</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>此值为 client 全局 RPC 超时上限。Get 类接口的 <code class="docutils literal notranslate"><span class="pre">subTimeoutMs</span></code> 参数实际生效值不超过此值，实际生效值为 <code class="docutils literal notranslate"><span class="pre">min(requestTimeoutMs,</span> <span class="pre">subTimeoutMs)</span></code>。</p>
+<p>此值为 client 运行期业务 RPC 的全局超时上限，不限制客户端初始化阶段的控制 RPC。
+Get 类接口的 <code class="docutils literal notranslate"><span class="pre">subTimeoutMs</span></code> 参数实际生效值不超过此值，
+实际生效值为 <code class="docutils literal notranslate"><span class="pre">min(requestTimeoutMs,</span> <span class="pre">subTimeoutMs)</span></code>。</p>
 </div>
 </dd></dl>
 

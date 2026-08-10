@@ -849,12 +849,8 @@ C++</label><div class="sd-tab-content docutils">
 <span class="w">    </span><span class="nt">rebalanceSourceUsagePercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">70</span>
 <span class="w">    </span><span class="c1"># source 与 target 之间的最小使用率差值（百分比），取值范围：1-100</span>
 <span class="w">    </span><span class="nt">rebalanceUsageGapPercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20</span>
-<span class="w">    </span><span class="c1"># 失败或超时后的冷却时间（秒）</span>
-<span class="w">    </span><span class="nt">rebalanceCooldownS</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span>
 <span class="w">    </span><span class="c1"># 任务上报宽限时间（毫秒）</span>
-<span class="w">    </span><span class="nt">rebalanceTaskReportGraceMs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60000</span>
-<span class="w">    </span><span class="c1"># 单次任务最多迁移数据量（字节），默认 1GB；超过 5 位需用字符串</span>
-<span class="w">    </span><span class="nt">rebalanceMaxMigrateBytesPerRound</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1073741824&quot;</span>
+<span class="w">    </span><span class="nt">rebalanceTaskReportGraceMs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30000</span>
 </pre></div>
 </div>
 <p>当 <code class="docutils literal notranslate"><span class="pre">enabled</span></code> 为 <code class="docutils literal notranslate"><span class="pre">false</span></code> 时，master 不会调度内存均衡任务，worker 在本地共享内存不足时仍按既有驱逐、Spill 和二级缓存策略处理。开启该能力后，如果集群中没有满足条件的低使用率 worker，数据仍会继续走本地驱逐、Spill 或二级缓存流程，因此该配置不能替代 Spill 或二级缓存可靠性配置。</p>
