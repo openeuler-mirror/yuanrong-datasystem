@@ -46,6 +46,7 @@
 #include "datasystem/client/transport/data_plane/shm_transporter.h"
 #include "datasystem/client/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
+#include "datasystem/client/transport/data_plane/shm_send_buffer_owner.h"
 #include "datasystem/client/transport/common/deadline_retry.h"
 #include "datasystem/client/transport/data_plane/data_plane_executor.h"
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
@@ -1220,9 +1221,11 @@ public:
 class TestUbTransporter : public UbTransporter {
 public:
     TestUbTransporter(std::shared_ptr<WorkerRpcClient> rpcClient, std::shared_ptr<UbConnection> connection)
-        : UbTransporter(std::move(rpcClient), std::move(connection))
+        : UbTransporter(std::move(rpcClient), std::move(connection)), testRpcClient_(rpcClient)
     {
     }
+
+    std::shared_ptr<WorkerRpcClient> testRpcClient_;
 
     Status writeStatus = Status::OK();
     std::vector<Status> writeStatuses;
@@ -1286,6 +1289,9 @@ protected:
         info->pointer = static_cast<uint8_t *>(calloc(size + 1, 1));
         info->shmId = ShmKey::Intern(response.shm_id());
         info->version = workerVersion;
+        // Mirror UbTransporter::BuildMCreateBuffer: attach owner for routed ref release.
+        info->receiveBufferOwner = std::make_shared<ShmSendBufferOwner>(
+            testRpcClient_, info->shmId, param.requestContext, std::weak_ptr<ThreadPool>{}, nullptr);
         return ObjectBufferInternal::Create(std::move(info), buffer);
     }
 };
@@ -6287,6 +6293,31 @@ TEST(TransportLayerTest, MSetWorkerAutoReleaseKeepsClientCleanupForFailedObjects
     EXPECT_EQ(manager->lastTransporter->releasedShmIds[0].ToString(), "fake-shm-id");
     ASSERT_EQ(result.failedKeys.size(), 1u);
     EXPECT_EQ(result.failedKeys[0], "key-b");
+}
+
+// Regression: UbTransporter::Create must attach a ShmSendBufferOwner (ManagesWorkerReference=true)
+// so Buffer::Release releases the shmId via the routed worker's RPC client, not LOCAL_WORKER.
+// Without it, DecreaseReference goes to LOCAL_WORKER, causing "shmId not exists" warnings when
+// the LOCAL_WORKER is not the worker that allocated the shmId (enableLocalCache=false + UB route).
+//
+// Directly construct and destroy ShmSendBufferOwner to verify the owner mechanism: destructor
+// triggers InvokeDecreaseReference on the routed rpcClient (not LOCAL_WORKER).
+TEST(UbTransporterTest, ShmSendBufferOwnerReleasesOnRoutedWorker)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto context = MakeRequestContext();
+    auto pool = std::make_shared<ThreadPool>(0, 1, "test_release");
+    {
+        auto owner = std::make_shared<ShmSendBufferOwner>(
+            rpcClient, ShmKey::Intern("test-shm-id"), context, pool, nullptr);
+        EXPECT_TRUE(owner->ManagesWorkerReference());
+        EXPECT_EQ(rpcClient->decreaseReferenceCount, 0);
+    }
+    // Owner destroyed: async Release via pool → InvokeDecreaseReference on rpcClient.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(rpcClient->decreaseReferenceCount, 1);
+    ASSERT_FALSE(rpcClient->decreaseReferenceShmIds.empty());
+    EXPECT_EQ(rpcClient->decreaseReferenceShmIds[0].ToString(), "test-shm-id");
 }
 }  // namespace
 }  // namespace client

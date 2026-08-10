@@ -27,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/client/transport/data_plane/shm_send_buffer_owner.h"
 #include "datasystem/client/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
@@ -162,8 +163,10 @@ std::shared_ptr<IUbReceiveBufferProvider> CreateDefaultUbReceiveBufferProvider()
 }
 
 UbTransporter::UbTransporter(std::shared_ptr<WorkerRpcClient> rpcClient, std::shared_ptr<UbConnection> conn,
-                             std::shared_ptr<IUbReceiveBufferProvider> bufferProvider)
-    : rpcClient_(std::move(rpcClient)), conn_(std::move(conn)), bufferProvider_(std::move(bufferProvider))
+                             std::shared_ptr<IUbReceiveBufferProvider> bufferProvider,
+                             std::weak_ptr<ThreadPool> releasePool)
+    : rpcClient_(std::move(rpcClient)), conn_(std::move(conn)), bufferProvider_(std::move(bufferProvider)),
+      releasePool_(std::move(releasePool))
 {
     if (bufferProvider_ == nullptr) {
         bufferProvider_ = CreateDefaultUbReceiveBufferProvider();
@@ -626,6 +629,16 @@ Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key,
         info->shmId = ShmKey::Intern(createRsp.shm_id());
         info->version = workerVersion;
 
+        // Attach owner that releases via the routed worker's RPC client (not LOCAL_WORKER).
+        try {
+            info->receiveBufferOwner = std::make_shared<ShmSendBufferOwner>(
+                rpcClient_, info->shmId, param.requestContext, releasePool_, info->ubGetBufferHandle);
+        } catch (const std::bad_alloc &e) {
+            LOG_IF_ERROR(rpcClient_->InvokeDecreaseReference(param.requestContext, info->shmId),
+                         "DecreaseReference after ShmSendBufferOwner OOM");
+            RETURN_STATUS(K_RUNTIME_ERROR, e.what());
+        }
+
         return ObjectBufferInternal::Create(info, buffer);
 #else
         static_cast<void>(buffer);
@@ -637,13 +650,19 @@ Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key,
     return Status(K_NOT_SUPPORTED, "UB Create: worker returned no URMA info; SHM-in-UB not yet supported");
 }
 
-void UbTransporter::ReleaseMCreateAllocations(const MultiCreateRspPb &response, const TransportRequestContext &context)
+void UbTransporter::ReleaseMCreateAllocations(const MultiCreateRspPb &response,
+                                                const TransportRequestContext &context,
+                                                const std::set<std::string> &skipShmIds)
 {
     if (rpcClient_ == nullptr) {
         return;
     }
     for (const auto &item : response.results()) {
         if (item.shm_id().empty()) {
+            continue;
+        }
+        // Skip shmIds that already have an owner attached (built buffer will release via owner).
+        if (skipShmIds.count(item.shm_id()) > 0) {
             continue;
         }
         Status rc = rpcClient_->InvokeDecreaseReference(context, ShmKey::Intern(item.shm_id()));
@@ -676,6 +695,20 @@ Status UbTransporter::BuildMCreateBuffer(const HostPort &workerAddr, const std::
     info->ubGetBufferHandle = std::static_pointer_cast<void>(handle);
     info->shmId = ShmKey::Intern(response.shm_id());
     info->version = workerVersion;
+    // Attach owner that releases via the routed worker's RPC client (same as Create).
+    // lifecycleHandle_ (ubGetBufferHandle) and info->ubGetBufferHandle both hold the same
+    // BufferHandle. After buffer destruction, info's ref drops but owner keeps another ref until
+    // Release completes — this ensures the UB pool slot stays valid during async DecreaseReference.
+    // The slot returns to the pool only when both refs are gone; worker ref is independent (affects
+    // worker-side shm lifecycle, not local pool reuse). No leak or double-free.
+    try {
+        info->receiveBufferOwner = std::make_shared<ShmSendBufferOwner>(
+            rpcClient_, info->shmId, param.requestContext, releasePool_, info->ubGetBufferHandle);
+    } catch (const std::bad_alloc &e) {
+        LOG_IF_ERROR(rpcClient_->InvokeDecreaseReference(param.requestContext, info->shmId),
+                     "DecreaseReference after ShmSendBufferOwner OOM");
+        RETURN_STATUS(K_RUNTIME_ERROR, e.what());
+    }
     return ObjectBufferInternal::Create(std::move(info), buffer);
 #else
     (void)workerAddr;
@@ -694,15 +727,24 @@ Status UbTransporter::BuildMCreateBuffers(const HostPort &workerAddr, const std:
                                           const MultiCreateRspPb &response, uint32_t workerVersion,
                                           std::vector<std::shared_ptr<ObjectBuffer>> &buffers)
 {
-    std::vector<std::shared_ptr<ObjectBuffer>> created;
-    created.reserve(keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
         std::shared_ptr<ObjectBuffer> buffer;
-        RETURN_IF_NOT_OK(BuildMCreateBuffer(workerAddr, keys[i], sizes[i], param, response.results(static_cast<int>(i)),
-                                            workerVersion, buffer));
-        created.emplace_back(std::move(buffer));
+        auto rc = BuildMCreateBuffer(workerAddr, keys[i], sizes[i], param, response.results(static_cast<int>(i)),
+                                     workerVersion, buffer);
+        if (rc.IsError()) {
+            // Collect shmIds from already-built buffers (they have owners and will self-release
+            // on destruction), so ReleaseMCreateAllocations can skip them.
+            std::set<std::string> builtShmIds;
+            for (const auto &b : buffers) {
+                if (b != nullptr) {
+                    builtShmIds.insert(ObjectBufferInternal::GetInfo(*b).shmId.ToString());
+                }
+            }
+            ReleaseMCreateAllocations(response, param.requestContext, builtShmIds);
+            return rc;
+        }
+        buffers.emplace_back(std::move(buffer));
     }
-    buffers = std::move(created);
     return Status::OK();
 }
 
@@ -724,11 +766,7 @@ Status UbTransporter::MCreate(const HostPort &workerAddr, const std::vector<std:
         return Status(K_RUNTIME_ERROR, "UB MCreate response count does not match request count");
     }
 
-    Status rc = BuildMCreateBuffers(workerAddr, keys, sizes, param, response, workerVersion, buffers);
-    if (rc.IsError()) {
-        ReleaseMCreateAllocations(response, param.requestContext);
-    }
-    return rc;
+    return BuildMCreateBuffers(workerAddr, keys, sizes, param, response, workerVersion, buffers);
 }
 
 Status UbTransporter::WritePayload(ObjectBufferInfo &info)

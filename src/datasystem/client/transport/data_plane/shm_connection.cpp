@@ -461,9 +461,13 @@ Status ShmSession::MmapWriteRegion(const CreateRspPb &createRsp, const Transport
     info.useSessionLockId = true;
     try {
         // Owner holds its own mmapEntry ref so the mapping outlives until the queued DecreaseReference
-        // completes (defense against unmap-before-worker-ack), and gates Publish on session liveness.
-        info.receiveBufferOwner =
-            std::make_shared<ShmSendBufferOwner>(shared_from_this(), mmapEntry, unit->id, context, releasePool_);
+        // completes (defense against unmap-before-worker-ack). CheckAlive gates Publish on both RPC
+        // client liveness and SHM session/fd data-plane liveness (preserves the original
+        // session->IsAlive() gate that covers alive_ + fdChannel_).
+        auto sessionPtr = shared_from_this();
+        info.receiveBufferOwner = std::make_shared<ShmSendBufferOwner>(
+            rpcClient_, unit->id, context, releasePool_, mmapEntry,
+            [sessionPtr]() { return sessionPtr->IsAlive(); });
     } catch (const std::bad_alloc &e) {
         // RegisterReference already incremented the worker ref; release it on OOM to avoid a leak.
         LOG_IF_ERROR(DecreaseReferenceByRequestClient(context, unit->id),

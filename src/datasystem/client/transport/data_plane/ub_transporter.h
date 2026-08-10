@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -69,7 +70,8 @@ std::shared_ptr<IUbReceiveBufferProvider> CreateDefaultUbReceiveBufferProvider()
 class UbTransporter : public IDataTransporter {
 public:
     explicit UbTransporter(std::shared_ptr<WorkerRpcClient> rpcClient, std::shared_ptr<UbConnection> conn,
-                           std::shared_ptr<IUbReceiveBufferProvider> bufferProvider = nullptr);
+                           std::shared_ptr<IUbReceiveBufferProvider> bufferProvider = nullptr,
+                           std::weak_ptr<ThreadPool> releasePool = {});
     ~UbTransporter() override = default;
 
     AccessTransportKind Kind() const override
@@ -134,7 +136,8 @@ private:
                                const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
                                const MultiCreateRspPb &response, uint32_t workerVersion,
                                std::vector<std::shared_ptr<ObjectBuffer>> &buffers);
-    void ReleaseMCreateAllocations(const MultiCreateRspPb &response, const TransportRequestContext &context);
+    void ReleaseMCreateAllocations(const MultiCreateRspPb &response, const TransportRequestContext &context,
+                                    const std::set<std::string> &skipShmIds = {});
     Status BatchGetAggregateAdaptive(const DataGetBatchRequest &inputs, const std::vector<uint64_t> &alignedSizes,
                                      size_t begin, size_t end, uint64_t rangeSize, DataGetBatchResult &outputs,
                                      std::vector<size_t> &tcpFallbackIndexes, bool &allocationPressureObserved,
@@ -146,6 +149,7 @@ private:
     std::shared_ptr<WorkerRpcClient> rpcClient_;
     std::shared_ptr<UbConnection> conn_;
     std::shared_ptr<IUbReceiveBufferProvider> bufferProvider_;
+    std::weak_ptr<ThreadPool> releasePool_;
     mutable std::shared_mutex lifecycleMutex_;
     std::atomic<uint64_t> urmaFallbackTcpPendingBytes_{0};
 };
