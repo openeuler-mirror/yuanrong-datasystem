@@ -227,6 +227,7 @@ static constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
 static constexpr int64_t URMA_WARMUP_REQUEST_TIMEOUT_MS = 5'000;
 static constexpr size_t MAX_TOPOLOGY_SCALE_IN_CLEANUP_STATES = 1'024;
 static constexpr int ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS = 10;
+static constexpr int MS_TO_US = 1000;
 static constexpr int64_t ORDINARY_RECONCILIATION_LOCK_TIMEOUT_MS = 500;
 static constexpr int64_t REJOIN_RECONCILIATION_LOCK_TIMEOUT_MS = 10'000;
 uint64_t PayloadBytes(const std::vector<RpcMessage> &payloads)
@@ -980,7 +981,7 @@ Status WorkerOCServiceImpl::CleanupLocalStateForRejoin(std::chrono::steady_clock
     while (!ordinaryRpcDrain.TryLockIfUnlocked()) {
         CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                                  "rejoin cleanup waits for ordinary RPC drain timed out");
-        (void)bthread_usleep(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS * 1000);
+        (void)bthread_usleep(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS * MS_TO_US);
     }
     if (localMetadataCleanupForRejoin_ != nullptr) {
         RETURN_IF_NOT_OK(localMetadataCleanupForRejoin_());
@@ -1376,7 +1377,7 @@ Status WorkerOCServiceImpl::ValidateWorkerState(BthreadReadGuard &noRecon, int r
             LOG(INFO) << "Waiting for the reconFlag...";
             hasLoggedBeforeWait = true;
         }
-        (void)bthread_usleep(INTERVAL_MS * 1000);
+        (void)bthread_usleep(INTERVAL_MS * MS_TO_US);
         rc = noRecon.TryLockIfUnlocked();
     }
     if (!rc) {
@@ -1471,7 +1472,7 @@ Status WorkerOCServiceImpl::PrepareRestartReconciliation(const PushMetaToWorkerR
 }
 
 Status WorkerOCServiceImpl::LockReconciliationIfWorkerUnhealthy(BthreadWriteGuard &haveRecon,
-                                                              bool isRestartReconciliation)
+                                                                bool isRestartReconciliation)
 {
     if (IsHealthy()) {
         return Status::OK();
@@ -1483,7 +1484,7 @@ Status WorkerOCServiceImpl::LockReconciliationIfWorkerUnhealthy(BthreadWriteGuar
     while (!haveRecon.TryLockIfUnlocked()) {
         CHECK_FAIL_RETURN_STATUS(timer.ElapsedMilliSecond() < lockTimeoutMs, K_NOT_READY,
                                  "rejoin cleanup is in progress");
-        (void)bthread_usleep(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS * 1000);
+        (void)bthread_usleep(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS * MS_TO_US);
     }
     if (timer.ElapsedMilliSecond() > 0) {
         LOG(INFO) << "Reconciliation waited for reconFlag, elapsed ms: " << timer.ElapsedMilliSecond();
