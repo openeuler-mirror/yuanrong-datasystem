@@ -24,6 +24,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
@@ -245,7 +246,7 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
             });
             VLOG(1) << FormatString("OOM, sleep time: %ld, objectKey: %s, needSize %ld", sleepTime, objectKey,
                                     needSize);
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
+            SleepCurrentFor(std::chrono::milliseconds(sleepTime));
             rc = shmUnit.AllocateMemory(tenantId, needSize, populate, ServiceType::OBJECT,
                                         static_cast<memory::CacheType>(cacheType));
             if (rc.GetCode() != K_OUT_OF_MEMORY) {
