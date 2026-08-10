@@ -600,6 +600,9 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedInfos, bool &dataSizeChange)
 {
     PerfPoint all(PerfKey::WORKER_HANDLE_BATCH_GET_RESPONSE);
+    if (infos.empty()) {
+        return status;
+    }
     Status lastRc;
     uint64_t payloadIndex = 0;
     auto iter = infos.begin();

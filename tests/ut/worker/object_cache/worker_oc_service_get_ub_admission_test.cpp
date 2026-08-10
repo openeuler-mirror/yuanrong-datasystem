@@ -16,8 +16,10 @@
 
 #include <gtest/gtest.h>
 
+#include <list>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "datasystem/common/object_cache/peer_ub_admission.h"
@@ -74,6 +76,29 @@ TEST(WorkerOcServiceGetUbAdmissionTest, UnavailableDataWorkerReadSourceFailsFast
 
     ASSERT_TRUE(rc.IsError());
     EXPECT_EQ(rc.GetCode(), StatusCode::K_URMA_DATA_WORKER_UNAVAILABLE);
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, EmptyBatchResponsePreservesRequestError)
+{
+    WorkerRequestManager requestManager;
+    auto param = BuildGetParam(requestManager, std::make_shared<ObjectTable>());
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, LOCAL_WORKER, nullptr, nullptr);
+    Status checkConnectStatus;
+    std::list<WorkerOcServiceGetImpl::GetObjectInfo> infos;
+    BatchGetObjectRemoteRspPb rsp;
+    std::vector<RpcMessage> payloads;
+    std::vector<std::string> successIds;
+    std::vector<ReadKey> needRetryIds;
+    std::unordered_set<std::string> failedIds;
+    std::list<WorkerOcServiceGetImpl::GetObjectInfo> failedInfos;
+    bool dataSizeChange = false;
+    Status requestError(K_RPC_UNAVAILABLE, "batch request failed before per-object handling");
+
+    auto rc = getImpl.ProcessBatchResponse(DATA_WORKER.ToString(), checkConnectStatus, infos, nullptr, requestError,
+                                           rsp, payloads, successIds, needRetryIds, failedIds, failedInfos,
+                                           dataSizeChange);
+
+    EXPECT_EQ(rc, requestError);
 }
 
 TEST(WorkerOcServiceGetUbAdmissionTest, LegacyRemoteReadFailureDoesNotHardQuarantineDataWorker)
