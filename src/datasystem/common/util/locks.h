@@ -25,6 +25,8 @@
 #include <thread>
 #include <unordered_set>
 
+#include <bthread/rwlock.h>
+
 namespace datasystem {
 /**
  * @brief Write-preferring RW locks. The writer will block new readers while waiting for lock.
@@ -269,6 +271,128 @@ public:
 
 private:
     WriterPrefRWLock *lock_ = nullptr;
+    bool locked_ = false;
+};
+
+// bthread-aware RW lock for brpc worker bthread context. Contended waiters butex-yield instead of
+// spinning the pthread worker. Same RAII usage as ReadLock/WriteLock (Assign + TryLockIfUnlocked + dtor).
+class BthreadRwLock {
+public:
+    BthreadRwLock()
+    {
+        bthread_rwlock_init(&rwlock_, nullptr);
+    }
+    ~BthreadRwLock()
+    {
+        bthread_rwlock_destroy(&rwlock_);
+    }
+    BthreadRwLock(const BthreadRwLock &) = delete;
+    BthreadRwLock &operator=(const BthreadRwLock &) = delete;
+
+    void ReadLock()
+    {
+        bthread_rwlock_rdlock(&rwlock_);
+    }
+    void ReadUnlock()
+    {
+        bthread_rwlock_unlock(&rwlock_);
+    }
+    bool TryReadLock()
+    {
+        return 0 == bthread_rwlock_tryrdlock(&rwlock_);
+    }
+    void WriteLock()
+    {
+        bthread_rwlock_wrlock(&rwlock_);
+    }
+    void WriteUnlock()
+    {
+        bthread_rwlock_unlock(&rwlock_);
+    }
+    bool TryWriteLock()
+    {
+        return 0 == bthread_rwlock_trywrlock(&rwlock_);
+    }
+
+private:
+    bthread_rwlock_t rwlock_;
+};
+
+class BthreadReadGuard {
+public:
+    explicit BthreadReadGuard(BthreadRwLock *lock) : lock_(lock)
+    {
+        lock_->ReadLock();
+        locked_ = true;
+    }
+    BthreadReadGuard() : lock_(nullptr), locked_(false) {}
+    ~BthreadReadGuard()
+    {
+        if (locked_) {
+            lock_->ReadUnlock();
+        }
+    }
+    void Assign(BthreadRwLock *lock) { lock_ = lock; }
+    bool TryLockIfUnlocked()
+    {
+        if (!locked_) {
+            locked_ = lock_->TryReadLock();
+            return locked_;
+        }
+        return false;
+    }
+    bool UnlockIfLocked()
+    {
+        if (locked_) {
+            lock_->ReadUnlock();
+            locked_ = false;
+            return true;
+        }
+        return false;
+    }
+
+private:
+    BthreadRwLock *lock_ = nullptr;
+    bool locked_ = false;
+};
+
+class BthreadWriteGuard {
+public:
+    explicit BthreadWriteGuard(BthreadRwLock *lock) : lock_(lock)
+    {
+        if (lock_ != nullptr) {
+            lock_->WriteLock();
+            locked_ = true;
+        }
+    }
+    BthreadWriteGuard() : lock_(nullptr), locked_(false) {}
+    ~BthreadWriteGuard()
+    {
+        if (locked_) {
+            lock_->WriteUnlock();
+        }
+    }
+    void Assign(BthreadRwLock *lock) { lock_ = lock; }
+    bool TryLockIfUnlocked()
+    {
+        if (!locked_) {
+            locked_ = lock_->TryWriteLock();
+            return locked_;
+        }
+        return false;
+    }
+    bool UnlockIfLocked()
+    {
+        if (locked_) {
+            lock_->WriteUnlock();
+            locked_ = false;
+            return true;
+        }
+        return false;
+    }
+
+private:
+    BthreadRwLock *lock_ = nullptr;
     bool locked_ = false;
 };
 }  // namespace datasystem

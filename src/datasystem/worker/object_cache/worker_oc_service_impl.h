@@ -163,7 +163,7 @@ public:
      * @param[in] reqTimeoutMs req timeout ms
      * @return Status of the call.
      */
-    Status ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs);
+    Status ValidateWorkerState(BthreadReadGuard &noRecon, int reqTimeoutMs);
 
     /**
      * @brief GroupAndRemoveMeta
@@ -1048,7 +1048,7 @@ private:
      * @param[in] isRestartReconciliation Whether the caller is the restart/rejoin reconciliation path.
      * @return K_OK after the reconciliation lock is acquired or not needed; an error otherwise.
      */
-    Status LockReconciliationIfWorkerUnhealthy(WriteLock &haveRecon, bool isRestartReconciliation);
+    Status LockReconciliationIfWorkerUnhealthy(BthreadWriteGuard &haveRecon, bool isRestartReconciliation);
 
     /**
      * @brief Create a shared memory communication channel.
@@ -1360,8 +1360,9 @@ private:
     HostPort localMasterAddress_;
 
     // Blocks ordinary RPCs while startup reconciliation owns the unhealthy Worker. Acquire before
-    // reconciliationMutex_ when both locks are required.
-    WriterPrefRWLock reconFlag_;
+    // reconciliationMutex_ when both locks are required. Uses BthreadRwLock so contended waiters
+    // butex-yield instead of spinning the pthread worker.
+    BthreadRwLock reconFlag_;
     // bthread::Mutex (not std::mutex): Reconciliation() holds this across worker->master sync RPCs in brpc bthread
     // context; butex-yield lets other bthreads on the same pthread run during RetryOnError storms.
     // Non-recursive: bthread::Mutex does not support re-locking from the same thread.
