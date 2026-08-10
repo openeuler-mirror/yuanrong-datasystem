@@ -24,6 +24,7 @@
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/util/thread.h"
+#include <bthread/mutex.h>
 
 namespace datasystem::cluster {
 
@@ -514,7 +515,7 @@ private:
     std::string keepAliveTableName_;
     std::string keepAliveKey_;
     // Serializes membership RPC commit order and protects keepAliveModRevision_.
-    std::timed_mutex membershipMutationMutex_;
+    bthread::Mutex membershipMutationMutex_;
     int64_t keepAliveModRevision_{ COORDINATOR_NO_MOD_REVISION_CHECK };
     std::atomic<bool> exitMembershipRequested_{ false };
     // Protects keepAliveValue_; also used by keepAliveCv_ to interrupt its wait.
