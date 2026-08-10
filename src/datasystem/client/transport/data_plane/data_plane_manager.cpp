@@ -255,10 +255,10 @@ Status DataPlaneManager::ProbeUbConnection(const HostPort &workerAddr, const std
 {
     HostPort probeWorker;
     {
-        bthread::RWLockWrGuard lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(probeMutex_);
         CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                                  "DataPlaneManager is shutting down");
-        CHECK_FAIL_RETURN_STATUS(hasWorkerSnapshot_, K_NOT_READY,
+        CHECK_FAIL_RETURN_STATUS(hasWorkerSnapshot_.load(std::memory_order_acquire), K_NOT_READY,
                                  "Worker snapshot is not published for UB recovery probe");
         CHECK_FAIL_RETURN_STATUS(!writeProbeWorkers_.empty(), K_NOT_FOUND,
                                  "No admitted Worker endpoint is available for UB recovery probe");
@@ -281,11 +281,13 @@ Status DataPlaneManager::ProbeUbConnection(const HostPort &workerAddr, const std
     RETURN_IF_NOT_OK(GetOrCreateRpcClient(probeWorker, rpcClient));
     RETURN_IF_NOT_OK(EstablishUbProbe(probeWorker, rpcClient));
 
-    bthread::RWLockWrGuard lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(probeMutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     CHECK_FAIL_RETURN_STATUS(
-        hasWorkerSnapshot_ && writeProbeWorkerIndices_.count(probeWorker.ToString()) != 0, K_NOT_FOUND,
+        hasWorkerSnapshot_.load(std::memory_order_acquire)
+            && writeProbeWorkerIndices_.count(probeWorker.ToString()) != 0,
+        K_NOT_FOUND,
         "Worker endpoint is absent from latest writable transport snapshot: " + probeWorker.ToString());
     probePreferredWorker_.clear();
     lastProbeWorker_.clear();
@@ -311,11 +313,14 @@ Status DataPlaneManager::EstablishUbProbe(const HostPort &workerAddr, const std:
 Status DataPlaneManager::GetOrCreateEntry(const std::string &workerKey,
                                           std::shared_ptr<WorkerTransportEntry> &entry)
 {
-    bthread::RWLockRdGuard lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
-    CHECK_FAIL_RETURN_STATUS(!hasWorkerSnapshot_ || liveWorkers_.find(workerKey) != liveWorkers_.end(), K_NOT_READY,
-                             "Worker endpoint is absent from latest transport snapshot: " + workerKey);
+    if (hasWorkerSnapshot_.load(std::memory_order_acquire)) {
+        auto live = std::atomic_load(&liveWorkers_);
+        if (live == nullptr || live->find(workerKey) == live->end()) {
+            return Status(K_NOT_READY, "Worker endpoint is absent from latest transport snapshot: " + workerKey);
+        }
+    }
     EntryMap::const_accessor constAccessor;
     if (entries_.find(constAccessor, workerKey)) {
         entry = constAccessor->second;
@@ -421,7 +426,6 @@ void DataPlaneManager::ResetDataPlane(const HostPort &workerAddr)
 
     std::shared_ptr<WorkerTransportEntry> entry;
     {
-        bthread::RWLockRdGuard lock(mutex_);
         EntryMap::const_accessor accessor;
         if (entries_.find(accessor, workerAddr.ToString())) {
             entry = accessor->second;
@@ -437,10 +441,8 @@ void DataPlaneManager::Teardown(const HostPort &workerAddr)
     if (shutdown_.load(std::memory_order_acquire)) {
         return;
     }
-
     std::shared_ptr<WorkerTransportEntry> entry;
     {
-        bthread::RWLockRdGuard lock(mutex_);
         EntryMap::accessor accessor;
         if (entries_.find(accessor, workerAddr.ToString())) {
             entry = accessor->second;
@@ -456,24 +458,29 @@ Status DataPlaneManager::UpdateWorkerSnapshot(const WorkerSnapshot &snapshot)
 {
     auto liveWorkers = BuildLiveWorkerSet(snapshot);
     auto writeProbeWorkers = BuildWriteProbeWorkers(snapshot, liveWorkers);
-    bthread::RWLockWrGuard lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
-    CHECK_FAIL_RETURN_STATUS(!hasWorkerSnapshot_ || snapshot.ringVersion >= workerSnapshotVersion_, K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(!hasWorkerSnapshot_.load(std::memory_order_acquire)
+                             || snapshot.ringVersion >= workerSnapshotVersion_.load(std::memory_order_acquire),
+                             K_INVALID,
                              "Transport worker snapshot version regressed from "
-                                 + std::to_string(workerSnapshotVersion_) + " to "
+                                 + std::to_string(workerSnapshotVersion_.load()) + " to "
                                  + std::to_string(snapshot.ringVersion));
-    liveWorkers_ = std::move(liveWorkers);
-    writeProbeWorkers_ = std::move(writeProbeWorkers);
-    writeProbeWorkerIndices_.clear();
-    writeProbeWorkerIndices_.reserve(writeProbeWorkers_.size());
-    for (size_t index = 0; index < writeProbeWorkers_.size(); ++index) {
-        writeProbeWorkerIndices_.emplace(writeProbeWorkers_[index], index);
+    auto newLiveWorkers = std::make_shared<const std::unordered_set<std::string>>(std::move(liveWorkers));
+    std::atomic_store(&liveWorkers_, newLiveWorkers);
+    {
+        std::lock_guard<bthread::Mutex> lock(probeMutex_);
+        writeProbeWorkers_ = std::move(writeProbeWorkers);
+        writeProbeWorkerIndices_.clear();
+        writeProbeWorkerIndices_.reserve(writeProbeWorkers_.size());
+        for (size_t index = 0; index < writeProbeWorkers_.size(); ++index) {
+            writeProbeWorkerIndices_.emplace(writeProbeWorkers_[index], index);
+        }
     }
-    workerSnapshotVersion_ = snapshot.ringVersion;
-    hasWorkerSnapshot_ = true;
-    VLOG(1) << "[TransportGet][Reconcile] Published worker snapshot, version: " << workerSnapshotVersion_
-            << ", worker count: " << liveWorkers_.size();
+    workerSnapshotVersion_.store(snapshot.ringVersion, std::memory_order_release);
+    hasWorkerSnapshot_.store(true, std::memory_order_release);
+    VLOG(1) << "[TransportGet][Reconcile] Published worker snapshot, version: " << workerSnapshotVersion_.load()
+            << ", worker count: " << newLiveWorkers->size();
     return Status::OK();
 }
 
@@ -482,37 +489,35 @@ void DataPlaneManager::ReconcileWithSnapshot(const WorkerSnapshot &snapshot)
     auto liveWorkers = BuildLiveWorkerSet(snapshot);
 
     std::vector<std::shared_ptr<WorkerTransportEntry>> goneEntries;
-    {
-        bthread::RWLockWrGuard lock(mutex_);
-        if (shutdown_.load(std::memory_order_acquire)) {
-            return;
-        }
-        if (hasWorkerSnapshot_ && snapshot.ringVersion != workerSnapshotVersion_) {
-            VLOG(1) << "[TransportGet][Reconcile] Skip superseded worker snapshot, version: "
-                    << snapshot.ringVersion << ", latest version: " << workerSnapshotVersion_;
-            return;
-        }
-
-        std::vector<std::string> goneWorkers;
-        for (auto iter = entries_.begin(); iter != entries_.end(); ++iter) {
-            if (liveWorkers.find(iter->first) == liveWorkers.end()) {
-                goneWorkers.emplace_back(iter->first);
-            }
-        }
-
-        goneEntries.reserve(goneWorkers.size());
-        for (const auto &worker : goneWorkers) {
-            EntryMap::accessor accessor;
-            if (entries_.find(accessor, worker)) {
-                if (accessor->second != nullptr) {
-                    goneEntries.emplace_back(accessor->second);
-                }
-                entries_.erase(accessor);
-            }
-        }
-        VLOG(1) << "[TransportGet][Reconcile] Detached absent worker entries, version: "
-                << snapshot.ringVersion << ", removed count: " << goneEntries.size();
+    if (shutdown_.load(std::memory_order_acquire)) {
+        return;
     }
+    if (hasWorkerSnapshot_.load(std::memory_order_acquire)
+        && snapshot.ringVersion != workerSnapshotVersion_.load(std::memory_order_acquire)) {
+        VLOG(1) << "[TransportGet][Reconcile] Skip superseded worker snapshot, version: "
+                << snapshot.ringVersion << ", latest version: " << workerSnapshotVersion_.load();
+        return;
+    }
+
+    std::vector<std::string> goneWorkers;
+    for (auto iter = entries_.begin(); iter != entries_.end(); ++iter) {
+        if (liveWorkers.find(iter->first) == liveWorkers.end()) {
+            goneWorkers.emplace_back(iter->first);
+        }
+    }
+
+    goneEntries.reserve(goneWorkers.size());
+    for (const auto &worker : goneWorkers) {
+        EntryMap::accessor accessor;
+        if (entries_.find(accessor, worker)) {
+            if (accessor->second != nullptr) {
+                goneEntries.emplace_back(accessor->second);
+            }
+            entries_.erase(accessor);
+        }
+    }
+    VLOG(1) << "[TransportGet][Reconcile] Detached absent worker entries, version: "
+            << snapshot.ringVersion << ", removed count: " << goneEntries.size();
     for (auto &entry : goneEntries) {
         entry->ResetDataPlane();
     }
@@ -526,16 +531,13 @@ void DataPlaneManager::Shutdown()
     }
 
     std::vector<std::shared_ptr<WorkerTransportEntry>> entries;
-    {
-        bthread::RWLockWrGuard lock(mutex_);
-        entries.reserve(entries_.size());
-        for (auto iter = entries_.begin(); iter != entries_.end(); ++iter) {
-            if (iter->second != nullptr) {
-                entries.emplace_back(iter->second);
-            }
+    entries.reserve(entries_.size());
+    for (auto iter = entries_.begin(); iter != entries_.end(); ++iter) {
+        if (iter->second != nullptr) {
+            entries.emplace_back(iter->second);
         }
-        entries_.clear();
     }
+    entries_.clear();
     for (auto &entry : entries) {
         entry->ResetDataPlane();
     }
