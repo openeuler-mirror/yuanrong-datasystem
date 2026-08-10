@@ -97,10 +97,16 @@ Status EventLoop::AddFdEvent(int fd, uint32_t tEvents, std::function<void()> rea
                              std::function<void()> writeCallBack)
 {
     std::lock_guard<std::mutex> lock(eventsLock_);
-    eventMap_[fd] = std::make_shared<EventData>(fd, tEvents, std::move(readCallBack), std::move(writeCallBack));
+    CHECK_FAIL_RETURN_STATUS(eventMap_.find(fd) == eventMap_.end(), K_DUPLICATED,
+                             FormatString("Event fd %d is already registered", fd));
+    const uint64_t token = nextEventToken_++;
+    auto eventData = std::make_shared<EventData>(fd, tEvents, token, std::move(readCallBack), std::move(writeCallBack));
+    eventMap_[fd] = eventData;
+    eventTokenMap_[token] = eventData;
     auto status = UpdateFdEventUnlock(EPOLL_CTL_ADD, fd, tEvents);
     if (status.IsError()) {
         (void)eventMap_.erase(fd);
+        (void)eventTokenMap_.erase(token);
         return status;
     }
     return Status::OK();
@@ -119,6 +125,7 @@ Status EventLoop::DelFdEvent(int fd)
     if (epoll_ctl(efd_, EPOLL_CTL_DEL, fd, nullptr) != 0 && errno != ENOENT && errno != EBADF) {
         RETURN_STATUS(K_RUNTIME_ERROR, FormatString("epoll_ctl DEL failed for fd %d: errno=%d", fd, errno));
     }
+    (void)eventTokenMap_.erase(iter->second->token);
     (void)eventMap_.erase(iter);
     return Status::OK();
 }
@@ -141,16 +148,26 @@ Status EventLoop::UpdateFdEventUnlock(int operation, int fd, uint32_t tEvents)
     CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR,
                              FormatString("UpdateFdEventUnlock failed, memset_s ret: %d", ret));
     ev.events = iter->second->events;
-    ev.data.ptr = iter->second.get();
+    ev.data.u64 = iter->second->token;
     CHECK_FAIL_RETURN_STATUS(epoll_ctl(efd_, operation, fd, &ev) == 0, K_RUNTIME_ERROR,
                              FormatString("epoll_ctl failed:%d", errno));
     return Status::OK();
 }
 
+std::shared_ptr<EventLoop::EventData> EventLoop::FindEventData(uint64_t token)
+{
+    std::lock_guard<std::mutex> lock(eventsLock_);
+    auto iter = eventTokenMap_.find(token);
+    return iter == eventTokenMap_.end() ? nullptr : iter->second;
+}
+
 void EventLoop::HandleEvent(const struct epoll_event *tEvents, int nevent)
 {
     for (int i = 0; i < nevent; i++) {
-        auto *tev = reinterpret_cast<EventData *>(tEvents[i].data.ptr);
+        auto tev = FindEventData(tEvents[i].data.u64);
+        if (tev == nullptr) {
+            continue;
+        }
         if (tEvents[i].events & EPOLLIN) {
             uint64_t count;
             // We use LT mode for epoll so we need to read the fd. And this function is only used for timer queue.
@@ -174,20 +191,14 @@ void EventLoop::HandleEvent(const struct epoll_event *tEvents, int nevent)
 void SockEventLoop::HandleEvent(const struct epoll_event *tEvents, int nevent)
 {
     for (int i = 0; i < nevent; i++) {
-        auto *tev = reinterpret_cast<EventData *>(tEvents[i].data.ptr);
-        // The lost-handle callback (tev->readCallBack) may call RemoveClient -> DelFdEvent, which
-        // erases the EventData from eventMap_ and drops the last shared_ptr, leaving `tev` dangling.
-        // Snapshot fd and hold a keepAlive shared_ptr across the callback so subsequent reads of fd
-        // (and DelFdEvent) do not dereference a freed EventData (UAF fix).
-        const int fd = tev->fd;
-        std::shared_ptr<EventData> keepAlive;
-        {
-            std::lock_guard<std::mutex> lock(eventsLock_);
-            auto it = eventMap_.find(fd);
-            if (it != eventMap_.end()) {
-                keepAlive = it->second;
-            }
+        // epoll only carries a token. Resolve it under eventsLock_ before dereferencing EventData so a
+        // concurrent DelFdEvent cannot leave this thread with an unsafe raw pointer. The local shared_ptr
+        // keeps the callback alive even when it removes its own registration.
+        auto tev = FindEventData(tEvents[i].data.u64);
+        if (tev == nullptr) {
+            continue;
         }
+        const int fd = tev->fd;
         // EPOLLHUP/EPOLLERR (with or without EPOLLIN) means the peer closed/crashed. When a crash
         // produces HUP/ERR without IN (e.g. RST with no pending readable data), the old code fell
         // through to the else branch and only logged, so the lost-handle callback never fired. Handle
@@ -209,7 +220,7 @@ void SockEventLoop::HandleEvent(const struct epoll_event *tEvents, int nevent)
             continue;
         }
         if (tEvents[i].events & EPOLLIN) {
-            ReadSockAndCallBack(tev, fd);
+            ReadSockAndCallBack(tev);
         } else if (tEvents[i].events & EPOLLOUT) {
             if (tev->writeCallBack) {
                 tev->writeCallBack();
@@ -220,8 +231,9 @@ void SockEventLoop::HandleEvent(const struct epoll_event *tEvents, int nevent)
     }
 }
 
-void SockEventLoop::ReadSockAndCallBack(const EventLoop::EventData *tev, int fd)
+void SockEventLoop::ReadSockAndCallBack(const std::shared_ptr<EventLoop::EventData> &tev)
 {
+    const int fd = tev->fd;
     uint64_t count;
     while (true) {
         ssize_t ret = read(fd, &count, sizeof(uint64_t));
@@ -248,7 +260,6 @@ void SockEventLoop::ReadSockAndCallBack(const EventLoop::EventData *tev, int fd)
         }
         break;
     }
-    // tev may be dangling after the callback erased the EventData; use the snapshotted fd.
     (void)DelFdEvent(fd);
 }
 }  // namespace datasystem

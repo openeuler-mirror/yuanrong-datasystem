@@ -18,7 +18,10 @@
  * Description: Timer
  */
 #include <chrono>
+#include <condition_variable>
 #include <functional>
+#include <sys/socket.h>
+#include <thread>
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
 
@@ -29,6 +32,35 @@
 using namespace datasystem;
 namespace datasystem {
 namespace ut {
+
+class TestableEventLoop : public EventLoop {
+public:
+    using EventLoop::HandleEvent;
+
+    uint64_t GetToken(int fd) const
+    {
+        return eventMap_.at(fd)->token;
+    }
+};
+
+class TestableSockEventLoop : public SockEventLoop {
+public:
+    using SockEventLoop::HandleEvent;
+
+    Status InitWithoutThread()
+    {
+        efd_ = epoll_create1(0);
+        if (efd_ == -1) {
+            return Status(K_RUNTIME_ERROR, "epoll_create1 failed");
+        }
+        return Status::OK();
+    }
+
+    int GetEpollFd() const
+    {
+        return efd_;
+    }
+};
 
 class EventLoopTest : public CommonTest {
 public:
@@ -57,7 +89,7 @@ public:
 
     int counter_;
     int timer_fd_;
-    EventLoop testLoop_;
+    TestableEventLoop testLoop_;
 };
 
 TEST_F(EventLoopTest, AddFdEvent)
@@ -94,6 +126,100 @@ TEST_F(EventLoopTest, DelFdEvent)
     testLoop_.DelFdEvent(timer_fd_);
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
     EXPECT_EQ(0, counter_);
+}
+
+TEST_F(EventLoopTest, IgnoreStaleEventAfterConcurrentDelete)
+{
+    Init();
+    timer_fd_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    DS_ASSERT_OK(testLoop_.AddFdEvent(timer_fd_, EPOLLIN, std::bind(&EventLoopTest::ReadCallBack, this), nullptr));
+    const uint64_t staleToken = testLoop_.GetToken(timer_fd_);
+    DS_ASSERT_OK(testLoop_.DelFdEvent(timer_fd_));
+
+    struct epoll_event staleEvent {};
+    staleEvent.events = EPOLLIN;
+    staleEvent.data.u64 = staleToken;
+    testLoop_.HandleEvent(&staleEvent, 1);
+
+    EXPECT_EQ(0, counter_);
+}
+
+TEST_F(EventLoopTest, RejectDuplicateRegistrationWithoutReplacingActiveToken)
+{
+    Init();
+    timer_fd_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    DS_ASSERT_OK(testLoop_.AddFdEvent(timer_fd_, EPOLLIN, std::bind(&EventLoopTest::ReadCallBack, this), nullptr));
+    const uint64_t token = testLoop_.GetToken(timer_fd_);
+
+    auto status = testLoop_.AddFdEvent(timer_fd_, EPOLLIN, nullptr, nullptr);
+
+    EXPECT_EQ(status.GetCode(), StatusCode::K_DUPLICATED);
+    EXPECT_EQ(testLoop_.GetToken(timer_fd_), token);
+}
+
+TEST_F(EventLoopTest, SockEventLoopIgnoresStaleDisconnectEventAfterDeleteAndFdReuse)
+{
+    TestableSockEventLoop sockLoop;
+    DS_ASSERT_OK(sockLoop.InitWithoutThread());
+    int disconnectedSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, disconnectedSockets), 0);
+    const int reusedFd = disconnectedSockets[0];
+    int staleCallbackCount = 0;
+    DS_ASSERT_OK(sockLoop.AddFdEvent(reusedFd, EPOLLIN | EPOLLHUP, [&]() { ++staleCallbackCount; }, nullptr));
+
+    std::mutex eventLock;
+    std::condition_variable eventCaptured;
+    std::condition_variable handleEvent;
+    bool isEventCaptured = false;
+    bool canHandleEvent = false;
+    int epollResult = 0;
+    struct epoll_event event {};
+    std::thread eventThread([&]() {
+        epollResult = epoll_wait(sockLoop.GetEpollFd(), &event, 1, 1000);
+        {
+            std::lock_guard<std::mutex> lock(eventLock);
+            isEventCaptured = true;
+        }
+        eventCaptured.notify_one();
+        std::unique_lock<std::mutex> lock(eventLock);
+        handleEvent.wait(lock, [&]() { return canHandleEvent; });
+        if (epollResult == 1) {
+            sockLoop.HandleEvent(&event, 1);
+        }
+    });
+
+    EXPECT_EQ(close(disconnectedSockets[1]), 0);
+    {
+        std::unique_lock<std::mutex> lock(eventLock);
+        eventCaptured.wait(lock, [&]() { return isEventCaptured; });
+    }
+    EXPECT_EQ(epollResult, 1);
+
+    EXPECT_TRUE(sockLoop.DelFdEvent(reusedFd).IsOk());
+    EXPECT_EQ(close(reusedFd), 0);
+    int replacementSockets[2];
+    EXPECT_EQ(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, replacementSockets), 0);
+    EXPECT_EQ(dup2(replacementSockets[0], reusedFd), reusedFd);
+    if (replacementSockets[0] != reusedFd) {
+        EXPECT_EQ(close(replacementSockets[0]), 0);
+    }
+    int replacementCallbackCount = 0;
+    EXPECT_TRUE(sockLoop.AddFdEvent(reusedFd, EPOLLIN | EPOLLHUP,
+                                    [&]() { ++replacementCallbackCount; }, nullptr)
+                    .IsOk());
+
+    {
+        std::lock_guard<std::mutex> lock(eventLock);
+        canHandleEvent = true;
+    }
+    handleEvent.notify_one();
+    eventThread.join();
+
+    EXPECT_EQ(staleCallbackCount, 0);
+    EXPECT_EQ(replacementCallbackCount, 0);
+    DS_ASSERT_OK(sockLoop.DelFdEvent(reusedFd));
+    EXPECT_EQ(close(reusedFd), 0);
+    EXPECT_EQ(close(replacementSockets[1]), 0);
 }
 
 TEST_F(EventLoopTest, ModifyNonExistentFd)
