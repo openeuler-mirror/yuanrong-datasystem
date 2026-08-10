@@ -62,6 +62,7 @@ DS_DEFINE_int32(sc_worker_worker_pool_size, 3, "Number of parallel connections b
 namespace datasystem {
 namespace {
 constexpr int64_t SLOW_RPC_STUB_THRESHOLD_MS = 2;
+constexpr int RPC_STUB_TRANSIENT_LOG_EVERY_N = 50'000;
 
 const char *GetSlowPhase(int64_t lookupElapsedMs, int64_t accessElapsedMs, int64_t createElapsedMs)
 {
@@ -464,9 +465,12 @@ void RpcStubCacheMgr::MaybeEvictStaleBrpcStub(const HostPort &hostPort, StubType
     // contention is bounded. If profiling shows this still hot, move the
     // check off the cache-hit path entirely and rely on E112 retry alone.
     if (!WaitForBrpcSocketAvailable(brpcAddr, 1, 0)) {
-        LOG(WARNING) << FormatString("Stale brpc stub evicted for %s type=%d, reconnecting", hostPort.ToString(),
-                                     static_cast<int>(type));
-        (void)Remove(hostPort, type);
+        auto rc = Remove(hostPort, type);
+        if (rc.IsOk()) {
+            LOG_FIRST_AND_EVERY_N(WARNING, RPC_STUB_TRANSIENT_LOG_EVERY_N)
+                << FormatString("RPC_STUB_EVICTION action=evicted dst=%s type=%d", hostPort.ToString(),
+                                static_cast<int>(type));
+        }
         rpcStub.reset();
     }
 }
@@ -567,6 +571,14 @@ Status RpcStubCacheMgr::Remove(const HostPort &hostPort, StubType type)
     Timer timer;
     Status rc = lruCache_->Remove(HashKeyForRpcStubCacheMgr(hostPort, type));
     auto totalElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecond());
+    if (rc.GetCode() == StatusCode::K_TRY_AGAIN) {
+        LOG_FIRST_AND_EVERY_N(INFO, RPC_STUB_TRANSIENT_LOG_EVERY_N)
+            << FormatString("[SLOW_RPC_STUB_REMOVE] event=eviction_deferred dst=%s type=%d total=%ldms error=%s "
+                            "trace=%s",
+                            hostPort.ToString(), static_cast<int>(type), totalElapsedMs, rc.ToString(),
+                            Trace::Instance().GetTraceID());
+        return rc;
+    }
     LOG_IF(INFO,
            totalElapsedMs > SLOW_RPC_STUB_THRESHOLD_MS || (rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND))
         << FormatString("[SLOW_RPC_STUB_REMOVE] dst=%s type=%d total=%ldms error=%s trace=%s", hostPort.ToString(),
