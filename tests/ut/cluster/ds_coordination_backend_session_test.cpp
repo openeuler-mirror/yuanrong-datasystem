@@ -724,6 +724,30 @@ TEST(DsCoordinationBackendSessionTest, PeerRpcSuccessClearsFailureSummary)
     EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
 }
 
+TEST(DsCoordinationBackendSessionTest, ClearPeerRpcFailureObservationsDropsAllPreExitEvidence)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort firstTarget("127.0.0.1", 12002);
+    const HostPort secondTarget("127.0.0.1", 12003);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    for (const auto &target : { firstTarget, secondTarget }) {
+        backend.RecordPeerRpcFailure(target, start);
+        backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(750));
+        backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(1'500));
+    }
+    ASSERT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(1'500)).size(), 2U);
+
+    backend.ClearPeerRpcFailureObservations();
+
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(1'501)).empty());
+    EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
+}
+
 TEST(DsCoordinationBackendSessionTest, PeerRpcFailureSummaryExpiresWithoutNewFailures)
 {
     const auto savedNodeTimeout = FLAGS_node_timeout_s;

@@ -26,3 +26,28 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "topology_controller_test",
+    srcs = [
+        "testing/fake_coordination_backend.cpp",
+        "testing/fake_coordination_backend.h",
+        "topology_controller_test.cpp",
+    ],
+    timeout = "short",
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
+        "//src/datasystem/protos:coordinator_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)
+
+test_suite(
+    name = "all_cluster_tests",
+    tests = [
+        "ds_coordination_backend_session_test",
+        "topology_controller_test",
+        "ub_health_lease_sync_test",
+    ],
+)

@@ -984,27 +984,41 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
     if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL) {
         ApplyWitnessFailureGate(classification);
     }
-    if (options_.activeFailureCandidateProvider) {
+    if (options_.failureSummaryCandidateProvider) {
         std::unordered_set<std::string> confirmedAddresses;
         confirmedAddresses.reserve(classification.confirmedFailure.size());
         for (const auto &identity : classification.confirmedFailure) {
             confirmedAddresses.emplace(identity.address);
         }
-        const auto activeCandidates = options_.activeFailureCandidateProvider(latest, memberships, options_.now());
-        for (const auto &identity : activeCandidates) {
-            if (confirmedAddresses.count(identity.address) > 0) {
-                continue;
-            }
+        std::unordered_set<std::string> joiningAddresses;
+        joiningAddresses.reserve(classification.removeJoining.size());
+        for (const auto &identity : classification.removeJoining) {
+            joiningAddresses.emplace(identity.address);
+        }
+        const auto candidates = options_.failureSummaryCandidateProvider(latest, memberships, options_.now());
+        for (const auto &identity : candidates) {
             const Member *member = nullptr;
-            if (latest.FindMemberByAddress(identity.address, member).IsError()
-                || member->state != MemberState::ACTIVE) {
+            if (latest.FindMemberByAddress(identity.address, member).IsError() || member == nullptr) {
                 continue;
             }
-            classification.confirmedFailure.push_back(identity);
-            confirmedAddresses.emplace(identity.address);
-            LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
-                         << " address=" << identity.address << " member_id_prefix=" << MemberIdForLog(identity.id)
-                         << " action=active_summary_confirmed";
+            if (member->state == MemberState::ACTIVE && confirmedAddresses.insert(identity.address).second) {
+                classification.confirmedFailure.push_back(identity);
+                LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
+                             << " version=" << latest.Version() << " address=" << identity.address
+                             << " member_id_prefix=" << MemberIdForLog(identity.id)
+                             << " action=active_summary_confirmed";
+                continue;
+            }
+            const auto activeBatch = latest.GetActiveBatch();
+            if (member->state == MemberState::JOINING && activeBatch.has_value()
+                && activeBatch->type == TopologyChangeType::SCALE_OUT
+                && joiningAddresses.insert(identity.address).second) {
+                classification.removeJoining.push_back(identity);
+                LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
+                             << " version=" << latest.Version() << " address=" << identity.address
+                             << " member_id_prefix=" << MemberIdForLog(identity.id)
+                             << " action=joining_summary_confirmed";
+            }
         }
     }
     if (!classification.confirmedFailure.empty()) {

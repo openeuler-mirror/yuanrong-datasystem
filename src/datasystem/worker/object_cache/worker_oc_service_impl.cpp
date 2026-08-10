@@ -280,15 +280,7 @@ void ObserveMetadataRpcOnTopology(cluster::TopologyEngine *topologyEngine, const
     if (topologyEngine == nullptr) {
         return;
     }
-    if (status.IsOk()) {
-        topologyEngine->RecordPeerRpcSuccess(target);
-        return;
-    }
-    if (status.GetCode() != K_RPC_UNAVAILABLE && status.GetCode() != K_RPC_DEADLINE_EXCEEDED
-        && status.GetCode() != K_RPC_PEER_DEAD) {
-        return;
-    }
-    topologyEngine->RecordPeerRpcFailure(target);
+    topologyEngine->ObservePeerRpcResult(target, status);
 }
 
 static constexpr int OLD_VERSION_DEL_THREAD_MIN_NUM = 0;

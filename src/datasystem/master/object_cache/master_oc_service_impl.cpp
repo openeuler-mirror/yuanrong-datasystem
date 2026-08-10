@@ -117,7 +117,8 @@ MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr
                                          std::shared_ptr<AkSkManager> akSkManager,
                                          MetadataManagerHolder *metadataManagerHolder, ResourceManager *resourceManager,
                                          const cluster::MembershipEndpointView &topologyMembership,
-                                         std::string localAddress)
+                                         std::string localAddress,
+                                         std::function<void(const HostPort &, const Status &)> metadataRpcObserver)
     : MasterOCService(serverAddress),
       masterAddress_(std::move(serverAddress)),
       persistenceApi_(persistApi),
@@ -125,12 +126,14 @@ MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr
       localAddress_(std::move(localAddress)),
       akSkManager_(akSkManager),
       metadataManagerHolder_(metadataManagerHolder),
-      resourceManager_(resourceManager)
+      resourceManager_(resourceManager),
+      metadataRpcObserver_(std::move(metadataRpcObserver))
 {
 }
 
 MasterOCServiceImpl::~MasterOCServiceImpl()
 {
+    Shutdown();
 }
 
 void MasterOCServiceImpl::Shutdown()
@@ -145,7 +148,7 @@ Status MasterOCServiceImpl::Init()
     reconciliationAsyncPool_ =
         std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "Reconciliation");
     RETURN_IF_NOT_OK(OCMigrateMetadataManager::Instance().Init(masterAddress_, akSkManager_, topologyMembership_,
-                                                               metadataManagerHolder_));
+                                                               metadataManagerHolder_, metadataRpcObserver_));
     return Status::OK();
 }
 

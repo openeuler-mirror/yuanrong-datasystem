@@ -648,6 +648,14 @@ void DsCoordinationBackend::RecordPeerRpcSuccess(const HostPort &target)
     }
 }
 
+void DsCoordinationBackend::ClearPeerRpcFailureObservations()
+{
+    std::lock_guard<std::mutex> lock(rpcFailedMutex_);
+    rpcFailedStates_.clear();
+    immediateReportSignal_ = false;
+    hasRpcFailures_.store(false, std::memory_order_release);
+}
+
 std::vector<std::string> DsCoordinationBackend::GetFailedTargets(std::chrono::steady_clock::time_point now)
 {
     const auto failureWindow =

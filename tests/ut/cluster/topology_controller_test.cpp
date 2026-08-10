@@ -3098,7 +3098,7 @@ TEST(TopologyControllerTest, ExternalEventSourceConfirmsMultipleFailuresWithoutW
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
-TEST(TopologyControllerTest, ActiveFailureCandidateProviderCommitsFailureForReadyMember)
+TEST(TopologyControllerTest, FailureSummaryCandidateProviderCommitsFailureForReadyMember)
 {
     FakeCoordinationBackend backend;
     std::unique_ptr<TopologyKeyHelper> keys;
@@ -3121,8 +3121,8 @@ TEST(TopologyControllerTest, ActiveFailureCandidateProviderCommitsFailureForRead
     options.reconcileTick = std::chrono::milliseconds(1);
     options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
     options.probeEpoch = "active-failure-candidate-provider";
-    options.activeFailureCandidateProvider = [&](const TopologySnapshot &, const std::vector<MembershipRecord> &,
-                                                 std::chrono::steady_clock::time_point) {
+    options.failureSummaryCandidateProvider = [&](const TopologySnapshot &, const std::vector<MembershipRecord> &,
+                                                  std::chrono::steady_clock::time_point) {
         return std::vector<MemberIdentity>{ latest.members[1].identity };
     };
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
@@ -3137,6 +3137,58 @@ TEST(TopologyControllerTest, ActiveFailureCandidateProviderCommitsFailureForRead
         return std::any_of(state.members.begin(), state.members.end(), [](const auto &member) {
             return member.identity.address == "127.0.0.1:2" && member.state == MemberState::FAILED;
         });
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, FailureSummaryCandidateProviderReplansJoiningScaleOutMember)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("joining-failure-summary-provider", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    for (const auto &member : latest.members) {
+        PutMembership(backend, *keys, member.identity.address, MemberLifecycleState::READY);
+    }
+    PutMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::READY);
+
+    std::atomic<bool> reportJoining{ false };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.scaleOutCollectWindow = std::chrono::milliseconds(0);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "joining-failure-summary-provider";
+    options.failureSummaryCandidateProvider = [&](const TopologySnapshot &snapshot,
+                                                  const std::vector<MembershipRecord> &,
+                                                  std::chrono::steady_clock::time_point) {
+        if (!reportJoining.load()) {
+            return std::vector<MemberIdentity>{};
+        }
+        const auto iter = std::find_if(snapshot.Members().begin(), snapshot.Members().end(),
+                                       [](const auto &member) { return member.state == MemberState::JOINING; });
+        return iter == snapshot.Members().end() ? std::vector<MemberIdentity>{}
+                                                : std::vector<MemberIdentity>{ iter->identity };
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    const auto scaleOutDeadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
+    ASSERT_TRUE(ActiveScaleOutBatchHasJoiningCount(repository, scaleOutDeadline, 1));
+    reportJoining.store(true);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    const auto replanDeadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
+    EXPECT_TRUE(WaitForTopology(repository, replanDeadline, [](const auto &state) {
+        return !state.activeBatch.has_value() && state.members.size() == 2
+               && std::all_of(state.members.begin(), state.members.end(),
+                              [](const auto &member) { return member.state == MemberState::ACTIVE; });
     }));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }

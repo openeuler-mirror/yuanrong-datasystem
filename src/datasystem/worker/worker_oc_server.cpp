@@ -670,6 +670,9 @@ WorkerOCServer::~WorkerOCServer()
     // StopBrpcServer() is idempotent (resets brpcServer_ after Stop+Join), so calling
     // it here has no effect when ~RpcServer() later calls StopBrpcServer() again.
     builder_ = RpcServer::Builder();
+    if (objCacheMasterSvc_ != nullptr) {
+        objCacheMasterSvc_->Shutdown();
+    }
     objCacheMasterSvc_.reset();
     objCacheWorkerWkSvc_.reset();
     objCacheWorkerMsSvc_.reset();
@@ -1033,9 +1036,14 @@ void WorkerOCServer::CreateMasterServices()
     if (EnableOCService()) {
         // create MasterOCServiceImpl
         resourceManager_->SetTopologyMembership(&topologyEngine_->Membership());
+        auto metadataRpcObserver = [topologyEngine = topologyEngine_.get()](const HostPort &target,
+                                                                           const Status &status) {
+            topologyEngine->ObservePeerRpcResult(target, status);
+        };
         objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_, akSkManager_,
                                                                    metadataManagerHolder_.get(), resourceManager_.get(),
-                                                                   topologyEngine_->Membership(), hostPort_.ToString());
+                                                                   topologyEngine_->Membership(), hostPort_.ToString(),
+                                                                   std::move(metadataRpcObserver));
     }
     if (EnableSCService()) {
         // create MasterSCServiceImpl

@@ -122,6 +122,19 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "oc_migrate_metadata_manager_test",
+    srcs = ["oc_migrate_metadata_manager_test.cpp"],
+    timeout = "short",
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/master/object_cache:oc_migrate_metadata_manager",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//tests/ut:ut_common",
+    ],
+)
+
 test_suite(
     name = "all_master_oc_tests",
     tests = [
@@ -133,6 +146,7 @@ test_suite(
         "memory_rebalance_scheduler_test",
         "resource_manager_test",
         "object_meta_store_test",
+        "oc_migrate_metadata_manager_test",
         "oc_notify_worker_manager_test",
     ],
 )

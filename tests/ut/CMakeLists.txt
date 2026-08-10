@@ -64,6 +64,7 @@ include_directories(${PROJECT_DIR}/tests/support)
 file(GLOB_RECURSE DS_TEST_UT_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 file(GLOB_RECURSE DS_UT_STREAM_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/**/stream_cache/*.cpp")
 file(GLOB_RECURSE DS_UT_OBJECT_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/**/object_cache/*.cpp")
+list(FILTER DS_UT_OBJECT_SRCS EXCLUDE REGEX .*/master/object_cache/oc_migrate_metadata_manager_test\.cpp$)
 
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX "hixl_plugin_loader_test")
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX "hixl_transport_plugin_test")
@@ -210,6 +211,10 @@ add_ds_ut_executable(ds_ut_object
         ${DS_UT_OBJECT_SRCS}
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
+add_ds_ut_executable(oc_migrate_metadata_manager_test
+        master/object_cache/oc_migrate_metadata_manager_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>
+        $<TARGET_OBJECTS:_ds_ut_common_obj>)
 if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
     add_ds_ut_executable(ds_ut_urma_remote_jetty_reuse
             client/urma_remote_jetty_reuse_test.cpp
@@ -319,6 +324,13 @@ target_link_libraries(ds_ut_object PRIVATE
         test_port_allocator
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
+target_link_libraries(oc_migrate_metadata_manager_test PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
+        ${DS_UT_DEPEND_LIBS}
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        test_port_allocator
+        ${DS_UT_HEAVY_LINK_END}
+        -Wl,--reduce-memory-overheads)
 if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
     target_link_libraries(ds_ut_urma_remote_jetty_reuse PRIVATE
             ${DS_UT_HEAVY_LINK_START}
@@ -421,6 +433,7 @@ endif()
 add_datasystem_test(ds_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(oc_migrate_metadata_manager_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_store_perf_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_server_options_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})

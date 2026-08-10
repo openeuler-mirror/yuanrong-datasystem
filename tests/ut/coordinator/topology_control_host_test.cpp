@@ -13,6 +13,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -57,6 +58,29 @@ std::shared_ptr<const cluster::TopologySnapshot> MakeActiveSnapshot(size_t membe
             cluster::MemberState::ACTIVE,
             { static_cast<uint32_t>(index + 1) },
         });
+    }
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    const auto rc = cluster::TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot);
+    EXPECT_TRUE(rc.IsOk()) << rc.ToString();
+    return snapshot;
+}
+
+std::shared_ptr<const cluster::TopologySnapshot> MakeSnapshot(
+    const std::vector<cluster::MemberState> &states,
+    std::optional<cluster::TopologyChangeType> activeBatch = std::nullopt)
+{
+    cluster::TopologyState state;
+    state.version = 1;
+    state.clusterHasInit = true;
+    for (size_t index = 0; index < states.size(); ++index) {
+        state.members.push_back(cluster::Member{
+            { std::string(15, 'a') + static_cast<char>('a' + index), "127.0.0.1:" + std::to_string(12001 + index) },
+            states[index],
+            { static_cast<uint32_t>(index + 1) },
+        });
+    }
+    if (activeBatch.has_value()) {
+        state.activeBatch = cluster::ActiveBatch{ *activeBatch, 1 };
     }
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     const auto rc = cluster::TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot);
@@ -472,6 +496,168 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummaryRefreshDoesNotCountDuplicate
     EXPECT_EQ(candidates.front().address, target);
 }
 
+TEST_F(TopologyControlHostTest, ReporterTimestampChangeInvalidatesFailureSummaryEvidence)
+{
+    auto options = MakeOptions();
+    options.activeFailureWindow = std::chrono::seconds(3);
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    auto snapshot = MakeActiveSnapshot(6);
+    auto memberships = MakeReadyMemberships(*snapshot);
+    const auto target = memberships.back();
+    for (size_t index = 0; index < 4; ++index) {
+        host_->RecordWorkerFailureSummaries("blue", memberships[index], { target });
+    }
+    ++memberships[0].timestamp;
+    host_->RecordWorkerFailureSummaries("blue", memberships[4], { target });
+
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+
+    host_->RecordWorkerFailureSummaries("blue", memberships[0], { target });
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates.front().address, target.address);
+}
+
+TEST_F(TopologyControlHostTest, ReporterHostIdChangeInvalidatesFailureSummaryEvidence)
+{
+    auto options = MakeOptions();
+    options.activeFailureWindow = std::chrono::seconds(3);
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    auto snapshot = MakeActiveSnapshot(6);
+    auto memberships = MakeReadyMemberships(*snapshot);
+    const auto target = memberships.back();
+    for (size_t index = 0; index < 4; ++index) {
+        host_->RecordWorkerFailureSummaries("blue", memberships[index], { target });
+    }
+    memberships[0].hostId = "restarted-host";
+    host_->RecordWorkerFailureSummaries("blue", memberships[4], { target });
+
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+
+    host_->RecordWorkerFailureSummaries("blue", memberships[0], { target });
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates.front().address, target.address);
+}
+
+TEST_F(TopologyControlHostTest, ExitingLeavingReportersCanIsolateActiveTarget)
+{
+    auto options = MakeOptions();
+    options.activeFailureWindow = std::chrono::seconds(3);
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    auto snapshot = MakeSnapshot({ cluster::MemberState::LEAVING, cluster::MemberState::LEAVING,
+                                   cluster::MemberState::LEAVING, cluster::MemberState::LEAVING,
+                                   cluster::MemberState::LEAVING, cluster::MemberState::ACTIVE },
+                                 cluster::TopologyChangeType::SCALE_IN);
+    auto memberships = MakeReadyMemberships(*snapshot);
+    for (size_t index = 0; index < 5; ++index) {
+        memberships[index].state = cluster::MemberLifecycleState::EXITING;
+    }
+    const auto target = memberships.back();
+    memberships.pop_back();
+    cluster::MembershipRecord expiredTarget{ target.address, cluster::MemberLifecycleState::READY, -1, "" };
+    for (const auto &reporter : memberships) {
+        host_->RecordWorkerFailureSummaries("blue", reporter, { expiredTarget });
+    }
+
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates.front().address, target.address);
+}
+
+TEST_F(TopologyControlHostTest, MissingLeavingReportersDoNotLowerFailureThreshold)
+{
+    auto options = MakeOptions();
+    options.activeFailureWindow = std::chrono::seconds(3);
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    auto snapshot = MakeSnapshot({ cluster::MemberState::LEAVING, cluster::MemberState::LEAVING,
+                                   cluster::MemberState::LEAVING, cluster::MemberState::LEAVING,
+                                   cluster::MemberState::LEAVING, cluster::MemberState::ACTIVE },
+                                 cluster::TopologyChangeType::SCALE_IN);
+    auto memberships = MakeReadyMemberships(*snapshot);
+    memberships.resize(4);
+    for (auto &membership : memberships) {
+        membership.state = cluster::MemberLifecycleState::EXITING;
+    }
+    const auto target = snapshot->Members().back().identity.address;
+    cluster::MembershipRecord expiredTarget{ target, cluster::MemberLifecycleState::READY, -1, "" };
+    for (const auto &reporter : memberships) {
+        host_->RecordWorkerFailureSummaries("blue", reporter, { expiredTarget });
+    }
+
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+}
+
+TEST_F(TopologyControlHostTest, PreLeavingMembersRemainInFailureThresholdPopulation)
+{
+    auto options = MakeOptions();
+    options.activeFailureWindow = std::chrono::seconds(3);
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    auto snapshot = MakeSnapshot({ cluster::MemberState::LEAVING, cluster::MemberState::LEAVING,
+                                   cluster::MemberState::PRE_LEAVING, cluster::MemberState::PRE_LEAVING,
+                                   cluster::MemberState::PRE_LEAVING, cluster::MemberState::PRE_LEAVING,
+                                   cluster::MemberState::ACTIVE },
+                                 cluster::TopologyChangeType::SCALE_IN);
+    auto memberships = MakeReadyMemberships(*snapshot);
+    memberships.resize(2);
+    for (auto &membership : memberships) {
+        membership.state = cluster::MemberLifecycleState::EXITING;
+    }
+    const auto target = snapshot->Members().back().identity.address;
+    cluster::MembershipRecord expiredTarget{ target, cluster::MemberLifecycleState::READY, -1, "" };
+    for (const auto &reporter : memberships) {
+        host_->RecordWorkerFailureSummaries("blue", reporter, { expiredTarget });
+    }
+
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+}
+
+TEST_F(TopologyControlHostTest, ReadyEvidenceDoesNotBecomeEligibleAfterReporterStartsExiting)
+{
+    auto options = MakeOptions();
+    options.activeFailureWindow = std::chrono::seconds(3);
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    auto activeSnapshot = MakeActiveSnapshot(6);
+    auto memberships = MakeReadyMemberships(*activeSnapshot);
+    const auto target = memberships.back();
+    memberships.pop_back();
+    cluster::MembershipRecord expiredTarget{ target.address, cluster::MemberLifecycleState::READY, -1, "" };
+    for (const auto &reporter : memberships) {
+        host_->RecordWorkerFailureSummaries("blue", reporter, { expiredTarget });
+    }
+    auto leavingSnapshot = MakeSnapshot({ cluster::MemberState::LEAVING, cluster::MemberState::LEAVING,
+                                          cluster::MemberState::LEAVING, cluster::MemberState::LEAVING,
+                                          cluster::MemberState::LEAVING, cluster::MemberState::ACTIVE },
+                                        cluster::TopologyChangeType::SCALE_IN);
+    for (auto &membership : memberships) {
+        membership.state = cluster::MemberLifecycleState::EXITING;
+    }
+
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *leavingSnapshot, memberships, clock_->Now()).empty());
+}
+
+TEST_F(TopologyControlHostTest, ActiveReportersCanRemoveJoiningScaleOutTarget)
+{
+    auto options = MakeOptions();
+    options.activeFailureWindow = std::chrono::seconds(3);
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    auto snapshot = MakeSnapshot({ cluster::MemberState::ACTIVE, cluster::MemberState::ACTIVE,
+                                   cluster::MemberState::ACTIVE, cluster::MemberState::ACTIVE,
+                                   cluster::MemberState::ACTIVE, cluster::MemberState::JOINING },
+                                 cluster::TopologyChangeType::SCALE_OUT);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    const auto target = memberships.back();
+    for (size_t index = 0; index < 5; ++index) {
+        host_->RecordWorkerFailureSummaries("blue", memberships[index], { target });
+    }
+
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates.front().address, target.address);
+}
+
 TEST_F(TopologyControlHostTest, ReservesOneSlotPerClusterAndReleasesFailedReservations)
 {
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, MakeOptions());
@@ -489,6 +675,31 @@ TEST_F(TopologyControlHostTest, ReservesOneSlotPerClusterAndReleasesFailedReserv
 
     DS_ASSERT_OK(host_->Shutdown(std::chrono::steady_clock::now() + TEST_DEADLINE));
     EXPECT_TRUE(host_->IsStopped());
+}
+
+TEST_F(TopologyControlHostTest, ReleasingClusterDiscardsFailureEvidence)
+{
+    auto options = MakeOptions();
+    options.activeFailureWindow = std::chrono::seconds(3);
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    DS_ASSERT_OK(host_->Start());
+    auto snapshot = MakeActiveSnapshot(6);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    const auto target = memberships.back();
+    for (size_t index = 0; index + 1 < memberships.size(); ++index) {
+        host_->RecordWorkerFailureSummaries("blue", memberships[index], { target });
+    }
+    ASSERT_EQ(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).size(), 1U);
+
+    DS_ASSERT_OK(host_->PrepareMembershipPut("blue"));
+    DS_ASSERT_OK(host_->PrepareMembershipPut("green"));
+    host_->CompleteMembershipPut("blue", false);
+    ASSERT_TRUE(WaitUntil([&] { return host_->PrepareMembershipPut("red").IsOk(); }));
+
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+    host_->CompleteMembershipPut("green", false);
+    host_->CompleteMembershipPut("red", false);
+    DS_ASSERT_OK(host_->Shutdown(std::chrono::steady_clock::now() + TEST_DEADLINE));
 }
 
 TEST_F(TopologyControlHostTest, StartsIndependentRuntimesAfterRecoveryReadiness)

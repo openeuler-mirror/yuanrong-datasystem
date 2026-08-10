@@ -188,20 +188,23 @@ private:
 
     struct FailureReportState {
         std::chrono::steady_clock::time_point receiveTime;
+        cluster::MemberLifecycleState reporterState{ cluster::MemberLifecycleState::READY };
         int64_t reporterTimestamp{ 0 };
         std::string reporterHostId;
         int64_t targetTimestamp{ 0 };
         std::string targetHostId;
     };
 
-    static std::unordered_map<std::string, cluster::MembershipRecord> BuildReadyActiveMemberships(
+    static std::unordered_map<std::string, cluster::MembershipRecord> BuildEligibleFailureReporters(
         const cluster::TopologySnapshot &latest, const std::vector<cluster::MembershipRecord> &memberships);
 
-    static size_t ActiveFailureReporterThreshold(size_t totalWorkers);
+    static size_t FailureReporterThreshold(size_t totalWorkers);
 
     size_t PruneAndCountFailureReporters(
         const cluster::TopologySnapshot &latest,
-        const std::unordered_map<std::string, cluster::MembershipRecord> &readyMemberships, const std::string &target,
+        const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
+        const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress,
+        const std::string &target,
         std::unordered_map<std::string, FailureReportState> &reporters,
         std::chrono::steady_clock::time_point now) const;
 
@@ -270,6 +273,12 @@ private:
      * @return K_OK or the exact-read status that prevented the decision.
      */
     Status ReleaseClusterIfEmpty(ClusterEntry &entry, bool &released, uint64_t &observationGeneration);
+
+    /**
+     * @brief Erase a released cluster and its process-local failure evidence while mutex_ is held.
+     * @param[in] clusterName Cluster scope to erase.
+     */
+    void EraseClusterLocked(const std::string &clusterName);
 
     /**
      * @brief Check an empty Store observation against current admission and mutation state.

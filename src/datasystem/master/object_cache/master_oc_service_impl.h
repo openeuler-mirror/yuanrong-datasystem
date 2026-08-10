@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_MASTER_OBJECT_CACHE_MASTER_OBJECT_CACHE_SERVICE_IMPL_H
 #define DATASYSTEM_MASTER_OBJECT_CACHE_MASTER_OBJECT_CACHE_SERVICE_IMPL_H
 
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -58,7 +59,8 @@ public:
     MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
                         std::shared_ptr<AkSkManager> akSkManager, MetadataManagerHolder *metadataManagerHolder,
                         master::ResourceManager *resourceManager,
-                        const cluster::MembershipEndpointView &topologyMembership, std::string localAddress);
+                        const cluster::MembershipEndpointView &topologyMembership, std::string localAddress,
+                        std::function<void(const HostPort &, const Status &)> metadataRpcObserver = {});
 
     /**
      * @brief Deconstruct MasterOCServiceImpl.
@@ -502,6 +504,7 @@ private:
     std::unique_ptr<ThreadPool> reconciliationAsyncPool_;
     MetadataManagerHolder *metadataManagerHolder_;
     ResourceManager *resourceManager_;
+    std::function<void(const HostPort &, const Status &)> metadataRpcObserver_;
 };
 }  // namespace master
 }  // namespace datasystem

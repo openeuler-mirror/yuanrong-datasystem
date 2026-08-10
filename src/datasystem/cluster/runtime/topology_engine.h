@@ -316,8 +316,7 @@ public:
     Status PutWithMembershipLease(const std::string &tableName, const std::string &key, const std::string &value);
     Status GetMembershipSidecar(const std::string &tableName,
                                 std::vector<std::pair<std::string, std::string>> &records) const;
-    void RecordPeerRpcFailure(const HostPort &target);
-    void RecordPeerRpcSuccess(const HostPort &target);
+    void ObservePeerRpcResult(const HostPort &target, const Status &status);
 
     /**
      * @brief Read membership host identifiers for the existing routing response.

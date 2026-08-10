@@ -143,6 +143,12 @@
     work. Shutdown first rejects new probe events and clears pending work, then closes Engine watch ingress, waits for
     in-flight probe/report work to drain, and finally destroys the joined probe pool. A finite-deadline failure retains
     the Engine, pool, proxy, and callback dependencies so the same shutdown sequence can be retried safely.
+  - Object-cache topology migration feeds the result of each actual remote `MigrateMetadata` RPC into the existing
+    Coordinator peer-failure summary observer. Local preflight, cancellation, signing, and metadata-application errors
+    are not transport observations. The first voluntary-exit request clears serving-phase peer-failure evidence; normal
+    business observers remain closed after exit intent, while topology-owned outgoing migration may build fresh
+    evidence as an `EXITING`/`LEAVING` reporter. The migration observer is cleared and drained before the master service
+    can outlive the borrowed `TopologyEngine`.
   - when `enable_urma=true`, URMA connection warmup runs after object-cache startup/restart handling and before
     `ReadinessProbe()`: it synchronously prepares the local warmup object, then starts best-effort async peer warmup
     without delaying readiness
