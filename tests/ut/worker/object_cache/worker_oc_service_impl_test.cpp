@@ -911,7 +911,7 @@ TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinWaitsForOrdinaryRpcDra
 {
     InitImplClearDataFlow();
     AddObject("rejoin-drain-object");
-    ReadLock inFlightRequest(&impl_->reconFlag_);
+    BthreadReadGuard inFlightRequest(&impl_->reconFlag_);
 
     const auto rc = impl_->CleanupLocalStateForRejoin(std::chrono::steady_clock::now() + std::chrono::milliseconds(20));
 
@@ -922,7 +922,7 @@ TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinWaitsForOrdinaryRpcDra
 TEST_F(WorkerOcServiceImplTest, ReconciliationReturnsNotReadyWhenRejoinCleanupHoldsReconFlag)
 {
     SetUnhealthy();
-    WriteLock cleanup(&impl_->reconFlag_);
+    BthreadWriteGuard cleanup(&impl_->reconFlag_);
     PushMetaToWorkerReqPb req;
     req.set_event_timestamp(1);
 
@@ -938,7 +938,7 @@ TEST_F(WorkerOcServiceImplTest, ReconciliationReturnsNotReadyWhenRejoinCleanupHo
 TEST_F(WorkerOcServiceImplTest, RestartReconciliationWaitsForRejoinCleanupReconFlag)
 {
     SetUnhealthy();
-    WriteLock cleanup(&impl_->reconFlag_);
+    BthreadWriteGuard cleanup(&impl_->reconFlag_);
     PushMetaToWorkerReqPb req;
     req.set_event_timestamp(1);
     req.set_is_restart(true);

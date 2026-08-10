@@ -42,6 +42,7 @@
 #include <utility>
 #include <vector>
 
+#include <bthread/bthread.h>
 #include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/eventloop/timer_queue.h"
@@ -548,7 +549,7 @@ Status WorkerOCServiceImpl::InitRecoveryServices()
 Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthCheckReplyPb &resp)
 {
     INJECT_POINT("worker.HealthCheck.begin");
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     auto rc = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
     if (rc.IsError()) {
         LOG(WARNING) << rc;
@@ -613,7 +614,7 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(VerifyClientWriteAdmission(), "verify client write admission failed");
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -648,7 +649,7 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(VerifyClientWriteAdmission(), "verify client write admission failed");
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -974,12 +975,12 @@ Status WorkerOCServiceImpl::CleanupLocalStateForRejoin(std::chrono::steady_clock
     RETURN_IF_NOT_OK(CloseIncomingMigrationAdmissionAndWait(deadline));
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                              "rejoin cleanup deadline exceeded");
-    WriteLock ordinaryRpcDrain;
+    BthreadWriteGuard ordinaryRpcDrain;
     ordinaryRpcDrain.Assign(&reconFlag_);
     while (!ordinaryRpcDrain.TryLockIfUnlocked()) {
         CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                                  "rejoin cleanup waits for ordinary RPC drain timed out");
-        std::this_thread::sleep_for(std::chrono::milliseconds(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS));
+        (void)bthread_usleep(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS * 1000);
     }
     if (localMetadataCleanupForRejoin_ != nullptr) {
         RETURN_IF_NOT_OK(localMetadataCleanupForRejoin_());
@@ -1356,13 +1357,12 @@ Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::map<std::string, i
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs)
+Status WorkerOCServiceImpl::ValidateWorkerState(BthreadReadGuard &noRecon, int reqTimeoutMs)
 {
     Timer timer;
     if (!IsHealthy()) {
         RETURN_STATUS(K_NOT_READY, "Worker not ready");
     }
-    using namespace std::chrono;
     static const int SEC_TO_MS = 1000;
     const int totalWaitTimeMs = std::min(30 * SEC_TO_MS, reqTimeoutMs);
     static const int INTERVAL_MS = 10;
@@ -1371,12 +1371,12 @@ Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeou
     noRecon.Assign(&reconFlag_);
     bool rc = noRecon.TryLockIfUnlocked();
     bool hasLoggedBeforeWait = false;
-    while (!rc && GetSteadyClockTimeStampMs() - start < milliseconds(totalWaitTimeMs).count()) {
+    while (!rc && GetSteadyClockTimeStampMs() - start < static_cast<int64_t>(totalWaitTimeMs)) {
         if (!hasLoggedBeforeWait) {
             LOG(INFO) << "Waiting for the reconFlag...";
             hasLoggedBeforeWait = true;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(INTERVAL_MS));
+        (void)bthread_usleep(INTERVAL_MS * 1000);
         rc = noRecon.TryLockIfUnlocked();
     }
     if (!rc) {
@@ -1400,7 +1400,7 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(VerifyClientWriteAdmission(), "verify client write admission failed");
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -1426,7 +1426,7 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
         LOG(ERROR) << "verify client write admission failed:" << returnStatus.ToString();
         return returnStatus;
     }
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     returnStatus = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
     if (returnStatus.IsError()) {
         LOG(ERROR) << "validate worker state failed:" << returnStatus.ToString();
@@ -1470,7 +1470,8 @@ Status WorkerOCServiceImpl::PrepareRestartReconciliation(const PushMetaToWorkerR
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::LockReconciliationIfWorkerUnhealthy(WriteLock &haveRecon, bool isRestartReconciliation)
+Status WorkerOCServiceImpl::LockReconciliationIfWorkerUnhealthy(BthreadWriteGuard &haveRecon,
+                                                              bool isRestartReconciliation)
 {
     if (IsHealthy()) {
         return Status::OK();
@@ -1482,7 +1483,7 @@ Status WorkerOCServiceImpl::LockReconciliationIfWorkerUnhealthy(WriteLock &haveR
     while (!haveRecon.TryLockIfUnlocked()) {
         CHECK_FAIL_RETURN_STATUS(timer.ElapsedMilliSecond() < lockTimeoutMs, K_NOT_READY,
                                  "rejoin cleanup is in progress");
-        std::this_thread::sleep_for(std::chrono::milliseconds(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS));
+        (void)bthread_usleep(ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS * 1000);
     }
     if (timer.ElapsedMilliSecond() > 0) {
         LOG(INFO) << "Reconciliation waited for reconFlag, elapsed ms: " << timer.ElapsedMilliSecond();
@@ -1501,7 +1502,7 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
     if (req.event_timestamp() <= 0) {
         LOG(WARNING) << "timestamp should be greater than 0";
     }
-    WriteLock haveRecon;
+    BthreadWriteGuard haveRecon;
     RETURN_IF_NOT_OK(LockReconciliationIfWorkerUnhealthy(haveRecon, req.is_restart()));
     std::lock_guard<bthread::Mutex> reconciliationLock(reconciliationMutex_);
     Status rc;
@@ -1638,7 +1639,7 @@ Status WorkerOCServiceImpl::ReconcileGlobalRefsWithSourceMaster(
 Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi)
 {
     ScopedRequestContext ctx;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2013,7 +2014,7 @@ Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const s
 {
     ScopedRequestContext ctx;
     Timer timer;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2069,7 +2070,7 @@ Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, Rec
     CHECK_FAIL_RETURN_STATUS(exist, K_INVALID, FormatString("Client %s not found", req.client_id()));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
                                      "Authenticate failed");
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2090,7 +2091,7 @@ Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, Rec
 Status WorkerOCServiceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGRefsRspPb &resp)
 {
     ScopedRequestContext ctx;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2101,7 +2102,7 @@ Status WorkerOCServiceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGR
 Status WorkerOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRspPb &resp)
 {
     ScopedRequestContext ctx;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2112,7 +2113,7 @@ Status WorkerOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRsp
 Status WorkerOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRspPb &resp)
 {
     ScopedRequestContext ctx;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2158,7 +2159,7 @@ Status WorkerOCServiceImpl::RemoveMetaFromMaster(const std::list<std::string> &o
 Status WorkerOCServiceImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp)
 {
     ScopedRequestContext ctx;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2186,7 +2187,7 @@ Status WorkerOCServiceImpl::InvalidateBuffer(const InvalidateBufferReqPb &req, I
 {
     ScopedRequestContext ctx;
     Timer timer;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2219,7 +2220,7 @@ Status WorkerOCServiceImpl::InvalidateBuffer(const InvalidateBufferReqPb &req, I
 Status WorkerOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspCollectionPb &rsp)
 {
     ScopedRequestContext ctx;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2752,7 +2753,7 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
         return Status::OK();
     });
 
-    WriteLock haveRecon;
+    BthreadWriteGuard haveRecon;
     haveRecon.Assign(&reconFlag_);
     bool rec = haveRecon.TryLockIfUnlocked();
     if (!rec) {
@@ -2824,7 +2825,7 @@ Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &
     RETURN_IF_NOT_OK(
         WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, clientId, shmUnits, memoryRefTable_));
     PerfPoint point(PerfKey::WORKER_SEAL_OBJECT);
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2841,7 +2842,7 @@ Status WorkerOCServiceImpl::GetDeviceObject(
     std::shared_ptr<ServerUnaryWriterReader<GetDeviceObjectRspPb, GetDeviceObjectReqPb>> serverApi)
 {
     ScopedRequestContext ctx;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2910,7 +2911,7 @@ Status WorkerOCServiceImpl::SubscribeReceiveEvent(
 {
     ScopedRequestContext ctx;
     PerfPoint point(PerfKey::WORKER_SUBSCRIBE_EVENT);
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2950,7 +2951,7 @@ Status WorkerOCServiceImpl::GetP2PMeta(
 {
     ScopedRequestContext ctx;
     PerfPoint point(PerfKey::WORKER_GET_P2PMEATA);
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -3016,7 +3017,7 @@ Status WorkerOCServiceImpl::RecvRootInfo(
     std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>> serverApi)
 {
     ScopedRequestContext ctx;
-    ReadLock noRecon;
+    BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -3076,7 +3077,7 @@ Status WorkerOCServiceImpl::GetDataInfo(
     std::shared_ptr<ServerUnaryWriterReader<GetDataInfoRspPb, GetDataInfoReqPb>> serverApi)
 {
     ScopedRequestContext ctx;
-    ReadLock noReconciliation;
+    BthreadReadGuard noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -3118,7 +3119,7 @@ Status WorkerOCServiceImpl::WaitInit()
 
 Status WorkerOCServiceImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, GetObjMetaInfoRspPb &resp)
 {
-    ReadLock noReconciliation;
+    BthreadReadGuard noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -3128,7 +3129,7 @@ Status WorkerOCServiceImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, GetOb
 Status WorkerOCServiceImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    ReadLock noReconciliation;
+    BthreadReadGuard noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -3138,7 +3139,7 @@ Status WorkerOCServiceImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb 
 Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    ReadLock noReconciliation;
+    BthreadReadGuard noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -3149,7 +3150,7 @@ Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 Status WorkerOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    ReadLock noReconciliation;
+    BthreadReadGuard noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -3158,7 +3159,7 @@ Status WorkerOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 
 Status WorkerOCServiceImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp)
 {
-    ReadLock noReconciliation;
+    BthreadReadGuard noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
