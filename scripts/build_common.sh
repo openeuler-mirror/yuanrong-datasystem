@@ -119,8 +119,9 @@ function has_urma_runtime_lib() {
 }
 
 function normalize_build_options() {
-  if is_on "${BUILD_PIPLN_H2D}" && [[ "${BUILD_SYSTEM}" == "cmake" ]] && ! is_on "${BUILD_WITH_URMA}"; then
-    echo -e "-- [INFO] Pipeline H2D requires URMA. Enabling BUILD_WITH_URMA because -T on was specified."
+  if is_on "${BUILD_PIPLN_H2D}" && [[ "${BUILD_SYSTEM}" == "cmake" ]] && ! is_on "${BUILD_WITH_URMA}" \
+    && ! is_on "${BUILD_WITH_URMA_MOCK}"; then
+    echo -e "-- [INFO] Pipeline H2D requires an URMA backend. Enabling BUILD_WITH_URMA."
     BUILD_WITH_URMA="on"
   fi
   if [[ "${BUILD_SYSTEM}" == "cmake" && "${RUN_TESTS}" != "off" ]] && is_on "${BUILD_WITH_URMA}" \

@@ -62,6 +62,11 @@ ds_cc_library(
             "@local_cuda//:cuda_headers",
         ],
         "//conditions:default": [],
+    }) + select({
+        "//:enable_urma_mock": [
+            "//src/datasystem/common/urma_mock:urma_abi_compat",
+        ],
+        "//conditions:default": [],
     }),
 )
 
@@ -92,6 +97,11 @@ ds_cc_library(
             "//src/datasystem/protos:object_posix_cc_proto",
             "@mlcachedirect//:os_transport_prefixed_hdrs",
             "@local_cuda//:cuda_headers",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//:enable_urma_mock": [
+            "//src/datasystem/common/urma_mock:urma_abi_compat",
         ],
         "//conditions:default": [],
     }),

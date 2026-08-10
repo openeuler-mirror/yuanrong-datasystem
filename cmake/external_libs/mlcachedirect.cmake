@@ -14,8 +14,8 @@
 
 # Description: Build MLCacheDirect os_transport as a static CMake target for RH2D.
 
-set(MLCacheDirect_VERSION 0.1.6)
-set(MLCacheDirect_SHA256 392b21d7d73f3fb402eab14144c83a12e54b2ade605dfaee100e70a5eba820e2)
+set(MLCacheDirect_VERSION 0.1.7)
+set(MLCacheDirect_SHA256 457d42f7d6b2aac0cbee131aeadd41563032f33171a511f0492cdc9d7adfcae7)
 
 if (MLCACHEDIRECT_URL)
     set(MLCacheDirect_URL "${MLCACHEDIRECT_URL}")
@@ -38,6 +38,10 @@ set(MLCacheDirect_OS_TRANSPORT_SRCS
     ${MLCacheDirect_SOURCE_DIR}/src/os_transport_log.c
 )
 
+if (BUILD_WITH_URMA_MOCK)
+    list(APPEND MLCacheDirect_OS_TRANSPORT_SRCS ${MLCacheDirect_SOURCE_DIR}/mock/urma_mock_backend.c)
+endif()
+
 set(MLCacheDirect_PREFIXED_INCLUDE_DIR ${CMAKE_BINARY_DIR}/third_party/mlcachedirect_prefixed_include)
 file(MAKE_DIRECTORY ${MLCacheDirect_PREFIXED_INCLUDE_DIR}/os-transport)
 file(COPY ${MLCacheDirect_SOURCE_DIR}/include/
@@ -55,12 +59,22 @@ target_compile_options(mlcachedirect_os_transport_static PRIVATE
     -Wno-implicit-function-declaration
 )
 target_compile_definitions(mlcachedirect_os_transport_static PRIVATE _POSIX_C_SOURCE=200809L)
+if (BUILD_WITH_URMA_MOCK)
+    target_compile_definitions(mlcachedirect_os_transport_static PUBLIC USE_URMA_MOCK)
+endif()
 target_include_directories(mlcachedirect_os_transport_static
     PUBLIC
         ${MLCacheDirect_SOURCE_DIR}/include
         ${MLCacheDirect_PREFIXED_INCLUDE_DIR}
 )
-target_link_libraries(mlcachedirect_os_transport_static PUBLIC Threads::Threads ${URMA_LIBRARY})
+if (BUILD_WITH_URMA_MOCK)
+    target_include_directories(mlcachedirect_os_transport_static PUBLIC
+        ${MLCacheDirect_SOURCE_DIR}/mock
+    )
+    target_link_libraries(mlcachedirect_os_transport_static PUBLIC Threads::Threads)
+else()
+    target_link_libraries(mlcachedirect_os_transport_static PUBLIC Threads::Threads ${URMA_LIBRARY})
+endif()
 
 set(OS_TRANSPORT_INCLUDE_DIR ${MLCacheDirect_PREFIXED_INCLUDE_DIR})
 set(MLCacheDirect_INCLUDE_DIR ${MLCacheDirect_SOURCE_DIR}/include)
