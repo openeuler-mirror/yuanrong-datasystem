@@ -73,7 +73,7 @@ TEST_F(ValidatorTest, TestIsRegexMatch)
 TEST_F(ValidatorTest, TestValidateHostPortString)
 {
     EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", ""));
-    EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "0.0.0.0:0"));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "0.0.0.0:0"));
     EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "255.255.255.255:65535"));
     EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "[::1]:65535"));
     EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535"));
@@ -264,10 +264,10 @@ TEST_F(ValidatorTest, TestValidateCoordinatorAddresses)
     ASSERT_FALSE(Validator::ValidateCoordinatorAddresses(
         "FlagName", "255.255.255.255:65534,yr-core-coordinator.default.svc.cluster.local:65535"));
 
-    ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "0.0.0.0:0"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "0.0.0.0:0"));
     ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255:65535"));
     ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "255.255.255.255:65534,255.255.255.255:65535"));
-    ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "0.0.0.0:0,0.0.0.0:1"));
+    ASSERT_FALSE(Validator::ValidateCoordinatorAddresses("FlagName", "0.0.0.0:0,0.0.0.0:1"));
     ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName", "[::1]:65535,[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535"));
     ASSERT_TRUE(Validator::ValidateCoordinatorAddresses("FlagName",
         "192.0.2.10:31511,192.0.2.11:31511,192.0.2.12:31511"));
