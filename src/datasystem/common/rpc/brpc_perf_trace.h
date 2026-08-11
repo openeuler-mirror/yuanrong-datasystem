@@ -36,7 +36,10 @@
 namespace datasystem {
 
 inline constexpr uint64_t BRPC_NS_PER_US = 1000ULL;
+inline constexpr uint64_t BRPC_NS_PER_MS = 1000ULL * 1000ULL;
 inline constexpr uint64_t BRPC_RPC_FRAMEWORK_SLOW_LOG_THRESHOLD_NS = 1ULL * 1000ULL * 1000ULL;
+inline constexpr uint64_t BRPC_RPC_FRAMEWORK_SLOW_LOG_TIMEOUT_RATIO_NUMERATOR = 8ULL;
+inline constexpr uint64_t BRPC_RPC_FRAMEWORK_SLOW_LOG_TIMEOUT_RATIO_DENOMINATOR = 10ULL;
 inline constexpr std::array<char, 8> BRPC_TRACE_TRAILER_MAGIC = { 'B', 'R', 'P', 'C', 'T', 'R', 'C', '1' };
 inline constexpr uint32_t BRPC_TRACE_TRAILER_VERSION = 1U;
 
@@ -318,6 +321,21 @@ inline void RecordBrpcTraceLatencyMetrics(uint64_t clientReqFrameworkNs, uint64_
     }
 }
 
+inline bool ShouldEmitBrpcFrameworkSlowLog(const BrpcPerfTrace &trace, uint64_t frameworkNs)
+{
+    if (trace.Failed() || trace.CntlFailed() || trace.CntlErrorCode() != 0) {
+        return true;
+    }
+    if (trace.CntlTimeoutMs() <= 0) {
+        return frameworkNs > BRPC_RPC_FRAMEWORK_SLOW_LOG_THRESHOLD_NS;
+    }
+    const uint64_t timeoutNs = static_cast<uint64_t>(trace.CntlTimeoutMs()) * BRPC_NS_PER_MS;
+    const uint64_t slowThresholdNs =
+        timeoutNs * BRPC_RPC_FRAMEWORK_SLOW_LOG_TIMEOUT_RATIO_NUMERATOR
+        / BRPC_RPC_FRAMEWORK_SLOW_LOG_TIMEOUT_RATIO_DENOMINATOR;
+    return frameworkNs >= slowThresholdNs;
+}
+
 inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
 {
     const uint64_t e2eNs = TraceDelta(trace.ClientEndTs(), trace.ClientStartTs());
@@ -346,7 +364,7 @@ inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
                                   networkResidualNs, trace.Failed());
     const uint64_t frameworkNs = e2eNs > serverExecNs ? e2eNs - serverExecNs : 0;
     const int vlogLevel =
-        (frameworkNs > BRPC_RPC_FRAMEWORK_SLOW_LOG_THRESHOLD_NS || FLAGS_enable_perf_trace_log) ? 0 : 1;
+        (ShouldEmitBrpcFrameworkSlowLog(trace, frameworkNs) || FLAGS_enable_perf_trace_log) ? 0 : 1;
     VLOG(vlogLevel) << "[BRPC_RPC_FRAMEWORK_SLOW] trace_id=" << trace.TraceId()
                     << " method=" << trace.MethodName()
                     << " framework_us=" << BrpcNsToUs(frameworkNs)
