@@ -84,7 +84,7 @@ def redact_text(value: str) -> tuple[str, list[str]]:
 def request_json(api_base: str, owner: str, repo: str, issue: int, token: str | None) -> dict[str, Any]:
     path = f"/repos/{owner}/{repo}/issues/{issue}"
     url = api_base.rstrip("/") + path
-    headers = {"Accept": "application/json", "User-Agent": "ds-issue-intake/0.1"}
+    headers = {"Accept": "application/json", "User-Agent": "ds-resolve-issue/0.1"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
         headers["PRIVATE-TOKEN"] = token

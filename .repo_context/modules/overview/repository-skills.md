@@ -15,6 +15,8 @@ when a natural-language request should invoke one of them.
   - `.repo_context/playbooks/`
 - Key verification paths:
   - `.skills/ds-infra-engineering/SKILL.md`
+  - `.skills/ds-resolve-issue/SKILL.md`
+  - `.skills/ds-resolve-issue/scripts/issue_intake.py`
   - `.skills/ds-pr-review/SKILL.md`
   - `.skills/ds-pr-review/scripts/review_pr.py`
   - `.skills/ds-pr-review/scripts/sensitive_scan.py`
@@ -22,8 +24,6 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-self-verify/SKILL.md`
   - `.skills/ds-create-pr/SKILL.md`
   - `.skills/ds-create-pr/scripts/create_pr.py`
-  - `.skills/ds-issue-intake/SKILL.md`
-  - `.skills/ds-issue-intake/scripts/issue_intake.py`
   - `.skills/ds-test/SKILL.md`
   - `.skills/ds-test/scripts/ds_test.py`
   - `.skills/ds-pr-comment-proc/SKILL.md`
@@ -37,7 +37,7 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-design/scripts/mermaid_lint.py`
   - `.skills/ds-design/scripts/scope_check.py`
 - Last verified against source:
-  - `2026-08-06`
+  - `2026-08-11`
 
 ## Purpose
 
@@ -54,9 +54,9 @@ when a natural-language request should invoke one of them.
 | Skill | Canonical use | Source-backed trigger phrases | Ambiguous mentions that require confirmation |
 | --- | --- | --- | --- |
 | `ds-infra-engineering` | route implementation, debugging, refactor, design, and codebase Q&A through repository-level development gates for change decomposition, risk classification, qualified ownership, module boundaries, internal/public API quality, developer experience, misuse prevention, ownership/lifetime, production locatability, rollout/rollback, security boundaries, hot-path performance, concurrency, recovery, build/test behavior, and context updates | “实现/修复/重构/分析 datasystem 代码”, “修改 worker/client/common/master”, “性能/并发/恢复相关改动”, “infra engineering” | broad discussion of engineering philosophy without asking for codebase-specific analysis |
+| `ds-resolve-issue` | resolve a concrete GitCode issue through authenticated intake, sanitized task specification, source-backed implementation, local review, static-first validation, one commit, fork push, and a conflict-checked PR | “解决 issue #572”, “修复这个 issue 并提 PR”, “take issue 572 to PR”, “用 ds-resolve-issue” | only asking to fetch, analyze, understand, or triage an issue; issue-template or issue-process discussion |
 | `ds-pr-review` | review code, tests, scripts, docs, diffs, PRs, commits, or designs using strict infrastructure gates for correctness, design-contract compliance, internal/public API quality, naming clarity, developer experience, module locatability, production diagnosability, hot-path performance, concurrency/C++ safety, public API/config/docs coverage, Bazel/CMake support, mandatory changed-file sensitive-information scanning, line-count-based single-pass or parallel multi-round review planning, behavior-focused test quality, discussion lifecycle, and risk-calibrated rendered comments; when the target is a GitCode PR/MR number or URL, prepare a review bundle and publish validated high-confidence findings back to the PR page through the YuanRong PR review workflow | “review this diff”, “检查这个 PR”, “检视 1031”, “做代码评审”, “审查改动”, “PR review” | asking how the checklist works without requesting a concrete review; explicitly requesting local-only review |
 | `ds-self-verify` | verify diff, tests, context updates, and infra risk before Codex claims work is complete or PR-ready, using the shared AI self-verification playbook | “完成前自检”, “self verify”, “准备提交/PR前检查”, Codex is about to claim completion after file changes | general questions about verification policy |
-| `ds-issue-intake` | fetch a GitCode issue, redact sensitive details, and write a structured task spec for AI-assisted implementation | “拉取 issue”, “分析 issue 572”, “从这个 issue 开始开发”, “issue intake”, “准备 issue 任务” | asking how issue templates work or discussing issue policy without asking to fetch/triage a concrete issue |
 | `ds-test` | plan and run configured validation for code changes, including local command selection and remote validation through private user-provided SSH config | “验证这个改动”, “跑远端验证”, “跑测试并给 PR 验证结果”, “validate this branch”, “run ds-test” | asking what tests should exist in general, or discussing validation policy without asking to run validation |
 | `ds-create-pr` | normalize the source branch to exactly one commit relative to the target base, push it safely to a fork, create a GitCode PR with a template-compliant body, then post `/retest` unless the target is `doc_pages` or all changes are limited to `.repo_context/` and `docs/` | “创建PR”, “提交PR”, “开PR”, “create pull request”, “open a PR”, “发起合并请求” | mentions of PR review policy, PR template, or PR conflicts without asking to create a PR |
 | `ds-pr-comment-proc` | fetch unresolved GitCode PR review comments, prepare replies, mark discussions resolved, and verify final resolved state | “拉取 PR 评论”, “处理 review comments”, “回复并 resolve 评论”, “address PR comments”, “verify resolved comments” | asking how review comments work, or discussing PR review policy without asking to process comments |
@@ -76,8 +76,9 @@ Each repository-maintained skill should stay within this package shape unless a 
 - `tests/`: focused validation for skill scripts when behavior is easy to regress
 
 Repository-maintained skills must be reusable capabilities for this repository, not one-off wrappers for a single issue,
-single feature, single PR, or temporary delivery plan. If a user request needs multiple steps, compose existing skills
-through the routing model below. Keep issue-specific or feature-specific state in local task files or PR notes, not in a
+single feature, single PR, or temporary delivery plan. A canonical orchestration skill is justified only when it owns
+cross-stage preconditions, state, side-effect boundaries, recovery, and a completion contract that ordinary trigger
+routing cannot enforce. Keep issue-specific or feature-specific state in Git-internal task files or PR notes, not in a
 new `.skills/<name>/` package.
 
 All source and verification paths recorded in this document must be repository-relative, checked-in paths under the
@@ -100,36 +101,28 @@ Examples:
 - “review this diff”
 - “修改 worker object cache 的恢复逻辑”
 - “完成前跑自检”
-- “拉取 572 号 issue 并生成任务”
+- “解决 issue #572 并提 PR”
 - “跑远端验证并整理 PR 验证结果”
 - “处理这个 PR 的 unresolved comments”
 
 ### Composite issue development requests
 
-Do not create or require a dedicated orchestration skill for common multi-step development workflows. After the active
-tool entrypoint loads `.repo_context/index.md` and this skill registry, infer the next concrete skill from the user's end
-goal and current state.
+Use `ds-resolve-issue` when the user's end goal is to solve or fix a concrete issue, whether or not the request repeats
+“submit a PR”. The skill owns the full issue-to-PR state machine, including authenticated intake and task-spec creation,
+and composes `ds-infra-engineering`, `ds-pr-review`, `ds-test`, `ds-self-verify`, and `ds-create-pr`.
+It must announce each child-skill handoff and completion checkpoint with the current workflow state so the composition
+is visible and resumable.
 
-For requests such as “帮我解决 issue#572”, “修复这个 issue 并提 PR”, or “take issue 572 to PR”, compose the existing
-skills in order:
-
-1. Use `ds-issue-intake` to fetch the concrete issue and produce a sanitized task spec.
-2. Use `ds-infra-engineering` before product, build, test, config, or workflow edits.
-3. Implement the smallest source-backed fix.
-4. Use `ds-pr-review` for a multi-round deep review of the implementation before testing.
-5. Use `ds-test` for validation planning and configured local or remote validation.
-6. Use `ds-self-verify` before claiming completion or PR readiness.
-7. Use `ds-create-pr` only after the branch is committed and pushed.
-8. Use `ds-pr-comment-proc` when review comments need replies, fixes, resolution, or resolved-state verification.
+Requests that stop at fetching, analysis, understanding, or triage do not trigger the end-to-end skill; ask the user to
+state the intended fix or resolution target. Use `ds-pr-comment-proc` separately only when the user later asks to
+process review comments; the issue-resolution workflow stops after PR creation and conflict verification.
 
 At each step, stop and give a friendly setup prompt when required configuration is missing. The prompt must be actionable
 without asking the user to paste secrets into chat:
 
-- GitCode API access: ask the user to set `GITCODE_TOKEN` / `GITCODE_ACCESS_TOKEN`, or put the token in
-  `~/.local/gitcode_token`.
-- Remote Linux validation: ask the user to copy
-  `.skills/ds-test/references/validation_config.example.toml` to `~/.config/yuanrong/ds-test.toml`, fill in the SSH
-  target locally, then rerun `ds-test check-config`.
+- GitCode API access: follow the local credential setup prompt from the active GitCode skill.
+- Remote Linux validation: follow the private config setup prompt from `ds-test`, fill in the SSH target locally, then
+  rerun `ds-test check-config`.
 - macOS, Windows, and other non-Linux local hosts: treat them as orchestration hosts only; compile, CTest, Bazel, and
   remote validation require the local private `ds-test` config above.
 
@@ -170,7 +163,8 @@ If multiple skills could apply:
 - When a repository-local skill is added, removed, renamed, or materially repurposed, update this file in the same
   change.
 - Add a new skill only when it is a general repository capability that can be reused across issues and features. Do not
-  add skills that encode one issue, one PR, one feature plan, or a fixed orchestration chain that routing can compose.
+  add skills that encode one issue, one PR, or one feature plan. Do not add wrapper-only orchestration skills; an
+  orchestrator must own cross-stage state, safety gates, failure recovery, and completion verification.
 - Keep the trigger phrases narrow and action-oriented; do not register broad topic words that would cause accidental
   execution.
 - When a skill manages a repository artifact with frequent ambiguous mentions, record both:

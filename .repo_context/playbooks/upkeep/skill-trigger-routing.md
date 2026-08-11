@@ -14,7 +14,7 @@
   - `.skills/*/scripts/*`
   - `.repo_context/modules/overview/repository-skills.md`
 - Last verified against source:
-  - `2026-06-18`
+  - `2026-08-11`
 
 ## Purpose
 
@@ -96,9 +96,9 @@ Examples that should not trigger `ds-infra-engineering`:
 | Skill | Trigger now | Confirm first when |
 | --- | --- | --- |
 | `ds-infra-engineering` | implementation, debugging, refactor, design, or codebase Q&A touches runtime/client/worker/master/common infra, shared APIs, module boundaries, change decomposition, risk validation, rollout/rollback, production diagnosability, performance, concurrency, persistence, security boundaries, or recovery-sensitive code | user only asks broad engineering philosophy unrelated to the repository |
+| `ds-resolve-issue` | user asks to solve or fix a concrete GitCode issue end-to-end, including requests that imply delivery without explicitly repeating “open a PR” | user asks only to fetch, analyze, understand, or triage the issue; ask for the intended resolution target |
 | `ds-pr-review` | user asks to review a diff, PR, commit, code change, or design; for GitCode PR/MR numbers or URLs, use the prepare -> JSON findings -> publish workflow and post high-confidence findings back to the PR page | user asks only how review policy works, or explicitly asks for local-only review |
 | `ds-self-verify` | Codex changed files and is preparing to claim completion, or user explicitly asks for completion self-check using the shared AI self-verification playbook | user asks only what self-verification means |
-| `ds-issue-intake` | user asks to fetch, analyze, triage, or start development from a concrete GitCode issue number or URL; produce a sanitized task spec | user discusses issue templates, labels, or process without asking to fetch a concrete issue |
 | `ds-test` | user asks to validate code changes, run remote validation, choose tests for a branch, or prepare PR validation evidence | user asks only what validation policy should be, or asks for a conceptual test strategy without execution |
 | `ds-pr-comment-proc` | user asks to fetch unresolved PR comments, reply to review discussions, mark comments resolved, or verify resolved state | user asks only how review comments work or wants review policy explanation |
 | `ds-log-analysis` | user asks to analyze KVCache access/resource logs or generate a report | user only asks about log format or script internals |
@@ -108,28 +108,26 @@ Examples that should not trigger `ds-infra-engineering`:
 
 ## Composite Routing
 
-Do not register workflow-only wrapper skills when the behavior can be expressed as a sequence of existing concrete
-skills. After `.repo_context` initialization, route each phase by the user's end goal and the current repository state.
+Use `ds-resolve-issue` as the one canonical orchestrator for a concrete request such as “帮我解决 issue#572” or
+“修复这个 issue 并提 PR”. It owns the preflight, authenticated issue intake, task-spec creation, diagnosis, implementation,
+review, validation, delivery, conflict verification, and stop/recovery contract while composing the narrower skills.
+Every child-skill handoff, completion, and blocker must be announced with the current orchestration state and persisted
+to the Git-internal task checkpoint before advancing.
+
+Do not register other workflow-only wrappers when trigger routing can safely compose existing concrete skills.
 Repository-local skills must stay general to `yuanrong-datasystem`; do not create skills for a single issue, PR, feature,
-or temporary plan. Put case-specific state in local task files or PR notes, and let routing compose reusable skills.
+or temporary plan. Put case-specific state in Git-internal task files or PR notes.
 
-For a concrete request such as “帮我解决 issue#572” or “修复这个 issue 并提 PR”, use this sequence:
-
-1. `ds-issue-intake` for issue fetching, redaction, and task spec creation.
-2. `ds-infra-engineering` before implementation or workflow edits.
-3. `ds-pr-review` for a multi-round deep review of the implementation before testing.
-4. `ds-test` for validation planning and configured validation execution.
-5. `ds-self-verify` after changes and before claiming completion.
-6. `ds-create-pr` after the branch is committed and pushed.
-7. `ds-pr-comment-proc` only if PR review comments need processing.
+Requests that stop at fetching, analysis, understanding, or triage do not trigger `ds-resolve-issue`; ask for the intended
+resolution target. Route later PR review-comment work to `ds-pr-comment-proc`; it is not part of the issue-to-PR completion
+contract.
 
 Each phase should be skippable only when its precondition is already satisfied and source-backed evidence exists.
 Configuration gaps should produce a setup prompt, not guessed credentials or hardcoded private infrastructure details:
 
-- missing GitCode credentials: ask the user to set `GITCODE_TOKEN` / `GITCODE_ACCESS_TOKEN`, or create
-  `~/.local/gitcode_token`;
-- missing remote validation config: ask the user to copy
-  `.skills/ds-test/references/validation_config.example.toml` to `~/.config/yuanrong/ds-test.toml` and fill it locally;
+- missing GitCode credentials: show the local credential setup prompt from the active GitCode skill;
+- missing remote validation config: show the private config setup prompt from `ds-test` and ask the user to fill it
+  locally;
 - macOS, Windows, and other non-Linux local machines: use them only as orchestration hosts and route build/CTest/Bazel
   validation to a configured Linux validation target.
 
@@ -140,8 +138,8 @@ remote paths, local workspace paths, or raw sensitive logs.
 
 - [ ] update `.skills/<skill>/SKILL.md` trigger description when workflow scope changes
 - [ ] update `.repo_context/modules/overview/repository-skills.md`
-- [ ] reject issue-specific, PR-specific, feature-specific, or wrapper-only skill registrations; express them as
-      composite routing or task state instead
+- [ ] reject issue-specific, PR-specific, feature-specific, or wrapper-only skill registrations; a canonical
+      orchestrator must own cross-stage state, side-effect boundaries, recovery, and completion verification
 - [ ] update `.repo_context/index.md` if the best routing entrypoint changes
 - [ ] update metadata JSON if the canonical overview module set changes
 - [ ] regenerate `.repo_context/generated/repo_index.*` when `.skills/` structure changes
