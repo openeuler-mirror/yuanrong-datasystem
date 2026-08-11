@@ -51,10 +51,18 @@ constexpr uint64_t TRANSFER_TIME_MULTIPLIER = 2;
 // own report (<=30s) well before this fires.
 constexpr uint64_t HOLD_TTL_MIN_S = 60;
 // Previously gflags rebalance_cooldown_s / rebalance_max_migrate_bytes_per_round; the knobs were
-// removed but the behavior (cooldown window and per-task migration cap) is retained as constants.
-// CooldownSeconds inject below lets tests shorten the cooldown without re-introducing a flag.
+// removed but the cooldown behavior is retained as a constant. CooldownSeconds inject below lets
+// tests shorten the cooldown without re-introducing a flag.
 constexpr uint32_t REBALANCE_COOLDOWN_S = 60;
-constexpr uint64_t REBALANCE_MAX_MIGRATE_BYTES_PER_ROUND = 1024ul * 1024ul * 1024ul;
+// Per-task (per-batch) migration cap. The old per-round 1GB cap was removed so the rebalance can
+// keep issuing batches until the usage gap converges to the midpoint; the 1GB cap is replaced by
+// a 300MB per-task batch so master gets fresh target memory feedback between batches.
+constexpr uint64_t REBALANCE_MAX_BYTES_PER_TASK = 300 * 1024ul * 1024ul;
+// Wall-clock budget for one chain of 300MB batches. Matches the default ResourceReport cycle: a
+// chain started in cycle N must end before cycle N+1's snapshot is taken, otherwise it competes
+// with the next cycle's fresh budget and foreground work. The flag-driven migration rate limit
+// (~40 MiB/s default) bounds throughput; this bounds wall-clock duty cycle.
+constexpr uint64_t REBALANCE_EPOCH_BUDGET_MS = 30 * MS_PER_SECOND;
 
 uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
 {
@@ -118,13 +126,13 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
         return Status::OK();
     }
 
-    master::RebalanceTaskPb task;
-    Status rc = TryBuildTaskLocked(snapshot, reportingWorker, nowMs, topologySnapshot.get(), task);
+    RunningTask runningTask;
+    Status rc = TryBuildTaskLocked(snapshot, reportingWorker, nowMs, topologySnapshot.get(), runningTask);
     RETURN_OK_IF_TRUE(rc.GetCode() == StatusCode::K_NOT_FOUND);
     RETURN_IF_NOT_OK(rc);
-    RETURN_OK_IF_TRUE(task.source_worker() != reportingWorker);
+    RETURN_OK_IF_TRUE(runningTask.task.source_worker() != reportingWorker);
 
-    RunningTask runningTask{ .task = task };
+    const auto &task = runningTask.task;
     activeTasksBySource_.emplace(task.source_worker(), runningTask);
     futureView_[task.target_worker()].inflightBytes =
         SaturatingAdd(futureView_[task.target_worker()].inflightBytes, task.max_bytes());
@@ -169,10 +177,31 @@ bool MemoryRebalanceScheduler::NeedSnapshotForSchedule(const master::ResourceRep
     return IsSourceCandidateLocked(reportingNode, nowMs, topologySnapshot.get());
 }
 
+Status MemoryRebalanceScheduler::ReplayOrIgnoreStaleLocked(
+    std::unordered_map<std::string, RunningTask>::iterator taskIt,
+    const master::ReportRebalanceResultReqPb &req, master::ReportRebalanceResultRspPb &rsp)
+{
+    // Predecessor's response was lost in flight; worker retries it. If the active entry's
+    // immediatePredecessorTaskId matches, replay the successor so the chain continues.
+    if (!taskIt->second.immediatePredecessorTaskId.empty()
+        && taskIt->second.immediatePredecessorTaskId == req.task_id()) {
+        *rsp.mutable_next_rebalance_task() = taskIt->second.task;
+        LOG(INFO) << FormatString(
+            "[MemoryRebalance] replay cached successor for stale predecessor task=%s source=%s "
+            "active_task=%s",
+            req.task_id(), req.source_worker(), taskIt->second.task.task_id());
+        return Status::OK();
+    }
+    LOG(INFO) << FormatString(
+        "[MemoryRebalance] ignore stale result task=%s source=%s target=%s status=%d, active_task=%s",
+        req.task_id(), req.source_worker(), req.target_worker(), static_cast<int>(req.status()),
+        taskIt->second.task.task_id());
+    return Status::OK();
+}
+
 Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResultReqPb &req,
                                               master::ReportRebalanceResultRspPb &rsp)
 {
-    (void)rsp;
     CHECK_FAIL_RETURN_STATUS(!req.task_id().empty(), K_INVALID, "The rebalance task id can not be empty");
     CHECK_FAIL_RETURN_STATUS(!req.source_worker().empty(), K_INVALID, "The rebalance source worker can not be empty");
     CHECK_FAIL_RETURN_STATUS(IsTerminalStatus(req.status()), K_INVALID, "The rebalance task status is not terminal");
@@ -192,10 +221,7 @@ Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResul
     CHECK_FAIL_RETURN_STATUS(task.source_worker() == req.source_worker(), K_RUNTIME_ERROR,
                              "Rebalance task source index is inconsistent");
     if (task.task_id() != req.task_id()) {
-        LOG(INFO) << FormatString(
-            "[MemoryRebalance] ignore stale result task=%s source=%s target=%s status=%d, active_task=%s",
-            req.task_id(), req.source_worker(), req.target_worker(), static_cast<int>(req.status()), task.task_id());
-        return Status::OK();
+        return ReplayOrIgnoreStaleLocked(taskIt, req, rsp);
     }
     CHECK_FAIL_RETURN_STATUS(task.target_worker() == req.target_worker(), K_INVALID,
                              "The rebalance result does not match the active task");
@@ -206,8 +232,58 @@ Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResul
         req.task_id(), req.source_worker(), req.target_worker(), static_cast<int>(req.status()),
         static_cast<int>(req.failure_side()), req.migrated_bytes(), req.migrated_objects(), req.failed_objects(),
         req.failed_reason());
-    RemoveTaskLocked(req.source_worker(), nowMs, !IsFailedStatus(req.status()), req.failure_side());
+    RunningTask prevTask = taskIt->second;
+    const bool succeeded = !IsFailedStatus(req.status());
+    RemoveTaskLocked(req.source_worker(), nowMs, succeeded, req.failure_side());
+
+    ProcessFreshFeedbackLocked(prevTask, req, nowMs, rsp);
     return Status::OK();
+}
+
+void MemoryRebalanceScheduler::ProcessFreshFeedbackLocked(RunningTask &prevTask,
+                                                          const master::ReportRebalanceResultReqPb &req,
+                                                          uint64_t nowMs,
+                                                          master::ReportRebalanceResultRspPb &rsp)
+{
+    // proto3 scalar uint64 has no presence; treat 0 (wire default, old worker) and UINT64_MAX
+    // (new worker sentinel) both as "no fresh signal". Chain ends; genuine remain=0 also lands
+    // here -- the watermark stop in BuildNextBatchTaskLocked would have fired anyway.
+    if (IsFailedStatus(req.status()) || req.target_remain_bytes() == 0
+        || req.target_remain_bytes() == UINT64_MAX) {
+        return;
+    }
+    prevTask.cumulativeMigrated += req.migrated_bytes();
+    // Don't continue the chain if the batch was partial (candidates exhausted, didn't reach
+    // max_bytes); the next batch would immediately fail with NO_CANDIDATE and trigger a cooldown.
+    if (req.migrated_bytes() < prevTask.task.max_bytes()) {
+        return;
+    }
+    master::RebalanceTaskPb nextTask;
+    if (BuildNextBatchTaskLocked(prevTask, req.target_remain_bytes(), nowMs, nextTask)) {
+        // Release the held charge only when a next batch is built. If the chain ends, keep the
+        // held so the #685 stale-snapshot guard protects the target until its own ResourceReport
+        // arrives. BuildNextBatchTaskLocked already excluded held from its inflight projection.
+        auto deltaIt = futureView_.find(req.target_worker());
+        if (deltaIt != futureView_.end() && deltaIt->second.heldBytes > 0) {
+            ReleaseHeldLocked(req.target_worker(), deltaIt->second.heldBytes);
+        }
+        RunningTask nextRunningTask;
+        nextRunningTask.task = nextTask;
+        nextRunningTask.targetMemoryLimit = prevTask.targetMemoryLimit;
+        nextRunningTask.targetMemoryCapacity = prevTask.targetMemoryCapacity;
+        nextRunningTask.totalBudget = prevTask.totalBudget;
+        nextRunningTask.cumulativeMigrated = prevTask.cumulativeMigrated;
+        // Propagate the chain's epoch start so BuildNextBatchTaskLocked can enforce the
+        // wall-clock budget across batches; and record this predecessor so a lost-response retry
+        // of the predecessor replays this successor (idempotent ReportResult).
+        nextRunningTask.epochStartMs = prevTask.epochStartMs;
+        nextRunningTask.immediatePredecessorTaskId = prevTask.task.task_id();
+        activeTasksBySource_.emplace(nextTask.source_worker(), nextRunningTask);
+        futureView_[nextTask.target_worker()].inflightBytes =
+            SaturatingAdd(futureView_[nextTask.target_worker()].inflightBytes, nextTask.max_bytes());
+        *rsp.mutable_next_rebalance_task() = nextTask;
+        INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.ReportResult.AssignNextTask");
+    }
 }
 
 void MemoryRebalanceScheduler::ExpireTimeoutTasksLocked(uint64_t nowMs)
@@ -566,27 +642,48 @@ void MemoryRebalanceScheduler::CollectCandidatePairsLocked(const std::vector<con
     }
 }
 
-void MemoryRebalanceScheduler::FillTaskFromPairLocked(const CandidatePair &bestPair, uint64_t nowMs,
-                                                      master::RebalanceTaskPb &task) const
+void MemoryRebalanceScheduler::FillTaskProtoLocked(const std::string &sourceWorker,
+                                                   const std::string &targetWorker, uint64_t maxBytes,
+                                                   uint64_t nowMs, master::RebalanceTaskPb &task) const
 {
-    uint64_t createTimeMs = nowMs;
     task.set_task_id("memory-rebalance-" + GetStringUuid());
-    task.set_source_worker(bestPair.source->nodeId);
-    task.set_target_worker(bestPair.target->nodeId);
-    task.set_max_bytes(bestPair.maxBytes);
-    task.set_create_time_ms(createTimeMs);
-    auto rate_bytes_per_sec = static_cast<uint64_t>(FLAGS_data_migrate_rate_limit_mb) * 1024 * 1024;
-    auto estimated_transfer_ms = ((bestPair.maxBytes + rate_bytes_per_sec - 1) / rate_bytes_per_sec) * MS_PER_SECOND;
-    auto transferTimeoutMs = SaturatingMultiply(estimated_transfer_ms, TRANSFER_TIME_MULTIPLIER);
+    task.set_source_worker(sourceWorker);
+    task.set_target_worker(targetWorker);
+    task.set_max_bytes(maxBytes);
+    task.set_create_time_ms(nowMs);
+    auto rateBytesPerSec = static_cast<uint64_t>(FLAGS_data_migrate_rate_limit_mb) * 1024 * 1024;
+    auto estimatedTransferMs = ((maxBytes + rateBytesPerSec - 1) / rateBytesPerSec) * MS_PER_SECOND;
+    auto transferTimeoutMs = SaturatingMultiply(estimatedTransferMs, TRANSFER_TIME_MULTIPLIER);
     auto timeoutMs = SaturatingAdd(transferTimeoutMs, static_cast<uint64_t>(FLAGS_rebalance_task_report_grace_ms));
     task.set_timeout_ms(timeoutMs);
-    task.set_deadline_ms(SaturatingAdd(createTimeMs, timeoutMs));
+    task.set_deadline_ms(SaturatingAdd(nowMs, timeoutMs));
+}
+
+void MemoryRebalanceScheduler::FillTaskFromPairLocked(const CandidatePair &bestPair, uint64_t nowMs,
+                                                      RunningTask &runningTask) const
+{
+    FillTaskProtoLocked(bestPair.source->nodeId, bestPair.target->nodeId, bestPair.maxBytes, nowMs,
+                        runningTask.task);
+    runningTask.targetMemoryLimit = bestPair.target->memoryLimit;
+    runningTask.targetMemoryCapacity = bestPair.target->memoryCapacity;
+    // Fixed total migration budget for this 30s cycle: the midpoint gap (usageGap/2) capped by
+    // the target's watermark headroom and eviction headroom. Per-batch 300MB caps only each
+    // batch (bestPair.maxBytes already applies it for the first batch); totalBudget is uncapped
+    // so the loop can issue multiple batches until the planned convergence amount is migrated.
+    const uint64_t usageGapBytes = (bestPair.source->usedMemory > bestPair.target->usedMemory)
+        ? (bestPair.source->usedMemory - bestPair.target->usedMemory) / 2 : 0;
+    const uint64_t watermarkBytes =
+        bestPair.target->memoryLimit * FLAGS_rebalance_source_usage_percent / PERCENT_BASE;
+    const uint64_t headroomToWatermark = SubOrZero(watermarkBytes, bestPair.target->usedMemory);
+    runningTask.totalBudget = std::min({ usageGapBytes, headroomToWatermark, bestPair.targetAvailableAfterInFlight });
+    runningTask.cumulativeMigrated = 0;
+    runningTask.epochStartMs = nowMs;
 }
 
 Status MemoryRebalanceScheduler::TryBuildTaskLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
                                                     const std::string &sourceWorker, uint64_t nowMs,
                                                     const cluster::TopologySnapshot *topologySnapshot,
-                                                    master::RebalanceTaskPb &task)
+                                                    RunningTask &runningTask)
 {
     CHECK_FAIL_RETURN_STATUS(snapshot.size() >= MIN_REBALANCE_WORKER_COUNT, K_NOT_FOUND,
                              "No enough workers for memory rebalance");
@@ -618,7 +715,7 @@ Status MemoryRebalanceScheduler::TryBuildTaskLocked(const std::unordered_map<std
                              "No source target pair is suitable for memory rebalance");
     const CandidatePair &bestPair = targetPairs.front();
 
-    FillTaskFromPairLocked(bestPair, nowMs, task);
+    FillTaskFromPairLocked(bestPair, nowMs, runningTask);
     LOG(INFO) << FormatString(
         "[MemoryRebalance] select source=%s(%lu%%) target=%s(%lu%% -> %u%%), max_bytes=%lu, "
         "target_available_after_in_flight=%lu, usage_gap=%u%%",
@@ -628,15 +725,108 @@ Status MemoryRebalanceScheduler::TryBuildTaskLocked(const std::unordered_map<std
     return Status::OK();
 }
 
+bool MemoryRebalanceScheduler::ShouldStopChainEarlyLocked(const RunningTask &prevTask,
+                                                          uint64_t targetRemainBytes,
+                                                          uint64_t nowMs) const
+{
+    if (prevTask.targetMemoryCapacity == 0) {
+        return true;  // no captured target memory view; cannot make a fresh decision
+    }
+    // Guard against an impossible "remain > capacity" signal: SubOrZero would silently reverse
+    // to freshTargetUsed=0 (target looks empty). Treat as signal corrupt: stop the chain.
+    if (targetRemainBytes > prevTask.targetMemoryCapacity) {
+        LOG(INFO) << FormatString("[MemoryRebalance] stop loop source=%s target=%s: fresh remain %lu "
+                                  "> capacity %lu (signal corrupt)",
+                                  prevTask.task.source_worker(), prevTask.task.target_worker(),
+                                  targetRemainBytes, prevTask.targetMemoryCapacity);
+        return true;
+    }
+    // Epoch wall-clock budget: the chain must end before the next 30s ResourceReport cycle.
+    if (prevTask.epochStartMs != 0
+        && nowMs - prevTask.epochStartMs >= REBALANCE_EPOCH_BUDGET_MS) {
+        LOG(INFO) << FormatString("[MemoryRebalance] stop loop source=%s target=%s: epoch budget "
+                                  "exhausted (elapsed=%lums, budget=%lums)",
+                                  prevTask.task.source_worker(), prevTask.task.target_worker(),
+                                  nowMs - prevTask.epochStartMs, REBALANCE_EPOCH_BUDGET_MS);
+        return true;
+    }
+    return false;
+}
+
+bool MemoryRebalanceScheduler::BuildNextBatchTaskLocked(const RunningTask &prevTask, uint64_t targetRemainBytes,
+                                                        uint64_t nowMs, master::RebalanceTaskPb &nextTask) const
+{
+    if (ShouldStopChainEarlyLocked(prevTask, targetRemainBytes, nowMs)) {
+        return false;
+    }
+    // Budget exhausted: the fixed migration amount for this 30s cycle has been moved.
+    const uint64_t remaining = SubOrZero(prevTask.totalBudget, prevTask.cumulativeMigrated);
+    if (remaining == 0) {
+        LOG(INFO) << FormatString("[MemoryRebalance] stop loop source=%s target=%s: budget exhausted "
+                                  "(total=%lu, migrated=%lu)",
+                                  prevTask.task.source_worker(), prevTask.task.target_worker(),
+                                  prevTask.totalBudget, prevTask.cumulativeMigrated);
+        return false;
+    }
+    // Fresh target safety: stop if the target reached the rebalance watermark.
+    const uint64_t freshTargetUsed = SubOrZero(prevTask.targetMemoryCapacity, targetRemainBytes);
+    const uint64_t freshTargetRate = CalculateUsageRate(freshTargetUsed, prevTask.targetMemoryLimit);
+    if (freshTargetRate >= FLAGS_rebalance_source_usage_percent) {
+        LOG(INFO) << FormatString("[MemoryRebalance] stop loop source=%s target=%s: target reached "
+                                  "watermark (usage_rate=%lu%%)",
+                                  prevTask.task.source_worker(), prevTask.task.target_worker(), freshTargetRate);
+        return false;
+    }
+    const uint64_t watermarkBytes =
+        prevTask.targetMemoryLimit * FLAGS_rebalance_source_usage_percent / PERCENT_BASE;
+    const uint64_t targetInflight = GetTargetInflightBytesLocked(prevTask.task.target_worker());
+    uint64_t heldForTarget = 0;
+    auto deltaIt = futureView_.find(prevTask.task.target_worker());
+    if (deltaIt != futureView_.end()) {
+        heldForTarget = deltaIt->second.heldBytes;
+    }
+    // Exclude held from inflight to avoid double-counting the just-landed data.
+    const uint64_t inflightExcludingHeld = SubOrZero(targetInflight, heldForTarget);
+    const uint64_t projectedUsed = SaturatingAdd(freshTargetUsed, inflightExcludingHeld);
+    const uint64_t headroomToWatermark = SubOrZero(watermarkBytes, projectedUsed);
+    const uint64_t targetAvailableAfterInFlight = SubOrZero(targetRemainBytes, inflightExcludingHeld);
+    const uint64_t nextBytes = std::min({ REBALANCE_MAX_BYTES_PER_TASK, remaining,
+                                          headroomToWatermark, targetAvailableAfterInFlight });
+    if (nextBytes == 0) {
+        LOG(INFO) << FormatString("[MemoryRebalance] stop loop source=%s target=%s: next batch is 0 "
+                                  "(remaining=%lu, headroom_to_watermark=%lu, target_avail_after_inflight=%lu)",
+                                  prevTask.task.source_worker(), prevTask.task.target_worker(), remaining,
+                                  headroomToWatermark, targetAvailableAfterInFlight);
+        return false;
+    }
+    FillTaskProtoLocked(prevTask.task.source_worker(), prevTask.task.target_worker(), nextBytes, nowMs, nextTask);
+    LOG(INFO) << FormatString("[MemoryRebalance] next batch source=%s target=%s max_bytes=%lu "
+                              "(remaining_budget=%lu, target_usage_rate=%lu%%)",
+                              nextTask.source_worker(), nextTask.target_worker(), nextBytes, remaining,
+                              freshTargetRate);
+    return true;
+}
+
 uint64_t MemoryRebalanceScheduler::CalculateTaskBytesLocked(const NodeInfo &source, const NodeInfo &target,
                                                             uint64_t targetInflightBytes) const
 {
     if (source.usedMemory <= target.usedMemory) {
         return 0;
     }
+    // Rebalance goal: converge source and target toward the usage midpoint (keep the existing
+    // gap/2 logic). This is the migration amount, NOT a drain-to-watermark.
     const uint64_t usageGapBytes = (source.usedMemory - target.usedMemory) / 2;
+    // Target ceiling: do not push the target past the rebalance watermark (source_usage_percent).
+    // memoryCapacity == highWater line, so headroomToWatermark is how much the target can still
+    // absorb before hitting the watermark usage rate.
+    const uint64_t watermarkBytes = target.memoryLimit * FLAGS_rebalance_source_usage_percent / PERCENT_BASE;
+    // Account for other sources' in-flight bytes so concurrent tasks don't each reuse the same
+    // watermark headroom. projectedUsed = already-landed + not-yet-landed (in-flight).
+    const uint64_t projectedUsed = SaturatingAdd(target.usedMemory, targetInflightBytes);
+    const uint64_t headroomToWatermark = SubOrZero(watermarkBytes, projectedUsed);
     const uint64_t targetAvailableAfterInFlight = SubOrZero(target.availableMemory, targetInflightBytes);
-    return std::min({ usageGapBytes, targetAvailableAfterInFlight, REBALANCE_MAX_MIGRATE_BYTES_PER_ROUND });
+    return std::min({ usageGapBytes, headroomToWatermark, targetAvailableAfterInFlight,
+                      REBALANCE_MAX_BYTES_PER_TASK });
 }
 
 uint64_t MemoryRebalanceScheduler::CalculateProjectedTargetUsageRate(const NodeInfo &target,

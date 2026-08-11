@@ -76,7 +76,8 @@ public:
     using SelectCandidatesHook = std::function<Status(uint64_t, std::unordered_map<std::string, uint64_t> &)>;
     using MigrateToTargetHook = std::function<MigrateResult(const master::RebalanceTaskPb &, const HostPort &,
                                                             const std::vector<std::string> &)>;
-    using ReportResultHook = std::function<void(const master::ReportRebalanceResultReqPb &)>;
+    using ReportResultHook =
+        std::function<void(const master::ReportRebalanceResultReqPb &, master::ReportRebalanceResultRspPb &)>;
 
     void SetTestHooks(SelectCandidatesHook selectHook, MigrateToTargetHook migrateHook, ReportResultHook reportHook)
     {
@@ -115,14 +116,23 @@ private:
         master::RebalanceFailureSidePb failureSide = master::REBALANCE_FAILURE_UNKNOWN;
         std::string assignedMasterAddress;
         std::string failedReason;
+        // Target's fresh remain_bytes from the last batch's MigrateDataRspPb. UINT64_MAX means no
+        // batch was sent; forwarded to master only when a real value exists.
+        uint64_t targetRemainBytes{ UINT64_MAX };
     };
 
     void Execute(master::RebalanceTaskPb task, std::string assignedMasterAddress);
+    // Report a control-plane failure (empty assigned master) and clear the running state so
+    // the executor can accept a new task. Returns true when the caller should early-exit.
+    void ReportEmptyMasterAndDone(const master::RebalanceTaskPb &task);
     void SubmitBusyResult(const master::RebalanceTaskPb &task, const std::string &runningTaskId);
     uint64_t BuildLocalDeadlineMs(const master::RebalanceTaskPb &task) const;
     uint64_t NowMsForExpiryCheck() const;
     bool IsExpired(uint64_t localDeadlineMs) const;
     bool IsAssignedMasterUnavailable(const master::RebalanceTaskPb &task, ExecutionStats &stats) const;
+    bool IsExitRequested() const { return exitRequested_ != nullptr && exitRequested_->load(); }
+    void ClassifyBatchResult(const master::RebalanceTaskPb &task, bool masterUnavailable, ExecutionStats &stats);
+    void LogBatchResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats, uint64_t costMs);
     Status ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
                         object_cache::DataMigrator &migrator);
     void ExecuteBatches(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
@@ -136,7 +146,8 @@ private:
                                   object_cache::DataMigrator &migrator);
     master::RebalanceFailureSidePb ClassifyMigrationFailure(const MigrateResult &result,
                                                             const HostPort &targetAddr) const;
-    void ReportResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats);
+    void ReportResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats,
+                     master::ReportRebalanceResultRspPb &rsp);
     void ReportFailure(const master::RebalanceTaskPb &task, master::RebalanceFailureSidePb failureSide,
                        const std::string &reason);
     Status GetWorkerMasterApi(std::shared_ptr<WorkerMasterOCApi> &workerMasterApi) const;

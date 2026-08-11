@@ -20,6 +20,7 @@
 
 #include "datasystem/master/memory_rebalance_scheduler.h"
 
+#include <cstdint>
 #include <initializer_list>
 #include <string>
 #include <unordered_map>
@@ -93,6 +94,27 @@ master::ReportRebalanceResultReqPb MakeResultReq(const master::RebalanceTaskPb &
     req.set_migrated_bytes(task.max_bytes());
     req.set_migrated_objects(1);
     req.set_failure_side(failureSide);
+    // No fresh per-batch target memory in the legacy success/failure path: use the sentinel so
+    // ReportResult does not treat 0 as a "target full" fresh signal and keeps the #685 held charge
+    // until the target's own report (the legacy behavior these tests assert).
+    req.set_target_remain_bytes(UINT64_MAX);
+    return req;
+}
+
+// Like MakeResultReq but also carries the fresh per-batch target_remain_bytes the source worker
+// forwards (the target's post-receive headroom) and the bytes actually migrated this batch. These
+// drive master's next-batch decision in ReportResult (fixed-budget tracking + target safety).
+master::ReportRebalanceResultReqPb MakeFreshResultReq(const master::RebalanceTaskPb &task,
+                                                      uint64_t targetRemainBytes, uint64_t migratedBytes = 0)
+{
+    master::ReportRebalanceResultReqPb req;
+    req.set_task_id(task.task_id());
+    req.set_source_worker(task.source_worker());
+    req.set_target_worker(task.target_worker());
+    req.set_status(master::REBALANCE_TASK_SUCCEEDED);
+    req.set_migrated_bytes(migratedBytes == 0 ? task.max_bytes() : migratedBytes);
+    req.set_migrated_objects(1);
+    req.set_target_remain_bytes(targetRemainBytes);
     return req;
 }
 
@@ -219,6 +241,12 @@ protected:
     static void ExpireActiveTask(MemoryRebalanceScheduler &s, const std::string &source)
     {
         s.activeTasksBySource_.at(source).task.set_deadline_ms(0);
+    }
+    // Backdate the chain's epoch start so BuildNextBatchTaskLocked observes an expired wall-clock
+    // budget without the test having to wait 30s. Mirrors BackdateHold for the held GC TTL.
+    static void BackdateEpochStart(MemoryRebalanceScheduler &s, const std::string &source, uint64_t ts)
+    {
+        s.activeTasksBySource_.at(source).epochStartMs = ts;
     }
 
 private:
@@ -645,9 +673,9 @@ TEST_F(MemoryRebalanceSchedulerTest, HeldInflightReducesBudgetForImmediateRepick
     ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
 
     // Success holds the in-flight charge (issue #685): the target's snapshot is still
-    // stale-low, so the held in-flight reduces the re-pick budget. But the available
-    // clamp still allows a dispatch: maxBytes = min(410, 900-410=490) = 410, projected
-    // = 920 < triggerLine(1000). No eviction; converges.
+    // stale-low, so the held in-flight reduces the re-pick budget via the projected-usage
+    // watermark clamp. projectedUsed = 100 + 410 = 510, headroom = 700 - 510 = 190;
+    // targetAvail = 900 - 410 = 490. maxBytes = min(410, 190, 490) = 190.
     master::ReportRebalanceResultRspPb reportRsp;
     auto successReq = MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_SUCCEEDED);
     DS_ASSERT_OK(scheduler.ReportResult(successReq, reportRsp));
@@ -655,7 +683,7 @@ TEST_F(MemoryRebalanceSchedulerTest, HeldInflightReducesBudgetForImmediateRepick
     auto secondRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
     ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
     EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_10);
-    EXPECT_EQ(secondRsp.rebalance_task().max_bytes(), 410ul);
+    EXPECT_EQ(secondRsp.rebalance_task().max_bytes(), 190ul);
 }
 
 // ============================================================================
@@ -718,8 +746,9 @@ TEST_F(MemoryRebalanceSchedulerTest, HeldInflightReducesBudgetForSequentialRepic
         scheduler.ReportResult(MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_SUCCEEDED), reportRsp));
 
     // T1's snapshot is still stale-low (T1 actually received ~400 bytes). The held
-    // in-flight reduces S2's budget for T1 (maxBytes=400, not 800) but does NOT
-    // reject it — projected 900 < triggerLine(1000). S2 targets T1 directly.
+    // in-flight reduces S2's budget via the projected-usage watermark clamp:
+    // projectedUsed = 100 + 400 = 500, headroom = 700 - 500 = 200, targetAvail = 900 - 400 = 500.
+    // maxBytes = min(400, 200, 500) = 200. S2 targets T1 directly.
     auto secondSnapshot = MakeSnapshot({
         MakeNode(source1, 500, 500),  // S1 drained in reality
         MakeNode(source2, 900, 100),  // S2 is the reporting source
@@ -731,7 +760,7 @@ TEST_F(MemoryRebalanceSchedulerTest, HeldInflightReducesBudgetForSequentialRepic
     ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
     EXPECT_EQ(secondRsp.rebalance_task().source_worker(), source2);
     EXPECT_EQ(secondRsp.rebalance_task().target_worker(), target1);
-    EXPECT_EQ(secondRsp.rebalance_task().max_bytes(), 400ul);
+    EXPECT_EQ(secondRsp.rebalance_task().max_bytes(), 200ul);
 }
 
 // Concurrent (H3 / logs685 W2): while S1->T is still active (in-flight[T]=445),
@@ -757,12 +786,13 @@ TEST_F(MemoryRebalanceSchedulerTest, ConcurrentSourcesFillTargetUpToTriggerLine)
     ASSERT_EQ(rsp1.rebalance_task().target_worker(), target);
     ASSERT_EQ(rsp1.rebalance_task().max_bytes(), 445ul);
 
-    // S2 (85%) reports while S1 is active. maxBytes = min(375, 800-445=355) = 355
-    // (clamp binds, not midpoint). projected = 100+445+355 = 900 = 900. Dispatched.
+    // S2 (85%) reports while S1 is active. The watermark clamp now accounts for S1's
+    // in-flight: projectedUsed = 100 + 445 = 545, headroom = 700 - 545 = 155.
+    // targetAvail = 800 - 445 = 355. maxBytes = min(375, 155, 355) = 155 (watermark binds).
     auto rsp2 = ScheduleAndGetRsp(scheduler, source2, snap);
     ASSERT_FALSE(rsp2.rebalance_task().task_id().empty());
     EXPECT_EQ(rsp2.rebalance_task().target_worker(), target);
-    EXPECT_EQ(rsp2.rebalance_task().max_bytes(), 355ul);
+    EXPECT_EQ(rsp2.rebalance_task().max_bytes(), 155ul);
 }
 
 // Baseline (passes now): when the snapshot is kept fresh (each schedule reflects the
@@ -972,6 +1002,390 @@ TEST_F(MemoryRebalanceSchedulerTest, TargetClampBindsMaxBytesToAvailableHeadroom
         auto rsp = ScheduleAndGetRsp(scheduler, source, snap);
         EXPECT_TRUE(rsp.rebalance_task().task_id().empty());
     }
+}
+
+// ============================================================================
+// Per-batch feedback loop: ReportResult builds the next 300MB batch task from
+// the fixed total budget (set at Schedule) and the fresh target_remain_bytes
+// the worker forwards, with dual stop conditions (budget exhausted OR target
+// reached the watermark).
+// ============================================================================
+
+namespace {
+constexpr uint64_t ONE_GB = 1024ull * 1024 * 1024;
+constexpr uint64_t MB = 1024 * 1024;
+}  // namespace
+
+// A single 300MB batch does not exhaust a GB-scale budget, so master returns a next task whose
+// max_bytes is the remaining budget (capped by 300MB / target headroom). The loop terminates when
+// the fixed budget (set at Schedule) is fully migrated.
+TEST_F(MemoryRebalanceSchedulerTest, ReportResultReturnsNextBatchUntilBudgetExhausted)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    // memoryCapacity == memoryLimit == highWater line == 1GB; watermark = 70% ~= 700MB.
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),  // 900MB used, hot
+        MakeNode(target, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),  // 100MB used
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    // totalBudget = min(usageGap=(900-100)/2=400MB, headroomToWatermark=600MB, targetAvail=924MB)
+    // = 400MB; first batch = min(300MB, 400MB) = 300MB.
+    EXPECT_EQ(firstRsp.rebalance_task().max_bytes(), 300 * MB);
+
+    // Batch 1 report: migrated 300MB, target received 300MB -> used 400MB, remain = 1GB-400MB.
+    // remaining budget = 400-300 = 100MB; target rate 39% < 70%; next batch = 100MB (budget binds).
+    master::ReportRebalanceResultRspPb batch1Rsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(firstRsp.rebalance_task(), ONE_GB - 400 * MB, 300 * MB), batch1Rsp));
+    ASSERT_TRUE(batch1Rsp.has_next_rebalance_task());
+    const auto &nextTask = batch1Rsp.next_rebalance_task();
+    EXPECT_EQ(nextTask.source_worker(), source);
+    EXPECT_EQ(nextTask.target_worker(), target);
+    EXPECT_EQ(nextTask.max_bytes(), 100 * MB);  // remaining budget, not fresh gap
+
+    // Batch 2 report: migrated the last 100MB, cumulative = 400MB = totalBudget -> stop.
+    master::ReportRebalanceResultRspPb batch2Rsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(nextTask, ONE_GB - 500 * MB, 100 * MB), batch2Rsp));
+    EXPECT_FALSE(batch2Rsp.has_next_rebalance_task());
+}
+
+// When the fixed total budget is migrated in one batch (byte-scale, 300MB cap does not bind),
+// master must NOT assign another batch: budget exhausted.
+TEST_F(MemoryRebalanceSchedulerTest, ReportResultStopsWhenBudgetExhausted)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900, 100),  // capacity=limit=1000
+        MakeNode(target, 100, 900),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    // totalBudget = min((900-100)/2=400, headroomToWatermark=600, targetAvail=900) = 400; batch=400.
+    EXPECT_EQ(firstRsp.rebalance_task().max_bytes(), 400ul);
+
+    // Migrated the full 400 budget -> cumulative=400=totalBudget -> stop.
+    master::ReportRebalanceResultRspPb reportRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(firstRsp.rebalance_task(), /*targetRemain*/ 500, 400), reportRsp));
+    EXPECT_FALSE(reportRsp.has_next_rebalance_task());
+}
+
+// The fresh target safety stop fires INDEPENDENTLY of the budget when the target's own foreground
+// writes push it to the watermark before the fixed budget is exhausted.
+TEST_F(MemoryRebalanceSchedulerTest, ReportResultStopsWhenTargetReachesWatermarkWithBudgetRemaining)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    // source 900MB, target 200MB; watermark 700MB. totalBudget = min((900-200)/2=350MB,
+    // headroomToWatermark=500MB, targetAvail=824MB) = 350MB; first batch = 300MB (cap binds).
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(target, 200 * MB, ONE_GB - 200 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(firstRsp.rebalance_task().max_bytes(), 300 * MB);
+
+    // Batch 1: migrated 300MB (cumulative=300, budget remaining=50MB), BUT the target also had
+    // foreground writes that pushed its used to 750MB (remain = 1GB-750MB). fresh target rate =
+    // 73% >= 70% -> stop, even though 50MB of budget remains. This is the target-safety stop.
+    master::ReportRebalanceResultRspPb reportRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(firstRsp.rebalance_task(), ONE_GB - 750 * MB, 300 * MB), reportRsp));
+    EXPECT_FALSE(reportRsp.has_next_rebalance_task());
+}
+
+// When a fresh report signals the target crossed the rebalance watermark (e.g. remain=50MB ->
+// usage 95% >= 70%) and the chain ends, the held charge is KEPT (not released) so the #685
+// stale-snapshot guard protects the target until its own ResourceReport arrives. This prevents
+// sequential re-pick of the just-received target.
+TEST_F(MemoryRebalanceSchedulerTest, ReportResultKeepsHeldWhenChainEndsForTargetSafety)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(target, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(firstRsp.rebalance_task().max_bytes(), 300 * MB);
+
+    // Fresh report: target crossed watermark (remain=50MB -> used 950MB = 95% >= 70%). The chain
+    // ends via the watermark stop and the held charge is KEPT for #685 protection (not released).
+    // No next batch assigned.
+    master::ReportRebalanceResultRspPb reportRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(firstRsp.rebalance_task(), /*targetRemain*/ 50 * MB, 300 * MB), reportRsp));
+    EXPECT_TRUE(HasPendingRelease(scheduler)) << "held must be kept when chain ends for #685 protection";
+    EXPECT_FALSE(reportRsp.has_next_rebalance_task());
+}
+
+// Idempotent ReportResult: if the predecessor's ReportResult response is lost in flight, the
+// worker retries the same predecessor. Master sees a stale task_id (the active entry is the
+// successor we already built). Without replay, master returns an empty OK and the worker breaks
+// the loop prematurely. With replay, master returns the cached successor so the chain continues.
+TEST_F(MemoryRebalanceSchedulerTest, ReportResultReplaysCachedSuccessorOnRetry)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(target, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    const auto &taskA = firstRsp.rebalance_task();
+    EXPECT_EQ(taskA.max_bytes(), 300 * MB);
+
+    // First report: success, fresh remain signals target has room. Master builds successor B.
+    master::ReportRebalanceResultRspPb rsp1;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskA, ONE_GB - 400 * MB, 300 * MB), rsp1));
+    ASSERT_TRUE(rsp1.has_next_rebalance_task());
+    const auto successorTaskId = rsp1.next_rebalance_task().task_id();
+    EXPECT_NE(successorTaskId, taskA.task_id());
+
+    // Retry: worker retries the predecessor (response was lost). Master must replay the same
+    // successor instead of returning an empty OK that would break the chain.
+    master::ReportRebalanceResultRspPb rsp2;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskA, ONE_GB - 400 * MB, 300 * MB), rsp2));
+    ASSERT_TRUE(rsp2.has_next_rebalance_task());
+    EXPECT_EQ(rsp2.next_rebalance_task().task_id(), successorTaskId)
+        << "retry of predecessor must replay the same cached successor";
+}
+
+// Middle-of-chain retry: the replay must fire for ANY immediate predecessor in the chain, not
+// only the first task. After A->B->C, retrying B (the immediate predecessor of C) must replay
+// C. This locks in the contract that immediatePredecessorTaskId is updated on every hop.
+TEST_F(MemoryRebalanceSchedulerTest, ReportResultReplaysSuccessorOnMiddleOfChainRetry)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    // 2GB capacity so budget = min((1500-100)/2=700MB, watermark=1333MB, avail=1948MB) = 700MB.
+    // Chain: A=300MB (rem=400), B=300MB (rem=100), C=100MB. Three hops for replay verification.
+    constexpr uint64_t TWO_GB = 2ULL * ONE_GB;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 1500 * MB, TWO_GB - 1500 * MB, true, TWO_GB, TWO_GB),
+        MakeNode(target, 100 * MB, TWO_GB - 100 * MB, true, TWO_GB, TWO_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    const auto &taskA = firstRsp.rebalance_task();
+    EXPECT_EQ(taskA.max_bytes(), 300 * MB);
+
+    // Hop 1: report A -> B built (target used 100+300=400MB, remain=2GB-400MB; rate 19.5% < 70%;
+    // remaining budget 700-300=400MB; nextBytes=min(300,400,...)=300MB).
+    master::ReportRebalanceResultRspPb rsp1;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskA, TWO_GB - 400 * MB, 300 * MB), rsp1));
+    ASSERT_TRUE(rsp1.has_next_rebalance_task());
+    const auto &taskB = rsp1.next_rebalance_task();
+    EXPECT_EQ(taskB.max_bytes(), 300 * MB);
+
+    // Hop 2: report B -> C built (target used 100+600=700MB, remain=2GB-700MB; rate 34% < 70%;
+    // remaining budget 700-600=100MB; nextBytes=min(300,100,...)=100MB).
+    // active entry is now C with immediatePredecessorTaskId = taskB.task_id().
+    master::ReportRebalanceResultRspPb rsp2;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskB, TWO_GB - 700 * MB, 300 * MB), rsp2));
+    ASSERT_TRUE(rsp2.has_next_rebalance_task());
+    const auto taskCId = rsp2.next_rebalance_task().task_id();
+    EXPECT_NE(taskCId, taskB.task_id());
+
+    // Retry B (immediate predecessor of C): must replay C, not return empty OK.
+    master::ReportRebalanceResultRspPb retryRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskB, TWO_GB - 700 * MB, 300 * MB), retryRsp));
+    ASSERT_TRUE(retryRsp.has_next_rebalance_task());
+    EXPECT_EQ(retryRsp.next_rebalance_task().task_id(), taskCId)
+        << "retry of middle-of-chain predecessor must replay the same cached successor";
+}
+
+// Negative case: retrying an OLDER predecessor (not the immediate one) must NOT replay. After
+// A->B->C, retrying A finds active entry C whose immediatePredecessorTaskId = B != A. Master returns
+// empty OK and the worker breaks the loop. This locks in the "only immediate predecessor"
+// contract -- without it, a stale retry could re-issue an already-superseded task.
+TEST_F(MemoryRebalanceSchedulerTest, ReportResultDoesNotReplayForOlderPredecessorRetry)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    constexpr uint64_t TWO_GB = 2ULL * ONE_GB;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 1500 * MB, TWO_GB - 1500 * MB, true, TWO_GB, TWO_GB),
+        MakeNode(target, 100 * MB, TWO_GB - 100 * MB, true, TWO_GB, TWO_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    const auto &taskA = firstRsp.rebalance_task();
+
+    // Build chain A -> B -> C (same setup as the middle-of-chain test).
+    master::ReportRebalanceResultRspPb rsp1;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskA, TWO_GB - 400 * MB, 300 * MB), rsp1));
+    ASSERT_TRUE(rsp1.has_next_rebalance_task());
+    const auto &taskB = rsp1.next_rebalance_task();
+
+    master::ReportRebalanceResultRspPb rsp2;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskB, TWO_GB - 700 * MB, 300 * MB), rsp2));
+    ASSERT_TRUE(rsp2.has_next_rebalance_task());
+
+    // Retry A (older predecessor). Active entry is C with immediatePredecessorTaskId = B != A.
+    // Must NOT replay; return empty OK so the worker stops the loop.
+    master::ReportRebalanceResultRspPb retryRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskA, TWO_GB - 400 * MB, 300 * MB), retryRsp));
+    EXPECT_FALSE(retryRsp.has_next_rebalance_task())
+        << "older predecessor retry must not replay; only the immediate predecessor is replayed";
+}
+
+// State idempotency: a retry of the immediate predecessor must not mutate scheduler state
+// (inflight, held, cooldowns). The replay branch only writes to the response proto. This test
+// records the inflight/held booleans before and after the retry and asserts they are unchanged.
+TEST_F(MemoryRebalanceSchedulerTest, ReportResultReplayIsStateIdempotent)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(target, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    const auto &taskA = firstRsp.rebalance_task();
+
+    // Report A success -> B built. State after first report: target has inflight (B's 100MB),
+    // held released to 0 (B was built, so held was released inside BuildNextBatchTaskLocked block).
+    master::ReportRebalanceResultRspPb rsp1;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskA, ONE_GB - 400 * MB, 300 * MB), rsp1));
+    ASSERT_TRUE(rsp1.has_next_rebalance_task());
+    const auto successorTaskId = rsp1.next_rebalance_task().task_id();
+    const bool inflightBefore = HasInflight(scheduler);
+    const bool heldBefore = HasPendingRelease(scheduler);
+    EXPECT_TRUE(inflightBefore) << "B's max_bytes must be charged as inflight after B is built";
+    EXPECT_FALSE(heldBefore) << "held must be released when B is built (chain continues)";
+
+    // Retry A: replay B from cache. State must NOT change (replay is read-only).
+    master::ReportRebalanceResultRspPb rsp2;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskA, ONE_GB - 400 * MB, 300 * MB), rsp2));
+    ASSERT_TRUE(rsp2.has_next_rebalance_task());
+    EXPECT_EQ(rsp2.next_rebalance_task().task_id(), successorTaskId);
+    EXPECT_EQ(HasInflight(scheduler), inflightBefore)
+        << "retry must not change inflight state (replay is read-only)";
+    EXPECT_EQ(HasPendingRelease(scheduler), heldBefore)
+        << "retry must not change held state (replay is read-only)";
+}
+
+// The chain's wall-clock duration is capped to one 30s ResourceReport cycle. If the chain runs
+// past the epoch budget, BuildNextBatchTaskLocked must stop the loop even if budget and target
+// headroom remain. This prevents source/target duty cycle saturation on large gaps.
+TEST_F(MemoryRebalanceSchedulerTest, EpochWallClockBudgetStopsChain)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(target, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    const auto &taskA = firstRsp.rebalance_task();
+    EXPECT_EQ(taskA.max_bytes(), 300 * MB);
+
+    // Backdate the chain's epoch start so BuildNextBatchTaskLocked observes an expired 30s budget.
+    const uint64_t nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    BackdateEpochStart(scheduler, source, nowMs - 31 * MS_PER_SECOND);
+
+    // Report success with fresh remain signaling room (target only at 40% usage). Without the
+    // epoch check, master would build a next batch. With the check, the chain stops.
+    master::ReportRebalanceResultRspPb reportRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskA, ONE_GB - 400 * MB, 300 * MB), reportRsp));
+    EXPECT_FALSE(reportRsp.has_next_rebalance_task())
+        << "chain must stop when wall-clock epoch budget is exhausted";
+    EXPECT_TRUE(HasPendingRelease(scheduler))
+        << "held must be kept when chain ends on epoch budget stop for #685 protection";
+}
+
+// proto3 scalar uint64 has no presence: an old worker (pre-PR, never sets target_remain_bytes)
+// produces wire-default 0. Master must treat 0 as "no fresh signal" (same as UINT64_MAX), not
+// as "target 100% full". This skips the feedback loop and ends the chain without a successor,
+// falling back to the next 30s cycle's snapshot. A genuine "target full" would also land here
+// and end the chain -- the watermark stop would have fired anyway, so no behavioral regression.
+TEST_F(MemoryRebalanceSchedulerTest, OldWorkerZeroRemainTreatedAsUnsetStopsChain)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(target, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    const auto &taskA = firstRsp.rebalance_task();
+
+    // Old worker: target_remain_bytes omitted -> wire default 0. Master treats as unset, no
+    // successor built, chain ends. Held is kept for #685 protection.
+    master::ReportRebalanceResultReqPb req;
+    req.set_task_id(taskA.task_id());
+    req.set_source_worker(taskA.source_worker());
+    req.set_target_worker(taskA.target_worker());
+    req.set_status(master::REBALANCE_TASK_SUCCEEDED);
+    req.set_migrated_bytes(taskA.max_bytes());
+    req.set_migrated_objects(1);
+    req.set_failure_side(master::REBALANCE_FAILURE_UNKNOWN);
+    // Note: target_remain_bytes intentionally NOT set -- wire default 0 simulates old worker.
+    master::ReportRebalanceResultRspPb reportRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(req, reportRsp));
+    EXPECT_FALSE(reportRsp.has_next_rebalance_task())
+        << "wire-default 0 must be treated as 'no fresh signal' (unset), not as 'target full'";
+    EXPECT_TRUE(HasPendingRelease(scheduler))
+        << "held must be kept when chain ends on unset fresh signal";
+}
+
+// Defensive guard against an impossible "fresh remain > capacity" signal. Without this guard,
+// SubOrZero below would silently reverse to freshTargetUsed=0 (target looks empty), keeping the
+// loop going against a genuinely-full target. Treat as fresh-signal corrupt: stop the chain.
+TEST_F(MemoryRebalanceSchedulerTest, FreshRemainAboveCapacityStopsChain)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(target, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    const auto &taskA = firstRsp.rebalance_task();
+
+    // Fresh remain > capacity (impossible in practice but unguarded): master must refuse to
+    // build a next batch instead of silently reversing to 0% usage.
+    master::ReportRebalanceResultRspPb reportRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(taskA, /*targetRemain*/ 2 * ONE_GB, 300 * MB), reportRsp));
+    EXPECT_FALSE(reportRsp.has_next_rebalance_task())
+        << "fresh remain > capacity must stop the chain (signal corrupt, not silent reversal to 0%)";
+    EXPECT_TRUE(HasPendingRelease(scheduler))
+        << "held must be kept when chain ends on capacity-guard stop for #685 protection";
 }
 
 }  // namespace ut

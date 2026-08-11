@@ -73,6 +73,30 @@ private:
     struct RunningTask {
         master::RebalanceTaskPb task;
         bool dispatched = false;
+        // Stable target memory view captured at assignment. memoryCapacity == highWater line
+        // (stable config value: usedMemory + availableMemory); memoryLimit is the hard limit.
+        // ReportResult uses these with the fresh per-batch target_remain_bytes to derive the
+        // target's current used memory (memoryCapacity - remain_bytes) without re-reading the
+        // cluster snapshot, and to check the rebalance watermark ceiling.
+        uint64_t targetMemoryLimit = 0;
+        uint64_t targetMemoryCapacity = 0;
+        // Total migration budget fixed at Schedule time (the 30s ResourceReport cycle): the
+        // midpoint gap (usageGap/2) capped by the target's watermark headroom and eviction
+        // headroom. Per-batch max_bytes (300MB) caps only each batch, not the total. The loop
+        // migrates in batches until cumulativeMigrated reaches totalBudget OR a fresh target
+        // safety stop fires. Fixed by construction: foreground source writes cannot grow it.
+        uint64_t totalBudget = 0;
+        uint64_t cumulativeMigrated = 0;
+        // Steady-clock ms captured at Schedule time. BuildNextBatchTaskLocked caps the chain's
+        // wall-clock duration to one ResourceReport cycle so the loop cannot starve the next
+        // cycle's snapshot or foreground work. 0 only before the first Schedule fills it.
+        uint64_t epochStartMs = 0;
+        // task_id of the immediate predecessor that was erased and replaced by this successor.
+        // When the worker retries the predecessor (response lost in flight), master sees a stale
+        // task_id against this active entry; if it matches immediatePredecessorTaskId, master
+        // replays this entry's task as the successor so the chain continues instead of breaking on
+        // an empty OK. Empty for the first task in a chain (no predecessor to replay).
+        std::string immediatePredecessorTaskId;
     };
 
     struct CandidatePair {
@@ -119,6 +143,12 @@ private:
     // Encapsulates the decrease-then-clear pattern shared by GC, reporter-release, and
     // snapshot-release paths so callers cannot forget the clear.
     void ReleaseHeldLocked(const std::string &worker, uint64_t heldBytes);
+    // Per-batch feedback loop: on a successful report with a fresh target_remain_bytes, release the
+    // held charge (fresh signal supersedes #685 hold), accumulate migrated bytes into the fixed
+    // budget, and build the next 300MB batch task if the budget is not exhausted and the target is
+    // still below the watermark. Caller must hold mutex_.
+    void ProcessFreshFeedbackLocked(RunningTask &prevTask, const master::ReportRebalanceResultReqPb &req,
+                                    uint64_t nowMs, master::ReportRebalanceResultRspPb &rsp);
     std::shared_ptr<const cluster::TopologySnapshot> GetTopologySnapshot();
     bool IsWorkerActiveInTopology(const std::string &worker,
                                   const cluster::TopologySnapshot *topologySnapshot) const;
@@ -132,10 +162,31 @@ private:
     void CollectCandidatePairsLocked(const std::vector<const NodeInfo *> &sources,
                                      const std::vector<const NodeInfo *> &targets,
                                      uint64_t nowMs, std::vector<CandidatePair> &targetPairs) const;
-    void FillTaskFromPairLocked(const CandidatePair &bestPair, uint64_t nowMs, master::RebalanceTaskPb &task) const;
+    void FillTaskProtoLocked(const std::string &sourceWorker, const std::string &targetWorker,
+                             uint64_t maxBytes, uint64_t nowMs, master::RebalanceTaskPb &task) const;
+    void FillTaskFromPairLocked(const CandidatePair &bestPair, uint64_t nowMs,
+                                RunningTask &runningTask) const;
     Status TryBuildTaskLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
                               const std::string &sourceWorker, uint64_t nowMs,
-                              const cluster::TopologySnapshot *topologySnapshot, master::RebalanceTaskPb &task);
+                              const cluster::TopologySnapshot *topologySnapshot, RunningTask &runningTask);
+    // Build the next 300MB batch task for the same source->target pair from the fixed total
+    // budget (set at Schedule) and the fresh per-batch target_remain_bytes. Returns true and
+    // fills nextTask when another batch is needed (budget not exhausted and target below the
+    // rebalance watermark / not full); returns false when the rebalance loop should stop.
+    // Caller must hold mutex_ and have already recorded the previous task's result
+    // (RemoveTaskLocked) and updated prevTask.cumulativeMigrated so futureView_ is current.
+    bool BuildNextBatchTaskLocked(const RunningTask &prevTask, uint64_t targetRemainBytes,
+                                  uint64_t nowMs, master::RebalanceTaskPb &nextTask) const;
+    // Early stop checks (no target memory view, corrupt remain signal, epoch budget exhausted)
+    // that don't depend on the batch-size computation. Caller must hold mutex_.
+    bool ShouldStopChainEarlyLocked(const RunningTask &prevTask, uint64_t targetRemainBytes,
+                                    uint64_t nowMs) const;
+    // Idempotent replay: if the active entry's immediatePredecessorTaskId matches the retried
+    // req.task_id(), replay the successor into rsp and return true. Otherwise log stale and
+    // return false. Caller must hold mutex_.
+    Status ReplayOrIgnoreStaleLocked(std::unordered_map<std::string, RunningTask>::iterator taskIt,
+                                     const master::ReportRebalanceResultReqPb &req,
+                                     master::ReportRebalanceResultRspPb &rsp);
     uint64_t CalculateTaskBytesLocked(const NodeInfo &source, const NodeInfo &target,
                                       uint64_t targetInflightBytes) const;
     uint64_t CalculateProjectedTargetUsageRate(const NodeInfo &target, uint64_t targetInflightBytes,
