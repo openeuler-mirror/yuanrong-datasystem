@@ -702,9 +702,9 @@ Status UrmaManager::AcquireRecvTarget(uint64_t segAddress, uint64_t segSize, con
                      remoteConnectionId));
 
     std::shared_ptr<UrmaJetty> recvJetty;
-    RETURN_IF_NOT_OK_APPEND_MSG(urmaResource_->GetOrCreateSharedRecvJetty(recvJetty),
-                                FormatString("[AcquireRecvTarget] Failed to get shared recv Jetty for %s",
-                                             remoteConnectionId));
+    RETURN_IF_NOT_OK_APPEND_MSG(
+        urmaResource_->GetOrCreateSharedRecvJetty(recvJetty),
+        FormatString("[AcquireRecvTarget] Failed to get shared recv Jetty for %s", remoteConnectionId));
 
     lease.postPermit_ = recvJetty->TryAcquirePostPermit();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -735,24 +735,21 @@ Status UrmaManager::GetRecoveryProbeSegmentInfo(uint64_t &segmentAddress, uint64
     return Status::OK();
 }
 
-Status UrmaManager::GetRecoveryProbeSourceInfo(uint64_t &segmentAddress, uint64_t &segmentSize,
-                                               uint64_t &dataAddress)
+Status UrmaManager::GetRecoveryProbeSourceInfo(uint64_t &segmentAddress, uint64_t &segmentSize, uint64_t &dataAddress)
 {
-    RETURN_IF_NOT_OK(
-        GetOrCreateRecoveryProbeBuffer(recoveryProbeSourceBuffer_, recoveryProbeSourceMutex_, "source"));
+    RETURN_IF_NOT_OK(GetOrCreateRecoveryProbeBuffer(recoveryProbeSourceBuffer_, recoveryProbeSourceMutex_, "source"));
     segmentAddress = reinterpret_cast<uint64_t>(recoveryProbeSourceBuffer_);
     segmentSize = URMA_RECOVERY_PROBE_SEGMENT_SIZE;
     dataAddress = segmentAddress;
     return Status::OK();
 }
 
-Status UrmaManager::GetOrCreateRecoveryProbeBuffer(void *&probeBuffer, std::mutex &mutex,
-                                                   const std::string &purpose)
+Status UrmaManager::GetOrCreateRecoveryProbeBuffer(void *&probeBuffer, std::mutex &mutex, const std::string &purpose)
 {
     std::lock_guard<std::mutex> lock(mutex);
     RETURN_OK_IF_TRUE(probeBuffer != nullptr);
-    void *buffer = mmap(nullptr, URMA_RECOVERY_PROBE_SEGMENT_SIZE, PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *buffer =
+        mmap(nullptr, URMA_RECOVERY_PROBE_SEGMENT_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     CHECK_FAIL_RETURN_STATUS(buffer != MAP_FAILED, K_OUT_OF_MEMORY,
                              FormatString("Failed to allocate Worker URMA recovery probe %s segment", purpose));
     Status rc = RegisterSegment(reinterpret_cast<uint64_t>(buffer), URMA_RECOVERY_PROBE_SEGMENT_SIZE);
@@ -960,12 +957,12 @@ Status UrmaManager::CheckAndNotify(const UrmaWriteTrace &pollTrace)
             // Business completion is independent from lane/WR accounting, which was already
             // settled by local_id while classifying this CQE.
             event->NotifyAll();
-            VLOG(1) << "[UrmaEventHandler] Notifying the request id: " << requestId;
+            VLOG(1) << "[UrmaEventHandler] [urma_request_id:" << requestId << "] Notifying the request";
             // remove request id from finishedRequests_ set
             // we dont need lock for finishedRequests_ as its accessed only by single thread
             it = finishedRequests_.erase(it);
         } else {
-            LOG(INFO) << "[UrmaEventHandler] Event is missing, dropping request id: " << requestId;
+            LOG(INFO) << "[UrmaEventHandler] [urma_request_id:" << requestId << "] Event is missing, dropping request";
             // The event may already be removed by waiter cleanup; drop this finished request id.
             failedRequests_.erase(requestId);
             it = finishedRequests_.erase(it);
@@ -1002,15 +999,14 @@ Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<UrmaEvent> &eve
         return Status::OK();
     }
     // Can happen if event is not yet inserted by sender thread.
-    const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
-    RETURN_STATUS(K_NOT_FOUND, FormatString("Request id %s doesnt exist in event map", requestIdStr.c_str()));
+    RETURN_STATUS(K_NOT_FOUND, FormatString("[urma_request_id:%zu] doesnt exist in event map", requestId));
 }
 
 Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
                                 const std::shared_ptr<UrmaSendLaneLease> &laneLease, const std::string &remoteAddress,
                                 uint64_t dataSize, UrmaEvent::OperationType operationType,
-                                std::atomic<int> *srcChipInflightCounter,
-                                std::shared_ptr<EventWaiter> waiter, std::shared_ptr<UrmaEvent> *event)
+                                std::atomic<int> *srcChipInflightCounter, std::shared_ptr<EventWaiter> waiter,
+                                std::shared_ptr<UrmaEvent> *event)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(laneLease != nullptr, K_RUNTIME_ERROR, "URMA send lane lease is null");
     auto jetty = laneLease->GetJetty();
@@ -1024,19 +1020,16 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
     auto res = tbbEventMap_.insert(mapAccessor, requestId);
     if (!res) {
         // If this happens that means requestId is duplicated.
-        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
         RETURN_STATUS_LOG_ERROR(K_DUPLICATED,
-                                FormatString("Request id %s already exists in event map", requestIdStr.c_str()));
+                                FormatString("[urma_request_id:%zu] already exists in event map", requestId));
     } else {
-        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             connection != nullptr, K_RUNTIME_ERROR,
-            FormatString("Urma connection is null. requestId=%s, remoteAddress=%s, op=%s", requestIdStr.c_str(),
-                         remoteAddress.c_str(), UrmaEvent::OperationTypeName(operationType)));
-        mapAccessor->second =
-            std::make_shared<UrmaEvent>(requestId, laneLease, remoteAddress,
-                                        connection->GetUrmaJfrInfo().uniqueInstanceId, dataSize, operationType,
-                                        srcChipInflightCounter, waiter);
+            FormatString("[urma_request_id:%zu] Urma connection is null, remoteAddress=%s, op=%s", requestId,
+                         remoteAddress, UrmaEvent::OperationTypeName(operationType)));
+        mapAccessor->second = std::make_shared<UrmaEvent>(requestId, laneLease, remoteAddress,
+                                                          connection->GetUrmaJfrInfo().uniqueInstanceId, dataSize,
+                                                          operationType, srcChipInflightCounter, waiter);
         if (event != nullptr) {
             *event = mapAccessor->second;
         }
@@ -1055,8 +1048,8 @@ const char *UrmaManager::GetSrcChipInflightWrCountsString() const
         if (count == 0) {
             continue;
         }
-        const auto written = std::snprintf(buffer + length, sizeof(buffer) - length, "%s%zu:%d",
-                                           first ? "" : ",", i, count);
+        const auto written =
+            std::snprintf(buffer + length, sizeof(buffer) - length, "%s%zu:%d", first ? "" : ",", i, count);
         if (written < 0 || static_cast<size_t>(written) >= sizeof(buffer) - length) {
             break;
         }
@@ -1100,10 +1093,10 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
     SLOW_LOG_IF_OR_VLOG(
         INFO, (config.rpcSlowerThanUs > 0 && totalElapsedUs >= config.rpcSlowerThanUs) || FLAGS_enable_perf_trace_log,
         1,
-        "[URMA_ELAPSED_TOTAL]: Time from urma_post_jetty_send_wr to urma_write completion total cost "
-            << totalElapsedMs
+        "[URMA_ELAPSED_TOTAL]: [urma_request_id:"
+            << requestId << "] Time from urma_post_jetty_send_wr to urma_write completion total cost " << totalElapsedMs
             << "ms, wait bthread completion time(bthread::ConditionVariable.wait_for): " << waitElapsedMs
-            << "ms, request id:" << requestId << ", src address:" << localUrmaInfo_.localAddress.ToString()
+            << "ms, src address:" << localUrmaInfo_.localAddress.ToString()
             << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
             << ", writeChunkIndex:" << trace.writeChunkIndex << ", writeChunkCount:" << trace.writeChunkCount
             << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
@@ -1127,12 +1120,11 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
 Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                                 double elapsedMs, const std::string &reason) const
 {
-    const auto requestIdStr = std::to_string(requestId);
     const auto srcAddress = localUrmaInfo_.localAddress.ToString();
     const auto message = FormatString(
-        "[URMA_WAIT_TIMEOUT] timedout waiting for requestId=%s, elapsedMs=%f, srcAddress=%s, "
+        "[URMA_WAIT_TIMEOUT] [urma_request_id:%zu] timedout waiting, elapsedMs=%f, srcAddress=%s, "
         "targetAddress=%s, remoteInstanceId=%s, dataSize=%zu, op=%s, reason=%s",
-        requestIdStr.c_str(), elapsedMs, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
+        requestId, elapsedMs, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
         event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
         UrmaEvent::OperationTypeName(event->GetOperationType()), reason.c_str());
     LOG(WARNING) << message;
@@ -1188,8 +1180,8 @@ Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
     auto waitElapsedMs = waitTimer.ElapsedMicroSecond() / US_TO_MS;
     GetWorkerTimeCost().Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
     // UrmaEvent::WaitFor returns K_URMA_WAIT_TIMEOUT; keep K_RPC_DEADLINE_EXCEEDED for older Event paths.
-    const bool isUrmaWaitTimeout = waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT
-                                   || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
+    const bool isUrmaWaitTimeout =
+        waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
     if (isUrmaWaitTimeout) {
         scheduleTimedOutLane();
         return CreateUrmaWaitTimeoutStatus(requestId, event, totalElapsedMs, waitRc.GetMsg());
@@ -1236,16 +1228,14 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
     RETURN_OK_IF_TRUE(!event->IsFailed());
 
     const auto statusCode = event->GetStatusCode();
-    const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
-    auto errMsg = FormatString("Polling failed with an error for requestId: %s, cqe status: %d", requestIdStr.c_str(),
-                               statusCode);
+    auto errMsg =
+        FormatString("[urma_request_id:%zu] Polling failed with an error, cqe status: %d", requestId, statusCode);
 
     return Status(K_URMA_ERROR, errMsg);
 }
 
 Status UrmaManager::AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConnection> &connection,
-                                                  std::shared_ptr<UrmaJetty> &jetty,
-                                                  urma_target_jetty_t *&targetJetty)
+                                                  std::shared_ptr<UrmaJetty> &jetty, urma_target_jetty_t *&targetJetty)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
     auto rc = urmaResource_->AcquireJetty(jetty);
@@ -1293,8 +1283,8 @@ Status UrmaManager::TryRecoverFailedJettyFromCompletion(uint64_t requestId, int 
     const auto activeRetireRc = urmaResource_->RetireActiveSendLane(jettyId);
     if (activeRetireRc.IsOk()) {
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JETTY] Retired active lane from completion, requestId=" << requestId
-            << ", jettyId=" << jettyId << ", cqeStatus=" << statusCode;
+            << "[URMA_RECREATE_JETTY] [urma_request_id:" << requestId
+            << "] Retired active lane from completion, jettyId=" << jettyId << ", cqeStatus=" << statusCode;
         return Status::OK();
     }
     // The shared JFC can report a Jetty that is not represented by the active send-lane registry,
@@ -1304,13 +1294,13 @@ Status UrmaManager::TryRecoverFailedJettyFromCompletion(uint64_t requestId, int 
     auto lookupRc = urmaResource_->GetJettyById(jettyId, failedJetty);
     if (lookupRc.IsError() || failedJetty == nullptr) {
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JETTY_SKIP] Completion Jetty " << jettyId << " is not found, requestId=" << requestId
-            << ", cqeStatus=" << statusCode << ", rc=" << lookupRc.ToString();
+            << "[URMA_RECREATE_JETTY_SKIP] [urma_request_id:" << requestId << "] Completion Jetty " << jettyId
+            << " is not found, cqeStatus=" << statusCode << ", rc=" << lookupRc.ToString();
         return Status::OK();
     }
 
     LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-        << "[URMA_RECREATE_JETTY] Trigger from completion, requestId=" << requestId << ", jettyId=" << jettyId
+        << "[URMA_RECREATE_JETTY] [urma_request_id:" << requestId << "] Trigger from completion, jettyId=" << jettyId
         << ", cqeStatus=" << statusCode;
     return urmaResource_->RetireJetty(failedJetty);
 }
@@ -1340,22 +1330,21 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
 
         // Settle transport ownership by Jetty identity and request generation before notifying
         // the business request. This prevents an old CQE from consuming a reused lane's WR count.
-        if (crStatus == URMA_CR_SUCCESS ||
-            GetUrmaErrorHandlePolicy(crStatus) != UrmaErrorHandlePolicy::RECREATE_JETTY) {
+        if (crStatus == URMA_CR_SUCCESS
+            || GetUrmaErrorHandlePolicy(crStatus) != UrmaErrorHandlePolicy::RECREATE_JETTY) {
             LOG_IF_ERROR(urmaResource_->CompleteActiveSendLane(jettyId, userCtx, crStatus),
                          FormatString("[URMA_SEND_LANE_COMPLETE_FAILED] jettyId=%u", jettyId));
         } else {
             uint64_t requestIdFloor = 0;
             if (urmaResource_->IsStaleSendCompletion(jettyId, userCtx, requestIdFloor)) {
                 LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-                    << "[URMA_STALE_FATAL_CQE] A stale fatal CQE still invalidates the physical Jetty, jettyId="
-                    << jettyId << ", requestId=" << userCtx << ", currentRequestIdFloor=" << requestIdFloor
-                    << ", cqeStatus=" << crStatus;
+                    << "[URMA_STALE_FATAL_CQE] [urma_request_id:" << userCtx
+                    << "] A stale fatal CQE still invalidates the physical Jetty, jettyId=" << jettyId
+                    << ", floor_urma_request_id=" << requestIdFloor << ", cqeStatus=" << crStatus;
             }
-            const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
             LOG_IF_ERROR(TryRecoverFailedJettyFromCompletion(userCtx, crStatus, jettyId),
-                         FormatString("[URMA_RECREATE_JETTY_FAILED] requestId=%s, jettyId=%u, cqeStatus=%d",
-                                      requestIdStr.c_str(), jettyId, crStatus));
+                         FormatString("[URMA_RECREATE_JETTY_FAILED] [urma_request_id:%zu] jettyId=%u, cqeStatus=%d",
+                                      userCtx, jettyId, crStatus));
         }
 #ifdef BUILD_PIPLN_H2D
         // redirect pipeline h2d events
@@ -1371,13 +1360,12 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
 
         // Classify the business result by request identity for CheckAndNotify().
         if (crStatus == URMA_CR_SUCCESS) {
-            VLOG(1) << "[URMA_POLL_JFC] Got event with request id: " << userCtx;
+            VLOG(1) << "[URMA_POLL_JFC] [urma_request_id:" << userCtx << "] Got event";
             successCompletedReqs.insert(userCtx);
         } else {
-            const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
             LOG(ERROR) << FormatString(
-                "[URMA_POLL_JFC]: urma_poll_jfc return failed completion record, requestId: %s CR.status: %d",
-                requestIdStr.c_str(), crStatus);
+                "[URMA_POLL_JFC]: [urma_request_id:%zu] urma_poll_jfc return failed completion record, CR.status: %d",
+                userCtx, crStatus);
             failedCompletedReqs[userCtx] = crStatus;
         }
     }
@@ -1464,9 +1452,7 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
             // If there is nothing to poll, just sleep.
             // Note that it takes on average 50us to wake up with usleep(0), due to OS timerslack settings.
             Timer sleepTimer;
-            const struct timespec ts {
-                0, 1000
-            };
+            const struct timespec ts{ 0, 1000 };
             if (!tbbEventMap_.empty()) {
                 METRIC_TIMER(metrics::KvMetricId::URMA_NANOSLEEP_LATENCY);
                 nanosleep(&ts, nullptr);
@@ -1663,10 +1649,10 @@ uint64_t UrmaManager::GenerateReqId()
 }
 
 static urma_status_t PostJettyRw(const std::shared_ptr<UrmaJetty> &jetty, urma_opcode_t opcode,
-                                 urma_target_jetty_t *targetJetty,
-                                 urma_target_seg_t *remoteSeg, urma_target_seg_t *localSeg, uint64_t remoteAddress,
-                                 uint64_t localAddress, uint64_t length, urma_jfs_wr_flag_t flag, uint64_t userCtx,
-                                 bool useNumaAffinity, uint32_t src_chip_id, uint32_t dst_chip_id)
+                                 urma_target_jetty_t *targetJetty, urma_target_seg_t *remoteSeg,
+                                 urma_target_seg_t *localSeg, uint64_t remoteAddress, uint64_t localAddress,
+                                 uint64_t length, urma_jfs_wr_flag_t flag, uint64_t userCtx, bool useNumaAffinity,
+                                 uint32_t src_chip_id, uint32_t dst_chip_id)
 {
     auto permit = jetty == nullptr ? UrmaJetty::PostPermit{} : jetty->TryAcquirePostPermit();
     if (!permit) {
@@ -1846,29 +1832,27 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             if (failure != nullptr && !failure->providerStatus.has_value()) {
                 failure->providerStatus = static_cast<int>(ret);
             }
-            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease),
-                         "Failed to cancel unaccepted URMA write WR");
+            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease), "Failed to cancel unaccepted URMA write WR");
             DeleteEvent(key);
             cleanupSubmittedEvents();
             const auto srcAddress = localUrmaInfo_.localAddress.ToString();
             const auto remoteInstanceId =
                 args.connection == nullptr ? "" : args.connection->GetUrmaJfrInfo().uniqueInstanceId.c_str();
-            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
-                                    FormatString("[URMA_WRITE]: call urma_post_jetty_send_wr failed with key: %zu, "
-                                                 "ret: %d, srcAddress=%s, targetAddress=%s, remoteInstanceId=%s, "
-                                                 "dataSize=%zu, srcChipId=%u, dstChipId=%u, useNumaAffinity=%s, "
-                                                 "suggest: %s",
-                                                 key, ret, srcAddress.c_str(), args.remoteAddress.c_str(),
-                                                 remoteInstanceId, static_cast<size_t>(writeSize),
-                                                 static_cast<uint32_t>(srcChipId),
-                                                 static_cast<uint32_t>(args.dstChipId),
-                                                 useNumaAffinity ? "true" : "false", URMA_ERROR_SUGGEST));
+            RETURN_STATUS_LOG_ERROR(
+                K_URMA_ERROR, FormatString("[URMA_WRITE]: [urma_request_id:%zu] call urma_post_jetty_send_wr failed, "
+                                           "ret: %d, srcAddress=%s, targetAddress=%s, remoteInstanceId=%s, "
+                                           "dataSize=%zu, srcChipId=%u, dstChipId=%u, useNumaAffinity=%s, "
+                                           "suggest: %s",
+                                           key, ret, srcAddress.c_str(), args.remoteAddress.c_str(), remoteInstanceId,
+                                           static_cast<size_t>(writeSize), static_cast<uint32_t>(srcChipId),
+                                           static_cast<uint32_t>(args.dstChipId), useNumaAffinity ? "true" : "false",
+                                           URMA_ERROR_SUGGEST));
         }
         t.Stop();
         auto elapsedUs = t.ElapsedMicroSecond();
         auto vlogLevel = elapsedUs > URMA_WRITE_VLOG0_LIMIT_US ? 0 : 1;
-        VLOG(vlogLevel) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu() << ", elapsed:" << elapsedUs
-                        << " us, request id:" << key << ", jetty id:" << jettyId;
+        VLOG(vlogLevel) << "[UrmaWrite] [urma_request_id:" << key << "] URMA finish write, cpuid:" << sched_getcpu()
+                        << ", elapsed:" << elapsedUs << " us, jetty id:" << jettyId;
         pointWrite.Record();
         remainSize -= writeSize;
         writtenSize += writeSize;
@@ -1879,8 +1863,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     return Status::OK();
 }
 
-Status UrmaManager::AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo,
-                                    std::shared_ptr<UrmaSendLaneLease> &laneLease)
+Status UrmaManager::AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo, std::shared_ptr<UrmaSendLaneLease> &laneLease)
 {
     laneLease.reset();
     const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
@@ -2015,8 +1998,7 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
         // The transport pipeline receives a raw handle and may issue several provider posts.
         // Keep one permit over the complete synchronous pipeline call, not merely argument setup.
         auto pipelinePermit = jetty->TryAcquirePostPermit();
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(pipelinePermit, K_URMA_TRY_AGAIN,
-                                             "URMA pipeline Jetty is closing");
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(pipelinePermit, K_URMA_TRY_AGAIN, "URMA pipeline Jetty is closing");
         OsXprtPipln::PiplnSndArgs args;
         args.jetty = pipelinePermit.Raw();
         args.tjetty = targetJetty;
@@ -2028,9 +2010,8 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
         args.serverKey = GenerateReqId();
         args.clientKey = urmaInfo.pipeline_rh2d_req_id();
 
-        RETURN_IF_NOT_OK(
-            CreateEvent(args.serverKey, connection, laneLease, remoteAddress, readSize,
-                        UrmaEvent::OperationType::WRITE, nullptr));
+        RETURN_IF_NOT_OK(CreateEvent(args.serverKey, connection, laneLease, remoteAddress, readSize,
+                                     UrmaEvent::OperationType::WRITE, nullptr));
         laneLease->AddWr();
         eventKeys.emplace_back(args.serverKey);
         Status rc;
@@ -2106,8 +2087,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     std::shared_ptr<UrmaJetty> jetty;
     urma_target_jetty_t *targetJetty = nullptr;
     RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
-    auto laneLease =
-        std::make_shared<UrmaSendLaneLease>(jetty, requestId_.load(std::memory_order_relaxed));
+    auto laneLease = std::make_shared<UrmaSendLaneLease>(jetty, requestId_.load(std::memory_order_relaxed));
     auto registerRc = urmaResource_->RegisterActiveSendLane(laneLease);
     if (registerRc.IsError()) {
         LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
@@ -2151,17 +2131,16 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
             segVa + urmaInfo.seg_data_offset() + readOffset, localObjectAddress + metaDataSize + readOffset, readSize,
             flag, key, false, INVALID_CHIP_ID, INVALID_CHIP_ID);
         if (ret != URMA_SUCCESS) {
-            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease),
-                         "Failed to cancel unaccepted URMA read WR");
+            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease), "Failed to cancel unaccepted URMA read WR");
             DeleteEvent(key);
             cleanupSubmittedEvents();
             const auto srcAddress = localUrmaInfo_.localAddress.ToString();
-            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
-                                    FormatString("[URMA_READ]: call urma_post_jetty_send_wr failed with key: %zu, "
-                                                 "ret: %d, srcAddress=%s, targetAddress=%s, dataSize=%zu, "
-                                                 "suggest: %s",
-                                                 key, ret, srcAddress.c_str(), remoteAddress.c_str(),
-                                                 static_cast<size_t>(readSize), URMA_ERROR_SUGGEST));
+            RETURN_STATUS_LOG_ERROR(
+                K_URMA_ERROR, FormatString("[URMA_READ]: [urma_request_id:%zu] call urma_post_jetty_send_wr failed, "
+                                           "ret: %d, srcAddress=%s, targetAddress=%s, dataSize=%zu, "
+                                           "suggest: %s",
+                                           key, ret, srcAddress.c_str(), remoteAddress.c_str(),
+                                           static_cast<size_t>(readSize), URMA_ERROR_SUGGEST));
         }
 
         remainSize -= readSize;
@@ -2178,9 +2157,8 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     return UrmaGatherWriteImpl(remoteInfo, objInfos, blocking, eventKeys, nullptr);
 }
 
-Status UrmaManager::UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo,
-                                            const std::vector<LocalSgeInfo> &objInfos, bool blocking,
-                                            std::vector<uint64_t> &eventKeys,
+Status UrmaManager::UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
+                                            bool blocking, std::vector<uint64_t> &eventKeys,
                                             const std::shared_ptr<UrmaSendLaneLease> &laneLease)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(laneLease != nullptr, K_RUNTIME_ERROR,
@@ -2188,9 +2166,8 @@ Status UrmaManager::UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo,
     return UrmaGatherWriteImpl(remoteInfo, objInfos, blocking, eventKeys, laneLease);
 }
 
-Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
-                                        const std::vector<LocalSgeInfo> &objInfos, bool blocking,
-                                        std::vector<uint64_t> &eventKeys,
+Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
+                                        bool blocking, std::vector<uint64_t> &eventKeys,
                                         const std::shared_ptr<UrmaSendLaneLease> &externalLaneLease)
 {
     eventKeys.clear();
@@ -2265,8 +2242,7 @@ Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
         submittedCount = std::min(submittedCount, createdEventKeys.size());
         for (size_t i = submittedCount; i < createdEventKeys.size(); ++i) {
             // These events are after bad_wr (or no WR was posted at all), so the provider cannot complete them.
-            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease),
-                         "Failed to cancel unaccepted URMA gather WR");
+            LOG_IF_ERROR(urmaResource_->CancelActiveSendLane(laneLease), "Failed to cancel unaccepted URMA gather WR");
             DeleteEvent(createdEventKeys[i]);
         }
         submittedEventKeys.assign(createdEventKeys.begin(), createdEventKeys.begin() + submittedCount);
@@ -2297,11 +2273,10 @@ Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
                 cleanupEvents(0);
                 RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "Local segment is null");
             }
-            srcSgeList[srcSgeIdx] =
-                urma_sge_t{ .addr = ele.sgeAddr + ele.metaDataSize + ele.readOffset,
-                            .len = static_cast<uint32_t>(ele.writeSize),
-                            .tseg = localSegAccessor->second->Raw(),
-                            .user_tseg = NULL };
+            srcSgeList[srcSgeIdx] = urma_sge_t{ .addr = ele.sgeAddr + ele.metaDataSize + ele.readOffset,
+                                                .len = static_cast<uint32_t>(ele.writeSize),
+                                                .tseg = localSegAccessor->second->Raw(),
+                                                .user_tseg = NULL };
             singleDstWriteSize += srcSgeList[srcSgeIdx].len;
             srcSgeIdx++;
             if (srcSgeIdx % wrSgeMaxNum == 0) {
@@ -2326,9 +2301,8 @@ Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
         wr.user_ctx = key;
         wr.rw = rw;
         wr.next = NULL;
-        auto createRc =
-            CreateEvent(key, connection, laneLease, remoteAddress, singleDstWriteSize,
-                        UrmaEvent::OperationType::WRITE, nullptr);
+        auto createRc = CreateEvent(key, connection, laneLease, remoteAddress, singleDstWriteSize,
+                                    UrmaEvent::OperationType::WRITE, nullptr);
         if (createRc.IsError()) {
             cleanupEvents(0);
             return createRc;
@@ -2378,12 +2352,12 @@ Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
         }
         cleanupEvents(submittedCount);
         const auto srcAddress = localUrmaInfo_.localAddress.ToString();
-        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
-                                FormatString("[URMA_WRITE]: call urma_post_jetty_send_wr failed, ret: %d, "
-                                             "srcAddress=%s, targetAddress=%s, dataSize=%zu, dstChipId=%u, suggest: %s",
-                                             ret, srcAddress.c_str(), remoteAddress.c_str(),
-                                             static_cast<size_t>(totalWriteSize),
-                                             static_cast<uint32_t>(remoteInfo.dstChipId), URMA_ERROR_SUGGEST));
+        RETURN_STATUS_LOG_ERROR(
+            K_URMA_ERROR,
+            FormatString("[URMA_WRITE]: call urma_post_jetty_send_wr failed, ret: %d, "
+                         "srcAddress=%s, targetAddress=%s, dataSize=%zu, dstChipId=%u, suggest: %s",
+                         ret, srcAddress.c_str(), remoteAddress.c_str(), static_cast<size_t>(totalWriteSize),
+                         static_cast<uint32_t>(remoteInfo.dstChipId), URMA_ERROR_SUGGEST));
     }
 
     eventKeys = createdEventKeys;

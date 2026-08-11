@@ -53,7 +53,7 @@ ShmUnit::ShmUnit(ShmKey id, ShmView shmView, void *pointer) : ShmUnitInfo(std::m
 
 ShmUnit::~ShmUnit()
 {
-    VLOG(1) << "Release memory of " << id << " Size: " << size << " Off: " << offset;
+    VLOG(1) << "Release memory of " << id << " Size: " << size << " Off: " << offset << ", identity: " << GetIdentity();
     Status rc = this->FreeMemory();
     if (rc.IsError()) {
         LOG(WARNING) << "Destructor for a ShmUnit failed to free memory.";
@@ -69,6 +69,12 @@ std::string ShmUnit::GetTenantId()
 ShmView ShmUnit::GetShmView()
 {
     return { fd, mmapSize, offset, size };
+}
+
+std::string ShmUnit::GetIdentity() const
+{
+    return FormatString("F:%zu-M:%zu-O:%zu-S:%zu", static_cast<size_t>(fd), static_cast<size_t>(mmapSize),
+                        static_cast<size_t>(offset), static_cast<size_t>(size));
 }
 
 void ShmUnit::SetHardFreeMemory()
@@ -101,7 +107,7 @@ Status ShmUnit::FreeMemory()
     }
     // This call will set pointer to nullptr on success.
     VLOG(1) << "[ShmUnit] Arena FreeMemory, Tenant:" << (tenantId_.empty() ? "Default" : tenantId_)
-            << ", needHardFree: " << needHardFree_;
+            << ", needHardFree: " << needHardFree_ << ", id: " << id << ", identity: " << GetIdentity();
 #ifdef WITH_TESTS
     INJECT_POINT("ShmUnit.FreeMemory", [this]() {
         needHardFree_ = true;
@@ -120,14 +126,15 @@ Status ShmUnit::FreeMemory()
 Status ShmUnit::AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate, ServiceType serviceType,
                                memory::CacheType cacheType)
 {
-    VLOG(1) << "[ShmUnit] AllocateMemory, Tenant: " << (tenantId.empty() ? "Default" : tenantId)
-            << ", size: " << needSize << ", cachetype: " << static_cast<int>(cacheType);
     serviceType_ = serviceType;
     cacheType_ = cacheType;
     RETURN_IF_NOT_OK(datasystem::memory::Allocator::Instance()->AllocateMemory(
         tenantId, needSize, populate, pointer, fd, offset, mmapSize, numaId, serviceType_, cacheType_));
     size = needSize;
     tenantId_ = tenantId;
+    VLOG(1) << "[ShmUnit] AllocateMemory, Tenant: " << (tenantId.empty() ? "Default" : tenantId)
+            << ", size: " << needSize << ", cachetype: " << static_cast<int>(cacheType) << ", id: " << id
+            << ", identity: " << GetIdentity();
     return Status::OK();
 }
 
