@@ -21,6 +21,7 @@
 #include <thread>
 #include <gtest/gtest.h>
 
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
@@ -63,6 +64,19 @@ TEST_F(WorkerDeadlineGateTest, UninitializedReturnsPositiveDefault)
     GetRequestContext()->reqTimeoutDuration.Init();
     int64_t remaining = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     EXPECT_GT(remaining, 0);
+}
+
+// Verify the ProcessShmPut Publish gate: once Create+mmap+memcpy exhausted the budget,
+// CheckApiDeadline (called right before the Publish RPC) returns K_RPC_DEADLINE_EXCEEDED so the
+// second, non-idempotent RPC is skipped. ApiDeadlineGuard scopes Init so the thread-local deadline
+// is restored for the rest of the suite.
+TEST_F(WorkerDeadlineGateTest, PublishGateSkipsWhenDeadlineExhausted)
+{
+    ApiDeadlineGuard deadlineGuard(1);
+    EXPECT_TRUE(ApiDeadline::Instance().CheckApiDeadline().IsOk());
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    Status s = ApiDeadline::Instance().CheckApiDeadline();
+    EXPECT_EQ(s.GetCode(), K_RPC_DEADLINE_EXCEEDED);
 }
 
 }  // namespace test

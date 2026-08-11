@@ -3482,6 +3482,10 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
     }
+    // Skip the non-idempotent Publish RPC once Create+mmap+memcpy exhausted the budget. Create
+    // allocates only a worker-local shm unit (reclaimed by client_dead_timeout GC), so skipping
+    // here leaves no master metadata orphan; K_RPC_DEADLINE_EXCEEDED is non-retryable and non-evicting.
+    RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
     failureStage = SetFailureStage::PUBLISH;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(objInfo, !urmaDataInfo || objInfo->ubDataSentByMemoryCopy,
                                                          false, nestedObjectKeys, ttlSecond, existence),
