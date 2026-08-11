@@ -26,6 +26,10 @@
 #include <thread>
 #include <vector>
 
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include "ut/common.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -33,6 +37,7 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 #include "common/rpc_stub_cache_mgr/rpc_stub_cache_mgr_test_helper.h"
@@ -194,6 +199,35 @@ TEST_F(RpcStubCacheMgrTest, TestCreateStubFailed)
     std::shared_ptr<RpcStubBase> rpcStub;
     DS_ASSERT_NOT_OK(RpcStubCacheMgrForTest::Instance().GetStub(hostPort, StubType::TEST_TYPE_3, rpcStub));
     ASSERT_EQ(0, RpcStubCacheMgrForTest::Instance().Size());
+}
+
+TEST_F(RpcStubCacheMgrTest, TcpPortProbeDistinguishesListeningAndRefused)
+{
+    constexpr int kProbeTimeoutMs = 100;
+    constexpr int kInvalidFd = -1;
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(listener, 0);
+    Raii listenerCloser([&listener]() {
+        if (listener >= 0) {
+            close(listener);
+        }
+    });
+
+    struct sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    ASSERT_EQ(bind(listener, reinterpret_cast<struct sockaddr *>(&address), sizeof(address)), 0);
+    ASSERT_EQ(listen(listener, 1), 0);
+    socklen_t addressLength = sizeof(address);
+    ASSERT_EQ(getsockname(listener, reinterpret_cast<struct sockaddr *>(&address), &addressLength), 0);
+
+    HostPort endpoint("127.0.0.1", ntohs(address.sin_port));
+    EXPECT_EQ(ProbeTcpPort(endpoint, kProbeTimeoutMs), TcpPortProbeResult::AVAILABLE);
+
+    ASSERT_EQ(close(listener), 0);
+    listener = kInvalidFd;
+    EXPECT_EQ(ProbeTcpPort(endpoint, kProbeTimeoutMs), TcpPortProbeResult::PEER_DEAD);
 }
 
 TEST_F(RpcStubCacheMgrTest, TestParallelCreateStubFailedAndGetStub)

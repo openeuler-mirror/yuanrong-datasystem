@@ -440,7 +440,8 @@ Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint6
     int64_t timeoutMs = TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
     static const std::unordered_set<StatusCode> queryMetaRetryOn{ StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
         StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE };
-    Status status = RetryWithStubRebuild(timeoutMs,
+    // A dead metadata owner is terminal for this foreground Get; retrying it would consume the caller's full deadline.
+    Status status = RetryOnErrorRepent(timeoutMs,
         [this, &opts, &request, &response, &payloads](int32_t) {
             CHECK_AND_SET_TIMEOUT(&GetRequestContext()->reqTimeoutDuration, request, opts);
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
@@ -450,10 +451,10 @@ Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint6
             GetWorkerTimeCost().Append("Worker to master rpc QueryMeta", timer.ElapsedMilliSecond());
             return rc;
         },
-        queryMetaRetryOn, "QueryMeta");
+        []() { return Status::OK(); }, queryMetaRetryOn);
 
     point.Record();
-    return status;
+    return WithRpcDiag(status, "QueryMeta", localHostPort_, hostPort_);
 }
 
 Status WorkerRemoteMasterOCApi::RemoveMeta(master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response)

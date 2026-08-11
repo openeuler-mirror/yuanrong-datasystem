@@ -46,6 +46,9 @@ Status DeadlineRetry::CheckDeadline() const
 
 Status DeadlineRetry::Backoff(int64_t &backoffMs) const
 {
+    if (retryAdmissionCheck_) {
+        RETURN_IF_NOT_OK(retryAdmissionCheck_());
+    }
     const int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
     CHECK_FAIL_RETURN_STATUS(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED, "API deadline exceeded during retry");
     const int64_t remainingMs = TimeoutDuration::CeilUsToMs(remainingUs);
@@ -54,7 +57,8 @@ Status DeadlineRetry::Backoff(int64_t &backoffMs) const
         std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
     }
     backoffMs = std::min(backoffMs * BACKOFF_GROWTH_FACTOR, MAX_RETRY_BACKOFF_MS);
-    return CheckDeadline();
+    RETURN_IF_NOT_OK(CheckDeadline());
+    return retryAdmissionCheck_ ? retryAdmissionCheck_() : Status::OK();
 }
 }  // namespace client
 }  // namespace datasystem

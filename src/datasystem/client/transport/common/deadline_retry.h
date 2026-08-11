@@ -19,6 +19,8 @@
 #define DATASYSTEM_CLIENT_TRANSPORT_COMMON_DEADLINE_RETRY_H
 
 #include <cstdint>
+#include <functional>
+#include <utility>
 
 #include "datasystem/utils/status.h"
 
@@ -26,6 +28,15 @@ namespace datasystem {
 namespace client {
 class DeadlineRetry {
 public:
+    /**
+     * @brief Create a deadline-aware retry helper.
+     * @param[in] retryAdmissionCheck Optional synchronous check run immediately before and after every backoff.
+     */
+    explicit DeadlineRetry(std::function<Status()> retryAdmissionCheck = nullptr)
+        : retryAdmissionCheck_(std::move(retryAdmissionCheck))
+    {
+    }
+
     ~DeadlineRetry() = default;
 
     /** @brief Return whether a status is safe to retry for an idempotent operation. */
@@ -36,6 +47,9 @@ public:
 
     /** @brief Sleep with capped exponential backoff within the shared API deadline. */
     Status Backoff(int64_t &backoffMs) const;
+
+private:
+    std::function<Status()> retryAdmissionCheck_;
 };
 }  // namespace client
 }  // namespace datasystem

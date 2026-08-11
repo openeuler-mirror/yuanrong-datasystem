@@ -29,6 +29,7 @@
 #include <fstream>
 #include <future>
 #include <iterator>
+#include <map>
 #include <set>
 #include <string>
 #include <thread>
@@ -51,6 +52,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -267,6 +269,98 @@ public:
     std::shared_ptr<KVClient> client2_;
     std::shared_ptr<KVClient> client3_;
     std::shared_ptr<KVClient> client4_;
+};
+
+class KVCacheClientQueryMetaDeadPeerTest : public KVCacheClientTest {
+public:
+    void SetUp() override
+    {
+        UseBazelBuiltWorker();
+        KVCacheClientTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        KVCacheClientTest::TearDown();
+        if (!workerBinOverridden_) {
+            return;
+        }
+        if (hadWorkerBinOverride_) {
+            (void)setenv("DATASYSTEM_WORKER_BIN", oldWorkerBinOverride_.c_str(), 1);
+        } else {
+            (void)unsetenv("DATASYSTEM_WORKER_BIN");
+        }
+    }
+
+private:
+    void UseBazelBuiltWorker()
+    {
+        const char *srcdir = std::getenv("TEST_SRCDIR");
+        const char *workspace = std::getenv("TEST_WORKSPACE");
+        if (srcdir == nullptr || workspace == nullptr) {
+            return;
+        }
+        const char *currentWorkerBin = std::getenv("DATASYSTEM_WORKER_BIN");
+        hadWorkerBinOverride_ = currentWorkerBin != nullptr;
+        oldWorkerBinOverride_ = hadWorkerBinOverride_ ? currentWorkerBin : "";
+        std::string workerBin = std::string(srcdir) + "/" + workspace
+                                + "/src/datasystem/worker/datasystem_worker";
+        if (!FileExist(workerBin)) {
+            ADD_FAILURE() << "Cannot find Bazel-built worker: " << workerBin;
+            return;
+        }
+        if (setenv("DATASYSTEM_WORKER_BIN", workerBin.c_str(), 1) != 0) {
+            ADD_FAILURE() << "Failed to select Bazel-built worker";
+            return;
+        }
+        workerBinOverridden_ = true;
+    }
+
+    bool workerBinOverridden_ = false;
+    bool hadWorkerBinOverride_ = false;
+    std::string oldWorkerBinOverride_;
+};
+
+class KVCacheClientDistributedMetaDeadPeerTest : public KVCacheClientQueryMetaDeadPeerTest,
+                                                   public testing::WithParamInterface<bool> {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVCacheClientTest::SetClusterSetupOptions(opts);
+        opts.enableDistributedMaster = "true";
+    }
+
+    void GetKeysHashToWorker(uint32_t workerIndex, size_t keyCount, std::vector<std::string> &keys)
+    {
+        ClusterTopologyPb topology;
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(topology));
+
+        HostPort targetWorker;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
+        std::map<uint32_t, std::string> tokenWorkers;
+        for (const auto &worker : topology.members()) {
+            for (const auto token : worker.second.tokens()) {
+                tokenWorkers.emplace(token, worker.first);
+            }
+        }
+        ASSERT_FALSE(tokenWorkers.empty());
+
+        constexpr size_t kSearchLimit = 100'000;
+        keys.clear();
+        for (size_t candidateIndex = 0; candidateIndex < kSearchLimit && keys.size() < keyCount; ++candidateIndex) {
+            std::string key = "query_meta_dead_owner_" + std::to_string(candidateIndex);
+            // RoutingSnapshot owns closed token ranges: an exact hash match belongs to that
+            // token, so mirror WorkerRouter's lower_bound selection exactly.
+            auto owner = tokenWorkers.lower_bound(MurmurHash3_32(key));
+            if (owner == tokenWorkers.end()) {
+                owner = tokenWorkers.begin();
+            }
+            if (owner->second == targetWorker.ToString()) {
+                keys.emplace_back(std::move(key));
+            }
+        }
+        ASSERT_EQ(keys.size(), keyCount);
+    }
 };
 
 class KVCacheClientMmapSwitchTest : public OCClientCommon, public CommonDistributedExt {
@@ -1386,6 +1480,78 @@ TEST_F(KVCacheClientTest, TestQueryMetaRetry)
     }
 }
 
+TEST_F(KVCacheClientQueryMetaDeadPeerTest, QueryMetaFastFailsAfterMetadataWorkerKilled)
+{
+    if (!FLAGS_use_brpc) {
+        GTEST_SKIP() << "K_RPC_PEER_DEAD is a brpc transport status";
+    }
+    constexpr int32_t kConnectTimeoutMs = 60'000;
+    constexpr int32_t kRequestTimeoutMs = 30'000;
+    constexpr int64_t kFastFailMaxMs = 1'000;
+    std::shared_ptr<KVClient> writer;
+    std::shared_ptr<KVClient> reader;
+    InitTestKVClient(0, writer, kConnectTimeoutMs, false, kRequestTimeoutMs);
+    InitTestKVClient(1, reader, kConnectTimeoutMs, false, kRequestTimeoutMs);
+
+    const std::string key = "query-meta-peer-dead";
+    DS_ASSERT_OK(writer->Set(key, "value"));
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+
+    std::string value;
+    Timer timer;
+    Status status = reader->Get(key, value);
+
+    ASSERT_EQ(status.GetCode(), K_RPC_PEER_DEAD) << status.ToString();
+    ASSERT_LT(timer.ElapsedMilliSecond(), kFastFailMaxMs) << status.ToString();
+}
+
+TEST_P(KVCacheClientDistributedMetaDeadPeerTest, OperationsFastFailAfterMetadataOwnerKilled)
+{
+    if (!FLAGS_use_brpc) {
+        GTEST_SKIP() << "K_RPC_PEER_DEAD is a brpc transport status";
+    }
+    constexpr int32_t kConnectTimeoutMs = 60'000;
+    constexpr int32_t kRequestTimeoutMs = 30'000;
+    constexpr int64_t kFastFailMaxMs = 1'000;
+    constexpr size_t kKeyCount = 10;
+    constexpr uint32_t kClientWorkerIndex = 0;
+    constexpr uint32_t kDeadMetadataOwnerIndex = 1;
+    ConnectOptions options;
+    InitConnectOpt(kClientWorkerIndex, options, kConnectTimeoutMs);
+    options.requestTimeoutMs = kRequestTimeoutMs;
+    options.enableLocalCache = GetParam();
+    auto client = std::make_shared<KVClient>(options);
+    DS_ASSERT_OK(client->Init());
+
+    std::vector<std::string> keys;
+    GetKeysHashToWorker(kDeadMetadataOwnerIndex, kKeyCount, keys);
+    DS_ASSERT_OK(cluster_->KillWorker(kDeadMetadataOwnerIndex));
+
+    for (const auto &key : keys) {
+        std::string value;
+        Timer getTimer;
+        Status getStatus = client->Get(key, value);
+        ASSERT_EQ(getStatus.GetCode(), K_RPC_PEER_DEAD) << key << ": " << getStatus.ToString();
+        ASSERT_LT(getTimer.ElapsedMilliSecond(), kFastFailMaxMs) << key << ": " << getStatus.ToString();
+
+        std::vector<bool> exists;
+        Timer existTimer;
+        Status existStatus = client->Exist({ key }, exists);
+        ASSERT_EQ(existStatus.GetCode(), K_RPC_PEER_DEAD) << key << ": " << existStatus.ToString();
+        ASSERT_LT(existTimer.ElapsedMilliSecond(), kFastFailMaxMs) << key << ": " << existStatus.ToString();
+
+        Timer setTimer;
+        Status setStatus = client->Set(key, "value");
+        ASSERT_EQ(setStatus.GetCode(), K_RPC_PEER_DEAD) << key << ": " << setStatus.ToString();
+        ASSERT_LT(setTimer.ElapsedMilliSecond(), kFastFailMaxMs) << key << ": " << setStatus.ToString();
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(LocalCacheModes, KVCacheClientDistributedMetaDeadPeerTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool> &info) {
+                             return info.param ? "LocalCacheEnabled" : "LocalCacheDisabled";
+                         });
+
 TEST_F(KVCacheClientTest, SetRetryWhenOOM)
 {
     std::shared_ptr<KVClient> client1;
@@ -2204,6 +2370,9 @@ public:
     }
 };
 
+class KVClientDirectWorkerDeadPeerTest : public KVClientShutdownTest, public testing::WithParamInterface<bool> {
+};
+
 TEST_F(KVClientShutdownTest, TestAsynInitAndShutdown)
 {
     ConnectOptions connectOptions;
@@ -2243,53 +2412,71 @@ TEST_F(KVClientShutdownTest, TestMulInvokeShutdownWithNullPtr)
     client.reset();
 }
 
-TEST_F(KVClientShutdownTest, SetGetFastFailAfterWorkerKilledWithLongRequestTimeout)
+TEST_P(KVClientDirectWorkerDeadPeerTest, SetGetExistFastFailAfterWorkerKilledWithLongRequestTimeout)
 {
     // requestTimeoutMs = 30s. Killing the worker that serves this client must make the next
-    // Set/Get return immediately with K_RPC_PEER_DEAD (ECONNREFUSED/EHOSTDOWN while the peer
+    // Set/Get/Exist return immediately with K_RPC_PEER_DEAD (ECONNREFUSED/EHOSTDOWN while the peer
     // process is gone), instead of stalling the full 30s RPC budget. This is the end-to-end
     // guarantee of the brpc peer-dead split: a dead worker is detected instantly, not via the
     // request timeout. The client has no standby worker configured, so it does not fail over to
-    // the other worker; both Set and Get must observe the dead-peer fast-fail.
+    // the other worker; all three operations must observe the dead-peer fast-fail.
     ConnectOptions opts;
     InitConnectOpt(0, opts);
     constexpr int32_t kRequestTimeoutMs = 30000;
     opts.requestTimeoutMs = kRequestTimeoutMs;
-    auto client = std::make_shared<KVClient>(opts);
-    DS_ASSERT_OK(client->Init());
+    opts.enableLocalCache = GetParam();
+    auto getClient = std::make_shared<KVClient>(opts);
+    auto existClient = std::make_shared<KVClient>(opts);
+    auto setClient = std::make_shared<KVClient>(opts);
+    DS_ASSERT_OK(getClient->Init());
+    DS_ASSERT_OK(existClient->Init());
+    DS_ASSERT_OK(setClient->Init());
 
     // Pre-place a key on the (soon-to-be-killed) worker so Get targets a concrete dead owner.
     std::string key;
-    DS_ASSERT_OK(client->GenerateKey("fastfail", key));
-    DS_ASSERT_OK(client->Set(key, "value"));
+    DS_ASSERT_OK(getClient->GenerateKey("fastfail", key));
+    DS_ASSERT_OK(getClient->Set(key, "value"));
+    std::string newKey;
+    DS_ASSERT_OK(setClient->GenerateKey("fastfail2", newKey));
 
     // SIGKILL the worker that owns the key and serves this client (abrupt process death, like a
     // crash/OOM-kill — not a graceful shutdown). The listening port dies with the process, so the
     // next connect/RPC surfaces ECONNREFUSED/EHOSTDOWN -> K_RPC_PEER_DEAD and fast-fails.
     DS_ASSERT_OK(cluster_->KillWorker(0));
 
-    // Get must fast-fail with peer-dead, not stall ~30s. Measured elapsed is sub-millisecond
-    // (ECONNREFUSED returns immediately), so 100ms is a generous upper bound that still catches
-    // any regression to deadline-based timeout (~30s) or bounded retry.
-    constexpr int32_t kFastFailMaxMs = 100;
+    // Get must fast-fail with peer-dead, not stall ~30s. One second leaves enough margin for a
+    // loaded remote test host while still catching deadline-based timeout and retry regressions.
+    constexpr int32_t kFastFailMaxMs = 1'000;
     std::string val;
     Timer getTimer;
-    Status getRc = client->Get(key, val);
+    Status getRc = getClient->Get(key, val);
     int64_t getElapsedMs = getTimer.ElapsedMilliSecond();
     ASSERT_EQ(getRc.GetCode(), K_RPC_PEER_DEAD) << getRc.ToString();
     ASSERT_LT(getElapsedMs, kFastFailMaxMs)
         << "Get expected fast-fail after worker kill, elapsed=" << getElapsedMs << "ms";
 
+    // Exist must also fast-fail through the dead client-to-worker connection.
+    std::vector<bool> exists;
+    Timer existTimer;
+    Status existRc = existClient->Exist({ key }, exists);
+    int64_t existElapsedMs = existTimer.ElapsedMilliSecond();
+    ASSERT_EQ(existRc.GetCode(), K_RPC_PEER_DEAD) << existRc.ToString();
+    ASSERT_LT(existElapsedMs, kFastFailMaxMs)
+        << "Exist expected fast-fail after worker kill, elapsed=" << existElapsedMs << "ms";
+
     // Set of a new key must also fast-fail with peer-dead, not stall ~30s.
-    std::string newKey;
-    DS_ASSERT_OK(client->GenerateKey("fastfail2", newKey));
     Timer setTimer;
-    Status setRc = client->Set(newKey, "value");
+    Status setRc = setClient->Set(newKey, "value");
     int64_t setElapsedMs = setTimer.ElapsedMilliSecond();
     ASSERT_EQ(setRc.GetCode(), K_RPC_PEER_DEAD) << setRc.ToString();
     ASSERT_LT(setElapsedMs, kFastFailMaxMs)
         << "Set expected fast-fail after worker kill, elapsed=" << setElapsedMs << "ms";
 }
+
+INSTANTIATE_TEST_SUITE_P(LocalCacheModes, KVClientDirectWorkerDeadPeerTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool> &info) {
+                             return info.param ? "LocalCacheEnabled" : "LocalCacheDisabled";
+                         });
 
 class KVClientDfxTest : public OCClientCommon {
 public:

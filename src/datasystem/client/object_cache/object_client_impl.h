@@ -968,6 +968,21 @@ private:
     Status CheckConnection(WorkerNode id = LOCAL_WORKER);
 
     /**
+     * @brief Check a stable worker connection snapshot without holding switchNodeMutex_.
+     * @param[in] listenWorker Listener associated with the selected worker.
+     * @param[in] workerApi Client API associated with the selected worker.
+     * @return Status of network.
+     */
+    Status CheckConnection(const std::shared_ptr<client::ListenWorker> &listenWorker,
+                           const std::shared_ptr<IClientWorkerApi> &workerApi);
+
+    /**
+     * @brief Confirm whether the worker that owns the current client identity died while handling a routed request.
+     * @return K_RPC_PEER_DEAD when its listening port is closed; K_OK otherwise.
+     */
+    Status CheckBoundWorkerAvailability();
+
+    /**
      * @brief Check if worker is scale down or not.
      * @return True if worker is scale down.
      */

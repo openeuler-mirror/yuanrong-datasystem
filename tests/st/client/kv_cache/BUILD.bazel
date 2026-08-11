@@ -137,12 +137,16 @@ ds_cc_test(
 ds_cc_test(
     name = "kv_cache_client_test",
     srcs = ["kv_cache_client_test.cpp"],
-    data = ["//tests/st/cluster:mock_obs_service.py"],
+    data = [
+        "//src/datasystem/worker:datasystem_worker",
+        "//tests/st/cluster:mock_obs_service.py",
+    ],
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:hash_algorithm",
         "//tests/st/cluster:st_cluster",
     ],
 )
