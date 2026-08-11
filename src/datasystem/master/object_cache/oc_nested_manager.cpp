@@ -34,13 +34,13 @@ bool OCNestedManager::CheckIsNoneNestedRefById(const std::string &childObjectKey
 Status OCNestedManager::IncreaseNestedRefCnt(const std::string &parentObjectKey,
                                              const std::set<ImmutableString> &nestedObjectKeys)
 {
-    Timer timer;
-    std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    GetMasterTimeCost().Append("IncreaseNestedRefCnt 2 params get lock", timer.ElapsedMilliSecond());
     for (const auto &id : nestedObjectKeys) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->AddNestedRelationship(parentObjectKey, id),
                                          "Add nested dependency to RocksDb failed.");
     }
+    Timer timer;
+    std::lock_guard<std::shared_timed_mutex> lck(mutex_);
+    GetMasterTimeCost().Append("IncreaseNestedRefCnt 2 params get lock", timer.ElapsedMilliSecond());
     dependencyTable_[parentObjectKey] = nestedObjectKeys;
     return Status::OK();
 }
