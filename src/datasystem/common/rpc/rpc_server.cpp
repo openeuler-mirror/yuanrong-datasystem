@@ -21,6 +21,11 @@
 
 #include <brpc/server.h>
 #include <brpc/protocol.h>  // for brpc::FLAGS_max_body_size (DECLARE_uint64)
+// brpc only DEFINEs max_connection_pool_size in socket.cpp (inside namespace
+// brpc, no header DECLARE), so declare it here to override the global cap.
+namespace brpc {
+DECLARE_int32(max_connection_pool_size);
+}
 // brpc headers above override LOG/VLOG/DLOG via butil/logging.h.
 // Re-include log.h to restore datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"
@@ -135,6 +140,10 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port)
     constexpr uint64_t kBrpcMaxBodySize = 2ULL * 1024 * 1024 * 1024;  // 2GB
     if (brpc::FLAGS_max_body_size < kBrpcMaxBodySize) {
         brpc::FLAGS_max_body_size = kBrpcMaxBodySize;
+    }
+    // Override brpc's per-endpoint pooled-connection cap. Also set on client side.
+    if (FLAGS_brpc_max_connection_pool_size > 0) {
+        brpc::FLAGS_max_connection_pool_size = FLAGS_brpc_max_connection_pool_size;
     }
     // Install a process-static interceptor that drops requests whose client deadline already
     // elapsed while queued, before the handler runs (defense-in-depth against orphaned server

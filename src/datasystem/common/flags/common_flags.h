@@ -95,4 +95,6 @@ DS_DECLARE_int32(brpc_max_concurrency);
 DS_DECLARE_bool(brpc_enable_builtin_services);
 DS_DECLARE_bool(brpc_enable_circuit_breaker);
 DS_DECLARE_bool(brpc_drop_expired_request);
+DS_DECLARE_string(brpc_connection_type);
+DS_DECLARE_int32(brpc_max_connection_pool_size);
 #endif  // DATASYSTEM_COMMON_FLAGS_COMMON_FLAGS_H

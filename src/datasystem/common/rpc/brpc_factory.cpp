@@ -26,6 +26,12 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 
+// brpc only DEFINEs max_connection_pool_size in socket.cpp (inside namespace
+// brpc, no header DECLARE), so declare it here to override the client-side cap.
+namespace brpc {
+DECLARE_int32(max_connection_pool_size);
+}
+
 namespace datasystem {
 namespace {
 
@@ -92,6 +98,19 @@ void EnsureBrpcCircuitBreakerIsolationCap()
     });
 }
 
+// Override brpc's per-endpoint pooled-connection cap on the client side.
+void EnsureBrpcMaxConnectionPoolSize()
+{
+    static std::once_flag once;
+    std::call_once(once, []() {
+        if (FLAGS_brpc_max_connection_pool_size > 0) {
+            brpc::FLAGS_max_connection_pool_size = FLAGS_brpc_max_connection_pool_size;
+            LOG(INFO) << "max_connection_pool_size overridden to " << FLAGS_brpc_max_connection_pool_size
+                      << " (brpc default 100)";
+        }
+    });
+}
+
 }  // namespace
 
 // Force brpc's global one-shot init (GlobalInitializeOrDie, guarded by
@@ -128,13 +147,21 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
     EnsureBrpcDeliverTimeoutMs();
     EnsureBrpcMaxBodySize();
     EnsureBrpcCircuitBreakerIsolationCap();
+    EnsureBrpcMaxConnectionPoolSize();
     auto ch = std::make_unique<brpc::Channel>();
     brpc::ChannelOptions opts;
     opts.timeout_ms = cfg.timeout_ms;
     opts.connect_timeout_ms = cfg.connect_timeout_ms;
-    // P2-1: always POOLED. SINGLE bottlenecks worker<->master high-QPS paths to
-    // one TCP connection (one IO thread) and wastes the rest of the cores.
-    opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
+    // connection_type: POOLED (default) or SINGLE, controlled by gflag.
+    if (FLAGS_brpc_connection_type == "single") {
+        opts.connection_type = brpc::CONNECTION_TYPE_SINGLE;
+    } else if (FLAGS_brpc_connection_type == "pooled") {
+        opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
+    } else {
+        LOG(WARNING) << "Unknown brpc_connection_type: \"" << FLAGS_brpc_connection_type
+                     << "\", falling back to pooled.";
+        opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
+    }
     // P2-3: circuit breaker auto-isolates peers with high error rates so a
     // half-dead worker (TCP alive but handler hung) cannot drag down QPS.
     // Gated by FLAGS_brpc_enable_circuit_breaker (default false). When true,
@@ -156,9 +183,9 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
         LOG(ERROR) << "Failed to create brpc channel to " << cfg.endpoint;
         return nullptr;
     }
-    VLOG(1) << "BrpcChannel created: " << cfg.endpoint << " timeout=" << cfg.timeout_ms
-            << "ms connect_timeout=" << cfg.connect_timeout_ms << "ms retry=" << cfg.max_retry
-            << " cb=" << (opts.enable_circuit_breaker ? "on" : "off");
+    LOG(INFO) << "BrpcChannel created: " << cfg.endpoint << " timeout=" << cfg.timeout_ms
+              << "ms connect_timeout=" << cfg.connect_timeout_ms << "ms retry=" << cfg.max_retry
+              << " cb=" << (opts.enable_circuit_breaker ? "on" : "off");
     return ch;
 }
 
