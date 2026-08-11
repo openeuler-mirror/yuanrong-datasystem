@@ -53,6 +53,8 @@ namespace {
 constexpr uint32_t kPeerHandshakePort = 18081;
 constexpr uint32_t kLocalHandshakePort = 18080;
 constexpr uint64_t kPeerBufferSize = 2 * 1024 * 1024;
+constexpr uint64_t kExpectedWriteChunkCount = 2;
+constexpr uint64_t kSecondWriteChunkIndex = 2;
 constexpr uint8_t kPayloadByte = 0x5A;
 constexpr char kVerifyCommand = 'v';
 constexpr char kStopCommand = 's';
@@ -441,7 +443,7 @@ TEST(UrmaRemoteJettyReuseTest, MultiChunkWriteSharesAndSettlesOneRemoteSendLane)
     EXPECT_EQ(statsBeforeSeal.poolSize, 1u);
     EXPECT_EQ(statsBeforeSeal.idleCount, 0u) << "completion before Seal must not release the send lane";
     ASSERT_TRUE(writeStatus.IsOk()) << writeStatus.ToString();
-    ASSERT_EQ(eventKeys.size(), 2u);
+    ASSERT_EQ(eventKeys.size(), kExpectedWriteChunkCount);
 
     // Both chunks belong to one request and retain the same send Jetty until their WRs drain.
     std::shared_ptr<UrmaEvent> secondEvent;
@@ -453,6 +455,12 @@ TEST(UrmaRemoteJettyReuseTest, MultiChunkWriteSharesAndSettlesOneRemoteSendLane)
     ASSERT_NE(secondLease, nullptr);
     EXPECT_EQ(firstLease.get(), secondLease.get());
     EXPECT_EQ(firstEvent->GetJetty().lock().get(), secondEvent->GetJetty().lock().get());
+    const auto firstWriteTrace = firstEvent->GetWriteTrace();
+    const auto secondWriteTrace = secondEvent->GetWriteTrace();
+    EXPECT_EQ(firstWriteTrace.writeChunkIndex, 1u);
+    EXPECT_EQ(firstWriteTrace.writeChunkCount, kExpectedWriteChunkCount);
+    EXPECT_EQ(secondWriteTrace.writeChunkIndex, kSecondWriteChunkIndex);
+    EXPECT_EQ(secondWriteTrace.writeChunkCount, kExpectedWriteChunkCount);
     for (const auto key : eventKeys) {
         ASSERT_TRUE(manager.WaitToFinish(key, 10000).IsOk());
     }

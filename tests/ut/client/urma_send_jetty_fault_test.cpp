@@ -136,6 +136,22 @@ size_t GetRegisteredJettyCount(UrmaResource &resource)
     return resource.jettyRegistry_.size();
 }
 
+void PrimeCompletedEvent(const std::shared_ptr<UrmaEvent> &event, uint64_t notifyTimeUs)
+{
+    std::unique_lock<bthread::Mutex> lock(event->eventMutex_);
+    event->notifyTimeUs_ = notifyTimeUs;
+    event->writeTrace_.notifyUs = notifyTimeUs;
+    event->ready_ = true;
+}
+
+void RecordEventObservation(const std::shared_ptr<UrmaEvent> &event, bool waitedForNotification,
+                            UrmaSequentialWaitContext &waitContext)
+{
+    // Inject the state captured immediately after WaitUntilReadyLocked without relying on thread scheduling sleeps.
+    std::unique_lock<bthread::Mutex> lock(event->eventMutex_);
+    event->RecordCompletionObservationLocked(waitedForNotification, &waitContext);
+}
+
 TEST(UrmaSendJettyFaultTest, EventWaitSupportsBthreadWaiterAndPthreadNotifier)
 {
     constexpr uint64_t kRequestId = 1002;
@@ -178,6 +194,80 @@ TEST(UrmaSendJettyFaultTest, EventWaitSupportsBthreadWaiterAndPthreadNotifier)
     const auto trace = args.event->GetWriteTrace();
     EXPECT_GT(trace.notifyUs, 0U);
     EXPECT_GE(trace.awakeUs, trace.notifyUs);
+    EXPECT_EQ(trace.awakeUs, trace.observedUs);
+    EXPECT_TRUE(trace.waitedForNotification);
+    EXPECT_FALSE(trace.preCompletedBeforeWait);
+    EXPECT_FALSE(trace.wokenByPreviousEvent);
+    EXPECT_EQ(args.event->GetWakeSchedLatencyUs(), args.event->GetCompletionObservationLatencyUs());
+}
+
+TEST(UrmaSendJettyFaultTest, SequentialWaitReusesPreviousWakeLatencyForPreCompletedEvent)
+{
+    constexpr uint64_t kFirstRequestId = 1004;
+    constexpr uint64_t kSecondRequestId = 1005;
+    auto firstEvent = std::make_shared<UrmaEvent>(kFirstRequestId, nullptr, "fault-test", "fault-test", 0,
+                                                  UrmaEvent::OperationType::WRITE, nullptr);
+    auto secondEvent = std::make_shared<UrmaEvent>(kSecondRequestId, nullptr, "fault-test", "fault-test", 0,
+                                                   UrmaEvent::OperationType::WRITE, nullptr);
+    firstEvent->SetWriteChunkInfo(1, 2);
+    secondEvent->SetWriteChunkInfo(2, 2);
+    const auto nowUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+    ASSERT_GT(nowUs, 2000U);
+    PrimeCompletedEvent(secondEvent, nowUs - 2000);
+    PrimeCompletedEvent(firstEvent, nowUs - 1000);
+    UrmaSequentialWaitContext waitContext;
+    RecordEventObservation(firstEvent, true, waitContext);
+    RecordEventObservation(secondEvent, false, waitContext);
+
+    const auto firstTrace = firstEvent->GetWriteTrace();
+    const auto secondTrace = secondEvent->GetWriteTrace();
+    const auto firstWakeSchedLatencyUs = firstEvent->GetWakeSchedLatencyUs();
+    EXPECT_TRUE(firstTrace.waitedForNotification);
+    EXPECT_FALSE(firstTrace.preCompletedBeforeWait);
+    EXPECT_FALSE(firstTrace.wokenByPreviousEvent);
+    EXPECT_FALSE(firstTrace.eventProcessingAndWaitLatencyValid);
+    EXPECT_FALSE(secondTrace.waitedForNotification);
+    EXPECT_TRUE(secondTrace.preCompletedBeforeWait);
+    EXPECT_TRUE(secondTrace.wokenByPreviousEvent);
+    EXPECT_TRUE(secondTrace.eventProcessingAndWaitLatencyValid);
+    EXPECT_EQ(secondEvent->GetWakeSchedLatencyUs(), firstWakeSchedLatencyUs);
+    EXPECT_EQ(secondTrace.awakeUs, secondTrace.notifyUs);
+    EXPECT_EQ(secondEvent->GetEventProcessingAndWaitLatencyUs(),
+              secondEvent->GetCompletionObservationLatencyUs() - firstWakeSchedLatencyUs);
+}
+
+TEST(UrmaSendJettyFaultTest, GroupEventProcessingSubtractsBothActualWakeLatencies)
+{
+    auto firstEvent = std::make_shared<UrmaEvent>(1006, nullptr, "fault-test", "fault-test", 0,
+                                                  UrmaEvent::OperationType::WRITE, nullptr);
+    auto secondEvent = std::make_shared<UrmaEvent>(1007, nullptr, "fault-test", "fault-test", 0,
+                                                   UrmaEvent::OperationType::WRITE, nullptr);
+    firstEvent->SetWriteChunkInfo(1, 2);
+    secondEvent->SetWriteChunkInfo(2, 2);
+    const auto nowUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+    ASSERT_GT(nowUs, 1000U);
+    const auto firstNotifyUs = nowUs - 1000;
+    PrimeCompletedEvent(firstEvent, firstNotifyUs);
+    UrmaSequentialWaitContext waitContext;
+    RecordEventObservation(firstEvent, true, waitContext);
+    const auto firstTrace = firstEvent->GetWriteTrace();
+    ASSERT_GT(firstTrace.observedUs, 100U);
+    PrimeCompletedEvent(secondEvent, firstTrace.observedUs - 100);
+    RecordEventObservation(secondEvent, true, waitContext);
+
+    const auto secondTrace = secondEvent->GetWriteTrace();
+    const auto firstWakeSchedLatencyUs = firstEvent->GetWakeSchedLatencyUs();
+    const auto secondWakeSchedLatencyUs = secondEvent->GetWakeSchedLatencyUs();
+    EXPECT_GT(firstWakeSchedLatencyUs, 0U);
+    EXPECT_GT(secondWakeSchedLatencyUs, 0U);
+    EXPECT_TRUE(firstTrace.waitedForNotification);
+    EXPECT_TRUE(secondTrace.waitedForNotification);
+    EXPECT_FALSE(secondTrace.preCompletedBeforeWait);
+    EXPECT_FALSE(secondTrace.wokenByPreviousEvent);
+    EXPECT_TRUE(secondTrace.eventProcessingAndWaitLatencyValid);
+    EXPECT_EQ(waitContext.totalActualWakeSchedLatencyUs, firstWakeSchedLatencyUs + secondWakeSchedLatencyUs);
+    EXPECT_EQ(secondEvent->GetEventProcessingAndWaitLatencyUs(),
+              secondTrace.observedUs - firstTrace.notifyUs - firstWakeSchedLatencyUs - secondWakeSchedLatencyUs);
 }
 
 TEST(UrmaSendJettyFaultTest, EventWaitTimeoutPreservesUrmaStatus)

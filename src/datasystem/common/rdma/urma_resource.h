@@ -72,7 +72,23 @@ struct UrmaWriteTrace {
     uint64_t sleepEndUs{ 0 };
     uint64_t pollEndUs{ 0 };
     uint64_t notifyUs{ 0 };
+    // A pre-completed event has no own wake point, so awakeUs equals notifyUs; observedUs is its actual check time.
     uint64_t awakeUs{ 0 };
+    uint64_t observedUs{ 0 };
+    uint64_t writeChunkIndex{ 0 };
+    uint64_t writeChunkCount{ 0 };
+    bool waitedForNotification{ false };
+    bool preCompletedBeforeWait{ false };
+    bool wokenByPreviousEvent{ false };
+    bool eventProcessingAndWaitLatencyValid{ false };
+};
+
+struct UrmaSequentialWaitContext {
+    // Carries the actual wake latency to later chunks of the same write while event keys are waited in order.
+    uint64_t wakeSchedLatencyUs{ 0 };
+    uint64_t firstCompletionUs{ 0 };
+    uint64_t totalActualWakeSchedLatencyUs{ 0 };
+    bool hasWakeSchedLatency{ false };
 };
 
 class UrmaEvent : public Event {
@@ -127,10 +143,28 @@ public:
         return wakeSchedLatencyUs_.load(std::memory_order_relaxed);
     }
 
+    uint64_t GetCompletionObservationLatencyUs() const
+    {
+        return completionObservationLatencyUs_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t GetEventProcessingAndWaitLatencyUs() const
+    {
+        return eventProcessingAndWaitLatencyUs_.load(std::memory_order_relaxed);
+    }
+
     void SetWritePostTimeUs(uint64_t postUs)
     {
         if (operationType_ == OperationType::WRITE) {
             writeTrace_.postUs = postUs;
+        }
+    }
+
+    void SetWriteChunkInfo(uint64_t chunkIndex, uint64_t chunkCount)
+    {
+        if (operationType_ == OperationType::WRITE) {
+            writeTrace_.writeChunkIndex = chunkIndex;
+            writeTrace_.writeChunkCount = chunkCount;
         }
     }
 
@@ -231,10 +265,16 @@ public:
 
     Status WaitFor(std::chrono::milliseconds timeout) override
     {
+        return WaitFor(timeout, nullptr);
+    }
+
+    Status WaitFor(std::chrono::milliseconds timeout, UrmaSequentialWaitContext *waitContext)
+    {
         std::unique_lock<bthread::Mutex> lock(eventMutex_);
+        const bool waitedForNotification = !ready_;
         bool gotNotification = false;
         RETURN_IF_NOT_OK(WaitUntilReadyLocked(lock, timeout, gotNotification));
-        RecordWakeSchedLatencyLocked();
+        RecordCompletionObservationLocked(waitedForNotification, waitContext);
         if (gotNotification) {
             return Status::OK();
         }
@@ -261,21 +301,79 @@ public:
     }
 
 private:
-    void RecordWakeSchedLatencyLocked()
+    void ResetSequentialWaitContextIfNeeded(UrmaSequentialWaitContext *waitContext) const
+    {
+        const bool startsNewWrite = writeTrace_.writeChunkCount <= 1 || writeTrace_.writeChunkIndex <= 1;
+        if (waitContext != nullptr && startsNewWrite) {
+            *waitContext = UrmaSequentialWaitContext{};
+        }
+    }
+
+    uint64_t ResolveWakeSchedLatencyLocked(bool waitedForNotification, uint64_t observationLatencyUs,
+                                           UrmaSequentialWaitContext *waitContext)
+    {
+        uint64_t effectiveWakeSchedLatencyUs = waitedForNotification ? observationLatencyUs : 0;
+        if (waitContext == nullptr) {
+            return effectiveWakeSchedLatencyUs;
+        }
+        if (waitContext->firstCompletionUs == 0 || notifyTimeUs_ < waitContext->firstCompletionUs) {
+            waitContext->firstCompletionUs = notifyTimeUs_;
+        }
+        if (waitedForNotification) {
+            waitContext->wakeSchedLatencyUs = observationLatencyUs;
+            waitContext->totalActualWakeSchedLatencyUs += observationLatencyUs;
+            waitContext->hasWakeSchedLatency = true;
+        } else if (waitContext->hasWakeSchedLatency) {
+            effectiveWakeSchedLatencyUs = waitContext->wakeSchedLatencyUs;
+            writeTrace_.wokenByPreviousEvent = operationType_ == OperationType::WRITE;
+        }
+        return effectiveWakeSchedLatencyUs;
+    }
+
+    void RecordEventProcessingAndWaitLatencyLocked(uint64_t observedUs, UrmaSequentialWaitContext *waitContext)
+    {
+        const bool endsCurrentWrite = writeTrace_.writeChunkCount <= 1
+                                      || writeTrace_.writeChunkIndex == writeTrace_.writeChunkCount;
+        if (waitContext == nullptr || !endsCurrentWrite || observedUs < waitContext->firstCompletionUs) {
+            return;
+        }
+        const auto completionToObservationUs = observedUs - waitContext->firstCompletionUs;
+        const auto processingAndWaitUs = completionToObservationUs >= waitContext->totalActualWakeSchedLatencyUs
+                                             ? completionToObservationUs
+                                                   - waitContext->totalActualWakeSchedLatencyUs
+                                             : 0;
+        eventProcessingAndWaitLatencyUs_.store(processingAndWaitUs, std::memory_order_relaxed);
+        writeTrace_.eventProcessingAndWaitLatencyValid = operationType_ == OperationType::WRITE;
+    }
+
+    void RecordCompletionObservationLocked(bool waitedForNotification, UrmaSequentialWaitContext *waitContext)
     {
         if (wakeSchedLatencyRecorded_) {
             return;
         }
         wakeSchedLatencyRecorded_ = true;
-        if (notifyTimeUs_ == 0) {
-            wakeSchedLatencyUs_.store(0, std::memory_order_relaxed);
-            return;
-        }
         const auto nowUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
         if (operationType_ == OperationType::WRITE) {
-            writeTrace_.awakeUs = nowUs;
+            writeTrace_.observedUs = nowUs;
+            writeTrace_.waitedForNotification = waitedForNotification;
+            writeTrace_.preCompletedBeforeWait = !waitedForNotification;
         }
-        wakeSchedLatencyUs_.store(nowUs >= notifyTimeUs_ ? nowUs - notifyTimeUs_ : 0, std::memory_order_relaxed);
+        ResetSequentialWaitContextIfNeeded(waitContext);
+        if (notifyTimeUs_ == 0) {
+            wakeSchedLatencyUs_.store(0, std::memory_order_relaxed);
+            completionObservationLatencyUs_.store(0, std::memory_order_relaxed);
+            eventProcessingAndWaitLatencyUs_.store(0, std::memory_order_relaxed);
+            return;
+        }
+        const auto observationLatencyUs = nowUs >= notifyTimeUs_ ? nowUs - notifyTimeUs_ : 0;
+        completionObservationLatencyUs_.store(observationLatencyUs, std::memory_order_relaxed);
+        const auto effectiveWakeSchedLatencyUs =
+            ResolveWakeSchedLatencyLocked(waitedForNotification, observationLatencyUs, waitContext);
+        if (operationType_ == OperationType::WRITE) {
+            writeTrace_.awakeUs = waitedForNotification ? nowUs : notifyTimeUs_;
+        }
+        wakeSchedLatencyUs_.store(effectiveWakeSchedLatencyUs, std::memory_order_relaxed);
+        RecordEventProcessingAndWaitLatencyLocked(nowUs, waitContext);
     }
 
     int statusCode_{ 0 };
@@ -290,6 +388,8 @@ private:
     uint64_t notifyTimeUs_{ 0 };
     bool wakeSchedLatencyRecorded_{ false };
     std::atomic<uint64_t> wakeSchedLatencyUs_{ 0 };
+    std::atomic<uint64_t> completionObservationLatencyUs_{ 0 };
+    std::atomic<uint64_t> eventProcessingAndWaitLatencyUs_{ 0 };
     UrmaWriteTrace writeTrace_;
     std::atomic<int> *srcChipInflightCounter_{ nullptr };
 };

@@ -470,9 +470,12 @@ public:
      * @brief Urma write operation waits on the CV to check completion status
      * @param[in] requestId unique id for the urma request (passed as user_ctx in urma_write)
      * @param[in] timeoutMs timeout waiting for the request to end
+     * @param[in] failure Optional URMA provider or completion failure detail.
+     * @param[in,out] waitContext Sequential wait context shared by chunks of one write.
      * @return Status of the call.
      */
-    Status WaitToFinish(uint64_t requestId, int64_t timeoutMs, UrmaWriteFailure *failure = nullptr);
+    Status WaitToFinish(uint64_t requestId, int64_t timeoutMs, UrmaWriteFailure *failure = nullptr,
+                        UrmaSequentialWaitContext *waitContext = nullptr);
 
     /**
      * @brief Converts Urma device eid to string
@@ -789,11 +792,12 @@ private:
     const char *GetSrcChipInflightWrCountsString() const;
     void LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                     uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
-                                    uint64_t wakeSchedLatencyUs, const Status &waitRc) const;
+                                    uint64_t wakeSchedLatencyUs, uint64_t completionObservationLatencyUs,
+                                    uint64_t eventProcessingAndWaitLatencyUs, const Status &waitRc) const;
     Status CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                        double elapsedMs, const std::string &reason) const;
     Status WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs, const std::shared_ptr<UrmaEvent> &event,
-                            UrmaWriteFailure *failure);
+                            UrmaWriteFailure *failure, UrmaSequentialWaitContext *waitContext);
     uint64_t pollLastStartUs_{ 0 };
     uint64_t pollLastEndUs_{ 0 };
 

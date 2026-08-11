@@ -150,9 +150,10 @@ Status WaitFastTransportEventWithFailure(std::vector<uint64_t> &keys, std::funct
 #ifdef USE_URMA
     if (IsUrmaEnabled()) {
         Status firstError = Status::OK();
+        UrmaSequentialWaitContext waitContext;
         for (auto key : keys) {
             // Wait for the event until timeout
-            Status rc = UrmaManager::Instance().WaitToFinish(key, remainingTime(), failure);
+            Status rc = UrmaManager::Instance().WaitToFinish(key, remainingTime(), failure, &waitContext);
             if (rc.IsError() && firstError.IsOk()) {
                 firstError = errorHandler(rc);
             }
