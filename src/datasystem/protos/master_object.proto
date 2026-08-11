@@ -790,9 +790,18 @@ message ReportRebalanceResultReqPb {
   uint64 timestamp = 100;
   string signature = 101;
   string access_key = 102;
+  // Fresh target available memory reported by the source worker after a migration batch.
+  // Field number > 102 so old masters that re-serialize for AK/SK verification preserve the
+  // unknown field after the known AK/SK fields, keeping the canonical bytes identical.
+  uint64 target_remain_bytes = 103;
 }
 
-message ReportRebalanceResultRspPb {}
+message ReportRebalanceResultRspPb {
+  // Master-assigned next batch task. Set only when the source worker should immediately run
+  // another batch (usage gap not yet converged and target below the rebalance watermark).
+  // Empty means stop the rebalance loop on this worker.
+  RebalanceTaskPb next_rebalance_task = 1;
+}
 
 message ResourceReportReqPb {
   WorkerStat stat = 1;

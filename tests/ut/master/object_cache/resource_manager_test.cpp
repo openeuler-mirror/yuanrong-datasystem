@@ -207,15 +207,16 @@ TEST_F(ResourceManagerTest, SwapOnTriggerGivesFreshProjectionAndCorrectBudget)
     (void)Report(*rm_, t1, 600, 400);
 
     // 5. S3 reports high -> swap-on-trigger promotes writeSnapshot_ (T1 now 600 fresh) into
-    //    readSnapshot_ BEFORE Schedule. Schedule's projection for S3->T1 = 600+0+160 = 760
-    //    < triggerLine(1000) -> T1 dispatched with max_bytes=160. The 70% ceiling is removed;
-    //    the available clamp (400-0=400 > 160) does not bind; the midpoint (920-600)/2=160
-    //    binds. Without swap-on-trigger, readSnapshot_[T1] would still be stale-low (100) and
-    //    S3->T1 max_bytes would be (920-100)/2=410, over-migrating T1 to 600+410=1010 > limit.
+    //    readSnapshot_ BEFORE Schedule. Schedule's projection for S3->T1: the rebalance goal is
+    //    the midpoint gap (920-600)/2=160, but the target watermark ceiling caps the batch at
+    //    headroomToWatermark = 700-600 = 100 so T1 reaches the 70% watermark (not past it). The
+    //    available clamp (400-0=400 > 100) does not bind. Without swap-on-trigger, readSnapshot_[T1]
+    //    would still be stale-low (100) and the watermark cap would be 600 (looser), but the
+    //    fresh snapshot is what makes the watermark ceiling bind tightly here.
     auto s3Rsp = Report(*rm_, s3, 920, 80);
     ASSERT_TRUE(HasRebalanceTask(s3Rsp)) << "S3 should get a rebalance task targeting T1";
     EXPECT_EQ(s3Rsp.rebalance_task().target_worker(), t1);
-    EXPECT_EQ(s3Rsp.rebalance_task().max_bytes(), 160ul);
+    EXPECT_EQ(s3Rsp.rebalance_task().max_bytes(), 100ul);
 }
 }  // namespace ut
 }  // namespace datasystem

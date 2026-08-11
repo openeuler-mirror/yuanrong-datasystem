@@ -418,6 +418,9 @@ void MigrateDataHandler::HandleMigrationTransportResponse(const Status &status, 
         return;
     }
     AdjustMaxBatchSize(response.remainBytes);
+    if (response.remainBytes != UINT64_MAX) {
+        lastRemainBytes_ = response.remainBytes;
+    }
     successIds_.insert(response.successKeys.begin(), response.successKeys.end());
     failedIds_.insert(response.failedKeys.begin(), response.failedKeys.end());
     Status rateStatus = TryUpdateRate(response.limitRate);
@@ -524,7 +527,8 @@ MigrateDataHandler::MigrateResult MigrateDataHandler::ConstructResult(Status sta
              .failedIds = failedIds_,
              .skipIds = skipIds_,
              .strategy = strategy_,
-             .ubFailureDetail = ubFailureDetail_ };
+             .ubFailureDetail = ubFailureDetail_,
+             .targetRemainBytes = lastRemainBytes_ };
 }
 
 void MigrateDataHandler::Clear()

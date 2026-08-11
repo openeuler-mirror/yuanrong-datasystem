@@ -300,6 +300,7 @@ protected:
         reports_.clear();
         reportThreadIds_.clear();
         reportTraceIds_.clear();
+        nextTaskForReport_.Clear();
         executor_->SetTestHooks(
             [this](uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates) {
                 (void)maxBytes;
@@ -322,12 +323,18 @@ protected:
                 }
                 return result;
             },
-            [this](const master::ReportRebalanceResultReqPb &req) {
+            [this](const master::ReportRebalanceResultReqPb &req, master::ReportRebalanceResultRspPb &rsp) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 reports_.push_back({ req.status(), req.migrated_bytes(), req.migrated_objects(), req.failed_objects(),
                                      req.failure_side(), req.failed_reason() });
                 reportThreadIds_.push_back(std::this_thread::get_id());
                 reportTraceIds_.push_back(Trace::Instance().GetTraceID());
+                // Simulate master assigning a follow-up batch: copy the pre-set next task into the
+                // response (one-shot) so the executor's master-Rsp-driven loop advances a batch.
+                if (req.status() == master::REBALANCE_TASK_SUCCEEDED && !nextTaskForReport_.task_id().empty()) {
+                    *rsp.mutable_next_rebalance_task() = nextTaskForReport_;
+                    nextTaskForReport_.Clear();
+                }
                 ++reportCount_;
                 cv_.notify_all();
             });
@@ -451,6 +458,9 @@ protected:
     size_t reportCount_ = 0;
     std::vector<ReportRecord> reports_;
     std::vector<std::thread::id> reportThreadIds_;
+    // When set (non-empty task_id), the reportHook copies this task into the response's
+    // next_rebalance_task and clears it (one-shot), simulating master assigning a follow-up batch.
+    master::RebalanceTaskPb nextTaskForReport_;
     std::vector<std::string> reportTraceIds_;
 };
 
@@ -808,6 +818,50 @@ TEST_F(RebalanceExecutorTest, SubmitBusyResultPropagatesCallerTraceIdToExecutorP
         << "SubmitBusyResult must inherit the caller's traceId via executor pool propagation";
     EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
     EXPECT_NE(reports_[0].failedReason.find("busy"), std::string::npos);
+}
+
+// Regression guard for the master-Rsp-driven multi-batch loop: while the executor processes a
+// follow-up batch (assigned via ReportResult's next_rebalance_task), a periodic ResourceReport
+// returns the still-active batch task (master's NeedSnapshotForSchedule finds the active task
+// and returns it). Submit must recognize it as a duplicate (runningTaskId_ == task_id) and
+// ignore it, NOT report it as "busy" — which would falsely fail the in-progress batch and apply
+// a 60s cooldown. The fix keeps runningTaskId_ in sync with the current batch inside the loop.
+TEST_F(RebalanceExecutorTest, MultiBatchLoopDoesNotReportBusyWhenHeartbeatReturnsActiveTask)
+{
+    InstallHooks({ { { "obj1", 30 } }, { { "obj2", 40 } } },
+                  { MakeMigrateResult({ "obj1" }), MakeMigrateResult({ "obj2" }) });
+
+    // Master assigns a follow-up batch in the first success report's response.
+    const auto batch2 = MakeTask("heartbeat-batch2", 40);
+    nextTaskForReport_ = batch2;
+
+    // During batch2's migration, simulate the periodic heartbeat returning the active task.
+    // migrateIndex_ is incremented to 2 before the side effect fires on batch2.
+    migrateSideEffect_ = [this, batch2]() {
+        if (migrateIndex_ == 2) {
+            executor_->Submit(batch2, MASTER_ADDR.ToString());
+        }
+    };
+
+    executor_->Submit(MakeTask("heartbeat-batch1", 30), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(2)) << "expected batch1 + batch2 success reports";
+    ASSERT_TRUE(WaitTaskDone());
+
+    // If the fix is missing, SubmitBusyResult queued a failure report that runs after the loop.
+    // Wait briefly for it; a passing run must NOT see a third report.
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        const bool gotSpurious = cv_.wait_for(lock, std::chrono::milliseconds(500),
+                                              [this] { return reportCount_ >= 3; });
+        EXPECT_FALSE(gotSpurious) << "spurious busy failure report for the active batch detected";
+    }
+    ASSERT_EQ(reports_.size(), size_t(2));
+    for (const auto &r : reports_) {
+        EXPECT_EQ(r.status, master::REBALANCE_TASK_SUCCEEDED);
+        EXPECT_EQ(r.failedReason.find("busy"), std::string::npos)
+            << "false 'busy' failure leaked into reports";
+    }
 }
 
 }  // namespace ut

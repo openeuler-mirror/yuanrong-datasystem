@@ -74,6 +74,11 @@ public:
         std::shared_ptr<SelectionStrategy> strategy;
         std::optional<ProviderUbFailureDetailPb> ubFailureDetail;
         int retryCount = 0;
+        // Target's fresh available memory (headroom to high-water) reported by the target in the
+        // last batch's MigrateDataRspPb. UINT64_MAX means no batch was sent (e.g. all objects
+        // skipped); callers must treat it as "no fresh signal". Surfaced so the rebalance executor
+        // can forward it to master for per-batch gap recompute.
+        uint64_t targetRemainBytes{ UINT64_MAX };
     };
 
     /**
@@ -266,6 +271,10 @@ private:
     std::vector<std::unique_ptr<BaseDataUnit>> datas_;
     std::optional<ProviderUbFailureDetailPb> ubFailureDetail_;
     std::function<Status()> sendAdmission_;
+    // Last target remain_bytes received from a real batch send (updated in
+    // HandleMigrationTransportResponse; spy/probe paths do not touch it). UINT64_MAX means no
+    // batch sent yet. Surfaced via MigrateResult.targetRemainBytes.
+    uint64_t lastRemainBytes_{ UINT64_MAX };
 
     Status lastRc_;
 };

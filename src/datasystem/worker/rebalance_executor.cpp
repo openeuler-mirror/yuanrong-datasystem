@@ -320,6 +320,9 @@ Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, cons
     stats.migratedBytes += batchMigratedBytes;
     stats.migratedObjects += result.successIds.size();
     stats.failedObjects += result.failedIds.size() + result.skipIds.size();
+    if (result.targetRemainBytes != UINT64_MAX) {
+        stats.targetRemainBytes = result.targetRemainBytes;
+    }
     if (result.status.IsError()) {
         stats.failureSide = ClassifyMigrationFailure(result, targetAddr);
         stats.failedReason = result.status.ToString();
@@ -345,7 +348,7 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
     // too many objects at once.
     std::unique_ptr<object_cache::DataMigrator> migrator;
     while (stats.migratedBytes < task.max_bytes()) {
-        if (IsExpired(localDeadlineMs)) {
+        if (IsExpired(localDeadlineMs) || IsExitRequested()) {
             stats.status = master::REBALANCE_TASK_EXPIRED;
             stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
             stats.failedReason = "Rebalance task is expired";
@@ -379,53 +382,93 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
     }
 }
 
-void RebalanceExecutor::Execute(master::RebalanceTaskPb task, std::string assignedMasterAddress)
+void RebalanceExecutor::ClassifyBatchResult(const master::RebalanceTaskPb &task, bool masterUnavailable,
+                                            ExecutionStats &stats)
+{
+    if (masterUnavailable) {
+        return;
+    }
+    bool targetReached = stats.migratedBytes >= task.max_bytes();
+    bool partialCompleted = stats.migratedBytes > 0 && stats.candidatesExhausted;
+    if (stats.status != master::REBALANCE_TASK_EXPIRED && stats.failedObjects == 0
+        && (targetReached || partialCompleted)) {
+        stats.status = master::REBALANCE_TASK_SUCCEEDED;
+        stats.failureSide = master::REBALANCE_FAILURE_UNKNOWN;
+        stats.failedReason.clear();
+    }
+}
+
+void RebalanceExecutor::LogBatchResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats,
+                                       uint64_t costMs)
+{
+    LOG(INFO) << FormatString(
+        "Finish rebalance task %s, status: %d, maxBytes: %llu, migratedBytes: %llu, migratedObjects: %llu, "
+        "failedObjects: %llu, costMs: %llu, reason: %s",
+        task.task_id(), static_cast<int>(stats.status),
+        static_cast<unsigned long long>(task.max_bytes()),
+        static_cast<unsigned long long>(stats.migratedBytes),
+        static_cast<unsigned long long>(stats.migratedObjects),
+        static_cast<unsigned long long>(stats.failedObjects),
+        static_cast<unsigned long long>(costMs), stats.failedReason);
+}
+
+void RebalanceExecutor::ReportEmptyMasterAndDone(const master::RebalanceTaskPb &task)
 {
     ExecutionStats stats;
-    stats.assignedMasterAddress = std::move(assignedMasterAddress);
-    Timer timer;
-    do {
-        if (stats.assignedMasterAddress.empty()) {
-            stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
-            stats.failedReason = "Assigned cluster master address is empty";
+    stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
+    stats.failedReason = "Assigned cluster master address is empty";
+    master::ReportRebalanceResultRspPb rsp;
+    ReportResult(task, stats, rsp);
+    MarkTaskDone();
+}
+
+void RebalanceExecutor::Execute(master::RebalanceTaskPb task, std::string assignedMasterAddress)
+{
+    // Hoisted: assignedMasterAddress is a function parameter that does not change between batches.
+    if (assignedMasterAddress.empty()) {
+        ReportEmptyMasterAndDone(task);
+        return;
+    }
+    master::RebalanceTaskPb currentTask = task;
+    bool hasMoreBatches = true;
+    while (hasMoreBatches) {
+        if (IsExitRequested()) {
             break;
         }
-        LOG(INFO) << FormatString("Start rebalance task %s, assigned cluster master: %s", task.task_id(),
-                                  stats.assignedMasterAddress);
+        ExecutionStats stats;
+        stats.assignedMasterAddress = assignedMasterAddress;
+        Timer timer;
+        LOG(INFO) << "Start rebalance task " << currentTask.task_id() << ", master: " << stats.assignedMasterAddress;
         HostPort targetAddr;
-        auto localDeadlineMs = BuildLocalDeadlineMs(task);
-        auto rc = ValidateTask(task, targetAddr, localDeadlineMs, stats.failureSide);
+        auto localDeadlineMs = BuildLocalDeadlineMs(currentTask);
+        auto rc = ValidateTask(currentTask, targetAddr, localDeadlineMs, stats.failureSide);
         if (rc.IsError()) {
             stats.failedReason = rc.ToString();
             if (IsExpired(localDeadlineMs)) {
                 stats.status = master::REBALANCE_TASK_EXPIRED;
             }
+            master::ReportRebalanceResultRspPb rsp;
+            ReportResult(currentTask, stats, rsp);
             break;
         }
-
-        ExecuteBatches(task, targetAddr, stats, localDeadlineMs);
-        if (IsAssignedMasterUnavailable(task, stats)) {
-            break;
+        ExecuteBatches(currentTask, targetAddr, stats, localDeadlineMs);
+        bool masterUnavailable = IsAssignedMasterUnavailable(currentTask, stats);
+        ClassifyBatchResult(currentTask, masterUnavailable, stats);
+        LogBatchResult(currentTask, stats, timer.ElapsedMilliSecond());
+        master::ReportRebalanceResultRspPb rsp;
+        ReportResult(currentTask, stats, rsp);
+        // Only a successful batch can yield a next task; a dead master or any failure stops the loop.
+        if (masterUnavailable || stats.status != master::REBALANCE_TASK_SUCCEEDED
+            || !rsp.has_next_rebalance_task() || rsp.next_rebalance_task().task_id().empty()) {
+            hasMoreBatches = false;
+        } else {
+            // Copy proto and update runningTaskId_ under one lock so a heartbeat continuation
+            // cannot observe a stale predecessor id. Safe -- Submit/MarkTaskDone hold briefly.
+            std::lock_guard<std::mutex> lock(taskMutex_);
+            currentTask = rsp.next_rebalance_task();
+            runningTaskId_ = currentTask.task_id();
         }
-        bool targetReached = stats.migratedBytes >= task.max_bytes();
-        bool partialCompleted = stats.migratedBytes > 0 && stats.candidatesExhausted;
-        if (stats.status != master::REBALANCE_TASK_EXPIRED && stats.failedObjects == 0
-            && (targetReached || partialCompleted)) {
-            stats.status = master::REBALANCE_TASK_SUCCEEDED;
-            stats.failureSide = master::REBALANCE_FAILURE_UNKNOWN;
-            stats.failedReason.clear();
-        }
-    } while (false);
-
-    LOG(INFO) << FormatString(
-        "Finish rebalance task %s, status: %d, maxBytes: %llu, migratedBytes: %llu, migratedObjects: %llu, "
-        "failedObjects: %llu, costMs: %llu, reason: %s",
-        task.task_id(), static_cast<int>(stats.status), static_cast<unsigned long long>(task.max_bytes()),
-        static_cast<unsigned long long>(stats.migratedBytes), static_cast<unsigned long long>(stats.migratedObjects),
-        static_cast<unsigned long long>(stats.failedObjects),
-            static_cast<unsigned long long>(timer.ElapsedMilliSecond()),
-        stats.failedReason);
-    ReportResult(task, stats);
+    }
     MarkTaskDone();
 }
 
@@ -483,13 +526,14 @@ void RebalanceExecutor::ReportFailure(const master::RebalanceTaskPb &task,
     ExecutionStats stats;
     stats.failureSide = failureSide;
     stats.failedReason = reason;
-    ReportResult(task, stats);
+    master::ReportRebalanceResultRspPb rsp;
+    ReportResult(task, stats, rsp);
 }
 
-void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats)
+void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats,
+                                     master::ReportRebalanceResultRspPb &rspOut)
 {
     master::ReportRebalanceResultReqPb req;
-    master::ReportRebalanceResultRspPb rsp;
     req.set_task_id(task.task_id());
     req.set_source_worker(localAddress_.ToString());
     req.set_target_worker(task.target_worker());
@@ -499,14 +543,20 @@ void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, const 
     req.set_failed_objects(stats.failedObjects);
     req.set_failed_reason(stats.failedReason);
     req.set_failure_side(stats.failureSide);
+    // Fresh per-batch feedback for master's next-batch decision. target_remain_bytes uses
+    // UINT64_MAX as the "no batch sent" sentinel.
+    req.set_target_remain_bytes(stats.targetRemainBytes);
 #ifdef WITH_TESTS
     if (reportHook_ != nullptr) {
-        reportHook_(req);
+        reportHook_(req, rspOut);
         return;
     }
 #endif
 
     for (int i = 0; i < REPORT_RESULT_RETRY_TIMES; ++i) {
+        if (IsExitRequested()) {
+            break;
+        }
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
         auto rc = GetWorkerMasterApi(workerMasterApi);
         if (rc.IsError()) {
@@ -516,12 +566,13 @@ void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, const 
             continue;
         }
 
-        rc = workerMasterApi->ReportRebalanceResult(req, rsp);
+        rc = workerMasterApi->ReportRebalanceResult(req, rspOut);
         if (rc.IsOk()) {
             return;
         }
         LOG(WARNING) << FormatString("Report rebalance result failed, taskId: %s, retry: %d, rc: %s", task.task_id(),
                                      i, rc.ToString());
+        rspOut.Clear();  // a failed attempt may have left partial data; start clean next try
         std::this_thread::sleep_for(std::chrono::milliseconds(REPORT_RESULT_RETRY_INTERVAL_MS));
     }
     LOG(ERROR) << FormatString(
