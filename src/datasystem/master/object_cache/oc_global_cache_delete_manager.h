@@ -28,6 +28,8 @@
 
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/l2cache/l2_storage.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
@@ -150,7 +152,7 @@ public:
      */
     size_t GetDeletingObjectCount()
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        std::shared_lock<SharedMutex> lck(mutex_);
         return deleteIds_.size();
     }
 
@@ -205,7 +207,7 @@ private:
     const int SEND_DELETE_L2CACHE_TIME_MS = 100;  // Time interval between two delete l2cache object.
     WaitPost cvLock_;                             // Wait to send cache update to worker.
     std::unique_ptr<Thread> thread_{ nullptr };
-    std::shared_timed_mutex mutex_;  // For deleteIds_ and deleteFailedIds_.
+    SharedMutex mutex_;  // For deleteIds_ and deleteFailedIds_.
     std::mutex apiMutex_;
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };
     // The table deleteIds_ is used to store objects ready to be deleted, and another asynchronous thread polls and
