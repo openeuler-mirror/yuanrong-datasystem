@@ -20,6 +20,7 @@
 #include "datasystem/worker/object_cache/object_kv.h"
 
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
@@ -138,7 +139,7 @@ Status TryLockWithRetry(const std::string &objectKey, const std::shared_ptr<Safe
             static_cast<int32_t>(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()));
         int sleepMs = std::min<int>(t, std::max<int>(0, apiRemainingMs));
         if (sleepMs > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+            SleepCurrentFor(std::chrono::milliseconds(sleepMs));
             totalRetryMs += sleepMs;
         }
         retryCount++;
