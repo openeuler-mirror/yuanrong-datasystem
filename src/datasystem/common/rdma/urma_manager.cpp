@@ -79,6 +79,8 @@ constexpr size_t URMA_CHIP_INFLIGHT_LOG_BUFFER_SIZE = 160;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_MIN = 1;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_COUNT = 2;
 constexpr uint64_t URMA_RECOVERY_PROBE_SEGMENT_SIZE = 4096;
+constexpr uint64_t URMA_FIRST_WRITE_CHUNK_INDEX = 1;
+constexpr uint64_t URMA_SECOND_WRITE_CHUNK_INDEX = 2;
 constexpr const char *URMA_ELAPSED_TOTAL_SUGGEST =
     "check whether URMA_ELAPSED_THREAD_SHED/URMA_ELAPSED_POLL_JFC/URMA_ELAPSED_NOTIFY logs appear in the "
     "same time window; if none appear, check URMA and UDMA";
@@ -1084,10 +1086,17 @@ uint8_t UrmaManager::GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNum
 
 void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                              uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
-                                             uint64_t wakeSchedLatencyUs, const Status &waitRc) const
+                                             uint64_t wakeSchedLatencyUs, uint64_t completionObservationLatencyUs,
+                                             uint64_t eventProcessingAndWaitLatencyUs, const Status &waitRc) const
 {
     auto config = GetServerLatencyTraceConfig();
     const auto trace = event->GetWriteTrace();
+    const char *wakeSchedMetricName = "urmaWriteWakeSchedLatencyUs";
+    if (trace.writeChunkIndex == URMA_FIRST_WRITE_CHUNK_INDEX) {
+        wakeSchedMetricName = "firstUrmaWriteWakeSchedLatencyUs";
+    } else if (trace.writeChunkIndex == URMA_SECOND_WRITE_CHUNK_INDEX) {
+        wakeSchedMetricName = "secondUrmaWriteWakeSchedLatencyUs";
+    }
     SLOW_LOG_IF_OR_VLOG(
         INFO, (config.rpcSlowerThanUs > 0 && totalElapsedUs >= config.rpcSlowerThanUs) || FLAGS_enable_perf_trace_log,
         1,
@@ -1096,13 +1105,22 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
             << "ms, wait bthread completion time(bthread::ConditionVariable.wait_for): " << waitElapsedMs
             << "ms, request id:" << requestId << ", src address:" << localUrmaInfo_.localAddress.ToString()
             << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
+            << ", writeChunkIndex:" << trace.writeChunkIndex << ", writeChunkCount:" << trace.writeChunkCount
             << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
-            << ", urma_inflight_wr_count: " << tbbEventMap_.size() << ", wakeSchedLatencyUs:" << wakeSchedLatencyUs
+            << ", urma_inflight_wr_count: " << tbbEventMap_.size()
+            << ", " << wakeSchedMetricName << ":" << wakeSchedLatencyUs
+            << ", completionObservationLatencyUs:" << completionObservationLatencyUs
+            << ", urmaEventProcessingAndWaitLatencyUs:" << eventProcessingAndWaitLatencyUs
             << ", srcChipInflight:" << GetSrcChipInflightWrCountsString()
             << ", trace_us:{post:" << trace.postUs << ", wait:" << trace.waitUs
             << ", poll_begin:" << trace.pollBeginUs << ", sleep_start:" << trace.sleepStartUs
             << ", sleep_end:" << trace.sleepEndUs
             << ", poll_end:" << trace.pollEndUs << ", notify:" << trace.notifyUs << ", awake:" << trace.awakeUs
+            << ", observed:" << trace.observedUs
+            << ", waited_for_notification:" << trace.waitedForNotification
+            << ", pre_completed_before_wait:" << trace.preCompletedBeforeWait
+            << ", woken_by_previous_event:" << trace.wokenByPreviousEvent
+            << ", event_processing_and_wait_latency_valid:" << trace.eventProcessingAndWaitLatencyValid
             << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST);
 }
 
@@ -1122,7 +1140,8 @@ Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::s
 }
 
 Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
-                                     const std::shared_ptr<UrmaEvent> &event, UrmaWriteFailure *failure)
+                                     const std::shared_ptr<UrmaEvent> &event, UrmaWriteFailure *failure,
+                                     UrmaSequentialWaitContext *waitContext)
 {
     auto scheduleTimedOutLane = [this, requestId, &event]() {
         auto laneLease = event->GetLaneLease().lock();
@@ -1153,13 +1172,17 @@ Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
     Timer waitTimer;
     event->SetWriteWaitTimeUs(waitTimer.GetStartTimeStampUs());
-    Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
+    Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs), waitContext);
     waitTimer.Stop();
     const auto endWaitTimeUs = waitTimer.GetEndTimeStampUs();
     constexpr double US_TO_MS = 1000.0;
     auto totalElapsedUs = endWaitTimeUs - event->GetCreateTimeUs();
     auto wakeSchedLatencyUs = event->GetWakeSchedLatencyUs();
-    auto urmaElapsedUs = totalElapsedUs >= wakeSchedLatencyUs ? totalElapsedUs - wakeSchedLatencyUs : 0;
+    auto completionObservationLatencyUs = event->GetCompletionObservationLatencyUs();
+    auto eventProcessingAndWaitLatencyUs = event->GetEventProcessingAndWaitLatencyUs();
+    auto urmaElapsedUs = totalElapsedUs >= completionObservationLatencyUs
+                             ? totalElapsedUs - completionObservationLatencyUs
+                             : 0;
     auto totalElapsedMs = static_cast<double>(urmaElapsedUs) / US_TO_MS;
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
     auto waitElapsedMs = waitTimer.ElapsedMicroSecond() / US_TO_MS;
@@ -1172,7 +1195,7 @@ Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
         return CreateUrmaWaitTimeoutStatus(requestId, event, totalElapsedMs, waitRc.GetMsg());
     }
     LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, waitElapsedMs, wakeSchedLatencyUs,
-                               waitRc);
+                               completionObservationLatencyUs, eventProcessingAndWaitLatencyUs, waitRc);
     if (event->IsFailed() && failure != nullptr) {
         const int cqeStatus = event->GetStatusCode();
         if (!failure->cqeStatus.has_value() || cqeStatus == URMA_PORT_UNAVAILABLE_STATUS) {
@@ -1184,7 +1207,8 @@ Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
     return Status::OK();
 }
 
-Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs, UrmaWriteFailure *failure)
+Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs, UrmaWriteFailure *failure,
+                                 UrmaSequentialWaitContext *waitContext)
 {
     PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
     // This legacy injection models a wait call that fails before it obtains an event.
@@ -1202,7 +1226,7 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs, UrmaWrit
     // wait until timeout
 
     Raii deleteEvent([this, &requestId]() { DeleteEvent(requestId); });
-    RETURN_IF_NOT_OK(WaitForUrmaEvent(requestId, timeoutMs, event, failure));
+    RETURN_IF_NOT_OK(WaitForUrmaEvent(requestId, timeoutMs, event, failure, waitContext));
     RETURN_IF_NOT_OK(HandleUrmaEvent(requestId, event));
     return Status::OK();
 }
@@ -1699,6 +1723,10 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
 
     uint64_t writtenSize = 0;
     uint64_t remainSize = args.size;
+    const uint64_t maxWriteSize = urmaResource_->GetMaxWriteSize();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(maxWriteSize > 0, K_RUNTIME_ERROR, "URMA max write size is zero");
+    const uint64_t writeChunkCount = args.size / maxWriteSize + (args.size % maxWriteSize == 0 ? 0 : 1);
+    uint64_t writeChunkIndex = 0;
     Timer timer;
     std::shared_ptr<UrmaJetty> jetty;
     urma_target_jetty_t *targetJetty = nullptr;
@@ -1752,7 +1780,8 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     };
     auto *srcChipInflightCounter = GetSrcChipInflightWrCounter(srcChipId);
     while (remainSize > 0) {
-        const uint64_t writeSize = std::min(remainSize, urmaResource_->GetMaxWriteSize());
+        const uint64_t writeSize = std::min(remainSize, maxWriteSize);
+        ++writeChunkIndex;
         const uint64_t key = GenerateReqId();
         const uint64_t remoteAddress = args.remoteDataAddress + writtenSize;
         const uint64_t localAddress = args.localDataAddress + writtenSize;
@@ -1781,6 +1810,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             cleanupSubmittedEvents();
             return createRc;
         }
+        event->SetWriteChunkInfo(writeChunkIndex, writeChunkCount);
         laneLease->AddWr();
         urma_status_t ret;
         Timer t;

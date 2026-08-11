@@ -250,7 +250,8 @@ def test_urma_total_parser_accepts_evolved_field_aliases(tmp_path):
         f"WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | "
         "[URMA_ELAPSED_TOTAL] total cost 0.194ms, osSchedWaitMs: 0.168ms, reqId=489060, "
         "source address:src-worker-address, dst address:dst-worker-address, payloadSize=4194304, "
-        "cpuId=6, statusCode=OK, inflightWrCount=4, wake_sched_latency_us=6, chipInflight:{2:4}\n",
+        "cpuId=6, statusCode=OK, inflightWrCount=4, secondUrmaWriteWakeSchedLatencyUs=6, "
+        "chipInflight:{2:4}\n",
         encoding="utf-8",
     )
 
@@ -268,11 +269,70 @@ def test_urma_total_parser_accepts_evolved_field_aliases(tmp_path):
     assert event["wait_os_sched_ms"] == 0.168
     assert event["urma_inflight_wr_count"] == 4
     assert event["wake_sched_latency_us"] == 6
+    assert event["wake_sched_kind"] == "second_write"
+    assert event["wake_sched_is_actual"] is True
     assert event["src_chip_inflight"] == "{2:4}"
     lifecycle = report["dimensions"]["ub_lifecycle_summary"]
     assert lifecycle["metrics"]["wait_os_sched_ms"]["p99"] == 0.168
     assert lifecycle["metrics"]["wake_sched_latency_ms"]["p99"] == 0.006
     assert lifecycle["chip_inflight"]["2"]["p99"] == 4
+
+
+def test_urma_multi_write_metrics_preserve_identity_and_exclude_inherited_wake(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820021"
+    log = tmp_path / "urma-multi-write.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T10:00:00.000000 | INFO | worker | kvdataworker-0-worker2 | 1 | {trace_id} | "
+                "[URMA_ELAPSED_TOTAL] total cost 4.000ms, request id:100, dataSize:4194304, "
+                "writeChunkIndex:1, writeChunkCount:2, firstUrmaWriteWakeSchedLatencyUs:200, "
+                "completionObservationLatencyUs:200, urmaEventProcessingAndWaitLatencyUs:0, "
+                "trace_us:{waited_for_notification:1, pre_completed_before_wait:0, "
+                "woken_by_previous_event:0, event_processing_and_wait_latency_valid:0}",
+                f"2026-07-20T10:00:00.001000 | INFO | worker | kvdataworker-0-worker2 | 1 | {trace_id} | "
+                "[URMA_ELAPSED_TOTAL] total cost 3.000ms, request id:101, dataSize:4194304, "
+                "writeChunkIndex:2, writeChunkCount:2, secondUrmaWriteWakeSchedLatencyUs:200, "
+                "completionObservationLatencyUs:5000, urmaEventProcessingAndWaitLatencyUs:4800, "
+                "trace_us:{waited_for_notification:0, pre_completed_before_wait:1, "
+                "woken_by_previous_event:1, event_processing_and_wait_latency_valid:1}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+    events = report["traces"][trace_id]["ub_events"]
+    first, second = (event for event in events if event["event_type"] == "total")
+
+    assert first["write_chunk_index"] == 1
+    assert first["write_chunk_count"] == 2
+    assert first["wake_sched_kind"] == "first_write"
+    assert first["wake_sched_is_actual"] is True
+    assert first["wake_sched_inherited"] is False
+    assert second["write_chunk_index"] == 2
+    assert second["wake_sched_kind"] == "second_write"
+    assert second["wake_sched_is_actual"] is False
+    assert second["wake_sched_inherited"] is True
+    assert second["pre_completed_before_wait"] is True
+    assert second["completion_observation_latency_us"] == 5000
+    assert second["event_processing_and_wait_latency_us"] == 4800
+
+    metrics = report["dimensions"]["ub_lifecycle_summary"]["metrics"]
+    assert metrics["wake_sched_latency_ms"]["count"] == 1
+    assert metrics["wake_sched_latency_ms"]["p99"] == 0.2
+    assert metrics["first_write_wake_sched_latency_ms"]["p99"] == 0.2
+    assert metrics["second_write_wake_sched_latency_ms"]["p99"] == 0.2
+    assert metrics["inherited_wake_sched_latency_ms"]["p99"] == 0.2
+    assert metrics["completion_observation_latency_ms"]["count"] == 2
+    assert metrics["completion_observation_latency_ms"]["p99"] == 5.0
+    assert metrics["event_processing_and_wait_latency_ms"]["count"] == 1
+    assert metrics["event_processing_and_wait_latency_ms"]["p99"] == 4.8
+    requests = report["dimensions"]["ub_lifecycle_summary"]["requests"]
+    second_request = next(item for item in requests if item["request_id"] == "101")
+    assert second_request["reported_wake_sched_latency_ms"] == 0.2
+    assert second_request["wake_sched_latency_ms"] is None
 
 
 def test_rpc_max_concurrency_errors_are_classified_by_worker_and_time(tmp_path):

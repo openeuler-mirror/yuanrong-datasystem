@@ -141,7 +141,12 @@ CPUID_RE = re.compile(r"cpuid:\s*(\d+)", re.I)
 STATUS_RE = re.compile(r"status:\s*([^,]+)", re.I)
 WAIT_OS_RE = re.compile(r"wait os sched.*?:\s*([\d.]+)ms", re.I)
 INFLIGHT_WR_RE = re.compile(r"urma_inflight_wr_count:\s*(\d+)", re.I)
-WAKE_SCHED_RE = re.compile(r"wakeSchedLatencyUs:\s*([\d.]+)", re.I)
+FIRST_WRITE_WAKE_SCHED_RE = re.compile(r"\bfirstUrmaWriteWakeSchedLatencyUs[:=]\s*([\d.]+)", re.I)
+SECOND_WRITE_WAKE_SCHED_RE = re.compile(r"\bsecondUrmaWriteWakeSchedLatencyUs[:=]\s*([\d.]+)", re.I)
+WRITE_WAKE_SCHED_RE = re.compile(r"\burmaWriteWakeSchedLatencyUs[:=]\s*([\d.]+)", re.I)
+LEGACY_WAKE_SCHED_RE = re.compile(
+    r"\b(?:wakeSchedLatencyUs|wake_sched_latency_us|wakeLatencyUs)[:=]\s*([\d.]+)", re.I
+)
 SRC_CHIP_INFLIGHT_RE = re.compile(r"srcChipInflight:\s*(\{[^}]*\})", re.I)
 SLEEP_TARGET_RE = re.compile(r"nanosleep\(([\d.]+)us\)", re.I)
 TRANSFER_PATH_RE = re.compile(r"(?:transferPath|path):\s*(UB|RDMA|TCP)\b", re.I)
@@ -262,17 +267,39 @@ class UrmaFieldParser:
             INFLIGHT_WR_RE,
             re.compile(r"\b(?:urma_inflight_wr_count|inflightWrCount|wrInflightCount)[:=]\s*(\d+)", re.I),
         ],
+        "write_chunk_index": [re.compile(r"\bwriteChunkIndex[:=]\s*(\d+)", re.I)],
+        "write_chunk_count": [re.compile(r"\bwriteChunkCount[:=]\s*(\d+)", re.I)],
     }
     FLOAT_FIELDS = {
         "wait_os_sched_ms": [
             WAIT_OS_RE,
             re.compile(r"\b(?:osSchedWaitMs|waitForMs|wait_for_ms)[:=]\s*([\d.]+)\s*ms?", re.I),
         ],
-        "wake_sched_latency_us": [
-            WAKE_SCHED_RE,
-            re.compile(r"\b(?:wakeSchedLatencyUs|wake_sched_latency_us|wakeLatencyUs)[:=]\s*([\d.]+)", re.I),
+        "completion_observation_latency_us": [
+            re.compile(r"\bcompletionObservationLatencyUs[:=]\s*([\d.]+)", re.I)
+        ],
+        "event_processing_and_wait_latency_us": [
+            re.compile(r"\burmaEventProcessingAndWaitLatencyUs[:=]\s*([\d.]+)", re.I)
         ],
     }
+    BOOL_FIELDS = {
+        "waited_for_notification": [re.compile(r"\bwaited_for_notification[:=]\s*(true|false|0|1)", re.I)],
+        "pre_completed_before_wait": [
+            re.compile(r"\bpre_completed_before_wait[:=]\s*(true|false|0|1)", re.I)
+        ],
+        "woken_by_previous_event": [
+            re.compile(r"\bwoken_by_previous_event[:=]\s*(true|false|0|1)", re.I)
+        ],
+        "event_processing_and_wait_latency_valid": [
+            re.compile(r"\bevent_processing_and_wait_latency_valid[:=]\s*(true|false|0|1)", re.I)
+        ],
+    }
+    WAKE_SCHED_FIELDS = (
+        ("first_write", FIRST_WRITE_WAKE_SCHED_RE),
+        ("second_write", SECOND_WRITE_WAKE_SCHED_RE),
+        ("write", WRITE_WAKE_SCHED_RE),
+        ("legacy", LEGACY_WAKE_SCHED_RE),
+    )
 
     def enrich_base_event(self, event, line):
         for field, regexes in self.STRING_FIELDS.items():
@@ -291,6 +318,21 @@ class UrmaFieldParser:
             value = self._float(regexes, line)
             if value is not None:
                 event[field] = value
+        for field, regexes in self.BOOL_FIELDS.items():
+            value = self._bool(regexes, line)
+            if value is not None:
+                event[field] = value
+        for kind, regex in self.WAKE_SCHED_FIELDS:
+            value = self._float([regex], line)
+            if value is not None:
+                event["wake_sched_latency_us"] = value
+                event["wake_sched_kind"] = kind
+                break
+        if event.get("wake_sched_latency_us") is not None:
+            event["wake_sched_inherited"] = bool(event.get("woken_by_previous_event", False))
+            event["wake_sched_is_actual"] = (
+                not event["wake_sched_inherited"] and event.get("waited_for_notification") is not False
+            )
         return event
 
     @staticmethod
@@ -313,6 +355,13 @@ class UrmaFieldParser:
     def _float(regexes, line):
         raw = UrmaFieldParser._first(regexes, line)
         return float(raw) if raw is not None else None
+
+    @staticmethod
+    def _bool(regexes, line):
+        raw = UrmaFieldParser._first(regexes, line)
+        if raw is None:
+            return None
+        return raw.lower() in ("1", "true")
 
 
 URMA_FIELDS = UrmaFieldParser()
@@ -2082,9 +2131,18 @@ def _build_ub_lifecycle_summary(trace_rows):
             "src_chip_inflight": event.get("src_chip_inflight") or "",
             "urma_inflight_wr_count": event.get("urma_inflight_wr_count"),
             "remote_get_wr_count": event.get("inflight_remote_get"),
+            "write_chunk_index": event.get("write_chunk_index"),
+            "write_chunk_count": event.get("write_chunk_count"),
+            "wake_sched_kind": event.get("wake_sched_kind") or "",
+            "wake_sched_inherited": event.get("wake_sched_inherited"),
+            "waited_for_notification": event.get("waited_for_notification"),
+            "pre_completed_before_wait": event.get("pre_completed_before_wait"),
             "total_ms": None,
             "wait_os_sched_ms": None,
+            "reported_wake_sched_latency_ms": None,
             "wake_sched_latency_ms": None,
+            "completion_observation_latency_ms": None,
+            "event_processing_and_wait_latency_ms": None,
             "poll_jfc_ms": None,
             "notify_ms": None,
             "thread_sched_ms": None,
@@ -2100,12 +2158,18 @@ def _build_ub_lifecycle_summary(trace_rows):
                 row["last_ts"] = max(filter(None, [row["last_ts"], event["timestamp"]]))
             else:
                 row["last_ts"] = event["timestamp"]
-        for field in ("worker", "src_addr", "target_addr", "status", "src_chip_inflight"):
+        for field in ("worker", "src_addr", "target_addr", "status", "src_chip_inflight", "wake_sched_kind"):
             if event.get(field):
                 row[field] = event[field]
-        for field in ("data_size", "cpuid", "urma_inflight_wr_count", "inflight_remote_get"):
+        for field in (
+            "data_size", "cpuid", "urma_inflight_wr_count", "inflight_remote_get", "write_chunk_index",
+            "write_chunk_count",
+        ):
             if event.get(field) is not None:
                 row["remote_get_wr_count" if field == "inflight_remote_get" else field] = event[field]
+        for field in ("wake_sched_inherited", "waited_for_notification", "pre_completed_before_wait"):
+            if event.get(field) is not None:
+                row[field] = event[field]
         return row
 
     def update_max(row, field, value):
@@ -2127,14 +2191,32 @@ def _build_ub_lifecycle_summary(trace_rows):
                 _add_lifecycle_metric(metrics, "urma_inflight_wr_count", event.get("urma_inflight_wr_count"))
                 for chip, value in _parse_chip_inflight(event.get("src_chip_inflight")).items():
                     chip_inflight[chip].append(value)
-                if event.get("wake_sched_latency_us") is not None:
-                    _add_lifecycle_metric(metrics, "wake_sched_latency_ms", event["wake_sched_latency_us"] / 1000.0)
                 row = request_row(trace_id, event)
                 update_max(row, "total_ms", event.get("cost_ms"))
                 update_max(row, "wait_os_sched_ms", event.get("wait_os_sched_ms"))
                 update_max(row, "urma_inflight_wr_count", event.get("urma_inflight_wr_count"))
-                if event.get("wake_sched_latency_us") is not None:
-                    update_max(row, "wake_sched_latency_ms", event["wake_sched_latency_us"] / 1000.0)
+                wake_sched_latency_us = event.get("wake_sched_latency_us")
+                if wake_sched_latency_us is not None:
+                    wake_sched_latency_ms = wake_sched_latency_us / 1000.0
+                    update_max(row, "reported_wake_sched_latency_ms", wake_sched_latency_ms)
+                    wake_kind = event.get("wake_sched_kind")
+                    if wake_kind:
+                        _add_lifecycle_metric(metrics, f"{wake_kind}_wake_sched_latency_ms", wake_sched_latency_ms)
+                    if event.get("wake_sched_inherited"):
+                        _add_lifecycle_metric(metrics, "inherited_wake_sched_latency_ms", wake_sched_latency_ms)
+                    if event.get("wake_sched_is_actual", True):
+                        _add_lifecycle_metric(metrics, "wake_sched_latency_ms", wake_sched_latency_ms)
+                        update_max(row, "wake_sched_latency_ms", wake_sched_latency_ms)
+                completion_observation_us = event.get("completion_observation_latency_us")
+                if completion_observation_us is not None:
+                    completion_observation_ms = completion_observation_us / 1000.0
+                    _add_lifecycle_metric(metrics, "completion_observation_latency_ms", completion_observation_ms)
+                    update_max(row, "completion_observation_latency_ms", completion_observation_ms)
+                event_processing_us = event.get("event_processing_and_wait_latency_us")
+                if event_processing_us is not None and event.get("event_processing_and_wait_latency_valid") is True:
+                    event_processing_ms = event_processing_us / 1000.0
+                    _add_lifecycle_metric(metrics, "event_processing_and_wait_latency_ms", event_processing_ms)
+                    update_max(row, "event_processing_and_wait_latency_ms", event_processing_ms)
                 continue
             if event_type == "poll_jfc":
                 _add_lifecycle_metric(metrics, "poll_jfc_ms", event.get("cost_ms"))
@@ -2164,6 +2246,8 @@ def _build_ub_lifecycle_summary(trace_rows):
         score_fields = (
             "total_ms",
             "wait_os_sched_ms",
+            "completion_observation_latency_ms",
+            "event_processing_and_wait_latency_ms",
             "poll_loop_gap_ms",
             "nanosleep_wake_ms",
             "poll_jfc_ms",
@@ -2172,7 +2256,9 @@ def _build_ub_lifecycle_summary(trace_rows):
         score_values = [float(row.get(field) or 0) for field in score_fields]
         row["score_ms"] = max(score_values)
         for field in (
-            "total_ms", "wait_os_sched_ms", "wake_sched_latency_ms", "poll_jfc_ms", "notify_ms",
+            "total_ms", "wait_os_sched_ms", "reported_wake_sched_latency_ms", "wake_sched_latency_ms",
+            "completion_observation_latency_ms",
+            "event_processing_and_wait_latency_ms", "poll_jfc_ms", "notify_ms",
             "thread_sched_ms", "poll_loop_gap_ms", "nanosleep_wake_ms", "remote_get_wr_count",
             "urma_inflight_wr_count", "score_ms",
         ):
@@ -4000,7 +4086,9 @@ def _render_html(report, title, site=False, manifest=None):
     """failed|error_code=2004|max_concurrency)\\b/gi, '<span class="log-tag log-error">$1</span>')"""
     "\n"
     """      .replace(/(\\[?URMA_ELAPSED_(?:TOTAL|POLL_JFC|NOTIFY|THREAD_SHED)\\]?|URMA_WAIT_TIMEOUT|urma_[a-z_]+"""
-    """|wait os sched[^:,]*?(?:\\([^)]*\\))?:\\s*[\\d.]+ms|wakeSchedLatencyUs:\\s*[\\d.]+|srcChipInflight:\\s*\\{"""
+    """|wait os sched[^:,]*?(?:\\([^)]*\\))?:\\s*[\\d.]+ms"""
+    """|(?:firstUrmaWrite|secondUrmaWrite|urmaWrite)?WakeSchedLatencyUs:\\s*[\\d.]+"""
+    """|srcChipInflight:\\s*\\{"""
     """[^}]*\\}|request id[:=]?\\s*\\d+|src address:\\s*[^,\\s]+|target """
     """address:\\s*[^,\\s]+|dataSize[:=]?\\s*\\d+|cpuid[:=]?\\s*\\d+|inflight[_a-z]*[:=]?\\s*\\d+)/gi, '<span """
     """class="log-tag log-urma">$1</span>')"""
@@ -4160,8 +4248,9 @@ def _render_html(report, title, site=False, manifest=None):
     """    };"""
     "\n"
     """    for (const match of """
-    """text.matchAll(/\\b(costUs|cost|totalCost|framework_us|e2e_us|server_exec_us|network_residual_us|remote_pro"""
-    """cessing_us|wakeSchedLatencyUs)[:=]?\\s*([\\d.]+)\\s*(us|ms)?/gi)) {"""
+    """text.matchAll(/\\b(costUs|cost|totalCost|framework_us|e2e_us|server_exec_us|network_residual_us"""
+    """|remote_processing_us|(?:firstUrmaWrite|secondUrmaWrite|urmaWrite)?WakeSchedLatencyUs)"""
+    """[:=]?\\s*([\\d.]+)\\s*(us|ms)?/gi)) {"""
     "\n"
     """      add(match[1], match[2], match[3] || '');"""
     "\n"
@@ -5318,7 +5407,21 @@ def _render_html(report, title, site=False, manifest=None):
     "\n"
     """      'wait_os_sched_ms':'wait_for',"""
     "\n"
-    """      'wake_sched_latency_ms':'wake sched',"""
+    """      'wake_sched_latency_ms':'actual wake sched',"""
+    "\n"
+    """      'first_write_wake_sched_latency_ms':'first write reported wake',"""
+    "\n"
+    """      'second_write_wake_sched_latency_ms':'second write reported wake',"""
+    "\n"
+    """      'write_wake_sched_latency_ms':'write reported wake',"""
+    "\n"
+    """      'legacy_wake_sched_latency_ms':'legacy wake sched',"""
+    "\n"
+    """      'inherited_wake_sched_latency_ms':'inherited wake display',"""
+    "\n"
+    """      'completion_observation_latency_ms':'completion observation',"""
+    "\n"
+    """      'event_processing_and_wait_latency_ms':'event processing and wait',"""
     "\n"
     """      'poll_jfc_ms':'poll_jfc',"""
     "\n"
@@ -5364,8 +5467,10 @@ def _render_html(report, title, site=False, manifest=None):
     "\n"
     """    renderPagedTable('ub-request-table', 'ub-request-table-pager',"""
     "\n"
-    """      ['time','trace','request','worker','total ms','wait ms','wake ms','remote wr','urma wr','poll """
-    """ms','notify ms','sched ms','edge','cpuid','data size','status','chip inflight'],"""
+    """      ['time','trace','request','worker','chunk','wake kind','reported wake ms','actual wake ms','inherited',"""
+    """'waited','precompleted',"""
+    """'observe ms','event process ms','total ms','wait ms','remote wr','urma wr','poll ms','notify ms','sched ms',"""
+    """'edge','cpuid','data size','status','chip inflight'],"""
     "\n"
     """      ubRequestRows.map(item => ["""
     "\n"
@@ -5377,11 +5482,27 @@ def _render_html(report, title, site=False, manifest=None):
     "\n"
     """        item.worker || '',"""
     "\n"
+    """        item.write_chunk_index ? `${item.write_chunk_index}/${item.write_chunk_count || '?'}` : '',"""
+    "\n"
+    """        item.wake_sched_kind || '',"""
+    "\n"
+    """        item.reported_wake_sched_latency_ms ?? '',"""
+    "\n"
+    """        item.wake_sched_latency_ms ?? '',"""
+    "\n"
+    """        item.wake_sched_inherited ?? '',"""
+    "\n"
+    """        item.waited_for_notification ?? '',"""
+    "\n"
+    """        item.pre_completed_before_wait ?? '',"""
+    "\n"
+    """        item.completion_observation_latency_ms ?? '',"""
+    "\n"
+    """        item.event_processing_and_wait_latency_ms ?? '',"""
+    "\n"
     """        item.total_ms ?? '',"""
     "\n"
     """        item.wait_os_sched_ms ?? '',"""
-    "\n"
-    """        item.wake_sched_latency_ms ?? '',"""
     "\n"
     """        item.remote_get_wr_count ?? '',"""
     "\n"
