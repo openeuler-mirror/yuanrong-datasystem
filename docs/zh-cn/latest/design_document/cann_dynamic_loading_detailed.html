@@ -1,0 +1,2443 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="API 参考" href="../api_reference/index.html"><link rel="prev" title="CANN 运行时依赖隔离概要设计" href="cann_dynamic_loading.html">
+        <link rel="prefetch" href="../_static/logo-small.png" as="image">
+
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+        <title>子模块：HIXL 动态加载（CANN 运行时依赖隔离） - openYuanrong datasystem documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  --color-brand-primary: #3498db;
+  --color-brand-content: #3498db;
+  --color-api-background: #f8f9fa;
+  --color-api-name: #2c3e50;
+  --color-api-pre-name: #2c3e50;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5dade2;
+  --color-brand-content: #5dade2;
+  --color-api-background: #2d3748;
+  --color-api-name: #e2e8f0;
+  --color-api-pre-name: #e2e8f0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5dade2;
+  --color-brand-content: #5dade2;
+  --color-api-background: #2d3748;
+  --color-api-name: #e2e8f0;
+  --color-api-pre-name: #e2e8f0;
+  
+      }
+    }
+  }
+</style>
+<style>
+/* 版本切换器样式 */
+.sidebar-version-switcher {
+  padding: 10px 15px;
+  border-top: 1px solid var(--color-sidebar-border);
+  border-bottom: 1px solid var(--color-sidebar-border);
+  background-color: var(--color-sidebar-background);
+}
+
+.sidebar-version-switcher-label {
+  font-size: 0.8em;
+  color: var(--color-sidebar-caption-text);
+  margin-bottom: 5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#version-selector {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--color-brand-primary);
+  border-radius: 4px;
+  background-color: var(--color-background-primary);
+  color: var(--color-brand-primary);
+  font-size: 0.9em;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+#version-selector:hover {
+  border-color: var(--color-brand-content);
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.3);
+}
+
+#version-selector:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.5);
+}
+</style>
+</head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">openYuanrong datasystem  documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+<div class="sidebar-brand">
+  <a class="sidebar-brand-text" href="../index.html">
+    
+      <img src="../_static/logo-small.png" class="sidebar-logo" alt="Logo">
+    
+  </a>
+  <a href="https://gitcode.com/openeuler/yuanrong-datasystem" target="_blank" class="sidebar-brand-name">openYuanrong datasystem</a>
+</div>
+
+<!-- Version Switcher in Sidebar -->
+<div class="sidebar-version-switcher">
+  <select id="version-selector" onchange="switchVersion(this.value)">
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/latest/">Latest</option>
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.7.0/">0.7.0</option>
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.6.0/">0.6.0</option>
+  </select>
+</div>
+
+<script>
+function switchVersion(url) {
+  if (url && url !== '#') {
+    // 获取当前页面路径，替换版本前缀
+    var currentPath = window.location.pathname;
+    var newUrl = url + currentPath.split('/').slice(5).join('/');
+    window.location.href = newUrl;
+  }
+}
+
+// 设置当前版本的选中状态
+document.addEventListener('DOMContentLoaded', function() {
+  var selector = document.getElementById('version-selector');
+  if (selector) {
+    var currentHref = window.location.href;
+    var options = selector.options;
+
+    for (var i = 0; i < options.length; i++) {
+      if (currentHref.includes(options[i].value)) {
+        selector.selectedIndex = i;
+        break;
+      }
+    }
+  }
+});
+</script>
+
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quick_start/quick_start.html">入门</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../installation/index.html">安装</a><input aria-label="Toggle navigation of 安装" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../installation/installation_linux.html">安装指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/cmake_build.html">基于Cmake自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/bazel_build.html">基于 Bazel 自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/build_for_bazel.html">Bazel二进制集成SDK</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../deployment/index.html">部署</a><input aria-label="Toggle navigation of 部署" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/deploy.html">部署指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/k8s_configuration.html">kubernetes部署配置项</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dsbench.html">dsbench性能测试工具</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../deployment/examples/index.html">示例</a><input aria-label="Toggle navigation of 示例" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../deployment/examples/deploy-glm5.1-on-a3-using-pd.html">在 Atlas 800 A3 上使用 PD 分离方式部署 GLM-5.1-w8a8</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><input aria-label="Toggle navigation of 最佳实践" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_reliabilty.html">可靠性最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_kvcache.html">vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" checked="" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cluster_management.html">集群管理</a></li>
+<li class="toctree-l2"><a class="reference internal" href="shm_get_fd_passing.html">同节点多 Worker SHM Get fd-passing 方案设计</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cann_dynamic_loading.html">CANN 运行时依赖隔离概要设计</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">子模块：HIXL 动态加载（CANN 运行时依赖隔离）</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../api_reference/index.html">API 参考</a><input aria-label="Toggle navigation of API 参考" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../api_reference/example/index.html">编程示例</a><input aria-label="Toggle navigation of 编程示例" class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" role="switch" type="checkbox"/><label for="toctree-checkbox-7"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/hetero.html">HeteroClient编程示例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/kv.html">KVClient编程示例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/object.html">ObjectClient编程示例</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../api_reference/api/index.html">API</a><input aria-label="Toggle navigation of API" class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" role="switch" type="checkbox"/><label for="toctree-checkbox-8"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/python/index.html">Python</a><input aria-label="Toggle navigation of Python" class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" role="switch" type="checkbox"/><label for="toctree-checkbox-9"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.html">yr.datasystem.DsClient</a><input aria-label="Toggle navigation of yr.datasystem.DsClient" class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" role="switch" type="checkbox"/><label for="toctree-checkbox-10"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.init.html">yr.datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.hetero.html">yr.datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.kv.html">yr.datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.object.html">yr.datasystem.DsClient.object</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.html">yr.datasystem.DsTensorClient</a><input aria-label="Toggle navigation of yr.datasystem.DsTensorClient" class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" role="switch" type="checkbox"/><label for="toctree-checkbox-11"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.init.html">yr.datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mset_d2h.html">yr.datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mget_h2d.html">yr.datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_mset_d2h.html">yr.datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_mget_h2d.html">yr.datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.html">yr.datasystem.hetero_client.HeteroClient</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.HeteroClient" class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" role="switch" type="checkbox"/><label for="toctree-checkbox-12"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.init.html">yr.datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory.html">yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.delete.html">yr.datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_publish.html">yr.datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_subscribe.html">yr.datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mset.html">yr.datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mget.html">yr.datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_local_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.generate_key.html">yr.datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.get_meta_info.html">yr.datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.batch_is_exist.html">yr.datasystem.hetero_client.HeteroClient.batch_is_exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.exist.html">yr.datasystem.hetero_client.HeteroClient.exist</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.html">yr.datasystem.hetero_client.Blob</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.Blob" class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" role="switch" type="checkbox"/><label for="toctree-checkbox-13"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.set_dev_ptr.html">yr.datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.set_size.html">yr.datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.html">yr.datasystem.hetero_client.DeviceBlobList</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.DeviceBlobList" class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" role="switch" type="checkbox"/><label for="toctree-checkbox-14"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.append_blob.html">yr.datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.get_blob_list.html">yr.datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Future.html">yr.datasystem.hetero_client.Future</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.Future" class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" role="switch" type="checkbox"/><label for="toctree-checkbox-15"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Future.get.html">yr.datasystem.hetero_client.Future.get</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.MetaInfo.html">yr.datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.html">yr.datasystem.kv_client.KVClient</a><input aria-label="Toggle navigation of yr.datasystem.kv_client.KVClient" class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" role="switch" type="checkbox"/><label for="toctree-checkbox-16"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.init.html">yr.datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.set.html">yr.datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.set_value.html">yr.datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mset.html">yr.datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mcreate.html">yr.datasystem.kv_client.KVClient.mcreate</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mset_buffer.html">yr.datasystem.kv_client.KVClient.mset_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mget_buffer.html">yr.datasystem.kv_client.KVClient.get_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.msettx.html">yr.datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.get_read_only_buffers.html">yr.datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.get.html">yr.datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.read.html">yr.datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.delete.html">yr.datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.generate_key.html">yr.datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.exist.html">yr.datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.expire.html">yr.datasystem.kv_client.KVClient.expire</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.health_check.html">yr.datasystem.kv_client.KVClient.health_check</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.html">yr.datasystem.kv_client.ReadOnlyBuffer</a><input aria-label="Toggle navigation of yr.datasystem.kv_client.ReadOnlyBuffer" class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" role="switch" type="checkbox"/><label for="toctree-checkbox-17"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.rlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.SetParam.html">yr.datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadParam.html">yr.datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceAffinityPolicy.html">yr.datasystem.service_discovery.ServiceAffinityPolicy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceDiscoveryOptions.html">yr.datasystem.service_discovery.ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceDiscovery.html">yr.datasystem.service_discovery.ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions.html">yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.CoordinatorServiceDiscovery.html">yr.datasystem.service_discovery.CoordinatorServiceDiscovery</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><input aria-label="Toggle navigation of yr.datasystem.object_client.ObjectClient" class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" role="switch" type="checkbox"/><label for="toctree-checkbox-18"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.init.html">yr.datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.create.html">yr.datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.put.html">yr.datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.get.html">yr.datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.g_increase_ref.html">yr.datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.g_decrease_ref.html">yr.datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.query_global_ref_num.html">yr.datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.generate_object_id.html">yr.datasystem.object_client.ObjectClient.generate_object_id</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.html">yr.datasystem.object_client.Buffer</a><input aria-label="Toggle navigation of yr.datasystem.object_client.Buffer" class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" role="switch" type="checkbox"/><label for="toctree-checkbox-19"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.wlatch.html">yr.datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.unwlatch.html">yr.datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.rlatch.html">yr.datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.unrlatch.html">yr.datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.mutable_data.html">yr.datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.immutable_data.html">yr.datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.memory_copy.html">yr.datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.publish.html">yr.datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.seal.html">yr.datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.invalidate_buffer.html">yr.datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.get_size.html">yr.datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ConsistencyType.html">yr.datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.WriteMode.html">yr.datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.CacheType.html">yr.datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.html">yr.datasystem.stream_client.StreamClient</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.StreamClient" class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" role="switch" type="checkbox"/><label for="toctree-checkbox-20"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.init.html">yr.datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.create_producer.html">yr.datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.subscribe.html">yr.datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.delete_stream.html">yr.datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.query_global_producer_num.html">yr.datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.query_global_consumer_num.html">yr.datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.html">yr.datasystem.stream_client.Producer</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.Producer" class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" role="switch" type="checkbox"/><label for="toctree-checkbox-21"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.send.html">yr.datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.close.html">yr.datasystem.stream_client.Producer.close</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.html">yr.datasystem.stream_client.Consumer</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.Consumer" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.receive.html">yr.datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.receive_any.html">yr.datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.ack.html">yr.datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.close.html">yr.datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.SubconfigType.html">yr.datasystem.stream_client.SubconfigType</a></li>
+</ul>
+</li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClientConfig.html">KVClientConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-MSetParam.html">MSetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-SubscriptionType.html">SubscriptionType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Future.html">Future</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/IServiceDiscovery.html">IServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ICoordinatorDiscovery.html">ICoordinatorDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/CoordinatorServiceDiscovery.html">CoordinatorServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-CoordinatorServiceDiscoveryOptions.html">CoordinatorServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
+</ul>
+</li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.kv.KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.kv.SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.Context.html">Context</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.DataSystemException.html">DataSystemException</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.SubscriptionType.html">SubscriptionType</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/ai_development_workflow.html">AI 开发流程</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><input aria-label="Toggle navigation of 附录" class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" role="switch" type="checkbox"/><label for="toctree-checkbox-25"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem 日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/cluster_log_diagnosis_guide.html">集群日志定位指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/client_env_guide.html">Client环境变量</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/brpc_health_probe.html">brpc 健康探针与诊断接口</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/trace_triage_methodology.html">DataSystem 慢时延与错误 Trace 分析方法论</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section class="tex2jax_ignore mathjax_ignore" id="hixl-cann">
+<h1>子模块：HIXL 动态加载（CANN 运行时依赖隔离）<a class="headerlink" href="#hixl-cann" title="Link to this heading">¶</a></h1>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>属性</p></th>
+<th class="head"><p>值</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>创建</p></td>
+<td><p>2026-08-06（Issue #971 与概要设计）</p></td>
+</tr>
+<tr class="row-odd"><td><p>修改</p></td>
+<td><p>2026-08-06（初版完整详细设计）</p></td>
+</tr>
+<tr class="row-even"><td><p>阶段</p></td>
+<td><p>P1 ABI 与插件 / P2 构建分发 / P3 集成性能</p></td>
+</tr>
+<tr class="row-odd"><td><p>前置</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cann_dynamic_loading.md</span></code> / CANN HIXL 8.5.2+ / Remote H2D HCCS</p></td>
+</tr>
+<tr class="row-even"><td><p>源码基线</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">origin/master&#64;6b23deca</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>本文是《CANN 运行时依赖隔离概要设计》的子模块详细设计。设计范围限于 <code class="docutils literal notranslate"><span class="pre">libdatasystem.so</span></code>、Worker 主体、
+Common/RDMA/HIXL 及其 CMake、Bazel、SDK、Service、Python 分发链路；<code class="docutils literal notranslate"><span class="pre">transfer_engine</span></code> 不在范围内。</p>
+<section id="id1">
+<h2>1. 需求背景与目标<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<p>启用 HIXL/HCCS 后，<code class="docutils literal notranslate"><span class="pre">common_rdma</span></code> 将 HIXL C++ 实现和 <code class="docutils literal notranslate"><span class="pre">libascendcl.so</span></code>、<code class="docutils literal notranslate"><span class="pre">libcann_hixl.so</span></code>、
+<code class="docutils literal notranslate"><span class="pre">libmetadef.so</span></code> 一并传播到核心共享库。函数系统等不使用 NPU 的下游也必须满足 CANN 的链接和加载条件，
+而厂商 C++ 类型还进入了 <code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code> 的成员布局和热路径。</p>
+<p>本子模块将厂商实现隔离到按需加载的 <code class="docutils literal notranslate"><span class="pre">libds_hixl_plugin.so</span></code>，核心侧通过版本化 C ABI 调用插件，同时保持
+现有 HCCS 接口、语义、并发边界和性能基线。</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>#</p></th>
+<th class="head"><p>目标</p></th>
+<th class="head"><p>验收</p></th>
+<th class="head"><p>阶段</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>G1</p></td>
+<td><p>核心产物解除目标 CANN 加载依赖</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">libdatasystem.so</span></code> 与 Worker 主体的三个目标 <code class="docutils literal notranslate"><span class="pre">DT_NEEDED</span></code> 均为 0</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-odd"><td><p>G2</p></td>
+<td><p>HCCS 运行时按需加载</p></td>
+<td><p>未触发 NPU 时不访问插件或 CANN；首次 HCCS 初始化才加载</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-even"><td><p>G3</p></td>
+<td><p>厂商 C++ ABI 不进入核心</p></td>
+<td><p>核心源码、头文件和未定义符号均不含 <code class="docutils literal notranslate"><span class="pre">hixl::*</span></code>、<code class="docutils literal notranslate"><span class="pre">ge::*</span></code></p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-odd"><td><p>G4</p></td>
+<td><p>故障可诊断且初始化闭合</p></td>
+<td><p>缺插件、缺依赖、hash 失败、ABI 不兼容均返回确定状态且无资源残留</p></td>
+<td><p>P1、P3</p></td>
+</tr>
+<tr class="row-even"><td><p>G5</p></td>
+<td><p>HCCS 行为与性能稳定</p></td>
+<td><p>现有回归通过；P99 回退不超过 3%，吞吐下降不超过 3%，载荷额外复制为 0</p></td>
+<td><p>P3</p></td>
+</tr>
+<tr class="row-odd"><td><p>G6</p></td>
+<td><p>构建和分发语义一致</p></td>
+<td><p>CMake、Bazel、两套 C++ SDK、Service、Python 全部通过产物审计</p></td>
+<td><p>P2</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id2">
+<h2>2. 需求边界<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<p>本模块是核心 Remote H2D HCCS 逻辑与 CANN HIXL C++ 实现之间的运行时适配层，不改变用户业务 API 和
+远端传输协议。</p>
+<section id="id3">
+<h3>2.1 关键概念<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>概念</p></th>
+<th class="head"><p>定义</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>核心侧</p></td>
+<td><p>编入 <code class="docutils literal notranslate"><span class="pre">libdatasystem.so</span></code> 和 Worker 主体的加载器、ABI 头与 <code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>插件侧</p></td>
+<td><p>独立共享库 <code class="docutils literal notranslate"><span class="pre">libds_hixl_plugin.so</span></code> 及其 HIXL C++ 适配实现</p></td>
+</tr>
+<tr class="row-even"><td><p>ABI v1</p></td>
+<td><p>主体与插件共享的首版 C 函数表协议</p></td>
+</tr>
+<tr class="row-odd"><td><p>不透明句柄</p></td>
+<td><p>核心只保存和回传、不得解引用的 engine 或内存注册令牌</p></td>
+</tr>
+<tr class="row-even"><td><p>能力不可用</p></td>
+<td><p>插件、目标 CANN SO、入口或兼容 ABI 任一条件不满足</p></td>
+</tr>
+<tr class="row-odd"><td><p>核心产物审计集</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">libdatasystem.so</span></code> 与 Worker 主体共享库，不包含叶子插件和 <code class="docutils literal notranslate"><span class="pre">transfer_engine</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id4">
+<h3>2.2 做什么<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>端/组件</p></th>
+<th class="head"><p>职责</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>SDK 与 Worker 核心侧</p></td>
+<td><p>使用相同的 HIXL 加载器和 ABI；不链接目标 CANN SO</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code></p></td>
+<td><p>保留 HCCS 业务语义、输入校验、注册预算、错误上下文和现有锁边界</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">HixlPluginLoader</span></code></p></td>
+<td><p>固定路径定位、hash 校验、<code class="docutils literal notranslate"><span class="pre">dlopen</span></code>、入口解析、ABI 校验和结果缓存</p></td>
+</tr>
+<tr class="row-odd"><td><p>HIXL 插件</p></td>
+<td><p>封装 HIXL C++ 对象、类型转换、厂商调用、异常捕获和描述符缓冲</p></td>
+</tr>
+<tr class="row-even"><td><p>构建系统</p></td>
+<td><p>分离核心与插件目标，并生成与消费插件 hash</p></td>
+</tr>
+<tr class="row-odd"><td><p>打包系统</p></td>
+<td><p>将插件安装到每个核心主体同目录并保持 hash 对应关系</p></td>
+</tr>
+<tr class="row-even"><td><p>测试与流水线</p></td>
+<td><p>验证 ABI、错误分支、ELF 依赖、无 CANN 使用、HCCS 功能和性能</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id5">
+<h3>2.3 不做什么<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>事项</p></th>
+<th class="head"><p>归属</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">transfer_engine</span></code> 的 HIXL 动态加载</p></td>
+<td><p>独立后续设计</p></td>
+</tr>
+<tr class="row-odd"><td><p>无 CANN SDK 的 NPU 编译</p></td>
+<td><p>构建环境管理；<code class="docutils literal notranslate"><span class="pre">-X</span> <span class="pre">on</span></code> 仍要求 CANN SDK</p></td>
+</tr>
+<tr class="row-even"><td><p>ACL/HCCL/CUDA 插件重构</p></td>
+<td><p>既有设备插件模块</p></td>
+</tr>
+<tr class="row-odd"><td><p>HCCS 失败后自动切换 ROCE</p></td>
+<td><p>Remote H2D 策略语义，不在本次新增</p></td>
+</tr>
+<tr class="row-even"><td><p>修改公开 SDK、RPC 或 protobuf</p></td>
+<td><p>明确禁止</p></td>
+</tr>
+<tr class="row-odd"><td><p>支持运行中替换插件或补装 CANN 后热重试</p></td>
+<td><p><strong>P3+ 暂不实现</strong>；通过进程重启恢复</p></td>
+</tr>
+<tr class="row-even"><td><p>跨 Datasystem 发布版本混用主体与插件</p></td>
+<td><p>不支持；由 hash 与 ABI 双重拒绝</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="usecase">
+<h2>3. UseCase<a class="headerlink" href="#usecase" title="Link to this heading">¶</a></h2>
+<p>UseCase 仅将 Datasystem 视为黑盒，不描述内部 loader、transport 或插件。</p>
+<section id="npu">
+<h3>3.1 非 NPU 集成与部署<a class="headerlink" href="#npu" title="Link to this heading">¶</a></h3>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>flowchart LR
+    User[&quot;函数系统开发者或运维&quot;] --&gt;|链接或启动| DS[&quot;Datasystem 核心产物&quot;]
+    DS --&gt;|无 CANN 环境可用| User
+</pre></div>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>UseCase</p></th>
+<th class="head"><p>使用者</p></th>
+<th class="head"><p>场景</p></th>
+<th class="head"><p>需要什么</p></th>
+<th class="head"><p>设计响应</p></th>
+<th class="head"><p>验收</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>UC1</p></td>
+<td><p>下游开发者</p></td>
+<td><p>无 CANN 环境链接 SDK</p></td>
+<td><p>不引入 CANN 链接配置</p></td>
+<td><p>核心产物不声明目标 CANN <code class="docutils literal notranslate"><span class="pre">DT_NEEDED</span></code></p></td>
+<td><p>下游 CMake 链接和程序加载成功</p></td>
+</tr>
+<tr class="row-odd"><td><p>UC2</p></td>
+<td><p>部署运维</p></td>
+<td><p>无 CANN 节点启动非 NPU Worker</p></td>
+<td><p>同一发布包可用于普通节点</p></td>
+<td><p>未启用 NPU 时不加载可选能力</p></td>
+<td><p>Worker 启动和健康检查通过</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="hccs">
+<h3>3.2 正常 HCCS 使用<a class="headerlink" href="#hccs" title="Link to this heading">¶</a></h3>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>flowchart LR
+    User[&quot;HCCS 使用者&quot;] --&gt;|现有配置和 API| DS[&quot;Datasystem HCCS 能力&quot;]
+    DS --&gt;|连接注册传输清理| User
+</pre></div>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>UseCase</p></th>
+<th class="head"><p>使用者</p></th>
+<th class="head"><p>场景</p></th>
+<th class="head"><p>需要什么</p></th>
+<th class="head"><p>设计响应</p></th>
+<th class="head"><p>验收</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>UC3</p></td>
+<td><p>HCCS 使用者</p></td>
+<td><p>兼容 CANN 与完整发布包</p></td>
+<td><p>原配置无修改且功能稳定</p></td>
+<td><p>初始化期确定能力并保持原传输语义</p></td>
+<td><p>现有 HCCS 回归全部通过</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id6">
+<h3>3.3 故障与升级<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>flowchart LR
+    User[&quot;HCCS 使用者或运维&quot;] --&gt;|初始化或升级| DS[&quot;Datasystem HCCS 能力&quot;]
+    DS --&gt;|明确成功或明确失败| User
+</pre></div>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>UseCase</p></th>
+<th class="head"><p>使用者</p></th>
+<th class="head"><p>场景</p></th>
+<th class="head"><p>需要什么</p></th>
+<th class="head"><p>设计响应</p></th>
+<th class="head"><p>验收</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>UC4</p></td>
+<td><p>HCCS 使用者</p></td>
+<td><p>插件、CANN、hash 或 ABI 异常</p></td>
+<td><p>不崩溃、不降级、错误可定位</p></td>
+<td><p>初始化事务回滚并返回分类状态</p></td>
+<td><p>四类故障注入均无资源残留</p></td>
+</tr>
+<tr class="row-odd"><td><p>UC5</p></td>
+<td><p>集群运维</p></td>
+<td><p>升级后运行既有负载和 fork 生命周期</p></td>
+<td><p>行为、性能、资源释放保持稳定</p></td>
+<td><p>保持现有锁与生命周期且不卸载插件</p></td>
+<td><p>性能阈值、长稳和 fork 回归通过</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id7">
+<h3>3.4 UseCase 总表<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>UseCase</p></th>
+<th class="head"><p>使用者</p></th>
+<th class="head"><p>场景</p></th>
+<th class="head"><p>需要什么</p></th>
+<th class="head"><p>设计响应</p></th>
+<th class="head"><p>验收</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>UC1</p></td>
+<td><p>下游开发者</p></td>
+<td><p>无 CANN 链接 SDK</p></td>
+<td><p>核心 SDK 可独立消费</p></td>
+<td><p>隔离核心 ELF 依赖</p></td>
+<td><p>覆盖 G1、G2</p></td>
+</tr>
+<tr class="row-odd"><td><p>UC2</p></td>
+<td><p>部署运维</p></td>
+<td><p>无 CANN 启动普通 Worker</p></td>
+<td><p>非 NPU 服务可用</p></td>
+<td><p>不触发可选能力</p></td>
+<td><p>覆盖 G1、G2、G6</p></td>
+</tr>
+<tr class="row-even"><td><p>UC3</p></td>
+<td><p>HCCS 使用者</p></td>
+<td><p>正常 HCCS</p></td>
+<td><p>原接口和能力不变</p></td>
+<td><p>按需加载并调用 ABI</p></td>
+<td><p>覆盖 G2、G3、G5</p></td>
+</tr>
+<tr class="row-odd"><td><p>UC4</p></td>
+<td><p>HCCS 使用者</p></td>
+<td><p>依赖或版本异常</p></td>
+<td><p>确定失败</p></td>
+<td><p>分类错误与事务回滚</p></td>
+<td><p>覆盖 G4</p></td>
+</tr>
+<tr class="row-even"><td><p>UC5</p></td>
+<td><p>集群运维</p></td>
+<td><p>升级、长稳与 fork</p></td>
+<td><p>无性能和资源回归</p></td>
+<td><p>稳定所有权与生命周期</p></td>
+<td><p>覆盖 G5、G6</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="id8">
+<h2>4. 方案设计<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h2>
+<section id="id9">
+<h3>4.1 类图<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>classDiagram
+    class RemoteH2DManager {
+        +Status Init()
+        +Status Uninit()
+        +Status GetInitStatus()
+        +Status ScatterBatch(entries size context)
+    }
+    class RH2DTransportStrategy {
+        &lt;&lt;interface&gt;&gt;
+        +Status Init(deviceIds)
+        +Status Connect(remote kind callback)
+        +Status Disconnect(remote)
+        +Status DisconnectAll()
+        +Status RegisterMemory(addr size segInfo)
+        +Status PreRegisterDeviceMemory(addrs sizes)
+        +Status UnregisterDeviceMemory(addrs)
+        +Status ScatterBatch(entries count remote stream)
+    }
+    class HixlTransport {
+        +Status Init(deviceIds)
+        +Status Connect(remote kind callback)
+        +Status Disconnect(remote)
+        +Status DisconnectAll()
+        +Status RegisterMemory(addr size segInfo)
+        +Status PreRegisterDeviceMemory(addrs sizes)
+        +Status UnregisterDeviceMemory(addrs)
+        +Status ScatterBatch(entries count remote stream)
+    }
+    class HixlPluginLoader {
+        +HixlPluginLoader Instance()
+        +Status GetApi(api)
+    }
+    class DsHixlApi {
+        +uint32 abiVersion
+        +uint32 structSize
+        +function pointers
+    }
+    class HixlPluginEntry {
+        &lt;&lt;C ABI&gt;&gt;
+        +int32 DsHixlGetApi(version api)
+    }
+    RemoteH2DManager *-- RH2DTransportStrategy
+    RH2DTransportStrategy &lt;|.. HixlTransport
+    HixlTransport --&gt; HixlPluginLoader
+    HixlPluginLoader --&gt; DsHixlApi
+    HixlPluginEntry ..&gt; DsHixlApi
+</pre></div>
+</div>
+<p>模块对外签名如下；未列出私有辅助函数和字段。</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">RemoteH2DManager</span><span class="w"> </span><span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="n">GetInitStatus</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>该接口是 Common/RDMA 内部生命周期接口，不进入公开 SDK。Worker 通过
+<code class="docutils literal notranslate"><span class="pre">Status</span> <span class="pre">InitializeRemoteH2DManager()</span></code> wrapper 调用它，使非 NPU 构建保持 no-op。</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">HixlPluginLoader</span><span class="w"> </span><span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+<span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">HixlPluginLoader</span><span class="w"> </span><span class="o">&amp;</span><span class="n">Instance</span><span class="p">();</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="nf">GetApi</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlApi</span><span class="w"> </span><span class="o">*&amp;</span><span class="n">api</span><span class="p">);</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="kt">int32_t</span><span class="w"> </span><span class="nf">DsHixlGetApi</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">requestedAbiVersion</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlApi</span><span class="w"> </span><span class="o">**</span><span class="n">api</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code> 继续实现既有 <code class="docutils literal notranslate"><span class="pre">RH2DTransportStrategy</span></code>，不增加调用方可见方法。插件只暴露一个 C 入口，
+函数表中的完整签名见 §4.5 与 §4.6。</p>
+</section>
+<section id="id10">
+<h3>4.2 开发视图<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>src/datasystem/common/rdma/npu/
+├── hixl_transport.h                         # 改造：移除 HIXL 头和厂商成员类型
+├── hixl_transport.cpp                       # 改造：通过 DsHixlApi 执行 HCCS 操作
+├── hixl_plugin_api.h                        # 新增：核心与插件共享的纯 C ABI v1
+├── hixl_plugin_loader.h                     # 新增：加载器模块接口
+├── hixl_plugin_loader.cpp                   # 新增：定位 校验 dlopen ABI 协商
+├── plugin/                                  # HIXL 动态插件实现目录
+│   ├── CMakeLists.txt                       # 新增：插件目标与 hash 生成
+│   ├── BUILD.bazel                          # 新增：Bazel 插件共享目标
+│   └── hixl_plugin.cpp                      # 新增：HIXL C++ 适配与唯一导出入口
+├── CMakeLists.txt                           # 改造：核心依赖拆分
+└── BUILD.bazel                              # 改造：主体只依赖 loader 与 ABI
+
+cmake/modules/FindAscend.cmake               # 改造：区分 HIXL 编译信息与插件链接库
+cmake/package.cmake                          # 改造：SDK Service Python 安装插件
+scripts/build_cmake.sh                       # 改造：插件 strip 与符号文件顺序
+setup.py                                     # 改造：完整包依赖保留白名单
+python/setup.py                              # 改造：Python SDK 依赖保留白名单
+bazel/ascend_configure.bzl                   # 改造：主体不再继承 HIXL linkopts
+
+tests/ut/common/rdma/
+├── hixl_plugin_loader_test.cpp              # 新增：加载状态 完整性 ABI 错误
+├── hixl_transport_plugin_test.cpp            # 新增：假函数表 生命周期 回滚 并发
+└── fake_hixl_plugin.cpp                     # 新增：可控 ABI 与错误注入共享库
+
+tests/ut/device/ascend/hixl_rh2d_smoke_test.cpp  # 扩展：真实 HCCS 回归
+cmake/tests/check_datasystem_cann_needed.cmake   # 新增：核心与插件 ELF 守卫
+</pre></div>
+</div>
+<p>文件归属遵循以下规则：ABI 头与 loader 位于 Common/RDMA/NPU；只有 <code class="docutils literal notranslate"><span class="pre">plugin/</span></code> 能包含 CANN HIXL 头。
+构建、打包和测试文件只做该边界所需的窄改动，不抽取全仓通用插件框架。</p>
+</section>
+<section id="id11">
+<h3>4.3 关键交互<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="npu-uc1uc2">
+<h4>4.3.1 非 NPU 进程加载（UC1、UC2）<a class="headerlink" href="#npu-uc1uc2" title="Link to this heading">¶</a></h4>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>sequenceDiagram
+    participant App as 下游进程
+    participant Runtime as 系统动态加载器
+    participant Core as Datasystem 核心共享库
+
+    App-&gt;&gt;Runtime: 装载核心共享库
+    Runtime-&gt;&gt;Core: 解析 DT_NEEDED
+    Core--&gt;&gt;Runtime: 不包含目标 CANN SO
+    Runtime--&gt;&gt;App: 装载成功
+    App-&gt;&gt;Core: 使用非 NPU 功能
+    Core--&gt;&gt;App: 返回结果
+</pre></div>
+</div>
+<p>该路径不构造 <code class="docutils literal notranslate"><span class="pre">HixlPluginLoader</span></code> 之外的运行状态，不调用 <code class="docutils literal notranslate"><span class="pre">GetApi</span></code>，不执行插件 stat、读文件、hash、
+<code class="docutils literal notranslate"><span class="pre">dlopen</span></code> 或 <code class="docutils literal notranslate"><span class="pre">dlsym</span></code>。核心共享库中允许保留 <code class="docutils literal notranslate"><span class="pre">libdl</span></code> 依赖。</p>
+</section>
+<section id="hccs-uc3">
+<h4>4.3.2 HCCS 初始化提交（UC3）<a class="headerlink" href="#hccs-uc3" title="Link to this heading">¶</a></h4>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>sequenceDiagram
+    participant Caller as HCCS 调用方
+    participant Manager as RemoteH2DManager
+    participant Transport as HixlTransport
+    participant Loader as HixlPluginLoader
+    participant Plugin as HIXL Plugin
+
+    Caller-&gt;&gt;Manager: 初始化 HCCS
+    Manager-&gt;&gt;Manager: 启动本次生命周期资源
+    Manager-&gt;&gt;Transport: Init deviceIds
+    Transport-&gt;&gt;Loader: GetApi
+    Loader-&gt;&gt;Loader: call_once 执行 LoadPlugin
+    Loader-&gt;&gt;Loader: 定位并校验同目录插件
+    Loader-&gt;&gt;Plugin: RTLD_NOW 加载并请求 ABI v1
+    Plugin--&gt;&gt;Loader: 返回只读 API 表
+    Loader--&gt;&gt;Transport: 返回 API 表
+    loop 每个 deviceId
+        Transport-&gt;&gt;Plugin: create_engine
+        Plugin--&gt;&gt;Transport: 返回 engine 句柄
+        Transport-&gt;&gt;Plugin: initialize_engine
+        Plugin--&gt;&gt;Transport: 返回初始化结果
+    end
+    Transport-&gt;&gt;Transport: 一次性提交 pending engines
+    Transport--&gt;&gt;Manager: 初始化成功
+    Manager--&gt;&gt;Caller: 返回成功
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">HixlTransport::Init</span></code> 使用局部 <code class="docutils literal notranslate"><span class="pre">pendingEngines</span></code> 和 <code class="docutils literal notranslate"><span class="pre">pendingEndpoints</span></code>。每个 engine 的创建与初始化成功后才进入
+局部集合；全部设备成功后通过 move 一次性提交到成员并设置 <code class="docutils literal notranslate"><span class="pre">initialized_</span></code>。提交前，其他公开方法仍看到未
+初始化状态。</p>
+<p>插件 <code class="docutils literal notranslate"><span class="pre">create_engine</span></code> 创建 <code class="docutils literal notranslate"><span class="pre">HixlEngineContext</span></code>，其中持有一个 <code class="docutils literal notranslate"><span class="pre">hixl::Hixl</span></code> 和可复用描述符缓冲；
+<code class="docutils literal notranslate"><span class="pre">initialize_engine</span></code> 将字符串视图和 option 数组转换为 <code class="docutils literal notranslate"><span class="pre">AscendString</span></code> 与 map。任何 C++ 异常都在插件导出
+函数内捕获，不得越过 C ABI。</p>
+</section>
+<section id="uc4">
+<h4>4.3.3 初始化失败与回滚（UC4）<a class="headerlink" href="#uc4" title="Link to this heading">¶</a></h4>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>sequenceDiagram
+    participant Caller as HCCS 调用方
+    participant Manager as RemoteH2DManager
+    participant Transport as HixlTransport
+    participant Loader as HixlPluginLoader
+    participant Plugin as HIXL Plugin
+
+    Caller-&gt;&gt;Manager: 初始化 HCCS
+    Manager-&gt;&gt;Transport: Init deviceIds
+    Transport-&gt;&gt;Loader: GetApi
+    alt 插件加载或 ABI 失败
+        Loader--&gt;&gt;Transport: 返回缓存失败状态
+    else 第 N 个设备失败
+        Loader--&gt;&gt;Transport: 返回 API 表
+        Transport-&gt;&gt;Plugin: 初始化第 N 个 engine
+        Plugin--&gt;&gt;Transport: 返回失败结果
+        loop 逆序清理已创建 engine
+            Transport-&gt;&gt;Plugin: finalize_engine 和 destroy_engine
+            Plugin--&gt;&gt;Transport: 清理完成
+        end
+    end
+    Transport--&gt;&gt;Manager: 返回原始失败状态
+    Manager-&gt;&gt;Manager: 停止本次线程并撤销 ACL 资源
+    Manager--&gt;&gt;Caller: 返回失败
+</pre></div>
+</div>
+<p>回滚保存首个业务失败作为返回值，后续清理错误只记录警告并附带操作上下文，不覆盖首错。回滚完成后满足：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">initialized_</span> <span class="pre">==</span> <span class="pre">false</span></code>；</p></li>
+<li><p>engine、endpoint、连接和注册集合为空；</p></li>
+<li><p>本次创建的心跳线程已停止；</p></li>
+<li><p>本次成功执行的 ACL 初始化已对称撤销；</p></li>
+<li><p>loader 的插件映射和失败或成功缓存保持不变；</p></li>
+<li><p>transport 类型仍是 HCCS，不修改为 ROCE。</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">RemoteH2DManager</span></code> 构造函数不能返回 <code class="docutils literal notranslate"><span class="pre">Status</span></code>，因此不再使用 <code class="docutils literal notranslate"><span class="pre">LOG_IF_ERROR(Init())</span></code> 吞掉失败，而是把事务结果
+保存到 <code class="docutils literal notranslate"><span class="pre">initStatus_</span></code>。错误传播链固定如下：</p>
+<ol class="arabic simple">
+<li><p>客户端先写入 <code class="docutils literal notranslate"><span class="pre">enableRemoteH2D_</span></code>、device ID 和 HCCS 本地地址；当 Remote H2D 已启用时，
+<code class="docutils literal notranslate"><span class="pre">SetClientRemoteH2DConfig</span></code> 随即构造 Manager 并返回 <code class="docutils literal notranslate"><span class="pre">GetInitStatus()</span></code>。当前 <code class="docutils literal notranslate"><span class="pre">ObjectClientImpl</span></code> 已在
+<code class="docutils literal notranslate"><span class="pre">MGetH2D</span></code>、<code class="docutils literal notranslate"><span class="pre">PreRegisterDeviceMemory</span></code> 等首次需要设备号的操作中传播该返回值，因此不要求无设备上下文的
+<code class="docutils literal notranslate"><span class="pre">HeteroClient::Init()</span></code> 提前加载插件。</p></li>
+<li><p>Worker 在 <code class="docutils literal notranslate"><span class="pre">WorkerOCServer::InitRpcAndMemoryRuntime</span></code> 设置本地 HCCS 地址后、调用共享内存 allocator 前，调用
+Common/RDMA 内部 <code class="docutils literal notranslate"><span class="pre">InitializeRemoteH2DManager()</span></code>；它在非 NPU 或 Remote H2D 未启用时直接成功，否则返回
+<code class="docutils literal notranslate"><span class="pre">RemoteH2DManager::Instance().GetInitStatus()</span></code>。初始化失败终止本次 Worker 启动。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SetDeviceIdx</span></code>、连接、注册、导入和传输等 Manager 操作在 Remote H2D 已启用时先返回 <code class="docutils literal notranslate"><span class="pre">initStatus_</span></code> 中的
+错误，防止未来调用方漏掉显式初始化检查后访问半初始化 transport。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">AfterFork</span></code> 先使继承状态失效，再执行清理和重建；它以重建结果覆盖 <code class="docutils literal notranslate"><span class="pre">initStatus_</span></code>。pthread callback 无法
+返回错误，子进程后续首个 Manager 操作负责把该缓存错误返回业务侧。</p></li>
+</ol>
+<p>上述链路不改变公开 SDK 签名。普通 <code class="docutils literal notranslate"><span class="pre">HeteroClient::Init()</span></code>、未启用 NPU 的 Worker、Remote H2D 关闭及 ROCE
+路径不加载 HIXL 插件。</p>
+</section>
+<section id="uc3">
+<h4>4.3.4 连接与内存注册（UC3）<a class="headerlink" href="#uc3" title="Link to this heading">¶</a></h4>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>sequenceDiagram
+    participant Caller as Remote H2D 调用方
+    participant Transport as HixlTransport
+    participant Plugin as HIXL Plugin
+
+    Caller-&gt;&gt;Transport: Connect remote
+    Transport-&gt;&gt;Transport: 在 connMutex 下去重
+    Transport-&gt;&gt;Plugin: connect_engine
+    Plugin--&gt;&gt;Transport: 返回结果和厂商码
+    Transport--&gt;&gt;Caller: 返回 Status
+    Caller-&gt;&gt;Transport: 注册设备内存
+    Transport-&gt;&gt;Transport: 在 transferMutex 下检查预算
+    Transport-&gt;&gt;Plugin: register_memory
+    Plugin--&gt;&gt;Transport: 返回不透明注册句柄
+    Transport--&gt;&gt;Caller: 返回注册结果
+</pre></div>
+</div>
+<p>连接集合、地址覆盖判断、253 个长期与临时注册共享预算仍属于 <code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code>。插件不维护 Datasystem 的
+连接去重集合和注册预算，只把一个 engine 上的原子厂商操作转换成稳定 ABI。注册句柄作为 opaque token
+保存，核心不得比较其内部内容或跨 engine 使用。</p>
+</section>
+<section id="scatterbatch-uc3uc5">
+<h4>4.3.5 ScatterBatch 热路径（UC3、UC5）<a class="headerlink" href="#scatterbatch-uc3uc5" title="Link to this heading">¶</a></h4>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>sequenceDiagram
+    participant Caller as Remote H2D 调用方
+    participant Transport as HixlTransport
+    participant Plugin as HIXL Plugin
+    participant HIXL as HIXL 运行时
+
+    Caller-&gt;&gt;Transport: ScatterBatch
+    Transport-&gt;&gt;Transport: 获取 transferMutex
+    loop 每个传输片段
+        Transport-&gt;&gt;Transport: 检查长期注册覆盖
+        opt 未覆盖
+            Transport-&gt;&gt;Plugin: register_memory
+            Plugin--&gt;&gt;Transport: 返回临时句柄
+        end
+        Transport-&gt;&gt;Transport: 追加 POD 描述符
+        opt 临时注册预算耗尽
+            Transport-&gt;&gt;Plugin: transfer_sync
+            Plugin-&gt;&gt;Plugin: 转换到复用厂商缓冲
+            Plugin-&gt;&gt;HIXL: TransferSync READ
+            HIXL--&gt;&gt;Plugin: 返回厂商码
+            Plugin--&gt;&gt;Transport: 返回稳定结果
+            Transport-&gt;&gt;Plugin: 注销本批临时句柄
+        end
+    end
+    Transport-&gt;&gt;Plugin: 刷新最后一批
+    Plugin--&gt;&gt;Transport: 返回结果
+    Transport--&gt;&gt;Caller: 释放锁并返回 Status
+</pre></div>
+</div>
+<p>核心继续依据临时注册预算切批，POD 描述符按已知数量 <code class="docutils literal notranslate"><span class="pre">reserve</span></code>。插件将 POD 字段复制到 engine 自己的
+<code class="docutils literal notranslate"><span class="pre">vector&lt;hixl::TransferOpDesc&gt;</span></code>，该 vector 只增长不缩容并在调用后 <code class="docutils literal notranslate"><span class="pre">clear</span></code>，从而复用容量。这里新增的是
+描述符元数据复制，不复制用户数据；必须纳入微基准和真实 HCCS P99/吞吐验证。</p>
+<p>临时句柄使用 RAII 批次守卫，传输成功或任意中途错误都逐一注销。首个传输或注册错误优先返回，注销错误
+记录为清理告警。</p>
+</section>
+<section id="uninit-fork-uc5">
+<h4>4.3.6 Uninit 与 fork（UC5）<a class="headerlink" href="#uninit-fork-uc5" title="Link to this heading">¶</a></h4>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>sequenceDiagram
+    participant Manager as RemoteH2DManager
+    participant Transport as HixlTransport
+    participant Plugin as HIXL Plugin
+    participant Loader as HixlPluginLoader
+
+    Manager-&gt;&gt;Manager: 停止心跳与新请求
+    Manager-&gt;&gt;Transport: DisconnectAll
+    Transport-&gt;&gt;Plugin: 断开所有连接
+    Transport-&gt;&gt;Plugin: 注销全部内存
+    Transport-&gt;&gt;Plugin: finalize_engine
+    Transport-&gt;&gt;Plugin: destroy_engine
+    Plugin--&gt;&gt;Transport: 资源已释放
+    Transport--&gt;&gt;Manager: 清理完成
+    Manager-&gt;&gt;Manager: ACL finalize
+    Note over Loader: 不执行 dlclose
+    opt fork 子进程
+        Manager-&gt;&gt;Transport: 重新 Init
+        Transport-&gt;&gt;Loader: GetApi
+        Loader--&gt;&gt;Transport: 返回继承的只读 API 表
+        Transport-&gt;&gt;Plugin: 创建子进程 engine
+    end
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">DisconnectAll</span></code> 先在 <code class="docutils literal notranslate"><span class="pre">connMutex_</span></code> 下完成连接清理并释放锁，再在 <code class="docutils literal notranslate"><span class="pre">transferMutex_</span></code> 下清理注册资源，保持两个锁
+不嵌套。engine finalize 和 destroy 在所有句柄释放后执行。Manager 只有在 transport 清理结束后才能执行
+ACL finalize。</p>
+<p>loader 不定义主动卸载接口，单例析构也不调用 <code class="docutils literal notranslate"><span class="pre">dlclose</span></code>。fork 子进程继承映射和函数表；现有
+<code class="docutils literal notranslate"><span class="pre">AfterFork</span></code> 先清理继承的 transport 资源，再创建子进程 engine。若厂商明确不支持 fork 后 finalize，实际
+实现需通过设备验证决定是否在子进程跳过 inherited engine 的厂商清理并直接丢弃句柄，该分支必须以测试
+证据更新本文后才能启用。</p>
+</section>
+<section id="id12">
+<h4>4.3.7 错误码映射<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h4>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>ABI 结果</p></th>
+<th class="head"><p>Datasystem 状态</p></th>
+<th class="head"><p>适用场景</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_HIXL_OK</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">K_OK</span></code></p></td>
+<td><p>操作成功</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_HIXL_INVALID_ARGUMENT</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">K_INVALID</span></code></p></td>
+<td><p>空句柄、非法枚举、空地址、长度为 0</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_HIXL_NOT_SUPPORTED</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code></p></td>
+<td><p>ABI、操作或运行能力不可用</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_HIXL_RUNTIME_ERROR</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">K_RUNTIME_ERROR</span></code></p></td>
+<td><p>厂商返回失败或插件内部异常</p></td>
+</tr>
+<tr class="row-even"><td><p>loader hash 失败</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">K_NOT_AUTHORIZED</span></code></p></td>
+<td><p>插件内容或版本不匹配</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>每个 ABI 操作同时输出 <code class="docutils literal notranslate"><span class="pre">vendorStatus</span></code>。核心日志包含 ABI 操作名、设备或远端上下文和数值厂商码，不在插件
+中依赖 Datasystem 日志库。错误消息不得记录传输数据、密钥或完整用户地址列表。</p>
+</section>
+</section>
+<section id="id13">
+<h3>4.4 模块依赖图<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>flowchart TB
+    Client[&quot;datasystem shared&quot;] --&gt; CR[&quot;common_rdma&quot;]
+    Worker[&quot;datasystem_worker shared&quot;] --&gt; WOC[&quot;worker_object_cache&quot;]
+    WOC --&gt; CR
+    CR --&gt; Transport[&quot;hixl_transport&quot;]
+    Transport --&gt; Loader[&quot;hixl_plugin_loader&quot;]
+    Loader --&gt; ABI[&quot;hixl_plugin_api&quot;]
+    Loader --&gt; DL[&quot;libdl&quot;]
+
+    Plugin[&quot;ds_hixl_plugin shared&quot;] --&gt; ABI
+    Plugin --&gt; Ascend[&quot;ascendcl&quot;]
+    Plugin --&gt; Hixl[&quot;cann_hixl&quot;]
+    Plugin --&gt; Meta[&quot;metadef&quot;]
+
+    Loader -.-&gt;|dlopen| Plugin
+</pre></div>
+</div>
+<p>依赖规则：</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">common_rdma</span></code> 不再消费 <code class="docutils literal notranslate"><span class="pre">${ASCEND_HIXL_LIBRARIES}</span></code> 或 Bazel 的 <code class="docutils literal notranslate"><span class="pre">&#64;local_ascend//:hixl</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">hixl_transport</span></code> 和 loader 可以依赖 ABI 头、Datasystem util、Status、日志与 <code class="docutils literal notranslate"><span class="pre">libdl</span></code>，不能包含 HIXL 头。</p></li>
+<li><p>插件只依赖 ABI 头、C++ 标准库和三个目标 CANN 库，不依赖 <code class="docutils literal notranslate"><span class="pre">common_rdma</span></code>、<code class="docutils literal notranslate"><span class="pre">libdatasystem.so</span></code>、
+Datasystem <code class="docutils literal notranslate"><span class="pre">Status</span></code>、日志或 protobuf。</p></li>
+<li><p>CMake 插件 target 使用 <code class="docutils literal notranslate"><span class="pre">PRIVATE</span></code> 厂商链接；Bazel 使用独立 <code class="docutils literal notranslate"><span class="pre">linkshared</span></code> 目标，厂商 linkopts 不传播给
+<code class="docutils literal notranslate"><span class="pre">remote_h2d_manager</span></code>。</p></li>
+<li><p>插件 hash 生成目标依赖最终插件，核心 loader 目标依赖生成的 hash 头；插件不依赖 loader，因此无环。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ASCEND_HIXL_AVAILABLE</span></code> 表示构建时生成了 HIXL transport 和插件，不表示部署节点一定具备 CANN。</p></li>
+</ol>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>flowchart LR
+    PluginSource[&quot;插件源码&quot;] --&gt; PluginBinary[&quot;最终 strip 插件&quot;]
+    PluginBinary --&gt; Hash[&quot;生成 hash 头&quot;]
+    Hash --&gt; CoreBuild[&quot;编译核心 loader&quot;]
+    PluginBinary --&gt; SDK[&quot;C++ SDK&quot;]
+    PluginBinary --&gt; Service[&quot;Service&quot;]
+    PluginBinary --&gt; Python[&quot;Python&quot;]
+</pre></div>
+</div>
+<p>构建顺序必须先完成插件的 RPATH 清理和最终 strip，再计算 hash 并编译引用 hash 的核心目标。安装和 wheel
+组装只复制最终插件，不得再次 strip。CMake 和 Bazel 都必须形成同一顺序；如果 Bazel 当前发布流程不支持
+构建期 hash 依赖，P2 必须先补齐对应 genrule，不能降级为跳过完整性校验。</p>
+</section>
+<section id="id14">
+<h3>4.5 关键数据结构<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<section id="abi">
+<h4>4.5.1 ABI 基础类型<a class="headerlink" href="#abi" title="Link to this heading">¶</a></h4>
+<p><code class="docutils literal notranslate"><span class="pre">hixl_plugin_api.h</span></code> 必须可以被 C 和 C++ 编译器共同包含。下列定义为 v1 的规范骨架，具体命名在实现时
+保持一致，不使用 <code class="docutils literal notranslate"><span class="pre">#pragma</span> <span class="pre">pack</span></code>，通过字段顺序维持自然对齐。</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="cp">#define DS_HIXL_ABI_VERSION_1 1U</span>
+<span class="cp">#define DS_HIXL_MAX_OPTION_COUNT 16U</span>
+<span class="cp">#define DS_HIXL_MAX_STRING_LENGTH 4096U</span>
+
+<span class="k">typedef</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DS_HIXL_OK</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DS_HIXL_INVALID_ARGUMENT</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DS_HIXL_NOT_SUPPORTED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DS_HIXL_RUNTIME_ERROR</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="p">}</span><span class="w"> </span><span class="n">DsHixlResult</span><span class="p">;</span>
+
+<span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DsHixlEngine</span><span class="w"> </span><span class="o">*</span><span class="n">DsHixlEngineHandle</span><span class="p">;</span>
+<span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DsHixlMemory</span><span class="w"> </span><span class="o">*</span><span class="n">DsHixlMemHandle</span><span class="p">;</span>
+
+<span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DsHixlStringView</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">data</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">size</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">DsHixlStringView</span><span class="p">;</span>
+
+<span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DsHixlOption</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DsHixlStringView</span><span class="w"> </span><span class="n">key</span><span class="p">;</span>
+<span class="w">    </span><span class="n">DsHixlStringView</span><span class="w"> </span><span class="n">value</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">DsHixlOption</span><span class="p">;</span>
+
+<span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DsHixlTransferDesc</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uintptr_t</span><span class="w"> </span><span class="n">localAddr</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uintptr_t</span><span class="w"> </span><span class="n">remoteAddr</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">length</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">DsHixlTransferDesc</span><span class="p">;</span>
+
+<span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DsHixlRegisterMemoryRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uintptr_t</span><span class="w"> </span><span class="n">address</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">length</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">memoryType</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">DsHixlRegisterMemoryRequest</span><span class="p">;</span>
+
+<span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DsHixlTransferRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DsHixlStringView</span><span class="w"> </span><span class="n">remoteEndpoint</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">operation</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlTransferDesc</span><span class="w"> </span><span class="o">*</span><span class="n">descriptors</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">descriptorCount</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">timeoutMs</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">DsHixlTransferRequest</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>约束：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">DsHixlStringView</span></code> 不要求 NUL 结尾；插件按长度构造本地字符串。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">data</span> <span class="pre">==</span> <span class="pre">NULL</span></code> 只允许与 <code class="docutils literal notranslate"><span class="pre">size</span> <span class="pre">==</span> <span class="pre">0</span></code> 同时出现；endpoint 和 option key 不允许为空。</p></li>
+<li><p>option 数量不超过 <code class="docutils literal notranslate"><span class="pre">DS_HIXL_MAX_OPTION_COUNT</span></code>，单个字符串不超过
+<code class="docutils literal notranslate"><span class="pre">DS_HIXL_MAX_STRING_LENGTH</span></code>，避免错误输入导致无界分配。</p></li>
+<li><p>地址字段仅作为数值透传，插件与核心均不得读写指向的数据载荷。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">length</span></code> 必须大于 0；从 <code class="docutils literal notranslate"><span class="pre">uint64_t</span></code> 转换到厂商 <code class="docutils literal notranslate"><span class="pre">size_t</span></code> 前检查不溢出。</p></li>
+<li><p>不透明句柄只在创建它的插件与 engine 生命周期内有效。</p></li>
+</ul>
+</section>
+<section id="id15">
+<h4>4.5.2 ABI 函数表<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h4>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DsHixlApi</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">abiVersion</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">structSize</span><span class="p">;</span>
+
+<span class="w">    </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">create_engine</span><span class="p">)(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="o">*</span><span class="n">engine</span><span class="p">);</span>
+<span class="w">    </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">finalize_engine</span><span class="p">)(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">);</span>
+<span class="w">    </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">destroy_engine</span><span class="p">)(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">initialize_engine</span><span class="p">)(</span>
+<span class="w">        </span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">        </span><span class="n">DsHixlStringView</span><span class="w"> </span><span class="n">localEndpoint</span><span class="p">,</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlOption</span><span class="w"> </span><span class="o">*</span><span class="n">options</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">optionCount</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">connect_engine</span><span class="p">)(</span>
+<span class="w">        </span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">        </span><span class="n">DsHixlStringView</span><span class="w"> </span><span class="n">remoteEndpoint</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">timeoutMs</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">disconnect_engine</span><span class="p">)(</span>
+<span class="w">        </span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">        </span><span class="n">DsHixlStringView</span><span class="w"> </span><span class="n">remoteEndpoint</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">timeoutMs</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">register_memory</span><span class="p">)(</span>
+<span class="w">        </span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlRegisterMemoryRequest</span><span class="w"> </span><span class="o">*</span><span class="n">request</span><span class="p">,</span>
+<span class="w">        </span><span class="n">DsHixlMemHandle</span><span class="w"> </span><span class="o">*</span><span class="n">memoryHandle</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">deregister_memory</span><span class="p">)(</span>
+<span class="w">        </span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">        </span><span class="n">DsHixlMemHandle</span><span class="w"> </span><span class="n">memoryHandle</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">DsHixlResult</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">transfer_sync</span><span class="p">)(</span>
+<span class="w">        </span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlTransferRequest</span><span class="w"> </span><span class="o">*</span><span class="n">request</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="n">DsHixlApi</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>ABI v1 固定枚举值：<code class="docutils literal notranslate"><span class="pre">memoryType</span></code> 的 DEVICE 为 0、HOST 为 1；<code class="docutils literal notranslate"><span class="pre">operation</span></code> 的 READ 为 0、WRITE 为 1。
+这些数值由共享 ABI 头定义具名常量，插件显式转换为 HIXL 枚举，不能依赖两个枚举碰巧同值。</p>
+<p><code class="docutils literal notranslate"><span class="pre">structSize</span></code> 覆盖到 <code class="docutils literal notranslate"><span class="pre">transfer_sync</span></code> 字段末尾。loader 验证：版本等于 v1、长度不小于 v1 所需长度、所有
+必需函数指针非空。未来版本只能在结构尾部追加字段；删除、重排或改变已有签名必须提升 ABI 主版本。</p>
+</section>
+<section id="engine">
+<h4>4.5.3 核心 engine 与注册记录<a class="headerlink" href="#engine" title="Link to this heading">¶</a></h4>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">HixlEngineRecord</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">deviceId</span><span class="p">;</span>
+<span class="w">    </span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">handle</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="n">localEndpoint</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">RegisteredDeviceMemory</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uintptr_t</span><span class="w"> </span><span class="n">addr</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">size</span><span class="p">;</span>
+<span class="w">    </span><span class="n">DsHixlMemHandle</span><span class="w"> </span><span class="n">handle</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">RegisteredHostMemory</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">deviceId</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uintptr_t</span><span class="w"> </span><span class="n">addr</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">size</span><span class="p">;</span>
+<span class="w">    </span><span class="n">DsHixlMemHandle</span><span class="w"> </span><span class="n">handle</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>核心记录只保存 Datasystem 查找所需的地址、大小、设备和不透明句柄。<code class="docutils literal notranslate"><span class="pre">HixlEngineRecord</span></code> 按 device ID 存入
+有序 map，保持现有 identity 轮询与 engine 选择语义。注册记录仍受 <code class="docutils literal notranslate"><span class="pre">transferMutex_</span></code> 保护。</p>
+</section>
+<section id="loader">
+<h4>4.5.4 Loader 状态<a class="headerlink" href="#loader" title="Link to this heading">¶</a></h4>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">HixlPluginLoadState</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">UNINITIALIZED</span><span class="p">,</span>
+<span class="w">    </span><span class="n">LOADED</span><span class="p">,</span>
+<span class="w">    </span><span class="n">FAILED</span>
+<span class="p">};</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">HixlPluginLoadResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">HixlPluginLoadState</span><span class="w"> </span><span class="n">state</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">pluginHandle</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlApi</span><span class="w"> </span><span class="o">*</span><span class="n">api</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>该结果由 <code class="docutils literal notranslate"><span class="pre">std::call_once</span></code> 发布，之后只读。初始状态不允许被业务线程直接观察；所有读取均通过 <code class="docutils literal notranslate"><span class="pre">GetApi</span></code>。
+成功时 <code class="docutils literal notranslate"><span class="pre">pluginHandle</span></code> 与 <code class="docutils literal notranslate"><span class="pre">api</span></code> 非空、<code class="docutils literal notranslate"><span class="pre">status</span></code> 成功；失败时二者为空、<code class="docutils literal notranslate"><span class="pre">status</span></code> 保存分类错误。loader 不暴露
+reset 或 unload。</p>
+</section>
+<section id="manager">
+<h4>4.5.5 Manager 初始化状态<a class="headerlink" href="#manager" title="Link to this heading">¶</a></h4>
+<p>Manager 新增如下生命周期字段；这里只描述逻辑结构，具体 <code class="docutils literal notranslate"><span class="pre">Status</span></code> 初始化方式遵循项目
+既有实现：</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">RemoteH2DInitState</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">heartbeatStarted</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">aclInitialized</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">transportInitialized</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>实际成员可以拆分存放，但必须表达同一状态。构造线程在静态局部单例发布前完成写入，正常业务线程只读
+<code class="docutils literal notranslate"><span class="pre">status</span></code>；<code class="docutils literal notranslate"><span class="pre">Init</span></code>、<code class="docutils literal notranslate"><span class="pre">Uninit</span></code> 与 <code class="docutils literal notranslate"><span class="pre">AfterFork</span></code> 仍是串行生命周期操作。事务提交后 <code class="docutils literal notranslate"><span class="pre">status</span></code> 为成功；失败回滚仅清理
+标记为成功的阶段并保存首错。每个 Manager 操作必须在读取 map、engine 或注册记录前检查该状态。子进程只
+有 fork 调用线程，<code class="docutils literal notranslate"><span class="pre">AfterFork</span></code> 重建完成后再覆盖状态，不引入新的热路径锁。</p>
+</section>
+<section id="id16">
+<h4>4.5.6 插件 engine 上下文<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h4>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">HixlEngineContext</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">hixl</span><span class="o">::</span><span class="n">Hixl</span><span class="o">&gt;</span><span class="w"> </span><span class="n">engine</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">initialized</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">hixl</span><span class="o">::</span><span class="n">TransferOpDesc</span><span class="o">&gt;</span><span class="w"> </span><span class="n">transferDescriptors</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>该结构只存在于插件 <code class="docutils literal notranslate"><span class="pre">.cpp</span></code>，不出现在共享头。<code class="docutils literal notranslate"><span class="pre">create_engine</span></code> 分配上下文，<code class="docutils literal notranslate"><span class="pre">initialize_engine</span></code> 成功后设置
+<code class="docutils literal notranslate"><span class="pre">initialized</span></code>；<code class="docutils literal notranslate"><span class="pre">finalize_engine</span></code> 幂等清理并清零状态；<code class="docutils literal notranslate"><span class="pre">destroy_engine</span></code> 在必要时先 finalize，再删除上下文。
+描述符 vector 仅由 <code class="docutils literal notranslate"><span class="pre">transfer_sync</span></code> 使用，调用侧 <code class="docutils literal notranslate"><span class="pre">transferMutex_</span></code> 保证同一 transport 的串行访问。</p>
+<p>插件不得维护另一份连接集合或内存注册表，避免与核心所有权产生双重真相。厂商 <code class="docutils literal notranslate"><span class="pre">MemHandle</span></code> 作为 opaque
+token 返回，生命周期仍由核心注册记录驱动。</p>
+</section>
+<section id="id17">
+<h4>4.5.7 并发与所有权总表<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h4>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>状态</p></th>
+<th class="head"><p>唯一所有者</p></th>
+<th class="head"><p>保护方式</p></th>
+<th class="head"><p>销毁点</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>loader 结果</p></td>
+<td><p>进程级 <code class="docutils literal notranslate"><span class="pre">HixlPluginLoader</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">std::call_once</span></code> 发布后只读</p></td>
+<td><p>进程退出由 OS 回收映射</p></td>
+</tr>
+<tr class="row-odd"><td><p>engine 记录</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code></p></td>
+<td><p>Init/Uninit 生命周期；不与请求并发提交</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DisconnectAll</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>active endpoints</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">connMutex_</span></code></p></td>
+<td><p>单端断连或 <code class="docutils literal notranslate"><span class="pre">DisconnectAll</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>注册记录</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">transferMutex_</span></code></p></td>
+<td><p>显式注销或 <code class="docutils literal notranslate"><span class="pre">DisconnectAll</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>临时批次句柄</p></td>
+<td><p>单次 ScatterBatch RAII 守卫</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">transferMutex_</span></code></p></td>
+<td><p>每批 flush 或异常退出</p></td>
+</tr>
+<tr class="row-odd"><td><p>厂商描述符缓冲</p></td>
+<td><p>插件 engine context</p></td>
+<td><p>调用侧 <code class="docutils literal notranslate"><span class="pre">transferMutex_</span></code></p></td>
+<td><p>engine destroy</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>锁顺序规则是“不嵌套”：<code class="docutils literal notranslate"><span class="pre">connMutex_</span></code> 临界区结束后才能进入 <code class="docutils literal notranslate"><span class="pre">transferMutex_</span></code>。loader 不获取 transport 锁，
+插件不回调核心，因此不存在 loader 锁与 transport 锁的顺序关系。</p>
+</section>
+</section>
+<section id="id18">
+<h3>4.6 组件接口设计<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<section id="id19">
+<h4>4.6.1 接口总览<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h4>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>接口</p></th>
+<th class="head"><p>调用方</p></th>
+<th class="head"><p>实现方</p></th>
+<th class="head"><p>数据载体</p></th>
+<th class="head"><p>频率</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">HixlPluginLoader::GetApi</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HixlTransport::Init</span></code></p></td>
+<td><p>核心 loader</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Status</span></code> 与只读 <code class="docutils literal notranslate"><span class="pre">DsHixlApi*</span></code></p></td>
+<td><p>每次 transport Init 一次</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DsHixlGetApi</span></code></p></td>
+<td><p>核心 loader</p></td>
+<td><p>HIXL 插件</p></td>
+<td><p>ABI 版本与函数表指针</p></td>
+<td><p>每进程最多一次</p></td>
+</tr>
+<tr class="row-even"><td><p>engine 生命周期函数</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code></p></td>
+<td><p>HIXL 插件</p></td>
+<td><p>engine 句柄、option 数组、厂商码</p></td>
+<td><p>每设备初始化与清理</p></td>
+</tr>
+<tr class="row-odd"><td><p>connect/disconnect</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code></p></td>
+<td><p>HIXL 插件</p></td>
+<td><p>endpoint 视图、timeout、厂商码</p></td>
+<td><p>每连接生命周期</p></td>
+</tr>
+<tr class="row-even"><td><p>register/deregister</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code></p></td>
+<td><p>HIXL 插件</p></td>
+<td><p>地址、长度、类型、opaque handle</p></td>
+<td><p>每注册生命周期</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">transfer_sync</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code></p></td>
+<td><p>HIXL 插件</p></td>
+<td><p>endpoint 与 POD 描述符数组</p></td>
+<td><p>每个 HCCS 批次</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="hixlpluginloader-getapi">
+<h4>4.6.2 <code class="docutils literal notranslate"><span class="pre">HixlPluginLoader::GetApi</span></code><a class="headerlink" href="#hixlpluginloader-getapi" title="Link to this heading">¶</a></h4>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">Status</span><span class="w"> </span><span class="nf">HixlPluginLoader::GetApi</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlApi</span><span class="w"> </span><span class="o">*&amp;</span><span class="n">api</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>前置：仅在 HCCS transport 初始化阶段调用。输出引用进入函数时由实现置空。</p>
+<p>成功：返回 <code class="docutils literal notranslate"><span class="pre">K_OK</span></code>，<code class="docutils literal notranslate"><span class="pre">api</span></code> 指向进程生命周期有效的只读函数表。</p>
+<p>失败：<code class="docutils literal notranslate"><span class="pre">api</span> <span class="pre">==</span> <span class="pre">nullptr</span></code>，返回缓存的 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code> 或 <code class="docutils literal notranslate"><span class="pre">K_NOT_AUTHORIZED</span></code>。错误文本至少包含插件固定名称
+和 <code class="docutils literal notranslate"><span class="pre">locate</span></code>、<code class="docutils literal notranslate"><span class="pre">verify</span></code>、<code class="docutils literal notranslate"><span class="pre">dlopen</span></code>、<code class="docutils literal notranslate"><span class="pre">dlsym</span></code>、<code class="docutils literal notranslate"><span class="pre">abi</span></code> 中的阶段名；<code class="docutils literal notranslate"><span class="pre">dlopen</span></code> 错误保留系统给出的缺失 SONAME。</p>
+<p>并发：多线程可同时调用，只有一个线程执行实际加载，其余线程等待 <code class="docutils literal notranslate"><span class="pre">call_once</span></code> 完成。函数返回后不持有任何
+loader 锁。</p>
+</section>
+<section id="dshixlgetapi">
+<h4>4.6.3 <code class="docutils literal notranslate"><span class="pre">DsHixlGetApi</span></code><a class="headerlink" href="#dshixlgetapi" title="Link to this heading">¶</a></h4>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">DsHixlGetApi</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">requestedAbiVersion</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlApi</span><span class="w"> </span><span class="o">**</span><span class="n">api</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>输入版本不是 v1 或 <code class="docutils literal notranslate"><span class="pre">api</span> <span class="pre">==</span> <span class="pre">NULL</span></code> 时返回 <code class="docutils literal notranslate"><span class="pre">DS_HIXL_NOT_SUPPORTED</span></code> 或
+<code class="docutils literal notranslate"><span class="pre">DS_HIXL_INVALID_ARGUMENT</span></code>。成功时返回插件静态常量表地址；函数不分配内存、不初始化 HIXL、不记录
+调用方指针。</p>
+<p>入口使用显式默认可见性，插件其余符号使用 hidden visibility。符号名称大小写固定，不能导出版本相关的
+C++ 重载入口。</p>
+</section>
+<section id="id20">
+<h4>4.6.4 engine 生命周期接口<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h4>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">create_engine</span><span class="p">(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="o">*</span><span class="n">engine</span><span class="p">);</span>
+<span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">initialize_engine</span><span class="p">(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">                               </span><span class="n">DsHixlStringView</span><span class="w"> </span><span class="n">localEndpoint</span><span class="p">,</span>
+<span class="w">                               </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlOption</span><span class="w"> </span><span class="o">*</span><span class="n">options</span><span class="p">,</span>
+<span class="w">                               </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">optionCount</span><span class="p">,</span>
+<span class="w">                               </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+<span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">finalize_engine</span><span class="p">(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">);</span>
+<span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">destroy_engine</span><span class="p">(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">create_engine</span></code> 只分配上下文，不访问设备。<code class="docutils literal notranslate"><span class="pre">initialize_engine</span></code> 每个上下文最多成功一次；重复初始化返回
+<code class="docutils literal notranslate"><span class="pre">DS_HIXL_INVALID_ARGUMENT</span></code>。<code class="docutils literal notranslate"><span class="pre">finalize_engine</span></code> 对已 finalize 上下文幂等。<code class="docutils literal notranslate"><span class="pre">destroy_engine</span></code> 必须且只能调用一次，
+并保证已初始化资源先 finalize。</p>
+<p>option key/value 在调用期间有效，插件同步复制为厂商字符串，不保留输入指针。所有导出函数清零
+<code class="docutils literal notranslate"><span class="pre">vendorStatus</span></code> 后再调用厂商接口，厂商调用完成后写入原始返回值。</p>
+</section>
+<section id="id21">
+<h4>4.6.5 连接接口<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h4>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">connect_engine</span><span class="p">(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">                            </span><span class="n">DsHixlStringView</span><span class="w"> </span><span class="n">remoteEndpoint</span><span class="p">,</span>
+<span class="w">                            </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">timeoutMs</span><span class="p">,</span>
+<span class="w">                            </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+<span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">disconnect_engine</span><span class="p">(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">                               </span><span class="n">DsHixlStringView</span><span class="w"> </span><span class="n">remoteEndpoint</span><span class="p">,</span>
+<span class="w">                               </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">timeoutMs</span><span class="p">,</span>
+<span class="w">                               </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>插件只负责一次厂商调用。连接幂等语义由核心保留：核心在调用前检查 <code class="docutils literal notranslate"><span class="pre">activeEndpoints_</span></code>，并将厂商
+<code class="docutils literal notranslate"><span class="pre">ALREADY_CONNECTED</span></code> 视为成功。timeout 必须大于 0；连接当前沿用 30000 ms，断连沿用 1000 ms，数值以
+核心具名常量定义，不写入 ABI。</p>
+</section>
+<section id="id22">
+<h4>4.6.6 内存注册接口<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h4>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">register_memory</span><span class="p">(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">                             </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlRegisterMemoryRequest</span><span class="w"> </span><span class="o">*</span><span class="n">request</span><span class="p">,</span>
+<span class="w">                             </span><span class="n">DsHixlMemHandle</span><span class="w"> </span><span class="o">*</span><span class="n">memoryHandle</span><span class="p">,</span>
+<span class="w">                             </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+<span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">deregister_memory</span><span class="p">(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">                               </span><span class="n">DsHixlMemHandle</span><span class="w"> </span><span class="n">memoryHandle</span><span class="p">,</span>
+<span class="w">                               </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>核心负责地址覆盖、重复注册幂等和 253 个 MEM_DEVICE 预算；插件验证基本参数并转换为厂商 <code class="docutils literal notranslate"><span class="pre">MemDesc</span></code>。
+成功注册返回非空 opaque token。注销成功后 token 立即失效，重复注销属于调用方错误，不由插件吞掉。</p>
+</section>
+<section id="id23">
+<h4>4.6.7 同步传输接口<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h4>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="n">DsHixlResult</span><span class="w"> </span><span class="nf">transfer_sync</span><span class="p">(</span><span class="n">DsHixlEngineHandle</span><span class="w"> </span><span class="n">engine</span><span class="p">,</span>
+<span class="w">                           </span><span class="k">const</span><span class="w"> </span><span class="n">DsHixlTransferRequest</span><span class="w"> </span><span class="o">*</span><span class="n">request</span><span class="p">,</span>
+<span class="w">                           </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">*</span><span class="n">vendorStatus</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>v1 只接受 READ，但保留 WRITE 枚举以与厂商模型一致；核心当前固定传 READ。descriptorCount 为 0 时直接成功，
+非 0 时 descriptors 必须非空。插件检查每项长度和 <code class="docutils literal notranslate"><span class="pre">size_t</span></code> 转换，复用 engine 描述符 vector，调用
+<code class="docutils literal notranslate"><span class="pre">TransferSync</span></code> 后清空逻辑长度但保留容量。输入数组只在同步调用期间有效。</p>
+</section>
+<section id="id24">
+<h4>4.6.8 异常边界<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h4>
+<p>所有插件导出函数都采用 <code class="docutils literal notranslate"><span class="pre">noexcept</span></code> 等价实现策略：捕获 <code class="docutils literal notranslate"><span class="pre">std::bad_alloc</span></code>、<code class="docutils literal notranslate"><span class="pre">std::exception</span></code> 和未知异常，返回
+<code class="docutils literal notranslate"><span class="pre">DS_HIXL_RUNTIME_ERROR</span></code>，不得让 C++ 异常穿越共享库 C ABI。插件不把异常字符串跨 ABI 返回，核心根据
+操作名和稳定结果码记录错误；敏感信息卫生要求见 §6。</p>
+</section>
+</section>
+</section>
+<section id="id25">
+<h2>5. 对外接口<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h2>
+<section id="sdk">
+<h3>5.1 SDK 接口<a class="headerlink" href="#sdk" title="Link to this heading">¶</a></h3>
+<p>本设计不新增或修改公开 SDK 签名。下列现有接口是用户感知 HCCS 初始化和传输结果的边界：</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">HeteroClient</span><span class="w"> </span><span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="n">Init</span><span class="p">();</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>接口</p></th>
+<th class="head"><p>调用方</p></th>
+<th class="head"><p>频率</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Status</span> <span class="pre">HeteroClient::Init()</span></code></p></td>
+<td><p>异构客户端</p></td>
+<td><p>每客户端一次</p></td>
+<td><p>不要求设备上下文，不提前加载 HIXL 插件；现有初始化语义不变</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Status</span> <span class="pre">HeteroClient::PreRegisterDeviceMemory(const</span> <span class="pre">std::vector&lt;void</span> <span class="pre">*&gt;</span> <span class="pre">&amp;,</span> <span class="pre">const</span> <span class="pre">std::vector&lt;uint64_t&gt;</span> <span class="pre">&amp;)</span></code></p></td>
+<td><p>HCCS 客户端</p></td>
+<td><p>每内存池生命周期</p></td>
+<td><p>注册语义不变，内部句柄改为 opaque token</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Status</span> <span class="pre">HeteroClient::MGetH2D(...)</span></code></p></td>
+<td><p>HCCS 客户端</p></td>
+<td><p>请求路径</p></td>
+<td><p>首次 HCCS 配置阶段可返回插件加载或 ABI 错误；传输行为保持兼容</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>内部配置边界 <code class="docutils literal notranslate"><span class="pre">Status</span> <span class="pre">RemoteH2DManager::SetClientRemoteH2DConfig(bool,</span> <span class="pre">uint32_t,</span> <span class="pre">const</span> <span class="pre">std::string</span> <span class="pre">&amp;)</span></code> 的签名和
+调用顺序不变，但启用 Remote H2D 时增加 <code class="docutils literal notranslate"><span class="pre">GetInitStatus()</span></code> 返回。新增内部 wrapper
+<code class="docutils literal notranslate"><span class="pre">Status</span> <span class="pre">InitializeRemoteH2DManager()</span></code> 供 Worker 启动使用，在非 NPU 构建中返回成功。<code class="docutils literal notranslate"><span class="pre">DsHixlGetApi</span></code> 属于同一
+发行物内部 ABI，不属于公开 SDK。</p>
+</section>
+<section id="id26">
+<h3>5.2 部署参数<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
+<p>无新增或变更。现有 HCCS 选择参数继续决定是否进入插件加载路径；未选择 HCCS 时不读取插件。</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数变化</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>无</p></td>
+<td><p>不变</p></td>
+<td><p>不提供插件路径、ABI 版本或跳过 hash 的用户参数</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id27">
+<h3>5.3 环境变量<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<p>无新增或变更。</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>变量变化</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>无</p></td>
+<td><p>不变</p></td>
+<td><p>现有 <code class="docutils literal notranslate"><span class="pre">DS_RH2D_LINK_TYPE</span></code> 与 <code class="docutils literal notranslate"><span class="pre">DS_HIXL_CS_ENABLE</span></code> 语义不变</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id28">
+<h3>5.4 发布产物约定<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">libds_hixl_plugin.so</span></code> 是新增的可选叶子产物，但在 <code class="docutils literal notranslate"><span class="pre">-X</span> <span class="pre">on</span></code> 且构建支持 HIXL 时必须随核心发布包安装。
+它不是下游链接接口，不进入导出的 Datasystem CMake target 链接库列表。
+核心库嵌入的 SHA256 必须对应发布目录和 whl 中实际加载的插件文件；发布脚本按 <code class="docutils literal notranslate"><span class="pre">acl_plugin</span></code> 同类 hash 校验
+产物处理，hash 生成后不能在 Python 打包阶段再次 strip。</p>
+</section>
+</section>
+<section id="id29">
+<h2>6. 约束与风险<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h2>
+<section id="id30">
+<h3>6.1 约束<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>#</p></th>
+<th class="head"><p>约束</p></th>
+<th class="head"><p>违规后果</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>C1</p></td>
+<td><p>核心源码和目标不得包含或链接 HIXL/GE 厂商 C++ ABI</p></td>
+<td><p>Issue #971 复现，核心重新出现 CANN <code class="docutils literal notranslate"><span class="pre">DT_NEEDED</span></code> 或版本耦合</p></td>
+</tr>
+<tr class="row-odd"><td><p>C2</p></td>
+<td><p>插件只能导出 <code class="docutils literal notranslate"><span class="pre">DsHixlGetApi</span></code>，共享头只能使用 C ABI 安全类型</p></td>
+<td><p>ABI 面扩大，编译器或 CANN 升级可能使主体崩溃</p></td>
+</tr>
+<tr class="row-even"><td><p>C3</p></td>
+<td><p>插件必须与主体同目录且 hash 匹配</p></td>
+<td><p>加载错误版本或被修改文件，产生不可预测调用</p></td>
+</tr>
+<tr class="row-odd"><td><p>C4</p></td>
+<td><p>loader 结果每进程只初始化一次且不 <code class="docutils literal notranslate"><span class="pre">dlclose</span></code></p></td>
+<td><p>并发获得不同函数表，或资源仍活跃时代码段被卸载</p></td>
+</tr>
+<tr class="row-even"><td><p>C5</p></td>
+<td><p>所有插件 C 函数捕获 C++ 异常</p></td>
+<td><p>异常跨共享库边界导致未定义行为或进程终止</p></td>
+</tr>
+<tr class="row-odd"><td><p>C6</p></td>
+<td><p>engine、注册句柄必须先于 ACL finalize 释放</p></td>
+<td><p>厂商资源清理访问已关闭设备上下文</p></td>
+</tr>
+<tr class="row-even"><td><p>C7</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">connMutex_</span></code> 与 <code class="docutils literal notranslate"><span class="pre">transferMutex_</span></code> 不嵌套，插件不回调核心</p></td>
+<td><p>引入锁反转、死锁或热路径全局串行</p></td>
+</tr>
+<tr class="row-odd"><td><p>C8</p></td>
+<td><p>初始化必须全成功后提交，失败逆序回滚</p></td>
+<td><p>暴露部分 engine、残留线程或不可重试状态</p></td>
+</tr>
+<tr class="row-even"><td><p>C9</p></td>
+<td><p>ABI 描述符只复制元数据，不复制用户载荷</p></td>
+<td><p>HCCS 带宽和时延显著回退，破坏 U3</p></td>
+</tr>
+<tr class="row-odd"><td><p>C10</p></td>
+<td><p>CMake 与 Bazel 同时满足核心和插件依赖边界</p></td>
+<td><p>不同构建产物行为分叉，某一路径继续直链 CANN</p></td>
+</tr>
+<tr class="row-even"><td><p>C11</p></td>
+<td><p>插件最终 strip 后再生成 hash，后续发布和 Python 打包阶段不再修改文件内容</p></td>
+<td><p>发布插件与核心内置 hash 永久不匹配</p></td>
+</tr>
+<tr class="row-odd"><td><p>C12</p></td>
+<td><p>两套 SDK、Service、Python 均把插件放在实际主体同目录</p></td>
+<td><p>构建成功但 HCCS 部署稳定报插件缺失</p></td>
+</tr>
+<tr class="row-even"><td><p>C13</p></td>
+<td><p>不改变公开 SDK、RPC/protobuf 和 HCCS 远端身份格式</p></td>
+<td><p>产生跨版本互通或用户代码兼容问题</p></td>
+</tr>
+<tr class="row-odd"><td><p>C14</p></td>
+<td><p>不把 <code class="docutils literal notranslate"><span class="pre">transfer_engine</span></code> 纳入核心 ELF 审计结论</p></td>
+<td><p>验收口径失真，错误宣称完整发布包没有 CANN 依赖</p></td>
+</tr>
+<tr class="row-even"><td><p>C15</p></td>
+<td><p>插件目录不得由非授权运行用户写入</p></td>
+<td><p>hash 检查与 <code class="docutils literal notranslate"><span class="pre">dlopen</span></code> 之间的文件替换风险上升</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>该功能只管理进程内临时资源，不新增持久化数据、恢复记录或远端协议状态，因此无持久化、崩溃一致性、
+compaction 或数据迁移影响。</p>
+</section>
+<section id="id31">
+<h3>6.2 风险<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>#</p></th>
+<th class="head"><p>风险</p></th>
+<th class="head"><p>缓解</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>R1</p></td>
+<td><p>部署 CANN 与构建 CANN 的 HIXL ABI 或语义不兼容</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">RTLD_NOW</span></code>、ABI 插件隔离、受支持 CANN 矩阵和真实设备回归；错误在初始化期暴露</p></td>
+</tr>
+<tr class="row-odd"><td><p>R2</p></td>
+<td><p>主体与插件来自不同构建</p></td>
+<td><p>最终产物 SHA256 校验加 ABI 版本校验；禁止只替换单个文件</p></td>
+</tr>
+<tr class="row-even"><td><p>R3</p></td>
+<td><p>hash 校验后文件被替换</p></td>
+<td><p>固定同目录、插件权限 0440、目录归受信任用户；实现时评估 open/fstat 前后 inode 校验以缩小 TOCTOU 窗口</p></td>
+</tr>
+<tr class="row-odd"><td><p>R4</p></td>
+<td><p>POD 到厂商 vector 的元数据复制影响小包延迟</p></td>
+<td><p>engine 级容量复用、无载荷复制；微基准和真实 P99 阈值阻断发布</p></td>
+</tr>
+<tr class="row-even"><td><p>R5</p></td>
+<td><p>Manager 当前初始化失败仅日志记录，错误无法到达用户</p></td>
+<td><p>P1 保存 <code class="docutils literal notranslate"><span class="pre">initStatus_</span></code>；客户端首次 HCCS 操作和 Worker allocator 前显式检查；Manager 操作入口防御检查</p></td>
+</tr>
+<tr class="row-odd"><td><p>R6</p></td>
+<td><p>部分设备初始化失败泄漏已成功 engine</p></td>
+<td><p>局部 pending 集合和逆序 RAII 回滚；逐设备失败 UT</p></td>
+</tr>
+<tr class="row-even"><td><p>R7</p></td>
+<td><p>fork 后厂商不支持 inherited engine finalize</p></td>
+<td><p>真实设备 fork 测试；若不支持，只在有证据时设计子进程丢弃 inherited token 的专用路径</p></td>
+</tr>
+<tr class="row-odd"><td><p>R8</p></td>
+<td><p>插件失败被永久缓存，修复文件后进程仍不可用</p></td>
+<td><p>错误明确提示重启；不支持运行中混用版本，换取确定性</p></td>
+</tr>
+<tr class="row-even"><td><p>R9</p></td>
+<td><p>Bazel 缺少现成插件 hash 规则</p></td>
+<td><p>P2 新增无环 genrule，并用同一 ELF 与 hash 测试阻断 Bazel 合入</p></td>
+</tr>
+<tr class="row-odd"><td><p>R10</p></td>
+<td><p>某个分发位置遗漏插件或再次 strip</p></td>
+<td><p>打包清单测试覆盖四类位置，逐文件复算 hash 并执行 HCCS 加载冒烟</p></td>
+</tr>
+<tr class="row-even"><td><p>R11</p></td>
+<td><p>插件直接使用 Datasystem 日志或 Status 形成反向依赖</p></td>
+<td><p>链接图与未定义符号审计禁止 <code class="docutils literal notranslate"><span class="pre">libdatasystem</span></code> 反向依赖，错误只用 ABI 数值返回</p></td>
+</tr>
+<tr class="row-odd"><td><p>R12</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">libascendcl.so</span></code> 已由 ACL 插件加载时出现重复实例</p></td>
+<td><p>使用相同 SONAME 和系统 loader 复用规则；验证 <code class="docutils literal notranslate"><span class="pre">/proc/&lt;pid&gt;/maps</span></code> 仅出现预期映射</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="id32">
+<h2>7. 落地步骤<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h2>
+<p>本改造作为一个可原子回滚的 PR 交付，P1–P3 是同一 PR 内的提交和验证阶段；全部门禁通过前不合入，避免
+核心代码、插件和打包规则在 master 上短暂不一致。</p>
+<section id="common-rdma">
+<h3>7.1 Common/RDMA 与插件<a class="headerlink" href="#common-rdma" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>PR 编号</p></th>
+<th class="head"><p>内容</p></th>
+<th class="head"><p>阶段</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>新增 <code class="docutils literal notranslate"><span class="pre">hixl_plugin_api.h</span></code>、ABI 静态断言和 fake plugin</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-odd"><td><p>PR1</p></td>
+<td><p>新增 <code class="docutils literal notranslate"><span class="pre">HixlPluginLoader</span></code> 的固定路径、hash、<code class="docutils literal notranslate"><span class="pre">RTLD_NOW</span></code>、唯一入口和 ABI 校验</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>新增 <code class="docutils literal notranslate"><span class="pre">libds_hixl_plugin.so</span></code>，实现 engine、连接、注册和同步传输适配</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-odd"><td><p>PR1</p></td>
+<td><p>改造 <code class="docutils literal notranslate"><span class="pre">HixlTransport</span></code> 为 opaque handle 与函数表调用，保持预算、锁和批次语义</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>改造 <code class="docutils literal notranslate"><span class="pre">RemoteH2DManager::Init</span></code>：保存 <code class="docutils literal notranslate"><span class="pre">initStatus_</span></code>、分阶段回滚，并在客户端配置、Worker allocator 前及各 HCCS 操作入口传播</p></td>
+<td><p>P1</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id33">
+<h3>7.2 构建与分发<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>PR 编号</p></th>
+<th class="head"><p>内容</p></th>
+<th class="head"><p>阶段</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>CMake 移除 <code class="docutils literal notranslate"><span class="pre">common_rdma</span></code> 的三个 CANN 链接项并建立插件 hash 依赖</p></td>
+<td><p>P2</p></td>
+</tr>
+<tr class="row-odd"><td><p>PR1</p></td>
+<td><p>Bazel 拆分主体与插件目标并新增最终产物 hash genrule</p></td>
+<td><p>P2</p></td>
+</tr>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>更新两套 C++ SDK、Service 和两条 Python 打包路径</p></td>
+<td><p>P2</p></td>
+</tr>
+<tr class="row-odd"><td><p>PR1</p></td>
+<td><p>更新 <code class="docutils literal notranslate"><span class="pre">setup.py</span></code>、<code class="docutils literal notranslate"><span class="pre">python/setup.py</span></code> 白名单与 <code class="docutils literal notranslate"><span class="pre">build_cmake.sh</span></code> strip 例外</p></td>
+<td><p>P2</p></td>
+</tr>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>增加核心和插件 ELF、符号、hash、安装位置自动审计</p></td>
+<td><p>P2</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id34">
+<h3>7.3 测试、性能与文档<a class="headerlink" href="#id34" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>PR 编号</p></th>
+<th class="head"><p>内容</p></th>
+<th class="head"><p>阶段</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>完成 loader、ABI、transport 回滚和并发 UT</p></td>
+<td><p>P3</p></td>
+</tr>
+<tr class="row-odd"><td><p>PR1</p></td>
+<td><p>完成无 CANN 下游链接、Worker 启动和四类加载失败 IT</p></td>
+<td><p>P3</p></td>
+</tr>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>在 CANN 9.x 环境运行 HCCS 连接、注册、传输、清理和 fork 回归</p></td>
+<td><p>P3</p></td>
+</tr>
+<tr class="row-odd"><td><p>PR1</p></td>
+<td><p>对比小包 P50/P99、批量吞吐、分配次数和长稳资源</p></td>
+<td><p>P3</p></td>
+</tr>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>更新 <code class="docutils literal notranslate"><span class="pre">.repo_context</span></code> 构建、Common/RDMA 和测试说明</p></td>
+<td><p>P3</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id35">
+<h3>7.4 发布与回滚<a class="headerlink" href="#id35" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>发布：主体与插件必须来自同一个构建包；先在 CANN 节点验证 HCCS，再在无 CANN 节点验证非 NPU 服务，
+随后扩大部署。</p></li>
+<li><p>兼容：公开 SDK、配置和远端协议不变；新版本不支持搭配旧版本插件。</p></li>
+<li><p>回滚：整体回滚 Datasystem 发布包，不单独替换主体或插件。删除插件只可作为临时禁用 HCCS 的诊断手段，
+不能视为完整回滚。</p></li>
+<li><p>观测：初始化日志记录加载阶段、ABI 版本和失败类别；不在请求热路径增加逐请求成功日志。</p></li>
+</ul>
+</section>
+</section>
+<section id="id36">
+<h2>8. 测试方案<a class="headerlink" href="#id36" title="Link to this heading">¶</a></h2>
+<section id="id37">
+<h3>8.1 单元测试<a class="headerlink" href="#id37" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>文件</p></th>
+<th class="head"><p>覆盖点</p></th>
+<th class="head"><p>覆盖率目标</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">tests/ut/common/rdma/hixl_plugin_loader_test.cpp</span></code></p></td>
+<td><p>并发一次加载、固定路径、缺文件、hash 失败、dlopen 失败、缺入口、版本与长度错误、失败缓存</p></td>
+<td><p>新增分支 ≥ 90%</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">tests/ut/common/rdma/hixl_transport_plugin_test.cpp</span></code></p></td>
+<td><p>多设备提交、逐设备失败回滚、连接幂等、注册预算、临时句柄 RAII、错误映射、Uninit 幂等</p></td>
+<td><p>新增分支 ≥ 90%</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">tests/ut/common/rdma/fake_hixl_plugin.cpp</span></code></p></td>
+<td><p>v1 正常表、空函数指针、错误版本、可控厂商码和异常捕获</p></td>
+<td><p>所有 fake 模式被用例覆盖</p></td>
+</tr>
+<tr class="row-odd"><td><p>ABI C 编译测试</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">hixl_plugin_api.h</span></code> 可由 C11 和 C++17 编译，结构大小与 offset 固定</p></td>
+<td><p>100% ABI 字段断言</p></td>
+</tr>
+<tr class="row-even"><td><p>构建脚本测试</p></td>
+<td><p>hash 顺序、安装路径、strip 例外和白名单</p></td>
+<td><p>所有新增分支覆盖</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>测试不得依赖真实 CANN 的 loader 与 transport 逻辑使用 fake plugin 和 fake API 表；真实厂商行为放入设备测试。</p>
+</section>
+<section id="id38">
+<h3>8.2 集成与系统测试<a class="headerlink" href="#id38" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>IT</p></th>
+<th class="head"><p>对应 UseCase</p></th>
+<th class="head"><p>场景</p></th>
+<th class="head"><p>断言</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>IT1</p></td>
+<td><p>UC1</p></td>
+<td><p>CANN 9.x 构建产物复制到无 CANN 容器，下游 CMake 链接并加载 <code class="docutils literal notranslate"><span class="pre">libdatasystem.so</span></code></p></td>
+<td><p>链接、启动成功；loader 未访问 HIXL 插件</p></td>
+</tr>
+<tr class="row-odd"><td><p>IT2</p></td>
+<td><p>UC2</p></td>
+<td><p>无 CANN 容器启动未启用 NPU 的 Worker</p></td>
+<td><p>进程存活、健康检查通过、普通 KV/Object 冒烟成功</p></td>
+</tr>
+<tr class="row-even"><td><p>IT3</p></td>
+<td><p>UC3</p></td>
+<td><p>CANN 9.x 与完整插件执行多设备 HCCS smoke</p></td>
+<td><p>Init、Connect、Register、ScatterBatch、Disconnect、Finalize 全成功</p></td>
+</tr>
+<tr class="row-odd"><td><p>IT4</p></td>
+<td><p>UC4</p></td>
+<td><p>删除 HIXL 插件</p></td>
+<td><p>HCCS Init 返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code>，进程存活且无 ROCE 降级</p></td>
+</tr>
+<tr class="row-even"><td><p>IT5</p></td>
+<td><p>UC4</p></td>
+<td><p>保留插件但隐藏任一目标 CANN SO</p></td>
+<td><p>Init 在 <code class="docutils literal notranslate"><span class="pre">dlopen</span></code> 阶段返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code> 并指出 SONAME</p></td>
+</tr>
+<tr class="row-odd"><td><p>IT6</p></td>
+<td><p>UC4</p></td>
+<td><p>修改插件单字节或混用另一构建插件</p></td>
+<td><p>返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_AUTHORIZED</span></code>，厂商代码不执行</p></td>
+</tr>
+<tr class="row-even"><td><p>IT7</p></td>
+<td><p>UC4</p></td>
+<td><p>fake plugin 返回错误 ABI 或短结构</p></td>
+<td><p>返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code>，无 engine 创建</p></td>
+</tr>
+<tr class="row-odd"><td><p>IT8</p></td>
+<td><p>UC5</p></td>
+<td><p>HCCS 运行期间执行既有 fork 生命周期</p></td>
+<td><p>子进程重建新 engine；无父进程句柄继续用于传输</p></td>
+</tr>
+<tr class="row-even"><td><p>IT9</p></td>
+<td><p>UC5</p></td>
+<td><p>重复 Init/Uninit 与长稳传输</p></td>
+<td><p>无 engine、注册内存、线程或 fd 泄漏</p></td>
+</tr>
+<tr class="row-odd"><td><p>IT10</p></td>
+<td><p>UC1、UC2、UC3</p></td>
+<td><p>CMake 与 Bazel、四类分发包逐项审计</p></td>
+<td><p>插件位置、hash 和依赖闭包一致</p></td>
+</tr>
+<tr class="row-even"><td><p>IT11</p></td>
+<td><p>UC4</p></td>
+<td><p>客户端首次 <code class="docutils literal notranslate"><span class="pre">MGetH2D</span></code>/预注册及 Worker allocator 前注入插件加载失败</p></td>
+<td><p>客户端操作返回原始状态；Worker 启动失败；Manager 后续入口不访问半初始化资源</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="elf">
+<h3>8.3 ELF 与符号守卫<a class="headerlink" href="#elf" title="Link to this heading">¶</a></h3>
+<p>对 CMake 与 Bazel 产物执行等价检查：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>readelf<span class="w"> </span>-d<span class="w"> </span>libdatasystem.so
+readelf<span class="w"> </span>-d<span class="w"> </span>libdatasystem_worker.so
+readelf<span class="w"> </span>-d<span class="w"> </span>libds_hixl_plugin.so
+readelf<span class="w"> </span>-Ws<span class="w"> </span>libdatasystem.so<span class="w"> </span><span class="p">|</span><span class="w"> </span>c++filt
+readelf<span class="w"> </span>-Ws<span class="w"> </span>libdatasystem_worker.so<span class="w"> </span><span class="p">|</span><span class="w"> </span>c++filt
+</pre></div>
+</div>
+<p>断言：</p>
+<ul class="simple">
+<li><p>两个核心共享库不含 <code class="docutils literal notranslate"><span class="pre">libascendcl.so</span></code>、<code class="docutils literal notranslate"><span class="pre">libcann_hixl.so</span></code>、<code class="docutils literal notranslate"><span class="pre">libmetadef.so</span></code> 的 <code class="docutils literal notranslate"><span class="pre">NEEDED</span></code>；</p></li>
+<li><p>两个核心共享库没有未定义 <code class="docutils literal notranslate"><span class="pre">hixl::</span></code>、<code class="docutils literal notranslate"><span class="pre">ge::AscendString</span></code> 符号；</p></li>
+<li><p>HIXL 插件包含三个目标 <code class="docutils literal notranslate"><span class="pre">NEEDED</span></code>；</p></li>
+<li><p>HIXL 插件动态导出表只包含允许的 <code class="docutils literal notranslate"><span class="pre">DsHixlGetApi</span></code> 项目级符号；</p></li>
+<li><p>SDK、Service、Python 分发目录中的 <code class="docutils literal notranslate"><span class="pre">libds_hixl_plugin.so</span></code> hash 与核心库内置 hash 一致；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">transfer_engine</span></code> 不进入本测试的核心审计集合。</p></li>
+</ul>
+</section>
+<section id="id39">
+<h3>8.4 性能测试<a class="headerlink" href="#id39" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>指标</p></th>
+<th class="head"><p>场景</p></th>
+<th class="head"><p>通过标准</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>插件首次加载耗时</p></td>
+<td><p>首次 HCCS Init</p></td>
+<td><p>单独记录，不进入请求 P99；无重复加载</p></td>
+</tr>
+<tr class="row-odd"><td><p>函数表分发与描述符转换</p></td>
+<td><p>fake API 微基准</p></td>
+<td><p>单次增量 &lt; 1 μs，稳态无新增堆分配</p></td>
+</tr>
+<tr class="row-even"><td><p>小包 P50/P99</p></td>
+<td><p>固定设备、连接、并发和数据规模</p></td>
+<td><p>P99 回退 ≤ 3%</p></td>
+</tr>
+<tr class="row-odd"><td><p>批量吞吐</p></td>
+<td><p>固定 batch 分布和注册模式</p></td>
+<td><p>吞吐下降 ≤ 3%</p></td>
+</tr>
+<tr class="row-even"><td><p>注册路径</p></td>
+<td><p>长期注册、临时注册、预算切批</p></td>
+<td><p>分配次数不高于设计预算且无泄漏</p></td>
+</tr>
+<tr class="row-odd"><td><p>长稳资源</p></td>
+<td><p>持续传输加周期性 Init/Uninit</p></td>
+<td><p>RSS、fd、engine 和注册句柄无持续增长</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>如果测试环境自然抖动超过 3%，使用不少于 5 轮独立运行和置信区间比较；不能以单轮最好值替代基线。</p>
+</section>
+<section id="id40">
+<h3>8.5 验收矩阵<a class="headerlink" href="#id40" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>目标</p></th>
+<th class="head"><p>证据</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>G1</p></td>
+<td><p>ELF 守卫、IT1、IT2</p></td>
+</tr>
+<tr class="row-odd"><td><p>G2</p></td>
+<td><p>loader 调用计数、IT1、IT3</p></td>
+</tr>
+<tr class="row-even"><td><p>G3</p></td>
+<td><p>核心符号审计、ABI C/C++ 编译测试</p></td>
+</tr>
+<tr class="row-odd"><td><p>G4</p></td>
+<td><p>loader/transport UT、IT4–IT7、资源检查</p></td>
+</tr>
+<tr class="row-even"><td><p>G5</p></td>
+<td><p>IT3、IT8、IT9、性能测试</p></td>
+</tr>
+<tr class="row-odd"><td><p>G6</p></td>
+<td><p>IT10、四类分发路径和 hash 复算</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="../api_reference/index.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">API 参考</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="cann_dynamic_loading.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">CANN 运行时依赖隔离概要设计</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, openEuler openYuanrong datasystem
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">子模块：HIXL 动态加载（CANN 运行时依赖隔离）</a><ul>
+<li><a class="reference internal" href="#id1">1. 需求背景与目标</a></li>
+<li><a class="reference internal" href="#id2">2. 需求边界</a><ul>
+<li><a class="reference internal" href="#id3">2.1 关键概念</a></li>
+<li><a class="reference internal" href="#id4">2.2 做什么</a></li>
+<li><a class="reference internal" href="#id5">2.3 不做什么</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#usecase">3. UseCase</a><ul>
+<li><a class="reference internal" href="#npu">3.1 非 NPU 集成与部署</a></li>
+<li><a class="reference internal" href="#hccs">3.2 正常 HCCS 使用</a></li>
+<li><a class="reference internal" href="#id6">3.3 故障与升级</a></li>
+<li><a class="reference internal" href="#id7">3.4 UseCase 总表</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id8">4. 方案设计</a><ul>
+<li><a class="reference internal" href="#id9">4.1 类图</a></li>
+<li><a class="reference internal" href="#id10">4.2 开发视图</a></li>
+<li><a class="reference internal" href="#id11">4.3 关键交互</a><ul>
+<li><a class="reference internal" href="#npu-uc1uc2">4.3.1 非 NPU 进程加载（UC1、UC2）</a></li>
+<li><a class="reference internal" href="#hccs-uc3">4.3.2 HCCS 初始化提交（UC3）</a></li>
+<li><a class="reference internal" href="#uc4">4.3.3 初始化失败与回滚（UC4）</a></li>
+<li><a class="reference internal" href="#uc3">4.3.4 连接与内存注册（UC3）</a></li>
+<li><a class="reference internal" href="#scatterbatch-uc3uc5">4.3.5 ScatterBatch 热路径（UC3、UC5）</a></li>
+<li><a class="reference internal" href="#uninit-fork-uc5">4.3.6 Uninit 与 fork（UC5）</a></li>
+<li><a class="reference internal" href="#id12">4.3.7 错误码映射</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id13">4.4 模块依赖图</a></li>
+<li><a class="reference internal" href="#id14">4.5 关键数据结构</a><ul>
+<li><a class="reference internal" href="#abi">4.5.1 ABI 基础类型</a></li>
+<li><a class="reference internal" href="#id15">4.5.2 ABI 函数表</a></li>
+<li><a class="reference internal" href="#engine">4.5.3 核心 engine 与注册记录</a></li>
+<li><a class="reference internal" href="#loader">4.5.4 Loader 状态</a></li>
+<li><a class="reference internal" href="#manager">4.5.5 Manager 初始化状态</a></li>
+<li><a class="reference internal" href="#id16">4.5.6 插件 engine 上下文</a></li>
+<li><a class="reference internal" href="#id17">4.5.7 并发与所有权总表</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id18">4.6 组件接口设计</a><ul>
+<li><a class="reference internal" href="#id19">4.6.1 接口总览</a></li>
+<li><a class="reference internal" href="#hixlpluginloader-getapi">4.6.2 <code class="docutils literal notranslate"><span class="pre">HixlPluginLoader::GetApi</span></code></a></li>
+<li><a class="reference internal" href="#dshixlgetapi">4.6.3 <code class="docutils literal notranslate"><span class="pre">DsHixlGetApi</span></code></a></li>
+<li><a class="reference internal" href="#id20">4.6.4 engine 生命周期接口</a></li>
+<li><a class="reference internal" href="#id21">4.6.5 连接接口</a></li>
+<li><a class="reference internal" href="#id22">4.6.6 内存注册接口</a></li>
+<li><a class="reference internal" href="#id23">4.6.7 同步传输接口</a></li>
+<li><a class="reference internal" href="#id24">4.6.8 异常边界</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id25">5. 对外接口</a><ul>
+<li><a class="reference internal" href="#sdk">5.1 SDK 接口</a></li>
+<li><a class="reference internal" href="#id26">5.2 部署参数</a></li>
+<li><a class="reference internal" href="#id27">5.3 环境变量</a></li>
+<li><a class="reference internal" href="#id28">5.4 发布产物约定</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id29">6. 约束与风险</a><ul>
+<li><a class="reference internal" href="#id30">6.1 约束</a></li>
+<li><a class="reference internal" href="#id31">6.2 风险</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id32">7. 落地步骤</a><ul>
+<li><a class="reference internal" href="#common-rdma">7.1 Common/RDMA 与插件</a></li>
+<li><a class="reference internal" href="#id33">7.2 构建与分发</a></li>
+<li><a class="reference internal" href="#id34">7.3 测试、性能与文档</a></li>
+<li><a class="reference internal" href="#id35">7.4 发布与回滚</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id36">8. 测试方案</a><ul>
+<li><a class="reference internal" href="#id37">8.1 单元测试</a></li>
+<li><a class="reference internal" href="#id38">8.2 集成与系统测试</a></li>
+<li><a class="reference internal" href="#elf">8.3 ELF 与符号守卫</a></li>
+<li><a class="reference internal" href="#id39">8.4 性能测试</a></li>
+<li><a class="reference internal" href="#id40">8.5 验收矩阵</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js?v=b8b12719"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script src="../_static/custom.js?v=f6e2bf52"></script>
+    </body>
+</html>
