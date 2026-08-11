@@ -407,6 +407,13 @@ Status WorkerOcServiceGetImpl::GetDataFromL2CacheForPrimaryCopy(const std::strin
 
 Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::shared_ptr<GetRequest> &request)
 {
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
+    if (remainingUs <= 0) {
+        return Status(K_RPC_DEADLINE_EXCEEDED,
+                      FormatString("Get deadline exceeded before "
+                                  "ProcessGetObjectRequest, "
+                                  "remaining %ld us.", remainingUs));
+    }
     PerfPoint all(PerfKey::WORKER_PROCESS_GET_OBJECT);
     auto config = GetServerLatencyTraceConfig();
     INJECT_POINT("worker.Get.asyncGetStart", [](int timeout) {
@@ -2183,8 +2190,19 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
         }));
     }
 
+    int64_t waitUs = std::max<int64_t>(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs(), 1);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(waitUs);
+    bool timedOut = false;
     for (auto &f : futures) {
-        f.wait();
+        if (f.wait_until(deadline) == std::future_status::timeout) {
+            abortAllTasks.store(true);
+            timedOut = true;
+        }
+    }
+    if (timedOut) {
+        for (auto &f : futures) {
+            f.wait();
+        }
     }
 
     if (successIds.size() != queryMetas.size()) {

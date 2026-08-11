@@ -426,7 +426,6 @@ Status WorkerOcServicePublishImpl::PublishObject(ObjectKV &objectKV, const Publi
     // Step 1: Verify and request to master, object may be expired due to network latency.
     RETURN_IF_NOT_OK(RequestingToMaster(objectKV, params));
 
-    // Step 2: In case of Non-Shm object, save it to memory first. Write to l2cache if in write-through mode.
     if (!payloads.empty()) {
         RETURN_IF_NOT_OK(SaveBinaryObjectToMemory(objectKV, payloads, evictionManager_, memCpyThreadPool_));
     }
