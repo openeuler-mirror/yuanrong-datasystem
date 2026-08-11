@@ -123,6 +123,9 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     `bonding*` device and failed startup when it was unavailable.
   - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
     to `4` MB and is validated in the range `[1, 2048]` MB.
+  - URMA Jetty modify/flush/delete work runs on the lazy `RetireJfs` thread pool with an internal concurrency of `4`.
+    Resource shutdown drains and joins this non-droppable pool before releasing the Jetty registry and provider
+    dependencies.
   - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.
     `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; explicit provider/error
     retirement is bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap
