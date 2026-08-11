@@ -22,7 +22,7 @@
 
 #include <cstdint>
 #include <cstdlib>
-#include <iomanip>
+#include <cstring>
 #include <random>
 #include <unistd.h>
 
@@ -32,8 +32,30 @@
 #include "datasystem/common/log/log.h"
 
 namespace datasystem {
+namespace {
+constexpr char HEX_DIGITS[] = "0123456789abcdef";
+constexpr char UUID_FMT[] = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
+constexpr char INDEX_PREFIX[] = "00000000-0000-";
+constexpr uint64_t INDEX_DIV16 = 10000000000000000ULL;
+constexpr uint64_t INDEX_DIV12 = 1000000000000ULL;
+constexpr uint64_t INDEX_MOD4 = 10000ULL;
+constexpr size_t DECIMAL_BASE = 10;
+constexpr size_t NIBBLE_BITS = 4;
+constexpr size_t GROUP_WIDTH = 4;
+constexpr size_t TAIL_WIDTH = 12;
 
-std::string GetBytesUuid()
+Status FillDecimalPadded(uint64_t value, size_t width, char *out)
+{
+    CHECK_FAIL_RETURN_STATUS(out != nullptr, StatusCode::K_INVALID, "output is nullptr");
+    for (size_t i = 0; i < width; ++i) {
+        out[width - i - 1] = static_cast<char>('0' + (value % DECIMAL_BASE));
+        value /= DECIMAL_BASE;
+    }
+    CHECK_FAIL_RETURN_STATUS(value == 0, StatusCode::K_INVALID, "value exceeds decimal field width.");
+    return Status::OK();
+}
+
+void FillRandomUuidBytes(uint8_t random[UUID_SIZE])
 {
     static thread_local std::mt19937 gen(RandomData::GetRandomSeed());
     // fork() leaves the child with the parent's already-initialized gen (mt19937
@@ -54,7 +76,6 @@ std::string GetBytesUuid()
         gen.seed(RandomData::GetRandomSeed());
         observedPid = curPid;
     }
-    uint8_t random[UUID_SIZE];
     std::uniform_int_distribution<> dist(0, UINT8_MAX);
     for (size_t i = 0; i < UUID_SIZE; i++) {
         random[i] = dist(gen);
@@ -68,13 +89,26 @@ std::string GetBytesUuid()
     // must be 0b10xxxxxx
     random[UUID_VARIANT_BYTEINDEX] &= 0xBF;
     random[UUID_VARIANT_BYTEINDEX] |= 0x80;
+}
+}  // namespace
+
+std::string GetBytesUuid()
+{
+    uint8_t random[UUID_SIZE];
+    FillRandomUuidBytes(random);
 
     return std::string(reinterpret_cast<char *>(random), sizeof(random));
 }
 
 std::string GetStringUuid()
 {
-    return BytesUuidToString(GetBytesUuid());
+    char uuid[UUID_STRING_BUFFER_SIZE];
+    auto rc = GetStringUuid(uuid, sizeof(uuid));
+    if (rc.IsError()) {
+        LOG(ERROR) << "GetStringUuid failed: " << rc.ToString();
+        return "";
+    }
+    return std::string(uuid, UUID_STRING_SIZE);
 }
 
 std::string BytesUuidToString(const std::string &bytesUuid)
@@ -85,19 +119,43 @@ std::string BytesUuidToString(const std::string &bytesUuid)
         return bytesUuid;
     }
 
-    std::stringstream result;
-    result << std::setfill('0');
-    constexpr uint32_t hexWidth = 2; // represent uint8_t in hex string, width is 2
-    auto *p = reinterpret_cast<const uint8_t *>(bytesUuid.data());
-    for (size_t i = 0; i < bytesUuid.size(); p++, i++) {
-        result << std::setw(hexWidth) << std::hex << +*p;
-        // uuid format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, '-' at 3rd,5th,7th,9th byte
-        if (i == 3 || i == 5 || i == 7 || i == 9) {
-            result << "-";
-        }
+    char uuid[UUID_STRING_BUFFER_SIZE];
+    auto rc = BytesUuidToString(reinterpret_cast<const uint8_t *>(bytesUuid.data()), bytesUuid.size(), uuid,
+                                sizeof(uuid));
+    if (rc.IsError()) {
+        LOG(ERROR) << "BytesUuidToString failed: " << rc.ToString();
+        return bytesUuid;
     }
 
-    return result.str();
+    return std::string(uuid, UUID_STRING_SIZE);
+}
+
+Status BytesUuidToString(const uint8_t *bytesUuid, size_t bytesUuidSize, char *stringUuid, size_t stringUuidSize)
+{
+    CHECK_FAIL_RETURN_STATUS(bytesUuid != nullptr, StatusCode::K_INVALID, "bytesUuid is nullptr");
+    CHECK_FAIL_RETURN_STATUS(stringUuid != nullptr, StatusCode::K_INVALID, "stringUuid is nullptr");
+    CHECK_FAIL_RETURN_STATUS(bytesUuidSize == UUID_SIZE, StatusCode::K_INVALID, "The size of byte uuid should be 16.");
+    CHECK_FAIL_RETURN_STATUS(stringUuidSize >= UUID_STRING_BUFFER_SIZE, StatusCode::K_INVALID,
+                             "The size of string uuid buffer should be at least 37.");
+
+    size_t pos = 0;
+    for (size_t i = 0; i < UUID_SIZE; ++i) {
+        const uint8_t value = bytesUuid[i];
+        stringUuid[pos++] = HEX_DIGITS[value >> NIBBLE_BITS];
+        stringUuid[pos++] = HEX_DIGITS[value & 0x0F];
+        if (UUID_FMT[pos] == '-') {
+            stringUuid[pos++] = '-';
+        }
+    }
+    stringUuid[pos] = '\0';
+    return Status::OK();
+}
+
+Status GetStringUuid(char *stringUuid, size_t stringUuidSize)
+{
+    uint8_t random[UUID_SIZE];
+    FillRandomUuidBytes(random);
+    return BytesUuidToString(random, UUID_SIZE, stringUuid, stringUuidSize);
 }
 
 Status IndexUuidGenerator(const uint64_t uuidNumber, std::string &stringUuid)
@@ -105,20 +163,30 @@ Status IndexUuidGenerator(const uint64_t uuidNumber, std::string &stringUuid)
     // uint64_t max is 18,446,744,073,709,551,615 (len = 20 ： 4 + 4 + 12)
     // xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
     // (8)-(4)-(4)-(4)-(12)
-    std::stringstream ss;
-    const auto dataLen4 = 4;
-    const auto dataLen12 = 12;
+    char uuid[UUID_STRING_BUFFER_SIZE];
+    RETURN_IF_NOT_OK(IndexUuidGenerator(uuidNumber, uuid, sizeof(uuid)));
+    stringUuid.assign(uuid, UUID_STRING_SIZE);
+    return Status::OK();
+}
 
-    // cmath std::power can't get the exact value of uint64_t ( (uint64_t)power(10, 4) = 9999 )
-    const uint64_t power16 = 10000000000000000;
-    const uint64_t power12 = 1000000000000;
-    const uint64_t power4 = 10000;
+Status IndexUuidGenerator(const uint64_t uuidNumber, char *stringUuid, size_t stringUuidSize)
+{
+    CHECK_FAIL_RETURN_STATUS(stringUuid != nullptr, StatusCode::K_INVALID, "stringUuid is nullptr");
+    CHECK_FAIL_RETURN_STATUS(stringUuidSize >= UUID_STRING_BUFFER_SIZE, StatusCode::K_INVALID,
+                             "The size of string uuid buffer should be at least 37.");
 
-    ss << "00000000-0000-" << std::setw(dataLen4) << std::setfill('0') << (uuidNumber / power16) << "-"
-       << std::setw(dataLen4) << std::setfill('0') << (uuidNumber / power12 % power4) << "-" << std::setw(dataLen12)
-       << std::setfill('0') << (uuidNumber % power12);
-
-    stringUuid = ss.str();
+    // uint64_t max has 20 decimal digits, split as 4 + 4 + 12 into the UUID tail:
+    // 00000000-0000-xxxx-xxxx-xxxxxxxxxxxx
+    size_t pos = sizeof(INDEX_PREFIX) - 1;
+    std::memcpy(stringUuid, INDEX_PREFIX, pos);
+    RETURN_IF_NOT_OK(FillDecimalPadded(uuidNumber / INDEX_DIV16, GROUP_WIDTH, stringUuid + pos));
+    stringUuid[pos += GROUP_WIDTH] = '-';
+    ++pos;
+    RETURN_IF_NOT_OK(FillDecimalPadded(uuidNumber / INDEX_DIV12 % INDEX_MOD4, GROUP_WIDTH, stringUuid + pos));
+    stringUuid[pos += GROUP_WIDTH] = '-';
+    ++pos;
+    RETURN_IF_NOT_OK(FillDecimalPadded(uuidNumber % INDEX_DIV12, TAIL_WIDTH, stringUuid + pos));
+    stringUuid[UUID_STRING_SIZE] = '\0';
     return Status::OK();
 }
 

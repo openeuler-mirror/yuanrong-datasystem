@@ -21,12 +21,16 @@
 #ifndef DATASYSTEM_COMMON_UTIL_UUID_GENERATOR_H
 #define DATASYSTEM_COMMON_UTIL_UUID_GENERATOR_H
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 static constexpr size_t UUID_SIZE = 16;
+static constexpr size_t UUID_STRING_SIZE = 36;
+static constexpr size_t UUID_STRING_BUFFER_SIZE = UUID_STRING_SIZE + 1;
 static constexpr size_t UUID_VERSION_BYTEINDEX = 6;
 static constexpr size_t UUID_VARIANT_BYTEINDEX = 8;
 
@@ -36,6 +40,17 @@ static constexpr size_t UUID_VARIANT_BYTEINDEX = 8;
  * @return Return 36-byte printable uuid
  */
 std::string BytesUuidToString(const std::string &bytesUuid);
+
+/**
+ * @brief Convert a 16-byte uuid to a null-terminated printable uuid without heap allocation.
+ * @param[in] bytesUuid A 16-byte uuid.
+ * @param[in] bytesUuidSize Size of bytesUuid.
+ * @param[out] stringUuid Output buffer for a 36-byte printable uuid plus '\0'.
+ * @param[in] stringUuidSize Size of stringUuid.
+ * @note bytesUuid and stringUuid must not overlap.
+ * @return Status of the call.
+ */
+Status BytesUuidToString(const uint8_t *bytesUuid, size_t bytesUuidSize, char *stringUuid, size_t stringUuidSize);
 
 /**
  * @brief Convert a 36-byte printable uuid to a 16-byte uuid .
@@ -54,6 +69,15 @@ Status StringUuidToBytes(const std::string &stringUuid, std::string &byteUuid);
 Status IndexUuidGenerator(const uint64_t uuidNumber, std::string &stringUuid);
 
 /**
+ * @brief Convert a uint64_t index to a null-terminated 36-byte string uuid without heap allocation.
+ * @param[in] uuidNumber A uint64_t Index.
+ * @param[out] stringUuid Output buffer for a 36-byte printable uuid plus '\0'.
+ * @param[in] stringUuidSize Size of stringUuid.
+ * @return Status of the call.
+ */
+Status IndexUuidGenerator(const uint64_t uuidNumber, char *stringUuid, size_t stringUuidSize);
+
+/**
  * @brief Get a 16-byte uuid.
  * @return Return a 16-byte uuid.
  */
@@ -64,6 +88,14 @@ std::string GetBytesUuid();
  * @return Return a 36-byte printable uuid.
  */
 std::string GetStringUuid();
+
+/**
+ * @brief Get a null-terminated 36-byte printable uuid without heap allocation.
+ * @param[out] stringUuid Output buffer for a 36-byte printable uuid plus '\0'.
+ * @param[in] stringUuidSize Size of stringUuid.
+ * @return Status of the call.
+ */
+Status GetStringUuid(char *stringUuid, size_t stringUuidSize);
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_UTIL_UUID_GENERATOR_H

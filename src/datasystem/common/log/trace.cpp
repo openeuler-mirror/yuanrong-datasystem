@@ -126,11 +126,16 @@ TraceGuard Trace::SetTraceUUID()
     }
     SetRequestLogTrace(false);
     SetRequestSampleDecision(false, false);
-    std::string uuid = GetStringUuid();
+    char uuid[UUID_STRING_BUFFER_SIZE];
+    Status rc = GetStringUuid(uuid, sizeof(uuid));
+    if (rc.IsError()) {
+        LOG(ERROR) << "get string uuid failed: " << rc.ToString();
+        return TraceGuard(TraceGuardType::INVALID);
+    }
     auto prefixLen = std::min<size_t>(strlen(prefix_), TRACEID_PREFIX_SIZE);
     int ret = EOK;
     auto dest = traceID_;
-    auto src = uuid.c_str();
+    auto src = uuid;
     if (prefixLen > 0) {
         ret = memcpy_s(traceID_, TRACEID_MAX_SIZE, prefix_, prefixLen);
         if (ret != EOK) {
@@ -138,9 +143,7 @@ TraceGuard Trace::SetTraceUUID()
         }
         traceID_[prefixLen] = ';';
         dest += prefixLen + 1;
-        if (uuid.length() > SHORT_UUID_SIZE) {
-            src += uuid.length() - SHORT_UUID_SIZE;
-        }
+        src += UUID_STRING_SIZE - SHORT_UUID_SIZE;
     }
     size_t destMax = prefixLen > 0 ? TRACEID_MAX_SIZE - prefixLen : TRACEID_MAX_SIZE + 1;
     ret = strcpy_s(dest, destMax, src);

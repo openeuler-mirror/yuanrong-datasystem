@@ -18,6 +18,10 @@
  * Description: test uuid functions
  */
 #include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <iostream>
+#include <limits>
 #include <mutex>
 #include <thread>
 
@@ -51,6 +55,50 @@ TEST_F(UuidTest, TestUpperCaseStringUuidToBytes)
     std::string result;
     DS_ASSERT_OK(StringUuidToBytes(upperCaseString, result));
     EXPECT_EQ(uuid, result);
+}
+
+TEST_F(UuidTest, TestGetStringUuidToBuffer)
+{
+    char uuid[UUID_STRING_BUFFER_SIZE] = {};
+    DS_ASSERT_OK(GetStringUuid(uuid, sizeof(uuid)));
+    EXPECT_EQ(strlen(uuid), UUID_STRING_SIZE);
+
+    std::string byteUuid;
+    DS_ASSERT_OK(StringUuidToBytes(std::string(uuid), byteUuid));
+    EXPECT_EQ(BytesUuidToString(byteUuid), std::string(uuid));
+}
+
+TEST_F(UuidTest, TestBytesUuidToStringToBuffer)
+{
+    std::string byteUuid = GetBytesUuid();
+    char uuid[UUID_STRING_BUFFER_SIZE] = {};
+    DS_ASSERT_OK(BytesUuidToString(reinterpret_cast<const uint8_t *>(byteUuid.data()), byteUuid.size(), uuid,
+                                   sizeof(uuid)));
+
+    EXPECT_EQ(BytesUuidToString(byteUuid), std::string(uuid));
+}
+
+TEST_F(UuidTest, LEVEL1_GetStringUuidPerformance)
+{
+    constexpr size_t warmupIterations = 10000;
+    constexpr size_t benchmarkIterations = 1000000;
+    uint64_t checksum = 0;
+    for (size_t i = 0; i < warmupIterations; ++i) {
+        checksum += static_cast<uint8_t>(GetStringUuid()[0]);
+    }
+
+    const auto begin = std::chrono::steady_clock::now();
+    bool valid = true;
+    for (size_t i = 0; i < benchmarkIterations; ++i) {
+        const std::string uuid = GetStringUuid();
+        valid = valid && uuid.size() == 36 && uuid[8] == '-' && uuid[13] == '-' && uuid[18] == '-' && uuid[23] == '-';
+        checksum += static_cast<uint8_t>(uuid[0]);
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - begin;
+    const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+    std::cout << "UUID_PERF,GetStringUuid,iterations=" << benchmarkIterations << ",total_ns=" << elapsedNs
+              << ",ns_per_op=" << elapsedNs / benchmarkIterations << ",checksum=" << checksum << std::endl;
+    EXPECT_TRUE(valid);
 }
 
 TEST_F(UuidTest, TestDuplicate)
@@ -100,6 +148,9 @@ TEST_F(UuidTest, IndexUuidGenTest)
             uint64_t index = i + baseNum;
             std::string indexUuid;
             DS_ASSERT_OK(IndexUuidGenerator(index, indexUuid));
+            char indexUuidBuffer[UUID_STRING_BUFFER_SIZE] = {};
+            DS_ASSERT_OK(IndexUuidGenerator(index, indexUuidBuffer, sizeof(indexUuidBuffer)));
+            EXPECT_EQ(indexUuid, std::string(indexUuidBuffer));
             std::string byteUuid;
             DS_ASSERT_OK(StringUuidToBytes(indexUuid, byteUuid));
             std::string resultString = BytesUuidToString(byteUuid);
@@ -110,6 +161,20 @@ TEST_F(UuidTest, IndexUuidGenTest)
             ASSERT_EQ(index, dataResult);
         }
     }
+
+    const uint64_t maxIndex = std::numeric_limits<uint64_t>::max();
+    std::string maxIndexUuid;
+    DS_ASSERT_OK(IndexUuidGenerator(maxIndex, maxIndexUuid));
+    char maxIndexUuidBuffer[UUID_STRING_BUFFER_SIZE] = {};
+    DS_ASSERT_OK(IndexUuidGenerator(maxIndex, maxIndexUuidBuffer, sizeof(maxIndexUuidBuffer)));
+    EXPECT_EQ(maxIndexUuid, std::string(maxIndexUuidBuffer));
+    std::string byteUuid;
+    DS_ASSERT_OK(StringUuidToBytes(maxIndexUuid, byteUuid));
+    std::string resultString = BytesUuidToString(byteUuid);
+    resultString.erase(std::remove_if(resultString.begin(), resultString.end(),
+                                      [](unsigned char c) { return !std::isdigit(c); }),
+                       resultString.end());
+    ASSERT_EQ(maxIndex, std::stoull(resultString));
 }
 }  // namespace ut
 }  // namespace datasystem
