@@ -10,7 +10,11 @@ set(openssl_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
 set(openssl_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
-set(openssl_OPTIONS shared enable-ssl3 enable-ssl3-method no-buildtest-c++)
+if (KVTEST_BUILD_STATIC)
+    set(openssl_OPTIONS no-shared enable-ssl3 enable-ssl3-method no-buildtest-c++)
+else()
+    set(openssl_OPTIONS shared enable-ssl3 enable-ssl3-method no-buildtest-c++)
+endif()
 
 add_thirdparty_lib(OpenSSL
   URL ${openssl_URL}

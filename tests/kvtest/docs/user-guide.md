@@ -20,13 +20,19 @@
 
 | 依赖 | 版本要求 | 说明 |
 |------|---------|------|
-| datasystem SDK | 与目标集群同版本 | headers + libdatasystem.so |
+| Bazel | >= 6.0 | 默认编译工具（in-tree datasystem，自包含二进制） |
+| datasystem SDK | 与目标集群同版本 | 仅 cmake 模式需要；headers + libdatasystem.so |
 | GCC | >= 10 | 支持 C++17 |
-| CMake | >= 3.14 | 编译工具 |
+| CMake | >= 3.14 | 可选编译工具（`-b cmake` 时使用） |
+| patch | 任意 | cmake+brpc 模式需要（apply 第三方 .patch） |
 | etcd | >= 3.5 | 集群注册发现 |
 | datasystem Worker | 运行中 | 至少 1 个 Worker 节点 |
 
-### 1.2 获取 SDK
+> 默认 Bazel 模式无需预装 SDK，直接构建 `//tests/kvtest:kvtest`，包含 in-tree `datasystem` 客户端，二进制自包含；并自动启用 `KVTEST_USE_BRPC` —— brpc 控制面 + bthread pipeline/notify 池。
+> CMake + brpc 后端（`./build.sh -b cmake`，默认 ON）会自动下载/编译 brpc/protobuf/gflags/absl 等第三方件（缓存到 `$DS_OPENSOURCE_DIR`），用户无需预装这些 dev 包；仍需预装 datasystem SDK。
+> 仅 `./build.sh -b cmake --use-httplib` 才进入无第三方依赖的 fallback 路径。
+
+### 1.2 获取 SDK（仅 cmake 模式需要；bazel 模式自包含，无需此步）
 
 在 datasystem 源码目录执行 Bazel 编译：
 
@@ -39,10 +45,12 @@ cp bazel-bin/libdatasystem.so output/cpp/lib/
 
 ### 1.3 编译
 
+默认走 Bazel 构建，产物自包含（无需预装 SDK，自动启用 brpc 控制面 + bthread pipeline/notify 池）：
+
 ```bash
 cd tests/kvtest
-./build.sh                  # 使用默认 SDK 路径
-./build.sh -s /path/to/sdk  # 指定 SDK 路径
+./build.sh                  # 默认 bazel，in-tree datasystem，自包含二进制
+./build.sh -d               # Debug 构建（bazel: --config=debug）
 ./build.sh -c -j$(nproc)    # 清理重建
 ```
 
@@ -57,8 +65,25 @@ cd tests/kvtest
 kvtest 不会动态加载外部 `libdatasystem.so`，所以 URMA 必须在 kvtest 本身的构建命令中开启。默认
 `-M off`；CMake kvtest 的能力由其链接的预构建 SDK 决定。
 
-编译产物位于 `output/`：CMake 模式包含动态链接的 `lib/libdatasystem.so`，Bazel 模式只包含自包含的
-`kvtest`；两种模式都会打包 `deploy_client.py` 等运行文件。
+可选 CMake 模式，**两种后端可编译期切换**：
+
+```bash
+# CMake + brpc 后端（默认 KVTEST_USE_BRPC=ON，行为与 bazel 一致）：
+# 复用主仓 cmake/external_libs/*.cmake 自动下载编译 brpc/protobuf/gflags/absl/leveldb/openssl/zlib，
+# 缓存到 $DS_OPENSOURCE_DIR（首次 5-10 分钟，之后秒级）。第三方件全部静态链进 binary。
+./build.sh -b cmake
+./build.sh -b cmake -s /path/to/sdk
+
+# CMake + httplib 后端（fallback，无第三方依赖，无网络下载，纯 std::thread workers）：
+./build.sh -b cmake --use-httplib
+```
+
+**第三方件离线 / 缓存**：cmake+brpc 模式默认从 gitee/github 下载第三方源码。如需离线或加速：
+- `export DS_LOCAL_LIBS_DIR=/path/to/opensource_third_party` 指向主仓 `cmake/external_libs/*.cmake` 约定的本地源码包目录
+- `export DS_OPENSOURCE_DIR=/persistent/cache/dir` 持久化编译产物缓存，避免重复编译
+- `export DATASYSTEM_GITHUB_PROXY=1` 走 gh-proxy.com 镜像（brpc/leveldb/gflags 从 GitHub 下载时）
+
+编译产物位于 `output/`：`kvtest` 可执行文件（静态链接 libstdc++ + 第三方件）、`deploy_client.py` 等。不再需要 `output/lib/` —— kvtest 只动态依赖 `libdatasystem.so`（由部署环境的 container SDK 提供）。bazel 模式自包含二进制，无任何动态依赖。
 
 ---
 

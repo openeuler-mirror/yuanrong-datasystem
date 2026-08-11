@@ -7,26 +7,36 @@
 ```bash
 cd tests/kvtest
 
-# 编译（使用默认 SDK 路径 ../../output/cpp，默认 CMake）
+# 编译（默认 Bazel：in-tree datasystem，自包含二进制，无需预装 SDK；
+#       自动启用 KVTEST_USE_BRPC —— brpc 控制面 + bthread pipeline/notify 池）
 ./build.sh
 
 # 或指定 SDK 路径
 ./build.sh -s /path/to/sdk
 
-# 用 Bazel 构建（in-tree datasystem，自包含二进制，无需预装 SDK）
-./build.sh -b bazel
-
 # 用 Bazel 构建并将 URMA 支持编入自包含 kvtest（与根目录 build.sh -M on 对齐）
 ./build.sh -b bazel -M on
 
 # Debug 构建
-./build.sh -d          # cmake: -DCMAKE_BUILD_TYPE=Debug; bazel: --config=debug
+./build.sh -d                # bazel: --config=debug
 ./build.sh -b bazel -d
+
+# 用 CMake + brpc 后端构建（默认 KVTEST_USE_BRPC=ON，行为与 bazel 一致；
+#       复用主仓 cmake/external_libs/*.cmake 自动下载编译 brpc/protobuf/gflags/absl，
+#       缓存到 $DS_OPENSOURCE_DIR，首次 5-10 分钟，之后秒级；仍链预装 libdatasystem.so）
+./build.sh -b cmake
+./build.sh -b cmake -s /path/to/sdk
+
+# CMake + httplib 后端（fallback：无第三方依赖，无网络下载，纯 std::thread）
+./build.sh -b cmake --use-httplib
 ```
 
 Bazel 模式不会在运行时加载外部 `libdatasystem.so`。需要 UB/URMA 数据面时，必须在构建 kvtest 本身时传入
 `-M on`；该选项会映射为 Bazel 的 `--config=urma`。默认值为 `off`。CMake 模式的能力由 `-s` 指定的
 预构建 SDK 决定，因此不接受 `-M on`。
+
+> cmake+brpc 模式下第三方件源码默认从 gitee/github 下载。如需离线/加速，可设
+> `export DS_LOCAL_LIBS_DIR=/path/to/opensource_third_party` 指向主仓
 
 ## 运行
 

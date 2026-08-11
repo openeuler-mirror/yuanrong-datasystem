@@ -1,12 +1,12 @@
 #pragma once
 
+#include "common/bthread_compat.h"
 #include "common/config.h"
 #include "common/thread_pool.h"
 #include "metrics/metrics.h"
 #include "pipeline/pipeline.h"
 #include <datasystem/kv_client.h>
 #include <atomic>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -49,7 +49,10 @@ private:
     ThreadPool notifyPool_;
     std::vector<std::pair<std::string, OpFunc>> notifyOps_;
     bool notifyNeedsData_ = false;
-    std::mutex pregenMutex_;
+    // Protects pregenData_ from concurrent notify-pipeline tasks. Acquired
+    // inside notifyPool_ workers which are bthreads in bazel mode, so use
+    // kvtest::mutex (bthread::Mutex) to avoid blocking a pthread on contention.
+    kvtest::mutex pregenMutex_;
     std::unordered_map<std::string, std::string> pregenData_;
     CacheReader *cacheReader_ = nullptr;
 };

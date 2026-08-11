@@ -15,6 +15,16 @@ set(absl_CMAKE_OPTIONS
         -DBUILD_SHARED_LIBS:BOOL=ON
         -DABSL_BUILD_MONOLITHIC_SHARED_LIBS:BOOL=TRUE)
 
+# KVTEST_BUILD_STATIC: build absl as static libraries so they can be
+# statically linked into the kvtest binary, avoiding vtable interposition
+# with libdatasystem.so's internal absl. The appended -D options override
+# the earlier ones (cmake processes -D left-to-right, last wins).
+if (KVTEST_BUILD_STATIC)
+    list(APPEND absl_CMAKE_OPTIONS
+        -DBUILD_SHARED_LIBS:BOOL=OFF
+        -DABSL_BUILD_MONOLITHIC_SHARED_LIBS:BOOL=OFF)
+endif()
+
 if (USE_SANITIZER)
     set(absl_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} ${SANITIZER_FLAGS}")
 else ()

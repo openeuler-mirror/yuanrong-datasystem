@@ -57,6 +57,39 @@ if (EXISTS ${Protobuf_ROOT}/lib64/libprotobuf.so)
 else()
     set(_BRPC_PROTOBUF_LIB ${Protobuf_ROOT}/lib/libprotobuf.so)
 endif()
+# KVTEST_BUILD_STATIC: protobuf is built as static (.a, not .so). brpc's cmake
+# hardcodes libprotobuf.so / libprotoc.so paths via PROTOBUF_LIBRARIES /
+# PROTOC_LIB — redirect to the .a files so brpc's internal tools (protoc-gen-*)
+# link against the static archive instead of a non-existent .so.
+# Glob ALL .a files from protobuf's install dir — protobuf 28.x installs
+# libprotobuf.a, libprotoc.a, and potentially libutf8_range.a / libupb.a
+# as separate static archives. libprotobuf.a references utf8_range symbols
+# (utf8_range::IsStructurallyValid for UTF-8 field validation) but the
+# linker only pulls .o files from .a archives that resolve undefined
+# symbols, so passing all .a files is safe and ensures transitive deps
+# are satisfied. The exact set of .a files varies across protobuf versions;
+# globbing avoids hardcoding names that might not match.
+if (KVTEST_BUILD_STATIC)
+    # _BRPC_PROTOBUF_LIB: single path to libprotobuf.a (for FILEPATH vars and
+    # PROTOBUF_LIBRARIES — FindProtobuf.cmake / protobuf-config.cmake expect a
+    # single library path, not a list).
+    set(_BRPC_PROTOBUF_LIB "${Protobuf_LIB_PATH}/libprotobuf.a")
+    # _BRPC_PROTOC_LIB: single path to libprotoc.a (for FILEPATH vars like
+    # Protobuf_PROTOC_LIBRARY).
+    set(_BRPC_PROTOC_LIB "${Protobuf_LIB_PATH}/libprotoc.a")
+    # --whole-archive only for archives with circular deps (protoc↔protobuf↔upb).
+    # Skip libprotobuf-lite.a (subset of libprotobuf.a → duplicate symbols) and
+    # libutf8_range.a/libutf8_validity.a (utf8_validity is a superset of utf8_range
+    # → duplicate symbols). These are pulled in by normal archive resolution
+    # AFTER the --whole-archive block (listed as plain .a files after
+    # --no-whole-archive).
+    set(_PROTOBUF_WHOLE_A
+        "${Protobuf_LIB_PATH}/libprotobuf.a"
+        "${Protobuf_LIB_PATH}/libprotoc.a"
+        "${Protobuf_LIB_PATH}/libupb.a")
+    string(REPLACE ";" " " _PROTOBUF_WHOLE_A_SPACES "${_PROTOBUF_WHOLE_A}")
+    set(_KVTEST_STATIC_LDFLAGS "-Wl,--whole-archive ${_PROTOBUF_WHOLE_A_SPACES} -Wl,--no-whole-archive ${Protobuf_LIB_PATH}/libutf8_range.a ${Protobuf_LIB_PATH}/libutf8_validity.a ${Protobuf_LIB_PATH}/libprotobuf-lite.a")
+endif()
 
 set(brpc_CMAKE_OPTIONS
     -DCMAKE_BUILD_TYPE:STRING=Release
@@ -97,10 +130,10 @@ set(brpc_CMAKE_OPTIONS
     -Dprotobuf_MODULE_COMPATIBLE:BOOL=ON
     -DCMAKE_DISABLE_FIND_PACKAGE_Protobuf:BOOL=OFF
     -DPROTOBUF_INCLUDE_DIRS:PATH=${Protobuf_INCLUDE_DIR}
-    -DPROTOBUF_LIBRARIES:FILEPATH=${_BRPC_PROTOBUF_LIB}
+    -DPROTOBUF_LIBRARIES:STRING=${_BRPC_PROTOBUF_LIB}
     -DPROTOBUF_PROTOC_EXECUTABLE:FILEPATH=${_BRPC_PROTOC_EXECUTABLE}
     -DPROTOBUF_PROTOC_LIBRARY:FILEPATH=${_BRPC_PROTOC_LIB}
-    -DPROTOC_LIB:FILEPATH=${_BRPC_PROTOC_LIB}
+    -DPROTOC_LIB:STRING=${_BRPC_PROTOC_LIB}
     -DProtobuf_PROTOC_EXECUTABLE:FILEPATH=${_BRPC_PROTOC_EXECUTABLE}
     -DProtobuf_INCLUDE_DIR:PATH=${Protobuf_INCLUDE_DIR}
     -DProtobuf_LIBRARY:FILEPATH=${_BRPC_PROTOBUF_LIB}
@@ -110,6 +143,20 @@ set(brpc_CMAKE_OPTIONS
     # datasystem_worker can load libpthread before libbrpc, which makes that
     # lookup skip the real implementation and fail during process startup.
     "-DCMAKE_CPP_FLAGS:STRING=-I${absl_INCLUDE_DIR} -I${ZLIB_INCLUDE_DIRS} -DNO_PTHREAD_MUTEX_HOOK")
+
+if (KVTEST_BUILD_STATIC)
+    list(APPEND brpc_CMAKE_OPTIONS
+        -DBUILD_SHARED_LIBS:BOOL=OFF
+        -DWITH_BRPC_SHARED_LIB:BOOL=OFF)
+    # Pass --whole-archive for all protobuf .a files via CMAKE_EXE_LINKER_FLAGS.
+    # cmake's target_link_libraries strips -Wl,--end-group (doesn't recognize
+    # it as a library), so --start-group can't be used via PROTOC_LIB.
+    # CMAKE_EXE_LINKER_FLAGS is raw linker flags — not filtered by cmake.
+    # --whole-archive forces ALL .o files from the archives to be included,
+    # eliminating circular dep link order issues.
+    list(APPEND brpc_CMAKE_OPTIONS
+        "-DCMAKE_EXE_LINKER_FLAGS:STRING=${_KVTEST_STATIC_LDFLAGS}")
+endif()
 
 # brpc's CMakeLists.txt unconditionally overwrites CMAKE_CXX_FLAGS (line 149), so passing -I for
 # absl via CMAKE_CXX_FLAGS would be discarded. Instead, pass it via CMAKE_CPP_FLAGS which brpc

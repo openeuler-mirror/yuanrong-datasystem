@@ -4,10 +4,24 @@ set -euo pipefail
 # kvtest build script.
 #
 # Supports two build systems, mirroring the main repo's build.sh -b switch:
-#   -b cmake  (default): build kvtest against a pre-installed datasystem SDK
-#                        pointed to by -s/--sdk (default ../../output/cpp).
-#   -b bazel : build kvtest as an in-tree Bazel target (//tests/kvtest:kvtest),
-#              producing a self-contained binary that does not need an SDK.
+#   -b bazel (default): build kvtest as an in-tree Bazel target
+#                        (//tests/kvtest:kvtest), producing a self-contained
+#                        binary that does not need an SDK at runtime. Picks up
+#                        bthread/brpc headers transitively from the in-tree
+#                        datasystem client, so the KVTEST_USE_BRPC control
+#                        plane and bthread-backed pipeline/notify-pool workers
+#                        are enabled.
+#   -b cmake : build kvtest against a pre-installed datasystem SDK pointed to
+#              by -s/--sdk (default ../../output/cpp). Two backends selectable
+#              at build time:
+#                - brpc + bthread (default, KVTEST_USE_BRPC=ON): reuses the
+#                  main repo's cmake/external_libs/*.cmake to download/build
+#                  brpc/protobuf/gflags/absl into $DS_OPENSOURCE_DIR (cached;
+#                  first build ~5-10min, subsequent seconds). Same behavior as
+#                  bazel mode.
+#                - httplib + std::thread (--use-httplib, KVTEST_USE_BRPC=OFF):
+#                  legacy path; no third-party deps, no brpc headers needed.
+#                  Useful when the build host cannot reach GitHub / gitee.
 #
 # Common options:
 #   -s, --sdk DIR     SDK directory (cmake only; default $DATASYSTEM_SDK_DIR or ../../output/cpp)
@@ -15,8 +29,12 @@ set -euo pipefail
 #   -d, --debug       Debug build (cmake: -DCMAKE_BUILD_TYPE=Debug; bazel: --config=debug)
 #   -r, --release     Release build (default)
 #   -c, --clean       Clean build directory first (cmake) / bazel clean first (bazel)
-#   -b, --build SYS   Build system: cmake or bazel (default: cmake)
+#   -b, --build SYS   Build system: cmake or bazel (default: bazel)
 #   -M on|off         Build the Bazel kvtest with URMA support (default: off)
+#   --use-httplib     cmake mode only: build httplib+std::thread backend instead of
+#                     the default brpc+bthread backend. The brpc backend reuses the
+#                     main repo's cmake/external_libs scripts to download/build
+#                     brpc/protobuf/gflags/absl into $DS_OPENSOURCE_DIR (cached).
 #   -h, --help        Show this help
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,10 +42,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SDK_DIR="${DATASYSTEM_SDK_DIR:-$SCRIPT_DIR/../../output/cpp}"
 BUILD_DIR="$SCRIPT_DIR/build"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 8)}"
-BUILD_SYSTEM="cmake"
+BUILD_SYSTEM="bazel"
 BUILD_TYPE="Release"
 BUILD_WITH_URMA="off"
 CLEAN=0
+USE_HTTPLIB=0
 
 usage() {
     sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -57,6 +76,7 @@ while [[ $# -gt 0 ]]; do
             fi
             BUILD_WITH_URMA="$2"; shift 2 ;;
         -c|--clean) CLEAN=1; shift ;;
+        --use-httplib) USE_HTTPLIB=1; shift ;;
         -h|--help)  usage ;;
         *)          echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -65,10 +85,14 @@ done
 echo "Build system: $BUILD_SYSTEM"
 echo "Build type:   $BUILD_TYPE"
 echo "Jobs:         $JOBS"
-echo "URMA:         $BUILD_WITH_URMA"
-
-if [[ "$BUILD_SYSTEM" == "cmake" && "$BUILD_WITH_URMA" == "on" ]]; then
-    echo "ERROR: -M on is supported only with -b bazel; CMake kvtest uses the selected pre-built SDK"
+if [[ "$BUILD_SYSTEM" == "cmake" ]]; then
+    if [[ $USE_HTTPLIB -eq 1 ]]; then
+        echo "Backend:      httplib + std::thread (--use-httplib)"
+    else
+        echo "Backend:      brpc + bthread (default; third-party libs reuse main repo's cmake/external_libs)"
+    fi
+elif [[ $USE_HTTPLIB -eq 1 ]]; then
+    echo "ERROR: --use-httplib only applies to -b cmake (bazel mode is always brpc+bthread)"
     exit 1
 fi
 
@@ -106,10 +130,18 @@ if [[ "$BUILD_SYSTEM" == "cmake" ]]; then
 
     mkdir -p "$BUILD_DIR"
     # Out-of-source cmake configure/build against the kvtest source tree.
-    cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" \
-        -DDATASYSTEM_SDK_DIR="$SDK_DIR" \
-        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+    # -DREPO_ROOT points at the main yuanrong-datasystem source tree so the
+    #   cmake build can reuse cmake/external_libs/*.cmake + third_party/patches
+    #   to download/build brpc/protobuf/gflags/absl when KVTEST_USE_BRPC=ON.
+    # -DKVTEST_USE_BRPC selects the backend (ON by default; --use-httplib flips OFF).
+    cmake_opts=(
+        -DDATASYSTEM_SDK_DIR="$SDK_DIR"
+        -DREPO_ROOT="$REPO_ROOT"
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
         -DCMAKE_SKIP_INSTALL_RPATH=ON
+        -DKVTEST_USE_BRPC=$([[ $USE_HTTPLIB -eq 1 ]] && echo OFF || echo ON)
+    )
+    cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" "${cmake_opts[@]}"
     cmake --build "$BUILD_DIR" -j"$JOBS"
 
     echo ""
@@ -117,8 +149,7 @@ if [[ "$BUILD_SYSTEM" == "cmake" ]]; then
     echo ""
     echo "Packaging..."
     cd "$SCRIPT_DIR"
-    make copy-sdk BAZEL_SDK_DIR="$SDK_DIR"
-    make package
+    make package BAZEL_SDK_DIR="$SDK_DIR"
     echo ""
     echo "Done: $SCRIPT_DIR/output/"
 
@@ -179,10 +210,8 @@ else  # bazel
     echo ""
     echo "Packaging..."
     cd "$SCRIPT_DIR"
-    # No `make copy-sdk` here: the bazel binary is self-contained and does not
-    # need libdatasystem.so at runtime. The Makefile package target tolerates a
-    # missing third_party/sdk/ for this mode.
-    make package
+    # bazel binary is self-contained — no SDK libs needed at runtime.
+    make package BAZEL_SDK_DIR="$SDK_DIR"
     echo ""
     echo "Done: $SCRIPT_DIR/output/"
 fi

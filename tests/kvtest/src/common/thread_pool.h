@@ -1,13 +1,26 @@
 #pragma once
 
+#include "bthread_compat.h"
 #include "simple_log.h"
-#include <condition_variable>
 #include <functional>
-#include <mutex>
 #include <queue>
-#include <thread>
 #include <vector>
 
+// Bounded worker-pool with std::thread-compatible API. Used by
+// KVWorker::notifyPool_ (peer-notify offload) and NotifyDispatcher::
+// notifyPool_ (async notify-pipeline execution).
+//
+// Selection: in bazel mode (KVTEST_USE_BRPC) the workers are bthreads
+// (kvtest::thread -> bthread_start_background) and the queue mutex/cv are
+// bthread-aware (kvtest::mutex -> bthread::Mutex, kvtest::condition_variable
+// -> bthread::ConditionVariable). A worker waiting on the queue, or running
+// a task that calls SDK Set/Get / brpc::Channel::CallMethod, yields its
+// bthread instead of holding a pthread — the brpc M:N benefit. In cmake
+// mode the kvtest:: aliases resolve to std primitives so the pre-installed
+// SDK (no brpc headers) still builds unchanged. Submit / Stop / QueueSize
+// and the bounded-concurrency contract are preserved verbatim in both
+// modes — Submit never blocks, Stop drains the queue then joins workers,
+// QueueSize reports pending (un-started) tasks under the pool mutex.
 class ThreadPool {
 public:
     explicit ThreadPool(int numThreads) {
@@ -20,7 +33,7 @@ public:
 
     void Submit(std::function<void()> task) {
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<kvtest::mutex> lock(mutex_);
             if (stopped_) return;
             tasks_.push(std::move(task));
         }
@@ -28,13 +41,13 @@ public:
     }
 
     size_t QueueSize() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<kvtest::mutex> lock(mutex_);
         return tasks_.size();
     }
 
     void Stop() {
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<kvtest::mutex> lock(mutex_);
             if (stopped_) return;
             stopped_ = true;
         }
@@ -50,7 +63,7 @@ private:
         while (true) {
             std::function<void()> task;
             {
-                std::unique_lock<std::mutex> lock(mutex_);
+                std::unique_lock<kvtest::mutex> lock(mutex_);
                 cv_.wait(lock, [this] { return stopped_ || !tasks_.empty(); });
                 if (stopped_ && tasks_.empty()) return;
                 task = std::move(tasks_.front());
@@ -66,9 +79,9 @@ private:
         }
     }
 
-    std::vector<std::thread> workers_;
+    std::vector<kvtest::thread> workers_;
     std::queue<std::function<void()>> tasks_;
-    std::mutex mutex_;
-    std::condition_variable cv_;
+    kvtest::mutex mutex_;
+    kvtest::condition_variable cv_;
     bool stopped_ = false;
 };

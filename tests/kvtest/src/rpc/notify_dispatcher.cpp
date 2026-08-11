@@ -51,7 +51,7 @@ void NotifyDispatcher::DispatchNotify(const std::string &action, int sender,
         if (notifyNeedsData_) {
             auto cacheKey = std::to_string(expectedSize) + "_" + std::to_string(sender);
             {
-                std::lock_guard<std::mutex> lock(pregenMutex_);
+                std::lock_guard<kvtest::mutex> lock(pregenMutex_);
                 auto it = pregenData_.find(cacheKey);
                 if (it != pregenData_.end()) {
                     ctx.data = it->second;

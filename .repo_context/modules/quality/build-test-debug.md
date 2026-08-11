@@ -260,13 +260,22 @@ Backed by `.bazelrc`, `bazel/workspace_status.sh`, `bazel/git_version.bzl`, and 
 Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
 
 - `tests/kvtest` is a standalone KVClient performance tool with its own `build.sh` supporting `-b cmake|bazel`,
-  mirroring the main repo's build-system switch;
+  mirroring the main repo's build-system switch; **bazel is the default** (so the brpc control plane and
+  bthread-backed pipeline/notify-pool workers are enabled out of the box);
 - the CMake mode links against a pre-installed SDK (`-s/--sdk`, default `../../output/cpp`), while the Bazel mode
   builds `//tests/kvtest:kvtest` against the in-tree `//src/datasystem/client:datasystem`, producing a self-contained
   binary that does not need `libdatasystem.so` at runtime;
 - kvtest `build.sh -M on` mirrors the root build entrypoint for Bazel builds by adding `--config=urma`; it defaults
   to `off`, validates `on|off`, and rejects `-M on` with CMake because that mode consumes an already-built SDK
   whose compile-time transport capabilities cannot be changed by the kvtest build;
+- the CMake mode further exposes a build-time backend switch via `option(KVTEST_USE_BRPC)` (default ON): when ON,
+  `tests/kvtest/CMakeLists.txt` reuses the main repo's `cmake/util.cmake` + `cmake/external_libs/{absl,zlib,openssl,
+  leveldb,gflags,protobuf,brpc}.cmake` to download and build brpc/protobuf/gflags/absl into `$DS_OPENSOURCE_DIR`
+  (cached; first build 5-10min, subsequent seconds), then **statically links** all third-party archives into the
+  kvtest binary (`KVTEST_BUILD_STATIC=ON`) — same brpc+bthread behavior as bazel mode, with no SDK packaging changes
+  and no SDK symbol-export changes. Static linking avoids vtable interposition conflicts with libdatasystem.so's
+  exported `_ZTV*` symbols. When OFF (`--use-httplib`), keeps the legacy httplib control plane + `std::thread`
+  workers (no third-party deps, no network downloads).
 - `tests/kvtest/Makefile` `package` tolerates a missing `third_party/sdk/` so the same packaging step serves both
   modes (cmake ships SDK libs alongside; bazel ships only the fat binary);
 - the control plane (Notify/Stats/Stop/Summary) is dual-transport via a `KVTEST_USE_BRPC` compile-time switch:
@@ -277,6 +286,18 @@ Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
   work unchanged; the C++ peer client (`BrpcPeerClient`) uses typed `KvtestControl::Stub` over binary protobuf.
   The SDK does not ship brpc/protobuf/gflags headers, so cmake mode cannot use brpc until the SDK packages
   third-party dev headers.
+- the data-plane pipeline threads (`KVWorker::PipelineLoop`, `CacheReader::ReaderLoop`) use the same
+  `KVTEST_USE_BRPC` switch via `src/common/bthread_compat.h`: bazel mode spawns bthreads
+  (`bthread_start_background`) backed by brpc's M:N worker pool, with `bthread::Mutex` / `bthread_rwlock_t` /
+  `bthread::ConditionVariable` for hot-path synchronization and `bthread_usleep` for QPS-rate idling — a SDK
+  Set/Get RPC wait inside a bthread yields the bthread instead of holding a pthread. CMake mode keeps `std::thread`
+  + `std::mutex` / `std::shared_mutex` / `std::condition_variable` so the pre-installed SDK (no brpc headers)
+  still builds unchanged. The same `bthread_compat.h` abstraction backs `src/common/thread_pool.h`, so
+  `KVWorker::notifyPool_` and `NotifyDispatcher::notifyPool_` workers are bthreads in bazel mode too — peer-notify
+  offload and the async notify-pipeline yield the bthread on `brpc::Channel::CallMethod` / SDK Set/Get instead of
+  holding a pthread. The `ThreadPool` Submit / Stop / QueueSize contract and bounded-concurrency behavior are
+  preserved verbatim in both modes; the kvtest unit tests (`tests/kvtest/tests/cxx/test_thread_pool.cpp`) run in
+  cmake mode so they exercise the `std::thread` path unchanged.
 
 Backed by `tests/kvtest/deploy_coordinator.py`, `deploy_worker.py`, `deploy_common.py`, and `deploy_pods.py`:
 
