@@ -1415,8 +1415,6 @@ private:
 
     Status DoWarmupClientWorkerConnection();
 
-    void CleanupWarmupObjects(const std::vector<std::string> &warmupKeys, const std::string &firstWarmupKey);
-
     /**
      * @brief Try switch back to local worker.
      */
