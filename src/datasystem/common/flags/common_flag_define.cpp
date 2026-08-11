@@ -188,6 +188,13 @@ DS_DEFINE_bool(brpc_enable_builtin_services, false,
                "Default false to match the ZMQ security baseline (no HTTP endpoint); the /flags and "
                "/pprof endpoints allow gflag mutation and memory dumps. Set true only for debugging "
                "on a trusted network.");
+DS_DEFINE_string(brpc_connection_type, GetStringFromEnv("DATASYSTEM_BRPC_CONNECTION_TYPE", "pooled"),
+                 "brpc channel connection type: \"pooled\" (default) or \"single\". SINGLE is not "
+                 "recommended for high-QPS paths (single-socket write-lock contention).");
+DS_DEFINE_int32(brpc_max_connection_pool_size, GetInt32FromEnv("DATASYSTEM_BRPC_MAX_CONNECTION_POOL_SIZE", 8),
+                "Max idle pooled connections per remote endpoint (brpc default 100). Applied on both "
+                "server and client sides. Lower values reduce connection count but may cause "
+                "connection churn under bursty workloads.");
 DS_DEFINE_bool(brpc_drop_expired_request, true,
                "Server-side interceptor: reject brpc requests whose client deadline already elapsed "
                "while queued, before the handler runs. The client receives ERPCTIMEDOUT -> "
