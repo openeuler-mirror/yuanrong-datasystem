@@ -244,6 +244,7 @@ public:
     void RecordPeerRpcFailure(const HostPort &target) override;
     void RecordPeerRpcFailure(const HostPort &target, std::chrono::steady_clock::time_point now);
     void RecordPeerRpcSuccess(const HostPort &target) override;
+    void ClearPeerRpcFailureObservations() override;
     std::vector<std::string> GetFailedTargets(std::chrono::steady_clock::time_point now);
     bool ConsumeImmediateReportSignal();
 

@@ -988,7 +988,9 @@ Status TopologyEngine::MarkExiting(int32_t timeoutMs)
 {
     CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
                              "cluster topology Engine is not running");
-    localVoluntaryExitRequested_.store(true);
+    if (!localVoluntaryExitRequested_.exchange(true)) {
+        memberBackend_->ClearPeerRpcFailureObservations();
+    }
     auto rc = memberBackend_->UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, timeoutMs);
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
               << " role=worker action=mark_exiting address=" << options_.localAddress << " status=" << rc.ToString();
@@ -1064,14 +1066,16 @@ Status TopologyEngine::GetMembershipSidecar(
     return memberBackend_->GetAll(tableName, records);
 }
 
-void TopologyEngine::RecordPeerRpcFailure(const HostPort &target)
+void TopologyEngine::ObservePeerRpcResult(const HostPort &target, const Status &status)
 {
-    memberBackend_->RecordPeerRpcFailure(target);
-}
-
-void TopologyEngine::RecordPeerRpcSuccess(const HostPort &target)
-{
-    memberBackend_->RecordPeerRpcSuccess(target);
+    if (status.IsOk()) {
+        memberBackend_->RecordPeerRpcSuccess(target);
+        return;
+    }
+    if (status.GetCode() == K_RPC_UNAVAILABLE || status.GetCode() == K_RPC_DEADLINE_EXCEEDED
+        || status.GetCode() == K_RPC_PEER_DEAD) {
+        memberBackend_->RecordPeerRpcFailure(target);
+    }
 }
 
 Status TopologyEngine::GetRoutingHostIds(std::unordered_map<std::string, std::string> &hostIds) const

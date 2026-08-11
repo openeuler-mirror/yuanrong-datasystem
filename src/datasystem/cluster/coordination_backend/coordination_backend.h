@@ -217,6 +217,10 @@ public:
         (void)target;
     }
 
+    virtual void ClearPeerRpcFailureObservations()
+    {
+    }
+
     /**
      * @brief Idempotently stop asynchronous watch and keepalive callbacks while preserving synchronous operations.
      * @return Backend operation status.

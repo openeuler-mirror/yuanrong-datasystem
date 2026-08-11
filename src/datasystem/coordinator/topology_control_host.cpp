@@ -62,6 +62,20 @@ void PreserveFirstError(const Status &candidate, Status &firstError)
         firstError = candidate;
     }
 }
+
+size_t CountFailurePopulation(const cluster::TopologySnapshot &latest)
+{
+    const auto &activeBatch = latest.GetActiveBatch();
+    // PRE_LEAVING cannot report, but an active ScaleIn still blocks its exit, so it remains in the quorum population.
+    const auto isFailurePopulationMember = [&activeBatch](const cluster::Member &member) {
+        const bool scaleInMember = activeBatch.has_value()
+                                   && activeBatch->type == cluster::TopologyChangeType::SCALE_IN
+                                   && (member.state == cluster::MemberState::PRE_LEAVING
+                                       || member.state == cluster::MemberState::LEAVING);
+        return member.state == cluster::MemberState::ACTIVE || scaleInMember;
+    };
+    return std::count_if(latest.Members().begin(), latest.Members().end(), isFailurePopulationMember);
+}
 }  // namespace
 
 bool TopologyControlHost::Options::IsValid() const noexcept
@@ -228,6 +242,7 @@ Status TopologyControlHost::EnqueueWorkerLivenessReport(const std::string &clust
 void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &clusterName, const std::string &reporter,
                                                        const std::vector<std::string> &targets)
 {
+    // Address-only compatibility callers cannot provide incarnation fences; production ingestion uses records below.
     cluster::MembershipRecord reporterRecord{ reporter, cluster::MemberLifecycleState::READY, 0, "" };
     std::vector<cluster::MembershipRecord> targetRecords;
     targetRecords.reserve(targets.size());
@@ -244,6 +259,7 @@ void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &cluste
     if (reporter.address.empty() || targets.empty()) {
         return;
     }
+    // Eligibility is evaluated later against one current topology and membership snapshot.
     const auto now = options_.controller.now();
     std::lock_guard<std::mutex> lock(mutex_);
     auto &clusterReports = failureReportsByCluster_[clusterName];
@@ -258,6 +274,7 @@ void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &cluste
         const bool newReporter = reporters.size() != oldSize;
         state = FailureReportState{
             now,
+            reporter.state,
             reporter.timestamp,
             reporter.hostId,
             target.timestamp,
@@ -276,25 +293,36 @@ void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &cluste
     }
 }
 
-std::unordered_map<std::string, cluster::MembershipRecord> TopologyControlHost::BuildReadyActiveMemberships(
+std::unordered_map<std::string, cluster::MembershipRecord> TopologyControlHost::BuildEligibleFailureReporters(
     const cluster::TopologySnapshot &latest, const std::vector<cluster::MembershipRecord> &memberships)
 {
     std::unordered_set<std::string> activeMembers;
+    std::unordered_set<std::string> leavingMembers;
     activeMembers.reserve(latest.ActiveMembers().size());
+    leavingMembers.reserve(latest.Members().size());
     for (const auto *member : latest.ActiveMembers()) {
         activeMembers.emplace(member->identity.address);
     }
-    std::unordered_map<std::string, cluster::MembershipRecord> readyMemberships;
-    readyMemberships.reserve(memberships.size());
-    for (const auto &membership : memberships) {
-        if (membership.state == cluster::MemberLifecycleState::READY && activeMembers.count(membership.address) > 0) {
-            readyMemberships.emplace(membership.address, membership);
+    for (const auto &member : latest.Members()) {
+        if (member.state == cluster::MemberState::LEAVING) {
+            leavingMembers.emplace(member.identity.address);
         }
     }
-    return readyMemberships;
+    std::unordered_map<std::string, cluster::MembershipRecord> eligibleReporters;
+    eligibleReporters.reserve(memberships.size());
+    for (const auto &membership : memberships) {
+        const bool serving = membership.state == cluster::MemberLifecycleState::READY
+                             && activeMembers.count(membership.address) > 0;
+        const bool leaving = membership.state == cluster::MemberLifecycleState::EXITING
+                             && leavingMembers.count(membership.address) > 0;
+        if (serving || leaving) {
+            eligibleReporters.emplace(membership.address, membership);
+        }
+    }
+    return eligibleReporters;
 }
 
-size_t TopologyControlHost::ActiveFailureReporterThreshold(size_t totalWorkers)
+size_t TopologyControlHost::FailureReporterThreshold(size_t totalWorkers)
 {
     if (totalWorkers <= 1) {
         return std::numeric_limits<size_t>::max();
@@ -306,32 +334,40 @@ size_t TopologyControlHost::ActiveFailureReporterThreshold(size_t totalWorkers)
 
 size_t TopologyControlHost::PruneAndCountFailureReporters(
     const cluster::TopologySnapshot &latest,
-    const std::unordered_map<std::string, cluster::MembershipRecord> &readyMemberships, const std::string &target,
+    const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
+    const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress, const std::string &target,
     std::unordered_map<std::string, FailureReportState> &reporters, std::chrono::steady_clock::time_point now) const
 {
     size_t validReports = 0;
     const cluster::Member *targetMember = nullptr;
-    const bool targetActive = latest.FindMemberByAddress(target, targetMember).IsOk() && targetMember != nullptr
-                              && targetMember->state == cluster::MemberState::ACTIVE;
-    const auto targetMembership = readyMemberships.find(target);
-    const bool targetReady = targetMembership != readyMemberships.end();
+    const bool targetFound = latest.FindMemberByAddress(target, targetMember).IsOk() && targetMember != nullptr;
+    const auto activeBatch = latest.GetActiveBatch();
+    const bool targetEligible = targetFound
+                                && (targetMember->state == cluster::MemberState::ACTIVE
+                                    || (targetMember->state == cluster::MemberState::JOINING
+                                        && activeBatch.has_value()
+                                        && activeBatch->type == cluster::TopologyChangeType::SCALE_OUT));
+    const auto targetMembership = membershipsByAddress.find(target);
+    const bool targetPresent = targetMembership != membershipsByAddress.end();
     for (auto reporterIter = reporters.begin(); reporterIter != reporters.end();) {
         const auto &reporter = reporterIter->first;
         const bool expired = now - reporterIter->second.receiveTime > options_.activeFailureWindow;
-        const auto reporterMembership = readyMemberships.find(reporter);
-        const bool reporterActive = reporterMembership != readyMemberships.end();
+        const auto reporterMembership = eligibleReporters.find(reporter);
+        const bool reporterEligible = reporterMembership != eligibleReporters.end();
         const auto &state = reporterIter->second;
         const bool reporterChanged =
-            reporterActive && state.reporterTimestamp != 0
-            && (state.reporterTimestamp != reporterMembership->second.timestamp
-                || state.reporterHostId != reporterMembership->second.hostId);
+            reporterEligible
+            && (state.reporterState != reporterMembership->second.state
+                || (state.reporterTimestamp != 0
+                    && (state.reporterTimestamp != reporterMembership->second.timestamp
+                        || state.reporterHostId != reporterMembership->second.hostId)));
         const bool targetChanged =
-            targetReady
+            targetPresent
             && (state.targetTimestamp < 0
                 || (state.targetTimestamp > 0
                     && (state.targetTimestamp != targetMembership->second.timestamp
                         || state.targetHostId != targetMembership->second.hostId)));
-        if (expired || !targetActive || !reporterActive || reporter == target || reporterChanged || targetChanged) {
+        if (expired || !targetEligible || !reporterEligible || reporter == target || reporterChanged || targetChanged) {
             reporterIter = reporters.erase(reporterIter);
             continue;
         }
@@ -345,20 +381,13 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
     const std::string &clusterName, const cluster::TopologySnapshot &latest,
     const std::vector<cluster::MembershipRecord> &memberships, std::chrono::steady_clock::time_point now)
 {
-    const auto readyMemberships = BuildReadyActiveMemberships(latest, memberships);
-    size_t totalWorkers = 0;
-    for (const auto &member : latest.Members()) {
-        if (member.state == cluster::MemberState::ACTIVE) {
-            ++totalWorkers;
-        }
+    const auto eligibleReporters = BuildEligibleFailureReporters(latest, memberships);
+    std::unordered_map<std::string, cluster::MembershipRecord> membershipsByAddress;
+    membershipsByAddress.reserve(memberships.size());
+    for (const auto &membership : memberships) {
+        membershipsByAddress.emplace(membership.address, membership);
     }
-    if (totalWorkers <= 1) {
-        return {};
-    }
-    const auto reporterThreshold = ActiveFailureReporterThreshold(totalWorkers);
-    if (reporterThreshold > totalWorkers - 1) {
-        return {};
-    }
+    const auto failurePopulation = CountFailurePopulation(latest);
     std::vector<cluster::MemberIdentity> candidates;
     std::lock_guard<std::mutex> lock(mutex_);
     auto clusterIter = failureReportsByCluster_.find(clusterName);
@@ -366,14 +395,23 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
         return candidates;
     }
     auto &clusterReports = clusterIter->second;
+    const auto activeBatch = latest.GetActiveBatch();
     for (auto targetIter = clusterReports.begin(); targetIter != clusterReports.end();) {
         const auto &target = targetIter->first;
         auto &reporters = targetIter->second;
-        const auto validReports = PruneAndCountFailureReporters(latest, readyMemberships, target, reporters, now);
+        const auto validReports = PruneAndCountFailureReporters(
+            latest, eligibleReporters, membershipsByAddress, target, reporters, now);
+        const cluster::Member *targetMember = nullptr;
+        const bool joiningScaleOutTarget = activeBatch.has_value()
+                                           && activeBatch->type == cluster::TopologyChangeType::SCALE_OUT
+                                           && latest.FindMemberByAddress(target, targetMember).IsOk()
+                                           && targetMember != nullptr
+                                           && targetMember->state == cluster::MemberState::JOINING;
+        const size_t totalWorkers = failurePopulation + (joiningScaleOutTarget ? 1 : 0);
+        const auto reporterThreshold = FailureReporterThreshold(totalWorkers);
         if (validReports >= reporterThreshold) {
             const cluster::Member *member = nullptr;
-            if (latest.FindMemberByAddress(target, member).IsOk() && member != nullptr
-                && member->state == cluster::MemberState::ACTIVE) {
+            if (latest.FindMemberByAddress(target, member).IsOk() && member != nullptr) {
                 candidates.push_back(member->identity);
             }
         }
@@ -453,7 +491,7 @@ void TopologyControlHost::ReconcileCluster(const std::string &clusterName)
         entry = found->second.get();
         state = entry->state;
         if (state == EntryState::RESERVED && entry->releaseAfterStop) {
-            entries_.erase(found);
+            EraseClusterLocked(clusterName);
             return;
         }
     }
@@ -484,7 +522,7 @@ void TopologyControlHost::ReconcileWaitingEntry(const std::string &clusterName, 
             auto found = entries_.find(clusterName);
             if (found != entries_.end() && found->second.get() == &entry
                 && IsEmptyObservationCurrent(entry, observationGeneration)) {
-                entries_.erase(found);
+                EraseClusterLocked(clusterName);
             }
             return;
         }
@@ -646,7 +684,7 @@ Status TopologyControlHost::StartRuntime(ClusterEntry &entry)
     runtimeOptions.controller.initialProbeRound = (nextRuntimeGeneration_++ << 32U) + 1U;
     runtimeOptions.controller.membershipRestartHandler = {};
     runtimeOptions.controller.materializeRestartFacts = true;
-    runtimeOptions.controller.activeFailureCandidateProvider =
+    runtimeOptions.controller.failureSummaryCandidateProvider =
         [this, clusterName = entry.clusterName](const cluster::TopologySnapshot &latest,
                                                 const std::vector<cluster::MembershipRecord> &memberships,
                                                 std::chrono::steady_clock::time_point now) {
@@ -720,6 +758,12 @@ Status TopologyControlHost::ReleaseClusterIfEmpty(ClusterEntry &entry, bool &rel
     return Status::OK();
 }
 
+void TopologyControlHost::EraseClusterLocked(const std::string &clusterName)
+{
+    failureReportsByCluster_.erase(clusterName);
+    entries_.erase(clusterName);
+}
+
 bool TopologyControlHost::IsEmptyObservationCurrent(const ClusterEntry &entry,
                                                     uint64_t observationGeneration) const noexcept
 {
@@ -765,7 +809,7 @@ void TopologyControlHost::FinishStoppedEntry(const std::string &clusterName, Clu
     entry.deliveringLivenessReports = 0;
     if (releaseStatus.IsOk() && released && IsEmptyObservationCurrent(entry, observationGeneration)) {
         LOG(INFO) << "CLUSTER_CONTROL_HOST cluster=" << clusterName << " state=released";
-        entries_.erase(found);
+        EraseClusterLocked(clusterName);
         return;
     }
     entry.state = EntryState::WAITING_RECOVERY;

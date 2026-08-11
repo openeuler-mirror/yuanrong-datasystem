@@ -17,7 +17,10 @@
 #ifndef MASTER_OC_MIGRATE_METADATA_MANAGER_H
 #define MASTER_OC_MIGRATE_METADATA_MANAGER_H
 
+#include <condition_variable>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -50,6 +53,8 @@ using TbbFutureThreadTable = tbb::concurrent_hash_map<std::pair<std::string, std
 
 class OCMigrateMetadataManager {
 public:
+    using MetadataRpcObserver = std::function<void(const HostPort &, const Status &)>;
+
     struct MigrateMetaInfo {
         std::vector<std::string> objectKeys = {};
         std::string destAddr = "";
@@ -87,7 +92,8 @@ public:
      * @return Status of the call.
      */
     Status Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder);
+                const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder,
+                MetadataRpcObserver metadataRpcObserver = {});
 
     /**
      * @brief Shutdown the oc migrage metadata module.
@@ -141,6 +147,9 @@ public:
 
 private:
     static constexpr std::chrono::milliseconds TOPOLOGY_CANCELLATION_POLL{ 20 };
+
+    Status CheckMigrationTargetState(const HostPort &destAddr, bool isNetworkRecovery, Status &connectionStatus,
+                                     bool &committed, bool &preLeaving) const;
 
     using AsyncL2MetaMap =
         std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>>;
@@ -237,6 +246,8 @@ private:
         const MetaForMigrationPb &metadata, const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
         std::vector<std::string> &failedObjectKeys,
         const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap);
+
+    void ObserveMetadataRpcResult(const std::string &targetAddress, const Status &status);
 
     /**
      * @brief Commit per-object migration results while the topology execution remains authorized.
@@ -375,11 +386,16 @@ private:
 
     HostPort localHostPort_;
     std::shared_ptr<AkSkManager> akSkManager_;
+    mutable std::shared_mutex topologyMembershipMutex_;
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::unique_ptr<ThreadPool> threadPool_;
     // tbb::concurrent_hash_map<workerAddr, std::future<std::pair<Result status, Failed objectkeys>>>
     TbbFutureThreadTable futureThread_;
     std::atomic<bool> exitFlag_{ false };
+    std::mutex metadataRpcObserverMutex_;
+    std::condition_variable metadataRpcObserverCv_;
+    size_t metadataRpcObserversInFlight_{ 0 };
+    MetadataRpcObserver metadataRpcObserver_;
     MetadataManagerHolder *metadataManagerHolder_;
 };
 }  // namespace master

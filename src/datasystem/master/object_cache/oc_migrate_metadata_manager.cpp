@@ -39,6 +39,10 @@ static constexpr int MOVE_THREAD_NUM = 4;
 constexpr uint32_t OBJECT_BATCH = 300;  // Comparison test: The performance is optimal when the batch number is 300.
 
 namespace {
+constexpr int MIGRATION_CONNECTION_RETRY_LIMIT = 3;
+constexpr auto MIGRATION_TARGET_DISCOVERY_RETRY_INTERVAL = std::chrono::milliseconds(500);
+constexpr auto MIGRATION_CONNECTION_RETRY_INTERVAL = std::chrono::milliseconds(100);
+
 Status CheckMigrationTargetConnection(const cluster::MembershipEndpointView *membership, const HostPort &address)
 {
     CHECK_FAIL_RETURN_STATUS(membership != nullptr, K_NOT_READY, "Topology membership view is not available");
@@ -72,6 +76,27 @@ Status GetMigrationTargetState(const cluster::MembershipEndpointView *membership
     preLeaving = member->state == cluster::MemberState::PRE_LEAVING;
     return Status::OK();
 }
+
+bool ShouldRetryUnavailableTarget(const Status &status, const std::string &destAddr, bool committed, bool preLeaving,
+                                  int &retryTimes)
+{
+    LOG(ERROR) << "Check connection of " << destAddr << " failed: " << status.ToString();
+    if (!committed || preLeaving) {
+        LOG(WARNING) << "The dest node cannot be found, so the migration task is abandoned.";
+        return false;
+    }
+    if (status.GetCode() == K_NOT_FOUND) {
+        std::this_thread::sleep_for(MIGRATION_TARGET_DISCOVERY_RETRY_INTERVAL);
+        return true;
+    }
+    if (retryTimes < MIGRATION_CONNECTION_RETRY_LIMIT) {
+        std::this_thread::sleep_for(MIGRATION_CONNECTION_RETRY_INTERVAL);
+        ++retryTimes;
+        return true;
+    }
+    LOG(WARNING) << "The dest node cannot connect after retry 3 times.";
+    return false;
+}
 }  // namespace
 
 Status BuildMigrationFailureStatus(const Status &lastStatus,
@@ -93,12 +118,20 @@ OCMigrateMetadataManager &OCMigrateMetadataManager::Instance()
 
 Status OCMigrateMetadataManager::Init(
     const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-    const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder)
+    const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder,
+    MetadataRpcObserver metadataRpcObserver)
 {
     localHostPort_ = localHostPort;
     akSkManager_ = std::move(akSkManager);
-    topologyMembership_ = membership;
+    {
+        std::unique_lock<std::shared_mutex> lock(topologyMembershipMutex_);
+        topologyMembership_ = membership;
+    }
     metadataManagerHolder_ = metadataManagerHolder;
+    {
+        std::lock_guard<std::mutex> lock(metadataRpcObserverMutex_);
+        metadataRpcObserver_ = std::move(metadataRpcObserver);
+    }
     threadPool_ = std::make_unique<ThreadPool>(0, MOVE_THREAD_NUM, "MigrateMetadataThreadPool");
 
     return Status::OK();
@@ -113,7 +146,37 @@ OCMigrateMetadataManager::~OCMigrateMetadataManager()
 void OCMigrateMetadataManager::Shutdown()
 {
     exitFlag_ = true;
-    topologyMembership_ = nullptr;
+    {
+        std::unique_lock<std::shared_mutex> lock(topologyMembershipMutex_);
+        topologyMembership_ = nullptr;
+    }
+    std::unique_lock<std::mutex> lock(metadataRpcObserverMutex_);
+    // Migration tasks can finish after shutdown starts; clearing first makes those later observations no-ops.
+    metadataRpcObserver_ = {};
+    metadataRpcObserverCv_.wait(lock, [this] { return metadataRpcObserversInFlight_ == 0; });
+}
+
+void OCMigrateMetadataManager::ObserveMetadataRpcResult(const std::string &targetAddress, const Status &status)
+{
+    HostPort target;
+    if (target.ParseString(targetAddress).IsError()) {
+        return;
+    }
+    MetadataRpcObserver observer;
+    {
+        std::lock_guard<std::mutex> lock(metadataRpcObserverMutex_);
+        if (metadataRpcObserver_ == nullptr) {
+            return;
+        }
+        observer = metadataRpcObserver_;
+        ++metadataRpcObserversInFlight_;
+    }
+    Raii finish([this] {
+        std::lock_guard<std::mutex> lock(metadataRpcObserverMutex_);
+        --metadataRpcObserversInFlight_;
+        metadataRpcObserverCv_.notify_all();
+    });
+    observer(target, status);
 }
 
 Status OCMigrateMetadataManager::MigrateTopologyMetadata(
@@ -232,6 +295,21 @@ Status OCMigrateMetadataManager::CheckTopologyExecution(const MigrateMetaInfo &i
     return Status::OK();
 }
 
+Status OCMigrateMetadataManager::CheckMigrationTargetState(const HostPort &destAddr, bool isNetworkRecovery,
+                                                           Status &connectionStatus, bool &committed,
+                                                           bool &preLeaving) const
+{
+    if (isNetworkRecovery) {
+        return Status::OK();
+    }
+    std::shared_lock<std::shared_mutex> lock(topologyMembershipMutex_);
+    connectionStatus = CheckMigrationTargetConnection(topologyMembership_, destAddr);
+    if (connectionStatus.IsOk()) {
+        return Status::OK();
+    }
+    return GetMigrationTargetState(topologyMembership_, destAddr.ToString(), committed, preLeaving);
+}
+
 Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
     const std::shared_ptr<master::OCMetadataManager> &ocMetadatManager, MigrateMetaInfo &info, bool isNetworkRecovery)
 {
@@ -248,28 +326,14 @@ Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
         // 2. Submit the scale-up task first, and then process the put event of the clusterNodeTable of the scale-up
         // node, retry until success.
         // 3. for dest worker timeout, retry for 3 times, interval is 100 ms
-        if (!isNetworkRecovery && (status = CheckMigrationTargetConnection(topologyMembership_, destAddr)).IsError()) {
-            LOG(ERROR) << "Check connection of " << info.destAddr << " failed: " << status.ToString();
-            static const int totleRetryTimes = 3;
-            static const int sleepTimeMs = 100;
-            bool committed = false;
-            bool preLeaving = false;
-            RETURN_IF_NOT_OK(GetMigrationTargetState(topologyMembership_, destAddr.ToString(), committed, preLeaving));
-            if (!committed || preLeaving) {
-                // worker is scale down
-                LOG(WARNING) << "The dest node cannot be found, so the migration task is abandoned.";
-                break;
-            } else if (status.GetCode() == K_NOT_FOUND) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(timeInterval));
+        bool committed = false;
+        bool preLeaving = false;
+        RETURN_IF_NOT_OK(CheckMigrationTargetState(destAddr, isNetworkRecovery, status, committed, preLeaving));
+        if (!isNetworkRecovery && status.IsError()) {
+            if (ShouldRetryUnavailableTarget(status, info.destAddr, committed, preLeaving, retryTimes)) {
                 continue;
-            } else if (retryTimes < totleRetryTimes) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
-                retryTimes++;
-                continue;
-            } else {
-                LOG(WARNING) << "The dest node cannot connect after retry 3 times.";
-                break;
             }
+            break;
         }
         if (isNetworkRecovery && timer.ElapsedSecond() > FLAGS_node_timeout_s) {
             break;
@@ -289,7 +353,11 @@ Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
         return Status::OK();
     }
 
-    const bool connected = CheckMigrationTargetConnection(topologyMembership_, destAddr).IsOk();
+    bool connected = false;
+    {
+        std::shared_lock<std::shared_mutex> lock(topologyMembershipMutex_);
+        connected = CheckMigrationTargetConnection(topologyMembership_, destAddr).IsOk();
+    }
     return BuildMigrationFailureStatus(status, info, timer.ElapsedSecond(), isNetworkRecovery, connected);
 }
 
@@ -445,6 +513,7 @@ Status OCMigrateMetadataManager::BatchMigrateMetadata(
     if (sendStatus.IsOk()) {
         INJECT_POINT("BatchMigrateMetadata.rpc.error");
         sendStatus = api->MigrateMetadata(req, rsp);
+        ObserveMetadataRpcResult(info.destAddr, sendStatus);
     }
     if (sendStatus.IsOk()) {
         sendStatus = CheckTopologyExecution(info);

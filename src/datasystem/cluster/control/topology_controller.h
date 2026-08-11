@@ -113,7 +113,7 @@ struct TopologyControllerOptions {
      */
     std::function<std::vector<MemberIdentity>(const TopologySnapshot &, const std::vector<MembershipRecord> &,
                                               std::chrono::steady_clock::time_point)>
-        activeFailureCandidateProvider;
+        failureSummaryCandidateProvider;
 
     /**
      * @brief Semantic policy clock; production uses steady time and tests may inject virtual time.

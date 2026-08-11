@@ -115,6 +115,14 @@
   and lets upgraded readers consume successfully serialized legacy responses, but a legacy reader cannot consume every
   binary response from an upgraded Worker. Deploy or roll back this behavior cluster-wide; an ETCD outage during a
   mixed-version rolling upgrade is outside this contract.
+  Coordinator-mode peer-RPC failure summaries remain a separate fast confirmation path. A reporter is eligible only
+  while its membership/topology lifecycle pair is `READY`/`ACTIVE` or `EXITING`/`LEAVING`, and the lifecycle captured
+  when the report arrived must still match when the Coordinator counts it. This lets live ScaleIn sources report an
+  unreachable `ACTIVE` migration target without making old serving evidence valid after exit. The same summary can
+  remove a `JOINING` target only from the currently active ScaleOut batch through the existing ScaleOut replan; it never
+  converts that target to `FAILED`. Reporter and target incarnation checks, report expiry, self-report rejection, and
+  the existing quorum threshold remain mandatory. `PRE_LEAVING` members cannot report, but remain in the ScaleIn quorum
+  population so partial batch progress cannot lower the isolation threshold.
   Coordinator collective probe progress is additionally bound to the current nonzero Raft leader term; loss of control
   authority or a term change discards accumulated samples before any further probe or replacement attempt. Each
   Coordinator-to-Worker control probe and the final collective replacement commit use that expected term under the
