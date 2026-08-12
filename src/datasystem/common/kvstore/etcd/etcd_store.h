@@ -511,6 +511,18 @@ public:
 
 private:
     using TableMap = std::unordered_map<std::string, std::string>;
+    // Look up the etcd prefix for a table name under a short-lived shared lock.
+    // tableMap_ is populated during init (CreateTable) and read-only afterwards;
+    // the lock is released immediately after the lookup so RPCs are never issued under it.
+    Status GetPrefix(const std::string &tableName, std::string &outPrefix)
+    {
+        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        auto iter = tableMap_.find(tableName);
+        CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
+                                 "The table does not exist. tableName:" + tableName);
+        outPrefix = iter->second;
+        return Status::OK();
+    }
     const uint32_t CAS_MAX_SLEEP_TIME_US = 200000;
     const uint32_t CAS_ERROR_MAX_RETRY_NUM = 10;
     // Do not set it too long, otherwise in the scenario of etcd failure, the worker may have to wait for a long time

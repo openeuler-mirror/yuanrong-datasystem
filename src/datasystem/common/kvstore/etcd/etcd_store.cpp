@@ -320,10 +320,14 @@ Status EtcdStore::Put(const std::string &tableName, const std::string &key, cons
 Status EtcdStore::Put(const std::string &tableName, const std::string &key, const std::string &value, int64_t *version,
                       int32_t timeoutMs, uint64_t asyncElapse)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    TableMap::const_iterator iter = tableMap_.find(tableName);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + tableName);
+    std::string tablePrefix;
+    {
+        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        TableMap::const_iterator iter = tableMap_.find(tableName);
+        CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
+                                 "The table does not exist. tableName:" + tableName);
+        tablePrefix = iter->second;
+    }
     CHECK_FAIL_RETURN_STATUS(
         !(keepAliveTimeoutTimer_.ElapsedMilliSecond() > FLAGS_node_dead_timeout_s * MS_PER_SECOND
           && FLAGS_auto_del_dead_node),
@@ -331,7 +335,7 @@ Status EtcdStore::Put(const std::string &tableName, const std::string &key, cons
         FormatString("local node is failed, keepAliveTimeoutTimer ElapsedMilliSecond %ld,  not put data to etcd",
                      keepAliveTimeoutTimer_.ElapsedMilliSecond()));
     etcdserverpb::PutRequest req;
-    std::string etcdKey = iter->second + "/" + key;
+    std::string etcdKey = tablePrefix + "/" + key;
     req.set_key(etcdKey);
     req.set_value(value);
     etcdserverpb::PutResponse rsp;
@@ -346,21 +350,15 @@ Status EtcdStore::Put(const std::string &tableName, const std::string &key, cons
 
 Status EtcdStore::BatchPut(const std::unordered_map<std::string, BatchInfoPutToEtcd> &metaInfos)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
     Transaction txn(GetAuthToken());
     txn.StartTransaction();
     for (const auto &info : metaInfos) {
         const auto &tableName = info.second.tableName;
         VLOG(1) << "Calling rpc to put object with key " << info.second.etcdKey;
-        TableMap::const_iterator iter;
-        {
-            std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-            iter = tableMap_.find(tableName);
-        }
-        CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                                 "The table does not exist. tableName:" + tableName);
+        std::string tablePrefix;
+        RETURN_IF_NOT_OK(GetPrefix(tableName, tablePrefix));
         auto key = info.second.etcdKey;
-        std::string etcdKey = iter->second + "/" + key;
+        std::string etcdKey = tablePrefix + "/" + key;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(txn.Put(etcdKey, info.second.meta), "Transaction Put failed");
     }
     return txn.Commit();
@@ -369,12 +367,10 @@ Status EtcdStore::BatchPut(const std::unordered_map<std::string, BatchInfoPutToE
 Status EtcdStore::PutWithLeaseId(const std::string &tableName, const std::string &key, const std::string &value,
                                  const int64_t leaseId, int32_t timeoutMs)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    TableMap::const_iterator iter = tableMap_.find(tableName);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + tableName);
+    std::string tablePrefix;
+    RETURN_IF_NOT_OK(GetPrefix(tableName, tablePrefix));
     etcdserverpb::PutRequest req;
-    std::string etcdKey = iter->second + "/" + key;
+    std::string etcdKey = tablePrefix + "/" + key;
     req.set_key(etcdKey);
     req.set_value(value);
     req.set_lease(leaseId);
@@ -385,12 +381,10 @@ Status EtcdStore::PutWithLeaseId(const std::string &tableName, const std::string
 
 Status EtcdStore::PutMembershipWithLeaseId(const std::string &value, EtcdRpcIntent intent)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    const auto iter = tableMap_.find(keepAliveTableName_);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + keepAliveTableName_);
+    std::string tablePrefix;
+    RETURN_IF_NOT_OK(GetPrefix(keepAliveTableName_, tablePrefix));
     etcdserverpb::PutRequest req;
-    req.set_key(iter->second + "/" + keepAliveKey_);
+    req.set_key(tablePrefix + "/" + keepAliveKey_);
     req.set_value(value);
     req.set_lease(leaseId_);
     etcdserverpb::PutResponse rsp;
@@ -587,15 +581,9 @@ Status EtcdStore::UpdateNodeState(cluster::MemberLifecycleState state, int32_t t
 
 Status EtcdStore::HandleKeepAliveFailed()
 {
-    std::string etcdKey;
-    {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-        TableMap::const_iterator iter = tableMap_.find(keepAliveTableName_);
-        CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                                 "The table does not exist. tableName:" + keepAliveTableName_);
-        etcdserverpb::PutRequest req;
-        etcdKey = iter->second + "/" + keepAliveKey_;
-    }
+    std::string tablePrefix;
+    RETURN_IF_NOT_OK(GetPrefix(keepAliveTableName_, tablePrefix));
+    std::string etcdKey = tablePrefix + "/" + keepAliveKey_;
     LOG(INFO) << FormatString("Due to network failure, a fake node deletion event[key: %s] needs to be generated",
                               etcdKey);
     mvccpb::Event fakeEvent;
@@ -817,16 +805,12 @@ Status EtcdStore::WatchEvents(const std::vector<WatchElement> &watchKeys)
         auto startRevision = watchKey.startRevision;
         CHECK_FAIL_RETURN_STATUS(startRevision >= WATCH_FROM_NOW, K_INVALID,
                                  "ETCD watch revision is below WATCH_FROM_NOW");
-        {
-            std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-            TableMap::const_iterator iter = tableMap_.find(tableName);
-            CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                                     "The table does not exist. tableName:" + tableName);
-            const auto physicalKey = iter->second + "/" + key;
-            prefixToWatch->emplace(physicalKey, startRevision);
-            if (watchKey.exact) {
-                exactKeys.emplace(physicalKey);
-            }
+        std::string tablePrefix;
+        RETURN_IF_NOT_OK(GetPrefix(tableName, tablePrefix));
+        const auto physicalKey = tablePrefix + "/" + key;
+        prefixToWatch->emplace(physicalKey, startRevision);
+        if (watchKey.exact) {
+            exactKeys.emplace(physicalKey);
         }
     }
 
@@ -888,11 +872,9 @@ Status EtcdStore::RawGet(const std::string &etcdKey, RangeSearchResult &res, int
 
 Status EtcdStore::Get(const std::string &tableName, const std::string &key, RangeSearchResult &res, int32_t timeoutMs)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    TableMap::const_iterator iter = tableMap_.find(tableName);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.end(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + tableName);
-    std::string etcdKey = iter->second + "/" + key;
+    std::string tablePrefix;
+    RETURN_IF_NOT_OK(GetPrefix(tableName, tablePrefix));
+    std::string etcdKey = tablePrefix + "/" + key;
     return RawGet(etcdKey, res, 0, timeoutMs);
 }
 
@@ -943,12 +925,10 @@ Status EtcdStore::GetAll(const std::string &tableName, int64_t reqRevision,
                          std::vector<std::pair<std::string, std::string>> &outKeyValues, int64_t &rspRevision,
                          int32_t timeoutMs)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    TableMap::const_iterator iter = tableMap_.find(tableName);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + tableName);
+    std::string tablePrefix;
+    RETURN_IF_NOT_OK(GetPrefix(tableName, tablePrefix));
     etcdserverpb::RangeRequest req;
-    std::string etcdKey = iter->second + "/";
+    std::string etcdKey = tablePrefix + "/";
     req.set_key(etcdKey);
     req.set_range_end(StringPlusOne(etcdKey));
     req.set_revision(reqRevision);
@@ -956,7 +936,7 @@ Status EtcdStore::GetAll(const std::string &tableName, int64_t reqRevision,
     RETURN_IF_NOT_OK(rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range,
                                           GetAuthToken(), 0, timeoutMs));
     for (auto &result : rsp.kvs()) {
-        std::string key = RemovePrefix(result.key(), iter->second + "/");
+        std::string key = RemovePrefix(result.key(), tablePrefix + "/");
         outKeyValues.emplace_back(std::make_pair(key, result.value()));
     }
     rspRevision = rsp.header().revision();
@@ -997,13 +977,11 @@ Status EtcdStore::PrefixSearch(const std::string &prefixKey, EtcdRangeGetVector 
 Status EtcdStore::RangeSearch(const std::string &tableName, const std::string &begin, const std::string &end,
                               std::vector<std::pair<std::string, std::string>> &outKeyValues)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    TableMap::const_iterator iter = tableMap_.find(tableName);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + tableName);
+    std::string tablePrefix;
+    RETURN_IF_NOT_OK(GetPrefix(tableName, tablePrefix));
     etcdserverpb::RangeRequest req;
-    std::string keyBegin = iter->second + "/" + begin;
-    std::string keyEnd = iter->second + "/" + end;
+    std::string keyBegin = tablePrefix + "/" + begin;
+    std::string keyEnd = tablePrefix + "/" + end;
     req.set_key(keyBegin);
     req.set_range_end(StringPlusOne(keyEnd));
     etcdserverpb::RangeResponse rsp;
@@ -1013,7 +991,7 @@ Status EtcdStore::RangeSearch(const std::string &tableName, const std::string &b
         RETURN_STATUS(K_NOT_FOUND, FormatString("The key does not exist in etcd. range[ %s, %s ]", keyBegin, keyEnd));
     }
     for (auto &result : rsp.kvs()) {
-        std::string key = RemovePrefix(result.key(), iter->second + "/");
+        std::string key = RemovePrefix(result.key(), tablePrefix + "/");
         outKeyValues.emplace_back(std::make_pair(key, result.value()));
     }
     return Status::OK();
@@ -1026,12 +1004,10 @@ Status EtcdStore::Delete(const std::string &tableName, const std::string &key)
 
 Status EtcdStore::Delete(const std::string &tableName, const std::string &key, uint64_t asyncElapse, int timeoutMs)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    TableMap::const_iterator iter = tableMap_.find(tableName);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + tableName);
+    std::string tablePrefix;
+    RETURN_IF_NOT_OK(GetPrefix(tableName, tablePrefix));
     etcdserverpb::DeleteRangeRequest req;
-    std::string etcdKey = iter->second + "/" + key;
+    std::string etcdKey = tablePrefix + "/" + key;
     req.set_key(etcdKey);
     etcdserverpb::DeleteRangeResponse rsp;
     VLOG(1) << "Calling rpc to remove object with key " << etcdKey;
@@ -1062,11 +1038,9 @@ Status DoTransaction(const std::string &realKey, int64_t version, const std::str
 
 Status EtcdStore::GetRealKey(const std::string &tableName, const std::string &key, std::string &realKey)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    TableMap::const_iterator iter = tableMap_.find(tableName);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + tableName);
-    realKey = iter->second + "/" + key;
+    std::string tablePrefix;
+    RETURN_IF_NOT_OK(GetPrefix(tableName, tablePrefix));
+    realKey = tablePrefix + "/" + key;
     return Status::OK();
 }
 
@@ -1138,11 +1112,9 @@ Status EtcdStore::CAS(const std::string &tableName, const std::string &key, cons
 Status EtcdStore::CAS(const std::string &tableName, const std::string &key, const std::string &oldValue,
                       const std::string &newValue)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    TableMap::const_iterator iter = tableMap_.find(tableName);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + tableName);
-    std::string realKey = iter->second + "/" + key;
+    std::string tablePrefix;
+    RETURN_IF_NOT_OK(GetPrefix(tableName, tablePrefix));
+    std::string realKey = tablePrefix + "/" + key;
     RangeSearchResult res;
     Status status = Get(tableName, key, res);
     Transaction txn(GetAuthToken());
@@ -1158,11 +1130,7 @@ Status EtcdStore::CAS(const std::string &tableName, const std::string &key, cons
 
 Status EtcdStore::GetEtcdPrefix(const std::string &tableName, std::string &prefix)
 {
-    TableMap::const_iterator iter = tableMap_.find(tableName);
-    CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
-                             "The table does not exist. tableName:" + tableName);
-    prefix = iter->second;
-    return Status::OK();
+    return GetPrefix(tableName, prefix);
 }
 
 Status EtcdStore::InformReconciliationDone(const HostPort &workerAddr)
