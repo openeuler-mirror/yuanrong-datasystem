@@ -29,6 +29,8 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/util/bitmask_enum.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/thread.h"
@@ -524,7 +526,7 @@ private:
     // Global thread pool for reusing worker threads across delete requests.
     std::unique_ptr<ThreadPool> deleteThreadPool_;
     std::shared_ptr<ObjectMetaStore> objectStore_;  // Metadata store for object.
-    std::shared_timed_mutex notifyWorkerOpMutex_;
+    SharedMutex notifyWorkerOpMutex_;
     TbbNotifyWorkerOpTable notifyWorkerOpTable_;  // Key is worker address, value is object keys.
     std::unique_ptr<NotifyWorkerOpPersistenceState> notifyWorkerOpPersistence_;
     std::atomic<uint64_t> notifyWorkerOpEpoch_{ 0 };
@@ -534,7 +536,7 @@ private:
     WaitPost cvLock_;  // Wait for send cache update worker.
     std::atomic<bool> interruptFlag_;
 
-    std::shared_timed_mutex faultWorkerMutex_;
+    SharedMutex faultWorkerMutex_;
     // The value is true only after the worker has been confirmed dead.
     std::unordered_map<std::string, bool> faultWorkers_;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };

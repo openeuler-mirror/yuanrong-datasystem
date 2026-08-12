@@ -39,6 +39,7 @@
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/master/object_cache/device/master_dev_oc_manager.h"
@@ -2227,7 +2228,7 @@ private:
     std::unique_ptr<OCNestedManager> nestedRefManager_{ nullptr };  // object nested reference manager.
 
     TbbRemoteClientIdRefTable clientIdRefTable_;     // remote client id to master ip table
-    std::shared_timed_mutex clientIdRefTableMutex_;  // mutex for clientIdRefTable
+    SharedMutex clientIdRefTableMutex_;  // mutex for clientIdRefTable
 
     std::atomic<bool> interruptFlag_{ false };
     // Monotonic shutdown policy read by TTL tasks in asyncPool_.

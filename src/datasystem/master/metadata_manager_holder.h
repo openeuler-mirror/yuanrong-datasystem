@@ -28,6 +28,8 @@
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/l2cache/persistence_api.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
@@ -105,7 +107,7 @@ public:
     Status ApplyForAllMetaManager(Func &&func)
     {
         Status lastRc;
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         MetadataManager metadataManager{ ocMetadataManager_, scMetadataManager_ };
         auto rc = func(currentWorkerId_, metadataManager);
         lastRc = rc.IsError() ? rc : lastRc;
@@ -142,7 +144,7 @@ protected:
     std::shared_ptr<RocksStore> objectRocksStore_;
     std::shared_ptr<RocksStore> streamRocksStore_;
 
-    std::shared_timed_mutex mutex_;
+    SharedMutex mutex_;
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager_;
     std::shared_ptr<master::SCMetadataManager> scMetadataManager_;
 };

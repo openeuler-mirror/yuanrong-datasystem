@@ -20,6 +20,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/kvstore/rocksdb/replica.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
@@ -115,7 +116,7 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
 
 Status MetadataManagerHolder::GetOcMetadataManager(std::shared_ptr<master::OCMetadataManager> &ocMetadataManager)
 {
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     RETURN_RUNTIME_ERROR_IF_NULL(ocMetadataManager_);
     ocMetadataManager = ocMetadataManager_;
     return Status::OK();
@@ -123,7 +124,7 @@ Status MetadataManagerHolder::GetOcMetadataManager(std::shared_ptr<master::OCMet
 
 Status MetadataManagerHolder::GetScMetadataManager(std::shared_ptr<master::SCMetadataManager> &scMetadataManager)
 {
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     RETURN_RUNTIME_ERROR_IF_NULL(scMetadataManager_);
     scMetadataManager = scMetadataManager_;
     return Status::OK();
@@ -131,7 +132,7 @@ Status MetadataManagerHolder::GetScMetadataManager(std::shared_ptr<master::SCMet
 
 bool MetadataManagerHolder::HaveAsyncMetaRequest()
 {
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     return ocMetadataManager_ != nullptr && ocMetadataManager_->HaveAsyncMetaRequest();
 }
 
@@ -139,7 +140,7 @@ Status MetadataManagerHolder::CleanupLocalMetadataForRejoin(const std::string &w
 {
     HostPort localAddress;
     RETURN_IF_NOT_OK(localAddress.ParseString(workerAddr));
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     if (ocMetadataManager_ != nullptr) {
         RETURN_IF_NOT_OK(ocMetadataManager_->CleanupLocalMetadataForRejoin(workerAddr));
     }
@@ -151,7 +152,7 @@ Status MetadataManagerHolder::CleanupLocalMetadataForRejoin(const std::string &w
 
 Status MetadataManagerHolder::EnsureLocalMetadataManager(const std::string &workerId)
 {
-    std::unique_lock<std::shared_timed_mutex> locker(mutex_);
+    std::unique_lock<SharedMutex> locker(mutex_);
     if (objectRocksStore_ == nullptr) {
         std::string objectPath = dbRootPath_ + "/" + OBJECT_META_NAME;
         RETURN_IF_NOT_OK(Replica::CreateRocksStoreInstance(objectPath, objectRocksStore_));
@@ -168,7 +169,7 @@ Status MetadataManagerHolder::EnsureLocalMetadataManager(const std::string &work
 void MetadataManagerHolder::Shutdown()
 {
     Timer timer;
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     if (ocMetadataManager_ != nullptr) {
         ocMetadataManager_->Shutdown();
     }
@@ -180,7 +181,7 @@ void MetadataManagerHolder::Shutdown()
 
 void MetadataManagerHolder::PrepareForFullClusterShutdown()
 {
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     if (ocMetadataManager_ != nullptr) {
         ocMetadataManager_->PrepareForFullClusterShutdown();
     }
@@ -206,7 +207,7 @@ Status MetadataManagerHolder::InitLocalMetadataForStart(bool isRestart)
 
 bool MetadataManagerHolder::CheckMetaEmpty()
 {
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     auto oc = ocMetadataManager_;
     auto sc = scMetadataManager_;
     if ((oc != nullptr && !oc->CheckMetaTableEmpty()) || (sc != nullptr && !sc->CheckMetaTableEmpty())) {

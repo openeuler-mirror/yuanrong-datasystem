@@ -30,6 +30,7 @@
 #include <securec.h>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
@@ -641,7 +642,7 @@ private:
     bool isPersistenceEnabled_;
 
     // Protects 'etcdKeyMap_'
-    std::shared_timed_mutex etcdMtx_;
+    SharedMutex etcdMtx_;
 
     // Save etcd key put type, <table - <key - <hash, async>>>/
     std::unordered_map<std::string, std::map<std::string, std::pair<uint32_t, bool>>> etcdKeyMap_;
