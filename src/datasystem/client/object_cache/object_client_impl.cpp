@@ -8046,58 +8046,57 @@ void ObjectClientImpl::WarmupClientWorkerConnection()
     }
 }
 
-void ObjectClientImpl::CleanupWarmupObjects(const std::vector<std::string> &warmupKeys,
-                                            const std::string &firstWarmupKey)
-{
-    if (warmupKeys.empty()) {
-        return;
-    }
-    std::vector<std::string> failedObjectKeys;
-    auto rc = Delete(warmupKeys, failedObjectKeys);
-    INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.DeleteDone");
-    if (rc.IsError() || !failedObjectKeys.empty()) {
-        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] cleanup failed, key=%s, status=%s, failed=%s",
-                                     firstWarmupKey, rc.ToString(), VectorToString(failedObjectKeys));
-    }
-}
-
 Status ObjectClientImpl::DoWarmupClientWorkerConnection()
 {
     try {
         constexpr uint32_t warmupTtlSecond = 5;
-        constexpr size_t warmupObjectCount = 100;
+        // Split warmup into two phases: same-node (large value, exercises the SHM
+        // fd-passing path) and meta-owner (small value, exercises the cross-node
+        // RPC path). 20/80 split favors the metadata path which dominates traffic.
+        constexpr size_t sameNodeCount = 20;
+        constexpr size_t metaOwnerCount = 80;
         const std::string warmupKeyPrefix = "ds_internal_warmup_" + GetStringUuid();
-        const std::string warmupValue = "0";
+        static const std::string sameNodeValue(256 * 1024, '0');
+        static const std::string metaOwnerValue = "0";
+        const auto savedPolicy = dataPlacementPolicy_;
+        Raii restorePolicy([&]() { dataPlacementPolicy_ = savedPolicy; });
         SetParam setParam;
-        setParam.writeMode = WriteMode::NONE_L2_CACHE;
+        setParam.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
         setParam.ttlSecond = warmupTtlSecond;
-        const std::string firstWarmupKey = warmupKeyPrefix + "_0";
-        std::vector<std::string> warmupKeys;
-        warmupKeys.reserve(warmupObjectCount);
         std::vector<Optional<Buffer>> buffers;
-        for (size_t i = 0; i < warmupObjectCount; ++i) {
-            std::string warmupKey = warmupKeyPrefix + "_" + std::to_string(i);
-            auto rc = Set(warmupKey, StringView(warmupValue), setParam);
+        // Set + Get one warmup key; returns the first failing Status (or OK).
+        auto warmupOne = [&](const std::string &key, const std::string &value) -> Status {
+            auto rc = Set(key, StringView(value), setParam);
             if (rc.IsError()) {
-                CleanupWarmupObjects(warmupKeys, firstWarmupKey);
-                LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] set failed, key=%s, status=%s", warmupKey,
+                LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] set failed, key=%s, status=%s", key,
                                              rc.ToString());
                 return rc;
             }
-            warmupKeys.emplace_back(warmupKey);
             INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.SetDone");
             buffers.clear();
-            rc = Get({ warmupKey }, 0, buffers);
+            rc = Get({ key }, 0, buffers);
             if (rc.IsError()) {
-                CleanupWarmupObjects(warmupKeys, firstWarmupKey);
-                LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] get failed, key=%s, status=%s", warmupKey,
+                LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] get failed, key=%s, status=%s", key,
                                              rc.ToString());
                 return rc;
             }
             INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.GetDone");
+            return Status::OK();
+        };
+        // Phase 1: same-node workers (REQUIRED_SAME_NODE when localcache=false).
+        dataPlacementPolicy_ = enableLocalCache_
+            ? savedPolicy
+            : client::DataPlacementPolicy::REQUIRED_SAME_NODE;
+        for (size_t i = 0; i < sameNodeCount; ++i) {
+            RETURN_IF_NOT_OK(warmupOne(warmupKeyPrefix + "_" + std::to_string(i), sameNodeValue));
         }
-        CleanupWarmupObjects(warmupKeys, firstWarmupKey);
-        LOG(INFO) << FormatString("[CLIENT_WORKER_WARMUP] success, key=%s", firstWarmupKey);
+        // Phase 2: meta-owner (hash-ring owner, may be cross-node RPC).
+        dataPlacementPolicy_ = client::DataPlacementPolicy::PREFERRED_META_OWNER;
+        for (size_t i = 0; i < metaOwnerCount; ++i) {
+            RETURN_IF_NOT_OK(warmupOne(warmupKeyPrefix + "_m" + std::to_string(i), metaOwnerValue));
+        }
+        LOG(INFO) << FormatString("[CLIENT_WORKER_WARMUP] success, prefix=%s, sameNode=%zu, metaOwner=%zu",
+                                  warmupKeyPrefix, sameNodeCount, metaOwnerCount);
         return Status::OK();
     } catch (const std::exception &e) {
         LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] exception, error=%s", e.what());
