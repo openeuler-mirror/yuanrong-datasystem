@@ -68,7 +68,7 @@ class DevObjectHeteroTest : public DevTestHelper {
         opts.numWorkers = DEFAULT_WORKER_NUM;
         opts.workerGflagParams =
             " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=2 "
-            "-client_dead_timeout_s=15";
+            "-client_dead_timeout_s=15 -enable_reconciliation=true";
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;

@@ -1141,7 +1141,7 @@ public:
         opts.numEtcd = 1;
         opts.waitWorkerReady = false;
         opts.enableDistributedMaster = "true";
-        opts.workerGflagParams = " -client_reconnect_wait_s=5 -node_timeout_s=5";
+        opts.workerGflagParams = " -client_reconnect_wait_s=5 -node_timeout_s=5 -enable_reconciliation=true";
         opts.disableRocksDB = false;
     }
 

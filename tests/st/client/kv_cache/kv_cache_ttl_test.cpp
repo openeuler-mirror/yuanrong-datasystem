@@ -36,7 +36,8 @@ public:
         opts.numOBS = 1;
         opts.numWorkers = 3;
         opts.numEtcd = 1;
-        opts.workerGflagParams = "-node_timeout_s=5 -shared_memory_size_mb=2048 -v=2";
+        opts.workerGflagParams =
+            "-node_timeout_s=5 -shared_memory_size_mb=2048 -v=2 -enable_reconciliation=true";
     }
 
     void SetUp() override

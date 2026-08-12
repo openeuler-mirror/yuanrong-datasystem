@@ -352,8 +352,8 @@
         "description": "The payload threshold to batch get objects, the unit is mb, must be greater than 0. Setting to 0 will indicate no split."
     },
     "enable_reconciliation": {
-        "value": "true",
-        "description": "Whether to enable reconciliation, default is true."
+        "value": "false",
+        "description": "Whether to enable reconciliation, default is false."
     },
     "l2_cache_async_write_queue_size": {
         "value": "10000",

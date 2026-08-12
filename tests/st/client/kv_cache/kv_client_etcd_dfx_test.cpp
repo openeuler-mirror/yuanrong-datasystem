@@ -226,6 +226,7 @@ public:
         deadTimeoutS_ = 300;  // 300s
         KVClientEtcdDfxTest::SetClusterSetupOptions(opts);
         opts.disableRocksDB = false;
+        opts.workerGflagParams += " -enable_reconciliation=true";
         opts.injectActions = "GetLeaseRenewIntervalMs:return(1000)";
     }
 };

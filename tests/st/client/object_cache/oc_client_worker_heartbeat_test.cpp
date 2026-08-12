@@ -35,7 +35,7 @@ public:
     {
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
-        opts.workerGflagParams = "-node_timeout_s=1 -heartbeat_interval_ms=500";
+        opts.workerGflagParams = "-node_timeout_s=1 -heartbeat_interval_ms=500 -enable_reconciliation=true";
         opts.disableRocksDB = false;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");

@@ -59,7 +59,8 @@ public:
         opts.numWorkers = 3;
         opts.numEtcd = 1;
         opts.numOcThreadNum = getThreadNum_;
-        opts.workerGflagParams = FormatString(" -shared_memory_size_mb=500 -v=2 -log_monitor=true");
+        opts.workerGflagParams =
+            FormatString(" -shared_memory_size_mb=500 -v=2 -log_monitor=true -enable_reconciliation=true");
     }
 
 protected:

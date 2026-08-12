@@ -41,6 +41,10 @@
   - global-reference decrease treats a missing worker-to-master API after a successful owner lookup as
     `K_RPC_UNAVAILABLE`; affected ids enter the existing RPC-failure path instead of being silently skipped during a
     connection rebuild window.
+  - restart global-reference reconciliation is disabled by default in the Worker flag and dscli configuration because
+    pure KVClient deployments do not maintain global references. ObjectClient deployments that use global references
+    must explicitly enable `enable_reconciliation`; the Kubernetes Helm defaults continue to enable it for backward
+    compatibility.
   - `worker_oc_server.cpp` assembles object-cache and stream-cache related worker-side services and declares many worker runtime flags.
   - topology Snapshot handling retains FAILED addresses for RPC-stub cleanup. When the same address later appears as
     ACTIVE, `WorkerOCServer` publishes the existing `RemoveDeadWorkerEvent` so the local metadata service removes the
