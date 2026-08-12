@@ -194,8 +194,10 @@ Status DsCoordinationBackend::Delete(const std::string &tableName, const std::st
     }
     const int64_t expectedModRevision =
         deletesLocalMembership ? keepAliveModRevision_ : COORDINATOR_NO_MOD_REVISION_CHECK;
-    auto rc =
-        proxy_->DeleteRange(BuildRealKey(tableName, key), "", deleted, revision, timeoutMs, expectedModRevision);
+    const auto realKey = BuildRealKey(tableName, key);
+    auto rc = deletesLocalMembership
+                  ? proxy_->DeleteMembership(realKey, deleted, revision, timeoutMs, expectedModRevision)
+                  : proxy_->DeleteRange(realKey, "", deleted, revision, timeoutMs, expectedModRevision);
     RefreshWatchIdentity(rc);
     if (rc.IsOk() && deletesLocalMembership) {
         keepAliveModRevision_ = COORDINATOR_NO_MOD_REVISION_CHECK;

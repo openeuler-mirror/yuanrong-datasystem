@@ -1416,6 +1416,24 @@ TEST(TopologyEngineTest, WorkerWatchStartFailureNeverPublishesHostAdmission)
     EXPECT_EQ(normalAdmissions.load(), 0U);
 }
 
+TEST(TopologyEngineTest, StartRollbackRemovesPublishedCoordinatorMembership)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "start-membership-rollback";
+    const auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology());
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+
+    EXPECT_EQ(engine->Start().GetCode(), K_RPC_UNAVAILABLE);
+    std::vector<KeyValueEntry> entries;
+    int64_t revision = 0;
+    DS_ASSERT_OK(proxy.Range(keys->MembershipTable() + "/" + LOCAL_ADDRESS, "", entries, revision, 0, nullptr));
+    EXPECT_TRUE(entries.empty());
+}
+
 TEST(TopologyEngineTest, ServingAvailabilityIsPublishedBeforeAdmissionCallback)
 {
     testing::FakeCoordinatorServiceProxy proxy;

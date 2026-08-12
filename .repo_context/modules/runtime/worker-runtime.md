@@ -102,6 +102,9 @@
   - pre-initialize RocksDB storage
   - set up runtime services and signal handling
   - `DataWorker` selects the coordination backend before constructing `WorkerOCServer`: parameterized startup always passes its required injected Discovery and therefore selects Coordinator mode, while command-line and embedded static startup wrap a non-empty `coordinator_address` in internal `StaticCoordinatorDiscovery` or pass null for ETCD/metastore.
+  - Coordinator routing preserves the last application-level status from a valid Coordinator response when the shared
+    routing budget or discovery refresh later expires. Transport/deadline status remains authoritative only when no
+    Coordinator response was observed, so a recovering control plane is not misreported as network unreachability.
   - in `FLAGS_use_brpc` mode, `WorkerOCServer::InitRpcAndMemoryRuntime` calls
     `BrpcChannelFactory::EnsureGlobalInitialized()` immediately after configuring the brpc
     listen address and before any allocator/topology work. brpc::Channel::Init runs

@@ -105,6 +105,15 @@ public:
                                int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK) = 0;
 
     /**
+     * @brief Delete one fenced membership incarnation, including while the Leader recovery gate is closed.
+     */
+    virtual Status DeleteMembership(const std::string &key, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
+                                    int64_t expectedModRevision)
+    {
+        return DeleteRange(key, "", deleted, revision, timeoutMs, expectedModRevision);
+    }
+
+    /**
      * @brief Register one watch and optionally return the exact response CoordinatorId.
      * @param[in] key Physical start key.
      * @param[in] rangeEnd Physical range end; empty means exact watch.
@@ -262,6 +271,12 @@ public:
                        int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK) override;
 
     /**
+     * @copydoc ICoordinatorServiceProxy::DeleteMembership
+     */
+    Status DeleteMembership(const std::string &key, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
+                            int64_t expectedModRevision) override;
+
+    /**
      * @copydoc ICoordinatorServiceProxy::WatchRange
      */
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
@@ -333,6 +348,9 @@ protected:
     virtual Transport GetTransport() const = 0;
 
 private:
+    Status DeleteRangeInternal(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
+                               int64_t &revision, int32_t timeoutMs, int64_t expectedModRevision,
+                               bool recoveryControl);
     class InFlightScope;
 
     /**

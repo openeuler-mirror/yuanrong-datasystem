@@ -36,6 +36,9 @@ public:
     Status GetCoordinators(std::chrono::steady_clock::time_point, std::vector<std::string> &addresses) override
     {
         ++deadlineAwareCalls_;
+        if (deadlineAwareStatus_.IsError()) {
+            return deadlineAwareStatus_;
+        }
         addresses = addresses_;
         return Status::OK();
     }
@@ -45,10 +48,15 @@ public:
     {
         addresses_ = std::move(addresses);
     }
+    void SetDeadlineAwareStatus(Status status)
+    {
+        deadlineAwareStatus_ = std::move(status);
+    }
 
 private:
     std::vector<std::string> addresses_;
     size_t deadlineAwareCalls_{ 0 };
+    Status deadlineAwareStatus_;
 };
 
 HostPort Address(const std::string &value)
@@ -130,6 +138,45 @@ TEST(CoordinatorLeaderRouterTest, PreservesFollowerRouteStatusWhenRedirectLeader
     EXPECT_EQ(status.GetCode(), K_NOT_READY);
     EXPECT_EQ(attempted,
               (std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003" }));
+}
+
+TEST(CoordinatorLeaderRouterTest, PreservesCoordinatorStatusWhenDeadlineExpiresBeforeRedirectDispatch)
+{
+    auto now = std::chrono::steady_clock::time_point{};
+    auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001" });
+    CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001") }, [&now] { return now; }, {},
+                                   std::chrono::milliseconds(3'000));
+
+    const auto status = router.Execute([&now](const HostPort &, int32_t, coordinator::ResponseHeader &header,
+                                              bool &hasHeader) {
+        hasHeader = true;
+        header = LeaderHeader(7, coordinator::ResponseHeader::FOLLOWER_SERVING);
+        header.set_is_leader(false);
+        header.set_leader_address("127.0.0.1:30002");
+        now += std::chrono::milliseconds(3'000);
+        return Status::OK();
+    });
+
+    EXPECT_EQ(status.GetCode(), K_NOT_READY);
+}
+
+TEST(CoordinatorLeaderRouterTest, PreservesCoordinatorStatusWhenDiscoveryHitsDeadline)
+{
+    auto now = std::chrono::steady_clock::time_point{};
+    auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001" });
+    discovery->SetDeadlineAwareStatus(Status(K_RPC_DEADLINE_EXCEEDED, "injected discovery deadline"));
+    CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001") }, [&now] { return now; },
+                                   [&now](std::chrono::milliseconds delay) { now += delay; });
+
+    const auto status = router.Execute([](const HostPort &, int32_t, coordinator::ResponseHeader &header,
+                                          bool &hasHeader) {
+        hasHeader = true;
+        header = LeaderHeader(7, coordinator::ResponseHeader::FOLLOWER_SERVING);
+        header.set_is_leader(false);
+        return Status::OK();
+    });
+
+    EXPECT_EQ(status.GetCode(), K_NOT_READY);
 }
 
 TEST(CoordinatorLeaderRouterTest, RecoveringLeaderRequiresRecoveryControlRequest)

@@ -40,7 +40,15 @@
   uses the same `TopologyControlHost` reservation/completion transaction as normal membership Put, so topology recovery
   cannot become READY with committed memberships but no Controller runtime owner. Reconciler shutdown transfers its
   Ensure pool under the scheduling mutex and joins outside the lock, fencing already copied membership callbacks from
-  pool destruction without deadlocking the Ensure loop.
+  pool destruction without deadlocking the Ensure loop. If Worker startup fails after Coordinator membership
+  publication, Engine first drains membership event sources and then conditionally deletes that startup incarnation.
+  The existing CoordinatorId and modification-revision fences prevent an old failed process from deleting a replacement
+  at the same address; an unavailable Coordinator leaves TTL expiry as the fallback. This exact fenced membership
+  rollback is the only Delete operation admitted while the Coordinator Leader is recovering. Its committed Store
+  mutation synchronously removes the recovery context, then the Coordinator rechecks that Leader term after releasing
+  the shared operation fence and opens the recovery gate when no discovered cluster remains blocked. Ordinary Delete
+  operations remain gated; the owning backend uses the proxy's narrow `DeleteMembership` recovery-control operation,
+  while the Coordinator independently validates the exact membership key and both fences.
   `TopologyControlHost` then creates one centralized `TopologyControllerRuntime` per admitted cluster inside
   `datasystem_coordinator`; a Coordinator-backed Worker only consumes topology/own-notify and executes business effects.
 
