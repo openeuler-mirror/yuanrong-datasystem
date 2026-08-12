@@ -64,6 +64,37 @@ namespace {
 constexpr int64_t SLOW_RPC_STUB_THRESHOLD_MS = 2;
 constexpr int RPC_STUB_TRANSIENT_LOG_EVERY_N = 50'000;
 
+bool IsTcpPeerDeadError(int errorCode)
+{
+    return errorCode == ECONNREFUSED || errorCode == ENOTCONN || errorCode == EHOSTDOWN;
+}
+
+TcpPortProbeResult FinishTcpPortProbe(int sockfd, int connectRc, int connectError, int timeoutMs)
+{
+    if (connectRc == 0) {
+        return TcpPortProbeResult::AVAILABLE;
+    }
+    if (connectError != EINPROGRESS) {
+        return IsTcpPeerDeadError(connectError) ? TcpPortProbeResult::PEER_DEAD : TcpPortProbeResult::UNKNOWN;
+    }
+
+    struct pollfd pfd{};
+    pfd.fd = sockfd;
+    pfd.events = POLLOUT;
+    if (poll(&pfd, 1, timeoutMs) <= 0) {
+        return TcpPortProbeResult::UNKNOWN;
+    }
+    int sockErr = 0;
+    socklen_t sockErrLen = sizeof(sockErr);
+    if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &sockErr, &sockErrLen) != 0) {
+        return TcpPortProbeResult::UNKNOWN;
+    }
+    if (sockErr == 0) {
+        return TcpPortProbeResult::AVAILABLE;
+    }
+    return IsTcpPeerDeadError(sockErr) ? TcpPortProbeResult::PEER_DEAD : TcpPortProbeResult::UNKNOWN;
+}
+
 const char *GetSlowPhase(int64_t lookupElapsedMs, int64_t accessElapsedMs, int64_t createElapsedMs)
 {
     if (createElapsedMs >= lookupElapsedMs && createElapsedMs >= accessElapsedMs) {
@@ -249,18 +280,18 @@ bool WaitForBrpcSocketAvailable(const HostPort &brpcAddr, int maxRetries, int in
     return false;
 }
 
-bool WaitForTcpPortAvailable(const HostPort &addr, int timeoutMs)
+TcpPortProbeResult ProbeTcpPort(const HostPort &addr, int timeoutMs)
 {
     int family = addr.IsIPv6() ? AF_INET6 : AF_INET;
     int sockfd = socket(family, SOCK_STREAM, 0);
     if (sockfd < 0) {
-        return false;
+        return TcpPortProbeResult::UNKNOWN;
     }
     Raii closer([&sockfd]() { close(sockfd); });
 
     int flags = fcntl(sockfd, F_GETFL, 0);
     if (flags < 0 || fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        return false;
+        return TcpPortProbeResult::UNKNOWN;
     }
 
     int rc;
@@ -269,39 +300,27 @@ bool WaitForTcpPortAvailable(const HostPort &addr, int timeoutMs)
         addr6.sin6_family = AF_INET6;
         addr6.sin6_port = htons(static_cast<uint16_t>(addr.Port()));
         if (inet_pton(AF_INET6, addr.Host().c_str(), &addr6.sin6_addr) != 1) {
-            return false;
+            return TcpPortProbeResult::UNKNOWN;
         }
-        rc = connect(sockfd, reinterpret_cast<struct sockaddr *>(&addr6), sizeof(addr6));
+        auto *socketAddr = static_cast<struct sockaddr *>(static_cast<void *>(&addr6));
+        rc = connect(sockfd, socketAddr, sizeof(addr6));
     } else {
         struct sockaddr_in addr4{};
         addr4.sin_family = AF_INET;
         addr4.sin_port = htons(static_cast<uint16_t>(addr.Port()));
         if (inet_pton(AF_INET, addr.Host().c_str(), &addr4.sin_addr) != 1) {
-            return false;
+            return TcpPortProbeResult::UNKNOWN;
         }
-        rc = connect(sockfd, reinterpret_cast<struct sockaddr *>(&addr4), sizeof(addr4));
+        auto *socketAddr = static_cast<struct sockaddr *>(static_cast<void *>(&addr4));
+        rc = connect(sockfd, socketAddr, sizeof(addr4));
     }
-    if (rc == 0) {
-        return true;
-    }
-    if (errno != EINPROGRESS) {
-        return false;
-    }
+    const int connectError = errno;
+    return FinishTcpPortProbe(sockfd, rc, connectError, timeoutMs);
+}
 
-    struct pollfd pfd;
-    pfd.fd = sockfd;
-    pfd.events = POLLOUT;
-    pfd.revents = 0;
-    int ready = poll(&pfd, 1, timeoutMs);
-    if (ready <= 0) {
-        return false;
-    }
-    int sockErr = 0;
-    socklen_t sockErrLen = sizeof(sockErr);
-    if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &sockErr, &sockErrLen) != 0) {
-        return false;
-    }
-    return sockErr == 0;
+bool WaitForTcpPortAvailable(const HostPort &addr, int timeoutMs)
+{
+    return ProbeTcpPort(addr, timeoutMs) == TcpPortProbeResult::AVAILABLE;
 }
 
 Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_ptr<brpc::Channel> &brpcChannel)

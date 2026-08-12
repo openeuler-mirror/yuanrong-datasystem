@@ -139,6 +139,41 @@ std::shared_ptr<const TransportReadContext> MakeReadContext()
     return context;
 }
 
+TEST(DeadlineRetryTest, AdmissionFailureSkipsBackoff)
+{
+    constexpr int64_t kDeadlineMs = 1'000;
+    constexpr int64_t kBackoffMs = 128;
+    ApiDeadlineGuard deadline(kDeadlineMs);
+    int checkCount = 0;
+    DeadlineRetry retry([&checkCount]() {
+        ++checkCount;
+        return Status(K_RPC_PEER_DEAD, "Bound worker is dead");
+    });
+    int64_t backoffMs = kBackoffMs;
+
+    auto rc = retry.Backoff(backoffMs);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_EQ(checkCount, 1);
+}
+
+TEST(DeadlineRetryTest, RechecksAdmissionAfterBackoff)
+{
+    constexpr int64_t kDeadlineMs = 1'000;
+    ApiDeadlineGuard deadline(kDeadlineMs);
+    int checkCount = 0;
+    DeadlineRetry retry([&checkCount]() {
+        ++checkCount;
+        return checkCount == 1 ? Status::OK() : Status(K_RPC_PEER_DEAD, "Bound worker died during backoff");
+    });
+    int64_t backoffMs = 0;
+
+    auto rc = retry.Backoff(backoffMs);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_EQ(checkCount, 2);
+}
+
 ReplicaReadRequest MakeReplicaReadRequest(const master::ObjectLocationInfoPb *location, ObjectReadItemResult *result)
 {
     return { location, result, MakeReadContext() };

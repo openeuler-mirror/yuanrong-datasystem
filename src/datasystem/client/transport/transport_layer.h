@@ -60,6 +60,8 @@ struct TransportLayerOptions {
     bool enableClientDirectPipelineH2D = false;
     int32_t pipelineThreadNum = 64;
     std::shared_ptr<UbHealthFilter> readSourceFilter;
+    // Synchronous client-lifecycle admission checked around transport retry backoff.
+    std::function<Status()> retryAdmissionCheck;
 };
 
 class TransportLayer {

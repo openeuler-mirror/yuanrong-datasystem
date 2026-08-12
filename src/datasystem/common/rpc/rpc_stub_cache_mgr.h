@@ -57,6 +57,12 @@ bool WaitForBrpcSocketAvailable(const HostPort& brpcAddr, int maxRetries = kBrpc
 // budget (kBrpcConnMaxRetries * kBrpcConnRetryIntervalUs = 30 * 100000us = 3000ms).
 constexpr int kTcpProbeDefaultTimeoutMs = 3000;
 
+enum class TcpPortProbeResult : uint8_t {
+    AVAILABLE,
+    PEER_DEAD,
+    UNKNOWN,
+};
+
 // Return a TCP probe timeout capped by the caller's connect budget so a
 // host-unreachable probe never exceeds the Init budget. Falls back to the
 // default when budgetMs is non-positive (caller did not provide a budget).
@@ -66,10 +72,14 @@ inline int ComputeTcpProbeTimeoutMs(int budgetMs)
 }
 
 // Probe whether the TCP port of addr is listening with a non-blocking connect.
-// Returns true if connect succeeds within timeoutMs (port is listening); false on
-// timeout or refused connection (e.g. a worker killed by SIGKILL). Mirrors the
-// WaitForBrpcSocketAvailable intent for the ZMQ path, where zmq_connect always
-// succeeds asynchronously and a dead worker would otherwise surface only at RPC timeout.
+// PEER_DEAD is returned only when the kernel explicitly reports that the endpoint
+// is not listening. A probe timeout or local probe error is UNKNOWN, because it is
+// insufficient evidence to permanently classify the peer as dead.
+TcpPortProbeResult ProbeTcpPort(const HostPort &addr, int timeoutMs = kTcpProbeDefaultTimeoutMs);
+
+// Return true only when ProbeTcpPort confirms that the endpoint is listening.
+// Mirrors the WaitForBrpcSocketAvailable intent for the ZMQ path, where zmq_connect
+// always succeeds asynchronously and a dead worker would otherwise surface only at RPC timeout.
 bool WaitForTcpPortAvailable(const HostPort& addr, int timeoutMs = kTcpProbeDefaultTimeoutMs);
 
 enum class StubPriority : int {

@@ -160,6 +160,11 @@
     isolation when the detail identifies the actual responding Worker; RPC deadline/unavailable outcomes remain
     `SUSPECT` and do not close read-source admission. Batch and oversized Get paths preserve the matching structured
     detail, including a failed object in an otherwise partially successful NotifyRemoteGet migration batch.
+  - Foreground Worker-to-master `QueryMeta` retries transient retry-policy statuses within the caller deadline but
+    treats `K_RPC_PEER_DEAD` as terminal. A cross-Worker Get therefore returns the dead metadata owner's status
+    immediately instead of rebuilding the same dead peer's RPC stub until the configured request timeout expires.
+    Background reconciliation and metadata push paths retain their bounded stub-rebuild retry because those operations
+    are idempotent and must tolerate a restarting metadata owner.
   - Worker heartbeat and the UB-health membership sidecar publish exactly one self record. The service overwrites both
     Worker identity and incarnation at the publication boundary, so peer observations cannot leak into a self summary.
     Consumers reject stale epochs, retired incarnations, and summaries whose incarnation does not match the registered

@@ -113,6 +113,13 @@
     TransportLayer runtime only to share the same process-local UB sender admission and dedicated recovery probe used
     by routed writes. A raw provider/CQE status 4 from a legacy UB write therefore quarantines the sender before the
     next Create/MultiCreate and returns `K_URMA_WORKER_UNAVAILABLE` until the probe succeeds.
+  - Disabling local cache changes data placement, but the client identity and recovery lifecycle remain bound to the
+    bootstrap Worker. Routed retry backoff checks that bound endpoint, and routed `Exist` performs the same check before
+    dispatch because the operation can otherwise succeed entirely through another Worker. The check uses a 10 ms
+    non-blocking TCP probe and classifies only explicit `ECONNREFUSED`, `ENOTCONN`, or `EHOSTDOWN` results as
+    `K_RPC_PEER_DEAD`; timeouts and local probe failures remain unknown and do not poison the client. The successful
+    Set/Get hot paths do not add an active probe; routed `Exist` pays one bounded probe to preserve the bound-client
+    liveness contract.
   - Routed transport requests carry the gateway client id, token snapshot, thread tenant context, and shared transport
     `Signature`. Target workers authenticate routed Create, Publish, and cleanup requests by signature without requiring
     endpoint-local client registration. UB allocations are released asynchronously after the final Publish attempt, or
