@@ -63,6 +63,13 @@ public:
     /// @return K_OK on normal exit; error code otherwise.
     Status InitAndRun(const CoordinatorOptions &options);
 
+    /// @brief Update runtime-applicable Coordinator log-sampler rates from a JSON object.
+    /// @details Supported keys are request_sample_rate, access_sample_rate, and diagnostic_sample_rate; values must be
+    ///          strings. The update is synchronous and is rejected before startup is ready or after shutdown begins.
+    /// @param configJson JSON object containing flag name/value pairs.
+    /// @return K_OK on success; K_NOT_READY or K_SHUTTING_DOWN for lifecycle rejection; error code otherwise.
+    Status UpdateConfig(const std::string &configJson);
+
     /// @brief Request shutdown of a running InitAndRun().
     /// @return K_OK
     Status Stop();

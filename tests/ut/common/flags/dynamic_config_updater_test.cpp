@@ -92,6 +92,20 @@ TEST_F(DynamicConfigUpdaterTest, AllOrNothingOnValidationFailure)
     EXPECT_EQ(FLAGS_v, 0);
 }
 
+TEST_F(DynamicConfigUpdaterTest, RuntimeApplicabilityFilterRejectsUnsupportedFlagsBeforeCommit)
+{
+    DynamicConfigUpdater updater(flagConfig_, [](const std::string &flagName) {
+        return flagName == "request_sample_rate";
+    });
+
+    const auto status = updater.ApplyJson(R"({"request_sample_rate":"0.5","v":"2"})");
+
+    EXPECT_EQ(status.GetCode(), K_INVALID) << status.ToString();
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("not runtime-applicable"));
+    EXPECT_DOUBLE_EQ(FLAGS_request_sample_rate, 1.0);
+    EXPECT_EQ(FLAGS_v, 0);
+}
+
 TEST_F(DynamicConfigUpdaterTest, RejectWhenSpecialValidationFailsBeforeCommit)
 {
     flagConfig_.SetValidateSpecial([](const std::string &flagName, const std::string &newVal) {

@@ -46,7 +46,9 @@ std::string JoinErrors(const std::vector<std::string> &errors)
 
 }  // namespace
 
-DynamicConfigUpdater::DynamicConfigUpdater(DynamicFlagConfig &flagConfig) : flagConfig_(&flagConfig)
+DynamicConfigUpdater::DynamicConfigUpdater(DynamicFlagConfig &flagConfig,
+                                           RuntimeApplicabilityCheck runtimeApplicabilityCheck)
+    : flagConfig_(&flagConfig), runtimeApplicabilityCheck_(std::move(runtimeApplicabilityCheck))
 {
 }
 
@@ -100,6 +102,12 @@ Status DynamicConfigUpdater::ApplyJson(const std::string &configJson, const std:
             const std::string msg = apiPrefix + ": flag '" + kv.first + "' not in trust list";
             errors.push_back(msg);
             OperationLogger::Instance().LogConfigFailed(kv.first, "not in trust list");
+            continue;
+        }
+        if (runtimeApplicabilityCheck_ && !runtimeApplicabilityCheck_(kv.first)) {
+            const std::string msg = apiPrefix + ": flag '" + kv.first + "' not runtime-applicable";
+            errors.push_back(msg);
+            OperationLogger::Instance().LogConfigFailed(kv.first, "not runtime-applicable");
             continue;
         }
         std::string validateErr;

@@ -28,6 +28,9 @@
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
 
 namespace datasystem {
+class DynamicConfigUpdater;
+class DynamicFlagConfig;
+
 namespace coordinator {
 class CoordinatorServiceImpl;
 }  // namespace coordinator
@@ -58,6 +61,14 @@ public:
     Status InitAndRun(const CoordinatorOptions &options);
 
     /**
+     * @brief Synchronously update Coordinator log-sampler rates while this Runtime is running.
+     * @details Only request_sample_rate, access_sample_rate, and diagnostic_sample_rate are runtime-applicable. Calls
+     *          are serialized with Stop(). Production supports one Coordinator Runtime per process because the
+     *          underlying flag values are process-global.
+     */
+    Status UpdateConfig(const std::string &configJson);
+
+    /**
      * @brief Request this Runtime's event loop to stop without changing the process termination flag.
      */
     Status Stop();
@@ -70,11 +81,14 @@ protected:
 
 private:
     enum class LifecycleCallbackState : uint8_t { NOT_CONFIGURED, READY, START_ATTEMPTED, STOP_INVOKED };
+    enum class ConfigState : uint8_t { NOT_READY, READY, STOPPING };
 
     Status InitAndRunInternal(const CoordinatorOptions *options);
     Status InvokeOnStart();
     Status InvokeOnStop();
     Status ShutdownService();
+    void EnableConfigUpdates();
+    void DisableConfigUpdates();
     void RunEventLoop();
 
     mutable std::mutex mutex_;
@@ -84,6 +98,10 @@ private:
     std::function<Status()> onStart_;
     std::function<Status()> onStop_;
     LifecycleCallbackState callbackState_{ LifecycleCallbackState::NOT_CONFIGURED };
+    mutable std::mutex configMutex_;  // Acquired after mutex_ when both lifecycle domains are needed.
+    std::unique_ptr<DynamicFlagConfig> runtimeFlags_;
+    std::unique_ptr<DynamicConfigUpdater> configUpdater_;
+    ConfigState configState_{ ConfigState::NOT_READY };
 };
 
 }  // namespace datasystem

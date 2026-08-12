@@ -572,6 +572,12 @@ void Logging::Start(const std::string &logFilename, LogProcessRole processRole, 
     }
 }
 
+void Logging::LogProcessVersion(const std::string &gitCommit, const std::string &gitBranch)
+{
+    LOG(INFO) << "Git Commit:" << gitCommit << "; Git Branch: " << gitBranch;
+    OperationLogger::Instance().LogVersionInit(gitCommit);
+}
+
 Status Logging::WriteLogToFile(int lineOfCode, const std::string &fileNameOfCode, const std::string &logFileName,
                                char level, const std::string &message)
 {

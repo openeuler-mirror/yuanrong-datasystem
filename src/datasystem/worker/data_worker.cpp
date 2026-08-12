@@ -357,7 +357,7 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDe
     Logging::GetInstance()->Start(FLAGS_log_filename, LogProcessRole::WORKER, LOG_ROLLING_COMPRESS_SECS,
                                   isEmbeddedClient);
 
-    LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
+    Logging::GetInstance()->LogProcessVersion(GIT_HASH, GIT_BRANCH);
     LOG(INFO) << "Worker non-default flags:\n" << nonDefaultFlags;
 
 #ifdef SUPPORT_JEPROF

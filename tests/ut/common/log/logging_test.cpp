@@ -376,6 +376,24 @@ TEST_F(LoggingTest, TestCoordinatorDoesNotCreateAccessLogs)
     EXPECT_FALSE(FileExist(requestOutLogPath));
 }
 
+TEST_F(LoggingTest, LogProcessVersionWritesRegularAndOperationLogs)
+{
+    Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR, 1);
+    Logging::GetInstance()->LogProcessVersion("[abc123] [2026-08-13 09:30:00]", "feature/test");
+    OperationLogger::Instance().Shutdown();
+    Provider::Instance().FlushLogs();
+
+    const std::string infoContent = ReadFileContent(FLAGS_log_dir + "/datasystem_coordinator.INFO.log");
+    const std::string operationContent =
+        ReadFileContent(FLAGS_log_dir + "/datasystem_coordinator_operation.log");
+    EXPECT_NE(infoContent.find("Git Commit:[abc123] [2026-08-13 09:30:00]; Git Branch: feature/test"),
+              std::string::npos);
+    EXPECT_NE(operationContent.find(
+                  "VERSION_INIT: role=coordinator, git_commit=[abc123] [2026-08-13 09:30:00]"),
+              std::string::npos);
+    EXPECT_EQ(operationContent.find("feature/test"), std::string::npos);
+}
+
 TEST_F(LoggingTest, TestClientLogWithoutPidByDefault)
 {
     const char *oldValue = getenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str());

@@ -90,6 +90,13 @@ public:
                uint32_t logProcessInterval = LOG_ROLLING_COMPRESS_SECS, bool isEmbeddedClient = false);
 
     /**
+     * @brief Record process build identity in the regular and operation logs.
+     * @param[in] gitCommit Build-time Git commit description.
+     * @param[in] gitBranch Build-time Git branch name. This is written only to the regular log.
+     */
+    void LogProcessVersion(const std::string &gitCommit, const std::string &gitBranch);
+
+    /**
      * @brief  Check and create the log dir.
      * @return True if success.
      */

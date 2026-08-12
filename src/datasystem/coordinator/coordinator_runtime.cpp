@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
+#include "datasystem/common/flags/dynamic_config_updater.h"
 #include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
@@ -38,11 +39,16 @@ DS_DECLARE_int32(coordinator_raft_heartbeat_interval_ms);
 DS_DECLARE_int32(coordinator_raft_election_timeout_ms);
 DS_DECLARE_uint32(coordinator_member_failure_grace_ms);
 DS_DECLARE_uint32(coordinator_discovery_retry_interval_ms);
-
 namespace datasystem {
 namespace {
 
 constexpr int kStopPollIntervalMs = 100;
+
+bool IsCoordinatorRuntimeApplicableFlag(const std::string &flagName)
+{
+    return flagName == "request_sample_rate" || flagName == "access_sample_rate"
+        || flagName == "diagnostic_sample_rate";
+}
 
 Status ValidateOptions(const CoordinatorOptions &options)
 {
@@ -79,7 +85,11 @@ void PreserveFirstError(Status &firstError, const Status &status, const char *op
 }
 }  // namespace
 
-CoordinatorRuntime::CoordinatorRuntime() = default;
+CoordinatorRuntime::CoordinatorRuntime() : runtimeFlags_(std::make_unique<DynamicFlagConfig>()),
+                                           configUpdater_(std::make_unique<DynamicConfigUpdater>(
+                                               *runtimeFlags_, IsCoordinatorRuntimeApplicableFlag))
+{
+}
 
 CoordinatorRuntime::~CoordinatorRuntime() noexcept
 {
@@ -104,7 +114,7 @@ Status CoordinatorRuntime::InitAndRun(const CoordinatorOptions &options)
 Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
 {
     Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR);
-    LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
+    Logging::GetInstance()->LogProcessVersion(GIT_HASH, GIT_BRANCH);
     Status firstError;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery;
     int expectedMemberCount = 0;
@@ -136,8 +146,7 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
         }
         callbackState_ = LifecycleCallbackState::READY;
 
-        DynamicFlagConfig flags;
-        OperationLogger::Instance().LogConfigInit(flags.GetAllFlagsStr());
+        OperationLogger::Instance().LogConfigInit(runtimeFlags_->GetAllFlagsStr());
 
         auto raftFlags = GetRaftFlags();
         HostPort localAddress;
@@ -153,7 +162,6 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
         if (firstError.IsError()) {
             break;
         }
-
         firstError = InvokeOnStart();
         if (firstError.IsError()) {
             break;
@@ -163,18 +171,40 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
         if (firstError.IsError()) {
             break;
         }
+        EnableConfigUpdates();
 
         LOG(INFO) << "Coordinator started successfully, entering Runtime event loop";
         RunEventLoop();
     } while (false);
 
+    DisableConfigUpdates();
     PreserveFirstError(firstError, InvokeOnStop(), "Coordinator lifecycle onStop");
     PreserveFirstError(firstError, ShutdownService(), "Coordinator service shutdown");
     return firstError;
 }
 
+Status CoordinatorRuntime::UpdateConfig(const std::string &configJson)
+{
+    std::lock_guard<std::mutex> lock(configMutex_);
+    if (configState_ == ConfigState::STOPPING) {
+        const std::string reason = "Coordinator UpdateConfig: runtime is stopping";
+        OperationLogger::Instance().LogConfigApiFailed("UpdateConfig", reason);
+        return Status(K_SHUTTING_DOWN, reason);
+    }
+    if (configState_ != ConfigState::READY || configUpdater_ == nullptr) {
+        const std::string reason = "Coordinator UpdateConfig: runtime is not ready";
+        OperationLogger::Instance().LogConfigApiFailed("UpdateConfig", reason);
+        return Status(K_NOT_READY, reason);
+    }
+    return configUpdater_->ApplyJson(configJson, "Coordinator UpdateConfig");
+}
+
 Status CoordinatorRuntime::Stop()
 {
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        configState_ = ConfigState::STOPPING;
+    }
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stopRequested_ = true;
@@ -251,6 +281,23 @@ Status CoordinatorRuntime::ShutdownService()
     return service->Shutdown();
 }
 
+void CoordinatorRuntime::EnableConfigUpdates()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!stopRequested_) {
+        std::lock_guard<std::mutex> configLock(configMutex_);
+        if (configState_ == ConfigState::NOT_READY) {
+            configState_ = ConfigState::READY;
+        }
+    }
+}
+
+void CoordinatorRuntime::DisableConfigUpdates()
+{
+    std::lock_guard<std::mutex> lock(configMutex_);
+    configState_ = ConfigState::STOPPING;
+}
+
 void CoordinatorRuntime::RunEventLoop()
 {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -258,6 +305,7 @@ void CoordinatorRuntime::RunEventLoop()
         stopCv_.wait_for(lock, std::chrono::milliseconds(kStopPollIntervalMs),
                          [this] { return stopRequested_ || IsTermSignalReceived(); });
     }
+    DisableConfigUpdates();
     lock.unlock();
     LOG(INFO) << "Coordinator Runtime stop requested, shutting down";
 }

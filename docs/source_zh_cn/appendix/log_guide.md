@@ -10,7 +10,7 @@ openYuanrong datasystem 的日志分为以下类型：
 4. **资源日志**：定时输出 Worker 运行时关键资源信息，包括共享内存、Spill 磁盘、线程池、队列、流缓存相关统计等（需 `log_monitor` 且 `log_monitor_exporter=harddisk`）。
 5. **流缓存指标日志（sc_metrics）**：流缓存运行数据（需开启 `log_monitor`）。
 6. **容器/进程相关日志**：容器运行日志，管理和监控worker进程的生命周期。
-7. **操作审计日志（operation）**：记录进程启动/停止、配置初始化及运行时动态配置变更（`UpdateConfig` API 或 `monitor_config_file` 热更新），便于运维追溯配置操作历史。
+7. **操作审计日志（operation）**：记录进程启动/停止、构建 Commit、配置初始化及运行时动态配置变更（`UpdateConfig` API 或 `monitor_config_file` 热更新），便于运维追溯版本和配置操作历史。
 8. **资源快照日志（kv_resource）**：`resource.log` 同源字段的 JSON-Lines 快照，每行一个完整 JSON 对象，顶层含 `time`/`pod_name`/`cluster_name`，`metrics` 为按 `resource_json_schema` 配置的 metric 组及子字段（需 `json_log_monitor` 且 `log_monitor_exporter=harddisk`；与 `resource.log` 复用同一采集线程和周期，写入由 `json_log_monitor` 独立控制）。
 9. **指标摘要日志（kv_metrics）**：`datasystem_worker.INFO.log` 中 `metrics_summary` 摘要的 JSON-Lines 并行输出，每行一个完整 JSON 对象，顶层含 `time`/`pod_name`/`cluster_name`，body 与 INFO.log 逐字一致（需 `json_log_monitor`；INFO.log 原 `metrics_summary` 仍由 `log_monitor` 控制）。
 
@@ -26,12 +26,22 @@ openYuanrong datasystem 的日志分为以下类型：
 | 4 | datasystem_worker | `/path/yr_datasystem/logs/request_out.log` | 访问第三方（当前主要为 ETCD）接口日志 |
 | 5 | datasystem_worker | `/path/yr_datasystem/logs/sc_metrics.log` | 流缓存运行数据；由 `log_monitor` 控制是否开启 |
 | 6 | datasystem_worker | `/path/yr_datasystem/logs/container.log` | 容器运行日志，管理和监控worker进程的生命周期 |
-| 7 | datasystem_worker | `/path/yr_datasystem/logs/{log_filename}_operation.log` | 操作审计日志；记录 Init/Shutdown、配置初始化快照及运行时 flag 变更（`UpdateConfig` 或配置文件热更新） |
+| 7 | datasystem_worker | `/path/yr_datasystem/logs/{log_filename}_operation.log` | 操作审计日志；记录 Init/Shutdown、构建 Commit、配置初始化快照及运行时 flag 变更（`UpdateConfig` 或配置文件热更新） |
 | 8 | datasystem_worker | `/path/yr_datasystem/logs/kv_resource.log` | 资源快照 JSON-Lines；`resource.log` 同源字段的纯 JSON 输出，顶层 `time`/`pod_name`/`cluster_name`，`metrics` 按 schema 输出已配置的 metric 组；由 `json_log_monitor` 且 `log_monitor_exporter=harddisk` 控制 |
 | 9 | datasystem_worker | `/path/yr_datasystem/logs/kv_metrics.log` | 指标摘要 JSON-Lines；INFO.log 中 `metrics_summary` 的并行输出，body 逐字一致，额外前置 `time`/`pod_name`/`cluster_name`；由 `json_log_monitor` 控制（INFO.log 原输出仍由 `log_monitor` 控制） |
 | 10 | Client | `/path/client/ds_client.INFO.log`（及 `.WARNING`、`.ERROR` 等；关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}.INFO.log`） | SDK 运行日志；基名可由启动参数与环境变量 `DATASYSTEM_CLIENT_LOG_NAME` 覆盖 |
 | 11 | Client | `/path/client/ds_client_operation.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}_operation.log`） | Client 操作审计日志；记录 Init/Shutdown 及 `UpdateConfig` 动态配置变更 |
 | 12 | Client | `/path/client/ds_client_access.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_access_{pid}.log`） | SDK 接口访问日志；基名可由 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖 |
+| 13 | datasystem_coordinator | `/path/yr_datasystem/logs/datasystem_coordinator.INFO.log`（及 `.WARNING`、`.ERROR` 等轮转文件） | Coordinator 运行日志；启动时记录 Git Commit 和 Branch |
+| 14 | datasystem_coordinator | `/path/yr_datasystem/logs/datasystem_coordinator_operation.log` | Coordinator 操作审计日志；记录 Init/Shutdown、构建 Commit、配置初始化及运行时 `UpdateConfig` 变更 |
+
+Worker 和 Coordinator 启动后会在 operation 日志中各写入一条版本事件：
+
+```text
+VERSION_INIT: role=<worker|coordinator>, git_commit=<git-commit>
+```
+
+Branch 仅写入普通运行日志，不写入 operation 日志。构建系统无法解析版本时，回退字符串也会原样记录，便于定位构建配置问题。
 
 ---
 
