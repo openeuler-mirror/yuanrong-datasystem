@@ -595,7 +595,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <article role="main" id="furo-main-content">
           <section class="tex2jax_ignore mathjax_ignore" id="ai">
 <h1>AI 开发流程<a class="headerlink" href="#ai" title="Link to this heading">¶</a></h1>
-<p>openYuanrong datasystem 在 <code class="docutils literal notranslate"><span class="pre">.skills/</span></code> 中配置了 10 个 AI 辅助开发 skill，覆盖从 issue 拉取到 PR 创建的完整开发流程。本文档面向希望了解或参与 AI 辅助开发的贡献者。</p>
+<p>openYuanrong datasystem 在 <code class="docutils literal notranslate"><span class="pre">.skills/</span></code> 中配置了多项 AI 辅助开发 skill，覆盖从 issue 接收、代码修改到 PR 创建的完整开发流程。本文档面向希望了解或参与 AI 辅助开发的贡献者。</p>
 <hr class="docutils" />
 <section id="skills">
 <h2>Skills 总览<a class="headerlink" href="#skills" title="Link to this heading">¶</a></h2>
@@ -610,9 +610,9 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><strong>ds-issue-intake</strong></p></td>
-<td><p>“拉取 issue 572”、“分析这个 issue”</p></td>
-<td><p>从 GitCode 拉取 issue，脱敏敏感信息，生成结构化任务 spec</p></td>
+<tr class="row-even"><td><p><strong>ds-resolve-issue</strong></p></td>
+<td><p>“解决 issue 572”、“修复这个 issue 并提 PR”</p></td>
+<td><p>统一编排 issue 接收、脱敏、源码分析、实现、检视、验证和 PR 创建</p></td>
 </tr>
 <tr class="row-odd"><td><p><strong>ds-infra-engineering</strong></p></td>
 <td><p>“修改 worker client cache 逻辑”、“分析 datasystem 代码”</p></td>
@@ -675,15 +675,15 @@ document.addEventListener('DOMContentLoaded', function() {
 <h2>开发主链<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
 <p>标准的 issue → PR 流程：</p>
 <ol class="arabic simple">
-<li><p><strong>ds-issue-intake</strong>：拉取 issue，脱敏，生成结构化任务 spec</p></li>
+<li><p><strong>ds-resolve-issue</strong>：接收 issue，脱敏并生成 task spec，统一编排后续步骤</p></li>
 <li><p><strong>ds-infra-engineering</strong>：分析代码路径，识别高风险面，选择验证策略 → 实施最小改动</p></li>
 <li><p><strong>ds-pr-review</strong>：多轮深入检视——正确性、性能、并发、C++ 安全，发布 finding</p></li>
 <li><p><strong>ds-test</strong>：规划验证命令 → 跑本地/远端编译和测试 → 产出验证报告</p></li>
 <li><p><strong>ds-self-verify</strong>：diff 审查 → 工程门控 → 上下文更新，确认 PR 就绪</p></li>
 <li><p><strong>ds-create-pr</strong>：模板合规校验 + 敏感信息扫描 + 创建 PR</p></li>
-<li><p><strong>ds-pr-comment-proc</strong>：处理 review 反馈，回复/resolve discussion</p></li>
+<li><p><strong>ds-pr-comment-proc</strong>：PR 创建后按需处理 review 反馈，回复/resolve discussion</p></li>
 </ol>
-<p>对于 “帮我解决 issue#572 并提 PR” 这样的组合请求，AI 会自动串联上述 skills，无需手动逐个调用。</p>
+<p>对于 “帮我解决 issue#572 并提 PR” 这样的组合请求，只需调用 <code class="docutils literal notranslate"><span class="pre">ds-resolve-issue</span></code>，由它自动编排上述主链步骤，无需手动逐个调用。</p>
 </section>
 <hr class="docutils" />
 <section id="id4">

@@ -2641,7 +2641,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 </table>
 </div>
 <blockquote>
-<div><p>兼容性说明：<code class="docutils literal notranslate"><span class="pre">rebalance_cooldown_s</span></code> 与 <code class="docutils literal notranslate"><span class="pre">rebalance_max_migrate_bytes_per_round</span></code> 已移除，冷却时长固定为 60s、单次任务迁移上限固定为 1GB。升级前请从 worker 启动参数（如 <code class="docutils literal notranslate"><span class="pre">workerGflagParams</span></code>/<code class="docutils literal notranslate"><span class="pre">extraArgs</span></code>）和自定义 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 中移除这两个配置项，否则 worker 会因识别到未知 flag 而启动失败。</p>
+<div><p>兼容性说明：<code class="docutils literal notranslate"><span class="pre">rebalance_cooldown_s</span></code> 与 <code class="docutils literal notranslate"><span class="pre">rebalance_max_migrate_bytes_per_round</span></code> 已移除，冷却时长固定为 60s。单次任务迁移上限由原 1GB/轮改为 300MB/批的连续反馈回路：master 在 30s 调度周期内钉死总迁移预算（<code class="docutils literal notranslate"><span class="pre">min(usageGap/2,</span> <span class="pre">headroomToWatermark,</span> <span class="pre">targetAvail)</span></code>），worker 每完成一批 300MB 迁移即上报目标剩余内存，master 据此决策继续发放下一批或停止（预算耗尽或目标达 70% 水位线）。升级前请从 worker 启动参数（如 <code class="docutils literal notranslate"><span class="pre">workerGflagParams</span></code>/<code class="docutils literal notranslate"><span class="pre">extraArgs</span></code>）和自定义 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 中移除这两个配置项，否则 worker 会因识别到未知 flag 而启动失败。</p>
 </div></blockquote>
 </section>
 <section id="id26">
