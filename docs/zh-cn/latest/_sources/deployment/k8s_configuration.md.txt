@@ -305,7 +305,7 @@ global:
     rebalanceTaskReportGraceMs: 30000
 ```
 
-> 兼容性说明：`rebalanceCooldownS` 与 `rebalanceMaxMigrateBytesPerRound` 已移除，冷却时长固定为 60s、单次任务迁移上限固定为 1GB。升级前请从自定义 `workerGflagParams`/`extraArgs` 及历史 `values.yaml` 中移除这两项，否则 worker 会因识别到未知 flag 而启动失败。
+> 兼容性说明：`rebalanceCooldownS` 与 `rebalanceMaxMigrateBytesPerRound` 已移除，冷却时长固定为 60s。单次任务迁移上限由原 1GB/轮改为 300MB/批的连续反馈回路：master 在 30s 调度周期内钉死总迁移预算（`min(usageGap/2, headroomToWatermark, targetAvail)`），worker 每完成一批 300MB 迁移即上报目标剩余内存，master 据此决策继续发放下一批或停止（预算耗尽或目标达 70% 水位线）。升级前请从自定义 `workerGflagParams`/`extraArgs` 及历史 `values.yaml` 中移除这两项，否则 worker 会因识别到未知 flag 而启动失败。
 
 ### 日志与可观测相关配置
 
