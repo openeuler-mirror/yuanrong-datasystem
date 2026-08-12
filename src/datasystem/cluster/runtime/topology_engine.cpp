@@ -707,10 +707,6 @@ Status TopologyEngine::StartMemberRole()
     if (options_.unifiedEtcdWatch) {
         auto rc = controllerRuntime_->Start();
         if (rc.IsError()) {
-            LOG_IF_ERROR(memberBackend_->ShutdownEventSources(),
-                         "Stop membership event sources after Controller bootstrap failure");
-            LOG_IF_ERROR(memberBackend_->Delete(keys_->MembershipTable(), options_.localAddress),
-                         "CLUSTER_MEMBERSHIP_STARTUP_CLEANUP_FAILED");
             return rc;
         }
     }
@@ -750,15 +746,11 @@ Status TopologyEngine::StartMemberRole()
     }
     auto rc = memberBackend_->WatchEvents(watches);
     if (rc.IsError()) {
-        LOG_IF_ERROR(memberBackend_->Delete(keys_->MembershipTable(), options_.localAddress),
-                     "CLUSTER_MEMBERSHIP_STARTUP_CLEANUP_FAILED");
         return rc;
     }
     if (options_.unifiedEtcdWatch) {
         rc = controllerRuntime_->SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
         if (rc.IsError()) {
-            LOG_IF_ERROR(memberBackend_->Delete(keys_->MembershipTable(), options_.localAddress),
-                         "CLUSTER_MEMBERSHIP_STARTUP_CLEANUP_FAILED");
             return rc;
         }
     }
@@ -781,7 +773,8 @@ Status TopologyEngine::CleanupAfterStartFailure()
     SetAvailability(TopologyAvailabilityLevel::SHUTTING_DOWN, "start_rollback");
     dispatcher_.ShutdownIngress();
     const auto cleanupDeadline = std::chrono::steady_clock::now() + options_.stopGrace;
-    const auto cleanupStatus = ShutdownComponents(cleanupDeadline);
+    auto cleanupStatus = ShutdownComponents(cleanupDeadline);
+    PreserveFirstError(RollbackStartupMembership(), cleanupStatus);
     if (cleanupStatus.IsOk()) {
         snapshots_.Clear();
         SetAvailability(TopologyAvailabilityLevel::NOT_READY, "start_failed");
@@ -794,6 +787,15 @@ Status TopologyEngine::CleanupAfterStartFailure()
         lifecycleOperationInFlight_ = false;
     }
     return cleanupStatus;
+}
+
+Status TopologyEngine::RollbackStartupMembership()
+{
+    if (coordinatorProxy_ == nullptr || !memberBackend_->IsFirstKeepAliveSent()) {
+        return Status::OK();
+    }
+    const auto status = memberBackend_->Delete(keys_->MembershipTable(), options_.localAddress);
+    return status.GetCode() == K_NOT_FOUND || status.GetCode() == K_TRY_AGAIN ? Status::OK() : status;
 }
 
 void TopologyEngine::CommitSuccessfulStart()

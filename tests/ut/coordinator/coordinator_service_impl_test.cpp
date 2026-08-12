@@ -202,6 +202,41 @@ TEST_F(CoordinatorServiceImplTest, StaleTermEnsureDoesNotCreateMembership)
     EXPECT_EQ(reportResponse.result(), coordinator::ReportTopologyRecoveryCandidateRspPb::MEMBERSHIP_NOT_READY);
 }
 
+TEST_F(CoordinatorServiceImplTest, MembershipDeleteCompletesRecoveringLeaderGate)
+{
+    EnterRecoveringLeader();
+    const std::string workerAddress = "127.0.0.1:31501";
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(service_->store_->Put(MembershipKey(workerAddress), ValidMembershipValue(), 10'000,
+                                      COORDINATOR_KEY_NOT_EXISTS_VERSION, version, revision));
+    ASSERT_EQ(service_->topologyRecoveryManager_->GetRoundSummary().recoveringCount, 1U);
+
+    coordinator::DeleteRangeReqPb request;
+    request.set_key(MembershipKey(workerAddress));
+    coordinator::DeleteRangeRspPb response;
+    DS_ASSERT_OK(service_->DeleteRange(request, response));
+    EXPECT_EQ(response.deleted(), 0);
+    EXPECT_EQ(service_->topologyRecoveryManager_->GetRoundSummary().recoveringCount, 1U);
+
+    request.set_expected_coordinator_id(service_->coordinatorId_);
+    request.set_expected_mod_revision(revision);
+    response.Clear();
+    DS_ASSERT_OK(service_->DeleteRange(request, response));
+
+    EXPECT_EQ(response.deleted(), 1);
+    EXPECT_TRUE(response.header().is_leader());
+    EXPECT_EQ(service_->servingState_.load(std::memory_order_acquire),
+              coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING);
+
+    service_->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::LEADER_RECOVERING,
+                                  std::memory_order_release);
+    response.Clear();
+    DS_ASSERT_OK(service_->DeleteRange(request, response));
+    EXPECT_EQ(response.deleted(), 0);
+    EXPECT_TRUE(response.header().is_leader());
+}
+
 TEST_F(CoordinatorServiceImplTest, CoordinatorIdProbeRejectsUnknownLeaderButReturnsRecoveringLeader)
 {
     coordinator::GetCoordinatorIdReqPb request;

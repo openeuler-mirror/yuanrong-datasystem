@@ -130,6 +130,15 @@ public:
         return Status::OK();
     }
 
+    Status DeleteMembership(const std::string &key, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
+                            int64_t expectedModRevision) override
+    {
+        auto status = DeleteRange(key, "", deleted, revision, timeoutMs, expectedModRevision);
+        std::lock_guard<std::mutex> lock(mutex_);
+        membershipDeleteUsed_ = true;
+        return status;
+    }
+
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &, const std::string &,
                       int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
                       std::string *coordinatorId) override
@@ -355,6 +364,12 @@ public:
         return lastDeleteModRevision_;
     }
 
+    bool MembershipDeleteUsed() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return membershipDeleteUsed_;
+    }
+
     std::vector<std::string> LastFailedTargets() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -397,6 +412,7 @@ private:
     int64_t lastPutTtlMs_{ 0 };
     int64_t lastKeepAliveModRevision_{ 0 };
     int64_t lastDeleteModRevision_{ 0 };
+    bool membershipDeleteUsed_{ false };
     size_t putCalls_{ 0 };
     size_t keepAliveCalls_{ 0 };
     std::vector<std::string> lastFailedTargets_;
@@ -908,6 +924,22 @@ TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotDeleteRep
     proxy.ReplaceMembershipIncarnation();
     EXPECT_EQ(backend.Delete("/datasystem/c/cluster", WATCHER_ADDRESS).GetCode(), K_TRY_AGAIN);
     EXPECT_EQ(proxy.LastDeleteModRevision(), 2);
+}
+
+TEST(DsCoordinationBackendSessionTest, StartupRollbackDeletesOnlyPublishedMembership)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend unpublished(&proxy, WATCHER_ADDRESS);
+    EXPECT_FALSE(unpublished.IsFirstKeepAliveSent());
+
+    DsCoordinationBackend published(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(published.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(published.ShutdownEventSources().IsOk());
+    ASSERT_TRUE(published.IsFirstKeepAliveSent());
+    EXPECT_TRUE(published.Delete("/datasystem/c/cluster", WATCHER_ADDRESS).IsOk());
+    EXPECT_EQ(proxy.LastDeleteModRevision(), 1);
+    EXPECT_TRUE(proxy.MembershipDeleteUsed());
 }
 
 TEST(DsCoordinationBackendSessionTest, RecoveringLeaderInitialLeaseUsesReconcileHandlerBeforeStartingRenewal)

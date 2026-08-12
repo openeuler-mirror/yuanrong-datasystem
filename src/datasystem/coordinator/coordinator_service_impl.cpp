@@ -1085,8 +1085,16 @@ Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
 Status CoordinatorServiceImpl::DeleteRange(const DeleteRangeReqPb &req, DeleteRangeRspPb &rsp)
 {
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    ParsedTopologyCoordinationKey parsed;
+    const bool isMembershipRollback = servingState_.load(std::memory_order_acquire) == ServingState::LEADER_RECOVERING
+                                      && req.range_end().empty() && !req.expected_coordinator_id().empty()
+                                      && req.expected_mod_revision() != COORDINATOR_NO_MOD_REVISION_CHECK
+                                      && topologyRecoveryManager_ != nullptr
+                                      && topologyRecoveryManager_->ParseKey(req.key(), parsed).IsOk()
+                                      && parsed.kind == TopologyCoordinationKeyKind::MEMBERSHIP
+                                      && !parsed.relativeKey.empty();
     bool businessAllowed = false;
-    RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
+    RETURN_IF_NOT_OK(PrepareRpcResponse(isMembershipRollback, rsp.mutable_header(), businessAllowed));
     RETURN_OK_IF_TRUE(!businessAllowed);
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
     CHECK_FAIL_RETURN_STATUS(req.expected_coordinator_id().empty() || req.expected_coordinator_id() == coordinatorId_,
@@ -1100,6 +1108,12 @@ Status CoordinatorServiceImpl::DeleteRange(const DeleteRangeReqPb &req, DeleteRa
     int64_t deleted = 0;
     int64_t revision = 0;
     RETURN_IF_NOT_OK(store_->DeleteRange(req.key(), req.range_end(), deleted, revision, req.expected_mod_revision()));
+    if (isMembershipRollback) {
+        const uint64_t leaderTerm = leaderTerm_.load(std::memory_order_acquire);
+        leaderLock.unlock();
+        CompleteRecoveryWindow(leaderTerm);
+        FillResponseHeader(rsp.mutable_header());
+    }
     rsp.set_deleted(deleted);
     rsp.set_revision(revision);
     return Status::OK();

@@ -502,6 +502,7 @@ private:
      * @return K_OK after complete rollback; the first cleanup error when Shutdown must be retried.
      */
     Status CleanupAfterStartFailure();
+    Status RollbackStartupMembership();
 
     /**
      * @brief Commit RUNNING and publish the latest traffic-allowing availability before releasing Start ownership.

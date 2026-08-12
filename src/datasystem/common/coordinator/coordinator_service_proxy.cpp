@@ -362,8 +362,22 @@ Status CoordinatorServiceProxyBase::Range(const std::string &key, const std::str
     return Status::OK();
 }
 
-Status CoordinatorServiceProxyBase::DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
-                                                int64_t &revision, int32_t timeoutMs, int64_t expectedModRevision)
+Status CoordinatorServiceProxyBase::DeleteRange(
+    const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
+    int64_t expectedModRevision)
+{
+    return DeleteRangeInternal(key, rangeEnd, deleted, revision, timeoutMs, expectedModRevision, false);
+}
+
+Status CoordinatorServiceProxyBase::DeleteMembership(
+    const std::string &key, int64_t &deleted, int64_t &revision, int32_t timeoutMs, int64_t expectedModRevision)
+{
+    return DeleteRangeInternal(key, "", deleted, revision, timeoutMs, expectedModRevision, true);
+}
+
+Status CoordinatorServiceProxyBase::DeleteRangeInternal(
+    const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
+    int64_t expectedModRevision, bool recoveryControl)
 {
     auto inFlight = BeginRpc(timeoutMs);
     coordinator::DeleteRangeReqPb req;
@@ -376,8 +390,8 @@ Status CoordinatorServiceProxyBase::DeleteRange(const std::string &key, const st
     options.SetTimeout(timeoutMs);
     RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
         return stub.DeleteRange(opts, request, response);
-    }));
-    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), nullptr));
+    }, recoveryControl));
+    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), nullptr, recoveryControl));
     deleted = rsp.deleted();
     revision = rsp.revision();
     return Status::OK();
