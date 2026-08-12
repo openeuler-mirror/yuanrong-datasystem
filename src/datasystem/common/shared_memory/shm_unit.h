@@ -88,6 +88,12 @@ public:
     ShmView GetShmView();
 
     /**
+     * @brief Get the identity derived from the shared-memory mapping coordinates.
+     * @return Identity in F:<fd>-M:<mmapSize>-O:<offset>-S:<size> format.
+     */
+    std::string GetIdentity() const;
+
+    /**
      * @brief Get the Tenant Id object.
      * @return tenantId.
      */

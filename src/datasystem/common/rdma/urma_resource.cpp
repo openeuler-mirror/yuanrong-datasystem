@@ -91,8 +91,7 @@ struct RetainedUrmaProviderDependencies {
 // dependency closure so neither a later UrmaResource destructor nor liburma unloading can
 // partially tear it down. NoDestructor leaves final reclamation to process/kernel exit.
 void RetainUrmaProviderDependenciesUntilProcessExit(std::unique_ptr<UrmaContext> context,
-                                                    std::unique_ptr<UrmaJfce> jfce,
-                                                    std::unique_ptr<UrmaJfc> jfc)
+                                                    std::unique_ptr<UrmaJfce> jfce, std::unique_ptr<UrmaJfc> jfc)
 {
     static NoDestructor<std::mutex> retainedMutex;
     static NoDestructor<std::vector<RetainedUrmaProviderDependencies>> retainedDependencies;
@@ -162,9 +161,7 @@ Status UrmaContext::BondpDisableMSN() const
     LOG(INFO) << "Try disable MSN";
     CHECK_FAIL_RETURN_STATUS(raw_ != nullptr, K_INVALID, "URMA context is null");
 
-    urma_user_ctl_in_t in{ .addr = 0,
-                           .len = 0,
-                           .opcode = BONDP_USER_CTL_DISABLE_MSN };
+    urma_user_ctl_in_t in{ .addr = 0, .len = 0, .opcode = BONDP_USER_CTL_DISABLE_MSN };
     urma_user_ctl_out_t out;
     (void)memset_s(&out, sizeof(out), 0, sizeof(out));
 
@@ -328,8 +325,8 @@ UrmaJetty::~UrmaJetty()
     // A retired Jetty reaches provider delete only through DeleteAfterFlush.  In particular, do
     // not turn a failed modify into an implicit destructor delete: that provider contract is not
     // confirmed and could reintroduce post/delete overlap during shutdown.
-    if (lifecycle_.load(std::memory_order_acquire) == LifecycleState::ACTIVE && ActivePostCalls() == 0 &&
-        resource_ != nullptr) {
+    if (lifecycle_.load(std::memory_order_acquire) == LifecycleState::ACTIVE && ActivePostCalls() == 0
+        && resource_ != nullptr) {
         const auto jettyId = raw_->jetty_id.id;
         const auto ret = ds_urma_delete_jetty(raw_);
         LOG_IF(ERROR, ret != URMA_SUCCESS) << "Failed to delete active Jetty " << jettyId << ", ret=" << ret;
@@ -424,8 +421,7 @@ UrmaJetty::PostPermit UrmaJetty::TryAcquirePostPermit()
         if (PostGate::ActivePosts(state) == PostGate::kActiveMask) {
             return {};
         }
-        if (postGate_.compare_exchange_weak(state, state + 1, std::memory_order_acq_rel,
-                                             std::memory_order_acquire)) {
+        if (postGate_.compare_exchange_weak(state, state + 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
             // Every public posting entry owns a shared_ptr already; retain it in the permit so
             // the wrapper and raw provider handle live through the complete synchronous call.
             return PostPermit(shared_from_this());
@@ -439,7 +435,7 @@ bool UrmaJetty::BeginRetire()
     auto state = postGate_.load(std::memory_order_acquire);
     while (!PostGate::IsClosing(state)) {
         if (postGate_.compare_exchange_weak(state, state | PostGate::kClosing, std::memory_order_acq_rel,
-                                             std::memory_order_acquire)) {
+                                            std::memory_order_acquire)) {
             lifecycle_.store(LifecycleState::QUIESCING, std::memory_order_release);
             return true;
         }
@@ -450,10 +446,10 @@ bool UrmaJetty::BeginRetire()
 bool UrmaJetty::TryScheduleFinalizer()
 {
     auto state = postGate_.load(std::memory_order_acquire);
-    while (PostGate::IsClosing(state) && PostGate::IsRetireArmed(state) &&
-           !PostGate::IsFinalizerScheduled(state) && PostGate::ActivePosts(state) == 0) {
+    while (PostGate::IsClosing(state) && PostGate::IsRetireArmed(state) && !PostGate::IsFinalizerScheduled(state)
+           && PostGate::ActivePosts(state) == 0) {
         if (postGate_.compare_exchange_weak(state, state | PostGate::kFinalizerScheduled, std::memory_order_acq_rel,
-                                             std::memory_order_acquire)) {
+                                            std::memory_order_acquire)) {
             return true;
         }
     }
@@ -465,7 +461,7 @@ bool UrmaJetty::ArmRetireFinalizer()
     auto state = postGate_.load(std::memory_order_acquire);
     while (PostGate::IsClosing(state) && !PostGate::IsRetireArmed(state)) {
         if (postGate_.compare_exchange_weak(state, state | PostGate::kRetireArmed, std::memory_order_acq_rel,
-                                             std::memory_order_acquire)) {
+                                            std::memory_order_acquire)) {
             return TryScheduleFinalizer();
         }
     }
@@ -476,8 +472,7 @@ void UrmaJetty::ReleasePostPermit()
 {
     const auto old = postGate_.fetch_sub(1, std::memory_order_acq_rel);
     DCHECK(PostGate::ActivePosts(old) != 0) << "PostPermit underflow";
-    if (PostGate::IsClosing(old) && PostGate::ActivePosts(old) == 1 && TryScheduleFinalizer() &&
-        resource_ != nullptr) {
+    if (PostGate::IsClosing(old) && PostGate::ActivePosts(old) == 1 && TryScheduleFinalizer() && resource_ != nullptr) {
         resource_->ScheduleRetireFinalizer(shared_from_this());
     }
     // Normal ACTIVE posts never need the shutdown condition variable. Avoid a process-wide
@@ -787,8 +782,7 @@ Status UrmaResource::InitPipelineH2DEnv()
     RETURN_RUNTIME_ERROR_IF_NULL(context_);
     RETURN_RUNTIME_ERROR_IF_NULL(jfc_);
     RETURN_RUNTIME_ERROR_IF_NULL(jfce_);
-    pipelineInitStatus_ =
-        OsXprtPipln::InitOsPiplnRH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw(), JETTY_SIZE);
+    pipelineInitStatus_ = OsXprtPipln::InitOsPiplnRH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw(), JETTY_SIZE);
     if (pipelineInitStatus_.IsOk()) {
         pipelineInitialized_ = true;
     }
@@ -1028,9 +1022,8 @@ Status UrmaResource::RetireJettyToError(const std::shared_ptr<UrmaJetty> &jetty)
     const auto modifyRc = jetty->ModifyToError();
     if (modifyRc.IsError()) {
         QuarantineJetty(jetty);
-        return Status(modifyRc.GetCode(),
-                      FormatString("Failed to modify jetty with id %u to error state: %s", jettyId,
-                                   modifyRc.ToString()));
+        return Status(modifyRc.GetCode(), FormatString("Failed to modify jetty with id %u to error state: %s", jettyId,
+                                                       modifyRc.ToString()));
     }
     // The pending record is installed before provider modify. A flush already queued in the JFC
     // is preserved by flushSeen_ until the software state becomes WAIT_FLUSH.
@@ -1061,8 +1054,7 @@ Status UrmaResource::HandleFlushErrDone(uint32_t jettyId)
 }
 
 void UrmaResource::ScheduleTimedOutSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease, uint64_t requestId,
-                                            const std::string &remoteAddress,
-                                            const std::string &remoteInstanceId)
+                                            const std::string &remoteAddress, const std::string &remoteInstanceId)
 {
 #ifdef BUILD_PIPLN_H2D
     // Pipeline H2D truncates request IDs. Disable force release for the complete build: a Jetty
@@ -1083,10 +1075,10 @@ void UrmaResource::ScheduleTimedOutSendLane(const std::shared_ptr<UrmaSendLaneLe
     if (!laneLease->TryMarkTimedOut(std::move(timeoutInfo))) {
         return;
     }
-    LOG(WARNING) << "[URMA_SEND_LANE_TIMEOUT_OBSERVED] jettyId=" << jetty->GetJettyId()
-                 << ", requestId=" << requestId << ", requestIdFloor=" << laneLease->GetRequestIdFloor()
-                 << ", pendingWrs=" << laneLease->GetPendingWrCount()
-                 << ", sealed=" << laneLease->IsSealed()
+    LOG(WARNING) << "[URMA_SEND_LANE_TIMEOUT_OBSERVED] [urma_request_id:" << requestId
+                 << "] jettyId=" << jetty->GetJettyId()
+                 << ", floor_urma_request_id=" << laneLease->GetRequestIdFloor()
+                 << ", pendingWrs=" << laneLease->GetPendingWrCount() << ", sealed=" << laneLease->IsSealed()
                  << ", targetAddress=" << remoteAddress << ", remoteInstanceId=" << remoteInstanceId;
     TryForceReleaseTimedOutSendLane(laneLease);
 }
@@ -1102,7 +1094,8 @@ void UrmaResource::TryForceReleaseTimedOutSendLane(const std::shared_ptr<UrmaSen
     }
     const auto jetty = laneLease->GetJetty();
     if (jetty == nullptr) {
-        VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_SKIP] requestId=" << timeoutInfo.requestId << ", reason=jetty_expired";
+        VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_SKIP] [urma_request_id:" << timeoutInfo.requestId
+                << "] reason=jetty_expired";
         return;
     }
 
@@ -1117,24 +1110,23 @@ void UrmaResource::TryForceReleaseTimedOutSendLane(const std::shared_ptr<UrmaSen
         std::lock_guard<std::mutex> lock(activeSendLaneMutex_);
         const auto iter = activeSendLanes_.find(jettyId);
         if (iter == activeSendLanes_.end() || iter->second.get() != laneLease.get()) {
-            VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_SKIP] jettyId=" << jettyId
-                    << ", requestId=" << timeoutInfo.requestId
-                    << ", heldMs=" << heldMs << ", reason=lane_already_settled_or_replaced";
+            VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_SKIP] [urma_request_id:" << timeoutInfo.requestId
+                    << "] jettyId=" << jettyId << ", heldMs=" << heldMs
+                    << ", reason=lane_already_settled_or_replaced";
             return;
         }
         pendingWrs = laneLease->GetPendingWrCount();
         if (!laneLease->IsSealed()) {
-            VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_WAIT_SEAL] jettyId=" << jettyId
-                    << ", requestId=" << timeoutInfo.requestId << ", requestIdFloor=" << laneLease->GetRequestIdFloor()
+            VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_WAIT_SEAL] [urma_request_id:" << timeoutInfo.requestId
+                    << "] jettyId=" << jettyId << ", floor_urma_request_id=" << laneLease->GetRequestIdFloor()
                     << ", pendingWrs=" << pendingWrs << ", targetAddress=" << timeoutInfo.remoteAddress
                     << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
             return;
         }
         if (laneLease->IsRetireRequested()) {
             LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-                << "[URMA_SEND_LANE_TIMEOUT_SKIP] jettyId=" << jettyId
-                << ", requestId=" << timeoutInfo.requestId
-                << ", pendingWrs=" << pendingWrs << ", heldMs=" << heldMs
+                << "[URMA_SEND_LANE_TIMEOUT_SKIP] [urma_request_id:" << timeoutInfo.requestId
+                << "] jettyId=" << jettyId << ", pendingWrs=" << pendingWrs << ", heldMs=" << heldMs
                 << ", reason=retire_already_requested, targetAddress=" << timeoutInfo.remoteAddress
                 << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
             return;
@@ -1150,45 +1142,40 @@ void UrmaResource::TryForceReleaseTimedOutSendLane(const std::shared_ptr<UrmaSen
         }
     }
     if (action != UrmaSendLaneLease::SettleAction::RELEASE) {
-        VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_SKIP] jettyId=" << jettyId
-                << ", requestId=" << timeoutInfo.requestId
-                << ", heldMs=" << heldMs << ", reason=lane_settlement_lost_race";
+        VLOG(1) << "[URMA_SEND_LANE_TIMEOUT_SKIP] [urma_request_id:" << timeoutInfo.requestId
+                << "] jettyId=" << jettyId << ", heldMs=" << heldMs << ", reason=lane_settlement_lost_race";
         return;
     }
 
     if (retireForOrphanPressure) {
         LOG_IF_ERROR(RetireJetty(jetty), "Failed to asynchronously retire orphan-saturated URMA send Jetty");
     } else {
-        LOG_IF_ERROR(ApplyActiveSendLaneAction(laneLease, action),
-                     "Failed to force release timed-out URMA send lane");
+        LOG_IF_ERROR(ApplyActiveSendLaneAction(laneLease, action), "Failed to force release timed-out URMA send lane");
     }
     const auto poolStats = GetSendJettyPoolStats();
     const auto orphanWrs = jetty->GetOrphanWrCount();
-    LOG(WARNING) << "[URMA_SEND_LANE_FORCE_RELEASE] jettyId=" << jettyId
-                 << ", requestId=" << timeoutInfo.requestId
-                 << ", requestIdFloor=" << laneLease->GetRequestIdFloor() << ", pendingWrs=" << pendingWrs
-                 << ", orphanWrsAtDecision=" << orphanWrsAtDecision << ", orphanWrs=" << orphanWrs
-                 << ", jettyAction=" << (retireForOrphanPressure ? "retire" : "release") << ", heldMs=" << heldMs
-                 << ", poolSize=" << poolStats.poolSize << ", idleCount=" << poolStats.idleCount
-                 << ", inUseCount=" << poolStats.inUseCount << ", targetAddress=" << timeoutInfo.remoteAddress
+    LOG(WARNING) << "[URMA_SEND_LANE_FORCE_RELEASE] [urma_request_id:" << timeoutInfo.requestId
+                 << "] jettyId=" << jettyId << ", floor_urma_request_id=" << laneLease->GetRequestIdFloor()
+                 << ", pendingWrs=" << pendingWrs << ", orphanWrsAtDecision=" << orphanWrsAtDecision
+                 << ", orphanWrs=" << orphanWrs << ", jettyAction=" << (retireForOrphanPressure ? "retire" : "release")
+                 << ", heldMs=" << heldMs << ", poolSize=" << poolStats.poolSize
+                 << ", idleCount=" << poolStats.idleCount << ", inUseCount=" << poolStats.inUseCount
+                 << ", targetAddress=" << timeoutInfo.remoteAddress
                  << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
     if (retireForOrphanPressure) {
         LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_SEND_JETTY_ORPHAN_RETIRE] Asynchronously retiring Jetty after force-released WR pressure, "
-            << "jettyId=" << jettyId << ", orphanWrsAtDecision=" << orphanWrsAtDecision
-            << ", remainingOrphanWrs=" << orphanWrs
-            << ", retireThreshold=" << K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD
-            << ", jfsDepth=" << JETTY_SIZE << ", requestId=" << timeoutInfo.requestId
-            << ", targetAddress=" << timeoutInfo.remoteAddress
-            << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
+            << "[URMA_SEND_JETTY_ORPHAN_RETIRE] [urma_request_id:" << timeoutInfo.requestId
+            << "] Asynchronously retiring Jetty after force-released WR pressure, jettyId=" << jettyId
+            << ", orphanWrsAtDecision=" << orphanWrsAtDecision << ", remainingOrphanWrs=" << orphanWrs
+            << ", retireThreshold=" << K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD << ", jfsDepth=" << JETTY_SIZE
+            << ", targetAddress=" << timeoutInfo.remoteAddress << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
     } else if (orphanWrsAtDecision > K_SEND_JETTY_ORPHAN_WR_WARNING_THRESHOLD) {
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_SEND_JETTY_ORPHAN_PRESSURE] Outstanding timed-out WRs exceeded the warning threshold, "
-            << "jettyId=" << jettyId << ", orphanWrsAtDecision=" << orphanWrsAtDecision
-            << ", remainingOrphanWrs=" << orphanWrs
+            << "[URMA_SEND_JETTY_ORPHAN_PRESSURE] [urma_request_id:" << timeoutInfo.requestId
+            << "] Outstanding timed-out WRs exceeded the warning threshold, jettyId=" << jettyId
+            << ", orphanWrsAtDecision=" << orphanWrsAtDecision << ", remainingOrphanWrs=" << orphanWrs
             << ", warningThreshold=" << K_SEND_JETTY_ORPHAN_WR_WARNING_THRESHOLD
-            << ", retireThreshold=" << K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD
-            << ", jfsDepth=" << JETTY_SIZE << ", requestId=" << timeoutInfo.requestId
+            << ", retireThreshold=" << K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD << ", jfsDepth=" << JETTY_SIZE
             << ", targetAddress=" << timeoutInfo.remoteAddress
             << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
     }
@@ -1263,8 +1250,8 @@ Status UrmaResource::CompleteActiveSendLane(uint32_t jettyId, uint64_t requestId
             orphanTracked = jetty->CompleteOrphanWr();
         }
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_STALE_CQE_DROPPED] jettyId=" << jettyId << ", requestId=" << requestId
-            << ", currentRequestIdFloor=" << requestIdFloor << ", cqeStatus=" << cqeStatus
+            << "[URMA_STALE_CQE_DROPPED] [urma_request_id:" << requestId << "] jettyId=" << jettyId
+            << ", floor_urma_request_id=" << requestIdFloor << ", cqeStatus=" << cqeStatus
             << ", orphanTracked=" << orphanTracked
             << ", remainingOrphanWrs=" << (jetty == nullptr ? 0 : jetty->GetOrphanWrCount());
         return Status::OK();

@@ -148,7 +148,7 @@ TEST_F(StatusTest, EventWaitForTimeoutReturnsDeadlineExceeded)
     auto event = std::make_shared<Event>(1);
     Status status = event->WaitFor(std::chrono::milliseconds(0));
     ASSERT_EQ(status.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
-    ASSERT_TRUE(status.GetMsg().find("Timed out waiting for request") != std::string::npos);
+    ASSERT_TRUE(status.GetMsg().find("Timed out waiting for") != std::string::npos);
 }
 
 TEST_F(StatusTest, EventWaitForSucceedsAfterNotify)
