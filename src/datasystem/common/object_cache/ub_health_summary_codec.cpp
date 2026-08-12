@@ -44,7 +44,7 @@ Status DecodeUbHealthSummary(const UbHealthSummaryPb &pb, UbHealthSummary &summa
 }
 
 Status ApplyHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp, const HostPort &expectedWorker,
-                                     const std::string &expectedIncarnation, UbHealthSummaryCache &cache,
+                                     UbHealthSummaryCache &cache,
                                      const UbHealthSummaryApplyHook &hook)
 {
     if (!rsp.has_ub_health_summary()) {
@@ -54,7 +54,10 @@ Status ApplyHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp, const HostPort &
     RETURN_IF_NOT_OK(DecodeUbHealthSummary(rsp.ub_health_summary(), summary));
     CHECK_FAIL_RETURN_STATUS(summary.worker == expectedWorker, K_INVALID,
                              "UB health summary Worker does not match heartbeat source");
-    if (cache.Apply(summary, expectedIncarnation) && hook) {
+    // The process start id carried by HeartbeatRspPb is intentionally a different identity domain. The topology-aware
+    // consumer performs the authoritative membership-incarnation fence; this cache only rejects stale epochs from the
+    // same UB health incarnation before notifying that consumer.
+    if (cache.Apply(summary, summary.incarnation) && hook) {
         hook(summary);
     }
     return Status::OK();

@@ -156,7 +156,9 @@ protected:
     /** @brief Construct the facade with injected collaborators for focused orchestration tests. */
     TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager, std::shared_ptr<TransportAdvisor> advisor);
     TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager, std::shared_ptr<TransportAdvisor> advisor,
-                   std::chrono::milliseconds localUbProbeBaseDelay);
+                   std::chrono::milliseconds localUbProbeBaseDelay,
+                   std::shared_ptr<UbHealthFilter> readSourceFilter = nullptr);
+    bool ReportProviderUbFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail);
 
 private:
     struct LocalUbSenderFailureView {
@@ -173,8 +175,11 @@ private:
                                     std::shared_lock<std::shared_mutex> &admission);
     std::optional<std::chrono::steady_clock::time_point> GetLocalUbProbeDeadline() const;
     void TryRecoverLocalUbSender();
+    std::optional<std::chrono::steady_clock::time_point> GetProviderUbProbeDeadline() const;
+    void TryRecoverProviderUbSource();
+    void NotifyReconcile();
     void ReconcileLoop();
-    // Waits (under reconcileMutex_) for a published snapshot, a stop signal, or the local UB probe deadline.
+    // Waits (under reconcileMutex_) for a snapshot, stop signal, or either UB recovery deadline.
     // Returns true if the caller should process/apply a snapshot, false if it should stop or re-loop.
     // Extracted from ReconcileLoop to keep that function within the codecheck nesting-depth limit.
     bool WaitForSnapshotOrStop(std::unique_lock<bthread::Mutex> &lock);
@@ -219,6 +224,7 @@ private:
     std::shared_ptr<DataPlaneManager> manager_;
     std::shared_ptr<TransportAdvisor> advisor_;
     std::shared_ptr<ThreadPool> releasePool_;
+    std::shared_ptr<UbHealthFilter> healthFilter_;
     std::unique_ptr<ObjectReadFlow> objectRead_;
     mutable std::shared_mutex localUbSenderMutex_;
     std::atomic<bool> localUbSenderUnavailable_{ false };

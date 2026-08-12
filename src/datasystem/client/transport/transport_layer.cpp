@@ -48,6 +48,7 @@
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 
 #include "butil/time.h"
@@ -56,6 +57,7 @@ namespace datasystem {
 namespace client {
 namespace {
 constexpr uint32_t MAX_LOCAL_UB_PROBE_BACKOFF_LEVEL = 6;
+constexpr int32_t PROVIDER_UB_RECOVERY_PROBE_TIMEOUT_MS = 3'000;
 // SHM-off fallback is a steady-state path (every write on a SHM-disabled same-host worker); throttle the
 // diagnostic so it does not flood the log. Matches the read-path/DataPlaneExecutor convention.
 constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
@@ -126,17 +128,18 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
     auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry, advisor_, std::move(ubBufferProvider),
                                                            GetConfiguredUbInlineBufferSize());
     auto executor = std::make_shared<DataPlaneExecutor>(manager_, advisor_);
-    auto healthFilter = options.readSourceFilter == nullptr ? std::make_shared<UbHealthFilter>()
-                                                            : std::move(options.readSourceFilter);
+    healthFilter_ = options.readSourceFilter == nullptr ? std::make_shared<UbHealthFilter>()
+                                                        : std::move(options.readSourceFilter);
+    auto healthFilter = healthFilter_;
     auto checkReadSource = [healthFilter](const HostPort &workerAddr) {
         return healthFilter->IsAvailable(workerAddr)
                    ? Status::OK()
                    : Status(K_URMA_READ_SOURCE_DENIED,
                             "Client UB read source denied: " + workerAddr.ToString());
     };
-    auto reportReadOutcome = [healthFilter](const HostPort &workerAddr, const GetObjectRemoteRspPb &response) {
+    auto reportReadOutcome = [this](const HostPort &workerAddr, const GetObjectRemoteRspPb &response) {
         if (response.has_provider_ub_failure_detail()) {
-            (void)healthFilter->ReportProviderFailure(workerAddr, response.provider_ub_failure_detail());
+            (void)ReportProviderUbFailure(workerAddr, response.provider_ub_failure_detail());
         }
     };
     auto replicas = std::make_shared<ReplicaReader>(std::move(executor), std::move(retry), taskPool,
@@ -152,10 +155,22 @@ TransportLayer::TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManage
 
 TransportLayer::TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager,
                                std::shared_ptr<TransportAdvisor> advisor,
-                               std::chrono::milliseconds localUbProbeBaseDelay)
-    : manager_(std::move(dataPlaneManager)), advisor_(std::move(advisor))
+                               std::chrono::milliseconds localUbProbeBaseDelay,
+                               std::shared_ptr<UbHealthFilter> readSourceFilter)
+    : manager_(std::move(dataPlaneManager)),
+      advisor_(std::move(advisor)),
+      healthFilter_(readSourceFilter == nullptr ? std::make_shared<UbHealthFilter>() : std::move(readSourceFilter))
 {
     localUbProbeBaseDelay_ = std::max(localUbProbeBaseDelay, std::chrono::milliseconds(1));
+}
+
+bool TransportLayer::ReportProviderUbFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail)
+{
+    if (healthFilter_ == nullptr || !healthFilter_->ReportProviderFailure(provider, detail)) {
+        return false;
+    }
+    NotifyReconcile();
+    return true;
 }
 
 Status TransportLayer::CheckLocalUbSenderAdmission(TransportHint hint) const
@@ -250,7 +265,7 @@ bool TransportLayer::ReportLocalUbSenderFailure(const LocalUbSenderFailureView &
                    << ", cqeStatus=" << failure.cqeStatus.value_or(0)
                    << "; UB Create/Set/MSet will fast-fail K_URMA_WORKER_UNAVAILABLE until a recovery probe succeeds";
     }
-    reconcileCv_.notify_one();
+    NotifyReconcile();
     return true;
 }
 
@@ -306,6 +321,57 @@ void TransportLayer::TryRecoverLocalUbSender()
     auto delay = localUbProbeBaseDelay_ * (1u << (localUbProbeBackoffLevel_ - 1));
     localUbProbeDeadline_ = std::chrono::steady_clock::now() + delay;
     LOG(WARNING) << "Client-local UB sender recovery probe failed for " << workerAddr->ToString() << ": " << probeRc;
+}
+
+std::optional<std::chrono::steady_clock::time_point> TransportLayer::GetProviderUbProbeDeadline() const
+{
+    if (healthFilter_ == nullptr) {
+        return std::nullopt;
+    }
+    auto deadlineMs = healthFilter_->NextProviderRecoveryDeadlineMs();
+    if (!deadlineMs.has_value()) {
+        return std::nullopt;
+    }
+    const uint64_t nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    const uint64_t delayMs = *deadlineMs > nowMs ? *deadlineMs - nowMs : 0;
+    return std::chrono::steady_clock::now() + std::chrono::milliseconds(delayMs);
+}
+
+void TransportLayer::TryRecoverProviderUbSource()
+{
+    if (healthFilter_ == nullptr || shutdownRequested_.load(std::memory_order_acquire)) {
+        return;
+    }
+    const uint64_t nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    auto candidate = healthFilter_->TryBeginProviderRecovery(nowMs);
+    if (!candidate.has_value()) {
+        return;
+    }
+
+    UbHealthSummary summary;
+    Status probeRc = manager_->ProbeProviderUbRecovery(candidate->token.peer, candidate->expectedIncarnation,
+                                                       PROVIDER_UB_RECOVERY_PROBE_TIMEOUT_MS, summary);
+    std::optional<UbHealthSummary> responseSummary;
+    if (!summary.worker.Empty() && !summary.incarnation.empty()) {
+        responseSummary = summary;
+    }
+    const uint64_t completionMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    if (healthFilter_->CompleteProviderRecovery(*candidate, responseSummary, probeRc, completionMs)) {
+        LOG(INFO) << "Client Provider UB source recovered via dedicated probe from "
+                  << candidate->token.peer.ToString();
+    } else if (probeRc.IsError()) {
+        LOG(WARNING) << "Client Provider UB source recovery probe failed for "
+                     << candidate->token.peer.ToString() << ": " << probeRc;
+    }
+}
+
+void TransportLayer::NotifyReconcile()
+{
+    // Synchronize the notification with the waiter's predicate-to-wait transition. The actual recovery
+    // state lives under its domain lock; taking reconcileMutex_ here prevents a notification from being
+    // lost after the waiter checked that state but before ConditionVariable::wait released this mutex.
+    std::lock_guard<bthread::Mutex> lock(reconcileMutex_);
+    reconcileCv_.notify_one();
 }
 
 TransportLayer::~TransportLayer()
@@ -885,6 +951,11 @@ bool TransportLayer::WaitForSnapshotOrStop(std::unique_lock<bthread::Mutex> &loc
     // (deadline elapsed or notified), matching master's post-wait_until break.
     while (!reconcileStopping_ && !pendingSnapshot_.has_value()) {
         auto probeDeadline = GetLocalUbProbeDeadline();
+        auto providerDeadline = GetProviderUbProbeDeadline();
+        if (!probeDeadline.has_value() || (providerDeadline.has_value() && *providerDeadline < *probeDeadline)) {
+            probeDeadline = providerDeadline;
+        }
+        INJECT_POINT_NO_RETURN("TransportLayer.WaitForSnapshotOrStop.afterDeadlineCheck");
         if (probeDeadline.has_value()) {
             const auto now = std::chrono::steady_clock::now();
             if (*probeDeadline > now) {
@@ -920,6 +991,7 @@ void TransportLayer::ReconcileLoop()
             manager_->ReconcileWithSnapshot(*snapshot);
         }
         TryRecoverLocalUbSender();
+        TryRecoverProviderUbSource();
     }
 }
 

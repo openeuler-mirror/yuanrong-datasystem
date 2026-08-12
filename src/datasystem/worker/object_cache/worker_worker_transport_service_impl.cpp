@@ -25,6 +25,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_manager.h"
@@ -36,8 +37,9 @@
 namespace datasystem {
 namespace object_cache {
 WorkerWorkerTransportServiceImpl::WorkerWorkerTransportServiceImpl(
-    std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc)
-    : ocClientWorkerSvc_(std::move(clientSvc))
+    std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc, HostPort localWorker,
+    const cluster::MembershipEndpointView &membership)
+    : ocClientWorkerSvc_(std::move(clientSvc)), localWorker_(std::move(localWorker)), membership_(membership)
 {
 }
 
@@ -83,6 +85,55 @@ Status WorkerWorkerTransportServiceImpl::WorkerWorkerExchangeUrmaConnectInfo(con
     LOG(INFO) << "[URMA_NEED_CONNECT] WorkerWorkerExchangeUrmaConnectInfo finish, elapsed ms: "
               << timer.ElapsedMilliSecond() << ", status=" << rc.ToString();
     return rc;
+}
+
+Status WorkerWorkerTransportServiceImpl::ProbeProviderUbRecovery(const ProviderUbRecoveryProbeReqPb &req,
+                                                                 ProviderUbRecoveryProbeRspPb &rsp)
+{
+    CHECK_FAIL_RETURN_STATUS(req.has_hand_shake() && req.has_recovery_probe_addr(), K_INVALID,
+                             "Provider UB recovery probe is missing Client URMA information");
+    std::string workerIncarnation;
+    RETURN_IF_NOT_OK(ResolveWorkerIncarnation(workerIncarnation));
+
+    auto summary = ocClientWorkerSvc_->BuildSelfUbHealthSummary();
+    summary.incarnation = workerIncarnation;
+    EncodeUbHealthSummary(summary, *rsp.mutable_health_summary());
+    CHECK_FAIL_RETURN_STATUS(req.expected_worker_incarnation().empty()
+                                 || req.expected_worker_incarnation() == workerIncarnation,
+                             K_NOT_READY, "Worker incarnation changed before Provider UB recovery probe");
+    if (!summary.writable) {
+        return Status::OK();
+    }
+
+#ifdef USE_URMA
+    RETURN_IF_NOT_OK(ImportRecoveryProbeHandshake(req.hand_shake()));
+    UrmaHandshakeRspPb probeTarget;
+    probeTarget.mutable_recovery_probe_addr()->CopyFrom(req.recovery_probe_addr());
+    RETURN_IF_NOT_OK(ProbeUbDataPlane(probeTarget));
+    rsp.set_probe_performed(true);
+    std::string verifiedIncarnation;
+    RETURN_IF_NOT_OK(ResolveWorkerIncarnation(verifiedIncarnation));
+    auto verifiedSummary = ocClientWorkerSvc_->BuildSelfUbHealthSummary();
+    verifiedSummary.incarnation = verifiedIncarnation;
+    EncodeUbHealthSummary(verifiedSummary, *rsp.mutable_health_summary());
+    CHECK_FAIL_RETURN_STATUS(verifiedIncarnation == workerIncarnation && verifiedSummary.writable
+                                 && verifiedSummary.epoch == summary.epoch,
+                             K_NOT_READY, "Worker identity or UB admission changed during Provider recovery probe");
+    INJECT_POINT_NO_RETURN("WorkerWorkerTransportService.ProbeProviderUbRecovery.success");
+    return Status::OK();
+#else
+    return Status(K_NOT_SUPPORTED, "URMA Provider recovery probe is unavailable in this build");
+#endif
+}
+
+Status WorkerWorkerTransportServiceImpl::ResolveWorkerIncarnation(std::string &incarnation) const
+{
+    cluster::MemberEndpoint endpoint;
+    RETURN_IF_NOT_OK(membership_.ResolveByAddress(localWorker_.ToString(), endpoint));
+    CHECK_FAIL_RETURN_STATUS(!endpoint.identity.id.empty(), K_NOT_READY,
+                             "Worker topology incarnation is unavailable for Provider UB recovery probe");
+    incarnation = endpoint.identity.id;
+    return Status::OK();
 }
 }  // namespace object_cache
 }  // namespace datasystem

@@ -469,6 +469,30 @@ Status WorkerRpcClient::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response)
     return rc.IsError() ? WithRpcDiag(rc, "WorkerWorkerExchangeUrmaConnectInfo", workerAddress_) : Status::OK();
 }
 
+Status WorkerRpcClient::ProbeProviderUbRecovery(const std::string &expectedWorkerIncarnation,
+                                                int32_t timeoutMs, ProviderUbRecoveryProbeRspPb &response)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed worker RPC client is not initialized");
+#ifdef USE_URMA
+    ProviderUbRecoveryProbeReqPb request;
+    RETURN_IF_NOT_OK(ConstructRecoveryProbeHandshakePb(workerAddress_.ToString(), *request.mutable_hand_shake(),
+                                                       *request.mutable_recovery_probe_addr()));
+    request.set_expected_worker_incarnation(expectedWorkerIncarnation);
+
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(std::min<int64_t>(channelConfig_.timeout_ms, timeoutMs), rpcTimeout));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    Status rc = transportStub_->ProbeProviderUbRecovery(options, request, response);
+    return rc.IsError() ? WithRpcDiag(rc, "ProbeProviderUbRecovery", workerAddress_) : Status::OK();
+#else
+    (void)expectedWorkerIncarnation;
+    (void)timeoutMs;
+    (void)response;
+    return Status(K_NOT_SUPPORTED, "URMA Provider recovery probe is unavailable in this build");
+#endif
+}
+
 bool WorkerRpcClient::IsAlive() const
 {
     return alive_.load(std::memory_order_acquire) && channel_ != nullptr && workerStub_ != nullptr

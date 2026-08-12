@@ -371,6 +371,17 @@ Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
     return Status::OK();
 }
 
+Status ImportRecoveryProbeHandshake(const UrmaHandshakeReqPb &req)
+{
+    (void)req;
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        RETURN_IF_NOT_OK(UrmaManager::Instance().ImportRecoveryProbeHandshake(req));
+    }
+#endif
+    return Status::OK();
+}
+
 Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize, const std::vector<LocalSgeInfo> &objInfos,
                     bool blocking, std::vector<uint64_t> &eventKeys)
 {
@@ -419,15 +430,13 @@ Status GetLocalTransportInstanceId(std::string &instanceId)
     RETURN_STATUS(K_URMA_ERROR, "Disabled fast transport, cannot get local instance id");
 }
 
-Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req, const std::string &clientEntityId)
+namespace {
+Status ConstructHandshakeIdentityPb(const std::string &senderAddr, UrmaHandshakeReqPb &req,
+                                    const std::string &clientEntityId)
 {
-    (void)senderAddr;
-    (void)req;
-    (void)clientEntityId;
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
         auto &mgr = UrmaManager::Instance();
-        // Get or create a local Jetty for this target node (reused across reconnections).
         uint32_t jettyId = 0;
         RETURN_IF_NOT_OK(mgr.GetOrCreateLocalJetty(senderAddr, jettyId, JettyType::RECV));
         std::shared_ptr<UrmaJetty> localRecvJetty;
@@ -454,8 +463,47 @@ Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &r
         if (!clientEntityId.empty()) {
             req.set_client_entity_id(clientEntityId);
         }
-        RETURN_IF_NOT_OK(mgr.GetSegmentInfo(req));
     }
+#else
+    (void)senderAddr;
+    (void)req;
+    (void)clientEntityId;
+#endif
+    return Status::OK();
+}
+}  // namespace
+
+Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req, const std::string &clientEntityId)
+{
+    RETURN_IF_NOT_OK(ConstructHandshakeIdentityPb(senderAddr, req, clientEntityId));
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(req));
+    }
+#endif
+    return Status::OK();
+}
+
+Status ConstructRecoveryProbeHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req,
+                                         UrmaRemoteAddrPb &recoveryProbeAddr)
+{
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        auto &manager = UrmaManager::Instance();
+        uint64_t segmentAddress = 0;
+        uint64_t dataOffset = 0;
+        RETURN_IF_NOT_OK(manager.GetRecoveryProbeSegmentInfo(segmentAddress, dataOffset));
+        RETURN_IF_NOT_OK(ConstructHandshakeIdentityPb(senderAddr, req, ""));
+        RETURN_IF_NOT_OK(manager.GetSegmentInfo(segmentAddress, *req.add_seg_infos()));
+        recoveryProbeAddr.set_seg_va(segmentAddress);
+        recoveryProbeAddr.set_seg_data_offset(dataOffset);
+        recoveryProbeAddr.mutable_request_address()->CopyFrom(req.address());
+        recoveryProbeAddr.set_client_id(req.client_id());
+    }
+#else
+    (void)senderAddr;
+    (void)req;
+    (void)recoveryProbeAddr;
 #endif
     return Status::OK();
 }

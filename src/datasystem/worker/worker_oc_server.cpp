@@ -1129,8 +1129,8 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
     objCacheWorkerMsSvc_ =
         std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(objCacheClientWorkerSvc_, akSkManager_);
     // create WorkerWorkerTransportService
-    objCacheWorkerTransSvc_ =
-        std::make_shared<datasystem::object_cache::WorkerWorkerTransportServiceImpl>(objCacheClientWorkerSvc_);
+    objCacheWorkerTransSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerTransportServiceImpl>(
+        objCacheClientWorkerSvc_, hostPort_, topologyEngine_->Membership());
 }
 
 void WorkerOCServer::CreateRebalanceExecutor(
@@ -1751,13 +1751,16 @@ Status WorkerOCServer::StartUbHealthLeaseSync()
     }
     CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr && !ubHealthTable_.empty(), K_NOT_READY,
                              "UB health lease backend is not initialized");
-    CHECK_FAIL_RETURN_STATUS(workerSvc_ != nullptr && !workerSvc_->GetWorkerStartId().empty(), K_NOT_READY,
-                             "Worker incarnation is not initialized");
     std::weak_ptr<object_cache::WorkerOCServiceImpl> weakService = objCacheClientWorkerSvc_;
     cluster::UbHealthLeaseSync::Config config{
         ubHealthTable_,
         hostPort_,
-        workerSvc_->GetWorkerStartId(),
+        [this](std::string &incarnation) {
+            cluster::MemberEndpoint endpoint;
+            RETURN_IF_NOT_OK(topologyEngine_->Membership().ResolveByAddress(hostPort_.ToString(), endpoint));
+            incarnation = endpoint.identity.id;
+            return Status::OK();
+        },
         [weakService] {
             auto service = weakService.lock();
             return service == nullptr ? UbHealthSummary{} : service->BuildSelfUbHealthSummary();

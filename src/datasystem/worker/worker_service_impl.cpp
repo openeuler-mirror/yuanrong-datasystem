@@ -442,8 +442,14 @@ void WorkerServiceImpl::PopulateUbHealthSummary(HeartbeatRspPb &rsp) const
     if (!summary.has_value()) {
         return;
     }
+    cluster::MemberEndpoint endpoint;
+    auto rc = membership_.ResolveByAddress(localAddress_.ToString(), endpoint);
+    if (rc.IsError()) {
+        VLOG(1) << "Skip local Worker UB health summary without a topology membership identity: " << rc.ToString();
+        return;
+    }
     summary->worker = localAddress_;
-    summary->incarnation = workerStartId_;
+    summary->incarnation = endpoint.identity.id;
     EncodeUbHealthSummary(*summary, *rsp.mutable_ub_health_summary());
 }
 

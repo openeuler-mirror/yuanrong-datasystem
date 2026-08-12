@@ -31,7 +31,7 @@ UbHealthLeaseSync::UbHealthLeaseSync(LeasePublisher publisher, SnapshotLoader lo
       loader_(std::move(loader)),
       tableName_(std::move(config.tableName)),
       self_(std::move(config.self)),
-      incarnation_(std::move(config.incarnation)),
+      incarnationProvider_(std::move(config.incarnationProvider)),
       provider_(std::move(config.provider)),
       consumer_(std::move(config.consumer)),
       interval_(config.interval)
@@ -45,7 +45,7 @@ UbHealthLeaseSync::~UbHealthLeaseSync()
 
 Status UbHealthLeaseSync::Start()
 {
-    CHECK_FAIL_RETURN_STATUS(publisher_ && loader_ && !tableName_.empty() && !self_.Empty() && !incarnation_.empty()
+    CHECK_FAIL_RETURN_STATUS(publisher_ && loader_ && !tableName_.empty() && !self_.Empty() && incarnationProvider_
                                  && provider_ && consumer_ && interval_.count() > 0,
                              K_INVALID, "invalid UB health lease synchronizer configuration");
     bool expected = false;
@@ -74,9 +74,12 @@ Status UbHealthLeaseSync::SyncOnce()
 {
     std::lock_guard<std::mutex> syncLock(syncMutex_);
     INJECT_POINT("UbHealthLeaseSync.beforePublish");
+    std::string incarnation;
+    RETURN_IF_NOT_OK(incarnationProvider_(incarnation));
+    CHECK_FAIL_RETURN_STATUS(!incarnation.empty(), K_NOT_READY, "UB health topology incarnation is unavailable");
     auto selfSummary = provider_();
     selfSummary.worker = self_;
-    selfSummary.incarnation = incarnation_;
+    selfSummary.incarnation = std::move(incarnation);
     UbHealthSummaryPb selfPb;
     EncodeUbHealthSummary(selfSummary, selfPb);
     std::string bytes;

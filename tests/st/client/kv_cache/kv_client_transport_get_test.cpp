@@ -74,8 +74,12 @@ constexpr char PROVIDER_GET_ENTER_INJECT[] = "worker.GetObjectRemote.afterRead";
 constexpr char PROVIDER_BATCH_GET_ENTER_INJECT[] = "worker.BatchGetObjectRemote.afterRead";
 constexpr char URMA_CQE_ERROR_INJECT[] = "UrmaManager.CheckCompletionRecordStatus";
 constexpr char SELF_PROBE_SUCCEEDED_INJECT[] = "PeerUbAdmission.CompleteProbe.success";
+constexpr char PROVIDER_RECOVERY_PROBE_SUCCEEDED_INJECT[] =
+    "WorkerWorkerTransportService.ProbeProviderUbRecovery.success";
 constexpr char LOCAL_OBSERVATION_INJECT[] = "client.ub_health_filter.local_observation";
 constexpr char LOCAL_READ_DENIED_INJECT[] = "client.ub_health_filter.local_read_denied";
+constexpr char PROVIDER_PROBE_RECOVERED_INJECT[] = "client.ub_health_filter.provider_probe_recovered";
+constexpr char SKIP_HEARTBEAT_UB_SUMMARY_INJECT[] = "client.heartbeat_ub_health_summary.skip";
 constexpr char GLOBAL_UNAVAILABLE_APPLIED_INJECT[] = "client.ub_health_filter.global_unavailable_applied";
 constexpr char GLOBAL_READ_DENIED_INJECT[] = "client.ub_health_filter.global_read_denied";
 constexpr char SHM_HOST_ID_ENV_NAME[] = "transport_get_shm_host_id";
@@ -160,6 +164,8 @@ public:
         (void)inject::Clear(GET_OBJECT_REMOTE_INJECT);
         (void)inject::Clear(LOCAL_OBSERVATION_INJECT);
         (void)inject::Clear(LOCAL_READ_DENIED_INJECT);
+        (void)inject::Clear(PROVIDER_PROBE_RECOVERED_INJECT);
+        (void)inject::Clear(SKIP_HEARTBEAT_UB_SUMMARY_INJECT);
         (void)inject::Clear(GLOBAL_UNAVAILABLE_APPLIED_INJECT);
         (void)inject::Clear(GLOBAL_READ_DENIED_INJECT);
         (void)inject::Clear(BATCH_GET_OBJECT_REMOTE_INJECT);
@@ -300,11 +306,24 @@ protected:
         std::shared_ptr<KVClient> replicaWarmer;
         InitTestKVClient(TRANSPORT_CLIENT_WORKER_INDEX, replicaWarmer, CLIENT_TIMEOUT_MS);
         std::string warmedValue;
-        DS_ASSERT_OK(replicaWarmer->Get(key, warmedValue));
+        constexpr auto warmupTimeout = std::chrono::seconds(20);
+        constexpr auto warmupRetryInterval = std::chrono::milliseconds(200);
+        const auto warmupDeadline = std::chrono::steady_clock::now() + warmupTimeout;
+        Status warmupStatus(K_URMA_DATA_WORKER_UNAVAILABLE, "waiting for startup UB admission");
+        while (std::chrono::steady_clock::now() < warmupDeadline) {
+            warmupStatus = replicaWarmer->Get(key, warmedValue);
+            if (warmupStatus.IsOk() || warmupStatus.GetCode() != K_URMA_DATA_WORKER_UNAVAILABLE) {
+                break;
+            }
+            std::this_thread::sleep_for(warmupRetryInterval);
+        }
+        DS_ASSERT_OK(warmupStatus);
         ASSERT_EQ(warmedValue, value);
         replicaWarmer.reset();
 
-        SetUbGetSize(INLINE_DATA_LIMIT);
+        // Disable QueryAndGet inline data for the requester so the injected Provider failure is observed by
+        // ReplicaReader instead of being consumed as a metadata fast-path miss.
+        SetUbGetSize(0);
         ConnectOptions requesterOptions;
         InitConnectOpt(2, requesterOptions, CLIENT_TIMEOUT_MS);
         requesterOptions.enableLocalCache = false;
@@ -1510,6 +1529,66 @@ TEST_F(KVClientTransportGetTest, UbWritebackSelfObservationRecoversAfterDedicate
     ASSERT_GE(finalExecuted, 1u) << "injected UB failure window was never triggered on the provider";
     ASSERT_GE(selfProbeSucceeded, 1u) << "provider self observation recovered without a dedicated probe";
     ASSERT_TRUE(recovered) << "Get did not recover after the UB data-plane failure window ended";
+#endif
+}
+
+TEST_F(KVClientTransportGetTest, ProviderRecoveryProbeWorksWithoutHeartbeatHealthSummary)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "UB Provider recovery ST requires USE_URMA.";
+#else
+    constexpr int32_t RECOVERY_TIMEOUT_S = 60;
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string &key = keys.front();
+    const std::string value(VALUE_SIZE, 'r');
+    std::shared_ptr<KVClient> requester;
+    PrepareUbReplicaScenario(key, value, requester);
+    DS_ASSERT_OK(inject::Set(PROVIDER_PROBE_RECOVERED_INJECT, "call()"));
+    DS_ASSERT_OK(inject::Set(SKIP_HEARTBEAT_UB_SUMMARY_INJECT, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, PROVIDER_RECOVERY_PROBE_SUCCEEDED_INJECT,
+                                           "call()"));
+
+    const uint64_t observationBaseline = inject::GetExecuteCount(LOCAL_OBSERVATION_INJECT);
+    Optional<Buffer> failedBuffer;
+    const Status failedRc = requester->Get(key, failedBuffer);
+    ASSERT_EQ(failedRc.GetCode(), K_URMA_ERROR) << failedRc.ToString();
+    ASSERT_FALSE(failedBuffer);
+    ASSERT_EQ(inject::GetExecuteCount(LOCAL_OBSERVATION_INJECT), observationBaseline + 1);
+    uint64_t providerRequestsAfterFailure = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, PROVIDER_GET_ENTER_INJECT,
+                                                       providerRequestsAfterFailure));
+    ASSERT_EQ(providerRequestsAfterFailure, 1u);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(RECOVERY_TIMEOUT_S);
+    uint64_t workerProbeSucceeded = 0;
+    uint64_t providerRequestsAfterRecovery = providerRequestsAfterFailure;
+    bool recovered = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        (void)cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX,
+                                                    PROVIDER_RECOVERY_PROBE_SUCCEEDED_INJECT,
+                                                    workerProbeSucceeded);
+        Optional<Buffer> recoveredBuffer;
+        const Status readRc = requester->Get(key, recoveredBuffer);
+        (void)cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, PROVIDER_GET_ENTER_INJECT,
+                                                    providerRequestsAfterRecovery);
+        if (workerProbeSucceeded > 0 && inject::GetExecuteCount(PROVIDER_PROBE_RECOVERED_INJECT) > 0
+            && providerRequestsAfterRecovery > providerRequestsAfterFailure && readRc.IsOk() && recoveredBuffer) {
+            AssertBufferEqual(*recoveredBuffer, value);
+            recovered = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    ASSERT_GT(inject::GetExecuteCount(SKIP_HEARTBEAT_UB_SUMMARY_INJECT), 0u)
+        << "heartbeat health summaries were not explicitly suppressed";
+    ASSERT_GT(workerProbeSucceeded, 0u) << "Worker did not execute its dedicated Worker-to-Client UB probe";
+    ASSERT_GT(inject::GetExecuteCount(PROVIDER_PROBE_RECOVERED_INJECT), 0u)
+        << "Client did not commit Provider recovery through the on-demand probe";
+    ASSERT_GT(providerRequestsAfterRecovery, providerRequestsAfterFailure)
+        << "Recovered Provider was not readmitted for business Get";
+    ASSERT_TRUE(recovered) << "Provider remained filtered after its dedicated recovery probe succeeded";
 #endif
 }
 

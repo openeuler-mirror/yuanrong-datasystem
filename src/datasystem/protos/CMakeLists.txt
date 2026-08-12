@@ -213,12 +213,13 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME worker_object_protos
         SOURCE ${WORKER_OBJECT_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos rpc_option_protos meta_transport_protos)
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos rpc_option_protos meta_transport_protos share_memory_protos)
 GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         NAME worker_object_protos_client
         SOURCE ${WORKER_OBJECT_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client rpc_option_protos meta_transport_protos_client)
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client rpc_option_protos meta_transport_protos_client
+             share_memory_protos_client)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME worker_stream_protos

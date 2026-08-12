@@ -250,6 +250,23 @@ std::optional<HostPort> PeerUbAdmission::NextProbeCandidate(uint64_t nowMs) cons
     return std::nullopt;
 }
 
+std::optional<uint64_t> PeerUbAdmission::NextProbeDeadlineMs() const
+{
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    std::optional<uint64_t> deadline;
+    for (const auto &[peer, state] : states_) {
+        (void)peer;
+        const bool recoverable = state.state == UbAdmissionState::UNAVAILABLE
+                                 || state.state == UbAdmissionState::SUSPECT
+                                 || state.state == UbAdmissionState::PROBING;
+        if (recoverable && state.lastStatus.IsError()
+            && (!deadline.has_value() || state.backoffDeadlineMs < *deadline)) {
+            deadline = state.backoffDeadlineMs;
+        }
+    }
+    return deadline;
+}
+
 void PeerUbAdmission::ReconcileTopologyWorkers(const std::unordered_set<HostPort> &workers, uint64_t nowMs,
                                                uint64_t cleanupGraceMs)
 {

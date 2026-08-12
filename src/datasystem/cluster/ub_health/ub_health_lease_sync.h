@@ -24,6 +24,7 @@ namespace datasystem::cluster {
 class UbHealthLeaseSync {
 public:
     using SummaryProvider = std::function<UbHealthSummary()>;
+    using IncarnationProvider = std::function<Status(std::string &)>;
     using SnapshotConsumer = std::function<void(const std::vector<UbHealthSummary> &)>;
     using LeasePublisher = std::function<Status(const std::string &, const std::string &, const std::string &)>;
     using SnapshotLoader =
@@ -32,7 +33,7 @@ public:
     struct Config {
         std::string tableName;
         HostPort self;
-        std::string incarnation;
+        IncarnationProvider incarnationProvider;
         SummaryProvider provider;
         SnapshotConsumer consumer;
         std::chrono::milliseconds interval = std::chrono::seconds(1);
@@ -53,7 +54,7 @@ private:
     SnapshotLoader loader_;
     std::string tableName_;
     HostPort self_;
-    std::string incarnation_;
+    IncarnationProvider incarnationProvider_;
     SummaryProvider provider_;
     SnapshotConsumer consumer_;
     std::chrono::milliseconds interval_;

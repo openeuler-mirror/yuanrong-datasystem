@@ -2658,6 +2658,49 @@ TEST_F(UrmaClientSenderRecoveryTest, ClientSenderHardFailureBlocksNextSetWithDef
     EXPECT_EQ(inject::GetExecuteCount("UrmaManager.UrmaWriteError"), 0u);
 }
 
+TEST_F(UrmaClientSenderRecoveryTest, DedicatedProbeRecoversProcessWideSenderWithDefaultLocalCache)
+{
+    ConnectOptions options;
+    InitConnectOpt(0, options);
+    auto client = std::make_shared<KVClient>(options);
+    DS_ASSERT_OK(client->Init());
+    const std::string value = GenRandomString(2 * UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes);
+    constexpr char cqeInject[] = "UrmaManager.CheckCompletionRecordStatus";
+    constexpr char writeAttemptInject[] = "UrmaManager.UrmaWriteError";
+    constexpr char probeCompleted[] = "DataPlaneManager.ProbeUbDataPlane.AfterCompletion";
+    DS_ASSERT_OK(inject::Set(cqeInject, "1*call(0, 4)"));
+    DS_ASSERT_OK(inject::Set(probeCompleted, "call()"));
+
+    const std::string failedKey = NewObjectKey();
+    Status firstFailure = client->Set(failedKey, value);
+    ASSERT_EQ(firstFailure.GetCode(), K_URMA_ERROR) << firstFailure.ToString();
+    EXPECT_EQ(inject::GetExecuteCount(cqeInject), 1u);
+    DS_ASSERT_OK(inject::Clear(cqeInject));
+    DS_ASSERT_OK(inject::Set(writeAttemptInject, "1*return()"));
+
+    const std::string independentlyRoutedKey = NewObjectKey();
+    Status processWideFastFailure = client->Set(independentlyRoutedKey, value);
+    EXPECT_EQ(processWideFastFailure.GetCode(), K_URMA_WORKER_UNAVAILABLE)
+        << processWideFastFailure.ToString();
+    EXPECT_EQ(inject::GetExecuteCount(writeAttemptInject), 0u)
+        << "a different business Set reached URMA while the process-wide sender gate was closed";
+    DS_ASSERT_OK(inject::Clear(writeAttemptInject));
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (inject::GetExecuteCount(probeCompleted) == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    ASSERT_GT(inject::GetExecuteCount(probeCompleted), 0u)
+        << "Client-local dedicated UB probe did not complete";
+
+    Status recovered(K_URMA_WORKER_UNAVAILABLE, "waiting for process-wide sender recovery");
+    while (recovered.GetCode() == K_URMA_WORKER_UNAVAILABLE && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        recovered = client->Set(NewObjectKey(), value);
+    }
+    EXPECT_TRUE(recovered.IsOk()) << recovered.ToString();
+}
+
 TEST_F(UrmaDisableFallbackTest, TestUrmaRemoteGetFailed)
 {
     std::shared_ptr<KVClient> client1;

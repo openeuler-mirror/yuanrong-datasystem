@@ -269,8 +269,7 @@ protected:
     void UpdateMemoryAlignment(const RegisterClientRspPb &rsp);
 
     void SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp);
-    void ConsumeHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp, const std::string &expectedIncarnation,
-                                         const char *source);
+    void ConsumeHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp, const char *source);
 
     int64_t heartBeatTimeoutMs_{ 0 };
     std::mutex ubHealthSummaryCallbackMutex_;

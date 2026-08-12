@@ -22,6 +22,7 @@ import "datasystem/protos/rpc_option.proto";
 import "datasystem/protos/object_posix.proto";
 import "datasystem/protos/p2p_subscribe.proto";
 import "datasystem/protos/meta_transport.proto";
+import "datasystem/protos/share_memory.proto";
 
 option cc_enable_arenas = true;
 
@@ -206,9 +207,22 @@ message NotifyRemoteGetRspPb {
   ProviderUbFailureDetailPb provider_ub_failure_detail = 4;
 }
 
+message ProviderUbRecoveryProbeReqPb {
+  UrmaHandshakeReqPb hand_shake = 1;
+  UrmaRemoteAddrPb recovery_probe_addr = 2;
+  bytes expected_worker_incarnation = 3;
+}
+
+message ProviderUbRecoveryProbeRspPb {
+  UbHealthSummaryPb health_summary = 1;
+  bool probe_performed = 2;
+}
+
 service WorkerWorkerTransportService {
   // Named to avoid redefinition of ExchangeUrmaConnectInfoSvcMethod with WorkerOCService in object_posix.proto.
   rpc WorkerWorkerExchangeUrmaConnectInfo(UrmaHandshakeReqPb) returns (UrmaHandshakeRspPb) {}
+  // Query this Worker's current UB admission and, only when writable, verify Worker-to-Client UB WRITE recovery.
+  rpc ProbeProviderUbRecovery(ProviderUbRecoveryProbeReqPb) returns (ProviderUbRecoveryProbeRspPb) {}
 }
 
 service WorkerWorkerOCService {

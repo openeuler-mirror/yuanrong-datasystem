@@ -193,17 +193,22 @@ void ClientWorkerCommonApiAttribute::SetHeartbeatProperties(int32_t timeoutMs, c
                    clientReconnectWaitMs > 0 ? clientReconnectWaitMs / reduceRatio : UINT64_MAX });
 }
 
-void ClientWorkerCommonApiAttribute::ConsumeHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp,
-                                                                     const std::string &expectedIncarnation,
-                                                                     const char *source)
+void ClientWorkerCommonApiAttribute::ConsumeHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp, const char *source)
 {
+#ifdef WITH_TESTS
+    bool skipSummary = false;
+    INJECT_POINT_NO_RETURN("client.heartbeat_ub_health_summary.skip", [&skipSummary]() { skipSummary = true; });
+    if (skipSummary) {
+        return;
+    }
+#endif
     UbHealthSummaryApplyHook callback;
     {
         std::lock_guard<std::mutex> lock(ubHealthSummaryCallbackMutex_);
         callback = ubHealthSummaryCallback_;
     }
     LOG_IF_ERROR(
-        datasystem::ApplyHeartbeatUbHealthSummary(rsp, hostPort_, expectedIncarnation, ubHealthSummaryCache_, callback),
+        datasystem::ApplyHeartbeatUbHealthSummary(rsp, hostPort_, ubHealthSummaryCache_, callback),
         source);
 }
 
@@ -252,7 +257,7 @@ Status ClientWorkerLocalCommonApi::SendHeartbeat(bool &workerReboot, bool &clien
     clientRemoved = false;
     isWorkerVoluntaryScaleDown = false;
     if (status.IsOk()) {
-        ConsumeHeartbeatUbHealthSummary(rsp, rsp.worker_start_id(), "Ignore invalid local Worker UB health summary");
+        ConsumeHeartbeatUbHealthSummary(rsp, "Ignore invalid local Worker UB health summary");
         clientRemoved = rsp.client_removed();
         isWorkerVoluntaryScaleDown = rsp.is_voluntary_scale_down();
         SetHealthy(!rsp.unhealthy());
@@ -682,7 +687,7 @@ void ClientWorkerRemoteCommonApi::ProcessRemoteHeartbeatSummary(const HeartbeatR
         storeNotifyReboot_ = true;
         return;
     }
-    ConsumeHeartbeatUbHealthSummary(rsp, workerStartId_, "Ignore invalid remote Worker UB health summary");
+    ConsumeHeartbeatUbHealthSummary(rsp, "Ignore invalid remote Worker UB health summary");
 }
 
 Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTimeMs,

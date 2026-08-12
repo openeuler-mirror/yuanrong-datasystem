@@ -17,6 +17,11 @@
 #include "datasystem/protos/object_posix.pb.h"
 
 namespace datasystem::client {
+struct ProviderUbRecoveryCandidate {
+    UbProbeToken token;
+    std::string expectedIncarnation;
+};
+
 class UbHealthFilter : public IWorkerFilter {
 public:
     ~UbHealthFilter() override = default;
@@ -26,6 +31,11 @@ public:
     bool ReportProviderFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail);
     bool IsAvailable(const HostPort &addr) const override;
     std::optional<UbPathState> GetLocalObservation(const HostPort &addr) const;
+    std::optional<ProviderUbRecoveryCandidate> TryBeginProviderRecovery(uint64_t nowMs);
+    bool CompleteProviderRecovery(const ProviderUbRecoveryCandidate &candidate,
+                                  const std::optional<UbHealthSummary> &summary, const Status &probeStatus,
+                                  uint64_t nowMs);
+    std::optional<uint64_t> NextProviderRecoveryDeadlineMs() const;
 
 private:
     void ReconcileLocalObservationWithTrustedIncarnationLocked(const HostPort &worker,
