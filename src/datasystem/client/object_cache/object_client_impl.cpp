@@ -92,6 +92,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/flags/dynamic_config_updater.h"
 #include "datasystem/common/flags/dynamic_flag_config.h"
+#include "datasystem/common/util/version.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
@@ -260,7 +261,14 @@ void ShuffleWorkerCandidates(std::vector<HostPort> &candidates)
 void LogClientConfigInitSnapshot()
 {
     DynamicFlagConfig flagConfig;
-    OperationLogger::Instance().LogConfigInit(flagConfig.GetAllFlagsStr());
+#ifdef USE_URMA
+    constexpr char urmaCompiled[] = "1";
+#else
+    constexpr char urmaCompiled[] = "0";
+#endif
+    OperationLogger::Instance().LogConfigInit("URMA_COMPILED=" + std::string(urmaCompiled)
+                                              + "\nGIT_COMMIT=" + GetGitHash() + "\n"
+                                              + flagConfig.GetAllFlagsStr());
 }
 
 std::unordered_map<std::string, std::string> GetGflagArgs(const KVClientConfig &clientConfig)
