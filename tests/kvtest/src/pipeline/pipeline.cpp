@@ -2,10 +2,28 @@
 #include "metrics/metrics.h"
 #include "data_pattern.h"
 #include "common/simple_log.h"
+#include <datasystem/context/context.h>
+#include <atomic>
 #include <chrono>
 #include <cstring>
+#include <iomanip>
+#include <optional>
+#include <sstream>
+#include <unistd.h>
 
 using namespace datasystem;
+
+std::string GenerateTraceId(const char *prefix) {
+    constexpr int kTraceIdIndexWidth = 8;
+    static const auto processId = getpid();
+    static std::atomic<uint64_t> index{0};
+
+    const uint64_t current = index.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::ostringstream traceId;
+    traceId << prefix << '-' << processId << '-' << std::setfill('0') << std::setw(kTraceIdIndexWidth)
+            << current;
+    return traceId.str();
+}
 
 // setStringView: client->Set(key, StringView(data), param)
 static bool OpSetStringView(PipelineContext &ctx, double &latencyMs) {
@@ -24,18 +42,29 @@ static bool OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
     if (!ok || !optBuf) return false;
 
     VerifyFailReason reason = VerifyFailReason::NONE;
+    std::optional<uint64_t> mismatchPos;
     bool vok = VerifyBuffer(optBuf->ImmutableData(),
                             static_cast<uint64_t>(optBuf->GetSize()),
-                            ctx.size, ctx.senderId, ctx.verifyCfg, &reason);
+                            ctx.size, ctx.senderId, ctx.verifyCfg,
+                            &reason, &mismatchPos);
     if (!vok) {
         if (reason == VerifyFailReason::SIZE) {
             SLOG_WARN("getBuffer size mismatch: key=" << ctx.key
                       << " expected=" << ctx.size
-                      << " got=" << optBuf->GetSize());
+                      << " got=" << optBuf->GetSize()
+                      << " traceId=" << ctx.traceId);
+        } else if (mismatchPos) {
+            SLOG_WARN("getBuffer content mismatch: key=" << ctx.key
+                      << " level=" << static_cast<int>(ctx.verifyCfg.level)
+                      << " senderId=" << ctx.senderId
+                      << " traceId=" << ctx.traceId
+                      << " mismatchPos=" << *mismatchPos);
         } else {
             SLOG_WARN("getBuffer content mismatch: key=" << ctx.key
                       << " level=" << static_cast<int>(ctx.verifyCfg.level)
-                      << " senderId=" << ctx.senderId);
+                      << " senderId=" << ctx.senderId
+                      << " traceId=" << ctx.traceId
+                      << " mismatchPos=unknown");
         }
         if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
         if (ctx.verifyCfg.failOp) return false;
@@ -284,12 +313,19 @@ bool ExecutePipeline(
     std::atomic<uint64_t> &verifyFailCount) {
     bool allOk = true;
     for (auto &[name, fn] : ops) {
+        ctx.traceId = GenerateTraceId(name.c_str());
+        Status traceRc = Context::SetTraceId(ctx.traceId);
+        if (!traceRc.IsOk()) {
+            SLOG_WARN("Pipeline set trace id failed: traceId=" << ctx.traceId << " error=" << traceRc.GetMsg());
+        }
+
         double latencyMs = 0;
         bool ok = fn(ctx, latencyMs);
         metrics.Record(name, latencyMs, ok, ctx.size);
         if (!ok) {
             SLOG_WARN("Pipeline op failed: " << name
                       << " key=" << ctx.key
+                      << " traceId=" << ctx.traceId
                       << " latency=" << latencyMs << "ms");
             allOk = false;
             break;

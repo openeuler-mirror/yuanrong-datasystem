@@ -131,6 +131,7 @@ ds_cc_library(
         ":operation_logger",
         ":log_base",
         ":log_sampler",
+        "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common:common_constants",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log/spdlog:ds_spdlog",

@@ -16,6 +16,7 @@ set(WORKER_OC_SRCS
         obj_cache_shm_unit.cpp
         async_send_manager.cpp
         async_update_location_manager.cpp
+        delayed_release_shm_manager.cpp
         metadata_recovery_manager.cpp
         metadata_recovery_selector.cpp
         rebalance_candidate_provider.cpp

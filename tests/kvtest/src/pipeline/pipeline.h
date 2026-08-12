@@ -23,6 +23,7 @@ inline bool Measure(std::function<datasystem::Status()> fn, double &latencyMs) {
 struct PipelineContext {
     std::string key;
     std::string data;
+    std::string traceId;
     uint64_t size = 0;
     int senderId = 0;
     datasystem::SetParam param;
@@ -35,6 +36,8 @@ struct PipelineContext {
     VerifyConfig verifyCfg;
     class MetricsCollector *metrics = nullptr;
 };
+
+std::string GenerateTraceId(const char *prefix);
 
 // Op function: returns true on success, fills latencyMs.
 using OpFunc = std::function<bool(PipelineContext &ctx, double &latencyMs)>;

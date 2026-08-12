@@ -25,6 +25,7 @@
 #include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 #define private public
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
@@ -554,6 +555,32 @@ TEST(WorkerOcServiceGetUbAdmissionTest, LaterSuccessDoesNotClearBatchError)
 
     EXPECT_EQ(lastError.GetCode(), K_URMA_ERROR);
     EXPECT_EQ(lastError.GetMsg(), "first object failed");
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, DelayReleaseOnlyForAmbiguousRemoteWrites)
+{
+    auto notSent = TryExtractStatusFromControllerError("[E111]Connection refused", ECONNREFUSED);
+    EXPECT_FALSE(WorkerOcServiceGetImpl::NeedDelayReleaseRemoteGetShm(Status::OK()));
+    EXPECT_FALSE(WorkerOcServiceGetImpl::NeedDelayReleaseRemoteGetShm(Status(K_NOT_FOUND, "not found")));
+    EXPECT_TRUE(IsBrpcRequestDefinitelyNotSent(notSent));
+    EXPECT_FALSE(WorkerOcServiceGetImpl::NeedDelayReleaseRemoteGetShm(notSent));
+    EXPECT_TRUE(WorkerOcServiceGetImpl::NeedDelayReleaseRemoteGetShm(
+        Status(K_RPC_DEADLINE_EXCEEDED, "response timeout")));
+    EXPECT_TRUE(WorkerOcServiceGetImpl::NeedDelayReleaseRemoteGetShm(Status(K_URMA_ERROR, "write failed")));
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, RemoteGetRetryCodesDependOnTransport)
+{
+    const auto &fastTransportRetryCodes = WorkerOcServiceGetImpl::GetRemoteGetRetryCodes(true);
+    EXPECT_EQ(fastTransportRetryCodes.count(K_TRY_AGAIN), 1);
+    EXPECT_EQ(fastTransportRetryCodes.count(K_URMA_CONNECT_FAILED), 1);
+    EXPECT_EQ(fastTransportRetryCodes.count(K_RPC_DEADLINE_EXCEEDED), 0);
+
+    const auto &rpcPayloadRetryCodes = WorkerOcServiceGetImpl::GetRemoteGetRetryCodes(false);
+    EXPECT_EQ(rpcPayloadRetryCodes.count(K_TRY_AGAIN), 1);
+    EXPECT_EQ(rpcPayloadRetryCodes.count(K_URMA_CONNECT_FAILED), 1);
+    EXPECT_EQ(rpcPayloadRetryCodes.count(K_RPC_DEADLINE_EXCEEDED), 1);
+    EXPECT_EQ(rpcPayloadRetryCodes.count(K_RPC_UNAVAILABLE), 1);
 }
 }  // namespace object_cache
 }  // namespace datasystem

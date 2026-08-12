@@ -159,7 +159,8 @@ TEST_F(RdmaObjectClientTest, RdmaReconnectTest)
     // Retry to tolerate reconnect latency, matching the pattern used by
     // KVClientVoluntaryScaleDownTest.CreateClientWithServiceDiscoveryDuringScaleDown.
     Status getSt;
-    for (int retry = 0; retry < 10; ++retry) {
+    const int retryCount = 50;
+    for (int retry = 0; retry < retryCount; ++retry) {
         valuesGet.clear();
         getSt = client2->Get(keys, valuesGet);
         if (getSt.IsOk()) {

@@ -16,6 +16,7 @@
   - `src/datasystem/common/log/CMakeLists.txt`
   - `src/datasystem/common/log/BUILD.bazel`
   - `src/datasystem/common/log/log.h`
+
   - `src/datasystem/common/log/logging.h`
   - `src/datasystem/common/log/logging.cpp`
   - `src/datasystem/common/log/log_manager.h`
@@ -111,7 +112,7 @@
   - metrics-family definitions and collection cadence;
   - centralized log aggregation infrastructure outside the local process and filesystem.
 - Important boundaries with neighboring modules:
-  - `src/datasystem/common/log/*` owns macro surface, lifecycle, trace state, recorder lifecycle, and crash-path output.
+  - `src/datasystem/common/log/*` owns macro surface, lifecycle, trace state, recorder lifecycle, crash-path output, and the bounded data-content preview formatter used for corruption diagnosis.
   - `src/datasystem/common/metrics/hard_disk_exporter/*` owns the buffered file exporters used under access and monitor logging.
   - runtime modules and language bindings decide where trace IDs are created, propagated, or imported.
 
@@ -193,6 +194,7 @@
 
 - Public APIs:
   - logging macros from `src/datasystem/common/log/log.h`, including `LOG`, `VLOG`, `CHECK`, `LOG_EVERY_N`, and `LOG_FIRST_N`;
+
   - `Trace::SetTraceUUID`, `Trace::SetTraceNewID`, `Trace::SetSubTraceID`, and `Trace::GetTraceID`;
   - `datasystem::Context::SetTraceId` from `include/datasystem/context/context.h`;
   - `AccessRecorder` construction plus `Record()`.
@@ -275,6 +277,7 @@
 | Component | Responsibility | Key files | Notes |
 | --- | --- | --- | --- |
 | `log.h` | repository-wide macro surface for logs and checks | `src/datasystem/common/log/log.h` | main entrypoint seen by most callers; ordinary LOG macros pre-check request sampling before evaluating stream payloads |
+
 | `Logging` | provider init, env override, singleton lifecycle, startup ordering | `src/datasystem/common/log/logging.h/.cpp` | creates `LogManager` and `AccessRecorderManager` |
 | `LogManager` | background rolling, compression, pruning, and monitor flush | `src/datasystem/common/log/log_manager.h/.cpp` | one local background thread |
 | `Trace` | thread-local correlation state | `src/datasystem/common/log/trace.h/.cpp` | supports generated/imported trace IDs, request-log markers, and sampling-decision snapshots |

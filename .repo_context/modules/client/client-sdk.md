@@ -19,6 +19,7 @@
   - `include/datasystem/hetero_client.h`
   - `include/datasystem/context/context.h`
   - `include/datasystem/utils/connection.h`
+
   - `src/datasystem/client/CMakeLists.txt`
   - `src/datasystem/client/datasystem.cpp`
   - `src/datasystem/client/kv_cache/kv_client.cpp`
@@ -196,6 +197,7 @@
   - `ConnectOptions`
   - `ServiceDiscovery`
   - `Status`
+
   - `Buffer`, `ReadOnlyBuffer`, stream producer/consumer types, hetero blob/future types
 
 ## Implementation Mapping
@@ -211,6 +213,7 @@
 | `HeteroClient` | `src/datasystem/client/hetero_cache/hetero_client.cpp` plus object/device helpers | integrates D2H/H2D/D2D style operations |
 | `StreamClient` | `src/datasystem/client/stream_cache/stream_client.cpp` -> `client::stream_cache::StreamClientImpl` | separate stream cache implementation family |
 | `Context` | `src/datasystem/client/context/context.cpp` | thread-local trace and tenant context helpers |
+
 | `IServiceDiscovery` / `ServiceDiscovery` / `CoordinatorServiceDiscovery` | `src/datasystem/client/service_discovery.cpp` | SDK worker selection for C++ callers using `ConnectOptions.serviceDiscovery`; both implementations accept an optional `clusterName`. ETCD discovery maps the logical membership table to the legacy physical prefix `/<clusterName>/datasystem/cluster` (or `/datasystem/cluster` when empty), while Coordinator discovery reads `/datasystem/<clusterName>/cluster` (or `/datasystem/cluster` when empty); `hostIdEnvName` is read from the process env first and then recovered from `<log_dir>/env`, and the resolved SDK host ID is exposed to the shared client backend for Routing and Transport locality. Public `CoordinatorServiceDiscovery::Init` initializes membership/random state and a temporary shared Coordinator proxy handle, publishing it only after the proxy's `Init` succeeds. The discovery object then retains that long-lived handle; repeated successful `Init` calls are idempotent, and all later worker snapshots reuse the same proxy, which routes each Coordinator RPC to the current leader across the discovered candidate set. Provider updates require reconstructing the discovery object or restarting the process. |
 | `ICoordinatorDiscovery` | `include/datasystem/utils/coordinator_discovery.h` | Shared public candidate-provider contract used by SDK, Worker, and Coordinator startup. Proxy `Init` calls the provider once, requires a non-empty result, validates each candidate via `HostPort::ParseString`, requires at least one valid candidate, and builds a `CoordinatorLeaderRouter` over all valid candidates. Every later RPC routes through the router to the current leader within a fixed deadline, refreshing candidates from the provider as needed; the router caches the last observed leader identity and notifies subscribers on change. Changing the provider output requires reconstructing the proxy or restarting the process, and multi-node Coordinator leader availability remains the responsibility of the Coordinator Raft layer. The fixed-address fallback uses internal `StaticCoordinatorDiscovery`. |
 | `dscli query` | `cli/query.py` -> native query facade | Explicit backend, 5-second budget, local projection |
