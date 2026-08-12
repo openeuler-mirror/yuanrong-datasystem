@@ -98,6 +98,12 @@
     latch rather than the SDK's initially bound Worker lock id. Transport selection/admission, session, fd-channel,
     auth, legacy reference state, and the mmap manager/table use bthread mutex/RWLock/condition-variable primitives
     because these paths can be entered from brpc/bthread execution contexts.
+  - Each non-embedded shared-memory mmap table lazily owns one serial background worker for CUDA host-memory
+    registration. An mmap becomes usable before registration completes. KV `Get(..., ReadOnlyBuffer)` copies an
+    affected SHM payload under its read latch into Buffer-owned pageable memory. KV `Create`/`MCreate` similarly expose
+    Buffer-owned pageable memory while registration is pending; `Set`/`MSet` copy it back into the already allocated
+    Worker SHM with a CPU copy before publishing, without waiting for registration. Plain `Get(..., Optional<Buffer>)`
+    keeps its existing zero-copy behavior. Mmap-table shutdown drains pin work before entries can unpin and unmap.
   - `client::TransportLayer` also provides internal same-worker `MCreate`/`MSet` primitives. TCP MCreate allocates local
     buffers and MSet sends one positional MultiPublish payload; UB MCreate uses one MultiCreate RPC, MSet pipelines
     non-blocking per-object URMA writes in bounded groups, and failed writes use bounded TCP payload fallback in the

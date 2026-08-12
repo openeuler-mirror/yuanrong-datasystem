@@ -46,6 +46,11 @@ public:
     {
         return Status::OK();
     }
+
+    virtual bool IsCudaHostMemoryRegistrationDone() const
+    {
+        return true;
+    }
 };
 
 }  // namespace client

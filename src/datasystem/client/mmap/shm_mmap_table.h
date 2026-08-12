@@ -27,19 +27,24 @@
 #include <unistd.h>
 #include <unordered_map>
 
-#include "datasystem/common/log/log.h"
 #include "datasystem/client/mmap/immap_table.h"
+#include "datasystem/client/mmap/shm_mmap_table_entry.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/thread_pool.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace client {
+
 class ShmMmapTable : public IMmapTable {
 public:
     ShmMmapTable() = delete;
 
-    ~ShmMmapTable() = default;
+    ~ShmMmapTable() override;
 
-    ShmMmapTable(bool enableHugeTlb) : IMmapTable(enableHugeTlb) {};
+    explicit ShmMmapTable(bool enableHugeTlb) : IMmapTable(enableHugeTlb)
+    {
+    }
 
     /**
      * @brief Look up and mmap the share memory file descriptor.
@@ -52,6 +57,11 @@ public:
      */
     Status MmapAndStoreFd(const int &clientFd, const int &workerFd, const uint64_t &mmapSize,
                           const std::string &tenantId, const std::string &clientId = "") override;
+
+private:
+    void SubmitHostMemoryPin(const std::shared_ptr<ShmMmapTableEntry> &entry);
+
+    std::unique_ptr<ThreadPool> pinThread_;
 };
 }  // namespace client
 }  // namespace datasystem

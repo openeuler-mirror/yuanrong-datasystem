@@ -178,6 +178,12 @@ private:
     /// \return K_OK if the initialization succeeds, K_RUNTIME_ERROR otherwise.
     Status Init();
 
+    Status CopyToPageableMemoryIfCudaHostMemoryPinPending();
+
+    Status UsePageableMemoryIfCudaHostMemoryPinPending();
+
+    Status CopyPageableDataToShm();
+
     /// \brief Helper function to malloc buffer for non-shared memory scenario.
     ///
     /// \return K_OK if the malloc succeeds, error code otherwise.

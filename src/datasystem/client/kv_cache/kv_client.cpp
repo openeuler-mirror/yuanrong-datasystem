@@ -122,6 +122,12 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
     creatParam.cacheType = param.cacheType;
     creatParam.existence = param.existence;
     Status rc = impl_->Create(key, size, creatParam, buffer);
+    if (rc.IsOk()) {
+        rc = buffer->UsePageableMemoryIfCudaHostMemoryPinPending();
+        if (rc.IsError()) {
+            buffer.reset();
+        }
+    }
     METRIC_INC(metrics::KvMetricId::CLIENT_CREATE_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_CREATE_ERROR_TOTAL);
     if (rc.IsOk()) {
@@ -147,6 +153,20 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
     creatParam.cacheType = param.cacheType;
     creatParam.existence = param.existence;
     Status rc = impl_->MCreate(keys, sizes, creatParam, buffers);
+    if (rc.IsOk()) {
+        for (auto &buffer : buffers) {
+            if (buffer == nullptr || buffer->GetSize() == 0) {
+                continue;
+            }
+            rc = buffer->UsePageableMemoryIfCudaHostMemoryPinPending();
+            if (rc.IsError()) {
+                break;
+            }
+        }
+        if (rc.IsError()) {
+            buffers.clear();
+        }
+    }
     METRIC_INC(metrics::KvMetricId::CLIENT_CREATE_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_CREATE_ERROR_TOTAL);
     if (rc.IsOk()) {
@@ -347,15 +367,19 @@ Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyB
     std::vector<Optional<Buffer>> buffers;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get({ key }, subTimeoutMs, buffers);
+    size_t dataSize = rc.IsOk() ? buffers[0]->GetSize() : 0;
+    if (rc.IsOk()) {
+        auto bufferSharedPtr = std::make_shared<Buffer>(std::move(buffers[0].value()));
+        rc = bufferSharedPtr->CopyToPageableMemoryIfCudaHostMemoryPinPending();
+        if (rc.IsOk()) {
+            readOnlyBuffer = Optional<ReadOnlyBuffer>(ReadOnlyBuffer(bufferSharedPtr));
+        }
+    }
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
-    size_t dataSize = rc.IsOk() ? buffers[0]->GetSize() : 0;
     Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
     access.ObjectKeyRef(key).TimeoutMs(subTimeoutMs).TrackedTransportType()
         .DataSize(dataSize).Result(accessRc).Record();
-    RETURN_IF_NOT_OK(rc);
-    auto bufferSharedPtr = std::make_shared<Buffer>(std::move(buffers[0].value()));
-    readOnlyBuffer = Optional<ReadOnlyBuffer>(ReadOnlyBuffer(bufferSharedPtr));
     return rc;
 }
 
@@ -395,21 +419,29 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<
     std::vector<Optional<Buffer>> buffers;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get(keys, subTimeoutMs, buffers);
-    METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
-    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     int64_t dataSize = 0;
+    std::vector<Optional<ReadOnlyBuffer>> result;
     if (rc.IsOk()) {
-        readOnlyBuffers.clear();
+        result.reserve(buffers.size());
         for (auto &buffer : buffers) {
             if (buffer) {
                 dataSize += buffer->GetSize();
                 auto bufferSharedPtr = std::make_shared<Buffer>(std::move(buffer.value()));
-                readOnlyBuffers.emplace_back(ReadOnlyBuffer(bufferSharedPtr));
+                rc = bufferSharedPtr->CopyToPageableMemoryIfCudaHostMemoryPinPending();
+                if (rc.IsError()) {
+                    break;
+                }
+                result.emplace_back(ReadOnlyBuffer(bufferSharedPtr));
             } else {
-                readOnlyBuffers.emplace_back();
+                result.emplace_back();
             }
         }
+        if (rc.IsOk()) {
+            readOnlyBuffers = std::move(result);
+        }
     }
+    METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
     access.ObjectKeysRef(keys).TimeoutMs(subTimeoutMs).TrackedTransportType()
         .DataSize(dataSize).Result(accessRc).Record();

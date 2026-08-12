@@ -6592,6 +6592,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
         }
         // Routed (lc=false two-step Create) buffers are published through the transport layer below.
         CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
+        RETURN_IF_NOT_OK(buffer->CopyPageableDataToShm());
         if (buffer->bufferInfo_->isRoutedWrite) {
             hasRouted = true;
             continue;

@@ -20,6 +20,11 @@
 
 #include "datasystem/object/buffer.h"
 
+#include <cstdlib>
+#include <limits>
+#include <new>
+
+#include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
@@ -40,6 +45,29 @@
 static constexpr int DEBUG_LOG_LEVEL = 2;
 
 namespace datasystem {
+
+namespace {
+Status AllocatePageableMemory(uint64_t size, std::shared_ptr<uint8_t[]> &data)
+{
+#ifdef WITH_TESTS
+    INJECT_POINT_NO_RETURN("Buffer.AllocatePageableMemory");
+#endif
+    try {
+#ifdef WITH_TESTS
+        INJECT_POINT_NO_RETURN("Buffer.AllocatePageableMemory.bad_alloc", [] { throw std::bad_alloc(); });
+#endif
+        CHECK_FAIL_RETURN_STATUS(size <= std::numeric_limits<size_t>::max(), K_OUT_OF_MEMORY,
+                                 "Pageable memory size exceeds the addressable range");
+        auto *memory = static_cast<uint8_t *>(std::malloc(static_cast<size_t>(size)));
+        CHECK_FAIL_RETURN_STATUS(memory != nullptr, K_OUT_OF_MEMORY, "Allocate pageable memory failed");
+        data = std::shared_ptr<uint8_t[]>(memory, [](uint8_t *ptr) { std::free(ptr); });
+    } catch (const std::bad_alloc &e) {
+        RETURN_STATUS(K_OUT_OF_MEMORY,
+                      "Allocate " + std::to_string(size) + " bytes of pageable memory failed: " + e.what());
+    }
+    return Status::OK();
+}
+}  // namespace
 
 Buffer::Buffer() = default;
 
@@ -266,7 +294,9 @@ Status Buffer::MemoryCopyWithTransport(const void *data, uint64_t length, uint8_
         bufferInfo_->ubGetBufferHandle.reset();
         RETURN_IF_NOT_OK(MallocBufferHelper());
     }
-    uint8_t *dstData = bufferInfo_->pointer + bufferInfo_->metadataSize;
+    uint8_t *dstData = bufferInfo_->pageableData != nullptr
+                           ? bufferInfo_->pageableData.get()
+                           : bufferInfo_->pointer + bufferInfo_->metadataSize;
     Status status = ::datasystem::MemoryCopy(dstData, dataSize, static_cast<const uint8_t *>(data), length,
                                              clientImpl->memoryCopyThreadPool_, clientImpl->memcpyParallelThreshold_);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(status.IsOk(), K_RUNTIME_ERROR,
@@ -290,6 +320,7 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
     const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
+    RETURN_IF_NOT_OK(CopyPageableDataToShm());
 
     // Routed two-step buffers send their payload via transportLayer_->Set on the Create-pinned worker;
     // skip the legacy bound-worker UB pre-send here too (symmetric with the MemoryCopy guard above).
@@ -333,6 +364,7 @@ Status Buffer::Seal(const std::unordered_set<std::string> &nestedKeys)
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
+    RETURN_IF_NOT_OK(CopyPageableDataToShm());
     Status status = clientImpl->Seal(bufferInfo_, nestedKeys, isShm_);
     if (isShm_) {
         SetVisibility(status.IsOk());
@@ -415,8 +447,82 @@ Status Buffer::CopyDataWithRLatch(const std::function<Status()> &copyFn)
     return copyStatus;
 }
 
+Status Buffer::CopyToPageableMemoryIfCudaHostMemoryPinPending()
+{
+    CHECK_FAIL_RETURN_STATUS(bufferInfo_ != nullptr, K_RUNTIME_ERROR, "Buffer is not initialized");
+    bool pinCompleted = bufferInfo_->mmapEntry == nullptr
+                        || bufferInfo_->mmapEntry->IsCudaHostMemoryRegistrationDone();
+    if (bufferInfo_->receiveBufferOwner != nullptr) {
+        pinCompleted = pinCompleted && bufferInfo_->receiveBufferOwner->IsCudaHostMemoryRegistrationDone();
+    }
+    if (pinCompleted || bufferInfo_->pageableData != nullptr) {
+        return Status::OK();
+    }
+    std::shared_ptr<uint8_t[]> copy;
+    RETURN_IF_NOT_OK(AllocatePageableMemory(bufferInfo_->dataSize, copy));
+    const uint8_t *source = bufferInfo_->pointer + bufferInfo_->metadataSize;
+    RETURN_IF_NOT_OK(CopyDataWithRLatch([&copy, source, this] {
+        std::memcpy(copy.get(), source, bufferInfo_->dataSize);
+        return Status::OK();
+    }));
+    bufferInfo_->pageableData = std::move(copy);
+    VLOG(1) << "[CudaHostMemory] Pin is pending, Get copied shared memory to pageable memory, object key: "
+            << bufferInfo_->objectKey << ", size: " << bufferInfo_->dataSize
+            << ", pageable pointer: " << static_cast<const void *>(bufferInfo_->pageableData.get())
+            << ", shm pointer: " << static_cast<const void *>(source);
+    return Status::OK();
+}
+
+Status Buffer::UsePageableMemoryIfCudaHostMemoryPinPending()
+{
+    CHECK_FAIL_RETURN_STATUS(bufferInfo_ != nullptr, K_RUNTIME_ERROR, "Buffer is not initialized");
+    bool pinCompleted = bufferInfo_->mmapEntry == nullptr
+                        || bufferInfo_->mmapEntry->IsCudaHostMemoryRegistrationDone();
+    if (pinCompleted || bufferInfo_->pageableData != nullptr) {
+        return Status::OK();
+    }
+    std::shared_ptr<uint8_t[]> data;
+    RETURN_IF_NOT_OK(AllocatePageableMemory(bufferInfo_->dataSize, data));
+    bufferInfo_->pageableData = std::move(data);
+    bufferInfo_->pageableDataNeedsWriteBack = true;
+    VLOG(1) << "[CudaHostMemory] Pin is pending, Create exposes pageable memory, object key: "
+            << bufferInfo_->objectKey << ", size: " << bufferInfo_->dataSize
+            << ", pageable pointer: " << static_cast<const void *>(bufferInfo_->pageableData.get())
+            << ", shm pointer: " << static_cast<void *>(bufferInfo_->pointer + bufferInfo_->metadataSize);
+    return Status::OK();
+}
+
+Status Buffer::CopyPageableDataToShm()
+{
+    if (bufferInfo_ == nullptr || !bufferInfo_->pageableDataNeedsWriteBack) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(bufferInfo_->pointer != nullptr && bufferInfo_->mmapEntry != nullptr, K_RUNTIME_ERROR,
+                             "Pageable write buffer has no shared memory target");
+#ifdef WITH_TESTS
+    INJECT_POINT("Buffer.CopyPageableDataToShm");
+#endif
+    auto clientImpl = clientImpl_.lock();
+    CHECK_FAIL_RETURN_STATUS(clientImpl != nullptr, K_RUNTIME_ERROR,
+                             "Client already destroyed or Shutdown() invoked, buffer invalidated");
+    uint8_t *shmData = bufferInfo_->pointer + bufferInfo_->metadataSize;
+    Status rc = ::datasystem::MemoryCopy(shmData, bufferInfo_->dataSize, bufferInfo_->pageableData.get(),
+                                         bufferInfo_->dataSize, clientImpl->memoryCopyThreadPool_,
+                                         clientImpl->memcpyParallelThreshold_);
+    if (rc.IsOk()) {
+        VLOG(1) << "[CudaHostMemory] Set/MSet copied pageable memory back to shared memory, object key: "
+                << bufferInfo_->objectKey << ", size: " << bufferInfo_->dataSize
+                << ", pageable pointer: " << static_cast<const void *>(bufferInfo_->pageableData.get())
+                << ", shm pointer: " << static_cast<void *>(shmData);
+    }
+    return rc;
+}
+
 void *Buffer::MutableData()
 {
+    if (bufferInfo_->pageableData != nullptr) {
+        return bufferInfo_->pageableData.get();
+    }
     if (bufferInfo_->pointer == nullptr && bufferInfo_->ubUrmaDataInfo != nullptr) {
         bufferInfo_->ubDataSentByMemoryCopy = false;
         Status status = MallocBufferHelper();
@@ -486,10 +592,10 @@ Status Buffer::CheckDeprecated()
 
 uint8_t *Buffer::GetVisiblePointer()
 {
-    if (bufferInfo_ == nullptr || bufferInfo_->metadataSize == 0) {
+    if (bufferInfo_ == nullptr || bufferInfo_->pointer == nullptr || bufferInfo_->metadataSize == 0) {
         return nullptr;
     }
-    return static_cast<uint8_t *>(MutableData()) - sizeof(uint8_t);
+    return bufferInfo_->pointer + bufferInfo_->metadataSize - sizeof(uint8_t);
 }
 
 void Buffer::SetVisibility(bool visible)

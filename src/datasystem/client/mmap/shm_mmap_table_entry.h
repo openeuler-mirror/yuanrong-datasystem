@@ -54,8 +54,16 @@ public:
         return pointer_;
     }
 
+    void PinHostMemory();
+
+    void SkipHostMemoryPin();
+
+    bool IsCudaHostMemoryRegistrationDone() const override;
+
 private:
     const std::string clientId_;
+    std::atomic<bool> pinCompleted_{ false };
+    std::atomic<bool> pinAttempted_{ false };
 };
 }  // namespace client
 }  // namespace datasystem

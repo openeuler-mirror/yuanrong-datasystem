@@ -109,6 +109,7 @@ ds_cc_test(
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/client/kv_cache:read_only_buffer",
         "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
     ],
 )
 

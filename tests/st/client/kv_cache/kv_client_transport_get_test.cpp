@@ -42,6 +42,7 @@
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/kv/read_only_buffer.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 
@@ -613,6 +614,41 @@ TEST_F(KVClientTransportGetWithShmTest, NonBoundSameHostWorkerUsesWorkerOcFdPass
     ASSERT_EQ(postHeartbeat.workerOcGet, maintained.workerOcGet + 1);
     ASSERT_EQ(postHeartbeat.registerShmClient, maintained.registerShmClient);
     ASSERT_EQ(postHeartbeat.getClientFd, maintained.getClientFd);
+}
+
+TEST_F(KVClientTransportGetWithShmTest, PinPendingSingleAndBatchReadOnlyGetUsePageableMemory)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 3, keys);
+    ASSERT_EQ(keys.size(), 3u);
+    std::vector<std::string> values{ std::string(LARGE_VALUE_SIZE, 'p'), std::string(LARGE_VALUE_SIZE, 'q'),
+                                     std::string(LARGE_VALUE_SIZE, 'r') };
+    for (size_t i = 0; i < keys.size(); ++i) {
+        DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
+    }
+
+    DS_ASSERT_OK(inject::Set("ShmMmapTableEntry.PinHostMemory", "1*pause()"));
+    Raii clearPin([] { (void)inject::Clear("ShmMmapTableEntry.PinHostMemory"); });
+    DS_ASSERT_OK(inject::Set("Buffer.AllocatePageableMemory", "call()"));
+    Raii clearAlloc([] { (void)inject::Clear("Buffer.AllocatePageableMemory"); });
+
+    Optional<ReadOnlyBuffer> singleBuffer;
+    DS_ASSERT_OK(reader_->Get(keys[0], singleBuffer));
+    ASSERT_TRUE(singleBuffer);
+    ASSERT_EQ(singleBuffer->GetSize(), static_cast<int64_t>(values[0].size()));
+    ASSERT_EQ(std::memcmp(singleBuffer->ImmutableData(), values[0].data(), values[0].size()), 0);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+
+    std::vector<Optional<ReadOnlyBuffer>> batchBuffers;
+    DS_ASSERT_OK(reader_->Get({ keys[1], keys[2] }, batchBuffers));
+    ASSERT_EQ(batchBuffers.size(), 2u);
+    for (size_t i = 0; i < batchBuffers.size(); ++i) {
+        ASSERT_TRUE(batchBuffers[i]);
+        ASSERT_EQ(batchBuffers[i]->GetSize(), static_cast<int64_t>(values[i + 1].size()));
+        ASSERT_EQ(std::memcmp(batchBuffers[i]->ImmutableData(), values[i + 1].data(), values[i + 1].size()), 0);
+    }
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    ASSERT_GE(inject::GetExecuteCount("Buffer.AllocatePageableMemory"), 3u);
 }
 
 TEST_F(KVClientTransportGetWithTargetShmDisabledTest, BoundWorkerShmDoesNotEnableTargetWorkerShm)
