@@ -21,6 +21,8 @@
 
 #include "datasystem/master/stream_cache/topology_manager.h"
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -35,7 +37,7 @@ Status TopologyManager::PubIncreaseNode(const ProducerMetaPb &producerMeta, bool
     // Add pub worker node into pubTopo set.
     HostPort workerAddress(producerMeta.worker_address().host(), producerMeta.worker_address().port());
     std::string workerAddressStr = workerAddress.ToString();
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     auto iter = producerCount_.find(workerAddressStr);
     if (iter == producerCount_.end()) {
         iter = producerCount_.emplace(workerAddressStr, ProducerCount()).first;
@@ -61,7 +63,7 @@ Status TopologyManager::PubNodeFirstOrLastDone(const ProducerMetaPb &producerMet
 {
     // Add pub worker node into pubTopo set.
     HostPort workerAddress(producerMeta.worker_address().host(), producerMeta.worker_address().port());
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     auto iter = producerCount_.find(workerAddress.ToString());
     CHECK_FAIL_RETURN_STATUS(
         iter != producerCount_.end() && iter->second.count_ == 1 && iter->second.firstProducerProcessing_,
@@ -76,7 +78,7 @@ Status TopologyManager::PubDecreaseNodeStart(const ProducerMetaPb &producerMeta,
 {
     HostPort workerAddress(producerMeta.worker_address().host(), producerMeta.worker_address().port());
     std::string workerAddressStr = workerAddress.ToString();
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     auto iter = producerCount_.find(workerAddressStr);
     CHECK_FAIL_RETURN_STATUS(iter->second.firstProducerProcessing_ == false, K_TRY_AGAIN,
                              FormatString("First create producer request or the last close producer request from the "
@@ -94,7 +96,7 @@ Status TopologyManager::PubDecreaseNodeStart(const ProducerMetaPb &producerMeta,
 Status TopologyManager::PubDecreaseNode(const ProducerMetaPb &producerMeta, const bool delWorker)
 {
     HostPort workerAddress(producerMeta.worker_address().host(), producerMeta.worker_address().port());
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     auto iter = producerCount_.find(workerAddress.ToString());
 
     CHECK_FAIL_RETURN_STATUS(iter != producerCount_.end() && iter->second.count_ > 0, StatusCode::K_RUNTIME_ERROR,
@@ -114,7 +116,7 @@ Status TopologyManager::PubDecreaseNode(const ProducerMetaPb &producerMeta, cons
 Status TopologyManager::SubIncreaseNode(const ConsumerMetaPb &consumerMeta, bool &isFirstConsumer)
 {
     HostPort workerAddress(consumerMeta.worker_address().host(), consumerMeta.worker_address().port());
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     auto ret = consumerTopo_.emplace(consumerMeta.consumer_id(), consumerMeta);
     CHECK_FAIL_RETURN_STATUS(ret.second, StatusCode::K_RUNTIME_ERROR,
                              FormatString("Fail to add consumer [%s] into topo structure for stream <%s>",
@@ -138,14 +140,14 @@ Status TopologyManager::SubIncreaseNode(const ConsumerMetaPb &consumerMeta, bool
 
 uint32_t TopologyManager::GetConsumerCountForLife()
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     return consumerLifeCount_;
 }
 
 Status TopologyManager::SubDecreaseNode(const ConsumerMetaPb &consumerMeta, bool rollback, const bool delWorker)
 {
     HostPort workerAddress(consumerMeta.worker_address().host(), consumerMeta.worker_address().port());
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     const auto &config = consumerMeta.sub_config();
     if (config.subscription_type() == SubscriptionTypePb::STREAM_PB) {
         const std::string &subName = config.subscription_name();
@@ -178,7 +180,7 @@ Status TopologyManager::SubDecreaseNode(const ConsumerMetaPb &consumerMeta, bool
 
 Status TopologyManager::GetAllPubNode(std::set<HostPort> &pubNodeSet, bool informAll) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (const auto &kv : producerCount_) {
         if (kv.second.count_ > 0 || informAll) {
             HostPort nodeAddr;
@@ -191,7 +193,7 @@ Status TopologyManager::GetAllPubNode(std::set<HostPort> &pubNodeSet, bool infor
 
 Status TopologyManager::GetAllSubNode(std::set<HostPort> &subNodeSet) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (const auto &kv : consumerCount_) {
         if (kv.second > 0) {
             HostPort nodeAddr;
@@ -204,7 +206,7 @@ Status TopologyManager::GetAllSubNode(std::set<HostPort> &subNodeSet) const
 
 Status TopologyManager::GetAllRelatedNode(std::set<HostPort> &nodeSet) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (const auto &kv : producerCount_) {
         HostPort nodeAddr;
         RETURN_IF_NOT_OK(nodeAddr.ParseString(kv.first));
@@ -222,7 +224,7 @@ Status TopologyManager::GetAllRelatedNode(std::set<HostPort> &nodeSet) const
 void TopologyManager::GetAllRelatedNode(std::vector<std::string> &producerRelatedNodes,
                                         std::vector<std::string> &consumerRelatedNodes) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     producerRelatedNodes.reserve(producerCount_.size());
     for (const auto &kv : producerCount_) {
         producerRelatedNodes.emplace_back(kv.first);
@@ -246,7 +248,7 @@ bool TopologyManager::RecoverEmptyMetaIfNeeded(const HostPort &nodeAddr)
         return false;
     }
     LOG(INFO) << FormatString("[S: %s] Recover empty meta for worker: %s", streamName_, nodeAddr.ToString());
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     if (producerCount_.find(nodeAddr.ToString()) == producerCount_.end()) {
         (void)producerCount_.emplace(nodeAddr.ToString(), ProducerCount());
     }
@@ -270,7 +272,7 @@ void TopologyManager::PreparePubSubRelNodes(const std::vector<std::string> &prod
 std::vector<ConsumerMetaPb> TopologyManager::GetAllConsumerNotFromSrc(const std::string &srcNode) const
 {
     std::vector<ConsumerMetaPb> consumerList;
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (const auto &kv : consumerTopo_) {
         const auto hostPortPb = kv.second.worker_address();
         HostPort addr(hostPortPb.host(), hostPortPb.port());
@@ -285,7 +287,7 @@ std::unordered_map<std::string, ConsumerMetaPb> TopologyManager::GetAllConsumerF
     const HostPort &workerAddress) const
 {
     std::unordered_map<std::string, ConsumerMetaPb> consumerMap;
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (auto &kv : consumerTopo_) {
         const auto hostPortPb = kv.second.worker_address();
         HostPort addr(hostPortPb.host(), hostPortPb.port());
@@ -299,7 +301,7 @@ std::unordered_map<std::string, ConsumerMetaPb> TopologyManager::GetAllConsumerF
 Status TopologyManager::GetAllProducerFromWorker(const HostPort &workerAddress,
                                                  std::unordered_map<std::string, ProducerMetaPb> &producerMap)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (const auto &kv : producerCount_) {
         if (kv.first == workerAddress.ToString()) {
             // Create a temporary ProducerMetaPb
@@ -322,7 +324,7 @@ Status TopologyManager::GetAllProducerFromWorker(const HostPort &workerAddress,
 
 Status TopologyManager::GetAllProducer(std::vector<ProducerMetaPb> &producerList)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     producerList.reserve(producerCount_.size());
     for (const auto &kv : producerCount_) {
         // Skip the closed producer, we are getting that in the related node info.
@@ -348,7 +350,7 @@ Status TopologyManager::GetAllProducer(std::vector<ProducerMetaPb> &producerList
 std::vector<ConsumerMetaPb> TopologyManager::GetAllConsumer() const
 {
     std::vector<ConsumerMetaPb> consumerList;
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     consumerList.reserve(consumerTopo_.size());
     for (const auto &kv : consumerTopo_) {
         consumerList.emplace_back(kv.second);
@@ -358,13 +360,13 @@ std::vector<ConsumerMetaPb> TopologyManager::GetAllConsumer() const
 
 bool TopologyManager::GetStreamStatus() const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     return isDeleting_;
 }
 
 Status TopologyManager::SetDeletingStatus()
 {
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!isDeleting_, StatusCode::K_IO_ERROR,
                              FormatString("Stream:<%s>, State:<Repeat deleting>", streamName_));
     isDeleting_ = true;
@@ -373,13 +375,13 @@ Status TopologyManager::SetDeletingStatus()
 
 void TopologyManager::UnsetDeletingStatus()
 {
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     isDeleting_ = false;
 }
 
 Status TopologyManager::GlobalUniqueCheck(const ConsumerMetaPb &consumerMeta)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     bool isUnique = true;
     const auto &config = consumerMeta.sub_config();
     RETURN_OK_IF_TRUE(config.subscription_type() != SubscriptionTypePb::STREAM_PB);
@@ -400,7 +402,7 @@ Status TopologyManager::GlobalUniqueCheck(const ConsumerMetaPb &consumerMeta)
 
 Status TopologyManager::CheckNewConsumer(const ConsumerMetaPb &consumerMeta)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     auto iter = consumerTopo_.find(consumerMeta.consumer_id());
     if (iter != consumerTopo_.end()) {
         auto retCode = iter->second.client_id() == consumerMeta.client_id() ? StatusCode::K_DUPLICATED
@@ -413,7 +415,7 @@ Status TopologyManager::CheckNewConsumer(const ConsumerMetaPb &consumerMeta)
 
 bool TopologyManager::CheckIfAllPubSubHaveClosed()
 {
-    std::unique_lock<std::shared_timed_mutex> lock(mutex_);
+    std::unique_lock<SharedMutex> lock(mutex_);
     return consumerTopo_.empty() && (currentProducerCount_ == 0);
 }
 
@@ -464,7 +466,7 @@ void GetTopoInformation(std::ostream &os, const std::unordered_map<std::string, 
 
 std::ostream &operator<<(std::ostream &os, const TopologyManager &obj)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(obj.mutex_);
+    std::shared_lock<SharedMutex> lock(obj.mutex_);
     os << "{producerCount:";
     GetTopoInformation(os, obj.producerCount_);
     os << ", consumers:";

@@ -28,6 +28,8 @@
 #include <numeric>
 
 #include "datasystem/common/stream_cache/stream_fields.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/worker_stream.pb.h"
 
@@ -197,7 +199,7 @@ public:
      */
     void ClearEmptyMeta(const std::string &workerAddr)
     {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        std::shared_lock<SharedMutex> lock(mutex_);
         auto producerIter = producerCount_.find(workerAddr);
         if (producerIter != producerCount_.end() && !producerIter->second.count_) {
             producerCount_.erase(workerAddr);
@@ -215,7 +217,7 @@ public:
      */
     size_t GetProducerCountInWorker(const std::string &workerAddr)
     {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        std::shared_lock<SharedMutex> lock(mutex_);
         auto iter = producerCount_.find(workerAddr);
         if (iter != producerCount_.end()) {
             return iter->second.count_;
@@ -230,7 +232,7 @@ public:
      */
     size_t GetConsumerCountInWorker(const std::string &workerAddr) const
     {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        std::shared_lock<SharedMutex> lock(mutex_);
         auto iter = consumerCount_.find(workerAddr);
         if (iter != consumerCount_.end()) {
             return iter->second;
@@ -244,7 +246,7 @@ public:
      */
     uint64_t GetProducerCount() const
     {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        std::shared_lock<SharedMutex> lock(mutex_);
         return std::accumulate(
             producerCount_.begin(), producerCount_.end(), 0ul,
             [](uint64_t init, const std::pair<std::string, ProducerCount> &kv) { return init + kv.second.count_; });
@@ -256,7 +258,7 @@ public:
      */
     uint64_t GetConsumerCount() const
     {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        std::shared_lock<SharedMutex> lock(mutex_);
         return std::accumulate(
             consumerCount_.begin(), consumerCount_.end(), 0ul,
             [](uint64_t init, const std::pair<std::string, uint32_t> &kv) { return init + kv.second; });
@@ -270,7 +272,7 @@ public:
     bool ExistsProducer(const ProducerMetaPb &producerMeta) const
     {
         HostPort workerAddress(producerMeta.worker_address().host(), producerMeta.worker_address().port());
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        std::shared_lock<SharedMutex> lock(mutex_);
         return ((producerCount_.count(workerAddress.ToString()) > 0)
                 && (producerCount_.at(workerAddress.ToString()).count_ > 0));
     }
@@ -293,13 +295,13 @@ public:
      */
     bool ExistsConsumer(const std::string &consumerId) const
     {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        std::shared_lock<SharedMutex> lock(mutex_);
         return consumerTopo_.count(consumerId) > 0;
     }
 
     Status RestoreConsumerLifeCount(const uint32_t consumerCount)
     {
-        std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+        std::lock_guard<SharedMutex> lock(mutex_);
         consumerLifeCount_ = consumerCount;
         return Status::OK();
     }
@@ -331,7 +333,7 @@ public:
 private:
     friend std::ostream &operator<<(std::ostream &os, const TopologyManager &obj);
 
-    mutable std::shared_timed_mutex mutex_;
+    mutable SharedMutex mutex_;
 
     std::string streamName_;
 

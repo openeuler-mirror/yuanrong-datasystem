@@ -19,6 +19,8 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -91,7 +93,7 @@ Status SCNotifyWorkerManager::ProcessAsyncNotify()
         std::vector<std::vector<std::pair<std::string, std::string>>> parts(numNotifyThread);
         size_t index = 0;
         {
-            std::lock_guard<std::shared_timed_mutex> locker(notifyMutex_);
+            std::lock_guard<SharedMutex> locker(notifyMutex_);
             for (const auto &kv : notifyWorkerMap_) {
                 for (auto const &item : kv.second) {
                     auto &streamName = item.first;
@@ -141,7 +143,7 @@ Status SCNotifyWorkerManager::ProcessDeleteStreams()
         // Get the pending delete stream list.
         std::set<std::string> deleteStreamList;
         {
-            std::lock_guard<std::shared_timed_mutex> locker(deleteMutex_);
+            std::lock_guard<SharedMutex> locker(deleteMutex_);
             deleteStreamList.swap(pendingDeleteStreams_);
         }
         if (deleteStreamList.empty()) {
@@ -212,7 +214,7 @@ Status SCNotifyWorkerManager::NotifyDelConsumer(const HostPort &workerAddr, cons
 Status SCNotifyWorkerManager::ClearPendingNotification(const std::string &workerAddress)
 {
     LOG(INFO) << "Clear pending notification send to " << workerAddress;
-    std::shared_lock<std::shared_timed_mutex> locker(notifyMutex_);
+    std::shared_lock<SharedMutex> locker(notifyMutex_);
     TbbNotifyWorkerMap::accessor accessor;
     if (notifyWorkerMap_.find(accessor, workerAddress)) {
         RETURN_IF_NOT_OK(streamMetaStore_->RemoveNotificationByWorker(workerAddress));
@@ -265,7 +267,7 @@ Status SCNotifyWorkerManager::SendPendingNotificationForStream(const std::string
         skipNotify = true;
     }
 
-    std::shared_lock<std::shared_timed_mutex> locker(notifyMutex_);
+    std::shared_lock<SharedMutex> locker(notifyMutex_);
     TbbNotifyWorkerMap::accessor accessor;
     auto task = GetPendingNotification(workerAddr, streamName, accessor);
     RETURN_OK_IF_TRUE(task == nullptr);
@@ -332,7 +334,7 @@ Status SCNotifyWorkerManager::NotifyPubNodeImpl(const HostPort &workerAddr, cons
     }
 
     {
-        std::shared_lock<std::shared_timed_mutex> locker(notifyMutex_);
+        std::shared_lock<SharedMutex> locker(notifyMutex_);
         TbbNotifyWorkerMap::accessor accessor;
         auto task = GetPendingNotification(workerAddr.ToString(), streamName, accessor);
         bool exists = false;
@@ -365,7 +367,7 @@ Status SCNotifyWorkerManager::NotifyPubNodeImpl(const HostPort &workerAddr, cons
 Status SCNotifyWorkerManager::AddAsyncStopDataRetentionNotification(const HostPort &workerAddr,
                                                                     const std::string &streamName)
 {
-    std::shared_lock<std::shared_timed_mutex> locker(notifyMutex_);
+    std::shared_lock<SharedMutex> locker(notifyMutex_);
     TbbNotifyWorkerMap::accessor accessor;
     auto task = GetOrCreatePendingNotification(workerAddr.ToString(), streamName, accessor);
     CHECK_FAIL_RETURN_STATUS(task != nullptr, K_RUNTIME_ERROR, "task is null");
@@ -398,7 +400,7 @@ Status SCNotifyWorkerManager::NotifyConsumerImpl(const HostPort &workerAddr, con
     }
 
     {
-        std::shared_lock<std::shared_timed_mutex> locker(notifyMutex_);
+        std::shared_lock<SharedMutex> locker(notifyMutex_);
         TbbNotifyWorkerMap::accessor accessor;
         auto task = GetPendingNotification(workerAddr.ToString(), consumerMeta.stream_name(), accessor);
 
@@ -490,7 +492,7 @@ Status SCNotifyWorkerManager::HandleExistsSubNotification(std::shared_ptr<Pendin
 Status SCNotifyWorkerManager::AddAsyncDeleteNotification(const std::string &streamName)
 {
     LOG(INFO) << FormatString("Enqueuing AutoDelete request for stream %s", streamName);
-    std::unique_lock<std::shared_timed_mutex> lock(deleteMutex_);
+    std::unique_lock<SharedMutex> lock(deleteMutex_);
     pendingDeleteStreams_.insert(streamName);
     return Status::OK();
 }
@@ -499,7 +501,7 @@ Status SCNotifyWorkerManager::AddAsyncPubNotification(const std::string &workerA
                                                       bool needPersist)
 {
     const auto &streamName = pub.stream_name();
-    std::shared_lock<std::shared_timed_mutex> locker(notifyMutex_);
+    std::shared_lock<SharedMutex> locker(notifyMutex_);
     TbbNotifyWorkerMap::accessor accessor;
     auto task = GetOrCreatePendingNotification(workerAddr, streamName, accessor);
     CHECK_FAIL_RETURN_STATUS(task != nullptr, K_RUNTIME_ERROR, "task is null");
@@ -524,7 +526,7 @@ Status SCNotifyWorkerManager::AddAsyncSubNotification(const std::string &workerA
     const auto &consumerMeta = sub.consumer();
     const auto &streamName = consumerMeta.stream_name();
 
-    std::shared_lock<std::shared_timed_mutex> locker(notifyMutex_);
+    std::shared_lock<SharedMutex> locker(notifyMutex_);
     TbbNotifyWorkerMap::accessor accessor;
     auto task = GetOrCreatePendingNotification(workerAddr, streamName, accessor);
     CHECK_FAIL_RETURN_STATUS(task != nullptr, K_RUNTIME_ERROR, "task is null");
@@ -577,13 +579,13 @@ std::shared_ptr<PendingNotification> SCNotifyWorkerManager::GetPendingNotificati
 bool SCNotifyWorkerManager::ExistsPendingNotification(const std::string &streamName)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(notifyMutex_);
+        std::shared_lock<SharedMutex> locker(notifyMutex_);
         if (notifyWorkerMap_.empty()) {
             return false;
         }
     }
 
-    std::lock_guard<std::shared_timed_mutex> locker(notifyMutex_);
+    std::lock_guard<SharedMutex> locker(notifyMutex_);
     for (const auto &kv : notifyWorkerMap_) {
         auto iter = kv.second.find(streamName);
         if (iter != kv.second.end() && !iter->second->Empty()) {
@@ -638,7 +640,7 @@ Status SCNotifyWorkerManager::RecoverNotification()
 
 bool SCNotifyWorkerManager::CanRetryDeleteStream(const std::string &streamName)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(deleteMutex_);
+    std::shared_lock<SharedMutex> lock(deleteMutex_);
     auto itr = pendingDeleteStreamsLastRetry_.find(streamName);
     if (itr == pendingDeleteStreamsLastRetry_.end()) {
         // if entry does not exists this is first retry
@@ -677,17 +679,17 @@ Status SCNotifyWorkerManager::DeleteStreams(std::set<std::string> &deleteStreams
         if (rc.IsOk() || rc.GetCode() == StatusCode::K_NOT_FOUND || rc.GetCode() == StatusCode::K_SC_STREAM_IN_USE) {
             LOG(INFO) << "AutoDelete for stream: " << streamName << " done with status " << rc.ToString();
             iter = deleteStreams.erase(iter);
-            std::unique_lock<std::shared_timed_mutex> lock(deleteMutex_);
+            std::unique_lock<SharedMutex> lock(deleteMutex_);
             pendingDeleteStreamsLastRetry_.erase(streamName);
         } else {
             LOG(INFO) << FormatString("%s AutoDelete failed with error %s", infoMsg, rc.ToString());
             ++iter;
-            std::unique_lock<std::shared_timed_mutex> lock(deleteMutex_);
+            std::unique_lock<SharedMutex> lock(deleteMutex_);
             pendingDeleteStreamsLastRetry_[streamName] = std::chrono::high_resolution_clock::now();
         }
     }
     if (!deleteStreams.empty()) {
-        std::unique_lock<std::shared_timed_mutex> lock(deleteMutex_);
+        std::unique_lock<SharedMutex> lock(deleteMutex_);
         pendingDeleteStreams_.insert(deleteStreams.begin(), deleteStreams.end());
     }
     return Status::OK();
@@ -696,7 +698,7 @@ Status SCNotifyWorkerManager::DeleteStreams(std::set<std::string> &deleteStreams
 Status SCNotifyWorkerManager::GetPendingNotificationByStreamName(const std::string &streamName,
                                                                  std::vector<AsyncNotificationPb> &notifications)
 {
-    std::lock_guard<std::shared_timed_mutex> locker(notifyMutex_);
+    std::lock_guard<SharedMutex> locker(notifyMutex_);
     for (const auto &kv : notifyWorkerMap_) {
         auto iter = kv.second.find(streamName);
         if (iter != kv.second.end() && !iter->second->Empty()) {
@@ -773,7 +775,7 @@ Status SCNotifyWorkerManager::AddAsyncNotifications(const StreamFields &streamFi
 
 Status SCNotifyWorkerManager::RemovePendingNotificationByStreamName(const std::string &streamName)
 {
-    std::lock_guard<std::shared_timed_mutex> locker(notifyMutex_);
+    std::lock_guard<SharedMutex> locker(notifyMutex_);
     for (auto &kv : notifyWorkerMap_) {
         auto iter = kv.second.find(streamName);
         if (iter != kv.second.end() && !iter->second->Empty()) {

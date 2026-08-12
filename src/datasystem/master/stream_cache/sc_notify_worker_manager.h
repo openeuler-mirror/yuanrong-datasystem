@@ -27,6 +27,8 @@
 
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/wait_post.h"
@@ -377,10 +379,10 @@ private:
     std::atomic<bool> interruptFlag_{ false };
 
     // Protect notifyWorkerMap_.
-    std::shared_timed_mutex notifyMutex_;
+    SharedMutex notifyMutex_;
     TbbNotifyWorkerMap notifyWorkerMap_;
     // Protect pendingDeleteStreams_ and pendingDeleteStreamsLastRetry_.
-    std::shared_timed_mutex deleteMutex_;
+    SharedMutex deleteMutex_;
     std::set<std::string> pendingDeleteStreams_;
     std::unordered_map<std::string, std::chrono::high_resolution_clock::time_point> pendingDeleteStreamsLastRetry_;
 
