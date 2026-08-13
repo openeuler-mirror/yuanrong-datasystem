@@ -253,6 +253,9 @@ Backed by `.bazelrc`, `bazel/workspace_status.sh`, `bazel/git_version.bzl`, and 
 - the local Ascend repository declares the HIXL and transitive MetaDef public headers on `hixl_plugin_sdk`; an
   `includes` path alone does not make those headers available inside Bazel sandbox actions. Keep the repository rule
   local so changes to the detected CANN installation refresh the generated targets.
+- the generated HIXL plugin hash header is exposed through the dedicated `hixl_plugin_sha256_header` C++ target. Its
+  package-level strip prefix preserves the source include name `hixl_plugin_sha256.h` inside Bazel sandbox actions;
+  keep it as a conditional dependency rather than adding the raw genrule output to `remote_h2d_manager.hdrs`.
 
 Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
 

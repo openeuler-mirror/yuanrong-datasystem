@@ -28,6 +28,12 @@ printf '#ifndef HIXL_PLUGIN_SHA256_H\\n#define HIXL_PLUGIN_SHA256_H\\n\\n#define
 """,
 )
 
+cc_library(
+    name = "hixl_plugin_sha256_header",
+    hdrs = [":hixl_plugin_sha256"],
+    strip_include_prefix = "/src/datasystem/common/rdma/npu",
+)
+
 ds_cc_library(
     name = "remote_h2d_manager_header",
     # srcs = [
