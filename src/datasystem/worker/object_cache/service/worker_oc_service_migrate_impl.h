@@ -135,6 +135,11 @@ public:
     Status QueryMasterMetadata(const std::unordered_set<std::string> &objectKeys, QueryMetaMap &queryMetas,
                                std::unordered_set<std::string> &failedIds);
 
+    void QueryMasterMetadataForGroup(
+        const HostPort &masterAddr, const std::vector<std::string> &ids, QueryMetaMap &queryMetas,
+        std::unordered_map<std::string, std::unordered_set<std::string>> &redirectIds,
+        std::unordered_set<std::string> &tmpFailedIds, Status &lastRc);
+
 #ifdef WITH_TESTS
 public:
 #else
@@ -200,9 +205,10 @@ private:
      * @return K_OK on success, the error otherwise.
      */
     Status FillObjectsLocked(const MigrateDataReqPb &req, LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
-                             std::vector<RpcMessage> &payloads, std::unordered_set<std::string> &successIds,
-                             std::unordered_set<std::string> &failedIds, ObjectInfoMap &needSendMasterIds,
-                             const std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units);
+                             std::vector<RpcMessage> &payloads, std::unordered_set<std::string> &failedIds,
+                             ObjectInfoMap &needSendMasterIds,
+                             const std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units,
+                             std::unordered_set<std::string> &skippedIds);
 
     /**
      * @brief Fill one object data in lock state.
@@ -229,7 +235,8 @@ private:
      */
     void FillMetaToObjectEntries(LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
                                  std::unordered_set<std::string> &successIds,
-                                 std::unordered_set<std::string> &failedIds, ObjectInfoMap &needReadDataIds);
+                                 std::unordered_set<std::string> &failedIds, ObjectInfoMap &needReadDataIds,
+                                 std::unordered_set<std::string> &skippedIds);
 
     /**
      * @brief Fill data to object entries.
@@ -352,7 +359,8 @@ private:
      * @param[out] rsp Migrate data response.
      */
     void FillMigrateDataResponse(const MigrateDataReqPb &req, const std::unordered_set<std::string> &successIds,
-                                 const std::unordered_set<std::string> &failedIds, bool oom, MigrateDataRspPb &rsp);
+                                 const std::unordered_set<std::string> &failedIds, bool oom, MigrateDataRspPb &rsp,
+                                 const std::unordered_set<std::string> &skipIds = {});
 
     /**
      * @brief Fill migrate data direct response.
@@ -363,7 +371,8 @@ private:
      */
     void FillMigrateDataDirectResponse(const MigrateDataDirectReqPb &req,
                                        const std::unordered_set<std::string> &failedIds, bool oom,
-                                       uint64_t migratedBytes, MigrateDataDirectRspPb &rsp);
+                                       uint64_t migratedBytes, MigrateDataDirectRspPb &rsp,
+                                       const std::unordered_set<std::string> &skipIds = {});
 
     /**
      * @brief For test mock purpose.
@@ -634,7 +643,8 @@ private:
                                            PerfPoint &point, LockedEntryMap &lockedEntries,
                                            std::unordered_set<std::string> &successIds,
                                            std::unordered_set<std::string> &failedIds,
-                                           LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds);
+                                           LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds,
+                                           std::unordered_set<std::string> &skippedIds);
 
     /**
      * @brief Handle slot migration no-space case for migrate data direct.

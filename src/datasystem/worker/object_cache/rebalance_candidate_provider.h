@@ -24,6 +24,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
@@ -43,9 +44,12 @@ public:
      * @param[in] targetBytes The maximum bytes expected in this local batch.
      * @param[in] maxObjectCount The maximum object count expected in this local batch.
      * @param[out] candidates The selected object key to data size map.
+     * @param[in] skipKeys Optional set of object keys to skip during scanning (previously
+     *            skipped due to metadata-not-found within the same task).
      * @return Status of the call.
      */
-    Status Select(uint64_t targetBytes, size_t maxObjectCount, std::unordered_map<std::string, uint64_t> &candidates);
+    Status Select(uint64_t targetBytes, size_t maxObjectCount, std::unordered_map<std::string, uint64_t> &candidates,
+                  const std::unordered_set<std::string> *skipKeys = nullptr);
 
 private:
     Status TryGetObjectSize(const std::string &objectKey, uint64_t &objectSize);

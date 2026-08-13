@@ -473,5 +473,62 @@ TEST_F(MigrateDataDirectTest, TestAggregateAllocateMixedObjects)
     ASSERT_EQ(rsp.failed_object_keys_size(), 0);
 }
 
+TEST_F(MigrateDataDirectTest, MetadataNotFoundSkipsObjectAndDoesNotCallReplacePrimary)
+{
+    EnableUrma(true);
+    std::unordered_set<std::string> capturedQueryIds;
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::QueryMasterMetadata, (_, _, _))
+        .Times(1)
+        .WillOnce(Invoke([&capturedQueryIds](const std::unordered_set<std::string> &keys, QueryMetaMap &metas,
+                             std::unordered_set<std::string> &failedIds) {
+            capturedQueryIds = keys;
+            (void)metas;
+            (void)failedIds;
+            return Status::OK();
+        }));
+    BINEXPECT_CALL(&datasystem::UrmaRead, (_, _, _, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _)).Times(0);
+
+    auto req = MakeReq({ { .objectKey = "skipObj", .version = 1, .dataSize = defaultDataSize_ } });
+
+    MigrateDataDirectRspPb rsp;
+    DS_ASSERT_OK(impl_->MigrateDataDirect(req, rsp));
+    ASSERT_TRUE(capturedQueryIds.count("skipObj") > 0)
+        << "skipObj should be included in metadata query";
+    ASSERT_EQ(rsp.skipped_object_keys_size(), 1);
+    ASSERT_EQ(rsp.skipped_object_keys(0), "skipObj");
+    ASSERT_EQ(rsp.failed_object_keys_size(), 0);
+}
+
+TEST_F(MigrateDataDirectTest, NeedModifyPrimaryWithMetadataCallsReplacePrimary)
+{
+    EnableUrma(true);
+    constexpr uint64_t version = 1;
+    const std::string objectKey = "needModifyObj";
+    auto ptr = std::make_unique<object_cache::ObjCacheShmUnit>();
+    ptr->SetCreateTime(version);
+    ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
+    ptr->modeInfo.SetCacheType(CacheType::MEMORY);
+    ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
+    ptr->stateInfo.SetPrimaryCopy(true);
+    DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(ptr)));
+
+    MockQueryMasterMetadataOk(version, defaultDataSize_);
+    BINEXPECT_CALL(&datasystem::UrmaRead, (_, _, _, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _))
+        .WillOnce(Return(Status::OK()));
+
+    auto req = MakeReq({ { .objectKey = objectKey, .version = version, .dataSize = defaultDataSize_ } });
+
+    MigrateDataDirectRspPb rsp;
+    DS_ASSERT_OK(impl_->MigrateDataDirect(req, rsp));
+    ASSERT_EQ(rsp.skipped_object_keys_size(), 0)
+        << "object with valid metadata should not be skipped";
+    ASSERT_EQ(rsp.failed_object_keys_size(), 0);
+}
+
 }  // namespace ut
 }  // namespace datasystem

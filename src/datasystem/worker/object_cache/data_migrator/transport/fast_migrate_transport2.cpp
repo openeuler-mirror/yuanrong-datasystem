@@ -35,8 +35,10 @@ void FastMigrateTransport2::ProcessMigrateResponse(const NotifyRemoteGetReqPb &r
     rsp.remainBytes = rspPb.remain_bytes();
     rsp.limitRate = rspPb.limit_rate();
     rsp.failedKeys.insert(rspPb.failed_object_keys().begin(), rspPb.failed_object_keys().end());
+    rsp.skipKeys.insert(rspPb.skipped_object_keys().begin(), rspPb.skipped_object_keys().end());
     for (const auto &key : reqPb.object_keys()) {
-        if (rsp.failedKeys.find(key) == rsp.failedKeys.end()) {
+        if (rsp.failedKeys.find(key) == rsp.failedKeys.end()
+            && rsp.skipKeys.find(key) == rsp.skipKeys.end()) {
             (void)rsp.successKeys.emplace(key);
         }
     }
@@ -55,6 +57,7 @@ Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &
     INJECT_POINT("FastMigrateTransport2.MigrateDataToRemote.delay");
     NotifyRemoteGetReqPb reqPb;
     reqPb.set_addr(req.localAddr);
+    reqPb.set_is_spill(req.type == MigrateType::SPILL);
     uint64_t totalDataBytes = 0;
     for (const auto &data : *req.datas) {
         Status s = data->LockData();

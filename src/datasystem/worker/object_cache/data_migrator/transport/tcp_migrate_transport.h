@@ -37,6 +37,9 @@ public:
      * @return Status of the call.
      */
     Status MigrateDataToRemote(const Request &req, Response &rsp) override;
+
+private:
+    void ProcessMigrateRsp(const MigrateDataRspPb &rspPb, const Request &req, Response &rsp);
 };
 
 }  // namespace object_cache

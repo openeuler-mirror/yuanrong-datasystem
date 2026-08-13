@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -302,12 +303,24 @@ protected:
         reportTraceIds_.clear();
         nextTaskForReport_.Clear();
         executor_->SetTestHooks(
-            [this](uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates) {
+            [this](uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates,
+                   const std::unordered_set<std::string> &skipKeys) {
                 (void)maxBytes;
                 if (selectIndex_ >= batches_.size()) {
                     return Status(K_NOT_FOUND, "no more test candidates");
                 }
-                candidates = batches_[selectIndex_++];
+                auto batch = batches_[selectIndex_++];
+                for (auto it = batch.begin(); it != batch.end();) {
+                    if (skipKeys.count(it->first) > 0) {
+                        it = batch.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                if (batch.empty()) {
+                    return Status(K_NOT_FOUND, "all candidates were skipped");
+                }
+                candidates = std::move(batch);
                 return Status::OK();
             },
             [this](const master::RebalanceTaskPb &, const HostPort &, const std::vector<std::string> &objectKeys) {
@@ -862,6 +875,70 @@ TEST_F(RebalanceExecutorTest, MultiBatchLoopDoesNotReportBusyWhenHeartbeatReturn
         EXPECT_EQ(r.failedReason.find("busy"), std::string::npos)
             << "false 'busy' failure leaked into reports";
     }
+}
+
+TEST_F(RebalanceExecutorTest, SkipIdsDoesNotAbortBatch)
+{
+    RebalanceExecutor::MigrateResult result;
+    result.status = Status::OK();
+    result.successIds.emplace(ImmutableString("obj1"));
+    result.skipIds.emplace(ImmutableString("obj2"));
+
+    InstallHooks({ { { "obj1", 10 }, { "obj2", 20 } } }, { std::move(result) });
+    ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("obj1"));
+    ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("obj2"));
+
+    executor_->Submit(MakeTask("skip-task", 30), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_SUCCEEDED);
+    EXPECT_EQ(reports_[0].migratedBytes, uint64_t(10));
+    EXPECT_EQ(reports_[0].migratedObjects, uint64_t(1));
+    EXPECT_FALSE(executor_->IsRunningForTest());
+}
+
+TEST_F(RebalanceExecutorTest, SkippedObjectDoesNotStarveSubsequentBatch)
+{
+    // Batch 1: select {good_obj1}, migrate success -> migratedBytes=10
+    // Batch 2: select {skip_obj}, migrate all-skip -> K_NOT_FOUND, lastBatchAllSkipped=true
+    //          migratedBytes=10 > 0 -> retry (the fix prevents starvation)
+    // Batch 3: select {skip_obj, good_obj2} -> hook filters skip_obj (in taskSkippedKeys)
+    //          -> {good_obj2} -> migrate success -> migratedBytes=30 -> target reached -> SUCCEEDED
+    RebalanceExecutor::MigrateResult result1;
+    result1.status = Status::OK();
+    result1.successIds.emplace(ImmutableString("good_obj1"));
+
+    RebalanceExecutor::MigrateResult result2;
+    result2.status = Status::OK();
+    result2.skipIds.emplace(ImmutableString("skip_obj"));
+
+    RebalanceExecutor::MigrateResult result3;
+    result3.status = Status::OK();
+    result3.successIds.emplace(ImmutableString("good_obj2"));
+
+    InstallHooks(
+        { { { "good_obj1", 10 } }, { { "skip_obj", 100 } }, { { "skip_obj", 100 }, { "good_obj2", 20 } } },
+        { std::move(result1), std::move(result2), std::move(result3) });
+    ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("good_obj1"));
+    ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("skip_obj"));
+    ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("good_obj2"));
+
+    executor_->Submit(MakeTask("starvation-task", 30), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_SUCCEEDED);
+    EXPECT_EQ(reports_[0].migratedBytes, uint64_t(30));
+    EXPECT_EQ(reports_[0].migratedObjects, uint64_t(2));
+    ASSERT_EQ(migratedObjectKeys_.size(), size_t(3))
+        << "expected three batches (success + skip-retry + success)";
+    ASSERT_EQ(migratedObjectKeys_[2].size(), size_t(1));
+    EXPECT_EQ(migratedObjectKeys_[2][0], "good_obj2")
+        << "batch 3 should migrate good_obj2 after filtering skip_obj";
+    EXPECT_FALSE(executor_->IsRunningForTest());
 }
 
 }  // namespace ut

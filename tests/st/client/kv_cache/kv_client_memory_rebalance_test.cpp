@@ -68,6 +68,7 @@ constexpr char STUCK_PROBE_CASE_NAME[] = "RebalanceTargetStuckProbeExitsWithinDe
 constexpr char DISABLED_TEST_PREFIX[] = "DISABLED_";
 const std::string SOURCE_SEND_POINT = "TcpMigrateTransport.MigrateDataToRemote.delay";
 const std::string FAST_MIGRATE_SEND_POINT = "FastMigrateTransport2.MigrateDataToRemote.delay";
+const std::string FAST_MIGRATE_READ_SEND_POINT = "FastMigrateTransport.MigrateDataToRemote.delay";
 const std::string TARGET_MIGRATE_POINT = "worker.migrate_service.return";
 const std::string TARGET_MEMORY_AVAILABLE_POINT = "worker.migrate_service.memory_available";
 const std::string ASSIGN_TASK_POINT = "MemoryRebalanceScheduler.AssignTask";
@@ -89,6 +90,7 @@ const std::string REDIRECT_MIGRATION_SUBMITTED = "DataMigrator.RedirectMigration
 const std::string STOP_AFTER_TRANSPORT_FAILURE = "MigrateDataHandler.StopAfterTransportFailure";
 const std::string UB_PROBE_SUCCEEDED = "PeerUbAdmission.CompleteProbe.success";
 const std::string WRITE_TARGET_BLOCKED = "PeerUbAdmission.CheckWriteTarget.blocked";
+const std::string QUERY_META_NOT_FOUND_POINT = "WorkerOcServiceMigrateImpl.QueryMasterMetadata.notFound";
 
 struct ObjectBatch {
    std::vector<std::string> keys;
@@ -136,6 +138,12 @@ bool IsUrmaScaleInCase()
     return IsCurrentTestName("RebalanceTargetActiveScaleInUrmaDoesNotLoseData");
 }
 
+bool IsMetaNotFoundUrmaCase()
+{
+    return IsCurrentTestName("MetaNotFoundUrmaWriteKeepsSourceData")
+           || IsCurrentTestName("MetaNotFoundUrmaReadKeepsSourceData");
+}
+
 bool IsStuckProbeCase()
 {
     return IsCurrentTestName(STUCK_PROBE_CASE_NAME);
@@ -159,6 +167,10 @@ std::string BuildRebalanceInjectActions()
    if (IsSourceClockOffsetCase()) {
        actions += ";" + SOURCE_CLOCK_OFFSET_POINT + ":"
                   + FormatString("call(%lld)", static_cast<long long>(SOURCE_CLOCK_OFFSET_MS));
+   }
+   if (IsMetaNotFoundUrmaCase()) {
+       actions += ";FastMigrateTransport2.MigrateDataToRemote.delay:100000*call();"
+                  "FastMigrateTransport.MigrateDataToRemote.delay:100000*call()";
    }
    return actions;
 }
@@ -197,9 +209,12 @@ public:
             "-rebalance_task_report_grace_ms=500 "
             "-data_migrate_rate_limit_mb=1024" +
            watermarkParams;
-        if (IsUrmaScaleInCase()) {
+        if (IsUrmaScaleInCase() || IsMetaNotFoundUrmaCase()) {
 #ifdef USE_URMA
             opts.workerGflagParams += " -enable_urma=true -enable_transport_fallback=false";
+            if (IsCurrentTestName("MetaNotFoundUrmaReadKeepsSourceData")) {
+                opts.workerGflagParams += " -data_migrate_urma_transport_mode=read";
+            }
 #else
             // Worker binary not built with URMA framework; test will GTEST_SKIP in the body.
             opts.workerGflagParams += " -enable_urma=false";
@@ -732,6 +747,90 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceConvergesToMidpointWithRealS
 // fix, GetAvailableBandwidth prunes on read, so probe 2-3 sees the window drained after ~1s,
 // self-heal recovers, and all batches complete. Asserting >=2 source-send inject hits
 // distinguishes the two: old code stays at +1 (times out), fixed code reaches +2..3.
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, MetaNotFoundTcpKeepsSourceData)
+{
+    SetInjectAction(WORKER1, QUERY_META_NOT_FOUND_POINT, "100000*call()");
+    SetInjectAction(WORKER2, QUERY_META_NOT_FOUND_POINT, "100000*call()");
+    auto sourceSendBaseline = GetInjectCount(WORKER0, SOURCE_SEND_POINT);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    auto batch = WriteObjects(client0_, "meta_not_found_tcp", 9, 'm');
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1, AllWorkers(), 60'000);
+    WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 1, 60'000);
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER1, QUERY_META_NOT_FOUND_POINT));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER2, QUERY_META_NOT_FOUND_POINT));
+
+    AssertReadable(client0_, batch);
+    AssertReadable(client2_, batch);
+}
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, MetaNotFoundUrmaWriteKeepsSourceData)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Worker not built with URMA framework; skip URMA write-path test";
+#endif
+#ifdef USE_URMA_MOCK
+    GTEST_SKIP() << "URMA mock backend does not support NotifyRemoteGet data write path";
+#endif
+    SetInjectAction(WORKER1, QUERY_META_NOT_FOUND_POINT, "100000*call()");
+    SetInjectAction(WORKER2, QUERY_META_NOT_FOUND_POINT, "100000*call()");
+    auto sourceSendBaseline = GetInjectCount(WORKER0, FAST_MIGRATE_SEND_POINT);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    auto batch = WriteObjects(client0_, "meta_not_found_urma_write", 9, 'w');
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1, AllWorkers(), 60'000);
+    WaitForInjectCount(WORKER0, FAST_MIGRATE_SEND_POINT, sourceSendBaseline + 1, 60'000);
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER1, QUERY_META_NOT_FOUND_POINT));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER2, QUERY_META_NOT_FOUND_POINT));
+
+    AssertReadable(client0_, batch);
+    AssertReadable(client2_, batch);
+}
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, MetaNotFoundUrmaReadKeepsSourceData)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Worker not built with URMA framework; skip URMA read-path test";
+#endif
+    SetInjectAction(WORKER1, QUERY_META_NOT_FOUND_POINT, "100000*call()");
+    SetInjectAction(WORKER2, QUERY_META_NOT_FOUND_POINT, "100000*call()");
+    auto sourceSendBaseline = GetInjectCount(WORKER0, FAST_MIGRATE_READ_SEND_POINT);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    auto batch = WriteObjects(client0_, "meta_not_found_urma_read", 9, 'r');
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1, AllWorkers(), 60'000);
+    WaitForInjectCount(WORKER0, FAST_MIGRATE_READ_SEND_POINT, sourceSendBaseline + 1, 60'000);
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER1, QUERY_META_NOT_FOUND_POINT));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER2, QUERY_META_NOT_FOUND_POINT));
+
+    AssertReadable(client0_, batch);
+    AssertReadable(client2_, batch);
+}
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, MetaNotFoundRebalanceConverges)
+{
+    SetInjectAction(WORKER1, QUERY_META_NOT_FOUND_POINT, "100000*call()");
+    SetInjectAction(WORKER2, QUERY_META_NOT_FOUND_POINT, "100000*call()");
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    auto batch = WriteObjects(client0_, "meta_not_found_converge", 9, 'c');
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1, AllWorkers(), 60'000);
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER1, QUERY_META_NOT_FOUND_POINT));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER2, QUERY_META_NOT_FOUND_POINT));
+
+    WaitForWorkerMemRate(WORKER0, 0.0, 55.0);
+    AssertReadable(client0_, batch);
+    AssertReadable(client2_, batch);
+}
+
 class LEVEL1_KVClientMemoryRebalanceLowRateTest : public LEVEL1_KVClientMemoryRebalanceTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

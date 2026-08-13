@@ -179,16 +179,17 @@ Status RebalanceExecutor::CheckTargetAdmission(const HostPort &targetAddr) const
     return Status::OK();
 }
 
-Status RebalanceExecutor::SelectCandidates(uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates)
+Status RebalanceExecutor::SelectCandidates(uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates,
+                                           const std::unordered_set<std::string> &skipKeys)
 {
 #ifdef WITH_TESTS
     if (selectHook_ != nullptr) {
-        return selectHook_(maxBytes, candidates);
+        return selectHook_(maxBytes, candidates, skipKeys);
     }
 #endif
     // Apply a local batch cap so a large master task does not reserve too many eviction-list objects at once.
     const auto batchBytes = std::min(maxBytes, REBALANCE_BATCH_MAX_BYTES);
-    RETURN_IF_NOT_OK(candidateProvider_.Select(batchBytes, REBALANCE_BATCH_MAX_OBJECTS, candidates));
+    RETURN_IF_NOT_OK(candidateProvider_.Select(batchBytes, REBALANCE_BATCH_MAX_OBJECTS, candidates, &skipKeys));
     CHECK_FAIL_RETURN_STATUS(!candidates.empty(), K_NOT_FOUND, "No object can be selected for rebalance");
     return Status::OK();
 }
@@ -282,8 +283,37 @@ bool RebalanceExecutor::IsAssignedMasterUnavailable(const master::RebalanceTaskP
     return true;
 }
 
+Status RebalanceExecutor::ClassifyBatchResult(const MigrateResult &result, const HostPort &targetAddr,
+                                              uint64_t batchMigratedBytes, ExecutionStats &stats)
+{
+    stats.lastBatchAllSkipped = false;
+    if (result.status.IsError()) {
+        stats.failureSide = ClassifyMigrationFailure(result, targetAddr);
+        stats.failedReason = result.status.ToString();
+        return result.status;
+    }
+    if (!result.failedIds.empty()) {
+        stats.failureSide = ClassifyMigrationFailure(result, targetAddr);
+        stats.failedReason = "some objects failed";
+        RETURN_STATUS(K_RUNTIME_ERROR, stats.failedReason);
+    }
+    if (batchMigratedBytes == 0) {
+        if (result.skipIds.empty()) {
+            stats.failureSide = master::REBALANCE_FAILURE_NO_CANDIDATE;
+            stats.failedReason = "No object migrated in this batch";
+        } else {
+            stats.lastBatchAllSkipped = true;
+            stats.failureSide = master::REBALANCE_FAILURE_SOURCE;
+            stats.failedReason = "All candidates skipped (metadata not found)";
+        }
+        RETURN_STATUS(K_NOT_FOUND, stats.failedReason);
+    }
+    return Status::OK();
+}
+
 Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
-                                       ExecutionStats &stats, object_cache::DataMigrator &migrator)
+                                       ExecutionStats &stats, object_cache::DataMigrator &migrator,
+                                       std::unordered_set<std::string> &taskSkippedKeys)
 {
     auto rc = CheckTargetAdmission(targetAddr);
     if (rc.IsError()) {
@@ -291,10 +321,11 @@ Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, cons
         return rc;
     }
     std::unordered_map<std::string, uint64_t> candidates;
-    rc = SelectCandidates(task.max_bytes() - stats.migratedBytes, candidates);
+    rc = SelectCandidates(task.max_bytes() - stats.migratedBytes, candidates, taskSkippedKeys);
     if (rc.IsError()) {
+        stats.lastBatchAllSkipped = false;
         stats.failureSide = rc.GetCode() == K_NOT_FOUND ? master::REBALANCE_FAILURE_NO_CANDIDATE
-                                                       : master::REBALANCE_FAILURE_SOURCE;
+                                                        : master::REBALANCE_FAILURE_SOURCE;
         return rc;
     }
     // SelectCandidates marks selected objects as rebalancing; the marks must be released after this batch.
@@ -319,26 +350,13 @@ Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, cons
     auto batchMigratedBytes = CalculateMigratedBytes(candidates, result);
     stats.migratedBytes += batchMigratedBytes;
     stats.migratedObjects += result.successIds.size();
-    stats.failedObjects += result.failedIds.size() + result.skipIds.size();
+    stats.failedObjects += result.failedIds.size();
+    stats.skippedObjects += result.skipIds.size();
+    taskSkippedKeys.insert(result.skipIds.begin(), result.skipIds.end());
     if (result.targetRemainBytes != UINT64_MAX) {
         stats.targetRemainBytes = result.targetRemainBytes;
     }
-    if (result.status.IsError()) {
-        stats.failureSide = ClassifyMigrationFailure(result, targetAddr);
-        stats.failedReason = result.status.ToString();
-        return result.status;
-    }
-    if (!result.failedIds.empty() || !result.skipIds.empty()) {
-        stats.failureSide = ClassifyMigrationFailure(result, targetAddr);
-        stats.failedReason = "some objects failed or skipped";
-        RETURN_STATUS(K_RUNTIME_ERROR, stats.failedReason);
-    }
-    if (batchMigratedBytes == 0) {
-        stats.failureSide = master::REBALANCE_FAILURE_NO_CANDIDATE;
-        stats.failedReason = "No object migrated in this batch";
-        RETURN_STATUS(K_RUNTIME_ERROR, stats.failedReason);
-    }
-    return Status::OK();
+    return ClassifyBatchResult(result, targetAddr, batchMigratedBytes, stats);
 }
 
 void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
@@ -346,6 +364,10 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
 {
     // max_bytes is the target amount assigned by master; split it into bounded local batches to avoid reserving
     // too many objects at once.
+    // taskSkippedKeys tracks objects skipped (metadata-not-found) within this task so SelectCandidates
+    // can skip them in subsequent batches and reach valid candidates behind them. Lifetime is task-scoped:
+    // destroyed when ExecuteBatches returns, so each new task starts fresh.
+    std::unordered_set<std::string> taskSkippedKeys;
     std::unique_ptr<object_cache::DataMigrator> migrator;
     while (stats.migratedBytes < task.max_bytes()) {
         if (IsExpired(localDeadlineMs) || IsExitRequested()) {
@@ -370,8 +392,18 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
             migrator->SetUbAdmission(ubAdmission_);
             migrator->Init();
         }
-        auto rc = ExecuteBatch(task, targetAddr, stats, *migrator);
+        auto rc = ExecuteBatch(task, targetAddr, stats, *migrator, taskSkippedKeys);
         if (rc.IsError()) {
+            // When the entire batch was skipped (metadata-not-found) but the task had partial success,
+            // retry instead of breaking: SelectCandidates now has taskSkippedKeys and will scan past
+            // the skipped objects to find valid candidates behind them. This prevents a large
+            // meta-not-found object at the eviction-list head from starving subsequent batches.
+            // Only retry when there was partial success (migratedBytes > 0); if the first batch was
+            // all-skip, breaking is the right behavior since all candidates had no metadata.
+            if (rc.GetCode() == K_NOT_FOUND && stats.lastBatchAllSkipped
+                && stats.migratedBytes > 0 && stats.migratedBytes < task.max_bytes()) {
+                continue;
+            }
             stats.candidatesExhausted = rc.GetCode() == K_NOT_FOUND;
             if (stats.failedReason.empty()) {
                 stats.failedReason =
@@ -403,12 +435,13 @@ void RebalanceExecutor::LogBatchResult(const master::RebalanceTaskPb &task, cons
 {
     LOG(INFO) << FormatString(
         "Finish rebalance task %s, status: %d, maxBytes: %llu, migratedBytes: %llu, migratedObjects: %llu, "
-        "failedObjects: %llu, costMs: %llu, reason: %s",
+        "failedObjects: %llu, skippedObjects: %llu, costMs: %llu, reason: %s",
         task.task_id(), static_cast<int>(stats.status),
         static_cast<unsigned long long>(task.max_bytes()),
         static_cast<unsigned long long>(stats.migratedBytes),
         static_cast<unsigned long long>(stats.migratedObjects),
         static_cast<unsigned long long>(stats.failedObjects),
+        static_cast<unsigned long long>(stats.skippedObjects),
         static_cast<unsigned long long>(costMs), stats.failedReason);
 }
 

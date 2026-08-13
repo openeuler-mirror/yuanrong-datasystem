@@ -127,6 +127,17 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "migrate_transport_test",
+    srcs = ["object_cache/migrate_transport_test.cpp"],
+    deps = [
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker/object_cache/data_migrator/transport:fast_migrate_transport",
+        "//src/datasystem/worker/object_cache/data_migrator/transport:fast_migrate_transport2",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "rebalance_worker_test",
     srcs = ["object_cache/rebalance_worker_test.cpp"],
     deps = [
@@ -608,6 +619,7 @@ test_suite(
         "migrate_data_direct_test",
         "migrate_data_handler_test",
         "migrate_data_service_test",
+        "migrate_transport_test",
         "node_selector_test",
         "object_endpoint_policy_test",
         "rebalance_worker_test",

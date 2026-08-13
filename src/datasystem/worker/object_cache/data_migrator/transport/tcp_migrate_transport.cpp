@@ -24,6 +24,28 @@
 namespace datasystem {
 namespace object_cache {
 
+void TcpMigrateTransport::ProcessMigrateRsp(const MigrateDataRspPb &rspPb, const Request &req, Response &rsp)
+{
+    rsp.remainBytes = rspPb.remain_bytes();
+    rsp.successKeys.insert(rspPb.success_ids().begin(), rspPb.success_ids().end());
+    rsp.failedKeys.insert(rspPb.fail_ids().begin(), rspPb.fail_ids().end());
+    rsp.skipKeys.insert(rspPb.skipped_object_keys().begin(), rspPb.skipped_object_keys().end());
+    for (auto it = rsp.successKeys.begin(); it != rsp.successKeys.end();) {
+        if (rsp.skipKeys.find(*it) != rsp.skipKeys.end()) {
+            it = rsp.successKeys.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    rsp.limitRate = rspPb.limit_rate();
+    if (req.progress != nullptr) {
+        req.progress->Deal(rspPb.success_ids().size());
+    }
+    LOG_IF(WARNING, !rspPb.fail_ids().empty()) << FormatString(
+        "[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed", req.datas->size(),
+        req.batchSize, req.api->Address(), rspPb.fail_ids_size(), VectorToString(rspPb.fail_ids()));
+}
+
 Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rsp)
 {
     // 1. Construct request.
@@ -66,16 +88,7 @@ Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rs
     rspPb.Clear();
     Status rc = req.api->MigrateData(reqPb, payloads, rspPb);
     if (rc.IsOk()) {
-        rsp.remainBytes = rspPb.remain_bytes();
-        rsp.successKeys.insert(rspPb.success_ids().begin(), rspPb.success_ids().end());
-        rsp.failedKeys.insert(rspPb.fail_ids().begin(), rspPb.fail_ids().end());
-        rsp.limitRate = rspPb.limit_rate();
-        if (req.progress != nullptr) {
-            req.progress->Deal(rspPb.success_ids().size());
-        }
-        LOG_IF(WARNING, !rspPb.fail_ids().empty()) << FormatString(
-            "[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed", req.datas->size(),
-            req.batchSize, req.api->Address(), rspPb.fail_ids_size(), VectorToString(rspPb.fail_ids()));
+        ProcessMigrateRsp(rspPb, req, rsp);
     }
     return rc;
 }

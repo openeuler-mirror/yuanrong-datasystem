@@ -161,6 +161,7 @@ message MigrateDataRspPb {
   }
   ScaleDownState scale_down_state = 7;
   uint64 limit_rate = 8;
+  repeated string skipped_object_keys = 9;
 }
 
 message MigrateDataDirectReqPb {
@@ -187,12 +188,14 @@ message MigrateDataDirectRspPb {
   repeated string failed_object_keys = 2;
   uint64 limit_rate = 3;
   ProviderUbFailureDetailPb provider_ub_failure_detail = 4;
+  repeated string skipped_object_keys = 5;
 }
 
 message NotifyRemoteGetReqPb {
   repeated string object_keys = 1;
   string addr = 2;
   repeated uint64 versions = 3;
+  bool is_spill = 4;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -205,6 +208,7 @@ message NotifyRemoteGetRspPb {
   uint64 remain_bytes = 2;
   uint64 limit_rate = 3;
   ProviderUbFailureDetailPb provider_ub_failure_detail = 4;
+  repeated string skipped_object_keys = 5;
 }
 
 message ProviderUbRecoveryProbeReqPb {

@@ -423,6 +423,7 @@ void MigrateDataHandler::HandleMigrationTransportResponse(const Status &status, 
     }
     successIds_.insert(response.successKeys.begin(), response.successKeys.end());
     failedIds_.insert(response.failedKeys.begin(), response.failedKeys.end());
+    skipIds_.insert(response.skipKeys.begin(), response.skipKeys.end());
     Status rateStatus = TryUpdateRate(response.limitRate);
     LOG_IF_ERROR(rateStatus, FormatString("[Migrate Data] Rate update failed for %s", remoteApi_->Address()));
     ReleaseResources(response.successKeys);
