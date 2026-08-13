@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
 #endif
@@ -182,7 +183,7 @@ private:
     std::unordered_map<int, std::pair<void *, uint64_t>> fdPointerTable_;
 
     // Protects 'allocatedTable_'.
-    mutable std::shared_timed_mutex allocatedMutex_;
+    mutable SharedMutex allocatedMutex_;
 
     struct AllocRecord {
         uint64_t size = 0;
@@ -368,7 +369,7 @@ private:
     template <typename F>
     Status DestroyArenas(const std::vector<uint32_t> &arenaIds, F &&f)
     {
-        std::lock_guard<std::shared_timed_mutex> l(mutex_);
+        std::lock_guard<SharedMutex> l(mutex_);
         LOG_IF_ERROR(f(), "Destroy Jemalloc arena failed");
         for (const auto arenaId : arenaIds) {
             if (arenas_[arenaId] == nullptr) {
@@ -425,7 +426,7 @@ private:
      */
     void UpdateExpiredTenant(const std::vector<PreReleaseTenantResourceInfo> &expiredTenantsInfo);
 
-    std::shared_timed_mutex preReleaseTenantResourceInfoMapMutex_;
+    SharedMutex preReleaseTenantResourceInfoMapMutex_;
     std::unordered_map<ArenaGroupKey, PreReleaseTenantResourceInfo> preReleaseTenantResourceInfoMap_;
 
     std::unique_ptr<ThreadPool> handleExpiredTenantThread_;
@@ -434,11 +435,11 @@ private:
     std::unordered_map<ArenaGroupKey, std::shared_ptr<ArenaGroup>> tenantArenas_;
 
     // Protects 'temamtArenas_' in create and destroy scenario.
-    std::shared_timed_mutex tenantMutex_;
+    SharedMutex tenantMutex_;
 
     // To ensure that the allocation of arenaId in Jemalloc and the management of our own tables is an atomic operation
     // and to avoid inconsistencies in the meta information managed.
-    std::shared_timed_mutex mutex_;
+    SharedMutex mutex_;
 
     // Default arena list init size, the maximum number of arena that can be allocated by Jemalloc is 4096.
     const uint64_t ARENAS_INIT_SIZE = 4096;
@@ -454,7 +455,7 @@ private:
     WaitPost destroyWaitPost_;
     uint64_t maxTenantSize_ = 0;
 
-    std::shared_timed_mutex registerMutex_;
+    SharedMutex registerMutex_;
     std::unordered_map<CacheType, AllocatorFuncRegister> funcRegisterList_;
 };
 
