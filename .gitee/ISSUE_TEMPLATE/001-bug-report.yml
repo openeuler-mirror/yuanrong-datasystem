@@ -3,9 +3,7 @@ description: "报告可复现的问题，帮助维护者快速定位并修复"
 title: "[Bug] "
 labels:
   - bug
-issue_type: "缺陷"
-issue_severity: "次要"
-board: "openYuanrong"
+type: "缺陷"
 
 body:
   - type: markdown
