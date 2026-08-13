@@ -151,9 +151,11 @@ Status MasterWorkerOCServiceImpl::PublishMeta(const PublishMetaReqPb &req, Publi
     (void)resp;
     LOG(INFO) << FormatString("[ObjectKey %s] Publish meta for object", req.meta().object_key());
     auto traceID = Trace::Instance().GetTraceID();
-    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
+    // The asynchronous pull belongs to the subscriber and must not inherit the metadata notification RPC deadline.
+    const int64_t remainingUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::milliseconds(req.timeout())).count();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
-        FormatString("RPC deadline exceeded before PublishMeta dispatch, remaining %ld us.", remainingUs));
+        FormatString("Subscription deadline exceeded before PublishMeta dispatch, remaining %ld us.", remainingUs));
     auto dispatchTime = std::chrono::steady_clock::now();
     ocClientWorkerSvc_->threadPool_->Execute([this, req, traceID, remainingUs, dispatchTime] {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
