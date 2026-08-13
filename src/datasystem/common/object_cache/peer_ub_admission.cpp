@@ -19,6 +19,7 @@
 #include "datasystem/common/object_cache/peer_ub_admission.h"
 
 #include <algorithm>
+#include <exception>
 #include <iterator>
 #include <utility>
 
@@ -67,6 +68,12 @@ void PeerUbAdmission::SetSelfWorker(const HostPort &self)
 
 void PeerUbAdmission::ReportOutcome(const UbOpOutcome &outcome)
 {
+    ReportOutcomeImpl(outcome, std::nullopt);
+}
+
+void PeerUbAdmission::ReportOutcomeImpl(const UbOpOutcome &outcome,
+                                        std::optional<uint64_t> expectedLateCompletionGeneration)
+{
     auto failureClass = classifier_.Classify(outcome);
     if (failureClass == UbFailureClass::SUCCESS || failureClass == UbFailureClass::LOCAL_RESOURCE_PRESSURE
         || failureClass == UbFailureClass::NON_UB_FAILURE) {
@@ -83,6 +90,10 @@ void PeerUbAdmission::ReportOutcome(const UbOpOutcome &outcome)
             : UbAdmissionState::UNAVAILABLE;
     {
         std::lock_guard<std::shared_mutex> lock(mutex_);
+        if (expectedLateCompletionGeneration.has_value()
+            && *expectedLateCompletionGeneration != lateCompletionGeneration_.load(std::memory_order_acquire)) {
+            return;
+        }
         auto &state = states_[outcome.peer];
         // A timeout or path failure is lower-confidence evidence than an explicit provider/CQE
         // failure. Once hard evidence (or its recovery probe) has quarantined a peer, a late
@@ -224,6 +235,9 @@ bool PeerUbAdmission::CompleteProbe(const UbProbeToken &token, const Status &sta
         state.providerStatus.reset();
         state.cqeStatus.reset();
         ++state.epoch;
+        if (token.peer == self_) {
+            lateCompletionGeneration_.fetch_add(1, std::memory_order_acq_rel);
+        }
         INJECT_POINT_NO_RETURN("PeerUbAdmission.CompleteProbe.success");
         return true;
     }
@@ -358,6 +372,61 @@ void PeerUbAdmission::ClearLocalState(const HostPort &peer)
 {
     std::lock_guard<std::shared_mutex> lock(mutex_);
     states_.erase(peer);
+    if (peer == self_) {
+        lateCompletionGeneration_.fetch_add(1, std::memory_order_acq_rel);
+    }
+}
+
+std::optional<UrmaLateCompletionContext> PeerUbAdmission::BuildLateCompletionContext(UbOperationKind operation)
+{
+    auto observer = weak_from_this();
+    if (observer.expired()) {
+        return std::nullopt;
+    }
+    const auto operationValue = static_cast<uint64_t>(operation);
+    if (operationValue > static_cast<uint64_t>(UbOperationKind::MIGRATION_WRITE)) {
+        return std::nullopt;
+    }
+    const uint64_t ownerToken =
+        (lateCompletionGeneration_.load(std::memory_order_acquire) << LATE_COMPLETION_OPERATION_BITS)
+        | operationValue;
+    return UrmaLateCompletionContext{ observer, ownerToken };
+}
+
+void PeerUbAdmission::OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken) noexcept
+{
+    try {
+        if (completion.cqeStatus != URMA_PORT_UNAVAILABLE_STATUS) {
+            return;
+        }
+        const auto operationValue = ownerToken & LATE_COMPLETION_OPERATION_MASK;
+        if (operationValue > static_cast<uint64_t>(UbOperationKind::MIGRATION_WRITE)) {
+            return;
+        }
+        const uint64_t generation = ownerToken >> LATE_COMPLETION_OPERATION_BITS;
+        HostPort self;
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (self_.Empty()) {
+                return;
+            }
+            self = self_;
+        }
+        UbOpOutcome outcome(
+            self, static_cast<UbOperationKind>(operationValue),
+            Status(K_URMA_ERROR,
+                   FormatString("Late URMA completion reports Worker sender unavailable, requestId=%llu, "
+                                "remoteAddress=%s, remoteInstanceId=%s, cqeStatus=%d",
+                                completion.requestId, completion.remoteAddress.c_str(),
+                                completion.remoteInstanceId.c_str(), completion.cqeStatus)));
+        outcome.cqeStatus = completion.cqeStatus;
+        outcome.learnedFrom = "late_urma_completion";
+        ReportOutcomeImpl(outcome, generation);
+    } catch (const std::exception &error) {
+        LOG(ERROR) << "Failed to process late Worker URMA completion: " << error.what();
+    } catch (...) {
+        LOG(ERROR) << "Failed to process late Worker URMA completion: unknown exception";
+    }
 }
 
 bool UbHealthSummaryCache::Apply(const UbHealthSummary &summary, const std::string &expectedIncarnation)

@@ -19,7 +19,9 @@
 #ifndef DATASYSTEM_COMMON_OBJECT_CACHE_PEER_UB_ADMISSION_H
 #define DATASYSTEM_COMMON_OBJECT_CACHE_PEER_UB_ADMISSION_H
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -29,6 +31,7 @@
 #include <vector>
 
 #include "datasystem/common/object_cache/ub_failure_classifier.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 
 namespace datasystem {
 
@@ -89,10 +92,11 @@ private:
     std::unordered_map<HostPort, std::unordered_set<std::string>> retiredIncarnations_;
 };
 
-class PeerUbAdmission {
+class PeerUbAdmission : public UrmaLateCompletionObserver,
+                        public std::enable_shared_from_this<PeerUbAdmission> {
 public:
     PeerUbAdmission() = default;
-    ~PeerUbAdmission() = default;
+    ~PeerUbAdmission() override = default;
 
     Status CheckWriteTarget(const HostPort &peer, UbOperationKind op) const;
     Status CheckReadSource(const HostPort &peer) const;
@@ -112,6 +116,8 @@ public:
     std::optional<UbPathState> GetState(const HostPort &peer) const;
     PeerUbAdmissionStats GetStats() const;
     void ClearLocalState(const HostPort &peer);
+    std::optional<UrmaLateCompletionContext> BuildLateCompletionContext(UbOperationKind operation);
+    void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken) noexcept override;
 
 private:
     struct RetiredWorkerTombstone {
@@ -122,6 +128,8 @@ private:
     static constexpr uint32_t MAX_PROBE_BACKOFF_LEVEL = 6;
     static constexpr uint64_t PROBE_BASE_DELAY_MS = 1'000;
     static constexpr size_t MAX_REPLAY_TOMBSTONES = 8'192;
+    static constexpr uint64_t LATE_COMPLETION_OPERATION_BITS = 8;
+    static constexpr uint64_t LATE_COMPLETION_OPERATION_MASK = (1ULL << LATE_COMPLETION_OPERATION_BITS) - 1;
 
     static bool ShouldBlock(const UbPathState &state);
     static Status BuildUnavailableStatus(const HostPort &peer, StatusCode code);
@@ -131,6 +139,7 @@ private:
     void ApplyGlobalRecoveryTransitionLocked(const UbHealthSummary &summary, uint64_t nowMs);
     void RetireWorkerLocked(const HostPort &worker, uint64_t nowMs, uint64_t tombstoneTtlMs);
     void PruneTombstonesLocked(uint64_t nowMs);
+    void ReportOutcomeImpl(const UbOpOutcome &outcome, std::optional<uint64_t> expectedLateCompletionGeneration);
 
     mutable std::shared_mutex mutex_;
     std::unordered_map<HostPort, UbPathState> states_;
@@ -144,6 +153,7 @@ private:
     bool topologyInitialized_ = false;
     UbFailureClassifier classifier_;
     HostPort self_;
+    std::atomic<uint64_t> lateCompletionGeneration_{ 0 };
 };
 
 }  // namespace datasystem

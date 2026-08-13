@@ -77,7 +77,8 @@ Status SendBufferViaSingleUbWrite(const std::shared_ptr<ObjectBufferInfo> &buffe
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(), bufHandle->GetSegmentSize(),
                          reinterpret_cast<uint64_t>(poolBuf), 0, bufferInfo->dataSize, bufferInfo->metadataSize,
-                         srcChipId, dstChipId, true, eventKeys, nullptr, &failure),
+                         srcChipId, dstChipId, true, eventKeys, nullptr, &failure,
+                         bufferInfo->ubLateCompletionContext),
         FormatString("Failed to submit UrmaWritePayload, totalSize=%llu", totalSize));
     bufferInfo->ubDataSentByMemoryCopy = true;
     METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
@@ -95,6 +96,18 @@ Status PrepareUbHandle(uint64_t totalSize, std::shared_ptr<UrmaManager::BufferHa
     realSize = bufHandle->GetSegmentSize();
     CHECK_FAIL_RETURN_STATUS(totalSize >= realSize, K_RUNTIME_ERROR,
                              FormatString("Got unexpected buffer size with total:%llu real:%llu", totalSize, realSize));
+    return Status::OK();
+}
+
+Status CopyToUbPoolBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data, uint64_t length)
+{
+    uint8_t *dstData = bufferInfo->pointer + bufferInfo->metadataSize;
+    const auto *srcData = static_cast<const uint8_t *>(data);
+    if (srcData == dstData) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(memcpy_s(dstData, bufferInfo->dataSize, srcData, length) == 0, K_RUNTIME_ERROR,
+                             "memcpy_s failed in SendBufferViaUbFromPool");
     return Status::OK();
 }
 }  // namespace
@@ -265,10 +278,10 @@ Status ClientWorkerBaseApi::PipelineDataTransferHelper(const std::shared_ptr<Obj
                                           ? static_cast<uint8_t>(bufferInfo->ubUrmaDataInfo->chip_id())
                                           : INVALID_CHIP_ID;
             UrmaWriteFailure failure;
-            Status writeStatus = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(),
-                                                  bufHandle->GetSegmentSize(), reinterpret_cast<uint64_t>(chunkPtr), 0,
-                                                  writeSize, 0, srcChipId, dstChipId, false, eventKeys, waiter,
-                                                  &failure);
+            Status writeStatus = UrmaWritePayload(
+                *(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(), bufHandle->GetSegmentSize(),
+                reinterpret_cast<uint64_t>(chunkPtr), 0, writeSize, 0, srcChipId, dstChipId, false, eventKeys, waiter,
+                &failure, bufferInfo->ubLateCompletionContext);
             RecordUbWriteFailure(bufferInfo, writeStatus, failure);
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 writeStatus, FormatString("Failed to submit UrmaWritePayload, chunkIndex=%u, writeSize=%llu, "
@@ -368,14 +381,7 @@ Status ClientWorkerBaseApi::SendBufferViaUbFromPool(const std::shared_ptr<Object
     CHECK_FAIL_RETURN_STATUS(ubHandle != nullptr && ubHandle->GetPointer() != nullptr, K_RUNTIME_ERROR,
                              "Invalid UB buffer handle");
 
-    uint8_t *dstData = bufferInfo->pointer + bufferInfo->metadataSize;
-    const auto *srcData = static_cast<const uint8_t *>(data);
-    if (srcData != dstData) {
-        errno_t memRet = memcpy_s(dstData, bufferInfo->dataSize, srcData, length);
-        if (memRet != 0) {
-            return Status(K_RUNTIME_ERROR, "memcpy_s failed in SendBufferViaUbFromPool");
-        }
-    }
+    RETURN_IF_NOT_OK(CopyToUbPoolBuffer(bufferInfo, data, length));
     std::vector<uint64_t> eventKeys;
     ResetUbWriteFailure(bufferInfo);
     const uint8_t srcChipId = NumaIdToChipId(ubHandle->GetNumaId());
@@ -391,7 +397,8 @@ Status ClientWorkerBaseApi::SendBufferViaUbFromPool(const std::shared_ptr<Object
     UrmaWriteFailure failure;
     Status rc = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), segAddr, segSize,
                                  reinterpret_cast<uint64_t>(bufferInfo->pointer), 0, bufferInfo->dataSize,
-                                 bufferInfo->metadataSize, srcChipId, dstChipId, true, eventKeys, nullptr, &failure);
+                                 bufferInfo->metadataSize, srcChipId, dstChipId, true, eventKeys, nullptr, &failure,
+                                 bufferInfo->ubLateCompletionContext);
     RecordUbWriteFailure(bufferInfo, rc, failure);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_END);

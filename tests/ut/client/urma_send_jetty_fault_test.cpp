@@ -23,6 +23,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -33,7 +34,9 @@
 
 #ifdef USE_URMA
 #define private public
+#define protected public
 #include "datasystem/common/rdma/urma_manager.h"
+#undef protected
 #undef private
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/raii.h"
@@ -150,6 +153,62 @@ void RecordEventObservation(const std::shared_ptr<UrmaEvent> &event, bool waited
     // Inject the state captured immediately after WaitUntilReadyLocked without relying on thread scheduling sleeps.
     std::unique_lock<bthread::Mutex> lock(event->eventMutex_);
     event->RecordCompletionObservationLocked(waitedForNotification, &waitContext);
+}
+
+class RecordingLateCompletionObserver : public UrmaLateCompletionObserver {
+public:
+    void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken) noexcept override
+    {
+        observed = completion;
+        observedOwnerToken = ownerToken;
+    }
+
+    std::optional<UrmaLateCompletion> observed;
+    uint64_t observedOwnerToken{ 0 };
+};
+
+TEST(UrmaSendJettyFaultTest, TimedOutWriteRetainsEventButReleasesWaiterForLateCqe4)
+{
+    constexpr uint64_t kRequestId = 1001;
+    constexpr uint64_t kOwnerToken = 77;
+    auto observer = std::make_shared<RecordingLateCompletionObserver>();
+    auto waiter = std::make_shared<EventWaiter>();
+    std::weak_ptr<EventWaiter> waiterLifetime = waiter;
+    UrmaLateCompletionContext context{ observer, kOwnerToken };
+    auto event = std::make_shared<UrmaEvent>(kRequestId, nullptr, "127.0.0.1:29100", "remote-instance", 4096,
+                                             UrmaEvent::OperationType::WRITE, nullptr, waiter, context);
+    waiter.reset();
+    bool retained = false;
+
+    const auto timeout = event->WaitFor(std::chrono::milliseconds(0), nullptr, [&retained] { retained = true; });
+
+    EXPECT_EQ(timeout.GetCode(), K_URMA_WAIT_TIMEOUT);
+    EXPECT_TRUE(retained);
+    EXPECT_TRUE(event->IsTimedOutRetained());
+    EXPECT_TRUE(waiterLifetime.expired());
+    event->SetFailed(URMA_PORT_UNAVAILABLE_STATUS);
+    EXPECT_EQ(event->NotifyAllAndGetDisposition(), UrmaEvent::CompletionDisposition::RETAINED_TIMEOUT);
+    UrmaManager::DispatchLateCompletion(event, URMA_PORT_UNAVAILABLE_STATUS);
+    ASSERT_TRUE(observer->observed.has_value());
+    EXPECT_EQ(observer->observed->requestId, kRequestId);
+    EXPECT_EQ(observer->observed->cqeStatus, URMA_PORT_UNAVAILABLE_STATUS);
+    EXPECT_EQ(observer->observed->remoteAddress, "127.0.0.1:29100");
+    EXPECT_EQ(observer->observedOwnerToken, kOwnerToken);
+}
+
+TEST(UrmaSendJettyFaultTest, TimedOutWriteWithoutManagerRegistrationIsDiscarded)
+{
+    constexpr uint64_t kRequestId = 1004;
+    auto observer = std::make_shared<RecordingLateCompletionObserver>();
+    UrmaLateCompletionContext context{ observer, 1 };
+    auto event = std::make_shared<UrmaEvent>(kRequestId, nullptr, "127.0.0.1:29100", "remote-instance", 4096,
+                                             UrmaEvent::OperationType::WRITE, nullptr, nullptr, context);
+
+    const auto timeout = event->WaitFor(std::chrono::milliseconds(0));
+
+    EXPECT_EQ(timeout.GetCode(), K_URMA_WAIT_TIMEOUT);
+    EXPECT_FALSE(event->IsTimedOutRetained());
+    EXPECT_EQ(event->NotifyAllAndGetDisposition(), UrmaEvent::CompletionDisposition::DISCARDED_TIMEOUT);
 }
 
 TEST(UrmaSendJettyFaultTest, EventWaitSupportsBthreadWaiterAndPthreadNotifier)

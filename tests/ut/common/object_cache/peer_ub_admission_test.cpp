@@ -396,6 +396,43 @@ TEST(PeerUbAdmissionTest, EmptyLeaseSnapshotDoesNotClearLocalObservation)
     EXPECT_EQ(admission.GetState(PEER)->lastFailureClass, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
 }
 
+TEST(PeerUbAdmissionTest, LateCqe4QuarantinesSelfSender)
+{
+    auto admission = std::make_shared<PeerUbAdmission>();
+    admission->SetSelfWorker(PEER);
+    const auto context = admission->BuildLateCompletionContext(UbOperationKind::MIGRATION_WRITE);
+    ASSERT_TRUE(context.has_value());
+
+    admission->OnLateUrmaCompletion(
+        UrmaLateCompletion{ 5001, URMA_PORT_UNAVAILABLE_STATUS, "127.0.0.1:31502", "peer-incarnation" },
+        context->ownerToken);
+
+    const auto state = admission->GetState(PEER);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, UbAdmissionState::UNAVAILABLE);
+    EXPECT_EQ(state->lastFailureClass, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
+    ASSERT_TRUE(state->cqeStatus.has_value());
+    EXPECT_EQ(*state->cqeStatus, URMA_PORT_UNAVAILABLE_STATUS);
+    EXPECT_EQ(admission->CheckWriteTarget(PEER, UbOperationKind::MIGRATION_WRITE).GetCode(),
+              K_URMA_WORKER_UNAVAILABLE);
+}
+
+TEST(PeerUbAdmissionTest, OldLateCqeCannotQuarantineNewSelfGeneration)
+{
+    auto admission = std::make_shared<PeerUbAdmission>();
+    admission->SetSelfWorker(PEER);
+    const auto oldContext = admission->BuildLateCompletionContext(UbOperationKind::MIGRATION_WRITE);
+    ASSERT_TRUE(oldContext.has_value());
+    admission->ClearLocalState(PEER);
+
+    admission->OnLateUrmaCompletion(
+        UrmaLateCompletion{ 5002, URMA_PORT_UNAVAILABLE_STATUS, "127.0.0.1:31502", "old-incarnation" },
+        oldContext->ownerToken);
+
+    EXPECT_FALSE(admission->GetState(PEER).has_value());
+    EXPECT_TRUE(admission->CheckWriteTarget(PEER, UbOperationKind::MIGRATION_WRITE).IsOk());
+}
+
 TEST(PeerUbAdmissionTest, AuthoritativeRemovalBoundsStateAndRejectsOldReplay)
 {
     PeerUbAdmission admission;

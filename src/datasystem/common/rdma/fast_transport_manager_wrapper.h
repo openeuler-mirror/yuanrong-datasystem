@@ -141,7 +141,8 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
                         const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
                         const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                         std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter = nullptr,
-                        UrmaWriteFailure *failure = nullptr);
+                        UrmaWriteFailure *failure = nullptr,
+                        std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
 
 /**
  * @brief Acquire the send lane owned by one worker-to-worker Batch Get RPC.
@@ -162,7 +163,8 @@ Status UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t
                                 uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                                 std::vector<uint64_t> &eventKeys,
                                 const std::shared_ptr<UrmaSendLaneLease> &laneLease,
-                                std::shared_ptr<EventWaiter> waiter = nullptr, UrmaWriteFailure *failure = nullptr);
+                                std::shared_ptr<EventWaiter> waiter = nullptr, UrmaWriteFailure *failure = nullptr,
+                                std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
 
 /**
  * @brief Trigger UrmaManager logic to import segment and read payload.
@@ -189,14 +191,16 @@ Status UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddres
  * @return Status of the call.
  */
 Status UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos, bool blocking,
-                       std::vector<uint64_t> &eventKeys);
+                       std::vector<uint64_t> &eventKeys,
+                       std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
 
 /**
  * @brief Gather write using an already acquired Batch Get RPC send lane.
  */
 Status UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
                                bool blocking, std::vector<uint64_t> &eventKeys,
-                               const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+                               const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                               std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
 
 /**
  * @brief Fill in ucp_info pb for UCP RDMA.

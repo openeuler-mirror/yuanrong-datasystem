@@ -376,6 +376,7 @@ private:
     Status GatherWrite(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> aggregatedMem,
                        std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req,
                        const std::shared_ptr<UrmaSendLaneLease> &sendLaneLease);
+    static void ApplyGatherWriteFailure(ParallelRes &result, uint64_t requestCount, const Status &status);
 
     /**
      * @brief Helper function pre-process and then trigger GetObjectRemoteImpl.

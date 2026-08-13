@@ -1211,7 +1211,7 @@ TEST(DataPlaneManagerAdmissionTest, ProbeCommitAndSnapshotPostCheckAreAtomic)
     EXPECT_TRUE(update.get().IsOk());
 }
 
-TEST(TransportLayerAdmissionTest, ConcurrentAdmittedSetCompletesBeforeSenderQuarantineBecomesVisible)
+TEST(TransportLayerAdmissionTest, AdmittedSetCompletesAfterSenderQuarantineBecomesVisible)
 {
     auto manager = std::make_shared<FakeDataPlaneManager>();
     manager->transporterSetStatuses = { { Status(K_URMA_ERROR, "local sender error 4"), Status::OK() } };
@@ -1225,24 +1225,28 @@ TEST(TransportLayerAdmissionTest, ConcurrentAdmittedSetCompletesBeforeSenderQuar
     transporter->setUbCqeStatuses = { 4 };
     transporter->coordinateConcurrentSets = true;
 
-    auto firstSet = std::async(std::launch::async, [&]() { return layer.Set(*first, MakeSetParam()); });
-    auto secondSet = std::async(std::launch::async, [&]() { return layer.Set(*second, MakeSetParam()); });
+    auto quarantiningSet = std::async(std::launch::async, [&]() { return layer.Set(*first, MakeSetParam()); });
+    {
+        std::unique_lock<std::mutex> lock(transporter->setMutex);
+        ASSERT_TRUE(
+            transporter->setCv.wait_for(lock, std::chrono::seconds(1), [&]() { return transporter->setCount >= 1; }));
+    }
+    auto admittedSet = std::async(std::launch::async, [&]() { return layer.Set(*second, MakeSetParam()); });
     {
         std::unique_lock<std::mutex> lock(transporter->setMutex);
         ASSERT_TRUE(
             transporter->setCv.wait_for(lock, std::chrono::seconds(1), [&]() { return transporter->setCount >= 2; }));
     }
-    EXPECT_EQ(firstSet.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+    EXPECT_EQ(quarantiningSet.get().GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(layer.CheckLocalUbSenderAdmission().GetCode(), K_URMA_WORKER_UNAVAILABLE);
+    EXPECT_EQ(admittedSet.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
     {
         std::lock_guard<std::mutex> lock(transporter->setMutex);
         transporter->releaseSecondSet = true;
     }
     transporter->setCv.notify_all();
 
-    Status firstRc = firstSet.get();
-    Status secondRc = secondSet.get();
-    EXPECT_TRUE((firstRc.GetCode() == K_URMA_ERROR && secondRc.IsOk())
-                || (firstRc.IsOk() && secondRc.GetCode() == K_URMA_ERROR));
+    EXPECT_TRUE(admittedSet.get().IsOk());
     EXPECT_EQ(layer.Set(*second, MakeSetParam()).GetCode(), K_URMA_WORKER_UNAVAILABLE);
 }
 
@@ -1355,6 +1359,33 @@ TEST(TransportLayerAdmissionTest, ClientLocalSenderFailureDoesNotAffectAnotherCl
     std::shared_ptr<ObjectBuffer> healthyBuffer;
     EXPECT_TRUE(healthyClient.Create(MakeAddress(34), "healthy", 4, MakeCreateParam(), healthyBuffer).IsOk());
     EXPECT_TRUE(healthyClient.Set(*healthyBuffer, MakeSetParam()).IsOk());
+}
+
+TEST(TransportLayerAdmissionTest, LateCqe4AfterTimeoutBlocksNextSetWithoutAnotherWrite)
+{
+    const auto worker = MakeAddress(40);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterSetStatuses = { { Status(K_URMA_WAIT_TIMEOUT, "write timed out before CQE") } };
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE));
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(worker, "late-cqe", 4, MakeCreateParam(), buffer).IsOk());
+
+    EXPECT_EQ(layer.Set(*buffer, MakeSetParam()).GetCode(), K_URMA_WAIT_TIMEOUT);
+    ASSERT_EQ(manager->builtTransporters.size(), 1u);
+    ASSERT_EQ(manager->builtTransporters.front()->setCount, 1);
+    const auto lateContext = ObjectBufferInternal::GetInfo(*buffer).ubLateCompletionContext;
+    ASSERT_TRUE(lateContext.has_value());
+    auto observer = lateContext->observer.lock();
+    ASSERT_NE(observer, nullptr);
+
+    observer->OnLateUrmaCompletion(
+        UrmaLateCompletion{ 4001, URMA_PORT_UNAVAILABLE_STATUS, worker.ToString(), "worker-incarnation" },
+        lateContext->ownerToken);
+
+    const auto isolated = layer.Set(*buffer, MakeSetParam());
+    EXPECT_EQ(isolated.GetCode(), K_URMA_WORKER_UNAVAILABLE) << isolated.ToString();
+    EXPECT_NE(isolated.GetMsg().find("Client-local UB sender is unavailable"), std::string::npos);
+    EXPECT_EQ(manager->builtTransporters.front()->setCount, 1);
 }
 
 TEST(TransportLayerAdmissionTest, TcpFailureDoesNotTripUbSenderAdmission)

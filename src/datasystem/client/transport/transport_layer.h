@@ -161,6 +161,17 @@ protected:
     bool ReportProviderUbFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail);
 
 private:
+    struct LocalUbSenderState;
+    struct LocalUbSenderOperation {
+        LocalUbSenderOperation() = default;
+        ~LocalUbSenderOperation();
+        LocalUbSenderOperation(const LocalUbSenderOperation &) = delete;
+        LocalUbSenderOperation &operator=(const LocalUbSenderOperation &) = delete;
+
+        LocalUbSenderState *state{ nullptr };
+        uint64_t ownerToken{ 0 };
+    };
+
     struct LocalUbSenderFailureView {
         const HostPort &workerAddr;
         AccessTransportKind kind;
@@ -170,9 +181,10 @@ private:
     };
 
     Status CheckLocalUbSenderAdmission(TransportHint hint) const;
-    Status AcquireLocalUbSenderAdmission(TransportHint hint, std::shared_lock<std::shared_mutex> &admission) const;
-    bool ReportLocalUbSenderFailure(const LocalUbSenderFailureView &failure,
-                                    std::shared_lock<std::shared_mutex> &admission);
+    Status AcquireLocalUbSenderAdmission(TransportHint hint, LocalUbSenderOperation &operation) const;
+    bool ReportLocalUbSenderFailure(const LocalUbSenderFailureView &failure, uint64_t ownerToken);
+    void PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, AccessTransportKind kind,
+                                      uint64_t ownerToken) const;
     std::optional<std::chrono::steady_clock::time_point> GetLocalUbProbeDeadline() const;
     void TryRecoverLocalUbSender();
     std::optional<std::chrono::steady_clock::time_point> GetProviderUbProbeDeadline() const;
@@ -188,7 +200,7 @@ private:
     // the codecheck function-size limit.
     Status FinalizeSetPublish(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
                               TransportHint hint, std::shared_ptr<IDataTransporter> &transporter,
-                              const Status &publishRc, std::shared_lock<std::shared_mutex> &admission,
+                              const Status &publishRc, uint64_t ownerToken,
                               std::chrono::steady_clock::time_point setStart);
     Status RetrySet(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
                     TransportHint hint);
@@ -226,22 +238,14 @@ private:
     std::shared_ptr<ThreadPool> releasePool_;
     std::shared_ptr<UbHealthFilter> healthFilter_;
     std::unique_ptr<ObjectReadFlow> objectRead_;
-    mutable std::shared_mutex localUbSenderMutex_;
-    std::atomic<bool> localUbSenderUnavailable_{ false };
-    Status localUbSenderFailure_ = Status::OK();
-    std::optional<HostPort> localUbProbeWorker_;
-    uint64_t localUbSenderGeneration_{ 0 };
-    uint32_t localUbProbeBackoffLevel_{ 0 };
-    std::chrono::steady_clock::time_point localUbProbeDeadline_;
-    std::chrono::milliseconds localUbProbeBaseDelay_{ std::chrono::seconds(1) };
+    std::shared_ptr<LocalUbSenderState> localUbSenderState_;
     // ApplyWorkerSnapshot serializes admission publication with shutdown through reconcileMutex_.
     bthread::Mutex reconcileMutex_;
-    bthread::ConditionVariable reconcileCv_;
+    std::shared_ptr<bthread::ConditionVariable> reconcileCv_{ std::make_shared<bthread::ConditionVariable>() };
     std::optional<WorkerSnapshot> pendingSnapshot_;
     Thread reconcileThread_;
     bool reconcileStarted_{ false };
     bool reconcileStopping_{ false };
-    std::atomic<bool> shutdownRequested_{ false };
     // Serializes complete Shutdown calls while reconcileMutex_ remains available to the worker.
     bthread::Mutex shutdownMutex_;
 };

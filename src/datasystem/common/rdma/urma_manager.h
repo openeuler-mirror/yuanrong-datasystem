@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_RPC_URMA_MANAGER_H
 #define DATASYSTEM_COMMON_RPC_URMA_MANAGER_H
 
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -389,7 +390,8 @@ public:
                             const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                             const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
                             uint8_t srcChipId, uint8_t dstChipId, bool blocking, std::vector<uint64_t> &eventKeys,
-                            std::shared_ptr<EventWaiter> waiter = nullptr, UrmaWriteFailure *failure = nullptr);
+                            std::shared_ptr<EventWaiter> waiter = nullptr, UrmaWriteFailure *failure = nullptr,
+                            std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
 
     /**
      * @brief Acquire the single send lane owned by a worker-to-worker Batch Get RPC.
@@ -413,7 +415,8 @@ public:
                                     bool blocking, std::vector<uint64_t> &eventKeys,
                                     const std::shared_ptr<UrmaSendLaneLease> &laneLease,
                                     std::shared_ptr<EventWaiter> waiter = nullptr,
-                                    UrmaWriteFailure *failure = nullptr);
+                                    UrmaWriteFailure *failure = nullptr,
+                                    std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
 
     /**
      * @brief Does a RDMA read from remote worker memory location
@@ -443,7 +446,8 @@ public:
      * @return Status of the call.
      */
     Status UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos, bool blocking,
-                           std::vector<uint64_t> &eventKeys);
+                           std::vector<uint64_t> &eventKeys,
+                           std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
 
     /**
      * @brief Gather write using an already acquired Batch Get RPC lane.
@@ -451,7 +455,8 @@ public:
      */
     Status UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
                                    bool blocking, std::vector<uint64_t> &eventKeys,
-                                   const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+                                   const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                                   std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
 
     /**
      * @brief Seal a Batch Get RPC send lane after no more WRs can be created.
@@ -764,7 +769,8 @@ private:
                        const std::shared_ptr<UrmaSendLaneLease> &laneLease, const std::string &remoteAddress,
                        uint64_t dataSize, UrmaEvent::OperationType operationType,
                        std::atomic<int> *srcChipInflightCounter = nullptr,
-                       std::shared_ptr<EventWaiter> waiter = nullptr, std::shared_ptr<UrmaEvent> *event = nullptr);
+                       std::shared_ptr<EventWaiter> waiter = nullptr, std::shared_ptr<UrmaEvent> *event = nullptr,
+                       std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
     struct UrmaWriteArgs {
         std::shared_ptr<UrmaConnection> connection;
         std::shared_ptr<EventWaiter> waiter;
@@ -776,6 +782,26 @@ private:
         uint64_t size = 0;
         uint8_t srcChipId = INVALID_CHIP_ID;
         uint8_t dstChipId = INVALID_CHIP_ID;
+        std::optional<UrmaLateCompletionContext> lateCompletionContext;
+    };
+
+    struct UrmaGatherWriteContext {
+        std::string remoteAddress;
+        std::shared_lock<std::shared_timed_mutex> remoteMapLock;
+        TbbUrmaConnectionMap::const_accessor connectionAccessor;
+        std::shared_ptr<UrmaConnection> connection;
+        UrmaRemoteSegmentMap::const_accessor remoteSegAccessor;
+        std::shared_ptr<UrmaJetty> jetty;
+        urma_target_jetty_t *targetJetty = nullptr;
+        std::shared_ptr<UrmaSendLaneLease> laneLease;
+        bool ownsLaneLease = false;
+        bool laneLeaseSealed = false;
+        std::vector<urma_sge_t> srcSgeList;
+        std::vector<urma_sge_t> dstSgeList;
+        std::vector<urma_jfs_wr_t> wrList;
+        std::vector<uint64_t> createdEventKeys;
+        std::vector<uint64_t> submittedEventKeys;
+        uint32_t totalWriteSize = 0;
     };
 
     Status UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys,
@@ -788,11 +814,32 @@ private:
                                 uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                                 std::vector<uint64_t> &eventKeys,
                                 const std::shared_ptr<UrmaSendLaneLease> &laneLease,
-                                std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure);
+                                std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure,
+                                std::optional<UrmaLateCompletionContext> lateCompletionContext);
 
     Status UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
                                bool blocking, std::vector<uint64_t> &eventKeys,
-                               const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+                               const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                               std::optional<UrmaLateCompletionContext> lateCompletionContext);
+    Status InitGatherWriteContext(const RemoteSegInfo &remoteInfo, size_t sgeNum,
+                                  const std::shared_ptr<UrmaSendLaneLease> &externalLaneLease,
+                                  UrmaGatherWriteContext &context);
+    Status AppendGatherWriteRequest(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
+                                    size_t dstSgeIdx, size_t &srcSgeIdx,
+                                    const std::optional<UrmaLateCompletionContext> &lateCompletionContext,
+                                    UrmaGatherWriteContext &context);
+    Status CreateGatherWriteEvent(size_t dstSgeIdx, uint64_t writeSize, const urma_sg_t &srcSg,
+                                  const urma_sg_t &dstSg,
+                                  const std::optional<UrmaLateCompletionContext> &lateCompletionContext,
+                                  UrmaGatherWriteContext &context);
+    Status BuildGatherWriteRequests(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
+                                    const std::optional<UrmaLateCompletionContext> &lateCompletionContext,
+                                    UrmaGatherWriteContext &context);
+    Status PostGatherWriteRequests(const RemoteSegInfo &remoteInfo, UrmaGatherWriteContext &context);
+    size_t ResolveSubmittedGatherWriteCount(const RemoteSegInfo &remoteInfo, const urma_jfs_wr_t *badWr,
+                                            const UrmaGatherWriteContext &context) const;
+    Status SealGatherWriteLane(UrmaGatherWriteContext &context);
+    void CleanupGatherWriteEvents(UrmaGatherWriteContext &context, size_t submittedCount);
 
     /**
      * @brief Deletes the UrmaEvent object for the request
@@ -800,6 +847,11 @@ private:
      * @return Status of the call.
      */
     void DeleteEvent(uint64_t requestId);
+    void RegisterRetainedTimeoutEvent(uint64_t requestId);
+    bool ConsumeRetainedTimeoutEvent(uint64_t requestId);
+    void PruneRetainedTimeoutEvents(uint64_t nowMs);
+    void ClearRetainedTimeoutEvents();
+    static void DispatchLateCompletion(const std::shared_ptr<UrmaEvent> &event, int cqeStatus);
 
     Status InitLocalUrmaInfo(const HostPort &hostport);
     Status RemoveRemoteResources(const std::string &connectionKey);
@@ -840,6 +892,12 @@ private:
     TbbEventMap tbbEventMap_;
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_map<uint64_t, int> failedRequests_;
+    static constexpr uint64_t RETAINED_TIMEOUT_EVENT_TTL_MS = 3'000;
+    static constexpr size_t MAX_RETAINED_TIMEOUT_EVENTS = 1'024;
+    std::mutex retainedTimeoutMutex_;
+    std::unordered_map<uint64_t, uint64_t> retainedTimeoutDeadlines_;
+    std::deque<uint64_t> retainedTimeoutOrder_;
+    std::atomic<uint64_t> nextRetainedTimeoutPruneMs_{ 0 };
     std::atomic<bool> serverStop_{ false };
     std::atomic<uint64_t> affinitySrcChipIdSequence_{ 0 };
     std::vector<std::atomic<int>> srcChipInflightWrCounts_;

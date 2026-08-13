@@ -294,9 +294,10 @@ bazel test //tests/ut/client:urma_req_id_test --config=test --config=urma --test
 - Manual URMA local send-Jetty fault coverage:
   - `//tests/ut/client:urma_send_jetty_fault_test` is a separate Bazel `manual` target. It covers manager-level
     pool exhaustion, repeated recoverable status-9 CQEs, non-recoverable CQE no-rebuild/no-leak behavior, and async
-    `JETTY_ERR`. It also drives a real business Event timeout, verifies immediate force release once timeout and seal
-    are both observed, covers both timeout-before-seal and seal-before-timeout ordering, reuses the same local Jetty for
-    a replacement request generation, and proves the old CQE does not consume the replacement lane's WR count.
+    `JETTY_ERR`. It also verifies that a timed-out write retains its Event for a late status-4 CQE while releasing the
+    foreground waiter, drives a real business Event timeout, verifies immediate force release once timeout and seal are
+    both observed, covers both timeout-before-seal and seal-before-timeout ordering, reuses the same local Jetty for a
+    replacement request generation, and proves the old CQE does not consume the replacement lane's WR count.
     Orphan-pressure cases verify that 17 outstanding orphan WRs keep the Jetty reusable while emitting pressure DFX,
     and that the fixed threshold of 32 triggers asynchronous retirement plus pool refill. Refill/capacity assertions
     use unique registry Jetty identities; retirement installs one pending record synchronously rather than maintaining
@@ -330,9 +331,12 @@ DS_URMA_DEV_NAME=<device> \
     configured-capacity concurrent remote Get, a manual `LEVEL1_` 64 concurrently started Batch Get × 64 ordinary sub-object scenario with exactly 64 lane releases and zero
     observed pool exhaustion (without claiming all lanes were simultaneously held), recovery after an injected
     recoverable CQE retires a send Jetty, and `LEVEL1_ConcurrentBatchGetsRecoverFromInFlightTimeoutStorm`: timeout
-    deletes the business Event and force-releases each sealed lane without waiting for CQE arrival. The timeout-storm
-    case pauses production CQE classification, observes all four timed-out Events being deleted and their Jettys being
-    returned before polling resumes, then verifies late CQEs are classified as stale and the same lanes remain usable.
+    releases each sealed lane while retaining observer-backed write Events. The timeout-storm case pauses production
+    CQE classification, verifies timed-out Events are not deleted before polling resumes, then observes their cleanup
+    after the late CQEs and verifies the same lanes remain usable.
+  - `UrmaClientSenderRecoveryTest.LateCqe4AfterSetTimeoutQuarantinesSender` pauses a real client-side Set CQE, forces
+    the foreground wait to time out, rewrites that same delayed CQE to status 4, and verifies the next Set fast-fails
+    with `K_URMA_WORKER_UNAVAILABLE` without reaching another URMA write.
   - It needs the same URMA SDK/runtime and configured device:
 
 ```bash

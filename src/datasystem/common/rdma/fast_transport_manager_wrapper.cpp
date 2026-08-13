@@ -203,7 +203,8 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
                         const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
                         const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                         std::vector<uint64_t> &eventKeys,
-                        std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure)
+                        std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure,
+                        std::optional<UrmaLateCompletionContext> lateCompletionContext)
 {
     (void)urmaInfo;
     (void)localSegAddress;
@@ -217,6 +218,7 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
     (void)blocking;
     (void)eventKeys;
     (void)waiter;
+    (void)lateCompletionContext;
     if (failure != nullptr) {
         *failure = {};
     }
@@ -224,7 +226,7 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayload(urmaInfo, localSegAddress, localSegSize,
                                                               localObjectAddress, readOffset, readSize, metaDataSize,
                                                               srcChipId, dstChipId, blocking, eventKeys, waiter,
-                                                              failure));
+                                                              failure, std::move(lateCompletionContext)));
 #endif
     return Status::OK();
 }
@@ -254,7 +256,8 @@ Status UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t
                                 uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                                 std::vector<uint64_t> &eventKeys,
                                 const std::shared_ptr<UrmaSendLaneLease> &laneLease,
-                                std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure)
+                                std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure,
+                                std::optional<UrmaLateCompletionContext> lateCompletionContext)
 {
     (void)urmaInfo;
     (void)localSegAddress;
@@ -269,13 +272,14 @@ Status UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t
     (void)eventKeys;
     (void)laneLease;
     (void)waiter;
+    (void)lateCompletionContext;
     if (failure != nullptr) {
         *failure = {};
     }
 #ifdef USE_URMA
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayloadWithLane(
         urmaInfo, localSegAddress, localSegSize, localObjectAddress, readOffset, readSize, metaDataSize, srcChipId,
-        dstChipId, blocking, eventKeys, laneLease, waiter, failure));
+        dstChipId, blocking, eventKeys, laneLease, waiter, failure, std::move(lateCompletionContext)));
 #endif
     return Status::OK();
 }
@@ -299,30 +303,36 @@ Status UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddres
 }
 
 Status UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos, bool blocking,
-                       std::vector<uint64_t> &eventKeys)
+                       std::vector<uint64_t> &eventKeys,
+                       std::optional<UrmaLateCompletionContext> lateCompletionContext)
 {
     (void)remoteInfo;
     (void)objInfos;
     (void)blocking;
     (void)eventKeys;
+    (void)lateCompletionContext;
 #ifdef USE_URMA
-    RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaGatherWrite(remoteInfo, objInfos, blocking, eventKeys));
+    RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaGatherWrite(remoteInfo, objInfos, blocking, eventKeys,
+                                                             std::move(lateCompletionContext)));
 #endif
     return Status::OK();
 }
 
 Status UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
                                bool blocking, std::vector<uint64_t> &eventKeys,
-                               const std::shared_ptr<UrmaSendLaneLease> &laneLease)
+                               const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                               std::optional<UrmaLateCompletionContext> lateCompletionContext)
 {
     (void)remoteInfo;
     (void)objInfos;
     (void)blocking;
     (void)eventKeys;
     (void)laneLease;
+    (void)lateCompletionContext;
 #ifdef USE_URMA
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaGatherWriteWithLane(remoteInfo, objInfos, blocking, eventKeys,
-                                                                       laneLease));
+                                                                     laneLease,
+                                                                     std::move(lateCompletionContext)));
 #endif
     return Status::OK();
 }

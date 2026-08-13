@@ -122,6 +122,16 @@
     TransportLayer runtime only to share the same process-local UB sender admission and dedicated recovery probe used
     by routed writes. A raw provider/CQE status 4 from a legacy UB write therefore quarantines the sender before the
     next Create/MultiCreate and returns `K_URMA_WORKER_UNAVAILABLE` until the probe succeeds.
+    Timed-out UB writes retain the transport Event, whose late-completion context holds only a weak reference to that
+    originating TransportLayer's sender state plus its generation; the foreground waiter is detached at timeout. If a
+    status-4 CQE arrives later, it quarantines that same Client sender and releases the retained Event. Shutdown or a
+    completed recovery invalidates the generation, so an old CQE cannot quarantine a replacement sender and the
+    retained Event cannot extend the Client or payload lifetime. Client write admission captures that generation under
+    the sender-state lock but releases the lock before transport I/O; both synchronous and late failure reports validate
+    the captured generation, so the URMA poller never waits behind a foreground completion wait. A stack-owned operation
+    token tracks admitted UB Create/Set/MCreate/MSet work without holding the state lock. One atomic gate stores both
+    the closing bit and active-token count, so shutdown closes new admission and drains existing tokens through one
+    linearized state before destroying the data plane.
   - Disabling local cache changes data placement, but the client identity and recovery lifecycle remain bound to the
     bootstrap Worker. Routed retry backoff checks that bound endpoint, and routed `Exist` performs the same check before
     dispatch because the operation can otherwise succeed entirely through another Worker. The check uses a 10 ms

@@ -167,6 +167,10 @@
     isolation when the detail identifies the actual responding Worker; RPC deadline/unavailable outcomes remain
     `SUSPECT` and do not close read-source admission. Batch and oversized Get paths preserve the matching structured
     detail, including a failed object in an otherwise partially successful NotifyRemoteGet migration batch.
+    Worker-to-Client and Worker-to-Worker writeback Events also carry a weak `PeerUbAdmission` owner and an operation
+    token. A retained Event receiving a late status-4 CQE updates the writing Worker's self state; successful self
+    recovery advances a separate generation so an older Event cannot quarantine the recovered sender. Regular and
+    aggregate RemoteGet writes use the same ownership path without retaining their request payloads.
   - Foreground Worker-to-master `QueryMeta` retries transient retry-policy statuses within the caller deadline but
     treats `K_RPC_PEER_DEAD` as terminal. A cross-Worker Get therefore returns the dead metadata owner's status
     immediately instead of rebuilding the same dead peer's RPC stub until the configured request timeout expires.

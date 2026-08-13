@@ -178,8 +178,18 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     classifier treats raw status `4` as a hard local-port failure, wait/RPC timeout evidence as `SUSPECT`, and
     resource-pressure failures as non-isolating. A generic `K_URMA_ERROR` without raw provider/CQE evidence is not
     sufficient for hard isolation.
+  - A timed-out URMA WRITE carrying a late-completion observer retains its complete `UrmaEvent` in the existing request
+    map instead of copying request identity into a second tombstone object. The timeout transition is serialized with
+    completion by the Event mutex and clears the strong `EventWaiter` reference before the foreground request returns;
+    the Event already holds only a weak send-lane reference and never owns the payload. A late status-4 CQE consumes the
+    original Event and notifies the still-live owner outside Event/retention locks. Retention is bounded to 1,024 Events
+    and 3 seconds, with oldest-first capacity eviction, incremental poll-loop expiry, and explicit shutdown cleanup.
+    Reads, writes without a live observer, and WRs rejected before provider submission retain the original immediate
+    deletion behavior.
   - The client transport layer owns process-local UB sender admission. A raw status-4 write failure closes admission
-    for later UB Create/Set/MCreate/MSet operations; already-admitted operations drain under a shared lifecycle lock.
+    for later UB Create/Set/MCreate/MSet operations. Admission captures the sender generation and registers a stack
+    operation token under the sender-state lock, then releases that lock before transport I/O. Shutdown closes the
+    single-word in-flight gate and drains already-admitted tokens outside the sender-state lock.
     Recovery uses an explicit one-byte URMA WRITE to a manager-owned probe segment advertised by an ACTIVE Worker
     handshake, with bounded exponential retry. Business requests do not reopen the sender state.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
