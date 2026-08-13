@@ -290,7 +290,10 @@
   provisionally initialized as a fresh start so membership and recovery reporting can bootstrap. Simultaneous
   Coordinator recovery and restart of that same Worker is an explicit Phase 3 limitation; the initial version assumes
   surviving Workers reconnect and report topology rather than guaranteeing this combined-failure case.
-- A real restarted Worker remains `RESTARTING`/`RECOVERING` while Object Cache reconciliation is enabled. It publishes
+- A real restarted Worker remains `RESTARTING`/`RECOVERING` while Object Cache reconciliation is enabled. The Worker
+  binary and dscli defaults leave this global-reference reconciliation disabled for pure KVClient deployments, while
+  Kubernetes Helm defaults explicitly enable it for backward compatibility. An ObjectClient deployment using global
+  references must enable it explicitly. With reconciliation enabled, the Worker publishes
   `READY` only from reconciliation completion or the explicit give-up terminal path; reconciliation completion counts
   distinct source addresses that have succeeded for the current membership timestamp, commits the membership
   transition before publishing process health, and propagates synchronous master-to-Worker delivery failures so the

@@ -235,7 +235,8 @@ public:
         for (auto addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000";
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 -enable_reconciliation=true";
     }
 
     void SetUp() override

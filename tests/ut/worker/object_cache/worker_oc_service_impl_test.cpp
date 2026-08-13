@@ -938,6 +938,9 @@ TEST_F(WorkerOcServiceImplTest, ReconciliationReturnsNotReadyWhenRejoinCleanupHo
 TEST_F(WorkerOcServiceImplTest, RestartReconciliationWaitsForRejoinCleanupReconFlag)
 {
     SetUnhealthy();
+    const bool savedReconciliation = FLAGS_enable_reconciliation;
+    FLAGS_enable_reconciliation = true;
+    Raii restoreReconciliation([savedReconciliation] { FLAGS_enable_reconciliation = savedReconciliation; });
     BthreadWriteGuard cleanup(&impl_->reconFlag_);
     PushMetaToWorkerReqPb req;
     req.set_event_timestamp(1);
