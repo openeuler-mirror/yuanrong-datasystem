@@ -44,6 +44,12 @@ public:
     ~CoordinatorStore();
 
     /**
+     * @brief Start watch dispatch and TTL expiration.
+     * @return Status of the operation.
+     */
+    Status Start();
+
+    /**
      * @brief Put a key-value pair.
      * @param[in] key The key.
      * @param[in] value The value.

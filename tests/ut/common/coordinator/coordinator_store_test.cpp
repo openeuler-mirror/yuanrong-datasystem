@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "ut/common.h"
+#include "datasystem/common/coordinator/event_notify_executor.h"
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/coordinator/coordinator_service_impl.h"
@@ -61,7 +62,8 @@ constexpr uint16_t RAW_SNAPSHOT_TEST_PORT = 18488;
 
 TEST(WatchDispatcherImplTest, ExpiredProbeDeadlineIsNeutralAndUndispatched)
 {
-    coordinator::WatchDispatcherImpl dispatcher(nullptr, "coordinator-test");
+    coordinator::WatchDispatcherImpl dispatcher(
+        nullptr, "coordinator-test", WatchDispatcher::DEFAULT_DISPATCH_THREAD_COUNT);
     const auto result = dispatcher.ProbeWorkerReachable("127.0.0.1:1", std::chrono::steady_clock::now());
 
     EXPECT_EQ(result.status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
@@ -70,12 +72,49 @@ TEST(WatchDispatcherImplTest, ExpiredProbeDeadlineIsNeutralAndUndispatched)
 
 TEST(WatchDispatcherImplTest, MalformedProbeAddressIsNeutralAndUndispatched)
 {
-    coordinator::WatchDispatcherImpl dispatcher(nullptr, "coordinator-test");
+    coordinator::WatchDispatcherImpl dispatcher(
+        nullptr, "coordinator-test", WatchDispatcher::DEFAULT_DISPATCH_THREAD_COUNT);
     const auto result = dispatcher.ProbeWorkerReachable(
         "malformed-address", std::chrono::steady_clock::now() + std::chrono::seconds(1));
 
     EXPECT_TRUE(result.status.IsError());
     EXPECT_FALSE(result.rpcDispatched);
+}
+
+TEST(EventNotifyExecutorTest, RejectsEmptyWorker)
+{
+    EventNotifyExecutor executor;
+
+    auto status = executor.Start(1, BTHREAD_TAG_DEFAULT, {});
+
+    EXPECT_EQ(status.GetCode(), K_INVALID);
+    executor.Stop();
+}
+
+class StartupFailWatchDispatcher : public WatchDispatcher {
+public:
+    explicit StartupFailWatchDispatcher(WatchRegistry *watchRegistry)
+        : WatchDispatcher(watchRegistry, BTHREAD_TAG_DEFAULT, 0)
+    {
+    }
+    ~StartupFailWatchDispatcher() override = default;
+
+    Status DoNotify(int64_t, const std::string &, std::vector<std::shared_ptr<WatchEvent>> &) override
+    {
+        return Status::OK();
+    }
+};
+
+TEST(CoordinatorStoreStartTest, PropagatesWatchDispatcherStartupFailure)
+{
+    auto memStore = std::make_shared<MemoryKvStore>();
+    auto registry = std::make_shared<WatchRegistry>();
+    auto dispatcher = std::make_shared<StartupFailWatchDispatcher>(registry.get());
+    auto clock = std::make_shared<SteadyClockMock>();
+    auto ttlManager = std::make_shared<TtlManager>(clock);
+    CoordinatorStore store(memStore, registry, dispatcher, ttlManager);
+
+    EXPECT_EQ(store.Start().GetCode(), K_INVALID);
 }
 
 class MockWatchDispatcher : public WatchDispatcher {
@@ -270,6 +309,48 @@ private:
     bool unblock_ = false;
 };
 
+class SelectivelyBlockingWatchDispatcher : public MockWatchDispatcher {
+public:
+    SelectivelyBlockingWatchDispatcher(WatchRegistry *watchRegistry, int64_t blockedWatchId)
+        : MockWatchDispatcher(watchRegistry), blockedWatchId_(blockedWatchId)
+    {
+    }
+
+    Status DoNotify(int64_t watchId, const std::string &watcherAddr,
+                    std::vector<std::shared_ptr<WatchEvent>> &events) override
+    {
+        if (watchId == blockedWatchId_) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            blockedNotifyStarted_ = true;
+            cv_.notify_all();
+            cv_.wait(lock, [this] { return unblock_; });
+        }
+        return MockWatchDispatcher::DoNotify(watchId, watcherAddr, events);
+    }
+
+    bool WaitBlockedNotifyStarted(uint64_t timeoutMs = 2000)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] { return blockedNotifyStarted_; });
+    }
+
+    void Unblock()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            unblock_ = true;
+        }
+        cv_.notify_all();
+    }
+
+private:
+    const int64_t blockedWatchId_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool blockedNotifyStarted_ = false;
+    bool unblock_ = false;
+};
+
 }  // namespace
 
 class CoordinatorStoreTest : public CommonTest {
@@ -283,8 +364,7 @@ protected:
         clock_ = std::make_shared<SteadyClockMock>();
         ttlManager_ = std::make_shared<TtlManager>(clock_);
         store_ = std::make_unique<CoordinatorStore>(memStore_, registry_, dispatcher_, ttlManager_);
-        dispatcher_->Start();
-        ttlManager_->Start();
+        ASSERT_TRUE(store_->Start().IsOk());
     }
 
     void TearDown() override
@@ -1286,7 +1366,7 @@ TEST_F(CoordinatorStoreTest, WatchDispatcherDropsDoorbellWhenPendingQueueIsFull)
     ASSERT_EQ(pendingBeforeDrain, WATCH_PENDING_QUEUE_LIMIT);
 }
 
-TEST_F(CoordinatorStoreTest, ConstructorStartsTtlAndWatchDispatcher)
+TEST_F(CoordinatorStoreTest, StartRunsTtlAndWatchDispatcher)
 {
     auto memStore = std::make_shared<MemoryKvStore>();
     auto registry = std::make_shared<WatchRegistry>();
@@ -1294,6 +1374,7 @@ TEST_F(CoordinatorStoreTest, ConstructorStartsTtlAndWatchDispatcher)
     auto clock = std::make_shared<SteadyClockMock>();
     auto ttlManager = std::make_shared<TtlManager>(clock);
     auto store = std::make_unique<CoordinatorStore>(memStore, registry, dispatcher, ttlManager);
+    DS_ASSERT_OK(store->Start());
 
     int64_t watchId = 0;
     std::vector<KeyValueEntry> initial;
@@ -2108,6 +2189,37 @@ TEST_F(CoordinatorStoreTest, WatchDispatcherDispatchesEventsEnqueuedBeforeStart)
     auto events = dispatcher->GetEvents(watchId);
     ASSERT_EQ(events.size(), 1UL);
     ASSERT_EQ(events[0]->entry.value, "v");
+    dispatcher->Stop();
+}
+
+TEST_F(CoordinatorStoreTest, SlowChannelDoesNotBlockOtherChannel)
+{
+    auto registry = std::make_shared<WatchRegistry>();
+    const int64_t blockedWatchId = registry->Register("/blocked", "", "worker-a");
+    const int64_t readyWatchId = registry->Register("/ready", "", "worker-b");
+    auto dispatcher = std::make_shared<SelectivelyBlockingWatchDispatcher>(registry.get(), blockedWatchId);
+    dispatcher->AddChannel(blockedWatchId, "worker-a");
+    dispatcher->AddChannel(readyWatchId, "worker-b");
+    dispatcher->SetSnapshotRevision(blockedWatchId, 1);
+    dispatcher->SetSnapshotRevision(readyWatchId, 1);
+    dispatcher->Start();
+
+    auto blockedEvent = std::make_shared<WatchEvent>();
+    blockedEvent->type = WatchEvent::Type::PUT;
+    blockedEvent->entry = KeyValueEntry{ "/blocked", "blocked-value", 1, 2 };
+    blockedEvent->revision = 2;
+    dispatcher->Enqueue(std::move(blockedEvent));
+    ASSERT_TRUE(dispatcher->WaitBlockedNotifyStarted());
+
+    auto readyEvent = std::make_shared<WatchEvent>();
+    readyEvent->type = WatchEvent::Type::PUT;
+    readyEvent->entry = KeyValueEntry{ "/ready", "ready-value", 1, 3 };
+    readyEvent->revision = 3;
+    dispatcher->Enqueue(std::move(readyEvent));
+    EXPECT_TRUE(dispatcher->WaitEventCount(readyWatchId, 1));
+
+    dispatcher->Unblock();
+    EXPECT_TRUE(dispatcher->WaitEventCount(blockedWatchId, 1));
     dispatcher->Stop();
 }
 

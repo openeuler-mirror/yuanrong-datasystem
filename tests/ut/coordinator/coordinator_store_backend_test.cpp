@@ -64,6 +64,7 @@ protected:
         clock_ = std::make_shared<SteadyClockMock>();
         ttlManager_ = std::make_shared<TtlManager>(clock_);
         store_ = std::make_unique<CoordinatorStore>(memoryStore_, registry_, dispatcher_, ttlManager_);
+        ASSERT_TRUE(store_->Start().IsOk());
         backend_ = std::make_unique<CoordinatorStoreBackend>(*store_);
     }
 

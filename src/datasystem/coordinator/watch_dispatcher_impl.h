@@ -31,7 +31,6 @@
 namespace datasystem {
 namespace coordinator {
 class EventReqPb;
-
 // rpcDispatched is true only immediately before HandleEvent on a validated stub. Any other error is local,
 // unattributed evidence and must not be interpreted as a Worker application response.
 struct WorkerReachabilityProbeResult {
@@ -46,8 +45,9 @@ public:
      * @param[in] watchRegistry Registry that owns watch IDs.
      * @param[in] coordinatorId Immutable Coordinator process identity.
      */
-    WatchDispatcherImpl(WatchRegistry *watchRegistry, std::string coordinatorId)
-        : WatchDispatcher(watchRegistry), coordinatorId_(std::move(coordinatorId))
+    WatchDispatcherImpl(WatchRegistry *watchRegistry, std::string coordinatorId, size_t dispatchThreadCount)
+        : WatchDispatcher(watchRegistry, BTHREAD_TAG_DEFAULT, dispatchThreadCount),
+          coordinatorId_(std::move(coordinatorId))
     {
     }
 

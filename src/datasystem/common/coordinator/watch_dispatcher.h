@@ -33,6 +33,10 @@
 #include <unordered_set>
 #include <vector>
 
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
+
+#include "datasystem/common/coordinator/event_notify_executor.h"
 #include "datasystem/common/coordinator/watch_event.h"
 #include "datasystem/common/coordinator/watch_registry.h"
 #include "datasystem/common/util/thread.h"
@@ -48,8 +52,6 @@ struct WatcherChannel {
     std::deque<std::shared_ptr<WatchEvent>> queue;
     size_t backpressureLimit = 1024;
 
-    // Assigned before channel publication and immutable afterwards.
-    size_t assignedThread = 0;
     int64_t snapshotRevision = 0;
     bool needReWatch = false;
     bool dispatchQueued = false;
@@ -59,11 +61,14 @@ struct WatcherChannel {
 
 class WatchDispatcher {
 public:
+    static constexpr size_t DEFAULT_DISPATCH_THREAD_COUNT = 4;
+
     /**
      * @brief Construct a watch dispatcher using the specified registry.
      * @param[in] watchRegistry Registry that owns watch IDs.
      */
-    explicit WatchDispatcher(WatchRegistry *watchRegistry);
+    explicit WatchDispatcher(WatchRegistry *watchRegistry, bthread_tag_t notifyTag = BTHREAD_TAG_DEFAULT,
+                             size_t dispatchThreadCount = DEFAULT_DISPATCH_THREAD_COUNT);
 
     /**
      * @brief Stop dispatcher threads before destroying the dispatcher.
@@ -119,8 +124,9 @@ public:
 
     /**
      * @brief Start the fan-out thread and dispatch thread pool.
+     * @return Status of the operation.
      */
-    void Start();
+    Status Start();
 
     /**
      * @brief Stop all threads gracefully.
@@ -144,14 +150,11 @@ private:
         std::shared_ptr<WatcherChannel> channel;
     };
 
-    struct DispatchThread {
-        Thread thread;
-
-        // Protects readyChannels and retryChannels.
-        std::mutex mutex;
+    struct DispatchChannelGroup {
+        bthread::Mutex mutex;
+        bthread::ConditionVariable cv;
         std::deque<std::shared_ptr<WatcherChannel>> readyChannels;
         std::deque<RetryChannel> retryChannels;
-        std::condition_variable cv;
     };
 
     enum class HandleResult : uint8_t {
@@ -166,10 +169,10 @@ private:
     void FanOutLoop();
 
     /**
-     * @brief Dispatch thread main loop.
-     * @param[in] threadIndex Index of this thread in the pool.
+     * @brief Event notification bthread main loop.
+     * @param[in] workerIndex Index used as the preferred ready-channel group.
      */
-    void DispatchLoop(size_t threadIndex);
+    void DispatchLoop(size_t workerIndex);
 
     /**
      * @brief Notify and commit queued events for one watcher channel.
@@ -205,10 +208,9 @@ private:
 
     /**
      * @brief Insert a retry in ascending ready-time order.
-     * @param[in] dispatchThread Dispatch thread that owns the channel.
      * @param[in] retry Retry record to insert.
      */
-    void InsertRetryLocked(DispatchThread &dispatchThread, RetryChannel retry);
+    void InsertRetryLocked(DispatchChannelGroup &group, RetryChannel retry);
 
     /**
      * @brief Mark a channel cancelled and clear its pending events.
@@ -228,11 +230,18 @@ private:
     void ScheduleAllChannelsForRewatch();
 
     /**
-     * @brief Wait for the next non-cancelled channel owned by a dispatch thread.
-     * @param[in] dispatchThread Dispatch thread state to wait on.
+     * @brief Wait for the next non-cancelled ready channel.
+     * @param[in] groupIndex Group assigned to the current worker.
      * @return Ready channel, or nullptr after shutdown.
      */
-    std::shared_ptr<WatcherChannel> WaitForReadyChannel(DispatchThread &dispatchThread);
+    std::shared_ptr<WatcherChannel> WaitForReadyChannel(size_t groupIndex);
+
+    /**
+     * @brief Resolve the stable scheduling group for one channel.
+     * @param[in] channel Channel to map.
+     * @return Ready-channel group index.
+     */
+    size_t GetReadyGroupIndex(const std::shared_ptr<WatcherChannel> &channel) const;
 
     /**
      * @brief Cancel a watcher after notifying that the stream must be rebuilt.
@@ -257,9 +266,12 @@ private:
     std::unordered_map<int64_t, std::shared_ptr<WatcherChannel>> channels_;
     std::unordered_map<std::string, std::unordered_set<int64_t>> watchIdsByWatcher_;
 
-    std::vector<std::unique_ptr<DispatchThread>> dispatchThreadPool_;
+    std::vector<std::unique_ptr<DispatchChannelGroup>> dispatchChannelGroups_;
+    EventNotifyExecutor notifyExecutor_;
 
     WatchRegistry *watchRegistry_ = nullptr;
+    const bthread_tag_t notifyTag_;
+    const size_t dispatchThreadCount_;
     std::atomic<bool> running_{ false };
 };
 }  // namespace datasystem
