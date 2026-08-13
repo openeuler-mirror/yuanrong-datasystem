@@ -250,6 +250,9 @@ Backed by `.bazelrc`, `bazel/workspace_status.sh`, `bazel/git_version.bzl`, and 
 - local CUDA and URMA repository rules read declared environment variables through
   `repository_ctx.os.environ.get()` so the same Starlark works with Bazel 6.5 and 7.x; keep each variable in the
   repository rule's `environ` list so value changes still invalidate and refetch the external repository.
+- the local Ascend repository declares the HIXL and transitive MetaDef public headers on `hixl_plugin_sdk`; an
+  `includes` path alone does not make those headers available inside Bazel sandbox actions. Keep the repository rule
+  local so changes to the detected CANN installation refresh the generated targets.
 
 Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
 

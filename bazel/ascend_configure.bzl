@@ -178,6 +178,18 @@ cc_library(
 cc_library(
     name = "hixl_plugin_sdk",
     defines = {hixl_defines},
+    hdrs = glob([
+        "ascend/include/hixl/**/*.h",
+        "ascend/include/hixl/**/*.hpp",
+        "ascend/include/external/ge_common/**/*.h",
+        "ascend/include/external/ge_common/**/*.hpp",
+        "ascend/include/graph/**/*.h",
+        "ascend/include/graph/**/*.hpp",
+        "ascend/include/exe_graph/**/*.h",
+        "ascend/include/exe_graph/**/*.hpp",
+        "ascend/include/utils/**/*.h",
+        "ascend/include/utils/**/*.hpp",
+    ]),
     includes = {includes},
     linkopts = {hixl_plugin_linkopts},
 )
@@ -210,6 +222,7 @@ ASCEND_HIXL_PLUGIN_TARGETS = {hixl_plugin_targets}
 
 _ascend_configure = repository_rule(
     implementation = _ascend_configure_impl,
+    local = True,
     environ = [
         "ASCEND_CUSTOM_PATH",
         "ASCEND_HOME_PATH",
