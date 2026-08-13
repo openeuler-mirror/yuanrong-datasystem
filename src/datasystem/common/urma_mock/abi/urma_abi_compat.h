@@ -24,6 +24,9 @@
 #ifndef DATASYSTEM_COMMON_URMA_MOCK_URMA_ABI_COMPAT_H
 #define DATASYSTEM_COMMON_URMA_MOCK_URMA_ABI_COMPAT_H
 
+// MLCacheDirect extends the same mock ABI; prevent its base header from redefining shared URMA types.
+#define URMA_ABI_COMPAT_H
+
 // This header mirrors the URMA C ABI. Keep C-style names, typedefs, macros, unions, magic values, and pointer-based
 // signatures aligned with the external ABI instead of applying project C++ style rewrites.
 // NOLINTBEGIN

@@ -43,10 +43,7 @@ config_setting(
 
 config_setting(
     name = "enable_pipeline_h2d",
-    define_values = {
-        "enable_pipeline_h2d": "true",
-        "enable_urma": "true",
-    },
+    define_values = {"enable_pipeline_h2d": "true"},
     visibility = ["//visibility:public"],
 )
 

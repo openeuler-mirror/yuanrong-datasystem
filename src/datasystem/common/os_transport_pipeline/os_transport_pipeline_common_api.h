@@ -25,7 +25,11 @@
 
 #ifdef BUILD_PIPLN_H2D
 #include <atomic>
+#ifdef USE_URMA_MOCK
+#include "datasystem/common/urma_mock/abi/urma_abi_compat.h"
+#else
 #include <ub/umdk/urma/urma_api.h>
+#endif
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/os_transport_pipeline/chunk_manager.h"
 inline std::atomic<bool> &ClientPipelineRH2DEnabled()

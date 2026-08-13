@@ -43,10 +43,17 @@ build:urma --copt=-DURMA_OVER_UB
 # Provides a local shm+TCP transport so urma_manager.cpp can be unit-tested.
 # Mutually exclusive with build:urma (the actual SDK backend).
 build:urma_mock --define=enable_urma_mock=true
+build:urma_mock --copt=-DUSE_URMA
+build:urma_mock --copt=-DUSE_URMA_MOCK
 
 build:pipeline_h2d --config=urma
 build:pipeline_h2d --define=enable_pipeline_h2d=true
 build:pipeline_h2d --copt=-DBUILD_PIPLN_H2D
+
+build:pipeline_h2d_mock --config=urma_mock
+build:pipeline_h2d_mock --define=enable_pipeline_h2d=true
+build:pipeline_h2d_mock --define=mock_mode=true
+build:pipeline_h2d_mock --copt=-DBUILD_PIPLN_H2D
 
 build:asan --copt=-fsanitize=address
 build:asan --copt=-fno-omit-frame-pointer

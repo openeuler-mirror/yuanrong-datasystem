@@ -80,7 +80,11 @@ function _bazel_build_configs() {
 
   # Pipeline H2D
   if is_on "${BUILD_PIPLN_H2D}"; then
-    echo "--config=pipeline_h2d"
+    if is_on "${BUILD_WITH_URMA_MOCK}"; then
+      echo "--config=pipeline_h2d_mock"
+    else
+      echo "--config=pipeline_h2d"
+    fi
   fi
 
   # Perf
@@ -94,7 +98,7 @@ function _bazel_build_configs() {
   fi
 
   # URMA mock backend (mutually exclusive with BUILD_WITH_URMA, enforced in cmake path)
-  if is_on "${BUILD_WITH_URMA_MOCK}"; then
+  if is_on "${BUILD_WITH_URMA_MOCK}" && ! is_on "${BUILD_PIPLN_H2D}"; then
     echo "--config=urma_mock"
   fi
 
