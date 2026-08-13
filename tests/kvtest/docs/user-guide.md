@@ -46,7 +46,19 @@ cd tests/kvtest
 ./build.sh -c -j$(nproc)    # 清理重建
 ```
 
-编译产物位于 `output/`：`kvtest` 可执行文件（静态链接 libstdc++）、`lib/libdatasystem.so`、`deploy_client.py` 等。
+如需构建自包含的 Bazel kvtest，并启用 URMA：
+
+```bash
+cd tests/kvtest
+./build.sh -b bazel -M on
+```
+
+`-M on` 与仓库根目录 `build.sh` 的 URMA 开关保持一致，在 Bazel 模式下传递 `--config=urma`。Bazel
+kvtest 不会动态加载外部 `libdatasystem.so`，所以 URMA 必须在 kvtest 本身的构建命令中开启。默认
+`-M off`；CMake kvtest 的能力由其链接的预构建 SDK 决定。
+
+编译产物位于 `output/`：CMake 模式包含动态链接的 `lib/libdatasystem.so`，Bazel 模式只包含自包含的
+`kvtest`；两种模式都会打包 `deploy_client.py` 等运行文件。
 
 ---
 

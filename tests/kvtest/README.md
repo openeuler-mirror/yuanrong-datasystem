@@ -16,10 +16,17 @@ cd tests/kvtest
 # 用 Bazel 构建（in-tree datasystem，自包含二进制，无需预装 SDK）
 ./build.sh -b bazel
 
+# 用 Bazel 构建并将 URMA 支持编入自包含 kvtest（与根目录 build.sh -M on 对齐）
+./build.sh -b bazel -M on
+
 # Debug 构建
 ./build.sh -d          # cmake: -DCMAKE_BUILD_TYPE=Debug; bazel: --config=debug
 ./build.sh -b bazel -d
 ```
+
+Bazel 模式不会在运行时加载外部 `libdatasystem.so`。需要 UB/URMA 数据面时，必须在构建 kvtest 本身时传入
+`-M on`；该选项会映射为 Bazel 的 `--config=urma`。默认值为 `off`。CMake 模式的能力由 `-s` 指定的
+预构建 SDK 决定，因此不接受 `-M on`。
 
 ## 运行
 
