@@ -26,6 +26,8 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/raii.h"
@@ -1055,7 +1057,7 @@ private:
     std::shared_timed_mutex mutex_;  // protect streamMgrDict_.
     StreamManagerMap streamMgrDict_;
     std::atomic<uint64_t> lifetimeLocalStreamCount_{ 0 };
-    std::shared_timed_mutex mappingMutex_;  // protect streamNum2StreamName_.
+    SharedMutex mappingMutex_;  // protect streamNum2StreamName_.
     std::unordered_map<uint64_t, std::string> streamNum2StreamName_;
     CreatePubSubCtrl createStreamLocks_;
 
@@ -1064,7 +1066,7 @@ private:
     HostPort localWorkerAddress_;
     HostPort masterAddress_;
 
-    std::shared_timed_mutex clearMutex_;  // Protect requests success when other client crash.
+    SharedMutex clearMutex_;  // Protect requests success when other client crash.
     struct SubInfo {
         SubInfo(std::string streamName, std::string subName, std::string consumerId)
             : streamName(std::move(streamName)), subName(std::move(subName)), consumerId(std::move(consumerId))
@@ -1127,7 +1129,7 @@ public:
                      std::shared_ptr<BlockedCreateRequest<W, R>> &outblockedReq);
 
 private:
-    std::shared_timed_mutex blockedListMutex_;
+    SharedMutex blockedListMutex_;
     struct Compare {
         bool operator()(const BlockedCreateRequest<W, R> *a, const BlockedCreateRequest<W, R> *b)
         {

@@ -33,6 +33,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/metrics/metrics_vector/metrics_sc_remote_vector.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
 #include "datasystem/protos/stream_posix.brpc.stub.pb.h"

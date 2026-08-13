@@ -24,6 +24,8 @@
 #include <memory>
 #include <shared_mutex>
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/stream_cache/stream_data_page.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
@@ -135,7 +137,7 @@ public:
      */
     Status TryDecUsage(uint64_t size)
     {
-        std::shared_lock<std::shared_timed_mutex> lck(streamMetaShmMux_);
+        std::shared_lock<SharedMutex> lck(streamMetaShmMux_);
         return streamMetaShm_ ? streamMetaShm_->TryDecUsage(size) : Status::OK();
     }
 
@@ -145,7 +147,7 @@ public:
      */
     StreamMetaShm *GetStreamMetaShm()
     {
-        std::shared_lock<std::shared_timed_mutex> lck(streamMetaShmMux_);
+        std::shared_lock<SharedMutex> lck(streamMetaShmMux_);
         return streamMetaShm_ ? streamMetaShm_.get() : nullptr;
     }
 
@@ -164,11 +166,11 @@ private:
 
     std::string streamName_;
     std::atomic<bool> enableSharedPage_;
-    mutable std::shared_timed_mutex mutex_;
+    mutable SharedMutex mutex_;
     std::shared_ptr<ExclusivePageQueue> exclusivePageQueue_;
     std::shared_ptr<SharedPageQueue> sharedPageQueue_;
 
-    std::shared_timed_mutex streamMetaShmMux_;
+    SharedMutex streamMetaShmMux_;
     std::unique_ptr<ShmUnit> shmUnitOfStreamMeta_;
     std::unique_ptr<StreamMetaShm> streamMetaShm_;
     const uint64_t streamMetaShmSize_ = 64;

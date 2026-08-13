@@ -16,6 +16,8 @@
 
 #include "datasystem/worker/stream_cache/subscription.h"
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -34,7 +36,7 @@ Status Subscription::AddConsumer(const SubscriptionConfig &config, const std::st
 {
     CHECK_FAIL_RETURN_STATUS(config == this->subConfig_, StatusCode::K_RUNTIME_ERROR,
                              "The subscription config is different.");
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     // Initialize cursor by SubscriptionType, available data range is [lastSubAckCursor_, lastAppendCursor).
     CHECK_FAIL_RETURN_STATUS(config.subscriptionType == SubscriptionType::STREAM, K_INVALID, "Not supported config.");
     CHECK_FAIL_RETURN_STATUS(consumers_.empty(), StatusCode::K_RUNTIME_ERROR,
@@ -52,7 +54,7 @@ Status Subscription::RemoveConsumer(const std::string &consumerId)
     std::shared_ptr<Consumer> consumerPtr;
     RETURN_IF_NOT_OK(GetConsumer(consumerId, consumerPtr));
     uint64_t consumerAck = consumerPtr->GetWALastAckCursor();
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     if (ConsumerNum() == 1) {  // If only one consumer left (stream mode or queue mode with the last consumer).
         VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("[%s] Remove this sub since its last consumer is closed",
                                                     LogPrefix());
@@ -72,14 +74,14 @@ Status Subscription::RemoveConsumer(const std::string &consumerId)
 SubscriptionType Subscription::GetSubscriptionType() const
 {
     PerfPoint point(PerfKey::MANAGER_GET_SUB_TYPE);
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     return subConfig_.subscriptionType;
 }
 
 Status Subscription::GetConsumer(const std::string &consumerId, std::shared_ptr<Consumer> &consumer)
 {
     PerfPoint point(PerfKey::MANAGER_GET_CONSUMER);
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     auto iter = consumers_.find(consumerId);
     if (iter == consumers_.end()) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "Consumer not found " + consumerId);
@@ -109,7 +111,7 @@ uint64_t Subscription::CalcMinAckCursorNoLock() const
 
 uint64_t Subscription::UpdateLastAckCursor()
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     auto newAckCursor = CalcMinAckCursorNoLock();
     bool subAckForward = newAckCursor > lastSubAckCursor_;
     if (subAckForward) {
@@ -125,7 +127,7 @@ Status Subscription::TryWakeUpPendingReceive(uint64_t lastAppendCursor)
     if (subConfig_.subscriptionType != SubscriptionType::STREAM) {
         RETURN_STATUS(StatusCode::K_INVALID, "Only support stream mode");
     }
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (const auto &consumer : consumers_) {
         RETURN_IF_NOT_OK(consumer.second->WakeUpPendingReceive(lastAppendCursor));
     }
@@ -137,7 +139,7 @@ Status Subscription::SetForceClose()
     if (subConfig_.subscriptionType != SubscriptionType::STREAM) {
         RETURN_STATUS(StatusCode::K_INVALID, "Only support stream mode");
     }
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     Status rc;
     for (const auto &consumer : consumers_) {
         Status rc1 = consumer.second->SetForceClose();
@@ -151,7 +153,7 @@ Status Subscription::SetForceClose()
 uint64_t Subscription::GetElementCountAndReset()
 {
     uint64_t val = 0;
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (auto &consumer : consumers_) {
         val += consumer.second->GetElementCountAndReset();
     }
@@ -162,7 +164,7 @@ uint64_t Subscription::GetElementCountReceived()
 {
     uint64_t val = std::numeric_limits<uint64_t>::max();
     uint64_t count = 0;
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (auto &consumer : consumers_) {
         count = consumer.second->GetElementCount();
         if (val > count) {
@@ -175,7 +177,7 @@ uint64_t Subscription::GetElementCountReceived()
 uint64_t Subscription::GetRequestCountAndReset()
 {
     uint64_t val = 0;
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (auto &consumer : consumers_) {
         val += consumer.second->GetRequestCountAndReset();
     }
@@ -184,7 +186,7 @@ uint64_t Subscription::GetRequestCountAndReset()
 
 void Subscription::GetAllConsumers(std::vector<std::string> &consumers) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (const auto &kv : consumers_) {
         auto &consumerName = kv.first;
         consumers.emplace_back(consumerName);
@@ -193,7 +195,7 @@ void Subscription::GetAllConsumers(std::vector<std::string> &consumers) const
 
 void Subscription::CleanupSubscription()
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     for (const auto &kv : consumers_) {
         kv.second->CleanupConsumer();
     }

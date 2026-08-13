@@ -17,6 +17,8 @@
 #ifndef DATASYSTEM_WORKER_STREAM_CACHE_SUBSCRIPTION_H
 #define DATASYSTEM_WORKER_STREAM_CACHE_SUBSCRIPTION_H
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"
 #include "datasystem/common/stream_cache/cursor.h"
 #include "datasystem/stream/stream_config.h"
@@ -107,7 +109,7 @@ public:
      */
     bool HasConsumer() const
     {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        std::shared_lock<SharedMutex> lock(mutex_);
         return !consumers_.empty();
     }
 
@@ -173,7 +175,7 @@ private:
     const SubscriptionConfig subConfig_;
     const std::string streamName_;
     std::atomic<uint64_t> lastSubAckCursor_;
-    mutable std::shared_timed_mutex mutex_;  // protect consumers_
+    mutable SharedMutex mutex_;  // protect consumers_
     std::unordered_map<std::string, std::shared_ptr<Consumer>> consumers_;
 };
 }  // namespace stream_cache
