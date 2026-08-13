@@ -139,11 +139,11 @@ def _ascend_configure_impl(repository_ctx):
         hixl_defines.append("ASCEND_HIXL_AVAILABLE")
         hixl_srcs.append("hixl_transport.cpp")
         hixl_srcs.append("hixl_plugin_loader.cpp")
+        hixl_deps.append(":hixl_plugin_sha256_header")
         hixl_hdrs.extend([
             "hixl_plugin_api.h",
             "hixl_plugin_loader.h",
             "hixl_transport.h",
-            ":hixl_plugin_sha256",
         ])
         hixl_plugin_targets.append("//src/datasystem/common/rdma/npu/plugin:libds_hixl_plugin.so")
 
