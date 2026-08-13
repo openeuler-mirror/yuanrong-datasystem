@@ -10,7 +10,10 @@ package(
 # Header-only target: needed by common_shared_memory (breaks cycle)
 ds_cc_library(
     name="fast_transport_base_header",
-    hdrs=["fast_transport_base.h"],
+    hdrs=[
+        "fast_transport_base.h",
+        "urma_late_completion_observer.h",
+    ],
 )
 
 ds_cc_library(
@@ -78,6 +81,7 @@ ds_cc_library(
         ["*.h"],
         exclude=[
             "fast_transport_base.h",
+            "urma_late_completion_observer.h",
             "urma_dlopen_util.h",
             "urma_info.h",
             "urma_manager.h",

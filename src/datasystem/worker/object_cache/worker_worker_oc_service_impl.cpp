@@ -362,6 +362,21 @@ Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReq
     return Status::OK();
 }
 
+void WorkerWorkerOCServiceImpl::ApplyGatherWriteFailure(ParallelRes &result, uint64_t requestCount,
+                                                        const Status &status)
+{
+    LOG_IF_ERROR(status, "GatherWrite failed, all objects will fallback to payload");
+    result.kps.emplace_back(result.subIndex,
+                            std::make_pair(std::vector<uint64_t>(), std::vector<RpcMessage>()));
+    for (uint64_t i = 0; i < requestCount; ++i) {
+        result.respPbs[i].set_data_source(datasystem::DataTransferSource::DATA_IN_PAYLOAD);
+        if (!FLAGS_enable_transport_fallback) {
+            result.respPbs[i].mutable_error()->set_error_code(status.GetCode());
+            result.respPbs[i].mutable_error()->set_error_msg(status.GetMsg());
+        }
+    }
+}
+
 Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &info,
                                               std::shared_ptr<AggregateMemory> aggregatedMem,
                                               std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req,
@@ -370,8 +385,7 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
     if (!info.canBatchHandler) {
         return Status::OK();
     }
-    auto startPos = info.batchStartIndex[subIndex];
-    auto *subReq = req.mutable_requests(startPos);
+    auto *subReq = req.mutable_requests(info.batchStartIndex[subIndex]);
     ParallelRes &loc = parallelRes[subIndex];
 
     Status rc = Status::OK();
@@ -386,11 +400,17 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
             .port = urmaInfo.request_address().port(),
             .dstChipId = urmaInfo.has_chip_id() ? static_cast<uint8_t>(urmaInfo.chip_id()) : INVALID_CHIP_ID,
         };
+        auto *ubAdmission = ocClientWorkerSvc_->GetUbAdmission();
+        auto lateCompletionContext =
+            ubAdmission == nullptr
+                ? std::nullopt
+                : ubAdmission->BuildLateCompletionContext(UbOperationKind::WORKER_REMOTE_GET_WRITEBACK);
         if (sendLaneLease != nullptr) {
             rc = UrmaGatherWriteWithLane(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys,
-                                         sendLaneLease);
+                                         sendLaneLease, lateCompletionContext);
         } else {
-            rc = UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys);
+            rc = UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys,
+                                 lateCompletionContext);
         }
     } else if (IsUcpEnabled() && subReq->has_ucp_info()) {
         CHECK_FAIL_RETURN_STATUS(subReq->ucp_info().remote_buf() >= ocClientWorkerSvc_->GetMetadataSize(),
@@ -401,23 +421,12 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
 
     loc.fallbackPayloads = std::move(aggregatedMem->fallbackPayloads);
 
-    std::vector<uint64_t> subKeys;
-    // if error, set fallback flag
     if (rc.IsError()) {
-        LOG_IF_ERROR(rc, "GatherWrite failed, all objects will fallback to payload");
-        // Set empty subkeys and empty payload, and get failed payload in objectFallbackPayload
-        loc.kps.emplace_back(loc.subIndex, std::make_pair(std::move(subKeys), std::vector<RpcMessage>()));
-        for (uint64_t i = 0; i < info.batchReqSize[subIndex]; ++i) {
-            loc.respPbs[i].set_data_source(datasystem::DataTransferSource::DATA_IN_PAYLOAD);
-            if (!FLAGS_enable_transport_fallback) {
-                loc.respPbs[i].mutable_error()->set_error_code(rc.GetCode());
-                loc.respPbs[i].mutable_error()->set_error_msg(rc.GetMsg());
-            }
-        }
+        ApplyGatherWriteFailure(loc, info.batchReqSize[subIndex], rc);
         return Status::OK();
     }
 
-    subKeys = std::move(loc.eventKeys);
+    auto subKeys = std::move(loc.eventKeys);
     loc.kps.emplace_back(loc.subIndex, std::make_pair(std::move(subKeys), std::vector<RpcMessage>()));
     return Status::OK();
 }
@@ -727,16 +736,22 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
                 req.urma_info().has_chip_id() ? static_cast<uint8_t>(req.urma_info().chip_id()) : INVALID_CHIP_ID;
             Status rc;
             UrmaWriteFailure failure;
+            auto *ubAdmission = ocClientWorkerSvc_->GetUbAdmission();
+            auto lateCompletionContext =
+                ubAdmission == nullptr
+                    ? std::nullopt
+                    : ubAdmission->BuildLateCompletionContext(UbOperationKind::WORKER_REMOTE_GET_WRITEBACK);
             if (batchRh2dContext != nullptr && batchRh2dContext->sendLaneLease != nullptr) {
                 rc = UrmaWritePayloadWithLane(
                     req.urma_info(), localSegAddress, localSegSize,
                     reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size, entry->GetMetadataSize(),
-                    srcChipId, dstChipId, blocking, eventKeys, batchRh2dContext->sendLaneLease, nullptr, &failure);
+                    srcChipId, dstChipId, blocking, eventKeys, batchRh2dContext->sendLaneLease, nullptr, &failure,
+                    lateCompletionContext);
             } else {
                 rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize,
                                       reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size,
                                       entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys, nullptr,
-                                      &failure);
+                                      &failure, lateCompletionContext);
             }
             fastTransportStatus = rc;
             fastTransportName = "UrmaWrite";

@@ -2529,6 +2529,9 @@ public:
     {
         (void)inject::Clear("ObjectClientImpl.ClientWorkerWarmup.skip");
         (void)inject::Clear("UrmaManager.CheckCompletionRecordStatus");
+        (void)inject::Clear("UrmaManager.CheckCompletionRecordStatus.AfterPrimaryInject");
+        (void)inject::Clear("UrmaManager.UrmaWaitInFlightTimeout");
+        (void)inject::Clear("UrmaManager.DeleteEvent");
         (void)inject::Clear("UrmaManager.UrmaWriteError");
         (void)inject::Clear("UrmaManager.UrmaWriteAfterPost");
         (void)inject::Clear("DataPlaneManager.ProbeUbDataPlane.AfterCompletion");
@@ -2656,6 +2659,56 @@ TEST_F(UrmaClientSenderRecoveryTest, ClientSenderHardFailureBlocksNextSetWithDef
     Status fastFailure = client->Set(NewObjectKey(), value);
     EXPECT_EQ(fastFailure.GetCode(), K_URMA_WORKER_UNAVAILABLE) << fastFailure.ToString();
     EXPECT_EQ(inject::GetExecuteCount("UrmaManager.UrmaWriteError"), 0u);
+}
+
+TEST_F(UrmaClientSenderRecoveryTest, LateCqe4AfterSetTimeoutQuarantinesSender)
+{
+    ConnectOptions options;
+    InitConnectOpt(0, options);
+    options.enableLocalCache = false;
+    auto client = std::make_shared<KVClient>(options);
+    DS_ASSERT_OK(client->Init());
+    const std::string value = GenRandomString(UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes);
+    constexpr char cqePauseInject[] = "UrmaManager.CheckCompletionRecordStatus";
+    constexpr char lateCqeInject[] = "UrmaManager.CheckCompletionRecordStatus.AfterPrimaryInject";
+    constexpr char waitTimeoutInject[] = "UrmaManager.UrmaWaitInFlightTimeout";
+    constexpr char deleteEventInject[] = "UrmaManager.DeleteEvent";
+    constexpr char writeAttemptInject[] = "UrmaManager.UrmaWriteError";
+    DS_ASSERT_OK(inject::Set(cqePauseInject, "1*pause()"));
+    DS_ASSERT_OK(inject::Set(lateCqeInject, "1*call(0, 4)"));
+    DS_ASSERT_OK(inject::Set(waitTimeoutInject, "1*call(-1)"));
+    DS_ASSERT_OK(inject::Set(deleteEventInject, "call()"));
+
+    auto firstSet = std::async(std::launch::async, [&] { return client->Set(NewObjectKey(), value); });
+    const auto firstDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (inject::GetExecuteCount(cqePauseInject) == 0 && std::chrono::steady_clock::now() < firstDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const auto pauseCount = inject::GetExecuteCount(cqePauseInject);
+    const bool timedOutBeforeCqe = firstSet.wait_until(firstDeadline) == std::future_status::ready;
+    const auto deleteCountBeforeCqe = inject::GetExecuteCount(deleteEventInject);
+    DS_ASSERT_OK(inject::Clear(cqePauseInject));
+    const Status timeout = firstSet.get();
+    ASSERT_EQ(pauseCount, 1u);
+    ASSERT_TRUE(timedOutBeforeCqe) << "Set did not time out while CQE classification was paused";
+    EXPECT_EQ(timeout.GetCode(), K_URMA_WAIT_TIMEOUT) << timeout.ToString();
+    EXPECT_EQ(deleteCountBeforeCqe, 0u)
+        << "timed-out Event was deleted before its delayed CQE could be classified";
+
+    const auto completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while ((inject::GetExecuteCount(lateCqeInject) == 0 || inject::GetExecuteCount(deleteEventInject) == 0)
+           && std::chrono::steady_clock::now() < completionDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_EQ(inject::GetExecuteCount(lateCqeInject), 1u);
+    EXPECT_EQ(inject::GetExecuteCount(deleteEventInject), 1u);
+
+    DS_ASSERT_OK(inject::Set(writeAttemptInject, "call()"));
+    const Status isolated = client->Set(NewObjectKey(), value);
+    EXPECT_EQ(isolated.GetCode(), K_URMA_WORKER_UNAVAILABLE) << isolated.ToString();
+    EXPECT_NE(isolated.GetMsg().find("Client-local UB sender is unavailable"), std::string::npos);
+    EXPECT_EQ(inject::GetExecuteCount(writeAttemptInject), 0u)
+        << "isolated Set reached the URMA write path instead of failing admission";
 }
 
 TEST_F(UrmaClientSenderRecoveryTest, DedicatedProbeRecoversProcessWideSenderWithDefaultLocalCache)

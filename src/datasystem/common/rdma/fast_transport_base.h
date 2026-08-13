@@ -23,6 +23,7 @@
 #include <optional>
 #include <vector>
 
+#include "datasystem/common/rdma/urma_late_completion_observer.h"
 #include "datasystem/utils/status.h"
 
 #ifndef DATASYSTEM_COMMON_FAST_TRANSPORT_BASE_H

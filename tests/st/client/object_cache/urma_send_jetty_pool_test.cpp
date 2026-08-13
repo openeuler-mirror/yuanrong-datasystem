@@ -377,11 +377,12 @@ protected:
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kModifyJettyInject, "8*call()"));
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kRefillAddedInject, "8*call()"));
         std::vector<bool> requestResults;
-        bool timeoutEventsDeletedBeforeCqe = true;
+        bool timeoutEventsRetainedBeforeCqe = true;
+        bool timeoutEventsDeletedAfterCqe = true;
         uint64_t timeoutEventDeleteCount = 0;
         Status clearCompletionPause = Status::OK();
         auto runWave = [&](uint32_t requestOffset, uint32_t requestCount, bool observeHeldLanes = false,
-                           uint32_t expectedHeldLanes = 0, bool observeTimedOutEventDeletes = false) {
+                           uint32_t expectedHeldLanes = 0, bool observeTimedOutEventLifecycle = false) {
             ThreadPool threadPool(requestCount);
             std::promise<void> start;
             const auto startFuture = start.get_future().share();
@@ -405,16 +406,23 @@ protected:
                 heldLanesObserved = ObserveWorkerInjectExecuteCount(
                     kSourceWorker, kBatchGetAfterAcquireInject, expectedCount, acquiredCount, 10000);
             }
-            if (observeTimedOutEventDeletes) {
-                // The completion hook is paused. Observe the four timeout-owned deletions before releasing CQE
-                // classification, then always clear the pause before joining the request futures.
-                timeoutEventsDeletedBeforeCqe = ObserveWorkerInjectExecuteCount(
-                    kSourceWorker, kDeleteEventInject, kFaultCount, timeoutEventDeleteCount, 10000);
+            if (observeTimedOutEventLifecycle) {
+                uint64_t timeoutCount = 0;
+                const bool timeoutObserved = ObserveWorkerInjectExecuteCount(
+                    kSourceWorker, faultInject, kFaultCount, timeoutCount, 10000);
+                const auto deleteCountRc = cluster_->GetInjectActionExecuteCount(
+                    WORKER, kSourceWorker, kDeleteEventInject, timeoutEventDeleteCount);
+                timeoutEventsRetainedBeforeCqe = timeoutObserved && deleteCountRc.IsOk()
+                                                 && timeoutEventDeleteCount == 0;
                 clearCompletionPause =
                     cluster_->ClearInjectAction(WORKER, kSourceWorker, kCqeStatusInject);
             }
             for (auto &future : futures) {
                 requestResults.emplace_back(future.get());
+            }
+            if (observeTimedOutEventLifecycle) {
+                timeoutEventsDeletedAfterCqe = ObserveWorkerInjectExecuteCount(
+                    kSourceWorker, kDeleteEventInject, kFaultCount, timeoutEventDeleteCount, 10000);
             }
             return heldLanesObserved;
         };
@@ -523,10 +531,10 @@ protected:
         ASSERT_TRUE(clearFault.IsOk()) << clearFault.ToString();
         ASSERT_TRUE(timeoutWaveHeldFaultLanes) << "timeout wave did not hold four distinct fault lanes before Wait";
         if (faultInject != kCqeStatusInject) {
-            ASSERT_TRUE(timeoutEventsDeletedBeforeCqe)
-                << "only " << timeoutEventDeleteCount << " timed-out Events were deleted while CQE polling was paused";
-            ASSERT_EQ(timeoutEventDeleteCount, kFaultCount)
-                << "an Event outside the four injected timeouts was deleted before CQE polling resumed";
+            ASSERT_TRUE(timeoutEventsRetainedBeforeCqe)
+                << timeoutEventDeleteCount << " timed-out Events were deleted while CQE polling was paused";
+            ASSERT_TRUE(timeoutEventsDeletedAfterCqe)
+                << "only " << timeoutEventDeleteCount << " retained Events were deleted after CQE polling resumed";
         }
         ASSERT_TRUE(timeoutReleasesObserved)
             << "only " << timeoutReleaseCount << " CQE/transport-owned lane releases drained the timeout wave";

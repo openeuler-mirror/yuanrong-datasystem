@@ -550,8 +550,13 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
             ubUrmaInfo_.has_chip_id() ? static_cast<uint8_t>(ubUrmaInfo_.chip_id()) : INVALID_CHIP_ID;
         std::vector<uint64_t> eventKeys;
         UrmaWriteFailure failure;
+        auto lateCompletionContext =
+            ubAdmission_ == nullptr
+                ? std::nullopt
+                : ubAdmission_->BuildLateCompletionContext(UbOperationKind::CLIENT_GET_WRITEBACK);
         Status ubRc = UrmaWritePayload(urmaInfo, localSegAddress, localSegSize, localObjectAddressBase + readOffset, 0,
-                                       readSize, metaSize, srcChipId, dstChipId, true, eventKeys, nullptr, &failure);
+                                       readSize, metaSize, srcChipId, dstChipId, true, eventKeys, nullptr, &failure,
+                                       std::move(lateCompletionContext));
         if (ubRc.IsOk()) {
             ubWriteOffset += readSize;
             METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);

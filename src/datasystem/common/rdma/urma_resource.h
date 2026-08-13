@@ -94,6 +94,12 @@ struct UrmaSequentialWaitContext {
 class UrmaEvent : public Event {
 public:
     enum class OperationType : uint8_t { UNKNOWN = 0, READ = 1, WRITE = 2 };
+    enum class CompletionDisposition : uint8_t {
+        WAKE_WAITER,
+        RETAINED_TIMEOUT,
+        DISCARDED_TIMEOUT,
+        ALREADY_COMPLETED
+    };
 
     /**
      * @brief Construct an Urma event for an in-flight request.
@@ -108,14 +114,16 @@ public:
     UrmaEvent(uint64_t requestId, std::shared_ptr<UrmaSendLaneLease> laneLease, std::string remoteAddress,
               std::string remoteInstanceId, uint64_t dataSize, OperationType operationType,
               std::atomic<int> *srcChipInflightCounter,
-              std::shared_ptr<EventWaiter> waiter = nullptr)
+              std::shared_ptr<EventWaiter> waiter = nullptr,
+              std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt)
         : Event(requestId, std::move(waiter)),
           laneLease_(std::move(laneLease)),
           remoteAddress_(std::move(remoteAddress)),
           remoteInstanceId_(std::move(remoteInstanceId)),
           dataSize_(dataSize),
           operationType_(operationType),
-          srcChipInflightCounter_(srcChipInflightCounter)
+          srcChipInflightCounter_(srcChipInflightCounter),
+          lateCompletionContext_(std::move(lateCompletionContext))
     {
         if (srcChipInflightCounter_ != nullptr) {
             srcChipInflightCounter_->fetch_add(1, std::memory_order_relaxed);
@@ -265,10 +273,11 @@ public:
 
     Status WaitFor(std::chrono::milliseconds timeout) override
     {
-        return WaitFor(timeout, nullptr);
+        return WaitFor(timeout, nullptr, {});
     }
 
-    Status WaitFor(std::chrono::milliseconds timeout, UrmaSequentialWaitContext *waitContext)
+    Status WaitFor(std::chrono::milliseconds timeout, UrmaSequentialWaitContext *waitContext,
+                   const std::function<void()> &onRetainedTimeout = {})
     {
         std::unique_lock<bthread::Mutex> lock(eventMutex_);
         const bool waitedForNotification = !ready_;
@@ -278,28 +287,88 @@ public:
         if (gotNotification) {
             return Status::OK();
         }
+        MarkTimedOutLocked(onRetainedTimeout);
         // URMA wait timeout is a transport completion timeout, not an RPC API deadline.
         RETURN_STATUS_LOG_ERROR(K_URMA_WAIT_TIMEOUT,
                                 FormatString("Timed out waiting for urma_request_id_%zu", requestId_));
     }
 
+    void MarkWaitTimedOut(const std::function<void()> &onRetainedTimeout)
+    {
+        std::unique_lock<bthread::Mutex> lock(eventMutex_);
+        MarkTimedOutLocked(onRetainedTimeout);
+    }
+
     void NotifyAll() override
     {
+        (void)NotifyAllAndGetDisposition();
+    }
+
+    CompletionDisposition NotifyAllAndGetDisposition()
+    {
+        std::shared_ptr<EventWaiter> waiter;
+        CompletionDisposition disposition = CompletionDisposition::ALREADY_COMPLETED;
         {
             std::unique_lock<bthread::Mutex> lock(eventMutex_);
+            if (lifecycle_ == Lifecycle::COMPLETED) {
+                return disposition;
+            }
             notifyTimeUs_ = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
             if (operationType_ == OperationType::WRITE) {
                 writeTrace_.notifyUs = notifyTimeUs_;
             }
             ready_ = true;
+            switch (lifecycle_) {
+                case Lifecycle::WAITING:
+                    disposition = CompletionDisposition::WAKE_WAITER;
+                    waiter = waiter_;
+                    break;
+                case Lifecycle::TIMED_OUT_RETAINED:
+                    disposition = CompletionDisposition::RETAINED_TIMEOUT;
+                    break;
+                case Lifecycle::TIMED_OUT_DISCARD:
+                    disposition = CompletionDisposition::DISCARDED_TIMEOUT;
+                    break;
+                case Lifecycle::COMPLETED:
+                    break;
+            }
+            lifecycle_ = Lifecycle::COMPLETED;
         }
-        if (waiter_) {
-            waiter_->Notify(shared_from_this());
+        if (waiter) {
+            waiter->Notify(shared_from_this());
         }
         cv_.notify_all();
+        return disposition;
+    }
+
+    bool IsTimedOutRetained() const
+    {
+        std::unique_lock<bthread::Mutex> lock(eventMutex_);
+        return lifecycle_ == Lifecycle::TIMED_OUT_RETAINED;
+    }
+
+    const std::optional<UrmaLateCompletionContext> &GetLateCompletionContext() const
+    {
+        return lateCompletionContext_;
     }
 
 private:
+    enum class Lifecycle : uint8_t { WAITING, TIMED_OUT_RETAINED, TIMED_OUT_DISCARD, COMPLETED };
+
+    void MarkTimedOutLocked(const std::function<void()> &onRetainedTimeout)
+    {
+        if (lifecycle_ != Lifecycle::WAITING) {
+            return;
+        }
+        const bool retain = operationType_ == OperationType::WRITE && lateCompletionContext_.has_value()
+                            && !lateCompletionContext_->observer.expired() && onRetainedTimeout;
+        lifecycle_ = retain ? Lifecycle::TIMED_OUT_RETAINED : Lifecycle::TIMED_OUT_DISCARD;
+        waiter_.reset();
+        if (retain) {
+            onRetainedTimeout();
+        }
+    }
+
     void ResetSequentialWaitContextIfNeeded(UrmaSequentialWaitContext *waitContext) const
     {
         const bool startsNewWrite = writeTrace_.writeChunkCount <= 1 || writeTrace_.writeChunkIndex <= 1;
@@ -391,6 +460,8 @@ private:
     std::atomic<uint64_t> eventProcessingAndWaitLatencyUs_{ 0 };
     UrmaWriteTrace writeTrace_;
     std::atomic<int> *srcChipInflightCounter_{ nullptr };
+    Lifecycle lifecycle_{ Lifecycle::WAITING };
+    std::optional<UrmaLateCompletionContext> lateCompletionContext_;
 };
 
 class UrmaContext {

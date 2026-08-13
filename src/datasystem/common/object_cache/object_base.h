@@ -32,6 +32,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/object_cache/ireceive_buffer_owner.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -379,6 +380,7 @@ struct ObjectBufferInfo {
     Status ubFailureReportRc = Status::OK();
     std::optional<int> ubProviderStatus;
     std::optional<int> ubCqeStatus;
+    std::optional<UrmaLateCompletionContext> ubLateCompletionContext;
     std::shared_ptr<void> ubGetBufferHandle;  // UB Get zero-copy: type-erased BufferHandle ref
     std::shared_ptr<client::IReceiveBufferOwner> receiveBufferOwner;
     uint32_t sessionLockId = 0;                // Target Worker lock slot for routed SHM Buffer.

@@ -808,7 +808,7 @@ Status UbTransporter::SubmitPayload(ObjectBufferInfo &info, bool blocking, std::
         info.ubUrmaDataInfo->has_chip_id() ? static_cast<uint8_t>(info.ubUrmaDataInfo->chip_id()) : INVALID_CHIP_ID;
     return UrmaWritePayload(*(info.ubUrmaDataInfo), segment.first, segment.second,
                             reinterpret_cast<uint64_t>(info.pointer), 0, info.dataSize, info.metadataSize, srcChipId,
-                            dstChipId, blocking, eventKeys, nullptr, failure);
+                            dstChipId, blocking, eventKeys, nullptr, failure, info.ubLateCompletionContext);
 #else
     (void)info;
     (void)blocking;
