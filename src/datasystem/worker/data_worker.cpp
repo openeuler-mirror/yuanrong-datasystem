@@ -392,7 +392,13 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDe
     LOG_IF_ERROR(Uri::NormalizePathWithUserHomeDir(FLAGS_monitor_config_file, "", ""),
                  FormatString("Failed to normalize the path (%s) with user home directory", FLAGS_monitor_config_file));
     LOG(INFO) << "Worker start success";
-    OperationLogger::Instance().LogConfigInit(flags.GetAllFlagsStr());
+#ifdef USE_URMA
+    constexpr char urmaCompiled[] = "1";
+#else
+    constexpr char urmaCompiled[] = "0";
+#endif
+    OperationLogger::Instance().LogConfigInit("URMA_COMPILED=" + std::string(urmaCompiled) + "\n"
+                                              + flags.GetAllFlagsStr());
 
     return Status::OK();
 }
