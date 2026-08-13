@@ -40,10 +40,12 @@
 #include "datasystem/common/flags/config_monitor_state.h"
 #include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/log/log_sampler.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/rpc/brpc_factory.h"
-#include "datasystem/common/signal/signal.h"
 #include "datasystem/protos/coordinator.brpc.stub.pb.h"
+#include "datasystem/common/signal/signal.h"
+#include "datasystem/common/util/file_util.h"
 #include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/status.h"
 #define private public
@@ -155,6 +157,14 @@ void CreateCoordinatorConfig(const std::string &path, bool useBrpc = true)
 {
     CreateNonEmptyFile(path, std::string(R"({"use_brpc":{"value":")") + (useBrpc ? "true" : "false")
                                  + R"(","description":"Coordinator Runtime UT config."}})");
+}
+
+void CreateCoordinatorLogConfig(const std::string &path, const std::string &logFilename)
+{
+    CreateNonEmptyFile(path,
+                       std::string(R"({"use_brpc":{"value":"true","description":"Coordinator Runtime UT config."},)")
+                           + R"("log_filename":{"value":")" + logFilename
+                           + R"(","description":"Coordinator log filename."}})");
 }
 
 CoordinatorOptions MakeCoordinatorOptions(const std::shared_ptr<ICoordinatorDiscovery> &discovery,
@@ -404,6 +414,10 @@ protected:
         savedElectionTimeoutMs_ = FLAGS_coordinator_raft_election_timeout_ms;
         savedFailureGraceMs_ = FLAGS_coordinator_member_failure_grace_ms;
         savedDiscoveryRetryMs_ = FLAGS_coordinator_discovery_retry_interval_ms;
+        savedLogAsync_ = FLAGS_log_async;
+        savedLogDir_ = FLAGS_log_dir;
+        savedLogFilename_ = FLAGS_log_filename;
+        Logging::ResetLoggingRuntimeForTest();
 
         tempDirectory_ = std::make_unique<ScopedTempDirectory>();
         const auto *testInfo = testing::UnitTest::GetInstance()->current_test_info();
@@ -432,6 +446,9 @@ protected:
         FLAGS_coordinator_raft_election_timeout_ms = kElectionTimeoutMs;
         FLAGS_coordinator_member_failure_grace_ms = kFailureGraceMs;
         FLAGS_coordinator_discovery_retry_interval_ms = kDiscoveryRetryMs;
+        FLAGS_log_async = false;
+        FLAGS_log_dir = tempDirectory_->Child("logs");
+        FLAGS_log_filename.clear();
         raftFlags_ = coordinator::CoordinatorRaftFlags{ coordinatorAddress_, tempDirectory_->Child("raft-data"),
                                                         kHeartbeatIntervalMs, kElectionTimeoutMs,
                                                         kDiscoveryRetryMs,    kFailureGraceMs,
@@ -449,6 +466,10 @@ protected:
         FLAGS_coordinator_raft_election_timeout_ms = savedElectionTimeoutMs_;
         FLAGS_coordinator_member_failure_grace_ms = savedFailureGraceMs_;
         FLAGS_coordinator_discovery_retry_interval_ms = savedDiscoveryRetryMs_;
+        Logging::ResetLoggingRuntimeForTest();
+        FLAGS_log_async = savedLogAsync_;
+        FLAGS_log_dir = savedLogDir_;
+        FLAGS_log_filename = savedLogFilename_;
 
         auto &allocator = st::TestPortAllocator::Instance();
         for (const auto &lease : portLeases_) {
@@ -508,6 +529,9 @@ protected:
     int32_t savedElectionTimeoutMs_{ 0 };
     uint32_t savedFailureGraceMs_{ 0 };
     uint32_t savedDiscoveryRetryMs_{ 0 };
+    bool savedLogAsync_{ false };
+    std::string savedLogDir_;
+    std::string savedLogFilename_;
 };
 
 void ExpectAllBusinessRpcsReturn(coordinator::CoordinatorServiceImpl &service, StatusCode expectedCode,
@@ -856,6 +880,93 @@ TEST_F(CoordinatorElectionServiceTest, RuntimeNonEmptyConfigPathParsesProcessFla
     ExpectInvalidWithMessage(status, "use_brpc=true");
     EXPECT_EQ(runtime.SnapshotCallCount(), 1U);
     EXPECT_FALSE(FLAGS_use_brpc);
+}
+
+TEST_F(CoordinatorElectionServiceTest, RuntimeUsesConfiguredCoordinatorLogFilename)
+{
+    const std::string configuredLogFilename = "kvcache_coordinator";
+    FLAGS_log_filename = configuredLogFilename;
+    const auto configuredInfoLogPath = FLAGS_log_dir + "/" + configuredLogFilename + ".INFO.log";
+    const auto configuredOperationLogPath = FLAGS_log_dir + "/" + configuredLogFilename + "_operation.log";
+    const auto defaultInfoLogPath = FLAGS_log_dir + "/datasystem_coordinator.INFO.log";
+    const auto defaultOperationLogPath = FLAGS_log_dir + "/datasystem_coordinator_operation.log";
+
+    auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
+    discovery->candidates_ = { peers_.front() };
+    CoordinatorRuntimeMock runtime(raftFlags_);
+    auto options = MakeCoordinatorOptions(discovery);
+    options.onStart = [] {
+        return Status(K_RUNTIME_ERROR, "stop after coordinator log filename check");
+    };
+    options.onStop = [] {
+        return Status::OK();
+    };
+
+    const auto status = runtime.InitAndRun(options);
+
+    EXPECT_EQ(status.GetCode(), K_RUNTIME_ERROR) << status.ToString();
+    EXPECT_EQ(runtime.SnapshotCallCount(), 1U);
+    EXPECT_TRUE(FileExist(configuredInfoLogPath)) << configuredInfoLogPath;
+    EXPECT_TRUE(FileExist(configuredOperationLogPath)) << configuredOperationLogPath;
+    EXPECT_FALSE(FileExist(defaultInfoLogPath)) << defaultInfoLogPath;
+    EXPECT_FALSE(FileExist(defaultOperationLogPath)) << defaultOperationLogPath;
+}
+
+TEST_F(CoordinatorElectionServiceTest, RuntimeConfigPathUsesConfiguredCoordinatorLogFilename)
+{
+    const std::string configuredLogFilename = "kvcache_coordinator";
+    const auto configPath = tempDirectory_->Child("runtime-log-config.json");
+    CreateCoordinatorLogConfig(configPath, configuredLogFilename);
+    const auto configuredInfoLogPath = FLAGS_log_dir + "/" + configuredLogFilename + ".INFO.log";
+    const auto configuredOperationLogPath = FLAGS_log_dir + "/" + configuredLogFilename + "_operation.log";
+    const auto defaultInfoLogPath = FLAGS_log_dir + "/datasystem_coordinator.INFO.log";
+    const auto defaultOperationLogPath = FLAGS_log_dir + "/datasystem_coordinator_operation.log";
+
+    auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
+    discovery->candidates_ = { peers_.front() };
+    CoordinatorRuntimeMock runtime(raftFlags_);
+    auto options = MakeCoordinatorOptions(discovery);
+    options.configFilePath = configPath;
+    options.onStart = [] {
+        return Status(K_RUNTIME_ERROR, "stop after coordinator config path log filename check");
+    };
+    options.onStop = [] {
+        return Status::OK();
+    };
+
+    const auto status = runtime.InitAndRun(options);
+
+    EXPECT_EQ(status.GetCode(), K_RUNTIME_ERROR) << status.ToString();
+    EXPECT_EQ(runtime.SnapshotCallCount(), 1U);
+    EXPECT_TRUE(FileExist(configuredInfoLogPath)) << configuredInfoLogPath;
+    EXPECT_TRUE(FileExist(configuredOperationLogPath)) << configuredOperationLogPath;
+    EXPECT_FALSE(FileExist(defaultInfoLogPath)) << defaultInfoLogPath;
+    EXPECT_FALSE(FileExist(defaultOperationLogPath)) << defaultOperationLogPath;
+}
+
+TEST_F(CoordinatorElectionServiceTest, RuntimeKeepsDefaultCoordinatorLogFilenameWhenUnset)
+{
+    FLAGS_log_filename.clear();
+    const auto defaultInfoLogPath = FLAGS_log_dir + "/datasystem_coordinator.INFO.log";
+    const auto defaultOperationLogPath = FLAGS_log_dir + "/datasystem_coordinator_operation.log";
+
+    auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
+    discovery->candidates_ = { peers_.front() };
+    CoordinatorRuntimeMock runtime(raftFlags_);
+    auto options = MakeCoordinatorOptions(discovery);
+    options.onStart = [] {
+        return Status(K_RUNTIME_ERROR, "stop after default coordinator log filename check");
+    };
+    options.onStop = [] {
+        return Status::OK();
+    };
+
+    const auto status = runtime.InitAndRun(options);
+
+    EXPECT_EQ(status.GetCode(), K_RUNTIME_ERROR) << status.ToString();
+    EXPECT_EQ(runtime.SnapshotCallCount(), 1U);
+    EXPECT_TRUE(FileExist(defaultInfoLogPath)) << defaultInfoLogPath;
+    EXPECT_TRUE(FileExist(defaultOperationLogPath)) << defaultOperationLogPath;
 }
 
 TEST_F(CoordinatorElectionServiceTest, MalformedConfigFailsBeforeRaftSnapshot)

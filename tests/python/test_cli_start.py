@@ -15,7 +15,9 @@
 
 import argparse
 import importlib.util
+import json
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -91,6 +93,11 @@ class CliStartTest(unittest.TestCase):
     def setUp(self):
         self.command = start.Command.__new__(start.Command)
         self.command._base_dir = "/opt/yuanrong"
+        self.command.logger = types.SimpleNamespace(
+            info=lambda *args, **kwargs: None,
+            warning=lambda *args, **kwargs: None,
+            error=lambda *args, **kwargs: None,
+        )
 
     def test_build_command_accepts_valid_kv_events_json(self):
         config = (
@@ -133,6 +140,25 @@ class CliStartTest(unittest.TestCase):
 
         self.assertEqual(args.coordinator_config_path, "coordinator_config.json")
         self.assertIsNone(args.worker_config_path)
+
+    def test_coordinator_config_passes_log_filename_to_process(self):
+        config = {
+            "service_type": {"value": "coordinator"},
+            "log_filename": {"value": "kvcache_coordinator"},
+            "log_dir": {"value": "/tmp/datasystem/c1/logs"},
+        }
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as config_file:
+            json.dump(config, config_file)
+            config_path = config_file.name
+        self.addCleanup(lambda: Path(config_path).unlink(missing_ok=True))
+
+        params = self.command.load_config(config_path, start.Command._COORDINATOR_SERVICE)
+        command = self.command.build_coordinator_command(params)
+
+        self.assertEqual(params["log_filename"], "kvcache_coordinator")
+        self.assertIn("--log_filename=kvcache_coordinator", command)
+        self.assertIn("--log_dir=/tmp/datasystem/c1/logs", command)
+        self.assertNotIn("--service_type=coordinator", command)
 
     def test_physcpubind_keeps_long_option_only(self):
         args = self.parse_start_args(

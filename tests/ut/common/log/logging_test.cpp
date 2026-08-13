@@ -378,14 +378,14 @@ TEST_F(LoggingTest, TestCoordinatorDoesNotCreateAccessLogs)
 
 TEST_F(LoggingTest, LogProcessVersionWritesRegularAndOperationLogs)
 {
-    Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR, 1);
+    const std::string logFilename = "log_process_version_test";
+    Logging::GetInstance()->Start(logFilename, LogProcessRole::COORDINATOR, 1);
     Logging::GetInstance()->LogProcessVersion("[abc123] [2026-08-13 09:30:00]", "feature/test");
     OperationLogger::Instance().Shutdown();
     Provider::Instance().FlushLogs();
 
-    const std::string infoContent = ReadFileContent(FLAGS_log_dir + "/datasystem_coordinator.INFO.log");
-    const std::string operationContent =
-        ReadFileContent(FLAGS_log_dir + "/datasystem_coordinator_operation.log");
+    const std::string infoContent = ReadFileContent(FLAGS_log_dir + "/" + logFilename + ".INFO.log");
+    const std::string operationContent = ReadFileContent(FLAGS_log_dir + "/" + logFilename + "_operation.log");
     EXPECT_NE(infoContent.find("Git Commit:[abc123] [2026-08-13 09:30:00]; Git Branch: feature/test"),
               std::string::npos);
     EXPECT_NE(operationContent.find(

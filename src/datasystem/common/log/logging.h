@@ -165,6 +165,11 @@ public:
      * @brief Reset client log config state for unit tests.
      */
     static void ResetClientLogConfigForTest();
+
+    /**
+     * @brief Reset logging runtime state for unit tests.
+     */
+    static void ResetLoggingRuntimeForTest();
 #endif
 
 protected:
