@@ -261,6 +261,9 @@ Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
 - the CMake mode links against a pre-installed SDK (`-s/--sdk`, default `../../output/cpp`), while the Bazel mode
   builds `//tests/kvtest:kvtest` against the in-tree `//src/datasystem/client:datasystem`, producing a self-contained
   binary that does not need `libdatasystem.so` at runtime;
+- kvtest `build.sh -M on` mirrors the root build entrypoint for Bazel builds by adding `--config=urma`; it defaults
+  to `off`, validates `on|off`, and rejects `-M on` with CMake because that mode consumes an already-built SDK
+  whose compile-time transport capabilities cannot be changed by the kvtest build;
 - `tests/kvtest/Makefile` `package` tolerates a missing `third_party/sdk/` so the same packaging step serves both
   modes (cmake ships SDK libs alongside; bazel ships only the fat binary);
 - the control plane (Notify/Stats/Stop/Summary) is dual-transport via a `KVTEST_USE_BRPC` compile-time switch:

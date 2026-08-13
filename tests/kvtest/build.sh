@@ -16,6 +16,7 @@ set -euo pipefail
 #   -r, --release     Release build (default)
 #   -c, --clean       Clean build directory first (cmake) / bazel clean first (bazel)
 #   -b, --build SYS   Build system: cmake or bazel (default: cmake)
+#   -M on|off         Build the Bazel kvtest with URMA support (default: off)
 #   -h, --help        Show this help
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,6 +26,7 @@ BUILD_DIR="$SCRIPT_DIR/build"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 8)}"
 BUILD_SYSTEM="cmake"
 BUILD_TYPE="Release"
+BUILD_WITH_URMA="off"
 CLEAN=0
 
 usage() {
@@ -44,6 +46,16 @@ while [[ $# -gt 0 ]]; do
         -j|--jobs)  JOBS="$2"; shift 2 ;;
         -d|--debug) BUILD_TYPE="Debug"; shift ;;
         -r|--release) BUILD_TYPE="Release"; shift ;;
+        -M)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: -M requires on or off"
+                exit 1
+            fi
+            if [[ "$2" != "on" && "$2" != "off" ]]; then
+                echo "ERROR: invalid value '$2' for -M, choose from on or off"
+                exit 1
+            fi
+            BUILD_WITH_URMA="$2"; shift 2 ;;
         -c|--clean) CLEAN=1; shift ;;
         -h|--help)  usage ;;
         *)          echo "Unknown option: $1"; exit 1 ;;
@@ -53,6 +65,12 @@ done
 echo "Build system: $BUILD_SYSTEM"
 echo "Build type:   $BUILD_TYPE"
 echo "Jobs:         $JOBS"
+echo "URMA:         $BUILD_WITH_URMA"
+
+if [[ "$BUILD_SYSTEM" == "cmake" && "$BUILD_WITH_URMA" == "on" ]]; then
+    echo "ERROR: -M on is supported only with -b bazel; CMake kvtest uses the selected pre-built SDK"
+    exit 1
+fi
 
 # -----------------------------------------------------------------------------
 # Detect optional libnuma support. Used by both modes (cmake find_library and
@@ -120,6 +138,9 @@ else  # bazel
         ba_args+=(--config=debug)
     else
         ba_args+=(--config=release)
+    fi
+    if [[ "$BUILD_WITH_URMA" == "on" ]]; then
+        ba_args+=(--config=urma)
     fi
     if detect_numa; then
         echo "NUMA: libnuma detected, enabling -Dkvtest_numa=true"
