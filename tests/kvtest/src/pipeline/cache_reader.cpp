@@ -34,7 +34,7 @@ void CacheReader::Start() {
     running_ = true;
 
     {
-        std::lock_guard<std::mutex> lock(warmupMutex_);
+        std::lock_guard<kvtest::mutex> lock(warmupMutex_);
         if (pendingWarmupWriters_.empty()) {
             SLOG_WARN("CacheReader: no writers configured, warmup done immediately");
             warmupDone_ = true;
@@ -59,12 +59,12 @@ void CacheReader::Stop() {
 
 void CacheReader::OnWarmupDone(int senderId, const std::vector<std::string> &warmupKeys) {
     {
-        std::unique_lock<std::shared_mutex> lock(keyPoolMutex_);
+        std::unique_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
         keyPool_.insert(keyPool_.end(), warmupKeys.begin(), warmupKeys.end());
     }
     size_t remaining = 0;
     {
-        std::lock_guard<std::mutex> lock(warmupMutex_);
+        std::lock_guard<kvtest::mutex> lock(warmupMutex_);
         pendingWarmupWriters_.erase(senderId);
         if (pendingWarmupWriters_.empty()) {
             warmupDone_ = true;
@@ -78,7 +78,7 @@ void CacheReader::OnWarmupDone(int senderId, const std::vector<std::string> &war
 }
 
 void CacheReader::OnEvictKeys(const std::vector<std::string> &keys) {
-    std::unique_lock<std::shared_mutex> lock(keyPoolMutex_);
+    std::unique_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
     size_t prevSize = keyPool_.size();
     keyPool_.insert(keyPool_.end(), keys.begin(), keys.end());
     // Capacity control: remove oldest eviction keys if over limit
@@ -92,7 +92,7 @@ void CacheReader::OnEvictKeys(const std::vector<std::string> &keys) {
 }
 
 std::string CacheReader::RandomKey(std::mt19937 &rng) {
-    std::shared_lock<std::shared_mutex> lock(keyPoolMutex_);
+    std::shared_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
     if (keyPool_.empty()) return "";
     auto dist = std::uniform_int_distribution<size_t>(0, keyPool_.size() - 1);
     return keyPool_[dist(rng)];
@@ -105,7 +105,7 @@ void CacheReader::ReaderLoop(int threadId) {
 
     // Wait for warmup completion with timeout
     {
-        std::unique_lock<std::mutex> lock(warmupMutex_);
+        std::unique_lock<kvtest::mutex> lock(warmupMutex_);
         if (!warmupCv_.wait_for(lock,
                 std::chrono::seconds(cfg_.warmupTimeoutSeconds),
                 [this] { return warmupDone_.load() || !running_.load(); })) {
@@ -142,13 +142,16 @@ void CacheReader::ReaderLoop(int threadId) {
             auto fireTime = nextSlot + std::chrono::microseconds(offsetDist(rng));
             auto now = std::chrono::steady_clock::now();
             if (fireTime > now) {
-                std::this_thread::sleep_until(fireTime);
+                // Yield the bthread (brpc mode) or sleep the std::thread
+                // (cmake mode); kvtest::sleep_until picks the right primitive
+                // so the QPS-rate idle doesn't hold a pthread worker.
+                kvtest::sleep_until(fireTime);
             }
         }
 
         std::string key = RandomKey(rng);
         if (key.empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            kvtest::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
         uint64_t size = cfg_.dataSizes[sizeDist(rng)];
@@ -213,8 +216,9 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     }, existLatency);
     metrics_.Record(kOpCacheExist, existLatency, existOk, 0);
 
-    // Step 3: Simulate inference (not counted in latency)
-    std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.inferenceDelayMs));
+    // Step 3: Simulate inference (not counted in latency). Same primitive
+    // selection as the reader loop — yields the bthread in brpc mode.
+    kvtest::sleep_for(std::chrono::milliseconds(cfg_.inferenceDelayMs));
 
     // Step 4: Set backfill
     SetParam param;

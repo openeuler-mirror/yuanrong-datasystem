@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/bthread_compat.h"
 #include "common/config.h"
 #include "data_pattern.h"
 #include "metrics/metrics.h"
@@ -38,20 +39,24 @@ private:
     MetricsCollector &metrics_;
     VerifyConfig verifyCfg_;
 
-    // Key pool: read-heavy, shared_mutex
-    mutable std::shared_mutex keyPoolMutex_;
+    // Key pool: read-heavy, kvtest::shared_mutex (bthread::RWLock in bazel
+    // mode so a bthread reader waiting on a writer yields the bthread instead
+    // of blocking a pthread worker).
+    mutable kvtest::shared_mutex keyPoolMutex_;
     std::vector<std::string> keyPool_;
     size_t maxKeyPoolSize_;
 
-    // Warmup synchronization
-    std::mutex warmupMutex_;
-    std::condition_variable warmupCv_;
+    // Warmup synchronization — kvtest::mutex/condition_variable alias to
+    // bthread primitives in bazel mode so wait_for inside the reader bthread
+    // yields the bthread while waiting for warmup_done.
+    kvtest::mutex warmupMutex_;
+    kvtest::condition_variable warmupCv_;
     std::set<int> pendingWarmupWriters_;
 
     // Thread management
     std::atomic<bool> running_{false};
     std::atomic<bool> warmupDone_{false};
-    std::vector<std::thread> threads_;
+    std::vector<kvtest::thread> threads_;
 
     // Pre-generated data (constructor-time, read-only after)
     std::unordered_map<uint64_t, std::string> pregenData_;

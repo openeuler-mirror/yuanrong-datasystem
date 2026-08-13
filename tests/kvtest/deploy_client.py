@@ -47,7 +47,6 @@ class Deployer:
         self.nodes = self.deploy.get('nodes', [])
         self.remote_work_dir = self.deploy.get('remote_work_dir', '')
         self.binary_path = None  # resolved in main() via --kvtest-binary-path or deploy.json
-        self.datasystem_sdk_dir = os.path.join(self.base_dir, 'lib')
         version_file = os.path.join(self.base_dir, 'VERSION')
         self.version = open(version_file).read().strip() if os.path.isfile(version_file) else '?'
         self.default_transport = self.deploy.get('transport', 'ssh')
@@ -417,7 +416,7 @@ class Deployer:
             print(f'{tag} mkdir {self.remote_work_dir}')
             self.run_on(node, f'mkdir -p {self.remote_work_dir}')
 
-            # Step 2: Upload binary + SDK (under host lock to avoid concurrent races)
+            # Step 2: Upload binary (under host lock to avoid concurrent races)
             remote_binary = f'{self.remote_work_dir}/kvtest'
             remote_sdk = node.get('remote_sdk_dir', self.deploy.get('remote_sdk_dir', ''))
             with self._get_host_lock(node):
@@ -425,10 +424,6 @@ class Deployer:
                 self.scp_to(node, self.binary_path, remote_binary)
                 if remote_sdk:
                     print(f'{tag} using container SDK: {remote_sdk}')
-                elif os.path.isdir(self.datasystem_sdk_dir):
-                    print(f'{tag} deploying SDK libs...')
-                    self.run_on(node, f'rm -rf {self.remote_work_dir}/lib')
-                    self.scp_to(node, self.datasystem_sdk_dir, f'{self.remote_work_dir}/lib')
 
             # Step 4: Upload config
             remote_config = f'{self.remote_work_dir}/config_{instance_id}.json'
@@ -447,10 +442,10 @@ class Deployer:
                 self.scp_to(node, procmon_src, f'{self.remote_work_dir}/procmon.py')
 
             # Step 7: Start process
+            # Third-party libs are statically linked into the binary.
+            # libdatasystem.so is provided by the container SDK (remote_sdk).
             if remote_sdk:
                 ld_path = remote_sdk
-            elif os.path.isdir(self.datasystem_sdk_dir):
-                ld_path = f'{self.remote_work_dir}/lib'
             else:
                 ld_path = ''
             env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''

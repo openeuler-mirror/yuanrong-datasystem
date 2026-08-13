@@ -880,8 +880,12 @@ LoadConfig 解析后执行以下校验，失败则拒绝启动：
 # 从 datasystem 项目根目录编译
 bazel build //bazel:datasystem_wheel --config=release
 
-# 使用 build.sh 编译并打包
-./build.sh -s /path/to/sdk -j 8
+# 使用 build.sh 编译并打包（默认 bazel：自包含二进制，无需预装 SDK）
+./build.sh -j 8
+# 产物：output/kvtest + output/*.py（bazel 模式无 .so）
+
+# CMake 模式（链接预装 SDK，需先获取 SDK）
+./build.sh -b cmake -s /path/to/sdk -j 8
 # 产物：output/kvtest + output/*.so + output/*.py
 
 # 清理重建
@@ -1034,8 +1038,9 @@ python3 deploy_worker.py exec -p my-worker -c "cat /tmp/metrics.csv"
 | `src/metrics/metrics.h/.cpp` | MetricsCollector：窗口 CSV + 全局汇总（P50~P99.99） |
 | `src/vendor/httplib.h` | cpp-httplib 单文件 HTTP 库 |
 | `src/vendor/nlohmann_json.hpp` | nlohmann/json 单文件 JSON 库 |
-| `build.sh` | 构建脚本：cmake + make + 打包 |
-| `CMakeLists.txt` | CMake 构建配置 |
+| `build.sh` | 构建脚本：默认 bazel + make 打包；`-b cmake` 默认 brpc 后端（复用主仓 cmake/external_libs），`-b cmake --use-httplib` 切换 httplib 后端 |
+| `CMakeLists.txt` | CMake 构建配置（`-b cmake` 时使用）；`option(KVTEST_USE_BRPC)` 控制后端 |
+| `BUILD.bazel` | Bazel 构建配置（默认） |
 | `Makefile` | 打包配置（copy-sdk、package） |
 | `deploy_client.py` | 部署脚本（SSH / Kubectl），含 gen-config 子命令 |
 | `deploy_worker.py` | K8s Pod 管理工具（install/start/stop/check/exec） |

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/bthread_compat.h"
 #include "common/config.h"
 #include "common/thread_pool.h"
 #include "metrics/metrics.h"
@@ -49,7 +50,7 @@ private:
     std::atomic<int> currentTargetQps_{0};
     std::chrono::steady_clock::time_point stageStartTime_;
     int currentStageIndex_ = 0;
-    std::vector<std::thread> threads_;
+    std::vector<kvtest::thread> threads_;
     ThreadPool notifyPool_;
     std::vector<std::pair<std::string, OpFunc>> pipelineOps_;
     std::unordered_map<uint64_t, std::string> pregenData_;

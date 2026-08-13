@@ -1,9 +1,9 @@
 #include "peer_client.h"
 
+#include "common/bthread_compat.h"
 #include "common/simple_log.h"
 #include "vendor/nlohmann_json.hpp"
 
-#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -129,7 +129,7 @@ public:
                 std::string err = cntl.ErrorText();
                 bool firstFailure;
                 {
-                    std::lock_guard<std::mutex> lock(mu_);
+                    std::lock_guard<kvtest::mutex> lock(mu_);
                     firstFailure = warned_peers_.insert(key).second;
                 }
                 if (firstFailure) {
@@ -139,7 +139,7 @@ public:
             } else {
                 bool wasWarned;
                 {
-                    std::lock_guard<std::mutex> lock(mu_);
+                    std::lock_guard<kvtest::mutex> lock(mu_);
                     wasWarned = warned_peers_.erase(key) > 0;
                 }
                 if (wasWarned) {
@@ -168,7 +168,7 @@ public:
 private:
     brpc::Channel *GetOrCreateChannel(const std::string &host, int port) {
         std::string key = host + ":" + std::to_string(port);
-        std::lock_guard<std::mutex> lock(mu_);
+        std::lock_guard<kvtest::mutex> lock(mu_);
         auto it = channels_.find(key);
         if (it != channels_.end()) return it->second.get();
         auto chan = std::make_unique<brpc::Channel>();
@@ -184,7 +184,13 @@ private:
         return raw;
     }
 
-    std::mutex mu_;
+    // Protects channels_ and warned_peers_. Acquired from BrpcPeerClient::
+    // Notify (notifyPool_ worker, bthread in bazel mode) and from Stop
+    // (stop.cpp std::thread batch). kvtest::mutex is bthread::Mutex in bazel
+    // mode so a bthread worker blocks on contention without holding a pthread;
+    // also works from the pthread Stop callers since bthread::Mutex is
+    // pthread-compatible.
+    kvtest::mutex mu_;
     std::unordered_map<std::string, std::unique_ptr<brpc::Channel>> channels_;
     // Peers whose Notify is currently in a failed state. First failure logs a
     // WARN; subsequent failures are suppressed; recovery logs INFO + erases.

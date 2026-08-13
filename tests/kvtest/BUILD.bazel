@@ -92,6 +92,7 @@ cc_library(
     hdrs = [
         "src/common/config.h",
         "src/common/simple_log.h",
+        "src/common/bthread_compat.h",
         "src/common/thread_pool.h",
         "src/common/cpu_affinity.h",
         "src/metrics/metrics.h",

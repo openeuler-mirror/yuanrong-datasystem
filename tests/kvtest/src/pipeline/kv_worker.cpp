@@ -175,7 +175,11 @@ void KVWorker::PipelineLoop(int threadId) {
             auto fireTime = nextSlot + std::chrono::microseconds(offsetDist(rng));
             auto now = std::chrono::steady_clock::now();
             if (fireTime > now) {
-                std::this_thread::sleep_until(fireTime);
+                // Yield the bthread (brpc mode) or sleep the std::thread
+                // (cmake mode); kvtest::sleep_until picks the right primitive
+                // so a long fire-time gap doesn't hold a pthread worker
+                // when running on a bthread.
+                kvtest::sleep_until(fireTime);
             }
         }
 
@@ -271,13 +275,14 @@ void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size) 
     // Capture a copy of the keys for the async tasks; the transport (httplib
     // JSON body or brpc NotifyReq) is built inside PeerControlClient.
     if (cfg_.notifyIntervalUs > 0) {
-        // Sequential: offload to thread pool, notify one by one with interval
+        // Sequential: offload to thread pool, notify one by one with interval.
+        // In bazel mode the pool worker is a bthread — kvtest::sleep_for
+        // yields it so the inter-notify gap doesn't hold a pthread worker.
         int intervalUs = cfg_.notifyIntervalUs;
         notifyPool_.Submit([this, targets = std::move(targets), keys, sender, size, intervalUs]() {
             for (size_t i = 0; i < targets.size(); i++) {
                 if (i > 0) {
-                    std::this_thread::sleep_for(
-                        std::chrono::microseconds(intervalUs));
+                    kvtest::sleep_for(std::chrono::microseconds(intervalUs));
                 }
                 peerClient_->Notify(targets[i].host, targets[i].port,
                                      /*action=*/"", sender, keys, size);
