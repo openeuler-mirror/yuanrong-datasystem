@@ -19,6 +19,7 @@
  */
 #include "datasystem/common/util/file_util.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +31,7 @@
 #include <ostream>
 #include <iomanip>
 #include <map>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -784,6 +786,41 @@ Status SetFileLimit(rlim_t softLimit)
         RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR, "setrlimit failed, errno: " + std::to_string(errno));
     }
     LOG(INFO) << "Set process file limit to " + std::to_string(softLimit);
+    return Status::OK();
+}
+
+Status PreExpandFdPool(int targetCount)
+{
+    if (targetCount <= 0) {
+        return Status::OK();
+    }
+    static std::once_flag onceFlag;
+    std::call_once(onceFlag, [targetCount]() {
+        struct rlimit rlim {};
+        if (getrlimit(RLIMIT_NOFILE, &rlim) == 0 && rlim.rlim_cur != RLIM_INFINITY
+            && static_cast<rlim_t>(targetCount) > rlim.rlim_cur) {
+            // Only raise (never lower) the soft limit, capped at the hard limit.
+            rlim_t wantSoft = std::min(static_cast<rlim_t>(targetCount), rlim.rlim_max);
+            struct rlimit neu { wantSoft, rlim.rlim_max };
+            if (setrlimit(RLIMIT_NOFILE, &neu) != 0) {
+                LOG(WARNING) << FormatString("PreExpandFdPool: setrlimit failed, errno=%d: %s", errno, StrErr(errno));
+            }
+        }
+        std::vector<int> fds;
+        fds.reserve(targetCount);
+        for (int i = 0; i < targetCount; ++i) {
+            int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+            if (fd < 0) {
+                break; // Hit the fd ceiling (EMFILE/ENFILE): keep what was opened.
+            }
+            fds.push_back(fd);
+        }
+        for (int fd : fds) {
+            RETRY_ON_EINTR(close(fd));
+        }
+        LOG(INFO) << FormatString("PreExpandFdPool: opened and closed %d/%d fds to pre-expand the fdtable",
+                                  static_cast<int>(fds.size()), targetCount);
+    });
     return Status::OK();
 }
 
