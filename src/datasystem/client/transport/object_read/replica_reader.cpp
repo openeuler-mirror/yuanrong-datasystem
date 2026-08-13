@@ -41,6 +41,13 @@ constexpr size_t MAX_BATCH_OBJECT_COUNT = 1024;
 constexpr uint64_t MAX_BATCH_EXPECTED_BYTES = 100ULL * 1024ULL * 1024ULL;
 constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 
+struct RefreshableLocationState {
+    bool hasStaleLocation = false;
+    Status staleLocationStatus;
+    bool hasDrainingLocation = false;
+    Status drainingLocationStatus;
+};
+
 struct ReadState {
     const master::ObjectLocationInfoPb *location = nullptr;
     ObjectReadItemResult *result = nullptr;
@@ -53,9 +60,31 @@ struct ReadState {
     bool hasAttempt = false;
     bool completed = false;
     bool exhausted = false;
-    bool hasStaleLocation = false;
-    Status staleLocationStatus;
+    RefreshableLocationState refreshableLocation;
 };
+
+void RecordRefreshableLocation(const Status &status, RefreshableLocationState &state)
+{
+    if (IsWorkerDrainingForScaleIn(status)) {
+        state.hasDrainingLocation = true;
+        state.drainingLocationStatus = status;
+        return;
+    }
+    if (IsTransportSnapshotStaleLocation(status)) {
+        state.hasStaleLocation = true;
+        state.staleLocationStatus = status;
+    }
+}
+
+bool HasRefreshableLocation(const RefreshableLocationState &state)
+{
+    return state.hasDrainingLocation || state.hasStaleLocation;
+}
+
+const Status &GetRefreshableLocationStatus(const RefreshableLocationState &state)
+{
+    return state.hasDrainingLocation ? state.drainingLocationStatus : state.staleLocationStatus;
+}
 
 struct ReadChunk {
     std::vector<size_t> stateIndexes;
@@ -138,10 +167,33 @@ void AdvanceUnavailableReplica(ReadState &state, const Status &itemStatus)
     const bool replicasExhausted = state.replicaIndex >= static_cast<size_t>(state.location->object_locations_size());
     state.completed = replicasExhausted;
     if (replicasExhausted) {
-        state.result->status = itemStatus;
+        state.result->status = HasRefreshableLocation(state.refreshableLocation)
+                                   ? GetRefreshableLocationStatus(state.refreshableLocation)
+                                   : itemStatus;
         return;
     }
     METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL);
+}
+
+void AdvanceRetryableReplica(ReadState &state, const Status &itemStatus)
+{
+    ++state.replicaIndex;
+    const bool replicasExhausted = state.replicaIndex >= static_cast<size_t>(state.location->object_locations_size());
+    if (!replicasExhausted) {
+        METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL);
+        return;
+    }
+    if (HasRefreshableLocation(state.refreshableLocation)) {
+        state.result->status = GetRefreshableLocationStatus(state.refreshableLocation);
+        state.completed = true;
+        return;
+    }
+    if (itemStatus.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
+        state.result->status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "Object not found on any replica");
+        state.completed = true;
+        return;
+    }
+    state.exhausted = true;
 }
 
 // A replica whose UB read source is unavailable: either the worker reported it
@@ -186,7 +238,7 @@ ReplicaReader::ReplicaReader(std::shared_ptr<DataPlaneExecutor> executor, std::s
 
 bool ReplicaReader::IsRetryableLocationError(const Status &status) const
 {
-    if (IsTransportSnapshotStaleLocation(status)) {
+    if (IsTransportSnapshotStaleLocation(status) || IsWorkerDrainingForScaleIn(status)) {
         return true;
     }
     if (retry_->IsRetryableRpcError(status)) {
@@ -264,8 +316,7 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
     const ReplicaReadRequest request{ &location, &result, std::move(context) };
     while (true) {
         ++round;
-        bool hasStaleLocation = false;
-        Status staleLocationStatus;
+        RefreshableLocationState refreshableLocation;
         int notFoundReplicas = 0;
         for (int replicaIndex = 0; replicaIndex < location.object_locations_size(); ++replicaIndex) {
             Status deadlineStatus = retry_->CheckDeadline();
@@ -291,14 +342,14 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
                 ++notFoundReplicas;
             }
             if (rc.GetCode() == K_RPC_UNAVAILABLE) {
-                hasStaleLocation = true;
-                staleLocationStatus = Status(K_NOT_READY, STALE_TRANSPORT_SNAPSHOT_MESSAGE);
-            } else if (IsTransportSnapshotStaleLocation(rc)) {
-                hasStaleLocation = true;
-                staleLocationStatus = rc;
+                RecordRefreshableLocation(Status(K_NOT_READY, STALE_TRANSPORT_SNAPSHOT_MESSAGE), refreshableLocation);
+            } else {
+                RecordRefreshableLocation(rc, refreshableLocation);
             }
             if (IsLastUnavailableReplica(rc, replicaIndex, location.object_locations_size())) {
-                return hasStaleLocation ? staleLocationStatus : rc;
+                return HasRefreshableLocation(refreshableLocation)
+                           ? GetRefreshableLocationStatus(refreshableLocation)
+                           : rc;
             }
             if (IsReadSourceUnavailable(rc)) {
                 continue;
@@ -309,8 +360,8 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
                          << "key: " << location.object_key() << ", round: " << round;
             return Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "Object not found on any replica");
         }
-        if (hasStaleLocation) {
-            return staleLocationStatus;
+        if (HasRefreshableLocation(refreshableLocation)) {
+            return GetRefreshableLocationStatus(refreshableLocation);
         }
         Status backoffRc = retry_->Backoff(backoffMs);
         if (backoffRc.IsError()) {
@@ -493,23 +544,14 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                     }
 
                     state.lastStatus = itemStatus;
-                    if (IsTransportSnapshotStaleLocation(itemStatus)) {
-                        state.hasStaleLocation = true;
-                        state.staleLocationStatus = itemStatus;
-                        ++state.replicaIndex;
-                        if (state.replicaIndex >= static_cast<size_t>(state.location->object_locations_size())) {
-                            state.result->status = itemStatus;
-                            state.completed = true;
-                        } else {
-                            METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL);
-                        }
+                    if (IsTransportSnapshotStaleLocation(itemStatus)
+                        || IsWorkerDrainingForScaleIn(itemStatus)) {
+                        RecordRefreshableLocation(itemStatus, state.refreshableLocation);
+                        AdvanceRetryableReplica(state, itemStatus);
                         continue;
                     }
                     if (IsReadSourceUnavailable(itemStatus)) {
                         AdvanceUnavailableReplica(state, itemStatus);
-                        if (state.completed && state.hasStaleLocation) {
-                            state.result->status = state.staleLocationStatus;
-                        }
                         continue;
                     }
                     if (itemStatus.GetCode() == K_OC_REMOTE_GET_NOT_ENOUGH && data != nullptr) {
@@ -525,21 +567,7 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                         state.completed = true;
                         continue;
                     }
-                    ++state.replicaIndex;
-                    if (state.replicaIndex >= static_cast<size_t>(state.location->object_locations_size())) {
-                        if (state.hasStaleLocation) {
-                            state.result->status = state.staleLocationStatus;
-                            state.completed = true;
-                        } else if (itemStatus.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
-                            state.result->status =
-                                Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "Object not found on any replica");
-                            state.completed = true;
-                        } else {
-                            state.exhausted = true;
-                        }
-                    } else {
-                        METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL);
-                    }
+                    AdvanceRetryableReplica(state, itemStatus);
                 }
             }
         }

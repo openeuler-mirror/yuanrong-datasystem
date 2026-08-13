@@ -222,6 +222,11 @@ Status MakeStaleSnapshotStatus(const HostPort &address)
     return Status(K_NOT_READY, "Worker endpoint is absent from latest transport snapshot: " + address.ToString());
 }
 
+Status MakeWorkerDrainingStatus()
+{
+    return Status(K_NOT_READY, "Worker is draining for ScaleIn");
+}
+
 std::shared_ptr<Routing> MakeSingleWorkerRouting(const HostPort &address)
 {
     auto router = std::make_shared<WorkerRouter>("");
@@ -1129,6 +1134,12 @@ public:
 
     Status FillResult(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result)
     {
+        if (statusHandler) {
+            Status status = statusHandler(location.object_key());
+            if (status.IsError()) {
+                return status;
+            }
+        }
         auto status = itemStatuses.find(location.object_key());
         if (status != itemStatuses.end() && status->second.IsError()) {
             return status->second;
@@ -1147,6 +1158,7 @@ public:
     std::vector<std::thread::id> threadIds;
     std::vector<bool> traceDecisions;
     std::unordered_map<std::string, Status> itemStatuses;
+    std::function<Status(const std::string &)> statusHandler;
     std::function<void(const std::string &, ObjectReadItemResult &)> resultHandler;
 };
 
@@ -2835,6 +2847,148 @@ TEST(ObjectClientTransportTest, ReadTransportRoundPreservesMixedItemStatusesWhen
     EXPECT_EQ(metadata->keyGroups[0], objectKeys);
     ASSERT_EQ(replicas->batchKeys.size(), 1u);
     EXPECT_EQ(replicas->batchKeys[0], objectKeys);
+}
+
+TEST(ObjectClientTransportTest, DrainingLocationRetriesOnlyPendingKeys)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto ownerAddress = MakeAddress(41);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    std::atomic<int> drainingAttempts{ 0 };
+    replicas->statusHandler = [&drainingAttempts](const std::string &key) {
+        if (key == "draining" && drainingAttempts.fetch_add(1) == 0) {
+            return MakeWorkerDrainingStatus();
+        }
+        return Status::OK();
+    };
+    replicas->resultHandler = [](const std::string &, ObjectReadItemResult &result) {
+        result.data.kind = AccessTransportKind::TCP;
+        result.data.response.set_data_size(4);
+        result.data.response.set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
+        RpcMessage payload;
+        ASSERT_TRUE(payload.CopyString("data").IsOk());
+        result.data.rpcPayloads.emplace_back(std::move(payload));
+    };
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "draining-retry-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "draining", "stable" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    ASSERT_TRUE(client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
+    ASSERT_EQ(metadata->keyGroups.size(), 2u);
+    EXPECT_EQ(metadata->keyGroups[0], objectKeys);
+    EXPECT_EQ(metadata->keyGroups[1], std::vector<std::string>({ "draining" }));
+    EXPECT_EQ(replicas->batchKeys, std::vector<std::vector<std::string>>({ objectKeys }));
+    EXPECT_EQ(replicas->unaryKeys, std::vector<std::string>({ "draining" }));
+    EXPECT_NE(buffers[0], nullptr);
+    EXPECT_NE(buffers[1], nullptr);
+}
+
+TEST(ObjectClientTransportTest, DrainingLocationStopsAfterThreeFastRetries)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto ownerAddress = MakeAddress(41);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    replicas->statusHandler = [](const std::string &) { return MakeWorkerDrainingStatus(); };
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "draining-budget-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "draining" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+    EXPECT_NE(rc.GetMsg().find("Worker is draining for ScaleIn"), std::string::npos);
+    EXPECT_EQ(metadata->keyGroups.size(), 4u);
+    EXPECT_EQ(replicas->unaryKeys.size(), 4u);
+    EXPECT_EQ(buffers[0], nullptr);
+}
+
+TEST(ObjectClientTransportTest, AlternatingRefreshableErrorsKeepConsumedRetryBudgets)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto ownerAddress = MakeAddress(41);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    std::atomic<int> attempts{ 0 };
+    replicas->statusHandler = [&attempts, &ownerAddress](const std::string &) {
+        return attempts.fetch_add(1) % 2 == 0 ? MakeWorkerDrainingStatus() : MakeStaleSnapshotStatus(ownerAddress);
+    };
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "alternating-refresh-budget-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "alternating" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+    EXPECT_EQ(attempts.load(), 7);
+    EXPECT_EQ(metadata->keyGroups.size(), 7u);
+    EXPECT_EQ(replicas->unaryKeys.size(), 7u);
+    EXPECT_EQ(buffers[0], nullptr);
+}
+
+TEST(ObjectClientTransportTest, StaleLocationStopsAfterFiveRetries)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto ownerAddress = MakeAddress(41);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    replicas->statusHandler = [&ownerAddress](const std::string &) { return MakeStaleSnapshotStatus(ownerAddress); };
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "stale-budget-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "stale" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc));
+    EXPECT_EQ(metadata->keyGroups.size(), 6u);
+    EXPECT_EQ(replicas->unaryKeys.size(), 6u);
+    EXPECT_EQ(buffers[0], nullptr);
 }
 
 TEST(ObjectClientTransportTest, BatchExternalOwnersMaterializeIntoIndependentSdkBuffers)
@@ -4545,6 +4699,21 @@ TEST(ReplicaReaderTest, StaleTransportSnapshotTriesNextReplica)
     EXPECT_EQ(manager->transportBuildCount, 1);
 }
 
+TEST(ReplicaReaderTest, DrainingWorkerTriesNextReplica)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = { { MakeWorkerDrainingStatus() }, { Status::OK() } };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 4, { MakeAddress(86), MakeAddress(87) });
+    ObjectReadItemResult result;
+
+    ASSERT_TRUE(reader.Read(location, result, MakeReadContext()).IsOk());
+    EXPECT_EQ(result.objectKey, "key");
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
 TEST(ReplicaReaderTest, StaleTransportSnapshotReturnsForMetadataRefreshAfterAllReplicas)
 {
     ApiDeadlineGuard deadline(1000);
@@ -5021,6 +5190,25 @@ TEST(ReplicaReaderTest, BatchStaleTransportSnapshotAdvancesReplica)
     EXPECT_EQ(admissionChecks[staleAddress], 1u);
     EXPECT_EQ(admissionChecks[healthyAddress], 1u);
     EXPECT_EQ(manager->transportBuildCount, 1);
+}
+
+TEST(ReplicaReaderTest, BatchDrainingWorkerAdvancesReplica)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(88).ToString()) {
+            transporter.getStatuses = { MakeWorkerDrainingStatus() };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(88), MakeAddress(89) });
+    ObjectReadItemResult result;
+
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).IsOk());
+    EXPECT_TRUE(result.status.IsOk());
+    EXPECT_EQ(manager->transportBuildCount, 2);
 }
 
 TEST(ReplicaReaderTest, BatchStaleTransportSnapshotCompletesForMetadataRefreshAfterAllReplicas)

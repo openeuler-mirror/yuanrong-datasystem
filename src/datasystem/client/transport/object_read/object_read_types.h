@@ -30,11 +30,18 @@ namespace datasystem {
 namespace client {
 inline constexpr char STALE_TRANSPORT_SNAPSHOT_MESSAGE[] =
     "Worker endpoint is absent from latest transport snapshot";
+inline constexpr char WORKER_DRAINING_FOR_SCALE_IN_MESSAGE[] = "Worker is draining for ScaleIn";
 
 inline bool IsTransportSnapshotStaleLocation(const Status &status)
 {
     return status.GetCode() == K_NOT_READY
            && status.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE) != std::string::npos;
+}
+
+inline bool IsWorkerDrainingForScaleIn(const Status &status)
+{
+    return status.GetCode() == K_NOT_READY
+           && status.GetMsg().find(WORKER_DRAINING_FOR_SCALE_IN_MESSAGE) != std::string::npos;
 }
 
 /** @brief One object and metadata owner supplied by the routing layer. */

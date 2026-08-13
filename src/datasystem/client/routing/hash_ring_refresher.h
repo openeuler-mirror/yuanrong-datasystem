@@ -49,8 +49,12 @@ public:
     using RingUpdateHook = std::function<Status(uint64_t newVersion,
                                                 const ::datasystem::ClusterTopologyPb &ring,
                                                 const std::unordered_map<std::string, std::string> &hostIdMap)>;
+    using WaitFn = std::function<void(std::condition_variable &cv, std::unique_lock<std::mutex> &lock,
+                                      std::chrono::milliseconds duration,
+                                      const std::function<bool()> &wakePredicate)>;
 
-    HashRingRefresher(std::shared_ptr<WorkerRouter> router, FetchRpc fetchRpc, RingUpdateHook ringUpdateHook = {});
+    HashRingRefresher(std::shared_ptr<WorkerRouter> router, FetchRpc fetchRpc, RingUpdateHook ringUpdateHook = {},
+                      WaitFn waitFn = {});
     ~HashRingRefresher();
 
     Status InitialFetch(const HostPort &initialWorkerAddr);
@@ -70,6 +74,7 @@ private:
     std::shared_ptr<WorkerRouter> router_;
     FetchRpc fetchRpc_;
     RingUpdateHook ringUpdateHook_;
+    WaitFn waitFn_;
 
     std::mutex workerListMutex_;
     std::vector<HostPort> workerList_;
