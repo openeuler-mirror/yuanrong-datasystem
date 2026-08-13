@@ -17,6 +17,8 @@
 #include <mutex>
 
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -71,7 +73,7 @@ void UsageMonitor::Stop()
 
 Status UsageMonitor::IncUsage(const std::string &streamName, const std::string &workerAddr, const std::uint64_t size)
 {
-    std::shared_lock<std::shared_timed_mutex> l(usageMutex_);
+    std::shared_lock<SharedMutex> l(usageMutex_);
 
     // Update per stream usage
     TbbStreamReserveTable::Accessor accessorStTbl;
@@ -128,7 +130,7 @@ Status UsageMonitor::DecUsage(const std::string &streamName, const std::string &
     VLOG(SC_NORMAL_LOG_LEVEL) << "[UsageMonitor] Decrease Usage for stream " << streamName << " Remote worker "
                               << workerAddr << " by size " << size << " max size available " << maxBufferPoolMem_;
     std::string id = streamName + workerAddr;
-    std::shared_lock<std::shared_timed_mutex> l(usageMutex_);
+    std::shared_lock<SharedMutex> l(usageMutex_);
     // Update per stream usage
     TbbStreamReserveTable::Accessor accessorStTbl;
     if (streamMemoryMap_.Find(accessorStTbl, streamName)) {
@@ -158,7 +160,7 @@ Status UsageMonitor::DecUsage(const std::string &streamName, const std::string &
 Status UsageMonitor::RemoveUsageStats(const std::string &streamName, const std::string &workerAddr)
 {
     std::string id = streamName + workerAddr;
-    std::shared_lock<std::shared_timed_mutex> l(usageMutex_);
+    std::shared_lock<SharedMutex> l(usageMutex_);
     TbbUsageTable::accessor accessor;
     if (usage_.find(accessor, id)) {
         (void)usage_.erase(accessor);
@@ -185,7 +187,7 @@ Status UsageMonitor::CheckNIncOverUsedForStream(const std::string &streamName, c
     INJECT_POINT("worker.UsageMonitor.CheckOverUsedForStream.MockError");
     // Update per stream per remote worker usage
     auto limit = std::max<double>(lowerBound, (maxBufferPoolMem_ * threshold));
-    std::shared_lock<std::shared_timed_mutex> l(usageMutex_);
+    std::shared_lock<SharedMutex> l(usageMutex_);
     TbbStreamReserveTable::Accessor accessor;
     if (streamMemoryMap_.Find(accessor, streamName)) {
         auto &entry = accessor.entry->data;
@@ -218,7 +220,7 @@ Status UsageMonitor::CheckNIncOverUsedForStream(const std::string &streamName, c
 
 Status UsageMonitor::GetMostUsed(std::shared_ptr<UsageItem> &usageItem)
 {
-    std::lock_guard<std::shared_timed_mutex> l(usageMutex_);
+    std::lock_guard<SharedMutex> l(usageMutex_);
     if (usage_.empty()) {
         RETURN_STATUS(StatusCode::K_INVALID, "usage vector is empty");
     }
@@ -334,7 +336,7 @@ void UsageMonitor::BlockProducersIfNeeded()
 Status UsageMonitor::ReserveMemory(const std::string &streamName, size_t reserveSize)
 {
     VLOG(SC_NORMAL_LOG_LEVEL) << "[UsageMonitor] Reserve memory for: " << streamName << " with size = " << reserveSize;
-    std::shared_lock<std::shared_timed_mutex> l(usageMutex_);
+    std::shared_lock<SharedMutex> l(usageMutex_);
     TbbStreamReserveTable::Accessor accessor;
     if (streamMemoryMap_.Insert(accessor, streamName)) {
         // As long as the total reserved memory is still in bound, it is allowed to reserve.
@@ -364,7 +366,7 @@ Status UsageMonitor::ReserveMemory(const std::string &streamName, size_t reserve
 void UsageMonitor::UndoReserveMemory(const std::string &streamName)
 {
     VLOG(SC_NORMAL_LOG_LEVEL) << "[UsageMonitor] Undo the memory reservation for: " << streamName;
-    std::shared_lock<std::shared_timed_mutex> l(usageMutex_);
+    std::shared_lock<SharedMutex> l(usageMutex_);
     TbbStreamReserveTable::Accessor accessor;
     if (streamMemoryMap_.Find(accessor, streamName)) {
         const auto &entry = accessor.entry->data;

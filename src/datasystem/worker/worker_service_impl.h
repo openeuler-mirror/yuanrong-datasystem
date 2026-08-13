@@ -30,6 +30,8 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/eventloop/event_loop.h"
 #include "datasystem/common/object_cache/peer_ub_admission.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/protos/share_memory.irpc.pb.h"
@@ -212,7 +214,7 @@ private:
     mutable std::mutex ubHealthSummaryProviderMutex_;
     std::function<std::optional<UbHealthSummary>()> ubHealthSummaryProvider_;
 
-    std::shared_timed_mutex mutex_;                           // for unboundedUnixSockFds_
+    SharedMutex mutex_;                           // for unboundedUnixSockFds_
     std::unordered_map<int, uint64_t> unboundedUnixSockFds_;  // This is the fd that is not bound to the client.
     const size_t maxCacheUnboundedUnixSockFdsCount_;
 };

@@ -32,6 +32,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
@@ -300,7 +301,7 @@ Status WorkerServiceImpl::ConsumeRegisterClientFd(const RegisterClientReqPb &req
 {
     auto serverFd = req.server_fd();
     RETURN_OK_IF_TRUE(serverFd <= 0);
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     INJECT_POINT("WorkerServiceImpl.RegisterClient.BlowAuth");
     CHECK_FAIL_RETURN_STATUS(unboundedUnixSockFds_.find(serverFd) != unboundedUnixSockFds_.end(), K_SERVER_FD_CLOSED,
                              FormatString("Fd %d has been released", serverFd));
@@ -474,7 +475,7 @@ Status WorkerServiceImpl::GetSocketPath(const GetSocketPathReqPb &req, GetSocket
 
 void WorkerServiceImpl::CloseExpiredUnixSockFd()
 {
-    std::lock_guard<std::shared_timed_mutex> lck(mutex_);
+    std::lock_guard<SharedMutex> lck(mutex_);
     for (auto itr = unboundedUnixSockFds_.begin(); itr != unboundedUnixSockFds_.end();) {
         auto now = std::chrono::steady_clock::now();
         auto storeTimeMs = std::chrono::steady_clock::time_point(std::chrono::milliseconds(itr->second));
@@ -515,7 +516,7 @@ Status WorkerServiceImpl::operator()()
         int fd = accept(listenFd_, nullptr, 0);
         if (fd > 0) {
             {
-                std::lock_guard<std::shared_timed_mutex> lck(mutex_);
+                std::lock_guard<SharedMutex> lck(mutex_);
                 if (unboundedUnixSockFds_.size() >= maxCacheUnboundedUnixSockFdsCount_) {
                     RETRY_ON_EINTR(close(fd));
                     LOG(INFO) << "Up to the limit of caching fd, worker will close socket fd: " << fd;
@@ -543,7 +544,7 @@ Status WorkerServiceImpl::operator()()
             if (rc.IsError()) {
                 RETRY_ON_EINTR(close(fd));
                 {
-                    std::lock_guard<std::shared_timed_mutex> lck(mutex_);
+                    std::lock_guard<SharedMutex> lck(mutex_);
                     unboundedUnixSockFds_.erase(fd);
                 }
                 LOG(ERROR) << "Send socket to client failed, worker will close socket fd " << fd

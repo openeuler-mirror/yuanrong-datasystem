@@ -23,6 +23,8 @@
 #include <mutex>
 #include <shared_mutex>
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/status_helper.h"
@@ -69,7 +71,7 @@ size_t SharedPageQueueGroup::GetPartId(const std::string &streamName) const
 std::vector<std::string> SharedPageQueueGroup::GetAllSharedPageName()
 {
     std::vector<std::string> names;
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     for (auto &it : tenantPageQueues_) {
         for (auto &page : it.second) {
             names.emplace_back(page->GetStreamName());
@@ -83,7 +85,7 @@ Status SharedPageQueueGroup::GetSharedPageQueue(const std::string &streamName,
 {
     auto tenantId = TenantAuthManager::ExtractTenantId(streamName);
     auto realStreamName = TenantAuthManager::ExtractRealObjectKey(streamName);
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     auto iter = tenantPageQueues_.find(tenantId);
     if (iter != tenantPageQueues_.end()) {
         auto index = GetPartId(realStreamName);
@@ -102,7 +104,7 @@ void SharedPageQueueGroup::GetOrCreateSharedPageQueue(const std::string &streamN
     }
     auto tenantId = TenantAuthManager::ExtractTenantId(streamName);
     auto realStreamName = TenantAuthManager::ExtractRealObjectKey(streamName);
-    std::lock_guard<std::shared_timed_mutex> locker(mutex_);
+    std::lock_guard<SharedMutex> locker(mutex_);
     auto iter = tenantPageQueues_.find(tenantId);
     if (iter == tenantPageQueues_.end()) {
         std::vector<std::shared_ptr<SharedPageQueue>> pageQueues(partCount_);
@@ -118,7 +120,7 @@ void SharedPageQueueGroup::GetOrCreateSharedPageQueue(const std::string &streamN
 
 Status SharedPageQueueGroup::RemoveSharedPageQueueForTenant(const std::string &tenantId)
 {
-    std::lock_guard<std::shared_timed_mutex> locker(mutex_);
+    std::lock_guard<SharedMutex> locker(mutex_);
     auto iter = tenantPageQueues_.find(tenantId);
     if (iter != tenantPageQueues_.end()) {
         tenantPageQueues_.erase(iter);

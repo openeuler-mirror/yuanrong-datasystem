@@ -24,6 +24,8 @@
 #include <memory>
 #include <shared_mutex>
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/worker/stream_cache/page_queue/shared_page_queue.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 
@@ -49,7 +51,7 @@ private:
 
     const size_t partCount_;
     const HostPort remoteWorker_;
-    std::shared_timed_mutex mutex_;
+    SharedMutex mutex_;
     std::unordered_map<std::string, std::vector<std::shared_ptr<SharedPageQueue>>> tenantPageQueues_;
     std::shared_ptr<WorkerSCAllocateMemory> scAllocateManager_;
     ClientWorkerSCServiceImpl *scSvc_;
