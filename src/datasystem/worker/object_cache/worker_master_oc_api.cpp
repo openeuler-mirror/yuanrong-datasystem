@@ -250,18 +250,17 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
         return WithRpcDiag(rc, "CreateMeta", localHostPort_, hostPort_);
     }
 
-    // Hard cap so a slow master cannot pin a worker bthread for MAX_RPC_TIMEOUT_MS
-    // when the client budget is exhausted (remainingMs <= 0) OR when reqTimeoutDuration
-    // is uninitialized/degenerate (returns the 60s default, a positive value that would
-    // otherwise bypass the cap). When the client budget propagated correctly
-    // (remainingMs ~ 20ms) the cap does not fire — the client budget is trusted as-is.
-    // The cap applies to both the RetryOnError total budget (timeoutMs) and, inside the
-    // retry lambda, to the per-RPC opts.SetTimeout set by CHECK_AND_SET_TIMEOUT (which
-    // would otherwise also read 60s from an uninitialized reqTimeoutDuration).
+    // When the client budget is exhausted (remainingMs <= 0), fail fast instead of
+    // falling back to HARD_CAP: a 3s master RPC retry window would pin the Publish
+    // WLock and block concurrent Create RLock waiters far past requestTimeoutMs.
+    // An uninitialized reqTimeoutDuration returns the 60s default (a positive value),
+    // so the HARD_CAP clamp below still applies to that degenerate case.
     int64_t remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
-    int64_t timeoutMs = remainingMs > 0
-        ? remainingMs
-        : WORKER_TO_MASTER_RPC_HARD_CAP_MS;
+    if (remainingMs <= 0) {
+        return Status(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                      FormatString("CreateMeta deadline exhausted before RPC, remaining %ld ms.", remainingMs));
+    }
+    int64_t timeoutMs = std::min<int64_t>(remainingMs, WORKER_TO_MASTER_RPC_HARD_CAP_MS);
     if (timeoutMs <= 0 || timeoutMs > WORKER_TO_MASTER_RPC_HARD_CAP_MS) {
         timeoutMs = WORKER_TO_MASTER_RPC_HARD_CAP_MS;
     }
