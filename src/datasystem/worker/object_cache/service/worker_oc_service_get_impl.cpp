@@ -51,6 +51,7 @@
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/deadlock_util.h"
@@ -69,6 +70,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/common/util/meta_route_tool.h"
+#include "datasystem/worker/object_cache/delayed_release_shm_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/service_execution_policy.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
@@ -116,6 +118,18 @@ Status ValidateRemoteGetResult(bool workerConnected, const Status &status, SafeO
     return Status::OK();
 }
 }  // namespace
+
+const std::unordered_set<StatusCode> &WorkerOcServiceGetImpl::GetRemoteGetRetryCodes(bool fastTransportEnabled)
+{
+    static const std::unordered_set<StatusCode> fastTransportRetryCodes{
+        StatusCode::K_TRY_AGAIN, StatusCode::K_URMA_CONNECT_FAILED
+    };
+    static const std::unordered_set<StatusCode> rpcPayloadRetryCodes{
+        StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+        StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED, StatusCode::K_URMA_WAIT_TIMEOUT
+    };
+    return fastTransportEnabled ? fastTransportRetryCodes : rpcPayloadRetryCodes;
+}
 
 std::string BuildExistRedirectExtra(const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos)
 {
@@ -171,6 +185,18 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
     workerBatchQueryMetaThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchQueryMeta");
     if (FLAGS_enable_worker_worker_batch_get) {
         workerBatchRemoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchRemoteGet");
+    }
+    delayedReleaseShmManager_ = std::make_unique<DelayedReleaseShmManager>();
+}
+
+WorkerOcServiceGetImpl::~WorkerOcServiceGetImpl()
+{
+    workerBatchRemoteGetThreadPool_ = nullptr;
+    remoteGetThreadPool_ = nullptr;
+    delayedReleaseShmManager_ = nullptr;
+    if (asyncUpdateLocationManager_) {
+        asyncUpdateLocationManager_->Stop();
+        asyncUpdateLocationManager_ = nullptr;
     }
 }
 
@@ -1461,6 +1487,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
         RETURN_IF_NOT_OK(PrepareGetRequestHelper(address, dataSize, objectKV, reqPb, shmUnitAllocated));
         int64_t timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         INJECT_POINT("worker_oc_service_get_impl.pull_object_data_from_remote_worker.before_get_from_remote");
+        const auto &retryCodes = GetRemoteGetRetryCodes(IsFastTransportEnabled());
         Status rc = RetryOnErrorRepent(
             timeoutMs,
             [&workerStub, &reqPb, &rspPb, &clientApi, &address, this](int32_t) {
@@ -1474,10 +1501,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
                 RETURN_IF_NOT_OK(TryReconnectRemoteWorker(address, rc));
                 return Status::OK();
             },
-            []() { return Status::OK(); },
-            { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-              StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_WAIT_TIMEOUT },
-            minRetryOnceRpcMs);
+            []() { return Status::OK(); }, retryCodes, minRetryOnceRpcMs);
         // Consume comm before any early return to avoid stash leak across RPCs (issue #862 review).
         Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::WORKER_RPC_REMOTE_GET, traceEnabled);
         // In case of changed size, error will be returned as part of response PB and urma wont be written any data
@@ -1489,17 +1513,22 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
             dataSize = static_cast<uint64_t>(rspPb.data_size());
             dataSizeChange = true;
         } else {
+            if (rc.IsError()) {
+                DelayReleaseRemoteGetShmUnit(objectKV.GetObjEntry(), rc);
+                ReportRemoteReadOutcome(address, rc, "remote_get");
+            }
             if (IsFastTransportEnabled() && rc.IsError() && shmUnitAllocated) {
                 // memory is allocated but request failed
                 // deallocate the memory here
                 objectKV.GetObjEntry()->SetShmUnit(nullptr);
             }
-            if (rc.IsError()) {
-                ReportRemoteReadOutcome(address, rc, "remote_get");
-            }
             RETURN_IF_NOT_OK(rc);
         }
-        RETURN_IF_NOT_OK(ProcessRemoteReadResponse(address, rspPb, "remote_get_response"));
+        auto responseRc = ProcessRemoteReadResponse(address, rspPb, "remote_get_response");
+        if (responseRc.IsError()) {
+            DelayReleaseRemoteGetShmUnit(objectKV.GetObjEntry(), responseRc);
+        }
+        RETURN_IF_NOT_OK(responseRc);
     } while (dataSizeChange);
     // At this point, we haven't materialized the payload which is still sitting in the tcp/ip buffers.
     // We either receive payload directly into shared memory or fall back to the old behavior to save

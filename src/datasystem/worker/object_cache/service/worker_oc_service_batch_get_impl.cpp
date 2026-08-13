@@ -17,6 +17,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -31,6 +32,7 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -43,6 +45,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
+#include "datasystem/worker/object_cache/delayed_release_shm_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/service_execution_policy.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
@@ -59,9 +62,9 @@ namespace datasystem {
 namespace object_cache {
 namespace {
 constexpr int64_t MIGRATE_DATA_TIMEOUT_MS = 200;
-
-
-
+// Temporary quarantine for ambiguous remote gets. This reduces late URMA write reuse risk but does not
+// guarantee remote transport completion.
+constexpr int64_t REMOTE_GET_SHM_DELAY_RELEASE_MS = 128;
 constexpr double US_PER_MS = 1000.0;
 
 void LogInflightRemoteGetRequestIfNeeded(const metrics::Gauge &inflightGauge)
@@ -117,6 +120,60 @@ void CleanupWorkerWorkerOcRpcChannel(
 }
 
 }  // namespace
+
+bool WorkerOcServiceGetImpl::NeedDelayReleaseRemoteGetShm(const Status &status)
+{
+    if (status.IsOk() || IsBrpcRequestDefinitelyNotSent(status)) {
+        return false;
+    }
+    return IsRetryableRpcError(status) || IsNonRetryableRpcError(status)
+           || status.GetCode() == StatusCode::K_URMA_ERROR;
+}
+
+void WorkerOcServiceGetImpl::DelayReleaseRemoteGetShmUnit(SafeObjType &entry, const Status &reason)
+{
+    if (!NeedDelayReleaseRemoteGetShm(reason) || !IsFastTransportEnabled()) {
+        return;
+    }
+
+    auto object = entry.Get();
+    if (object == nullptr) {
+        return;
+    }
+    auto shmUnit = object->GetShmUnit();
+    if (shmUnit == nullptr) {
+        return;
+    }
+    shmUnit->SetHardFreeMemory();
+    object->SetShmUnit(nullptr);
+    LOG(WARNING) << "[REMOTE_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id << ", identity=" << shmUnit->GetIdentity()
+                 << ", bytes=" << shmUnit->size << ", delayMs=" << REMOTE_GET_SHM_DELAY_RELEASE_MS
+                 << ", reason=" << reason;
+    delayedReleaseShmManager_->Add(std::move(shmUnit), std::chrono::milliseconds(REMOTE_GET_SHM_DELAY_RELEASE_MS));
+}
+
+void WorkerOcServiceGetImpl::DelayReleaseBatchRemoteGetShmUnits(const BatchGetObjectRemoteReqPb &reqPb,
+                                                                std::list<GetObjectInfo> &infos,
+                                                                const Status &reason)
+{
+    if (!NeedDelayReleaseRemoteGetShm(reason)) {
+        return;
+    }
+    std::unordered_set<std::string> requestedObjectKeys;
+    requestedObjectKeys.reserve(static_cast<size_t>(reqPb.requests_size()));
+    for (const auto &request : reqPb.requests()) {
+        requestedObjectKeys.emplace(request.object_key());
+    }
+    for (auto &info : infos) {
+        if (info.queryMeta == nullptr || info.entry == nullptr || info.entry->safeObj == nullptr) {
+            continue;
+        }
+        const auto &objectKey = info.queryMeta->meta().object_key();
+        if (requestedObjectKeys.count(objectKey) > 0) {
+            DelayReleaseRemoteGetShmUnit(*info.entry->safeObj, reason);
+        }
+    }
+}
 
 bool WorkerOcServiceGetImpl::CanUpdateCopyMeta(const std::map<ReadKey, LockedEntity> &entries,
                                                const std::unordered_set<std::string> &skipKeys,
@@ -514,6 +571,9 @@ Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb
                                                       bool &dataSizeChange)
 {
     Status subRc = Status(static_cast<StatusCode>(subResp.error().error_code()), subResp.error().error_msg());
+    if (subRc.IsError()) {
+        DelayReleaseRemoteGetShmUnit(objectKV.GetObjEntry(), subRc);
+    }
     if (subRc.GetCode() == K_OC_REMOTE_GET_NOT_ENOUGH) {
         // If this error happens, remote worker should also sent the changed data size.
         if (subResp.data_size() == 0) {
@@ -733,10 +793,12 @@ Status WorkerOcServiceGetImpl::PrepareBatchGetRemoteRequest(BatchGetRemoteReques
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(
-    const std::string &address, const HostPort &hostAddr, const std::shared_ptr<GetRequest> &request,
-    int64_t migrateDataTimeoutMs, uint64_t rpcSlowerThanUs, PerfPoint &point,
-    BatchGetObjectRemoteReqPb &reqPb, BatchGetObjectRemoteRspPb &rspPb, std::vector<RpcMessage> &payloads)
+Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(const std::string &address, const HostPort &hostAddr,
+                                                         const std::shared_ptr<GetRequest> &request,
+                                                         int64_t migrateDataTimeoutMs, uint64_t rpcSlowerThanUs,
+                                                         PerfPoint &point, BatchGetObjectRemoteReqPb &reqPb,
+                                                         BatchGetObjectRemoteRspPb &rspPb,
+                                                         std::vector<RpcMessage> &payloads)
 {
     std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
@@ -752,6 +814,7 @@ Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(
     Raii inflightGuard([inflightGauge]() { inflightGauge.Dec(); });
     Timer timer;
     constexpr int32_t minRetryOnceRpcMs = 1;  // The first level of retryIntervalsMs.
+    const auto &retryCodes = GetRemoteGetRetryCodes(IsFastTransportEnabled());
     auto rc = RetryOnErrorRepent(
         timeoutMs,
         [this, &workerStub, &reqPb, &rspPb, &clientApi, &address, &payloads, &hostAddr, &request](int32_t) {
@@ -769,24 +832,21 @@ Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(
             CLEAN_RPC_AND_RETURN_WHEN_ERROR(clientApi->ReceivePayload(payloads), "receive payload");
             return Status::OK();
         },
-        []() { return Status::OK(); },
-        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED, StatusCode::K_URMA_WAIT_TIMEOUT },
-        minRetryOnceRpcMs);
+        []() { return Status::OK(); }, retryCodes, minRetryOnceRpcMs);
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
     SLOW_LOG_IF_OR_VLOG(
         INFO, rpcSlowerThanUs > 0 && elapsedUs >= rpcSlowerThanUs, 1,
-        AppendSrcDstForLog(
-            FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
-                         IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), elapsedMs),
-            localAddress_.ToString(), address));
+        AppendSrcDstForLog(FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
+                                        IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), elapsedMs),
+                           localAddress_.ToString(), address));
     return rc;
 }
 
-Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
-    const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
-    BatchGetObjectOutput output)
+Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(const std::string &address,
+                                                              std::list<GetObjectInfo> &infos,
+                                                              const std::shared_ptr<GetRequest> &request,
+                                                              BatchGetObjectOutput output)
 {
     auto &successIds = output.successIds;
     auto &needRetryIds = output.needRetryIds;
@@ -817,6 +877,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             if (rc.IsOk()) {
                 rc = SendBatchGetRemoteRequest(address, hostAddr, request, MIGRATE_DATA_TIMEOUT_MS,
                                                traceConfig.rpcSlowerThanUs, detailPoint, reqPb, rspPb, payloads);
+                DelayReleaseBatchRemoteGetShmUnits(reqPb, infos, rc);
             }
         }
         if (rc.IsError()) {
@@ -840,9 +901,10 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
     return lastRc;
 }
 
-Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
-    const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
-    BatchGetObjectOutput output)
+Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(const std::string &address,
+                                                              std::list<GetObjectInfo> &infos,
+                                                              const std::shared_ptr<GetRequest> &request,
+                                                              BatchGetObjectOutput output)
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA);
     // Construct and send request for batch remote get.

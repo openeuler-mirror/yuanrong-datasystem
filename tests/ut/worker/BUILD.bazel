@@ -322,6 +322,7 @@ ds_cc_test(
     srcs = ["object_cache/worker_oc_service_get_ub_admission_test.cpp"],
     deps = [
         "//src/datasystem/common/object_cache:common_object_cache",
+        "//src/datasystem/common/rpc:brpc_status_util",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_request_manager",

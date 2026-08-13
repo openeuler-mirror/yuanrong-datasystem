@@ -22,12 +22,14 @@ TEST(PatternGenerate_SenderId) {
 
 TEST(PatternVerify_Match) {
     auto data = GeneratePatternData(1024, 42);
-    ASSERT_TRUE(VerifyPatternData(data.data(), data.size(), 42));
+    uint64_t missMatchPos = 0;
+    ASSERT_TRUE(VerifyPatternData(data.data(), data.size(), 42, missMatchPos));
 }
 
 TEST(PatternVerify_Mismatch) {
     auto data = GeneratePatternData(1024, 0);
-    ASSERT_FALSE(VerifyPatternData(data.data(), data.size(), 1));
+    uint64_t missMatchPos = 0;
+    ASSERT_FALSE(VerifyPatternData(data.data(), data.size(), 1, missMatchPos));
 }
 
 TEST(PatternGenerate_ZeroSize) {
@@ -38,7 +40,8 @@ TEST(PatternGenerate_ZeroSize) {
 TEST(PatternGenerate_LargeSize) {
     auto data = GeneratePatternData(1024 * 1024, 0);
     ASSERT_EQ(data.size(), 1024u * 1024);
-    ASSERT_TRUE(VerifyPatternData(data.data(), data.size(), 0));
+    uint64_t missMatchPos = 0;
+    ASSERT_TRUE(VerifyPatternData(data.data(), data.size(), 0, missMatchPos));
 }
 
 // ---- VerifyBuffer / BuildVerifyConfig tests ----
@@ -54,31 +57,41 @@ TEST(PatternByteAt_MatchesPattern) {
 TEST(VerifyBuffer_Off_AlwaysTrue) {
     VerifyConfig vc; vc.level = VerifyLevel::OFF;
     char buf[16] = {0};
-    ASSERT_TRUE(VerifyBuffer(buf, 16, 16, 0, vc, nullptr));
+    std::optional<uint64_t> mismatchPos = 7;
+    ASSERT_TRUE(VerifyBuffer(buf, 16, 16, 0, vc, nullptr, &mismatchPos));
+    ASSERT_FALSE(mismatchPos.has_value());
     // even size mismatch passes when OFF
-    ASSERT_TRUE(VerifyBuffer(buf, 8, 16, 0, vc, nullptr));
+    mismatchPos = 7;
+    ASSERT_TRUE(VerifyBuffer(buf, 8, 16, 0, vc, nullptr, &mismatchPos));
+    ASSERT_FALSE(mismatchPos.has_value());
 }
 
 TEST(VerifyBuffer_Size_Match) {
     VerifyConfig vc; vc.level = VerifyLevel::SIZE;
     auto data = GeneratePatternData(64, 7);
     VerifyFailReason r = VerifyFailReason::CONTENT;
-    ASSERT_TRUE(VerifyBuffer(data.data(), 64, 64, 7, vc, &r));
+    std::optional<uint64_t> mismatchPos = 7;
+    ASSERT_TRUE(VerifyBuffer(data.data(), 64, 64, 7, vc, &r, &mismatchPos));
     ASSERT_TRUE(r == VerifyFailReason::NONE);
+    ASSERT_FALSE(mismatchPos.has_value());
 }
 
 TEST(VerifyBuffer_Size_Mismatch) {
     VerifyConfig vc; vc.level = VerifyLevel::SIZE;
     auto data = GeneratePatternData(64, 7);
     VerifyFailReason r = VerifyFailReason::NONE;
-    ASSERT_FALSE(VerifyBuffer(data.data(), 64, 128, 7, vc, &r));
+    std::optional<uint64_t> mismatchPos = 7;
+    ASSERT_FALSE(VerifyBuffer(data.data(), 64, 128, 7, vc, &r, &mismatchPos));
     ASSERT_TRUE(r == VerifyFailReason::SIZE);
+    ASSERT_FALSE(mismatchPos.has_value());
 }
 
 TEST(VerifyBuffer_Full_Match) {
     VerifyConfig vc; vc.level = VerifyLevel::FULL;
     auto data = GeneratePatternData(256, 3);
-    ASSERT_TRUE(VerifyBuffer(data.data(), 256, 256, 3, vc, nullptr));
+    std::optional<uint64_t> mismatchPos = 7;
+    ASSERT_TRUE(VerifyBuffer(data.data(), 256, 256, 3, vc, nullptr, &mismatchPos));
+    ASSERT_FALSE(mismatchPos.has_value());
 }
 
 TEST(VerifyBuffer_Full_ContentMismatch) {
@@ -86,8 +99,11 @@ TEST(VerifyBuffer_Full_ContentMismatch) {
     auto data = GeneratePatternData(256, 3);
     data[10] = static_cast<char>(static_cast<unsigned char>(data[10]) ^ 0xFF);
     VerifyFailReason r = VerifyFailReason::NONE;
-    ASSERT_FALSE(VerifyBuffer(data.data(), 256, 256, 3, vc, &r));
+    std::optional<uint64_t> mismatchPos;
+    ASSERT_FALSE(VerifyBuffer(data.data(), 256, 256, 3, vc, &r, &mismatchPos));
     ASSERT_TRUE(r == VerifyFailReason::CONTENT);
+    ASSERT_TRUE(mismatchPos.has_value());
+    ASSERT_EQ(*mismatchPos, 10ULL);
 }
 
 TEST(VerifyBuffer_Sample_Match) {
@@ -95,7 +111,9 @@ TEST(VerifyBuffer_Sample_Match) {
     vc.sampleBytes = 8;
     vc.sampleStepBytes = 64;
     auto data = GeneratePatternData(1024, 0);
-    ASSERT_TRUE(VerifyBuffer(data.data(), 1024, 1024, 0, vc, nullptr));
+    std::optional<uint64_t> mismatchPos = 7;
+    ASSERT_TRUE(VerifyBuffer(data.data(), 1024, 1024, 0, vc, nullptr, &mismatchPos));
+    ASSERT_FALSE(mismatchPos.has_value());
 }
 
 TEST(VerifyBuffer_Sample_CatchesHeadCorruption) {
@@ -104,7 +122,10 @@ TEST(VerifyBuffer_Sample_CatchesHeadCorruption) {
     vc.sampleStepBytes = 64;
     auto data = GeneratePatternData(1024, 0);
     data[2] = static_cast<char>(static_cast<unsigned char>(data[2]) ^ 0xFF);
-    ASSERT_FALSE(VerifyBuffer(data.data(), 1024, 1024, 0, vc, nullptr));
+    std::optional<uint64_t> mismatchPos;
+    ASSERT_FALSE(VerifyBuffer(data.data(), 1024, 1024, 0, vc, nullptr, &mismatchPos));
+    ASSERT_TRUE(mismatchPos.has_value());
+    ASSERT_EQ(*mismatchPos, 2ULL);
 }
 
 TEST(VerifyBuffer_Sample_CatchesTailCorruption) {
@@ -113,7 +134,10 @@ TEST(VerifyBuffer_Sample_CatchesTailCorruption) {
     vc.sampleStepBytes = 64;
     auto data = GeneratePatternData(1024, 0);
     data[1023] = static_cast<char>(static_cast<unsigned char>(data[1023]) ^ 0xFF);
-    ASSERT_FALSE(VerifyBuffer(data.data(), 1024, 1024, 0, vc, nullptr));
+    std::optional<uint64_t> mismatchPos;
+    ASSERT_FALSE(VerifyBuffer(data.data(), 1024, 1024, 0, vc, nullptr, &mismatchPos));
+    ASSERT_TRUE(mismatchPos.has_value());
+    ASSERT_EQ(*mismatchPos, 1023ULL);
 }
 
 TEST(VerifyBuffer_Sample_CatchesMiddleSampleCorruption) {
@@ -123,7 +147,10 @@ TEST(VerifyBuffer_Sample_CatchesMiddleSampleCorruption) {
     auto data = GeneratePatternData(1024, 0);
     // offset 128 is a sampled middle segment start (step=64: 64, 128, ...)
     data[128] = static_cast<char>(static_cast<unsigned char>(data[128]) ^ 0xFF);
-    ASSERT_FALSE(VerifyBuffer(data.data(), 1024, 1024, 0, vc, nullptr));
+    std::optional<uint64_t> mismatchPos;
+    ASSERT_FALSE(VerifyBuffer(data.data(), 1024, 1024, 0, vc, nullptr, &mismatchPos));
+    ASSERT_TRUE(mismatchPos.has_value());
+    ASSERT_EQ(*mismatchPos, 128ULL);
 }
 
 TEST(VerifyBuffer_Sample_SkipsUnsampledByte) {

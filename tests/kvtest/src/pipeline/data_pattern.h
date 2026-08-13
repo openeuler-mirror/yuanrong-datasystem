@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <optional>
 #include <string>
 
 inline std::string GeneratePatternData(uint64_t size, int senderId) {
@@ -11,9 +12,12 @@ inline std::string GeneratePatternData(uint64_t size, int senderId) {
 }
 
 // Verify data matches the pattern without allocating memory
-inline bool VerifyPatternData(const char *data, uint64_t size, int senderId) {
+inline bool VerifyPatternData(const char *data, uint64_t size, int senderId, uint64_t &missMatchPos) {
     for (uint64_t i = 0; i < size; i++) {
-        if (data[i] != static_cast<char>((senderId + i) % 256)) return false;
+        if (data[i] != static_cast<char>((senderId + i) % 256)) {
+            missMatchPos = i;
+            return false;
+        }
     }
     return true;
 }
@@ -57,7 +61,8 @@ inline VerifyConfig BuildVerifyConfig(const std::string &level,
 // segment. Returns true iff all sampled bytes match the pattern. Pure, no
 // allocation. For size==0 returns true.
 inline bool VerifySamplePattern(const char *buf, uint64_t size, int senderId,
-                                uint64_t sampleBytes, uint64_t sampleStepBytes) {
+                                uint64_t sampleBytes, uint64_t sampleStepBytes,
+                                std::optional<uint64_t> &mismatchPos) {
     if (size == 0) return true;
     uint64_t segLen = sampleBytes ? sampleBytes : 1;
     if (segLen > size) segLen = size;
@@ -65,7 +70,10 @@ inline bool VerifySamplePattern(const char *buf, uint64_t size, int senderId,
 
     auto checkSeg = [&](uint64_t off, uint64_t len) -> bool {
         for (uint64_t i = 0; i < len; i++) {
-            if (buf[off + i] != PatternByteAt(off + i, senderId)) return false;
+            if (buf[off + i] != PatternByteAt(off + i, senderId)) {
+                mismatchPos = off + i;
+                return false;
+            }
         }
         return true;
     };
@@ -93,11 +101,13 @@ inline bool VerifySamplePattern(const char *buf, uint64_t size, int senderId,
 //   - SIZE:   true iff bufSize == expectedSize
 //   - SAMPLE: SIZE + head/tail/middle sampled segments match
 //   - FULL:   SIZE + full content match (VerifyPatternData)
-// On failure, sets *reason (if non-null) to SIZE or CONTENT.
+// On failure, sets *reason (if non-null) to SIZE or CONTENT. Sets mismatchPos only for CONTENT failures.
 inline bool VerifyBuffer(const void *bufData, uint64_t bufSize,
                          uint64_t expectedSize, int senderId,
                          const VerifyConfig &cfg,
-                         VerifyFailReason *reason = nullptr) {
+                         VerifyFailReason *reason = nullptr,
+                         std::optional<uint64_t> *mismatchPos = nullptr) {
+    if (mismatchPos) mismatchPos->reset();
     if (cfg.level == VerifyLevel::OFF) {
         if (reason) *reason = VerifyFailReason::NONE;
         return true;
@@ -113,9 +123,13 @@ inline bool VerifyBuffer(const void *bufData, uint64_t bufSize,
     const char *buf = static_cast<const char *>(bufData);
     bool ok;
     if (cfg.level == VerifyLevel::FULL) {
-        ok = VerifyPatternData(buf, bufSize, senderId);
+        uint64_t pos = 0;
+        ok = VerifyPatternData(buf, bufSize, senderId, pos);
+        if (!ok && mismatchPos) *mismatchPos = pos;
     } else {
-        ok = VerifySamplePattern(buf, bufSize, senderId, cfg.sampleBytes, cfg.sampleStepBytes);
+        std::optional<uint64_t> sampleMismatchPos;
+        ok = VerifySamplePattern(buf, bufSize, senderId, cfg.sampleBytes, cfg.sampleStepBytes, sampleMismatchPos);
+        if (!ok && mismatchPos) *mismatchPos = sampleMismatchPos;
     }
     if (reason) *reason = ok ? VerifyFailReason::NONE : VerifyFailReason::CONTENT;
     return ok;

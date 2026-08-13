@@ -17,10 +17,12 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GET_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GET_IMPL_H
 
+#include <cstdint>
 #include <memory>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/peer_ub_admission.h"
@@ -42,6 +44,8 @@ class PerfPoint;
 
 namespace object_cache {
 
+class DelayedReleaseShmManager;
+
 using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 
 class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
@@ -54,13 +58,7 @@ public:
                            std::shared_ptr<MigrateDataRateController> rateController,
                            std::shared_ptr<PeerUbAdmission> ubAdmission = nullptr);
 
-    ~WorkerOcServiceGetImpl()
-    {
-        if (asyncUpdateLocationManager_) {
-            asyncUpdateLocationManager_->Stop();
-            asyncUpdateLocationManager_ = nullptr;
-        }
-    };
+    ~WorkerOcServiceGetImpl();
 
     /**
      * @brief Deal with the request for object data from client.
@@ -820,6 +818,15 @@ private:
         int64_t migrateDataTimeoutMs, uint64_t rpcSlowerThanUs, PerfPoint &point,
         BatchGetObjectRemoteReqPb &reqPb, BatchGetObjectRemoteRspPb &rspPb, std::vector<RpcMessage> &payloads);
 
+    static bool NeedDelayReleaseRemoteGetShm(const Status &status);
+
+    static const std::unordered_set<StatusCode> &GetRemoteGetRetryCodes(bool fastTransportEnabled);
+
+    void DelayReleaseRemoteGetShmUnit(SafeObjType &entry, const Status &reason);
+
+    void DelayReleaseBatchRemoteGetShmUnits(const BatchGetObjectRemoteReqPb &reqPb,
+                                            std::list<GetObjectInfo> &infos, const Status &reason);
+
     /**
      * @brief Helper function to construct batch get request.
      * @param[in] address The remote worker address.
@@ -1154,6 +1161,8 @@ private:
     std::shared_ptr<ThreadPool> threadPool_{ nullptr };
 
     std::unique_ptr<ThreadPool> remoteGetThreadPool_{ nullptr };
+
+    std::unique_ptr<DelayedReleaseShmManager> delayedReleaseShmManager_{ nullptr };
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
