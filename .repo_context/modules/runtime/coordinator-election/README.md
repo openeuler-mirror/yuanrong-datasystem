@@ -12,8 +12,8 @@
 
 | Component | Responsibility |
 | --- | --- |
-| `CoordinatorServer` | Singleton compatibility façade for public embedded startup and `Stop()`. |
-| `CoordinatorRuntime` | Non-singleton config parsing, Raft flag snapshot, lifecycle callbacks, event loop, instance-local `Stop()`, and leader observation. |
+| `CoordinatorServer` | Singleton compatibility façade for public embedded startup, runtime `UpdateConfig()`, and `Stop()`. |
+| `CoordinatorRuntime` | Non-singleton config parsing, dynamic-config ownership and lifecycle gating, Raft flag snapshot, callbacks, event loop, instance-local `Stop()`, and leader observation. |
 | `CoordinatorServiceImpl` | Business components, shared brpc server, braft service registration, two-stage startup, RPC readiness state, and ordered shutdown. |
 | `RegisterCoordinatorRaftServices` | Registers braft services on the shared brpc server generation; called by the Service/shared-server owner. |
 | `CoordinatorElectionManager` | Owns bootstrap-state publication, Discovery/peer convergence, startup-plan selection, Node then Membership startup, and Membership-before-Node shutdown. |
@@ -67,7 +67,17 @@ sequenceDiagram
 
 The no-argument `CoordinatorServer::InitAndRun()` / `CoordinatorRuntime::InitAndRun()` path is the dscli-compatible entry. When `coordinator_raft_initial_peers` is empty, it constructs the Service with no Discovery and member count `0`, so the Coordinator runs in single-node no-election mode; the Runtime still calls `StartElectionManager()`, and the Service returns `OK` without publishing an election Manager. When `coordinator_raft_initial_peers` is non-empty, Runtime builds `StaticCoordinatorDiscovery` from that exact list; if the resulting member count configures election, startup uses the same Service `StartElectionManager()` path as parameterized Runtime startup. Direct `CoordinatorRuntime` startup with an empty config path remains restricted to internal in-process tests for the parameterized overload. Each Runtime starts Coordinator logging and immediately records the build's Git commit and branch before processing startup options. After parsing succeeds or is skipped, each startup attempt calls `GetRaftFlags()` exactly once and captures the config-log snapshot before local-address parsing and Service construction. In-process multi-Runtime fixtures set shared common flags before launching any Runtime, do not mutate them while any Runtime is active, and restore them only after every Runtime has stopped and joined. Endpoint, exclusive Raft data root, Raft heartbeat/election timing, Discovery retry timing, member failure grace, and internal membership timing are isolated by each Runtime's `GetRaftFlags()` snapshot. Production runs one Coordinator Runtime per process.
 
-`CoordinatorRuntime::Stop()` updates only that Runtime's state and wakes only its event loop. The process signal handler only sets `g_exitFlag`, which each bounded Runtime event loop observes. Runtime moves each callback out of owned state exactly once and invokes it without the Runtime mutex held. A `CoordinatorRuntime` instance is one-shot by interface contract: callers must not invoke `InitAndRun` concurrently or more than once on the same instance, and must create a new Runtime instance to retry after any return.
+`CoordinatorRuntime::UpdateConfig()` owns one long-lived `DynamicFlagConfig` and `DynamicConfigUpdater`. It accepts
+string-valued JSON objects only after Service `Init()`/`Start()`, `onStart`, and election-manager startup succeed. The
+Coordinator capability list is intentionally limited to `request_sample_rate`, `access_sample_rate`, and
+`diagnostic_sample_rate`: the common updater commits them through the atomically published `LogSampler` snapshot. Other
+process-dynamic flags, including `node_dead_timeout_s`, are rejected as not runtime-applicable until every Coordinator
+consumer has a synchronized live-update path. A dedicated Runtime config mutex protects readiness and updater lifetime
+and serializes each accepted update with `Stop()`; startup returns `K_NOT_READY`, while Stop, failed startup cleanup, or
+signal shutdown returns `K_SHUTTING_DOWN`. Lifecycle rejections write an operation-log failure without the JSON payload.
+Updates are process-local and are not distributed or persisted.
+
+`CoordinatorRuntime::Stop()` updates only that Runtime's state, closes dynamic-update admission, and wakes only its event loop. The process signal handler only sets `g_exitFlag`, which each bounded Runtime event loop observes. Runtime moves each callback out of owned state exactly once and invokes it without the Runtime mutex held. A `CoordinatorRuntime` instance is one-shot by interface contract: callers must not invoke `InitAndRun` concurrently or more than once on the same instance, and must create a new Runtime instance to retry after any return.
 
 ## Service Readiness And Registration
 

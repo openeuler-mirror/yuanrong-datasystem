@@ -152,6 +152,29 @@ TEST_F(OperationLoggerTest, WritesCoordinatorRole)
     EXPECT_THAT(content, testing::HasSubstr("OPERATION_STOP: role=coordinator"));
 }
 
+TEST_F(OperationLoggerTest, WritesWorkerVersionInit)
+{
+    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
+    OperationLogger::Instance().LogVersionInit("[abc123] [2026-08-13 09:30:00]");
+    OperationLogger::Instance().Shutdown();
+
+    const std::string content = ReadFile(logDir_ + "/test_worker_operation.log");
+    EXPECT_THAT(content, testing::HasSubstr(
+                             "VERSION_INIT: role=worker, git_commit=[abc123] [2026-08-13 09:30:00]"));
+    EXPECT_THAT(content, testing::Not(testing::HasSubstr("git_branch=")));
+}
+
+TEST_F(OperationLoggerTest, WritesCoordinatorVersionInit)
+{
+    ASSERT_TRUE(OperationLogger::Instance().Init(GetLogProcessRoleName(LogProcessRole::COORDINATOR)));
+    OperationLogger::Instance().LogVersionInit("NO GIT_HASH FIXME");
+    OperationLogger::Instance().Shutdown();
+
+    const std::string content = ReadFile(logDir_ + "/test_worker_operation.log");
+    EXPECT_THAT(content,
+                testing::HasSubstr("VERSION_INIT: role=coordinator, git_commit=NO GIT_HASH FIXME"));
+}
+
 TEST_F(OperationLoggerTest, MasksSensitiveFlagsInConfigInit)
 {
     ASSERT_TRUE(OperationLogger::Instance().Init("worker"));

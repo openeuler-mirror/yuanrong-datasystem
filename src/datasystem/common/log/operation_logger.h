@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Operation audit logger for config lifecycle events.
+ * Description: Operation audit logger for process lifecycle and configuration events.
  */
 #ifndef DATASYSTEM_COMMON_LOG_OPERATION_LOGGER_H
 #define DATASYSTEM_COMMON_LOG_OPERATION_LOGGER_H
@@ -55,6 +55,12 @@ public:
      * @brief Record operation logger shutdown in audit log.
      */
     void LogOperationStop();
+
+    /**
+     * @brief Record the process build commit in the audit log.
+     * @param[in] gitCommit Build-time Git commit description.
+     */
+    void LogVersionInit(const std::string &gitCommit);
 
     /**
      * @brief Record initial configuration snapshot in audit log.

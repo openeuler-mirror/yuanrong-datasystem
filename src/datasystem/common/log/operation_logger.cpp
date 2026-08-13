@@ -246,6 +246,14 @@ void OperationLogger::LogOperationStop()
         [](const std::string &role) { return "OPERATION_STOP: role=" + role; });
 }
 
+void OperationLogger::LogVersionInit(const std::string &gitCommit)
+{
+    WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, false, "",
+        [&gitCommit](const std::string &role) {
+            return "VERSION_INIT: role=" + role + ", git_commit=" + gitCommit;
+        });
+}
+
 void OperationLogger::LogConfigInit(const std::string &flagsSnapshot)
 {
     WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, false, "",

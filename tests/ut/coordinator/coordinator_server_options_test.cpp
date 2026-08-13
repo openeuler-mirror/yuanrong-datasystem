@@ -20,6 +20,7 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -36,6 +37,10 @@
 #include <google/protobuf/descriptor.h>
 
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/flags/config_monitor_state.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
+#include "datasystem/common/log/log_sampler.h"
+#include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/protos/coordinator.brpc.stub.pb.h"
@@ -55,6 +60,13 @@ DS_DECLARE_int32(coordinator_raft_heartbeat_interval_ms);
 DS_DECLARE_int32(coordinator_raft_election_timeout_ms);
 DS_DECLARE_uint32(coordinator_member_failure_grace_ms);
 DS_DECLARE_uint32(coordinator_discovery_retry_interval_ms);
+DS_DECLARE_double(request_sample_rate);
+DS_DECLARE_double(access_sample_rate);
+DS_DECLARE_double(diagnostic_sample_rate);
+DS_DECLARE_string(log_dir);
+DS_DECLARE_string(log_filename);
+DS_DECLARE_bool(log_async);
+DS_DECLARE_uint32(node_dead_timeout_s);
 
 namespace datasystem {
 namespace ut {
@@ -315,6 +327,43 @@ public:
 private:
     CoordinatorServer *server_;
     std::unique_ptr<CoordinatorRuntime> originalRuntime_;
+};
+
+class ScopedDynamicConfigTestState {
+public:
+    ScopedDynamicConfigTestState()
+        : originalRequestSampleRate_(FLAGS_request_sample_rate), originalAccessSampleRate_(FLAGS_access_sample_rate),
+          originalDiagnosticSampleRate_(FLAGS_diagnostic_sample_rate),
+          originalFileMonitorEnabled_(ConfigMonitorState::Instance().IsFileMonitorEnabled())
+    {
+        FLAGS_request_sample_rate = 1.0;
+        FLAGS_access_sample_rate = 1.0;
+        FLAGS_diagnostic_sample_rate = 1.0;
+        LogSampler::Instance().ResetForTest();
+        LogSampler::Instance().Init();
+        ConfigMonitorState::Instance().SetFileMonitorEnabled(false);
+    }
+
+    ~ScopedDynamicConfigTestState()
+    {
+        FLAGS_request_sample_rate = originalRequestSampleRate_;
+        FLAGS_access_sample_rate = originalAccessSampleRate_;
+        FLAGS_diagnostic_sample_rate = originalDiagnosticSampleRate_;
+        LogSampler::Instance().ResetForTest();
+        LogSampler::Instance().Init();
+        LogSampleUserConfig config;
+        config.requestSampleRate = originalRequestSampleRate_;
+        config.accessSampleRate = originalAccessSampleRate_;
+        config.diagnosticSampleRate = originalDiagnosticSampleRate_;
+        (void)LogSampler::Instance().UpdateConfigFromFlags(config);
+        ConfigMonitorState::Instance().SetFileMonitorEnabled(originalFileMonitorEnabled_);
+    }
+
+private:
+    double originalRequestSampleRate_;
+    double originalAccessSampleRate_;
+    double originalDiagnosticSampleRate_;
+    bool originalFileMonitorEnabled_;
 };
 
 class ScopedTempDirectory {
@@ -733,6 +782,65 @@ TEST_F(CoordinatorElectionServiceTest, RuntimeEmptyConfigPathSkipsParsingAndUses
     EXPECT_EQ(stopCount, 1);
 }
 
+TEST_F(CoordinatorElectionServiceTest, RealRuntimePublishesConfigReadinessOnlyAfterStartupCompletes)
+{
+    constexpr auto kReadyTimeout = std::chrono::seconds(3);
+    ScopedDynamicConfigTestState testState;
+    auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
+    discovery->candidates_ = { peers_.front() };
+    CoordinatorRuntimeMock runtime(raftFlags_);
+    auto options = MakeCoordinatorOptions(discovery);
+    Status updateDuringOnStart;
+    options.onStart = [&] {
+        updateDuringOnStart = runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.75"})");
+        return Status::OK();
+    };
+    options.onStop = [] { return Status::OK(); };
+
+    auto runFuture = std::async(std::launch::async, [&] { return runtime.InitAndRun(options); });
+    Status readyUpdate(K_NOT_READY, "not attempted");
+    const auto deadline = std::chrono::steady_clock::now() + kReadyTimeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        readyUpdate = runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.75"})");
+        if (readyUpdate.IsOk() || readyUpdate.GetCode() != K_NOT_READY) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    DS_ASSERT_OK(runtime.Stop());
+    const auto runStatus = runFuture.get();
+    EXPECT_EQ(updateDuringOnStart.GetCode(), K_NOT_READY) << updateDuringOnStart.ToString();
+    EXPECT_TRUE(readyUpdate.IsOk()) << readyUpdate.ToString();
+    EXPECT_DOUBLE_EQ(FLAGS_diagnostic_sample_rate, 0.75);
+    EXPECT_TRUE(runStatus.IsOk()) << runStatus.ToString();
+    const auto afterStop = runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.5"})");
+    EXPECT_EQ(afterStop.GetCode(), K_SHUTTING_DOWN) << afterStop.ToString();
+}
+
+TEST_F(CoordinatorElectionServiceTest, StartupFailureNeverOpensConfigAdmission)
+{
+    ScopedDynamicConfigTestState testState;
+    auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
+    discovery->candidates_ = { peers_.front() };
+    CoordinatorRuntimeMock runtime(raftFlags_);
+    auto options = MakeCoordinatorOptions(discovery);
+    Status updateDuringOnStart;
+    options.onStart = [&] {
+        updateDuringOnStart = runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.75"})");
+        return Status(K_RUNTIME_ERROR, "scripted startup failure");
+    };
+    options.onStop = [] { return Status::OK(); };
+
+    const auto runStatus = runtime.InitAndRun(options);
+
+    EXPECT_EQ(updateDuringOnStart.GetCode(), K_NOT_READY) << updateDuringOnStart.ToString();
+    EXPECT_EQ(runStatus.GetCode(), K_RUNTIME_ERROR) << runStatus.ToString();
+    const auto afterFailure = runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.5"})");
+    EXPECT_EQ(afterFailure.GetCode(), K_SHUTTING_DOWN) << afterFailure.ToString();
+    EXPECT_DOUBLE_EQ(FLAGS_diagnostic_sample_rate, 1.0);
+}
+
 TEST_F(CoordinatorElectionServiceTest, RuntimeNonEmptyConfigPathParsesProcessFlags)
 {
     const auto configPath = tempDirectory_->Child("runtime-parse-config.json");
@@ -854,6 +962,7 @@ TEST(CoordinatorServerOptionsTest, ServerStopDelegatesToOwnedRuntime)
     auto *server = CoordinatorServer::GetInstance();
     ASSERT_NE(server->runtime_, nullptr);
     auto &runtime = *server->runtime_;
+    const auto originalConfigState = runtime.configState_;
     runtime.stopRequested_ = false;
 
     const auto stopStatus = server->Stop();
@@ -861,6 +970,140 @@ TEST(CoordinatorServerOptionsTest, ServerStopDelegatesToOwnedRuntime)
     EXPECT_TRUE(stopStatus.IsOk()) << stopStatus.ToString();
     EXPECT_TRUE(runtime.stopRequested_);
     runtime.stopRequested_ = false;
+    runtime.configState_ = originalConfigState;
+}
+
+TEST(CoordinatorServerOptionsTest, UpdateConfigIsGatedByRuntimeLifecycle)
+{
+    ScopedDynamicConfigTestState testState;
+    CoordinatorRuntime runtime;
+
+    const auto beforeStart = runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.75"})");
+    EXPECT_EQ(beforeStart.GetCode(), K_NOT_READY) << beforeStart.ToString();
+
+    runtime.EnableConfigUpdates();
+    const auto invalidStatus = runtime.UpdateConfig(R"({"v":2})");
+    EXPECT_EQ(invalidStatus.GetCode(), K_INVALID) << invalidStatus.ToString();
+    DS_ASSERT_OK(runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.75"})"));
+    EXPECT_DOUBLE_EQ(FLAGS_diagnostic_sample_rate, 0.75);
+
+    DS_ASSERT_OK(runtime.Stop());
+    const auto afterStop = runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.5"})");
+    EXPECT_EQ(afterStop.GetCode(), K_SHUTTING_DOWN) << afterStop.ToString();
+    EXPECT_DOUBLE_EQ(FLAGS_diagnostic_sample_rate, 0.75);
+}
+
+TEST(CoordinatorServerOptionsTest, UpdateConfigRejectsFlagsWithoutCompleteRuntimeEffect)
+{
+    ScopedDynamicConfigTestState testState;
+    const auto originalNodeDeadTimeout = FLAGS_node_dead_timeout_s;
+    FLAGS_node_dead_timeout_s = 300;
+    CoordinatorRuntime runtime;
+    runtime.EnableConfigUpdates();
+
+    const auto status = runtime.UpdateConfig(R"({"node_dead_timeout_s":"600"})");
+    EXPECT_EQ(status.GetCode(), K_INVALID) << status.ToString();
+    EXPECT_NE(status.GetMsg().find("not runtime-applicable"), std::string::npos) << status.ToString();
+    EXPECT_EQ(FLAGS_node_dead_timeout_s, 300u);
+
+    FLAGS_node_dead_timeout_s = originalNodeDeadTimeout;
+}
+
+TEST(CoordinatorServerOptionsTest, ServerUpdateConfigDelegatesToOwnedRuntime)
+{
+    ScopedDynamicConfigTestState testState;
+    auto runtime = std::make_unique<CoordinatorRuntime>();
+    runtime->EnableConfigUpdates();
+    ScopedCoordinatorServerRuntimeOverride runtimeOverride(std::move(runtime));
+
+    DS_ASSERT_OK(CoordinatorServer::GetInstance()->UpdateConfig(R"({"diagnostic_sample_rate":"0.75"})"));
+    EXPECT_DOUBLE_EQ(FLAGS_diagnostic_sample_rate, 0.75);
+
+    DS_ASSERT_OK(CoordinatorServer::GetInstance()->Stop());
+}
+
+TEST(CoordinatorServerOptionsTest, StopWaitsForAcceptedUpdateAndClosesAdmission)
+{
+    constexpr auto kWaitTimeout = std::chrono::seconds(1);
+    ScopedDynamicConfigTestState testState;
+    CoordinatorRuntime runtime;
+    runtime.EnableConfigUpdates();
+    std::promise<void> updateEntered;
+    auto updateEnteredFuture = updateEntered.get_future();
+    std::promise<void> releaseUpdate;
+    auto releaseUpdateFuture = releaseUpdate.get_future().share();
+    std::once_flag updateEnteredOnce;
+    runtime.runtimeFlags_->SetBatchCommitHandler([&](const auto &) {
+        std::call_once(updateEnteredOnce, [&] {
+            updateEntered.set_value();
+            releaseUpdateFuture.wait();
+        });
+        return true;
+    });
+
+    Status updateStatus;
+    std::thread updateThread([&] {
+        updateStatus = runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.75"})");
+    });
+    const auto updateEnteredStatus = updateEnteredFuture.wait_for(kWaitTimeout);
+    if (updateEnteredStatus != std::future_status::ready) {
+        releaseUpdate.set_value();
+        updateThread.join();
+        FAIL() << "UpdateConfig did not enter validation before the timeout";
+        return;
+    }
+    std::promise<void> stopStarted;
+    auto stopStartedFuture = stopStarted.get_future();
+    auto stopFuture = std::async(std::launch::async, [&] {
+        stopStarted.set_value();
+        return runtime.Stop();
+    });
+    ASSERT_EQ(stopStartedFuture.wait_for(kWaitTimeout), std::future_status::ready);
+    EXPECT_EQ(stopFuture.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+
+    releaseUpdate.set_value();
+    updateThread.join();
+    EXPECT_TRUE(updateStatus.IsOk()) << updateStatus.ToString();
+    EXPECT_TRUE(stopFuture.get().IsOk());
+    const auto rejectedStatus = runtime.UpdateConfig(R"({"diagnostic_sample_rate":"0.5"})");
+    EXPECT_EQ(rejectedStatus.GetCode(), K_SHUTTING_DOWN) << rejectedStatus.ToString();
+}
+
+TEST(CoordinatorServerOptionsTest, LifecycleRejectionsAreAuditedWithoutConfigPayload)
+{
+    ScopedTempDirectory tempDirectory;
+    const auto originalLogDir = FLAGS_log_dir;
+    const auto originalLogFilename = FLAGS_log_filename;
+    const auto originalLogAsync = FLAGS_log_async;
+    OperationLogger::Instance().Shutdown();
+    FLAGS_log_dir = tempDirectory.Child("logs");
+    std::filesystem::create_directories(FLAGS_log_dir);
+    FLAGS_log_filename = "coordinator_lifecycle_audit";
+    FLAGS_log_async = false;
+    EXPECT_TRUE(OperationLogger::Instance().Init("coordinator"));
+    CoordinatorRuntime runtime;
+    constexpr const char *kPayloadMarker = "payload-must-not-be-audited";
+
+    const auto beforeStart = runtime.UpdateConfig(
+        std::string(R"({"diagnostic_sample_rate":")") + kPayloadMarker + R"("})");
+    DS_ASSERT_OK(runtime.Stop());
+    const auto afterStop = runtime.UpdateConfig(
+        std::string(R"({"diagnostic_sample_rate":")") + kPayloadMarker + R"("})");
+    OperationLogger::Instance().Shutdown();
+
+    EXPECT_EQ(beforeStart.GetCode(), K_NOT_READY) << beforeStart.ToString();
+    EXPECT_EQ(afterStop.GetCode(), K_SHUTTING_DOWN) << afterStop.ToString();
+    std::ifstream operationLog(tempDirectory.Child("logs/coordinator_lifecycle_audit_operation.log"));
+    const std::string content((std::istreambuf_iterator<char>(operationLog)), std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("CONFIG_FAILED: UpdateConfig Coordinator UpdateConfig: runtime is not ready"),
+              std::string::npos);
+    EXPECT_NE(content.find("CONFIG_FAILED: UpdateConfig Coordinator UpdateConfig: runtime is stopping"),
+              std::string::npos);
+    EXPECT_EQ(content.find(kPayloadMarker), std::string::npos);
+
+    FLAGS_log_dir = originalLogDir;
+    FLAGS_log_filename = originalLogFilename;
+    FLAGS_log_async = originalLogAsync;
 }
 
 TEST_F(CoordinatorElectionServiceTest, ElectionInputsAndZmqFailBeforeNetwork)

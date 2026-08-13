@@ -9,6 +9,12 @@
 - `CoordinatorOptions` contains a config path, Discovery provider, expected member count, and paired `onStart`/`onStop` callbacks.
 - `CoordinatorServer` is the production singleton façade, owns one Runtime, and rejects an empty parameterized `configFilePath` before delegation. Production supports one Coordinator Runtime per process.
 - `CoordinatorRuntime` passes a non-empty path directly to `FlagManager::ParseConfigFile`; parse failures return the `K_INVALID` error built from the configured path and parser message.
+- `CoordinatorRuntime` owns one long-lived `DynamicFlagConfig` and `DynamicConfigUpdater`; `UpdateConfig()` is admitted
+  only after Service `Init()`/`Start()`, `onStart`, and election-manager startup and is serialized with `Stop()` by a
+  dedicated config mutex. Its capability filter accepts only `request_sample_rate`, `access_sample_rate`, and
+  `diagnostic_sample_rate`, whose runtime state is atomically published by `LogSampler`. Other dynamic gflags are
+  rejected until all Coordinator consumers support synchronized live update. Changes are process-local and are not
+  distributed or persisted; lifecycle rejections are audited without logging the JSON payload.
 - The no-argument dscli-compatible path reads process flags directly: empty `coordinator_raft_initial_peers` means single-node no-election mode; non-empty static peers are converted to `StaticCoordinatorDiscovery` and can start election through the Service election path. An empty path on the parameterized Runtime overload skips parsing and consumes process flags prepared by the caller; that direct Runtime path is internal and used by in-process tests only.
 - After parsing succeeds or is skipped, `CoordinatorRuntime::GetRaftFlags()` is called exactly once for that attempt and supplies the local endpoint, exclusive data root, election timeout, and membership timing.
 - In-process multi-Runtime fixtures set common flags before launch, keep them unchanged while any Runtime is active, and restore them only after every Runtime stops and joins.
@@ -58,7 +64,7 @@ Runtime onStop: provider callback records delayed 10-second unregister
 -> relock only to publish STOPPED/the saved first cleanup status and notify concurrent Shutdown callers
 ```
 
-`CoordinatorRuntime::Stop()` sets only that Runtime's `stopRequested_` and notifies only its `stopCv_`; it does not change `g_exitFlag`. The process signal handler only sets `g_exitFlag`, and each bounded Runtime event loop observes it. After the event loop exits, Runtime invokes `onStop` once when `onStart` was attempted, then shuts down its Service and completes the lifecycle future/thread.
+`CoordinatorRuntime::Stop()` closes `UpdateConfig()` admission, sets only that Runtime's `stopRequested_`, and notifies only its `stopCv_`; it does not change `g_exitFlag`. The process signal handler only sets `g_exitFlag`, and each bounded Runtime event loop observes it and closes update admission before cleanup. After the event loop exits, Runtime invokes `onStop` once when `onStart` was attempted, then shuts down its Service and completes the lifecycle future/thread.
 
 The unregister delay belongs to provider callback semantics. The in-process Discovery mock records an expiration deadline and returns immediately. It retains the endpoint for 10 seconds and removes it lazily on a later query; test-only virtual time avoids a real 10-second sleep.
 

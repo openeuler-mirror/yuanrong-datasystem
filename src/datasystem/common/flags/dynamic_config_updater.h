@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_FLAGS_DYNAMIC_CONFIG_UPDATER_H
 #define DATASYSTEM_COMMON_FLAGS_DYNAMIC_CONFIG_UPDATER_H
 
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -31,7 +32,10 @@ namespace datasystem {
 
 class DynamicConfigUpdater {
 public:
-    explicit DynamicConfigUpdater(DynamicFlagConfig &flagConfig);
+    using RuntimeApplicabilityCheck = std::function<bool(const std::string &)>;
+
+    explicit DynamicConfigUpdater(DynamicFlagConfig &flagConfig,
+                                  RuntimeApplicabilityCheck runtimeApplicabilityCheck = {});
     ~DynamicConfigUpdater() = default;
 
     DynamicConfigUpdater(const DynamicConfigUpdater &) = delete;
@@ -43,6 +47,7 @@ public:
      * @brief Apply JSON config updates to modifiable flags.
      * @param[in] configJson JSON object mapping flag names to string values.
      * @param[in] apiPrefix Error message prefix, e.g. "UpdateConfig".
+     * @details When a runtime-applicability check was supplied at construction, every flag must also pass that check.
      * @return Status::OK() on success; aggregated errors otherwise.
      */
     Status ApplyJson(const std::string &configJson, const std::string &apiPrefix = "UpdateConfig");
@@ -52,6 +57,7 @@ private:
                         std::unordered_map<std::string, std::string> &out, std::string &errMsg) const;
 
     DynamicFlagConfig *flagConfig_;
+    RuntimeApplicabilityCheck runtimeApplicabilityCheck_;
     std::mutex mutex_;
 };
 

@@ -65,6 +65,11 @@ Status CoordinatorServer::InitAndRun(const CoordinatorOptions &options)
     return runtime_->InitAndRun(options);
 }
 
+Status CoordinatorServer::UpdateConfig(const std::string &configJson)
+{
+    return runtime_->UpdateConfig(configJson);
+}
+
 Status CoordinatorServer::Stop()
 {
     return runtime_->Stop();

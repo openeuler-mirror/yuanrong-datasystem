@@ -14,7 +14,7 @@
   - `src/datasystem/common/log/failure_handler.h`
   - `src/datasystem/common/log/failure_handler.cpp`
 - Last verified against source:
-  - `2026-07-20`
+  - `2026-08-13`
 - Related design docs:
   - `.repo_context/modules/infra/logging/design.md`
   - `.repo_context/modules/infra/logging/access-recorder.md`
@@ -58,8 +58,9 @@
     process role: clients create the client-access exporter, workers create access and request-out exporters, and
     coordinators keep the manager disabled without creating `access.log` or `request_out.log`; disabled coordinator
     reset, flush, and record calls are successful no-ops.
-  - worker startup logs the Git commit/branch and non-default flag snapshot immediately after `Logging::Start()` so
-    these process-identity signals stay near the beginning of the worker log.
+  - worker and coordinator startup call `Logging::LogProcessVersion()` immediately after `Logging::Start()`; the
+    regular INFO log records Git commit and branch, while operation.log records `VERSION_INIT` with role and commit
+    only. Branch names are intentionally excluded from the audit log.
   - operation records use the same source, pod, PID/TID, trace, and cluster context field layout as ordinary INFO logs;
     multiline event payloads such as `CONFIG_INIT` keep one prefix on the first physical line.
   - worker and coordinator startup paths write an effective-flag `CONFIG_INIT` snapshot after successful service startup;

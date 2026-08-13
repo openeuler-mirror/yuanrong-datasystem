@@ -23,10 +23,12 @@ classDiagram
     class CoordinatorServer {
         +GetInstance() CoordinatorServer*
         +InitAndRun(options) Status
+        +UpdateConfig(configJson) Status
         +Stop() Status
     }
     class CoordinatorRuntime {
         +InitAndRun(options) Status
+        +UpdateConfig(configJson) Status
         +Stop() Status
         +IsLeader() bool
         +GetLeader(address) Status
@@ -56,7 +58,7 @@ classDiagram
     CoordinatorElectionManager *-- CoordinatorMembershipManager
 ```
 
-`CoordinatorRuntime` is the reusable internal lifecycle abstraction. `CoordinatorServer` is the production singleton façade and owns one Runtime. `CoordinatorOptions` contains a config file path, shared Discovery provider, expected member count, and paired lifecycle callbacks. The façade requires a non-empty path; file access, parsing, and flag validation belong to `FlagManager` and Runtime startup. Local endpoint, exclusive Raft data root, user-facing Raft heartbeat/election/Discovery/member-failure timing, and internal membership timing come from one `GetRaftFlags()` snapshot per Runtime startup.
+`CoordinatorRuntime` is the reusable internal lifecycle abstraction. `CoordinatorServer` is the production singleton façade and owns one Runtime. `CoordinatorOptions` contains a config file path, shared Discovery provider, expected member count, and paired lifecycle callbacks. The façade requires a non-empty path; file access, parsing, and flag validation belong to `FlagManager` and Runtime startup. The Runtime owns one `DynamicFlagConfig` and one `DynamicConfigUpdater`; its public `UpdateConfig` façade accepts string-valued JSON only after the Service, lifecycle callback, and election manager have started and serializes each update with `Stop()`. Its role-specific capability list contains only the three log-sampler rates because their consumers use atomically published `LogSampler` snapshots. Snapshot-only and unsynchronized flags such as `node_dead_timeout_s` are rejected rather than reporting a partially effective update. Local endpoint, exclusive Raft data root, user-facing Raft heartbeat/election/Discovery/member-failure timing, and internal membership timing come from one `GetRaftFlags()` snapshot per Runtime startup.
 
 ## Startup Sequence
 
@@ -184,6 +186,7 @@ Public Service shutdown has one cleanup owner. Under the lifecycle mutex it firs
 | State/resource | Owner | Protection and lifetime |
 | --- | --- | --- |
 | Runtime stop and lifecycle state | Each `CoordinatorRuntime` | Runtime mutex protects callbacks, Service ownership, and stop state; `Stop()` wakes only that instance. `InitAndRun` is one-shot by interface contract, so callers must not invoke it concurrently or more than once on the same Runtime. |
+| Runtime dynamic-config state | Each `CoordinatorRuntime` | Dedicated config mutex protects `NOT_READY`/`READY`/`STOPPING`, the updater, and its referenced flag-config lifetime. The role filter admits only atomically published sampler configuration. Accepted updates finish before `Stop()` closes admission; later updates return `K_SHUTTING_DOWN`. Lifecycle failures are audited without request payloads. |
 | Common process flags | Production caller or test fixture | Production starts one Runtime per process through `CoordinatorServer`. In-process tests set shared flags before launch, do not mutate them while any Runtime is active, and restore them only after every Runtime stops and joins. Concurrent flag mutation is outside the supported contract. |
 | Per-instance Raft startup values | Each `CoordinatorRuntime` | One `GetRaftFlags()` snapshot per attempt isolates endpoint, data root, and election timing before local-address parsing and Service construction. |
 | Lifecycle callbacks | Each Runtime | Moved exactly once from Runtime-owned `std::function`; invoked without the Runtime mutex. |
