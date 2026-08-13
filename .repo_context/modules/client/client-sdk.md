@@ -367,9 +367,12 @@
     the fixed metadata location snapshot, but `K_NOT_READY` with `Worker endpoint is absent from latest transport
     snapshot` is treated as a stale topology/location signal: the reader tries remaining replicas, and
     `ObjectClientImpl::GetFromTransportLayer` forces the existing hash-ring refresher before it re-routes and re-queries
-    metadata only for affected keys with deadline-bounded backoff. The transport round must still apply structured
-    per-item results before deciding which keys are affected, so mixed batches do not turn object-level failures such as
-    `K_NOT_FOUND` into stale-location retries.
+    metadata only for affected keys with deadline-bounded backoff. Retry state is allocated only for affected keys;
+    draining and stale-location budgets advance independently and never reset when the observed policy alternates.
+    Concurrent force-refresh requests are coalesced by the refresher's atomic budget, and forced retries retain their
+    500 ms minimum interval instead of letting request traffic wake the refresh loop continuously. The transport round
+    must still apply structured per-item results before deciding which keys are affected, so mixed batches do not turn
+    object-level failures such as `K_NOT_FOUND` into stale-location retries.
   - Python-facing behavior can differ from C++ because pybind wrappers convert statuses into exceptions and sometimes rename methods;
   - context propagation changes can affect tracing and multi-tenant behavior across all client operations.
   - `tools/perf/cpu_spike_capture.sh` is an operator-side event trigger for transient client CPU spikes. It samples

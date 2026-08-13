@@ -151,6 +151,99 @@ TEST_F(HashRingRefresherTest, TestForceRefreshDuringFetchIsNotLost)
     EXPECT_TRUE(refreshed);
 }
 
+TEST_F(HashRingRefresherTest, TestConcurrentForceRefreshKeepsRetryInterval)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::mutex waitMutex;
+    std::condition_variable waitCv;
+    std::vector<std::chrono::milliseconds> requestedWaits;
+    std::atomic<size_t> releasedWaits{ 0 };
+    std::atomic<std::condition_variable *> refresherCv{ nullptr };
+    int fetchCount = 0;
+    bool releaseForcedFetch = false;
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                     uint64_t &newVersion, bool &changed,
+                     std::unordered_map<std::string, std::string> &hostIdMap) {
+        std::unique_lock<std::mutex> lock(mutex);
+        const int currentFetchCount = ++fetchCount;
+        cv.notify_all();
+        if (currentFetchCount == 3) {
+            cv.wait(lock, [&] { return releaseForcedFetch; });
+        }
+        lock.unlock();
+        FillRing(ring, hostIdMap);
+        newVersion = 1;
+        changed = currentFetchCount == 1;
+        return Status::OK();
+    };
+    auto wait = [&](std::condition_variable &refreshCv, std::unique_lock<std::mutex> &lock,
+                    std::chrono::milliseconds duration, const std::function<bool()> &wakePredicate) {
+        size_t waitSequence;
+        {
+            std::lock_guard<std::mutex> waitLock(waitMutex);
+            requestedWaits.emplace_back(duration);
+            waitSequence = requestedWaits.size();
+            refresherCv.store(&refreshCv, std::memory_order_release);
+        }
+        waitCv.notify_all();
+        refreshCv.wait(lock, [&] {
+            return wakePredicate() || releasedWaits.load(std::memory_order_acquire) >= waitSequence;
+        });
+    };
+    client::HashRingRefresher refresher(router, fetch, {}, wait);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(2), [&] { return fetchCount >= 2; }));
+    }
+    {
+        std::unique_lock<std::mutex> lock(waitMutex);
+        ASSERT_TRUE(waitCv.wait_for(lock, std::chrono::seconds(2), [&] { return requestedWaits.size() >= 1; }));
+        EXPECT_EQ(requestedWaits[0], std::chrono::seconds(60));
+    }
+    refresher.ForceRefresh();
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(2), [&] { return fetchCount >= 3; }));
+    }
+
+    std::vector<std::thread> callers;
+    callers.reserve(64);
+    for (int i = 0; i < 64; ++i) {
+        callers.emplace_back([&refresher] { refresher.ForceRefresh(); });
+    }
+    for (auto &caller : callers) {
+        caller.join();
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        releaseForcedFetch = true;
+    }
+    cv.notify_all();
+
+    {
+        std::unique_lock<std::mutex> lock(waitMutex);
+        ASSERT_TRUE(waitCv.wait_for(lock, std::chrono::seconds(2), [&] { return requestedWaits.size() >= 2; }));
+        EXPECT_EQ(requestedWaits[1], std::chrono::milliseconds(500));
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        EXPECT_EQ(fetchCount, 3);
+    }
+
+    releasedWaits.store(2, std::memory_order_release);
+    refresherCv.load(std::memory_order_acquire)->notify_all();
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(2), [&] { return fetchCount >= 4; }));
+    }
+    refresher.Stop();
+}
+
 TEST_F(HashRingRefresherTest, TestSuccessfulRefreshUpdatesWorkerCandidates)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");

@@ -177,6 +177,8 @@ constexpr size_t MIN_SHUFFLE_CANDIDATE_COUNT = 2;
 constexpr size_t SET_ROUTE_MAX_ATTEMPTS = 3;
 constexpr size_t STALE_LOCATION_REFRESH_ATTEMPTS = 5;
 constexpr int64_t STALE_LOCATION_REFRESH_INITIAL_BACKOFF_MS = 20;
+constexpr size_t DRAINING_LOCATION_REFRESH_ATTEMPTS = 3;
+constexpr int64_t DRAINING_LOCATION_REFRESH_INITIAL_BACKOFF_MS = 1;
 constexpr int32_t HASH_RING_RPC_MIN_TIMEOUT_MS = 100;
 constexpr int BOUND_WORKER_PROBE_TIMEOUT_MS = 10;
 constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
@@ -188,48 +190,165 @@ std::mutex g_kvClientConfigMutex;
 bool g_hasKvClientProcessConfig = false;
 std::unordered_map<std::string, std::string> g_kvClientProcessConfig;
 
-std::vector<std::string> BuildPendingTransportReadKeys(const std::vector<std::string> &objectKeys,
-                                                       const std::vector<size_t> &pendingIndexes)
+enum class TransportReadRetryPolicy : uint8_t { NONE, DRAINING, STALE };
+
+struct TransportReadRetryState {
+    size_t outputIndex = 0;
+    TransportReadRetryPolicy policy = TransportReadRetryPolicy::NONE;
+    uint8_t drainingRetryCount = 0;
+    uint8_t staleRetryCount = 0;
+    int64_t drainingBackoffMs = DRAINING_LOCATION_REFRESH_INITIAL_BACKOFF_MS;
+    int64_t staleBackoffMs = STALE_LOCATION_REFRESH_INITIAL_BACKOFF_MS;
+};
+
+struct TransportReadRoundResult {
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    std::vector<Status> statuses;
+};
+
+TransportReadRetryPolicy ClassifyTransportReadRetry(const Status &status)
 {
-    std::vector<std::string> keys;
-    keys.reserve(pendingIndexes.size());
-    for (auto index : pendingIndexes) {
-        keys.emplace_back(objectKeys[index]);
+    if (client::IsWorkerDrainingForScaleIn(status)) {
+        return TransportReadRetryPolicy::DRAINING;
     }
-    return keys;
+    if (client::IsTransportSnapshotStaleLocation(status)) {
+        return TransportReadRetryPolicy::STALE;
+    }
+    return TransportReadRetryPolicy::NONE;
 }
 
-std::vector<size_t> CollectStaleTransportReadIndexes(const std::vector<size_t> &pendingIndexes,
-                                                     std::vector<std::shared_ptr<Buffer>> &roundBuffers,
-                                                     const std::vector<Status> &roundStatuses,
-                                                     std::vector<std::shared_ptr<Buffer>> &buffers,
-                                                     std::vector<Status> &itemStatuses)
+size_t TransportReadRetryLimit(TransportReadRetryPolicy policy)
 {
-    std::vector<size_t> staleIndexes;
-    staleIndexes.reserve(pendingIndexes.size());
-    for (size_t i = 0; i < pendingIndexes.size(); ++i) {
-        const auto outputIndex = pendingIndexes[i];
-        itemStatuses[outputIndex] = roundStatuses[i];
-        if (roundStatuses[i].IsOk()) {
-            buffers[outputIndex] = std::move(roundBuffers[i]);
-        } else if (client::IsTransportSnapshotStaleLocation(roundStatuses[i])) {
-            staleIndexes.push_back(outputIndex);
+    return policy == TransportReadRetryPolicy::DRAINING ? DRAINING_LOCATION_REFRESH_ATTEMPTS
+                                                        : STALE_LOCATION_REFRESH_ATTEMPTS;
+}
+
+uint8_t TransportReadRetryCount(const TransportReadRetryState &state)
+{
+    return state.policy == TransportReadRetryPolicy::DRAINING ? state.drainingRetryCount : state.staleRetryCount;
+}
+
+uint8_t &TransportReadRetryCount(TransportReadRetryState &state)
+{
+    return state.policy == TransportReadRetryPolicy::DRAINING ? state.drainingRetryCount : state.staleRetryCount;
+}
+
+int64_t &TransportReadRetryBackoffMs(TransportReadRetryState &state)
+{
+    return state.policy == TransportReadRetryPolicy::DRAINING ? state.drainingBackoffMs : state.staleBackoffMs;
+}
+
+void UpdateTransportReadRetryState(const Status &status, TransportReadRetryState &state)
+{
+    state.policy = ClassifyTransportReadRetry(status);
+}
+
+void CollectInitialTransportReadRetryStates(const std::vector<Status> &itemStatuses,
+                                            std::vector<TransportReadRetryState> &retryStates)
+{
+    for (size_t i = 0; i < itemStatuses.size(); ++i) {
+        if (itemStatuses[i].IsOk()) {
+            continue;
+        }
+        const auto policy = ClassifyTransportReadRetry(itemStatuses[i]);
+        if (policy != TransportReadRetryPolicy::NONE) {
+            TransportReadRetryState state;
+            state.outputIndex = i;
+            state.policy = policy;
+            retryStates.emplace_back(std::move(state));
         }
     }
-    return staleIndexes;
 }
 
-Status RefreshStaleTransportReadRoute(const std::shared_ptr<client::Routing> &routing, size_t keyCount,
-                                      size_t refreshCount, client::DeadlineRetry &retry, int64_t &backoffMs)
+void CollectRetryTransportReadRound(const std::vector<size_t> &pendingStateIndexes,
+                                    TransportReadRoundResult &roundResult,
+                                    std::vector<std::shared_ptr<Buffer>> &buffers,
+                                    std::vector<Status> &itemStatuses,
+                                    std::vector<TransportReadRetryState> &retryStates)
 {
-    LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-        << "[TransportGet][Route] Retry stale transport snapshot locations, key count: "
-        << keyCount << ", refresh count: " << refreshCount
-        << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
-    if (routing != nullptr) {
-        routing->ForceRefresh();
+    for (size_t i = 0; i < pendingStateIndexes.size(); ++i) {
+        auto &state = retryStates[pendingStateIndexes[i]];
+        itemStatuses[state.outputIndex] = roundResult.statuses[i];
+        if (roundResult.statuses[i].IsOk()) {
+            buffers[state.outputIndex] = std::move(roundResult.buffers[i]);
+        }
+        UpdateTransportReadRetryState(roundResult.statuses[i], state);
     }
-    return retry.Backoff(backoffMs);
+}
+
+bool CanRetryTransportRead(const TransportReadRetryState &state)
+{
+    return state.policy != TransportReadRetryPolicy::NONE &&
+           TransportReadRetryCount(state) < TransportReadRetryLimit(state.policy);
+}
+
+std::vector<size_t> BuildNextTransportReadRetry(const std::vector<TransportReadRetryState> &states)
+{
+    TransportReadRetryPolicy policy = TransportReadRetryPolicy::NONE;
+    uint8_t retryCount = std::numeric_limits<uint8_t>::max();
+    std::vector<size_t> indexes;
+    for (size_t i = 0; i < states.size(); ++i) {
+        const auto &state = states[i];
+        if (!CanRetryTransportRead(state)) {
+            continue;
+        }
+        const auto stateRetryCount = TransportReadRetryCount(state);
+        const bool higherPriority = state.policy == TransportReadRetryPolicy::DRAINING
+                                    && policy != TransportReadRetryPolicy::DRAINING;
+        if (policy == TransportReadRetryPolicy::NONE || higherPriority
+            || (state.policy == policy && stateRetryCount < retryCount)) {
+            policy = state.policy;
+            retryCount = stateRetryCount;
+            indexes.clear();
+        }
+        if (state.policy == policy && stateRetryCount == retryCount) {
+            indexes.push_back(i);
+        }
+    }
+    return indexes;
+}
+
+Status PrepareTransportReadRetry(const std::shared_ptr<client::Routing> &routing,
+                                 const std::vector<size_t> &retryIndexes,
+                                 std::vector<TransportReadRetryState> &states,
+                                 client::DeadlineRetry &retry, bool &refreshRequested)
+{
+    auto &firstState = states[retryIndexes.front()];
+    const bool draining = firstState.policy == TransportReadRetryPolicy::DRAINING;
+    const auto retryCount = TransportReadRetryCount(firstState);
+    LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+        << "[TransportGet][Route] Retry " << (draining ? "draining" : "stale")
+        << " locations, key count: " << retryIndexes.size() << ", retry count: "
+        << (static_cast<int>(retryCount) + 1) << ", backoff ms: " << TransportReadRetryBackoffMs(firstState)
+        << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
+    if (!refreshRequested) {
+        if (routing != nullptr) {
+            routing->ForceRefresh();
+        }
+        refreshRequested = true;
+    }
+    int64_t nextBackoffMs = TransportReadRetryBackoffMs(firstState);
+    RETURN_IF_NOT_OK(retry.Backoff(nextBackoffMs));
+    for (auto index : retryIndexes) {
+        ++TransportReadRetryCount(states[index]);
+        TransportReadRetryBackoffMs(states[index]) = nextBackoffMs;
+    }
+    return Status::OK();
+}
+
+void ApplyTransportReadRetryWaitFailure(const std::vector<size_t> &retryIndexes,
+                                        const std::vector<TransportReadRetryState> &states,
+                                        const Status &waitStatus, std::vector<Status> &itemStatuses)
+{
+    for (auto index : retryIndexes) {
+        if (states[index].policy != TransportReadRetryPolicy::DRAINING) {
+            continue;
+        }
+        const auto outputIndex = states[index].outputIndex;
+        Status deadlineStatus = waitStatus;
+        deadlineStatus.AppendMsg(itemStatuses[outputIndex].GetMsg());
+        itemStatuses[outputIndex] = std::move(deadlineStatus);
+    }
 }
 
 #ifdef USE_URMA
@@ -5340,39 +5459,38 @@ Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &o
     std::vector<Status> itemStatuses(objectKeys.size(), Status(K_NOT_READY, "Object Get has not completed"));
     AccessTransportKind actualKind = AccessTransportKind::SHM;
     Status transportStatus(K_NOT_READY, "No object route is available");
-    std::vector<size_t> pendingIndexes(objectKeys.size());
-    std::iota(pendingIndexes.begin(), pendingIndexes.end(), 0);
+    std::vector<TransportReadRetryState> retryStates;
     client::DeadlineRetry retry;
-    int64_t backoffMs = STALE_LOCATION_REFRESH_INITIAL_BACKOFF_MS;
+    bool refreshRequested = false;
 
-    size_t refreshCount = 0;
-    while (!pendingIndexes.empty()) {
-        std::vector<std::string> retryKeys;
-        const std::vector<std::string> *roundKeys = &objectKeys;
-        if (refreshCount > 0) {
-            retryKeys = BuildPendingTransportReadKeys(objectKeys, pendingIndexes);
-            roundKeys = &retryKeys;
-        }
-        std::vector<std::shared_ptr<Buffer>> roundBuffers(roundKeys->size());
-        std::vector<Status> roundStatuses(roundKeys->size(), Status(K_NOT_READY, "Object Get has not completed"));
-        RETURN_IF_NOT_OK(ReadTransportRound(*roundKeys, traceEnabled, subTimeoutMs, queryL2Cache, roundBuffers,
-                                            roundStatuses, actualKind, transportStatus));
-        auto staleIndexes =
-            CollectStaleTransportReadIndexes(pendingIndexes, roundBuffers, roundStatuses, buffers, itemStatuses);
+    RETURN_IF_NOT_OK(ReadTransportRound(objectKeys, traceEnabled, subTimeoutMs, queryL2Cache, buffers, itemStatuses,
+                                        actualKind, transportStatus));
+    CollectInitialTransportReadRetryStates(itemStatuses, retryStates);
 
-        if (staleIndexes.empty() || refreshCount >= STALE_LOCATION_REFRESH_ATTEMPTS
-            || ApiDeadline::Instance().ApiRemainingUs() <= 0) {
+    while (ApiDeadline::Instance().ApiRemainingUs() > 0) {
+        auto retryIndexes = BuildNextTransportReadRetry(retryStates);
+        if (retryIndexes.empty()) {
             break;
         }
-        ++refreshCount;
         auto routing = std::atomic_load(&routing_);
-        Status waitStatus =
-            RefreshStaleTransportReadRoute(routing, staleIndexes.size(), refreshCount, retry, backoffMs);
+        Status waitStatus = PrepareTransportReadRetry(routing, retryIndexes, retryStates, retry, refreshRequested);
         if (waitStatus.IsError()) {
             transportStatus = waitStatus;
+            ApplyTransportReadRetryWaitFailure(retryIndexes, retryStates, waitStatus, itemStatuses);
             break;
         }
-        pendingIndexes = std::move(staleIndexes);
+
+        std::vector<std::string> retryKeys;
+        retryKeys.reserve(retryIndexes.size());
+        for (auto stateIndex : retryIndexes) {
+            retryKeys.emplace_back(objectKeys[retryStates[stateIndex].outputIndex]);
+        }
+        TransportReadRoundResult roundResult;
+        roundResult.buffers.resize(retryKeys.size());
+        roundResult.statuses.resize(retryKeys.size(), Status(K_NOT_READY, "Object Get has not completed"));
+        RETURN_IF_NOT_OK(ReadTransportRound(retryKeys, traceEnabled, subTimeoutMs, queryL2Cache, roundResult.buffers,
+                                            roundResult.statuses, actualKind, transportStatus));
+        CollectRetryTransportReadRound(retryIndexes, roundResult, buffers, itemStatuses, retryStates);
     }
     return FinishTransportRead(itemStatuses, actualKind, transportStatus);
 }

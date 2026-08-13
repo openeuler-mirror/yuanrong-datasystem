@@ -28,9 +28,18 @@ namespace datasystem {
 namespace client {
 
 HashRingRefresher::HashRingRefresher(std::shared_ptr<WorkerRouter> router, FetchRpc fetchRpc,
-                                     RingUpdateHook ringUpdateHook)
-    : router_(std::move(router)), fetchRpc_(std::move(fetchRpc)), ringUpdateHook_(std::move(ringUpdateHook))
+                                     RingUpdateHook ringUpdateHook, WaitFn waitFn)
+    : router_(std::move(router)),
+      fetchRpc_(std::move(fetchRpc)),
+      ringUpdateHook_(std::move(ringUpdateHook)),
+      waitFn_(std::move(waitFn))
 {
+    if (waitFn_ == nullptr) {
+        waitFn_ = [](std::condition_variable &cv, std::unique_lock<std::mutex> &lock,
+                     std::chrono::milliseconds duration, const std::function<bool()> &wakePredicate) {
+            cv.wait_for(lock, duration, wakePredicate);
+        };
+    }
 }
 
 HashRingRefresher::~HashRingRefresher()
@@ -64,8 +73,11 @@ Status HashRingRefresher::StartPeriodicRefresh(int64_t intervalMs)
 
 void HashRingRefresher::Stop()
 {
-    if (!running_.exchange(false)) {
-        return;
+    {
+        std::lock_guard<std::mutex> lock(cvMutex_);
+        if (!running_.exchange(false)) {
+            return;
+        }
     }
     cv_.notify_all();
     if (refreshThread_.joinable()) {
@@ -75,10 +87,19 @@ void HashRingRefresher::Stop()
 
 void HashRingRefresher::ForceRefresh()
 {
-    int expected = 0;
-    forceRefreshBudget_.compare_exchange_strong(expected, FORCED_REFRESH_RETRY_COUNT, std::memory_order_acq_rel);
-    forceRefresh_.store(true, std::memory_order_release);
-    cv_.notify_all();
+    bool notify = false;
+    {
+        std::lock_guard<std::mutex> lock(cvMutex_);
+        int expected = 0;
+        if (forceRefreshBudget_.compare_exchange_strong(expected, FORCED_REFRESH_RETRY_COUNT,
+                                                        std::memory_order_acq_rel)) {
+            forceRefresh_.store(true, std::memory_order_release);
+            notify = true;
+        }
+    }
+    if (notify) {
+        cv_.notify_one();
+    }
 }
 
 Status HashRingRefresher::DoRefresh()
@@ -157,14 +178,16 @@ void HashRingRefresher::RefreshLoop()
         DoRefresh();
 
         const bool retryForcedRefresh = forceRefreshBudget_.load(std::memory_order_acquire) > 0;
-        if (retryForcedRefresh) {
-            forceRefreshBudget_.fetch_sub(1, std::memory_order_acq_rel);
-        }
         std::unique_lock<std::mutex> lock(cvMutex_);
         const auto waitMs = retryForcedRefresh ? FORCED_REFRESH_RETRY_INTERVAL_MS : intervalMs_;
-        cv_.wait_for(lock, std::chrono::milliseconds(waitMs), [this] {
-            return !running_.load() || forceRefresh_.load(std::memory_order_acquire);
-        });
+        if (retryForcedRefresh) {
+            waitFn_(cv_, lock, std::chrono::milliseconds(waitMs), [this] { return !running_.load(); });
+            forceRefreshBudget_.fetch_sub(1, std::memory_order_acq_rel);
+        } else {
+            waitFn_(cv_, lock, std::chrono::milliseconds(waitMs), [this] {
+                return !running_.load() || forceRefresh_.load(std::memory_order_acquire);
+            });
+        }
     }
 }
 
