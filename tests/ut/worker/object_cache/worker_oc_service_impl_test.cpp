@@ -56,6 +56,7 @@
 #include "ut/common.h"
 #define private public
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 #undef private
 
 using namespace ::testing;
@@ -549,6 +550,41 @@ protected:
     std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc_;
     std::shared_ptr<WorkerOcServiceClearDataFlow> dataClearImpl_;
 };
+
+TEST_F(WorkerOcServiceImplTest, RemoteGetTryLockMissDoesNotLeaveEmptyEntry)
+{
+    constexpr size_t kAttemptCount = 2;
+    const std::string objectKey = "remote-get-try-lock-missing-key";
+    ScopedRequestContext requestContext;
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, nullptr, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
+
+    for (size_t i = 0; i < kAttemptCount; ++i) {
+        std::shared_ptr<SafeObjType> safeEntry;
+        auto rc = remoteService.GetSafeObjectEntry(objectKey, true, 0, safeEntry);
+
+        ASSERT_EQ(rc.GetCode(), K_NOT_FOUND);
+        EXPECT_THAT(rc.GetMsg(), HasSubstr("Object not found"));
+        EXPECT_THAT(rc.GetMsg(), Not(HasSubstr("realObject is null")));
+        EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
+    }
+}
+
+TEST_F(WorkerOcServiceImplTest, RemoteGetL2MissDoesNotLeaveEmptyEntry)
+{
+    const std::string objectKey = "remote-get-l2-missing-key";
+    ScopedRequestContext requestContext;
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, nullptr, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
+    std::shared_ptr<SafeObjType> safeEntry;
+
+    auto rc = remoteService.GetSafeObjectEntry(objectKey, false, 0, safeEntry);
+
+    ASSERT_EQ(rc.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
+}
 
 TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaFollowsRedirectToTarget)
 {
