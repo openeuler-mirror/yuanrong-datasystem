@@ -39,20 +39,28 @@ TEST(UrmaChipInflightTest, FormatsNonZeroCountsWithRealChipIds)
     manager.srcChipInflightWrCounts_.at(2).store(0, std::memory_order_relaxed);
 }
 
-TEST(UrmaChipInflightTest, SelectsRoundRobinSourceChipWhenEnabled)
+TEST(UrmaChipInflightTest, SelectsSourceChipAccordingToRoundRobinType)
 {
     auto &manager = UrmaManager::Instance();
-    const bool oldUbNumaRr = FLAGS_ub_numa_rr;
+    const uint32_t oldUbNumaRrType = FLAGS_ub_numa_rr_type;
     manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
-    FLAGS_ub_numa_rr = false;
-    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 2);
 
-    FLAGS_ub_numa_rr = true;
+    FLAGS_ub_numa_rr_type = 0;
+    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 2);
+    EXPECT_EQ(manager.affinitySrcChipIdSequence_.load(std::memory_order_relaxed), 0);
+
+    FLAGS_ub_numa_rr_type = 1;
     EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 1);
     EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 2);
     EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 1);
+
+    manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
+    FLAGS_ub_numa_rr_type = 2;
+    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 1);
+    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 2);
     EXPECT_EQ(manager.GetAffinitySrcChipId(INVALID_CHIP_ID, false), INVALID_CHIP_ID);
-    FLAGS_ub_numa_rr = oldUbNumaRr;
+    EXPECT_EQ(manager.affinitySrcChipIdSequence_.load(std::memory_order_relaxed), 2);
+    FLAGS_ub_numa_rr_type = oldUbNumaRrType;
 }
 
 }  // namespace
