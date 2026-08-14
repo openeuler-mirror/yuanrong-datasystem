@@ -246,6 +246,13 @@ public:
                              bool returnIfDuplicated = false, bool lockIfFailed = true);
 
     /**
+     * @brief Same as ReserveGetAndLock but with a deadline on the WLock. If the lock is not acquired
+     * within timeoutUs, returns K_RPC_DEADLINE_EXCEEDED instead of blocking indefinitely.
+     */
+    Status ReserveGetAndLock(const KeyType &key, std::shared_ptr<SafeObjType> &safeObjPtr, bool &isInsert,
+                             int64_t timeoutUs, bool returnIfDuplicated = false, bool lockIfFailed = true);
+
+    /**
      * @brief Fetches the safe object into a shared pointer. To access the real object, caller must then use the
      * SafeObject api appropriately.
      * @param[in] key The key for identifying the object.
@@ -320,6 +327,11 @@ public:
      * @return Status of the call.
      */
     Status GetAndLock(const KeyType &key, std::shared_ptr<SafeObjType> &safeObjPtr);
+
+    /**
+     * @brief Same as GetAndLock but with a deadline on the WLock.
+     */
+    Status GetAndLock(const KeyType &key, std::shared_ptr<SafeObjType> &safeObjPtr, int64_t timeoutUs);
 
 private:
     TbbTable tbbTable_;           // The implementation of the table itself.
@@ -402,6 +414,15 @@ Status SafeTable<KeyType, ObjType>::GetAndLock(const KeyType &key, std::shared_p
 }
 
 template <typename KeyType, typename ObjType>
+Status SafeTable<KeyType, ObjType>::GetAndLock(const KeyType &key, std::shared_ptr<SafeObjType> &safeObjPtr,
+    int64_t timeoutUs)
+{
+    RETURN_IF_NOT_OK(this->Get(key, safeObjPtr));
+    INJECT_POINT("safe_table.get_and_lock");
+    return (safeObjPtr->WLock(true, timeoutUs));
+}
+
+template <typename KeyType, typename ObjType>
 Status SafeTable<KeyType, ObjType>::ReserveGetAndLock(const KeyType &key, std::shared_ptr<SafeObjType> &safeObjPtr,
                                                       bool &isInsert, bool returnIfDuplicated, bool lockIfFailed)
 {
@@ -443,6 +464,52 @@ Status SafeTable<KeyType, ObjType>::ReserveGetAndLock(const KeyType &key, std::s
         }
         // A rare timing case where another thread removed the object from the object table after our reserve
         // attempt but before we did Get(). A retry can fix that.
+    } while (rc.GetCode() == K_NOT_FOUND && numRetries++ < maxRetries);
+
+    if (rc.GetCode() == K_NOT_FOUND && numRetries >= maxRetries) {
+        rc = Status(K_WORKER_TIMEOUT, "Max retries hit while trying to reserve " + std::string(key) + " in SafeTable");
+        LOG(ERROR) << rc.ToString();
+    }
+
+    return rc;
+}
+
+template <typename KeyType, typename ObjType>
+Status SafeTable<KeyType, ObjType>::ReserveGetAndLock(const KeyType &key, std::shared_ptr<SafeObjType> &safeObjPtr,
+                                                      bool &isInsert, int64_t timeoutUs, bool returnIfDuplicated,
+                                                      bool lockIfFailed)
+{
+    INJECT_POINT("SafeTable.ReserveGetAndLock.return", []() { return Status(K_NOT_FOUND, ""); });
+    isInsert = false;
+    const int maxRetries = 5;
+    int numRetries = 0;
+    CHECK_FAIL_RETURN_STATUS(safeObjPtr == nullptr, K_RUNTIME_ERROR,
+                             "Output argument was passed in as not-null reference!");
+    Status rc;
+    do {
+        safeObjPtr = std::make_shared<SafeObjType>();
+        (void)safeObjPtr->WLock(true, timeoutUs);
+
+        rc = this->Insert(key, safeObjPtr);
+        if (rc.IsError()) {
+            safeObjPtr->WUnlock();
+            safeObjPtr.reset();
+        } else {
+            isInsert = true;
+        }
+        if (rc.GetCode() == K_DUPLICATED) {
+            if (lockIfFailed) {
+                rc = this->GetAndLock(key, safeObjPtr, timeoutUs);
+            } else {
+                rc = this->Get(key, safeObjPtr);
+            }
+            if (returnIfDuplicated && rc.IsOk() && safeObjPtr->Get() != nullptr
+                && !(safeObjPtr->Get()->stateInfo.IsCacheInvalid())) {
+                safeObjPtr->WUnlock();
+                rc = Status(K_OC_KEY_ALREADY_EXIST, "object[" + std::string(key) + "] already exists in local worker");
+                break;
+            }
+        }
     } while (rc.GetCode() == K_NOT_FOUND && numRetries++ < maxRetries);
 
     if (rc.GetCode() == K_NOT_FOUND && numRetries >= maxRetries) {

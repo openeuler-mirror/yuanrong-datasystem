@@ -111,12 +111,14 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
                                              CreateRspPb &resp, CacheType cacheType)
 {
     auto objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, rawObjectKey);
-    // Check whether the object is sealed.
     std::shared_ptr<SafeObjType> entry;
     bool isExist = objectTable_->Get(objectKey, entry).IsOk();
-    if (isExist && entry != nullptr && entry->RLock(false).IsOk()) {
-        Raii unlock([&entry]() { entry->RUnlock(); });
-        CHECK_FAIL_RETURN_STATUS(!(*entry)->IsSealed(), K_OC_ALREADY_SEALED, "Cannot create sealed object.");
+    if (isExist && entry != nullptr) {
+        int64_t remUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
+        if (entry->RLock(false, remUs).IsOk()) {
+            Raii unlock([&entry]() { entry->RUnlock(); });
+            CHECK_FAIL_RETURN_STATUS(!(*entry)->IsSealed(), K_OC_ALREADY_SEALED, "Cannot create sealed object.");
+        }
     }
     // Given size, construct shmUnit, generate shm uuid and add client's reference on shmUnit.
     auto shmUnit = std::make_shared<ShmUnit>();

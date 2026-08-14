@@ -18,6 +18,7 @@
 #define DATASYSTEM_SAFE_OBJECT_H
 
 #include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -26,12 +27,15 @@
 #include <unistd.h>
 
 #include <sys/syscall.h>
+#include <sys/time.h>
+#include <time.h>
 
 #include <bthread/bthread.h>
 #include <bthread/mutex.h>
 #include <bthread/rwlock.h>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/latency_phase_types.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/status_helper.h"
@@ -139,6 +143,17 @@ public:
     Status WLock(bool nullable = false);
 
     /**
+     * @brief Acquires a write lock with a deadline. If the lock is not acquired within timeoutUs,
+     * returns K_RPC_DEADLINE_EXCEEDED. Brpc mode uses bthread_rwlock_timedwrlock (yields the
+     * worker thread while waiting); ZMQ mode falls back to blocking (shared_mutex has no timed API,
+     * but InitTimeoutsFromDispatch already deducted queue wait at dispatch).
+     * @param[in] nullable Whether allow null after get write lock.
+     * @param[in] timeoutUs Maximum wait in microseconds; <=0 means immediate fail.
+     * @return Status of the call.
+     */
+    Status WLock(bool nullable, int64_t timeoutUs);
+
+    /**
      * @brief Attempts Acquires a write lock on the SafeObject. If the lock is already held, it returns K_TRY_AGAIN
      * right away and does not wait.
      * @param[in] nullable Whether allow null after get write lock. If this parameter passes true, before using the
@@ -160,6 +175,16 @@ public:
      * @return Status of the call.
      */
     Status RLock(bool nullable = false);
+
+    /**
+     * @brief Acquires a read lock with a deadline. If the lock is not acquired within timeoutUs,
+     * returns K_RPC_DEADLINE_EXCEEDED. Brpc mode uses bthread_rwlock_timedrdlock (yields the
+     * worker thread while waiting); ZMQ mode falls back to blocking.
+     * @param[in] nullable Whether allow null after get read lock.
+     * @param[in] timeoutUs Maximum wait in microseconds; <=0 means immediate fail.
+     * @return Status of the call.
+     */
+    Status RLock(bool nullable, int64_t timeoutUs);
 
     /**
      * @brief Attempt to acquire a read lock on the SafeObject. If the lock is already held, it returns K_TRY_AGAIN
@@ -312,6 +337,45 @@ Status SafeObject<ObjType>::WLock(bool nullable)
 }
 
 template <typename ObjType>
+Status SafeObject<ObjType>::WLock(bool nullable, int64_t timeoutUs)
+{
+    if (timeoutUs <= 0) {
+        RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED, "WLock deadline exhausted");
+    }
+    Timer timer;
+    if (FLAGS_use_brpc) {
+        struct timeval tv;
+        gettimeofday(&tv, nullptr);
+        int64_t deadlineUs = static_cast<int64_t>(tv.tv_sec) * 1000000L + tv.tv_usec + timeoutUs;
+        struct timespec abstime;
+        abstime.tv_sec = deadlineUs / 1000000L;
+        abstime.tv_nsec = (deadlineUs % 1000000L) * static_cast<int64_t>(NS_PER_US);
+        int rc = bthread_rwlock_timedwrlock(&bthread_mutex_, &abstime);
+        if (rc != 0) {
+            RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                          rc == ETIMEDOUT ? "WLock timed out" : "WLock acquire failed");
+        }
+    } else {
+        mutex_.lock();
+    }
+    auto* reqCtx = GetRequestContext();
+    reqCtx->workerTimeCost.Append("worker SafeObject WLock", timer.ElapsedMilliSecond());
+    reqCtx->masterTimeCost.Append("master SafeObject WLock", timer.ElapsedMilliSecond());
+    if (deleted_ || (!nullable && realObject_ == nullptr)) {
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
+        } else {
+            mutex_.unlock();
+        }
+        RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
+    }
+    lastWriteThread_ = syscall(__NR_gettid);
+    lastWriteBthread_ = bthread_self();
+    wLocked_ = true;
+    return Status::OK();
+}
+
+template <typename ObjType>
 Status SafeObject<ObjType>::TryWLock(bool nullable)
 {
     bool locked;
@@ -365,6 +429,38 @@ Status SafeObject<ObjType>::RLock(bool nullable)
 {
     if (FLAGS_use_brpc) {
         bthread_rwlock_rdlock(&bthread_mutex_);
+    } else {
+        mutex_.lock_shared();
+    }
+    if (deleted_ || (!nullable && realObject_ == nullptr)) {
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
+        } else {
+            mutex_.unlock_shared();
+        }
+        RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
+    }
+    return Status::OK();
+}
+
+template <typename ObjType>
+Status SafeObject<ObjType>::RLock(bool nullable, int64_t timeoutUs)
+{
+    if (timeoutUs <= 0) {
+        RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED, "RLock deadline exhausted");
+    }
+    if (FLAGS_use_brpc) {
+        struct timeval tv;
+        gettimeofday(&tv, nullptr);
+        int64_t deadlineUs = static_cast<int64_t>(tv.tv_sec) * 1000000L + tv.tv_usec + timeoutUs;
+        struct timespec abstime;
+        abstime.tv_sec = deadlineUs / 1000000L;
+        abstime.tv_nsec = (deadlineUs % 1000000L) * static_cast<int64_t>(NS_PER_US);
+        int rc = bthread_rwlock_timedrdlock(&bthread_mutex_, &abstime);
+        if (rc != 0) {
+            RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                          rc == ETIMEDOUT ? "RLock timed out" : "RLock acquire failed");
+        }
     } else {
         mutex_.lock_shared();
     }

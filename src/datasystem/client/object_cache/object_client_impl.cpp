@@ -3865,8 +3865,13 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
     }
     // CANCELLED (brpc-internal cancellation) is excluded: it is not a transport
     // connection failure, so it must not evict the worker from the routing table.
+    // DEADLINE_EXCEEDED is also excluded: it means the request budget is exhausted, not that
+    // the peer is unreachable. Retrying on another worker would only burn more time past the
+    // original deadline (root cause of SDK Set max 436ms: multiple retry rounds accumulating).
     const bool connectionFailure = status.GetCode() == K_CLIENT_WORKER_DISCONNECT
-                                   || (IsRetryableRpcError(status) && status.GetCode() != K_RPC_CANCELLED)
+                                   || (IsRetryableRpcError(status)
+                                       && status.GetCode() != K_RPC_CANCELLED
+                                       && status.GetCode() != K_RPC_DEADLINE_EXCEEDED)
                                    || IsNonRetryableRpcError(status);
     const bool transferFailure = status.GetCode() == K_URMA_NEED_CONNECT;
     const bool workerNotReady = status.GetCode() == K_NOT_READY

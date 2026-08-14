@@ -606,6 +606,10 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+        FormatString("RPC deadline exceeded before Publish dispatch, remaining %ld us.", remainingUs));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(VerifyClientWriteAdmission(), "verify client write admission failed");
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
