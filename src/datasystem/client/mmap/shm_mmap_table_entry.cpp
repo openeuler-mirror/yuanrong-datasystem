@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <exception>
 #include <shared_mutex>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -58,19 +59,43 @@ Status ShmMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenantId)
         // Ignore and write log.
         LOG(WARNING) << "madvise DONTDUMP memory failed: " << StrErr(errno);
     }
-    RegisterCudaHostMemory(pointer_, size_);
-
     // Closing this fd has an effect on performance.
     RETRY_ON_EINTR(close(fd_));
     LOG(INFO) << FormatString("mmap success, client id: %s, fd: %d, size: %zu", clientId_, fd_, size_);
     return Status::OK();
 }
 
+void ShmMmapTableEntry::PinHostMemory()
+{
+    pinAttempted_.store(true, std::memory_order_release);
+    try {
+        INJECT_POINT_NO_RETURN("ShmMmapTableEntry.PinHostMemory");
+        RegisterCudaHostMemory(pointer_, size_);
+    } catch (const std::exception &e) {
+        LOG(WARNING) << "CUDA host memory pin task failed: " << e.what();
+    } catch (...) {
+        LOG(WARNING) << "CUDA host memory pin task failed with an unknown exception";
+    }
+    pinCompleted_.store(true, std::memory_order_release);
+}
+
+void ShmMmapTableEntry::SkipHostMemoryPin()
+{
+    pinCompleted_.store(true, std::memory_order_release);
+}
+
+bool ShmMmapTableEntry::IsCudaHostMemoryRegistrationDone() const
+{
+    return pinCompleted_.load(std::memory_order_acquire);
+}
+
 ShmMmapTableEntry::~ShmMmapTableEntry()
 {
     // munmap fd.
     if (pointer_ != nullptr && pointer_ != MAP_FAILED) {
-        UnregisterCudaHostMemory(pointer_);
+        if (pinAttempted_.load(std::memory_order_acquire)) {
+            UnregisterCudaHostMemory(pointer_);
+        }
         int ret = munmap(pointer_, size_);
         if (ret != 0) {
             LOG(ERROR) << FormatString("munmap failed, client id: %s, fd: %d, size: %zu, returned: [%d], errno = [%s]",

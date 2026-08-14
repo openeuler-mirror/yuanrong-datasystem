@@ -23,13 +23,16 @@
  */
 
 #include <gtest/gtest.h>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/kv/read_only_buffer.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
@@ -127,6 +130,35 @@ TEST_F(KVCacheNoMetadataHeaderTest, ExplicitRLatchKeepsNotSupportedSemantics)
     DS_ASSERT_OK(client->Get(key, buffer));
     ASSERT_TRUE(static_cast<bool>(buffer));
     ASSERT_EQ(buffer->RLatch().GetCode(), StatusCode::K_NOT_SUPPORTED);
+}
+
+TEST_F(KVCacheNoMetadataHeaderTest, PinPendingCreateSetAndGetReturnCorrectData)
+{
+    constexpr char pinInject[] = "ShmMmapTableEntry.PinHostMemory";
+    constexpr char allocInject[] = "Buffer.AllocatePageableMemory";
+    DS_ASSERT_OK(inject::Set(pinInject, "1*pause()"));
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    Raii clearPin([] { (void)inject::Clear("ShmMmapTableEntry.PinHostMemory"); });
+    DS_ASSERT_OK(inject::Set(allocInject, "call()"));
+    Raii clearAlloc([] { (void)inject::Clear("Buffer.AllocatePageableMemory"); });
+
+    const std::string key = "pin-pending-no-metadata";
+    const std::string value(SHM_SIZE, 'p');
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    std::shared_ptr<Buffer> createBuffer;
+    DS_ASSERT_OK(client->Create(key, value.size(), param, createBuffer));
+    ASSERT_NE(createBuffer, nullptr);
+    DS_ASSERT_OK(createBuffer->MemoryCopy(value.data(), value.size()));
+    DS_ASSERT_OK(client->Set(createBuffer));
+
+    Optional<ReadOnlyBuffer> getBuffer;
+    DS_ASSERT_OK(client->Get(key, getBuffer));
+    ASSERT_TRUE(getBuffer);
+    ASSERT_EQ(getBuffer->GetSize(), static_cast<int64_t>(value.size()));
+    ASSERT_EQ(std::memcmp(getBuffer->ImmutableData(), value.data(), value.size()), 0);
+    ASSERT_EQ(getBuffer->RLatch().GetCode(), StatusCode::K_NOT_SUPPORTED);
+    ASSERT_GE(inject::GetExecuteCount(allocInject), 2u);
 }
 
 }  // namespace st

@@ -74,6 +74,11 @@ public:
         return size_;
     }
 
+    virtual bool IsCudaHostMemoryRegistrationDone() const
+    {
+        return true;
+    }
+
 protected:
     friend class IMmapTable;
 

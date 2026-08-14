@@ -30,6 +30,8 @@ ds_cc_test(
         "//src/datasystem/common/device/ascend:p2phccl_comm_wrapper",
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:raii",
         "//tests/ut:ut_common",
     ],
 )

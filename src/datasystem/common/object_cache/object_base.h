@@ -366,6 +366,8 @@ struct ObjectBufferInfo {
     uint8_t *pointer;
     uint64_t dataSize;
     uint64_t metadataSize;
+    std::shared_ptr<uint8_t[]> pageableData;
+    bool pageableDataNeedsWriteBack = false;
     uint32_t ttlSecond = 0;
     int existence = 0;
     ModeInfo objectMode;

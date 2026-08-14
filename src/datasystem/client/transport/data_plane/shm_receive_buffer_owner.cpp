@@ -91,5 +91,10 @@ Status ShmReceiveBufferOwner::CheckAlive() const
                : Status(K_BUFFER_DEPRECATED, "Routed shared-memory session is no longer alive");
 }
 
+bool ShmReceiveBufferOwner::IsCudaHostMemoryRegistrationDone() const
+{
+    return mmapEntry_ == nullptr || mmapEntry_->IsCudaHostMemoryRegistrationDone();
+}
+
 }  // namespace client
 }  // namespace datasystem

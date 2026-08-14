@@ -21,13 +21,15 @@
 
 #include <atomic>
 #include <cstddef>
+#include <exception>
 
-#include "datasystem/client/mmap/shm_mmap_table_entry.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 
 namespace datasystem {
 namespace client {
+ShmMmapTable::~ShmMmapTable() = default;
+
 Status ShmMmapTable::MmapAndStoreFd(const int &clientFd, const int &workerFd, const uint64_t &mmapSize,
                                     const std::string &tenantId, const std::string &clientId)
 {
@@ -38,14 +40,31 @@ Status ShmMmapTable::MmapAndStoreFd(const int &clientFd, const int &workerFd, co
         if (workerFd > 0 && clientFd > 0) {
             LOG(INFO) << FormatString("Client id: %s, worker fd: %d, mmap the client fd %d, mmap size is %llu",
                                       clientId, workerFd, clientFd, mmapSize);
-            auto newEntry = std::make_unique<ShmMmapTableEntry>(clientFd, mmapSize, clientId);
+            auto newEntry = std::make_shared<ShmMmapTableEntry>(clientFd, mmapSize, clientId);
             RETURN_IF_NOT_OK(newEntry->Init(enableHugeTlb_, tenantId));
+            SubmitHostMemoryPin(newEntry);
             mmapTable_[workerFd] = std::move(newEntry);
         }
     } else {
         LOG(INFO) << FormatString("The client fd %d exists, no need to mmap again", clientFd);
     }
     return Status::OK();
+}
+
+void ShmMmapTable::SubmitHostMemoryPin(const std::shared_ptr<ShmMmapTableEntry> &entry)
+{
+    try {
+        if (pinThread_ == nullptr) {
+            pinThread_ = std::make_unique<ThreadPool>(1, 1, "cuda_host_pin");
+        }
+        pinThread_->Execute([entry] { entry->PinHostMemory(); });
+    } catch (const std::exception &e) {
+        entry->SkipHostMemoryPin();
+        LOG(WARNING) << "Submit CUDA host memory pin task failed: " << e.what();
+    } catch (...) {
+        entry->SkipHostMemoryPin();
+        LOG(WARNING) << "Submit CUDA host memory pin task failed with an unknown exception";
+    }
 }
 }  // namespace client
 }  // namespace datasystem

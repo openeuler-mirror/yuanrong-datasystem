@@ -23,7 +23,9 @@
 #include <chrono>
 #include <thread>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/client/client_worker_common_api.h"
@@ -138,6 +140,41 @@ TEST_F(MmapManagerTest, TestLookupUnitsAndMmapFdsShmPathWithStubGetClientFd)
     mmapManager.ClearExpiredFds(mappedFds);
     EXPECT_EQ(mmapManager.GetMmapEntryByFd(unit->fd), nullptr);
 
+    ASSERT_EQ(0, close(memfd));
+#else
+    GTEST_SKIP() << "Linux memfd + ShmMmapTable path only";
+#endif
+}
+
+TEST_F(MmapManagerTest, TestCudaHostMemoryPinRunsInBackground)
+{
+#if defined(__linux__)
+    constexpr int mmapSize = 4096;
+    constexpr int workerFd = 904;
+    constexpr int pinDelayMs = 1000;
+    int memfd = static_cast<int>(syscall(SYS_memfd_create, "mmap_mgr_async_pin", MFD_ALLOW_SEALING));
+    ASSERT_GE(memfd, 0);
+    ASSERT_EQ(0, ftruncate(memfd, mmapSize));
+
+    auto api = std::make_shared<MmapUtFakeWorkerApi>(HostPort("127.0.0.1", 1));
+    api->SetTestMemfd(memfd);
+    ASSERT_TRUE(inject::Set("ShmMmapTableEntry.PinHostMemory", "1*sleep(1000)").IsOk());
+    Raii clearInject([] { (void)inject::Clear("ShmMmapTableEntry.PinHostMemory"); });
+
+    MmapManager mmapManager(api, false);
+    auto unit = std::make_shared<ShmUnitInfo>(workerFd, static_cast<uint64_t>(mmapSize));
+    auto start = std::chrono::steady_clock::now();
+    ASSERT_TRUE(mmapManager.LookupUnitsAndMmapFd("tenant_ut", unit).IsOk());
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+
+    EXPECT_LT(elapsed.count(), pinDelayMs / 2);
+    auto entry = mmapManager.GetMmapEntryByFd(workerFd);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_FALSE(entry->IsCudaHostMemoryRegistrationDone());
+    for (int retry = 0; retry < 200 && !entry->IsCudaHostMemoryRegistrationDone(); ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(entry->IsCudaHostMemoryRegistrationDone());
     ASSERT_EQ(0, close(memfd));
 #else
     GTEST_SKIP() << "Linux memfd + ShmMmapTable path only";

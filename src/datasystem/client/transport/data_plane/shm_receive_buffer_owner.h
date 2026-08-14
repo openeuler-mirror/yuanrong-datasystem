@@ -42,6 +42,7 @@ public:
     void Release() override;
     bool ManagesWorkerReference() const override;
     Status CheckAlive() const override;
+    bool IsCudaHostMemoryRegistrationDone() const override;
 
 private:
     std::shared_ptr<ShmSession> session_;

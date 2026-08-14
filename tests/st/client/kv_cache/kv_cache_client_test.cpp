@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <ostream>
 #include <cstdint>
@@ -104,6 +105,10 @@ constexpr char ENV_RECOVERY_CLIENT_LOG_MESSAGE[] = "env_recovery_client_pod_ip_l
 constexpr char ENV_RECOVERY_LOCK_FILE_SUFFIX[] = ".lock";
 constexpr char REGISTER_CLIENT_INJECT[] = "WorkerServiceImpl.RegisterClient.AboveAddClient";
 constexpr char CREATE_OBJECT_INJECT[] = "worker.Create.begin";
+constexpr char PAGEABLE_ALLOC_INJECT[] = "Buffer.AllocatePageableMemory";
+constexpr char PAGEABLE_BAD_ALLOC_INJECT[] = "Buffer.AllocatePageableMemory.bad_alloc";
+constexpr char PAGEABLE_COPY_TO_SHM_INJECT[] = "Buffer.CopyPageableDataToShm";
+constexpr char SHM_PIN_INJECT[] = "ShmMmapTableEntry.PinHostMemory";
 constexpr int REMOTE_INITIAL_WORKER_TIMEOUT_MS = 10'000;
 constexpr int ENV_RECOVERY_LOG_WAIT_MS = 5'000;
 constexpr int ENV_RECOVERY_LOG_POLL_MS = 100;
@@ -1864,6 +1869,154 @@ TEST_F(KVCacheClientTest, TestMCreateAndMSetBufferSuccess)
     auto waitTime = 5;
     std::this_thread::sleep_for(std::chrono::seconds(waitTime));
     DS_ASSERT_NOT_OK(client->Get(keys, getBuffers));
+}
+
+TEST_F(KVCacheClientTest, CreateSetAndGetUsePageableMemoryWhilePinPending)
+{
+    DS_ASSERT_OK(inject::Set(SHM_PIN_INJECT, "1*pause()"));
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    Raii clearPin([] { (void)inject::Clear(SHM_PIN_INJECT); });
+    DS_ASSERT_OK(inject::Set(PAGEABLE_ALLOC_INJECT, "call()"));
+    Raii clearAlloc([] { (void)inject::Clear(PAGEABLE_ALLOC_INJECT); });
+
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    const std::string singleKey = "pageable_single_" + client->GenerateKey();
+    const std::string singleValue(SHM_SIZE, 's');
+    std::shared_ptr<Buffer> singleBuffer;
+    DS_ASSERT_OK(client->Create(singleKey, singleValue.size(), param, singleBuffer));
+    ASSERT_NE(singleBuffer, nullptr);
+    DS_ASSERT_OK(singleBuffer->MemoryCopy(singleValue.data(), singleValue.size()));
+    DS_ASSERT_OK(client->Set(singleBuffer));
+
+    Optional<ReadOnlyBuffer> singleGet;
+    DS_ASSERT_OK(client->Get(singleKey, singleGet));
+    ASSERT_TRUE(singleGet);
+    ASSERT_EQ(singleGet->GetSize(), static_cast<int64_t>(singleValue.size()));
+    ASSERT_EQ(std::memcmp(singleGet->ImmutableData(), singleValue.data(), singleValue.size()), 0);
+    DS_ASSERT_OK(singleGet->RLatch());
+    DS_ASSERT_OK(singleGet->UnRLatch());
+
+    std::vector<std::string> keys{ "pageable_batch_0_" + client->GenerateKey(),
+                                   "pageable_batch_1_" + client->GenerateKey() };
+    std::vector<std::string> values{ std::string(SHM_SIZE, 'a'), std::string(SHM_SIZE, 'b') };
+    std::vector<uint64_t> sizes{ values[0].size(), values[1].size() };
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    DS_ASSERT_OK(client->MCreate(keys, sizes, param, buffers));
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        DS_ASSERT_OK(buffers[i]->MemoryCopy(values[i].data(), values[i].size()));
+    }
+    DS_ASSERT_OK(client->MSet(buffers));
+
+    std::vector<Optional<ReadOnlyBuffer>> batchGet;
+    DS_ASSERT_OK(client->Get(keys, batchGet));
+    ASSERT_EQ(batchGet.size(), keys.size());
+    for (size_t i = 0; i < batchGet.size(); ++i) {
+        ASSERT_TRUE(batchGet[i]);
+        ASSERT_EQ(batchGet[i]->GetSize(), static_cast<int64_t>(values[i].size()));
+        ASSERT_EQ(std::memcmp(batchGet[i]->ImmutableData(), values[i].data(), values[i].size()), 0);
+    }
+    ASSERT_GE(inject::GetExecuteCount(PAGEABLE_ALLOC_INJECT), 6u);
+
+    DS_ASSERT_OK(inject::Clear(SHM_PIN_INJECT));
+    DS_ASSERT_OK(inject::Set(PAGEABLE_BAD_ALLOC_INJECT, "call()"));
+    Raii clearBadAlloc([] { (void)inject::Clear(PAGEABLE_BAD_ALLOC_INJECT); });
+    Optional<ReadOnlyBuffer> fastGet;
+    Status fastRc;
+    for (int retry = 0; retry < 500; ++retry) {
+        fastRc = client->Get(singleKey, fastGet);
+        if (fastRc.IsOk()) {
+            break;
+        }
+        ASSERT_EQ(fastRc.GetCode(), K_OUT_OF_MEMORY);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    DS_ASSERT_OK(fastRc);
+    ASSERT_TRUE(fastGet);
+    ASSERT_EQ(std::memcmp(fastGet->ImmutableData(), singleValue.data(), singleValue.size()), 0);
+
+    std::shared_ptr<Buffer> fastBuffer;
+    DS_ASSERT_OK(client->Create("pageable_fast_" + client->GenerateKey(), SHM_SIZE, param, fastBuffer));
+    ASSERT_NE(fastBuffer, nullptr);
+}
+
+TEST_F(KVCacheClientTest, PageableAllocationFailureReturnsStatusAndClearsBatchOutputs)
+{
+    const std::string getKey = "pageable_oom_get_" + client_->GenerateKey();
+    const std::string mgetKey = "pageable_oom_mget_" + client_->GenerateKey();
+    const std::string value(SHM_SIZE, 'o');
+    DS_ASSERT_OK(client_->Set(getKey, value));
+    DS_ASSERT_OK(client_->Set(mgetKey, value));
+
+    DS_ASSERT_OK(inject::Set(SHM_PIN_INJECT, "1*pause()"));
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    Raii clearPin([] { (void)inject::Clear(SHM_PIN_INJECT); });
+    DS_ASSERT_OK(inject::Set(PAGEABLE_BAD_ALLOC_INJECT, "call()"));
+    Raii clearBadAlloc([] { (void)inject::Clear(PAGEABLE_BAD_ALLOC_INJECT); });
+
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    std::shared_ptr<Buffer> createBuffer;
+    ASSERT_EQ(client->Create("pageable_oom_create_" + client->GenerateKey(), SHM_SIZE, param, createBuffer).GetCode(),
+              K_OUT_OF_MEMORY);
+    ASSERT_EQ(createBuffer, nullptr);
+
+    std::vector<std::shared_ptr<Buffer>> createBuffers;
+    ASSERT_EQ(client->MCreate({ "pageable_oom_batch_0_" + client->GenerateKey(),
+                                "pageable_oom_batch_1_" + client->GenerateKey() },
+                              { SHM_SIZE, SHM_SIZE }, param, createBuffers).GetCode(),
+              K_OUT_OF_MEMORY);
+    ASSERT_TRUE(createBuffers.empty());
+
+    Optional<ReadOnlyBuffer> getBuffer;
+    ASSERT_EQ(client->Get(getKey, getBuffer).GetCode(), K_OUT_OF_MEMORY);
+    ASSERT_FALSE(getBuffer);
+
+    std::vector<Optional<ReadOnlyBuffer>> getBuffers;
+    ASSERT_EQ(client->Get({ getKey, mgetKey }, getBuffers).GetCode(), K_OUT_OF_MEMORY);
+    ASSERT_TRUE(getBuffers.empty());
+}
+
+TEST_F(KVCacheClientTest, SetAndMSetDoNotPublishWhenPageableWriteBackFails)
+{
+    DS_ASSERT_OK(inject::Set(SHM_PIN_INJECT, "1*pause()"));
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    Raii clearPin([] { (void)inject::Clear(SHM_PIN_INJECT); });
+
+    const std::string singleKey = "pageable_copy_fail_single_" + client->GenerateKey();
+    const std::string value(SHM_SIZE, 'f');
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    std::shared_ptr<Buffer> singleBuffer;
+    DS_ASSERT_OK(client->Create(singleKey, value.size(), param, singleBuffer));
+    ASSERT_NE(singleBuffer, nullptr);
+    DS_ASSERT_OK(singleBuffer->MemoryCopy(value.data(), value.size()));
+    DS_ASSERT_OK(inject::Set(PAGEABLE_COPY_TO_SHM_INJECT, "1*return(K_RUNTIME_ERROR)"));
+    {
+        Raii clearCopy([] { (void)inject::Clear(PAGEABLE_COPY_TO_SHM_INJECT); });
+        ASSERT_EQ(client->Set(singleBuffer).GetCode(), K_RUNTIME_ERROR);
+    }
+    std::string singleOutput;
+    ASSERT_EQ(client_->Get(singleKey, singleOutput).GetCode(), K_NOT_FOUND);
+
+    const std::vector<std::string> keys{ "pageable_copy_fail_0_" + client->GenerateKey(),
+                                         "pageable_copy_fail_1_" + client->GenerateKey() };
+    const std::vector<uint64_t> sizes{ SHM_SIZE, SHM_SIZE };
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    DS_ASSERT_OK(client->MCreate(keys, sizes, param, buffers));
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (const auto &buffer : buffers) {
+        DS_ASSERT_OK(buffer->MemoryCopy(value.data(), value.size()));
+    }
+
+    DS_ASSERT_OK(inject::Set(PAGEABLE_COPY_TO_SHM_INJECT, "1*off->1*return(K_RUNTIME_ERROR)"));
+    Raii clearCopy([] { (void)inject::Clear(PAGEABLE_COPY_TO_SHM_INJECT); });
+    ASSERT_EQ(client->MSet(buffers).GetCode(), K_RUNTIME_ERROR);
+    for (const auto &key : keys) {
+        std::string output;
+        ASSERT_EQ(client_->Get(key, output).GetCode(), K_NOT_FOUND);
+    }
 }
 
 TEST_F(KVCacheClientTest, TestMCreateWithNXOnExistingKey)
