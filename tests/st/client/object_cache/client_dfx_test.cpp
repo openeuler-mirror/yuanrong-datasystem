@@ -2055,13 +2055,10 @@ TEST_F(WorkerKillTest, LEVEL1_GetAfterGDecrease)
 
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client->GIncreaseRef({ objectKey }, failedObjectKeys));
-    DS_ASSERT_NOT_OK(client->GDecreaseRef({ objectKey }, failedObjectKeys));
+    DS_ASSERT_OK(client->GDecreaseRef({ objectKey }, failedObjectKeys));
+    EXPECT_TRUE(failedObjectKeys.empty());
 
     StartWorkerAndWaitReady({ workerIdx2 }, 1);
-
-    DS_ASSERT_OK(client->Get({ objectKey }, 0, buffers));
-    failedObjectKeys.clear();
-    DS_ASSERT_OK(client->GDecreaseRef({ objectKey }, failedObjectKeys));
 
     DS_ASSERT_NOT_OK(client->Get({ objectKey }, 0, buffers));
 }

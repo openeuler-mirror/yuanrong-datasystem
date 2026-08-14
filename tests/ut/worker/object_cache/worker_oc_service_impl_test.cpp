@@ -945,6 +945,41 @@ TEST_F(WorkerOcServiceImplTest, TestParallelClearData)
     }
 }
 
+TEST_F(WorkerOcServiceImplTest, SyncDeleteNotificationPreservesNewerObjectVersion)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(1'000);
+    const std::string objectKey = "sync-delete-version-fence";
+    constexpr uint64_t olderDeleteVersion = 100;
+    constexpr uint64_t newerObjectVersion = 200;
+    AddObject(objectKey, newerObjectVersion);
+
+    DeleteObjectReqPb request;
+    DeleteObjectRspPb response;
+    request.add_object_keys(objectKey);
+    request.add_versions(olderDeleteVersion);
+    request.set_is_async(false);
+
+    DS_ASSERT_OK(deleteProc_->DeleteCopyNotification(request, response));
+    EXPECT_TRUE(response.failed_object_keys().empty());
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+    EXPECT_EQ((*entry)->GetCreateTime(), newerObjectVersion);
+}
+
+TEST_F(WorkerOcServiceImplTest, DeleteNotificationRejectsOversizedBatch)
+{
+    DeleteObjectReqPb request;
+    DeleteObjectRspPb response;
+    constexpr size_t oversizedBatch = 10'001;
+    for (size_t i = 0; i < oversizedBatch; ++i) {
+        request.add_object_keys(std::to_string(i));
+        request.add_versions(i);
+    }
+
+    EXPECT_EQ(deleteProc_->DeleteCopyNotification(request, response).GetCode(), StatusCode::K_INVALID);
+}
+
 TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinClearsLocalObjects)
 {
     InitImplClearDataFlow();

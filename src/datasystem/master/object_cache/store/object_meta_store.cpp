@@ -81,6 +81,16 @@ DS_DEFINE_validator(etcd_meta_pool_size, ValidateEtcdPoolSize);
 namespace datasystem {
 namespace master {
 
+void FillNotifyWorkerOpDetailPb(const NotifyWorkerOp &op, ObjectAsyncOpDetailPb &pb)
+{
+    pb.set_op_type(static_cast<uint32_t>(op.type));
+    pb.set_remove_meta_version(op.removeMetaVersion);
+    *pb.mutable_remove_meta_az_names() = { op.removeMetaAzNames.begin(), op.removeMetaAzNames.end() };
+    pb.set_delete_all_copy_version(op.deleteAllCopyMetaVersion);
+    *pb.mutable_delete_all_copy_az_names() = { op.deleteAllCopyMetaAzNames.begin(), op.deleteAllCopyMetaAzNames.end() };
+    pb.set_delete_object_version(op.delObjectVersion);
+}
+
 ObjectMetaStore::ObjectMetaStore(RocksStore *rocksStore, EtcdStore *etcdStore, bool isEnable)
     : rocksStore_(rocksStore),
       etcdStore_(etcdStore),
@@ -807,12 +817,7 @@ Status ObjectMetaStore::AddAsyncWorkerOp(const std::string &workerAddr, const st
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     std::string key = workerAddr + "_" + objectKey;
     ObjectAsyncOpDetailPb pb;
-    pb.set_op_type(static_cast<uint32_t>(op.type));
-    pb.set_remove_meta_version(op.removeMetaVersion);
-    *pb.mutable_remove_meta_az_names() = { op.removeMetaAzNames.begin(), op.removeMetaAzNames.end() };
-    pb.set_delete_all_copy_version(op.deleteAllCopyMetaVersion);
-    *pb.mutable_delete_all_copy_az_names() = { op.deleteAllCopyMetaAzNames.begin(), op.deleteAllCopyMetaAzNames.end() };
-    pb.set_delete_object_version(op.delObjectVersion);
+    FillNotifyWorkerOpDetailPb(op, pb);
     auto val = pb.SerializeAsString();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         rocksStore_->Put(ASYNC_WORKER_OP_TABLE, key, val),

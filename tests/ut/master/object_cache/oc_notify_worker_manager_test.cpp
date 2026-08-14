@@ -21,8 +21,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <string>
 #include <thread>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "ut/common.h"
@@ -30,6 +35,7 @@
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/worker/cluster_event_type.h"
 
 DS_DECLARE_string(rocksdb_store_dir);
@@ -67,16 +73,40 @@ public:
     std::shared_ptr<AkSkManager> akSkManager_;
     std::string rocksdbWriteMode_;
 
-    std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> SnapshotWorkerOps(OCNotifyWorkerManager &manager,
-                                                                                const std::string &worker)
+    std::vector<AsyncWorkerOpSnapshot> SnapshotWorkerOps(OCNotifyWorkerManager &manager, const std::string &worker)
     {
         return manager.SnapshotAsyncWorkerOps(worker);
     }
 
     Status ClearSnapshotOps(OCNotifyWorkerManager &manager, const std::string &worker,
-                            const std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> &snapshots)
+                            const std::vector<AsyncWorkerOpSnapshot> &snapshots)
     {
         return manager.ClearAsyncWorkerOpSnapshots(worker, snapshots);
+    }
+
+    Status QueueAsyncDelete(
+        OCNotifyWorkerManager &manager, std::vector<PendingDeleteNotification> &notifications,
+        std::unordered_map<std::string, std::unordered_map<std::string, std::pair<int64_t, uint32_t>>> &replicas,
+        std::unordered_set<std::string> &failedObjects)
+    {
+        return manager.AsyncNotifyWorkerDelete(notifications, replicas, failedObjects);
+    }
+
+    std::vector<AsyncWorkerOpSnapshot> SelectAcknowledgedDeletes(OCNotifyWorkerManager &manager,
+                                                                 const std::vector<AsyncWorkerOpSnapshot> &snapshots,
+                                                                 const DeleteObjectRspPb &response)
+    {
+        return manager.SelectAcknowledgedDeleteSnapshots(snapshots, response);
+    }
+
+    NotifyWorkerOp ParseNotifyWorkerOp(const ObjectAsyncOpDetailPb &pb)
+    {
+        return OCNotifyWorkerManager::ParseNotifyWorkerOpFromMigration(pb);
+    }
+
+    std::vector<AsyncWorkerOpSnapshot> SnapshotDeleteBatch(OCNotifyWorkerManager &manager, const std::string &worker)
+    {
+        return manager.SnapshotAsyncDeleteReplayBatch(worker);
     }
 };
 
@@ -148,26 +178,189 @@ TEST_F(OCNotifyWorkerManagerTest, TestInsertAsyncWorkerOpReleasesTableLockBefore
     Status insertRc;
     std::thread insertThread([&] { insertRc = manager->InsertAsyncWorkerOp(worker, objectKey, op); });
 
-    bool observedPendingOp = false;
     int64_t maxCheckMs = 0;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(maxPollMs);
-    while (std::chrono::steady_clock::now() < deadline) {
-        auto start = std::chrono::steady_clock::now();
-        bool exists = manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID);
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-        maxCheckMs = std::max(maxCheckMs, static_cast<int64_t>(elapsed.count()));
-        if (exists) {
-            observedPendingOp = true;
-            break;
-        }
+    while (std::chrono::steady_clock::now() < deadline && inject::GetExecuteCount("master.rocksdb.put") == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
     }
+    ASSERT_GT(inject::GetExecuteCount("master.rocksdb.put"), 0U);
+    auto start = std::chrono::steady_clock::now();
+    bool existsBeforePersistence =
+        manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID);
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+    maxCheckMs = std::max(maxCheckMs, static_cast<int64_t>(elapsed.count()));
 
     insertThread.join();
     DS_ASSERT_OK(inject::Clear("master.rocksdb.put"));
     DS_ASSERT_OK(insertRc);
-    ASSERT_TRUE(observedPendingOp);
+    ASSERT_FALSE(existsBeforePersistence);
+    ASSERT_TRUE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
     EXPECT_LT(maxCheckMs, maxExpectedCheckMs);
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestInsertAsyncWorkerOpPersistenceFailureDoesNotPublish)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "failed_insert_must_not_publish";
+    auto op = NotifyWorkerOp::Delete(12345);
+
+    DS_ASSERT_OK(inject::Set("master.rocksdb.put", "1*return(K_KVSTORE_ERROR)"));
+    EXPECT_EQ(manager->InsertAsyncWorkerOp(worker, objectKey, op).GetCode(), StatusCode::K_KVSTORE_ERROR);
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.put"));
+
+    EXPECT_FALSE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::DELETE));
+    std::vector<std::pair<std::string, std::string>> persistedOps;
+    DS_ASSERT_OK(objectStore_->GetAllFromRocks(ASYNC_WORKER_OP_TABLE, persistedOps));
+    EXPECT_TRUE(persistedOps.empty());
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestNoPersistInsertWaitsForPersistedInsertCommit)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "serialize_recovery_insert";
+    constexpr int rocksPutSleepMs = 300;
+    DS_ASSERT_OK(inject::Set("master.rocksdb.put", FormatString("1*sleep(%d)", rocksPutSleepMs)));
+
+    Status persistedRc;
+    std::thread persisted(
+        [&] { persistedRc = manager->InsertAsyncWorkerOp(worker, objectKey, NotifyWorkerOp::Delete(1)); });
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (inject::GetExecuteCount("master.rocksdb.put") == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (inject::GetExecuteCount("master.rocksdb.put") == 0) {
+        persisted.join();
+        FAIL() << "Persisted insert did not reach the RocksDB barrier";
+    }
+    auto start = std::chrono::steady_clock::now();
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, NotifyWorkerOp::Delete(2), false));
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+    persisted.join();
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.put"));
+
+    DS_ASSERT_OK(persistedRc);
+    EXPECT_GE(elapsed.count(), rocksPutSleepMs / 2);
+    auto snapshots = SnapshotWorkerOps(*manager, worker);
+    ASSERT_EQ(snapshots.size(), 1U);
+    EXPECT_EQ(snapshots.front().op.delObjectVersion, 2U);
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestAsyncDeleteReplayBatchIsBoundedAndFair)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    constexpr size_t objectCount = 2'500;
+    for (size_t i = 0; i < objectCount; ++i) {
+        DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, FormatString("object-%05d", static_cast<int>(i)),
+                                                  NotifyWorkerOp::Delete(i), false));
+    }
+
+    auto first = SnapshotDeleteBatch(*manager, worker);
+    auto second = SnapshotDeleteBatch(*manager, worker);
+    ASSERT_EQ(first.size(), 1'000U);
+    ASSERT_EQ(second.size(), 1'000U);
+    std::unordered_set<std::string> selected;
+    for (const auto &snapshot : first) {
+        selected.emplace(snapshot.objectKey);
+    }
+    for (const auto &snapshot : second) {
+        selected.emplace(snapshot.objectKey);
+    }
+    EXPECT_EQ(selected.size(), 2'000U);
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeletePreservesObjectVersion)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "async_delete_version";
+    constexpr uint64_t objectVersion = 12345;
+    constexpr uint32_t writeMode = static_cast<uint32_t>(WriteMode::WRITE_THROUGH_L2_CACHE);
+    std::vector<PendingDeleteNotification> notifications = { { objectKey, worker, writeMode, objectVersion } };
+    std::unordered_map<std::string, std::unordered_map<std::string, std::pair<int64_t, uint32_t>>> replicas;
+    replicas[worker].emplace(objectKey, std::make_pair(objectVersion, writeMode));
+    std::unordered_set<std::string> failedObjects;
+
+    DS_ASSERT_OK(QueueAsyncDelete(*manager, notifications, replicas, failedObjects));
+
+    EXPECT_TRUE(failedObjects.empty());
+    EXPECT_TRUE(replicas[worker].empty());
+    auto snapshots = SnapshotWorkerOps(*manager, worker);
+    ASSERT_EQ(snapshots.size(), 1);
+    EXPECT_EQ(snapshots.front().objectKey, objectKey);
+    EXPECT_EQ(snapshots.front().op.delObjectVersion, objectVersion);
+
+    manager.reset();
+    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    DS_ASSERT_OK(manager->RecoverCacheInvalidAndRemoveMeta(true));
+    snapshots = SnapshotWorkerOps(*manager, worker);
+    ASSERT_EQ(snapshots.size(), 1);
+    EXPECT_EQ(snapshots.front().op.delObjectVersion, objectVersion);
+
+    constexpr uint64_t newerObjectVersion = objectVersion + 1;
+    notifications.front().deleteVersion = newerObjectVersion;
+    replicas[worker].emplace(objectKey, std::make_pair(newerObjectVersion, writeMode));
+    DS_ASSERT_OK(QueueAsyncDelete(*manager, notifications, replicas, failedObjects));
+    snapshots = SnapshotWorkerOps(*manager, worker);
+    ASSERT_EQ(snapshots.size(), 1);
+    EXPECT_EQ(snapshots.front().op.delObjectVersion, newerObjectVersion);
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeletePersistenceFailureKeepsReplicaPending)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "async_delete_persistence_failure";
+    constexpr uint64_t objectVersion = 12345;
+    constexpr uint32_t writeMode = static_cast<uint32_t>(WriteMode::WRITE_THROUGH_L2_CACHE);
+    std::vector<PendingDeleteNotification> notifications = { { objectKey, worker, writeMode, objectVersion } };
+    std::unordered_map<std::string, std::unordered_map<std::string, std::pair<int64_t, uint32_t>>> replicas;
+    replicas[worker].emplace(objectKey, std::make_pair(objectVersion, writeMode));
+    std::unordered_set<std::string> failedObjects;
+
+    DS_ASSERT_OK(inject::Set("master.rocksdb.put", "1*return(K_KVSTORE_ERROR)"));
+    EXPECT_EQ(QueueAsyncDelete(*manager, notifications, replicas, failedObjects).GetCode(),
+              StatusCode::K_KVSTORE_ERROR);
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.put"));
+
+    EXPECT_EQ(failedObjects, std::unordered_set<std::string>{ objectKey });
+    EXPECT_EQ(replicas[worker].count(objectKey), 1U);
+    EXPECT_FALSE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::DELETE));
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestMigrationAsyncDeleteRoundTripPreservesVersion)
+{
+    auto deleteOp = NotifyWorkerOp::Delete(12345);
+    ObjectAsyncOpDetailPb pb;
+
+    FillNotifyWorkerOpDetailPb(deleteOp, pb);
+    auto restored = ParseNotifyWorkerOp(pb);
+
+    EXPECT_EQ(restored.type, NotifyWorkerOpType::DELETE);
+    EXPECT_EQ(restored.delObjectVersion, deleteOp.delObjectVersion);
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestAsyncDeleteHasPeriodicConsumer)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "periodic_async_delete";
+    const std::string injectPoint = "OCNotifyWorkerManager.ProcessAsyncDeleteNotifyOpImpl";
+    auto op = NotifyWorkerOp::Delete(12345);
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, op));
+    manager->SetFaultWorker(worker, true);
+    DS_ASSERT_OK(inject::Set(injectPoint, "call()"));
+    DS_ASSERT_OK(manager->Init());
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline && inject::GetExecuteCount(injectPoint) == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    EXPECT_GT(inject::GetExecuteCount(injectPoint), 0U);
+    DS_ASSERT_OK(inject::Clear(injectPoint));
 }
 
 TEST_F(OCNotifyWorkerManagerTest, TestSnapshotClearKeepsNewerAsyncWorkerOp)
@@ -187,6 +380,65 @@ TEST_F(OCNotifyWorkerManagerTest, TestSnapshotClearKeepsNewerAsyncWorkerOp)
 
     ASSERT_FALSE(manager->CheckExistAsyncWorkerOp(worker, clearedObjectKey, NotifyWorkerOpType::CACHE_INVALID));
     ASSERT_TRUE(manager->CheckExistAsyncWorkerOp(worker, newerObjectKey, NotifyWorkerOpType::CACHE_INVALID));
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestDeleteSnapshotClearKeepsNewerVersion)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "delete_snapshot_newer_version";
+    auto oldDelete = NotifyWorkerOp::Delete(12345);
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, oldDelete));
+    auto snapshots = SnapshotWorkerOps(*manager, worker);
+
+    auto newDelete = NotifyWorkerOp::Delete(12346);
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, newDelete));
+    DS_ASSERT_OK(ClearSnapshotOps(*manager, worker, snapshots));
+
+    snapshots = SnapshotWorkerOps(*manager, worker);
+    ASSERT_EQ(snapshots.size(), 1U);
+    EXPECT_EQ(snapshots.front().op.delObjectVersion, newDelete.delObjectVersion);
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeleteMergeKeepsLargestVersion)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "delete_merge_largest_version";
+    constexpr uint64_t newerDeleteVersion = 12346;
+    constexpr uint64_t olderDeleteVersion = 12345;
+
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, NotifyWorkerOp::Delete(newerDeleteVersion)));
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, objectKey, NotifyWorkerOp::Delete(olderDeleteVersion)));
+
+    auto snapshots = SnapshotWorkerOps(*manager, worker);
+    ASSERT_EQ(snapshots.size(), 1U);
+    EXPECT_EQ(snapshots.front().op.delObjectVersion, newerDeleteVersion);
+
+    manager.reset();
+    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    DS_ASSERT_OK(manager->RecoverCacheInvalidAndRemoveMeta(true));
+    snapshots = SnapshotWorkerOps(*manager, worker);
+    ASSERT_EQ(snapshots.size(), 1U);
+    EXPECT_EQ(snapshots.front().op.delObjectVersion, newerDeleteVersion);
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestAsyncDeleteAcknowledgesOnlySuccessfulObjects)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto op = NotifyWorkerOp::Delete(0);
+    std::vector<AsyncWorkerOpSnapshot> snapshots = { { "success", op, 1 }, { "failed", op, 2 } };
+    DeleteObjectRspPb response;
+    response.add_failed_object_keys("failed");
+    response.mutable_last_rc()->set_error_code(StatusCode::K_WORKER_TIMEOUT);
+
+    auto acknowledged = SelectAcknowledgedDeletes(*manager, snapshots, response);
+    ASSERT_EQ(acknowledged.size(), 1U);
+    EXPECT_EQ(acknowledged.front().objectKey, "success");
+
+    response.clear_failed_object_keys();
+    acknowledged = SelectAcknowledgedDeletes(*manager, snapshots, response);
+    EXPECT_TRUE(acknowledged.empty());
 }
 
 TEST_F(OCNotifyWorkerManagerTest, TestClearAsyncWorkerOpKeepsRetryStateOnPersistenceFailure)
@@ -286,20 +538,15 @@ TEST_F(OCNotifyWorkerManagerTest, TestDeadWorkerClearsConcurrentAsyncWorkerOp)
     Status insertRc;
     std::thread insertThread([&] { insertRc = manager->InsertAsyncWorkerOp(worker, objectKey, op); });
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(maxPollMs);
-    bool observedPendingOp = false;
-    while (std::chrono::steady_clock::now() < deadline) {
-        observedPendingOp = manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID);
-        if (observedPendingOp) {
-            break;
-        }
+    while (std::chrono::steady_clock::now() < deadline && inject::GetExecuteCount("master.rocksdb.put") == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
     }
+    ASSERT_GT(inject::GetExecuteCount("master.rocksdb.put"), 0U);
 
     manager->SetFaultWorker(worker, true);
     DS_ASSERT_OK(manager->ClearAsyncWorkerOp(worker));
     insertThread.join();
 
-    EXPECT_TRUE(observedPendingOp);
     DS_ASSERT_OK(insertRc);
     EXPECT_FALSE(manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
 }

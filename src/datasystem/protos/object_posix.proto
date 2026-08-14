@@ -367,6 +367,7 @@ message DeleteObjectReqPb {
   bool is_async = 3;
   repeated uint64 versions = 4;
   string tenant_id = 5;
+  bool require_sync_version_fence = 6;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -377,6 +378,7 @@ message DeleteObjectReqPb {
 message DeleteObjectRspPb {
   repeated string failed_object_keys = 1;
   ErrorInfoPb last_rc = 2;
+  bool sync_version_fence_applied = 3;
 }
 
 message DeletePersistenceObjectReqPb {
