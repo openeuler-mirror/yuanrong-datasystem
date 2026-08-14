@@ -45,6 +45,13 @@ public:
     void WaitAllow(uint64_t requiredSize);
 
     /**
+     * @brief Estimate how long the required tokens need to become available.
+     * @param[in] requiredSize Required size.
+     * @return Estimated wait time in milliseconds, or UINT64_MAX when tokens are insufficient at zero rate.
+     */
+    uint64_t EstimateWaitMilliseconds(uint64_t requiredSize);
+
+    /**
      * @brief Update rate.
      * @param[in] rate Limit rate from response.
      */
@@ -67,7 +74,7 @@ private:
      * @param[in] requiredSize Required size.
      * @return Need wait milliseconds.
      */
-    std::time_t WaitMilliseconds(uint64_t requiredSize);
+    uint64_t WaitMilliseconds(uint64_t requiredSize) const;
 
     uint64_t rate_;
 

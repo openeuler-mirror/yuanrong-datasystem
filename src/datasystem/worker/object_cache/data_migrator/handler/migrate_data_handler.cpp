@@ -19,6 +19,7 @@
  */
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 
+#include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
@@ -168,7 +169,17 @@ void MigrateDataHandler::CollectObjectForMigration(const std::string &objectKey,
         return;
     }
 
+    auto lockStartUs = GetSteadyClockTimeStampUs();
     rc = entry->RLock();
+    auto lockWaitUs = GetSteadyClockTimeStampUs() - lockStartUs;
+    constexpr int64_t slowLockThresholdUs = 100'000;
+    constexpr uint32_t slowLockLogEveryN = 100;
+    if (lockWaitUs >= slowLockThresholdUs) {
+        LOG_FIRST_EVERY_N(INFO, slowLockLogEveryN)
+            << "event=MIGRATE_OBJECT_LOCK_SLOW target=" << remoteApi_->Address()
+            << " object_key_hash=" << std::hash<std::string>{}(objectKey) << " wait_ms=" << lockWaitUs / SECS_TO_MS
+            << " status=" << rc.ToString();
+    }
     if (rc.IsError()) {
         (void)skipIds_.emplace(objectKey);
         return;
@@ -353,18 +364,15 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
         return;
     }
 
-    if (limiter_.IsRemoteBusyNode()) {
-        VLOG(1) << FormatString("[Migrate Data] self-heal triggered for %s", remoteApi_->Address());
-        Status heal = SelfHealBusyRate();
-        if (heal.IsError()) {
-            LOG(WARNING) << FormatString("[Migrate Data] Remote %s still busy after probe: %s",
-                                         remoteApi_->Address(), heal.ToString());
-            std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
-                           [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
-            lastRc_ = heal;
-            Clear();
-            return;
-        }
+    Status rateRc = EnsureRateForBatch();
+    if (rateRc.IsError()) {
+        LOG(WARNING) << FormatString("[Migrate Data] Remote %s rate is not usable after probe: %s",
+                                     remoteApi_->Address(), rateRc.ToString());
+        std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
+                       [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
+        lastRc_ = rateRc;
+        Clear();
+        return;
     }
     limiter_.WaitAllow(currBatchSize_);
 
@@ -381,10 +389,39 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
     PerfPoint point(PerfKey::WORKER_MIGRATE_TRANSPORT_SEND_DATA);
     INJECT_POINT_NO_RETURN("MigrateDataHandler.BeforeTransportSend");
     INJECT_POINT_NO_RETURN("MigrateDataHandler.TransportBatchStarted");
+    auto transportStartUs = GetSteadyClockTimeStampUs();
     Status s = transport_->MigrateDataToRemote(req, rsp);
+    auto transportUs = GetSteadyClockTimeStampUs() - transportStartUs;
+    constexpr int64_t slowTransportThresholdUs = 5'000'000;
+    constexpr uint32_t slowTransportLogEveryN = 10;
+    if (transportUs >= slowTransportThresholdUs) {
+        LOG_FIRST_EVERY_N(INFO, slowTransportLogEveryN)
+            << "event=MIGRATE_TRANSPORT_SLOW target=" << remoteApi_->Address() << " batch_count=" << datas_.size()
+            << " batch_bytes=" << currBatchSize_ << " elapsed_ms=" << transportUs / SECS_TO_MS
+            << " limit_rate=" << rsp.limitRate << " status=" << s.ToString();
+    }
     point.Record();
     HandleMigrationTransportResponse(s, rsp);
     Clear();
+}
+
+Status MigrateDataHandler::EnsureRateForBatch()
+{
+    bool busy = limiter_.IsRemoteBusyNode();
+    if (!busy && type_ != MigrateType::SCALE_DOWN) {
+        return Status::OK();
+    }
+    uint64_t estimatedWaitMs = limiter_.EstimateWaitMilliseconds(currBatchSize_);
+    uint64_t maxWaitMs = GetScaleDownMaxLimiterWaitMilliseconds(currBatchSize_);
+    bool scaleDownWaitTooLong = type_ == MigrateType::SCALE_DOWN
+                                && estimatedWaitMs > maxWaitMs;
+    if (!busy && !scaleDownWaitTooLong) {
+        return Status::OK();
+    }
+    LOG(INFO) << "event=MIGRATE_LIMITER_SLOW target=" << remoteApi_->Address() << " batch_count=" << datas_.size()
+              << " batch_bytes=" << currBatchSize_ << " estimated_wait_ms=" << estimatedWaitMs
+              << " wait_limit_ms=" << maxWaitMs << " action=probe";
+    return SelfHealBusyRate(currBatchSize_);
 }
 
 bool MigrateDataHandler::CheckSendAdmission()
@@ -446,21 +483,23 @@ Status MigrateDataHandler::MigrateDataToRemoteRetry(const std::shared_ptr<Worker
     return status;
 }
 
-Status MigrateDataHandler::SelfHealBusyRate()
+Status MigrateDataHandler::SelfHealBusyRate(uint64_t requiredSize)
 {
     if (selfHealAttempted_) {
         return lastHealStatus_;
     }
     selfHealAttempted_ = true;
-
+    auto startMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
     int probesMade = 0;
-    auto deadline = static_cast<uint64_t>(GetSteadyClockTimeStampMs()) + BUSY_HEAL_BUDGET_MS;
+    auto deadline = startMs + BUSY_HEAL_BUDGET_MS;
     uint64_t rate = 0;
+    uint64_t estimatedWaitMs = UINT64_MAX;
+    bool recovered = false;
     Status lastErr;
     MigrateDataReqPb req;
     MigrateDataRspPb rsp;
     uint64_t sleepMs = BUSY_HEAL_INITIAL_SLEEP_MS;
-    while (rate == 0 && probesMade < BUSY_HEAL_MAX_PROBES
+    while (!recovered && probesMade < BUSY_HEAL_MAX_PROBES
            && static_cast<uint64_t>(GetSteadyClockTimeStampMs()) < deadline
            && (stoppingPtr_ == nullptr || !stoppingPtr_->load(std::memory_order_relaxed))) {
         INJECT_POINT_NO_RETURN("MigrateDataHandler.SelfHealBusyRate.probe");
@@ -474,49 +513,84 @@ Status MigrateDataHandler::SelfHealBusyRate()
         if (stoppingPtr_ != nullptr && stoppingPtr_->load(std::memory_order_relaxed)) {
             break;
         }
-        Status s = remoteApi_->MigrateDataProbe(req, rsp, 2000);
-        if (s.IsOk()) {
+        lastErr = remoteApi_->MigrateDataProbe(req, rsp, BUSY_HEAL_PROBE_TIMEOUT_MS);
+        if (lastErr.IsOk()) {
             rate = rsp.limit_rate();
-        } else {
-            lastErr = s;
+            limiter_.UpdateRate(rate);
+            estimatedWaitMs = limiter_.EstimateWaitMilliseconds(requiredSize);
+            recovered = IsRateRecovered(rate, estimatedWaitMs, requiredSize);
         }
         VLOG(1) << FormatString("[Migrate Data] busy re-probe for %s: attempt %d, rate=%lu, rc=%s",
-                                remoteApi_->Address(), probesMade + 1, rate, s.ToString());
+                                remoteApi_->Address(), probesMade + 1, rate, lastErr.ToString());
         ++probesMade;
         sleepMs = std::min(sleepMs * BUSY_HEAL_BACKOFF_FACTOR, BUSY_HEAL_MAX_SLEEP_MS);
         rsp.Clear();
     }
-    limiter_.UpdateRate(rate);
-    return BuildHealResult(rate, probesMade, lastErr);
+    if (!recovered) {
+        limiter_.UpdateRate(rate);
+    }
+    lastHealStatus_ = BuildHealResult(recovered, rate, probesMade, lastErr);
+    LOG(INFO) << "event=MIGRATE_RATE_REFRESH target=" << remoteApi_->Address() << " attempts=" << probesMade
+              << " new_rate_bps=" << rate << " estimated_wait_ms=" << estimatedWaitMs
+              << " elapsed_ms=" << GetSteadyClockTimeStampMs() - startMs
+              << " status=" << lastHealStatus_.ToString();
+    return lastHealStatus_;
 }
 
-Status MigrateDataHandler::BuildHealResult(uint64_t rate, int probesMade, const Status &lastErr)
+bool MigrateDataHandler::IsRateRecovered(uint64_t rate, uint64_t estimatedWaitMs, uint64_t requiredSize) const
+{
+    if (rate == 0) {
+        return false;
+    }
+    return type_ != MigrateType::SCALE_DOWN
+           || estimatedWaitMs <= GetScaleDownMaxLimiterWaitMilliseconds(requiredSize);
+}
+
+uint64_t MigrateDataHandler::GetScaleDownMaxLimiterWaitMilliseconds(uint64_t requiredSize) const
+{
+    uint64_t configuredRate = static_cast<uint64_t>(FLAGS_data_migrate_rate_limit_mb) * MB_TO_BYTES;
+    if (configuredRate == 0) {
+        return SCALE_DOWN_MIN_LIMITER_WAIT_MS;
+    }
+    uint64_t configuredWaitMs = requiredSize * SECS_TO_MS / configuredRate + 1;
+    return std::max(SCALE_DOWN_MIN_LIMITER_WAIT_MS, configuredWaitMs);
+}
+
+Status MigrateDataHandler::BuildHealResult(bool recovered, uint64_t rate, int probesMade, const Status &lastErr)
 {
     if (stoppingPtr_ != nullptr && stoppingPtr_->load(std::memory_order_relaxed)) {
         LOG(INFO) << FormatString("[Migrate Data] self-heal cancelled for %s during shutdown",
                                   remoteApi_->Address());
-        lastHealStatus_ = Status(K_RUNTIME_ERROR, "Cancelled during shutdown");
-        return lastHealStatus_;
+        return Status(K_RUNTIME_ERROR, "Cancelled during shutdown");
     }
-    if (rate == 0) {
-        lastHealStatus_ = lastErr.IsError()
-            ? lastErr
-            : Status(K_NOT_READY,
-                     FormatString("Remote node %s can't provide bandwidth after %d probes",
-                                  remoteApi_->Address(), probesMade));
-        return lastHealStatus_;
+    if (!recovered) {
+        return lastErr.IsError()
+                   ? lastErr
+                   : Status(K_NOT_READY,
+                            FormatString("Remote node %s can't provide usable bandwidth after %d probes, rate: %lu",
+                                         remoteApi_->Address(), probesMade, rate));
     }
-    lastHealStatus_ = Status::OK();
-    return lastHealStatus_;
+    return Status::OK();
 }
 
 Status MigrateDataHandler::TryUpdateRate(uint64_t rate)
 {
     if (rate != 0) {
+        selfHealAttempted_ = false;
+        lastHealStatus_ = Status::OK();
         limiter_.UpdateRate(rate);
+        if (type_ == MigrateType::SCALE_DOWN) {
+            uint64_t estimatedWaitMs = limiter_.EstimateWaitMilliseconds(currBatchSize_);
+            constexpr uint32_t lowRateLogEveryN = 10;
+            if (estimatedWaitMs > GetScaleDownMaxLimiterWaitMilliseconds(currBatchSize_)) {
+                LOG_FIRST_EVERY_N(INFO, lowRateLogEveryN)
+                    << "event=MIGRATE_RATE_LOW target=" << remoteApi_->Address() << " batch_bytes=" << currBatchSize_
+                    << " advertised_rate_bps=" << rate << " estimated_wait_ms=" << estimatedWaitMs;
+            }
+        }
         return Status::OK();
     }
-    return SelfHealBusyRate();
+    return SelfHealBusyRate(currBatchSize_);
 }
 
 MigrateDataHandler::MigrateResult MigrateDataHandler::ConstructResult(Status status) const

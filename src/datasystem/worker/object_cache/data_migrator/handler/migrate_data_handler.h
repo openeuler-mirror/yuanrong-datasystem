@@ -43,7 +43,7 @@ namespace object_cache {
 
 class MigrateDataHandler {
 public:
-    // SelfHealBusyRate probes the remote after a migrate batch returns limit_rate=0. The remote's
+    // SelfHealBusyRate probes the remote after a migrate batch returns an unusable limit rate. The remote's
     // MigrateDataRateLimiter uses a 1-second sliding window; a full batch (= maxBandwidth) saturates
     // it, so availableBandwidth stays 0 until the entry expires (~1s after receipt). The 3-probe
     // backoff sequence MUST span more than 1 second so probe 3 lands after the window drains:
@@ -56,6 +56,8 @@ public:
     static constexpr uint64_t BUSY_HEAL_BACKOFF_FACTOR = 2;
     static constexpr int BUSY_HEAL_MAX_PROBES = 3;
     static constexpr uint64_t BUSY_HEAL_CANCEL_POLL_MS = 10;
+    static constexpr uint64_t BUSY_HEAL_PROBE_TIMEOUT_MS = 2000;
+    static constexpr uint64_t SCALE_DOWN_MIN_LIMITER_WAIT_MS = 1000;
 
     MigrateDataHandler(MigrateType type, const std::string &localAddr,
                        const std::vector<ImmutableString> &needMigrateDataIds, std::shared_ptr<ObjectTable> objectTable,
@@ -155,29 +157,35 @@ private:
      */
     void SendDataToRemote(bool isSlotMigration = false);
     bool CheckSendAdmission();
+    Status EnsureRateForBatch();
     void HandleMigrationTransportResponse(const Status &status, MigrateTransport::Response &response);
 
     /**
      * @brief Update rate from response, or self-heal when rate is zero.
-     * @param[in] rate Rate from response. If zero, triggers bounded self-heal probing.
+     * @param[in] rate Rate from response. A zero rate triggers bounded self-heal probing.
      * @return K_OK if rate is non-zero or self-heal succeeds, the error otherwise.
      */
     Status TryUpdateRate(uint64_t rate);
 
     /**
-     * @brief Self-heal busy rate limiter with bounded budget and exponential backoff.
+     * @brief Refresh an unusable remote rate with bounded budget and exponential backoff.
+     * @param[in] requiredSize Token size required by the pending batch.
      * @return K_OK if rate recovered, the error otherwise (K_NOT_READY or last RPC error).
      */
-    Status SelfHealBusyRate();
+    Status SelfHealBusyRate(uint64_t requiredSize);
 
     /**
-     * @brief Build and cache the final self-heal status from the probe outcome.
-     * @param[in] rate Final recovered rate (0 means still busy).
+     * @brief Build the final self-heal status from the probe outcome.
+     * @param[in] recovered Whether the refreshed rate can admit the pending batch within the bounded wait.
+     * @param[in] rate Final advertised rate.
      * @param[in] probesMade Number of probes executed.
      * @param[in] lastErr Last RPC error (if any) from probing.
      * @return K_OK if rate recovered, the error otherwise (cancelled, K_NOT_READY, or last RPC error).
      */
-    Status BuildHealResult(uint64_t rate, int probesMade, const Status &lastErr);
+    Status BuildHealResult(bool recovered, uint64_t rate, int probesMade, const Status &lastErr);
+
+    bool IsRateRecovered(uint64_t rate, uint64_t estimatedWaitMs, uint64_t requiredSize) const;
+    uint64_t GetScaleDownMaxLimiterWaitMilliseconds(uint64_t requiredSize) const;
 
     /**
      * @brief Construct the migrate data result.
