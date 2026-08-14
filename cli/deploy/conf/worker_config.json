@@ -212,8 +212,8 @@
         "description": "Enable master-scheduled object cache memory rebalance. When a worker exceeds the rebalance source usage threshold, the master schedules migration of old primary copies to less-loaded workers, reducing hotspot memory pressure."
     },
     "rebalance_source_usage_percent": {
-        "value": "70",
-        "description": "Memory usage percent at or above which a ready worker can be selected as a memory rebalance source. Valid range: 1-100."
+        "value": "80",
+        "description": "Memory usage percent at or above which a ready worker can be selected as a memory rebalance source. Dual-role: the same percent also caps the target worker's projected usage; reaching it stops further rebalance batches. Default 80% matches the eviction low watermark; raising it moves the target ceiling toward the eviction high watermark, where eviction fires. Valid range: 1-100."
     },
     "rebalance_usage_gap_percent": {
         "value": "20",
