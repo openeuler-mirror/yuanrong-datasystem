@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from deploy_common import (
     check_process,
     cmd_install_impl,
+    discover_nodes,
     do_for_all_pods,
     find_default_whl,
     find_pid_by_port,
@@ -408,6 +409,71 @@ class TestStartService(unittest.TestCase):
                       enable_procmon=False, numactl_opts='-N 0', timeout=10)
         self.assertEqual(mock_exec.call_args[0][2],
                          'dscli start -C /tmp/coordinator.config')
+
+
+class TestDiscoverNodes(unittest.TestCase):
+    """discover_nodes: parses kubectl get nodes JSON, sorts by name for
+    deterministic cross-run distribution (shared by deploy_pods and
+    deploy_coordinator), and returns [] on any kubectl failure."""
+
+    @staticmethod
+    def _nodes_json(node_specs):
+        # node_specs: list of (name, ip); build the kubectl get nodes -o json
+        # items list and return its JSON string (check_output returns stdout).
+        items = []
+        for name, ip in node_specs:
+            items.append({
+                'metadata': {'name': name},
+                'status': {'addresses': [{'type': 'InternalIP', 'address': ip}]},
+            })
+        return json.dumps({'items': items})
+
+    @patch('deploy_common.subprocess.check_output')
+    def test_parses_internal_ip_and_sorts_by_name(self, mock_co):
+        # Intentionally unsorted in the API response to prove discover_nodes
+        # sorts by name so percentage / round-robin assignment is deterministic
+        # across runs (the k8s API does not guarantee item order).
+        mock_co.return_value = self._nodes_json(
+            [('node-c', '10.0.0.3'),
+             ('node-a', '10.0.0.1'),
+             ('node-b', '10.0.0.2')])
+        nodes = discover_nodes()
+        self.assertEqual([n['name'] for n in nodes],
+                         ['node-a', 'node-b', 'node-c'])
+        self.assertEqual(nodes[0]['ip'], '10.0.0.1')
+
+    @patch('deploy_common.subprocess.check_output')
+    def test_returns_empty_on_kubectl_nonzero_exit(self, mock_co):
+        # check_output raises CalledProcessError on non-zero exit; discover_nodes
+        # swallows it and returns [] so callers can decide whether to abort.
+        mock_co.side_effect = subprocess.CalledProcessError(1, ['kubectl'])
+        self.assertEqual(discover_nodes(), [])
+
+    @patch('deploy_common.subprocess.check_output')
+    def test_returns_empty_when_kubectl_missing(self, mock_co):
+        mock_co.side_effect = FileNotFoundError()
+        self.assertEqual(discover_nodes(), [])
+
+    @patch('deploy_common.subprocess.check_output')
+    def test_returns_empty_on_timeout(self, mock_co):
+        mock_co.side_effect = subprocess.TimeoutExpired(cmd=['kubectl'],
+                                                       timeout=60)
+        self.assertEqual(discover_nodes(), [])
+
+    @patch('deploy_common.subprocess.check_output')
+    def test_skips_non_internal_ip_addresses(self, mock_co):
+        # A Hostname-type address before InternalIP must not shadow the
+        # InternalIP; discover_nodes picks InternalIP and breaks per-node.
+        mock_co.return_value = json.dumps({'items': [{
+            'metadata': {'name': 'node-a'},
+            'status': {'addresses': [
+                {'type': 'Hostname', 'address': 'node-a'},
+                {'type': 'InternalIP', 'address': '10.0.0.1'},
+            ]},
+        }]})
+        nodes = discover_nodes()
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0]['ip'], '10.0.0.1')
 
 
 if __name__ == '__main__':

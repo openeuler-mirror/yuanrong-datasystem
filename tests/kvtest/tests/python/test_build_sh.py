@@ -75,7 +75,11 @@ fi
         ]
         for args, expect_urma in cases:
             with self.subTest(args=args):
-                self.bazel_log.unlink(missing_ok=True)
+                # unlink(missing_ok=...) is 3.8+; this repo's tests run on
+                # 3.7 too (see test_deploy_coordinator's 3.7 note), so guard
+                # the unlink explicitly instead of relying on missing_ok.
+                if self.bazel_log.exists():
+                    self.bazel_log.unlink()
                 result = self._run(*args)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 build_commands = [cmd for cmd in self._bazel_commands() if cmd.startswith("build ")]

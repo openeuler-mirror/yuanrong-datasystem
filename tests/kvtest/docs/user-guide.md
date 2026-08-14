@@ -223,7 +223,7 @@ python3 deploy_client.py clean deploy.json                # 清理
   "transport": "ssh",
   "ssh_user": "root",
   "ssh_options": "-o StrictHostKeyChecking=no",
-  "enable_procmon": true,
+  "enable_procmon": false,
   "remote_sdk_dir": "/root/tmp/yr/datasystem/lib",
   "duration": "30s",
   "nodes": [

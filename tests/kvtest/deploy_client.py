@@ -52,7 +52,7 @@ class Deployer:
         self.default_transport = self.deploy.get('transport', 'ssh')
         self.default_ssh_user = self.deploy.get('ssh_user', 'root')
         self.ssh_options = self.deploy.get('ssh_options', '-o StrictHostKeyChecking=no')
-        self.enable_procmon = self.deploy.get('enable_procmon', True)
+        self.enable_procmon = self.deploy.get('enable_procmon', False)
         self.listen_port = self.config_template.get('listen_port', 9000)
         self._host_locks = {}
 
@@ -1024,7 +1024,7 @@ def cmd_gen_config(args):
     deploy = {
         'remote_work_dir': args.remote_work_dir,
         'transport': transport,
-        'enable_procmon': True,
+        'enable_procmon': False,
         'nodes': nodes,
     }
     if args.remote_sdk_dir:
