@@ -136,7 +136,7 @@ kvtest 不会动态加载外部 `libdatasystem.so`，所以 URMA 必须在 kvtes
 | `connect_options.connect_timeout_ms` | int | 1000 | KVClient 连接超时（毫秒） |
 | `connect_options.request_timeout_ms` | int | 20 | KVClient 请求超时（毫秒） |
 | `connect_options.enable_cross_node_connection` | bool | true | 允许跨节点连接 standby Worker |
-| `connect_options.enable_local_cache` | bool | true | 启用 SDK 客户端本地缓存，`false` 走 Transport 层 |
+| `connect_options.enable_local_cache` | bool | true | Get/MGet 走绑定 Worker；`false` 时按 metadata owner 走 Transport 层 |
 | `connect_options.data_placement_policy` | string | "PREFERRED_SAME_NODE" | Set/MSet 数据放置策略 |
 | `connect_options.fast_transport_mem_size` | string | "512MB" | 快速传输内存大小，支持 KB/MB/GB 后缀 |
 | `data_sizes` | string[] | ["1MB"] | 数据大小列表，支持 KB/MB/GB 后缀，随机选取 |

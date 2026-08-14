@@ -782,7 +782,7 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `notify_interval_us` | int | 0 | ≥ 0（0=并行） | 通知间隔（微秒） |
 | `enable_jitter` | bool | true | - | 启用随机偏移避免请求同步 |
 | `enable_cross_node_connection` | bool | true | - | 允许跨节点 failover |
-| `enable_local_cache` | bool | true | - | 启用客户端本地缓存，false 走 Transport 层 |
+| `enable_local_cache` | bool | true | - | 控制 Get/MGet 读路径：true 走绑定 Worker，false 按 metadata owner 走 Transport 层；同机副本且 SHM 可用时仍可使用 SHM |
 | `data_placement_policy` | string | "PREFERRED_SAME_NODE" | PREFERRED_SAME_NODE / REQUIRED_SAME_NODE / PREFERRED_META_OWNER | Set/MSet 数据放置策略 |
 | `metrics_interval_ms` | int | 3000 | > 0 | 指标采集间隔 |
 | `metrics_file` | string | "metrics_{instance_id}.csv" | - | CSV 输出文件名 |

@@ -284,7 +284,7 @@ class KVCommand(BenchmarkBaseCommand):
             "--enable_local_cache",
             choices=("true", "false"),
             default="true",
-            help="Select the legacy worker-mediated path (true) or routing/transport path (false).",
+            help="Get/MGet use the bound Worker path (true) or metadata-owner transport path (false).",
         )
         parser.add_argument(
             "--data_placement_policy",

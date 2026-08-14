@@ -69,11 +69,18 @@ ConnectOptions
 
         如果为 true，允许客户端在与当前数据系统Worker 连接异常时自动切换到备用节点。默认值：false
 
+    .. cpp:member:: bool enableLocalCache = true;
+
+        控制 Get/MGet 的读路径。为 ``true`` 时，Get/MGet 固定走当前绑定 Worker 的 legacy 路径；为
+        ``false`` 时，Get/MGet 固定通过 TransportLayer 按 metadata owner 执行 ``QueryAndGet``，再按
+        metadata 返回的实际副本位置读取数据。同机副本且 SHM 可用时，TransportLayer 仍会使用 SHM。
+        默认值：``true``。
+
     .. cpp:member:: DataPlacementPolicy dataPlacementPolicy = DataPlacementPolicy::PREFERRED_SAME_NODE;
 
         ``enableLocalCache=false`` 时 Set/MSet 使用的数据放置策略。该配置按客户端实例生效，
         默认值为 ``PREFERRED_SAME_NODE``，不受同一进程中其他 ``KVClient`` 的初始化顺序影响。
-        该配置不改变 Get/MGet 的现有路由和传输行为。
+        该配置不改变 Get/MGet 的 metadata owner 路由和传输行为。
 
     .. cpp:member:: bool enableRemoteH2D = false;
         

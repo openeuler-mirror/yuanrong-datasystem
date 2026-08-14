@@ -1239,7 +1239,7 @@ def _add_gen_config_args(p):
                    nargs='?', const=True, dest='enable_local_cache',
                    metavar='BOOL',
                    help='Enable SDK client local cache (default: true; bare flag = true). '
-                        'Pass false to make Get go through the Transport layer.')
+                        'Pass false to make Get/MGet query metadata owners through the Transport layer.')
     p.add_argument('--data-placement-policy',
                    choices=['PREFERRED_SAME_NODE', 'REQUIRED_SAME_NODE', 'PREFERRED_META_OWNER'],
                    default='PREFERRED_SAME_NODE', dest='data_placement_policy',
