@@ -23,9 +23,11 @@
 #include <utility>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/coordinator/raft/coordinator_raft_node.h"
 #include "datasystem/coordinator/raft/coordinator_raft_peer.h"
 
@@ -42,6 +44,16 @@ constexpr char kRemoveSubmissionExceptionMarker[] = "Coordinator membership Remo
 constexpr char kOperationCompletionErrorMarker[] = "Coordinator membership asynchronous operation failed";
 constexpr char kUnsafeOverTargetMarker[] =
     "Coordinator membership over-target configuration has no safe removal target";
+constexpr char K_COORDINATOR_MEMBERSHIP_TRACE_PREFIX[] = "CoordinatorMembership;";
+
+std::string GetCoordinatorMembershipTraceId()
+{
+    auto traceId = Trace::Instance().GetTraceID();
+    if (traceId.empty()) {
+        traceId = std::string(K_COORDINATOR_MEMBERSHIP_TRACE_PREFIX) + GetStringUuid();
+    }
+    return traceId;
+}
 
 const char *InvalidCoordinatorMembershipOptionsReason(const CoordinatorMembershipOptions &options) noexcept
 {
@@ -108,7 +120,11 @@ CoordinatorMembershipManager::CoordinatorMembershipManager(CoordinatorMembership
                                                            Dependencies dependencies,
                                                            std::shared_ptr<ICoordinatorDiscovery> discovery,
                                                            NowFunction now)
-    : options_(options), dependencies_(std::move(dependencies)), discovery_(std::move(discovery)), now_(std::move(now))
+    : options_(options),
+      dependencies_(std::move(dependencies)),
+      discovery_(std::move(discovery)),
+      now_(std::move(now)),
+      traceId_(GetCoordinatorMembershipTraceId())
 {
 }
 
@@ -218,6 +234,7 @@ Status CoordinatorMembershipManager::Shutdown()
 
 void CoordinatorMembershipManager::Run()
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId_, true);
     while (true) {
         {
             std::lock_guard<std::mutex> lock(lifecycleMutex_);

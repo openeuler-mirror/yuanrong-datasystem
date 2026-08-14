@@ -41,6 +41,7 @@
 #include "datasystem/coordinator/raft/coordinator_raft_node.h"
 #include "datasystem/coordinator/raft/coordinator_raft_state_machine.h"
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/status.h"
 #define private public
@@ -916,6 +917,61 @@ TEST(CoordinatorElectionManagerTest, ConfigurationCallbackUpdatesBootstrapSnapsh
               std::future_status::ready);
     EXPECT_EQ(observedFuture.get().committedPeers,
               (std::vector<std::string>{ kPeer1, kPeer2 }));
+    DS_ASSERT_OK(manager->Shutdown());
+}
+
+TEST(CoordinatorElectionManagerTest, ManagedRaftCallbacksCarryBootstrapTrace)
+{
+    auto state = std::make_shared<DependencyState>();
+    state->discoveredCandidates = { kPeer1, kPeer2 };
+    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
+    std::vector<std::string> observedTraceIds;
+    CoordinatorRaftEventCallbacks callbacks;
+    callbacks.onLeaderStart = [&observedTraceIds](int64_t) {
+        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
+    };
+    callbacks.onLeaderStop = [&observedTraceIds](Status) {
+        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
+    };
+    callbacks.onConfigurationCommitted = [&observedTraceIds](std::vector<std::string>, int64_t) {
+        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
+    };
+    callbacks.onError = [&observedTraceIds](Status) {
+        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
+    };
+    callbacks.onShutdown = [&observedTraceIds] {
+        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
+    };
+    auto manager = MakeManager(state, MakeOptions(), std::move(callbacks));
+
+    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
+    CoordinatorRaftEventCallbacks managedCallbacks;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        managedCallbacks = state->managedCallbacks;
+    }
+    ASSERT_TRUE(managedCallbacks.onLeaderStart);
+    ASSERT_TRUE(managedCallbacks.onLeaderStop);
+    ASSERT_TRUE(managedCallbacks.onConfigurationCommitted);
+    ASSERT_TRUE(managedCallbacks.onError);
+    ASSERT_TRUE(managedCallbacks.onShutdown);
+    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
+
+    managedCallbacks.onLeaderStart(2);
+    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
+    managedCallbacks.onLeaderStop(Status::OK());
+    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
+    managedCallbacks.onConfigurationCommitted({ kPeer2, kPeer1 }, 3);
+    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
+    managedCallbacks.onError(Status(K_RPC_UNAVAILABLE, "scripted retryable callback error"));
+    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
+    managedCallbacks.onShutdown();
+    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
+
+    ASSERT_EQ(observedTraceIds.size(), 5U);
+    for (const auto &traceId : observedTraceIds) {
+        EXPECT_EQ(traceId.find("CoordinatorBootstrap;"), 0U) << traceId;
+    }
     DS_ASSERT_OK(manager->Shutdown());
 }
 

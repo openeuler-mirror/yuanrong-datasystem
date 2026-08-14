@@ -33,6 +33,7 @@
 
 #include <gtest/gtest.h>
 
+#include "datasystem/common/log/trace.h"
 #include "datasystem/coordinator/raft/coordinator_raft_node.h"
 #define private public
 #include "datasystem/coordinator/raft/coordinator_membership_manager.h"
@@ -504,6 +505,31 @@ TEST(CoordinatorMembershipManagerTest, StartsOnceAndShutsDownIdempotently)
     EXPECT_EQ(manager.Start().GetCode(), K_INVALID);
     ASSERT_EQ(firstStatus.wait_for(kLifecycleDeadline), std::future_status::ready);
     EXPECT_TRUE(manager.Shutdown().IsOk());
+    EXPECT_TRUE(manager.Shutdown().IsOk());
+}
+
+TEST(CoordinatorMembershipManagerTest, ReconciliationThreadCarriesCreationTrace)
+{
+    constexpr char kBootstrapTraceId[] = "CoordinatorBootstrap;membership-thread-ut";
+    ThreadSafeMembershipDependencies dependencies;
+    dependencies.SetStatus(HealthyFullStatus());
+    std::atomic<bool> traceRecorded{ false };
+    std::promise<std::string> observedTracePromise;
+    auto observedTraceFuture = observedTracePromise.get_future();
+    dependencies.SetGetStatusAction(
+        [&traceRecorded, &observedTracePromise](CoordinatorRaftMembershipStatus &, int) {
+            if (!traceRecorded.exchange(true, std::memory_order_acq_rel)) {
+                observedTracePromise.set_value(Trace::Instance().GetTraceID());
+            }
+            return Status::OK();
+        });
+    auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(kBootstrapTraceId);
+    auto manager = MakeManager(LongWaitOptions(), dependencies, discovery);
+
+    ASSERT_TRUE(manager.Start().IsOk());
+    ASSERT_EQ(observedTraceFuture.wait_for(kLifecycleDeadline), std::future_status::ready);
+    EXPECT_EQ(observedTraceFuture.get(), kBootstrapTraceId);
     EXPECT_TRUE(manager.Shutdown().IsOk());
 }
 

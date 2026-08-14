@@ -27,6 +27,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -352,6 +353,10 @@ void CoordinatorServiceImpl::OnLeaderStart(int64_t term)
         }
         leaderTerm_.store(leaderTerm, std::memory_order_release);
         servingState_.store(ServingState::LEADER_RECOVERING, std::memory_order_release);
+        recoveryTraceId_ = Trace::Instance().GetTraceID();
+        if (recoveryTraceId_.empty()) {
+            recoveryTraceId_ = "CoordinatorRecovery;" + GetStringUuid();
+        }
         if (topologyRecoveryManager_ != nullptr) {
             topologyRecoveryManager_->BeginLeaderRound({ leaderTerm, coordinatorId_ });
         }
@@ -373,6 +378,7 @@ void CoordinatorServiceImpl::OnLeaderStop(const Status &status)
     if (topologyRecoveryManager_ != nullptr && leaderTerm != 0) {
         topologyRecoveryManager_->EndLeaderRound({ leaderTerm, coordinatorId_ });
     }
+    recoveryTraceId_.clear();
     recoveryGateCv_.notify_all();
     LOG(WARNING) << "CLUSTER_COORDINATOR_LEADER_STOP status=" << status.ToString();
 }
@@ -423,6 +429,15 @@ void CoordinatorServiceImpl::StopRecoveryGate()
 void CoordinatorServiceImpl::CompleteRecoveryWindow(uint64_t term)
 {
     std::unique_lock<std::shared_mutex> operationLock(leaderOperationMutex_);
+    TraceGuard traceGuard(TraceGuardType::INVALID);
+    if (Trace::Instance().GetTraceID().empty()) {
+        traceGuard = Trace::Instance().SetTraceNewID(recoveryTraceId_);
+    }
+#ifdef WITH_TESTS
+    if (recoveryWindowTraceHook_) {
+        recoveryWindowTraceHook_();
+    }
+#endif
     if (topologyRecoveryManager_ == nullptr) {
         return;
     }
