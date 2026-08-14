@@ -966,7 +966,7 @@ Status UrmaManager::CheckAndNotify(const UrmaWriteTrace &pollTrace)
 {
     const auto nextPruneMs = nextRetainedTimeoutPruneMs_.load(std::memory_order_acquire);
     if (nextPruneMs != 0) {
-        const auto nowMs = GetSteadyClockTimeStampMs();
+        const auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
         if (nowMs >= nextPruneMs) {
             PruneRetainedTimeoutEvents(nowMs);
         }

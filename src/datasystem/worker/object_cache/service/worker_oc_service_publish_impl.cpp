@@ -469,7 +469,9 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
     std::shared_ptr<SafeObjType> entry;
     bool isInsert;
     Timer timer;
-    Status status = objectTable_->ReserveGetAndLock(objectKey, entry, isInsert, req.existence() == ExistenceOptPb::NX);
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
+    Status status = objectTable_->ReserveGetAndLock(objectKey, entry, isInsert, remainingUs,
+                                                     req.existence() == ExistenceOptPb::NX);
     if (req.existence() == ExistenceOptPb::NX && status.GetCode() == K_OC_KEY_ALREADY_EXIST) {
         return Status::OK();
     }
