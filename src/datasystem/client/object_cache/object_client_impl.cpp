@@ -96,6 +96,7 @@
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -117,6 +118,7 @@
 #include "datasystem/utils/string_view.h"
 #include "datasystem/object/buffer.h"
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_int32(fd_pool_prewarm_size);
 
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
 
@@ -1225,6 +1227,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, con
     }
     Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT);
     FlagsMonitor::GetInstance()->Start();
+    LOG_IF_ERROR(PreExpandFdPool(FLAGS_fd_pool_prewarm_size), "Failed to pre-expand fd pool.");
 
     auto rc = clientStateManager_->ProcessInit(needRollbackState);
     if (!needRollbackState) {

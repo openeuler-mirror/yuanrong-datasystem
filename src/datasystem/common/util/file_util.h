@@ -256,6 +256,16 @@ Status OpenFile(const std::string &pathname, int flags, mode_t mode, int *fileDe
 Status SetFileLimit(rlim_t softLimit);
 
 /**
+ * @brief Briefly open then close targetCount fds (/dev/null) once per process to pre-expand the kernel
+ *        fdtable and warm the file slab, so the first burst of real fd allocation avoids the fdtable
+ *        realloc and cold-slab cost. Raises RLIMIT_NOFILE soft limit up to the hard limit when needed.
+ *        Best-effort: any failure is logged as a warning and Status::OK() is always returned.
+ * @param[in] targetCount Number of fds to open and close. <= 0 disables.
+ * @return Always Status::OK().
+ */
+Status PreExpandFdPool(int targetCount);
+
+/**
  * @brief Get file last modified timestamp.
  * @param[in] pathname Pathname of the file to get timestamp.
  * @param[out] timestamp The variable to save last modified timestamp.

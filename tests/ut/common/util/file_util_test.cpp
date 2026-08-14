@@ -20,6 +20,7 @@
 #include "datasystem/common/util/file_util.h"
 
 #include <cstdlib>
+#include <dirent.h>
 #include <fcntl.h>
 #include <fstream>
 #include <glob.h>
@@ -315,6 +316,41 @@ TEST_F(FileUtilTest, FileLimitErrors2)
         ASSERT_EQ(rlimGet.rlim_cur, static_cast<rlim_t>(10));
         ASSERT_NE(rlimGet.rlim_max, RLIM_INFINITY);
     }
+}
+
+TEST_F(FileUtilTest, PreExpandFdPoolBestEffortAndLeakFree)
+{
+    auto countOpenFds = []() -> long {
+        DIR *dir = opendir("/proc/self/fd");
+        if (dir == nullptr) {
+            return -1;
+        }
+        long n = 0;
+        struct dirent *ent = nullptr;
+        while ((ent = readdir(dir)) != nullptr) {
+            if (ent->d_name[0] == '.') {
+                continue;
+            }
+            ++n;
+        }
+        closedir(dir);
+        return n;
+    };
+
+    // Non-positive counts are no-ops and must succeed.
+    DS_ASSERT_OK(PreExpandFdPool(0));
+    DS_ASSERT_OK(PreExpandFdPool(-5));
+
+    long before = countOpenFds();
+    ASSERT_GE(before, 0L);
+    // 512 is safely below typical RLIMIT_NOFILE and exercises the open/close path quickly.
+    DS_ASSERT_OK(PreExpandFdPool(512));
+    long after = countOpenFds();
+    // All warmed-up fds are closed: no net fd leak (allow tiny drift from logging).
+    EXPECT_LE(std::llabs(after - before), 2L);
+
+    // Idempotent: a second call is a no-op (once-per-process guard) and must not error.
+    DS_ASSERT_OK(PreExpandFdPool(512));
 }
 
 TEST_F(FileUtilTest, TestChangeFileMod)

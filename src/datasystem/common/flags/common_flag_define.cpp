@@ -215,3 +215,8 @@ DS_DEFINE_uint64_dynamic(client_slow_log_rpc_slower_than, 5000,
                  "Client-side RPC operation latency threshold (microseconds) for slow-log and latency summary. "
                  "Default 5000 (5ms). 0 means disabled. When enabled, requests whose RPC phases exceed this threshold "
                  "will include a latency summary in the access log.");
+
+DS_DEFINE_int32(fd_pool_prewarm_size, GetInt32FromEnv("DATASYSTEM_FD_POOL_PREWARM_SIZE", 5000),
+                "Number of fds to briefly open then close during SDK Init and worker startup to pre-expand the "
+                "kernel fdtable and warm the file slab. Default 5000. 0 disables. The soft RLIMIT_NOFILE is raised "
+                "(up to the hard limit) when needed; any failure is non-fatal.");
