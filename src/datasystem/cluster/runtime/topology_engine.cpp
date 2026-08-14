@@ -39,6 +39,7 @@ constexpr auto BACKEND_EVIDENCE_MAX_AGE = std::chrono::seconds(10);
 constexpr uint32_t LOCAL_ISOLATION_CONFIRMATIONS = 3;
 constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
 constexpr int CONTROL_DEGRADED_ERROR_LOG_INTERVAL = 60;
+constexpr int MARK_EXITING_FAILURE_LOG_INTERVAL = 30;
 // This background write is retried by the Controller; keep one attempt below the default Engine stop grace so
 // Controller shutdown is not pinned by ETCD's 50-second default RPC timeout.
 constexpr int32_t LOCAL_RECOVERY_READY_TIMEOUT_MS = 3'000;
@@ -994,8 +995,15 @@ Status TopologyEngine::MarkExiting(int32_t timeoutMs)
         memberBackend_->ClearPeerRpcFailureObservations();
     }
     auto rc = memberBackend_->UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, timeoutMs);
-    LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
-              << " role=worker action=mark_exiting address=" << options_.localAddress << " status=" << rc.ToString();
+    if (rc.IsOk()) {
+        LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+                  << " role=worker action=mark_exiting address=" << options_.localAddress
+                  << " status=" << rc.ToString();
+    } else {
+        LOG_FIRST_AND_EVERY_N(WARNING, MARK_EXITING_FAILURE_LOG_INTERVAL)
+            << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+            << " role=worker action=mark_exiting address=" << options_.localAddress << " status=" << rc.ToString();
+    }
     return rc;
 }
 
