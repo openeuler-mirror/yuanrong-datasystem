@@ -401,7 +401,6 @@ ds_cc_test(
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/client:urma_success_rate_tracker",
-        "//src/datasystem/client:service_discovery",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/object_cache:common_object_cache",

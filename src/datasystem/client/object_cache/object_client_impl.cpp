@@ -866,6 +866,8 @@ Status ObjectClientImpl::InitTransportLayer()
     options.releasePool = asyncReleasePool_;
     options.enableClientDirectPipelineH2D = enableClientDirectPipelineH2D_;
     options.pipelineThreadNum = clientDirectPipelineH2DThreadNum_;
+    options.initializeUbRuntime =
+        !(enableLocalCache_ && enableCrossNodeConnection_ && !IsUrmaEnabled() && !enableClientDirectPipelineH2D_);
     options.readSourceFilter = ubHealthFilter_;
     options.retryAdmissionCheck = [this]() { return CheckBoundWorkerAvailability(); };
     auto transportLayer = std::make_unique<client::TransportLayer>(
@@ -1087,7 +1089,7 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
     clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
     RETURN_IF_NOT_OK(InitListenWorkerAt(node, isLocalWorker));
     RETURN_IF_NOT_OK(workerApi->TryFastTransportAfterHeartbeat());
-    if (enableLocalCache_ && IsUrmaEnabled()) {
+    if (enableLocalCache_ && (IsUrmaEnabled() || enableCrossNodeConnection_)) {
         RETURN_IF_NOT_OK(InitTransportLayer());
         client::WorkerSnapshot snapshot;
         if (workerApi->IsShmEnable()) {
@@ -5299,20 +5301,19 @@ Status ObjectClientImpl::RouteGetByShm(const std::vector<std::string> &objectKey
         rc = GetFromTransportLayer(objectKeys, objectBuffers, traceEnabled, subTimeoutMs, queryL2Cache);
         return Status::OK();
     }
-    std::vector<std::pair<std::shared_ptr<IClientWorkerApi>, std::vector<std::pair<std::string, size_t>>>>
-        shmGroups;
+    std::vector<ShmGetRouteGroup> shmGroups;
     std::vector<std::pair<std::string, size_t>> remoteIdx;
     RETURN_IF_NOT_OK(BuildShmGroups(objectKeys, shmGroups, remoteIdx));
     if (VLOG_IS_ON(1)) {
         const auto shmKeyCount = std::accumulate(
             shmGroups.begin(), shmGroups.end(), size_t{ 0 },
-            [](size_t count, const auto &group) { return count + group.second.size(); });
+            [](size_t count, const auto &group) { return count + group.keys.size(); });
         VLOG(1) << "[TransportGet][SDK] Route by client transport, key count: " << objectKeys.size()
                 << ", shm group count: " << shmGroups.size() << ", shm key count: " << shmKeyCount
                 << ", transport key count: " << remoteIdx.size();
     }
-    for (auto &[workerApi, kidx] : shmGroups) {
-        auto shmErr = ExecuteShmGroup(workerApi, kidx, subTimeoutMs, queryL2Cache, isRH2DSupported,
+    for (auto &group : shmGroups) {
+        auto shmErr = ExecuteShmGroup(group.workerApi, group.keys, subTimeoutMs, queryL2Cache, isRH2DSupported,
                                       objectBuffers, remoteIdx);
         if (shmErr.IsError() && rc.IsOk()) {
             rc = shmErr;
@@ -5334,8 +5335,7 @@ Status ObjectClientImpl::RouteGetByShm(const std::vector<std::string> &objectKey
 }
 
 Status ObjectClientImpl::BuildShmGroups(const std::vector<std::string> &objectKeys,
-    std::vector<std::pair<std::shared_ptr<IClientWorkerApi>,
-                          std::vector<std::pair<std::string, size_t>>>> &shmGroups,
+    std::vector<ShmGetRouteGroup> &shmGroups,
     std::vector<std::pair<std::string, size_t>> &remoteIdx)
 {
     auto routing = std::atomic_load(&routing_);
@@ -5373,7 +5373,8 @@ Status ObjectClientImpl::BuildShmGroups(const std::vector<std::string> &objectKe
             kidx.emplace_back(k, popIndex(k));
         }
         if (shmEnabled) {
-            shmGroups.emplace_back(routeContext.clientApi, std::move(kidx));
+            shmGroups.push_back(
+                { std::move(routeContext.clientApi), std::move(kidx), std::move(routeContext.invokeGuard) });
         } else {
             for (auto &p : kidx) {
                 remoteIdx.push_back(std::move(p));

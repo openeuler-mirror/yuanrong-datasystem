@@ -104,8 +104,9 @@ Status InitializeFastTransportManager(const HostPort &hostport)
         return Status(K_URMA_ERROR, "Inject fast transport init failed");
     });
 #ifdef USE_URMA
-    if (UrmaManager::IsUrmaEnabled()) {
+    if (IsUrmaRuntimeConfigured()) {
         RETURN_IF_NOT_OK(UrmaManager::Instance().Init(hostport));
+        PublishClientUrmaRuntimeReady();
     }
 #endif
 

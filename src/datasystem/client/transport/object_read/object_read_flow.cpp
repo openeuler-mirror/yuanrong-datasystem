@@ -54,7 +54,9 @@ struct MetadataGroup {
         }
         if (status.IsError()) {
             for (auto *item : items) {
-                item->status = status;
+                item->status = IsNonRetryableRpcError(status)
+                                   ? Status(K_NOT_READY, STALE_TRANSPORT_SNAPSHOT_MESSAGE)
+                                   : status;
             }
             LOG(ERROR) << "[TransportGet][Metadata] Metadata group failed, meta owner: " << address.ToString()
                        << ", key count: " << items.size() << ", metadata only: " << metadataOnly

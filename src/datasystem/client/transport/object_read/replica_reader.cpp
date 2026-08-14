@@ -202,7 +202,7 @@ void AdvanceRetryableReplica(ReadState &state, const Status &itemStatus)
 bool IsReadSourceUnavailable(const Status &status)
 {
     return status.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE
-           || status.GetCode() == K_URMA_READ_SOURCE_DENIED;
+           || status.GetCode() == K_URMA_READ_SOURCE_DENIED || IsNonRetryableRpcError(status);
 }
 
 bool IsLastUnavailableReplica(const Status &status, int replicaIndex, int replicaCount)
@@ -242,6 +242,9 @@ bool ReplicaReader::IsRetryableLocationError(const Status &status) const
         return true;
     }
     if (retry_->IsRetryableRpcError(status)) {
+        return true;
+    }
+    if (IsNonRetryableRpcError(status)) {
         return true;
     }
     switch (status.GetCode()) {

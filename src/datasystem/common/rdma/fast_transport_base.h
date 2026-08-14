@@ -70,6 +70,15 @@ bool IsRemoteH2DEnabled();
  */
 bool IsUrmaEnabled();
 
+/** @brief Mark that a client handshake requested process-local URMA initialization. */
+void RequestClientUrmaRuntime();
+
+/** @brief Return whether URMA is configured at startup or requested by a client handshake. */
+bool IsUrmaRuntimeConfigured();
+
+/** @brief Publish a completely initialized client URMA runtime to request threads. */
+void PublishClientUrmaRuntimeReady();
+
 /**
  * @brief Check if Ucp is enabled.
  * @return True if Ucp logic is compiled and the flag is set, else false.

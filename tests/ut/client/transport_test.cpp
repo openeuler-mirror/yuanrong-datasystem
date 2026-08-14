@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -35,8 +36,12 @@
 #include <utility>
 #include <vector>
 
+#include <spawn.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+extern char **environ;
 
 #define private public
 #include "datasystem/client/object_cache/object_client_impl.h"
@@ -75,6 +80,10 @@
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/object/object_buffer.h"
+
+#ifdef USE_URMA
+DS_DECLARE_bool(enable_urma);
+#endif
 
 namespace datasystem {
 namespace client {
@@ -121,6 +130,68 @@ public:
     {
         return Status::OK();
     }
+};
+
+class ShmRouteMmapTableEntry : public IMmapTableEntry {
+public:
+    ShmRouteMmapTableEntry(int fd, uint8_t *pointer) : IMmapTableEntry(fd, 1)
+    {
+        pointer_ = pointer;
+    }
+
+    Status Init(bool, const std::string &) override
+    {
+        return Status::OK();
+    }
+};
+
+class ShmRouteMmapTable : public IMmapTable {
+public:
+    ShmRouteMmapTable() : IMmapTable(false)
+    {
+    }
+
+    Status MmapAndStoreFd(const int &, const int &, const uint64_t &, const std::string &,
+                          const std::string &) override
+    {
+        return Status::OK();
+    }
+
+    void Add(int fd, uint8_t *pointer)
+    {
+        mmapTable_[fd] = std::make_shared<ShmRouteMmapTableEntry>(fd, pointer);
+    }
+};
+
+class BlockingShmGetWorkerApi : public object_cache::ClientWorkerRemoteApi {
+public:
+    BlockingShmGetWorkerApi(HostPort hostPort, std::promise<void> &getEntered, std::shared_future<void> allowGet,
+                            int storeFd)
+        : IClientWorkerCommonApi(hostPort, HeartbeatType::RPC_HEARTBEAT, false, nullptr),
+          ClientWorkerRemoteApi(std::move(hostPort), RpcCredential{}), getEntered_(getEntered),
+          allowGet_(std::move(allowGet)), storeFd_(storeFd)
+    {
+    }
+
+    Status Get(const object_cache::GetParam &, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &) override
+    {
+        getEntered_.set_value();
+        allowGet_.wait();
+        version = 1;
+        auto *info = rsp.add_objects();
+        info->set_object_index(0);
+        info->set_store_fd(storeFd_);
+        info->set_mmap_size(1);
+        info->set_data_size(1);
+        info->set_shm_id("old-worker-shm");
+        rsp.mutable_last_rc()->set_error_code(K_OK);
+        return Status::OK();
+    }
+
+private:
+    std::promise<void> &getEntered_;
+    std::shared_future<void> allowGet_;
+    int storeFd_;
 };
 
 TransportRequestContext MakeRequestContext()
@@ -1084,6 +1155,12 @@ public:
                 keyGroups.back().push_back(item->objectKey);
             }
         }
+        if (queryAndGetHandler) {
+            auto status = queryAndGetHandler(address, items);
+            if (status.IsError()) {
+                return status;
+            }
+        }
         auto groupStatus = groupStatuses.find(address.ToString());
         if (groupStatus != groupStatuses.end()) {
             return groupStatus->second;
@@ -1118,6 +1195,7 @@ public:
     std::unordered_map<std::string, Status> groupStatuses;
     std::unordered_map<std::string, Status> itemStatuses;
     std::unordered_map<std::string, AccessTransportKind> inlineKinds;
+    std::function<Status(const HostPort &, const ObjectMetadataBatch &)> queryAndGetHandler;
 };
 
 class FakeReplicaReader : public ReplicaReader {
@@ -1996,6 +2074,128 @@ TEST(DataPlaneManagerTest, ReusesRpcClientAndTransporterForSameAddress)
     EXPECT_EQ(manager.rpcBuildCount, 1);
     EXPECT_EQ(manager.transportBuildCount, 1);
 }
+
+#ifdef USE_URMA
+constexpr char INIT_POLICY_CHILD_ENV[] = "DATASYSTEM_UT_DATA_PLANE_INIT_POLICY_CHILD";
+
+std::string BuildInitPolicyChildMarker(const char *mode, pid_t parentPid)
+{
+    return std::string(mode) + ":" + std::to_string(parentPid);
+}
+
+bool IsInitPolicyChild(const char *mode)
+{
+    const char *marker = std::getenv(INIT_POLICY_CHILD_ENV);
+    return marker != nullptr && marker == BuildInitPolicyChildMarker(mode, getppid());
+}
+
+void RunInitPolicyTestInFreshProcess(const char *testName, const char *mode)
+{
+    const std::string filter = std::string("--gtest_filter=DataPlaneManagerTest.") + testName;
+    const std::string markerPrefix = std::string(INIT_POLICY_CHILD_ENV) + "=";
+    const std::string marker = markerPrefix + BuildInitPolicyChildMarker(mode, getpid());
+    constexpr char gtestRepeatEnvPrefix[] = "GTEST_REPEAT=";
+    std::vector<std::string> childEnvironment;
+    for (char **env = environ; env != nullptr && *env != nullptr; ++env) {
+        if (std::strncmp(*env, markerPrefix.c_str(), markerPrefix.size()) != 0
+            && std::strncmp(*env, gtestRepeatEnvPrefix, sizeof(gtestRepeatEnvPrefix) - 1) != 0) {
+            childEnvironment.emplace_back(*env);
+        }
+    }
+    childEnvironment.emplace_back(marker);
+
+    std::vector<char *> childEnvironmentPointers;
+    childEnvironmentPointers.reserve(childEnvironment.size() + 1);
+    for (auto &entry : childEnvironment) {
+        childEnvironmentPointers.emplace_back(const_cast<char *>(entry.c_str()));
+    }
+    childEnvironmentPointers.emplace_back(nullptr);
+
+    std::vector<char *> arguments{ const_cast<char *>("/proc/self/exe"), const_cast<char *>(filter.c_str()),
+                                   const_cast<char *>("--gtest_also_run_disabled_tests"),
+                                   const_cast<char *>("--gtest_repeat=1"), nullptr };
+    pid_t pid = -1;
+    const int spawnRc = posix_spawn(&pid, "/proc/self/exe", nullptr, nullptr, arguments.data(),
+                                    childEnvironmentPointers.data());
+    ASSERT_EQ(spawnRc, 0) << std::strerror(spawnRc);
+
+    int status = 0;
+    pid_t waitRc;
+    do {
+        waitRc = waitpid(pid, &status, 0);
+    } while (waitRc == -1 && errno == EINTR);
+    ASSERT_EQ(waitRc, pid) << std::strerror(errno);
+    ASSERT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(DataPlaneManagerTest, TransportNeutralInitDoesNotActivateUbRuntime)
+{
+    constexpr char mode[] = "transport-neutral";
+    if (!IsInitPolicyChild(mode)) {
+        RunInitPolicyTestInFreshProcess("TransportNeutralInitDoesNotActivateUbRuntime", mode);
+        return;
+    }
+
+    FLAGS_enable_urma = false;
+    ASSERT_TRUE(inject::Set("FastTransportManager.Initialize", "return(0)").IsOk());
+    DataPlaneManager manager(MakeSignature(), ConnectOptions{}.fastTransportMemSize, {}, nullptr, false, 64, nullptr,
+                             false);
+    EXPECT_TRUE(manager.Init().IsOk());
+    EXPECT_FALSE(IsUrmaEnabled());
+}
+
+TEST(DataPlaneManagerTest, DefaultInitStillActivatesUbRuntime)
+{
+    constexpr char mode[] = "default-eager";
+    if (!IsInitPolicyChild(mode)) {
+        RunInitPolicyTestInFreshProcess("DefaultInitStillActivatesUbRuntime", mode);
+        return;
+    }
+
+    FLAGS_enable_urma = false;
+    ASSERT_TRUE(inject::Set("FastTransportManager.Initialize", "return(0)").IsOk());
+    DataPlaneManager manager(MakeSignature(), ConnectOptions{}.fastTransportMemSize);
+    const Status rc = manager.Init();
+    EXPECT_EQ(rc.GetCode(), K_URMA_ERROR);
+    EXPECT_FALSE(IsUrmaEnabled());
+}
+
+TEST(DataPlaneManagerTest, DirectPipelineForcesUbRuntimeInitialization)
+{
+    constexpr char mode[] = "direct-pipeline";
+    if (!IsInitPolicyChild(mode)) {
+        RunInitPolicyTestInFreshProcess("DirectPipelineForcesUbRuntimeInitialization", mode);
+        return;
+    }
+
+    FLAGS_enable_urma = false;
+    ASSERT_TRUE(inject::Set("FastTransportManager.Initialize", "return(0)").IsOk());
+    DataPlaneManager manager(MakeSignature(), ConnectOptions{}.fastTransportMemSize, {}, nullptr, true, 64, nullptr,
+                             false);
+    const Status rc = manager.Init();
+    EXPECT_EQ(rc.GetCode(), K_URMA_ERROR);
+    EXPECT_FALSE(IsUrmaEnabled());
+}
+
+TEST(DataPlaneManagerTest, UbRuntimeIsNotPublishedBeforeInitializationCompletes)
+{
+    constexpr char mode[] = "publish-after-init";
+    if (!IsInitPolicyChild(mode)) {
+        RunInitPolicyTestInFreshProcess("UbRuntimeIsNotPublishedBeforeInitializationCompletes", mode);
+        return;
+    }
+
+    FLAGS_enable_urma = false;
+    ASSERT_TRUE(inject::Set("FastTransportManager.Initialize", "sleep(200)->return(0)").IsOk());
+    DataPlaneManager manager(MakeSignature(), ConnectOptions{}.fastTransportMemSize);
+    auto init = std::async(std::launch::async, [&manager]() { return manager.Init(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(IsUrmaEnabled());
+    EXPECT_EQ(init.get().GetCode(), K_URMA_ERROR);
+    EXPECT_FALSE(IsUrmaEnabled());
+}
+#endif
 
 TEST(DataPlaneManagerTest, ShmCandidateDoesNotDependOnInitialWorkerShmCapability)
 {
@@ -2935,6 +3135,108 @@ TEST(ObjectClientTransportTest, DrainingLocationRetriesOnlyPendingKeys)
     EXPECT_EQ(replicas->unaryKeys, std::vector<std::string>({ "draining" }));
     EXPECT_NE(buffers[0], nullptr);
     EXPECT_NE(buffers[1], nullptr);
+}
+
+TEST(ObjectClientTransportTest, PeerDeadMetadataOwnerRetriesRoutedRead)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto ownerAddress = MakeAddress(41);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    std::atomic<int> metadataAttempts{ 0 };
+    metadata->queryAndGetHandler = [&metadataAttempts](const HostPort &, const ObjectMetadataBatch &) {
+        return metadataAttempts.fetch_add(1) == 0 ? Status(K_RPC_PEER_DEAD, "metadata owner is dead")
+                                                  : Status::OK();
+    };
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    replicas->resultHandler = [](const std::string &, ObjectReadItemResult &result) {
+        result.data.kind = AccessTransportKind::TCP;
+        result.data.response.set_data_size(4);
+        result.data.response.set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
+        RpcMessage payload;
+        ASSERT_TRUE(payload.CopyString("data").IsOk());
+        result.data.rpcPayloads.emplace_back(std::move(payload));
+    };
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "peer-dead-metadata-retry-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "peer-dead" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    ASSERT_TRUE(client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
+    EXPECT_EQ(metadataAttempts.load(), 2);
+    EXPECT_EQ(metadata->keyGroups.size(), 2u);
+    EXPECT_EQ(replicas->unaryKeys, objectKeys);
+    EXPECT_NE(buffers[0], nullptr);
+}
+
+TEST(ObjectClientTransportTest, StandbySwitchDefersOldMmapCleanupUntilShmGetMaterializes)
+{
+    constexpr int storeFd = 77;
+    const auto workerAddress = MakeAddress(41);
+    const auto standbyAddress = MakeAddress(42);
+    std::promise<void> getEntered;
+    std::promise<void> allowGetPromise;
+    auto getEnteredFuture = getEntered.get_future();
+    auto allowGet = allowGetPromise.get_future().share();
+    bool getReleased = false;
+    Raii releaseBlockedGet([&]() {
+        if (!getReleased) {
+            allowGetPromise.set_value();
+        }
+    });
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 41;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<BlockingShmGetWorkerApi>(workerAddress, getEntered, allowGet, storeFd);
+    workerApi->shmEnableType_ = ShmEnableType::UDS;
+    client->workerApi_.emplace_back(workerApi);
+    client->listenWorker_.emplace_back(
+        std::make_shared<ListenWorker>(workerApi, HeartbeatType::NO_HEARTBEAT));
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(workerAddress));
+    client->mmapManager_ = std::make_unique<MmapManager>(workerApi, false);
+    auto mmapTable = std::make_unique<ShmRouteMmapTable>();
+    uint8_t mappedByte = 'x';
+    mmapTable->Add(storeFd, &mappedByte);
+    client->mmapManager_->mmapTable_ = std::move(mmapTable);
+
+    std::vector<std::shared_ptr<Buffer>> buffers(1);
+    Status routeStatus;
+    auto getFuture = std::async(std::launch::async, [&]() {
+        return client->RouteGetByShm({ "local" }, 1'000, false, false, false, buffers, routeStatus);
+    });
+    ASSERT_EQ(getEnteredFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    EXPECT_EQ(workerApi->InvokeCount(), 1u);
+    ASSERT_NE(client->mmapManager_->GetMmapEntryByFd(storeFd), nullptr);
+
+    auto standbyApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(standbyAddress, RpcCredential{});
+    client->workerApi_.resize(2);
+    client->listenWorker_.resize(2);
+    client->switchInProgress_ = true;
+    client->switchGeneration_ = 1;
+    ASSERT_TRUE(client->CommitStandbySwitch(object_cache::ObjectClientImpl::LOCAL_WORKER,
+                                             object_cache::ObjectClientImpl::STANDBY1_WORKER, 1, standbyApi, nullptr));
+    EXPECT_NE(client->mmapManager_->GetMmapEntryByFd(storeFd), nullptr);
+
+    allowGetPromise.set_value();
+    getReleased = true;
+    ASSERT_EQ(getFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    EXPECT_TRUE(getFuture.get().IsOk());
+    EXPECT_TRUE(routeStatus.IsOk());
+    ASSERT_NE(buffers[0], nullptr);
+    EXPECT_EQ(*static_cast<const uint8_t *>(buffers[0]->ImmutableData()), mappedByte);
+    EXPECT_EQ(workerApi->InvokeCount(), 0u);
+    EXPECT_EQ(client->mmapManager_->GetMmapEntryByFd(storeFd), nullptr);
 }
 
 TEST(ObjectClientTransportTest, DrainingLocationStopsAfterThreeFastRetries)
@@ -4712,6 +5014,21 @@ TEST(ReplicaReaderTest, TriesNextLocationWithoutRefreshingMetadata)
     result.requestIndex = 7;
     ASSERT_TRUE(reader.Read(location, result, MakeReadContext()).IsOk());
     EXPECT_EQ(result.requestIndex, 7u);
+    EXPECT_EQ(result.objectKey, "key");
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(ReplicaReaderTest, PeerDeadReplicaTriesNextLocationWithoutRefreshingMetadata)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = { { Status(K_RPC_PEER_DEAD, "dead replica") }, { Status::OK() } };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 4, { MakeAddress(33), MakeAddress(34) });
+    ObjectReadItemResult result;
+
+    ASSERT_TRUE(reader.Read(location, result, MakeReadContext()).IsOk());
     EXPECT_EQ(result.objectKey, "key");
     EXPECT_EQ(manager->transportBuildCount, 2);
 }

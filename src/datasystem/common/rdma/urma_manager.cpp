@@ -131,7 +131,7 @@ constexpr uint64_t MAX_TRANSPORT_MEM_SIZE = 2UL * 1024UL * 1024UL * 1024UL;
 constexpr uint64_t URMA_EFFECTIVE_REQUEST_ID_WIDTH = 40;
 constexpr uint64_t URMA_EFFECTIVE_REQUEST_ID_MASK = (1ULL << URMA_EFFECTIVE_REQUEST_ID_WIDTH) - 1;
 
-bool UrmaManager::clientMode_ = false;
+std::atomic<bool> UrmaManager::clientMode_{ false };
 std::atomic<uint64_t> UrmaManager::ubTransportMemSize_(DEFAULT_TRANSPORT_MEM_SIZE);
 UrmaManager &UrmaManager::Instance()
 {
@@ -272,7 +272,7 @@ Status UrmaManager::Init(const HostPort &hostport)
         LOG(WARNING) << "Flag urma_connection_size is deprecated and ignored. "
                      << "JFS/JFR are now created per-connection.";
     }
-    OsXprtPipln::SetIsClientMode(clientMode_);
+    OsXprtPipln::SetIsClientMode(clientMode_.load(std::memory_order_acquire));
     // Try each candidate device in order. UrmaResource::Init starts with Clear() (urma_resource.cpp), so a failed
     // attempt on one device is torn down before the next candidate is tried; the first device whose Init succeeds is
     // used. This lets a bare-metal worker start when its default bonding device (EID 0) is occupied by a container.
@@ -316,7 +316,7 @@ Status UrmaManager::Init(const HostPort &hostport)
     aeHandler_.Init(urmaResource_.get());
     aeHandler_.Start(serverStop_);
 
-    if (UrmaManager::clientMode_) {
+    if (UrmaManager::clientMode_.load(std::memory_order_acquire)) {
         RETURN_IF_NOT_OK(InitMemoryBufferPool());
         RegisterCudaHostMemory(memoryBuffer_, ubTransportMemSize_.load());
         clientId_ = GetStringUuid();
@@ -2674,7 +2674,8 @@ Status UrmaManager::ProcessHandshakePeer(const UrmaHandshakeReqPb &req, UrmaHand
     RETURN_IF_NOT_OK(urmaInfo.FromProto(req));
     LOG(INFO) << "Start import remote jetty, remote urma info: " << urmaInfo.ToString()
               << ", local address:" << localUrmaInfo_.localAddress;
-    if (localUrmaInfo_.localAddress != urmaInfo.localAddress || !req.client_id().empty() || clientMode_) {
+    if (localUrmaInfo_.localAddress != urmaInfo.localAddress || !req.client_id().empty()
+        || clientMode_.load(std::memory_order_acquire)) {
         uint32_t localJettyId = 0;
         METRIC_TIMER(metrics::KvMetricId::URMA_CONNECTION_SETUP_LATENCY);
         RETURN_IF_NOT_OK(ImportRemoteJetty(urmaInfo, localJettyId));
@@ -2729,7 +2730,6 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
 #else
         (void)enablePipelineH2D;
 #endif
-        FLAGS_enable_urma = true;
         const char *ubNumaRr = std::getenv("DATASYSTEM_UB_NUMA_RR");
         if (ubNumaRr != nullptr) {
             std::string errMsg;
@@ -2737,7 +2737,7 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
                 LOG(WARNING) << "Ignore invalid DATASYSTEM_UB_NUMA_RR value '" << ubNumaRr << "': " << errMsg;
             }
         }
-        UrmaManager::clientMode_ = true;
+        UrmaManager::clientMode_.store(true, std::memory_order_release);
         uint64_t expected = DEFAULT_TRANSPORT_MEM_SIZE;
         if (UrmaManager::ubTransportMemSize_.compare_exchange_strong(expected, transportSize)) {
             LOG(INFO) << "Set client UB transport memory size to " << transportSize;
@@ -2746,6 +2746,7 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
                 "Try to set client UB transport memory size to %lu, but it is already set to %lu", transportSize,
                 UrmaManager::ubTransportMemSize_);
         }
+        RequestClientUrmaRuntime();
         // FLAGS_urma_connection_size is deprecated; JFS/JFR are created per-connection.
     }
 }

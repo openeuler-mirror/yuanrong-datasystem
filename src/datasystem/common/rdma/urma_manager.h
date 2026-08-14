@@ -221,12 +221,12 @@ public:
     Status FillRemoteAddr(const BufferHandle &handle, UrmaRemoteAddrPb &urmaInfo);
 
     /**
-     * @brief Check if Urma worker flag is set
-     * @return True if flag is set, else false
+     * @brief Check whether the URMA runtime is ready for request traffic.
+     * @return True if the startup flag is set or dynamic client initialization completed.
      */
     static bool IsUrmaEnabled()
     {
-        return FLAGS_enable_urma;
+        return datasystem::IsUrmaEnabled();
     };
 
     /**
@@ -909,7 +909,7 @@ private:
     std::atomic<InitState> initState_{ UNINITIALIZED };
     WaitPost waitInit_;
     std::string clientId_;
-    static bool clientMode_;
+    static std::atomic<bool> clientMode_;
     // The singleton freezes the process-global affinity flag on its first worker response.
     std::once_flag clientUbNumaAffinityOnce_;
     void *memoryBuffer_ = nullptr;
