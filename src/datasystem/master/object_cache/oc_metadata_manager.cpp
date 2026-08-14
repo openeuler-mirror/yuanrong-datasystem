@@ -1698,7 +1698,11 @@ Status OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, con
             }
             (void)accessor->second.locations.erase(address);
             (void)objectStore_->RemoveObjectLocation(objectKey, address);
-            if (accessor->second.locations.empty() && accessor->second.IsNoneL2CacheEvict()) {
+            // For NONE_L2_CACHE_EVICT objects, evict means the data is gone and the
+            // meta is no longer reliable. Drop the whole ObjectMeta unconditionally
+            // (not only when locations is empty), otherwise migration-inflight
+            // locations keep the entry alive forever and the meta table leaks.
+            if (accessor->second.IsNoneL2CacheEvict()) {
                 (void)objectStore_->RemoveMeta(objectKey, false);
                 (void)metaShards_[shardIdx].table.erase(accessor);
             }
