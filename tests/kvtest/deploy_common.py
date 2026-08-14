@@ -74,12 +74,14 @@ def discover_nodes(timeout=DEFAULT_TIMEOUT):
     """Discover cluster nodes via ``kubectl get nodes``.
 
     Returns a list of ``{'ip', 'name'}`` for every node that exposes an
-    InternalIP address, mirroring the discovery logic in deploy_pods so a
-    caller that needs to spread work across nodes gets the same node set
-    deploy_pods would schedule on. Returns an empty list on any kubectl
-    failure (kubectl missing, non-zero exit, timeout) so callers can decide
-    whether to abort; a multi-instance deploy that must spread pods treats
-    an empty list as a hard error.
+    InternalIP address, sorted by node name so any caller that spreads work
+    across nodes (round-robin instance distribution, percentage buckets) gets
+    a deterministic, reproducible assignment across runs -- the k8s API does
+    not guarantee item order. Returns an empty list on any kubectl failure
+    (kubectl missing, non-zero exit, timeout) so callers can decide whether
+    to abort; a multi-instance deploy that must spread pods treats an empty
+    list as a hard error. This is the single canonical node-discovery helper
+    shared by deploy_pods and deploy_coordinator.
     """
     try:
         out = subprocess.check_output(
@@ -101,6 +103,7 @@ def discover_nodes(timeout=DEFAULT_TIMEOUT):
                     'name': item.get('metadata', {}).get('name', ''),
                 })
                 break
+    nodes.sort(key=lambda n: n['name'])
     return nodes
 
 

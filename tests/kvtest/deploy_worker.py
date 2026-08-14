@@ -202,12 +202,12 @@ def main():
     parser_start.add_argument('--set', '-s', action='append', default=[],
                               help='Add/override config values (format: key=value). '
                                    'Example: --set ttl_seconds=3600')
-    parser_start.add_argument('--enable-procmon', action='store_true', default=True,
-                              dest='enable_procmon',
-                              help='Start procmon.py for worker monitoring (default: enabled)')
+    parser_start.add_argument('--enable-procmon', action='store_true', default=False,
+                               dest='enable_procmon',
+                               help='Start procmon.py for worker monitoring (default: disabled)')
     parser_start.add_argument('--no-procmon', action='store_false',
-                              dest='enable_procmon',
-                              help='Disable procmon.py monitoring')
+                               dest='enable_procmon',
+                               help='Disable procmon.py monitoring (default)')
     parser_start.add_argument('--procmon-dir', default=None,
                               help='Remote directory for procmon files (default: same as --remote-config dir)')
     parser_start.add_argument('-N', '--numa-nodes', default=None,

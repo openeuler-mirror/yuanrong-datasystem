@@ -302,17 +302,40 @@ Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
 Backed by `tests/kvtest/deploy_coordinator.py`, `deploy_worker.py`, `deploy_common.py`, and `deploy_pods.py`:
 
 - `deploy_coordinator.py` has two coordinator lifecycle entrypoints: `start` (start coordinators on already-running
-  pods matched by `-p/--prefix`, single-node no-election mode) and `deploy` (full lifecycle: bring up N pods via
+  pods matched by `-p/--prefix`; injects `coordinator_raft_initial_peers` when 2+ pods match so a multi-instance
+  cluster can run static-peers Raft election, single-pod stays in single-node no-election mode; skips pods that
+  already have a live `datasystem_coordinator` process so passing every cluster prefix restarts only the stopped
+  members, each still carrying the full peer list for Raft rejoin) and `deploy` (full lifecycle: bring up N pods via
   `deploy_pods`, install the datasystem whl, then start N coordinators);
 - `deploy_coordinator.py deploy --instances N` spreads the N pods across the cluster nodes discovered by
   `deploy_common.discover_nodes()` (balanced round-robin; the per-node distribution is not exposed on the CLI) and
   reuses `deploy_pods.cmd_deploy` with a computed `--replicas` string;
-- for `N >= 2`, `deploy` injects `coordinator_raft_initial_peers` (full member list, including self) into each pod's
-  config so the coordinators run static-peers Raft election; for `N == 1` the peers field is left untouched
-  (single-node no-election mode, matching `start`). The config flag passed to dscli is role-aware:
-  `dscli start -C <cfg>` for coordinators vs `dscli start -f <cfg>` for workers;
+- for `N >= 2`, both `start` and `deploy` inject `coordinator_raft_initial_peers` (full member list, including
+  self) into each pod's config via the shared `_inject_raft_initial_peers` helper so the coordinators run
+  static-peers Raft election; for `N == 1` the peers field is left untouched (single-node no-election mode). The
+  config flag passed to dscli is role-aware: `dscli start -C <cfg>` for coordinators vs `dscli start -f <cfg>` for
+  workers;
 - the shared kubectl/procmon/whl-install/parallel orchestration lives in `deploy_common.py`; `deploy_pods.py` is the
-  standalone pod-bringup CLI (`deploy`/`delete`/`status`).
+  pod-bringup CLI (`deploy`/`delete`/`status`) and reuses `deploy_common.discover_nodes` (the single canonical
+  kubectl-get-nodes helper, sorted by node name for deterministic cross-run distribution) rather than a local copy,
+  so it depends on `deploy_common` for that one helper; everything else (kubectl transport, manifest apply/wait/delete)
+  stays self-contained. `deploy_pods.py deploy` takes one mutually-exclusive distribution flag: `--replicas
+  "ip:count,..."` (explicit per-node), `--replicas-pct "PCT:COUNT,..."` (percentage of discovered nodes each get COUNT
+  pods, rounded by the Largest Remainder Method so the assigned node count matches exactly; nodes sorted by name then
+  assigned contiguously to each bucket), or `--pods-per-node N` (uniform); the default is 1 pod per discovered node.
+  Node discovery, spec parsing, percentage rounding, and IP validation live in `cmd_deploy` (via the pure helpers
+  `parse_replicas_pct` / `distribute_nodes_by_percentage`; `discover_nodes` is imported from `deploy_common`);
+  `generate_pod_manifest` only renders pod specs from a pre-computed `{node_ip: count}` plan. `deploy_pods.cmd_deploy`
+  is also called by `deploy_coordinator.cmd_deploy` via a hand-rolled `SimpleNamespace` (no `replicas_pct` field), so
+  `cmd_deploy` reads `replicas_pct` with `getattr` to tolerate that caller. `deploy_pods.py` is covered by
+  `tests/kvtest/tests/python/test_deploy_pods.py` (pure-helper coverage of parse / distribute / rounding / manifest
+  rendering and `cmd_deploy` wiring with kubectl mocked); `discover_nodes` is covered in
+  `tests/kvtest/tests/python/test_deploy_common.py` since it lives in `deploy_common`.
+- procmon (process watchdog) defaults to **disabled** across all three role CLIs: `deploy_worker.py` /
+  `deploy_coordinator.py` `--enable-procmon` (argparse `default=False`) and `deploy_client.py` `deploy.json`
+  `enable_procmon` (fallback `False`, `gen-config` writes `False`); opt in explicitly with `--enable-procmon` /
+  `"enable_procmon": true`. `deploy_common.discover_nodes` now sorts by node name so the same helper serves
+  `deploy_pods` percentage distribution and `deploy_coordinator` round-robin spread deterministically.
 
 ## Environment Notes
 

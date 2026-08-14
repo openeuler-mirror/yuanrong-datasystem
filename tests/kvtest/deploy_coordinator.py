@@ -25,6 +25,7 @@ import deploy_pods
 from deploy_common import (
     DEFAULT_TIMEOUT,
     apply_config_overrides,
+    check_process,
     cmd_check_impl,
     cmd_clean_impl,
     cmd_collect_impl,
@@ -52,15 +53,48 @@ def start_coordinator(pod, namespace, config, coordinator_port, remote_config,
 
     Delegates to deploy_common.start_service with the coordinator role's
     binding (datasystem_coordinator binary). The caller must have injected
-    ``coordinator_address`` into ``config`` already (see cmd_start).
+    ``coordinator_address`` (and, for a multi-instance cluster, the shared
+    ``coordinator_raft_initial_peers`` list -- see ``_inject_raft_initial_peers``)
+    into ``config`` already (see cmd_start / cmd_deploy).
     """
     return start_service(pod, namespace, config, remote_config,
                          coordinator_port, PROCESS_NAME, enable_procmon,
                          procmon_remote_dir, numactl_opts=None, timeout=timeout)
 
 
+def _inject_raft_initial_peers(cfg, pods, port):
+    """Inject ``coordinator_raft_initial_peers`` from the full pod member list.
+
+    Static-peers Raft requires every node to carry the same full member list
+    (including self). With 2+ pods we inject the comma-joined ``ip:port``
+    list so the coordinators run static-peers election; with a single pod we
+    leave the field untouched so that coordinator runs in single-node
+    no-election mode. The caller passes the *full* pod set (all pods that will
+    form or rejoin the cluster), not just the one being started, so a restart
+    of one member of an existing cluster still gets the full membership.
+    """
+    if len(pods) >= 2:
+        peers = ','.join(f'{p["ip"]}:{port}' for p in pods)
+        cfg['coordinator_raft_initial_peers'] = {'value': peers}
+
+
 def cmd_start(args, pods):
-    """Start coordinators from a config template."""
+    """Start coordinators from a config template.
+
+    Each matching pod gets its own ``coordinator_address`` (``pod_ip:port``)
+    and, when 2+ pods are matched, the same ``coordinator_raft_initial_peers``
+    list built from every matched pod so a multi-instance cluster can run
+    static-peers Raft election. A single matched pod is left in single-node
+    no-election mode.
+
+    Pods that already have a live ``datasystem_coordinator`` process are
+    skipped (not re-started). This lets an operator restart a single member
+    of an existing cluster by passing every cluster prefix: the live members
+    are skipped and only the stopped one is started, still carrying the full
+    peer list so it can rejoin via persisted Raft recovery. A pod whose
+    liveness probe errors is treated as dead and started (so a flaky check
+    surfaces a real start failure rather than silently skipping).
+    """
     with open(args.config) as f:
         config_template = json.load(f)
 
@@ -75,8 +109,14 @@ def cmd_start(args, pods):
         print('\nNo config overrides specified')
 
     def do_op(pod):
+        _, status, _ = check_process(pod, args.namespace, PROCESS_NAME,
+                                    timeout=args.timeout)
+        if status == 'alive':
+            print(f'  {pod["name"]} ({pod["ip"]}) -> already running, skip')
+            return True
         cfg = json.loads(json.dumps(config_template))
         cfg[ADDRESS_KEY]['value'] = f'{pod["ip"]}:{args.port}'
+        _inject_raft_initial_peers(cfg, pods, args.port)
         return start_coordinator(pod, args.namespace, cfg, args.port,
                                  args.remote_config,
                                  enable_procmon=args.enable_procmon,
@@ -231,20 +271,10 @@ def cmd_deploy(args, pods=None):
     else:
         print('\nNo config overrides specified')
 
-    # N >= 2: inject the full member list (including self) so the
-    # coordinators run static-peers Raft election. N == 1: leave peers
-    # empty so the single coordinator runs in single-node no-election mode
-    # (matches the start subcommand).
-    if len(pods) >= 2:
-        peers = ','.join(f'{p["ip"]}:{args.port}' for p in pods)
-    else:
-        peers = ''
-
     def do_op(pod):
         cfg = json.loads(json.dumps(config_template))
         cfg[ADDRESS_KEY]['value'] = f'{pod["ip"]}:{args.port}'
-        if peers:
-            cfg['coordinator_raft_initial_peers'] = {'value': peers}
+        _inject_raft_initial_peers(cfg, pods, args.port)
         return start_coordinator(pod, args.namespace, cfg, args.port,
                                  args.remote_config,
                                  enable_procmon=args.enable_procmon,
@@ -328,12 +358,12 @@ def main():
                                    'coordinator_rpc_stub_cache_size, '
                                    'max_log_size, max_log_file_num, '
                                    'log_retention_day. Example: --set rpc_thread_num=128')
-    parser_start.add_argument('--enable-procmon', action='store_true', default=True,
+    parser_start.add_argument('--enable-procmon', action='store_true', default=False,
                               dest='enable_procmon',
-                              help='Start procmon.py for coordinator monitoring (default: enabled)')
+                              help='Start procmon.py for coordinator monitoring (default: disabled)')
     parser_start.add_argument('--no-procmon', action='store_false',
                               dest='enable_procmon',
-                              help='Disable procmon.py monitoring')
+                              help='Disable procmon.py monitoring (default)')
     parser_start.add_argument('--procmon-dir', default=None,
                               help='Remote directory for procmon files (default: same as --remote-config dir)')
 
@@ -395,12 +425,12 @@ def main():
                                     'coordinator_rpc_stub_cache_size, '
                                     'max_log_size, max_log_file_num, '
                                     'log_retention_day.')
-    parser_deploy.add_argument('--enable-procmon', action='store_true', default=True,
+    parser_deploy.add_argument('--enable-procmon', action='store_true', default=False,
                                dest='enable_procmon',
-                               help='Start procmon.py for coordinator monitoring (default: enabled)')
+                               help='Start procmon.py for coordinator monitoring (default: disabled)')
     parser_deploy.add_argument('--no-procmon', action='store_false',
-                              dest='enable_procmon',
-                              help='Disable procmon.py monitoring')
+                               dest='enable_procmon',
+                               help='Disable procmon.py monitoring (default)')
     parser_deploy.add_argument('--procmon-dir', default=None,
                                help='Remote directory for procmon files (default: same as --remote-config dir)')
     parser_deploy.add_argument('--whl', default=find_default_whl(),

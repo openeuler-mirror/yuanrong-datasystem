@@ -90,8 +90,20 @@ class TestStartCoordinator(unittest.TestCase):
 
 class TestCmdStart(unittest.TestCase):
     """cmd_start: per-pod coordinator_address injection, procmon dir
-    resolution, --set overrides. No NUMA option construction (coordinator
+    resolution, --set overrides, and skip-alive (pods with a running
+    coordinator are skipped so a multi-instance cluster can be partially
+    restarted without --set). No NUMA option construction (coordinator
     does not support NUMA)."""
+
+    def setUp(self):
+        # cmd_start probes each pod with check_process before starting and
+        # skips pods that already have a running coordinator. Default to
+        # 'dead' so the start path is exercised by every test in this class;
+        # the skip-alive tests override per-pod via side_effect.
+        patcher = patch('deploy_coordinator.check_process',
+                        return_value=(None, 'dead', 0))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _args(self, **overrides):
         defaults = dict(namespace='default', port=31511,
@@ -171,6 +183,144 @@ class TestCmdStart(unittest.TestCase):
             # and the injected address uses that port
             self.assertEqual(_pos(mock_start.call_args)[2][ADDRESS_KEY]['value'],
                              '10.0.0.1:31511')
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_coordinator.start_coordinator', return_value=True)
+    def test_multi_instance_injects_raft_peers_with_full_member_list(self,
+                                                                     mock_start):
+        # 2+ pods -> every cfg carries the same coordinator_raft_initial_peers
+        # built from ALL matched pods (including self), so the cluster can run
+        # static-peers Raft election.
+        cfg_path = _write_config({
+            'coordinator_address': {'value': '0.0.0.0:0'},
+        })
+        try:
+            args = self._args(config=cfg_path)
+            pods = [{'name': 'p1', 'ip': '10.0.0.1'},
+                    {'name': 'p2', 'ip': '10.0.0.2'},
+                    {'name': 'p3', 'ip': '10.0.0.3'}]
+            rc = cmd_start(args, pods)
+            self.assertEqual(rc, 0)
+            self.assertEqual(mock_start.call_count, 3)
+            expected_peers = '10.0.0.1:31511,10.0.0.2:31511,10.0.0.3:31511'
+            for call in mock_start.call_args_list:
+                cfg = _pos(call)[2]
+                self.assertEqual(cfg['coordinator_raft_initial_peers']['value'],
+                                 expected_peers)
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_coordinator.start_coordinator', return_value=True)
+    def test_single_pod_leaves_raft_peers_untouched(self, mock_start):
+        # 1 pod -> single-node no-election mode; peers must NOT be injected
+        # (matches cmd_deploy's single-instance rule).
+        cfg_path = _write_config({
+            'coordinator_address': {'value': '0.0.0.0:0'},
+        })
+        try:
+            args = self._args(config=cfg_path)
+            cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
+            cfg = _pos(mock_start.call_args)[2]
+            self.assertNotIn('coordinator_raft_initial_peers', cfg)
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_coordinator.start_coordinator', return_value=True)
+    def test_peers_built_from_full_pod_set_not_just_started_pod(self,
+                                                                mock_start):
+        # Restart invariant: even when only one pod of an existing cluster is
+        # being (re)started, the peers list must come from the FULL matched
+        # pod set so the restarting node can rejoin. cmd_start discovers pods
+        # by prefix; passing all cluster prefixes yields the full membership.
+        cfg_path = _write_config({
+            'coordinator_address': {'value': '0.0.0.0:0'},
+        })
+        try:
+            args = self._args(config=cfg_path)
+            pods = [{'name': 'p1', 'ip': '10.0.0.1'},
+                    {'name': 'p2', 'ip': '10.0.0.2'},
+                    {'name': 'p3', 'ip': '10.0.0.3'}]
+            cmd_start(args, pods)
+            # The cfg handed to each pod's start_coordinator carries all three
+            # members in peers, including the pod itself.
+            for i, call in enumerate(mock_start.call_args_list):
+                pod = _pos(call)[0]
+                cfg = _pos(call)[2]
+                peers = cfg['coordinator_raft_initial_peers']['value']
+                self.assertIn(f'{pod["ip"]}:31511', peers)
+                for other in pods:
+                    self.assertIn(f'{other["ip"]}:31511', peers)
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_coordinator.start_coordinator', return_value=True)
+    def test_skips_pods_with_running_coordinator(self, mock_start):
+        # Pods that already have a live coordinator process are skipped (no
+        # start_coordinator call); only dead pods are started. This lets the
+        # operator restart a subset of a cluster by passing all prefixes.
+        cfg_path = _write_config({
+            'coordinator_address': {'value': '0.0.0.0:0'},
+        })
+        try:
+            args = self._args(config=cfg_path)
+            pods = [{'name': 'p1', 'ip': '10.0.0.1'},
+                    {'name': 'p2', 'ip': '10.0.0.2'}]
+            with patch('deploy_coordinator.check_process',
+                       side_effect=lambda pod, namespace, process_name,
+                                     timeout=10:
+                       (pod, 'alive' if pod['name'] == 'p1' else 'dead', 0)):
+                rc = cmd_start(args, pods)
+            self.assertEqual(rc, 0)
+            self.assertEqual(mock_start.call_count, 1)
+            started_pod = _pos(mock_start.call_args)[0]
+            self.assertEqual(started_pod['name'], 'p2')
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_coordinator.start_coordinator', return_value=True)
+    def test_restarted_pod_carries_full_peer_list_including_skipped_members(
+            self, mock_start):
+        # 2 of 3 pods alive (skipped), 1 dead (started). The single started
+        # pod's cfg must carry the full 3-member peers list so it can rejoin
+        # the cluster via persisted Raft recovery -- this is the restart-1
+        # scenario without --set.
+        cfg_path = _write_config({
+            'coordinator_address': {'value': '0.0.0.0:0'},
+        })
+        try:
+            args = self._args(config=cfg_path)
+            pods = [{'name': 'p1', 'ip': '10.0.0.1'},
+                    {'name': 'p2', 'ip': '10.0.0.2'},
+                    {'name': 'p3', 'ip': '10.0.0.3'}]
+            with patch('deploy_coordinator.check_process',
+                       side_effect=lambda pod, namespace, process_name,
+                                     timeout=10:
+                       (pod, 'dead' if pod['name'] == 'p3' else 'alive', 0)):
+                rc = cmd_start(args, pods)
+            self.assertEqual(rc, 0)
+            self.assertEqual(mock_start.call_count, 1)
+            cfg = _pos(mock_start.call_args)[2]
+            expected_peers = '10.0.0.1:31511,10.0.0.2:31511,10.0.0.3:31511'
+            self.assertEqual(cfg['coordinator_raft_initial_peers']['value'],
+                             expected_peers)
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_coordinator.start_coordinator', return_value=True)
+    def test_liveness_probe_error_is_treated_as_dead(self, mock_start):
+        # A check_process 'error' (e.g. transient kubectl timeout) must not
+        # silently skip the pod; it is started so a real failure surfaces.
+        cfg_path = _write_config({
+            'coordinator_address': {'value': '0.0.0.0:0'},
+        })
+        try:
+            args = self._args(config=cfg_path)
+            with patch('deploy_coordinator.check_process',
+                       return_value=(None, 'error', 'timeout')):
+                rc = cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
+            self.assertEqual(rc, 0)
+            self.assertEqual(mock_start.call_count, 1)
         finally:
             os.unlink(cfg_path)
 

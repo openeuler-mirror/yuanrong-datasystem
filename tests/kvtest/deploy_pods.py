@@ -5,6 +5,12 @@ Usage:
     python3 deploy_pods.py deploy --image xxx --prefix xxx [--yaml template.yaml]
     python3 deploy_pods.py delete --prefix xxx
     python3 deploy_pods.py status --prefix xxx
+
+Node discovery reuses deploy_common.discover_nodes (the single canonical
+kubectl-get-nodes helper, sorted by node name for deterministic distribution)
+rather than a local copy, so deploy_pods depends on deploy_common for that
+one helper; everything else (kubectl transport, manifest apply/wait/delete)
+stays self-contained here.
 """
 
 import argparse
@@ -13,6 +19,8 @@ import os
 import subprocess
 import sys
 import tempfile
+
+from deploy_common import discover_nodes
 
 MAX_PARALLEL_KUBECTL = 32
 
@@ -129,6 +137,114 @@ def parse_replicas(replicas_str):
     return result
 
 
+def parse_replicas_pct(spec):
+    """Parse a percentage-based replica spec: ``"PCT:COUNT,PCT:COUNT,..."``.
+
+    Each entry means "PCT percent of discovered nodes each get COUNT pods".
+    PCT may be a float (e.g. ``"33.3:1,66.7:2"``); COUNT must be a
+    non-negative integer. Returns a list of ``(pct_float, count_int)`` tuples
+    in input order. Raises SystemExit on a malformed entry so the user gets
+    a clear message instead of a ValueError traceback.
+
+    Example: ``"30:0,60:1,10:2"`` -> ``[(30.0, 0), (60.0, 1), (10.0, 2)]``.
+    """
+    if not spec:
+        return []
+    buckets = []
+    for item in spec.split(','):
+        item = item.strip()
+        if not item:
+            continue
+        if ':' not in item:
+            print(f'ERROR: invalid --replicas-pct entry "{item}": expected '
+                  f'"PCT:COUNT" (e.g. "30:0")', file=sys.stderr)
+            sys.exit(1)
+        pct_str, count_str = item.rsplit(':', 1)
+        try:
+            pct = float(pct_str.strip())
+        except ValueError:
+            print(f'ERROR: invalid percentage "{pct_str}" in --replicas-pct '
+                  f'entry "{item}"', file=sys.stderr)
+            sys.exit(1)
+        try:
+            count = int(count_str.strip())
+        except ValueError:
+            print(f'ERROR: invalid count "{count_str}" in --replicas-pct '
+                  f'entry "{item}"', file=sys.stderr)
+            sys.exit(1)
+        if pct < 0:
+            print(f'ERROR: negative percentage {pct} in --replicas-pct '
+                  f'entry "{item}"', file=sys.stderr)
+            sys.exit(1)
+        if count < 0:
+            print(f'ERROR: negative count {count} in --replicas-pct entry '
+                  f'"{item}"', file=sys.stderr)
+            sys.exit(1)
+        if pct == 0:
+            print(f'WARNING: --replicas-pct entry "{item}" has 0%, which '
+                  f'has no effect', file=sys.stderr)
+        buckets.append((pct, count))
+    return buckets
+
+
+def distribute_nodes_by_percentage(nodes, pct_spec):
+    """Distribute nodes across percentage buckets via Largest Remainder Method.
+
+    Args:
+        nodes: list of ``{'ip', 'name'}`` (already discovered; the caller
+            should have sorted them by name for deterministic assignment).
+        pct_spec: list of ``(pct, count)`` tuples from ``parse_replicas_pct``.
+
+    Returns ``(target_replicas, bucket_summary)``:
+        target_replicas: ``{node_ip: count}`` covering EVERY node (count may
+            be 0 for nodes that land in a 0-pod bucket).
+        bucket_summary: list of ``(pct, count, assigned_node_count)`` in spec
+            order, for plan printing and assertions.
+
+    Largest Remainder Method: floor each bucket's raw node count, then hand
+    the leftover nodes (``n - sum(floors)``) to the buckets with the largest
+    fractional remainders, breaking ties by original spec order (stable) so
+    the result is deterministic and debuggable. This guarantees
+    ``sum(assigned_node_count) == len(nodes)`` exactly.
+
+    Raises ValueError when the percentages do not sum to 100 (within 0.01
+    float tolerance), there are no nodes to distribute over, or the spec is
+    empty.
+    """
+    if not pct_spec:
+        raise ValueError('empty --replicas-pct spec')
+    total_pct = sum(pct for pct, _ in pct_spec)
+    if abs(total_pct - 100.0) > 0.01:
+        raise ValueError(
+            f'--replicas-pct percentages sum to {total_pct:g}, expected 100')
+    n = len(nodes)
+    if n == 0:
+        raise ValueError('no cluster nodes discovered; cannot distribute')
+
+    # raw[i] = pct[i]/100 * n; floor loses the fractional part, summed loss
+    # is < len(spec), so leftover < len(spec) and the index below is safe.
+    raw = [pct / 100.0 * n for pct, _ in pct_spec]
+    floors = [int(r) for r in raw]  # int() == floor() for non-negative r
+    remainders = [(raw[i] - floors[i], i) for i in range(len(pct_spec))]
+    leftover = n - sum(floors)
+    # Sort by remainder desc; stable on original index for deterministic ties.
+    remainders.sort(key=lambda x: (-x[0], x[1]))
+    for k in range(leftover):
+        floors[remainders[k][1]] += 1
+
+    # Assign nodes contiguously to each bucket in spec order so the plan is
+    # readable: "first N0 nodes get count0, next N1 get count1, ...".
+    target = {}
+    pos = 0
+    for i, (pct, count) in enumerate(pct_spec):
+        for _ in range(floors[i]):
+            target[nodes[pos]['ip']] = count
+            pos += 1
+    bucket_summary = [(pct_spec[i][0], pct_spec[i][1], floors[i])
+                      for i in range(len(pct_spec))]
+    return target, bucket_summary
+
+
 def apply_yaml(yaml_content, namespace='default', timeout=60):
     """Apply YAML manifest to cluster.
 
@@ -152,21 +268,26 @@ def apply_yaml(yaml_content, namespace='default', timeout=60):
                   file=sys.stderr)
 
 
-def generate_pod_manifest(config, template_content):
-    """Generate Pod YAML manifests from template.
+def generate_pod_manifest(config, template_content, target_replicas,
+                          ip_to_node):
+    """Generate Pod YAML manifests from a pre-computed per-node replica plan.
+
+    Distribution (node discovery, spec parsing, percentage rounding) lives
+    in ``cmd_deploy``; this function only renders one deep-copied pod spec
+    per (node_ip, count) entry so it stays free of kubectl and is purely
+    about manifest construction.
 
     Args:
-        config: dict with:
-            - image (str): container image
-            - name_prefix (str): pod name prefix
-            - namespace (str): namespace
-            - cpu (str): CPU limit
-            - memory (str): memory limit
-            - requests_cpu (str): CPU request
-            - requests_memory (str): memory request
-            - pod_replicas (dict): {node_ip: count} (explicit spec)
-            - pods_per_node (int): number of pods per node (if pod_replicas not set)
-        template_content: YAML template string
+        config: dict with image, name_prefix, namespace, cpu, memory,
+            requests_cpu, requests_memory.
+        template_content: YAML template string.
+        target_replicas: ``{node_ip: count}`` as computed by the caller
+            (explicit ``--replicas``, percentage distribution, uniform
+            ``--pods-per-node``, or the default 1-per-node). Entries with
+            count <= 0 are skipped.
+        ip_to_node: ``{node_ip: node_name}`` mapping for ``spec.nodeName``;
+            a missing entry falls back to the raw IP string (the degraded
+            -cluster path where discovery itself failed).
     """
     import copy
     import yaml
@@ -178,56 +299,11 @@ def generate_pod_manifest(config, template_content):
     memory_limit = config.get('memory', '16Gi')
     requests_cpu = config.get('requests_cpu', cpu_limit)
     requests_memory = config.get('requests_memory', memory_limit)
-    pod_replicas = config.get('pod_replicas') or {}
-    pods_per_node = config.get('pods_per_node') or 0
 
     if not image:
         raise ValueError('image is required')
     if not name_prefix:
         raise ValueError('name_prefix is required')
-
-    # Get all node IPs and names
-    result = run_kubectl([
-        'get', 'nodes', '-o', 'json',
-    ], check=False)
-    all_nodes = []
-    if result and result.returncode == 0:
-        for item in json.loads(result.stdout).get('items', []):
-            for addr in item.get('status', {}).get('addresses', []):
-                if addr.get('type') == 'InternalIP':
-                    all_nodes.append({
-                        'ip': addr.get('address', ''),
-                        'name': item.get('metadata', {}).get('name', ''),
-                    })
-                    break
-
-    # Determine target nodes and replica counts
-    if pod_replicas:
-        # Explicit per-node spec: {ip: count, ...}
-        target_replicas = pod_replicas
-    elif pods_per_node > 0:
-        # Simple mode: N pods per node
-        target_replicas = {node['ip']: pods_per_node for node in all_nodes}
-    else:
-        # Default: 1 pod per node
-        target_replicas = {node['ip']: 1 for node in all_nodes}
-
-    # Build IP to node name mapping
-    ip_to_node = {node['ip']: node['name'] for node in all_nodes}
-
-    # Validate user-specified IPs against discovered nodes. A typo'd or
-    # stale IP must not silently fall back to using the raw IP string as
-    # nodeName -- that would make Kubernetes fail to schedule the Pod with
-    # a cryptic "node not found" event. Only skip this check when we could
-    # not discover any node at all (kubectl get nodes failed), so we don't
-    # block the user in a degraded cluster where discovery itself failed.
-    if all_nodes and pod_replicas:
-        unknown = [ip for ip in pod_replicas if ip not in ip_to_node]
-        if unknown:
-            raise ValueError(
-                'Unknown node IP(s) in --replicas not found in cluster: '
-                f'{", ".join(unknown)}. '
-                f'Known node IPs: {", ".join(sorted(ip_to_node))}')
 
     # Parse the YAML template once; each pod gets its own deep copy so the
     # original is not mutated across iterations.
@@ -355,7 +431,15 @@ def wait_for_pods(name_prefix, namespace, timeout=300):
 
 
 def cmd_deploy(args):
-    """Deploy pods."""
+    """Deploy pods.
+
+    Distribution is selected by exactly one of the mutually-exclusive flags:
+    ``--replicas`` (explicit per-node ``ip:count``), ``--replicas-pct``
+    (percentage-of-nodes buckets), or ``--pods-per-node`` (uniform); the
+    default is 1 pod per discovered node. Node discovery, spec parsing,
+    percentage rounding, and IP validation all happen here so manifest
+    generation stays free of kubectl and purely about rendering pod specs.
+    """
     namespace = args.namespace or 'default'
     name_prefix = args.prefix
     image = args.image
@@ -364,11 +448,61 @@ def cmd_deploy(args):
     requests_cpu = args.requests_cpu or cpu
     requests_memory = args.requests_memory or memory
     replicas_str = args.replicas
+    # getattr: deploy_coordinator._build_deploy_pods_args builds a hand-rolled
+    # SimpleNamespace without this field; tolerate its absence so the existing
+    # coordinator caller keeps working without importing percentage support.
+    replicas_pct_str = getattr(args, 'replicas_pct', None)
     pods_per_node = args.pods_per_node or 0
     yaml_path = args.yaml
 
-    # Parse replicas (explicit per-node spec takes precedence)
+    # Discover nodes once; every distribution mode needs them. discover_nodes
+    # (shared with deploy_common) swallows kubectl failure/timeout and returns
+    # [] so callers handle "no nodes" per path (percentage -> hard error,
+    # explicit --replicas -> degraded-cluster passthrough, uniform/default ->
+    # no pods to deploy).
+    nodes = discover_nodes(timeout=args.timeout)
+    ip_to_node = {node['ip']: node['name'] for node in nodes}
+
+    # Parse specs. The mutually-exclusive CLI group guarantees only one is
+    # set when invoked via argparse; the precedence below also handles the
+    # hand-rolled Namespace from deploy_coordinator (which sets replicas and
+    # pods_per_node=None, no replicas_pct).
     pod_replicas = parse_replicas(replicas_str) if replicas_str else {}
+    pct_spec = parse_replicas_pct(replicas_pct_str) if replicas_pct_str else []
+
+    if pod_replicas:
+        # Explicit per-node spec: {ip: count, ...}. Validate against
+        # discovered nodes so a typo'd or stale IP surfaces before apply --
+        # otherwise Kubernetes would fail to schedule with a cryptic
+        # "node not found" event. Skip only when discovery itself failed,
+        # to preserve the degraded-cluster path.
+        if nodes:
+            unknown = [ip for ip in pod_replicas if ip not in ip_to_node]
+            if unknown:
+                print('ERROR: Unknown node IP(s) in --replicas not found in '
+                      f'cluster: {", ".join(unknown)}. Known node IPs: '
+                      f'{", ".join(sorted(ip_to_node))}', file=sys.stderr)
+                return 1
+        target_replicas = pod_replicas
+        dist_label = f'--replicas (explicit): {pod_replicas}'
+    elif pct_spec:
+        try:
+            target_replicas, bucket_summary = distribute_nodes_by_percentage(
+                nodes, pct_spec)
+        except ValueError as e:
+            print(f'ERROR: {e}', file=sys.stderr)
+            return 1
+        dist_label = (f'--replicas-pct "{replicas_pct_str}": '
+                      + ', '.join(f'{pct:g}% x{count} -> {assigned} node(s)'
+                                   for pct, count, assigned in bucket_summary))
+    elif pods_per_node > 0:
+        target_replicas = {node['ip']: pods_per_node for node in nodes}
+        dist_label = f'--pods-per-node {pods_per_node}'
+    else:
+        target_replicas = {node['ip']: 1 for node in nodes}
+        dist_label = 'default 1 per node'
+
+    total_pods = sum(c for c in target_replicas.values() if c > 0)
 
     print('Deployment config:')
     print(f'  name_prefix: {name_prefix}')
@@ -377,12 +511,13 @@ def cmd_deploy(args):
     print(f'  memory: {memory} (limits)')
     print(f'  requests_cpu: {requests_cpu}')
     print(f'  requests_memory: {requests_memory}')
-    if pod_replicas:
-        print(f'  replicas: {pod_replicas}')
-    elif pods_per_node:
-        print(f'  pods_per_node: {pods_per_node}')
-    else:
-        print('  replicas: (default 1 per node)')
+    print(f'  distribution: {dist_label}')
+    print(f'  discovered nodes: {len(nodes)}')
+    if nodes:
+        for node in nodes:
+            c = target_replicas.get(node['ip'], 0)
+            print(f'    {node["name"]} ({node["ip"]}): {c} pod(s)')
+    print(f'  total pods to deploy: {total_pods}')
 
     # Load YAML template
     if not os.path.exists(yaml_path):
@@ -394,7 +529,8 @@ def cmd_deploy(args):
 
     print(f'\nLoaded template from: {yaml_path}')
 
-    # Build config
+    # Build config (distribution is already resolved into target_replicas;
+    # generate_pod_manifest only renders).
     config = {
         'image': image,
         'name_prefix': name_prefix,
@@ -403,17 +539,12 @@ def cmd_deploy(args):
         'memory': memory,
         'requests_cpu': requests_cpu,
         'requests_memory': requests_memory,
-        'pod_replicas': pod_replicas,
-        'pods_per_node': pods_per_node,
     }
 
     # Generate manifest
     try:
-        manifest = generate_pod_manifest(config, template_content)
-    except subprocess.TimeoutExpired:
-        print('ERROR: timed out while discovering cluster nodes '
-              '(kubectl get nodes)', file=sys.stderr)
-        return 1
+        manifest = generate_pod_manifest(config, template_content,
+                                         target_replicas, ip_to_node)
     except ValueError as e:
         print(f'ERROR: {e}', file=sys.stderr)
         return 1
@@ -570,6 +701,15 @@ Examples:
     --yaml config/pod_config.yaml.example \\
     --replicas "10.0.0.1:2,10.0.0.2:1,10.0.0.3:0"
 
+  # Deploy by percentage of nodes: 30% get 0 pods, 60% get 1, 10% get 2
+  # (nodes are sorted by name then assigned contiguously to each bucket;
+  #  rounding uses the Largest Remainder Method so the totals match exactly)
+  python3 deploy_pods.py deploy \\
+    --image my-registry.com/worker:latest \\
+    --prefix ds-worker \\
+    --yaml config/pod_config.yaml.example \\
+    --replicas-pct "30:0,60:1,10:2" --dry-run
+
   # Deploy with custom resources
   python3 deploy_pods.py deploy \\
     --image my-registry.com/worker:latest \\
@@ -616,12 +756,28 @@ Examples:
                                help='CPU requests (default: same as --cpu)')
     deploy_parser.add_argument('--requests-memory',
                                help='Memory requests (default: same as --memory)')
-    deploy_parser.add_argument('--replicas', '-r',
-                               help='Replica spec: "ip1:count1,ip2:count2,..." '
-                                    '(0 = skip node)')
-    deploy_parser.add_argument('--pods-per-node', type=int,
-                               help='Number of pods per node (simpler than --replicas). '
-                                    'Example: --pods-per-node 3 deploys 3 pods on each node')
+    # Distribution modes are mutually exclusive: only one of explicit
+    # per-node, percentage-of-nodes, or uniform may drive a single deploy.
+    # (Previously --replicas silently won over --pods-per-node; making them
+    # exclusive surfaces a redundant-flag mistake instead of ignoring it.)
+    dist_group = deploy_parser.add_mutually_exclusive_group()
+    dist_group.add_argument('--replicas', '-r',
+                            help='Replica spec: "ip1:count1,ip2:count2,..." '
+                                 '(0 = skip node)')
+    dist_group.add_argument('--pods-per-node', type=int,
+                            help='Number of pods per node (uniform). '
+                                 'Example: --pods-per-node 3 deploys 3 pods on each node')
+    dist_group.add_argument('--replicas-pct',
+                            help='Percentage-based distribution: '
+                                 '"PCT:COUNT,PCT:COUNT,..." where PCT%% of '
+                                 'discovered nodes each get COUNT pods. '
+                                 'Example: "30:0,60:1,10:2" means 30%% of '
+                                 'nodes get 0 pods, 60%% get 1, 10%% get 2. '
+                                 'Percentages must sum to 100; nodes are '
+                                 'sorted by name then assigned contiguously '
+                                 'to each bucket; rounding uses the Largest '
+                                 'Remainder Method so the assigned node '
+                                 'count matches exactly.')
     deploy_parser.add_argument('--dry-run', action='store_true',
                                help='Show manifest without applying')
     deploy_parser.add_argument('--force', '-f', action='store_true',

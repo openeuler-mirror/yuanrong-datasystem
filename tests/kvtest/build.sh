@@ -82,6 +82,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# -M drives the Bazel --config=urma flag; it has no cmake-mode equivalent and
+# must not be silently ignored under cmake (a stale cmake build would proceed
+# and fail later on the SDK check with a misleading error). Fail fast instead.
+if [[ "$BUILD_WITH_URMA" == "on" && "$BUILD_SYSTEM" != "bazel" ]]; then
+    echo "ERROR: -M on is supported only with -b bazel"
+    exit 1
+fi
+
 echo "Build system: $BUILD_SYSTEM"
 echo "Build type:   $BUILD_TYPE"
 echo "Jobs:         $JOBS"
