@@ -508,13 +508,17 @@ Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKe
     };
     RETURN_IF_NOT_OK(RetryWhenDeadlock(func));
     if (insert) {
+        Status rc(StatusCode::K_NOT_FOUND, "Object not found");
         Raii innerUnlock([&safeEntry]() { safeEntry->WUnlock(); });
         if (!tryLock) {
             // get data from L2 cache if worker is primary copy
-            return ocClientWorkerSvc_->GetDataFromL2CacheForPrimaryCopy(objectKey, version, safeEntry);
+            rc = ocClientWorkerSvc_->GetDataFromL2CacheForPrimaryCopy(objectKey, version, safeEntry);
+            RETURN_OK_IF_TRUE(rc.IsOk());
         }
+        LOG_IF_ERROR(ocClientWorkerSvc_->objectTable_->Erase(objectKey, *safeEntry),
+                     FormatString("[ObjectKey %s] Erase empty remote get entry failed", objectKey));
         // tryLock callers must not load a missing entry from L2; the remote-get handler maps not-found for retry.
-        RETURN_STATUS(StatusCode::K_NOT_FOUND, "Object not found");
+        return rc;
     }
     return Status::OK();
 }
