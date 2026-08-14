@@ -1230,7 +1230,7 @@ std::atomic<int> *UrmaManager::GetSrcChipInflightWrCounter(uint8_t chipId)
 
 uint8_t UrmaManager::GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity)
 {
-    if (!useNumaAffinity || !FLAGS_ub_numa_rr) {
+    if (!useNumaAffinity || FLAGS_ub_numa_rr_type == 0) {
         return transmittedChipId;
     }
     const uint64_t sequence = affinitySrcChipIdSequence_.fetch_add(1, std::memory_order_relaxed);
@@ -1881,7 +1881,9 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     flag.bs.complete_enable = 1;
     const bool useNumaAffinity =
         IsUbNumaAffinityEnabled() && args.srcChipId != INVALID_CHIP_ID && args.dstChipId != INVALID_CHIP_ID;
-    const uint8_t srcChipId = GetAffinitySrcChipId(args.srcChipId, useNumaAffinity);
+    // Type 0 keeps the transmitted chip, type 1 selects once per logical write, and type 2 selects once per post.
+    const bool selectSrcChipPerPost = useNumaAffinity && FLAGS_ub_numa_rr_type == 2;
+    uint8_t srcChipId = selectSrcChipPerPost ? args.srcChipId : GetAffinitySrcChipId(args.srcChipId, useNumaAffinity);
 
     uint64_t writtenSize = 0;
     uint64_t remainSize = args.size;
@@ -1940,8 +1942,11 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                      "Failed to cleanup submitted URMA write events");
         eventKeys.clear();
     };
-    auto *srcChipInflightCounter = GetSrcChipInflightWrCounter(srcChipId);
     while (remainSize > 0) {
+        if (selectSrcChipPerPost) {
+            srcChipId = GetAffinitySrcChipId(args.srcChipId, useNumaAffinity);
+        }
+        auto *srcChipInflightCounter = GetSrcChipInflightWrCounter(srcChipId);
         const uint64_t writeSize = std::min(remainSize, maxWriteSize);
         ++writeChunkIndex;
         const uint64_t key = GenerateReqId();
@@ -2730,11 +2735,12 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
 #else
         (void)enablePipelineH2D;
 #endif
-        const char *ubNumaRr = std::getenv("DATASYSTEM_UB_NUMA_RR");
-        if (ubNumaRr != nullptr) {
+        const char *ubNumaRrType = std::getenv("DATASYSTEM_UB_NUMA_RR_TYPE");
+        if (ubNumaRrType != nullptr) {
             std::string errMsg;
-            if (!SetCommandLineOption("ub_numa_rr", ubNumaRr, errMsg)) {
-                LOG(WARNING) << "Ignore invalid DATASYSTEM_UB_NUMA_RR value '" << ubNumaRr << "': " << errMsg;
+            if (!SetCommandLineOption("ub_numa_rr_type", ubNumaRrType, errMsg)) {
+                LOG(WARNING) << "Ignore invalid DATASYSTEM_UB_NUMA_RR_TYPE value '" << ubNumaRrType
+                             << "': " << errMsg;
             }
         }
         UrmaManager::clientMode_.store(true, std::memory_order_release);
