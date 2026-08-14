@@ -130,8 +130,11 @@ global:
   memoryRebalance:
     # Enable master-scheduled object cache memory rebalance.
     enabled: false
-    # Memory usage percent at or above which a ready worker can be selected as a rebalance source. Valid range: 1-100.
-    rebalanceSourceUsagePercent: 70
+    # Memory usage percent at or above which a ready worker can be selected as a rebalance source.
+    # Dual-role: the same percent also caps the target worker's projected usage; reaching it stops further
+    # rebalance batches. Default 80% matches the eviction low watermark; raising it moves the target
+    # ceiling toward the eviction high watermark, where eviction fires. Valid range: 1-100.
+    rebalanceSourceUsagePercent: 80
     # Minimum memory usage percent gap between source and target worker for rebalance to be scheduled. Valid range: 1-100.
     rebalanceUsageGapPercent: 20
     # Grace time in milliseconds for a rebalance task to report back before it is considered expired.

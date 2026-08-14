@@ -20,6 +20,7 @@
 
 #include <memory>
 #include <string>
+#include <algorithm>
 
 #include <gtest/gtest.h>
 
@@ -78,6 +79,18 @@ bool HasRebalanceTask(const master::ResourceReportRspPb &rsp)
 {
     return !rsp.rebalance_task().task_id().empty();
 }
+
+// Rebalance watermark in bytes == source trigger threshold (the flag is dual-role: it gates
+// source selection AND caps the target migration ceiling). Mirrors the scheduler's SubOrZero.
+uint64_t WatermarkBytes(uint64_t memoryLimit = MEMORY_LIMIT)
+{
+    return memoryLimit * FLAGS_rebalance_source_usage_percent / 100;
+}
+
+uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
+{
+    return lhs > rhs ? lhs - rhs : 0;
+}
 }  // namespace
 
 class ResourceManagerTest : public CommonTest {
@@ -93,8 +106,8 @@ public:
         oldNodeDeadS_ = FLAGS_node_dead_timeout_s;
 
         FLAGS_enable_memory_rebalance = true;
-        FLAGS_rebalance_source_usage_percent = 70;
-        FLAGS_rebalance_usage_gap_percent = 30;
+        FLAGS_rebalance_source_usage_percent = 80;
+        FLAGS_rebalance_usage_gap_percent = 20;
         // Large grace keeps the active task from expiring mid-test (deterministic, no real timeout).
         FLAGS_rebalance_task_report_grace_ms = 60'000;
         // 1 MB/s so the transfer-time estimate stays bounded for any realistic max_bytes.
@@ -159,9 +172,9 @@ private:
 // and the midpoint budget is correct (smaller), keeping projected usage below the eviction
 // trigger line.
 //
-// Timeline (MEMORY_LIMIT = 1000, source threshold = 70%, gap = 30%):
+// Timeline (MEMORY_LIMIT = 1000, source threshold = source_pct, gap = 20%):
 //   T1 initial  used=100  (10%)  -- pickable low target
-//   T1 received used=600  (60%)  -- still < 70% so its own report does NOT trigger a schedule
+//   T1 received used=700  (70%)  -- still < source threshold so its own report does NOT trigger a schedule
 //                                   (not a source), hence readSnapshot_ stays stale-low for it
 //   S2 / S3      used=920  (92%)  -- high sources
 //
@@ -169,15 +182,18 @@ private:
 //   2. Report S2@920   -> swap-on-trigger -> readSnapshot_ fresh -> Schedule assigns S2->T1
 //                         (max_bytes=(920-100)/2=410, projected 100+0+410=510 < triggerLine ok)
 //   3. ReportResult(S2->T1, SUCCEEDED) -> hold T1 (inflight[T1]=410 held)
-//   4. Report T1@600   -> writeSnapshot_[T1]=600 fresh; T1 reports, releases its own hold
-//                         (inflight->0); T1 is 60% < 70% so NOT a source -> NO swap; readSnapshot_[T1]
+//   4. Report T1@700   -> writeSnapshot_[T1]=700 fresh; T1 reports, releases its own hold
+//                         (inflight->0); T1 is 70% < source threshold so NOT a source -> NO swap; readSnapshot_[T1]
 //                         stays stale-low (100). THIS is the exposure window.
-//   5. Report S3@920   -> swap-on-trigger -> readSnapshot_[T1]=600 fresh -> Schedule: S3->T1
-//                         projected = 600+0+160 = 760 < triggerLine(1000) -> dispatch, max_bytes=160.
+//   5. Report S3@920   -> swap-on-trigger -> readSnapshot_[T1]=700 fresh -> Schedule: S3->T1
+//                         midpoint=(920-700)/2=110, headroomToWatermark=watermark-700=100 (binds, < midpoint),
+//                         targetAvail=300-0=300; max_bytes=100, projected=700+100=800=watermark (not past it).
 //
-// Assertion: S3 gets a rebalance task targeting T1 with max_bytes=160. (Without swap-on-trigger,
-// readSnapshot_[T1]=100 stale -> max_bytes=(920-100)/2=410 -> T1 (really 600) pushed to 1010
-// > triggerLine -> over-migration.)
+// Assertion: S3 gets a rebalance task targeting T1 with max_bytes=100. The target watermark ceiling
+// binds because headroomToWatermark=100 < midpoint=110 — this keeps the #685 target-ceiling coverage
+// that would be lost if T1 sat at 600 (headroom=200 > midpoint=160, midpoint would bind instead).
+// Without swap-on-trigger, readSnapshot_[T1]=100 stale -> max_bytes=(920-100)/2=410 -> T1 (really 700)
+// pushed to 1110 > triggerLine(1000) -> over-migration.)
 TEST_F(ResourceManagerTest, SwapOnTriggerGivesFreshProjectionAndCorrectBudget)
 {
     const std::string t1 = "127.0.0.1:1010";
@@ -201,22 +217,24 @@ TEST_F(ResourceManagerTest, SwapOnTriggerGivesFreshProjectionAndCorrectBudget)
     // the release, leaving the held charge on T1 and blocking S3->T1 with maxBytes=0.
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
 
-    // 4. T1 reports its real post-receive usage (600, 60%). It is not a source (60% < 70%) so
+    // 4. T1 reports its real post-receive usage (700, 70%). It is not a source (70% < source threshold) so
     //    NO swap-on-trigger fires here -- readSnapshot_[T1] stays stale-low (100) and the held
     //    charge is released (write-side report advances past hold time).
-    (void)Report(*rm_, t1, 600, 400);
+    (void)Report(*rm_, t1, 700, 300);
 
-    // 5. S3 reports high -> swap-on-trigger promotes writeSnapshot_ (T1 now 600 fresh) into
+    // 5. S3 reports high -> swap-on-trigger promotes writeSnapshot_ (T1 now 700 fresh) into
     //    readSnapshot_ BEFORE Schedule. Schedule's projection for S3->T1: the rebalance goal is
-    //    the midpoint gap (920-600)/2=160, but the target watermark ceiling caps the batch at
-    //    headroomToWatermark = 700-600 = 100 so T1 reaches the 70% watermark (not past it). The
-    //    available clamp (400-0=400 > 100) does not bind. Without swap-on-trigger, readSnapshot_[T1]
-    //    would still be stale-low (100) and the watermark cap would be 600 (looser), but the
-    //    fresh snapshot is what makes the watermark ceiling bind tightly here.
+    //    the midpoint gap (920-700)/2=110, but the target watermark ceiling caps the batch at
+    //    headroomToWatermark = watermark-700 = 100 (< midpoint=110), so T1 reaches the watermark
+    //    (not past it). The available clamp (300-0=300 > headroom) does not bind. Without
+    //    swap-on-trigger, readSnapshot_[T1] would still be stale-low (100) and the watermark cap
+    //    would be watermark-100 = 700 (looser, > midpoint=410), so the midpoint would bind instead
+    //    and over-migrate T1 — the fresh snapshot is what makes the watermark ceiling bind tightly.
     auto s3Rsp = Report(*rm_, s3, 920, 80);
     ASSERT_TRUE(HasRebalanceTask(s3Rsp)) << "S3 should get a rebalance task targeting T1";
     EXPECT_EQ(s3Rsp.rebalance_task().target_worker(), t1);
-    EXPECT_EQ(s3Rsp.rebalance_task().max_bytes(), 100ul);
+    EXPECT_EQ(s3Rsp.rebalance_task().max_bytes(),
+              std::min({ 110ul, SubOrZero(WatermarkBytes(), 700), 300ul }));
 }
 }  // namespace ut
 }  // namespace datasystem

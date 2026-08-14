@@ -131,8 +131,11 @@ DS_DEFINE_bool(enable_data_replication, true,
 DS_DEFINE_bool(enable_memory_rebalance, false,
     "Enable master-scheduled memory rebalance across workers. The master periodically schedules tasks to migrate "
     "primary object replicas from high-usage workers to under-utilized workers.");
-DS_DEFINE_uint32(rebalance_source_usage_percent, 70,
-                 "Memory usage percent at or above which a ready worker can be selected as memory rebalance source.");
+DS_DEFINE_uint32(rebalance_source_usage_percent, 80,
+                 "Memory usage percent at or above which a ready worker can be selected as a memory rebalance "
+                 "source. Dual-role: the same percent also caps the target worker's projected usage; reaching it "
+                 "stops further rebalance batches. Default 80% matches the eviction low watermark; raising it moves "
+                 "the target ceiling toward the eviction high watermark, where eviction fires.");
 DS_DEFINE_uint32(rebalance_usage_gap_percent, 20,
                  "Minimum memory usage percent gap between source and target for memory rebalance.");
 DS_DEFINE_uint32(rebalance_task_report_grace_ms, 30000, "rebalance task report grace ms.");

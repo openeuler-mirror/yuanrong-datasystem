@@ -265,8 +265,10 @@ spillEnableReadahead: true
 global:
   memoryRebalance:
     enabled: true
-    # source worker 的共享内存使用率阈值（百分比），取值范围：1-100
-    rebalanceSourceUsagePercent: 70
+    # source worker 的共享内存使用率阈值（百分比）。双重语义：同一百分比同时作为 target 迁移上限，
+    # target 投影达该值即停止后续迁移批次。默认 80% 与 eviction 低水位一致；调高会让 target 上限向
+    # eviction 高水位（默认 90%）靠拢，更易触发驱逐。取值范围：1-100
+    rebalanceSourceUsagePercent: 80
     # source 与 target 之间的最小使用率差值（百分比），取值范围：1-100
     rebalanceUsageGapPercent: 20
     # 任务上报宽限时间（毫秒）
