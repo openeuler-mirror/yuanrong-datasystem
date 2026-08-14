@@ -65,6 +65,7 @@ constexpr char QUERY_AND_GET_INJECT[] = "client.transport.query_and_get";
 constexpr char GET_OBJECT_REMOTE_INJECT[] = "client.transport.get_object_remote";
 constexpr char BATCH_GET_OBJECT_REMOTE_INJECT[] = "client.transport.batch_get_object_remote";
 constexpr char WORKER_OC_GET_INJECT[] = "client.transport.worker_oc_get";
+constexpr char WORKER_OC_GET_ENTRY_INJECT[] = "worker.PreProcessGetObject.begin";
 constexpr char REGISTER_SHM_CLIENT_INJECT[] = "client.transport.register_shm_client";
 constexpr char GET_CLIENT_FD_INJECT[] = "client.transport.get_client_fd";
 constexpr char SHM_HEARTBEAT_INJECT[] = "client.transport.shm_heartbeat";
@@ -525,6 +526,181 @@ public:
         (void)unsetenv(SHM_HOST_ID_ENV_NAME);
     }
 };
+
+class KVClientTransportGetWithAllWorkersShmTest : public KVClientTransportGetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientTransportGetTest::SetClusterSetupOptions(opts);
+        constexpr char DISABLED_SHM_OPTION[] = "-ipc_through_shared_memory=false";
+        const auto pos = opts.workerGflagParams.find(DISABLED_SHM_OPTION);
+        ASSERT_NE(pos, std::string::npos);
+        opts.workerGflagParams.replace(pos, sizeof(DISABLED_SHM_OPTION) - 1, "-ipc_through_shared_memory=true");
+        opts.workerGflagParams += " -host_id_env_name=" + std::string(SHM_HOST_ID_ENV_NAME);
+        opts.injectActions += ";" + std::string(WORKER_OC_GET_ENTRY_INJECT) + ":call()";
+    }
+
+    void SetUp() override
+    {
+        ASSERT_EQ(setenv(SHM_HOST_ID_ENV_NAME, SHM_HOST_ID_VALUE, 1), 0);
+        KVClientTransportGetTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        KVClientTransportGetTest::TearDown();
+        (void)unsetenv(SHM_HOST_ID_ENV_NAME);
+    }
+
+protected:
+    std::string GetKeyWithMetaOwnerAndSameNodeWorker(uint32_t metaOwnerIndex, uint32_t sameNodeWorkerIndex)
+    {
+        std::string topology;
+        Status status = etcd_->Get(GetTopologyTableName(), "", topology);
+        if (status.IsError()) {
+            ADD_FAILURE() << status.ToString();
+            return {};
+        }
+        ClusterTopologyPb ring;
+        if (!ring.ParseFromString(topology)) {
+            ADD_FAILURE() << "Failed to parse topology";
+            return {};
+        }
+        HostPort sameNodeWorker;
+        status = cluster_->GetWorkerAddr(sameNodeWorkerIndex, sameNodeWorker);
+        if (status.IsError()) {
+            ADD_FAILURE() << status.ToString();
+            return {};
+        }
+        std::vector<HostPort> sameNodeWorkers;
+        std::map<uint32_t, std::string> tokenWorkers;
+        for (uint32_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+            HostPort worker;
+            status = cluster_->GetWorkerAddr(i, worker);
+            if (status.IsError()) {
+                ADD_FAILURE() << status.ToString();
+                return {};
+            }
+            sameNodeWorkers.emplace_back(std::move(worker));
+        }
+        for (const auto &worker : ring.members()) {
+            for (const auto token : worker.second.tokens()) {
+                tokenWorkers.emplace(token, worker.first);
+            }
+        }
+        std::sort(sameNodeWorkers.begin(), sameNodeWorkers.end());
+        const auto selected = std::find(sameNodeWorkers.begin(), sameNodeWorkers.end(), sameNodeWorker);
+        if (selected == sameNodeWorkers.end()) {
+            ADD_FAILURE() << "Same-node worker is absent from the topology";
+            return {};
+        }
+        const size_t selectedIndex = static_cast<size_t>(selected - sameNodeWorkers.begin());
+        HostPort expectedOwner;
+        status = cluster_->GetWorkerAddr(metaOwnerIndex, expectedOwner);
+        if (status.IsError()) {
+            ADD_FAILURE() << status.ToString();
+            return {};
+        }
+
+        for (size_t candidateIndex = 0; candidateIndex < KEY_SEARCH_LIMIT; ++candidateIndex) {
+            std::string key = "transport_get_policy_" + std::to_string(candidateIndex);
+            const uint32_t keyHash = MurmurHash3_32(key);
+            auto owner = tokenWorkers.lower_bound(keyHash);
+            if (owner == tokenWorkers.end()) {
+                owner = tokenWorkers.begin();
+            }
+            HostPort ownerWorker;
+            status = ownerWorker.ParseString(owner->second);
+            if (status.IsError()) {
+                ADD_FAILURE() << status.ToString();
+                return {};
+            }
+            if (ownerWorker == expectedOwner && keyHash % sameNodeWorkers.size() == selectedIndex) {
+                return key;
+            }
+        }
+        ADD_FAILURE() << "Unable to find a key for the requested metadata owner and same-node worker";
+        return {};
+    }
+};
+
+// Regression: when local cache is disabled, dataPlacementPolicy is a write-only setting. Even when
+// its same-node choice differs from the metadata owner, Get must enter the metadata-owner transport flow.
+TEST_F(KVClientTransportGetWithAllWorkersShmTest, GetIgnoresSameNodeWritePlacementPolicy)
+{
+    const std::string key = GetKeyWithMetaOwnerAndSameNodeWorker(META_OWNER_INDEX, TRANSPORT_CLIENT_WORKER_INDEX);
+    ASSERT_FALSE(key.empty());
+    const std::string value(VALUE_SIZE, 'p');
+    DS_ASSERT_OK(writer_->Set(key, value));
+
+    for (const auto policy : { DataPlacementPolicy::PREFERRED_SAME_NODE,
+                               DataPlacementPolicy::REQUIRED_SAME_NODE,
+                               DataPlacementPolicy::PREFERRED_META_OWNER }) {
+        reader_.reset();
+        ConnectOptions options;
+        InitConnectOpt(TRANSPORT_CLIENT_WORKER_INDEX, options, CLIENT_TIMEOUT_MS);
+        options.enableLocalCache = false;
+        options.dataPlacementPolicy = policy;
+        reader_ = std::make_shared<KVClient>(options);
+        DS_ASSERT_OK(reader_->Init());
+
+        TransportRpcCounts before;
+        GetRpcCounts(before);
+        uint64_t metaOwnerGetBefore = 0;
+        uint64_t nonOwnerGetBefore = 0;
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, META_OWNER_INDEX, WORKER_OC_GET_ENTRY_INJECT, metaOwnerGetBefore));
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, TRANSPORT_CLIENT_WORKER_INDEX, WORKER_OC_GET_ENTRY_INJECT, nonOwnerGetBefore));
+        Optional<Buffer> buffer;
+        DS_ASSERT_OK(reader_->Get(key, buffer));
+        TransportRpcCounts after;
+        GetRpcCounts(after);
+        uint64_t metaOwnerGetAfter = 0;
+        uint64_t nonOwnerGetAfter = 0;
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, META_OWNER_INDEX, WORKER_OC_GET_ENTRY_INJECT, metaOwnerGetAfter));
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, TRANSPORT_CLIENT_WORKER_INDEX, WORKER_OC_GET_ENTRY_INJECT, nonOwnerGetAfter));
+
+        ASSERT_TRUE(buffer);
+        AssertBufferEqual(*buffer, value);
+        ASSERT_EQ(after.queryAndGet, before.queryAndGet + 1);
+        ASSERT_EQ(nonOwnerGetAfter, nonOwnerGetBefore)
+            << "Get must not probe a same-host non-owner before metadata-owner QueryAndGet";
+        ASSERT_EQ(metaOwnerGetAfter, metaOwnerGetBefore + 1);
+        ASSERT_EQ(after.workerOcGet, before.workerOcGet + 1);
+        ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    }
+}
+
+TEST_F(KVClientTransportGetTest, LocalCacheGetStaysOnBoundWorkerWhenCrossNodeConnectionIsEnabled)
+{
+    reader_.reset();
+    ConnectOptions options;
+    InitConnectOpt(TRANSPORT_CLIENT_WORKER_INDEX, options, CLIENT_TIMEOUT_MS, true);
+    options.enableLocalCache = true;
+    options.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
+    reader_ = std::make_shared<KVClient>(options);
+    DS_ASSERT_OK(reader_->Init());
+
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string value(VALUE_SIZE, 'l');
+    DS_ASSERT_OK(writer_->Set(keys.front(), value));
+
+    TransportRpcCounts before;
+    GetRpcCounts(before);
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(keys.front(), buffer));
+    TransportRpcCounts after;
+    GetRpcCounts(after);
+
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(after.queryAndGet, before.queryAndGet);
+}
 
 TEST_F(KVClientTransportGetWithShmTest, NonBoundSameHostWorkerUsesWorkerOcFdPassing)
 {

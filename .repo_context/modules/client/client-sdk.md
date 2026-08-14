@@ -116,8 +116,10 @@
     and sends each same-worker group through these primitives; with local cache enabled it preserves the legacy
     client-worker batch path.
   - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing`; Set/MSet select workers through
-    the per-client `ConnectOptions::dataPlacementPolicy`, which defaults to `PREFERRED_SAME_NODE`. The option does not
-    change Get/MGet routing.
+    the per-client `ConnectOptions::dataPlacementPolicy`, which defaults to `PREFERRED_SAME_NODE`. Get/MGet always
+    build metadata-owner transport requests independent of that write policy; the transport flow then reads
+    metadata-selected replicas and may use same-host SHM. With `enableLocalCache=true`, Get/MGet stay on the bound
+    Worker path even if routing was initialized for cross-node failover.
     Unavailable workers are excluded during bounded pre-Publish retries. With local cache enabled, both APIs preserve
     the legacy current-worker data path and do not initialize Routing. When URMA is enabled, they initialize the
     TransportLayer runtime only to share the same process-local UB sender admission and dedicated recovery probe used

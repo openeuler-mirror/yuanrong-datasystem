@@ -62,8 +62,9 @@ std::string KVArgs::Usage(const std::string &argv0)
     ss << "  -W --worker_num      Worker number, used for key range fetching (default: 0)\n";
     ss << "  -I --worker_index    Worker index, used for key generation (default: 0)\n";
     ss << "  --skip_local         Skip local worker data during get operations (default: false)\n";
-    ss << "  --enable_local_cache Enable the legacy worker-mediated path: true/false (default: true)\n";
-    ss << "  --data_placement_policy SDK routing policy: PREFERRED_SAME_NODE, REQUIRED_SAME_NODE, "
+    ss << "  --enable_local_cache Get/MGet use bound worker when true, metadata-owner transport when false "
+          "(default: true)\n";
+    ss << "  --data_placement_policy SDK write placement policy: PREFERRED_SAME_NODE, REQUIRED_SAME_NODE, "
           "or PREFERRED_META_OWNER (default: PREFERRED_SAME_NODE)\n";
     ss << "  -h                   Show help\n";
     return ss.str();

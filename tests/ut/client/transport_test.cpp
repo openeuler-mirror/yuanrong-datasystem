@@ -132,68 +132,6 @@ public:
     }
 };
 
-class ShmRouteMmapTableEntry : public IMmapTableEntry {
-public:
-    ShmRouteMmapTableEntry(int fd, uint8_t *pointer) : IMmapTableEntry(fd, 1)
-    {
-        pointer_ = pointer;
-    }
-
-    Status Init(bool, const std::string &) override
-    {
-        return Status::OK();
-    }
-};
-
-class ShmRouteMmapTable : public IMmapTable {
-public:
-    ShmRouteMmapTable() : IMmapTable(false)
-    {
-    }
-
-    Status MmapAndStoreFd(const int &, const int &, const uint64_t &, const std::string &,
-                          const std::string &) override
-    {
-        return Status::OK();
-    }
-
-    void Add(int fd, uint8_t *pointer)
-    {
-        mmapTable_[fd] = std::make_shared<ShmRouteMmapTableEntry>(fd, pointer);
-    }
-};
-
-class BlockingShmGetWorkerApi : public object_cache::ClientWorkerRemoteApi {
-public:
-    BlockingShmGetWorkerApi(HostPort hostPort, std::promise<void> &getEntered, std::shared_future<void> allowGet,
-                            int storeFd)
-        : IClientWorkerCommonApi(hostPort, HeartbeatType::RPC_HEARTBEAT, false, nullptr),
-          ClientWorkerRemoteApi(std::move(hostPort), RpcCredential{}), getEntered_(getEntered),
-          allowGet_(std::move(allowGet)), storeFd_(storeFd)
-    {
-    }
-
-    Status Get(const object_cache::GetParam &, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &) override
-    {
-        getEntered_.set_value();
-        allowGet_.wait();
-        version = 1;
-        auto *info = rsp.add_objects();
-        info->set_object_index(0);
-        info->set_store_fd(storeFd_);
-        info->set_mmap_size(1);
-        info->set_data_size(1);
-        info->set_shm_id("old-worker-shm");
-        rsp.mutable_last_rc()->set_error_code(K_OK);
-        return Status::OK();
-    }
-
-private:
-    std::promise<void> &getEntered_;
-    std::shared_future<void> allowGet_;
-    int storeFd_;
-};
-
 TransportRequestContext MakeRequestContext()
 {
     return { "client-1", "token-1", "tenant-1" };
@@ -3177,66 +3115,6 @@ TEST(ObjectClientTransportTest, PeerDeadMetadataOwnerRetriesRoutedRead)
     EXPECT_EQ(metadata->keyGroups.size(), 2u);
     EXPECT_EQ(replicas->unaryKeys, objectKeys);
     EXPECT_NE(buffers[0], nullptr);
-}
-
-TEST(ObjectClientTransportTest, StandbySwitchDefersOldMmapCleanupUntilShmGetMaterializes)
-{
-    constexpr int storeFd = 77;
-    const auto workerAddress = MakeAddress(41);
-    const auto standbyAddress = MakeAddress(42);
-    std::promise<void> getEntered;
-    std::promise<void> allowGetPromise;
-    auto getEnteredFuture = getEntered.get_future();
-    auto allowGet = allowGetPromise.get_future().share();
-    bool getReleased = false;
-    Raii releaseBlockedGet([&]() {
-        if (!getReleased) {
-            allowGetPromise.set_value();
-        }
-    });
-    ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 41;
-    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
-    auto workerApi = std::make_shared<BlockingShmGetWorkerApi>(workerAddress, getEntered, allowGet, storeFd);
-    workerApi->shmEnableType_ = ShmEnableType::UDS;
-    client->workerApi_.emplace_back(workerApi);
-    client->listenWorker_.emplace_back(
-        std::make_shared<ListenWorker>(workerApi, HeartbeatType::NO_HEARTBEAT));
-    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(workerAddress));
-    client->mmapManager_ = std::make_unique<MmapManager>(workerApi, false);
-    auto mmapTable = std::make_unique<ShmRouteMmapTable>();
-    uint8_t mappedByte = 'x';
-    mmapTable->Add(storeFd, &mappedByte);
-    client->mmapManager_->mmapTable_ = std::move(mmapTable);
-
-    std::vector<std::shared_ptr<Buffer>> buffers(1);
-    Status routeStatus;
-    auto getFuture = std::async(std::launch::async, [&]() {
-        return client->RouteGetByShm({ "local" }, 1'000, false, false, false, buffers, routeStatus);
-    });
-    ASSERT_EQ(getEnteredFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-    EXPECT_EQ(workerApi->InvokeCount(), 1u);
-    ASSERT_NE(client->mmapManager_->GetMmapEntryByFd(storeFd), nullptr);
-
-    auto standbyApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(standbyAddress, RpcCredential{});
-    client->workerApi_.resize(2);
-    client->listenWorker_.resize(2);
-    client->switchInProgress_ = true;
-    client->switchGeneration_ = 1;
-    ASSERT_TRUE(client->CommitStandbySwitch(object_cache::ObjectClientImpl::LOCAL_WORKER,
-                                             object_cache::ObjectClientImpl::STANDBY1_WORKER, 1, standbyApi, nullptr));
-    EXPECT_NE(client->mmapManager_->GetMmapEntryByFd(storeFd), nullptr);
-
-    allowGetPromise.set_value();
-    getReleased = true;
-    ASSERT_EQ(getFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-    EXPECT_TRUE(getFuture.get().IsOk());
-    EXPECT_TRUE(routeStatus.IsOk());
-    ASSERT_NE(buffers[0], nullptr);
-    EXPECT_EQ(*static_cast<const uint8_t *>(buffers[0]->ImmutableData()), mappedByte);
-    EXPECT_EQ(workerApi->InvokeCount(), 0u);
-    EXPECT_EQ(client->mmapManager_->GetMmapEntryByFd(storeFd), nullptr);
 }
 
 TEST(ObjectClientTransportTest, DrainingLocationStopsAfterThreeFastRetries)

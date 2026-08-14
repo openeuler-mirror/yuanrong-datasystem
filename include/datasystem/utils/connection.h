@@ -51,7 +51,9 @@ struct ConnectOptions {
     SensitiveValue secretKey = "";
     std::string tenantId = "";
     bool enableCrossNodeConnection = false;
+    // true: Get/MGet use the bound Worker path; false: Get/MGet query metadata owners through TransportLayer.
     bool enableLocalCache = true;
+    // Used only by Set/MSet when enableLocalCache is false; it never changes Get/MGet routing.
     DataPlacementPolicy dataPlacementPolicy = DataPlacementPolicy::PREFERRED_SAME_NODE;
     bool enableRemoteH2D = false;
     bool enableClientDirectPipelineH2D = false;
