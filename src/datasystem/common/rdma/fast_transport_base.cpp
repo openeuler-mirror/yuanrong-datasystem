@@ -16,6 +16,7 @@
 
 #include "datasystem/utils/status.h"
 
+#include <atomic>
 #include <utility>
 
 #include "datasystem/common/flags/common_flags.h"
@@ -86,13 +87,46 @@ bool IsRemoteH2DEnabled()
 #endif
 }
 
+namespace {
+std::atomic<bool> &ClientUrmaRuntimeRequested()
+{
+    static std::atomic<bool> requested{ false };
+    return requested;
+}
+
+std::atomic<bool> &ClientUrmaRuntimeReady()
+{
+    static std::atomic<bool> ready{ false };
+    return ready;
+}
+}  // namespace
+
 bool IsUrmaEnabled()
 {
 #ifdef USE_URMA
-    return FLAGS_enable_urma;
+    return FLAGS_enable_urma || ClientUrmaRuntimeReady().load(std::memory_order_acquire);
 #else
     return false;
 #endif
+}
+
+void RequestClientUrmaRuntime()
+{
+    ClientUrmaRuntimeRequested().store(true, std::memory_order_release);
+}
+
+bool IsUrmaRuntimeConfigured()
+{
+#ifdef USE_URMA
+    return FLAGS_enable_urma || ClientUrmaRuntimeRequested().load(std::memory_order_acquire);
+#else
+    return false;
+#endif
+}
+
+void PublishClientUrmaRuntimeReady()
+{
+    ClientUrmaRuntimeReady().store(true, std::memory_order_release);
 }
 
 bool IsUcpEnabled()
@@ -112,7 +146,7 @@ bool IsRegisterWholeArenaEnabled()
 bool IsUbNumaAffinityEnabled()
 {
 #ifdef USE_URMA
-    return FLAGS_enable_ub_numa_affinity && IsUrmaEnabled() && IsRegisterWholeArenaEnabled();
+    return IsUrmaEnabled() && FLAGS_enable_ub_numa_affinity && IsRegisterWholeArenaEnabled();
 #else
     return false;
 #endif

@@ -76,10 +76,10 @@ public:
                               BrpcChannelConfig channelConfig = {},
                               std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider = nullptr,
                               bool enableClientDirectPipelineH2D = false, int32_t pipelineThreadNum = 64,
-                              std::shared_ptr<ThreadPool> releasePool = nullptr);
+                              std::shared_ptr<ThreadPool> releasePool = nullptr, bool initializeUbRuntime = true);
     virtual ~DataPlaneManager();
 
-    /** @brief Initialize process-level resources required by UB data-plane transport. */
+    /** @brief Initialize manager lifecycle and, when requested, process-level UB resources. */
     Status Init();
 
     /**
@@ -212,6 +212,7 @@ private:
     BrpcChannelConfig channelConfig_;
     std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider_;
     uint64_t fastTransportMemSize_ = 0;
+    bool initializeUbRuntime_ = true;
     bool enableClientDirectPipelineH2D_ = false;
     int32_t pipelineThreadNum_ = 64;
     bthread::Mutex lifecycleMutex_;

@@ -757,6 +757,12 @@ private:
         std::unique_ptr<Raii> invokeGuard;
     };
 
+    struct ShmGetRouteGroup {
+        std::shared_ptr<IClientWorkerApi> workerApi;
+        std::vector<std::pair<std::string, size_t>> keys;
+        std::unique_ptr<Raii> invokeGuard;
+    };
+
     struct MSetRouteGroup {
         HostPort worker;
         std::vector<std::string> keys;
@@ -1034,10 +1040,9 @@ private:
                          std::vector<std::shared_ptr<Buffer>> &objectBuffers, Status &rc);
 
     // Split routed keys into same-host shm groups and cross-host remoteIdx, with index-based
-    // mapping for duplicate keys. Returns K_OK on success.
+    // mapping for duplicate keys. Each shm group retains its worker invocation guard. Returns K_OK on success.
     Status BuildShmGroups(const std::vector<std::string> &objectKeys,
-                          std::vector<std::pair<std::shared_ptr<IClientWorkerApi>,
-                                                std::vector<std::pair<std::string, size_t>>>> &shmGroups,
+                          std::vector<ShmGetRouteGroup> &shmGroups,
                           std::vector<std::pair<std::string, size_t>> &remoteIdx);
 
     // Execute one same-host shm group via GetBuffersFromWorker; on failure move the keys into

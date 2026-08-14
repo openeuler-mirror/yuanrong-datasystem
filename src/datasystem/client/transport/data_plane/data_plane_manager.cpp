@@ -126,11 +126,11 @@ DataPlaneManager::DataPlaneManager(std::shared_ptr<Signature> signature, uint64_
                                    BrpcChannelConfig channelConfig,
                                    std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider,
                                    bool enableClientDirectPipelineH2D, int32_t pipelineThreadNum,
-                                   std::shared_ptr<ThreadPool> releasePool)
+                                   std::shared_ptr<ThreadPool> releasePool, bool initializeUbRuntime)
     : signature_(std::move(signature)), channelConfig_(std::move(channelConfig)),
       ubBufferProvider_(std::move(ubBufferProvider)), fastTransportMemSize_(fastTransportMemSize),
-      enableClientDirectPipelineH2D_(enableClientDirectPipelineH2D), pipelineThreadNum_(pipelineThreadNum),
-      releasePool_(std::move(releasePool))
+      initializeUbRuntime_(initializeUbRuntime), enableClientDirectPipelineH2D_(enableClientDirectPipelineH2D),
+      pipelineThreadNum_(pipelineThreadNum), releasePool_(std::move(releasePool))
 {
 }
 
@@ -163,7 +163,9 @@ Status DataPlaneManager::Init()
     if (enableClientDirectPipelineH2D_) {
         RETURN_IF_NOT_OK(OsXprtPipln::SetClientPipelineThreadNum(pipelineThreadNum_));
     }
-    RETURN_IF_NOT_OK(InitClientUbRuntime(fastTransportMemSize_, enableClientDirectPipelineH2D_));
+    if (initializeUbRuntime_ || enableClientDirectPipelineH2D_) {
+        RETURN_IF_NOT_OK(InitClientUbRuntime(fastTransportMemSize_, enableClientDirectPipelineH2D_));
+    }
 #ifdef USE_URMA
     if (enableClientDirectPipelineH2D_) {
         RETURN_IF_NOT_OK(UrmaManager::Instance().EnsureClientPipelineH2DEnv());

@@ -31,6 +31,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
@@ -447,12 +448,13 @@ protected:
             SWITCH_TIMEOUT_S, K_OK));
     }
 
-    void WaitClientTrafficReady(const std::shared_ptr<KVClient> &client, uint32_t workerIndex)
+    void WaitClientTrafficReady(const std::shared_ptr<KVClient> &client, uint32_t workerIndex, uint64_t valueSize = 0)
     {
         DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-            [this, &client, workerIndex]() {
+            [this, &client, workerIndex, valueSize]() {
                 std::string key = FormatString("wait_worker_%u_%llu", workerIndex, GetSteadyClockTimeStampMs());
-                std::string value = "service discovery failover keeps KV available";
+                std::string value = valueSize == 0 ? "service discovery failover keeps KV available"
+                                                   : std::string(valueSize, 'x');
                 RETURN_IF_NOT_OK(client->Set(key, value));
                 std::string result;
                 RETURN_IF_NOT_OK(client->Get(key, result));
@@ -548,6 +550,41 @@ private:
     uint32_t oldMinSampleCount_{ MIN_SAMPLE_COUNT };
     bool isClusterSetUp_{ false };
 };
+
+class KVClientUrmaMixedModeFailoverTest : public KVClientUrmaFailoverTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientUrmaFailoverTest::SetClusterSetupOptions(opts);
+        // The initial same-host worker intentionally advertises no UB transport. Remote workers keep URMA enabled.
+        opts.workerSpecifyGflagParams[0] += " -enable_urma=false";
+    }
+};
+
+TEST_F(KVClientUrmaMixedModeFailoverTest, LEVEL1_LocalShmFailoverToRemoteUbKeepsTrafficAvailable)
+{
+    LOG(INFO) << "[URMA failover test] verify local non-URMA SHM worker failure switches to remote UB";
+    std::shared_ptr<KVClient> client;
+    InitLocalPreferredClient(client);
+    EnableSwitchEndCounter();
+    RunTraffic(client, 1, "mixed_local_shm_before");
+    // The one-shot standby injection makes worker1 the only candidate without disrupting worker2 metadata ownership.
+    ForceNextSwitchWorker(1);
+    SetSwitchWorkerExpected(1, 1);
+    KillWorkerAndWaitDiscoveryRemote(0);
+    WaitClientTrafficReady(client, 1);
+    ASSERT_TRUE(WaitSwitchCountAtLeast(1));
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
+    WaitClientTrafficReady(client, 1, VALUE_SIZE);
+    std::string value(VALUE_SIZE, 'u');
+    std::string key = FormatString("mixed_remote_ub_%llu", GetSteadyClockTimeStampMs());
+    DS_ASSERT_OK(client->Set(key, value));
+    ASSERT_EQ(AccessTransportTracker::ToString(), "UB");
+    std::string result;
+    DS_ASSERT_OK(client->Get(key, result));
+    ASSERT_EQ(AccessTransportTracker::ToString(), "UB");
+    ASSERT_EQ(result, value);
+}
 
 TEST_F(KVClientUrmaFailoverTest, LocalDiscoveryUsesUdsAndDoesNotTriggerUrmaSwitch)
 {

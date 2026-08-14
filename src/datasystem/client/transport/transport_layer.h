@@ -59,6 +59,8 @@ struct TransportLayerOptions {
     std::shared_ptr<ThreadPool> releasePool;
     bool enableClientDirectPipelineH2D = false;
     int32_t pipelineThreadNum = 64;
+    // Keep eager UB setup by default; non-pipeline callers that have not negotiated UB may opt out explicitly.
+    bool initializeUbRuntime = true;
     std::shared_ptr<UbHealthFilter> readSourceFilter;
     // Synchronous client-lifecycle admission checked around transport retry backoff.
     std::function<Status()> retryAdmissionCheck;

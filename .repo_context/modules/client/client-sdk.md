@@ -123,7 +123,17 @@
     TransportLayer runtime only to share the same process-local UB sender admission and dedicated recovery probe used
     by routed writes. A raw provider/CQE status 4 from a legacy UB write therefore quarantines the sender before the
     next Create/MultiCreate and returns `K_URMA_WORKER_UNAVAILABLE` until the probe succeeds.
-    Timed-out UB writes retain the transport Event, whose late-completion context holds only a weak reference to that
+  - With `enableLocalCache=true` and `enableCrossNodeConnection=true`, `ObjectClientImpl` constructs its
+    `TransportLayer` before client initialization completes even when the initially selected same-host Worker does not
+    advertise URMA. A later same-host SHM-to-remote UB failover therefore reuses an already-published transport object
+    and Routing's full Worker snapshot; the switch path does not lazily replace `transportLayer_`. This preserves the
+    existing UB sender admission and reconcile-probe recovery path without adding synchronization to Set/Get. This
+    eager construction is transport-neutral for a non-URMA initial Worker: `DataPlaneManager` initializes its generic
+    lifecycle without activating the process-local UB runtime. For this compatibility path, later UB activation remains
+    owned by a Worker handshake that advertises UB; client-direct pipeline initialization continues to request UB setup
+    eagerly. The `TransportLayerOptions` default remains UB-eager, so routed clients with local cache disabled retain
+    their existing initialization behavior.
+  - Timed-out UB writes retain the transport Event, whose late-completion context holds only a weak reference to that
     originating TransportLayer's sender state plus its generation; the foreground waiter is detached at timeout. If a
     status-4 CQE arrives later, it quarantines that same Client sender and releases the retained Event. Shutdown or a
     completed recovery invalidates the generation, so an old CQE cannot quarantine a replacement sender and the
@@ -378,7 +388,9 @@
   - `ObjectClientImpl` is shared by both KV and Object API families, so “KV-only” changes may regress object behavior;
   - direct-read metadata and replica retries share the caller's API deadline. The data phase first polls replicas from
     the fixed metadata location snapshot, but `K_NOT_READY` with `Worker endpoint is absent from latest transport
-    snapshot` is treated as a stale topology/location signal: the reader tries remaining replicas, and
+    snapshot` are treated as stale topology/location signals; `K_RPC_PEER_DEAD` is converted to that signal only when
+    the metadata owner RPC fails:
+    the reader tries remaining replicas, and
     `ObjectClientImpl::GetFromTransportLayer` forces the existing hash-ring refresher before it re-routes and re-queries
     metadata only for affected keys with deadline-bounded backoff. Retry state is allocated only for affected keys;
     draining and stale-location budgets advance independently and never reset when the observed policy alternates.
@@ -386,6 +398,7 @@
     500 ms minimum interval instead of letting request traffic wake the refresh loop continuously. The transport round
     must still apply structured per-item results before deciding which keys are affected, so mixed batches do not turn
     object-level failures such as `K_NOT_FOUND` into stale-location retries.
+    A dead data replica is advanced within the current fixed-location round and does not trigger a metadata refresh.
   - Python-facing behavior can differ from C++ because pybind wrappers convert statuses into exceptions and sometimes rename methods;
   - context propagation changes can affect tracing and multi-tenant behavior across all client operations.
   - `tools/perf/cpu_spike_capture.sh` is an operator-side event trigger for transient client CPU spikes. It samples
@@ -474,9 +487,15 @@
     terminal route, metadata, data-plane, deadline, replica, missing-result, and materialization failures use `ERROR`.
     Data-plane dispatch logs each selected transporter at `INFO` before sending, and metadata warnings and errors are
     emitted for every occurrence. Other repeated degradation and per-key failure sites are sampled where needed, while
-    normal route, metadata, replica, chunk, and payload details remain in `VLOG(1)`. Because `enableLocalCache=true`
-    does not enter `TransportLayer::Get`, its gateway Get logging remains unchanged. Neither path remaps existing status
-    codes; when every key fails, Get returns the first failure in input order. Partial success still returns `K_OK`.
+    normal route, metadata, replica, chunk, and payload details remain in `VLOG(1)`. With local cache and cross-node
+    connection both enabled, routed same-host reads still use SHM while remote fallback enters `TransportLayer::Get`;
+    local-only Get logging remains unchanged. Neither path remaps existing status codes; when every key fails, Get
+    returns the first failure in input order. Partial success still returns `K_OK`.
+    Same-host routed Get retains the selected worker's invocation guard through SHM response processing, so worker
+    switch cleanup cannot unmap the old worker's shared memory while that read is still in flight.
+    Client-side dynamic UB activation publishes readiness with release/acquire ordering only after `UrmaManager::Init`
+    succeeds; transport selection remains fail-closed during initialization or after failure, without writing the
+    process gflag from a heartbeat thread.
     `MasterOCServiceImpl::QueryAndGet` logs authenticated handler entry at `INFO`, terminal handler failures at `ERROR`,
     and successful completion through `SLOW_LOG_IF_OR_VLOG` using the configured server process threshold.
   - when the existing client latency trace is enabled for a request, transport-layer Get contributes
