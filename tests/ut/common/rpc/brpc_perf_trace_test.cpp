@@ -224,6 +224,34 @@ TEST_F(BrpcPerfTraceTest, mark_failed_alone_routes_to_fail_histograms)
     EXPECT_EQ(HistogramField(summary, "brpc_rpc_network_residual_fail_latency", "total", "count"), 1u);
 }
 
+TEST_F(BrpcPerfTraceTest, framework_slow_log_uses_timeout_ratio_for_successful_rpc)
+{
+    BrpcPerfTrace trace("trace-success", "CoordinatorWatchService.HandleEvent");
+    trace.SetCntlDiagnostics(3000, -1, 0, false, 48);
+
+    EXPECT_FALSE(ShouldEmitBrpcFrameworkSlowLog(trace, 6ULL * BRPC_NS_PER_MS));
+    EXPECT_TRUE(ShouldEmitBrpcFrameworkSlowLog(trace, 2400ULL * BRPC_NS_PER_MS));
+}
+
+TEST_F(BrpcPerfTraceTest, framework_slow_log_keeps_failed_rpc_visible)
+{
+    BrpcPerfTrace failed("trace-failed", "CoordinatorWatchService.HandleEvent");
+    failed.SetCntlDiagnostics(3000, -1, 110, true, 0);
+    EXPECT_TRUE(ShouldEmitBrpcFrameworkSlowLog(failed, 1ULL * BRPC_NS_PER_MS));
+
+    BrpcPerfTrace marked("trace-marked", "CoordinatorWatchService.HandleEvent");
+    marked.MarkFailed();
+    EXPECT_TRUE(ShouldEmitBrpcFrameworkSlowLog(marked, 1ULL));
+}
+
+TEST_F(BrpcPerfTraceTest, framework_slow_log_keeps_legacy_threshold_without_controller_timeout)
+{
+    BrpcPerfTrace trace("trace-no-timeout", "WorkerService.GetObject");
+
+    EXPECT_FALSE(ShouldEmitBrpcFrameworkSlowLog(trace, BRPC_RPC_FRAMEWORK_SLOW_LOG_THRESHOLD_NS));
+    EXPECT_TRUE(ShouldEmitBrpcFrameworkSlowLog(trace, BRPC_RPC_FRAMEWORK_SLOW_LOG_THRESHOLD_NS + 1));
+}
+
 TEST_F(BrpcPerfTraceTest, server_trace_trailer_round_trips_without_payload_corruption)
 {
     BrpcPerfTrace serverTrace("trace-2", "WorkerService.GetObject");
