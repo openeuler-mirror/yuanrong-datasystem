@@ -448,7 +448,6 @@ TEST_F(TopologyRecoveryManagerTest, MembershipDeleteDoesNotBreakAnInstallingCand
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, payload, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     std::atomic<StatusCode> readStatus{ K_OK };
     store_->SetCommittedMutationObserver([&](WatchEvent::Type type, const std::string &key) {
         if (type == WatchEvent::Type::PUT && key == TopologyKey(clusterName)) {
@@ -457,6 +456,7 @@ TEST_F(TopologyRecoveryManagerTest, MembershipDeleteDoesNotBreakAnInstallingCand
         }
     });
 
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
     EXPECT_EQ(readStatus.load(), K_NOT_READY);
@@ -471,11 +471,11 @@ TEST_F(TopologyRecoveryManagerTest, CommittedObserverExceptionDoesNotStrandInsta
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, payload, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     store_->SetCommittedMutationObserver([](WatchEvent::Type, const std::string &) {
         throw std::runtime_error("injected committed observer failure");
     });
 
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
     std::vector<KeyValueEntry> entries;
@@ -668,19 +668,23 @@ TEST_F(TopologyRecoveryManagerTest, ShutdownWaitsForStartedTopologyInstallation)
     const std::string topologyKey = TopologyKey(clusterName);
     ObserveMember(clusterName, MEMBER_A);
     auto payload = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
-    TopologyRecoveryReportDecision decision;
-    ReportEvidence(clusterName, payload, decision);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     std::promise<void> installationStarted;
     auto installationFuture = installationStarted.get_future();
     std::promise<void> releaseInstallation;
     auto releaseFuture = releaseInstallation.get_future().share();
+    std::atomic<bool> installationSignaled{ false };
     store_->SetCommittedMutationObserver([&](WatchEvent::Type, const std::string &key) {
         if (key == topologyKey) {
-            installationStarted.set_value();
+            bool expected = false;
+            if (installationSignaled.compare_exchange_strong(expected, true)) {
+                installationStarted.set_value();
+            }
             releaseFuture.wait();
         }
     });
+    TopologyRecoveryReportDecision decision;
+    ReportEvidence(clusterName, payload, decision);
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     manager_->NotifyMembershipActivity(MembershipKey(clusterName, MEMBER_A));
     if (installationFuture.wait_for(TEST_DEADLINE) != std::future_status::ready) {

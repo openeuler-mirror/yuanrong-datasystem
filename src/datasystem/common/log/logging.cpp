@@ -506,6 +506,22 @@ void Logging::ResetClientLogConfigForTest()
     g_hasClientAccessLogNameConfig = false;
     g_clientAccessLogNameConfig.clear();
 }
+
+void Logging::ResetLoggingRuntimeForTest()
+{
+    auto *logging = Logging::GetInstance();
+    WriteLock lock(&logging->mux_);
+    if (logging->IsLoggingInitialized()) {
+        logging->ShutdownLoggingWrapper();
+    } else {
+        OperationLogger::Instance().Shutdown();
+    }
+    logging->accessRecorderManagerInstance_.reset();
+    logging->logManager_.reset();
+    Provider::Instance().SetLoggerProvider(nullptr);
+    logging->SetLoggingInitialized(false);
+    logging->init_ = false;
+}
 #endif
 
 Logging::Logging() : init_(false)

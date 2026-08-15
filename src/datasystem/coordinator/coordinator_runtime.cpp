@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/dynamic_config_updater.h"
 #include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/flags/flag_manager.h"
@@ -113,7 +114,15 @@ Status CoordinatorRuntime::InitAndRun(const CoordinatorOptions &options)
 
 Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
 {
-    Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR);
+    if (options != nullptr && !options->configFilePath.empty()) {
+        std::string errMsg;
+        CHECK_FAIL_RETURN_STATUS(
+            FlagManager::GetInstance()->ParseConfigFile(options->configFilePath, errMsg), K_INVALID,
+            FormatString("Parse config file %s error: %s", options->configFilePath, errMsg));
+    }
+
+    const std::string logFilename = FLAGS_log_filename.empty() ? "datasystem_coordinator" : FLAGS_log_filename;
+    Logging::GetInstance()->Start(logFilename, LogProcessRole::COORDINATOR);
     Logging::GetInstance()->LogProcessVersion(GIT_HASH, GIT_BRANCH);
     Status firstError;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery;
@@ -124,12 +133,6 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
             onStop_ = options->onStop;
             coordinatorDiscovery = options->coordinatorDiscovery;
             expectedMemberCount = options->expectedMemberCount;
-            if (!options->configFilePath.empty()) {
-                std::string errMsg;
-                CHECK_FAIL_RETURN_STATUS(
-                    FlagManager::GetInstance()->ParseConfigFile(options->configFilePath, errMsg), K_INVALID,
-                    FormatString("Parse config file %s error: %s", options->configFilePath, errMsg));
-            }
             LOG(INFO) << "Coordinator expect " << expectedMemberCount << " peers from CoordinatorDiscovery";
         } else {
             onStart_ = [] { return Status::OK(); };
