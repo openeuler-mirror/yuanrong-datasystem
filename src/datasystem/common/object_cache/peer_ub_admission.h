@@ -105,7 +105,7 @@ public:
     void ReportOutcome(const UbOpOutcome &outcome);
     void SetSelfWorker(const HostPort &self);
     void ReplaceGlobalSummaries(const std::vector<UbHealthSummary> &summaries);
-    void InitializeProbing(const HostPort &peer, uint64_t nowMs);
+    void InitializeVerification(const HostPort &peer, uint64_t nowMs);
     std::optional<UbProbeToken> TryBeginProbe(const HostPort &peer, uint64_t nowMs);
     bool CancelProbe(const UbProbeToken &token, uint64_t nowMs);
     bool CompleteProbe(const UbProbeToken &token, const Status &status, uint64_t nowMs,

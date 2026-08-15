@@ -191,10 +191,11 @@
     Consumers reject stale epochs, retired incarnations, and summaries whose incarnation does not match the registered
     Worker. Accepting a trusted new incarnation clears process-local evidence for that endpoint so the restarted Worker
     can be readmitted. Lease expiry alone removes only the global quarantine and retains process-local evidence.
-  - Multi-Worker URMA startup places the local migration sender in `PROBING`; a single Worker skips this peer-dependent
-    gate. The long-lived URMA warmup controller serializes dedicated one-byte recovery writes outside admission locks.
-    A successful CQE, current `ACTIVE` topology, unchanged probe epoch, and non-denying peer Global Fact are all required
-    before FastMigration admission reopens. Trusted provider-local ERROR 4 remains a Local Observation for the Worker
+  - Multi-Worker URMA startup begins non-blocking local-sender verification only after the local topology member is
+    `ACTIVE`; `INITIAL` and `JOINING` do not create UB failure evidence, and a single Worker skips this peer-dependent
+    verification. Startup verification stays `SUSPECT` and writable unless an authoritative CQE status `4` or `9`
+    identifies a hard failure. The long-lived URMA warmup controller serializes dedicated one-byte recovery writes
+    outside admission locks. Trusted provider-local ERROR 4 remains a Local Observation for the Worker
     itself; the Worker's own lease-published summary is treated as an echo rather than an external recovery fence, so a
     successful self probe can publish the next writable summary instead of deadlocking behind its previous deny fact.
   - `WorkerWorkerTransportService.ProbeProviderUbRecovery` is the heartbeat-independent Client recovery control path.

@@ -164,7 +164,7 @@ int RunBenchMain(int argc, char **argv)
     }
 
     PeerUbAdmission probingAdmission;
-    probingAdmission.InitializeProbing(PEER, PROBE_TIME_MS);
+    probingAdmission.InitializeVerification(PEER, PROBE_TIME_MS);
     const auto probe = probingAdmission.TryBeginProbe(PEER, PROBE_TIME_MS);
     if (!probe.has_value()) {
         std::cerr << "unable to begin recovery probe" << std::endl;

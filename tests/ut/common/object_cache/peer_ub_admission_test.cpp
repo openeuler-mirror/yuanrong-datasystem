@@ -99,10 +99,14 @@ TEST(PeerUbAdmissionTest, LateTimeoutCannotDowngradeHardUnavailableEvidence)
     EXPECT_EQ(admission.CheckReadSource(PEER).GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE);
 }
 
-TEST(PeerUbAdmissionTest, LateTimeoutCannotInvalidateRecoveryProbe)
+TEST(PeerUbAdmissionTest, StartupVerificationKeepsAdmissionOpen)
 {
     PeerUbAdmission admission;
-    admission.InitializeProbing(PEER, 10);
+    admission.SetSelfWorker(PEER);
+    admission.InitializeVerification(PEER, 10);
+    EXPECT_TRUE(admission.BuildSelfHealthSummary(PEER).writable);
+    EXPECT_TRUE(admission.CheckReadSource(PEER).IsOk());
+    EXPECT_TRUE(admission.CheckWriteTarget(PEER, UbOperationKind::MIGRATION_WRITE).IsOk());
     auto probe = admission.TryBeginProbe(PEER, 10);
     ASSERT_TRUE(probe.has_value());
 
@@ -112,9 +116,29 @@ TEST(PeerUbAdmissionTest, LateTimeoutCannotInvalidateRecoveryProbe)
 
     const auto state = admission.GetState(PEER);
     ASSERT_TRUE(state.has_value());
-    EXPECT_EQ(state->state, UbAdmissionState::PROBING);
+    EXPECT_EQ(state->state, UbAdmissionState::SUSPECT);
     EXPECT_EQ(state->epoch, probe->epoch);
     EXPECT_TRUE(admission.CompleteProbe(*probe, Status::OK(), 11, false));
+    EXPECT_EQ(admission.GetState(PEER)->state, UbAdmissionState::AVAILABLE);
+}
+
+TEST(PeerUbAdmissionTest, StartupVerificationTopologyNotReadyDoesNotQuarantinePeer)
+{
+    PeerUbAdmission admission;
+    admission.SetSelfWorker(PEER);
+    admission.InitializeVerification(PEER, 10);
+    auto probe = admission.TryBeginProbe(PEER, 10);
+    ASSERT_TRUE(probe.has_value());
+
+    EXPECT_FALSE(admission.CompleteProbe(*probe, Status(K_NOT_READY, "topology is joining"), 11, false));
+
+    const auto state = admission.GetState(PEER);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, UbAdmissionState::SUSPECT);
+    EXPECT_EQ(state->backoffLevel, 1U);
+    EXPECT_TRUE(admission.BuildSelfHealthSummary(PEER).writable);
+    EXPECT_TRUE(admission.CheckReadSource(PEER).IsOk());
+    EXPECT_TRUE(admission.CheckWriteTarget(PEER, UbOperationKind::MIGRATION_WRITE).IsOk());
 }
 
 TEST(PeerUbAdmissionTest, ConcurrentTimeoutReportsCannotDowngradeUnavailableState)
@@ -466,7 +490,7 @@ TEST(PeerUbAdmissionTest, AvailableGlobalFactRequiresProbeBeforeRecovery)
 TEST(PeerUbAdmissionTest, StaleProbeCannotOverrideNewFailure)
 {
     PeerUbAdmission admission;
-    admission.InitializeProbing(PEER, 10);
+    admission.InitializeVerification(PEER, 10);
     auto token = admission.TryBeginProbe(PEER, 10);
     ASSERT_TRUE(token.has_value());
     UbOpOutcome newerFailure(PEER, UbOperationKind::MIGRATION_READ, Status(K_URMA_ERROR, "new CQE status 4"));
