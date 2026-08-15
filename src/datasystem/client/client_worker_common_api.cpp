@@ -1103,6 +1103,22 @@ Status ClientWorkerRemoteCommonApi::Reconnect()
     return Status::OK();
 }
 
+void ClientWorkerRemoteCommonApi::ApplyClientUbRegistrationConfig(const RegisterClientRspPb &rsp)
+{
+    // UB capability is process-wide, while fast_transport_mode is endpoint-scoped. A same-host endpoint may use
+    // SHM and still needs to pass the worker's NUMA policy to a client that can later access cross-node workers.
+    if (!rsp.ub_runtime_enabled()) {
+        return;
+    }
+    SetClientUbNumaConfig(rsp.ub_numa_affinity_enabled(), rsp.ub_numa_rr_type(), hostPort_.ToString());
+    // Do this before ObjectClientImpl can initialize its transport arena. Affinity must already be visible when
+    // Arena::Init decides whether to build the NUMA range table. Pure SHM clients do not request UB runtime.
+    if (ShouldRequestClientUrmaRuntime(rsp.ub_runtime_enabled(), mayAccessNonBoundWorker_,
+                                       rsp.fast_transport_mode() == FastTransportMode::UB)) {
+        SetClientFastTransportMode(FastTransportMode::UB, fastTransportMemSize_);
+    }
+}
+
 void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp)
 {
     enableHugeTlb_ = rsp.enable_huge_tlb();
@@ -1122,7 +1138,9 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
     ConstructDecShmUnit(rsp);
     LOG(INFO) << "[URMA_INIT] post_register addr=" << hostPort_.ToString() << " clientId=" << clientId_
-              << " ver=" << workerVersion << " shm=" << IsShmEnable() << " ft=" << rsp.fast_transport_mode();
+              << " ver=" << workerVersion << " shm=" << IsShmEnable() << " ft=" << rsp.fast_transport_mode()
+              << " ubRuntime=" << rsp.ub_runtime_enabled();
+    ApplyClientUbRegistrationConfig(rsp);
     ConstructPipelineShmUnit(rsp);
     ConstructPipelineDataShmUnits(rsp);
     pendingFtHandshake_ = FtHandshakeContext{ timeoutMs, workerVersion, rsp };
@@ -1140,7 +1158,7 @@ Status ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()
     pendingFtHandshake_.reset();
     LOG(INFO) << "[URMA_INIT] try_ft addr=" << hostPort_.ToString() << " clientId=" << clientId_
               << " ver=" << ctx.workerVersion << " shm=" << IsShmEnable() << " ft=" << ctx.rsp.fast_transport_mode();
-    auto rc = FastTransportHandshake(ctx.timeoutMs, ctx.workerVersion, ctx.rsp);
+    auto rc = FastTransportHandshake(ctx.timeoutMs, ctx.workerVersion);
     if (rc.IsError()) {
         LOG(ERROR) << "Fast transport handshake failed for worker " << hostPort_.ToString()
                    << ". Detail: " << rc.ToString();
@@ -1149,19 +1167,22 @@ Status ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()
     return Status::OK();
 }
 
-Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion,
-                                                           const RegisterClientRspPb &rsp)
+Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion)
 {
     (void)timeoutMs;
     (void)workerVersion;
-    // Initialize UrmaManager regardless of shmEnabled_ to avoid switch overhead standby worker.
-    // This only warms up local URMA hardware resources and memory pools.
-    // The actual remote connection is established later during the handshake.
-    SetClientFastTransportMode(rsp.fast_transport_mode(), fastTransportMemSize_);
-    if (rsp.fast_transport_mode() == FastTransportMode::UB) {
-        SetClientUbNumaAffinityConfig(rsp.ub_numa_affinity_enabled(), hostPort_.ToString());
+    // PostRegisterClient has already requested UB runtime when either this endpoint uses UB or this client may
+    // connect cross-node. Keeping the request there is required because transport arenas can be initialized before
+    // this deferred handshake when local cache is disabled.
+    Status initRc = InitializeFastTransportManager();
+    if (initRc.IsError()) {
+        if (!IsShmEnable()) {
+            return initRc;
+        }
+        LOG(WARNING) << "Optional client UB runtime initialization failed for SHM endpoint "
+                     << hostPort_.ToString() << "; continue with SHM/TCP. Detail: " << initRc.ToString();
+        return Status::OK();
     }
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(), "Fast transport init failed");
 
     // This endpoint already uses SHM. Keep the process URMA capability for transport-layer access to other workers.
     if (IsShmEnable()) {

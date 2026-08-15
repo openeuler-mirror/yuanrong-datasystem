@@ -372,9 +372,15 @@ void WorkerServiceImpl::PopulateRegisterClientResponse(
     LogSampler::Instance().PopulateConfigProto(rsp.mutable_log_sample_config());
     OsXprtPipln::SetPiplnQueueShmInfo(rsp, pipelineQueueId, tenantId);
 #ifdef USE_URMA
-    if (IsUrmaEnabled() && !shmEnabled) {
-        rsp.set_fast_transport_mode(FastTransportMode::UB);
+    if (IsUrmaEnabled()) {
+        rsp.set_ub_runtime_enabled(true);
         rsp.set_ub_numa_affinity_enabled(IsUbNumaAffinityEnabled());
+        rsp.set_ub_numa_rr_type(FLAGS_ub_numa_rr_type);
+        // fast_transport_mode describes this endpoint only. Keep it as SHM for a same-host client, even though
+        // ub_runtime_enabled above advertises process-wide UB capability for connections to other workers.
+        if (!shmEnabled) {
+            rsp.set_fast_transport_mode(FastTransportMode::UB);
+        }
     }
 #endif
 }

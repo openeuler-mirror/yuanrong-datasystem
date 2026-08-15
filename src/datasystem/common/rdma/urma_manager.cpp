@@ -1232,11 +1232,23 @@ std::atomic<int> *UrmaManager::GetSrcChipInflightWrCounter(uint8_t chipId)
 
 uint8_t UrmaManager::GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity)
 {
-    if (!useNumaAffinity || FLAGS_ub_numa_rr_type == 0) {
+    if (!useNumaAffinity || FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::DISABLED)) {
         return transmittedChipId;
     }
     const uint64_t sequence = affinitySrcChipIdSequence_.fetch_add(1, std::memory_order_relaxed);
     return static_cast<uint8_t>(URMA_AFFINITY_SRC_CHIP_MIN + sequence % URMA_AFFINITY_SRC_CHIP_COUNT);
+}
+
+uint8_t UrmaManager::GetAffinitySrcChipIdForPost(uint8_t transmittedChipId, bool useNumaAffinity, bool firstPost,
+                                                 uint8_t logicalWriteChipId)
+{
+    if (!useNumaAffinity || FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::DISABLED)) {
+        return transmittedChipId;
+    }
+    if (FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::PER_POST) || firstPost) {
+        return GetAffinitySrcChipId(transmittedChipId, true);
+    }
+    return logicalWriteChipId;
 }
 
 void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
@@ -1883,9 +1895,10 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     flag.bs.complete_enable = 1;
     const bool useNumaAffinity =
         IsUbNumaAffinityEnabled() && args.srcChipId != INVALID_CHIP_ID && args.dstChipId != INVALID_CHIP_ID;
-    // Type 0 keeps the transmitted chip, type 1 selects once per logical write, and type 2 selects once per post.
-    const bool selectSrcChipPerPost = useNumaAffinity && FLAGS_ub_numa_rr_type == 2;
-    uint8_t srcChipId = selectSrcChipPerPost ? args.srcChipId : GetAffinitySrcChipId(args.srcChipId, useNumaAffinity);
+    // Type 0 keeps the transmitted chip, type 1 selects on the first post and reuses it for the logical write,
+    // and type 2 selects independently for every post. Keep this decision inside GetAffinitySrcChipIdForPost so
+    // tests can guard the loop granularity rather than only the underlying round-robin counter.
+    uint8_t srcChipId = args.srcChipId;
 
     uint64_t writtenSize = 0;
     uint64_t remainSize = args.size;
@@ -1945,9 +1958,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         eventKeys.clear();
     };
     while (remainSize > 0) {
-        if (selectSrcChipPerPost) {
-            srcChipId = GetAffinitySrcChipId(args.srcChipId, useNumaAffinity);
-        }
+        srcChipId = GetAffinitySrcChipIdForPost(args.srcChipId, useNumaAffinity, writeChunkIndex == 0, srcChipId);
         auto *srcChipInflightCounter = GetSrcChipInflightWrCounter(srcChipId);
         const uint64_t writeSize = std::min(remainSize, maxWriteSize);
         ++writeChunkIndex;
@@ -2737,14 +2748,6 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
 #else
         (void)enablePipelineH2D;
 #endif
-        const char *ubNumaRrType = std::getenv("DATASYSTEM_UB_NUMA_RR_TYPE");
-        if (ubNumaRrType != nullptr) {
-            std::string errMsg;
-            if (!SetCommandLineOption("ub_numa_rr_type", ubNumaRrType, errMsg)) {
-                LOG(WARNING) << "Ignore invalid DATASYSTEM_UB_NUMA_RR_TYPE value '" << ubNumaRrType
-                             << "': " << errMsg;
-            }
-        }
         UrmaManager::clientMode_.store(true, std::memory_order_release);
         uint64_t expected = DEFAULT_TRANSPORT_MEM_SIZE;
         if (UrmaManager::ubTransportMemSize_.compare_exchange_strong(expected, transportSize)) {
@@ -2759,17 +2762,34 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
     }
 }
 
-void UrmaManager::SetClientUbNumaAffinityConfig(bool enabled, const std::string &configSource)
+uint32_t UrmaManager::NormalizeUbNumaRrType(uint32_t rrType, const std::string &configSource)
 {
+    constexpr auto defaultRrType = UbNumaRrType::PER_LOGICAL_WRITE;
+    constexpr auto maxRrType = UbNumaRrType::PER_POST;
+    if (rrType > static_cast<uint32_t>(maxRrType)) {
+        LOG(WARNING) << "Worker " << configSource << " reported invalid UB NUMA rrType=" << rrType
+                     << ", use default rrType=" << static_cast<uint32_t>(defaultRrType);
+        return static_cast<uint32_t>(defaultRrType);
+    }
+    return rrType;
+}
+
+void UrmaManager::SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, const std::string &configSource)
+{
+    rrType = NormalizeUbNumaRrType(rrType, configSource);
     bool isFirstWorker = false;
-    std::call_once(Instance().clientUbNumaAffinityOnce_, [&]() {
-        FLAGS_enable_ub_numa_affinity = enabled;
+    std::call_once(Instance().clientUbNumaConfigOnce_, [&]() {
+        FLAGS_enable_ub_numa_affinity = affinityEnabled;
+        FLAGS_ub_numa_rr_type = rrType;
         isFirstWorker = true;
-        LOG(INFO) << "Set client UB NUMA affinity to " << enabled << " from worker " << configSource;
+        LOG(INFO) << "Set client UB NUMA config from worker " << configSource
+                  << ", affinityEnabled=" << affinityEnabled << ", rrType=" << rrType;
     });
-    if (!isFirstWorker && FLAGS_enable_ub_numa_affinity != enabled) {
-        LOG(WARNING) << "Worker " << configSource << " reported UB NUMA affinity " << enabled
-                     << ", but the client keeps " << FLAGS_enable_ub_numa_affinity;
+    if (!isFirstWorker
+        && (FLAGS_enable_ub_numa_affinity != affinityEnabled || FLAGS_ub_numa_rr_type != rrType)) {
+        LOG(WARNING) << "Worker " << configSource << " reported UB NUMA config affinityEnabled=" << affinityEnabled
+                     << ", rrType=" << rrType << ", but the client keeps affinityEnabled="
+                     << FLAGS_enable_ub_numa_affinity << ", rrType=" << FLAGS_ub_numa_rr_type;
     }
 }
 

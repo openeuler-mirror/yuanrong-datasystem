@@ -866,8 +866,13 @@ Status ObjectClientImpl::InitTransportLayer()
     options.releasePool = asyncReleasePool_;
     options.enableClientDirectPipelineH2D = enableClientDirectPipelineH2D_;
     options.pipelineThreadNum = clientDirectPipelineH2DThreadNum_;
-    options.initializeUbRuntime =
-        !(enableLocalCache_ && enableCrossNodeConnection_ && !IsUrmaEnabled() && !enableClientDirectPipelineH2D_);
+    // RegisterClient decides whether this process can actually use UB and requests the runtime before this method.
+    // Do not infer UB capability from local-cache settings: doing so makes TCP/SHM-only clients scan UB devices and
+    // allocate/register the transport memory pool even when no worker has advertised UB support.
+    options.initializeUbRuntime = IsUrmaRuntimeConfigured();
+    // UB prewarming is optional while the bound endpoint has a working SHM path. Keep that path available when the
+    // local client cannot initialize UB; a non-SHM endpoint retains the existing fail-fast behavior.
+    options.allowUbRuntimeFailure = workerApi_[currentNode_]->IsShmEnable();
     options.readSourceFilter = ubHealthFilter_;
     options.retryAdmissionCheck = [this]() { return CheckBoundWorkerAvailability(); };
     auto transportLayer = std::make_unique<client::TransportLayer>(
@@ -994,6 +999,11 @@ Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPo
         workerApi_[node] = std::make_shared<ClientWorkerLocalApi>(address, embeddedClientWorkerApi_, worker_,
                                                                   heartbeatType, signature_.get(), false, deviceId_);
     }
+    // Local-cache-off clients route every object operation through the transport layer even when worker failover is
+    // disabled. Keep this intent separate from enableCrossNodeConnection_, whose registration/switch semantics must
+    // not change merely to prepare UB for routed data.
+    workerApi_[node]->SetMayAccessNonBoundWorker(
+        ClientMayAccessNonBoundWorker(enableLocalCache_, enableCrossNodeConnection_));
     workerApi_[node]->isUseStandbyWorker_ = node != LOCAL_WORKER;
     int32_t initAttemptTimeoutMs = connectTimeoutMs == connectTimeoutMs_ ? -1 : connectTimeoutMs;
     RETURN_IF_NOT_OK(workerApi_[node]->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_,
@@ -1887,10 +1897,11 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
     const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode current, WorkerNode next, uint64_t switchGeneration,
     const HostPort &standbyWorker)
 {
-    HeartbeatType heartbeatType = currentApi->heartbeatType_;
-    auto candidateWorkerApi = currentApi->CloneWith(standbyWorker, cred_, heartbeatType, token_, signature_.get(),
-                                                    tenantId_, enableCrossNodeConnection_,
-                                                    embeddedClientWorkerApi_, worker_);
+    auto candidateWorkerApi =
+        currentApi->CloneWith(standbyWorker, cred_, currentApi->heartbeatType_, token_, signature_.get(), tenantId_,
+                              enableCrossNodeConnection_, embeddedClientWorkerApi_, worker_);
+    candidateWorkerApi->SetMayAccessNonBoundWorker(
+        ClientMayAccessNonBoundWorker(enableLocalCache_, enableCrossNodeConnection_));
     candidateWorkerApi->isUseStandbyWorker_ = true;
     ConfigureUrmaDataPlaneFailureCallback(next, candidateWorkerApi);
     Status rc = candidateWorkerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_);
@@ -1900,8 +1911,8 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
         return StandbySwitchAttemptResult::CONTINUE;
     }
 
-    auto candidateListenWorker =
-        std::make_shared<client::ListenWorker>(candidateWorkerApi, heartbeatType, next, asyncSwitchWorkerPool_.get());
+    auto candidateListenWorker = std::make_shared<client::ListenWorker>(candidateWorkerApi, currentApi->heartbeatType_,
+                                                                        next, asyncSwitchWorkerPool_.get());
     candidateListenWorker->SetSwitchWorkerHandle([this](uint32_t index, client::SwitchTriggerReason reason) {
         return SwitchWorkerNode(static_cast<WorkerNode>(index), reason);
     });
@@ -2100,6 +2111,8 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
     localWorkerApi =
         std::make_shared<ClientWorkerRemoteApi>(localAddress, cred_, heartbeatType, token_, signature_.get(), tenantId_,
                                                 enableCrossNodeConnection_, deviceId_);
+    localWorkerApi->SetMayAccessNonBoundWorker(
+        ClientMayAccessNonBoundWorker(enableLocalCache_, enableCrossNodeConnection_));
     Status rc = localWorkerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_);
     if (rc.IsError()) {
         LOG(ERROR) << "[Switch] Init preferred same-node worker " << localAddress.ToString()

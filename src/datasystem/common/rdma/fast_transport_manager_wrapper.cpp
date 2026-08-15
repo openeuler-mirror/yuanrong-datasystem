@@ -87,12 +87,13 @@ void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t tr
 #endif
 }
 
-void SetClientUbNumaAffinityConfig(bool enabled, const std::string &configSource)
+void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, const std::string &configSource)
 {
-    (void)enabled;
+    (void)affinityEnabled;
+    (void)rrType;
     (void)configSource;
 #ifdef USE_URMA
-    UrmaManager::SetClientUbNumaAffinityConfig(enabled, configSource);
+    UrmaManager::SetClientUbNumaConfig(affinityEnabled, rrType, configSource);
 #endif
 }
 

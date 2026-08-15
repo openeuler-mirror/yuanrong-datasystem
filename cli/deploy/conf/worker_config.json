@@ -604,7 +604,7 @@
         "description": "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled."
     },
     "ub_numa_rr_type": {
-        "value": "0",
+        "value": "1",
         "description": "UB NUMA source-chip round-robin type: 0=disabled, 1=one chip per logical write, 2=one chip per post."
     },
     "shared_memory_distribution_policy": {

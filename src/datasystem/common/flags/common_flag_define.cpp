@@ -70,7 +70,7 @@ DS_DEFINE_bool(urma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
 DS_DEFINE_bool(enable_ub_numa_affinity, false,
                "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled.");
-DS_DEFINE_uint32(ub_numa_rr_type, 0,
+DS_DEFINE_uint32(ub_numa_rr_type, 1,
                  "UB NUMA source-chip round-robin type: 0=disabled, 1=one chip per logical write, "
                  "2=one chip per post.");
 DS_DEFINE_string(shared_memory_distribution_policy, "none",

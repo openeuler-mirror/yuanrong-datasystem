@@ -37,6 +37,25 @@ public:
     {
         UpdateMemoryAlignment(rsp);
     }
+
+    void RunPostRegisterClient(const RegisterClientRspPb &rsp)
+    {
+        PostRegisterClient(1'000, rsp);
+    }
+
+    bool UbConfigWasApplied() const
+    {
+        return ubConfigWasApplied_;
+    }
+
+protected:
+    void ApplyClientUbRegistrationConfig(const RegisterClientRspPb &rsp) override
+    {
+        ubConfigWasApplied_ = rsp.ub_runtime_enabled();
+    }
+
+private:
+    bool ubConfigWasApplied_{ false };
 };
 
 TEST(ClientWorkerCommonApiTest, UsesWorkerMemoryAlignmentAndFallsBackForOldWorker)
@@ -63,6 +82,47 @@ TEST(ClientWorkerCommonApiTest, UsesFalseAsTheDefaultWorkerUrmaAffinityConfig)
 
     rsp.set_ub_numa_affinity_enabled(false);
     EXPECT_FALSE(rsp.ub_numa_affinity_enabled());
+}
+
+TEST(ClientWorkerCommonApiTest, CarriesWorkerUrmaRoundRobinType)
+{
+    RegisterClientRspPb rsp;
+
+    rsp.set_ub_numa_rr_type(1);
+    EXPECT_EQ(rsp.ub_numa_rr_type(), 1u);
+
+    rsp.set_ub_numa_rr_type(2);
+    EXPECT_EQ(rsp.ub_numa_rr_type(), 2u);
+
+    rsp.set_ub_numa_rr_type(0);
+    EXPECT_EQ(rsp.ub_numa_rr_type(), 0u);
+}
+
+TEST(ClientWorkerCommonApiTest, SeparatesWorkerUbCapabilityFromEndpointTransportMode)
+{
+    RegisterClientRspPb rsp;
+    EXPECT_FALSE(rsp.ub_runtime_enabled());
+
+    rsp.set_ub_runtime_enabled(true);
+    rsp.set_ub_numa_affinity_enabled(true);
+    rsp.set_ub_numa_rr_type(2);
+
+    // A same-host endpoint remains SHM/default while advertising the UB policy needed by cross-node connections.
+    EXPECT_TRUE(rsp.ub_runtime_enabled());
+    EXPECT_EQ(rsp.fast_transport_mode(), FastTransportMode::TCPIP);
+    EXPECT_TRUE(rsp.ub_numa_affinity_enabled());
+    EXPECT_EQ(rsp.ub_numa_rr_type(), 2u);
+}
+
+TEST(ClientWorkerCommonApiTest, AppliesUbConfigDuringPostRegisterBeforeDeferredHandshake)
+{
+    TestClientWorkerRemoteCommonApi api(HostPort("127.0.0.1", 1));
+    RegisterClientRspPb rsp;
+    rsp.set_ub_runtime_enabled(true);
+
+    api.RunPostRegisterClient(rsp);
+
+    EXPECT_TRUE(api.UbConfigWasApplied());
 }
 
 class InvalidWorkerMemoryAlignmentTest : public ::testing::TestWithParam<uint32_t> {

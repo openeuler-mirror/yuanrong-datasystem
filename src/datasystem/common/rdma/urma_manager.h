@@ -238,10 +238,10 @@ public:
                                     bool enablePipelineH2D = false);
 
     /**
-     * @brief Set the client process affinity policy from a worker registration response.
+     * @brief Set the client process UB NUMA-affinity and source-chip round-robin policy from a worker response.
      * The first worker fixes the policy; later conflicts are logged and ignored.
      */
-    static void SetClientUbNumaAffinityConfig(bool enabled, const std::string &configSource);
+    static void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, const std::string &configSource);
 
     /**
      * @brief Get client id for current process; non-empty when set by SetClientUrmaConfig (client mode).
@@ -856,6 +856,11 @@ private:
     Status InitLocalUrmaInfo(const HostPort &hostport);
     Status RemoveRemoteResources(const std::string &connectionKey);
     uint8_t GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity);
+    uint8_t GetAffinitySrcChipIdForPost(uint8_t transmittedChipId, bool useNumaAffinity, bool firstPost,
+                                        uint8_t logicalWriteChipId);
+
+    /** @brief Normalize a worker-provided UB NUMA round-robin type to the supported range. */
+    static uint32_t NormalizeUbNumaRrType(uint32_t rrType, const std::string &configSource);
     std::atomic<int> *GetSrcChipInflightWrCounter(uint8_t chipId);
     const char *GetSrcChipInflightWrCountsString() const;
     void LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
@@ -910,8 +915,8 @@ private:
     WaitPost waitInit_;
     std::string clientId_;
     static std::atomic<bool> clientMode_;
-    // The singleton freezes the process-global affinity flag on its first worker response.
-    std::once_flag clientUbNumaAffinityOnce_;
+    // The singleton freezes the process-global UB NUMA policy on its first worker response.
+    std::once_flag clientUbNumaConfigOnce_;
     void *memoryBuffer_ = nullptr;
     std::mutex recoveryProbeMutex_;
     void *recoveryProbeBuffer_ = nullptr;

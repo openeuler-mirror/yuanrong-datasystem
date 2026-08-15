@@ -20,6 +20,7 @@
 #include <sstream>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/rdma/urma_send_lane.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
 
@@ -54,9 +55,10 @@ bool ValidateSharedMemoryDistributionPolicy(const char *flagName, const std::str
 
 bool ValidateUbNumaRrType(const char *flagName, uint32_t value)
 {
-    constexpr uint32_t kMaxType = 2;
-    if (value > kMaxType) {
-        LOG(ERROR) << FormatString("The %s flag is %u, which must be between 0 and %u.", flagName, value, kMaxType);
+    constexpr auto kMaxType = datasystem::UbNumaRrType::PER_POST;
+    if (value > static_cast<uint32_t>(kMaxType)) {
+        LOG(ERROR) << FormatString("The %s flag is %u, which must be between 0 and %u.", flagName, value,
+                                   static_cast<uint32_t>(kMaxType));
         return false;
     }
     return true;

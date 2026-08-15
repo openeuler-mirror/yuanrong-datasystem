@@ -46,21 +46,47 @@ TEST(UrmaChipInflightTest, SelectsSourceChipAccordingToRoundRobinType)
     manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
 
     FLAGS_ub_numa_rr_type = 0;
-    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 2);
+    EXPECT_EQ(manager.GetAffinitySrcChipIdForPost(2, true, true, INVALID_CHIP_ID), 2);
+    EXPECT_EQ(manager.GetAffinitySrcChipIdForPost(2, true, false, 2), 2);
     EXPECT_EQ(manager.affinitySrcChipIdSequence_.load(std::memory_order_relaxed), 0);
 
     FLAGS_ub_numa_rr_type = 1;
-    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 1);
-    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 2);
-    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 1);
+    // Two logical writes with two posts each: type 1 selects once on the first post and reuses that chip.
+    auto firstWriteChip = manager.GetAffinitySrcChipIdForPost(2, true, true, INVALID_CHIP_ID);
+    EXPECT_EQ(firstWriteChip, 1);
+    firstWriteChip = manager.GetAffinitySrcChipIdForPost(2, true, false, firstWriteChip);
+    EXPECT_EQ(firstWriteChip, 1);
+    auto secondWriteChip = manager.GetAffinitySrcChipIdForPost(2, true, true, INVALID_CHIP_ID);
+    EXPECT_EQ(secondWriteChip, 2);
+    secondWriteChip = manager.GetAffinitySrcChipIdForPost(2, true, false, secondWriteChip);
+    EXPECT_EQ(secondWriteChip, 2);
+    EXPECT_EQ(manager.affinitySrcChipIdSequence_.load(std::memory_order_relaxed), 2);
 
     manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
     FLAGS_ub_numa_rr_type = 2;
-    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 1);
-    EXPECT_EQ(manager.GetAffinitySrcChipId(2, true), 2);
-    EXPECT_EQ(manager.GetAffinitySrcChipId(INVALID_CHIP_ID, false), INVALID_CHIP_ID);
-    EXPECT_EQ(manager.affinitySrcChipIdSequence_.load(std::memory_order_relaxed), 2);
+    // Two logical writes with two posts each: type 2 selects independently for every post.
+    auto chip = manager.GetAffinitySrcChipIdForPost(2, true, true, INVALID_CHIP_ID);
+    EXPECT_EQ(chip, 1);
+    chip = manager.GetAffinitySrcChipIdForPost(2, true, false, chip);
+    EXPECT_EQ(chip, 2);
+    chip = manager.GetAffinitySrcChipIdForPost(2, true, true, INVALID_CHIP_ID);
+    EXPECT_EQ(chip, 1);
+    chip = manager.GetAffinitySrcChipIdForPost(2, true, false, chip);
+    EXPECT_EQ(chip, 2);
+    EXPECT_EQ(manager.affinitySrcChipIdSequence_.load(std::memory_order_relaxed), 4);
+
+    EXPECT_EQ(manager.GetAffinitySrcChipIdForPost(INVALID_CHIP_ID, false, true, INVALID_CHIP_ID), INVALID_CHIP_ID);
+    EXPECT_EQ(manager.affinitySrcChipIdSequence_.load(std::memory_order_relaxed), 4);
     FLAGS_ub_numa_rr_type = oldUbNumaRrType;
+}
+
+TEST(UrmaChipInflightTest, NormalizesWorkerRoundRobinType)
+{
+    EXPECT_EQ(UrmaManager::NormalizeUbNumaRrType(0, "test-worker"), 0u);
+    EXPECT_EQ(UrmaManager::NormalizeUbNumaRrType(1, "test-worker"), 1u);
+    EXPECT_EQ(UrmaManager::NormalizeUbNumaRrType(2, "test-worker"), 2u);
+    EXPECT_EQ(UrmaManager::NormalizeUbNumaRrType(3, "test-worker"), 1u);
+    EXPECT_EQ(UrmaManager::NormalizeUbNumaRrType(UINT32_MAX, "test-worker"), 1u);
 }
 
 }  // namespace
