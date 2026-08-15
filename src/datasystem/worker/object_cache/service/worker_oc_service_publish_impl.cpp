@@ -384,6 +384,11 @@ Status WorkerOcServicePublishImpl::RequestingToMasterCore(ObjectKV &objectKV, co
     } else {
         LOG_IF_ERROR(safeObj->FreeResources(), "SafeObj free failed");
         LOG(ERROR) << FormatString("[ObjectKey %s] RequestingToMaster failed, status: %s", objectKey, rc.ToString());
+        if (rc.GetCode() == K_RPC_PEER_DEAD) {
+            // A relayed K_RPC_PEER_DEAD makes the client tear down its (healthy) data plane to
+            // this worker and evict it from routing. Other codes keep their transparency.
+            return Status(K_MASTER_TIMEOUT, FormatString("Create meta to master failed. detail: %s", rc.ToString()));
+        }
         if (IsRetryableRpcError(rc) || IsNonRetryableRpcError(rc)) {
             return Status(rc.GetCode(), FormatString("Create meta to master failed. detail: %s", rc.ToString()));
         }
