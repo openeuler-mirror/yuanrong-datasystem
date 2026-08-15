@@ -28,6 +28,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/log/trace.h"
@@ -68,6 +69,14 @@ bool IsMetadataRouteRetryable(const Status &rc)
     return retryableCodes.find(rc.GetCode()) != retryableCodes.end();
 }
 
+// Bounds for replaying a provably-unsent failure (E112 "Not connected yet" on a reconnecting
+// master socket, mapped to K_RPC_PEER_DEAD with the not-sent extra): the request never left
+// this worker, so replay is safe. Fixed small constants independent of the caller's budget --
+// a caller with a long timeout (e.g. 60s) must not spin retrying for it.
+constexpr int32_t UNSENT_RETRY_MAX_ATTEMPTS = 3;
+constexpr int64_t UNSENT_RETRY_ATTEMPT_TIMEOUT_MS = 5;
+constexpr int64_t UNSENT_RETRY_INTERVAL_MS = 1;
+
 template <typename Resolver, typename Requester, typename Sleeper>
 Status RetryMetadataRequestWithRouteRefresh(std::shared_ptr<WorkerMasterOCApi> &workerMasterApi,
                                             bool retryRequestFailure, Resolver &&resolver, Requester &&requester,
@@ -75,6 +84,8 @@ Status RetryMetadataRequestWithRouteRefresh(std::shared_ptr<WorkerMasterOCApi> &
 {
     Status rc;
     bool shouldRetry = true;
+    bool capNextAttempt = false;
+    int32_t unsentAttempts = 0;
     while (shouldRetry) {
         workerMasterApi.reset();
         bool requestAttempted = false;
@@ -84,17 +95,29 @@ Status RetryMetadataRequestWithRouteRefresh(std::shared_ptr<WorkerMasterOCApi> &
             auto &requestTimeout = GetRequestContext()->reqTimeoutDuration;
             auto savedTimeout = requestTimeout;
             Raii restoreTimeout([&requestTimeout, savedTimeout]() { requestTimeout = savedTimeout; });
-            requestTimeout.Init(std::min<int64_t>(requestTimeout.CalcRealRemainingTime(),
-                                                  META_ROUTE_ATTEMPT_TIMEOUT_MS));
+            int64_t attemptTimeoutMs = META_ROUTE_ATTEMPT_TIMEOUT_MS;
+            if (capNextAttempt) {
+                attemptTimeoutMs = std::min<int64_t>(attemptTimeoutMs, UNSENT_RETRY_ATTEMPT_TIMEOUT_MS);
+            }
+            requestTimeout.Init(std::min<int64_t>(requestTimeout.CalcRealRemainingTime(), attemptTimeoutMs));
             requestAttempted = true;
             rc = requester(workerMasterApi);
         }
-        shouldRetry = IsMetadataRouteRetryable(rc) && (!requestAttempted || retryRequestFailure);
+        const bool unsentFailure = requestAttempted && IsBrpcRequestDefinitelyNotSent(rc)
+                                   && unsentAttempts < UNSENT_RETRY_MAX_ATTEMPTS;
+        shouldRetry = (IsMetadataRouteRetryable(rc) || unsentFailure)
+                      && (!requestAttempted || retryRequestFailure);
+        capNextAttempt = unsentFailure && !IsMetadataRouteRetryable(rc);
         if (shouldRetry) {
             int64_t remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
-            shouldRetry = remainingMs > META_ROUTE_RETRY_INTERVAL_MS;
+            int64_t intervalMs = META_ROUTE_RETRY_INTERVAL_MS;
+            if (capNextAttempt) {
+                unsentAttempts++;
+                intervalMs = UNSENT_RETRY_INTERVAL_MS;
+            }
+            shouldRetry = remainingMs > intervalMs;
             if (shouldRetry) {
-                sleeper(std::min<int64_t>(remainingMs, META_ROUTE_RETRY_INTERVAL_MS));
+                sleeper(std::min<int64_t>(remainingMs, intervalMs));
             }
         }
     }
