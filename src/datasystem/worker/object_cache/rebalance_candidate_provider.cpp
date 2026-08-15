@@ -36,7 +36,8 @@ RebalanceCandidateProvider::RebalanceCandidateProvider(std::shared_ptr<WorkerOcE
 }
 
 Status RebalanceCandidateProvider::Select(uint64_t targetBytes, size_t maxObjectCount,
-                                          std::unordered_map<std::string, uint64_t> &candidates)
+                                          std::unordered_map<std::string, uint64_t> &candidates,
+                                          const std::unordered_set<std::string> *skipKeys)
 {
     candidates.clear();
     CHECK_FAIL_RETURN_STATUS(evictionManager_ != nullptr && objectTable_ != nullptr, K_RUNTIME_ERROR,
@@ -54,6 +55,9 @@ Status RebalanceCandidateProvider::Select(uint64_t targetBytes, size_t maxObject
     uint64_t selectedBytes = 0;
     for (const auto &node : nodes) {
         const std::string objectKey = node.objectKey;
+        if (skipKeys != nullptr && skipKeys->count(objectKey) > 0) {
+            continue;
+        }
         uint64_t objectSize = 0;
         auto rc = TryGetObjectSize(objectKey, objectSize);
         if (rc.IsError()) {

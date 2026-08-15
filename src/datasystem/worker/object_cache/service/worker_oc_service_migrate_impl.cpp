@@ -259,9 +259,16 @@ Status WorkerOcServiceMigrateImpl::MigrateDataImpl(const MigrateDataReqPb &req, 
         BatchUnlock(needModifyPrimary);
     });
     // 2. Get object metadata from master.
+    // needModifyPrimary objects (equal-version copies on target) are not in lockedEntries, so
+    // their keys must be added explicitly to needQueryIds — otherwise metas would never contain
+    // them and the needModifyPrimary loop below would unconditionally skip them, breaking
+    // ReplacePrimary for idempotent retries and same-version primary handoff.
     std::unordered_set<std::string> needQueryIds;
     std::transform(lockedEntries.begin(), lockedEntries.end(), std::inserter(needQueryIds, needQueryIds.end()),
                    [](const auto &entry) { return entry.first; });
+    for (const auto &[objectKey, it] : needModifyPrimary) {
+        (void)needQueryIds.insert(objectKey);
+    }
     QueryMetaMap metas;
     Status rc = QueryMasterMetadata(needQueryIds, metas, failedIds);
     if (rc.IsError()) {
@@ -271,11 +278,18 @@ Status WorkerOcServiceMigrateImpl::MigrateDataImpl(const MigrateDataReqPb &req, 
 
     // 3. Fill data and metadata to object entry.
     ObjectInfoMap needSendMasterIds;
+    std::unordered_set<std::string> skippedIds;
     Status status =
-        FillObjectsLocked(req, lockedEntries, metas, payloads, successIds, failedIds, needSendMasterIds, units);
+        FillObjectsLocked(req, lockedEntries, metas, payloads, failedIds, needSendMasterIds, units,
+                          skippedIds);
     bool oom = IsNoSpace(status);
 
     for (const auto &[objectKey, it] : needModifyPrimary) {
+        if (metas.find(objectKey) == metas.end()) {
+            (void)skippedIds.emplace(objectKey);
+            (void)successIds.erase(objectKey);
+            continue;
+        }
         needSendMasterIds.emplace(objectKey, std::make_pair(it.first, false));
     }
     // 4. Send replace primary copy to master.
@@ -284,7 +298,7 @@ Status WorkerOcServiceMigrateImpl::MigrateDataImpl(const MigrateDataReqPb &req, 
     }
 
     // 5. Fill response.
-    FillMigrateDataResponse(req, successIds, failedIds, oom, rsp);
+    FillMigrateDataResponse(req, successIds, failedIds, oom, rsp, skippedIds);
     if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
         auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
         LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
@@ -353,7 +367,8 @@ Status WorkerOcServiceMigrateImpl::PreCheckMigrateDataDirect(const MigrateDataDi
 Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectEntries(
     const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp, PerfPoint &point, LockedEntryMap &lockedEntries,
     std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &failedIds,
-    LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds)
+    LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds,
+    std::unordered_set<std::string> &skippedIds)
 {
     BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
 
@@ -361,6 +376,9 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectEntries(
     std::unordered_set<std::string> needQueryIds;
     std::transform(lockedEntries.begin(), lockedEntries.end(), std::inserter(needQueryIds, needQueryIds.end()),
                    [](const auto &entry) { return entry.first; });
+    for (const auto &[objectKey, it] : needModifyPrimary) {
+        (void)needQueryIds.insert(objectKey);
+    }
     QueryMetaMap metas;
     Status rc = QueryMasterMetadata(needQueryIds, metas, failedIds);
     if (rc.IsError()) {
@@ -369,7 +387,16 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectEntries(
     }
 
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_META);
-    FillMetaToObjectEntries(lockedEntries, metas, successIds, failedIds, needReadDataIds);
+    FillMetaToObjectEntries(lockedEntries, metas, successIds, failedIds, needReadDataIds, skippedIds);
+    for (auto it = needModifyPrimary.begin(); it != needModifyPrimary.end();) {
+        if (metas.find(it->first) == metas.end()) {
+            (void)skippedIds.emplace(it->first);
+            (void)successIds.erase(it->first);
+            it = needModifyPrimary.erase(it);
+        } else {
+            ++it;
+        }
+    }
     return Status::OK();
 }
 
@@ -414,6 +441,7 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
     LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
     std::unordered_set<std::string> failedIds;
+    std::unordered_set<std::string> skippedIds;
     LockedEntryMap needModifyPrimary;
     ObjectInfoMap needReadDataIds;
     Raii raii([this, &lockedEntries, &needModifyPrimary]() {
@@ -421,7 +449,7 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
         BatchUnlock(needModifyPrimary);
     });
     RETURN_IF_NOT_OK(PrepareMigrateDataDirectEntries(req, rsp, point, lockedEntries, successIds, failedIds,
-                                                     needModifyPrimary, needReadDataIds));
+                                                     needModifyPrimary, needReadDataIds, skippedIds));
 
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_DATA);
     DirectReadOutcome readOutcome{ req, needReadDataIds, {}, failedIds };
@@ -437,7 +465,7 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
     ReplacePrimaryForMigrateDataDirect(req, point, needModifyPrimary, needReadDataIds, successIds, failedIds,
                                        readOutcome.needSendMasterIds, status);
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_RSP);
-    FillMigrateDataDirectResponse(req, failedIds, oom, readOutcome.migratedBytes, rsp);
+    FillMigrateDataDirectResponse(req, failedIds, oom, readOutcome.migratedBytes, rsp, skippedIds);
     if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
         auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
         LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
@@ -505,6 +533,42 @@ void WorkerOcServiceMigrateImpl::BatchLock(const std::map<std::string, uint64_t>
     }
 }
 
+void WorkerOcServiceMigrateImpl::QueryMasterMetadataForGroup(
+    const HostPort &masterAddr, const std::vector<std::string> &ids, QueryMetaMap &queryMetas,
+    std::unordered_map<std::string, std::unordered_set<std::string>> &redirectIds,
+    std::unordered_set<std::string> &tmpFailedIds, Status &lastRc)
+{
+    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
+    if (workerMasterApi == nullptr) {
+        std::stringstream ss;
+        ss << "[Migrate Data] hash master get failed, Replace primary copy failed: " << masterAddr.ToString();
+        LOG(ERROR) << ss.str();
+        lastRc = Status(StatusCode::K_RUNTIME_ERROR, ss.str());
+        tmpFailedIds.insert(ids.begin(), ids.end());
+        return;
+    }
+    master::PureQueryMetaReqPb req;
+    req.set_redirect(true);
+    for (const auto &id : ids) {
+        req.add_object_keys(id);
+    }
+    master::PureQueryMetaRspPb rsp;
+    Status rc = PureQueryMetaRetry(workerMasterApi, req, rsp);
+    if (rc.IsError()) {
+        LOG(ERROR) << "[Migrate Data] Pure query meta failed: " << rc.ToString();
+        tmpFailedIds.insert(ids.begin(), ids.end());
+        lastRc = rc;
+        return;
+    }
+    for (const auto &meta : rsp.query_metas()) {
+        (void)queryMetas.emplace(meta.meta().object_key(), meta);
+    }
+    for (const auto &info : rsp.info()) {
+        auto &objectList = redirectIds[info.redirect_meta_address()];
+        objectList.insert(info.change_meta_ids().begin(), info.change_meta_ids().end());
+    }
+}
+
 Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<std::string> &objectKeys,
                                                        QueryMetaMap &queryMetas,
                                                        std::unordered_set<std::string> &failedIds)
@@ -518,38 +582,7 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
     std::unordered_map<std::string, std::unordered_set<std::string>> redirectIds;
     std::unordered_set<std::string> tmpFailedIds;
     for (auto &item : objKeysGrpByMaster) {
-        HostPort masterAddr = item.first;
-        const auto &ids = item.second;
-        auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-        if (workerMasterApi == nullptr) {
-            std::stringstream ss;
-            ss << "[Migrate Data] hash master get failed, Replace primary copy failed: " << masterAddr.ToString();
-            LOG(ERROR) << ss.str();
-            lastRc = Status(StatusCode::K_RUNTIME_ERROR, ss.str());
-            tmpFailedIds.insert(ids.begin(), ids.end());
-            continue;
-        }
-        master::PureQueryMetaReqPb req;
-        req.set_redirect(true);
-        for (const auto &id : ids) {
-            req.add_object_keys(id);
-        }
-        master::PureQueryMetaRspPb rsp;
-        Status rc = PureQueryMetaRetry(workerMasterApi, req, rsp);
-        if (rc.IsError()) {
-            LOG(ERROR) << "[Migrate Data] Pure query meta failed: " << rc.ToString();
-            tmpFailedIds.insert(ids.begin(), ids.end());
-            lastRc = rc;
-            continue;
-        }
-        for (const auto &meta : rsp.query_metas()) {
-            (void)queryMetas.emplace(meta.meta().object_key(), meta);
-        }
-
-        for (const auto &info : rsp.info()) {
-            auto &objectList = redirectIds[info.redirect_meta_address()];
-            objectList.insert(info.change_meta_ids().begin(), info.change_meta_ids().end());
-        }
+        QueryMasterMetadataForGroup(item.first, item.second, queryMetas, redirectIds, tmpFailedIds, lastRc);
     }
 
     Status rc = PureQueryMetaToRedirectMaster(redirectIds, queryMetas, tmpFailedIds);
@@ -557,14 +590,20 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
 
     size_t failedSize = tmpFailedIds.size();
     failedIds.insert(tmpFailedIds.begin(), tmpFailedIds.end());
+    INJECT_POINT("WorkerOcServiceMigrateImpl.QueryMasterMetadata.notFound",
+                 [&queryMetas]() -> Status {
+                     queryMetas.clear();
+                     return Status::OK();
+                 });
     return failedSize == objectKeys.size() ? lastRc : Status::OK();
 }
 
 Status WorkerOcServiceMigrateImpl::FillObjectsLocked(
     const MigrateDataReqPb &req, LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
-    std::vector<RpcMessage> &payloads, std::unordered_set<std::string> &successIds,
+    std::vector<RpcMessage> &payloads,
     std::unordered_set<std::string> &failedIds, ObjectInfoMap &needSendMasterIds,
-    const std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units)
+    const std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units,
+    std::unordered_set<std::string> &skippedIds)
 {
     Status lastRc;
     const auto &infoList = req.objects();
@@ -580,7 +619,7 @@ Status WorkerOcServiceMigrateImpl::FillObjectsLocked(
         if (metaIt == metas.end()) {
             LOG(INFO) << FormatString("[Migrate Data] %s has been deleted, not need to be process.", objectKey);
             if (failedIds.find(objectKey) == failedIds.end()) {
-                (void)successIds.emplace(objectKey);
+                (void)skippedIds.emplace(objectKey);
             }
             continue;
         }
@@ -618,14 +657,15 @@ Status WorkerOcServiceMigrateImpl::FillObjectsLocked(
 void WorkerOcServiceMigrateImpl::FillMetaToObjectEntries(LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
                                                          std::unordered_set<std::string> &successIds,
                                                          std::unordered_set<std::string> &failedIds,
-                                                         ObjectInfoMap &needReadDataIds)
+                                                         ObjectInfoMap &needReadDataIds,
+                                                         std::unordered_set<std::string> &skippedIds)
 {
     for (auto &[objectKey, it] : lockedEntries) {
         const auto &metaIt = metas.find(objectKey);
         if (metaIt == metas.end()) {
             LOG(INFO) << FormatString("[Migrate Data] %s has been deleted, not need to be process.", objectKey);
             if (failedIds.find(objectKey) == failedIds.end()) {
-                (void)successIds.emplace(objectKey);
+                (void)skippedIds.emplace(objectKey);
             }
             continue;
         }
@@ -940,13 +980,17 @@ uint64_t WorkerOcServiceMigrateImpl::CalcRemainBytes(const MigrateType &type)
 void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb &req,
                                                          const std::unordered_set<std::string> &successIds,
                                                          const std::unordered_set<std::string> &failedIds, bool oom,
-                                                         MigrateDataRspPb &rsp)
+                                                         MigrateDataRspPb &rsp,
+                                                         const std::unordered_set<std::string> &skipIds)
 {
     for (const auto &id : successIds) {
         rsp.add_success_ids(id);
     }
     for (const auto &id : failedIds) {
         rsp.add_fail_ids(id);
+    }
+    for (const auto &id : skipIds) {
+        rsp.add_skipped_object_keys(id);
     }
     if (oom) {
         rsp.set_remain_bytes(0);
@@ -974,10 +1018,14 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
 void WorkerOcServiceMigrateImpl::FillMigrateDataDirectResponse(const MigrateDataDirectReqPb &req,
                                                                const std::unordered_set<std::string> &failedIds,
                                                                bool oom, uint64_t migratedBytes,
-                                                               MigrateDataDirectRspPb &rsp)
+                                                               MigrateDataDirectRspPb &rsp,
+                                                               const std::unordered_set<std::string> &skipIds)
 {
     for (const auto &id : failedIds) {
         rsp.add_failed_object_keys(id);
+    }
+    for (const auto &id : skipIds) {
+        rsp.add_skipped_object_keys(id);
     }
     if (oom) {
         rsp.set_remain_bytes(0);

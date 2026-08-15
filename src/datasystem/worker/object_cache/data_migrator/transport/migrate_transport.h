@@ -51,6 +51,7 @@ public:
         uint64_t remainBytes{ UINT64_MAX };  // UINT64_MAX means the field is not set.
         std::unordered_set<ImmutableString> successKeys;
         std::unordered_set<ImmutableString> failedKeys;
+        std::unordered_set<ImmutableString> skipKeys;
         uint64_t limitRate{ 0 };
         std::optional<ProviderUbFailureDetailPb> ubFailureDetail;
     };

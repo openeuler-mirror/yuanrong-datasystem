@@ -232,6 +232,21 @@
     stops following batches instead of being misattributed to a target. Recovery
     probes use a manager-owned, independently registered 4 KiB source segment; Worker startup does not initialize the
     client `UB_TRANSPORT` allocation pool solely for the one-byte probe.
+  - Worker-to-worker migration responses distinguish success, failed, and skipped object keys as three mutually
+    exclusive sets. `skipped_object_keys` (in `MigrateDataRspPb`, `MigrateDataDirectRspPb`, and `NotifyRemoteGetRspPb`)
+    carries objects the target could not process because master metadata was not found (deleted concurrently, or
+    meta-is-moving). The source `MigrateDataHandler` inserts `skipKeys` into `skipIds_` and excludes them from
+    `successIds` before calling `ReleaseResources`, so skipped objects are never released at the source. Three migration
+    paths route metadata-not-found to skipped: TCP `FillObjectsLocked`, URMA read `FillMetaToObjectEntries`, and URMA
+    write `NotifyRemoteGet` entry plus `ReportUnattemptedObjects` catch-all. `needModifyPrimary` objects (equal-version
+    copies already on target) are included in the metadata query set so that the skip check only fires when master
+    genuinely has no metadata, not merely because the key was not queried. For SPILL migrations via `NotifyRemoteGet`,
+    `is_spill` gates `ReplacePrimary`/`CreateMultiCopyMeta`/`ClearNeedDelete`: when `is_spill=true`, the target skips
+    `CreateMultiCopyMeta`, executes `ReplacePrimary`, and clears `needDelete`, so the source's primary pointer transfers
+    to the target before the source releases data. `RebalanceExecutor` treats skipped objects as non-failure
+    (`failedObjects` excludes skipIds) and, when a batch is all-skip after partial success, retries candidate selection
+    with a task-local `taskSkippedKeys` set so `SelectCandidates` scans past previously-skipped objects to find valid
+    candidates behind them. `skippedObjects` is reported in task completion logs for observability.
   - Published full topology snapshots drive UB-state lifecycle reconciliation. Explicitly removed Worker addresses
     enter a `2 * node_timeout_s` grace period, after which local/global/incarnation buckets are removed and a bounded
     TTL tombstone rejects old incarnation replay. The warmup background loop prunes expired tombstones even when no

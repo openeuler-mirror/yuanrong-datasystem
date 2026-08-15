@@ -166,6 +166,7 @@ public:
     std::function<Status(master::ReplacePrimaryReqPb &, master::ReplacePrimaryRspPb &)> replacePrimary_;
     std::function<Status(master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &, std::vector<RpcMessage> &)>
         queryMeta_;
+    std::function<Status(master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)> pureQueryMeta_;
 
     RETURN_UNSUPPORTED_MASTER_API(PutP2PMeta, PutP2PMetaReqPb &, PutP2PMetaRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(SubscribeReceiveEvent, SubscribeReceiveEventReqPb &,
@@ -196,7 +197,13 @@ public:
         }
         return Status(K_RUNTIME_ERROR, "unsupported test master API: ReplacePrimary");
     }
-    RETURN_UNSUPPORTED_MASTER_API(PureQueryMeta, master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)
+    Status PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) override
+    {
+        if (pureQueryMeta_) {
+            return pureQueryMeta_(req, rsp);
+        }
+        return Status(K_RUNTIME_ERROR, "unsupported test master API: PureQueryMeta");
+    }
     RETURN_UNSUPPORTED_MASTER_API(CheckObjectDataLocation, master::CheckObjectDataLocationReqPb &,
                                   master::CheckObjectDataLocationRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(RollbackMultiMeta, master::RollbackMultiMetaReqPb &,
@@ -339,6 +346,40 @@ public:
 
         objectTable_->Insert(objectKey, std::move(ptr));
         return Status::OK();
+    }
+
+    MigrateDataReqPb MakeSpillReqWithObjects(const std::string &prefix, uint32_t count, uint64_t version = 1)
+    {
+        MigrateDataReqPb req;
+        req.set_worker_addr("127.0.0.1:18481");
+        req.set_type(MigrateType::SPILL);
+        for (uint32_t i = 0; i < count; ++i) {
+            const std::string objectKey = prefix + std::to_string(i);
+            auto ptr = std::make_unique<object_cache::ObjCacheShmUnit>();
+            ptr->SetCreateTime(version);
+            ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+            ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
+            ptr->modeInfo.SetCacheType(CacheType::MEMORY);
+            ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
+            ptr->stateInfo.SetPrimaryCopy(true);
+            ptr->stateInfo.SetSpillState(false);
+            auto insertStatus = objectTable_->Insert(objectKey, std::move(ptr));
+            EXPECT_EQ(insertStatus.GetCode(), StatusCode::K_OK) << "Insert failed for " << objectKey;
+            auto *info = req.add_objects();
+            info->set_object_key(objectKey);
+            info->set_version(version);
+            info->set_data_size(1);
+        }
+        return req;
+    }
+
+    static std::unordered_set<std::string> MakeExpectedKeys(const std::string &prefix, uint32_t count)
+    {
+        std::unordered_set<std::string> keys;
+        for (uint32_t i = 0; i < count; ++i) {
+            keys.emplace(prefix + std::to_string(i));
+        }
+        return keys;
     }
 
     void SetMemoryAvailable(bool available)
@@ -1175,7 +1216,8 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     GetRequestContext()->reqTimeoutDuration.Init(10'000);
     impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
                                                   tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
-                                                  migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners);
+                                                  migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners,
+                                                  false);
 
     EXPECT_EQ(replacePrimaryCalls, 1u);
     EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete());
@@ -1328,7 +1370,8 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetReturnsFailedKeyWhenMasterDo
 
     impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
                                                   tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
-                                                  migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners);
+                                                  migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners,
+                                                  false);
 
     EXPECT_THAT(rsp.failed_object_keys(), Contains(objectKey));
     EXPECT_EQ(unconfirmedObjectVersions.at(objectKey), 42);
@@ -1357,7 +1400,7 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetAcceptsOnlyExplicitlyConfirm
     ScopedRequestContext requestContext;
 
     impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
-                                              failedConfirmationOwners);
+                                              failedConfirmationOwners, false);
 
     EXPECT_THAT(confirmedIds, ElementsAre(objectKey));
     EXPECT_TRUE(failedIds.empty());
@@ -1421,7 +1464,7 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetFollowsCopyMetaRedirectAfter
     ScopedRequestContext requestContext;
 
     impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
-                                              failedConfirmationOwners);
+                                              failedConfirmationOwners, false);
 
     EXPECT_EQ(oldMasterCalls, 1);
     EXPECT_EQ(newMasterCalls, 1);
@@ -1451,7 +1494,7 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRejectsCopyMetaPersistenceFa
     ScopedRequestContext requestContext;
 
     impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
-                                              failedConfirmationOwners);
+                                              failedConfirmationOwners, false);
 
     EXPECT_TRUE(confirmedIds.empty());
     EXPECT_THAT(failedIds, Contains(objectKey));
@@ -1480,11 +1523,11 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetShortCircuitsFailedConfirmat
     std::unordered_set<std::string> failedIds;
 
     impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
-                                              failedConfirmationOwners);
+                                              failedConfirmationOwners, false);
     confirmedIds.clear();
     failedIds.clear();
     impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
-                                              failedConfirmationOwners);
+                                              failedConfirmationOwners, false);
 
     EXPECT_EQ(requestCount, 1);
     EXPECT_TRUE(confirmedIds.empty());
@@ -1539,6 +1582,260 @@ TEST_F(MigrateDataServiceTest, MigrateDataDirectResponseSetsZeroLimitRateWhenOom
 
     ASSERT_EQ(rsp.limit_rate(), 0);
     ASSERT_EQ(rsp.remain_bytes(), 0);
+}
+
+TEST_F(MigrateDataServiceTest, MetadataNotFoundSkipsObjectAndDoesNotCallReplacePrimary)
+{
+    RELEASE_STUBS;
+    constexpr uint32_t count = 2;
+    auto req = MakeSpillReqWithObjects("SkipTest_", count);
+    auto expectedKeys = MakeExpectedKeys("SkipTest_", count);
+    RouteObjectKeysByMasterHostPort2(expectedKeys);
+
+    int replacePrimaryCalls = 0;
+    auto remoteApi = std::make_shared<MigrateTestWorkerMasterOCApi>(HostPort("127.0.0.1:18481"),
+                                                                     HostPort("127.0.0.1:18482"));
+    remoteApi->replacePrimary_ = [&replacePrimaryCalls](master::ReplacePrimaryReqPb &req,
+                                                         master::ReplacePrimaryRspPb &rsp) {
+        ++replacePrimaryCalls;
+        for (const auto &info : req.object_infos()) {
+            rsp.add_success_ids(info.object_key());
+        }
+        return Status::OK();
+    };
+    remoteApi->pureQueryMeta_ = [](master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &rsp) {
+        (void)rsp;
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetDefaultApi(remoteApi);
+
+    std::unordered_set<std::string> capturedQueryIds;
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::QueryMasterMetadata, (_, _, _))
+        .WillRepeatedly(Invoke([&capturedQueryIds](const std::unordered_set<std::string> &keys, QueryMetaMap &metas,
+                                                   std::unordered_set<std::string> &failedIds) {
+            capturedQueryIds = keys;
+            (void)metas;
+            (void)failedIds;
+            return Status::OK();
+        }));
+
+    MigrateDataRspPb rsp;
+    std::vector<RpcMessage> payloads;
+    DS_ASSERT_OK(impl_->MigrateData(req, rsp, std::move(payloads)));
+
+    for (const auto &key : expectedKeys) {
+        EXPECT_TRUE(capturedQueryIds.count(key) > 0)
+            << "needModifyPrimary key " << key << " was not included in metadata query";
+    }
+    EXPECT_EQ(replacePrimaryCalls, 0);
+    EXPECT_EQ(rsp.skipped_object_keys_size(), static_cast<int>(count));
+    for (int i = 0; i < rsp.skipped_object_keys_size(); ++i) {
+        EXPECT_TRUE(expectedKeys.count(rsp.skipped_object_keys(i)) > 0)
+            << "unexpected skipped key: " << rsp.skipped_object_keys(i);
+    }
+    EXPECT_EQ(rsp.success_ids_size(), 0);
+    EXPECT_EQ(rsp.fail_ids_size(), 0);
+}
+
+TEST_F(MigrateDataServiceTest, NeedModifyPrimaryWithMetadataCallsReplacePrimary)
+{
+    RELEASE_STUBS;
+    constexpr uint64_t version = 1;
+    constexpr uint32_t count = 2;
+    auto req = MakeSpillReqWithObjects("NeedModifyTest_", count, version);
+    auto expectedKeys = MakeExpectedKeys("NeedModifyTest_", count);
+    RouteObjectKeysByMasterHostPort2(expectedKeys);
+
+    int replacePrimaryCalls = 0;
+    std::unordered_set<std::string> replacePrimaryKeys;
+    auto remoteApi = std::make_shared<MigrateTestWorkerMasterOCApi>(HostPort("127.0.0.1:18481"),
+                                                                     HostPort("127.0.0.1:18482"));
+    remoteApi->replacePrimary_ = [&replacePrimaryCalls, &replacePrimaryKeys](master::ReplacePrimaryReqPb &req,
+                                                                              master::ReplacePrimaryRspPb &rsp) {
+        ++replacePrimaryCalls;
+        for (const auto &info : req.object_infos()) {
+            replacePrimaryKeys.emplace(info.object_key());
+            rsp.add_success_ids(info.object_key());
+        }
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetDefaultApi(remoteApi);
+
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::QueryMasterMetadata, (_, _, _))
+        .WillRepeatedly(Invoke([](const std::unordered_set<std::string> &keys, QueryMetaMap &metas,
+                                 std::unordered_set<std::string> &failedIds) {
+            for (const auto &key : keys) {
+                master::QueryMetaInfoPb metaInfo;
+                metaInfo.mutable_meta()->set_object_key(key);
+                metaInfo.mutable_meta()->set_version(version);
+                metaInfo.mutable_meta()->set_data_size(1);
+                metas.emplace(key, std::move(metaInfo));
+            }
+            (void)failedIds;
+            return Status::OK();
+        }));
+
+    MigrateDataRspPb rsp;
+    std::vector<RpcMessage> payloads;
+    DS_ASSERT_OK(impl_->MigrateData(req, rsp, std::move(payloads)));
+
+    EXPECT_EQ(replacePrimaryCalls, 1);
+    for (const auto &key : expectedKeys) {
+        EXPECT_TRUE(replacePrimaryKeys.count(key) > 0)
+            << "ReplacePrimary was not called for " << key;
+    }
+    EXPECT_EQ(rsp.skipped_object_keys_size(), 0)
+        << "objects with valid metadata should not be skipped";
+    EXPECT_EQ(rsp.fail_ids_size(), 0);
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, SpillCallsReplacePrimaryAndSkipsCreateMultiCopyMeta)
+{
+    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
+    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
+    FLAGS_enable_data_replication = true;
+    const std::string objectKey = "spill_obj";
+    const HostPort masterAddress("127.0.0.1", 18890);
+    RouteObjectToMaster(objectKey, masterAddress);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
+    workerMasterApiManager_->SetDefaultApi(api);
+
+    int createMultiCopyMetaCalls = 0;
+    int replacePrimaryCalls = 0;
+    api->createMultiCopyMeta_ = [&createMultiCopyMetaCalls](master::CreateMultiCopyMetaReqPb &,
+                                                              master::CreateMultiCopyMetaRspPb &) {
+        ++createMultiCopyMetaCalls;
+        return Status::OK();
+    };
+    api->replacePrimary_ = [&replacePrimaryCalls, &objectKey](master::ReplacePrimaryReqPb &req,
+                                                              master::ReplacePrimaryRspPb &rsp) {
+        ++replacePrimaryCalls;
+        EXPECT_EQ(req.origin_primary_addr(), "127.0.0.1:18889");
+        EXPECT_EQ(req.object_infos_size(), 1);
+        EXPECT_EQ(req.object_infos(0).object_key(), objectKey);
+        rsp.add_success_ids(objectKey);
+        return Status::OK();
+    };
+
+    auto entry = std::make_shared<SafeObjType>();
+    auto obj = std::make_unique<ObjCacheShmUnit>();
+    obj->stateInfo.SetDataFormat(DataFormat::BINARY);
+    obj->stateInfo.SetNeedToDelete(true);
+    entry->SetRealObject(std::move(obj));
+    ASSERT_TRUE(entry->WLock().IsOk());
+
+    std::map<ReadKey, WorkerOcServiceGetImpl::LockedEntity> lockedEntries;
+    lockedEntries.emplace(ReadKey(objectKey, 0, 1), WorkerOcServiceGetImpl::LockedEntity{ entry, false });
+
+    using NotifyRemoteGetGroup =
+        std::unordered_map<std::string,
+                           std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>>;
+    NotifyRemoteGetGroup groupedQueryMetas;
+    groupedQueryMetas.emplace("127.0.0.1:18889",
+                              std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>{});
+    std::vector<std::vector<std::string>> tempSuccessIds{ { objectKey } };
+    std::vector<std::vector<ReadKey>> tempNeedRetryIds(1);
+    std::vector<std::unordered_set<std::string>> tempFailedIds(1);
+    std::set<ReadKey> objectsNeedGetRemote;
+    Status lastRc = Status::OK();
+    NotifyRemoteGetRspPb rsp;
+    auto queryMeta = MakeQueryMeta();
+    queryMeta.set_address(leavingWorkerAddress_.ToString());
+    QueryMetaMap queryMetas{ { objectKey, std::move(queryMeta) } };
+    uint64_t migratedBytes = 0;
+    std::map<std::string, uint64_t> unconfirmedObjectVersions;
+    std::unordered_set<std::string> failedConfirmationOwners;
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(10'000);
+    impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
+                                                  tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
+                                                  migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners,
+                                                  true);
+
+    EXPECT_EQ(createMultiCopyMetaCalls, 0)
+        << "isSpill=true must skip CreateMultiCopyMeta even when enable_data_replication=true";
+    EXPECT_EQ(replacePrimaryCalls, 1)
+        << "isSpill=true must always call ReplacePrimary even when enable_data_replication=true";
+    EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete())
+        << "isSpill=true must clear needDelete after ReplacePrimary succeeds";
+
+    entry->WUnlock();
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, ConfirmCopyMetaForNotifyRemoteGetSpillSkipsCreateMultiCopyMeta)
+{
+    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
+    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
+    FLAGS_enable_data_replication = true;
+    const std::string objectKey = "spill_copymeta_obj";
+    const HostPort masterAddress("127.0.0.1", 18890);
+    RouteObjectToMaster(objectKey, masterAddress);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
+    workerMasterApiManager_->SetDefaultApi(api);
+
+    int createMultiCopyMetaCalls = 0;
+    api->createMultiCopyMeta_ = [&createMultiCopyMetaCalls](master::CreateMultiCopyMetaReqPb &,
+                                                              master::CreateMultiCopyMetaRspPb &) {
+        ++createMultiCopyMetaCalls;
+        return Status::OK();
+    };
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(10'000);
+    auto queryMeta = MakeQueryMeta();
+    QueryMetaMap queryMetas{ { objectKey, std::move(queryMeta) } };
+    std::vector<std::string> confirmedIds;
+    std::unordered_set<std::string> failedIds;
+    std::unordered_set<std::string> failedConfirmationOwners;
+
+    impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
+                                              failedConfirmationOwners, true);
+
+    EXPECT_EQ(createMultiCopyMetaCalls, 0) << "isSpill=true must skip CreateMultiCopyMeta RPC";
+    EXPECT_THAT(confirmedIds, ::testing::ElementsAre(objectKey))
+        << "isSpill=true must confirm all dataSuccessIds without RPC";
+    EXPECT_TRUE(failedIds.empty()) << "isSpill=true must not produce failures";
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, ReportUnattemptedObjectsSpillRoutesToSkippedKeys)
+{
+    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
+    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
+    FLAGS_enable_data_replication = true;
+
+    NotifyRemoteGetReqPb req;
+    req.set_is_spill(true);
+    req.add_object_keys("attempted");
+    req.add_object_keys("not_attempted");
+    req.add_object_keys("already_failed");
+    req.add_object_keys("already_skipped");
+
+    NotifyRemoteGetRspPb rsp;
+    rsp.add_failed_object_keys("already_failed");
+    rsp.add_skipped_object_keys("already_skipped");
+
+    std::unordered_set<std::string> attemptedObjectKeys{ "attempted" };
+
+    impl_->ReportUnattemptedObjects(req, attemptedObjectKeys, rsp);
+
+    std::unordered_set<std::string> skippedSet(rsp.skipped_object_keys().begin(),
+                                                rsp.skipped_object_keys().end());
+    EXPECT_TRUE(skippedSet.count("not_attempted") > 0)
+        << "unattempted key must be routed to skipped_object_keys when is_spill=true";
+    EXPECT_TRUE(skippedSet.count("already_skipped") > 0)
+        << "pre-existing skipped key must still be present";
+    EXPECT_EQ(skippedSet.count("attempted"), 0u)
+        << "attempted key must NOT appear in skipped_object_keys";
+    EXPECT_EQ(skippedSet.count("already_failed"), 0u)
+        << "failed key must NOT appear in skipped_object_keys";
+
+    std::unordered_set<std::string> failedSet(rsp.failed_object_keys().begin(),
+                                                rsp.failed_object_keys().end());
+    EXPECT_TRUE(failedSet.count("already_failed") > 0)
+        << "pre-existing failed key must still be present";
+    EXPECT_EQ(failedSet.count("not_attempted"), 0u)
+        << "unattempted key must NOT be routed to failed_object_keys when is_spill=true";
 }
 }  // namespace ut
 }  // namespace datasystem

@@ -73,7 +73,8 @@ public:
     void Submit(const master::RebalanceTaskPb &task, std::string assignedMasterAddress);
 
 #ifdef WITH_TESTS
-    using SelectCandidatesHook = std::function<Status(uint64_t, std::unordered_map<std::string, uint64_t> &)>;
+    using SelectCandidatesHook = std::function<Status(uint64_t, std::unordered_map<std::string, uint64_t> &,
+                                                      const std::unordered_set<std::string> &)>;
     using MigrateToTargetHook = std::function<MigrateResult(const master::RebalanceTaskPb &, const HostPort &,
                                                             const std::vector<std::string> &)>;
     using ReportResultHook =
@@ -112,7 +113,9 @@ private:
         uint64_t migratedBytes = 0;
         uint64_t migratedObjects = 0;
         uint64_t failedObjects = 0;
+        uint64_t skippedObjects = 0;
         bool candidatesExhausted = false;
+        bool lastBatchAllSkipped = false;
         master::RebalanceFailureSidePb failureSide = master::REBALANCE_FAILURE_UNKNOWN;
         std::string assignedMasterAddress;
         std::string failedReason;
@@ -134,13 +137,15 @@ private:
     void ClassifyBatchResult(const master::RebalanceTaskPb &task, bool masterUnavailable, ExecutionStats &stats);
     void LogBatchResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats, uint64_t costMs);
     Status ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
-                        object_cache::DataMigrator &migrator);
+                        object_cache::DataMigrator &migrator,
+                        std::unordered_set<std::string> &taskSkippedKeys);
     void ExecuteBatches(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
                         uint64_t localDeadlineMs);
     Status ValidateTask(const master::RebalanceTaskPb &task, HostPort &targetAddr, uint64_t localDeadlineMs,
                         master::RebalanceFailureSidePb &failureSide) const;
     Status CheckTargetAdmission(const HostPort &targetAddr) const;
-    Status SelectCandidates(uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates);
+    Status SelectCandidates(uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates,
+                            const std::unordered_set<std::string> &skipKeys);
     MigrateResult MigrateToTarget(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
                                   const std::vector<std::string> &objectKeys,
                                   object_cache::DataMigrator &migrator);
@@ -150,6 +155,8 @@ private:
                      master::ReportRebalanceResultRspPb &rsp);
     void ReportFailure(const master::RebalanceTaskPb &task, master::RebalanceFailureSidePb failureSide,
                        const std::string &reason);
+    Status ClassifyBatchResult(const MigrateResult &result, const HostPort &targetAddr,
+                               uint64_t batchMigratedBytes, ExecutionStats &stats);
     Status GetWorkerMasterApi(std::shared_ptr<WorkerMasterOCApi> &workerMasterApi) const;
     uint64_t CalculateMigratedBytes(const std::unordered_map<std::string, uint64_t> &candidates,
                                     const MigrateResult &result) const;

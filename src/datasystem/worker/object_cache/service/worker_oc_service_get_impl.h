@@ -1065,6 +1065,7 @@ private:
         std::map<std::string, uint64_t> &unconfirmedVersions;
         std::unordered_set<std::string> &failedConfirmationOwners;
         std::unordered_map<std::string, uint64_t> &failedKeyVersions;
+        bool isSpill{ false };
     };
 
     Status ProcessRemoteGetInNotificationImpl(NotifyRemoteGetProcessContext &context);
@@ -1087,10 +1088,12 @@ private:
         std::vector<std::unordered_set<std::string>> &tempFailedIds, std::set<ReadKey> &objectsNeedGetRemote,
         Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
         std::map<std::string, uint64_t> &unconfirmedObjectVersions,
-        std::unordered_set<std::string> &failedConfirmationOwners);
+        std::unordered_set<std::string> &failedConfirmationOwners,
+        bool isSpill);
 
     void ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
-                                           std::map<ReadKey, LockedEntity> &lockedEntries);
+                                           std::map<ReadKey, LockedEntity> &lockedEntries,
+                                           bool isSpill);
 
     void CollectUnconfirmedVersions(const std::unordered_set<std::string> &unconfirmedIds,
                                     std::map<ReadKey, LockedEntity> &lockedEntries,
@@ -1099,7 +1102,8 @@ private:
     void ConfirmCopyMetaForNotifyRemoteGet(const std::vector<std::string> &dataSuccessIds,
                                            const QueryMetaMap &queryMetas, std::vector<std::string> &confirmedIds,
                                            std::unordered_set<std::string> &failedIds,
-                                           std::unordered_set<std::string> &failedConfirmationOwners);
+                                           std::unordered_set<std::string> &failedConfirmationOwners,
+                                           bool isSpill);
 
     // When enable_data_replication=false, BatchUpdateLocationHelper is a no-op so
     // master metadata is never updated during NotifyRemoteGet migration. Call
@@ -1112,7 +1116,8 @@ private:
     // to the target, then remove failed objects from successIds so their needDelete is not
     // cleared (target can reclaim orphan copies).
     void ReplacePrimaryAndPruneFailed(std::vector<std::string> &successIds,
-                                      const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp);
+                                      const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp,
+                                      bool isSpill);
 
     master::ReplacePrimaryReqPb BuildReplacePrimaryReq(const std::vector<std::string> &objectKeys,
                                                       const std::string &sourceAddr,
@@ -1136,6 +1141,10 @@ private:
 
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
+
+    void ReportUnattemptedObjects(const NotifyRemoteGetReqPb &req,
+                                  const std::unordered_set<std::string> &attemptedObjectKeys,
+                                  NotifyRemoteGetRspPb &rsp);
 
     Status CheckRemoteReadAdmission(const std::string &address) const;
 

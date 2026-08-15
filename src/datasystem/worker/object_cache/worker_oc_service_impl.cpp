@@ -3221,6 +3221,16 @@ Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, Not
     // Add query-failed objects to response
     rsp.mutable_failed_object_keys()->Add(failedIds.begin(), failedIds.end());
 
+    // When is_spill=true, objects not found in master metadata are skipped (source keeps
+    // data) instead of being treated as success.
+    if (req.is_spill()) {
+        for (const auto &key : req.object_keys()) {
+            if (queryMetas.find(key) == queryMetas.end() && failedIds.find(key) == failedIds.end()) {
+                rsp.add_skipped_object_keys(key);
+            }
+        }
+    }
+
     Status rc = getProc_->NotifyRemoteGet(req, std::move(queryMetas), rsp);
     if (rc.IsOk() && gMigrateProc_->IsIncomingMigrationDrainTimedOut()) {
         // Data may already be written to target; intentionally return failure so Source
@@ -3235,8 +3245,9 @@ Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, Not
     // If any object was successfully processed, set remain_bytes even if there were some failures
     // This allows the client to continue sending more data based on the remaining memory
     uint64_t originalFailedCount = rsp.failed_object_keys_size();
+    uint64_t originalSkippedCount = rsp.skipped_object_keys_size();
     bool hasSuccess = false;
-    if (originalFailedCount < static_cast<uint64_t>(req.object_keys_size())) {
+    if (originalFailedCount + originalSkippedCount < static_cast<uint64_t>(req.object_keys_size())) {
         hasSuccess = true;
     }
 

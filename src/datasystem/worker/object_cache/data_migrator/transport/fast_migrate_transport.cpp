@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -35,9 +36,11 @@ void FastMigrateTransport::ProcessMigrateResponse(const MigrateDataDirectReqPb &
     rsp.remainBytes = rspPb.remain_bytes();
     rsp.limitRate = rspPb.limit_rate();
     rsp.failedKeys.insert(rspPb.failed_object_keys().begin(), rspPb.failed_object_keys().end());
+    rsp.skipKeys.insert(rspPb.skipped_object_keys().begin(), rspPb.skipped_object_keys().end());
     for (const auto &obj : reqPb.objects()) {
         const auto &key = obj.object_key();
-        if (rsp.failedKeys.find(key) == rsp.failedKeys.end()) {
+        if (rsp.failedKeys.find(key) == rsp.failedKeys.end()
+            && rsp.skipKeys.find(key) == rsp.skipKeys.end()) {
             (void)rsp.successKeys.emplace(key);
         }
     }
@@ -54,6 +57,7 @@ void FastMigrateTransport::ProcessMigrateResponse(const MigrateDataDirectReqPb &
 
 Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &rsp)
 {
+    INJECT_POINT("FastMigrateTransport.MigrateDataToRemote.delay");
     PerfPoint point(PerfKey::WORKER_MIGRATE_DIRECT_REQ_BUILD);
     HostPort localAddress;
     RETURN_IF_NOT_OK(localAddress.ParseString(req.localAddr));

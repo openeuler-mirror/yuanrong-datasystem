@@ -3281,12 +3281,14 @@ std::string WorkerOcServiceGetImpl::GetHitInfo()
 
 void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
     std::map<ReadKey, LockedEntity> &lockedEntries,
-    const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
+    const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>>
+        &groupedQueryMetas,
     std::vector<std::vector<std::string>> &tempSuccessIds, std::vector<std::vector<ReadKey>> &tempNeedRetryIds,
     std::vector<std::unordered_set<std::string>> &tempFailedIds, std::set<ReadKey> &objectsNeedGetRemote,
     Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
     std::map<std::string, uint64_t> &unconfirmedObjectVersions,
-    std::unordered_set<std::string> &failedConfirmationOwners)
+    std::unordered_set<std::string> &failedConfirmationOwners,
+    bool isSpill)
 {
     std::vector<std::string> successIds;
     successIds.reserve(lockedEntries.size());
@@ -3314,7 +3316,7 @@ void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
     std::unordered_set<std::string> unconfirmedIds;
     std::vector<std::string> confirmedIds;
     ConfirmCopyMetaForNotifyRemoteGet(dataSuccessIds, queryMetas, confirmedIds, unconfirmedIds,
-                                      failedConfirmationOwners);
+                                      failedConfirmationOwners, isSpill);
     rsp.mutable_failed_object_keys()->Add(unconfirmedIds.begin(), unconfirmedIds.end());
     CollectUnconfirmedVersions(unconfirmedIds, lockedEntries, unconfirmedObjectVersions);
     successIds = std::move(confirmedIds);
@@ -3322,8 +3324,8 @@ void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
     // Objects where ReplacePrimary fails are pruned from successIds so their needDelete
     // is preserved; clearing needDelete before confirming master metadata update would
     // leave orphan copies on the target with no path to either the source or the target.
-    ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp);
-    ClearNeedDeleteForMigratedObjects(successIds, lockedEntries);
+    ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, isSpill);
+    ClearNeedDeleteForMigratedObjects(successIds, lockedEntries, isSpill);
     for (const auto &objectKey : dataSuccessIds) {
         auto metaIt = queryMetas.find(objectKey);
         if (metaIt != queryMetas.end()) {
@@ -3349,10 +3351,10 @@ void WorkerOcServiceGetImpl::CollectUnconfirmedVersions(
 void WorkerOcServiceGetImpl::ConfirmCopyMetaForNotifyRemoteGet(
     const std::vector<std::string> &dataSuccessIds, const QueryMetaMap &queryMetas,
     std::vector<std::string> &confirmedIds, std::unordered_set<std::string> &failedIds,
-    std::unordered_set<std::string> &failedConfirmationOwners)
+    std::unordered_set<std::string> &failedConfirmationOwners, bool isSpill)
 {
     constexpr int64_t confirmationTimeoutMs = 1000;
-    if (!FLAGS_enable_data_replication) {
+    if (!FLAGS_enable_data_replication || isSpill) {
         confirmedIds = dataSuccessIds;
         return;
     }
@@ -3434,9 +3436,9 @@ void WorkerOcServiceGetImpl::ReplacePrimaryForNotifyRemoteGet(
 }
 
 void WorkerOcServiceGetImpl::ReplacePrimaryAndPruneFailed(
-    std::vector<std::string> &successIds, const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp)
+    std::vector<std::string> &successIds, const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp, bool isSpill)
 {
-    if (FLAGS_enable_data_replication || successIds.empty()) {
+    if ((FLAGS_enable_data_replication && !isSpill) || successIds.empty()) {
         return;
     }
     ReplacePrimaryForNotifyRemoteGet(successIds, queryMetas, rsp);
@@ -3571,9 +3573,10 @@ void WorkerOcServiceGetImpl::CleanupFailedRemoteGetMetas(
 }
 
 void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
-                                                               std::map<ReadKey, LockedEntity> &lockedEntries)
+                                                               std::map<ReadKey, LockedEntity> &lockedEntries,
+                                                               bool isSpill)
 {
-    if (!successIds.empty() && !FLAGS_enable_data_replication) {
+    if (!successIds.empty() && (!FLAGS_enable_data_replication || isSpill)) {
         VLOG(1) << FormatString("[NotifyRemoteGet] clear needDelete for %zu migrated objects", successIds.size());
         for (const auto &objectKey : successIds) {
             auto it = lockedEntries.find(ReadKey(objectKey));
@@ -3633,7 +3636,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(NotifyRemoteGe
     PostProcessRemoteGetInNotificationImpl(
         context.lockedEntries, context.groups, tempSuccessIds, tempNeedRetryIds, tempFailedIds,
         context.pendingObjects, lastRc, context.response, context.queryMetas, context.migratedBytes,
-        context.unconfirmedVersions, context.failedConfirmationOwners);
+        context.unconfirmedVersions, context.failedConfirmationOwners, context.isSpill);
     return lastRc;
 }
 
@@ -3749,7 +3752,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
             }
             NotifyRemoteGetProcessContext processContext{
                 groupedQueryMetas, lockedEntries, rsp, objectsNeedGetRemote, queryMetas, migratedBytes,
-                unconfirmedObjectVersions, failedConfirmationOwners, failedKeyVersions };
+                unconfirmedObjectVersions, failedConfirmationOwners, failedKeyVersions, req.is_spill() };
             auto remoteGetRc = ProcessRemoteGetInNotificationImpl(processContext);
             if (remoteGetRc.IsError()) {
                 LOG(WARNING) << "ProcessRemoteGetInNotificationImpl failed, rc: " << remoteGetRc.ToString();
@@ -3773,6 +3776,30 @@ void WorkerOcServiceGetImpl::UpdateNotifyRemoteGetRateLimit(const std::string &w
 {
     rateController_->SlidingWindowUpdateRate(migratedBytes);
     rsp.set_limit_rate(rateController_->CalculateNewRate(workerAddr));
+}
+
+void WorkerOcServiceGetImpl::ReportUnattemptedObjects(const NotifyRemoteGetReqPb &req,
+                                                      const std::unordered_set<std::string> &attemptedObjectKeys,
+                                                      NotifyRemoteGetRspPb &rsp)
+{
+    if (FLAGS_enable_data_replication && !req.is_spill()) {
+        return;
+    }
+    const auto &failedKeys = rsp.failed_object_keys();
+    const auto &skippedKeys = rsp.skipped_object_keys();
+    std::unordered_set<std::string> failedSet(failedKeys.begin(), failedKeys.end());
+    std::unordered_set<std::string> skippedSet(skippedKeys.begin(), skippedKeys.end());
+    for (const auto &key : req.object_keys()) {
+        if (attemptedObjectKeys.find(key) == attemptedObjectKeys.end()
+            && failedSet.find(key) == failedSet.end()
+            && skippedSet.find(key) == skippedSet.end()) {
+            if (req.is_spill()) {
+                rsp.add_skipped_object_keys(key);
+            } else {
+                rsp.add_failed_object_keys(key);
+            }
+        }
+    }
 }
 
 Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, QueryMetaMap queryMetas,
@@ -3826,21 +3853,13 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
             lastRc = rc;
         }
     }
-    // Catch-all (only when enable_data_replication=false): objects in req.object_keys
-    // but not attempted (silent skipped due to version mismatch, meta_is_moving, or
-    // master has no metadata) must be added to failed_object_keys so the source does
-    // not treat them as success and release. When enable_data_replication=true, keep
-    // the existing behavior so stale version-mismatch objects are still released.
-    if (!FLAGS_enable_data_replication) {
-        std::unordered_set<std::string> failedSet(rsp.failed_object_keys().begin(),
-                                                  rsp.failed_object_keys().end());
-        for (const auto &key : req.object_keys()) {
-            if (attemptedObjectKeys.find(key) == attemptedObjectKeys.end()
-                && failedSet.find(key) == failedSet.end()) {
-                rsp.add_failed_object_keys(key);
-            }
-        }
-    }
+    // Catch-all: objects in req.object_keys but not attempted (silent skipped due to version
+    // mismatch, meta_is_moving, or master has no metadata) must be reported so the source does
+    // not treat them as success and release.
+    // - enable_data_replication=false: add to failed_object_keys (source retries or keeps).
+    // - is_spill=true: add to skipped_object_keys (source keeps data, no release).
+    // - enable_data_replication=true, non-spill: keep existing behavior (stale objects released).
+    ReportUnattemptedObjects(req, attemptedObjectKeys, rsp);
     UpdateNotifyRemoteGetRateLimit(req.addr(), migratedBytes, rsp);
     return lastRc;
 }
