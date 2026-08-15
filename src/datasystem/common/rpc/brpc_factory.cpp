@@ -111,6 +111,26 @@ void EnsureBrpcMaxConnectionPoolSize()
     });
 }
 
+// brpc creates its global event dispatchers during the first Channel::Init.
+// The upstream gflag is not exposed through datasystem's worker CLI, so copy
+// the configured value before triggering brpc's one-shot initialization.
+void EnsureBrpcEventDispatcherNum()
+{
+    static std::once_flag once;
+    std::call_once(once, []() {
+        if (FLAGS_brpc_event_dispatcher_num <= 0) {
+            return;
+        }
+        const std::string value = std::to_string(FLAGS_brpc_event_dispatcher_num);
+        const std::string result = gflags::SetCommandLineOption("event_dispatcher_num", value.c_str());
+        if (result.empty()) {
+            LOG(WARNING) << "Failed to override brpc event_dispatcher_num to " << value;
+            return;
+        }
+        LOG(INFO) << "event_dispatcher_num overridden to " << value;
+    });
+}
+
 }  // namespace
 
 // Force brpc's global one-shot init (GlobalInitializeOrDie, guarded by
@@ -124,6 +144,7 @@ void BrpcChannelFactory::EnsureGlobalInitialized()
 {
     static std::once_flag once;
     std::call_once(once, []() {
+        EnsureBrpcEventDispatcherNum();
         brpc::ChannelOptions opts;
         brpc::Channel ch;
         // 127.0.0.1:1 — loopback, no DNS; port 1 is unreachable on a normal

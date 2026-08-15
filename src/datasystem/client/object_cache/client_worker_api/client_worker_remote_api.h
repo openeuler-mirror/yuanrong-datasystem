@@ -93,10 +93,10 @@ public:
 
     Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize,
                   std::shared_ptr<ShmUnitInfo> &shmBuf, std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo,
-                  const CacheType &cacheType = CacheType::MEMORY) override;
+                  const CacheType &cacheType = CacheType::MEMORY, int32_t requestTimeoutMs = 0) override;
     Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
                    const std::unordered_set<std::string> &nestedKeys = {}, uint32_t ttlSecond = 0,
-                   int existence = 0) override;
+                   int existence = 0, int32_t requestTimeoutMs = 0) override;
     Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param,
                         MultiPublishRspPb &rsp,
                         const std::vector<const DeviceBlobList *> &deviceBlobRefs = {}) override;

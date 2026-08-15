@@ -151,10 +151,12 @@ Status ClientWorkerLocalApi::Init(int32_t requestTimeoutMs, int32_t connectTimeo
 
 Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,
                                     uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
-                                    std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType)
+                                    std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType,
+                                    int32_t requestTimeoutMs)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     (void)urmaDataInfo;
+    (void)requestTimeoutMs;
     VLOG(1) << FormatString("Begin to create object, client id: %s, worker address: %s, object key: %s", clientId_,
                             hostPort_.ToString(), objectKey);
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, StatusCode::K_INVALID,
@@ -182,9 +184,10 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
 
 Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
                                      const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
-                                     int existence)
+                                     int existence, int32_t requestTimeoutMs)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
+    (void)requestTimeoutMs;
     GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));

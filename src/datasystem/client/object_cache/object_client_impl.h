@@ -297,10 +297,12 @@ public:
      * @param[in] nestedObjectKeys Objects that depend on objectKey.
      * @param[in] ttlSecond Used by state api, means how many seconds the key will be delete automatically.
      * @param[in] existence Used by state api, to determine whether to set or not set the key if it does already exist.
+     * @param[in] requestTimeoutMs Optional per-call timeout; 0 uses the configured business timeout.
      * @return K_OK on success; the error code otherwise.
      */
     Status Put(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
-               const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond = 0, int existence = 0);
+               const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond = 0, int existence = 0,
+               int32_t requestTimeoutMs = 0);
 
     /**
      * @brief Invoke worker client to get an object.
@@ -335,10 +337,11 @@ public:
      * @param[out] buffers The return vector of the objects.
      * @param[in] queryL2Cache whether query l2cache.
      * @param[in] isRH2DSupported whether the get request supports RH2D.
+     * @param[in] requestTimeoutMs Optional per-call timeout; 0 uses the configured business timeout.
      * @return Status of the result.
      */
     Status Get(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs, std::vector<Optional<Buffer>> &buffers,
-               bool queryL2Cache = true, bool isRH2DSupported = false);
+               bool queryL2Cache = true, bool isRH2DSupported = false, int32_t requestTimeoutMs = 0);
 
     /**
      * @brief Invoke worker client to get an object.
@@ -774,7 +777,8 @@ private:
     Status ProcessTransportPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
                                const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
                                uint32_t ttlSecond, int existence, const SetRouteContext &routeContext,
-                               SetFailureStage &failureStage, client::TransportSetResult &transportResult);
+                               SetFailureStage &failureStage, client::TransportSetResult &transportResult,
+                               int32_t requestTimeoutMs);
 
     // Routed two-step Create/Publish (Component D). When local cache is off, allocate the buffer
     // on the hash-ring-selected worker via the transport layer and bridge the result to a legacy
@@ -817,7 +821,8 @@ private:
                                std::vector<HostPort> &excludedWorkers, bool safeWriteTargetReplay = false);
 
     Status ExecuteSetFlow(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
-                          const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence);
+                          const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
+                          int32_t requestTimeoutMs);
 
     friend Buffer;
     friend DeviceBuffer;
@@ -1402,6 +1407,13 @@ private:
 
     Status DoWarmupClientWorkerConnection();
 
+    Status WarmupOneClientWorkerConnection(const std::string &key, const std::string &value,
+                                           const SetParam &setParam, TimeoutDuration &warmupBudget,
+                                           std::vector<Optional<Buffer>> &buffers);
+
+    Status Set(const std::string &key, const StringView &val, const SetParam &setParam,
+               int32_t requestTimeoutMs);
+
     /**
      * @brief Try switch back to local worker.
      */
@@ -1490,7 +1502,7 @@ private:
     Status ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                          const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
                          const std::shared_ptr<IClientWorkerApi> &workerApi, int existence,
-                         SetFailureStage &failureStage);
+                         SetFailureStage &failureStage, int32_t requestTimeoutMs);
 
     Status CheckLocalUbSenderAdmission(const std::shared_ptr<IClientWorkerApi> &workerApi) const;
 

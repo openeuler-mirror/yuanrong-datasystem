@@ -199,6 +199,10 @@ DS_DEFINE_int32(brpc_max_connection_pool_size, GetInt32FromEnv("DATASYSTEM_BRPC_
                 "Max idle pooled connections per remote endpoint (brpc default 100). Applied on both "
                 "server and client sides. Lower values reduce connection count but may cause "
                 "connection churn under bursty workloads.");
+DS_DEFINE_int32(brpc_event_dispatcher_num, GetInt32FromEnv("DATASYSTEM_BRPC_EVENT_DISPATCHER_NUM", 0),
+                "Override brpc event_dispatcher_num before global initialization. 0 keeps the brpc default (1). "
+                "Set a positive value to shard socket I/O events by fd across dispatchers. A single listening fd "
+                "is not parallelized.");
 DS_DEFINE_bool(brpc_drop_expired_request, true,
                "Server-side interceptor: reject brpc requests whose client deadline already elapsed "
                "while queued, before the handler runs. The client receives ERPCTIMEDOUT -> "

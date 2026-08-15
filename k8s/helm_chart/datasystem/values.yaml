@@ -373,6 +373,9 @@ global:
     brpc:
       # Whether to use brpc instead of ZMQ for RPC communication. Set to false to fall back to ZMQ.
       useBrpc: true
+      # Number of process-wide brpc event dispatchers. 0 keeps the brpc default (1).
+      # Values greater than 1 shard socket I/O by fd; they do not parallelize a single listening fd.
+      eventDispatcherNum: 0
       # Number of brpc server worker threads (bthread worker pool size).
       brpcServerNumThreads: 64
       # Max concurrent in-flight RPCs per brpc server. 0 means unlimited.

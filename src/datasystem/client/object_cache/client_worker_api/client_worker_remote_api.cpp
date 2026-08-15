@@ -351,7 +351,8 @@ void ClientWorkerRemoteApi::RecreateOCStub()
 
 Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,
                                      uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
-                                     std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType)
+                                     std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType,
+                                     int32_t requestTimeoutMs)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
@@ -382,10 +383,9 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
             VLOG(1) << "Start to send rpc to create object: " << req.object_key();
             return DS_OC_DISPATCH(Create, opts, req, rsp);
         },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
-    if (status.IsError()) {
-        status = WithRpcDiag(status, "Create", hostPort_);
-    }
+        []() { return Status::OK(); }, RETRY_ERROR_CODE,
+        requestTimeoutMs > 0 ? requestTimeoutMs : rpcTimeoutMs_);
+    status = WithRpcDiag(status, "Create", hostPort_);
     LogClientWorkerRpcDone("Create", 1, IsUrmaEnabled() && rsp.has_urma_info() ? "UB" : "SHM",
                            static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
     Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_CREATE, traceEnabled);
@@ -546,7 +546,9 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     int64_t requestTimeoutUs =
         std::max<int64_t>(subTimeoutMs * ONE_THOUSAND, ApiDeadline::Instance().ApiRemainingUs());
     req.set_request_timeout(TimeoutDuration::CeilUsToMs(requestTimeoutUs));
-    int64_t rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);
+    int64_t rpcTimeout = getParam.requestTimeoutMs > 0
+                             ? getParam.requestTimeoutMs
+                             : std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);
     INJECT_POINT("ClientWorkerApi.Get.retryTimeout", [this, &rpcTimeout](int timeout) {
         rpcTimeout = timeout;
         return Status::OK();
@@ -662,7 +664,7 @@ Status ClientWorkerRemoteApi::InvalidateBuffer(const std::string &objectKey)
 
 Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
                                       const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
-                                      int existence)
+                                      int existence, int32_t requestTimeoutMs)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
     auto config = GetClientLatencyTraceConfig();
@@ -699,7 +701,8 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
                 isRetry = true;
                 return s;
             },
-            []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+            []() { return Status::OK(); }, RETRY_ERROR_CODE,
+            requestTimeoutMs > 0 ? requestTimeoutMs : rpcTimeoutMs_);
     const auto *path = isShm ? "SHM" : (bufferInfo->ubUrmaDataInfo != nullptr ? "UB" : "TCP");
     if (status.IsError()) {
         status = WithRpcDiag(status, "Publish", hostPort_);
