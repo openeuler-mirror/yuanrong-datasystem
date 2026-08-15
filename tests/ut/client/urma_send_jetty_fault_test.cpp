@@ -157,14 +157,17 @@ void RecordEventObservation(const std::shared_ptr<UrmaEvent> &event, bool waited
 
 class RecordingLateCompletionObserver : public UrmaLateCompletionObserver {
 public:
-    void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken) noexcept override
+    void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken,
+                              uint64_t peerToken) noexcept override
     {
         observed = completion;
         observedOwnerToken = ownerToken;
+        observedPeerToken = peerToken;
     }
 
     std::optional<UrmaLateCompletion> observed;
     uint64_t observedOwnerToken{ 0 };
+    uint64_t observedPeerToken{ 0 };
 };
 
 TEST(UrmaSendJettyFaultTest, TimedOutWriteRetainsEventButReleasesWaiterForLateCqe4)
@@ -194,6 +197,34 @@ TEST(UrmaSendJettyFaultTest, TimedOutWriteRetainsEventButReleasesWaiterForLateCq
     EXPECT_EQ(observer->observed->cqeStatus, URMA_PORT_UNAVAILABLE_STATUS);
     EXPECT_EQ(observer->observed->remoteAddress, "127.0.0.1:29100");
     EXPECT_EQ(observer->observedOwnerToken, kOwnerToken);
+    EXPECT_EQ(observer->observedPeerToken, 0U);
+}
+
+TEST(UrmaSendJettyFaultTest, TimedOutWriteDispatchesLateCqe9WithPeerFence)
+{
+    constexpr uint64_t kRequestId = 1008;
+    constexpr uint64_t kOwnerToken = 78;
+    constexpr uint64_t kPeerToken = 91;
+    auto observer = std::make_shared<RecordingLateCompletionObserver>();
+    UrmaLateCompletionContext context{ observer, kOwnerToken, kPeerToken };
+    auto event = std::make_shared<UrmaEvent>(kRequestId, nullptr, "127.0.0.1:29101", "remote-instance", 4096,
+                                             UrmaEvent::OperationType::WRITE, nullptr, nullptr, context);
+    bool retained = false;
+
+    const auto timeout =
+        event->WaitFor(std::chrono::milliseconds(0), nullptr, [&retained] { retained = true; });
+
+    EXPECT_EQ(timeout.GetCode(), K_URMA_WAIT_TIMEOUT);
+    EXPECT_TRUE(retained);
+    EXPECT_TRUE(event->IsTimedOutRetained());
+    event->SetFailed(URMA_REMOTE_ACK_TIMEOUT_STATUS);
+    EXPECT_EQ(event->NotifyAllAndGetDisposition(), UrmaEvent::CompletionDisposition::RETAINED_TIMEOUT);
+    UrmaManager::DispatchLateCompletion(event, URMA_REMOTE_ACK_TIMEOUT_STATUS);
+
+    ASSERT_TRUE(observer->observed.has_value());
+    EXPECT_EQ(observer->observed->cqeStatus, URMA_REMOTE_ACK_TIMEOUT_STATUS);
+    EXPECT_EQ(observer->observedOwnerToken, kOwnerToken);
+    EXPECT_EQ(observer->observedPeerToken, kPeerToken);
 }
 
 TEST(UrmaSendJettyFaultTest, TimedOutWriteWithoutManagerRegistrationIsDiscarded)

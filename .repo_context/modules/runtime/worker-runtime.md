@@ -165,8 +165,10 @@
   - Worker Get and worker-to-worker RemoteGet URMA writeback failures return `ProviderUbFailureDetailPb` containing the
     provider Worker identity, failed write endpoint, and available raw provider/CQE status. Consumers only apply hard
     isolation when the detail identifies the actual responding Worker; RPC deadline/unavailable outcomes remain
-    `SUSPECT` and do not close read-source admission. Batch and oversized Get paths preserve the matching structured
-    detail, including a failed object in an otherwise partially successful NotifyRemoteGet migration batch.
+    `SUSPECT` and do not close read-source admission, including while their active verification probe is in flight.
+    A verification failure without authoritative CQE status `4` or `9` remains `SUSPECT` under bounded backoff; hard
+    failure recovery stays fail-closed. Batch and oversized Get paths preserve the matching structured detail,
+    including a failed object in an otherwise partially successful NotifyRemoteGet migration batch.
     Worker-to-Client and Worker-to-Worker writeback Events also carry a weak `PeerUbAdmission` owner and an operation
     token. A retained Event receiving a late status-4 CQE updates the writing Worker's self state; successful self
     recovery advances a separate generation so an older Event cannot quarantine the recovered sender. Regular and

@@ -513,6 +513,12 @@ private:
     void RunOneUbRecoveryProbe();
 
     /**
+     * @brief Attribute a completed recovery probe and settle its admission token.
+     */
+    void FinishUbRecoveryProbe(PeerUbAdmission *admission, const UbProbeToken &token, const HostPort &subject,
+                               const HostPort &endpoint, const Status &status, const UrmaWriteFailure &failure);
+
+    /**
      * @brief Resolve the remote endpoint used to validate a quarantined path.
      */
     Status ResolveUbProbeEndpoint(const HostPort &subject, HostPort &endpoint) const;

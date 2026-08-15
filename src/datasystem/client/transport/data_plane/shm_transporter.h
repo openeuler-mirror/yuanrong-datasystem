@@ -34,6 +34,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 
 namespace datasystem {
 namespace client {
@@ -211,10 +212,14 @@ public:
         return rc;
     }
 
-    Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override
+    Status Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult *result = nullptr) override
     {
         RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
         const ObjectBufferInfo &info = ObjectBufferInternal::GetInfo(buffer);
+        if (result != nullptr) {
+            result->publishAttempted = false;
+            result->publishDefinitelyNotSent = false;
+        }
         // UC6: gate on session liveness for routed SHM zero-copy buffers. If the fd-passing session died
         // between Create and Set, fail fast (K_BUFFER_DEPRECATED) instead of publishing a stale shm_id.
         if (info.receiveBufferOwner != nullptr) {
@@ -233,7 +238,14 @@ public:
         }
         PublishRspPb rsp;
         uint32_t workerVersion = 0;
-        RETURN_IF_NOT_OK(rpcClient_->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion));
+        if (result != nullptr) {
+            result->publishAttempted = true;
+        }
+        Status invokeRc = rpcClient_->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion);
+        if (result != nullptr) {
+            result->publishDefinitelyNotSent = IsBrpcRequestDefinitelyNotSent(invokeRc);
+        }
+        RETURN_IF_NOT_OK(invokeRc);
         // Observability: record whether this Set actually used the zero-copy mmap pointer or fell back to
         // inline payload (review 180849800). mmapEntry is the real zero-copy discriminator (info.pointer is
         // always malloc'd by ObjectBuffer::Init).
@@ -313,7 +325,9 @@ public:
         result.publishAttempted = true;
         MultiPublishRspPb response;
         uint32_t workerVersion = 0;
-        RETURN_IF_NOT_OK(rpcClient_->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion));
+        Status invokeRc = rpcClient_->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion);
+        result.publishDefinitelyNotSent = IsBrpcRequestDefinitelyNotSent(invokeRc);
+        RETURN_IF_NOT_OK(invokeRc);
         // Tag SHM only when every buffer is zero-copy (data in mmap'd worker regions). A same-host
         // same-worker MSet is uniform, so this is all-or-nothing; mixed (some inline) falls back to TCP.
         const auto kind = (zeroCopyCount == static_cast<int64_t>(buffers.size()))

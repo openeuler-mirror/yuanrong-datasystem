@@ -1127,7 +1127,9 @@ void UrmaManager::ClearRetainedTimeoutEvents()
 
 void UrmaManager::DispatchLateCompletion(const std::shared_ptr<UrmaEvent> &event, int cqeStatus)
 {
-    if (event == nullptr || cqeStatus != URMA_PORT_UNAVAILABLE_STATUS
+    const bool isolationCompletion = cqeStatus == URMA_PORT_UNAVAILABLE_STATUS
+                                     || cqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS;
+    if (event == nullptr || !isolationCompletion
         || !event->GetLateCompletionContext().has_value()) {
         return;
     }
@@ -1138,7 +1140,7 @@ void UrmaManager::DispatchLateCompletion(const std::shared_ptr<UrmaEvent> &event
     }
     UrmaLateCompletion completion{ event->GetRequestId(), cqeStatus, event->GetRemoteAddress(),
                                    event->GetRemoteInstanceId() };
-    observer->OnLateUrmaCompletion(completion, context.ownerToken);
+    observer->OnLateUrmaCompletion(completion, context.ownerToken, context.peerToken);
 }
 
 Status UrmaManager::SealSendLaneLease(const std::shared_ptr<UrmaSendLaneLease> &laneLease)

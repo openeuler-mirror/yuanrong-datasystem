@@ -32,12 +32,14 @@ struct UrmaLateCompletion {
 class UrmaLateCompletionObserver {
 public:
     virtual ~UrmaLateCompletionObserver() = default;
-    virtual void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken) noexcept = 0;
+    virtual void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken,
+                                      uint64_t peerToken) noexcept = 0;
 };
 
 struct UrmaLateCompletionContext {
     std::weak_ptr<UrmaLateCompletionObserver> observer;
     uint64_t ownerToken = 0;
+    uint64_t peerToken = 0;
 };
 }  // namespace datasystem
 

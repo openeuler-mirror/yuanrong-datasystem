@@ -186,10 +186,13 @@ public:
         return ObjectBufferInternal::Create(std::move(info), buffer);
     }
 
-    Status Set(ObjectBuffer &buffer, const TransportSetParam &) override
+    Status Set(ObjectBuffer &buffer, const TransportSetParam &, TransportSetResult *result = nullptr) override
     {
         std::unique_lock<std::mutex> lock(setMutex);
         const int callIndex = ++setCount;
+        if (result != nullptr) {
+            result->publishAttempted = true;
+        }
         setCv.notify_all();
         if (coordinateConcurrentSets) {
             if (callIndex == 1) {
@@ -203,8 +206,13 @@ public:
             info.ubFailureReportRc = setUbFailureReports.front();
             setUbFailureReports.erase(setUbFailureReports.begin());
             if (!setUbCqeStatuses.empty()) {
-                info.ubCqeStatus = setUbCqeStatuses.front();
+                const auto cqeStatus = setUbCqeStatuses.front();
+                info.ubCqeStatus = cqeStatus;
                 setUbCqeStatuses.erase(setUbCqeStatuses.begin());
+                if (result != nullptr && cqeStatus.has_value()
+                    && *cqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS) {
+                    result->publishAttempted = false;
+                }
             }
         }
         if (setStatuses.empty()) {
@@ -235,6 +243,9 @@ public:
         result.publishAttempted = true;
         result.ubFailureReportRc = mSetUbFailureReportRc;
         result.ubCqeStatus = mSetUbCqeStatus;
+        if (mSetUbCqeStatus.has_value() && *mSetUbCqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS) {
+            result.publishAttempted = false;
+        }
         return mSetStatus;
     }
 
@@ -323,7 +334,12 @@ public:
         if (!transporterMSetUbFailureReports.empty()) {
             transporter->mSetUbFailureReportRc = transporterMSetUbFailureReports.front();
             transporterMSetUbFailureReports.erase(transporterMSetUbFailureReports.begin());
-            transporter->mSetUbCqeStatus = 4;
+            transporter->mSetUbCqeStatus = transporterMSetUbCqeStatuses.empty()
+                                               ? URMA_PORT_UNAVAILABLE_STATUS
+                                               : transporterMSetUbCqeStatuses.front();
+            if (!transporterMSetUbCqeStatuses.empty()) {
+                transporterMSetUbCqeStatuses.erase(transporterMSetUbCqeStatuses.begin());
+            }
         }
         builtTransporters.emplace_back(transporter);
         output = std::move(transporter);
@@ -359,6 +375,19 @@ public:
         return status;
     }
 
+    Status ProbeUbWriteTarget(const HostPort &workerAddr) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        probedWorkers.emplace_back(workerAddr);
+        ++probeCount;
+        Status status = probeStatuses.empty() ? Status::OK() : probeStatuses.front();
+        if (!probeStatuses.empty()) {
+            probeStatuses.erase(probeStatuses.begin());
+        }
+        probeCv.notify_all();
+        return status;
+    }
+
     std::vector<HostPort> GetProbedWorkers()
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -372,6 +401,7 @@ public:
     std::unordered_map<HostPort, std::vector<Status>> transporterGetStatuses;
     std::unordered_map<HostPort, int> transporterGetCqeStatuses;
     std::vector<Status> transporterMSetUbFailureReports;
+    std::vector<int> transporterMSetUbCqeStatuses;
     std::vector<Status> probeStatuses;
     std::vector<HostPort> probedWorkers;
     std::vector<HostPort> providerProbedWorkers;
@@ -574,6 +604,67 @@ TEST(UbHealthFilterTest, NewTopologyIncarnationClearsOldLocalObservation)
     filter.ApplyTopologyIncarnations(restarted);
     EXPECT_TRUE(filter.IsAvailable(provider));
     EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
+}
+
+TEST(UbHealthFilterTest, Cqe9QuarantinesOnlyWriteTargetAndProbeRecoversIt)
+{
+    UbHealthFilter filter;
+    const auto worker = MakeAddress(54);
+    EXPECT_TRUE(filter.ReportWriteTargetFailure(worker, Status(K_URMA_ERROR, "remote ack timeout"),
+                                                std::nullopt, URMA_REMOTE_ACK_TIMEOUT_STATUS));
+    EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(filter.IsAvailable(worker));
+    ASSERT_EQ(filter.GetUnavailableWriteTargets().size(), 1U);
+
+    auto state = filter.GetWriteTargetObservation(worker);
+    ASSERT_TRUE(state.has_value());
+    auto candidate = filter.TryBeginWriteTargetRecovery(state->backoffDeadlineMs);
+    ASSERT_TRUE(candidate.has_value());
+    EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(filter.CompleteWriteTargetRecovery(*candidate, Status::OK(), state->backoffDeadlineMs));
+    EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
+}
+
+TEST(UbHealthFilterTest, LateCqe9UsesPeerGenerationFence)
+{
+    UbHealthFilter filter;
+    const auto worker = MakeAddress(55);
+    const uint64_t peerToken = filter.CaptureWriteTargetCompletionGeneration(worker);
+    ASSERT_NE(peerToken, 0U);
+    filter.ReportLateWriteTargetFailure(
+        UrmaLateCompletion{ 5005, URMA_REMOTE_ACK_TIMEOUT_STATUS, worker.ToString(), "worker-incarnation" },
+        peerToken);
+    EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
+
+    auto state = filter.GetWriteTargetObservation(worker);
+    ASSERT_TRUE(state.has_value());
+    auto candidate = filter.TryBeginWriteTargetRecovery(state->backoffDeadlineMs);
+    ASSERT_TRUE(candidate.has_value());
+    ASSERT_TRUE(filter.CompleteWriteTargetRecovery(*candidate, Status::OK(), state->backoffDeadlineMs));
+    filter.ReportLateWriteTargetFailure(
+        UrmaLateCompletion{ 5006, URMA_REMOTE_ACK_TIMEOUT_STATUS, worker.ToString(), "old-incarnation" }, peerToken);
+    EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
+}
+
+TEST(UbHealthFilterTest, TopologyIncarnationChangeInvalidatesLateWriteTargetCompletion)
+{
+    UbHealthFilter filter;
+    const auto worker = MakeAddress(58);
+    ClusterTopologyPb initial;
+    (*initial.mutable_members())[worker.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(initial);
+    const uint64_t peerToken = filter.CaptureWriteTargetCompletionGeneration(worker);
+    ASSERT_NE(peerToken, 0U);
+
+    ClusterTopologyPb restarted = initial;
+    (*restarted.mutable_members())[worker.ToString()].set_id("incarnation-b");
+    filter.ApplyTopologyIncarnations(restarted);
+    filter.ReportLateWriteTargetFailure(
+        UrmaLateCompletion{ 5007, URMA_REMOTE_ACK_TIMEOUT_STATUS, worker.ToString(), "incarnation-a" }, peerToken);
+
+    EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
 }
 
 TEST(UbHealthFilterTest, FirstTrustedTopologyIncarnationClearsUnversionedObservation)
@@ -1380,12 +1471,77 @@ TEST(TransportLayerAdmissionTest, LateCqe4AfterTimeoutBlocksNextSetWithoutAnothe
 
     observer->OnLateUrmaCompletion(
         UrmaLateCompletion{ 4001, URMA_PORT_UNAVAILABLE_STATUS, worker.ToString(), "worker-incarnation" },
-        lateContext->ownerToken);
+        lateContext->ownerToken, lateContext->peerToken);
 
     const auto isolated = layer.Set(*buffer, MakeSetParam());
     EXPECT_EQ(isolated.GetCode(), K_URMA_WORKER_UNAVAILABLE) << isolated.ToString();
     EXPECT_NE(isolated.GetMsg().find("Client-local UB sender is unavailable"), std::string::npos);
     EXPECT_EQ(manager->builtTransporters.front()->setCount, 1);
+}
+
+TEST(TransportLayerAdmissionTest, LateCqe9DoesNotCloseClientLocalSender)
+{
+    const auto worker = MakeAddress(41);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto filter = std::make_shared<UbHealthFilter>();
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                             std::chrono::seconds(1), filter);
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(worker, "late-cqe9", 4, MakeCreateParam(), buffer).IsOk());
+    ASSERT_TRUE(layer.Set(*buffer, MakeSetParam()).IsOk());
+    const auto lateContext = ObjectBufferInternal::GetInfo(*buffer).ubLateCompletionContext;
+    ASSERT_TRUE(lateContext.has_value());
+    auto observer = lateContext->observer.lock();
+    ASSERT_NE(observer, nullptr);
+
+    observer->OnLateUrmaCompletion(
+        UrmaLateCompletion{ 4002, URMA_REMOTE_ACK_TIMEOUT_STATUS, worker.ToString(), "worker-incarnation" },
+        lateContext->ownerToken, lateContext->peerToken);
+
+    EXPECT_TRUE(layer.CheckLocalUbSenderAdmission().IsOk());
+    ASSERT_TRUE(WaitUntil([&] { return !filter->IsWriteTargetAvailable(worker); }));
+}
+
+TEST(TransportLayerAdmissionTest, SynchronousCqe9ReportsSafeWriteTargetReplay)
+{
+    const auto worker = MakeAddress(56);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto filter = std::make_shared<UbHealthFilter>();
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                             std::chrono::seconds(1), filter);
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(worker, "sync-cqe9", 4, MakeCreateParam(), buffer).IsOk());
+    auto transporter = manager->builtTransporters.front();
+    transporter->setUbFailureReports = { Status(K_URMA_ERROR, "remote ack timeout") };
+    transporter->setUbCqeStatuses = { URMA_REMOTE_ACK_TIMEOUT_STATUS };
+    transporter->setStatuses = { Status(K_URMA_ERROR, "fallback was not sent") };
+
+    TransportSetResult result;
+    EXPECT_EQ(layer.Set(*buffer, MakeSetParam(), result).GetCode(), K_URMA_ERROR);
+    EXPECT_TRUE(result.writeTargetQuarantined);
+    EXPECT_FALSE(result.publishAttempted);
+    EXPECT_FALSE(filter->IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(layer.CheckLocalUbSenderAdmission().IsOk());
+}
+
+TEST(TransportLayerAdmissionTest, MSetCqe9ReportsSafeWriteTargetReplay)
+{
+    const auto worker = MakeAddress(57);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterMSetUbFailureReports = { Status(K_URMA_ERROR, "remote ack timeout") };
+    manager->transporterMSetUbCqeStatuses = { URMA_REMOTE_ACK_TIMEOUT_STATUS };
+    auto filter = std::make_shared<UbHealthFilter>();
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                             std::chrono::seconds(1), filter);
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    ASSERT_TRUE(layer.MCreate(worker, { "mset-cqe9" }, { 4 }, MakeCreateParam(), buffers).IsOk());
+
+    TransportMSetResult result;
+    EXPECT_TRUE(layer.MSet(buffers, MakeSetParam(), result).IsOk());
+    EXPECT_TRUE(result.writeTargetQuarantined);
+    EXPECT_FALSE(result.publishAttempted);
+    EXPECT_FALSE(filter->IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(layer.CheckLocalUbSenderAdmission().IsOk());
 }
 
 TEST(TransportLayerAdmissionTest, TcpFailureDoesNotTripUbSenderAdmission)

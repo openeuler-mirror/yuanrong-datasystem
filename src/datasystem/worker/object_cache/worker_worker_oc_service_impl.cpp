@@ -401,10 +401,12 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
             .dstChipId = urmaInfo.has_chip_id() ? static_cast<uint8_t>(urmaInfo.chip_id()) : INVALID_CHIP_ID,
         };
         auto *ubAdmission = ocClientWorkerSvc_->GetUbAdmission();
+        const HostPort remotePeer(remoteSegInfo.host, remoteSegInfo.port);
         auto lateCompletionContext =
             ubAdmission == nullptr
                 ? std::nullopt
-                : ubAdmission->BuildLateCompletionContext(UbOperationKind::WORKER_REMOTE_GET_WRITEBACK);
+                : ubAdmission->BuildLateCompletionContext(UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                                                          remotePeer);
         if (sendLaneLease != nullptr) {
             rc = UrmaGatherWriteWithLane(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys,
                                          sendLaneLease, lateCompletionContext);
@@ -737,10 +739,13 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
             Status rc;
             UrmaWriteFailure failure;
             auto *ubAdmission = ocClientWorkerSvc_->GetUbAdmission();
+            const auto &remoteAddress = req.urma_info().request_address();
+            const HostPort remotePeer(remoteAddress.host(), remoteAddress.port());
             auto lateCompletionContext =
                 ubAdmission == nullptr
                     ? std::nullopt
-                    : ubAdmission->BuildLateCompletionContext(UbOperationKind::WORKER_REMOTE_GET_WRITEBACK);
+                    : ubAdmission->BuildLateCompletionContext(UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                                                              remotePeer);
             if (batchRh2dContext != nullptr && batchRh2dContext->sendLaneLease != nullptr) {
                 rc = UrmaWritePayloadWithLane(
                     req.urma_info(), localSegAddress, localSegSize,
@@ -790,8 +795,8 @@ void WorkerWorkerOCServiceImpl::RecordProviderUbWriteFailure(const GetObjectRemo
         FillProviderUbFailureDetail(status, failedEndpointIdentity, operatorWorker.ToString(), std::nullopt,
                                     std::nullopt, detail);
     }
-    ReportProviderLocalUbWriteFailure(
-        ubAdmission, operatorWorker, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK, status,
+    ReportLocalUbOperationFailure(
+        ubAdmission, operatorWorker, failedEndpoint, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK, status,
         failure == nullptr ? std::nullopt : failure->providerStatus,
         failure == nullptr ? std::nullopt : failure->cqeStatus);
 }

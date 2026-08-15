@@ -125,6 +125,9 @@ public:
     /** @brief Validate a UB connection and commit recovery while the worker snapshot remains admitted. */
     Status ProbeUbConnection(const HostPort &workerAddr, const std::function<void()> &commitRecovery = {});
 
+    /** @brief Validate the Client-to-Worker UB path to one exact live worker endpoint. */
+    virtual Status ProbeUbWriteTarget(const HostPort &workerAddr);
+
     /**
      * @brief Pull one Provider's UB health and verify its outbound Worker-to-Client UB path within a bounded timeout.
      */

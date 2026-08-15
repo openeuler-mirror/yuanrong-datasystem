@@ -26,6 +26,7 @@
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/kv_client.h"
@@ -145,11 +146,15 @@ Status TcpTransporter::CreateBuffer(const HostPort &workerAddr, const std::strin
     return ObjectBufferInternal::Create(info, buffer);
 }
 
-Status TcpTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
+Status TcpTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult *result)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
 
     const ObjectBufferInfo &info = ObjectBufferInternal::GetInfo(buffer);
+    if (result != nullptr) {
+        result->publishAttempted = false;
+        result->publishDefinitelyNotSent = false;
+    }
     PublishReqPb pubReq;
     RETURN_IF_NOT_OK(BuildSetRequest(info, param, pubReq));
 
@@ -159,7 +164,14 @@ Status TcpTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
 
     PublishRspPb rsp;
     uint32_t workerVersion = 0;
-    RETURN_IF_NOT_OK(rpcClient_->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion));
+    if (result != nullptr) {
+        result->publishAttempted = true;
+    }
+    Status invokeRc = rpcClient_->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion);
+    if (result != nullptr) {
+        result->publishDefinitelyNotSent = IsBrpcRequestDefinitelyNotSent(invokeRc);
+    }
+    RETURN_IF_NOT_OK(invokeRc);
     return SetTransportResponseStatus(rsp, AccessTransportKind::TCP, param.isSeal, param.isRetry);
 }
 
@@ -195,7 +207,9 @@ Status TcpTransporter::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
         return Status(K_RPC_UNAVAILABLE, "TCP MSet: RPC client not alive before publish");
     }
     result.publishAttempted = true;
-    RETURN_IF_NOT_OK(rpcClient_->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion));
+    Status invokeRc = rpcClient_->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion);
+    result.publishDefinitelyNotSent = IsBrpcRequestDefinitelyNotSent(invokeRc);
+    RETURN_IF_NOT_OK(invokeRc);
     const uint64_t payloadBytes = std::accumulate(
         buffers.begin(), buffers.end(), uint64_t{ 0 }, [](uint64_t total, const auto &buffer) {
             return total + ObjectBufferInternal::GetInfo(*buffer).dataSize;

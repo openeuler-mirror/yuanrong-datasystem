@@ -443,6 +443,23 @@ TEST(WorkerOcServiceGetUbAdmissionTest, ClientWritebackFailureQuarantinesProvide
     EXPECT_EQ(self->lastFailureClass, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
 }
 
+TEST(WorkerOcServiceGetUbAdmissionTest, ClientAckTimeoutDoesNotQuarantineProvider)
+{
+    auto admission = std::make_shared<PeerUbAdmission>();
+    GetRequest request(AccessRecorderKey::DS_POSIX_GET, DATA_WORKER.ToString(), admission);
+    request.ubUrmaInfo_.mutable_request_address()->set_host(CLIENT_WRITEBACK_ENDPOINT.Host());
+    request.ubUrmaInfo_.mutable_request_address()->set_port(CLIENT_WRITEBACK_ENDPOINT.Port());
+    GetRspPb rsp;
+    UrmaWriteFailure failure{ .cqeStatus = URMA_REMOTE_ACK_TIMEOUT_STATUS };
+
+    request.RecordProviderUbWriteFailure(Status(K_URMA_ERROR, "client ACK timed out"), rsp, &failure);
+
+    EXPECT_FALSE(admission->GetState(DATA_WORKER).has_value());
+    EXPECT_FALSE(admission->GetState(CLIENT_WRITEBACK_ENDPOINT).has_value());
+    ASSERT_TRUE(rsp.has_provider_ub_failure_detail());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().failure_side(), REMOTE_UB_ACK_TIMEOUT_FAILURE_SIDE);
+}
+
 TEST(WorkerOcServiceGetUbAdmissionTest, RemoteGetProviderRecordsWorkerToWorkerFailure)
 {
     GetObjectRemoteReqPb req;
@@ -497,6 +514,46 @@ TEST(WorkerOcServiceGetUbAdmissionTest, RemoteGetWritebackFailureQuarantinesProv
     ASSERT_TRUE(self.has_value());
     EXPECT_EQ(self->state, UbAdmissionState::UNAVAILABLE);
     EXPECT_EQ(self->lastFailureClass, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, RemoteGetAckTimeoutQuarantinesRequesterNotProvider)
+{
+    auto admission = std::make_shared<PeerUbAdmission>();
+    GetObjectRemoteReqPb req;
+    req.mutable_urma_info()->mutable_request_address()->set_host(REMOTE_GET_ENDPOINT.Host());
+    req.mutable_urma_info()->mutable_request_address()->set_port(REMOTE_GET_ENDPOINT.Port());
+    GetObjectRemoteRspPb rsp;
+    UrmaWriteFailure failure{ .cqeStatus = URMA_REMOTE_ACK_TIMEOUT_STATUS };
+
+    WorkerWorkerOCServiceImpl::RecordProviderUbWriteFailure(
+        req, Status(K_URMA_ERROR, "remote ACK timed out"), DATA_WORKER, rsp, &failure, admission.get());
+
+    EXPECT_FALSE(admission->GetState(DATA_WORKER).has_value());
+    const auto remote = admission->GetState(REMOTE_GET_ENDPOINT);
+    ASSERT_TRUE(remote.has_value());
+    EXPECT_EQ(remote->state, UbAdmissionState::UNAVAILABLE);
+    EXPECT_EQ(remote->lastFailureClass, UbFailureClass::REMOTE_UNAVAILABLE_ERROR9);
+    ASSERT_TRUE(rsp.has_provider_ub_failure_detail());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().failure_side(), REMOTE_UB_ACK_TIMEOUT_FAILURE_SIDE);
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, RemoteAckTimeoutResponseAttributesRequesterNotProvider)
+{
+    auto admission = std::make_shared<PeerUbAdmission>();
+    WorkerRequestManager requestManager;
+    auto param = BuildGetParam(requestManager, std::make_shared<ObjectTable>());
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, LOCAL_WORKER, nullptr, admission);
+    GetObjectRemoteRspPb rsp;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "remote ACK timed out"), LOCAL_WORKER.ToString(),
+                                DATA_WORKER.ToString(), std::nullopt, URMA_REMOTE_ACK_TIMEOUT_STATUS,
+                                *rsp.mutable_provider_ub_failure_detail());
+
+    getImpl.ReportRemoteReadOutcome(DATA_WORKER.ToString(), rsp, "remote_get_response");
+
+    EXPECT_FALSE(admission->GetState(DATA_WORKER).has_value());
+    const auto requester = admission->GetState(LOCAL_WORKER);
+    ASSERT_TRUE(requester.has_value());
+    EXPECT_EQ(requester->lastFailureClass, UbFailureClass::REMOTE_UNAVAILABLE_ERROR9);
 }
 
 TEST(WorkerOcServiceGetUbAdmissionTest, NotifyRemoteGetPropagatesNewSourceProviderError4)

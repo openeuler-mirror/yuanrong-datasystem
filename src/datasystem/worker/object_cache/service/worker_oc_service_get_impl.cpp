@@ -3845,7 +3845,7 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
     return lastRc;
 }
 
-Status WorkerOcServiceGetImpl::ProbeUbConnectionToPeer(const HostPort &peerAddr)
+Status WorkerOcServiceGetImpl::ProbeUbConnectionToPeer(const HostPort &peerAddr, UrmaWriteFailure *failure)
 {
     const auto endpoint = peerAddr.ToString();
     TbbTransportStubTable::const_accessor constAccessor;
@@ -3862,7 +3862,7 @@ Status WorkerOcServiceGetImpl::ProbeUbConnectionToPeer(const HostPort &peerAddr)
     }
     UrmaHandshakeRspPb response;
     RETURN_IF_NOT_OK(constAccessor->second->ExecOnceParrallelExchange(response));
-    return ProbeUbDataPlane(response);
+    return ProbeUbDataPlane(response, failure);
 }
 }  // namespace object_cache
 }  // namespace datasystem

@@ -94,9 +94,10 @@ Status InitializeFastTransportManager(const HostPort &hostport = HostPort());
 /**
  * @brief Verify one established worker UB path with a dedicated one-byte URMA WRITE.
  * @param[in] response Worker handshake response containing the reserved probe address.
+ * @param[out] failure Optional raw provider/CQE failure details.
  * @return K_OK only after the probe CQE completes successfully.
  */
-Status ProbeUbDataPlane(const UrmaHandshakeRspPb &response);
+Status ProbeUbDataPlane(const UrmaHandshakeRspPb &response, UrmaWriteFailure *failure = nullptr);
 
 /**
  * @brief Remove remote fast transport node in urma and ucp.

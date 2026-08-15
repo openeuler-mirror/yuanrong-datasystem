@@ -35,6 +35,7 @@ struct UrmaWriteFailure {
 };
 
 static constexpr int URMA_PORT_UNAVAILABLE_STATUS = 4;
+static constexpr int URMA_REMOTE_ACK_TIMEOUT_STATUS = 9;
 
 /**
  * @brief Register fast transport memory (as segment).

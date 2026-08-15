@@ -3754,20 +3754,49 @@ Status ObjectClientImpl::SelectSetRoute(const std::string &objectKey,
                                         const std::vector<HostPort> &excludedWorkers,
                                         SetRouteContext &routeContext)
 {
+    const auto effectiveExclusions = MergeWriteTargetExclusions(excludedWorkers);
     SetRouteContext selected;
-    // Keep the first local-cache Set colocated; retries with exclusions must use routing to avoid failed workers.
-    if (enableLocalCache_ && excludedWorkers.empty()) {
+    if (enableLocalCache_) {
         RETURN_IF_NOT_OK(GetAvailableWorkerApi(selected.clientApi, selected.invokeGuard));
         selected.worker = selected.clientApi->hostPort_;
-        selected.directWorkerApi = selected.clientApi;
-        routeContext = std::move(selected);
-        return Status::OK();
+        const bool excludedForThisRequest =
+            std::find(excludedWorkers.begin(), excludedWorkers.end(), selected.worker) != excludedWorkers.end();
+        if (!excludedForThisRequest) {
+            const bool ubWriteTargetQuarantined =
+                std::find(effectiveExclusions.begin(), effectiveExclusions.end(), selected.worker)
+                != effectiveExclusions.end();
+            if (!ubWriteTargetQuarantined || selected.clientApi->IsShmEnable()) {
+                selected.directWorkerApi = selected.clientApi;
+                routeContext = std::move(selected);
+                return Status::OK();
+            }
+        }
+        selected.invokeGuard.reset();
+        selected.clientApi.reset();
     }
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     HostPort worker;
-    RETURN_IF_NOT_OK(routing->SelectWorker(objectKey, dataPlacementPolicy_, worker, excludedWorkers));
+    RETURN_IF_NOT_OK(routing->SelectWorker(objectKey, dataPlacementPolicy_, worker, effectiveExclusions));
     return BuildSetRouteContext(worker, routeContext);
+}
+
+std::vector<HostPort> ObjectClientImpl::MergeWriteTargetExclusions(
+    const std::vector<HostPort> &excludedWorkers) const
+{
+    std::vector<HostPort> result = excludedWorkers;
+    if (ubHealthFilter_ == nullptr) {
+        return result;
+    }
+    for (const auto &worker : ubHealthFilter_->GetUnavailableWriteTargets()) {
+        if (std::find(result.begin(), result.end(), worker) == result.end()) {
+            result.emplace_back(worker);
+            LOG(WARNING) << "[CLIENT_UB_WRITE_TARGET_EXCLUDED] Quarantined UB write target excluded from this "
+                            "Set/MSet routing, worker="
+                         << worker.ToString();
+        }
+    }
+    return result;
 }
 
 Status ObjectClientImpl::BuildSetRouteContext(const HostPort &worker, SetRouteContext &routeContext)
@@ -3811,7 +3840,8 @@ client::TransportRequestContext ObjectClientImpl::BuildTransportRequestContext(
 Status ObjectClientImpl::ProcessTransportPut(
     const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
     const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
-    const SetRouteContext &routeContext, SetFailureStage &failureStage)
+    const SetRouteContext &routeContext, SetFailureStage &failureStage,
+    client::TransportSetResult &transportResult)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
     const auto requestContext = BuildTransportRequestContext(routeContext);
@@ -3839,7 +3869,7 @@ Status ObjectClientImpl::ProcessTransportPut(
     setParam.existence = static_cast<ExistenceOpt>(existence);
     setParam.subTimeoutMs = requestTimeoutMs_;
     failureStage = SetFailureStage::PUBLISH;
-    Status setRc = transportLayer_->Set(*buffer, setParam);
+    Status setRc = transportLayer_->Set(*buffer, setParam, transportResult);
     if (setRc.GetCode() == K_URMA_NEED_CONNECT) {
         // TransportLayer returns this only after same-worker UB reconnect failed, before Publish was sent.
         failureStage = SetFailureStage::TRANSFER;
@@ -3848,7 +3878,8 @@ Status ObjectClientImpl::ProcessTransportPut(
 }
 
 bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureStage failureStage,
-                                             const HostPort &worker, std::vector<HostPort> &excludedWorkers)
+                                             const HostPort &worker, std::vector<HostPort> &excludedWorkers,
+                                             bool safeWriteTargetReplay)
 {
     auto routing = std::atomic_load(&routing_);
     if (routing == nullptr) {
@@ -3880,7 +3911,8 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
     if (IsRoutingEvictionFailure(status) || workerNotReady) {
         routing->UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
     }
-    const bool retry = (failureStage == SetFailureStage::CREATE && (connectionFailure || workerNotReady))
+    const bool retry = safeWriteTargetReplay
+                       || (failureStage == SetFailureStage::CREATE && (connectionFailure || workerNotReady))
                        || (failureStage == SetFailureStage::TRANSFER && transferFailure)
                        || (failureStage == SetFailureStage::PUBLISH && (workerNotReady || publishNotSent));
     if (retry) {
@@ -3903,6 +3935,7 @@ Status ObjectClientImpl::ExecuteSetFlow(
         VLOG(1) << FormatString("[Set] attempt: %zu, objectKey: %s, clientId: %s, worker: %s", attempt + 1,
                                 objectKey, routeContext.clientApi->clientId_, routeContext.worker.ToString());
         SetFailureStage failureStage = SetFailureStage::CREATE;
+        client::TransportSetResult transportResult;
         // Branch 1 is a local-cache shortcut that writes via the bound worker's SHM. In routed mode
         // (enableLocalCache_ == false) every write must go through the transport layer (Branch 3) for
         // uniform placement and shm lifecycle, so gate this shortcut on enableLocalCache_. Without the
@@ -3934,11 +3967,16 @@ Status ObjectClientImpl::ExecuteSetFlow(
             return rc;
         }
         rc = ProcessTransportPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence,
-                                 routeContext, failureStage);
+                                 routeContext, failureStage, transportResult);
         if (rc.IsError()) {
             RETURN_IF_NOT_OK(CheckBoundWorkerAvailability());
         }
-        if (rc.IsOk() || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers)) {
+        const bool safeWriteTargetReplay = transportResult.writeTargetQuarantined
+                                           && (!transportResult.publishAttempted
+                                               || transportResult.publishDefinitelyNotSent);
+        if (rc.IsOk()
+            || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers,
+                                      safeWriteTargetReplay)) {
             return rc;
         }
     }
@@ -6990,7 +7028,8 @@ Status ObjectClientImpl::BuildMSetRouteGroups(const std::vector<std::string> &ke
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
-    RETURN_IF_NOT_OK(routing->SelectWorkers(keys, dataPlacementPolicy_, groupedKeys));
+    RETURN_IF_NOT_OK(routing->SelectWorkers(keys, dataPlacementPolicy_, groupedKeys,
+                                            MergeWriteTargetExclusions({})));
     std::unordered_map<std::string, size_t> valueIndexes;
     valueIndexes.reserve(keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
@@ -7108,7 +7147,8 @@ Status ObjectClientImpl::BuildMSetRetryRouteGroups(const MSetRouteGroup &group,
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
-    RETURN_IF_NOT_OK(routing->SelectWorkers(group.keys, dataPlacementPolicy_, groupedKeys, excludedWorkers));
+    RETURN_IF_NOT_OK(routing->SelectWorkers(group.keys, dataPlacementPolicy_, groupedKeys,
+                                            MergeWriteTargetExclusions(excludedWorkers)));
     std::unordered_map<std::string, size_t> valueIndexes;
     valueIndexes.reserve(group.keys.size());
     for (size_t i = 0; i < group.keys.size(); ++i) {
@@ -7175,7 +7215,9 @@ Status ObjectClientImpl::ExecuteTransportMSetGroupAttempt(
         outFailedKeys.insert(outFailedKeys.end(), result.failedKeys.begin(), result.failedKeys.end());
         return rc;
     }
-    if (!HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers)
+    const bool safeWriteTargetReplay = result.writeTargetQuarantined
+                                       && (!result.publishAttempted || result.publishDefinitelyNotSent);
+    if (!HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers, safeWriteTargetReplay)
         || attempt + 1 >= SET_ROUTE_MAX_ATTEMPTS) {
         const auto &failedKeys = result.failedKeys.empty() ? group.keys : result.failedKeys;
         outFailedKeys.insert(outFailedKeys.end(), failedKeys.begin(), failedKeys.end());

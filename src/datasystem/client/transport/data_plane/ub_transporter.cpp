@@ -39,6 +39,7 @@
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/numa_util.h"
@@ -854,7 +855,7 @@ Status UbTransporter::WritePayloads(const std::vector<ObjectBufferInfo *> &infos
     return Status::OK();
 }
 
-Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
+Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult *result)
 {
     // Keep the per-transporter lifecycle lock while the operation is in flight so CloseDataPlane cannot tear down
     // the UB connection between the liveness check and the write/publish sequence.
@@ -871,6 +872,10 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     info.ubFailureReportRc = Status::OK();
     info.ubProviderStatus.reset();
     info.ubCqeStatus.reset();
+    if (result != nullptr) {
+        result->publishAttempted = false;
+        result->publishDefinitelyNotSent = false;
+    }
     PublishReqPb pubReq;
     RETURN_IF_NOT_OK(BuildSetRequest(info, param, pubReq));
     // URMA write path: data already in pool buffer via user MemoryCopy.
@@ -887,24 +892,46 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
 
     PublishRspPb rsp;
     uint32_t workerVersion = 0;
-
-    if (info.ubDataSentByMemoryCopy) {
-        // URMA write succeeded: no TCP payload
-        std::vector<MemView> payloads;
-        RETURN_IF_NOT_OK(rpcClient->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion));
-    } else {
-        // TCP fallback: send data as payload through RPC
-        UrmaFallbackTcpLimiter::Ticket ticket;
-        RETURN_IF_NOT_OK(UrmaFallbackTcpLimiter::TryAcquire(urmaFallbackTcpPendingBytes_, info.dataSize, writeRc,
-                                                            "client->worker", ticket));
-
-        MemView payload(info.pointer + info.metadataSize, info.dataSize);
-        std::vector<MemView> payloads{ payload };
-        RETURN_IF_NOT_OK(rpcClient->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion));
-    }
+    RETURN_IF_NOT_OK(PublishSetPayload(info, pubReq, param, rpcClient, rsp, workerVersion, result, writeRc));
 
     const auto kind = info.ubDataSentByMemoryCopy ? AccessTransportKind::UB : AccessTransportKind::TCP;
     return SetTransportResponseStatus(rsp, kind, param.isSeal, param.isRetry);
+}
+
+Status UbTransporter::PublishSetPayload(const ObjectBufferInfo &info, PublishReqPb &pubReq,
+                                        const TransportSetParam &param,
+                                        const std::shared_ptr<WorkerRpcClient> &rpcClient, PublishRspPb &rsp,
+                                        uint32_t &workerVersion, TransportSetResult *result,
+                                        const Status &writeRc)
+{
+    if (info.ubDataSentByMemoryCopy) {
+        // URMA write succeeded: no TCP payload
+        std::vector<MemView> payloads;
+        if (result != nullptr) {
+            result->publishAttempted = true;
+        }
+        Status invokeRc = rpcClient->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion);
+        if (result != nullptr) {
+            result->publishDefinitelyNotSent = IsBrpcRequestDefinitelyNotSent(invokeRc);
+        }
+        RETURN_IF_NOT_OK(invokeRc);
+        return Status::OK();
+    }
+    // TCP fallback: send data as payload through RPC
+    UrmaFallbackTcpLimiter::Ticket ticket;
+    RETURN_IF_NOT_OK(UrmaFallbackTcpLimiter::TryAcquire(urmaFallbackTcpPendingBytes_, info.dataSize, writeRc,
+                                                        "client->worker", ticket));
+    MemView payload(info.pointer + info.metadataSize, info.dataSize);
+    std::vector<MemView> payloads{ payload };
+    if (result != nullptr) {
+        result->publishAttempted = true;
+    }
+    Status invokeRc = rpcClient->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion);
+    if (result != nullptr) {
+        result->publishDefinitelyNotSent = IsBrpcRequestDefinitelyNotSent(invokeRc);
+    }
+    RETURN_IF_NOT_OK(invokeRc);
+    return Status::OK();
 }
 
 void UbTransporter::ClassifyMSetPayload(const std::shared_ptr<ObjectBuffer> &buffer, const Status &writeRc,
@@ -1002,6 +1029,7 @@ Status UbTransporter::PublishMSet(const std::shared_ptr<WorkerRpcClient> &rpcCli
         invokeRc = rpcClient->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion);
     }
     if (invokeRc.IsError()) {
+        result.publishDefinitelyNotSent = IsBrpcRequestDefinitelyNotSent(invokeRc);
         for (const auto &buffer : publishBuffers) {
             result.failedKeys.emplace_back(ObjectBufferInternal::GetInfo(*buffer).objectKey);
         }

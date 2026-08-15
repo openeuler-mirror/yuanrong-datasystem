@@ -49,7 +49,7 @@ public:
 
     Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
                   const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override;
-    Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override;
+    Status Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult *result = nullptr) override;
     Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
                    const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
                    std::vector<std::shared_ptr<ObjectBuffer>> &buffers) override;

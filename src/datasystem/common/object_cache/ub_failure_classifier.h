@@ -45,7 +45,9 @@ enum class UbFailureClass {
     TIMEOUT_SUSPECT,
     CONNECT_OR_PATH_FAILURE,
     LOCAL_RESOURCE_PRESSURE,
-    NON_UB_FAILURE
+    NON_UB_FAILURE,
+    // Process-local only; health-summary encoding uses the existing hard-failure wire value.
+    REMOTE_UNAVAILABLE_ERROR9
 };
 
 struct UbOpOutcome {

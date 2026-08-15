@@ -94,6 +94,25 @@ TEST(WorkerServiceUbHealthTest, HeartbeatConsumerNotifiesValidatedUbIncarnation)
     ASSERT_TRUE(cache.Get(source.worker).has_value());
 }
 
+TEST(WorkerServiceUbHealthTest, Cqe9ReasonUsesCompatibleHardFailureWireValue)
+{
+    UbHealthSummary source;
+    source.worker = SELF;
+    source.incarnation = "incarnation-a";
+    source.writable = false;
+    source.state = UbAdmissionState::UNAVAILABLE;
+    source.reason = UbFailureClass::REMOTE_UNAVAILABLE_ERROR9;
+    UbHealthSummaryPb encoded;
+
+    EncodeUbHealthSummary(source, encoded);
+
+    EXPECT_EQ(encoded.reason(), static_cast<int32_t>(UbFailureClass::PORT_UNAVAILABLE_ERROR4));
+    UbHealthSummary decoded;
+    ASSERT_TRUE(DecodeUbHealthSummary(encoded, decoded).IsOk());
+    EXPECT_EQ(decoded.reason, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
+    EXPECT_FALSE(decoded.writable);
+}
+
 TEST(WorkerServiceUbHealthTest, HeartbeatConsumerRejectsSummaryFromAnotherWorker)
 {
     UbHealthSummary source;

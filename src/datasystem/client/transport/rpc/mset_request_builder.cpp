@@ -84,10 +84,12 @@ void TransportMSetResult::Clear()
     lastRc = Status::OK();
     actualKind = AccessTransportKind::UNKNOWN;
     publishAttempted = false;
+    publishDefinitelyNotSent = false;
     workerAutoRelease = false;
     ubFailureReportRc = Status::OK();
     ubProviderStatus.reset();
     ubCqeStatus.reset();
+    writeTargetQuarantined = false;
 }
 
 Status ValidateMultiCreateRequest(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,

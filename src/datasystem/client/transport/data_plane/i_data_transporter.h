@@ -123,7 +123,7 @@ public:
      * @return K_OK on success; rebuild/teardown-trigger errors (K_URMA_NEED_CONNECT, retryable RPC failures,
      *         K_RPC_PEER_DEAD) on failure. K_RPC_PEER_DEAD is terminal for the current request.
      */
-    virtual Status Set(ObjectBuffer &buffer, const TransportSetParam &param) = 0;
+    virtual Status Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult *result = nullptr) = 0;
 
     /**
      * @brief Create caller-owned transport-native buffers for one same-worker MSet batch.

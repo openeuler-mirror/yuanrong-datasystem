@@ -2408,14 +2408,42 @@ void WorkerOCServer::RunOneUbRecoveryProbe()
         status = ResolveUbProbeEndpoint(*subject, endpoint);
     }
     if (status.IsOk()) {
-        status = objCacheClientWorkerSvc_->ProbeUrmaConnectionToPeer(endpoint);
-    }
-    if (status.IsOk()) {
-        status = objectEndpointPolicy_->CheckDataPlaneAdmission(
-            *subject, object_cache::DataPlaneAdmissionRole::NEW_MIGRATION_TARGET);
+        UrmaWriteFailure failure;
+        status = objCacheClientWorkerSvc_->ProbeUrmaConnectionToPeer(endpoint, &failure);
+        if (status.IsOk()) {
+            status = objectEndpointPolicy_->CheckDataPlaneAdmission(
+                *subject, object_cache::DataPlaneAdmissionRole::NEW_MIGRATION_TARGET);
+        }
+        FinishUbRecoveryProbe(admission, *token, *subject, endpoint, status, failure);
+        return;
     }
     const bool requireGlobalAvailable = *subject != hostPort_;
     (void)admission->CompleteProbe(*token, status, GetSteadyClockTimeStampMs(), requireGlobalAvailable);
+}
+
+void WorkerOCServer::FinishUbRecoveryProbe(PeerUbAdmission *admission, const UbProbeToken &token,
+                                           const HostPort &subject, const HostPort &endpoint, const Status &status,
+                                           const UrmaWriteFailure &failure)
+{
+    UbOpOutcome outcome(endpoint, UbOperationKind::MIGRATION_WRITE, status);
+    outcome.providerStatus = failure.providerStatus;
+    outcome.cqeStatus = failure.cqeStatus;
+    const auto failureClass = UbFailureClassifier().Classify(outcome);
+    const bool localSenderFailure = failureClass == UbFailureClass::PORT_UNAVAILABLE_ERROR4;
+    const bool remotePeerFailure = failureClass == UbFailureClass::REMOTE_UNAVAILABLE_ERROR9;
+    const auto nowMs = GetSteadyClockTimeStampMs();
+    if (localSenderFailure || remotePeerFailure) {
+        outcome.peer = localSenderFailure ? hostPort_ : endpoint;
+        outcome.learnedFrom = "recovery_probe";
+        admission->ReportOutcome(outcome);
+        if (outcome.peer == subject) {
+            return;
+        }
+        (void)admission->CancelProbe(token, nowMs);
+        return;
+    }
+    const bool requireGlobalAvailable = subject != hostPort_;
+    (void)admission->CompleteProbe(token, status, nowMs, requireGlobalAvailable);
 }
 
 Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()
