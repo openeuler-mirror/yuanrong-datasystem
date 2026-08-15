@@ -175,17 +175,27 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     invalid partial teardown and the resulting expected provider error logs; fully converged shutdown keeps the normal
     explicit cleanup path.
   - URMA write failures preserve raw provider-post and completion status in `UrmaWriteFailure`. The object-cache
-    classifier treats raw status `4` as a hard local-port failure, wait/RPC timeout evidence as `SUSPECT`, and
-    resource-pressure failures as non-isolating. A generic `K_URMA_ERROR` without raw provider/CQE evidence is not
-    sufficient for hard isolation.
+    classifier treats raw status `4` as a hard local-sender failure and CQE status `9` as a hard remote-peer ACK
+    timeout; wait/RPC timeout evidence without a CQE remains `SUSPECT`, and resource-pressure failures remain
+    non-isolating. Health-summary wire encoding maps the new CQE-9 reason to the existing hard-unavailable reason so
+    rolling upgrades preserve the established enum range. A generic `K_URMA_ERROR` without raw provider/CQE evidence
+    is not sufficient for hard isolation.
   - A timed-out URMA WRITE carrying a late-completion observer retains its complete `UrmaEvent` in the existing request
     map instead of copying request identity into a second tombstone object. The timeout transition is serialized with
     completion by the Event mutex and clears the strong `EventWaiter` reference before the foreground request returns;
     the Event already holds only a weak send-lane reference and never owns the payload. A late status-4 CQE consumes the
     original Event and notifies the still-live owner outside Event/retention locks. Retention is bounded to 1,024 Events
     and 3 seconds, with oldest-first capacity eviction, incremental poll-loop expiry, and explicit shutdown cleanup.
-    Reads, writes without a live observer, and WRs rejected before provider submission retain the original immediate
-    deletion behavior.
+    Late status-4 completions are fenced by the local sender recovery generation. Worker-to-worker late status-9
+    completions are attributed to the Event's remote endpoint and fenced by a per-peer recovery generation; that
+    generation advances on successful peer recovery and trusted Worker-incarnation replacement. Reads, writes without
+    a live observer, and WRs rejected before provider submission retain the original immediate deletion behavior.
+  - Worker recovery probes preserve the raw `UrmaWriteFailure` through posting and CQE wait. A status-4 probe failure
+    isolates the probing Worker's local sender, while CQE status `9` isolates the remote probe endpoint. When that
+    endpoint is not the current recovery subject, the probe token is cancelled back to its previous failure state so
+    one fault cannot be reassigned to the unrelated subject. Soft `SUSPECT` verification keeps admission open while
+    the probe is in flight; a probe failure without authoritative status `4` or `9` remains `SUSPECT` and retries with
+    bounded backoff. Recovery probes for an already hard-unavailable subject remain fail-closed.
   - The client transport layer owns process-local UB sender admission. A raw status-4 write failure closes admission
     for later UB Create/Set/MCreate/MSet operations. Admission captures the sender generation and registers a stack
     operation token under the sender-state lock, then releases that lock before transport I/O. Shutdown closes the

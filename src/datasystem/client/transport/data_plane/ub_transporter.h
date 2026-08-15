@@ -87,7 +87,7 @@ public:
 
     Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
                   const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override;
-    Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override;
+    Status Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult *result = nullptr) override;
     Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
                    const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
                    std::vector<std::shared_ptr<ObjectBuffer>> &buffers) override;
@@ -120,6 +120,12 @@ private:
                                std::vector<bool> &tcpPayload,
                                std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets,
                                uint64_t &fallbackBytes, TransportMSetResult &result);
+    // Publishes one Set: URMA path sends no TCP payload, TCP fallback sends the data as RPC payload.
+    // Extracted from Set to keep Set within the codecheck function-size limit.
+    Status PublishSetPayload(const ObjectBufferInfo &info, PublishReqPb &pubReq,
+                             const TransportSetParam &param, const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                             PublishRspPb &rsp, uint32_t &workerVersion, TransportSetResult *result,
+                             const Status &writeRc);
     void ClassifyMSetPayload(const std::shared_ptr<ObjectBuffer> &buffer, const Status &writeRc,
                              std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
                              std::vector<bool> &tcpPayload,

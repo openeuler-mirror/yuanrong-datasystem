@@ -764,6 +764,7 @@ private:
     };
 
     Status BuildSetRouteContext(const HostPort &worker, SetRouteContext &routeContext);
+    std::vector<HostPort> MergeWriteTargetExclusions(const std::vector<HostPort> &excludedWorkers) const;
 
     Status SelectSetRoute(const std::string &objectKey, const std::vector<HostPort> &excludedWorkers,
                           SetRouteContext &routeContext);
@@ -773,7 +774,7 @@ private:
     Status ProcessTransportPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
                                const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
                                uint32_t ttlSecond, int existence, const SetRouteContext &routeContext,
-                               SetFailureStage &failureStage);
+                               SetFailureStage &failureStage, client::TransportSetResult &transportResult);
 
     // Routed two-step Create/Publish (Component D). When local cache is off, allocate the buffer
     // on the hash-ring-selected worker via the transport layer and bridge the result to a legacy
@@ -813,7 +814,7 @@ private:
                                   size_t &failedCount);
 
     bool HandleSetRouteFailure(const Status &status, SetFailureStage failureStage, const HostPort &worker,
-                               std::vector<HostPort> &excludedWorkers);
+                               std::vector<HostPort> &excludedWorkers, bool safeWriteTargetReplay = false);
 
     Status ExecuteSetFlow(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                           const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence);

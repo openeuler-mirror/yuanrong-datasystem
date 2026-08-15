@@ -654,9 +654,10 @@ public:
     /**
      * @brief Run a dedicated worker-to-worker UB recovery probe.
      * @param[in] peerAddr Remote worker endpoint.
+     * @param[out] failure Optional raw provider/CQE failure details.
      * @return K_OK only after the one-byte URMA WRITE completes.
      */
-    Status ProbeUrmaConnectionToPeer(const HostPort &peerAddr);
+    Status ProbeUrmaConnectionToPeer(const HostPort &peerAddr, UrmaWriteFailure *failure = nullptr);
 
     /**
      * @brief Try to give up waiting for reconciliation to be done when using distributed master. If the local worker

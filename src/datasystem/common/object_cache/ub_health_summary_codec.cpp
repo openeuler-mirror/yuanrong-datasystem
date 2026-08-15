@@ -15,7 +15,10 @@ void EncodeUbHealthSummary(const UbHealthSummary &summary, UbHealthSummaryPb &pb
     pb.set_incarnation(summary.incarnation);
     pb.set_writable(summary.writable);
     pb.set_state(static_cast<int32_t>(summary.state));
-    pb.set_reason(static_cast<int32_t>(summary.reason));
+    const auto wireReason = summary.reason == UbFailureClass::REMOTE_UNAVAILABLE_ERROR9
+                                ? UbFailureClass::PORT_UNAVAILABLE_ERROR4
+                                : summary.reason;
+    pb.set_reason(static_cast<int32_t>(wireReason));
     pb.set_last_status_code(static_cast<int32_t>(summary.lastStatusCode));
     pb.set_epoch(summary.epoch);
     pb.set_backoff_level(summary.backoffLevel);

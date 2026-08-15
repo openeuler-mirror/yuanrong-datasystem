@@ -115,11 +115,11 @@ std::vector<TransportHint> CreateFallbackHints(TransportHint initial)
 }
 }  // namespace
 
-struct TransportLayer::LocalUbSenderState final : public UrmaLateCompletionObserver {
+struct TransportLayer::LocalUbSenderState final : public UrmaLateCompletionObserver,
+                                                  public std::enable_shared_from_this<LocalUbSenderState> {
     // Closing and the active count share one modification order so the last release cannot miss Shutdown's drain.
     static constexpr uint64_t IN_FLIGHT_CLOSING = 1ull << 63;
     static constexpr uint64_t IN_FLIGHT_COUNT_MASK = IN_FLIGHT_CLOSING - 1;
-
     bool IsShuttingDown() const
     {
         return (inFlightGate.load(std::memory_order_acquire) & IN_FLIGHT_CLOSING) != 0;
@@ -145,9 +145,35 @@ struct TransportLayer::LocalUbSenderState final : public UrmaLateCompletionObser
         return inFlightGate.load(std::memory_order_acquire) & IN_FLIGHT_COUNT_MASK;
     }
 
-    void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken) noexcept override
+    void DispatchLateWriteTargetCompletion(const UrmaLateCompletion &completion, uint64_t peerToken)
+    {
+        auto pool = lateCompletionPool;
+        auto filter = healthFilter.lock();
+        auto mutex = reconcileMutex.lock();
+        auto cv = reconcileCv.lock();
+        if (pool == nullptr || filter == nullptr || mutex == nullptr || cv == nullptr || IsShuttingDown()) {
+            return;
+        }
+        auto weakState = weak_from_this();
+        pool->Execute([weakState, filter, mutex, cv, completion, peerToken]() {
+            std::lock_guard<bthread::Mutex> lock(*mutex);
+            auto state = weakState.lock();
+            if (state == nullptr || state->IsShuttingDown()) {
+                return;
+            }
+            filter->ReportLateWriteTargetFailure(completion, peerToken);
+            cv->notify_all();
+        });
+    }
+
+    void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken,
+                              uint64_t peerToken) noexcept override
     {
         try {
+            if (completion.cqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS) {
+                DispatchLateWriteTargetCompletion(completion, peerToken);
+                return;
+            }
             HostPort workerAddr;
             if (completion.cqeStatus != URMA_PORT_UNAVAILABLE_STATUS
                 || workerAddr.ParseString(completion.remoteAddress).IsError()) {
@@ -195,7 +221,10 @@ struct TransportLayer::LocalUbSenderState final : public UrmaLateCompletionObser
     uint32_t probeBackoffLevel = 0;
     std::chrono::steady_clock::time_point probeDeadline;
     std::chrono::milliseconds probeBaseDelay{ std::chrono::seconds(1) };
+    std::weak_ptr<bthread::Mutex> reconcileMutex;
     std::weak_ptr<bthread::ConditionVariable> reconcileCv;
+    std::shared_ptr<ThreadPool> lateCompletionPool;
+    std::weak_ptr<UbHealthFilter> healthFilter;
     std::mutex inFlightDrainMutex;
     std::condition_variable inFlightCv;
     std::atomic<uint64_t> inFlightGate{ 0 };
@@ -217,6 +246,7 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
     : advisor_(std::make_shared<TransportAdvisor>()), releasePool_(std::move(options.releasePool))
 {
     localUbSenderState_ = std::make_shared<LocalUbSenderState>();
+    localUbSenderState_->reconcileMutex = reconcileMutex_;
     localUbSenderState_->reconcileCv = reconcileCv_;
     auto ubBufferProvider = CreateDefaultUbReceiveBufferProvider();
     manager_ = std::make_shared<DataPlaneManager>(std::move(signature), fastTransportMemSize,
@@ -229,6 +259,8 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
     auto executor = std::make_shared<DataPlaneExecutor>(manager_, advisor_);
     healthFilter_ = options.readSourceFilter == nullptr ? std::make_shared<UbHealthFilter>()
                                                         : std::move(options.readSourceFilter);
+    localUbSenderState_->lateCompletionPool = lateCompletionPool_;
+    localUbSenderState_->healthFilter = healthFilter_;
     auto healthFilter = healthFilter_;
     auto checkReadSource = [healthFilter](const HostPort &workerAddr) {
         return healthFilter->IsAvailable(workerAddr)
@@ -262,7 +294,10 @@ TransportLayer::TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManage
 {
     localUbSenderState_ = std::make_shared<LocalUbSenderState>();
     localUbSenderState_->probeBaseDelay = std::max(localUbProbeBaseDelay, std::chrono::milliseconds(1));
+    localUbSenderState_->reconcileMutex = reconcileMutex_;
     localUbSenderState_->reconcileCv = reconcileCv_;
+    localUbSenderState_->lateCompletionPool = lateCompletionPool_;
+    localUbSenderState_->healthFilter = healthFilter_;
 }
 
 bool TransportLayer::ReportProviderUbFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail)
@@ -332,7 +367,27 @@ void TransportLayer::PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, 
         bufferInfo.ubLateCompletionContext.reset();
         return;
     }
-    bufferInfo.ubLateCompletionContext = UrmaLateCompletionContext{ localUbSenderState_, ownerToken };
+    const uint64_t peerToken = healthFilter_ == nullptr
+                                   ? 0
+                                   : healthFilter_->CaptureWriteTargetCompletionGeneration(bufferInfo.workerAddr);
+    bufferInfo.ubLateCompletionContext = UrmaLateCompletionContext{ localUbSenderState_, ownerToken, peerToken };
+}
+
+bool TransportLayer::ReportWriteTargetUbFailure(const LocalUbSenderFailureView &failure)
+{
+    if (healthFilter_ == nullptr || failure.kind != AccessTransportKind::UB || failure.status.IsOk()
+        || !failure.cqeStatus.has_value() || *failure.cqeStatus != URMA_REMOTE_ACK_TIMEOUT_STATUS) {
+        return false;
+    }
+    const bool quarantined = healthFilter_->ReportWriteTargetFailure(
+        failure.workerAddr, failure.status, failure.providerStatus, failure.cqeStatus);
+    if (quarantined) {
+        LOG(ERROR) << "[CLIENT_UB_WRITE_TARGET_ISOLATION] Client UB write target quarantined, worker="
+                   << failure.workerAddr.ToString() << ", status=" << failure.status.ToString()
+                   << ", cqeStatus=" << *failure.cqeStatus;
+        NotifyReconcile();
+    }
+    return quarantined;
 }
 
 bool TransportLayer::ReportLocalUbSenderFailure(const LocalUbSenderFailureView &failure, uint64_t ownerToken)
@@ -453,6 +508,20 @@ std::optional<std::chrono::steady_clock::time_point> TransportLayer::GetProvider
     return std::chrono::steady_clock::now() + std::chrono::milliseconds(delayMs);
 }
 
+std::optional<std::chrono::steady_clock::time_point> TransportLayer::GetWriteTargetUbProbeDeadline() const
+{
+    if (healthFilter_ == nullptr) {
+        return std::nullopt;
+    }
+    auto deadlineMs = healthFilter_->NextWriteTargetRecoveryDeadlineMs();
+    if (!deadlineMs.has_value()) {
+        return std::nullopt;
+    }
+    const uint64_t nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    const uint64_t delayMs = *deadlineMs > nowMs ? *deadlineMs - nowMs : 0;
+    return std::chrono::steady_clock::now() + std::chrono::milliseconds(delayMs);
+}
+
 void TransportLayer::TryRecoverProviderUbSource()
 {
     if (healthFilter_ == nullptr || localUbSenderState_->IsShuttingDown()) {
@@ -481,12 +550,33 @@ void TransportLayer::TryRecoverProviderUbSource()
     }
 }
 
+void TransportLayer::TryRecoverWriteTargetUbSource()
+{
+    if (healthFilter_ == nullptr || localUbSenderState_->IsShuttingDown()) {
+        return;
+    }
+    const uint64_t nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    auto candidate = healthFilter_->TryBeginWriteTargetRecovery(nowMs);
+    if (!candidate.has_value()) {
+        return;
+    }
+    Status probeRc = manager_->ProbeUbWriteTarget(candidate->token.peer);
+    const uint64_t completionMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    if (healthFilter_->CompleteWriteTargetRecovery(*candidate, probeRc, completionMs)) {
+        LOG(INFO) << "Client UB write target recovered via directional probe, worker="
+                  << candidate->token.peer.ToString();
+    } else if (probeRc.IsError()) {
+        LOG(WARNING) << "Client UB write target recovery probe failed, worker="
+                     << candidate->token.peer.ToString() << ": " << probeRc;
+    }
+}
+
 void TransportLayer::NotifyReconcile()
 {
     // Synchronize the notification with the waiter's predicate-to-wait transition. The actual recovery
     // state lives under its domain lock; taking reconcileMutex_ here prevents a notification from being
     // lost after the waiter checked that state but before ConditionVariable::wait released this mutex.
-    std::lock_guard<bthread::Mutex> lock(reconcileMutex_);
+    std::lock_guard<bthread::Mutex> lock(*reconcileMutex_);
     reconcileCv_->notify_one();
 }
 
@@ -499,7 +589,7 @@ Status TransportLayer::Init()
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_IF_NOT_OK(manager_->Init());
-    std::lock_guard<bthread::Mutex> lock(reconcileMutex_);
+    std::lock_guard<bthread::Mutex> lock(*reconcileMutex_);
     if (reconcileStarted_) {
         return Status::OK();
     }
@@ -686,6 +776,13 @@ void TransportLayer::LogSetResult(const HostPort &workerAddr, TransportHint hint
 
 Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
 {
+    TransportSetResult result;
+    return Set(buffer, param, result);
+}
+
+Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult &result)
+{
+    result = TransportSetResult{};
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const HostPort workerAddr = ObjectBufferInternal::GetInfo(buffer).workerAddr;
@@ -701,14 +798,14 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     mutableBufferInfo.ubProviderStatus.reset();
     mutableBufferInfo.ubCqeStatus.reset();
     PrepareLocalUbLateCompletion(mutableBufferInfo, transporter->Kind(), operation.ownerToken);
-    Status rc = transporter->Set(buffer, param);
-    return FinalizeSetPublish(workerAddr, buffer, param, hint, transporter, rc, operation.ownerToken, setStart);
+    Status rc = transporter->Set(buffer, param, &result);
+    return FinalizeSetPublish(workerAddr, buffer, param, hint, transporter, rc, operation.ownerToken, result, setStart);
 }
 
 Status TransportLayer::FinalizeSetPublish(const HostPort &workerAddr, ObjectBuffer &buffer,
                                           const TransportSetParam &param, TransportHint hint,
                                           std::shared_ptr<IDataTransporter> &transporter, const Status &publishRc,
-                                          uint64_t ownerToken,
+                                          uint64_t ownerToken, TransportSetResult &result,
                                           std::chrono::steady_clock::time_point setStart)
 {
     const auto &ubFailureReport = ObjectBufferInternal::GetInfo(buffer).ubFailureReportRc;
@@ -720,6 +817,8 @@ Status TransportLayer::FinalizeSetPublish(const HostPort &workerAddr, ObjectBuff
     bool senderQuarantined = ReportLocalUbSenderFailure(
         { workerAddr, transporter->Kind(), ubFailureReport, bufferInfo.ubProviderStatus, bufferInfo.ubCqeStatus },
         ownerToken);
+    result.writeTargetQuarantined = ReportWriteTargetUbFailure(
+        { workerAddr, transporter->Kind(), ubFailureReport, bufferInfo.ubProviderStatus, bufferInfo.ubCqeStatus });
     std::optional<Status> firstPublishRc;
     if (publishRc.GetCode() == K_RPC_UNAVAILABLE && !IsBrpcRequestDefinitelyNotSent(publishRc)) {
         firstPublishRc = publishRc;
@@ -737,11 +836,16 @@ Status TransportLayer::FinalizeSetPublish(const HostPort &workerAddr, ObjectBuff
         releaseRef(TransportHint::TCP_ONLY);
         return rc.GetCode() == K_URMA_NEED_CONNECT ? ubFailureReport : rc;
     }
+    if (result.writeTargetQuarantined
+        && (!result.publishAttempted || result.publishDefinitelyNotSent)) {
+        releaseRef(TransportHint::TCP_ONLY);
+        return rc;
+    }
     if (!RebuildPlaneOnSetFailure(rc, workerAddr)) {
         releaseRef();
         return rc;
     }
-    rc = RetrySet(workerAddr, buffer, param, hint);
+    rc = RetrySet(workerAddr, buffer, param, hint, result);
     if (rc.IsError() && firstPublishRc.has_value()) {
         rc = *firstPublishRc;
     }
@@ -751,7 +855,7 @@ Status TransportLayer::FinalizeSetPublish(const HostPort &workerAddr, ObjectBuff
 }
 
 Status TransportLayer::RetrySet(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
-                                TransportHint hint)
+                                TransportHint hint, TransportSetResult &result)
 {
     std::shared_ptr<IDataTransporter> transporter;
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
@@ -764,12 +868,16 @@ Status TransportLayer::RetrySet(const HostPort &workerAddr, ObjectBuffer &buffer
     mutableBufferInfo.ubProviderStatus.reset();
     mutableBufferInfo.ubCqeStatus.reset();
     PrepareLocalUbLateCompletion(mutableBufferInfo, transporter->Kind(), operation.ownerToken);
-    Status rc = transporter->Set(buffer, retryParam);
+    result = TransportSetResult{};
+    Status rc = transporter->Set(buffer, retryParam, &result);
     const auto &bufferInfo = ObjectBufferInternal::GetInfo(buffer);
     (void)ReportLocalUbSenderFailure(
         { workerAddr, transporter->Kind(), bufferInfo.ubFailureReportRc, bufferInfo.ubProviderStatus,
           bufferInfo.ubCqeStatus },
         operation.ownerToken);
+    result.writeTargetQuarantined = ReportWriteTargetUbFailure(
+        { workerAddr, transporter->Kind(), bufferInfo.ubFailureReportRc, bufferInfo.ubProviderStatus,
+          bufferInfo.ubCqeStatus });
     if (rc.IsError()) {
         LOG(WARNING) << "Set still failed after rebuilding transport for worker " << workerAddr.ToString() << ": "
                      << rc;
@@ -852,10 +960,25 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
     bool senderQuarantined = ReportLocalUbSenderFailure(
         { workerAddr, transporter->Kind(), ubFailureReport, result.ubProviderStatus, result.ubCqeStatus },
         operation.ownerToken);
+    result.writeTargetQuarantined = ReportWriteTargetUbFailure(
+        { workerAddr, transporter->Kind(), ubFailureReport, result.ubProviderStatus, result.ubCqeStatus });
     if (senderQuarantined) {
         ScheduleMSetReleases(buffers, param.requestContext, result, TransportHint::TCP_ONLY);
         return rc.GetCode() == K_URMA_NEED_CONNECT ? ubFailureReport : rc;
     }
+    if (result.writeTargetQuarantined
+        && (!result.publishAttempted || result.publishDefinitelyNotSent)) {
+        ScheduleMSetReleases(buffers, param.requestContext, result, TransportHint::TCP_ONLY);
+        return rc;
+    }
+    return RetryOrReplayMSet(workerAddr, buffers, param, hint, result, rc);
+}
+
+Status TransportLayer::RetryOrReplayMSet(const HostPort &workerAddr,
+                                         const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                                         const TransportSetParam &param, TransportHint hint,
+                                         TransportMSetResult &result, const Status &rc)
+{
     const bool retryUbWrite = rc.GetCode() == K_URMA_NEED_CONNECT;
     const bool retryUnsentPublish = IsRetryableRpcError(rc) && !result.publishAttempted;
     if (!retryUbWrite && !retryUnsentPublish) {
@@ -875,13 +998,13 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
                      << " after MSet failed before publish: " << rc;
         manager_->Teardown(workerAddr);
     }
-    rc = RetryMSet(workerAddr, buffers, param, hint, result);
+    Status retryRc = RetryMSet(workerAddr, buffers, param, hint, result);
     std::optional<TransportHint> releaseHint;
     if (localUbSenderState_->unavailable.load(std::memory_order_acquire)) {
         releaseHint = TransportHint::TCP_ONLY;
     }
     ScheduleMSetReleases(buffers, param.requestContext, result, releaseHint);
-    return rc;
+    return retryRc;
 }
 
 Status TransportLayer::RetryMSet(const HostPort &workerAddr, const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
@@ -900,6 +1023,8 @@ Status TransportLayer::RetryMSet(const HostPort &workerAddr, const std::vector<s
     (void)ReportLocalUbSenderFailure(
         { workerAddr, transporter->Kind(), result.ubFailureReportRc, result.ubProviderStatus, result.ubCqeStatus },
         operation.ownerToken);
+    result.writeTargetQuarantined = ReportWriteTargetUbFailure(
+        { workerAddr, transporter->Kind(), result.ubFailureReportRc, result.ubProviderStatus, result.ubCqeStatus });
     if (rc.IsError()) {
         LOG(WARNING) << "MSet still failed after rebuilding transport for worker " << workerAddr.ToString() << ": "
                      << rc;
@@ -1042,7 +1167,7 @@ Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
     // write lock.
     std::vector<HostPort> sameHostAddrs = snapshot.sameHostAddrs;
     {
-        std::lock_guard<bthread::Mutex> lock(reconcileMutex_);
+        std::lock_guard<bthread::Mutex> lock(*reconcileMutex_);
         CHECK_FAIL_RETURN_STATUS(reconcileStarted_, K_NOT_READY, "Transport reconcile thread is not initialized");
         CHECK_FAIL_RETURN_STATUS(!reconcileStopping_, K_SHUTTING_DOWN, "TransportLayer is shutting down");
         // Publish the live-worker snapshot to the manager FIRST. The advisor's same-host set is
@@ -1074,6 +1199,11 @@ bool TransportLayer::WaitForSnapshotOrStop(std::unique_lock<bthread::Mutex> &loc
         if (!probeDeadline.has_value() || (providerDeadline.has_value() && *providerDeadline < *probeDeadline)) {
             probeDeadline = providerDeadline;
         }
+        auto writeTargetDeadline = GetWriteTargetUbProbeDeadline();
+        if (!probeDeadline.has_value()
+            || (writeTargetDeadline.has_value() && *writeTargetDeadline < *probeDeadline)) {
+            probeDeadline = writeTargetDeadline;
+        }
         INJECT_POINT_NO_RETURN("TransportLayer.WaitForSnapshotOrStop.afterDeadlineCheck");
         if (probeDeadline.has_value()) {
             const auto now = std::chrono::steady_clock::now();
@@ -1096,7 +1226,7 @@ void TransportLayer::ReconcileLoop()
     while (keepRunning) {
         std::optional<WorkerSnapshot> snapshot;
         {
-            std::unique_lock<bthread::Mutex> lock(reconcileMutex_);
+            std::unique_lock<bthread::Mutex> lock(*reconcileMutex_);
             if (!WaitForSnapshotOrStop(lock)) {
                 keepRunning = false;
                 continue;
@@ -1111,6 +1241,7 @@ void TransportLayer::ReconcileLoop()
         }
         TryRecoverLocalUbSender();
         TryRecoverProviderUbSource();
+        TryRecoverWriteTargetUbSource();
     }
 }
 
@@ -1130,7 +1261,7 @@ void TransportLayer::Shutdown()
     }
     Thread reconcileThread;
     {
-        std::lock_guard<bthread::Mutex> lock(reconcileMutex_);
+        std::lock_guard<bthread::Mutex> lock(*reconcileMutex_);
         reconcileStopping_ = true;
         pendingSnapshot_.reset();
         reconcileCv_->notify_all();

@@ -118,7 +118,7 @@ Status InitializeFastTransportManager(const HostPort &hostport)
     return Status::OK();
 }
 
-Status ProbeUbDataPlane(const UrmaHandshakeRspPb &response)
+Status ProbeUbDataPlane(const UrmaHandshakeRspPb &response, UrmaWriteFailure *failure)
 {
 #ifdef USE_URMA
     CHECK_FAIL_RETURN_STATUS(response.has_recovery_probe_addr(), K_NOT_SUPPORTED,
@@ -131,7 +131,7 @@ Status ProbeUbDataPlane(const UrmaHandshakeRspPb &response)
     std::vector<uint64_t> eventKeys;
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayload(
         response.recovery_probe_addr(), segmentAddress, segmentSize, dataAddress, 0, probeSize, 0, INVALID_CHIP_ID,
-        INVALID_CHIP_ID, false, eventKeys));
+        INVALID_CHIP_ID, false, eventKeys, nullptr, failure));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
     auto remainingTime = [deadline]() {
         const auto remaining =
@@ -139,12 +139,13 @@ Status ProbeUbDataPlane(const UrmaHandshakeRspPb &response)
         return std::max<int64_t>(0, remaining.count());
     };
     auto preserveError = [](Status &status) { return status; };
-    RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, preserveError));
+    RETURN_IF_NOT_OK(WaitFastTransportEventWithFailure(eventKeys, remainingTime, preserveError, failure));
     INJECT_POINT("DataPlaneManager.ProbeUbDataPlane.AfterCompletion");
     INJECT_POINT("FastTransportManager.ProbeUbDataPlane.AfterCompletion");
     return Status::OK();
 #else
     (void)response;
+    (void)failure;
     return Status(K_NOT_SUPPORTED, "URMA recovery probe is unavailable in this build");
 #endif
 }

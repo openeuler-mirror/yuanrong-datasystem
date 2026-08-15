@@ -41,11 +41,13 @@ struct TransportMSetResult {
     AccessTransportKind actualKind = AccessTransportKind::UNKNOWN;
     // True once InvokeMultiSet starts; connection errors after this point are ambiguous and must not be replayed.
     bool publishAttempted = false;
+    bool publishDefinitelyNotSent = false;
     // True when the worker released memory references for successfully published objects.
     bool workerAutoRelease = false;
     Status ubFailureReportRc = Status::OK();
     std::optional<int> ubProviderStatus;
     std::optional<int> ubCqeStatus;
+    bool writeTargetQuarantined = false;
 
     void Clear();
 };

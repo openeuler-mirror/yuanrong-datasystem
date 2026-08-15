@@ -2715,14 +2715,14 @@ Status WorkerOCServiceImpl::WarmupUrmaConnectionToPeer(const std::string &peerAd
     return getProc_->WarmupGetObjectFromRemoteWorker(peerAddr, peerKey, URMA_WARMUP_OBJECT_SIZE);
 }
 
-Status WorkerOCServiceImpl::ProbeUrmaConnectionToPeer(const HostPort &peerAddr)
+Status WorkerOCServiceImpl::ProbeUrmaConnectionToPeer(const HostPort &peerAddr, UrmaWriteFailure *failure)
 {
     CHECK_FAIL_RETURN_STATUS(getProc_ != nullptr, K_NOT_READY, "Object cache get service is not ready.");
     ScopedRequestContext context;
     constexpr int64_t probeRpcTimeoutMs = 2'000;
     GetRequestContext()->reqTimeoutDuration.Init(probeRpcTimeoutMs);
     ApiDeadline::Instance().Reset();
-    return getProc_->ProbeUbConnectionToPeer(peerAddr);
+    return getProc_->ProbeUbConnectionToPeer(peerAddr, failure);
 }
 
 Status WorkerOCServiceImpl::GiveUpReconciliation()

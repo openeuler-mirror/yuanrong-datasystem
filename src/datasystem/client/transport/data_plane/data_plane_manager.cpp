@@ -300,6 +300,30 @@ Status DataPlaneManager::ProbeUbConnection(const HostPort &workerAddr, const std
     return Status::OK();
 }
 
+Status DataPlaneManager::ProbeUbWriteTarget(const HostPort &workerAddr)
+{
+    {
+        std::lock_guard<bthread::Mutex> lock(probeMutex_);
+        CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                                 "DataPlaneManager is shutting down");
+        CHECK_FAIL_RETURN_STATUS(hasWorkerSnapshot_.load(std::memory_order_acquire), K_NOT_READY,
+                                 "Worker snapshot is not published for UB write-target probe");
+        CHECK_FAIL_RETURN_STATUS(writeProbeWorkerIndices_.count(workerAddr.ToString()) != 0, K_NOT_FOUND,
+                                 "Worker endpoint is absent from latest writable transport snapshot: "
+                                     + workerAddr.ToString());
+    }
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+    RETURN_IF_NOT_OK(GetOrCreateRpcClient(workerAddr, rpcClient));
+    RETURN_IF_NOT_OK(EstablishUbProbe(workerAddr, rpcClient));
+    std::lock_guard<bthread::Mutex> lock(probeMutex_);
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "DataPlaneManager is shutting down");
+    CHECK_FAIL_RETURN_STATUS(writeProbeWorkerIndices_.count(workerAddr.ToString()) != 0, K_NOT_FOUND,
+                             "Worker endpoint left the writable transport snapshot during probe: "
+                                 + workerAddr.ToString());
+    return Status::OK();
+}
+
 Status DataPlaneManager::ProbeProviderUbRecovery(const HostPort &workerAddr, const std::string &expectedIncarnation,
                                                  int32_t timeoutMs, UbHealthSummary &summary)
 {

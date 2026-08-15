@@ -71,8 +71,7 @@ void PeerUbAdmission::ReportOutcome(const UbOpOutcome &outcome)
     ReportOutcomeImpl(outcome, std::nullopt);
 }
 
-void PeerUbAdmission::ReportOutcomeImpl(const UbOpOutcome &outcome,
-                                        std::optional<uint64_t> expectedLateCompletionGeneration)
+void PeerUbAdmission::ReportOutcomeImpl(const UbOpOutcome &outcome, std::optional<LateCompletionFence> fence)
 {
     auto failureClass = classifier_.Classify(outcome);
     if (failureClass == UbFailureClass::SUCCESS || failureClass == UbFailureClass::LOCAL_RESOURCE_PRESSURE
@@ -82,7 +81,7 @@ void PeerUbAdmission::ReportOutcomeImpl(const UbOpOutcome &outcome,
 
     // issue #958: CONNECT_OR_PATH_FAILURE (e.g. post failure ret=4096) cannot tell a local send
     // fault from a peer receive fault, so hard-isolating on first sight over-blocks. Treat it as
-    // SUSPECT (record-only, no blocking) and let the recovery probe decide the verdict.
+    // SUSPECT and actively verify the path without closing admission.
     const auto nextState =
         (failureClass == UbFailureClass::TIMEOUT_SUSPECT
          || failureClass == UbFailureClass::CONNECT_OR_PATH_FAILURE)
@@ -90,33 +89,10 @@ void PeerUbAdmission::ReportOutcomeImpl(const UbOpOutcome &outcome,
             : UbAdmissionState::UNAVAILABLE;
     {
         std::lock_guard<std::shared_mutex> lock(mutex_);
-        if (expectedLateCompletionGeneration.has_value()
-            && *expectedLateCompletionGeneration != lateCompletionGeneration_.load(std::memory_order_acquire)) {
+        if ((fence.has_value() && !IsLateCompletionFenceCurrentLocked(outcome.peer, *fence))
+            || !UpdatePathStateLocked(outcome, failureClass, nextState)) {
             return;
         }
-        auto &state = states_[outcome.peer];
-        // A timeout or path failure is lower-confidence evidence than an explicit provider/CQE
-        // failure. Once hard evidence (or its recovery probe) has quarantined a peer, a late
-        // soft report from an older in-flight request must not reopen the SUSPECT -> UNAVAILABLE
-        // oscillation or invalidate the probe token.
-        if ((failureClass == UbFailureClass::TIMEOUT_SUSPECT
-             || failureClass == UbFailureClass::CONNECT_OR_PATH_FAILURE)
-            && (state.state == UbAdmissionState::UNAVAILABLE || state.state == UbAdmissionState::PROBING)) {
-            return;
-        }
-        if (state.state == nextState) {
-            return;
-        }
-        state.lastStatus = outcome.status;
-        state.lastFailureClass = failureClass;
-        state.providerStatus = outcome.providerStatus;
-        state.cqeStatus = outcome.cqeStatus;
-        state.state = nextState;
-        if (state.backoffLevel == 0) {
-            state.backoffLevel = 1;
-        }
-        state.backoffDeadlineMs = GetSteadyClockTimeStampMs() + ProbeBackoffMs(state.backoffLevel);
-        ++state.epoch;
     }
     if (nextState == UbAdmissionState::SUSPECT) {
         LOG(INFO) << "UB admission marked peer SUSPECT, peer=" << outcome.peer
@@ -162,6 +138,7 @@ void PeerUbAdmission::ReplaceGlobalSummaries(const std::vector<UbHealthSummary> 
             latest->second = summary.incarnation;
             // A trusted new incarnation supersedes process-local evidence learned from the old worker instance.
             states_.erase(summary.worker);
+            AdvancePeerCompletionGenerationLocked(summary.worker);
         }
 
         auto candidate = summary;
@@ -192,6 +169,7 @@ void PeerUbAdmission::InitializeProbing(const HostPort &peer, uint64_t nowMs)
     state.lastFailureClass = UbFailureClass::CONNECT_OR_PATH_FAILURE;
     state.backoffLevel = 0;
     state.backoffDeadlineMs = nowMs;
+    state.probeInFlight = false;
     ++state.epoch;
 }
 
@@ -207,13 +185,37 @@ std::optional<UbProbeToken> PeerUbAdmission::TryBeginProbe(const HostPort &peer,
         && state.state != UbAdmissionState::PROBING) {
         return std::nullopt;
     }
-    if (state.state == UbAdmissionState::PROBING && state.lastStatus.IsOk()) {
+    if (state.probeInFlight) {
         return std::nullopt;
     }
-    state.state = UbAdmissionState::PROBING;
-    state.lastStatus = Status::OK();
+    if (state.state != UbAdmissionState::SUSPECT) {
+        state.state = UbAdmissionState::PROBING;
+    }
+    state.probeInFlight = true;
     ++state.epoch;
     return UbProbeToken{ peer, state.epoch };
+}
+
+bool PeerUbAdmission::CancelProbe(const UbProbeToken &token, uint64_t nowMs)
+{
+    std::lock_guard<std::shared_mutex> lock(mutex_);
+    auto iter = states_.find(token.peer);
+    if (iter == states_.end()
+        || (iter->second.state != UbAdmissionState::PROBING
+            && iter->second.state != UbAdmissionState::SUSPECT)
+        || !iter->second.probeInFlight
+        || iter->second.epoch != token.epoch) {
+        return false;
+    }
+    auto &state = iter->second;
+    const bool softFailure = state.lastFailureClass == UbFailureClass::TIMEOUT_SUSPECT
+                             || state.lastFailureClass == UbFailureClass::CONNECT_OR_PATH_FAILURE;
+    state.state = softFailure ? UbAdmissionState::SUSPECT : UbAdmissionState::UNAVAILABLE;
+    state.probeInFlight = false;
+    state.backoffLevel = std::max(state.backoffLevel, 1U);
+    state.backoffDeadlineMs = nowMs + ProbeBackoffMs(state.backoffLevel);
+    ++state.epoch;
+    return true;
 }
 
 bool PeerUbAdmission::CompleteProbe(const UbProbeToken &token, const Status &status, uint64_t nowMs,
@@ -221,7 +223,10 @@ bool PeerUbAdmission::CompleteProbe(const UbProbeToken &token, const Status &sta
 {
     std::lock_guard<std::shared_mutex> lock(mutex_);
     auto iter = states_.find(token.peer);
-    if (iter == states_.end() || iter->second.state != UbAdmissionState::PROBING
+    if (iter == states_.end()
+        || (iter->second.state != UbAdmissionState::PROBING
+            && iter->second.state != UbAdmissionState::SUSPECT)
+        || !iter->second.probeInFlight
         || iter->second.epoch != token.epoch) {
         return false;
     }
@@ -232,16 +237,20 @@ bool PeerUbAdmission::CompleteProbe(const UbProbeToken &token, const Status &sta
         state.lastFailureClass = UbFailureClass::SUCCESS;
         state.backoffLevel = 0;
         state.backoffDeadlineMs = 0;
+        state.probeInFlight = false;
         state.providerStatus.reset();
         state.cqeStatus.reset();
         ++state.epoch;
         if (token.peer == self_) {
             lateCompletionGeneration_.fetch_add(1, std::memory_order_acq_rel);
         }
+        AdvancePeerCompletionGenerationLocked(token.peer);
         INJECT_POINT_NO_RETURN("PeerUbAdmission.CompleteProbe.success");
         return true;
     }
-    state.state = UbAdmissionState::UNAVAILABLE;
+    const bool softVerification = state.state == UbAdmissionState::SUSPECT;
+    state.state = softVerification ? UbAdmissionState::SUSPECT : UbAdmissionState::UNAVAILABLE;
+    state.probeInFlight = false;
     state.lastStatus = status.IsOk() ? Status(K_NOT_READY, "Global UB health still denies recovery") : status;
     state.backoffLevel = std::min(state.backoffLevel + 1, MAX_PROBE_BACKOFF_LEVEL);
     state.backoffDeadlineMs = nowMs + ProbeBackoffMs(state.backoffLevel);
@@ -257,7 +266,8 @@ std::optional<HostPort> PeerUbAdmission::NextProbeCandidate(uint64_t nowMs) cons
         const bool recoverable = state.state == UbAdmissionState::UNAVAILABLE
                                  || state.state == UbAdmissionState::SUSPECT
                                  || state.state == UbAdmissionState::PROBING;
-        if (recoverable && state.lastStatus.IsError() && nowMs >= state.backoffDeadlineMs) {
+        if (recoverable && !state.probeInFlight && state.lastStatus.IsError()
+            && nowMs >= state.backoffDeadlineMs) {
             return peer;
         }
     }
@@ -273,7 +283,7 @@ std::optional<uint64_t> PeerUbAdmission::NextProbeDeadlineMs() const
         const bool recoverable = state.state == UbAdmissionState::UNAVAILABLE
                                  || state.state == UbAdmissionState::SUSPECT
                                  || state.state == UbAdmissionState::PROBING;
-        if (recoverable && state.lastStatus.IsError()
+        if (recoverable && !state.probeInFlight && state.lastStatus.IsError()
             && (!deadline.has_value() || state.backoffDeadlineMs < *deadline)) {
             deadline = state.backoffDeadlineMs;
         }
@@ -305,6 +315,10 @@ void PeerUbAdmission::ReconcileTopologyWorkers(const std::unordered_set<HostPort
     }
     for (const auto &[worker, incarnations] : retiredGlobalIncarnations_) {
         (void)incarnations;
+        trackedWorkers.emplace(worker);
+    }
+    for (const auto &[worker, generation] : peerCompletionGenerations_) {
+        (void)generation;
         trackedWorkers.emplace(worker);
     }
     for (const auto &worker : trackedWorkers) {
@@ -365,19 +379,59 @@ PeerUbAdmissionStats PeerUbAdmission::GetStats() const
     std::shared_lock<std::shared_mutex> lock(mutex_);
     return PeerUbAdmissionStats{ states_.size(), globalSummaries_.size(), latestGlobalIncarnations_.size(),
                                  retiredGlobalIncarnations_.size(), departedWorkers_.size(),
-                                 replayTombstones_.size() };
+                                 replayTombstones_.size(), peerCompletionGenerations_.size() };
 }
 
 void PeerUbAdmission::ClearLocalState(const HostPort &peer)
 {
     std::lock_guard<std::shared_mutex> lock(mutex_);
     states_.erase(peer);
+    AdvancePeerCompletionGenerationLocked(peer);
     if (peer == self_) {
         lateCompletionGeneration_.fetch_add(1, std::memory_order_acq_rel);
     }
 }
 
-std::optional<UrmaLateCompletionContext> PeerUbAdmission::BuildLateCompletionContext(UbOperationKind operation)
+bool PeerUbAdmission::IsLateCompletionFenceCurrentLocked(const HostPort &peer,
+                                                         const LateCompletionFence &fence) const
+{
+    if (fence.scope == LateCompletionScope::LOCAL_SENDER) {
+        return fence.generation == lateCompletionGeneration_.load(std::memory_order_acquire);
+    }
+    auto generation = peerCompletionGenerations_.find(peer);
+    if (generation == peerCompletionGenerations_.end() || generation->second != fence.generation) {
+        return false;
+    }
+    return true;
+}
+
+bool PeerUbAdmission::UpdatePathStateLocked(const UbOpOutcome &outcome, UbFailureClass failureClass,
+                                            UbAdmissionState nextState)
+{
+    auto &state = states_[outcome.peer];
+    const bool softFailure = failureClass == UbFailureClass::TIMEOUT_SUSPECT
+                             || failureClass == UbFailureClass::CONNECT_OR_PATH_FAILURE;
+    // Soft evidence cannot downgrade an existing hard failure or invalidate an active recovery probe.
+    if (softFailure && (state.state == UbAdmissionState::UNAVAILABLE || state.state == UbAdmissionState::PROBING)) {
+        return false;
+    }
+    if (state.state == nextState) {
+        return false;
+    }
+    state.lastStatus = outcome.status;
+    state.lastFailureClass = failureClass;
+    state.providerStatus = outcome.providerStatus;
+    state.cqeStatus = outcome.cqeStatus;
+    state.state = nextState;
+    state.probeInFlight = false;
+    state.backoffLevel = std::max(state.backoffLevel, 1U);
+    state.backoffDeadlineMs = GetSteadyClockTimeStampMs() + ProbeBackoffMs(state.backoffLevel);
+    ++state.epoch;
+    return true;
+}
+
+std::optional<UrmaLateCompletionContext> PeerUbAdmission::BuildLateCompletionContext(
+    UbOperationKind operation, const std::optional<HostPort> &remotePeer)
 {
     auto observer = weak_from_this();
     if (observer.expired()) {
@@ -390,13 +444,21 @@ std::optional<UrmaLateCompletionContext> PeerUbAdmission::BuildLateCompletionCon
     const uint64_t ownerToken =
         (lateCompletionGeneration_.load(std::memory_order_acquire) << LATE_COMPLETION_OPERATION_BITS)
         | operationValue;
-    return UrmaLateCompletionContext{ observer, ownerToken };
+    uint64_t peerToken = 0;
+    if (remotePeer.has_value() && !remotePeer->Empty()) {
+        std::lock_guard<std::shared_mutex> lock(mutex_);
+        peerToken = GetOrCreatePeerCompletionGenerationLocked(*remotePeer);
+    }
+    return UrmaLateCompletionContext{ observer, ownerToken, peerToken };
 }
 
-void PeerUbAdmission::OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken) noexcept
+void PeerUbAdmission::OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken,
+                                           uint64_t peerToken) noexcept
 {
     try {
-        if (completion.cqeStatus != URMA_PORT_UNAVAILABLE_STATUS) {
+        const bool localSenderFailure = completion.cqeStatus == URMA_PORT_UNAVAILABLE_STATUS;
+        const bool remotePeerFailure = completion.cqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS;
+        if (!localSenderFailure && !remotePeerFailure) {
             return;
         }
         const auto operationValue = ownerToken & LATE_COMPLETION_OPERATION_MASK;
@@ -404,24 +466,31 @@ void PeerUbAdmission::OnLateUrmaCompletion(const UrmaLateCompletion &completion,
             return;
         }
         const uint64_t generation = ownerToken >> LATE_COMPLETION_OPERATION_BITS;
-        HostPort self;
-        {
+        HostPort attributedPeer;
+        LateCompletionFence fence{ LateCompletionScope::LOCAL_SENDER, generation };
+        if (localSenderFailure) {
             std::shared_lock<std::shared_mutex> lock(mutex_);
             if (self_.Empty()) {
                 return;
             }
-            self = self_;
+            attributedPeer = self_;
+        } else {
+            if (peerToken == 0 || attributedPeer.ParseString(completion.remoteAddress).IsError()) {
+                return;
+            }
+            fence = { LateCompletionScope::REMOTE_PEER, peerToken };
         }
         UbOpOutcome outcome(
-            self, static_cast<UbOperationKind>(operationValue),
+            attributedPeer, static_cast<UbOperationKind>(operationValue),
             Status(K_URMA_ERROR,
-                   FormatString("Late URMA completion reports Worker sender unavailable, requestId=%llu, "
-                                "remoteAddress=%s, remoteInstanceId=%s, cqeStatus=%d",
+                   FormatString("Late URMA completion reports %s unavailable, requestId=%llu, remoteAddress=%s, "
+                                "remoteInstanceId=%s, cqeStatus=%d",
+                                localSenderFailure ? "local Worker sender" : "remote Worker peer",
                                 completion.requestId, completion.remoteAddress.c_str(),
                                 completion.remoteInstanceId.c_str(), completion.cqeStatus)));
         outcome.cqeStatus = completion.cqeStatus;
         outcome.learnedFrom = "late_urma_completion";
-        ReportOutcomeImpl(outcome, generation);
+        ReportOutcomeImpl(outcome, std::move(fence));
     } catch (const std::exception &error) {
         LOG(ERROR) << "Failed to process late Worker URMA completion: " << error.what();
     } catch (...) {
@@ -527,8 +596,9 @@ void PeerUbAdmission::ApplyGlobalRecoveryTransitionLocked(const UbHealthSummary 
     }
     auto &state = local->second;
     if (!summary.writable) {
-        if (state.state == UbAdmissionState::PROBING && state.lastStatus.IsOk()) {
+        if (state.state == UbAdmissionState::PROBING) {
             state.state = UbAdmissionState::UNAVAILABLE;
+            state.probeInFlight = false;
             state.lastStatus = Status(K_NOT_READY, "Global UB health denies recovery");
             ++state.epoch;
         }
@@ -536,6 +606,7 @@ void PeerUbAdmission::ApplyGlobalRecoveryTransitionLocked(const UbHealthSummary 
     }
     if (state.state == UbAdmissionState::UNAVAILABLE) {
         state.state = UbAdmissionState::PROBING;
+        state.probeInFlight = false;
         state.backoffDeadlineMs = nowMs;
         ++state.epoch;
     }
@@ -563,6 +634,21 @@ void PeerUbAdmission::RetireWorkerLocked(const HostPort &worker, uint64_t nowMs,
     globalSummaries_.erase(worker);
     latestGlobalIncarnations_.erase(worker);
     retiredGlobalIncarnations_.erase(worker);
+    peerCompletionGenerations_.erase(worker);
+}
+
+uint64_t PeerUbAdmission::GetOrCreatePeerCompletionGenerationLocked(const HostPort &peer)
+{
+    auto [iter, inserted] = peerCompletionGenerations_.try_emplace(peer, 0);
+    if (inserted) {
+        iter->second = ++nextPeerCompletionGeneration_;
+    }
+    return iter->second;
+}
+
+void PeerUbAdmission::AdvancePeerCompletionGenerationLocked(const HostPort &peer)
+{
+    peerCompletionGenerations_[peer] = ++nextPeerCompletionGeneration_;
 }
 
 void PeerUbAdmission::PruneTombstonesLocked(uint64_t nowMs)

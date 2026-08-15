@@ -199,9 +199,10 @@ public:
     /**
      * @brief Exchange worker transport metadata and run the dedicated one-byte UB recovery probe.
      * @param[in] peerAddr Remote worker address.
+     * @param[out] failure Optional raw provider/CQE failure details.
      * @return K_OK only after the probe CQE succeeds.
      */
-    Status ProbeUbConnectionToPeer(const HostPort &peerAddr);
+    Status ProbeUbConnectionToPeer(const HostPort &peerAddr, UrmaWriteFailure *failure = nullptr);
 
 private:
     using ObjectKeysQueryMetaFailed = std::tuple<std::unordered_set<std::string>, std::unordered_set<std::string>>;

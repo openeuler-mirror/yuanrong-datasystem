@@ -592,8 +592,8 @@ void GetRequest::RecordProviderUbWriteFailure(const Status &status, GetRspPb &re
     }
     HostPort operatorWorker;
     if (operatorWorker.ParseString(operatorWorkerAddress_).IsOk()) {
-        ReportProviderLocalUbWriteFailure(
-            ubAdmission_.get(), operatorWorker, UbOperationKind::CLIENT_GET_WRITEBACK, status,
+        ReportLocalUbOperationFailure(
+            ubAdmission_.get(), operatorWorker, failedEndpoint, UbOperationKind::CLIENT_GET_WRITEBACK, status,
             failure == nullptr ? std::nullopt : failure->providerStatus,
             failure == nullptr ? std::nullopt : failure->cqeStatus);
     }

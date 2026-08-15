@@ -892,7 +892,7 @@ private:
     TbbEventMap tbbEventMap_;
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_map<uint64_t, int> failedRequests_;
-    static constexpr uint64_t RETAINED_TIMEOUT_EVENT_TTL_MS = 3'000;
+    static constexpr uint64_t RETAINED_TIMEOUT_EVENT_TTL_MS = 5'000;
     static constexpr size_t MAX_RETAINED_TIMEOUT_EVENTS = 1'024;
     std::mutex retainedTimeoutMutex_;
     std::unordered_map<uint64_t, uint64_t> retainedTimeoutDeadlines_;

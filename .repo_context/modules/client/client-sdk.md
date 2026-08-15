@@ -151,6 +151,14 @@
     token tracks admitted UB Create/Set/MCreate/MSet work without holding the state lock. One atomic gate stores both
     the closing bit and active-token count, so shutdown closes new admission and drains existing tokens through one
     linearized state before destroying the data plane.
+  - Client CQE-9 write-target isolation applies to UB writes in routed-only and local-cache modes. A quarantined bound
+    Worker remains eligible when its same-host SHM capability keeps the Set off UB; a bound Worker without SHM
+    capability joins the routing exclusion set and Set selects another eligible Worker. Request-local retry exclusions
+    still override the same-host preference. The fault-free route path uses an atomic empty-observation fast path, and
+    UB Set reads peer
+    generations from an immutable topology cache instead of taking the admission write lock per request. Late CQE-9
+    attribution runs on a dedicated executor, keeping its state-machine locks, formatting, and logging off the URMA
+    polling thread.
   - Disabling local cache changes data placement, but the client identity and recovery lifecycle remain bound to the
     bootstrap Worker. Routed retry backoff checks that bound endpoint, and routed `Exist` performs the same check before
     dispatch because the operation can otherwise succeed entirely through another Worker. The check uses a 10 ms
@@ -526,6 +534,11 @@
     verifies successful data and metadata publication, complete transaction rerouting after a Publish-time scale-down
     or worker-not-ready response, Set and MSet rerouting from Create and Publish stages, and the rule that an ambiguous
     Publish connection failure is not replayed on another worker.
+  - A raw Client-to-Worker CQE status `9` quarantines only that routed Set/MSet write target. The current request keeps
+    same-worker TCP fallback semantics; a failed request is rerouted only when Publish was not attempted or bRPC marks
+    it definitely unsent. Get admission and the Client-local CQE-status-`4` sender circuit remain independent. The
+    transport reconcile thread restores a quarantined target only after an exact Client-to-Worker UB WRITE probe and
+    current topology-incarnation fencing succeed.
   - standby failover candidate order is randomized per switch attempt, so when one worker fails a batch of clients can spread across the remaining ready workers instead of stampeding to the first candidate in a shared list.
   - after a standby switch publishes the new current worker, cleanup of the previous worker's mmap fds captured at switch commit runs immediately when that worker API has no pending invocations; otherwise cleanup is deferred until its invocation count reaches zero. Cleanup removes only the captured fds, so mappings added for another worker before the deferred callback runs are preserved.
   - Python `DsTensorClient` depends on `HeteroClient`; tensor features are not an independent transport stack.

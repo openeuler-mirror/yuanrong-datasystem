@@ -44,6 +44,7 @@ struct UbPathState {
     uint64_t epoch = 0;
     uint32_t backoffLevel = 0;
     uint64_t backoffDeadlineMs = 0;
+    bool probeInFlight = false;
     std::optional<int> providerStatus;
     std::optional<int> cqeStatus;
 };
@@ -72,6 +73,7 @@ struct PeerUbAdmissionStats {
     size_t retiredWorkerBuckets = 0;
     size_t pendingDepartures = 0;
     size_t replayTombstones = 0;
+    size_t peerCompletionGenerations = 0;
 };
 
 class UbHealthSummaryCache {
@@ -105,6 +107,7 @@ public:
     void ReplaceGlobalSummaries(const std::vector<UbHealthSummary> &summaries);
     void InitializeProbing(const HostPort &peer, uint64_t nowMs);
     std::optional<UbProbeToken> TryBeginProbe(const HostPort &peer, uint64_t nowMs);
+    bool CancelProbe(const UbProbeToken &token, uint64_t nowMs);
     bool CompleteProbe(const UbProbeToken &token, const Status &status, uint64_t nowMs,
                        bool requireGlobalAvailable = true);
     std::optional<HostPort> NextProbeCandidate(uint64_t nowMs) const;
@@ -116,10 +119,19 @@ public:
     std::optional<UbPathState> GetState(const HostPort &peer) const;
     PeerUbAdmissionStats GetStats() const;
     void ClearLocalState(const HostPort &peer);
-    std::optional<UrmaLateCompletionContext> BuildLateCompletionContext(UbOperationKind operation);
-    void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken) noexcept override;
+    std::optional<UrmaLateCompletionContext> BuildLateCompletionContext(
+        UbOperationKind operation, const std::optional<HostPort> &remotePeer = std::nullopt);
+    void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken,
+                              uint64_t peerToken) noexcept override;
 
 private:
+    enum class LateCompletionScope { LOCAL_SENDER, REMOTE_PEER };
+
+    struct LateCompletionFence {
+        LateCompletionScope scope;
+        uint64_t generation;
+    };
+
     struct RetiredWorkerTombstone {
         std::unordered_set<std::string> incarnations;
         uint64_t expiresAtMs = 0;
@@ -139,7 +151,12 @@ private:
     void ApplyGlobalRecoveryTransitionLocked(const UbHealthSummary &summary, uint64_t nowMs);
     void RetireWorkerLocked(const HostPort &worker, uint64_t nowMs, uint64_t tombstoneTtlMs);
     void PruneTombstonesLocked(uint64_t nowMs);
-    void ReportOutcomeImpl(const UbOpOutcome &outcome, std::optional<uint64_t> expectedLateCompletionGeneration);
+    void ReportOutcomeImpl(const UbOpOutcome &outcome, std::optional<LateCompletionFence> fence);
+    bool IsLateCompletionFenceCurrentLocked(const HostPort &peer, const LateCompletionFence &fence) const;
+    bool UpdatePathStateLocked(const UbOpOutcome &outcome, UbFailureClass failureClass,
+                               UbAdmissionState nextState);
+    uint64_t GetOrCreatePeerCompletionGenerationLocked(const HostPort &peer);
+    void AdvancePeerCompletionGenerationLocked(const HostPort &peer);
 
     mutable std::shared_mutex mutex_;
     std::unordered_map<HostPort, UbPathState> states_;
@@ -154,6 +171,8 @@ private:
     UbFailureClassifier classifier_;
     HostPort self_;
     std::atomic<uint64_t> lateCompletionGeneration_{ 0 };
+    std::unordered_map<HostPort, uint64_t> peerCompletionGenerations_;
+    uint64_t nextPeerCompletionGeneration_{ 0 };
 };
 
 }  // namespace datasystem

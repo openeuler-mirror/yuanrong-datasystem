@@ -862,14 +862,14 @@ void WorkerOcServiceMigrateImpl::RecordDirectReadUbFailure(const ReadTask &task,
         return;
     }
     HostPort operatorWorker;
-    if (operatorWorker.ParseString(localAddr_).IsError()) {
+    HostPort remoteWorker;
+    if (operatorWorker.ParseString(localAddr_).IsError()
+        || remoteWorker.ParseString(outcome.req.worker_addr()).IsError()) {
         return;
     }
-    UbOpOutcome ubOutcome(operatorWorker, UbOperationKind::MIGRATION_READ, status);
-    ubOutcome.providerStatus = task.failure.providerStatus;
-    ubOutcome.cqeStatus = task.failure.cqeStatus;
-    ubOutcome.learnedFrom = MIGRATION_LOCAL_UB_READ_FAILURE_SIDE;
-    ubAdmission_->ReportOutcome(ubOutcome);
+    ReportLocalUbOperationFailure(ubAdmission_, operatorWorker, remoteWorker,
+                                  UbOperationKind::MIGRATION_READ, status, task.failure.providerStatus,
+                                  task.failure.cqeStatus);
 }
 
 Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originAddr,

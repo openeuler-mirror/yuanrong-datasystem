@@ -632,7 +632,7 @@ bool DataMigrator::LearnStructuredUbFailure(const MigrateDataHandler::MigrateRes
         return false;
     }
     ubAdmission_->ReportOutcome(*outcome);
-    localOperator = operatorWorker == localAddress_;
+    localOperator = outcome->peer == localAddress_;
     if (!localOperator) {
         INJECT_POINT_NO_RETURN("DataMigrator.RemoteOperatorUnavailable");
     }

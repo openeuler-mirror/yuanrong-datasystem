@@ -34,13 +34,32 @@ TEST(UbFailureClassifierTest, ClassifiesExplicitError4AsPortUnavailable)
     EXPECT_EQ(classifier.Classify(outcome), UbFailureClass::PORT_UNAVAILABLE_ERROR4);
 }
 
-TEST(UbFailureClassifierTest, ClassifiesWaitTimeoutAsSuspectOnly)
+TEST(UbFailureClassifierTest, ClassifiesRawCqe9AsRemoteUnavailable)
 {
     UbFailureClassifier classifier;
     UbOpOutcome outcome{ PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
                          Status(K_URMA_WAIT_TIMEOUT, "wait jfc timeout") };
-    outcome.providerStatus = 9;
+    outcome.cqeStatus = 9;
     outcome.learnedFrom = "local_completion";
+
+    EXPECT_EQ(classifier.Classify(outcome), UbFailureClass::REMOTE_UNAVAILABLE_ERROR9);
+}
+
+TEST(UbFailureClassifierTest, ClassifiesWaitTimeoutWithoutRawCqeAsSuspectOnly)
+{
+    UbFailureClassifier classifier;
+    UbOpOutcome outcome{ PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                         Status(K_URMA_WAIT_TIMEOUT, "wait jfc timeout") };
+
+    EXPECT_EQ(classifier.Classify(outcome), UbFailureClass::TIMEOUT_SUSPECT);
+}
+
+TEST(UbFailureClassifierTest, ProviderReturnCode9IsNotCqeAckTimeout)
+{
+    UbFailureClassifier classifier;
+    UbOpOutcome outcome{ PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                         Status(K_URMA_WAIT_TIMEOUT, "provider wait timed out") };
+    outcome.providerStatus = 9;
 
     EXPECT_EQ(classifier.Classify(outcome), UbFailureClass::TIMEOUT_SUSPECT);
 }

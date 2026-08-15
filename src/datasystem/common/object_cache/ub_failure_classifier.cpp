@@ -23,7 +23,7 @@
 namespace datasystem {
 namespace {
 constexpr int URMA_PROVIDER_PORT_UNAVAILABLE = 4;
-constexpr int URMA_PROVIDER_WAIT_TIMEOUT = 9;
+constexpr int URMA_REMOTE_ACK_TIMEOUT = 9;
 }  // namespace
 
 UbFailureClass UbFailureClassifier::Classify(const UbOpOutcome &outcome) const
@@ -34,10 +34,12 @@ UbFailureClass UbFailureClassifier::Classify(const UbOpOutcome &outcome) const
     if (HasProviderStatus(outcome, URMA_PROVIDER_PORT_UNAVAILABLE)) {
         return UbFailureClass::PORT_UNAVAILABLE_ERROR4;
     }
+    if (outcome.cqeStatus.has_value() && *outcome.cqeStatus == URMA_REMOTE_ACK_TIMEOUT) {
+        return UbFailureClass::REMOTE_UNAVAILABLE_ERROR9;
+    }
     if (outcome.status.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT
         || outcome.status.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED
-        || outcome.status.GetCode() == StatusCode::K_RPC_UNAVAILABLE
-        || HasProviderStatus(outcome, URMA_PROVIDER_WAIT_TIMEOUT)) {
+        || outcome.status.GetCode() == StatusCode::K_RPC_UNAVAILABLE) {
         return UbFailureClass::TIMEOUT_SUSPECT;
     }
     if (outcome.status.GetCode() == StatusCode::K_TRY_AGAIN

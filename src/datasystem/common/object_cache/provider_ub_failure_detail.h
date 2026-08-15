@@ -23,6 +23,19 @@
 namespace datasystem {
 constexpr const char *PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE = "provider_local_ub_write";
 constexpr const char *MIGRATION_LOCAL_UB_READ_FAILURE_SIDE = "migration_local_ub_read";
+constexpr const char *REMOTE_UB_ACK_TIMEOUT_FAILURE_SIDE = "remote_ub_ack_timeout";
+
+inline bool HasRawUrmaStatus(std::optional<int> providerStatus, std::optional<int> cqeStatus, int expected)
+{
+    return (providerStatus.has_value() && *providerStatus == expected)
+           || (cqeStatus.has_value() && *cqeStatus == expected);
+}
+
+inline bool IsRemoteUbAckTimeout(std::optional<int> providerStatus, std::optional<int> cqeStatus)
+{
+    return !HasRawUrmaStatus(providerStatus, cqeStatus, URMA_PORT_UNAVAILABLE_STATUS)
+           && cqeStatus.has_value() && *cqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS;
+}
 
 inline void FillProviderUbFailureDetail(const Status &status, const std::string &failedEndpoint,
                                         const std::string &operatorWorker, std::optional<int> providerStatus,
@@ -32,7 +45,9 @@ inline void FillProviderUbFailureDetail(const Status &status, const std::string 
     detail.set_status_code(status.GetCode());
     detail.set_message(status.GetMsg());
     detail.set_failed_endpoint(failedEndpoint);
-    detail.set_failure_side(PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE);
+    detail.set_failure_side(IsRemoteUbAckTimeout(providerStatus, cqeStatus)
+                                ? REMOTE_UB_ACK_TIMEOUT_FAILURE_SIDE
+                                : PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE);
     detail.set_operator_worker(operatorWorker);
     if (providerStatus.has_value()) {
         detail.set_has_provider_status(true);
@@ -63,7 +78,9 @@ inline void FillMigrationUbReadFailureDetail(const Status &status, const std::st
     detail.set_status_code(status.GetCode());
     detail.set_message(status.GetMsg());
     detail.set_failed_endpoint(failedEndpoint);
-    detail.set_failure_side(MIGRATION_LOCAL_UB_READ_FAILURE_SIDE);
+    detail.set_failure_side(IsRemoteUbAckTimeout(failure.providerStatus, failure.cqeStatus)
+                                ? REMOTE_UB_ACK_TIMEOUT_FAILURE_SIDE
+                                : MIGRATION_LOCAL_UB_READ_FAILURE_SIDE);
     detail.set_operator_worker(operatorWorker);
     if (failure.providerStatus.has_value()) {
         detail.set_has_provider_status(true);
@@ -75,17 +92,28 @@ inline void FillMigrationUbReadFailureDetail(const Status &status, const std::st
     }
 }
 
-inline void ReportProviderLocalUbWriteFailure(PeerUbAdmission *admission, const HostPort &operatorWorker,
-                                              UbOperationKind operation, const Status &status,
-                                              std::optional<int> providerStatus, std::optional<int> cqeStatus)
+inline void ReportLocalUbOperationFailure(PeerUbAdmission *admission, const HostPort &operatorWorker,
+                                          const HostPort &remoteEndpoint, UbOperationKind operation,
+                                          const Status &status, std::optional<int> providerStatus,
+                                          std::optional<int> cqeStatus)
 {
     if (admission == nullptr) {
         return;
     }
-    UbOpOutcome outcome(operatorWorker, operation, status);
+    const bool remoteAckTimeout = IsRemoteUbAckTimeout(providerStatus, cqeStatus);
+    if (remoteAckTimeout && (operation == UbOperationKind::CLIENT_GET_WRITEBACK || remoteEndpoint.Empty())) {
+        return;
+    }
+    UbOpOutcome outcome(remoteAckTimeout ? remoteEndpoint : operatorWorker, operation, status);
     outcome.providerStatus = providerStatus;
     outcome.cqeStatus = cqeStatus;
-    outcome.learnedFrom = PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE;
+    if (remoteAckTimeout) {
+        outcome.learnedFrom = REMOTE_UB_ACK_TIMEOUT_FAILURE_SIDE;
+    } else if (operation == UbOperationKind::MIGRATION_READ) {
+        outcome.learnedFrom = MIGRATION_LOCAL_UB_READ_FAILURE_SIDE;
+    } else {
+        outcome.learnedFrom = PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE;
+    }
     admission->ReportOutcome(outcome);
 }
 
@@ -95,14 +123,23 @@ inline std::optional<UbOpOutcome> DecodeProviderUbFailureDetail(const ProviderUb
 {
     const bool migrationOperation =
         operation == UbOperationKind::MIGRATION_READ || operation == UbOperationKind::MIGRATION_WRITE;
-    const bool supportedSide =
-        detail.failure_side() == PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE
-        || (migrationOperation && detail.failure_side() == MIGRATION_LOCAL_UB_READ_FAILURE_SIDE);
+    const bool remoteAckTimeout = detail.failure_side() == REMOTE_UB_ACK_TIMEOUT_FAILURE_SIDE;
+    const bool supportedSide = detail.failure_side() == PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE
+                               || remoteAckTimeout
+                               || (migrationOperation && detail.failure_side() == MIGRATION_LOCAL_UB_READ_FAILURE_SIDE);
     if (!supportedSide || detail.failed_endpoint().empty()
         || detail.operator_worker() != provider.ToString() || detail.status_code() == K_OK) {
         return std::nullopt;
     }
-    UbOpOutcome outcome(provider, operation, Status(static_cast<StatusCode>(detail.status_code()), detail.message()));
+    HostPort attributedPeer = provider;
+    if (remoteAckTimeout) {
+        if (operation == UbOperationKind::CLIENT_GET_WRITEBACK
+            || attributedPeer.ParseString(detail.failed_endpoint()).IsError()) {
+            return std::nullopt;
+        }
+    }
+    UbOpOutcome outcome(attributedPeer, operation,
+                        Status(static_cast<StatusCode>(detail.status_code()), detail.message()));
     if (detail.has_provider_status()) {
         outcome.providerStatus = detail.provider_status();
     }

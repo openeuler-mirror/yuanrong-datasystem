@@ -48,6 +48,7 @@ extern char **environ;
 #undef private
 
 #include "datasystem/client/transport/data_plane/data_plane_manager.h"
+#include "datasystem/client/listen_worker.h"
 #include "datasystem/client/transport/data_plane/shm_transporter.h"
 #include "datasystem/client/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
@@ -881,10 +882,13 @@ public:
         return ObjectBufferInternal::Create(info, buffer);
     }
 
-    Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override
+    Status Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult *result = nullptr) override
     {
         static_cast<void>(buffer);
         ++setCount;
+        if (result != nullptr) {
+            result->publishAttempted = true;
+        }
         setParams.push_back(param);
         if (!setStatuses.empty()) {
             Status rc = setStatuses.front();
@@ -3304,6 +3308,75 @@ TEST(ObjectClientTransportTest, ConnectOptionsPolicyControlsWritePlacement)
 
     ASSERT_TRUE(client.InitDataPlacementPolicy().IsOk());
     EXPECT_EQ(client.dataPlacementPolicy_, DataPlacementPolicy::PREFERRED_META_OWNER);
+}
+
+TEST(ObjectClientTransportTest, LocalCacheSetRouteSkipsQuarantinedBoundWorker)
+{
+    const auto boundWorker = MakeAddress(31501);
+    const auto healthyWorker = MakeAddress(31502);
+    ConnectOptions options;
+    options.host = boundWorker.Host();
+    options.port = boundWorker.Port();
+    object_cache::ObjectClientImpl client(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(boundWorker, RpcCredential{});
+    workerApi->clientId_ = "local-cache-write-target-test";
+    client.workerApi_.emplace_back(workerApi);
+    client.listenWorker_.resize(object_cache::ObjectClientImpl::STANDBY2_WORKER + 1);
+    client.listenWorker_[object_cache::ObjectClientImpl::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
+        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::ObjectClientImpl::LOCAL_WORKER, nullptr);
+    client.enableLocalCache_ = true;
+    client.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_SAME_NODE;
+    client.ubHealthFilter_ = std::make_shared<client::UbHealthFilter>();
+    ASSERT_TRUE(client.ubHealthFilter_->ReportWriteTargetFailure(
+        boundWorker, Status(K_URMA_ERROR, "remote ack timeout"), std::nullopt,
+        URMA_REMOTE_ACK_TIMEOUT_STATUS));
+    auto routing = MakeSingleWorkerRouting(healthyWorker);
+    std::atomic_store(&client.routing_, routing);
+    workerApi->SetHealthy(true);
+
+    object_cache::ObjectClientImpl::SetRouteContext route;
+    ASSERT_TRUE(client.SelectSetRoute("rerouted", {}, route).IsOk());
+
+    EXPECT_EQ(route.worker, healthyWorker);
+    EXPECT_EQ(route.directWorkerApi, nullptr);
+}
+
+TEST(ObjectClientTransportTest, LocalCacheSetRouteKeepsHealthyShmPathForUbQuarantinedBoundWorker)
+{
+    const auto boundWorker = MakeAddress(31503);
+    const auto healthyWorker = MakeAddress(31504);
+    ConnectOptions options;
+    options.host = boundWorker.Host();
+    options.port = boundWorker.Port();
+    object_cache::ObjectClientImpl client(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(boundWorker, RpcCredential{});
+    workerApi->clientId_ = "local-cache-shm-write-target-test";
+    workerApi->shmEnableType_ = ShmEnableType::UDS;
+    client.workerApi_.emplace_back(workerApi);
+    client.listenWorker_.resize(object_cache::ObjectClientImpl::STANDBY2_WORKER + 1);
+    client.listenWorker_[object_cache::ObjectClientImpl::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
+        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::ObjectClientImpl::LOCAL_WORKER, nullptr);
+    client.enableLocalCache_ = true;
+    client.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_SAME_NODE;
+    client.ubHealthFilter_ = std::make_shared<client::UbHealthFilter>();
+    ASSERT_TRUE(client.ubHealthFilter_->ReportWriteTargetFailure(
+        boundWorker, Status(K_URMA_ERROR, "remote ack timeout"), std::nullopt,
+        URMA_REMOTE_ACK_TIMEOUT_STATUS));
+    auto routing = MakeSingleWorkerRouting(healthyWorker);
+    std::atomic_store(&client.routing_, routing);
+    workerApi->SetHealthy(true);
+
+    object_cache::ObjectClientImpl::SetRouteContext route;
+    ASSERT_TRUE(client.SelectSetRoute("local-shm", {}, route).IsOk());
+
+    EXPECT_EQ(route.worker, boundWorker);
+    EXPECT_EQ(route.directWorkerApi, workerApi);
+
+    object_cache::ObjectClientImpl::SetRouteContext retryRoute;
+    ASSERT_TRUE(client.SelectSetRoute("retry", { boundWorker }, retryRoute).IsOk());
+
+    EXPECT_EQ(retryRoute.worker, healthyWorker);
+    EXPECT_EQ(retryRoute.directWorkerApi, nullptr);
 }
 
 TEST(ObjectClientTransportTest, ConnectOptionsPolicyDefaultsToPreferredSameNode)

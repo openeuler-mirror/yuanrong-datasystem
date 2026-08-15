@@ -129,6 +129,7 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param);
+    Status Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult &result);
 
     /** @brief Create transport-native buffers for a same-worker MSet batch. */
     Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &objectKeys,
@@ -184,6 +185,7 @@ private:
 
     Status CheckLocalUbSenderAdmission(TransportHint hint) const;
     Status AcquireLocalUbSenderAdmission(TransportHint hint, LocalUbSenderOperation &operation) const;
+    bool ReportWriteTargetUbFailure(const LocalUbSenderFailureView &failure);
     bool ReportLocalUbSenderFailure(const LocalUbSenderFailureView &failure, uint64_t ownerToken);
     void PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, AccessTransportKind kind,
                                       uint64_t ownerToken) const;
@@ -191,6 +193,8 @@ private:
     void TryRecoverLocalUbSender();
     std::optional<std::chrono::steady_clock::time_point> GetProviderUbProbeDeadline() const;
     void TryRecoverProviderUbSource();
+    std::optional<std::chrono::steady_clock::time_point> GetWriteTargetUbProbeDeadline() const;
+    void TryRecoverWriteTargetUbSource();
     void NotifyReconcile();
     void ReconcileLoop();
     // Waits (under reconcileMutex_) for a snapshot, stop signal, or either UB recovery deadline.
@@ -202,10 +206,10 @@ private:
     // the codecheck function-size limit.
     Status FinalizeSetPublish(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
                               TransportHint hint, std::shared_ptr<IDataTransporter> &transporter,
-                              const Status &publishRc, uint64_t ownerToken,
+                              const Status &publishRc, uint64_t ownerToken, TransportSetResult &result,
                               std::chrono::steady_clock::time_point setStart);
     Status RetrySet(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
-                    TransportHint hint);
+                    TransportHint hint, TransportSetResult &result);
     // Rebuilds the data plane after a Set failure (K_URMA_NEED_CONNECT -> ResetDataPlane;
     // K_RPC_UNAVAILABLE -> Teardown). A non-retryable RPC error (dead peer) tears down the stale
     // connection but returns false so the caller does not retry. Returns true if rebuilt (caller
@@ -218,6 +222,11 @@ private:
                       std::chrono::steady_clock::time_point start);
     Status RetryMSet(const HostPort &workerAddr, const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
                      const TransportSetParam &param, TransportHint hint, TransportMSetResult &result);
+    // Rebuild/retry decision after an MSet failure that neither quarantined the local sender nor the
+    // write target. Extracted from MSet to keep MSet within the codecheck function-size limit.
+    Status RetryOrReplayMSet(const HostPort &workerAddr, const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                             const TransportSetParam &param, TransportHint hint, TransportMSetResult &result,
+                             const Status &rc);
 
     void ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId, const TransportRequestContext &context,
                          std::optional<TransportHint> transportHint = std::nullopt);
@@ -241,8 +250,9 @@ private:
     std::shared_ptr<UbHealthFilter> healthFilter_;
     std::unique_ptr<ObjectReadFlow> objectRead_;
     std::shared_ptr<LocalUbSenderState> localUbSenderState_;
+    std::shared_ptr<ThreadPool> lateCompletionPool_{ std::make_shared<ThreadPool>(1, 1, "ub-late-cqe") };
     // ApplyWorkerSnapshot serializes admission publication with shutdown through reconcileMutex_.
-    bthread::Mutex reconcileMutex_;
+    std::shared_ptr<bthread::Mutex> reconcileMutex_{ std::make_shared<bthread::Mutex>() };
     std::shared_ptr<bthread::ConditionVariable> reconcileCv_{ std::make_shared<bthread::ConditionVariable>() };
     std::optional<WorkerSnapshot> pendingSnapshot_;
     Thread reconcileThread_;
