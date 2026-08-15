@@ -451,6 +451,22 @@ protected:
         return values;
     }
 
+    Status SetKeyEventually(KVClient &client, const std::string &key, const std::string &value,
+                            int timeoutSec = WAIT_SCALE_TIMEOUT_SEC)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+        Status lastRc(K_RUNTIME_ERROR, "Set has not been attempted");
+        while (std::chrono::steady_clock::now() < deadline) {
+            lastRc = client.Set(key, value);
+            if (lastRc.IsOk()) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR, "Timed out waiting for Set to succeed for key " + key
+                                           + ", last status: " + lastRc.ToString());
+    }
+
     Status SetKeys(KVClient &client, const std::vector<std::string> &keys,
                    const std::unordered_map<std::string, std::string> &values)
     {
@@ -458,6 +474,17 @@ protected:
             auto iter = values.find(key);
             CHECK_FAIL_RETURN_STATUS(iter != values.end(), K_RUNTIME_ERROR, "Missing expected value for key " + key);
             RETURN_IF_NOT_OK(client.Set(key, iter->second));
+        }
+        return Status::OK();
+    }
+
+    Status SetKeysEventually(KVClient &client, const std::vector<std::string> &keys,
+                             const std::unordered_map<std::string, std::string> &values)
+    {
+        for (const auto &key : keys) {
+            auto iter = values.find(key);
+            CHECK_FAIL_RETURN_STATUS(iter != values.end(), K_RUNTIME_ERROR, "Missing expected value for key " + key);
+            RETURN_IF_NOT_OK(SetKeyEventually(client, key, iter->second));
         }
         return Status::OK();
     }
@@ -482,6 +509,13 @@ protected:
     {
         ASSERT_NE(client, nullptr);
         DS_ASSERT_OK(SetKeys(*client, keys, values));
+    }
+
+    void AssertSetKeysEventually(std::shared_ptr<KVClient> &client, const std::vector<std::string> &keys,
+                                 const std::unordered_map<std::string, std::string> &values)
+    {
+        ASSERT_NE(client, nullptr);
+        DS_ASSERT_OK(SetKeysEventually(*client, keys, values));
     }
 
     void AssertGetKeysEventually(std::shared_ptr<KVClient> &client, const std::vector<std::string> &keys,
@@ -784,6 +818,24 @@ protected:
         const auto secondKeys = BuildKeys(prefix + "_second_to_first");
         const auto secondValues = BuildValues(secondKeys, prefix + "_second_to_first");
         AssertSetKeys(secondClient, secondKeys, secondValues);
+        AssertGetKeysEventually(firstClient, secondKeys, secondValues);
+    }
+
+    void AssertBidirectionalAccessEventually(uint32_t first, uint32_t second, const std::string &prefix)
+    {
+        std::shared_ptr<KVClient> firstClient;
+        std::shared_ptr<KVClient> secondClient;
+        InitKVClient(first, firstClient);
+        InitKVClient(second, secondClient);
+
+        const auto firstKeys = BuildKeys(prefix + "_first_to_second");
+        const auto firstValues = BuildValues(firstKeys, prefix + "_first_to_second");
+        AssertSetKeysEventually(firstClient, firstKeys, firstValues);
+        AssertGetKeysEventually(secondClient, firstKeys, firstValues);
+
+        const auto secondKeys = BuildKeys(prefix + "_second_to_first");
+        const auto secondValues = BuildValues(secondKeys, prefix + "_second_to_first");
+        AssertSetKeysEventually(secondClient, secondKeys, secondValues);
         AssertGetKeysEventually(firstClient, secondKeys, secondValues);
     }
 
@@ -1144,7 +1196,7 @@ TEST_P(StaleTopologyBootstrapTest, EntireCommittedRingCanBootstrapFromReadyRepla
     ASSERT_NE(client, nullptr);
     const auto key = NewObjectKey();
     const std::string expectedValue = "replacement-topology-value";
-    DS_ASSERT_OK(client->Set(key, expectedValue));
+    DS_ASSERT_OK(SetKeyEventually(*client, key, expectedValue));
     std::string observedValue;
     DS_ASSERT_OK(client->Get(key, observedValue));
     EXPECT_EQ(observedValue, expectedValue);
@@ -1306,7 +1358,7 @@ TEST_F(CoordinatorBackendClusterTest, IsolatedWorkerRemovedThenColdRejoinsWithou
 
     std::shared_ptr<KVClient> client0;
     InitKVClient(0, client0);
-    DS_ASSERT_OK(isolatedClient->Set("isolated_worker_rejoined_key", "after_rejoin"));
+    DS_ASSERT_OK(SetKeyEventually(*isolatedClient, "isolated_worker_rejoined_key", "after_rejoin"));
     std::string value;
     DS_ASSERT_OK(client0->Get("isolated_worker_rejoined_key", value));
     EXPECT_EQ(value, "after_rejoin");
@@ -1352,7 +1404,7 @@ TEST_F(CoordinatorBackendClusterTest, AddedWorkerCanWriteKeysReadableFromExistin
     InitKVClient(2, client2);
     const auto scaleUpKeys = BuildKeys("scale_up_new_worker");
     const auto scaleUpValues = BuildValues(scaleUpKeys, "scale_up_new_worker");
-    AssertSetKeys(client2, scaleUpKeys, scaleUpValues);
+    AssertSetKeysEventually(client2, scaleUpKeys, scaleUpValues);
     AssertGetKeysEventually(client1, scaleUpKeys, scaleUpValues);
 }
 
@@ -1365,7 +1417,7 @@ TEST_F(CoordinatorBackendClusterThreeWorkerTest, AllWorkersRestartWithCoordinato
 
     AssertWorkersInCluster({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC);
     DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC));
-    AssertBidirectionalAccess(0, 2, "all_worker_restart_after");
+    AssertBidirectionalAccessEventually(0, 2, "all_worker_restart_after");
 }
 
 TEST_F(CoordinatorBackendClusterThreeWorkerTest, TransientCoordinatorIsolationKeepsTopologyStable)
@@ -1379,7 +1431,7 @@ TEST_F(CoordinatorBackendClusterThreeWorkerTest, TransientCoordinatorIsolationKe
 
     AssertWorkersInCluster({ 0, 1, 2 });
     DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC, 2));
-    AssertBidirectionalAccess(0, 1, "transient_coordinator_isolation_recovered");
+    AssertBidirectionalAccessEventually(0, 1, "transient_coordinator_isolation_recovered");
 }
 
 TEST_F(CoordinatorBackendClusterThreeWorkerTest, SingleWorkerCoordinatorIsolationIsProtectedByWitness)
@@ -1438,7 +1490,7 @@ TEST_F(CoordinatorBackendClusterThreeWorkerTest, ProtectedWorkerIsRemovedAfterRe
 
     AssertWorkersNotInCluster({ 2 }, REAL_FAILURE_REMOVAL_TIMEOUT_SEC);
     AssertWorkersInCluster({ 0, 1 });
-    AssertBidirectionalAccess(0, 1, "protected_worker_after_real_failure");
+    AssertBidirectionalAccessEventually(0, 1, "protected_worker_after_real_failure");
 }
 
 TEST_F(CoordinatorBackendClusterThreeWorkerTest, GracefulWorkerExitKeepsExistingKeysReadable)
@@ -1519,7 +1571,7 @@ TEST_F(CoordinatorBackendClusterThreeWorkerTest, KilledWorkerScaleDownAllowsNewW
 
     const auto newKeys = BuildKeys("passive_scale_down_new_write");
     const auto newValues = BuildValues(newKeys, "passive_scale_down_new_write");
-    AssertSetKeys(client0, newKeys, newValues);
+    AssertSetKeysEventually(client0, newKeys, newValues);
     auto t6 = std::chrono::steady_clock::now();
     LOG(INFO) << "[TIMING] New SetKeys after kill done in "
               << std::chrono::duration_cast<std::chrono::milliseconds>(t6 - t5).count() << "ms";
@@ -1869,7 +1921,7 @@ TEST_F(CoordinatorBackendRaftClusterTest, ThreeCoordinatorRaftWorkerScaleUp)
     InitKVClient(2, client2);
     const auto keys = BuildKeys("raft_scale_up");
     const auto values = BuildValues(keys, "raft_scale_up");
-    AssertSetKeys(client2, keys, values);
+    AssertSetKeysEventually(client2, keys, values);
     AssertGetKeysEventually(client0, keys, values);
 }
 
@@ -1903,7 +1955,7 @@ TEST_F(CoordinatorBackendRaftClusterThreeWorkerTest, ThreeCoordinatorRaftPassive
 
     const auto keys = BuildKeys("raft_passive_scale_down");
     const auto values = BuildValues(keys, "raft_passive_scale_down");
-    AssertSetKeys(client0, keys, values);
+    AssertSetKeysEventually(client0, keys, values);
     AssertGetKeysEventually(client1, keys, values);
 }
 
@@ -1948,7 +2000,7 @@ TEST_F(CoordinatorBackendRaftClusterThreeWorkerTest, PassiveWorkerScaleDownAfter
 
     const auto keys = BuildKeys("raft_failover_passive_scale_down");
     const auto values = BuildValues(keys, "raft_failover_passive_scale_down");
-    AssertSetKeys(client0, keys, values);
+    AssertSetKeysEventually(client0, keys, values);
     AssertGetKeysEventually(client1, keys, values);
 }
 

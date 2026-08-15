@@ -125,6 +125,7 @@ private:
     Dependencies dependencies_;
     std::shared_ptr<ICoordinatorDiscovery> discovery_;
     NowFunction now_;
+    std::string traceId_;
     std::mutex lifecycleMutex_;
     std::condition_variable lifecycleCv_;
     LifecycleState state_{ LifecycleState::CONSTRUCTED };

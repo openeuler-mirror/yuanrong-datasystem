@@ -34,12 +34,12 @@
 // Include DataSystem helpers afterwards to restore the spdlog-based macros.
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
-#include "datasystem/coordinator/raft/coordinator_raft_peer.h"
-#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/coordinator/raft/coordinator_raft_peer.h"
 
 namespace datasystem::coordinator {
 namespace {
@@ -52,6 +52,7 @@ constexpr char kCoordinatorRaftInProgressLogSegmentPrefix[] = "log_inprogress_";
 constexpr size_t kCoordinatorRaftLogIndexWidth = 20;
 constexpr size_t kCoordinatorRaftClosedLogIndexCount = 2;
 constexpr size_t kSha256HexLength = 64;
+constexpr char K_COORDINATOR_BOOTSTRAP_TRACE_PREFIX[] = "CoordinatorBootstrap;";
 
 struct DirectoryCloser {
     void operator()(DIR *directory) const noexcept
@@ -65,6 +66,15 @@ struct DirectoryCloser {
 bool StartsWith(std::string_view value, std::string_view prefix)
 {
     return value.substr(0, prefix.size()) == prefix;
+}
+
+std::string GetCoordinatorBootstrapTraceId()
+{
+    auto traceId = Trace::Instance().GetTraceID();
+    if (traceId.empty()) {
+        traceId = std::string(K_COORDINATOR_BOOTSTRAP_TRACE_PREFIX) + GetStringUuid();
+    }
+    return traceId;
 }
 
 Status FilesystemOperationError(StatusCode statusCode, const char *operation, std::string_view entity,
@@ -555,7 +565,7 @@ Status CoordinatorElectionManager::Start()
 
 void CoordinatorElectionManager::RunBootstrapControl() noexcept
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("CoordinatorBootstrap;" + GetStringUuid(), true);
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(GetCoordinatorBootstrapTraceId(), true);
     Raii exitNotifier([callback = dependencies_.onBootstrapWorkerExit] {
         if (callback) {
             callback();
@@ -867,8 +877,10 @@ Status CoordinatorElectionManager::ProbePeerBootstrapState(const std::string &pe
 
 CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks()
 {
+    const auto callbackTraceId = GetCoordinatorBootstrapTraceId();
     CoordinatorRaftEventCallbacks managed;
-    managed.onLeaderStart = [this, callback = callbacks_.onLeaderStart](int64_t term) {
+    managed.onLeaderStart = [this, callback = callbacks_.onLeaderStart, callbackTraceId](int64_t term) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callbackTraceId);
         std::vector<std::string> committedPeers;
         {
             std::lock_guard<std::mutex> lock(bootstrapMutex_);
@@ -882,7 +894,8 @@ CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks(
         }
         InvokeCallback([callback, term] { callback(term); });
     };
-    managed.onLeaderStop = [this, callback = callbacks_.onLeaderStop](Status status) {
+    managed.onLeaderStop = [this, callback = callbacks_.onLeaderStop, callbackTraceId](Status status) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callbackTraceId);
         LOG(WARNING) << "COORDINATOR_RAFT_LEADER_STOPPED current_addr=" << options_.raftFlags.localAddress
                      << " status=" << status.ToString();
         if (!callback) {
@@ -890,8 +903,9 @@ CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks(
         }
         InvokeCallback([callback, status = std::move(status)]() mutable { callback(std::move(status)); });
     };
-    managed.onConfigurationCommitted = [this, callback = callbacks_.onConfigurationCommitted](
+    managed.onConfigurationCommitted = [this, callback = callbacks_.onConfigurationCommitted, callbackTraceId](
                                            std::vector<std::string> peers, int64_t index) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callbackTraceId);
         std::vector<std::string> normalizedPeers;
         const auto status = NormalizePeers(peers, normalizedPeers);
         if (status.IsError() || normalizedPeers.size() != peers.size() || normalizedPeers.empty()) {
@@ -911,7 +925,8 @@ CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks(
                 [callback, peers = std::move(normalizedPeers), index]() mutable { callback(std::move(peers), index); });
         }
     };
-    managed.onError = [this, callback = callbacks_.onError](Status status) {
+    managed.onError = [this, callback = callbacks_.onError, callbackTraceId](Status status) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callbackTraceId);
         auto callbackStatus = status;
         if (!IsRetryableRaftCallbackError(status.GetCode())) {
             RecordBootstrapTerminalStatus(std::move(status));
@@ -920,7 +935,10 @@ CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks(
             InvokeCallback([callback, callbackStatus]() mutable { callback(std::move(callbackStatus)); });
         }
     };
-    managed.onShutdown = [callback = callbacks_.onShutdown] { InvokeCallback(callback); };
+    managed.onShutdown = [callback = callbacks_.onShutdown, callbackTraceId] {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callbackTraceId);
+        InvokeCallback(callback);
+    };
     return managed;
 }
 

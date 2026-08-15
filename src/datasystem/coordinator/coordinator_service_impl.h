@@ -340,6 +340,8 @@ private:
     // This fence linearizes RPC admission with Raft Leader transitions; CoordinatorElectionManager remains the
     // Raft source of truth.
     mutable std::shared_mutex leaderOperationMutex_;
+    // Leader-round trace restored by the delayed recovery gate; protected by leaderOperationMutex_.
+    std::string recoveryTraceId_;
     // Wakes the recovery timer on state changes. ServingState is the single service/admission state machine.
     mutable std::mutex recoveryGateMutex_;
     std::condition_variable recoveryGateCv_;
@@ -355,6 +357,7 @@ private:
     std::function<void()> raftBootstrapSnapshotCopiedHook_;
     std::function<Status()> electionManagerShutdownHook_;
     std::function<void()> rpcServerShutdownHook_;
+    std::function<void()> recoveryWindowTraceHook_;
 #endif
 
     // Declaration order is the reverse-destruction fallback. Explicit Shutdown remains authoritative:

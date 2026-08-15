@@ -15,21 +15,27 @@
  * Description: Unit tests for Coordinator leader serving gates.
  */
 
+#include <future>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ut/common.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/raii.h"
 #define private public
 #include "datasystem/coordinator/coordinator_service_impl.h"
 #include "datasystem/coordinator/topology_control_host.h"
 #undef private
 
+DS_DECLARE_bool(use_brpc);
+DS_DECLARE_uint32(node_dead_timeout_s);
+
 namespace datasystem {
 namespace ut {
 namespace {
-DS_DECLARE_bool(use_brpc);
 constexpr uint16_t TEST_COORDINATOR_PORT = 18501;
 constexpr uint64_t FOLLOWER_TERM = 7;
 constexpr uint64_t RECOVERING_TERM = 8;
@@ -268,6 +274,37 @@ TEST_F(CoordinatorServiceImplTest, LeaderStopImmediatelyRevokesBusinessServing)
     rangeRequest.set_key("/coordinator/revoked-leader");
     coordinator::RangeRspPb rangeResponse;
     EXPECT_EQ(service_->Range(rangeRequest, rangeResponse).GetCode(), K_NOT_READY);
+}
+
+TEST_F(CoordinatorServiceImplTest, RecoveryGateRestoresLeaderRoundTrace)
+{
+    constexpr char EXPECTED_TRACE_ID[] = "CoordinatorBootstrap;recovery-gate-test";
+    std::promise<std::string> observedTracePromise;
+    auto observedTrace = observedTracePromise.get_future();
+    service_->recoveryWindowTraceHook_ = [this, &observedTracePromise] {
+        if (std::this_thread::get_id() == service_->recoveryGateThread_.get_id()) {
+            observedTracePromise.set_value(Trace::Instance().GetTraceID());
+        }
+    };
+    const auto savedNodeDeadTimeout = FLAGS_node_dead_timeout_s;
+    Raii restoreTestState([this, savedNodeDeadTimeout] {
+        FLAGS_node_dead_timeout_s = savedNodeDeadTimeout;
+        std::unique_lock<std::shared_mutex> operationLock(service_->leaderOperationMutex_);
+        service_->recoveryWindowTraceHook_ = {};
+    });
+
+    {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(EXPECTED_TRACE_ID);
+        service_->OnLeaderStart(RECOVERING_TERM);
+    }
+    ASSERT_TRUE(Trace::Instance().GetTraceID().empty());
+    service_->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::LEADER_RECOVERING,
+                                  std::memory_order_release);
+    FLAGS_node_dead_timeout_s = 0;
+    service_->recoveryGateCv_.notify_all();
+
+    ASSERT_EQ(observedTrace.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_EQ(observedTrace.get(), EXPECTED_TRACE_ID);
 }
 }  // namespace
 }  // namespace ut
