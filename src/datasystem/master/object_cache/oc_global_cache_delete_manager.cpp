@@ -25,6 +25,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/strings_util.h"
 
 DS_DECLARE_string(obs_endpoint);
@@ -154,7 +155,7 @@ Status OCGlobalCacheDeleteManager::InsertDeletedObject(const std::string &object
         RETURN_IF_NOT_OK(objectStore_->AddDeletedObjectWithDelVersion(objectKey, objectVersion, delVersion,
                                                                       targetWorkerAddress, type));
     }
-    std::lock_guard<std::shared_timed_mutex> lck(mutex_);
+    std::lock_guard<SharedMutex> lck(mutex_);
     // The objectKey of the inserted deleteIds_ map is combined with the version to prevent objects of the old version
     // from being deleted asynchronously and objects of the new version from being inserted into the deletion list.
     // As a result, the cloudstrorage data remains.
@@ -203,7 +204,7 @@ void OCGlobalCacheDeleteManager::DeleteObjects(const std::map<std::string, Delet
             if (!meta.failed) {
                 LOG(WARNING) << "del object failed. objectKey:" << key << ", version:" << delVersion
                              << ", status:" << status.ToString();
-                std::lock_guard<std::shared_timed_mutex> lck(mutex_);
+                std::lock_guard<SharedMutex> lck(mutex_);
                 auto iter = deleteIds_.find(key);
                 if (iter != deleteIds_.end()) {
                     iter->second.failed = true;
@@ -232,7 +233,7 @@ Status OCGlobalCacheDeleteManager::RemoveDeletedObject(const std::unordered_map<
         RETURN_IF_NOT_OK(objectStore_->RemoveDeletedObject(info.first, info.second));
     }
     // If delete operation was successfully executed, remove the key from deleteFailedIds_.
-    std::lock_guard<std::shared_timed_mutex> lck(mutex_);
+    std::lock_guard<SharedMutex> lck(mutex_);
     for (const auto &info : objectKeys) {
         std::string key = info.first + "/" + std::to_string(info.second);
         (void)deleteIds_.erase(key);
@@ -343,7 +344,7 @@ Status OCGlobalCacheDeleteManager::DelPersistenceObj(const std::string &objectKe
 
 void OCGlobalCacheDeleteManager::GetDeletedObjects(std::map<std::string, DeleteMeta> &deleteIds)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    std::shared_lock<SharedMutex> lck(mutex_);
     deleteIds = deleteIds_;
 }
 
@@ -425,7 +426,7 @@ bool OCGlobalCacheDeleteManager::VersionFromString(const std::string &key, const
 void OCGlobalCacheDeleteManager::GetDeletingVersions(const std::list<std::string> &objectKeys,
                                                      std::vector<uint64_t> &deletingVersions)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    std::shared_lock<SharedMutex> lck(mutex_);
     for (const auto &id : objectKeys) {
         std::string prefix = id + "/";
         auto it = deleteIds_.lower_bound(prefix);
@@ -446,7 +447,7 @@ std::vector<std::pair<uint64_t, GlobalDeleteInfo>> OCGlobalCacheDeleteManager::G
     const std::string &objectKey)
 {
     std::vector<std::pair<uint64_t, GlobalDeleteInfo>> ret;
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    std::shared_lock<SharedMutex> lck(mutex_);
     auto it = objDeleteMap_.find(objectKey);
     if (it == objDeleteMap_.end()) {
         return ret;
@@ -461,7 +462,7 @@ GlobalDeleteInfoMap OCGlobalCacheDeleteManager::GetDeletedInfosMatch(
     const std::function<bool(const std::string &)> &matchFunc)
 {
     GlobalDeleteInfoMap ret;
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    std::shared_lock<SharedMutex> lck(mutex_);
     for (const auto &entry : objDeleteMap_) {
         if (!matchFunc(entry.first)) {
             continue;
