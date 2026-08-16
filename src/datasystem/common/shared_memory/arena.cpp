@@ -31,6 +31,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #ifdef WITH_TESTS
@@ -145,7 +147,7 @@ Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSi
     }
 
     {
-        std::lock_guard<std::shared_timed_mutex> l(allocatedMutex_);
+        std::lock_guard<SharedMutex> l(allocatedMutex_);
         allocatedTable_.emplace(pointer, AllocRecord{ size, realSize, index });
     }
     auto arena = arenas_[index];
@@ -249,7 +251,7 @@ Status ArenaGroup::FreeMemory(void *pointer, uint64_t &bytesFree, uint64_t &byte
 
     RETURN_RUNTIME_ERROR_IF_NULL(pointer);
     PerfPoint point(PerfKey::ALLOCATE_FREE_WAIT_LOCK);
-    std::lock_guard<std::shared_timed_mutex> l(allocatedMutex_);
+    std::lock_guard<SharedMutex> l(allocatedMutex_);
     point.RecordAndReset(PerfKey::ALLOCATE_FREE_HOLD_LOCK);
     auto iter = allocatedTable_.find(pointer);
     if (iter == allocatedTable_.end()) {
@@ -284,7 +286,7 @@ Status ArenaGroup::FreeMemory(void *pointer)
 
 uint64_t ArenaGroup::GetMemoryUsage() const
 {
-    std::shared_lock<std::shared_timed_mutex> l(allocatedMutex_);
+    std::shared_lock<SharedMutex> l(allocatedMutex_);
     return memoryUsage_;
 }
 
@@ -313,7 +315,7 @@ void ArenaGroup::GetArenaGroupStat(ShmMemStat &stat)
         stat.realMemoryUsage += arena->GetRealMemoryUsage();
         stat.physicalMemoryUsage += arena->GetPhysicalMemoryUsage();
     }
-    std::shared_lock<std::shared_timed_mutex> l(allocatedMutex_);
+    std::shared_lock<SharedMutex> l(allocatedMutex_);
     stat.numOfAllocated = allocatedTable_.size();
 }
 
@@ -389,7 +391,7 @@ void ArenaManager::Init()
 
 Status ArenaManager::Init(CacheType type, AllocatorFuncRegister funcRegister)
 {
-    std::lock_guard<std::shared_timed_mutex> lck(registerMutex_);
+    std::lock_guard<SharedMutex> lck(registerMutex_);
     auto rc = funcRegisterList_.try_emplace(type, funcRegister);
     if (!rc.second) {
         RETURN_STATUS(K_DUPLICATED, FormatString("Already register allocator func for type: %d", (int)type));
@@ -430,7 +432,7 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         mmapSize = RoundUpToNextMultiple(mmapSize);
     }
     {
-        std::lock_guard<std::shared_timed_mutex> l(mutex_);
+        std::lock_guard<SharedMutex> l(mutex_);
         std::vector<std::shared_ptr<Arena>> arenas;
         auto arenasNum = type == CacheType::MEMORY ? FLAGS_arena_per_tenant : FLAGS_shared_disk_arena_per_tenant;
         arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST || type == CacheType::UB_TRANSPORT)
@@ -459,7 +461,7 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
 
             AllocatorFuncRegister regFunc;
             {
-                std::shared_lock<std::shared_timed_mutex> l(registerMutex_);
+                std::shared_lock<SharedMutex> l(registerMutex_);
                 auto it = funcRegisterList_.find(type);
                 if (it != funcRegisterList_.end()) {
                     regFunc = it->second;
@@ -520,7 +522,7 @@ Status ArenaManager::CreateArenaGroup(const std::string &tenantId, CacheType typ
 {
     RETURN_IF_NOT_OK(CreateArenaGroup(type, maxSize, arenaGroup));
     {
-        std::lock_guard<std::shared_timed_mutex> l(tenantMutex_);
+        std::lock_guard<SharedMutex> l(tenantMutex_);
         tenantArenas_[{ tenantId, type }] = arenaGroup;
     }
     return Status::OK();
@@ -529,7 +531,7 @@ Status ArenaManager::CreateArenaGroup(const std::string &tenantId, CacheType typ
 Status ArenaManager::GetArenaGroup(const ArenaGroupKey &key, std::shared_ptr<ArenaGroup> &arenaGroup)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!destroyed_, K_RUNTIME_ERROR, "ArenaManager already destroyed");
-    std::shared_lock<std::shared_timed_mutex> l(tenantMutex_);
+    std::shared_lock<SharedMutex> l(tenantMutex_);
     auto iter = tenantArenas_.find(key);
     if (iter != tenantArenas_.end()) {
         RETURN_RUNTIME_ERROR_IF_NULL(iter->second);
@@ -551,7 +553,7 @@ Status ArenaManager::GetOrCreateArenaGroup(const ArenaGroupKey &key, uint64_t ma
         // lock to prevent another thread call Create Arena
         // Query the arena again which is a tradeoff of the
         // parallel get arena above
-        std::lock_guard<std::shared_timed_mutex> l(tenantMutex_);
+        std::lock_guard<SharedMutex> l(tenantMutex_);
         auto iter = tenantArenas_.find(key);
         if (iter != tenantArenas_.end()) {
             arenaGroup = iter->second;
@@ -581,7 +583,7 @@ Status ArenaManager::DestroyArenaGroup(const ArenaGroupKey &key)
     if (arenaGroup->GetMemoryUsage() == 0) {
         RETURN_IF_NOT_OK(DestroyArenaGroup(arenaGroup));
         {
-            std::lock_guard<std::shared_timed_mutex> l(tenantMutex_);
+            std::lock_guard<SharedMutex> l(tenantMutex_);
             (void)tenantArenas_.erase(key);
         }
         return Status::OK();
@@ -597,7 +599,7 @@ Status ArenaManager::DestroyAllArenaGroup()
         return Status::OK();
     }
     Status lastRc;
-    std::shared_lock<std::shared_timed_mutex> l(tenantMutex_);
+    std::shared_lock<SharedMutex> l(tenantMutex_);
     for (auto &kv : tenantArenas_) {
         auto &arenaGroup = kv.second;
         Status rc = arenaGroup->DestroyAll();
@@ -619,7 +621,7 @@ void ArenaManager::SetReleaseableTenant(const ArenaGroupKey &key)
     preReleaseTenantResourceInfo.fds = GetAllFdsByKey(key);
     preReleaseTenantResourceInfo.releaseHandler = releaseHandler;
 
-    std::lock_guard<std::shared_timed_mutex> lck(preReleaseTenantResourceInfoMapMutex_);
+    std::lock_guard<SharedMutex> lck(preReleaseTenantResourceInfoMapMutex_);
     VLOG(1) << FormatString("[TENANT RELEASER]Tenant[%s] is releaseable", key.tenantId);
     preReleaseTenantResourceInfoMap_.emplace(key, std::move(preReleaseTenantResourceInfo));
 }
@@ -627,7 +629,7 @@ void ArenaManager::SetReleaseableTenant(const ArenaGroupKey &key)
 void ArenaManager::CancelExpiredTenantTimer(const ArenaGroupKey &key)
 {
     {
-        std::lock_guard<std::shared_timed_mutex> lck(preReleaseTenantResourceInfoMapMutex_);
+        std::lock_guard<SharedMutex> lck(preReleaseTenantResourceInfoMapMutex_);
         if (preReleaseTenantResourceInfoMap_.erase(key) != 0) {
             VLOG(1) << FormatString("[TENANT RELEASER]The release process for tenant[%s] has been canceled",
                                     key.tenantId);
@@ -645,7 +647,7 @@ ArenaManager::~ArenaManager()
 void *ArenaManager::AllocHook(size_t size, size_t alignment, unsigned arenaInd, bool *zero, bool *commit)
 {
     auto manager = Allocator::Instance()->GetArenaManager();
-    std::shared_lock<std::shared_timed_mutex> l(manager->mutex_);
+    std::shared_lock<SharedMutex> l(manager->mutex_);
     return manager->arenas_[arenaInd]->AllocHook(size, alignment, zero, commit);
 }
 
@@ -666,7 +668,7 @@ bool ArenaManager::CommitHook(bool commit, void *addr, size_t size, size_t offse
 
 std::vector<int> ArenaManager::GetAllFdsByKey(const ArenaGroupKey &key)
 {
-    std::shared_lock<std::shared_timed_mutex> l(tenantMutex_);
+    std::shared_lock<SharedMutex> l(tenantMutex_);
     auto iter = tenantArenas_.find(key);
     if (iter != tenantArenas_.end()) {
         auto fds = iter->second->GetAllFds();
@@ -683,7 +685,7 @@ void ArenaManager::StartCheckExpiredTenantResource()
         LOG(INFO) << "[TENANT RELEASER]Start check expired tenant resource thread";
         while (!destroyed_) {
             {
-                std::lock_guard<std::shared_timed_mutex> lck(preReleaseTenantResourceInfoMapMutex_);
+                std::lock_guard<SharedMutex> lck(preReleaseTenantResourceInfoMapMutex_);
                 std::vector<PreReleaseTenantResourceInfo> expiredTenantsInfo;
                 for (auto &i : preReleaseTenantResourceInfoMap_) {
                     if (i.second.IsExpired()) {
@@ -713,7 +715,7 @@ void ArenaManager::UpdateExpiredTenant(const std::vector<PreReleaseTenantResourc
 
 std::set<int> ArenaManager::GetAllExpiredFds()
 {
-    std::shared_lock<std::shared_timed_mutex> lck(preReleaseTenantResourceInfoMapMutex_);
+    std::shared_lock<SharedMutex> lck(preReleaseTenantResourceInfoMapMutex_);
     std::set<int> expiredFds;
     for (auto iter : preReleaseTenantResourceInfoMap_) {
         if (iter.second.IsExpired()) {
