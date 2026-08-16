@@ -74,6 +74,19 @@ bool IsUrmaEnabled();
 /** @brief Mark that a client handshake requested process-local URMA initialization. */
 void RequestClientUrmaRuntime();
 
+/**
+ * @brief Decide whether a worker registration requires process-local URMA initialization.
+ * @param[in] workerUbEnabled Whether the worker advertises process-wide UB capability.
+ * @param[in] clientMayAccessNonBoundWorker Whether the client may access a worker beyond the bound endpoint.
+ * @param[in] endpointUsesUb Whether the registered endpoint itself uses UB.
+ * @return True only when UB is both available and needed by this client process.
+ */
+bool ShouldRequestClientUrmaRuntime(bool workerUbEnabled, bool clientMayAccessNonBoundWorker,
+                                    bool endpointUsesUb);
+
+/** @brief Return whether the client may access a worker beyond its bound worker endpoint. */
+bool ClientMayAccessNonBoundWorker(bool enableLocalCache, bool enableCrossNodeConnection);
+
 /** @brief Return whether URMA is configured at startup or requested by a client handshake. */
 bool IsUrmaRuntimeConfigured();
 
@@ -97,6 +110,12 @@ bool IsRegisterWholeArenaEnabled();
  * @return True if the feature flag, URMA and whole-arena registration are all enabled.
  */
 bool IsUbNumaAffinityEnabled();
+
+/**
+ * @brief Check whether an arena should build its UB NUMA range table during transport initialization.
+ * @return True if URMA is configured, UB NUMA affinity is enabled, and whole-arena registration is enabled.
+ */
+bool ShouldBuildUbNumaRangeTable();
 
 /**
  * @brief Check if the whole arena needs to be registered.

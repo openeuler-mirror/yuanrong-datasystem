@@ -785,7 +785,11 @@ Status Arena::Init(AllocatorFuncRegister funcRegister)
                           FormatString("Unkowned cache type: %d", static_cast<int32_t>(cacheType_)));
     }
     RETURN_IF_NOT_OK(mmap_->Initialize(mmapSize_, populate_, FLAGS_enable_huge_tlb));
-    if ((cacheType_ == CacheType::MEMORY || cacheType_ == CacheType::UB_TRANSPORT) && IsUbNumaAffinityEnabled()) {
+    // Use the requested/configured state during initialization: UrmaManager cannot become ready until its transport
+    // arena has been created. Replacing this with IsUbNumaAffinityEnabled() creates a ready-before-init cycle and
+    // silently skips the table that maps source addresses to NUMA nodes.
+    if ((cacheType_ == CacheType::MEMORY || cacheType_ == CacheType::UB_TRANSPORT)
+        && ShouldBuildUbNumaRangeTable()) {
         Status rc = BuildNumaRangeTable();
         if (rc.IsError()) {
             LOG(WARNING) << "BuildNumaRangeTable failed for arena " << arenaId_

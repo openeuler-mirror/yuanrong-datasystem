@@ -115,6 +115,11 @@ struct ClientWorkerCommonApiAttribute {
         return shmEnableType_ != ShmEnableType::NONE;
     }
 
+    void SetMayAccessNonBoundWorker(bool mayAccessNonBoundWorker)
+    {
+        mayAccessNonBoundWorker_ = mayAccessNonBoundWorker;
+    }
+
     bool IsShmEnableByUDS() const
     {
         return shmEnableType_ == ShmEnableType::UDS;
@@ -254,6 +259,9 @@ struct ClientWorkerCommonApiAttribute {
     std::atomic_bool healthy_{ false };
     UbHealthSummaryCache ubHealthSummaryCache_;
     bool enableCrossNodeConnection_{ false };
+    // Unlike enableCrossNodeConnection_, this records data-plane reachability. Local-cache-off clients can also
+    // access workers beyond the bound endpoint, even when worker failover is disabled.
+    bool mayAccessNonBoundWorker_{ false };
     bool workerEnableP2Ptransfer_ = false;
     std::shared_ptr<ShmUnitInfo> decShmUnit_;
     std::shared_ptr<ShmUnitInfo> pipelineMsgShmUnit_;
@@ -597,6 +605,20 @@ protected:
     void CloseExpiredFd();
     void ProcessRemoteHeartbeatSummary(const HeartbeatRspPb &rsp, bool &workerReboot);
 
+    /**
+     * @brief Apply process-wide UB capability and NUMA policy from RegisterClient before any transport arena exists.
+     * Keep this hook in PostRegisterClient; applying it during the later fast-transport handshake is too late when
+     * local cache is disabled.
+     */
+    virtual void ApplyClientUbRegistrationConfig(const RegisterClientRspPb &rsp);
+
+    /**
+     * @brief Called after RegisterClient succeeds.
+     * @param[in] timeoutMs Timeout used for client connection state after register.
+     * @param[in] rsp Register response.
+     */
+    virtual void PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp);
+
     static constexpr int32_t retryTimes_ = 3;
     RpcCredential cred_;
     // Protect 'standbyWorkerAddrs_'
@@ -650,13 +672,6 @@ protected:
     std::optional<FtHandshakeContext> pendingFtHandshake_;
 
 private:
-    /**
-     * @brief Called after RegisterClient succeeds.
-     * @param[in] timeoutMs Timeout used for client connection state after register.
-     * @param[in] rsp Register response.
-     */
-    virtual void PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp);
-
     /**
      * @brief Registering the client with the worker
      * @param[in] req The register client request pb.
@@ -744,7 +759,7 @@ private:
     void SaveStandbyWorker(const std::string standbyWorker,
                            const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers);
 
-    Status FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion, const RegisterClientRspPb &rsp);
+    Status FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion);
 
     /**
      * @brief Execute the first URMA handshake in background and schedule retry on failure.

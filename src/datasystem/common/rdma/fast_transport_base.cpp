@@ -115,6 +115,19 @@ void RequestClientUrmaRuntime()
     ClientUrmaRuntimeRequested().store(true, std::memory_order_release);
 }
 
+bool ShouldRequestClientUrmaRuntime(bool workerUbEnabled, bool clientMayAccessNonBoundWorker, bool endpointUsesUb)
+{
+    // Endpoint transport and process capability are deliberately separate: SHM can serve the bound worker while
+    // UB is still required for another node. Conversely, client routing options must not activate UB when the
+    // worker does not advertise it, because activation performs device discovery and memory registration.
+    return workerUbEnabled && (clientMayAccessNonBoundWorker || endpointUsesUb);
+}
+
+bool ClientMayAccessNonBoundWorker(bool enableLocalCache, bool enableCrossNodeConnection)
+{
+    return !enableLocalCache || enableCrossNodeConnection;
+}
+
 bool IsUrmaRuntimeConfigured()
 {
 #ifdef USE_URMA
@@ -147,6 +160,17 @@ bool IsUbNumaAffinityEnabled()
 {
 #ifdef USE_URMA
     return IsUrmaEnabled() && FLAGS_enable_ub_numa_affinity && IsRegisterWholeArenaEnabled();
+#else
+    return false;
+#endif
+}
+
+bool ShouldBuildUbNumaRangeTable()
+{
+#ifdef USE_URMA
+    // Initialization must use "configured/requested", not "ready": the range table is built from inside
+    // UrmaManager::Init, before PublishClientUrmaRuntimeReady can run.
+    return IsUrmaRuntimeConfigured() && FLAGS_enable_ub_numa_affinity && IsRegisterWholeArenaEnabled();
 #else
     return false;
 #endif

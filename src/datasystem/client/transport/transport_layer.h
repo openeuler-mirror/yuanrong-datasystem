@@ -61,6 +61,8 @@ struct TransportLayerOptions {
     int32_t pipelineThreadNum = 64;
     // Keep eager UB setup by default; non-pipeline callers that have not negotiated UB may opt out explicitly.
     bool initializeUbRuntime = true;
+    // A same-host endpoint remains usable through SHM when optional UB prewarming fails.
+    bool allowUbRuntimeFailure = false;
     std::shared_ptr<UbHealthFilter> readSourceFilter;
     // Synchronous client-lifecycle admission checked around transport retry backoff.
     std::function<Status()> retryAdmissionCheck;

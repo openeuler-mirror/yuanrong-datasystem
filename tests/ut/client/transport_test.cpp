@@ -2103,6 +2103,22 @@ TEST(DataPlaneManagerTest, DefaultInitStillActivatesUbRuntime)
     EXPECT_FALSE(IsUrmaEnabled());
 }
 
+TEST(DataPlaneManagerTest, ShmFirstInitAllowsOptionalUbRuntimeFailure)
+{
+    constexpr char mode[] = "shm-first-optional-ub";
+    if (!IsInitPolicyChild(mode)) {
+        RunInitPolicyTestInFreshProcess("ShmFirstInitAllowsOptionalUbRuntimeFailure", mode);
+        return;
+    }
+
+    FLAGS_enable_urma = false;
+    ASSERT_TRUE(inject::Set("FastTransportManager.Initialize", "return(0)").IsOk());
+    DataPlaneManager manager(MakeSignature(), ConnectOptions{}.fastTransportMemSize, {}, nullptr, false, 64, nullptr,
+                             true, true);
+    EXPECT_TRUE(manager.Init().IsOk());
+    EXPECT_FALSE(IsUrmaEnabled());
+}
+
 TEST(DataPlaneManagerTest, DirectPipelineForcesUbRuntimeInitialization)
 {
     constexpr char mode[] = "direct-pipeline";
@@ -2134,8 +2150,8 @@ TEST(DataPlaneManagerTest, UbRuntimeIsNotPublishedBeforeInitializationCompletes)
     auto init = std::async(std::launch::async, [&manager]() { return manager.Init(); });
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     EXPECT_FALSE(IsUrmaEnabled());
-    EXPECT_EQ(init.get().GetCode(), K_URMA_ERROR);
-    EXPECT_FALSE(IsUrmaEnabled());
+    EXPECT_TRUE(init.get().IsOk());
+    EXPECT_TRUE(IsUrmaEnabled());
 }
 #endif
 

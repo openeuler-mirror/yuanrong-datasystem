@@ -116,6 +116,11 @@ message RegisterClientRspPb {
     uint32 memory_alignment = 28;
     // Effective worker-side UB NUMA-affinity capability.
     bool ub_numa_affinity_enabled = 29;
+    // Worker-configured UB NUMA source-chip round-robin type.
+    uint32 ub_numa_rr_type = 30;
+    // Whether this worker process has UB runtime capability. This is independent of fast_transport_mode:
+    // a same-host endpoint can use SHM while the client still needs UB for other cross-node workers.
+    bool ub_runtime_enabled = 31;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;

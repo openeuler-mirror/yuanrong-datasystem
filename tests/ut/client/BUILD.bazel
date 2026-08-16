@@ -22,6 +22,14 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "urma_runtime_policy_test",
+    srcs = ["urma_runtime_policy_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rdma:common_rdma",
+    ],
+)
+
+ds_cc_test(
     name = "mmap_manager_test",
     srcs = ["mmap_manager_test.cpp"],
     deps = [

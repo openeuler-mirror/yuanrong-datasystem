@@ -35,6 +35,13 @@
 namespace datasystem {
 class UrmaJetty;
 
+/** @brief UB NUMA source-chip round-robin granularity configured by the worker. */
+enum class UbNumaRrType : uint32_t {
+    DISABLED = 0,
+    PER_LOGICAL_WRITE = 1,
+    PER_POST = 2,
+};
+
 class UrmaSendLaneLease {
 public:
     enum class SettleAction : uint8_t { NONE = 0, RELEASE = 1, RETIRE = 2 };
