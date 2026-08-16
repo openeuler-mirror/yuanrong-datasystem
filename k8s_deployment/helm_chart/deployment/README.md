@@ -191,6 +191,11 @@ resources:
 | global.rpc.rpcThreadNum | int | `128` | 配置服务端的RPC线程数，必须为大于0的数 |
 | global.rpc.ocThreadNum | int | `64` | 配置服务端用于处理对象/KV缓存的业务线程数 |
 
+该 Deployment 镜像通过 `k8s_deployment/helm_chart/worker.config` 启动 Worker。可在该文件中配置
+`brpc_event_dispatcher_num`：0 表示保留 brpc 默认值 1；仅在大量连接同时发送首包或恢复读写，
+且确认瓶颈位于已接入 socket 的读写事件分发时，建议从 2 或 4 开始灰度验证。该配置按 fd 分流，
+不会并行化单个监听 fd 的 accept；修改后需要重建镜像并重启 Worker。
+
 **样例**：
 配置一个Unix Domain Socket路径为 "/home/uds"，并使用31501作为kvcache deployment的监听端口号
 ```yaml

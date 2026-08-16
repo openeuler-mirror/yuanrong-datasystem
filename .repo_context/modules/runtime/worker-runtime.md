@@ -121,6 +121,14 @@
     and dsbench entrypoints also benefit. Under TSAN the brpc-internal init race in
     `bthread::TaskGroup::ready_to_run_remote` is additionally silenced by
     `//tools/tsan:default_suppressions`; see `modules/quality/build-test-debug.md`.
+    `brpc_event_dispatcher_num` (or
+    `DATASYSTEM_BRPC_EVENT_DISPATCHER_NUM`) can override brpc's global
+    `event_dispatcher_num` before this one-shot initialization; zero preserves the upstream
+    default and a positive value hashes socket I/O processing by fd across dispatchers; it does
+    not parallelize accept on a single listening fd. The worker
+    setting is exposed by `cli/deploy/conf/worker_config.json`, the DaemonSet Helm value
+    `global.rpc.brpc.eventDispatcherNum`, and the Deployment image's `worker.config`; changing
+    it requires a worker restart because brpc consumes it during process-wide one-shot init.
   - `WorkerOCServer::Init()` constructs and explicitly initializes a discovery-backed Coordinator proxy from the injected provider, or selects ETCD/metastore, then configures `TopologyEngine::Builder`. Coordinator proxy `Init` requires a non-empty provider result, caches only `front()`, and ignores the remaining candidates. All subsequent RPCs use that cached address once. Changing the provider output or selected endpoint requires rebuilding the runtime object or restarting the Worker, while multi-node Coordinator availability remains the responsibility of the Coordinator Raft layer. The Engine creates and owns both role backends, the hash algorithm, Worker runtime, Controller runtime, Janitor, and optional recovery reporter. Worker code does not assemble or retain those concrete components. Callback targets are initialized before
     `TopologyEngine::Start()`, so callbacks cannot run against partially constructed services. A missing initial topology
     keeps Engine `NOT_READY` while the co-located Controller establishes authority. The Worker publishes READY only after

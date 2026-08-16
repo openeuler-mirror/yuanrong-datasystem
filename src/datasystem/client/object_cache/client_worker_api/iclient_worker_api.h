@@ -98,6 +98,7 @@ struct GetParam {
     int64_t ubGetObjMetaElapsedMs = 0;  // Time spent by UB Get pre-fetching object metadata before Get.
     AccessTransportKind *actualTransportKind = nullptr;  // Actual request transport after UB/TCP resolution.
     const void *ubPreAllocHandle = nullptr;  // Pre-allocated UB handle (type-erased, non-owning).
+    int32_t requestTimeoutMs = 0;  // Optional per-call RPC budget; 0 uses the configured business timeout.
 };
 
 struct PiplnRh2dParam {
@@ -135,13 +136,14 @@ public:
      * @param[out] metadataSize The metadata size.
      * @param[out] urmaDataInfo Urma data info.
      * @param[out] shmBuf The address of the newly created object will be written here.
+     * @param[in] requestTimeoutMs Optional per-call RPC budget; 0 uses the configured business timeout.
      * @return K_OK on success; the error code otherwise.
      *         K_RUNTIME_ERROR: client fd mmap failed.
      *         K_DUPLICATED: the object already exists, no need to create.
      */
     virtual Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize,
                           std::shared_ptr<ShmUnitInfo> &shmBuf, std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo,
-                          const CacheType &cacheType = CacheType::MEMORY) = 0;
+                          const CacheType &cacheType = CacheType::MEMORY, int32_t requestTimeoutMs = 0) = 0;
 
     /**
      * @brief Publish/Seal/Put an object in the store-server.
@@ -152,11 +154,12 @@ public:
      * @param[in] ttlSecond Used by state api, means how many seconds the key will be delete automatically.
      * @param[in] existence Used by state api, to determine whether to set or not set the key if it does already
      * exist.
+     * @param[in] requestTimeoutMs Optional per-call RPC budget; 0 uses the configured business timeout.
      * @return K_OK on success; the error code otherwise.
      */
     virtual Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
                            const std::unordered_set<std::string> &nestedKeys = {}, uint32_t ttlSecond = 0,
-                           int existence = 0) = 0;
+                           int existence = 0, int32_t requestTimeoutMs = 0) = 0;
 
     /**
      * @brief Publish multiple objects in the store-server.

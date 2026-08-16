@@ -458,13 +458,13 @@ TEST_F(KVCacheClientTest, MGetH2DRejectsDuplicateKeys)
 
 TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_UnmapOldWorkerSharedMemoryAfterSwitch)
 {
+    const auto baselineMappings = GetDatasystemMemfdMappingRanges();
     InitSwitchableClient();
     HostPort worker1Address;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Address));
     DS_ASSERT_OK(SetSwitchWorkerExpected(1, worker1Address));
     DS_ASSERT_OK(datasystem::inject::Set("client.standby_worker", "call(" + worker1Address.ToString() + ")"));
 
-    const auto baselineMappings = GetDatasystemMemfdMappingRanges();
     std::string value(MMAP_SWITCH_VALUE_SIZE, 'x');
     std::string keyOnWorker0 = client_->Set(value);
     ASSERT_FALSE(keyOnWorker0.empty());
@@ -487,12 +487,12 @@ TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_UnmapOldWorkerSharedMemoryAfterSwitch
 
 TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_DeferUnmapUntilInFlightGetCompletes)
 {
+    const auto baselineMappings = GetDatasystemMemfdMappingRanges();
     InitSwitchableClient();
     HostPort worker1Address;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Address));
     DS_ASSERT_OK(datasystem::inject::Set("client.standby_worker", "call(" + worker1Address.ToString() + ")"));
 
-    const auto baselineMappings = GetDatasystemMemfdMappingRanges();
     std::string value(MMAP_SWITCH_VALUE_SIZE, 'x');
     std::string keyOnWorker0 = client_->Set(value);
     ASSERT_FALSE(keyOnWorker0.empty());

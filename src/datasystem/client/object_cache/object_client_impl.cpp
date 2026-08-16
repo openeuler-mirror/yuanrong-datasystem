@@ -3625,7 +3625,7 @@ Status ObjectClientImpl::TimedMemoryCopyWithDeadline(const std::shared_ptr<Buffe
 Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
                                        const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
                                        uint32_t ttlSecond, const std::shared_ptr<IClientWorkerApi> &workerApi,
-                                       int existence, SetFailureStage &failureStage)
+                                       int existence, SetFailureStage &failureStage, int32_t requestTimeoutMs)
 {
     RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(workerApi));
     auto config = GetClientLatencyTraceConfig();
@@ -3639,7 +3639,8 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_START);
     }
     failureStage = SetFailureStage::CREATE;
-    RETURN_IF_NOT_OK(workerApi->Create(objectKey, size, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType));
+    RETURN_IF_NOT_OK(workerApi->Create(objectKey, size, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType,
+                                       requestTimeoutMs));
     failureStage = SetFailureStage::TRANSFER;
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_END);
@@ -3678,7 +3679,8 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
     failureStage = SetFailureStage::PUBLISH;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(objInfo, !urmaDataInfo || objInfo->ubDataSentByMemoryCopy,
-                                                         false, nestedObjectKeys, ttlSecond, existence),
+                                                         false, nestedObjectKeys, ttlSecond, existence,
+                                                         requestTimeoutMs),
                                      FormatString("Put object %s", objectKey));
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
@@ -3846,16 +3848,17 @@ Status ObjectClientImpl::ProcessTransportPut(
     const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
     const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
     const SetRouteContext &routeContext, SetFailureStage &failureStage,
-    client::TransportSetResult &transportResult)
+    client::TransportSetResult &transportResult, int32_t requestTimeoutMs)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    const int32_t subTimeoutMs = requestTimeoutMs > 0 ? requestTimeoutMs : requestTimeoutMs_;
     const auto requestContext = BuildTransportRequestContext(routeContext);
     client::TransportCreateParam createParam;
     createParam.requestContext = requestContext;
     createParam.cacheType = param.cacheType;
     createParam.consistencyType = param.consistencyType;
     createParam.writeMode = param.writeMode;
-    createParam.subTimeoutMs = requestTimeoutMs_;
+    createParam.subTimeoutMs = subTimeoutMs;
     failureStage = SetFailureStage::CREATE;
     std::shared_ptr<ObjectBuffer> buffer;
     RETURN_IF_NOT_OK(transportLayer_->Create(routeContext.worker, objectKey, size, createParam, buffer));
@@ -3872,7 +3875,7 @@ Status ObjectClientImpl::ProcessTransportPut(
     setParam.nestedKeys = nestedObjectKeys;
     setParam.ttlSecond = ttlSecond;
     setParam.existence = static_cast<ExistenceOpt>(existence);
-    setParam.subTimeoutMs = requestTimeoutMs_;
+    setParam.subTimeoutMs = subTimeoutMs;
     failureStage = SetFailureStage::PUBLISH;
     Status setRc = transportLayer_->Set(*buffer, setParam, transportResult);
     if (setRc.GetCode() == K_URMA_NEED_CONNECT) {
@@ -3934,7 +3937,8 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
 
 Status ObjectClientImpl::ExecuteSetFlow(
     const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
-    const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence)
+    const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
+    int32_t requestTimeoutMs)
 {
     std::vector<HostPort> excludedWorkers;
     Status rc(K_RUNTIME_ERROR, "Set route attempts exhausted");
@@ -3954,7 +3958,7 @@ Status ObjectClientImpl::ExecuteSetFlow(
         if (enableLocalCache_ && routeContext.directWorkerApi != nullptr
             && routeContext.directWorkerApi->ShmCreateable(size)) {
             rc = ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
-                               routeContext.directWorkerApi, existence, failureStage);
+                               routeContext.directWorkerApi, existence, failureStage, requestTimeoutMs);
             if (rc.IsOk() || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers)) {
                 return rc;
             }
@@ -3963,30 +3967,30 @@ Status ObjectClientImpl::ExecuteSetFlow(
         if (routeContext.directWorkerApi != nullptr && transportLayer_ == nullptr) {
             if (IsUrmaEnabled()) {
                 return ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
-                                     routeContext.directWorkerApi, existence, failureStage);
+                                     routeContext.directWorkerApi, existence, failureStage, requestTimeoutMs);
             }
             auto info = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
             const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
             if (traceEnabled) {
                 Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
             }
-            rc = routeContext.directWorkerApi->Publish(info, false, false, nestedObjectKeys, ttlSecond, existence);
+            rc = routeContext.directWorkerApi->Publish(info, false, false, nestedObjectKeys, ttlSecond, existence,
+                                                       requestTimeoutMs);
             if (traceEnabled) {
                 Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
             }
             return rc;
         }
         rc = ProcessTransportPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence,
-                                 routeContext, failureStage, transportResult);
+                                 routeContext, failureStage, transportResult, requestTimeoutMs);
         if (rc.IsError()) {
             RETURN_IF_NOT_OK(CheckBoundWorkerAvailability());
         }
-        const bool safeWriteTargetReplay = transportResult.writeTargetQuarantined
-                                           && (!transportResult.publishAttempted
-                                               || transportResult.publishDefinitelyNotSent);
         if (rc.IsOk()
             || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers,
-                                      safeWriteTargetReplay)) {
+                                      transportResult.writeTargetQuarantined
+                                          && (!transportResult.publishAttempted
+                                              || transportResult.publishDefinitelyNotSent))) {
             return rc;
         }
     }
@@ -3994,7 +3998,8 @@ Status ObjectClientImpl::ExecuteSetFlow(
 }
 
 Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
-                             const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence)
+                             const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
+                             int32_t requestTimeoutMs)
 {
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
@@ -4010,10 +4015,12 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_START);
     }
-    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    const int32_t effectiveTimeoutMs = requestTimeoutMs > 0 ? requestTimeoutMs : requestTimeoutMs_;
+    ApiDeadlineGuard deadlineGuard(effectiveTimeoutMs);
     GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     Timer setTimer;
-    Status rc = ExecuteSetFlow(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence);
+    Status rc = ExecuteSetFlow(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence,
+                               requestTimeoutMs);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_END);
     }
@@ -5377,7 +5384,8 @@ Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &o
 }
 
 Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
-                             std::vector<Optional<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported)
+                             std::vector<Optional<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported,
+                             int32_t requestTimeoutMs)
 {
     PerfPoint perfPoint(PerfKey::CLIENT_GET_OBJECT);
     AccessTransportTracker::Reset();
@@ -5385,7 +5393,8 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    const int32_t effectiveTimeoutMs = requestTimeoutMs > 0 ? requestTimeoutMs : requestTimeoutMs_;
+    ApiDeadlineGuard deadlineGuard(effectiveTimeoutMs);
     auto config = GetClientLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
     if (traceEnabled) {
@@ -5405,7 +5414,8 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
                            .subTimeoutMs = subTimeoutMs,
                            .readParams = {},
                            .queryL2Cache = queryL2Cache,
-                           .isRH2DSupported = isRH2DSupported };
+                           .isRH2DSupported = isRH2DSupported,
+                           .requestTimeoutMs = requestTimeoutMs };
         rc = GetBuffersFromWorker(workerApi, getParam, objectBuffers);
     }
     buffers.clear();
@@ -5795,7 +5805,8 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
                               .ubTotalSize = batch.totalSize,
                               .ubMetaResolved = true,
                               .ubGetObjMetaElapsedMs = getParam.ubGetObjMetaElapsedMs,
-                              .actualTransportKind = &batchTransportKind };
+                              .actualTransportKind = &batchTransportKind,
+                              .requestTimeoutMs = getParam.requestTimeoutMs };
 
         GetRspPb rsp;
         std::vector<RpcMessage> payloads;
@@ -5907,7 +5918,8 @@ Status ObjectClientImpl::GetOversizedBufferChunk(std::shared_ptr<IClientWorkerAp
                           .ubTotalSize = chunkSize,
                           .ubMetaResolved = true,
                           .ubGetObjMetaElapsedMs = getParam.ubGetObjMetaElapsedMs,
-                          .actualTransportKind = &chunkTransportKind };
+                          .actualTransportKind = &chunkTransportKind,
+                          .requestTimeoutMs = getParam.requestTimeoutMs };
     GetRspPb rsp;
     std::vector<RpcMessage> payloads;
     RETURN_IF_NOT_OK(workerApi->Get(subGetParam, version, rsp, payloads));
@@ -6625,6 +6637,12 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
 
 Status ObjectClientImpl::Set(const std::string &key, const StringView &val, const SetParam &setParam)
 {
+    return Set(key, val, setParam, 0);
+}
+
+Status ObjectClientImpl::Set(const std::string &key, const StringView &val, const SetParam &setParam,
+                             int32_t requestTimeoutMs)
+{
     AccessTransportTracker::Reset();
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKey(key));
@@ -6633,7 +6651,7 @@ Status ObjectClientImpl::Set(const std::string &key, const StringView &val, cons
     param.consistencyType = ConsistencyType::CAUSAL;
     param.cacheType = setParam.cacheType;
     return Put(key, reinterpret_cast<const uint8_t *>(val.data()), val.size(), param, {}, setParam.ttlSecond,
-               static_cast<int>(setParam.existence));
+               static_cast<int>(setParam.existence), requestTimeoutMs);
 }
 
 Status ObjectClientImpl::Set(const StringView &val, const SetParam &setParam, std::string &key)
@@ -8046,10 +8064,40 @@ void ObjectClientImpl::WarmupClientWorkerConnection()
         LOG(INFO) << "[CLIENT_WORKER_WARMUP] skip by inject";
         return;
     }
+    Timer timer;
     auto rc = DoWarmupClientWorkerConnection();
     if (rc.IsError()) {
-        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] failed, status=%s", rc.ToString());
+        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] failed, cost_us=%.0f, status=%s",
+                                     timer.ElapsedMicroSecond(), rc.ToString());
+    } else {
+        LOG(INFO) << FormatString("[CLIENT_WORKER_WARMUP] done, cost_us=%.0f", timer.ElapsedMicroSecond());
     }
+}
+
+Status ObjectClientImpl::WarmupOneClientWorkerConnection(const std::string &key, const std::string &value,
+                                                         const SetParam &setParam, TimeoutDuration &warmupBudget,
+                                                         std::vector<Optional<Buffer>> &buffers)
+{
+    int32_t remainingMs = static_cast<int32_t>(warmupBudget.CalcRealRemainingTime());
+    CHECK_FAIL_RETURN_STATUS(remainingMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             "Client-worker Set/Get warmup budget exhausted");
+    auto rc = Set(key, StringView(value), setParam, remainingMs);
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] set failed, key=%s, status=%s", key, rc.ToString());
+        return rc;
+    }
+    INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.SetDone");
+    buffers.clear();
+    remainingMs = static_cast<int32_t>(warmupBudget.CalcRealRemainingTime());
+    CHECK_FAIL_RETURN_STATUS(remainingMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             "Client-worker Set/Get warmup budget exhausted");
+    rc = Get({ key }, 0, buffers, true, false, remainingMs);
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] get failed, key=%s, status=%s", key, rc.ToString());
+        return rc;
+    }
+    INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.GetDone");
+    return Status::OK();
 }
 
 Status ObjectClientImpl::DoWarmupClientWorkerConnection()
@@ -8059,6 +8107,7 @@ Status ObjectClientImpl::DoWarmupClientWorkerConnection()
         // Split warmup into two phases: same-node (large value, exercises the SHM
         // fd-passing path) and meta-owner (small value, exercises the cross-node
         // RPC path). 20/80 split favors the metadata path which dominates traffic.
+        constexpr int32_t warmupTimeoutMs = 500;
         constexpr size_t sameNodeCount = 20;
         constexpr size_t metaOwnerCount = 80;
         const std::string warmupKeyPrefix = "ds_internal_warmup_" + GetStringUuid();
@@ -8069,37 +8118,24 @@ Status ObjectClientImpl::DoWarmupClientWorkerConnection()
         SetParam setParam;
         setParam.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
         setParam.ttlSecond = warmupTtlSecond;
+        TimeoutDuration warmupBudget(warmupTimeoutMs);
+        warmupBudget.InitWithPositiveTime(warmupTimeoutMs);
+        LOG(INFO) << FormatString("[CLIENT_WORKER_WARMUP] begin, business_timeout_ms=%d, budget_ms=%d",
+                                  requestTimeoutMs_, warmupTimeoutMs);
         std::vector<Optional<Buffer>> buffers;
-        // Set + Get one warmup key; returns the first failing Status (or OK).
-        auto warmupOne = [&](const std::string &key, const std::string &value) -> Status {
-            auto rc = Set(key, StringView(value), setParam);
-            if (rc.IsError()) {
-                LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] set failed, key=%s, status=%s", key,
-                                             rc.ToString());
-                return rc;
-            }
-            INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.SetDone");
-            buffers.clear();
-            rc = Get({ key }, 0, buffers);
-            if (rc.IsError()) {
-                LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] get failed, key=%s, status=%s", key,
-                                             rc.ToString());
-                return rc;
-            }
-            INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.GetDone");
-            return Status::OK();
-        };
         // Phase 1: same-node workers (REQUIRED_SAME_NODE when localcache=false).
         dataPlacementPolicy_ = enableLocalCache_
             ? savedPolicy
             : client::DataPlacementPolicy::REQUIRED_SAME_NODE;
         for (size_t i = 0; i < sameNodeCount; ++i) {
-            RETURN_IF_NOT_OK(warmupOne(warmupKeyPrefix + "_" + std::to_string(i), sameNodeValue));
+            RETURN_IF_NOT_OK(WarmupOneClientWorkerConnection(warmupKeyPrefix + "_" + std::to_string(i), sameNodeValue,
+                                                             setParam, warmupBudget, buffers));
         }
         // Phase 2: meta-owner (hash-ring owner, may be cross-node RPC).
         dataPlacementPolicy_ = client::DataPlacementPolicy::PREFERRED_META_OWNER;
         for (size_t i = 0; i < metaOwnerCount; ++i) {
-            RETURN_IF_NOT_OK(warmupOne(warmupKeyPrefix + "_m" + std::to_string(i), metaOwnerValue));
+            RETURN_IF_NOT_OK(WarmupOneClientWorkerConnection(
+                warmupKeyPrefix + "_m" + std::to_string(i), metaOwnerValue, setParam, warmupBudget, buffers));
         }
         LOG(INFO) << FormatString("[CLIENT_WORKER_WARMUP] success, prefix=%s, sameNode=%zu, metaOwner=%zu",
                                   warmupKeyPrefix, sameNodeCount, metaOwnerCount);

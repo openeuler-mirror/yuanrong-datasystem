@@ -158,12 +158,15 @@ global:
 | global.rpc.ioThreadNice | int | `0` | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
 | global.rpc.zmqChunkSz | int | `1048576` | 并行负载分块大小配置（以字节为单位） |
 | global.rpc.brpc.useBrpc | bool | `false` | 是否使用 brpc 替代 ZMQ 作为 RPC 通信传输。启用后 brpc 独占 worker 的 TCP 端口（与 `worker_address` 同端口，无端口偏移），ZMQ 的 TCP 端点不再创建，上述 ZMQ 专属参数（`zmqServerIoContext`、`zmqClientIoContext`、`zmqClientIoThread`、`zmqChunkSz`）在 brpc 模式下不生效。各服务的线程池参数（`rpcThreadNum`、`ocThreadNum`、`scThreadNum` 等）仍然生效 |
+| global.rpc.brpc.eventDispatcherNum | int | `0` | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。该值仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | global.rpc.brpc.brpcServerNumThreads | int | `64` | brpc 服务端工作线程数（bthread 工作线程池大小） |
 | global.rpc.brpc.brpcMaxConcurrency | int | `128` | 单个 brpc 服务的最大并发在途 RPC 数，0 表示不限制。推荐值为 `brpcServerNumThreads` 的 2 倍（如 64 线程对应 128）。超过该值时 brpc 会立即向客户端返回 ELIMIT，避免慢请求耗尽 bthread 导致 OOM。该值不得小于 `brpcServerNumThreads` |
 | global.rpc.maxRpcSessionNum | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | global.rpc.streamIdleTimes | int | `300` | 配置流的空闲时间。默认值为300秒（5分钟） |
 | global.rpc.remoteSendThreadNum | int | `8` | 配置服务端用于将元素发送到远程工作线程的线程数量 |
 | global.rpc.scThreadNum | int | `128` | 配置流缓存master工作的最大线程数 |
+
+`eventDispatcherNum` 不等同于业务 RPC 线程数。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。若瓶颈位于业务处理、锁竞争、`rpcThreadNum`/`ocThreadNum` 线程池或单监听 fd 的 accept，增大该值通常无效；连接较少或 CPU 资源紧张时应保持默认值。
 
 **样例**：
 配置一个Unix Domain Socket路径为 "/home/uds"，并使用31501作为openYuanrong datasystem DaemonSet的监听端口号

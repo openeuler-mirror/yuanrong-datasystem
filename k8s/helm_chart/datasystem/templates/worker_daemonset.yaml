@@ -237,6 +237,7 @@ spec:
         - -enable_sched_runtime={{ $.Values.global.performance.enableSchedRuntime }}
         - -zmq_chunk_sz={{ $.Values.global.rpc.zmqChunkSz | int64 }}
         - -use_brpc={{ $.Values.global.rpc.brpc.useBrpc }}
+        - -brpc_event_dispatcher_num={{ $.Values.global.rpc.brpc.eventDispatcherNum }}
         - -brpc_server_num_threads={{ $.Values.global.rpc.brpc.brpcServerNumThreads }}
         - -brpc_max_concurrency={{ $.Values.global.rpc.brpc.brpcMaxConcurrency }}
         - -etcd_address={{ $.Values.global.etcd.etcdAddress }}

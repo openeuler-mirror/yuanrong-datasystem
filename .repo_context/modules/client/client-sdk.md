@@ -37,6 +37,14 @@
 ## Responsibilities
 
 - Verified:
+  - Client-worker startup warmup reuses the real Set/Get path: 20 same-node 256 KiB objects followed by 80 one-byte
+    meta-owner objects. The sequence remains serial because startup experiments found no tail-latency benefit from
+    16-way warmup. Warmup shares one fixed 500 ms budget and passes its remaining time into Create, Publish, and Get, so
+    a 20 ms business `requestTimeoutMs` cannot abort the initialization warmup. Runtime calls keep their original
+    timeout because the override defaults to zero. Warmup follows URMA runtime enablement and is independent of the
+    `enableCrossNodeConnection` failover option. The existing placement-policy split covers both
+    `enableLocalCache=true` and `false`, and the meta-owner phase exercises the normal worker outbound path without a
+    separate probe protocol.
   - `datasystem` shared library is built from `src/datasystem/client/*` and is the main user-facing client library.
   - `DsClient` is only a convenience aggregator. It constructs `KVClient`, `HeteroClient`, and `ObjectClient`, then initializes and shuts them down in order.
   - `ConnectOptions` is the common connection/auth/config carrier for C++ clients.
