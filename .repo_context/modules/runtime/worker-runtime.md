@@ -279,6 +279,16 @@
     alive until a current immutable snapshot no longer contains the local member; only then may process shutdown begin.
     This preserves the source for the whole ScaleIn task barrier. The external process manager remains the bounded final
     termination authority when the control plane cannot complete the transition.
+  - if a restarted Worker reads its local member as `LEAVING`, it claims the process-local exit fence before fallible
+    helper-thread startup, keeps READY closed, and retries creation of only a missing pre-shutdown worker after a partial
+    failure; the startup exact-snapshot pass propagates a persistent startup failure. A lazy Worker-owned thread, rather
+    than the Engine Snapshot callback, republishes EXITING with capped exponential backoff and per-Worker jitter. Removal
+    terminally cancels that publisher, prevents an older concurrent `LEAVING` callback from re-arming it, and requests
+    process shutdown once. An initial publication that races synchronous Snapshot delivery during Engine startup is
+    woken immediately by the Engine-RUNNING transition instead of waiting for backend-failure backoff. The publisher
+    keeps retrying until authoritative removal or process shutdown; an independent
+    give-up budget would recreate a permanent `LEAVING` state. This recovery is address-local and therefore independent
+    for every member in a multi-Worker ScaleIn batch; it deliberately does not replay `PRE_LEAVING`.
   - the graceful-exit topology retries (`PublishExitingMembership` -> `TopologyEngine::MarkExiting`, and
     `WaitForTopologyRemoval` -> poll until the local member is gone from the authoritative snapshot) are bounded by the
     worker-owned constexpr `LOSSLESS_EXIT_GRACE` (worker_oc_server.cpp; 120s in production, 10s under `WITH_TESTS` so

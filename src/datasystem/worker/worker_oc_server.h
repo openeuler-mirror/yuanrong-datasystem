@@ -195,6 +195,16 @@ public:
     }
 
     /**
+     * @brief Register the process shutdown request used after a recovered scale-in removes this Worker.
+     * @param[in] shutdownRequester Non-blocking callback that wakes the owning process lifecycle. Configure before
+     * Init.
+     */
+    void SetScaleInShutdownRequester(std::function<void()> shutdownRequester)
+    {
+        scaleInShutdownRequester_ = std::move(shutdownRequester);
+    }
+
+    /**
      * @brief Apply runtime JSON config updates to modifiable worker flags.
      * @param[in] configJson JSON object mapping flag names to string values.
      * @return Status::OK() on success; error status otherwise.
@@ -231,12 +241,29 @@ private:
     Status StartBrpcIfEnabled();
 
     /**
-     * @brief Start asynchronous pre-shutdown checks and publish voluntary scale-in intent when requested.
+     * @brief Start asynchronous pre-shutdown checks for shutdown or restored scale-in.
      * @param[in] scaleIn Whether this shutdown is a voluntary scale-in.
      * @param[in] traceId Trace identifier propagated to helper threads.
      * @return Status of the start operation.
      */
     Status StartPreShutdownWorkers(bool scaleIn, const std::string &traceId);
+    Status StartPreShutdownWorkersLocked(bool scaleIn, const std::string &traceId);
+    Status RestorePreShutdownWorkers(const std::string &traceId, bool &recovered);
+
+    /**
+     * @brief Publish EXITING membership for a scale-in lifecycle restored from topology.
+     */
+    Status ScheduleScaleInExitPublication();
+    void RunScaleInExitPublisher();
+    void CancelScaleInExitPublication();
+    void StopScaleInExitPublisher();
+    static std::chrono::milliseconds ComputeScaleInExitRetryDelay(const std::string &address,
+                                                                   size_t consecutiveFailures);
+
+    /**
+     * @brief Stop and join asynchronous pre-shutdown checks.
+     */
+    void StopPreShutdownWorkers();
 
     /**
      * @brief Wait for asynchronous work and, during scale-in, clients and topology exit intent to finish.
@@ -584,6 +611,7 @@ private:
      * @param[in] snapshot Published immutable topology.
      */
     void ReconcileUbAdmissionTopology(const cluster::TopologySnapshot &snapshot);
+    Status RestoreScaleInPreparation(const cluster::TopologySnapshot &snapshot);
     void HandleTopologySnapshotPublished(std::shared_ptr<const cluster::TopologySnapshot> snapshot);
 
     /**
@@ -702,6 +730,7 @@ private:
      * @return Status of this call.
      */
     Status PublishReadyMembership();
+    bool ShouldPublishReadyMembership(bool needsRestartReconciliation) const;
 
     Status StartUbHealthLeaseSync();
 
@@ -810,9 +839,21 @@ private:
     // ResourceManager's rebalance scheduler borrows MembershipEndpointView from this engine. The destructor must reset
     // resourceManager_ before resetting topologyEngine_; declaration order provides the same fallback ordering.
     std::unique_ptr<cluster::TopologyEngine> topologyEngine_{ nullptr };
+    std::atomic<bool> topologyRuntimeStarted_{ false };
     std::unique_ptr<MetadataRouteResolver> metadataRouteResolver_{ nullptr };
     std::unique_ptr<object_cache::ObjectEndpointPolicy> objectEndpointPolicy_{ nullptr };
     std::atomic<bool> topologyExitRequested_{ false };
+    bool scaleInRecoveryStarted_{ false };
+    std::function<Status(int32_t)> scaleInExitPublishFn_;
+    std::mutex scaleInExitPublisherMutex_;
+    std::condition_variable scaleInExitPublisherCv_;
+    std::unique_ptr<Thread> scaleInExitPublisherThread_{ nullptr };
+    bool scaleInExitPublicationRequested_{ false };
+    bool scaleInExitPublicationPublished_{ false };
+    bool scaleInExitPublicationCancelled_{ false };
+    bool scaleInExitPublisherStopping_{ false };
+    bool scaleInShutdownRequested_{ false };
+    std::function<void()> scaleInShutdownRequester_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
@@ -859,6 +900,9 @@ private:
     std::future<Status> streamCacheMasterSvcStatus_;
 
     // Check whether all asynchronous tasks are completed before the worker ends.
+    // Protects pre-shutdown thread creation against concurrent snapshot handling and destruction.
+    std::mutex preShutdownWorkersMutex_;
+    bool preShutdownWorkersStopped_{ false };
     std::unique_ptr<Thread> checkAsyncTasksThread_{ nullptr };
     std::atomic<bool> checkThreadRunning_{ true };
     std::atomic<bool> checkAsyncTasksDone_{ false };

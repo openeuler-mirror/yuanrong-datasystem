@@ -30,6 +30,7 @@ ds_cc_test(
     srcs = ["worker_oc_server_test.cpp"],
     deps = [
         "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker:worker_oc_server",
         "//tests/ut:ut_common",

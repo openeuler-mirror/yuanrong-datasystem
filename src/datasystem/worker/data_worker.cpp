@@ -383,6 +383,9 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDe
     LOG_IF_ERROR(PreExpandFdPool(FLAGS_fd_pool_prewarm_size), "Failed to pre-expand fd pool.");
     worker_ = std::make_unique<worker::WorkerOCServer>(options.workerAddress, options.bindAddress,
                                                        options.masterAddress, coordinatorDiscovery_);
+    if (!isEmbeddedClient) {
+        worker_->SetScaleInShutdownRequester([] { SignalHandler(0); });
+    }
     worker_->SetFlags(&flags);
 
     LOG_IF_ERROR(PreInitRocksDB(), "Failed to initialize the rocksdb database in advance.");
