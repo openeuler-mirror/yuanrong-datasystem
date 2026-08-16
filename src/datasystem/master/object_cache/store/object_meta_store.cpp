@@ -48,6 +48,7 @@
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 
 DS_DEFINE_uint32(etcd_meta_pool_size, 8, "ETCD metadata async pool size");
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
@@ -178,7 +179,7 @@ void ObjectMetaStore::InsertToEtcdKeyMap(const std::string &table, const std::st
     if (!EtcdEnable()) {
         return;
     }
-    std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
+    std::lock_guard<SharedMutex> l(etcdMtx_);
     auto tableIter = etcdKeyMap_.find(table);
     if (tableIter == etcdKeyMap_.end()) {
         std::map<std::string, std::pair<uint32_t, bool>> item{ { key, { hash, isAsync } } };
@@ -352,7 +353,7 @@ Status ObjectMetaStore::RemoveEtcdKey(const std::string &objectKey, const std::s
     bool async;
     std::string table = tablePrefix + ETCD_HASH_SUFFIX;
     {
-        std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
+        std::lock_guard<SharedMutex> l(etcdMtx_);
         auto tableIter = etcdKeyMap_.find(table);
         if (tableIter == etcdKeyMap_.end()) {
             VLOG(1) << table << " not find, skip deleting the key in etcd";
@@ -377,7 +378,7 @@ Status ObjectMetaStore::RemoveEtcdKey(const std::string &objectKey, const std::s
     }
 
     if (rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND) {
-        std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
+        std::lock_guard<SharedMutex> l(etcdMtx_);
         (void)etcdKeyMap_[table].emplace(key, std::make_pair(hash, async));
         return rc;
     }
@@ -433,7 +434,7 @@ Status ObjectMetaStore::PrefixRemoveEtcdKey(const std::string &prefixKey, const 
     std::string hashTable = tablePrefix + ETCD_HASH_SUFFIX;
     std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> hashKeys;
     {
-        std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
+        std::lock_guard<SharedMutex> l(etcdMtx_);
         PrefixSearchAndErase(hashTable, prefixKey, hashKeys);
     }
 
@@ -442,7 +443,7 @@ Status ObjectMetaStore::PrefixRemoveEtcdKey(const std::string &prefixKey, const 
     std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> failedHashKeys;
     Status rc = PrefixRemoveEtcdKeyImpl(hashTable, hashKeys, failedHashKeys);
 
-    std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
+    std::lock_guard<SharedMutex> l(etcdMtx_);
     for (const auto &item : failedHashKeys) {
         (void)etcdKeyMap_[hashTable].emplace(item.first, item.second);
     }
@@ -499,7 +500,7 @@ void ObjectMetaStore::GetMetasMatch(
         (void)asyncReqSize_.fetch_sub(count, std::memory_order_relaxed);
     }
     {
-        std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
+        std::lock_guard<SharedMutex> l(etcdMtx_);
         for (const auto &entry : objAsyncMap) {
             (void)etcdKeyMap_.erase(entry.first);
         }
@@ -517,7 +518,7 @@ void ObjectMetaStore::PollAsyncElementsByObjectKey(const std::string &objectKey,
     queues_[idx]->PollAsyncElementsByObjectKey(objectKey, elements);
     (void)asyncReqSize_.fetch_sub(elements.size(), std::memory_order_relaxed);
     {
-        std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
+        std::lock_guard<SharedMutex> l(etcdMtx_);
         (void)etcdKeyMap_.erase(objectKey);
     }
 }
@@ -712,7 +713,7 @@ Status ObjectMetaStore::GetRangeFromEtcd(const std::string &tablePrefix, const s
             RETURN_STATUS(StatusCode::K_INVALID, "Parse failed with hash: " + hash);
         }
         RETURN_IF_NOT_OK(rocksStore_->Put(rocksTable, kv.first, kv.second));
-        std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
+        std::lock_guard<SharedMutex> l(etcdMtx_);
         auto iter = etcdKeyMap_.find(table);
         if (iter == etcdKeyMap_.end()) {
             std::map<std::string, std::pair<uint32_t, bool>> item{ { kv.first, { hashNum, false } } };

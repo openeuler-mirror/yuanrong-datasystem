@@ -39,6 +39,7 @@
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/parallel/service_parallel_policy.h"
@@ -354,7 +355,7 @@ Status OCMetadataManager::InitGlobalRef()
     // Recovery REMOTE_CLIENT_REF_TABLE from the Rocksdb.
     RETURN_IF_NOT_OK(
         LoadRefFromRocks(REMOTE_CLIENT_REF_TABLE, [this](const std::string &remoteClientId, const std::string &addr) {
-            std::shared_lock<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
+            std::shared_lock<SharedMutex> lck(clientIdRefTableMutex_);
             TbbRemoteClientIdRefTable::accessor objAccessor;
             if (!clientIdRefTable_.find(objAccessor, remoteClientId)) {
                 clientIdRefTable_.insert(objAccessor, remoteClientId);
@@ -2819,7 +2820,7 @@ void OCMetadataManager::GetObjGlobalCacheDeletesMatch(const std::function<bool(c
 void OCMetadataManager::GetRemoteClientIdsMatch(const std::function<bool(const std::string &)> &matchFunc,
                                                 std::vector<std::string> &remoteClientIds)
 {
-    std::lock_guard<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
+    std::lock_guard<SharedMutex> lck(clientIdRefTableMutex_);
     for (const auto &it : clientIdRefTable_) {
         if (matchFunc(it.first)) {
             VLOG(1) << "Migrateclientid:" << it.first;
@@ -2942,7 +2943,7 @@ void OCMetadataManager::FillClientIdRefsForMigration(const std::string &remoteCl
     VLOG(1) << "Migrate clientid:" << remoteClientId;
     std::unordered_set<std::string> masterAddrs;
     {
-        std::shared_lock<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
+        std::shared_lock<SharedMutex> lck(clientIdRefTableMutex_);
         TbbRemoteClientIdRefTable::accessor clientAccessor;
         if (clientIdRefTable_.find(clientAccessor, remoteClientId)) {
             for (const auto &masterAddress : clientAccessor->second) {
@@ -3034,7 +3035,7 @@ Status OCMetadataManager::SaveMigrationRemoteClientRefData(const MigrateMetadata
         VLOG(1) << "Migrate clientid:" << clientId;
         std::vector<std::string> masterAddrs{ remoteClientIdRefs.master_addrs().begin(),
                                               remoteClientIdRefs.master_addrs().end() };
-        std::shared_lock<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
+        std::shared_lock<SharedMutex> lck(clientIdRefTableMutex_);
         TbbRemoteClientIdRefTable::accessor objAccessor;
         if (!clientIdRefTable_.find(objAccessor, clientId)) {
             (void)clientIdRefTable_.insert(objAccessor, clientId);
@@ -3080,7 +3081,7 @@ Status OCMetadataManager::GIncreaseMasterAppRef(const GIncreaseReqPb &req, GIncr
         info->add_change_meta_ids(req.remote_client_id());
         return Status::OK();
     }
-    std::shared_lock<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
+    std::shared_lock<SharedMutex> lck(clientIdRefTableMutex_);
     TbbRemoteClientIdRefTable::accessor objAccessor;
     if (!clientIdRefTable_.find(objAccessor, req.remote_client_id())) {
         clientIdRefTable_.insert(objAccessor, req.remote_client_id());
@@ -3302,7 +3303,7 @@ void OCMetadataManager::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGRefsR
     std::vector<std::string> masterAddrs;
     const std::string &remoteClientId = req.remote_client_id();
     {
-        std::shared_lock<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
+        std::shared_lock<SharedMutex> lck(clientIdRefTableMutex_);
         TbbRemoteClientIdRefTable::accessor clientAccessor;
         if (!clientIdRefTable_.find(clientAccessor, remoteClientId)) {
             LOG(WARNING) << FormatString("ReleaseGRefs: remoteClientId does not exist: %s", remoteClientId);
@@ -3347,7 +3348,7 @@ Status OCMetadataManager::ReleaseGRefsToMaster(const std::string &remoteClientId
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         api->ReleaseGRefsOfRemoteClientId(req, rsp),
         FormatString("ReleaseGRefsToMaster failed. masterAddr:%s", masterAddr.ToString()));
-    std::shared_lock<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
+    std::shared_lock<SharedMutex> lck(clientIdRefTableMutex_);
     TbbRemoteClientIdRefTable::accessor accessor;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(clientIdRefTable_.find(accessor, remoteClientId), StatusCode::K_RUNTIME_ERROR,
                                          FormatString("Fail to find remoteClientId: %s", masterAddress));
@@ -3876,7 +3877,7 @@ Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bo
     if (removeFailWorkerMetaData) {
         {
             // clear remoteclient master address
-            std::lock_guard<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
+            std::lock_guard<SharedMutex> lck(clientIdRefTableMutex_);
             for (auto &iter : clientIdRefTable_) {
                 iter.second.erase(workerAddr);
                 objectStore_->RemoveRemoteClientRef(iter.first, workerAddr);

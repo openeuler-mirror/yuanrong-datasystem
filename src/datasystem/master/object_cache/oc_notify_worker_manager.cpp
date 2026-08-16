@@ -46,6 +46,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -145,7 +146,7 @@ Status OCNotifyWorkerManager::ProcessAsyncNotifyOpImpl()
     INJECT_POINT("OCNotifyWorkerManager.ProcessAsyncNotifyOpImpl.SkipProcess");
     std::vector<std::string> workerIds;
     {
-        std::lock_guard<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+        std::lock_guard<SharedMutex> lck(notifyWorkerOpMutex_);
         for (const auto &cache : notifyWorkerOpTable_) {
             workerIds.emplace_back(cache.first);
         }
@@ -167,7 +168,7 @@ Status OCNotifyWorkerManager::ProcessAsyncNotifyOpImpl()
         }
         std::unordered_set<std::string> objsNeedCacheInvalid;
         {
-            std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+            std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
             TbbNotifyWorkerOpTable::accessor accessor;
             if (notifyWorkerOpTable_.find(accessor, workerId)) {
                 for (const auto &it : accessor->second) {
@@ -189,7 +190,7 @@ Status OCNotifyWorkerManager::ProcessAsyncDeleteNotifyOpImpl()
     LOG(INFO) << "ProcessAsyncDeleteNotifyOpImpl";
     std::vector<std::string> workerIds;
     {
-        std::lock_guard<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+        std::lock_guard<SharedMutex> lck(notifyWorkerOpMutex_);
         for (const auto &cache : notifyWorkerOpTable_) {
             workerIds.emplace_back(cache.first);
         }
@@ -207,7 +208,7 @@ Status OCNotifyWorkerManager::ProcessAsyncDeleteNotifyOpImpl()
         }
         std::unordered_map<std::string, std::uint64_t> objNeedDelete;
         {
-            std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+            std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
             TbbNotifyWorkerOpTable::const_accessor accessor;
             if (notifyWorkerOpTable_.find(accessor, workerId)) {
                 for (const auto &it : accessor->second) {
@@ -401,7 +402,7 @@ std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> OCNotifyWorkerManager:
     const std::string &workerAddr)
 {
     std::vector<AsyncWorkerOpSnapshot> snapshots;
-    std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+    std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
     TbbNotifyWorkerOpTable::const_accessor accessor;
     if (!notifyWorkerOpTable_.find(accessor, workerAddr)) {
         return snapshots;
@@ -415,7 +416,7 @@ std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> OCNotifyWorkerManager:
 bool OCNotifyWorkerManager::CheckExistAsyncWorkerOp(const std::string &workerId, const std::string &objectKey,
                                                     NotifyWorkerOpType op)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+    std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
     TbbNotifyWorkerOpTable::const_accessor accessor;
     if (notifyWorkerOpTable_.find(accessor, workerId)) {
         auto iter = accessor->second.find(objectKey);
@@ -430,7 +431,7 @@ std::vector<std::pair<std::string, NotifyWorkerOp>> OCNotifyWorkerManager::GetOb
     const std::string &objectKey)
 {
     std::vector<std::pair<std::string, NotifyWorkerOp>> result;
-    std::lock_guard<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+    std::lock_guard<SharedMutex> lck(notifyWorkerOpMutex_);
     for (const auto &cache : notifyWorkerOpTable_) {
         auto iter = cache.second.find(objectKey);
         if (iter != cache.second.end()) {
@@ -789,12 +790,12 @@ Status OCNotifyWorkerManager::InsertAsyncWorkerOp(const std::string &workerId, c
     Timer timer;
     NotifyWorkerOp opAfterModify = op;
     {
-        std::shared_lock<std::shared_timed_mutex> faultLck(faultWorkerMutex_);
+        std::shared_lock<SharedMutex> faultLck(faultWorkerMutex_);
         auto faultWorker = faultWorkers_.find(workerId);
         if (faultWorker != faultWorkers_.end() && faultWorker->second) {
             return Status::OK();
         }
-        std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+        std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
         GetMasterTimeCost().Append("InsertAsyncWorkerOp get lock", timer.ElapsedMilliSecond());
         TbbNotifyWorkerOpTable::accessor accessor;
 
@@ -832,7 +833,7 @@ Status OCNotifyWorkerManager::CommitAsyncWorkerOpRequests(const std::vector<Asyn
             objectStore_->AddAsyncWorkerOp(request.workerId, request.objectKey, request.op, request.writeType),
             "modify async worker op in l2 cache failed, key: " + request.objectKey);
     }
-    std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+    std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
     for (const auto &request : requests) {
         TbbNotifyWorkerOpTable::accessor accessor;
         if (!notifyWorkerOpTable_.find(accessor, request.workerId)) {
@@ -863,7 +864,7 @@ Status OCNotifyWorkerManager::ClearAsyncWorkerOpSnapshots(
     std::unique_lock<bthread::Mutex> persistLock(notifyWorkerOpPersistence_->mutex);
     std::vector<AsyncWorkerOpPersistRequest> persistRequests;
     {
-        std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+        std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
         TbbNotifyWorkerOpTable::accessor accessor;
         RETURN_OK_IF_TRUE(!notifyWorkerOpTable_.find(accessor, workerAddr));
         for (const auto &snapshot : snapshots) {
@@ -903,7 +904,7 @@ Status OCNotifyWorkerManager::RemoveAsyncWorkerOp(const std::string &workerId,
     std::unique_lock<bthread::Mutex> persistLock(notifyWorkerOpPersistence_->mutex);
     std::vector<AsyncWorkerOpPersistRequest> persistRequests;
     {
-        std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
+        std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
         TbbNotifyWorkerOpTable::accessor accessor;
         RETURN_OK_IF_TRUE(!notifyWorkerOpTable_.find(accessor, workerId));
         for (const auto &id : objectKeys) {
@@ -962,7 +963,7 @@ Status OCNotifyWorkerManager::FillUpdateObjectInfoPb(const std::string &objectKe
 void OCNotifyWorkerManager::SetFaultWorker(const std::string &workerAddr, bool isDead)
 {
     LOG(INFO) << "add fault worker: " << workerAddr << ", isDead:" << isDead;
-    std::lock_guard<std::shared_timed_mutex> lck(faultWorkerMutex_);
+    std::lock_guard<SharedMutex> lck(faultWorkerMutex_);
     auto iter = faultWorkers_.find(workerAddr);
     if (iter == faultWorkers_.end()) {
         (void)faultWorkers_.emplace(workerAddr, isDead);
@@ -974,7 +975,7 @@ void OCNotifyWorkerManager::SetFaultWorker(const std::string &workerAddr, bool i
 void OCNotifyWorkerManager::RemoveFaultWorker(const std::string &workerAddr)
 {
     Timer timer;
-    std::lock_guard<std::shared_timed_mutex> lck(faultWorkerMutex_);
+    std::lock_guard<SharedMutex> lck(faultWorkerMutex_);
     LOG(INFO) << "remove fault worker: " << workerAddr;
     GetMasterTimeCost().Append("RemoveFaultWorker get lock", timer.ElapsedMilliSecond());
     (void)faultWorkers_.erase(workerAddr);
@@ -984,7 +985,7 @@ Status OCNotifyWorkerManager::CheckWorkerIsHealthy(const std::string &workerAddr
 {
     INJECT_POINT("OCNotifyWorkerManager.CheckWorkerIsHealth.worker.unhealthy");
     Timer timer;
-    std::shared_lock<std::shared_timed_mutex> lck(faultWorkerMutex_);
+    std::shared_lock<SharedMutex> lck(faultWorkerMutex_);
     GetMasterTimeCost().Append("CheckWorkerIsHealthy get lock", timer.ElapsedMilliSecond());
     if (faultWorkers_.find(workerAddr) != faultWorkers_.end()) {
         RETURN_STATUS(K_WORKER_ABNORMAL, "The worker status is abnormal. workerAddr:" + workerAddr);
