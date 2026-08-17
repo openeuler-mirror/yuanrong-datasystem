@@ -2990,9 +2990,9 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 </tr>
 <tr class="row-odd"><td><p>enable_reconciliation</p></td>
 <td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>否</p></td>
-<td><p>当节点重启时是否启用对账功能</p></td>
+<td><p>当节点重启时是否启用全局引用计数对账功能；仅使用 KVClient 的场景无需开启，使用 ObjectClient 全局引用计数时需显式设置为 <code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>add_node_wait_time_s</p></td>
 <td><p>int</p></td>

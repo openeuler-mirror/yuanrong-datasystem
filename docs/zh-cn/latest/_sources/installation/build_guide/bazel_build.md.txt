@@ -716,6 +716,19 @@ int main() {
 收敛的部署控制域，返回值必须是数字IPv4 `host:port`；同步`GetCoordinators`实现必须在provider自身控制的
 有限时间内返回。
 
+Coordinator 运行后，集成方可从其他线程调用同步配置更新接口：
+
+```cpp
+auto status = datasystem::CoordinatorServer::GetInstance()->UpdateConfig(
+    R"({"diagnostic_sample_rate":"0.5"})");
+```
+
+输入必须是 JSON object，value 必须是字符串。Coordinator 当前仅支持运行时更新
+`request_sample_rate`、`access_sample_rate` 和 `diagnostic_sample_rate`；其他动态 flag 会返回 `K_INVALID`，
+避免更新只影响部分消费者。合法更新在接口返回前通过 `LogSampler` 原子快照生效；Runtime 尚未就绪时返回
+`K_NOT_READY`，开始停止后返回 `K_SHUTTING_DOWN`。该接口只修改当前进程，不向其他 Coordinator 广播，
+也不写入 Raft 或配置文件。
+
 本地Raft data root和权威配置按以下规则处理：
 
 - 本地metadata为`VALID`：直接从本地braft状态recover，不调用Discovery。

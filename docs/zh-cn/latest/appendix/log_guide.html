@@ -605,7 +605,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><strong>资源日志</strong>：定时输出 Worker 运行时关键资源信息，包括共享内存、Spill 磁盘、线程池、队列、流缓存相关统计等（需 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 且 <code class="docutils literal notranslate"><span class="pre">log_monitor_exporter=harddisk</span></code>）。</p></li>
 <li><p><strong>流缓存指标日志（sc_metrics）</strong>：流缓存运行数据（需开启 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code>）。</p></li>
 <li><p><strong>容器/进程相关日志</strong>：容器运行日志，管理和监控worker进程的生命周期。</p></li>
-<li><p><strong>操作审计日志（operation）</strong>：记录进程启动/停止、配置初始化及运行时动态配置变更（<code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> API 或 <code class="docutils literal notranslate"><span class="pre">monitor_config_file</span></code> 热更新），便于运维追溯配置操作历史。</p></li>
+<li><p><strong>操作审计日志（operation）</strong>：记录进程启动/停止、构建 Commit、配置初始化及运行时动态配置变更（<code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> API 或 <code class="docutils literal notranslate"><span class="pre">monitor_config_file</span></code> 热更新），便于运维追溯版本和配置操作历史。</p></li>
 <li><p><strong>资源快照日志（kv_resource）</strong>：<code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 同源字段的 JSON-Lines 快照，每行一个完整 JSON 对象，顶层含 <code class="docutils literal notranslate"><span class="pre">time</span></code>/<code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>，<code class="docutils literal notranslate"><span class="pre">metrics</span></code> 为按 <code class="docutils literal notranslate"><span class="pre">resource_json_schema</span></code> 配置的 metric 组及子字段（需 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 且 <code class="docutils literal notranslate"><span class="pre">log_monitor_exporter=harddisk</span></code>；与 <code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 复用同一采集线程和周期，写入由 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 独立控制）。</p></li>
 <li><p><strong>指标摘要日志（kv_metrics）</strong>：<code class="docutils literal notranslate"><span class="pre">datasystem_worker.INFO.log</span></code> 中 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 摘要的 JSON-Lines 并行输出，每行一个完整 JSON 对象，顶层含 <code class="docutils literal notranslate"><span class="pre">time</span></code>/<code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>，body 与 INFO.log 逐字一致（需 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code>；INFO.log 原 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 仍由 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制）。</p></li>
 </ol>
@@ -655,7 +655,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-even"><td><p>7</p></td>
 <td><p>datasystem_worker</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/{log_filename}_operation.log</span></code></p></td>
-<td><p>操作审计日志；记录 Init/Shutdown、配置初始化快照及运行时 flag 变更（<code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> 或配置文件热更新）</p></td>
+<td><p>操作审计日志；记录 Init/Shutdown、构建 Commit、配置初始化快照及运行时 flag 变更（<code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> 或配置文件热更新）</p></td>
 </tr>
 <tr class="row-odd"><td><p>8</p></td>
 <td><p>datasystem_worker</p></td>
@@ -682,9 +682,24 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_access.log</span></code>（关闭 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code> 后恢复为 <code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_access_{pid}.log</span></code>）</p></td>
 <td><p>SDK 接口访问日志；基名可由 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_ACCESS_LOG_NAME</span></code> 覆盖</p></td>
 </tr>
+<tr class="row-even"><td><p>13</p></td>
+<td><p>datasystem_coordinator</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/datasystem_coordinator.INFO.log</span></code>（及 <code class="docutils literal notranslate"><span class="pre">.WARNING</span></code>、<code class="docutils literal notranslate"><span class="pre">.ERROR</span></code> 等轮转文件）</p></td>
+<td><p>Coordinator 运行日志；启动时记录 Git Commit 和 Branch</p></td>
+</tr>
+<tr class="row-odd"><td><p>14</p></td>
+<td><p>datasystem_coordinator</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/datasystem_coordinator_operation.log</span></code></p></td>
+<td><p>Coordinator 操作审计日志；记录 Init/Shutdown、构建 Commit、配置初始化及运行时 <code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> 变更</p></td>
+</tr>
 </tbody>
 </table>
 </div>
+<p>Worker 和 Coordinator 启动后会在 operation 日志中各写入一条版本事件：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>VERSION_INIT: role=&lt;worker|coordinator&gt;, git_commit=&lt;git-commit&gt;
+</pre></div>
+</div>
+<p>Branch 仅写入普通运行日志，不写入 operation 日志。构建系统无法解析版本时，回退字符串也会原样记录，便于定位构建配置问题。</p>
 </section>
 </section>
 <hr class="docutils" />

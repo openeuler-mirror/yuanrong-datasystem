@@ -1422,6 +1422,16 @@ build:urma --copt=-DURMA_OVER_UB
 表示目标voting成员数，不表示首次bootstrap时Discovery必须精确返回N个候选。Discovery必须来自同一个全局
 收敛的部署控制域，返回值必须是数字IPv4 <code class="docutils literal notranslate"><span class="pre">host:port</span></code>；同步<code class="docutils literal notranslate"><span class="pre">GetCoordinators</span></code>实现必须在provider自身控制的
 有限时间内返回。</p>
+<p>Coordinator 运行后，集成方可从其他线程调用同步配置更新接口：</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">datasystem</span><span class="o">::</span><span class="n">CoordinatorServer</span><span class="o">::</span><span class="n">GetInstance</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">UpdateConfig</span><span class="p">(</span>
+<span class="w">    </span><span class="sa">R</span><span class="s">&quot;</span><span class="dl">(</span><span class="s">{&quot;diagnostic_sample_rate&quot;:&quot;0.5&quot;}</span><span class="dl">)</span><span class="s">&quot;</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>输入必须是 JSON object，value 必须是字符串。Coordinator 当前仅支持运行时更新
+<code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code>、<code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code> 和 <code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code>；其他动态 flag 会返回 <code class="docutils literal notranslate"><span class="pre">K_INVALID</span></code>，
+避免更新只影响部分消费者。合法更新在接口返回前通过 <code class="docutils literal notranslate"><span class="pre">LogSampler</span></code> 原子快照生效；Runtime 尚未就绪时返回
+<code class="docutils literal notranslate"><span class="pre">K_NOT_READY</span></code>，开始停止后返回 <code class="docutils literal notranslate"><span class="pre">K_SHUTTING_DOWN</span></code>。该接口只修改当前进程，不向其他 Coordinator 广播，
+也不写入 Raft 或配置文件。</p>
 <p>本地Raft data root和权威配置按以下规则处理：</p>
 <ul class="simple">
 <li><p>本地metadata为<code class="docutils literal notranslate"><span class="pre">VALID</span></code>：直接从本地braft状态recover，不调用Discovery。</p></li>
