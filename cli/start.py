@@ -14,6 +14,7 @@
 """YuanRong datasystem CLI start command."""
 
 import argparse
+import errno
 import json
 import os
 import shutil
@@ -25,6 +26,10 @@ from typing import Any, Dict, Optional
 
 import yr.datasystem.cli.common.util as util
 from yr.datasystem.cli.command import BaseCommand
+
+
+class WorkerResourceConflictError(RuntimeError):
+    """Worker startup failed because a local resource is already in use."""
 
 
 class Command(BaseCommand):
@@ -487,15 +492,136 @@ class Command(BaseCommand):
 
     @staticmethod
     def is_retryable_worker_store_lock_error(output: str) -> bool:
-        """Return true when a just-stopped worker still owns the local metadata store lock."""
+        """Return true when the local metadata store lock is temporarily unavailable."""
         normalized = output.lower()
-        return (
-            "lock file:" in normalized
-            and "resource temporarily unavailable" in normalized
-            and (
-                "cannot open the key/value store" in normalized
-                or "kv store error" in normalized
+        if "lock file:" not in normalized:
+            return False
+        if "resource temporarily unavailable" not in normalized:
+            return False
+        return Command.contains_any_token(
+            normalized, ("cannot open the key/value store", "kv store error")
+        )
+
+    @staticmethod
+    def is_locked_by_another_process(lock_path: str, fcntl_module) -> bool:
+        """Return true when a POSIX lock file is held by another process."""
+        try:
+            with open(lock_path, "a", encoding="utf-8") as lock_file:
+                try:
+                    fcntl_module.lockf(
+                        lock_file, fcntl_module.LOCK_EX | fcntl_module.LOCK_NB
+                    )
+                    fcntl_module.lockf(lock_file, fcntl_module.LOCK_UN)
+                except OSError as err:
+                    return err.errno in (errno.EACCES, errno.EAGAIN)
+        except OSError:
+            return False
+        return False
+
+    @staticmethod
+    def is_worker_store_lock_unavailable(params: Dict[str, str]) -> bool:
+        """Return true when another process holds the worker RocksDB LOCK file."""
+        rocksdb_store_dir = params.get("rocksdb_store_dir")
+        if not rocksdb_store_dir:
+            return False
+        lock_path = os.path.join(rocksdb_store_dir, "LOCK")
+        if not os.path.exists(lock_path):
+            return False
+        try:
+            import fcntl  # pylint: disable=import-outside-toplevel
+        except ImportError:
+            return False
+        return Command.is_locked_by_another_process(lock_path, fcntl)
+
+    @staticmethod
+    def contains_any_token(output: str, tokens) -> bool:
+        """Return true when any token is present in output."""
+        return any(token in output for token in tokens)
+
+    @staticmethod
+    def is_worker_address_conflict_error(output: str) -> bool:
+        """Return true when worker startup output reports an address bind conflict."""
+        normalized = output.lower()
+        if "eaddrinuse" in normalized:
+            return True
+        if "already in use" in normalized:
+            return Command.contains_any_token(
+                normalized, ("address", "port", "bind")
             )
+        if "bind" not in normalized:
+            return False
+        return Command.contains_any_token(normalized, ("errno = 98", "errno 98"))
+
+    @staticmethod
+    def format_worker_address_conflict(params: Dict[str, str]) -> str:
+        """Build a clear worker address conflict message."""
+        bind_address = params.get("bind_address") or params.get("worker_address")
+        worker_address = params.get("worker_address")
+        detail_msg = ""
+        if worker_address == bind_address:
+            worker_address = None
+        if worker_address:
+            detail_msg = f" (worker_address={worker_address})"
+        return (
+            f"Worker address {bind_address} is already in use{detail_msg}. "
+            "Please stop the existing worker first or use a different "
+            "worker_address/bind_address."
+        )
+
+    @staticmethod
+    def format_worker_store_lock_conflict(
+        params: Dict[str, str], retry_count: int = 0
+    ) -> str:
+        """Build a clear worker metadata store lock conflict message."""
+        details = []
+        rocksdb_store_dir = params.get("rocksdb_store_dir")
+        if rocksdb_store_dir:
+            details.append(f"rocksdb_store_dir={rocksdb_store_dir}")
+        worker_address = params.get("worker_address")
+        if worker_address:
+            details.append(f"worker_address={worker_address}")
+        detail_msg = f" ({', '.join(details)})" if details else ""
+        retry_msg = f" after {retry_count} startup retries" if retry_count else ""
+        return (
+            f"Worker metadata store lock is unavailable{detail_msg}{retry_msg}. "
+            "The previous worker may still be releasing RocksDB resources, or another "
+            "worker may be using the same store. Please wait for cleanup to finish, "
+            "stop the existing worker if it is still running, or use a different "
+            "worker_address/rocksdb_store_dir."
+        )
+
+    def handle_exited_worker_start(
+        self,
+        params: Dict[str, str],
+        process: subprocess.Popen,
+        retry_count: int,
+        retryable_store_lock: bool,
+    ) -> int:
+        """Classify worker process exit while dscli waits for the ready file."""
+        return_code = process.poll()
+        if return_code is None:
+            return retry_count
+        stdout, stderr = process.communicate(timeout=10)
+        output = stdout + stderr
+        if self.is_worker_address_conflict_error(output):
+            raise WorkerResourceConflictError(
+                self.format_worker_address_conflict(params)
+            )
+        if self.is_retryable_worker_store_lock_error(output):
+            next_retry_count = retry_count + 1
+            if retryable_store_lock:
+                self.logger.warning(
+                    "Worker metadata store lock is unavailable; retrying startup."
+                )
+                return next_retry_count
+            raise WorkerResourceConflictError(
+                self.format_worker_store_lock_conflict(params, next_retry_count)
+            )
+        self.logger.error(
+            f"[  FAILED  ] Worker exited with code {return_code}\n output: {output}"
+        )
+        raise RuntimeError(
+            f"Worker service exited abnormally with code {return_code}"
         )
 
     def start_worker(
@@ -523,7 +649,9 @@ class Command(BaseCommand):
         bind_address = params.get("bind_address") or worker_address
         util.is_valid_address_port(bind_address)
         if self.is_tcp_ready(bind_address):
-            raise RuntimeError(f"Worker address {bind_address} is already in use")
+            raise WorkerResourceConflictError(
+                self.format_worker_address_conflict(params)
+            )
 
         cmd = self.build_command(params, use_ums, use_numactl, numactl_opts)
         lib_dir = os.path.join(self._base_dir, "lib")
@@ -538,7 +666,22 @@ class Command(BaseCommand):
             if os.path.exists(ready_check_path) and os.path.isfile(ready_check_path):
                 os.remove(ready_check_path)
             deadline = time.monotonic() + self._timeout
+            last_store_lock_conflict = False
+            store_lock_retry_count = 0
             while time.monotonic() < deadline:
+                if self.is_worker_store_lock_unavailable(params):
+                    last_store_lock_conflict = True
+                    store_lock_retry_count += 1
+                    self.logger.warning(
+                        "Worker metadata store lock is unavailable; retrying startup."
+                    )
+                    time.sleep(
+                        min(
+                            self._WORKER_STORE_LOCK_RETRY_INTERVAL_SECONDS,
+                            max(0, deadline - time.monotonic()),
+                        )
+                    )
+                    continue
                 process = subprocess.Popen(
                     cmd,
                     env=env,
@@ -552,21 +695,17 @@ class Command(BaseCommand):
                 while time.monotonic() < deadline:
                     return_code = process.poll()
                     if return_code is not None:
-                        stdout, stderr = process.communicate(timeout=10)
-                        output = stdout + stderr
-                        if self.is_retryable_worker_store_lock_error(output):
-                            self.logger.warning(
-                                "Worker metadata store lock is still held by the previous process; "
-                                "retrying startup."
-                            )
+                        next_retry_count = self.handle_exited_worker_start(
+                            params,
+                            process,
+                            store_lock_retry_count,
+                            retryable_store_lock=True,
+                        )
+                        if next_retry_count > store_lock_retry_count:
+                            last_store_lock_conflict = True
+                            store_lock_retry_count = next_retry_count
                             retry_start = True
                             break
-                        self.logger.error(
-                            f"[  FAILED  ] Worker exited with code {return_code}\n output: {output}"
-                        )
-                        raise RuntimeError(
-                            f"Worker service exited abnormally with code {return_code}"
-                        )
                     if os.path.exists(ready_check_path):
                         self.logger.info(
                             "[  OK  ] Start worker service @ {} success, PID: {}".format(
@@ -575,6 +714,15 @@ class Command(BaseCommand):
                         )
                         return
                     time.sleep(min(1, max(0, deadline - time.monotonic())))
+                if not retry_start:
+                    return_code = process.poll()
+                    if return_code is not None:
+                        self.handle_exited_worker_start(
+                            params,
+                            process,
+                            store_lock_retry_count,
+                            retryable_store_lock=False,
+                        )
                 if retry_start:
                     time.sleep(
                         min(
@@ -591,12 +739,24 @@ class Command(BaseCommand):
                 except ProcessLookupError:
                     pass
                 raise RuntimeError("Worker service startup timeout")
+            if last_store_lock_conflict:
+                raise WorkerResourceConflictError(
+                    self.format_worker_store_lock_conflict(params, store_lock_retry_count)
+                )
             raise RuntimeError("Worker service startup timeout")
 
-        except Exception as e:
+        except WorkerResourceConflictError as e:
             self.logger.error(
                 "[  FAILED  ] Start worker service @ {} failed: {}".format(
                     params["worker_address"], e
+                )
+            )
+            raise
+        except Exception as e:
+            message = str(e)
+            self.logger.error(
+                "[  FAILED  ] Start worker service @ {} failed: {}".format(
+                    params["worker_address"], message
                 )
             )
             raise RuntimeError("The worker service exited abnormally") from e

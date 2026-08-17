@@ -16,11 +16,13 @@
 import argparse
 import importlib.util
 import json
+from pathlib import Path
 import sys
 import tempfile
 import types
 import unittest
-from pathlib import Path
+from unittest import mock
+
 
 def install_cli_import_stubs_if_needed():
     try:
@@ -88,6 +90,33 @@ assert spec.loader is not None
 start = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(start)
 
+LOCK_OUTPUT = (
+    "KV store error. Cannot open the key/value store. "
+    "Cannot create/open database: lock file: /tmp/rocksdb/LOCK: "
+    "Resource temporarily unavailable"
+)
+
+
+class ExitedWorker:
+    pid = 1001
+
+    def __init__(self, output):
+        self.output = output
+
+    def poll(self):
+        return 255
+
+    def communicate(self, timeout=10):
+        del timeout
+        return "", self.output
+
+
+class RunningWorker:
+    pid = 1002
+
+    def poll(self):
+        return None
+
 
 class CliStartTest(unittest.TestCase):
     def setUp(self):
@@ -98,6 +127,22 @@ class CliStartTest(unittest.TestCase):
             warning=lambda *args, **kwargs: None,
             error=lambda *args, **kwargs: None,
         )
+
+    @staticmethod
+    def worker_params():
+        return {
+            "worker_address": "127.0.0.1:31501",
+            "coordinator_address": "127.0.0.1:31511",
+            "ready_check_path": "/tmp/worker.ready",
+            "rocksdb_store_dir": "/tmp/rocksdb",
+        }
+
+    @staticmethod
+    def make_start_command(timeout=10):
+        command = start.Command()
+        command._base_dir = "/opt/yuanrong"
+        command._timeout = timeout
+        return command
 
     def test_build_command_accepts_valid_kv_events_json(self):
         config = (
@@ -174,22 +219,164 @@ class CliStartTest(unittest.TestCase):
         combined_args = self.parse_start_args(["-a", "--worker_address", "127.0.0.1:31501"])
 
         self.assertEqual(worker_args.worker_args, ["--worker_address", "127.0.0.1:31501"])
-        self.assertEqual(coordinator_args.coordinator_args, ["--coordinator_address", "127.0.0.1:31511"])
-        self.assertEqual(combined_args.coordinator_worker_args, ["--worker_address", "127.0.0.1:31501"])
-
-    def test_worker_store_lock_error_is_retryable(self):
-        output = (
-            "KV store error. Cannot open the key/value store. "
-            "Cannot create/open database: lock file: /tmp/rocksdb/LOCK: "
-            "Resource temporarily unavailable"
+        self.assertEqual(
+            coordinator_args.coordinator_args,
+            ["--coordinator_address", "127.0.0.1:31511"],
+        )
+        self.assertEqual(
+            combined_args.coordinator_worker_args,
+            ["--worker_address", "127.0.0.1:31501"],
         )
 
-        self.assertTrue(start.Command.is_retryable_worker_store_lock_error(output))
+    def test_worker_start_error_classifiers_cover_issue976_boundaries(self):
+        address_outputs = [
+            "Port 31501 on 127.0.0.1 is already in use",
+            "Socket bind failed: errno = 98",
+            "worker failed: EADDRINUSE",
+        ]
 
-    def test_unrelated_worker_exit_is_not_retryable(self):
-        output = "Worker runtime error: RPC deadline exceeded"
+        self.assertTrue(start.Command.is_retryable_worker_store_lock_error(LOCK_OUTPUT))
+        for output in address_outputs:
+            with self.subTest(output=output):
+                self.assertTrue(start.Command.is_worker_address_conflict_error(output))
+        self.assertFalse(
+            start.Command.is_retryable_worker_store_lock_error(
+                "Worker runtime error: RPC deadline exceeded"
+            )
+        )
+        self.assertFalse(
+            start.Command.is_worker_address_conflict_error(
+                "mbind failed after trying all NUMA nodes"
+            )
+        )
 
-        self.assertFalse(start.Command.is_retryable_worker_store_lock_error(output))
+    def test_worker_store_lock_file_preflight_distinguishes_held_and_available_lock(self):
+        fake_fcntl = types.SimpleNamespace(LOCK_EX=1, LOCK_NB=2, LOCK_UN=4)
+        err = OSError()
+        err.errno = start.errno.EAGAIN
+
+        with mock.patch.object(start.os.path, "exists", return_value=True), \
+            mock.patch("builtins.open", mock.mock_open()), \
+            mock.patch.dict(sys.modules, {"fcntl": fake_fcntl}):
+            fake_fcntl.lockf = mock.Mock(side_effect=err)
+            self.assertTrue(
+                start.Command.is_worker_store_lock_unavailable(
+                    {"rocksdb_store_dir": "/tmp/rocksdb"}
+                )
+            )
+            fake_fcntl.lockf = mock.Mock(return_value=None)
+            self.assertFalse(
+                start.Command.is_worker_store_lock_unavailable(
+                    {"rocksdb_store_dir": "/tmp/rocksdb"}
+                )
+            )
+
+    def test_start_worker_reports_preflight_address_conflict_without_launching_worker(self):
+        command = self.make_start_command()
+        params = self.worker_params()
+
+        with mock.patch.object(command, "is_tcp_ready", return_value=True), \
+            mock.patch.object(start.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(
+                RuntimeError, "Worker address 127.0.0.1:31501 is already in use"
+            ):
+                command.start_worker(params, use_ums=False)
+
+        popen.assert_not_called()
+
+    def test_start_worker_reports_child_bind_conflict(self):
+        command = self.make_start_command()
+        params = self.worker_params()
+
+        with mock.patch.object(command, "is_tcp_ready", return_value=False), \
+            mock.patch.object(command, "build_command", return_value=["datasystem_worker"]), \
+            mock.patch.object(start.os.path, "exists", return_value=False), \
+            mock.patch.object(
+                start.subprocess,
+                "Popen",
+                return_value=ExitedWorker("Port 31501 on 127.0.0.1 is already in use"),
+            ) as popen:
+            with self.assertRaisesRegex(
+                RuntimeError, "Worker address 127.0.0.1:31501 is already in use"
+            ) as caught:
+                command.start_worker(params, use_ums=False)
+
+        self.assertEqual(popen.call_count, 1)
+        message = str(caught.exception)
+        self.assertIn("worker_address/bind_address", message)
+        self.assertNotIn("metadata store lock", message)
+
+    def test_start_worker_reports_preflight_store_lock_without_launching_worker(self):
+        command = self.make_start_command(timeout=0.15)
+        params = self.worker_params()
+
+        with mock.patch.object(command, "is_tcp_ready", return_value=False), \
+            mock.patch.object(command, "build_command", return_value=["datasystem_worker"]), \
+            mock.patch.object(command, "is_worker_store_lock_unavailable", return_value=True), \
+            mock.patch.object(start.os.path, "exists", return_value=False), \
+            mock.patch.object(start.subprocess, "Popen") as popen, \
+            mock.patch.object(start.time, "monotonic", side_effect=[0, 0, 0.05, 0.2]), \
+            mock.patch.object(start.time, "sleep"):
+            with self.assertRaisesRegex(
+                RuntimeError, "Worker metadata store lock is unavailable"
+            ) as caught:
+                command.start_worker(params, use_ums=False)
+
+        popen.assert_not_called()
+        message = str(caught.exception)
+        self.assertIn("worker_address=127.0.0.1:31501", message)
+        self.assertIn("rocksdb_store_dir=/tmp/rocksdb", message)
+        self.assertIn("after 1 startup retries", message)
+
+    def test_start_worker_reports_store_lock_conflict_after_retry_deadline(self):
+        command = self.make_start_command(timeout=0.15)
+        params = self.worker_params()
+
+        with mock.patch.object(command, "is_tcp_ready", return_value=False), \
+            mock.patch.object(command, "build_command", return_value=["datasystem_worker"]), \
+            mock.patch.object(command, "is_worker_store_lock_unavailable", return_value=False), \
+            mock.patch.object(start.os.path, "exists", return_value=False), \
+            mock.patch.object(
+                start.subprocess,
+                "Popen",
+                side_effect=[ExitedWorker(LOCK_OUTPUT), ExitedWorker(LOCK_OUTPUT)],
+            ) as popen, \
+            mock.patch.object(
+                start.time,
+                "monotonic",
+                side_effect=[0, 0, 0, 0.05, 0.05, 0.05, 0.2, 0.2],
+            ), \
+            mock.patch.object(start.time, "sleep"), \
+            mock.patch.object(start.os, "kill"):
+            with self.assertRaisesRegex(
+                RuntimeError, "Worker metadata store lock is unavailable"
+            ) as caught:
+                command.start_worker(params, use_ums=False)
+
+        self.assertEqual(popen.call_count, 2)
+        message = str(caught.exception)
+        self.assertIn("worker_address=127.0.0.1:31501", message)
+        self.assertIn("rocksdb_store_dir=/tmp/rocksdb", message)
+        self.assertIn("after 2 startup retries", message)
+
+    def test_start_worker_succeeds_after_store_lock_retry_when_ready_file_appears(self):
+        command = self.make_start_command()
+        params = self.worker_params()
+
+        with mock.patch.object(command, "is_tcp_ready", return_value=False), \
+            mock.patch.object(command, "build_command", return_value=["datasystem_worker"]), \
+            mock.patch.object(command, "is_worker_store_lock_unavailable", return_value=False), \
+            mock.patch.object(start.os.path, "exists", side_effect=[False, True]), \
+            mock.patch.object(
+                start.subprocess,
+                "Popen",
+                side_effect=[ExitedWorker(LOCK_OUTPUT), RunningWorker()],
+            ) as popen, \
+            mock.patch.object(start.time, "monotonic", side_effect=[0, 0, 0, 0.1, 0.1, 0.1]), \
+            mock.patch.object(start.time, "sleep"):
+            command.start_worker(params, use_ums=False)
+
+        self.assertEqual(popen.call_count, 2)
 
 
 if __name__ == "__main__":
