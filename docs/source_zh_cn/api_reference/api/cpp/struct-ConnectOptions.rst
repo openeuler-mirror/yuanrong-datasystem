@@ -28,7 +28,9 @@ ConnectOptions
 
         客户端连接超时时间，单位为毫秒。默认值：9'000, 数值约束>=500。
         初始化阶段的 ``GetSocketPath``、``RegisterClient`` 等控制 RPC 从当前连接尝试预算计算超时时间，
-        而不受 ``requestTimeoutMs`` 限制。
+        而不受 ``requestTimeoutMs`` 限制。控制 RPC 在对端不可达时返回 ``StatusCode::K_RPC_PEER_DEAD``
+        （不可重试，调用方应快速失败），瞬时网络问题返回 ``StatusCode::K_RPC_NETWORK_BLIP``（可重试，
+        旧 ``K_RPC_UNAVAILABLE`` 的重试策略自动覆盖）。
 
     .. cpp:member:: int32_t requestTimeoutMs;
 

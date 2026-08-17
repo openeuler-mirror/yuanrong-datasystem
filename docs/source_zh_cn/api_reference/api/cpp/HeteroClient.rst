@@ -189,6 +189,8 @@ HeteroClient
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据删除成功。
             - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
             - 返回值状态码为 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回值状态码为 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回值状态码为 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
     .. cpp:function:: std::shared_future<AsyncResult> AsyncDevDelete(const std::vector<std::string> &keys)
@@ -242,6 +244,8 @@ HeteroClient
             - 返回 ``StatusCode::K_OK`` 表示查询成功。
             - 返回 ``StatusCode::K_INVALID`` 表示提供的key中包含非法字符或为空。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_NOT_READY`` 表示服务当前无法处理请求。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
