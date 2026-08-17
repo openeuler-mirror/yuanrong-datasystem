@@ -143,6 +143,16 @@ void WorkerLeaderReconciler::NotifyMembershipReady(const std::string &coordinato
 
 Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
 {
+    return ReconcileMembership(waitForCompletion, false);
+}
+
+Status WorkerLeaderReconciler::Rejoin()
+{
+    return ReconcileMembership(false, true);
+}
+
+Status WorkerLeaderReconciler::ReconcileMembership(bool waitForCompletion, bool completeRejoin)
+{
     CHECK_FAIL_RETURN_STATUS(!stopping_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "Worker Leader reconciler is shutting down");
     auto *routes = proxy_.GetLeaderRouteProvider();
@@ -153,7 +163,7 @@ Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
     if (!waitForCompletion) {
         // Keepalive proved that the membership key or its revision is stale. Queue one more Ensure even when an
         // in-flight request later publishes the same Leader identity.
-        ScheduleEnsure(identity, true, true);
+        ScheduleEnsure(identity, true, completeRejoin);
         return Status::OK();
     }
     Status lastStatus(K_TRY_AGAIN, "Coordinator Leader changed during synchronous membership reconciliation");
@@ -192,12 +202,15 @@ Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity
     auto *routes = proxy_.GetLeaderRouteProvider();
     CHECK_FAIL_RETURN_STATUS(routes != nullptr, K_NOT_READY, "Coordinator Leader route is unavailable");
 
-    // Rejoin recreates membership in three ordered steps: close local admissions, ask the current Coordinator to
-    // install a fresh membership key, then publish the returned revision into the local keepalive state.
-    RETURN_IF_NOT_OK(backend_.PrepareMembershipRecreate());
-    const auto currentAfterCleanup = routes->GetLeaderCache();
-    CHECK_FAIL_RETURN_STATUS(SameIdentity(currentAfterCleanup, identity), K_TRY_AGAIN,
-                             "Coordinator Leader changed during membership recreate cleanup");
+    // Recreate membership in three ordered steps for a true Rejoin: close local admissions, install a fresh key, then
+    // publish the returned revision. Keep the destructive cleanup bound to the pass that also publishes RESTARTING, so
+    // a plain membership reconcile never runs the recreate gate.
+    if (completeRejoin) {
+        RETURN_IF_NOT_OK(backend_.PrepareMembershipRecreate());
+        const auto currentAfterCleanup = routes->GetLeaderCache();
+        CHECK_FAIL_RETURN_STATUS(SameIdentity(currentAfterCleanup, identity), K_TRY_AGAIN,
+                                 "Coordinator Leader changed during membership recreate cleanup");
+    }
 
     RETURN_IF_NOT_OK(backend_.EnsureMembership(
         identity.coordinatorId,

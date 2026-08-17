@@ -1383,7 +1383,7 @@ Status TopologyEngine::ScheduleMembershipRejoin(const char *reason)
     if (workerLeaderReconciler_ == nullptr) {
         return Status::OK();
     }
-    auto rc = workerLeaderReconciler_->Reconcile(false);
+    auto rc = workerLeaderReconciler_->Rejoin();
     LOG_IF_ERROR(rc, FormatString("CLUSTER_MEMBERSHIP_REJOIN_SCHEDULE_FAILED reason=%s", reason));
     return rc;
 }

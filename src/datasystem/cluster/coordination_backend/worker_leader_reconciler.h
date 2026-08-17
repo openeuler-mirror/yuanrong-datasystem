@@ -41,7 +41,20 @@ public:
 
     // Complete initial membership publication against the observed Coordinator lifetime.
     void NotifyMembershipReady(const std::string &coordinatorId);
+
+    /**
+     * @brief Ensure membership without running local rejoin cleanup.
+     * @param[in] waitForCompletion Whether to wait for membership installation.
+     * @return K_OK on success; the error code otherwise.
+     */
     Status Reconcile(bool waitForCompletion);
+
+    /**
+     * @brief Rejoin after the local Worker is confirmed isolated from topology.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status Rejoin();
+
     void Shutdown();
 
 private:
@@ -52,6 +65,7 @@ private:
     };
 
     void ScheduleEnsure(const CoordinatorLeaderIdentity &identity, bool forceEnsure, bool completeRejoin);
+    Status ReconcileMembership(bool waitForCompletion, bool completeRejoin);
     Status ReconcileIdentity(const CoordinatorLeaderIdentity &identity, bool forceEnsure, bool completeRejoin);
     Status SendMembershipEnsure(const CoordinatorLeaderIdentity &identity,
                                 const DsCoordinationBackend::MembershipRenewalPayload &payload,
