@@ -103,7 +103,14 @@ The membership health-check interval and bootstrap retry-warning interval are in
 
 - `expectedMemberCount = N` is the voting-member target, not an exact fresh-bootstrap candidate count. A fresh cluster may bootstrap once the normalized candidate count reaches `floor(N / 2) + 1`; the initial committed configuration need not already contain `N` members.
 - Candidate snapshots are endpoint-normalized, sorted, deduplicated, and SHA-256 digested. From quorum through `N`, every bootstrappable candidate is used. Above `N`, the Manager still probes every visible candidate before deterministically selecting the first `N` bootstrappable candidates; an unselected fresh node waits for an authoritative committed configuration.
-- Valid local metadata always selects `RecoverPlan` without first-bootstrap Discovery. Only local `ABSENT` metadata is eligible for first bootstrap or peer-assisted election/membership metadata rebuild. Local `CORRUPT` or `UNKNOWN` metadata is terminal and fail-closed.
+- Local metadata probing treats an absent data root, missing persistence paths, and empty regular persistence files as no
+  persistence evidence. After the complete layout is checked and no recognized non-empty regular persistence file
+  exists, the probe revalidates and removes only the recognized empty persistence files before publishing `ABSENT`, so
+  braft observes a fresh layout during bootstrap or peer-assisted election/membership metadata rebuild. If any
+  recognized non-empty persistence file exists, no empty file is removed. Any recognized non-empty
+  `raft_meta`, `log_meta`, or correctly named log-segment file selects `VALID` and `RecoverPlan`, leaving content
+  consistency to braft. Recognized path type conflicts return `K_INVALID`; other filesystem-access failures return
+  `K_NOT_READY`; both are terminal and fail-closed.
 - Before first bootstrap or rebuild, the Manager probes every normalized Discovery-visible candidate, including candidates after the first `N`, and collects the complete observation set before deciding. Candidate shortage does not skip this probe phase.
 - Valid non-empty committed configurations take precedence only after the same normalized committed peer list is confirmed by that committed list's own quorum (`size / 2 + 1`), counting only reports from peers that are themselves members of that committed list. A quorum-confirmed configuration containing an `ABSENT` local endpoint becomes the explicit `BootstrapPlan` used to rebuild local election/membership metadata; a quorum-confirmed configuration excluding local produces `WaitingToJoinPlan`.
 - Observed committed configurations without any quorum-confirmed peer list are retryable `K_NOT_READY`; conflicting quorum-confirmed configurations are also retryable `K_NOT_READY`, including the expected `N` versus `N + 1` observation window during Add-before-Remove membership replacement. The narrow exception is target-quorum fresh bootstrap (`committed_size < N`): if a valid peer already reports a committed peer subset of the current normalized candidates and that subset includes the local `ABSENT` endpoint, the local peer may rebuild from that same subset to converge with the first peer that won the bootstrap race.
@@ -174,7 +181,8 @@ Each Runtime election case body has a 6-second deadline; mandatory teardown Stop
 - Keep local address/data/timing in one per-Runtime `GetRaftFlags()` snapshot for every startup attempt.
 - Keep `CoordinatorRuntime` instances one-shot by interface contract; retry requires constructing a new Runtime instance.
 - Keep Manager publication and bootstrap RPC availability ahead of asynchronous Node startup; Service lifecycle `RUNNING` must remain distinct from Leader-only business readiness.
-- Keep peer-assisted rebuild limited to local `ABSENT`, keep conflicting authoritative full-list observations retryable, and keep local `CORRUPT`/`UNKNOWN` terminal.
+- Keep peer-assisted rebuild limited to local `ABSENT`, keep conflicting authoritative full-list observations retryable,
+  and keep local metadata probe errors terminal without automatically deleting the Raft data root.
 - Preserve Coordinator ZMQ method indexes 7 and 8 and append bootstrap diagnostics at index 9; expose only phase and stable numeric status code, never raw Status text or data paths.
 - Keep Coordinator Raft limited to election and voting membership, keep business payloads outside its state machine, and keep business admission determined by the local `raftServing_` gate driven by braft leadership lifecycle callbacks.
 - Keep braft registration in the Service/shared-server owner and out of Node/Manager APIs.

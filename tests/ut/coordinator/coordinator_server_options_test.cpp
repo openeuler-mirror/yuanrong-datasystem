@@ -1309,7 +1309,7 @@ TEST_F(CoordinatorElectionServiceTest, BootstrapRpcValidatesGroupAndForwardsPubl
     DS_ASSERT_OK(service->Shutdown());
 }
 
-TEST_F(CoordinatorElectionServiceTest, BootstrapHandlerReportsSanitizedTerminalPhaseForCorruptLocalMetadata)
+TEST_F(CoordinatorElectionServiceTest, BootstrapHandlerReportsSanitizedTerminalPhaseForInvalidLocalMetadataPath)
 {
     constexpr auto kTerminalDeadline = std::chrono::seconds(1);
     constexpr auto kPollInterval = std::chrono::milliseconds(10);
@@ -1339,7 +1339,7 @@ TEST_F(CoordinatorElectionServiceTest, BootstrapHandlerReportsSanitizedTerminalP
     }
 
     ASSERT_TRUE(observedTerminal) << queryStatus.ToString();
-    EXPECT_EQ(response.status_code(), static_cast<int32_t>(K_DATA_INCONSISTENCY));
+    EXPECT_EQ(response.status_code(), static_cast<int32_t>(K_INVALID));
     EXPECT_EQ(response.GetDescriptor()->FindFieldByName("data_dir"), nullptr);
     EXPECT_EQ(response.GetDescriptor()->FindFieldByName("status_message"), nullptr);
     EXPECT_EQ(response.SerializeAsString().find(corruptDataDir), std::string::npos);

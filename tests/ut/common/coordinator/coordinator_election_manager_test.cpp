@@ -22,6 +22,8 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <map>
@@ -29,11 +31,14 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
@@ -425,7 +430,139 @@ const BootstrapPlan &GetBootstrapPlan(const CoordinatorRaftOptions &options)
 {
     return std::get<BootstrapPlan>(options.startPlan);
 }
+
+class CoordinatorRaftMetadataProbeTest : public testing::Test {
+public:
+protected:
+    void SetUp() override
+    {
+        dataRoot_ =
+            (std::filesystem::temp_directory_path() / ("coordinator-raft-metadata-" + std::to_string(getpid()))).string();
+        ResetDataRoot();
+    }
+
+    void TearDown() override
+    {
+        std::error_code error;
+        std::filesystem::remove_all(dataRoot_, error);
+    }
+
+    void ResetDataRoot()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(dataRoot_, error);
+        ASSERT_FALSE(error) << error.message();
+        ASSERT_TRUE(std::filesystem::create_directories(dataRoot_, error));
+        ASSERT_FALSE(error) << error.message();
+    }
+
+    void CreateFile(const std::string &relativePath, std::string_view contents)
+    {
+        const auto path = std::filesystem::path(dataRoot_) / relativePath;
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        ASSERT_FALSE(error) << error.message();
+        std::ofstream output(path, std::ios::binary);
+        ASSERT_TRUE(output.is_open());
+        output << contents;
+        ASSERT_TRUE(output.good());
+    }
+
+    Status Probe(RaftMetadataState &metadataState) const
+    {
+        return CoordinatorElectionManager::MakeProductionDependencies().probeLocalMetadata(dataRoot_, metadataState);
+    }
+
+    std::string dataRoot_;
+};
 }  // namespace
+
+TEST_F(CoordinatorRaftMetadataProbeTest, MissingAndEmptyPersistenceFilesAreAbsent)
+{
+    std::error_code error;
+    ASSERT_TRUE(std::filesystem::create_directories(std::filesystem::path(dataRoot_) / "raft_meta", error));
+    ASSERT_FALSE(error) << error.message();
+    CreateFile("raft_meta/raft_meta", "");
+    ASSERT_TRUE(std::filesystem::create_directories(std::filesystem::path(dataRoot_) / "log", error));
+    ASSERT_FALSE(error) << error.message();
+    CreateFile("log/log_meta", "");
+    CreateFile("log/log_inprogress_00000000000000000001", "");
+
+    RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
+    DS_ASSERT_OK(Probe(metadataState));
+    EXPECT_EQ(metadataState, RaftMetadataState::ABSENT);
+    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "raft_meta/raft_meta"));
+    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "log/log_meta"));
+    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "log/log_inprogress_00000000000000000001"));
+}
+
+TEST_F(CoordinatorRaftMetadataProbeTest, AnyNonEmptyRecognizedPersistenceFileIsValid)
+{
+    const std::vector<std::string> persistenceFiles{
+        "raft_meta/raft_meta",
+        "log/log_meta",
+        "log/log_inprogress_00000000000000000001",
+        "log/log_00000000000000000001_00000000000000000002",
+    };
+    for (const auto &persistenceFile : persistenceFiles) {
+        ResetDataRoot();
+        CreateFile(persistenceFile, "persisted");
+
+        RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
+        DS_ASSERT_OK(Probe(metadataState));
+        EXPECT_EQ(metadataState, RaftMetadataState::VALID) << persistenceFile;
+    }
+}
+
+TEST_F(CoordinatorRaftMetadataProbeTest, NonEmptyPersistencePreservesEmptyPersistenceFiles)
+{
+    CreateFile("raft_meta/raft_meta", "persisted");
+    CreateFile("log/log_meta", "");
+    CreateFile("log/log_inprogress_00000000000000000001", "");
+
+    RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
+    DS_ASSERT_OK(Probe(metadataState));
+    EXPECT_EQ(metadataState, RaftMetadataState::VALID);
+    EXPECT_TRUE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "log/log_meta"));
+    EXPECT_TRUE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "log/log_inprogress_00000000000000000001"));
+}
+
+TEST_F(CoordinatorRaftMetadataProbeTest, UnrecognizedNonEmptyFilesDoNotCountAsPersistence)
+{
+    CreateFile("unrelated", "persisted");
+    CreateFile("log/not_a_log_segment", "persisted");
+
+    RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
+    DS_ASSERT_OK(Probe(metadataState));
+    EXPECT_EQ(metadataState, RaftMetadataState::ABSENT);
+}
+
+TEST_F(CoordinatorRaftMetadataProbeTest, RecognizedPathTypeMismatchIsInvalid)
+{
+    const std::vector<std::string> directoryPaths{ "raft_meta", "log" };
+    for (const auto &directoryPath : directoryPaths) {
+        ResetDataRoot();
+        CreateFile(directoryPath, "not-a-directory");
+
+        RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
+        EXPECT_EQ(Probe(metadataState).GetCode(), K_INVALID) << directoryPath;
+    }
+
+    const std::vector<std::string> filePaths{
+        "raft_meta/raft_meta",
+        "log/log_meta",
+        "log/log_inprogress_00000000000000000001",
+    };
+    for (const auto &filePath : filePaths) {
+        ResetDataRoot();
+        std::error_code error;
+        ASSERT_TRUE(std::filesystem::create_directories(std::filesystem::path(dataRoot_) / filePath, error));
+        ASSERT_FALSE(error) << error.message();
+
+        RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
+        EXPECT_EQ(Probe(metadataState).GetCode(), K_INVALID) << filePath;
+    }
+}
 
 TEST(CoordinatorElectionManagerTest, StartReturnsAfterOwningBootstrapWorker)
 {
