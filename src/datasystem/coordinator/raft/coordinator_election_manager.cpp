@@ -27,6 +27,7 @@
 
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/protos/coordinator.brpc.stub.pb.h"
@@ -84,30 +85,68 @@ Status FilesystemOperationError(StatusCode statusCode, const char *operation, st
                                            std::string(entity), path, errorNumber, StrErr(errorNumber)));
 }
 
-Status CheckRequiredDirectory(const std::string &path, std::string_view description)
+Status CheckOptionalDirectory(const std::string &path, std::string_view description, bool &exists)
 {
+    exists = false;
     struct stat directoryStat{};
     if (lstat(path.c_str(), &directoryStat) != 0) {
         const int errorNumber = errno;
-        const auto statusCode = errorNumber == ENOENT ? K_DATA_INCONSISTENCY : K_NOT_READY;
-        return FilesystemOperationError(statusCode, "lstat", description, path, errorNumber);
+        if (errorNumber == ENOENT) {
+            return Status::OK();
+        }
+        return FilesystemOperationError(K_NOT_READY, "lstat", description, path, errorNumber);
     }
-    CHECK_FAIL_RETURN_STATUS(S_ISDIR(directoryStat.st_mode), K_DATA_INCONSISTENCY,
+    CHECK_FAIL_RETURN_STATUS(S_ISDIR(directoryStat.st_mode), K_INVALID,
                              std::string(description) + " is not a directory");
+    exists = true;
     return Status::OK();
 }
 
-Status CheckRequiredNonEmptyRegularFile(const std::string &path, std::string_view description)
+Status CheckOptionalPersistenceFile(const std::string &path, std::string_view description, bool &hasPersistence,
+                                    std::vector<std::string> &emptyPersistenceFiles)
 {
     struct stat fileStat{};
     if (lstat(path.c_str(), &fileStat) != 0) {
         const int errorNumber = errno;
-        const auto statusCode = errorNumber == ENOENT ? K_DATA_INCONSISTENCY : K_NOT_READY;
-        return FilesystemOperationError(statusCode, "lstat", description, path, errorNumber);
+        if (errorNumber == ENOENT) {
+            return Status::OK();
+        }
+        return FilesystemOperationError(K_NOT_READY, "lstat", description, path, errorNumber);
     }
-    CHECK_FAIL_RETURN_STATUS(S_ISREG(fileStat.st_mode), K_DATA_INCONSISTENCY,
+    CHECK_FAIL_RETURN_STATUS(S_ISREG(fileStat.st_mode), K_INVALID,
                              std::string(description) + " is not a regular file");
-    CHECK_FAIL_RETURN_STATUS(fileStat.st_size > 0, K_DATA_INCONSISTENCY, std::string(description) + " is empty");
+    if (fileStat.st_size > 0) {
+        hasPersistence = true;
+    } else {
+        emptyPersistenceFiles.emplace_back(path);
+    }
+    return Status::OK();
+}
+
+Status DeleteEmptyPersistenceFile(const std::string &path)
+{
+    struct stat fileStat{};
+    if (lstat(path.c_str(), &fileStat) != 0) {
+        const int errorNumber = errno;
+        if (errorNumber == ENOENT) {
+            return Status::OK();
+        }
+        return FilesystemOperationError(K_NOT_READY, "lstat", "empty Coordinator Raft persistence file", path,
+                                        errorNumber);
+    }
+    CHECK_FAIL_RETURN_STATUS(S_ISREG(fileStat.st_mode), K_INVALID,
+                             "Empty Coordinator Raft persistence path is not a regular file");
+    CHECK_FAIL_RETURN_STATUS(fileStat.st_size == 0, K_NOT_READY,
+                             "Coordinator Raft persistence file became non-empty during cleanup");
+    if (unlink(path.c_str()) != 0) {
+        const int errorNumber = errno;
+        if (errorNumber == ENOENT) {
+            return Status::OK();
+        }
+        return FilesystemOperationError(K_NOT_READY, "unlink", "empty Coordinator Raft persistence file", path,
+                                        errorNumber);
+    }
+    LOG(INFO) << "Removed empty Coordinator Raft persistence file, path=" << path;
     return Status::OK();
 }
 
@@ -169,12 +208,19 @@ bool IsCoordinatorRaftLogSegment(std::string_view entryName)
            && IsFixedWidthCoordinatorRaftLogIndex(indexes.substr(separatorPosition + 1));
 }
 
-Status CheckCoordinatorRaftLog(const std::string &dataRoot)
+Status CheckCoordinatorRaftLog(const std::string &dataRoot, bool &hasPersistence,
+                               std::vector<std::string> &emptyPersistenceFiles)
 {
     const std::string logDirectoryPath = dataRoot + "/" + kCoordinatorRaftLogDirectory;
-    RETURN_IF_NOT_OK(CheckRequiredDirectory(logDirectoryPath, "Coordinator Raft log directory"));
-    RETURN_IF_NOT_OK(CheckRequiredNonEmptyRegularFile(logDirectoryPath + "/" + kCoordinatorRaftLogMetadataEntity,
-                                                      "Coordinator Raft log metadata entity"));
+    bool logDirectoryExists = false;
+    RETURN_IF_NOT_OK(
+        CheckOptionalDirectory(logDirectoryPath, "Coordinator Raft log directory", logDirectoryExists));
+    if (!logDirectoryExists) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(CheckOptionalPersistenceFile(logDirectoryPath + "/" + kCoordinatorRaftLogMetadataEntity,
+                                                  "Coordinator Raft log metadata entity", hasPersistence,
+                                                  emptyPersistenceFiles));
 
     auto *logDirectoryHandle = opendir(logDirectoryPath.c_str());
     const int openDirectoryErrorNumber = errno;
@@ -184,7 +230,6 @@ Status CheckCoordinatorRaftLog(const std::string &dataRoot)
                                         openDirectoryErrorNumber);
     }
 
-    bool hasValidSegment = false;
     while (true) {
         errno = 0;
         const auto *entry = readdir(logDirectory.get());
@@ -207,80 +252,60 @@ Status CheckCoordinatorRaftLog(const std::string &dataRoot)
             return FilesystemOperationError(K_NOT_READY, "lstat", "Coordinator Raft log segment", segmentPath,
                                             errorNumber);
         }
-        CHECK_FAIL_RETURN_STATUS(S_ISREG(segmentStat.st_mode), K_DATA_INCONSISTENCY,
+        CHECK_FAIL_RETURN_STATUS(S_ISREG(segmentStat.st_mode), K_INVALID,
                                  "Coordinator Raft log segment is not a regular file");
-        CHECK_FAIL_RETURN_STATUS(segmentStat.st_size > 0, K_DATA_INCONSISTENCY,
-                                 "Coordinator Raft log segment is empty");
-        hasValidSegment = true;
+        if (segmentStat.st_size > 0) {
+            hasPersistence = true;
+        } else {
+            emptyPersistenceFiles.emplace_back(segmentPath);
+        }
     }
-    CHECK_FAIL_RETURN_STATUS(hasValidSegment, K_DATA_INCONSISTENCY,
-                             "Coordinator Raft log directory contains no persisted log segment");
     return Status::OK();
 }
 
 Status ProbeCoordinatorRaftMetadata(const std::string &dataRoot, RaftMetadataState &metadataState)
 {
     metadataState = RaftMetadataState::UNKNOWN;
-    struct stat rootStat{};
-    if (lstat(dataRoot.c_str(), &rootStat) != 0) {
-        const int errorNumber = errno;
-        if (errorNumber == ENOENT) {
-            metadataState = RaftMetadataState::ABSENT;
-            return Status::OK();
-        }
-        return FilesystemOperationError(K_NOT_READY, "lstat", "Coordinator Raft data root", dataRoot, errorNumber);
+    bool dataRootExists = false;
+    auto status = CheckOptionalDirectory(dataRoot, "Coordinator Raft data root", dataRootExists);
+    if (status.IsError()) {
+        return status;
     }
-    if (!S_ISDIR(rootStat.st_mode)) {
-        metadataState = RaftMetadataState::CORRUPT;
-        return Status(K_DATA_INCONSISTENCY, "Coordinator Raft data root exists but is not a directory");
-    }
-
-    auto *directoryHandle = opendir(dataRoot.c_str());
-    const int openDirectoryErrorNumber = errno;
-    std::unique_ptr<DIR, DirectoryCloser> directory(directoryHandle);
-    if (directory == nullptr) {
-        return FilesystemOperationError(K_NOT_READY, "opendir", "Coordinator Raft data root", dataRoot,
-                                        openDirectoryErrorNumber);
-    }
-
-    bool rootIsEmpty = true;
-    while (true) {
-        errno = 0;
-        const auto *entry = readdir(directory.get());
-        const int readDirectoryErrorNumber = errno;
-        if (entry == nullptr) {
-            if (readDirectoryErrorNumber != 0) {
-                return FilesystemOperationError(K_NOT_READY, "readdir", "Coordinator Raft data root", dataRoot,
-                                                readDirectoryErrorNumber);
-            }
-            break;
-        }
-        const std::string entryName = entry->d_name;
-        if (entryName != "." && entryName != "..") {
-            rootIsEmpty = false;
-        }
-    }
-    if (rootIsEmpty) {
+    if (!dataRootExists) {
         metadataState = RaftMetadataState::ABSENT;
         return Status::OK();
     }
 
+    bool hasPersistence = false;
+    std::vector<std::string> emptyPersistenceFiles;
     const std::string metadataDirectoryPath = dataRoot + "/" + kCoordinatorRaftMetadataDirectory;
-    auto status = CheckRequiredDirectory(metadataDirectoryPath, "Coordinator Raft metadata directory");
-    if (status.IsOk()) {
-        status = CheckRequiredNonEmptyRegularFile(metadataDirectoryPath + "/" + kCoordinatorRaftMetadataEntity,
-                                                  "Coordinator Raft metadata entity");
-    }
-    if (status.IsOk()) {
-        status = CheckCoordinatorRaftLog(dataRoot);
-    }
+    bool metadataDirectoryExists = false;
+    status =
+        CheckOptionalDirectory(metadataDirectoryPath, "Coordinator Raft metadata directory", metadataDirectoryExists);
     if (status.IsError()) {
-        metadataState =
-            status.GetCode() == K_DATA_INCONSISTENCY ? RaftMetadataState::CORRUPT : RaftMetadataState::UNKNOWN;
+        return status;
+    }
+    if (metadataDirectoryExists) {
+        status = CheckOptionalPersistenceFile(metadataDirectoryPath + "/" + kCoordinatorRaftMetadataEntity,
+                                              "Coordinator Raft metadata entity", hasPersistence,
+                                              emptyPersistenceFiles);
+        if (status.IsError()) {
+            return status;
+        }
+    }
+    status = CheckCoordinatorRaftLog(dataRoot, hasPersistence, emptyPersistenceFiles);
+    if (status.IsError()) {
         return status;
     }
 
-    metadataState = RaftMetadataState::VALID;
+    if (hasPersistence) {
+        metadataState = RaftMetadataState::VALID;
+        return Status::OK();
+    }
+    for (const auto &emptyPersistenceFile : emptyPersistenceFiles) {
+        RETURN_IF_NOT_OK(DeleteEmptyPersistenceFile(emptyPersistenceFile));
+    }
+    metadataState = RaftMetadataState::ABSENT;
     return Status::OK();
 }
 
