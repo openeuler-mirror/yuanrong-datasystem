@@ -1467,6 +1467,57 @@ TEST_F(KVCacheClientTest, TestRemoteGetFromSelfAddressScenarios1)
     t2.join();
 }
 
+TEST_F(KVCacheClientTest, LEVEL1_DelSucceedsWhenTargetWorkerDiesBeforeDeleteNotificationReply)
+{
+    if (!FLAGS_use_brpc) {
+        GTEST_SKIP() << "K_RPC_PEER_DEAD is a brpc transport status";
+    }
+    constexpr uint32_t kDeleteWorkerIndex = 0;
+    constexpr uint32_t kTargetWorkerIndex = 1;
+    constexpr int32_t kRequestTimeoutMs = 10'000;
+    constexpr auto kWaitTimeout = std::chrono::seconds(5);
+    const std::string injectName = "MasterWorkerOCServiceImpl.DeleteNotification.retry";
+
+    std::shared_ptr<KVClient> deleteClient;
+    std::shared_ptr<KVClient> targetWorkerClient;
+    InitTestKVClient(kDeleteWorkerIndex, deleteClient, kRequestTimeoutMs, false, kRequestTimeoutMs);
+    InitTestKVClient(kTargetWorkerIndex, targetWorkerClient, kRequestTimeoutMs, false, kRequestTimeoutMs);
+
+    const std::string key = NewObjectKey();
+    const std::string value = GenRandomString(128);
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    DS_ASSERT_OK(targetWorkerClient->Set(key, value, param));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kTargetWorkerIndex, injectName, "1*pause()"));
+
+    auto deleteFuture = std::async(std::launch::async, [&deleteClient, &key] { return deleteClient->Del(key); });
+
+    uint64_t executeCount = 0;
+    Status countStatus;
+    const auto deadline = std::chrono::steady_clock::now() + kWaitTimeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        countStatus = cluster_->GetInjectActionExecuteCount(WORKER, kTargetWorkerIndex, injectName, executeCount);
+        if (countStatus.IsOk() && executeCount >= 1) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    Status killStatus = cluster_->KillWorker(kTargetWorkerIndex);
+    if (killStatus.IsError()) {
+        (void)cluster_->ClearInjectAction(WORKER, kTargetWorkerIndex, injectName);
+    }
+    ASSERT_GE(executeCount, 1) << countStatus.ToString();
+    DS_ASSERT_OK(killStatus);
+    ASSERT_EQ(deleteFuture.wait_for(kWaitTimeout), std::future_status::ready);
+
+    Status deleteStatus = deleteFuture.get();
+    ASSERT_NE(deleteStatus.GetCode(), K_RPC_PEER_DEAD) << "Issue #1045 reproduced: " << deleteStatus.ToString();
+    DS_ASSERT_OK(deleteStatus);
+
+    std::string result;
+    ASSERT_EQ(deleteClient->Get(key, result).GetCode(), K_NOT_FOUND);
+}
+
 TEST_F(KVCacheClientTest, DISABLED_FixResidualLocationProblem)
 {
     std::shared_ptr<KVClient> client0;

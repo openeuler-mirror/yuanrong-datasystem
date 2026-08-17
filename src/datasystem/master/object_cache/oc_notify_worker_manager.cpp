@@ -16,9 +16,12 @@
  */
 #include "datasystem/master/object_cache/oc_notify_worker_manager.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -65,8 +68,30 @@ DS_DECLARE_string(worker_address);
 
 namespace datasystem {
 namespace master {
+namespace {
+using DeleteObjectItems = std::unordered_map<std::string, std::pair<int64_t, uint32_t>>;
+using AsyncDeleteNotifications = std::vector<PendingDeleteNotification>;
+constexpr size_t ASYNC_DELETE_REPLAY_BATCH_SIZE = 1'000;
+constexpr uint32_t ASYNC_DELETE_MAX_BACKOFF_EXPONENT = 5;
+
+bool ShouldDeferDeleteNotification(const Status &status)
+{
+    return status.GetCode() == StatusCode::K_RPC_PEER_DEAD || status.GetCode() == StatusCode::K_RPC_NETWORK_BLIP;
+}
+
+void AppendAsyncDeleteNotifications(const std::string &address, const DeleteObjectItems &objectItems,
+                                    AsyncDeleteNotifications &notifications)
+{
+    for (const auto &entry : objectItems) {
+        notifications.emplace_back(PendingDeleteNotification{ entry.first, address, entry.second.second,
+                                                              static_cast<uint64_t>(entry.second.first) });
+    }
+}
+}  // namespace
+
 struct OCNotifyWorkerManager::NotifyWorkerOpPersistenceState {
     bthread::Mutex mutex;
+    bthread::Mutex replayMutex;
 };
 
 OCNotifyWorkerManager::OCNotifyWorkerManager(std::shared_ptr<ObjectMetaStore> objectStore, bool backendStoreExist,
@@ -103,6 +128,8 @@ Status OCNotifyWorkerManager::Init()
     thread_->set_name("ProcessAsyncNotifyOp");
     deleteThreadPool_ =
         std::make_unique<datasystem::ThreadPool>(minDeleteThreadSize, maxDeleteThreadSize, "NotifyDeleteSend");
+    asyncDeleteReplayThreadPool_ =
+        std::make_unique<datasystem::ThreadPool>(0, maxAsyncDeleteReplayThreadSize, "AsyncDeleteReplay");
     EraseFailedNodeApiEvent::GetInstance().AddSubscriber(subscriberPrefix_ + "OCNotifyWorkerManager",
                                                          [this](HostPort &node) { EraseMasterWorkerApi(node); });
     RemoveDeadWorkerEvent::GetInstance().AddSubscriber(
@@ -129,16 +156,33 @@ void OCNotifyWorkerManager::ProcessAsyncNotifyOp()
     auto traceId = GetStringUuid().substr(0, SHORT_TRACEID_SIZE);
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
     LOG(INFO) << "Starting processing asynchronous notification operation thread.";
+    auto nextDeleteRetry = std::chrono::steady_clock::now();
     while (!interruptFlag_) {
-        if (!notifyWorkerOpTable_.empty()) {
-            Status rc = ProcessAsyncNotifyOpImpl();
-            if (rc.IsError()) {
-                LOG(ERROR) << "Process asynchronous notification operation failed, msg: " << rc.ToString();
-            }
-        }
+        ProcessAsyncNotifyOpOnce(nextDeleteRetry);
         cvLock_.WaitFor(ASYNC_SEND_UPDATE_TIME_MS);
     }
     LOG(INFO) << "Terminating processing asynchronous notification operation thread.";
+}
+
+void OCNotifyWorkerManager::ProcessAsyncNotifyOpOnce(std::chrono::steady_clock::time_point &nextDeleteRetry)
+{
+    if (notifyWorkerOpTable_.empty()) {
+        return;
+    }
+    Status rc = ProcessAsyncNotifyOpImpl();
+    if (rc.IsError()) {
+        LOG(ERROR) << "Process asynchronous notification operation failed, msg: " << rc.ToString();
+    }
+    auto now = std::chrono::steady_clock::now();
+    if (now < nextDeleteRetry) {
+        return;
+    }
+    rc = ProcessAsyncDeleteNotifyOpImpl();
+    if (rc.IsError()) {
+        LOG(ERROR) << "Process asynchronous delete notification failed, msg: " << rc.ToString();
+    }
+    static constexpr int kAsyncDeleteRetryIntervalMs = 1'000;
+    nextDeleteRetry = now + std::chrono::milliseconds(kAsyncDeleteRetryIntervalMs);
 }
 
 Status OCNotifyWorkerManager::ProcessAsyncNotifyOpImpl()
@@ -187,7 +231,10 @@ Status OCNotifyWorkerManager::ProcessAsyncNotifyOpImpl()
 
 Status OCNotifyWorkerManager::ProcessAsyncDeleteNotifyOpImpl()
 {
-    LOG(INFO) << "ProcessAsyncDeleteNotifyOpImpl";
+    std::unique_lock<bthread::Mutex> replayLock(notifyWorkerOpPersistence_->replayMutex, std::try_to_lock);
+    RETURN_OK_IF_TRUE(!replayLock.owns_lock());
+    INJECT_POINT("OCNotifyWorkerManager.ProcessAsyncDeleteNotifyOpImpl");
+    VLOG(1) << "ProcessAsyncDeleteNotifyOpImpl";
     std::vector<std::string> workerIds;
     {
         std::lock_guard<SharedMutex> lck(notifyWorkerOpMutex_);
@@ -200,26 +247,19 @@ Status OCNotifyWorkerManager::ProcessAsyncDeleteNotifyOpImpl()
         if (workerId == "") {
             continue;
         }
-        LOG(INFO) << "send delete to worker: " << workerId;
-        Status status = CheckWorkerIsHealthy(workerId);
-        if (status.IsError()) {
-            LOG(WARNING) << "[async notify] Worker " << workerId << " is unhealthy, detail: " << status.ToString();
+        auto retryState = asyncDeleteRetryState_.find(workerId);
+        if (retryState != asyncDeleteRetryState_.end()
+            && std::chrono::steady_clock::now() < retryState->second.retryAfter) {
             continue;
         }
-        std::unordered_map<std::string, std::uint64_t> objNeedDelete;
-        {
-            std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
-            TbbNotifyWorkerOpTable::const_accessor accessor;
-            if (notifyWorkerOpTable_.find(accessor, workerId)) {
-                for (const auto &it : accessor->second) {
-                    if (TESTFLAG(it.second.op.type, NotifyWorkerOpType::DELETE)) {
-                        (void)objNeedDelete.emplace(it.first, it.second.op.delObjectVersion);
-                    }
-                }
-            }
+        VLOG(1) << "send delete to worker: " << workerId;
+        Status status = CheckWorkerIsHealthy(workerId);
+        if (status.IsError()) {
+            VLOG(1) << "[async notify] Worker " << workerId << " is unhealthy, detail: " << status.ToString();
+            continue;
         }
-
-        if (objNeedDelete.empty()) {
+        auto pendingOps = SnapshotAsyncDeleteReplayBatch(workerId);
+        if (pendingOps.empty()) {
             continue;
         }
 
@@ -227,38 +267,124 @@ Status OCNotifyWorkerManager::ProcessAsyncDeleteNotifyOpImpl()
         status = GetMasterWorkerApi(workerId, masterWorkerApi);
         if (status.IsError()) {
             LOG(WARNING) << "GetMasterWorkerApi failed, error:" << status.ToString();
+            RecordAsyncDeleteReplayResult(workerId, status);
             continue;
         }
         auto request = std::make_unique<DeleteObjectReqPb>();
-        for (const auto &info : objNeedDelete) {
-            request->add_object_keys(info.first);
-            request->add_versions(info.second);
+        for (const auto &snapshot : pendingOps) {
+            request->add_object_keys(snapshot.objectKey);
+            request->add_versions(snapshot.op.delObjectVersion);
         }
-        request->set_is_async(false);
+        request->set_is_async(true);
+        request->set_require_sync_version_fence(true);
         DeleteApiInfo info;
-        info.objs = { request->object_keys().begin(), request->object_keys().end() };
+        info.snapshots = std::move(pendingOps);
         info.workerAddr = workerId;
         int64_t tag;
-        LOG(INFO) << FormatString("Send delete notify to: %s, objects[%s]", workerId,
-                                  VectorToString(request->object_keys()));
+        LOG(INFO) << FormatString("Send async delete notifications to worker %s, object count: %d", workerId,
+                                  request->object_keys_size());
         status = masterWorkerApi->DeleteNotificationSend(std::move(request), tag);
         if (status.IsOk()) {
             info.apiTag = tag;
             api2Tag.emplace(masterWorkerApi, info);
         } else {
             LOG(ERROR) << "DeleteNotificationSend failed: status: " << status.ToString();
+            RecordAsyncDeleteReplayResult(workerId, status);
         }
     }
+    std::vector<std::future<std::pair<std::string, Status>>> receiveFutures;
+    receiveFutures.reserve(api2Tag.size());
     for (const auto &kv : api2Tag) {
-        DeleteObjectRspPb response;
-        Status status = kv.first->DeleteNotificationReceive(kv.second.apiTag, response);
-        if (status.IsOk()) {
-            RemoveAsyncWorkerOp(kv.second.workerAddr, kv.second.objs, NotifyWorkerOpType::DELETE);
-        } else {
-            LOG(ERROR) << "DeleteNotificationReceive failed : status: " << status.ToString();
+        receiveFutures.emplace_back(asyncDeleteReplayThreadPool_->Submit([this, api = kv.first, info = kv.second] {
+            return std::make_pair(info.workerAddr, ReceiveAsyncDeleteNotification(api, info));
+        }));
+    }
+    Status lastErr;
+    for (auto &future : receiveFutures) {
+        auto result = future.get();
+        const auto &status = result.second;
+        if (status.IsError()) {
+            lastErr = status;
+        }
+        RecordAsyncDeleteReplayResult(result.first, status);
+    }
+    return lastErr;
+}
+
+void OCNotifyWorkerManager::RecordAsyncDeleteReplayResult(const std::string &workerAddr, const Status &status)
+{
+    if (status.IsOk()) {
+        asyncDeleteRetryState_.erase(workerAddr);
+        return;
+    }
+    auto &state = asyncDeleteRetryState_[workerAddr];
+    state.consecutiveFailures = std::min(state.consecutiveFailures + 1, ASYNC_DELETE_MAX_BACKOFF_EXPONENT);
+    state.retryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(1U << state.consecutiveFailures);
+}
+
+Status OCNotifyWorkerManager::ReceiveAsyncDeleteNotification(const std::shared_ptr<MasterWorkerOCApi> &api,
+                                                             const DeleteApiInfo &info)
+{
+    DeleteObjectRspPb response;
+    Status status = api->DeleteNotificationReceive(info.apiTag, response);
+    if (status.IsError()) {
+        LOG(ERROR) << "DeleteNotificationReceive failed: " << status.ToString();
+        return status;
+    }
+    if (!response.sync_version_fence_applied()) {
+        RETURN_STATUS_LOG_ERROR(K_NOT_SUPPORTED,
+                                "Worker does not support synchronous delete version fencing; replay remains pending");
+    }
+    Status lastErr(static_cast<StatusCode>(response.last_rc().error_code()), response.last_rc().error_msg());
+    if (lastErr.IsError()) {
+        LOG(ERROR) << "DeleteNotification failed on worker " << info.workerAddr << ", detail: " << lastErr.ToString();
+    }
+    auto acknowledged = SelectAcknowledgedDeleteSnapshots(info.snapshots, response);
+    status = ClearAsyncWorkerOpSnapshots(info.workerAddr, acknowledged);
+    if (status.IsError()) {
+        LOG(ERROR) << "Clear acknowledged async delete failed: " << status.ToString();
+        lastErr = status;
+    }
+    return lastErr;
+}
+
+std::vector<AsyncWorkerOpSnapshot> OCNotifyWorkerManager::SnapshotAsyncDeleteReplayBatch(const std::string &workerAddr)
+{
+    std::map<std::string, AsyncWorkerOpSnapshot> afterCursor;
+    std::map<std::string, AsyncWorkerOpSnapshot> wrapped;
+    const auto cursor = asyncDeleteReplayCursor_[workerAddr];
+    std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
+    TbbNotifyWorkerOpTable::const_accessor accessor;
+    if (!notifyWorkerOpTable_.find(accessor, workerAddr)) {
+        asyncDeleteReplayCursor_.erase(workerAddr);
+        asyncDeleteRetryState_.erase(workerAddr);
+        return {};
+    }
+    for (const auto &item : accessor->second) {
+        if (!TESTFLAG(item.second.op.type, NotifyWorkerOpType::DELETE)) {
+            continue;
+        }
+        auto &candidates = item.first > cursor ? afterCursor : wrapped;
+        candidates.emplace(item.first, AsyncWorkerOpSnapshot{ item.first, item.second.op, item.second.epoch });
+        if (candidates.size() > ASYNC_DELETE_REPLAY_BATCH_SIZE) {
+            candidates.erase(std::prev(candidates.end()));
         }
     }
-    return Status::OK();
+    std::vector<AsyncWorkerOpSnapshot> batch;
+    batch.reserve(ASYNC_DELETE_REPLAY_BATCH_SIZE);
+    for (const auto &item : afterCursor) {
+        batch.emplace_back(item.second);
+    }
+    for (const auto &item : wrapped) {
+        if (batch.size() == ASYNC_DELETE_REPLAY_BATCH_SIZE) {
+            break;
+        }
+        batch.emplace_back(item.second);
+    }
+    if (!batch.empty()) {
+        asyncDeleteReplayCursor_[workerAddr] = batch.back().objectKey;
+    }
+    return batch;
 }
 
 Status OCNotifyWorkerManager::SendCacheInvalidToWorker(const std::string &workerId,
@@ -357,7 +483,8 @@ void OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta2EtcdKeyMap(
         if (TESTFLAG(op.type, NotifyWorkerOpType::DELETE)) {
             LOG(INFO) << FormatString("Insert async worker operation(%d) for object:%s, workerId:%s",
                                       static_cast<uint32_t>(op.type), keyVec[1], keyVec[0]);
-            (void)InsertAsyncWorkerOp(keyVec[0], keyVec[1], { NotifyWorkerOpType::DELETE, op.delObjectVersion }, false);
+            auto deleteOp = NotifyWorkerOp::Delete(op.delObjectVersion);
+            (void)InsertAsyncWorkerOp(keyVec[0], keyVec[1], deleteOp, false);
             uint32_t hash;
             std::string table;
             auto key = keyVec[0] + "_" + keyVec[1];
@@ -398,8 +525,7 @@ Status OCNotifyWorkerManager::ClearAsyncWorkerOp(const std::string &workerAddr)
     return ClearAsyncWorkerOpSnapshots(workerAddr, SnapshotAsyncWorkerOps(workerAddr));
 }
 
-std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> OCNotifyWorkerManager::SnapshotAsyncWorkerOps(
-    const std::string &workerAddr)
+std::vector<AsyncWorkerOpSnapshot> OCNotifyWorkerManager::SnapshotAsyncWorkerOps(const std::string &workerAddr)
 {
     std::vector<AsyncWorkerOpSnapshot> snapshots;
     std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
@@ -411,6 +537,26 @@ std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> OCNotifyWorkerManager:
         snapshots.emplace_back(AsyncWorkerOpSnapshot{ it.first, it.second.op, it.second.epoch });
     }
     return snapshots;
+}
+
+std::vector<AsyncWorkerOpSnapshot> OCNotifyWorkerManager::SelectAcknowledgedDeleteSnapshots(
+    const std::vector<AsyncWorkerOpSnapshot> &snapshots, const DeleteObjectRspPb &response)
+{
+    Status recvRc(static_cast<StatusCode>(response.last_rc().error_code()), response.last_rc().error_msg());
+    std::unordered_set<std::string> failedKeys(response.failed_object_keys().begin(),
+                                               response.failed_object_keys().end());
+    if (recvRc.IsError() && failedKeys.empty()) {
+        return {};
+    }
+    std::vector<AsyncWorkerOpSnapshot> acknowledged;
+    acknowledged.reserve(snapshots.size() - std::min(snapshots.size(), failedKeys.size()));
+    for (auto snapshot : snapshots) {
+        if (failedKeys.count(snapshot.objectKey) == 0) {
+            snapshot.op.type = NotifyWorkerOpType::DELETE;
+            acknowledged.emplace_back(std::move(snapshot));
+        }
+    }
+    return acknowledged;
 }
 
 bool OCNotifyWorkerManager::CheckExistAsyncWorkerOp(const std::string &workerId, const std::string &objectKey,
@@ -526,6 +672,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDelete(
 {
     std::unordered_map<std::shared_ptr<MasterWorkerOCApi>, std::pair<int64_t, std::string>> api2Tag;
     Status lastErr = DoNotifyWorkerDeleteSendRequest(sourceWorker, replicas2Obj, isAsync, failedObjects, api2Tag);
+    AsyncDeleteNotifications asyncNotifyIds;
     for (const auto &kv : api2Tag) {
         const auto &masterWorkerApi = kv.first;
         const auto &tag = kv.second.first;
@@ -539,6 +686,10 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDelete(
         if (status.IsError()) {
             LOG(ERROR) << FormatString("DeleteNotificationReceive failed from worker %s, error: %s", address,
                                        status.ToString());
+            if (ShouldDeferDeleteNotification(status)) {
+                AppendAsyncDeleteNotifications(address, successIds, asyncNotifyIds);
+                continue;
+            }
             lastErr = lastErr.GetCode() == K_WORKER_TIMEOUT ? lastErr : status;
             continue;
         }
@@ -562,6 +713,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDelete(
         VLOG(1) << FormatString("Start to remove meta location for objects[%s]", oss.str());
         replicas2Obj.erase(address);
     }
+    RETURN_IF_NOT_OK(AsyncNotifyWorkerDelete(asyncNotifyIds, replicas2Obj, failedObjects));
     return lastErr;
 }
 
@@ -584,7 +736,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
     bool isAsync, std::unordered_set<std::string> &failedObjects,
     std::unordered_map<std::shared_ptr<MasterWorkerOCApi>, std::pair<int64_t, std::string>> &api2Tag)
 {
-    std::vector<std::tuple<std::string, std::string, uint32_t, uint64_t>> asyncNotifyIds;
+    std::vector<PendingDeleteNotification> asyncNotifyIds;
     Timer timer;
     int64_t realTimeoutMs = GetRequestContext()->timeoutDuration.CalcRealRemainingTime();
     std::string traceID = Trace::Instance().GetTraceID();
@@ -636,6 +788,13 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
         res = f.get();
         if (res.status.IsError()) {
             LOG(ERROR) << "Send delete to " << res.address << " failed: " << res.status.ToString();
+            if (ShouldDeferDeleteNotification(res.status)) {
+                const auto objectItems = replicas2Obj.find(res.address);
+                if (objectItems != replicas2Obj.end()) {
+                    AppendAsyncDeleteNotifications(res.address, objectItems->second, asyncNotifyIds);
+                    continue;
+                }
+            }
             if (!isAsync) {
                 lastErr = res.status;
             }
@@ -649,15 +808,12 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
 
 bool OCNotifyWorkerManager::HandleWorkerDisconnection(
     const std::string &address, const std::unordered_map<std::string, std::pair<int64_t, uint32_t>> &objectItem,
-    std::vector<std::tuple<std::string, std::string, uint32_t, uint64_t>> &asyncNotifyIds)
+    std::vector<PendingDeleteNotification> &asyncNotifyIds)
 {
     if (CheckWorkerIsHealthy(address).IsError()) {
         // If the worker is faulty, the message is placed in the asynchronous queue
         // and sent when the worker recovers.
-        std::transform(objectItem.begin(), objectItem.end(), std::back_inserter(asyncNotifyIds),
-                       [&address](const auto &entry) {
-                           return std::make_tuple(entry.first, address, entry.second.second, entry.second.first);
-                       });
+        AppendAsyncDeleteNotifications(address, objectItem, asyncNotifyIds);
         return false;
     }
     return true;
@@ -693,22 +849,20 @@ Status OCNotifyWorkerManager::SyncNotifyWorkerDelete(
 }
 
 Status OCNotifyWorkerManager::AsyncNotifyWorkerDelete(
-    std::vector<std::tuple<std::string, std::string, uint32_t, uint64_t>> &asyncNotifyIds,
+    std::vector<PendingDeleteNotification> &asyncNotifyIds,
     std::unordered_map<std::string, std::unordered_map<std::string, std::pair<int64_t, uint32_t>>> &replicas2Obj,
     std::unordered_set<std::string> &failedObjects)
 {
     Status rc = Status::OK();
+    if (!asyncNotifyIds.empty()) {
+        LOG(INFO) << FormatString("Persist async delete notifications, object count: %zu", asyncNotifyIds.size());
+    }
     for (const auto &item : asyncNotifyIds) {
-        const auto &objectKey = std::get<0>(item);
-        const auto &address = std::get<1>(item);
-        const auto &writeMode = std::get<2>(item);
-        const auto &objVersion = std::get<3>(item);
-        LOG(INFO) << FormatString("Insert async worker operation(%d) for object:%s, workerId:%s",
-                                  static_cast<uint32_t>(NotifyWorkerOpType::DELETE), objectKey, address);
-        NotifyWorkerOp op = { .type = NotifyWorkerOpType::DELETE };
-        op.delObjectVersion = objVersion;
-        Status status = InsertAsyncWorkerOp(address, objectKey, { NotifyWorkerOpType::DELETE }, true,
-                                            OCMetadataManager::WriteMode2MetaType(writeMode));
+        const auto &objectKey = item.objectKey;
+        const auto &address = item.workerAddress;
+        auto op = NotifyWorkerOp::Delete(item.deleteVersion);
+        Status status =
+            InsertAsyncWorkerOp(address, objectKey, op, true, OCMetadataManager::WriteMode2MetaType(item.writeMode));
         if (status.IsError()) {
             LOG(ERROR) << FormatString("InsertAsyncWorkerOp failed, address: %s, error: %s", address,
                                        status.ToString());
@@ -765,6 +919,9 @@ NotifyWorkerOp OCNotifyWorkerManager::MergeAsyncWorkerOpEntry(NotifyWorkerOpEntr
     if (static_cast<uint32_t>(notifyWorkerOp) == 0) {
         return entry.op;
     }
+    if (TESTFLAG(op.type, NotifyWorkerOpType::DELETE)) {
+        entry.op.delObjectVersion = std::max(entry.op.delObjectVersion, op.delObjectVersion);
+    }
     auto currWorkerOp = ClearNotifyMasterOp(entry.op.type);
     if (static_cast<uint32_t>(currWorkerOp) >= static_cast<uint32_t>(op.type)) {
         VLOG(1) << FormatString(
@@ -783,41 +940,125 @@ Status OCNotifyWorkerManager::InsertAsyncWorkerOp(const std::string &workerId, c
                                                   ObjectMetaStore::WriteType type)
 {
     INJECT_POINT("OCNotifyWorkerManager.InsertAsyncWorkerOp.Fail");
-    std::unique_lock<bthread::Mutex> persistLock;
-    if (needPersist) {
-        persistLock = std::unique_lock<bthread::Mutex>(notifyWorkerOpPersistence_->mutex);
+    if (!needPersist) {
+        return InsertAsyncWorkerOpWithoutPersistence(workerId, objectKey, op, type);
     }
-    Timer timer;
-    NotifyWorkerOp opAfterModify = op;
-    {
-        std::shared_lock<SharedMutex> faultLck(faultWorkerMutex_);
-        auto faultWorker = faultWorkers_.find(workerId);
-        if (faultWorker != faultWorkers_.end() && faultWorker->second) {
+    return InsertAsyncWorkerOpWithPersistence(workerId, objectKey, op, type);
+}
+
+Status OCNotifyWorkerManager::InsertAsyncWorkerOpWithPersistence(const std::string &workerId,
+                                                                 const std::string &objectKey,
+                                                                 const NotifyWorkerOp &op,
+                                                                 ObjectMetaStore::WriteType type)
+{
+    std::unique_lock<bthread::Mutex> persistLock(notifyWorkerOpPersistence_->mutex);
+    bool retry = true;
+    while (retry) {
+        AsyncWorkerOpInsertSnapshot snapshot{ op };
+        if (!PrepareAsyncWorkerOpInsert(workerId, objectKey, op, snapshot)) {
             return Status::OK();
         }
-        std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
-        GetMasterTimeCost().Append("InsertAsyncWorkerOp get lock", timer.ElapsedMilliSecond());
-        TbbNotifyWorkerOpTable::accessor accessor;
-
-        if (!notifyWorkerOpTable_.find(accessor, workerId)) {
-            std::unordered_map<std::string, NotifyWorkerOpEntry> objectKeys;
-            (void)objectKeys.emplace(objectKey, NotifyWorkerOpEntry{ op, NextNotifyWorkerOpEpoch(), type });
-            (void)notifyWorkerOpTable_.emplace(accessor, workerId, objectKeys);
-        } else {
-            auto itr = accessor->second.find(objectKey);
-            if (itr == accessor->second.end()) {
-                (void)accessor->second.emplace(objectKey,
-                                               NotifyWorkerOpEntry{ op, NextNotifyWorkerOpEpoch(), type });
-            } else {
-                opAfterModify = MergeAsyncWorkerOpEntry(itr->second, op, objectKey, workerId);
-                itr->second.epoch = NextNotifyWorkerOpEpoch();
-                itr->second.writeType = type;
-            }
-        }
+        INJECT_POINT("OCNotifyWorkerManager.InsertAsyncWorkerOp.BeforePersist");
+        RETURN_IF_NOT_OK(objectStore_->AddAsyncWorkerOp(workerId, objectKey, snapshot.op, type));
+        retry = false;
+        RETURN_IF_NOT_OK(PublishPersistedAsyncWorkerOp(workerId, objectKey, snapshot, type, retry));
     }
+    return Status::OK();
+}
 
-    INJECT_POINT("OCNotifyWorkerManager.InsertAsyncWorkerOp.BeforePersist");
-    return !needPersist ? Status::OK() : objectStore_->AddAsyncWorkerOp(workerId, objectKey, opAfterModify, type);
+bool OCNotifyWorkerManager::PrepareAsyncWorkerOpInsert(const std::string &workerId, const std::string &objectKey,
+                                                       const NotifyWorkerOp &op,
+                                                       AsyncWorkerOpInsertSnapshot &snapshot)
+{
+    Timer timer;
+    std::shared_lock<SharedMutex> faultLck(faultWorkerMutex_);
+    auto faultWorker = faultWorkers_.find(workerId);
+    if (faultWorker != faultWorkers_.end() && faultWorker->second) {
+        return false;
+    }
+    std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
+    GetMasterTimeCost().Append("InsertAsyncWorkerOp get lock", timer.ElapsedMilliSecond());
+    TbbNotifyWorkerOpTable::const_accessor accessor;
+    if (!notifyWorkerOpTable_.find(accessor, workerId)) {
+        return true;
+    }
+    auto itr = accessor->second.find(objectKey);
+    if (itr == accessor->second.end()) {
+        return true;
+    }
+    auto entry = itr->second;
+    snapshot.op = MergeAsyncWorkerOpEntry(entry, op, objectKey, workerId);
+    snapshot.expectedEpoch = itr->second.epoch;
+    snapshot.entryExists = true;
+    return true;
+}
+
+Status OCNotifyWorkerManager::PublishPersistedAsyncWorkerOp(const std::string &workerId,
+                                                            const std::string &objectKey,
+                                                            const AsyncWorkerOpInsertSnapshot &snapshot,
+                                                            ObjectMetaStore::WriteType type, bool &retry)
+{
+    retry = false;
+    std::shared_lock<SharedMutex> faultLck(faultWorkerMutex_);
+    auto faultWorker = faultWorkers_.find(workerId);
+    if (faultWorker != faultWorkers_.end() && faultWorker->second) {
+        faultLck.unlock();
+        return objectStore_->RemoveAsyncWorkerOp(workerId, objectKey, true);
+    }
+    std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
+    TbbNotifyWorkerOpTable::accessor accessor;
+    if (!notifyWorkerOpTable_.find(accessor, workerId)) {
+        retry = snapshot.entryExists;
+        if (retry) {
+            return Status::OK();
+        }
+        std::unordered_map<std::string, NotifyWorkerOpEntry> objectKeys;
+        (void)objectKeys.emplace(objectKey, NotifyWorkerOpEntry{ snapshot.op, NextNotifyWorkerOpEpoch(), type });
+        (void)notifyWorkerOpTable_.emplace(accessor, workerId, objectKeys);
+        return Status::OK();
+    }
+    auto itr = accessor->second.find(objectKey);
+    if (snapshot.entryExists) {
+        retry = itr == accessor->second.end() || itr->second.epoch != snapshot.expectedEpoch;
+        RETURN_OK_IF_TRUE(retry);
+        itr->second = NotifyWorkerOpEntry{ snapshot.op, NextNotifyWorkerOpEpoch(), type };
+        return Status::OK();
+    }
+    retry = itr != accessor->second.end();
+    RETURN_OK_IF_TRUE(retry);
+    (void)accessor->second.emplace(objectKey,
+                                   NotifyWorkerOpEntry{ snapshot.op, NextNotifyWorkerOpEpoch(), type });
+    return Status::OK();
+}
+
+Status OCNotifyWorkerManager::InsertAsyncWorkerOpWithoutPersistence(const std::string &workerId,
+                                                                    const std::string &objectKey,
+                                                                    const NotifyWorkerOp &op,
+                                                                    ObjectMetaStore::WriteType type)
+{
+    std::unique_lock<bthread::Mutex> persistLock(notifyWorkerOpPersistence_->mutex);
+    std::shared_lock<SharedMutex> faultLck(faultWorkerMutex_);
+    auto faultWorker = faultWorkers_.find(workerId);
+    if (faultWorker != faultWorkers_.end() && faultWorker->second) {
+        return Status::OK();
+    }
+    std::shared_lock<SharedMutex> lck(notifyWorkerOpMutex_);
+    TbbNotifyWorkerOpTable::accessor accessor;
+    if (!notifyWorkerOpTable_.find(accessor, workerId)) {
+        std::unordered_map<std::string, NotifyWorkerOpEntry> objectKeys;
+        (void)objectKeys.emplace(objectKey, NotifyWorkerOpEntry{ op, NextNotifyWorkerOpEpoch(), type });
+        (void)notifyWorkerOpTable_.emplace(accessor, workerId, objectKeys);
+        return Status::OK();
+    }
+    auto itr = accessor->second.find(objectKey);
+    if (itr == accessor->second.end()) {
+        (void)accessor->second.emplace(objectKey, NotifyWorkerOpEntry{ op, NextNotifyWorkerOpEpoch(), type });
+        return Status::OK();
+    }
+    itr->second.op = MergeAsyncWorkerOpEntry(itr->second, op, objectKey, workerId);
+    itr->second.epoch = NextNotifyWorkerOpEpoch();
+    itr->second.writeType = type;
+    return Status::OK();
 }
 
 Status OCNotifyWorkerManager::CommitAsyncWorkerOpRequests(const std::vector<AsyncWorkerOpPersistRequest> &requests)
@@ -858,8 +1099,8 @@ uint64_t OCNotifyWorkerManager::NextNotifyWorkerOpEpoch()
     return notifyWorkerOpEpoch_.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-Status OCNotifyWorkerManager::ClearAsyncWorkerOpSnapshots(
-    const std::string &workerAddr, const std::vector<AsyncWorkerOpSnapshot> &snapshots)
+Status OCNotifyWorkerManager::ClearAsyncWorkerOpSnapshots(const std::string &workerAddr,
+                                                          const std::vector<AsyncWorkerOpSnapshot> &snapshots)
 {
     std::unique_lock<bthread::Mutex> persistLock(notifyWorkerOpPersistence_->mutex);
     std::vector<AsyncWorkerOpPersistRequest> persistRequests;
@@ -1289,17 +1530,27 @@ void OCNotifyWorkerManager::NotifyOpToWorker(const std::string &workerAddr, int6
 
     PushMetaToWorkerReqPb req;
     PushMetaToWorkerRspPb rsp;
+    std::vector<AsyncWorkerOpSnapshot> acknowledged;
     req.set_is_restart(false);
     req.set_event_timestamp(timestamp);
-    for (const auto &it : pendingOps) {
+    for (auto snapshot : pendingOps) {
+        const auto &it = snapshot;
         if (TESTFLAG(it.op.type, NotifyWorkerOpType::CACHE_INVALID)) {
             (void)FillUpdateObjectInfoPb(it.objectKey, req.add_cache_invalids());
+            snapshot.op.type = NotifyWorkerOpType::CACHE_INVALID;
+            acknowledged.emplace_back(std::move(snapshot));
         } else if (TESTFLAG(it.op.type, NotifyWorkerOpType::DELETE)) {
-            req.add_delete_object_keys(it.objectKey);
+            continue;
         } else if (TESTFLAG(it.op.type, NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
             req.add_primary_copy_invalid_ids(it.objectKey);
+            snapshot.op.type = NotifyWorkerOpType::PRIMARY_COPY_INVALID;
+            acknowledged.emplace_back(std::move(snapshot));
         }
         // There is no need to process the request to notify the master here.
+    }
+
+    if (acknowledged.empty()) {
+        return;
     }
 
     rc = masterWorkerApi->PushMetaToWorker(req, rsp);
@@ -1308,7 +1559,7 @@ void OCNotifyWorkerManager::NotifyOpToWorker(const std::string &workerAddr, int6
         return;
     }
     LOG(INFO) << "PushMetaToWorker end. workerAddr:" << workerAddr;
-    (void)ClearAsyncWorkerOpSnapshots(workerAddr, pendingOps);
+    (void)ClearAsyncWorkerOpSnapshots(workerAddr, acknowledged);
 }
 
 void OCNotifyWorkerManager::AssignLocalWorker(object_cache::MasterWorkerOCServiceImpl *service,
@@ -1329,6 +1580,9 @@ NotifyWorkerOp OCNotifyWorkerManager::ParseNotifyWorkerOpFromMigration(const Obj
     if (TESTFLAG(op.type, NotifyWorkerOpType::DELETE_ALL_COPY_META)) {
         op.deleteAllCopyMetaVersion = static_cast<int64_t>(pb.delete_all_copy_version());
         op.deleteAllCopyMetaAzNames.insert(pb.delete_all_copy_az_names().begin(), pb.delete_all_copy_az_names().end());
+    }
+    if (TESTFLAG(op.type, NotifyWorkerOpType::DELETE)) {
+        op.delObjectVersion = static_cast<int64_t>(pb.delete_object_version());
     }
     return op;
 }

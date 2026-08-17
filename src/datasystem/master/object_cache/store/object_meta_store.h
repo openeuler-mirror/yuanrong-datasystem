@@ -86,7 +86,16 @@ struct NotifyWorkerOp {
     int64_t deleteAllCopyMetaVersion = 0;
     std::unordered_set<std::string> deleteAllCopyMetaAzNames = {};
     int64_t delObjectVersion = 0;
+
+    static NotifyWorkerOp Delete(int64_t version)
+    {
+        NotifyWorkerOp op{ .type = NotifyWorkerOpType::DELETE };
+        op.delObjectVersion = version;
+        return op;
+    }
 };
+
+void FillNotifyWorkerOpDetailPb(const NotifyWorkerOp &op, ObjectAsyncOpDetailPb &pb);
 
 class ObjectMetaStore {
 public:

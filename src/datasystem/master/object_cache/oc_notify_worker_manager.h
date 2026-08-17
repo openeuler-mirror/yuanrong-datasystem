@@ -18,6 +18,7 @@
 #define DATASYSTEM_MASTER_OBJECT_CACHE_OC_NOTIFY_WORKER_MANAGER_H
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <shared_mutex>
@@ -52,12 +53,25 @@ struct NotifyWorkerOpEntry {
     ObjectMetaStore::WriteType writeType = ObjectMetaStore::WriteType::ROCKS_ONLY;
 };
 
+struct AsyncWorkerOpSnapshot {
+    std::string objectKey;
+    NotifyWorkerOp op;
+    uint64_t epoch = 0;
+};
+
+struct PendingDeleteNotification {
+    std::string objectKey;
+    std::string workerAddress;
+    uint32_t writeMode = 0;
+    uint64_t deleteVersion = 0;
+};
+
 using TbbNotifyWorkerOpTable =
     tbb::concurrent_hash_map<std::string, std::unordered_map<std::string, NotifyWorkerOpEntry>>;
 
 struct DeleteApiInfo {
     std::int64_t apiTag;
-    std::vector<std::string> objs;
+    std::vector<AsyncWorkerOpSnapshot> snapshots;
     std::string workerAddr;
 };
 
@@ -386,16 +400,23 @@ private:
         uint64_t expectedEpoch = 0;
     };
 
-    struct AsyncWorkerOpSnapshot {
-        std::string objectKey;
+    struct AsyncWorkerOpInsertSnapshot {
         NotifyWorkerOp op;
-        uint64_t epoch = 0;
+        uint64_t expectedEpoch = 0;
+        bool entryExists = false;
+    };
+
+    struct AsyncDeleteRetryState {
+        uint32_t consecutiveFailures = 0;
+        std::chrono::steady_clock::time_point retryAfter;
     };
 
     /**
      * @brief Process async notify operation.
      */
     void ProcessAsyncNotifyOp();
+
+    void ProcessAsyncNotifyOpOnce(std::chrono::steady_clock::time_point &nextDeleteRetry);
 
     /**
      * @brief Obtain the RPC Connection from the Master to the Worker.
@@ -457,9 +478,9 @@ private:
      * @param[out] asyncNotifyIds The objects that will send the delete request to the worker asynchronously.
      * @return Worker is healthy if true, otherwise false.
      */
-    bool HandleWorkerDisconnection(
-        const std::string &address, const std::unordered_map<std::string, std::pair<int64_t, uint32_t>> &objectItem,
-        std::vector<std::tuple<std::string, std::string, uint32_t, uint64_t>> &asyncNotifyIds);
+    bool HandleWorkerDisconnection(const std::string &address,
+                                   const std::unordered_map<std::string, std::pair<int64_t, uint32_t>> &objectItem,
+                                   std::vector<PendingDeleteNotification> &asyncNotifyIds);
 
     /**
      * @brief Sync notify worker delete a object data.
@@ -485,7 +506,7 @@ private:
      * @return Status of the call.
      */
     Status AsyncNotifyWorkerDelete(
-        std::vector<std::tuple<std::string, std::string, uint32_t, uint64_t>> &asyncNotifyIds,
+        std::vector<PendingDeleteNotification> &asyncNotifyIds,
         std::unordered_map<std::string, std::unordered_map<std::string, std::pair<int64_t, uint32_t>>> &replicas2Obj,
         std::unordered_set<std::string> &failedObjects);
 
@@ -516,20 +537,47 @@ private:
 
     std::vector<AsyncWorkerOpSnapshot> SnapshotAsyncWorkerOps(const std::string &workerAddr);
 
+    std::vector<AsyncWorkerOpSnapshot> SnapshotAsyncDeleteReplayBatch(const std::string &workerAddr);
+
+    Status ReceiveAsyncDeleteNotification(const std::shared_ptr<MasterWorkerOCApi> &api,
+                                          const DeleteApiInfo &info);
+
+    void RecordAsyncDeleteReplayResult(const std::string &workerAddr, const Status &status);
+
+    static std::vector<AsyncWorkerOpSnapshot> SelectAcknowledgedDeleteSnapshots(
+        const std::vector<AsyncWorkerOpSnapshot> &snapshots, const DeleteObjectRspPb &response);
+
     uint64_t NextNotifyWorkerOpEpoch();
 
     static NotifyWorkerOp MergeAsyncWorkerOpEntry(NotifyWorkerOpEntry &entry, const NotifyWorkerOp &op,
-                                                  const std::string &objectKey, const std::string &workerId);
+                                                   const std::string &objectKey, const std::string &workerId);
+
+    Status InsertAsyncWorkerOpWithoutPersistence(const std::string &workerId, const std::string &objectKey,
+                                                 const NotifyWorkerOp &op, ObjectMetaStore::WriteType type);
+
+    Status InsertAsyncWorkerOpWithPersistence(const std::string &workerId, const std::string &objectKey,
+                                              const NotifyWorkerOp &op, ObjectMetaStore::WriteType type);
+
+    bool PrepareAsyncWorkerOpInsert(const std::string &workerId, const std::string &objectKey,
+                                    const NotifyWorkerOp &op, AsyncWorkerOpInsertSnapshot &snapshot);
+
+    Status PublishPersistedAsyncWorkerOp(const std::string &workerId, const std::string &objectKey,
+                                         const AsyncWorkerOpInsertSnapshot &snapshot,
+                                         ObjectMetaStore::WriteType type, bool &retry);
 
     const size_t minDeleteThreadSize = 1;
     const size_t maxDeleteThreadSize = 8;
+    const size_t maxAsyncDeleteReplayThreadSize = 8;
     // Global thread pool for reusing worker threads across delete requests.
     std::unique_ptr<ThreadPool> deleteThreadPool_;
+    std::unique_ptr<ThreadPool> asyncDeleteReplayThreadPool_;
     std::shared_ptr<ObjectMetaStore> objectStore_;  // Metadata store for object.
     SharedMutex notifyWorkerOpMutex_;
     TbbNotifyWorkerOpTable notifyWorkerOpTable_;  // Key is worker address, value is object keys.
     std::unique_ptr<NotifyWorkerOpPersistenceState> notifyWorkerOpPersistence_;
     std::atomic<uint64_t> notifyWorkerOpEpoch_{ 0 };
+    std::unordered_map<std::string, std::string> asyncDeleteReplayCursor_;
+    std::unordered_map<std::string, AsyncDeleteRetryState> asyncDeleteRetryState_;
 
     const int ASYNC_SEND_UPDATE_TIME_MS = 100;  // Time interval between two async update object.
     std::unique_ptr<Thread> thread_{ nullptr };

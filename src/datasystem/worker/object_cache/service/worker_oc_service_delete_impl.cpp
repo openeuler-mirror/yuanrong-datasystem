@@ -24,6 +24,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -73,6 +74,9 @@ Status WorkerOcServiceDeleteImpl::DeleteCopyNotification(const DeleteObjectReqPb
 {
     bool isAsync = req.is_async();
     VLOG(1) << "DeleteCopyNotification begin, request: " << LogHelper::IgnoreSensitive(req);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        Validator::IsBatchSizeUnderLimit(req.object_keys_size()), K_INVALID,
+        FormatString("The number of object keys exceeds the limit: %d", req.object_keys_size()));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         req.object_keys_size() == req.versions_size(), K_RUNTIME_ERROR,
         FormatString("Unexpected error happen, it should not happen, object key size: %d, version size: %d",
@@ -187,6 +191,11 @@ Status WorkerOcServiceDeleteImpl::DeleteObjectFromNotification(const std::string
         RETURN_IF_NOT_OK(TryLockWithRetry(objectKey, entry));
         ObjectKV objectKV(objectKey, *entry);
         Raii innerUnlock([&entry]() { entry->WUnlock(); });
+        if ((*entry)->GetCreateTime() > version) {
+            LOG(INFO) << FormatString("[ObjectKey %s] Version %d is large than the request version %d, skip.",
+                                      objectKey, (*entry)->GetCreateTime(), version);
+            return Status::OK();
+        }
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ClearObject(objectKV),
                                          FormatString("[ObjectKey %s] ClearObjectAndDelL2cache failed.", objectKey));
     }

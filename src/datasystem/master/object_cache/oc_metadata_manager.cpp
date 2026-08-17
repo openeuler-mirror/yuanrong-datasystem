@@ -4473,14 +4473,8 @@ Status OCMetadataManager::FillMetadataForMigration(
     for (const auto &op : operations) {
         auto opPb = meta.add_async_ops();
         opPb->set_worker_addr(op.first);
-        auto opDetailPb = *opPb->mutable_async_op();
-        opDetailPb.set_op_type(static_cast<uint32_t>(op.second.type));
-        opDetailPb.set_remove_meta_version(op.second.removeMetaVersion);
-        *opDetailPb.mutable_remove_meta_az_names() = { op.second.removeMetaAzNames.begin(),
-                                                       op.second.removeMetaAzNames.end() };
-        opDetailPb.set_delete_all_copy_version(op.second.deleteAllCopyMetaVersion);
-        *opDetailPb.mutable_delete_all_copy_az_names() = { op.second.deleteAllCopyMetaAzNames.begin(),
-                                                           op.second.deleteAllCopyMetaAzNames.end() };
+        auto *opDetailPb = opPb->mutable_async_op();
+        FillNotifyWorkerOpDetailPb(op.second, *opDetailPb);
         (void)notifyWorkerManager_->RemoveAsyncWorkerOp(op.first, { objectKey }, op.second.type, true);
     }
 
