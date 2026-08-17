@@ -60,7 +60,8 @@ public:
 class SlowProbeWatchDispatcher final : public coordinator::WatchDispatcherImpl {
 public:
     explicit SlowProbeWatchDispatcher(WatchRegistry *registry, std::function<void()> onFirstProbe = {})
-        : WatchDispatcherImpl(registry, "test-coordinator"), onFirstProbe_(std::move(onFirstProbe))
+        : WatchDispatcherImpl(registry, "test-coordinator", WatchDispatcher::DEFAULT_DISPATCH_THREAD_COUNT),
+          onFirstProbe_(std::move(onFirstProbe))
     {
     }
 
