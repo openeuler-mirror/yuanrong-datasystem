@@ -185,6 +185,7 @@ protected:
         clock_ = std::make_shared<SteadyClockMock>();
         ttlManager_ = std::make_shared<TtlManager>(clock_);
         store_ = std::make_unique<CoordinatorStore>(memoryStore_, registry_, dispatcher_, ttlManager_);
+        ASSERT_TRUE(store_->Start().IsOk());
         TopologyRecoveryOptions recoveryOptions;
         recoveryOptions.discoveryWindow = TEST_DISCOVERY_WINDOW;
         recoveryOptions.maxClusters = TEST_CLUSTER_LIMIT;

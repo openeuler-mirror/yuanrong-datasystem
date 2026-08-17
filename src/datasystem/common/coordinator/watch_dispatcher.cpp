@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iterator>
+#include <thread>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
@@ -31,7 +32,6 @@
 DS_DEFINE_int32(watch_event_dispatch_thread, 4, "Number of coordinator watch event dispatch threads");
 
 namespace datasystem {
-constexpr size_t DEFAULT_DISPATCH_THREAD_COUNT = 4;
 constexpr size_t MAX_PENDING_EVENTS = 10000;
 constexpr uint64_t DROP_LOG_INTERVAL = 1024;
 constexpr int64_t INITIAL_RETRY_DELAY_MS = 100;
@@ -39,6 +39,11 @@ constexpr int64_t MAX_RETRY_DELAY_MS = 5000;
 constexpr int64_t RETRY_DELAY_MULTIPLIER = 2;
 constexpr int64_t RETRY_JITTER_PERCENT = 20;
 constexpr int64_t PERCENT_SCALE = 100;
+constexpr size_t BTHREADS_PER_DISPATCH_THREAD = 4;
+constexpr size_t MAX_READY_CHANNEL_GROUPS = 8;
+constexpr size_t ACTIVE_FAN_OUT_BACKLOG = 1024;
+constexpr size_t MAX_WATCH_EVENTS_PER_FAN_OUT = 4096;
+constexpr uint64_t ACTIVE_FAN_OUT_COALESCE_US = 50;
 
 /**
  * @brief Build the payload-free lifecycle event used to rebuild an overflowed watch.
@@ -55,7 +60,8 @@ std::shared_ptr<WatchEvent> MakeRewatchEvent(const std::shared_ptr<WatchEvent> &
     return rewatchEvent;
 }
 
-WatchDispatcher::WatchDispatcher(WatchRegistry *watchRegistry) : watchRegistry_(watchRegistry)
+WatchDispatcher::WatchDispatcher(WatchRegistry *watchRegistry, bthread_tag_t notifyTag, size_t dispatchThreadCount)
+    : watchRegistry_(watchRegistry), notifyTag_(notifyTag), dispatchThreadCount_(dispatchThreadCount)
 {
 }
 
@@ -104,9 +110,6 @@ void WatchDispatcher::AddChannel(int64_t watchId, const std::string &watcherAddr
         if (oldChannel != channels_.end()) {
             CancelChannel(oldChannel->second);
             RemoveReverseIndexLocked(oldChannel->second);
-        }
-        if (!dispatchThreadPool_.empty()) {
-            channel->assignedThread = static_cast<size_t>(watchId) % dispatchThreadPool_.size();
         }
         channels_[watchId] = channel;
         watchIdsByWatcher_[watcherAddr].insert(watchId);
@@ -227,25 +230,38 @@ void WatchDispatcher::SetSnapshotRevision(int64_t watchId, int64_t revision)
     }
 }
 
-void WatchDispatcher::Start()
+Status WatchDispatcher::Start()
 {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
-        return;
+        return Status::OK();
     }
 
-    size_t dispatchThreadCount = DEFAULT_DISPATCH_THREAD_COUNT;
-    if (FLAGS_watch_event_dispatch_thread > 0) {
-        dispatchThreadCount = static_cast<size_t>(FLAGS_watch_event_dispatch_thread);
+    if (notifyTag_ != BTHREAD_TAG_DEFAULT
+        && bthread_setconcurrency_by_tag(static_cast<int>(dispatchThreadCount_), notifyTag_) != 0) {
+        running_.store(false);
+        LOG(ERROR) << "Failed to configure watch event bthread tag, tag=" << notifyTag_
+                   << ", pthreadCount=" << dispatchThreadCount_;
+        RETURN_STATUS(K_RUNTIME_ERROR, "Failed to configure watch event bthread tag");
     }
-    for (size_t i = 0; i < dispatchThreadCount; ++i) {
-        auto dt = std::make_unique<DispatchThread>();
-        dispatchThreadPool_.push_back(std::move(dt));
+    const size_t workerCount = dispatchThreadCount_ * BTHREADS_PER_DISPATCH_THREAD;
+    const size_t groupCount = std::min(dispatchThreadCount_, MAX_READY_CHANNEL_GROUPS);
+    dispatchChannelGroups_.reserve(groupCount);
+    for (size_t i = 0; i < groupCount; ++i) {
+        dispatchChannelGroups_.push_back(std::make_unique<DispatchChannelGroup>());
     }
-    for (size_t i = 0; i < dispatchThreadPool_.size(); ++i) {
-        dispatchThreadPool_[i]->thread = Thread(&WatchDispatcher::DispatchLoop, this, i);
+    auto rc = notifyExecutor_.Start(workerCount, notifyTag_, [this](size_t workerIndex) { DispatchLoop(workerIndex); });
+    if (rc.IsError()) {
+        running_.store(false);
+        for (auto &group : dispatchChannelGroups_) {
+            group->cv.notify_all();
+        }
+        notifyExecutor_.Stop();
+        dispatchChannelGroups_.clear();
+        return rc;
     }
     fanOutThread_ = Thread(&WatchDispatcher::FanOutLoop, this);
+    return Status::OK();
 }
 
 void WatchDispatcher::Stop()
@@ -256,19 +272,15 @@ void WatchDispatcher::Stop()
     }
 
     pendingEmptyCv_.notify_one();
-    for (auto &dt : dispatchThreadPool_) {
-        dt->cv.notify_one();
+    for (auto &group : dispatchChannelGroups_) {
+        group->cv.notify_all();
     }
 
     if (fanOutThread_.joinable()) {
         fanOutThread_.join();
     }
-    for (auto &dt : dispatchThreadPool_) {
-        if (dt->thread.joinable()) {
-            dt->thread.join();
-        }
-    }
-    dispatchThreadPool_.clear();
+    notifyExecutor_.Stop();
+    dispatchChannelGroups_.clear();
 }
 
 void WatchDispatcher::FanOutLoop()
@@ -282,7 +294,12 @@ void WatchDispatcher::FanOutLoop()
             if (!running_.load() && pendingQueue_.empty()) {
                 break;
             }
-            auto count = std::min(MAX_WATCH_EVENTS_PER_BATCH, pendingQueue_.size());
+            if (pendingQueue_.size() >= ACTIVE_FAN_OUT_BACKLOG) {
+                lock.unlock();
+                std::this_thread::sleep_for(std::chrono::microseconds(ACTIVE_FAN_OUT_COALESCE_US));
+                lock.lock();
+            }
+            auto count = std::min(MAX_WATCH_EVENTS_PER_FAN_OUT, pendingQueue_.size());
             for (size_t i = 0; i < count; ++i) {
                 batch.push_back(std::move(pendingQueue_.front()));
                 pendingQueue_.pop_front();
@@ -333,24 +350,24 @@ void WatchDispatcher::FanOutLoop()
 void WatchDispatcher::ScheduleChannelLocked(const std::shared_ptr<WatcherChannel> &channel)
 {
     if (channel->cancelled.load(std::memory_order_acquire) || channel->dispatchQueued
-        || channel->assignedThread >= dispatchThreadPool_.size()) {
+        || dispatchChannelGroups_.empty()) {
         return;
     }
     channel->dispatchQueued = true;
-    auto &dt = dispatchThreadPool_[channel->assignedThread];
+    auto &group = *dispatchChannelGroups_[GetReadyGroupIndex(channel)];
     {
-        std::lock_guard<std::mutex> dtLock(dt->mutex);
-        dt->readyChannels.push_back(channel);
+        std::lock_guard<bthread::Mutex> lock(group.mutex);
+        group.readyChannels.push_back(channel);
     }
-    dt->cv.notify_one();
+    group.cv.notify_one();
 }
 
-void WatchDispatcher::DispatchLoop(size_t threadIndex)
+void WatchDispatcher::DispatchLoop(size_t workerIndex)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID("CoordWD;" + GetStringUuid());
-    auto &dt = dispatchThreadPool_[threadIndex];
+    const size_t groupIndex = workerIndex % dispatchChannelGroups_.size();
     while (running_.load()) {
-        auto channel = WaitForReadyChannel(*dt);
+        auto channel = WaitForReadyChannel(groupIndex);
         if (channel == nullptr) {
             return;
         }
@@ -359,52 +376,68 @@ void WatchDispatcher::DispatchLoop(size_t threadIndex)
             continue;
         }
         if (result == HandleResult::READY_AGAIN) {
-            std::lock_guard<std::mutex> lock(dt->mutex);
-            if (!channel->cancelled.load(std::memory_order_acquire)) {
-                dt->readyChannels.push_back(std::move(channel));
+            auto &group = *dispatchChannelGroups_[groupIndex];
+            {
+                std::lock_guard<bthread::Mutex> lock(group.mutex);
+                if (!channel->cancelled.load(std::memory_order_acquire)) {
+                    group.readyChannels.push_back(std::move(channel));
+                }
             }
-            dt->cv.notify_one();
+            group.cv.notify_one();
         } else if (result == HandleResult::RETRY_LATER) {
             std::chrono::milliseconds delay;
             if (!PrepareRetry(channel, delay)) {
                 continue;
             }
             RetryChannel retry{ std::chrono::steady_clock::now() + delay, std::move(channel) };
-            std::lock_guard<std::mutex> lock(dt->mutex);
-            if (!retry.channel->cancelled.load(std::memory_order_acquire)) {
-                InsertRetryLocked(*dt, std::move(retry));
+            auto &group = *dispatchChannelGroups_[GetReadyGroupIndex(retry.channel)];
+            {
+                std::lock_guard<bthread::Mutex> lock(group.mutex);
+                if (!retry.channel->cancelled.load(std::memory_order_acquire)) {
+                    InsertRetryLocked(group, std::move(retry));
+                }
             }
-            dt->cv.notify_one();
+            group.cv.notify_one();
         }
     }
 }
 
-std::shared_ptr<WatcherChannel> WatchDispatcher::WaitForReadyChannel(DispatchThread &dispatchThread)
+std::shared_ptr<WatcherChannel> WatchDispatcher::WaitForReadyChannel(size_t groupIndex)
 {
-    std::unique_lock<std::mutex> lock(dispatchThread.mutex);
+    auto &group = *dispatchChannelGroups_[groupIndex];
+    std::unique_lock<bthread::Mutex> lock(group.mutex);
     while (running_.load()) {
         const auto now = std::chrono::steady_clock::now();
-        while (!dispatchThread.retryChannels.empty() && dispatchThread.retryChannels.front().readyTime <= now) {
-            auto channel = std::move(dispatchThread.retryChannels.front().channel);
-            dispatchThread.retryChannels.pop_front();
+        while (!group.retryChannels.empty() && group.retryChannels.front().readyTime <= now) {
+            auto channel = std::move(group.retryChannels.front().channel);
+            group.retryChannels.pop_front();
             if (!channel->cancelled.load(std::memory_order_acquire)) {
-                dispatchThread.readyChannels.push_back(std::move(channel));
+                group.readyChannels.push_back(std::move(channel));
             }
         }
-        while (!dispatchThread.readyChannels.empty()) {
-            auto channel = std::move(dispatchThread.readyChannels.front());
-            dispatchThread.readyChannels.pop_front();
+        while (!group.readyChannels.empty()) {
+            auto channel = std::move(group.readyChannels.front());
+            group.readyChannels.pop_front();
             if (!channel->cancelled.load(std::memory_order_acquire)) {
                 return channel;
             }
         }
-        if (dispatchThread.retryChannels.empty()) {
-            dispatchThread.cv.wait(lock);
+        if (group.retryChannels.empty()) {
+            group.cv.wait(lock);
         } else {
-            dispatchThread.cv.wait_until(lock, dispatchThread.retryChannels.front().readyTime);
+            const auto waitNs =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(group.retryChannels.front().readyTime - now);
+            if (waitNs > std::chrono::nanoseconds::zero()) {
+                (void)group.cv.wait_until(lock, butil::nanoseconds_from_now(waitNs.count()));
+            }
         }
     }
     return nullptr;
+}
+
+size_t WatchDispatcher::GetReadyGroupIndex(const std::shared_ptr<WatcherChannel> &channel) const
+{
+    return std::hash<int64_t>{}(channel->watchId) % dispatchChannelGroups_.size();
 }
 
 bool WatchDispatcher::PrepareRetry(const std::shared_ptr<WatcherChannel> &channel, std::chrono::milliseconds &delay)
@@ -430,12 +463,12 @@ bool WatchDispatcher::PrepareRetry(const std::shared_ptr<WatcherChannel> &channe
     return true;
 }
 
-void WatchDispatcher::InsertRetryLocked(DispatchThread &dispatchThread, RetryChannel retry)
+void WatchDispatcher::InsertRetryLocked(DispatchChannelGroup &group, RetryChannel retry)
 {
     auto position = std::upper_bound(
-        dispatchThread.retryChannels.begin(), dispatchThread.retryChannels.end(), retry.readyTime,
+        group.retryChannels.begin(), group.retryChannels.end(), retry.readyTime,
         [](const auto &readyTime, const RetryChannel &queued) { return readyTime < queued.readyTime; });
-    dispatchThread.retryChannels.insert(position, std::move(retry));
+    group.retryChannels.insert(position, std::move(retry));
 }
 
 bool WatchDispatcher::PrepareChannelEvents(const std::shared_ptr<WatcherChannel> &channel, bool &needReWatch,

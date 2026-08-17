@@ -13,6 +13,7 @@ target_link_libraries(static_coordinator_discovery PUBLIC coordinator_leader_rou
 set(COORDINATOR_STORE_SRCS
     coordinator_service_proxy.cpp
     coordinator_store.cpp
+    event_notify_executor.cpp
     memory_kv_store.cpp
     ttl_manager.cpp
     watch_dispatcher.cpp
@@ -23,6 +24,7 @@ set(COORDINATOR_STORE_HDRS
     coordinator_service_proxy.h
     coordinator_leader_router.h
     coordinator_store.h
+    event_notify_executor.h
     key_value_entry.h
     memory_kv_store.h
     steady_clock.h

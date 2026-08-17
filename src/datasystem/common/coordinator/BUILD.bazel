@@ -42,6 +42,7 @@ ds_cc_library(
     srcs=[
         "coordinator_service_proxy.cpp",
         "coordinator_store.cpp",
+        "event_notify_executor.cpp",
         "memory_kv_store.cpp",
         "ttl_manager.cpp",
         "watch_dispatcher.cpp",
@@ -50,6 +51,7 @@ ds_cc_library(
     hdrs=[
         "coordinator_service_proxy.h",
         "coordinator_leader_router.h",
+        "event_notify_executor.h",
         "key_value_entry.h",
         "coordinator_store.h",
         "memory_kv_store.h",
@@ -70,5 +72,6 @@ ds_cc_library(
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/protos:coordinator_brpc",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
+        "@com_github_apache_brpc//:brpc",
     ],
 )

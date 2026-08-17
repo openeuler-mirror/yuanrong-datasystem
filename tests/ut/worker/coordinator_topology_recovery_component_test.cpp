@@ -79,6 +79,7 @@ struct RecoveryGeneration {
           store(std::make_unique<CoordinatorStore>(memoryStore, registry, dispatcher, ttlManager)),
           manager(std::make_unique<coordinator::TopologyRecoveryManager>(coordinatorId, *store, clock, Options()))
     {
+        EXPECT_TRUE(store->Start().IsOk());
         manager->BeginLeaderRound({ 0, coordinatorId });
     }
 

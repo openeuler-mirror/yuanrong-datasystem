@@ -34,17 +34,19 @@ CoordinatorStore::CoordinatorStore(std::shared_ptr<MemoryKvStore> memKvStore,
       ttlManager_(std::move(ttlManager))
 {
     BindCallbacks();
-    if (watchDispatcher_) {
-        watchDispatcher_->Start();
-    }
-    if (ttlManager_) {
-        ttlManager_->Start();
-    }
 }
 
 CoordinatorStore::~CoordinatorStore()
 {
     Shutdown();
+}
+
+Status CoordinatorStore::Start()
+{
+    RETURN_IF_NOT_OK(CheckInitialized());
+    RETURN_IF_NOT_OK(watchDispatcher_->Start());
+    ttlManager_->Start();
+    return Status::OK();
 }
 
 void CoordinatorStore::BindCallbacks()

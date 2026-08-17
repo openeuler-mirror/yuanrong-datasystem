@@ -58,6 +58,7 @@ DS_DEFINE_uint32(coordinator_topology_max_active_clusters, 8,
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(scale_in_collect_window_ms);
+DS_DECLARE_int32(watch_event_dispatch_thread);
 DS_DEFINE_string(coordinator_raft_initial_peers, "", "Coordinator Raft initial peers.");
 DS_DEFINE_string(coordinator_raft_data_dir, kDefaultCoordinatorRaftDataDir,
                  "Exclusive local data root for Coordinator Raft term, vote, log, and snapshot state.");
@@ -645,10 +646,15 @@ Status CoordinatorServiceImpl::BuildComponentTree()
                              K_INVALID, "invalid Coordinator topology active cluster limit");
     memStore_ = std::make_shared<MemoryKvStore>();
     watchRegistry_ = std::make_shared<WatchRegistry>();
-    watchDispatcher_ = std::make_shared<WatchDispatcherImpl>(watchRegistry_.get(), coordinatorId_);
+    const size_t watchDispatchThreadCount =
+        FLAGS_watch_event_dispatch_thread > 0 ? static_cast<size_t>(FLAGS_watch_event_dispatch_thread)
+                                              : WatchDispatcher::DEFAULT_DISPATCH_THREAD_COUNT;
+    watchDispatcher_ =
+        std::make_shared<WatchDispatcherImpl>(watchRegistry_.get(), coordinatorId_, watchDispatchThreadCount);
     clock_ = std::make_shared<SteadyClockReal>();
     ttlManager_ = std::make_shared<TtlManager>(clock_);
     store_ = std::make_shared<CoordinatorStore>(memStore_, watchRegistry_, watchDispatcher_, ttlManager_);
+    RETURN_IF_NOT_OK(store_->Start());
     TopologyRecoveryOptions recoveryOptions;
     recoveryOptions.maxClusters = FLAGS_coordinator_topology_max_active_clusters;
     topologyRecoveryManager_ =
