@@ -604,6 +604,50 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXMSetAllPlaceholders)
     ASSERT_EQ(val, val2);
 }
 
+TEST_F(KVCacheExistenceOptTest, TestMCreateNXFinalPublishDoesNotOverwriteConcurrentSet)
+{
+    const std::string key = "mcreate_nx_final_publish_" + client1->GenerateKey();
+    const std::string candidateValue = "candidate_value";
+    const std::string committedValue = "committed_value";
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.existence = ExistenceOpt::NX;
+
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    DS_ASSERT_OK(client1->MCreate({ key }, { candidateValue.size() }, param, buffers));
+    ASSERT_EQ(buffers.size(), 1U);
+    ASSERT_EQ(buffers[0]->GetSize(), candidateValue.size());
+    DS_ASSERT_OK(buffers[0]->MemoryCopy(candidateValue.data(), candidateValue.size()));
+
+    // The competing write happens after MCreate's early existence check but before the final publish.
+    DS_ASSERT_OK(client2->Set(key, committedValue));
+    DS_ASSERT_OK(client1->MSet(buffers));
+
+    std::string actualValue;
+    DS_ASSERT_OK(client3->Get(key, actualValue));
+    ASSERT_EQ(actualValue, committedValue);
+}
+
+TEST_F(KVCacheExistenceOptTest, TestMSetBuffersRejectsMixedExistenceOptions)
+{
+    SetParam nxParam;
+    nxParam.writeMode = WriteMode::NONE_L2_CACHE;
+    nxParam.existence = ExistenceOpt::NX;
+    SetParam noneParam;
+    noneParam.writeMode = WriteMode::NONE_L2_CACHE;
+    noneParam.existence = ExistenceOpt::NONE;
+
+    std::vector<std::shared_ptr<Buffer>> nxBuffers;
+    std::vector<std::shared_ptr<Buffer>> noneBuffers;
+    DS_ASSERT_OK(client1->MCreate({ "mset_mixed_nx_" + client1->GenerateKey() }, { 1 }, nxParam, nxBuffers));
+    DS_ASSERT_OK(client1->MCreate({ "mset_mixed_none_" + client1->GenerateKey() }, { 1 }, noneParam, noneBuffers));
+    ASSERT_EQ(nxBuffers.size(), 1U);
+    ASSERT_EQ(noneBuffers.size(), 1U);
+
+    std::vector<std::shared_ptr<Buffer>> mixedBuffers{ nxBuffers.front(), noneBuffers.front() };
+    ASSERT_EQ(client1->MSet(mixedBuffers).GetCode(), K_INVALID);
+}
+
 TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadRace)
 {
     // Test: multiple threads race to MCreate NX the same key.

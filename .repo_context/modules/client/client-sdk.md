@@ -129,6 +129,10 @@
     cache disabled, public key/value `ObjectClientImpl::MSet` groups keys with the configured data-placement policy
     and sends each same-worker group through these primitives; with local cache enabled it preserves the legacy
     client-worker batch path.
+  - Buffer-based `ObjectClientImpl::MSet` preserves the `ExistenceOpt` recorded by its matching `MCreate`. The MCreate
+    existence check is an early allocation filter; the final MultiPublish carries NX so the Worker object table and
+    metadata owner arbitrate concurrent writers atomically. NX-existing keys remain successful no-ops, while mixing
+    non-placeholder Buffers with different existence options in one MSet is rejected before any publish.
   - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing`; Set/MSet select workers through
     the per-client `ConnectOptions::dataPlacementPolicy`, which defaults to `PREFERRED_SAME_NODE`. Get/MGet always
     build metadata-owner transport requests independent of that write policy; the transport flow then reads

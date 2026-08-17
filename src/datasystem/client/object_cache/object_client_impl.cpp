@@ -6767,6 +6767,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
     std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList;
     bufferInfoList.reserve(bufferCnt);
     bool hasRouted = false;
+    std::optional<ExistenceOpt> batchExistence;
     for (size_t i = 0; i < bufferCnt; i++) {
         auto &buffer = buffers[i];
         CHECK_FAIL_RETURN_STATUS(buffers[i] != nullptr, K_INVALID, "The buffer should not be empty.");
@@ -6775,6 +6776,12 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
         if (buffer->bufferInfo_->dataSize == 0) {
             continue;
         }
+        const auto existence = static_cast<ExistenceOpt>(buffer->bufferInfo_->existence);
+        CHECK_FAIL_RETURN_STATUS(existence == ExistenceOpt::NONE || existence == ExistenceOpt::NX, K_INVALID,
+                                 "The buffer has an invalid existence option.");
+        CHECK_FAIL_RETURN_STATUS(!batchExistence || *batchExistence == existence, K_INVALID,
+                                 "Buffers in one MSet must use the same existence option.");
+        batchExistence = existence;
         // Routed (lc=false two-step Create) buffers are published through the transport layer below.
         CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
         RETURN_IF_NOT_OK(buffer->CopyPageableDataToShm());
@@ -6797,10 +6804,9 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     const uint32_t ttl = bufferInfoList.front()->ttlSecond;
-    // MSet(buffers) is the publish step after MCreate. The existence check was already done
-    // during MCreate, so the publish step should always use NONE to avoid the worker-side
-    // NTX+NX restriction in distributed master mode.
-    PublishParam publishParam{ .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl };
+    // MCreate's existence check is only an early filter. MultiPublish must carry the original option so the worker and
+    // metadata owner can make the final atomic NX decision.
+    PublishParam publishParam{ .isReplica = false, .existence = *batchExistence, .ttlSecond = ttl };
     MultiPublishRspPb rsp;
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     auto rc = HandleShmRefCountAfterMultiPublish(buffers, rsp);
