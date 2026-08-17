@@ -35,6 +35,8 @@
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
@@ -389,11 +391,11 @@ private:
     std::atomic<uint32_t> sendingCount_{ 0 };
 
     // Protect 'lastSunccessTimestamp_'
-    mutable std::shared_timed_mutex timestampMutex_;
+    mutable SharedMutex timestampMutex_;
     std::chrono::time_point<std::chrono::steady_clock> lastSunccessTimestamp_;
 
     // Protect 'failedObjects_'
-    mutable std::shared_timed_mutex failedObjectsMutex_;
+    mutable SharedMutex failedObjectsMutex_;
     std::unordered_set<std::string> failedObjects_;
     DataLimiter limiter_;
 };

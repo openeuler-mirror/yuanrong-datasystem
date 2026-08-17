@@ -412,7 +412,7 @@ bool AsyncSendManager::CheckHealth() const
 
     uint64_t asyncElapse = 0;
     {
-        std::shared_lock<std::shared_timed_mutex> l(timestampMutex_);
+        std::shared_lock<SharedMutex> l(timestampMutex_);
         asyncElapse = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - lastSunccessTimestamp_)
                 .count());
@@ -427,7 +427,7 @@ std::vector<std::string> AsyncSendManager::GetAllUnfinishedObjects()
         list->GetAllKeys(ret);
     }
     {
-        std::shared_lock<std::shared_timed_mutex> l(failedObjectsMutex_);
+        std::shared_lock<SharedMutex> l(failedObjectsMutex_);
         for (const auto &objectKey : failedObjects_) {
             ret.emplace_back(objectKey);
         }
@@ -437,13 +437,13 @@ std::vector<std::string> AsyncSendManager::GetAllUnfinishedObjects()
 
 void AsyncSendManager::UpdateLastSuccessTimestamp()
 {
-    std::lock_guard<std::shared_timed_mutex> l(timestampMutex_);
+    std::lock_guard<SharedMutex> l(timestampMutex_);
     lastSunccessTimestamp_ = std::chrono::steady_clock::now();
 }
 
 void AsyncSendManager::AddToFailedObjects(const std::string &objectKey)
 {
-    std::lock_guard<std::shared_timed_mutex> l(failedObjectsMutex_);
+    std::lock_guard<SharedMutex> l(failedObjectsMutex_);
     (void)failedObjects_.emplace(objectKey);
 }
 }  // namespace object_cache

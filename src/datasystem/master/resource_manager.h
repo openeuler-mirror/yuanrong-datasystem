@@ -28,7 +28,9 @@
 #include <unordered_map>
 
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/node_info.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/master/memory_rebalance_scheduler.h"
@@ -101,7 +103,7 @@ private:
     std::atomic<bool> running_ = true;
 
     std::mutex writeSnapshotMutex_;
-    std::shared_timed_mutex readSnapshotMutex_;
+    SharedMutex readSnapshotMutex_;
     std::unordered_map<std::string, NodeInfo> readSnapshot_{};
     std::unordered_map<std::string, NodeInfo> writeSnapshot_{};
     MemoryRebalanceScheduler rebalanceScheduler_;

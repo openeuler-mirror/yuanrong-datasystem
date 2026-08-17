@@ -20,6 +20,8 @@
 #ifndef DATASYSTEM_COMMON_TOKEN_CLIENT_ACCESS_TOKEN_H
 #define DATASYSTEM_COMMON_TOKEN_CLIENT_ACCESS_TOKEN_H
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/common/eventloop/timer_queue.h"
@@ -62,7 +64,7 @@ public:
 
 private:
     // Lock for the update and query of client access token.
-    std::shared_timed_mutex tokenMutex_;
+    SharedMutex tokenMutex_;
     std::unique_ptr<TimerQueue::TimerImpl> timer_;
     std::atomic<bool> tokenValid_{ false };
     SensitiveValue token_;

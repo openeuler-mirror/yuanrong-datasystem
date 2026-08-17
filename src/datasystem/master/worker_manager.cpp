@@ -136,7 +136,7 @@ Status WorkerManager::AddNode(const HeartbeatReqPb &request, std::shared_ptr<Nod
 {
     std::string ipAddress = request.ip_address();
     NodeTypePb type = request.type();
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     auto iter = workerNodes_.find(ipAddress);
     if (iter == workerNodes_.end()) {
         LOG(INFO) << "Registering new worker in the master node management tracking. worker: " << ipAddress;
@@ -157,7 +157,7 @@ Status WorkerManager::AddNode(const HeartbeatReqPb &request, std::shared_ptr<Nod
 Status WorkerManager::ReAddNodes(const std::set<std::string> &ipAddresses)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(registerFunc_, K_RUNTIME_ERROR, "not set register function!");
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    std::lock_guard<SharedMutex> lock(mutex_);
     for (const auto &ipAddress : ipAddresses) {
         HostPort host;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(host.ParseString(ipAddress), "Failed to parse ip address");
@@ -171,7 +171,7 @@ Status WorkerManager::ReAddNodes(const std::set<std::string> &ipAddresses)
 
 Status WorkerManager::GetWorkerDescriptor(const std::string &ipAddress, std::shared_ptr<NodeDescriptor> &desc)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     auto iter = workerNodes_.find(ipAddress);
     CHECK_FAIL_RETURN_STATUS(iter != workerNodes_.end(), StatusCode::K_RUNTIME_ERROR,
                              "The worker does not exist. ipAddress:" + ipAddress);
@@ -181,7 +181,7 @@ Status WorkerManager::GetWorkerDescriptor(const std::string &ipAddress, std::sha
 
 Status WorkerManager::GetAllNodesDesc(std::vector<std::shared_ptr<NodeDescriptor>> &descs)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     VLOG(2) << "WorkerManager::GetAllNodesDesc: worker map size is " << workerNodes_.size();
     for (auto iter = workerNodes_.begin(); iter != workerNodes_.end(); iter++) {
         descs.push_back(iter->second);
