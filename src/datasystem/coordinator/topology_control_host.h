@@ -26,14 +26,13 @@
 #include "datasystem/cluster/membership/membership_types.h"
 #include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/cluster/runtime/worker_liveness.h"
+#include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/coordinator/watch_event.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/coordinator/coordinator_store_backend.h"
 #include "datasystem/coordinator/topology_recovery_manager.h"
 
 namespace datasystem {
-class CoordinatorStore;
-
 namespace coordinator {
 
 /**
@@ -49,6 +48,7 @@ public:
         std::chrono::seconds startRetryMaximum{ 5 };
         std::chrono::seconds activeFailureWindow{ 3 };
         cluster::TopologyControllerOptions controller;
+        std::function<Status(std::optional<uint64_t>, const std::function<Status()> &)> activeFailureAuthorityFence;
 
         /**
          * @brief Validate bounded Host and nested Controller scalar settings.
@@ -148,6 +148,8 @@ public:
     bool IsStopped() const noexcept;
 
 private:
+    friend class TopologyControlHostTestPeer;
+
     enum class EntryState : uint8_t { RESERVED, WAITING_RECOVERY, RUNNING, STOPPING };
 
     /**
@@ -178,6 +180,9 @@ private:
         bool storeDirty{ true };
         bool emptyCheckPending{ false };
         bool releaseAfterStop{ false };
+        bool activeFailureCommitInProgress{ false };
+        std::shared_ptr<std::mutex> failureReportMutex{ std::make_shared<std::mutex>() };
+        uint64_t clusterGeneration{ 0 };
         uint64_t mutationGeneration{ 0 };
         std::deque<cluster::WorkerLivenessReport> pendingLivenessReports;
         size_t deliveringLivenessReports{ 0 };
@@ -193,20 +198,77 @@ private:
         std::string reporterHostId;
         int64_t targetTimestamp{ 0 };
         std::string targetHostId;
+        uint64_t clusterGeneration{ 0 };
+    };
+
+    using TargetFailureReports = std::unordered_map<std::string, FailureReportState>;
+    struct ClusterFailureReports {
+        std::unordered_map<std::string, TargetFailureReports> byTarget;
+        std::unordered_map<std::string, std::unordered_set<std::string>> targetsByReporter;
+
+        bool empty() const
+        {
+            return byTarget.empty();
+        }
+    };
+
+    struct ActiveFailureReservation {
+        uint64_t clusterGeneration{ 0 };
+        uint64_t mutationGeneration{ 0 };
     };
 
     static std::unordered_map<std::string, cluster::MembershipRecord> BuildEligibleFailureReporters(
         const cluster::TopologySnapshot &latest, const std::vector<cluster::MembershipRecord> &memberships);
 
-    static size_t FailureReporterThreshold(size_t totalWorkers);
+    static size_t FailureReporterThreshold(size_t totalWorkers, size_t eligibleReporterCount);
+
+    static bool ActiveFailureCandidatesContainExpected(const std::vector<cluster::MemberIdentity> &candidates,
+                                                       const std::vector<cluster::MemberIdentity> &expected);
+
+    std::shared_ptr<std::mutex> GetFailureReportClusterMutex(const std::string &clusterName);
+
+    bool UpdateFailureReports(const std::string &clusterName, const cluster::MembershipRecord &reporter,
+                              const std::vector<cluster::MembershipRecord> &targets,
+                              const std::unordered_set<std::string> &reportedTargets, uint64_t clusterGeneration,
+                              std::chrono::steady_clock::time_point now, std::vector<std::string> &newTargets,
+                              std::vector<std::string> &clearedTargets);
+
+    static bool ClearUnreportedTargets(ClusterFailureReports &clusterReports, const cluster::MembershipRecord &reporter,
+                                       const std::unordered_set<std::string> &reportedTargets,
+                                       uint64_t clusterGeneration, std::vector<std::string> &clearedTargets);
+
+    static void RemoveTargetFromReporterIndex(ClusterFailureReports &clusterReports, const std::string &reporter,
+                                              const std::string &target);
 
     size_t PruneAndCountFailureReporters(
         const cluster::TopologySnapshot &latest,
         const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
         const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress,
-        const std::string &target,
+        const std::string &target, uint64_t clusterGeneration, ClusterFailureReports &clusterReports,
         std::unordered_map<std::string, FailureReportState> &reporters,
         std::chrono::steady_clock::time_point now) const;
+
+    std::vector<cluster::MemberIdentity> GetIsolationCandidatesLocked(
+        const std::string &clusterName, const cluster::TopologySnapshot &latest,
+        const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
+        const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress,
+        size_t failurePopulation, uint64_t clusterGeneration, std::chrono::steady_clock::time_point now);
+
+    Status RunUnderActiveFailureCommitFence(const std::string &clusterName, const cluster::TopologySnapshot &latest,
+                                            const std::vector<cluster::MembershipRecord> &memberships,
+                                            std::chrono::steady_clock::time_point now,
+                                            std::optional<uint64_t> expectedControlEpoch,
+                                            const std::vector<cluster::MemberIdentity> &expected,
+                                            const std::function<Status(int64_t)> &mutation);
+
+    Status ReadCurrentMemberships(const std::string &clusterName, std::vector<cluster::MembershipRecord> &memberships,
+                                  int64_t &authorityRevision);
+
+    bool TryReserveActiveFailureCommit(const std::string &clusterName, ActiveFailureReservation &reservation);
+
+    bool IsActiveFailureReservationCurrent(const std::string &clusterName, const ActiveFailureReservation &reservation);
+
+    void ReleaseActiveFailureCommit(const std::string &clusterName, uint64_t clusterGeneration);
 
     /**
      * @brief Run the single Host lifecycle loop until Shutdown closes ingress.
@@ -275,10 +337,11 @@ private:
     Status ReleaseClusterIfEmpty(ClusterEntry &entry, bool &released, uint64_t &observationGeneration);
 
     /**
-     * @brief Erase a released cluster and its process-local failure evidence while mutex_ is held.
+     * @brief Erase a released cluster and its process-local failure evidence under the cluster shard.
      * @param[in] clusterName Cluster scope to erase.
      */
-    void EraseClusterLocked(const std::string &clusterName);
+    bool EraseClusterIfCurrent(const std::string &clusterName, const ClusterEntry *expected,
+                               uint64_t mutationGeneration);
 
     /**
      * @brief Check an empty Store observation against current admission and mutation state.
@@ -318,10 +381,11 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable wakeCv_;
     std::unordered_map<std::string, std::unique_ptr<ClusterEntry>> entries_;
+    uint64_t nextClusterGeneration_{ 1 };
     uint64_t nextRuntimeGeneration_{ 1 };
-    std::unordered_map<std::string,
-                       std::unordered_map<std::string, std::unordered_map<std::string, FailureReportState>>>
-        failureReportsByCluster_;
+    std::unordered_map<std::string, ClusterFailureReports> failureReportsByCluster_;
+    // The map lock is held only for report access; each ClusterEntry serializes its own validation and commit.
+    std::mutex failureReportMutex_;
     size_t reconcileCursor_{ 0 };
     Thread thread_;
     bool started_{ false };

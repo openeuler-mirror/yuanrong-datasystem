@@ -82,15 +82,14 @@ public:
 
     void UpdateState(const HostPort &addr, StatusCode status);
 
-    void ForceRefresh();
+    bool ForceRefresh();
 
     void Shutdown();
 
 private:
-    Status FetchHashRing(const HostPort &workerAddr, uint64_t currentVersion,
-                         ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress,
-                         uint64_t &newVersion, bool &changed,
-                         std::unordered_map<std::string, std::string> &hostIdMap);
+    Status FetchHashRing(const HostPort &workerAddr, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
+                         std::string &masterAddress, uint64_t &newVersion, bool &changed,
+                         std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs);
 
     static constexpr int64_t DEFAULT_REFRESH_INTERVAL_MS = 5'000;
     std::shared_ptr<WorkerRouter> router_;

@@ -53,11 +53,13 @@ public:
      * @param[out] version The new version after put.
      * @param[out] revision The new global revision.
      * @param[in] expectedModRevision Expected modification revision. Zero disables the incarnation fence.
+     * @param[in] expectedGlobalRevision Expected Store revision. Zero disables the snapshot fence.
      * @return Status of the operation.
      */
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
                int64_t &version, int64_t &revision,
-               int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
+               int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK,
+               int64_t expectedGlobalRevision = COORDINATOR_NO_GLOBAL_REVISION_CHECK);
 
     /**
      * @brief Range query over [key, rangeEnd).

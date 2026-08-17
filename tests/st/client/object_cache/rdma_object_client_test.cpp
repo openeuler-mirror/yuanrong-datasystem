@@ -159,15 +159,15 @@ TEST_F(RdmaObjectClientTest, RdmaReconnectTest)
     // Retry to tolerate reconnect latency, matching the pattern used by
     // KVClientVoluntaryScaleDownTest.CreateClientWithServiceDiscoveryDuringScaleDown.
     Status getSt;
-    const int retryCount = 50;
-    for (int retry = 0; retry < retryCount; ++retry) {
+    const auto reconnectDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    do {
         valuesGet.clear();
         getSt = client2->Get(keys, valuesGet);
         if (getSt.IsOk()) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    } while (std::chrono::steady_clock::now() < reconnectDeadline);
     DS_ASSERT_OK(getSt);
     checkFunc(valuesGet);
 }

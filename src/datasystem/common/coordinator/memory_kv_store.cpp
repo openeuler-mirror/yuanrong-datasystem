@@ -21,7 +21,7 @@
 namespace datasystem {
 Status MemoryKvStore::Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
                           int64_t &version, int64_t &revision, uint64_t &ttlGeneration,
-                          int64_t expectedModRevision)
+                          int64_t expectedModRevision, int64_t expectedGlobalRevision)
 {
     std::shared_ptr<WatchEvent> event;
 
@@ -31,6 +31,10 @@ Status MemoryKvStore::Put(const std::string &key, const std::string &value, int6
         auto it = data_.find(key);
         bool exists = (it != data_.end());
 
+        if (expectedGlobalRevision != COORDINATOR_NO_GLOBAL_REVISION_CHECK
+            && revision_.load(std::memory_order_relaxed) != expectedGlobalRevision) {
+            return Status(StatusCode::K_TRY_AGAIN, "global revision mismatch");
+        }
         if (expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK) {
             if (!exists || it->second.modRevision != expectedModRevision) {
                 return Status(StatusCode::K_TRY_AGAIN, "modification revision mismatch");

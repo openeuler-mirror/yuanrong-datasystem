@@ -244,9 +244,12 @@ public:
     void RecordPeerRpcFailure(const HostPort &target) override;
     void RecordPeerRpcFailure(const HostPort &target, std::chrono::steady_clock::time_point now);
     void RecordPeerRpcSuccess(const HostPort &target) override;
+    bool IsPeerRpcFailureReported(const HostPort &target) const override;
     void ClearPeerRpcFailureObservations() override;
+    void DiscardPeerRpcFailure(const HostPort &target) override;
     std::vector<std::string> GetFailedTargets(std::chrono::steady_clock::time_point now);
     bool ConsumeImmediateReportSignal();
+    void WakeKeepAliveForFailureSummary();
 
     /**
      * @brief Copy the current membership lease value for the restricted Ensure RPC.
@@ -331,6 +334,8 @@ private:
         std::chrono::steady_clock::time_point lastFailedAt;
         bool reported{ false };
     };
+
+    void ClearPeerRpcFailure(const HostPort &target, const char *action);
 
     /**
      * @brief Strip a physical table prefix from one returned key.
@@ -508,7 +513,7 @@ private:
     size_t activeEventHandlers_{ 0 };
     size_t activeMembershipReadyHandlers_{ 0 };
 
-    std::mutex rpcFailedMutex_;
+    mutable std::mutex rpcFailedMutex_;
     std::unordered_map<std::string, RpcFailedState> rpcFailedStates_;
     std::atomic<bool> hasRpcFailures_{ false };
     bool immediateReportSignal_{ false };

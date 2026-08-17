@@ -754,6 +754,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
             listenWorker_[i]->StopListenWorker(true);
         }
     }
+    DrainAsyncSwitchWorkerPool();
     // Step2: keep the local worker disconnect under the shutdown lock because it shares
     // the same shutdown-synchronized shm ref cleanup path. Other worker disconnects can
     // be deferred until after the lock is released.
@@ -843,6 +844,7 @@ void ObjectClientImpl::ConstructTreadPool()
     asyncGetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_rpc");
     asyncPipelineRH2DPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_pipeline_rh2d");
     asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch");
+    asyncSwitchWorkerPoolHandle_ = asyncSwitchWorkerPool_.get();
     asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
     asyncReleasePool_ = std::make_shared<ThreadPool>(0, 4, "async_release_buffer");
 }
@@ -875,6 +877,16 @@ Status ObjectClientImpl::InitTransportLayer()
     options.allowUbRuntimeFailure = workerApi_[currentNode_]->IsShmEnable();
     options.readSourceFilter = ubHealthFilter_;
     options.retryAdmissionCheck = [this]() { return CheckBoundWorkerAvailability(); };
+    options.metadataFailureHandler = [this](const HostPort &owner, const Status &status) {
+        if (!ShouldRefreshRoutingAfterFailure(status.GetCode())) {
+            return;
+        }
+        auto routing = std::atomic_load(&routing_);
+        if (routing != nullptr && routing->ForceRefresh()) {
+            LOG(INFO) << "[Routing] Force hash ring refresh after metadata owner access failure, metadata owner: "
+                      << owner.ToString() << ", status: " << status.ToString();
+        }
+    };
     auto transportLayer = std::make_unique<client::TransportLayer>(
         transportSignature_, asyncGetRPCPool_, fastTransportMemSize_, std::move(options));
     RETURN_IF_NOT_OK(transportLayer->Init());
@@ -893,7 +905,9 @@ Status ObjectClientImpl::ApplyRoutingWorkerSnapshot(uint64_t ringVersion,
     client::WorkerSnapshot snapshot;
     RETURN_IF_NOT_OK(client::BuildWorkerSnapshot(ringVersion, ring, hostIdMap, sdkHostId, snapshot));
     ubHealthFilter_->ApplyTopologyIncarnations(ring);
-    return transportLayer_->ApplyWorkerSnapshot(std::move(snapshot));
+    RETURN_IF_NOT_OK(transportLayer_->ApplyWorkerSnapshot(std::move(snapshot)));
+    MaybeSwitchWorkerRemovedFromRing(ring);
+    return Status::OK();
 }
 
 Status ObjectClientImpl::InitDataPlacementPolicy()
@@ -1040,17 +1054,14 @@ void ObjectClientImpl::ConfigureUrmaDataPlaneFailureCallback(WorkerNode node,
 bool ObjectClientImpl::SubmitUrmaDataPlaneSwitch(WorkerNode node,
                                                  std::weak_ptr<client::IClientWorkerCommonApi> weakWorkerApi)
 {
-    if (asyncSwitchWorkerPool_ == nullptr) {
-        return false;
-    }
     auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([this, node, weakWorkerApi, traceId]() {
+    auto task = [this, node, weakWorkerApi, traceId]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         auto workerApi = weakWorkerApi.lock();
         if (workerApi == nullptr) {
             return;
         }
-        if (!IsCurrentUrmaDataPlaneTrigger(node, workerApi)) {
+        if (!IsCurrentWorkerSwitchTrigger(node, workerApi)) {
             LOG(INFO) << "[Switch] Ignore stale URMA data-plane failure callback, client id: " << workerApi->clientId_
                       << ", worker address: " << workerApi->hostPort_.ToString()
                       << ", source node: " << static_cast<int>(node);
@@ -1070,12 +1081,129 @@ bool ObjectClientImpl::SubmitUrmaDataPlaneSwitch(WorkerNode node,
                        << ", source node: " << static_cast<int>(node);
         }
         workerApi->FinishUrmaDataPlaneSwitchAttempt(switched);
-    });
+    };
+    try {
+        std::lock_guard<std::mutex> lock(asyncSwitchWorkerMutex_);
+        if (asyncSwitchWorkerPool_ == nullptr) {
+            return false;
+        }
+        asyncSwitchWorkerPool_->Execute(std::move(task));
+    } catch (const std::exception &error) {
+        LOG(ERROR) << "[Switch] Failed to submit URMA data-plane worker switch: " << error.what();
+        return false;
+    } catch (...) {
+        LOG(ERROR) << "[Switch] Failed to submit URMA data-plane worker switch: unknown exception";
+        return false;
+    }
     return true;
 }
 
-bool ObjectClientImpl::IsCurrentUrmaDataPlaneTrigger(
-    WorkerNode node, const std::shared_ptr<client::IClientWorkerCommonApi> &workerApi)
+bool ObjectClientImpl::SubmitUnavailableWorkerSwitch(const std::shared_ptr<IClientWorkerApi> &workerApi)
+{
+    if (!enableCrossNodeConnection_ || workerApi == nullptr) {
+        return false;
+    }
+    WorkerNode node;
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        node = currentNode_;
+        if (workerApi_[node] == nullptr || workerApi_[node].get() != workerApi.get()) {
+            return false;
+        }
+    }
+    try {
+        std::lock_guard<std::mutex> lock(asyncSwitchWorkerMutex_);
+        if (asyncSwitchWorkerPool_ == nullptr) {
+            return false;
+        }
+        if (!unavailableWorkerSwitchPending_.emplace(workerApi.get()).second) {
+            return false;
+        }
+        auto traceId = Trace::Instance().GetTraceID();
+        asyncSwitchWorkerPool_->Execute([this, node, workerApi, traceId]() {
+            Raii clearPending([this, worker = workerApi.get()]() {
+                std::lock_guard<std::mutex> lock(asyncSwitchWorkerMutex_);
+                unavailableWorkerSwitchPending_.erase(worker);
+            });
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            if (!IsCurrentWorkerSwitchTrigger(node, workerApi)) {
+                return;
+            }
+            LOG(WARNING) << "[Switch] Bound worker unavailable, trigger worker switch, client id: "
+                         << workerApi->clientId_ << ", worker address: " << workerApi->hostPort_.ToString();
+            (void)SwitchWorkerNode(node, client::SwitchTriggerReason::WORKER_UNAVAILABLE);
+        });
+    } catch (const std::exception &error) {
+        std::lock_guard<std::mutex> lock(asyncSwitchWorkerMutex_);
+        unavailableWorkerSwitchPending_.erase(workerApi.get());
+        LOG(ERROR) << "[Switch] Failed to submit unavailable worker switch: " << error.what();
+        return false;
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(asyncSwitchWorkerMutex_);
+        unavailableWorkerSwitchPending_.erase(workerApi.get());
+        LOG(ERROR) << "[Switch] Failed to submit unavailable worker switch: unknown exception";
+        return false;
+    }
+    return true;
+}
+
+bool ObjectClientImpl::ShouldRefreshRoutingAfterFailure(StatusCode code)
+{
+    return code == K_RPC_UNAVAILABLE || code == K_RPC_DEADLINE_EXCEEDED || code == K_RPC_PEER_DEAD
+           || code == K_CLIENT_WORKER_DISCONNECT || code == K_METADATA_OWNER_UNAVAILABLE;
+}
+
+void ObjectClientImpl::HandleDirectGetFailure(const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                              const Status &status)
+{
+    if (!ShouldRefreshRoutingAfterFailure(status.GetCode())) {
+        return;
+    }
+    auto routing = std::atomic_load(&routing_);
+    if (routing != nullptr && routing->ForceRefresh()) {
+        LOG(INFO) << "[Routing] Force hash ring refresh after direct Get failure, worker: "
+                  << workerApi->hostPort_.ToString() << ", status: " << status.ToString();
+    }
+    if (status.GetCode() == K_RPC_PEER_DEAD) {
+        (void)SubmitUnavailableWorkerSwitch(workerApi);
+    }
+}
+
+void ObjectClientImpl::MaybeSwitchWorkerRemovedFromRing(const ::datasystem::ClusterTopologyPb &ring)
+{
+    if (std::atomic_load(&routing_) == nullptr) {
+        return;
+    }
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (static_cast<size_t>(currentNode_) >= workerApi_.size() || workerApi_[currentNode_] == nullptr) {
+            return;
+        }
+        workerApi = workerApi_[currentNode_];
+    }
+    auto member = ring.members().find(workerApi->hostPort_.ToString());
+    if (member != ring.members().end() && member->second.state() == ::datasystem::MembershipPb::ACTIVE) {
+        return;
+    }
+    (void)SubmitUnavailableWorkerSwitch(workerApi);
+}
+
+void ObjectClientImpl::DrainAsyncSwitchWorkerPool()
+{
+    std::shared_ptr<ThreadPool> asyncSwitchWorkerPool;
+    {
+        std::lock_guard<std::mutex> lock(asyncSwitchWorkerMutex_);
+        asyncSwitchWorkerPool = std::move(asyncSwitchWorkerPool_);
+    }
+    asyncSwitchWorkerPool.reset();
+    asyncSwitchWorkerPoolHandle_ = nullptr;
+    std::lock_guard<std::mutex> lock(asyncSwitchWorkerMutex_);
+    unavailableWorkerSwitchPending_.clear();
+}
+
+bool ObjectClientImpl::IsCurrentWorkerSwitchTrigger(WorkerNode node,
+                                                    const std::shared_ptr<client::IClientWorkerCommonApi> &workerApi)
 {
     std::lock_guard<std::mutex> lock(switchNodeMutex_);
     return currentNode_ == node && workerApi_[node] != nullptr && workerApi_[node].get() == workerApi.get();
@@ -1134,7 +1262,7 @@ Status ObjectClientImpl::InitListenWorkerAt(WorkerNode node, bool isLocalWorker)
     auto heartbeatType = workerApi_[node]->heartbeatType_;
     listenWorker_.resize(STANDBY2_WORKER + 1);
     listenWorker_[node] =
-        std::make_shared<client::ListenWorker>(workerApi_[node], heartbeatType, node, asyncSwitchWorkerPool_.get());
+        std::make_shared<client::ListenWorker>(workerApi_[node], heartbeatType, node, asyncSwitchWorkerPoolHandle_);
     if (isLocalWorker) {
         listenWorker_[node]->AddRecoveryCallback(
             this, [this](client::WorkerRecoveryReason reason) { return ProcessWorkerLost(reason); });
@@ -1212,6 +1340,7 @@ void ObjectClientImpl::ClearFailedInitAttempt()
             listener->StopListenWorker(true);
         }
     }
+    DrainAsyncSwitchWorkerPool();
     for (auto &api : workerApi_) {
         if (api != nullptr) {
             LOG_IF_ERROR(api->Disconnect(false), "Disconnect failed init worker.");
@@ -1228,7 +1357,6 @@ void ObjectClientImpl::ClearFailedInitAttempt()
     asyncGetRPCPool_ = nullptr;
     asyncPipelineRH2DPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
-    asyncSwitchWorkerPool_ = nullptr;
     asyncDevDeletePool_ = nullptr;
 }
 
@@ -1911,8 +2039,8 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
         return StandbySwitchAttemptResult::CONTINUE;
     }
 
-    auto candidateListenWorker = std::make_shared<client::ListenWorker>(candidateWorkerApi, currentApi->heartbeatType_,
-                                                                        next, asyncSwitchWorkerPool_.get());
+    auto candidateListenWorker = std::make_shared<client::ListenWorker>(
+        candidateWorkerApi, currentApi->heartbeatType_, next, asyncSwitchWorkerPoolHandle_);
     candidateListenWorker->SetSwitchWorkerHandle([this](uint32_t index, client::SwitchTriggerReason reason) {
         return SwitchWorkerNode(static_cast<WorkerNode>(index), reason);
     });
@@ -2131,7 +2259,7 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
     }
 
     localListenWorker = std::make_shared<client::ListenWorker>(localWorkerApi, localWorkerApi->heartbeatType_,
-                                                               LOCAL_WORKER, asyncSwitchWorkerPool_.get());
+                                                               LOCAL_WORKER, asyncSwitchWorkerPoolHandle_);
     localListenWorker->AddRecoveryCallback(
         this, [this](client::WorkerRecoveryReason reason) { return ProcessWorkerLost(reason); });
     localListenWorker->SetWorkerTimeoutHandle([this] { ProcessWorkerTimeout(); });
@@ -2976,6 +3104,11 @@ Status ObjectClientImpl::CheckBoundWorkerAvailability()
     // without touching the bound worker. A short active port confirmation avoids relying on
     // brpc's socket state, which can report a dead endpoint as connectable during recovery.
     if (ProbeTcpPort(boundWorker, BOUND_WORKER_PROBE_TIMEOUT_MS) == TcpPortProbeResult::PEER_DEAD) {
+        auto routing = std::atomic_load(&routing_);
+        if (routing != nullptr && routing->ForceRefresh()) {
+            LOG(INFO) << "[Routing] Force hash ring refresh after bound worker probe failure, worker: "
+                      << boundWorker.ToString();
+        }
         return { K_RPC_PEER_DEAD,
                  FormatString("Client connection to bound worker %s is broken.", boundWorker.ToString()) };
     }
@@ -3911,6 +4044,13 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
             excludedWorkers.emplace_back(worker);
         }
     };
+    if (status.GetCode() == K_METADATA_OWNER_UNAVAILABLE) {
+        if (routing->ForceRefresh()) {
+            LOG(INFO) << "[Routing] Force hash ring refresh after metadata owner RPC failure, ingress worker: "
+                      << worker.ToString();
+        }
+        return false;
+    }
     if (status.GetCode() == K_SCALE_DOWN) {
         excludeWorker();
         return true;
@@ -3948,6 +4088,36 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
     return retry;
 }
 
+Status ObjectClientImpl::ProcessDirectSetWithoutTransport(
+    const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
+    const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
+    const SetRouteContext &routeContext, SetFailureStage &failureStage, std::vector<HostPort> &excludedWorkers,
+    int32_t requestTimeoutMs)
+{
+    if (IsUrmaEnabled()) {
+        return ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, routeContext.directWorkerApi,
+                             existence, failureStage, requestTimeoutMs);
+    }
+    auto info = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
+    const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
+    }
+    failureStage = SetFailureStage::PUBLISH;
+    auto rc = routeContext.directWorkerApi->Publish(info, false, false, nestedObjectKeys, ttlSecond, existence,
+                                                    requestTimeoutMs);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
+    }
+    if (rc.IsError()) {
+        (void)HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers);
+        if (IsRoutingEvictionFailure(rc)) {
+            (void)SwitchWorkerNode(currentNode_.load(), client::SwitchTriggerReason::WORKER_UNAVAILABLE);
+        }
+    }
+    return rc;
+}
+
 Status ObjectClientImpl::ExecuteSetFlow(
     const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
     const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
@@ -3978,21 +4148,9 @@ Status ObjectClientImpl::ExecuteSetFlow(
             continue;
         }
         if (routeContext.directWorkerApi != nullptr && transportLayer_ == nullptr) {
-            if (IsUrmaEnabled()) {
-                return ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
-                                     routeContext.directWorkerApi, existence, failureStage, requestTimeoutMs);
-            }
-            auto info = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
-            const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
-            if (traceEnabled) {
-                Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
-            }
-            rc = routeContext.directWorkerApi->Publish(info, false, false, nestedObjectKeys, ttlSecond, existence,
-                                                       requestTimeoutMs);
-            if (traceEnabled) {
-                Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
-            }
-            return rc;
+            return ProcessDirectSetWithoutTransport(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
+                                                    existence, routeContext, failureStage, excludedWorkers,
+                                                    requestTimeoutMs);
         }
         rc = ProcessTransportPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence,
                                  routeContext, failureStage, transportResult, requestTimeoutMs);
@@ -5430,6 +5588,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
                            .isRH2DSupported = isRH2DSupported,
                            .requestTimeoutMs = requestTimeoutMs };
         rc = GetBuffersFromWorker(workerApi, getParam, objectBuffers);
+        HandleDirectGetFailure(workerApi, rc);
     }
     buffers.clear();
     for (auto &objectBuffer : objectBuffers) {

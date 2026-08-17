@@ -284,6 +284,28 @@ void ObserveMetadataRpcOnTopology(cluster::TopologyEngine *topologyEngine, const
     topologyEngine->ObservePeerRpcResult(target, status);
 }
 
+std::function<void(const HostPort &, const Status &)> BuildMetadataRpcObserver(
+    cluster::TopologyEngine *topologyEngine, const std::atomic<bool> *exitRequested,
+    const std::shared_ptr<std::atomic_bool> &observerAlive)
+{
+    return [topologyEngine, exitRequested, observerAlive = std::weak_ptr<std::atomic_bool>(observerAlive)](
+               const HostPort &target, const Status &status) {
+        auto alive = observerAlive.lock();
+        if (alive == nullptr || !alive->load(std::memory_order_acquire)
+            || (exitRequested != nullptr && exitRequested->load(std::memory_order_acquire))) {
+            return;
+        }
+        ObserveMetadataRpcOnTopology(topologyEngine, target, status);
+    };
+}
+
+std::function<bool(const HostPort &)> BuildMetadataRpcFailureReported(cluster::TopologyEngine *topologyEngine)
+{
+    return [topologyEngine](const HostPort &target) {
+        return topologyEngine != nullptr && topologyEngine->IsPeerRpcFailureReported(target);
+    };
+}
+
 static constexpr int OLD_VERSION_DEL_THREAD_MIN_NUM = 0;
 static constexpr int OLD_VERSION_DEL_THREAD_MAX_NUM = 1;
 static constexpr uint32_t SHM_QUEUE_SLOT_NUM = 32;
@@ -396,9 +418,6 @@ void WorkerOCServiceImpl::ObserveMetadataRpc(const HostPort &target, const Statu
 
 void WorkerOCServiceImpl::InitServiceImpl()
 {
-    auto *topologyEngine = topologyEngine_;
-    auto *exitRequested = exitRequested_;
-    std::weak_ptr<std::atomic_bool> metadataRpcObserverAlive = metadataRpcObserverAlive_;
     WorkerOcServiceCrudParam param{
         .workerMasterApiManager = workerMasterApiManager_,
         .workerRequestManager = workerRequestManager_,
@@ -415,16 +434,9 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .endpointPolicy = &endpointPolicy_,
         .exitRequested = exitRequested_,
         .ubAdmission = ubAdmission_.get(),
-        .metadataRpcObserver = [topologyEngine, exitRequested, metadataRpcObserverAlive](const HostPort &target,
-                                                                                         const Status &status) {
-            auto alive = metadataRpcObserverAlive.lock();
-            if (alive == nullptr || !alive->load(std::memory_order_acquire)
-                || (exitRequested != nullptr && exitRequested->load(std::memory_order_acquire))) {
-                return;
-            }
-            ObserveMetadataRpcOnTopology(topologyEngine, target, status);
-        },
+        .metadataRpcObserver = BuildMetadataRpcObserver(topologyEngine_, exitRequested_, metadataRpcObserverAlive_),
         .allowDirectoryLag = centralizedMetadata_,
+        .metadataRpcFailureReported = BuildMetadataRpcFailureReported(topologyEngine_),
     };
     createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, akSkManager_, localAddress_);
 

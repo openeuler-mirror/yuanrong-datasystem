@@ -385,8 +385,11 @@ public:
     }
 
     Status InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
-                             std::vector<RpcMessage> &payloads) override
+                             std::vector<RpcMessage> &payloads, bool *rpcDispatched = nullptr) override
     {
+        if (rpcDispatched != nullptr) {
+            *rpcDispatched = true;
+        }
         ++queryAndGetCount;
         queryAndGetRequests.push_back(request);
         if (queryAndGetHandler) {
@@ -996,6 +999,13 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex);
         ++rpcBuildCount;
+        if (!rpcBuildStatuses.empty()) {
+            Status rc = rpcBuildStatuses.front();
+            rpcBuildStatuses.erase(rpcBuildStatuses.begin());
+            if (rc.IsError()) {
+                return rc;
+            }
+        }
         auto client = std::make_shared<FakeWorkerRpcClient>(address);
         client->queryAndGetHandler = queryAndGetHandler;
         if (!existInvokeStatuses.empty()) {
@@ -1065,6 +1075,7 @@ public:
     std::shared_ptr<FakeTransporter> lastTransporter;
     std::vector<std::shared_ptr<WorkerRpcClient>> rpcClientsSeen;
     std::vector<bool> transportBuildTraceEnabled;
+    std::vector<Status> rpcBuildStatuses;
     std::vector<Status> transportBuildStatuses;
     std::vector<Status> existInvokeStatuses;
     std::vector<std::vector<Status>> transporterGetStatuses;
@@ -1781,9 +1792,12 @@ TEST(WorkerRpcClientTest, ExpiredApiDeadlineDoesNotSendRpc)
     master::QueryAndGetReqPb metadataRequest;
     master::QueryAndGetRspPb metadataResponse;
     std::vector<RpcMessage> metadataPayloads;
-    EXPECT_EQ(client.InvokeQueryAndGet(metadataRequest, metadataResponse, metadataPayloads).GetCode(),
-              K_RPC_DEADLINE_EXCEEDED);
+    bool metadataRpcDispatched = true;
+    EXPECT_EQ(
+        client.InvokeQueryAndGet(metadataRequest, metadataResponse, metadataPayloads, &metadataRpcDispatched).GetCode(),
+        K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(client.metadataInvokeCount, 0);
+    EXPECT_FALSE(metadataRpcDispatched);
 
     ExistReqPb existRequest;
     ExistRspPb existResponse;
@@ -2591,28 +2605,102 @@ TEST(ObjectMetadataClientTest, FollowsTwoRedirects)
     EXPECT_EQ(calls, std::vector<HostPort>({ MakeAddress(41), MakeAddress(42), MakeAddress(43) }));
 }
 
-TEST(ObjectMetadataClientTest, RebuildsUnavailableSharedRpcConnection)
+TEST(ObjectMetadataClientTest, ReportsRedirectTargetAccessFailure)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->queryAndGetHandler = [](const HostPort &address, const master::QueryAndGetReqPb &,
+                                     master::QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        if (address == MakeAddress(41)) {
+            auto *redirect = response.add_info();
+            redirect->set_redirect_meta_address(MakeAddress(42).ToString());
+            redirect->add_change_meta_ids("key");
+            return Status::OK();
+        }
+        return Status(K_RPC_PEER_DEAD, "redirect target is unavailable");
+    };
+    std::vector<std::pair<HostPort, Status>> failures;
+    ObjectMetadataClient metadata(
+        manager, std::make_shared<DeadlineRetry>(), nullptr, nullptr, 0,
+        [&failures](const HostPort &address, const Status &status) { failures.emplace_back(address, status); });
+    auto results = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
+    auto batch = MakeMetadataBatch(results);
+
+    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch).IsOk());
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(results[0].status));
+    ASSERT_EQ(failures.size(), 1u);
+    EXPECT_EQ(failures[0].first, MakeAddress(42));
+    EXPECT_EQ(failures[0].second.GetCode(), K_RPC_PEER_DEAD);
+}
+
+TEST(ObjectMetadataClientTest, DoesNotReportDeadlineExpiredBeforeAccess)
+{
+    ApiDeadlineGuard deadline(100, InUs{});
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    size_t invokeCount = 0;
+    manager->queryAndGetHandler = [&invokeCount](const HostPort &, const master::QueryAndGetReqPb &,
+                                                 master::QueryAndGetRspPb &, std::vector<RpcMessage> &) {
+        ++invokeCount;
+        return Status::OK();
+    };
+    size_t failureCount = 0;
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>(), nullptr, nullptr, 0,
+                                  [&failureCount](const HostPort &, const Status &) { ++failureCount; });
+    auto results = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
+    auto batch = MakeMetadataBatch(results);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+    EXPECT_EQ(metadata.QueryAndGet(MakeAddress(41), batch).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(invokeCount, 0u);
+    EXPECT_EQ(failureCount, 0u);
+}
+
+TEST(ObjectMetadataClientTest, ConnectionFailureRequestsRerouteWithoutFixedOwnerRetry)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->rpcBuildStatuses.emplace_back(K_RPC_UNAVAILABLE, "unavailable before dispatch");
+    std::vector<std::pair<HostPort, Status>> failures;
+    ObjectMetadataClient metadata(
+        manager, std::make_shared<DeadlineRetry>(), nullptr, nullptr, 0,
+        [&failures](const HostPort &address, const Status &status) { failures.emplace_back(address, status); });
+    auto results = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
+    auto batch = MakeMetadataBatch(results);
+
+    const auto rc = metadata.QueryAndGet(MakeAddress(41), batch);
+
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc));
+    EXPECT_EQ(manager->rpcBuildCount, 1);
+    ASSERT_EQ(failures.size(), 1u);
+    EXPECT_EQ(failures[0].first, MakeAddress(41));
+    EXPECT_EQ(failures[0].second.GetCode(), K_RPC_UNAVAILABLE);
+}
+
+TEST(ObjectMetadataClientTest, DispatchedDeadlineRequestsRerouteWithoutFixedOwnerRetry)
 {
     ApiDeadlineGuard deadline(1000);
     auto manager = std::make_shared<FakeDataPlaneManager>();
     int invokeCount = 0;
     manager->queryAndGetHandler = [&invokeCount](const HostPort &, const master::QueryAndGetReqPb &,
-                                                 master::QueryAndGetRspPb &response,
-                                                 std::vector<RpcMessage> &) {
-        if (++invokeCount == 1) {
-            return Status(K_RPC_UNAVAILABLE, "unavailable");
-        }
-        AddLocation(response, "key", MakeAddress(51));
-        return Status::OK();
+                                                 master::QueryAndGetRspPb &, std::vector<RpcMessage> &) {
+        ++invokeCount;
+        return Status(K_RPC_DEADLINE_EXCEEDED, "metadata owner deadline");
     };
-    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>());
+    std::vector<std::pair<HostPort, Status>> failures;
+    ObjectMetadataClient metadata(
+        manager, std::make_shared<DeadlineRetry>(), nullptr, nullptr, 0,
+        [&failures](const HostPort &address, const Status &status) { failures.emplace_back(address, status); });
     auto results = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
     auto batch = MakeMetadataBatch(results);
 
-    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch).IsOk());
-    EXPECT_EQ(manager->rpcBuildCount, 2);
-    ASSERT_EQ(results.size(), 1u);
-    EXPECT_TRUE(results[0].status.IsOk());
+    const auto rc = metadata.QueryAndGet(MakeAddress(41), batch);
+
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc));
+    EXPECT_EQ(invokeCount, 1);
+    ASSERT_EQ(failures.size(), 1u);
+    EXPECT_EQ(failures[0].first, MakeAddress(41));
+    EXPECT_EQ(failures[0].second.GetCode(), K_RPC_DEADLINE_EXCEEDED);
 }
 
 TEST(ObjectMetadataClientTest, PeerDeadTearsDownWithoutRetry)
@@ -2629,7 +2717,7 @@ TEST(ObjectMetadataClientTest, PeerDeadTearsDownWithoutRetry)
     auto results = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
     auto batch = MakeMetadataBatch(results);
 
-    EXPECT_EQ(metadata.QueryAndGet(MakeAddress(41), batch).GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(metadata.QueryAndGet(MakeAddress(41), batch)));
     EXPECT_EQ(invokeCount, 1);
     EXPECT_EQ(manager->rpcBuildCount, 1);
 
@@ -3099,11 +3187,24 @@ TEST(ObjectClientTransportTest, PeerDeadMetadataOwnerRetriesRoutedRead)
 {
     ApiDeadlineGuard deadline(1000);
     const auto ownerAddress = MakeAddress(41);
+    const auto refreshedOwnerAddress = MakeAddress(42);
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "peer-dead-metadata-retry-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
     auto metadata = std::make_shared<FakeObjectMetadataClient>();
     std::atomic<int> metadataAttempts{ 0 };
-    metadata->queryAndGetHandler = [&metadataAttempts](const HostPort &, const ObjectMetadataBatch &) {
-        return metadataAttempts.fetch_add(1) == 0 ? Status(K_RPC_PEER_DEAD, "metadata owner is dead")
-                                                  : Status::OK();
+    metadata->queryAndGetHandler = [&metadataAttempts, &client, &refreshedOwnerAddress](
+                                       const HostPort &, const ObjectMetadataBatch &) {
+        if (metadataAttempts.fetch_add(1) == 0) {
+            std::atomic_store(&client->routing_, MakeSingleWorkerRouting(refreshedOwnerAddress));
+            return Status(K_RPC_PEER_DEAD, "metadata owner is dead");
+        }
+        return Status::OK();
     };
     auto replicas = std::make_shared<FakeReplicaReader>();
     replicas->resultHandler = [](const std::string &, ObjectReadItemResult &result) {
@@ -3118,21 +3219,14 @@ TEST(ObjectClientTransportTest, PeerDeadMetadataOwnerRetriesRoutedRead)
     transportLayer->SetObjectRead(
         std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
 
-    ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 31501;
-    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
-    workerApi->clientId_ = "peer-dead-metadata-retry-test-client";
-    client->workerApi_.emplace_back(workerApi);
     client->transportLayer_ = std::move(transportLayer);
-    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
 
     const std::vector<std::string> objectKeys{ "peer-dead" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
     ASSERT_TRUE(client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
     EXPECT_EQ(metadataAttempts.load(), 2);
     EXPECT_EQ(metadata->keyGroups.size(), 2u);
+    EXPECT_EQ(metadata->addresses, std::vector<HostPort>({ ownerAddress, refreshedOwnerAddress }));
     EXPECT_EQ(replicas->unaryKeys, objectKeys);
     EXPECT_NE(buffers[0], nullptr);
 }
@@ -3417,6 +3511,253 @@ TEST(ObjectClientTransportTest, RejectsInvalidWritePlacementPolicyFromConnectOpt
     object_cache::ObjectClientImpl client(options);
 
     EXPECT_EQ(client.InitDataPlacementPolicy().GetCode(), K_INVALID);
+}
+
+TEST(ObjectClientTransportTest, ShutdownWaitsForAsyncWorkerSwitchTasks)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch_shutdown_test");
+    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
+    client.enableCrossNodeConnection_ = true;
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "switch-shutdown-test-client";
+    client.workerApi_.emplace_back(workerApi);
+
+    std::promise<void> taskStarted;
+    std::promise<void> releaseTask;
+    auto releaseFuture = releaseTask.get_future().share();
+    client.asyncSwitchWorkerPool_->Execute([&taskStarted, releaseFuture]() {
+        taskStarted.set_value();
+        releaseFuture.wait();
+    });
+    taskStarted.get_future().wait();
+    EXPECT_TRUE(client.SubmitUnavailableWorkerSwitch(workerApi));
+    EXPECT_TRUE(client.SubmitUrmaDataPlaneSwitch(object_cache::ObjectClientImpl::LOCAL_WORKER, workerApi));
+    {
+        std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
+        EXPECT_EQ(client.unavailableWorkerSwitchPending_.size(), 1U);
+    }
+
+    bool initNeedsCompletion = false;
+    ASSERT_TRUE(client.clientStateManager_->ProcessInit(initNeedsCompletion).IsOk());
+    client.clientStateManager_->CompleteHandler(false, initNeedsCompletion);
+    auto shutdownFuture = std::async(std::launch::async, [&client]() {
+        bool shutdownNeedsCompletion = false;
+        auto rc = client.ShutDown(shutdownNeedsCompletion, true);
+        client.clientStateManager_->CompleteHandler(rc.IsError(), shutdownNeedsCompletion);
+        return rc;
+    });
+
+    EXPECT_EQ(shutdownFuture.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
+    releaseTask.set_value();
+    EXPECT_TRUE(shutdownFuture.get().IsOk());
+    EXPECT_EQ(client.asyncSwitchWorkerPool_, nullptr);
+    EXPECT_EQ(client.asyncSwitchWorkerPoolHandle_, nullptr);
+    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
+}
+
+TEST(ObjectClientTransportTest, DirectGetRecoveryFailureForcesRingRefreshWithoutEagerSwitch)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    client.enableCrossNodeConnection_ = true;
+    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "direct_get_refresh_test");
+    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    client.workerApi_.emplace_back(workerApi);
+    auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
+    std::atomic_store(&client.routing_, routing);
+
+    client.HandleDirectGetFailure(workerApi, Status(K_RPC_DEADLINE_EXCEEDED, "request timed out"));
+
+    EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
+    std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
+    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
+}
+
+TEST(ObjectClientTransportTest, DirectGetNonRecoveryFailureDoesNotForceRingRefresh)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    client.workerApi_.emplace_back(workerApi);
+    auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
+    std::atomic_store(&client.routing_, routing);
+
+    client.HandleDirectGetFailure(workerApi, Status(K_NOT_FOUND, "missing object"));
+
+    EXPECT_EQ(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
+}
+
+TEST(ObjectClientTransportTest, SetCreateMetadataOwnerUnavailableForcesRingRefreshWithoutReplay)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
+    std::atomic_store(&client.routing_, routing);
+    std::vector<HostPort> excludedWorkers;
+
+    const bool retry = client.HandleSetRouteFailure(
+        Status(K_METADATA_OWNER_UNAVAILABLE, "metadata owner is unavailable"),
+        object_cache::ObjectClientImpl::SetFailureStage::CREATE, MakeAddress(31501), excludedWorkers);
+
+    EXPECT_FALSE(retry);
+    EXPECT_TRUE(excludedWorkers.empty());
+    EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
+}
+
+TEST(ObjectClientTransportTest, SetCreatePeerDeadForcesRingRefreshAndKeepsSafeRetry)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
+    std::atomic_store(&client.routing_, routing);
+    std::vector<HostPort> excludedWorkers;
+
+    const bool retry = client.HandleSetRouteFailure(
+        Status(K_RPC_PEER_DEAD, "ingress worker is unavailable"),
+        object_cache::ObjectClientImpl::SetFailureStage::CREATE, MakeAddress(31501), excludedWorkers);
+
+    EXPECT_TRUE(retry);
+    EXPECT_EQ(excludedWorkers, std::vector<HostPort>({ MakeAddress(31501) }));
+    EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
+}
+
+TEST(ObjectClientTransportTest, DeadBoundWorkerForcesRingRefreshBeforeRoutedRetryReturns)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    client.enableLocalCache_ = false;
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(1), RpcCredential{});
+    client.workerApi_.emplace_back(workerApi);
+    auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
+    std::atomic_store(&client.routing_, routing);
+
+    const auto status = client.CheckBoundWorkerAvailability();
+
+    EXPECT_EQ(status.GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
+}
+
+TEST(ObjectClientTransportTest, AuthoritativeRingRemovalQueuesBoundWorkerSwitchOnlyAfterRoutingInit)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    client.enableCrossNodeConnection_ = true;
+    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "ring_removal_switch_test");
+    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    client.workerApi_.emplace_back(workerApi);
+
+    std::promise<void> taskStarted;
+    std::promise<void> releaseTask;
+    auto releaseFuture = releaseTask.get_future().share();
+    client.asyncSwitchWorkerPool_->Execute([&taskStarted, releaseFuture]() {
+        taskStarted.set_value();
+        releaseFuture.wait();
+    });
+    taskStarted.get_future().wait();
+
+    ::datasystem::ClusterTopologyPb ringWithoutBoundWorker;
+    (*ringWithoutBoundWorker.mutable_members())[MakeAddress(31502).ToString()].set_state(
+        ::datasystem::MembershipPb::ACTIVE);
+    client.MaybeSwitchWorkerRemovedFromRing(ringWithoutBoundWorker);
+    {
+        std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
+        EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
+    }
+
+    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(MakeAddress(31502)));
+    client.MaybeSwitchWorkerRemovedFromRing(ringWithoutBoundWorker);
+    client.MaybeSwitchWorkerRemovedFromRing(ringWithoutBoundWorker);
+    {
+        std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
+        EXPECT_EQ(client.unavailableWorkerSwitchPending_.size(), 1U);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(client.switchNodeMutex_);
+        client.workerApi_[client.currentNode_] =
+            std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31502), RpcCredential{});
+    }
+    releaseTask.set_value();
+    client.DrainAsyncSwitchWorkerPool();
+    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
+}
+
+TEST(ObjectClientTransportTest, ActiveBoundWorkerDoesNotQueueAuthoritativeRingSwitch)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    client.enableCrossNodeConnection_ = true;
+    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "active_ring_switch_test");
+    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    client.workerApi_.emplace_back(workerApi);
+    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(MakeAddress(31501)));
+    ::datasystem::ClusterTopologyPb ring;
+    (*ring.mutable_members())[MakeAddress(31501).ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+
+    client.MaybeSwitchWorkerRemovedFromRing(ring);
+
+    std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
+    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
+}
+
+TEST(ObjectClientTransportTest, NonActiveBoundWorkerQueuesAuthoritativeRingSwitch)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    client.enableCrossNodeConnection_ = true;
+    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "non_active_ring_switch_test");
+    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    client.workerApi_.emplace_back(workerApi);
+    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(MakeAddress(31502)));
+
+    std::promise<void> taskStarted;
+    std::promise<void> releaseTask;
+    auto releaseFuture = releaseTask.get_future().share();
+    client.asyncSwitchWorkerPool_->Execute([&taskStarted, releaseFuture]() {
+        taskStarted.set_value();
+        releaseFuture.wait();
+    });
+    taskStarted.get_future().wait();
+    ::datasystem::ClusterTopologyPb ring;
+    (*ring.mutable_members())[MakeAddress(31501).ToString()].set_state(::datasystem::MembershipPb::FAILED);
+
+    client.MaybeSwitchWorkerRemovedFromRing(ring);
+    {
+        std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
+        EXPECT_EQ(client.unavailableWorkerSwitchPending_.size(), 1U);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(client.switchNodeMutex_);
+        client.workerApi_[client.currentNode_] =
+            std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31502), RpcCredential{});
+    }
+    releaseTask.set_value();
+    client.DrainAsyncSwitchWorkerPool();
 }
 
 TEST(ObjectReadFlowTest, QueriesMultipleOwnersInParallelAndPreservesPartialSuccess)

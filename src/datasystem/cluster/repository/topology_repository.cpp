@@ -201,7 +201,7 @@ Status TopologyRepository::ReadTopology(int32_t timeoutMs, TopologyState &state,
 }
 
 Status TopologyRepository::CompareAndSwapTopology(uint64_t expectedVersion, const TopologyState &desired,
-                                                  TopologyCasResult &result)
+                                                  TopologyCasResult &result, int64_t expectedAuthorityRevision)
 {
     result = {};
     CHECK_FAIL_RETURN_STATUS(desired.version == expectedVersion + 1, K_INVALID, "topology CAS version must advance");
@@ -224,7 +224,11 @@ Status TopologyRepository::CompareAndSwapTopology(uint64_t expectedVersion, cons
         next = std::make_unique<std::string>(desiredBytes);
         return Status::OK();
     };
-    auto rc = backend_.CAS(keys_.TopologyTable(), TopologyKeyHelper::TopologyKey(), process);
+    RangeSearchResult casResult;
+    auto rc = expectedAuthorityRevision > 0
+                  ? backend_.CASAtRevision(keys_.TopologyTable(), TopologyKeyHelper::TopologyKey(), process,
+                                           expectedAuthorityRevision, casResult)
+                  : backend_.CAS(keys_.TopologyTable(), TopologyKeyHelper::TopologyKey(), process, casResult);
     if (rc.IsOk() && !conflict) {
         result.outcome = TopologyCasOutcome::COMMITTED;
         return Status::OK();

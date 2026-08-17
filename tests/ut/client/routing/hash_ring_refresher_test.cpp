@@ -17,9 +17,11 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -28,7 +30,9 @@
 #include "datasystem/client/routing/hash_ring_refresher.h"
 #include "datasystem/client/routing/i_worker_filter.h"
 #include "datasystem/client/routing/worker_router.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "ut/common.h"
 
@@ -228,7 +232,7 @@ TEST_F(HashRingRefresherTest, TestConcurrentForceRefreshKeepsRetryInterval)
     {
         std::unique_lock<std::mutex> lock(waitMutex);
         ASSERT_TRUE(waitCv.wait_for(lock, std::chrono::seconds(2), [&] { return requestedWaits.size() >= 2; }));
-        EXPECT_EQ(requestedWaits[1], std::chrono::milliseconds(500));
+        EXPECT_EQ(requestedWaits[1], std::chrono::milliseconds(250));
     }
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -276,6 +280,108 @@ TEST_F(HashRingRefresherTest, TestSuccessfulRefreshUpdatesWorkerCandidates)
     }
     refresher.Stop();
     EXPECT_TRUE(fetchedUpdatedWorker);
+}
+
+TEST_F(HashRingRefresherTest, ForceRefreshCoalescesOneRetryWindow)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    client::HashRingRefresher refresher(
+        router, [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+                   std::unordered_map<std::string, std::string> &) { return Status::OK(); });
+
+    EXPECT_TRUE(refresher.ForceRefresh());
+    EXPECT_FALSE(refresher.ForceRefresh());
+}
+
+TEST_F(HashRingRefresherTest, ForceRefreshSynchronizesWithWaitTransition)
+{
+    constexpr char injectPoint[] = "HashRingRefresher.RefreshLoop.beforeWait";
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    client::HashRingRefresher refresher(
+        router, [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+                   std::unordered_map<std::string, std::string> &) { return Status::OK(); });
+
+    DS_ASSERT_OK(inject::Set(injectPoint, "pause"));
+    Raii clearInject([&] { (void)inject::Clear(injectPoint); });
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+    for (size_t retry = 0; retry < 2'000 && inject::GetExecuteCount(injectPoint) == 0; ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(inject::GetExecuteCount(injectPoint), 0);
+    auto force = std::async(std::launch::async, [&] { return refresher.ForceRefresh(); });
+    EXPECT_EQ(force.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+
+    DS_ASSERT_OK(inject::Clear(injectPoint));
+    ASSERT_EQ(force.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_TRUE(force.get());
+    refresher.Stop();
+}
+
+TEST_F(HashRingRefresherTest, DeadlineExtensionAtExpiryKeepsForcedRefreshCadence)
+{
+    constexpr char injectPoint[] = "HashRingRefresher.RefreshLoop.afterDeadlineRead";
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::atomic<int> fetchCount{ 0 };
+    client::HashRingRefresher refresher(
+        router, [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &,
+                              bool &, std::unordered_map<std::string, std::string> &) {
+            fetchCount.fetch_add(1, std::memory_order_release);
+            return Status::OK();
+        });
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+    for (size_t retry = 0; retry < 2'000 && fetchCount.load(std::memory_order_acquire) < 2; ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GE(fetchCount.load(std::memory_order_acquire), 2);
+
+    DS_ASSERT_OK(inject::Set(injectPoint, "pause"));
+    Raii clearInject([&] { (void)inject::Clear(injectPoint); });
+    ASSERT_TRUE(refresher.ForceRefresh());
+    for (size_t retry = 0; retry < 2'000 && inject::GetExecuteCount(injectPoint) == 0; ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(inject::GetExecuteCount(injectPoint), 0);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(5'700));
+    EXPECT_FALSE(refresher.ForceRefresh());
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    const int fetchesBeforeResume = fetchCount.load(std::memory_order_acquire);
+    DS_ASSERT_OK(inject::Clear(injectPoint));
+
+    for (size_t retry = 0; retry < 1'500 && fetchCount.load(std::memory_order_acquire) == fetchesBeforeResume;
+         ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    refresher.Stop();
+    EXPECT_GT(fetchCount.load(std::memory_order_acquire), fetchesBeforeResume);
+}
+
+TEST_F(HashRingRefresherTest, StopSynchronizesWithWaitTransition)
+{
+    constexpr char injectPoint[] = "HashRingRefresher.RefreshLoop.afterWaitPredicateRead";
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    client::HashRingRefresher refresher(
+        router, [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+                   std::unordered_map<std::string, std::string> &) { return Status::OK(); });
+
+    DS_ASSERT_OK(inject::Set(injectPoint, "pause"));
+    Raii clearInject([&] { (void)inject::Clear(injectPoint); });
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+    for (size_t retry = 0; retry < 2'000 && inject::GetExecuteCount(injectPoint) == 0; ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(inject::GetExecuteCount(injectPoint), 0);
+    auto stop = std::async(std::launch::async, [&] { refresher.Stop(); });
+
+    DS_ASSERT_OK(inject::Clear(injectPoint));
+    const bool stoppedWithoutRecovery = stop.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready;
+    if (!stoppedWithoutRecovery) {
+        (void)refresher.ForceRefresh();
+    }
+    EXPECT_TRUE(stoppedWithoutRecovery);
+    EXPECT_EQ(stop.wait_for(std::chrono::seconds(1)), std::future_status::ready);
 }
 
 TEST_F(HashRingRefresherTest, TestRingUpdateHookRunsBeforeRoutePublication)
@@ -469,6 +575,50 @@ TEST_F(HashRingRefresherTest, TestForcedRefreshRetriesUntilRingChanges)
     EXPECT_EQ(selected.ToString(), "127.0.0.1:2000");
 }
 
+TEST_F(HashRingRefresherTest, RepeatedFailureExtendsForcedRefreshUntilIsolationPublishes)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::mutex mutex;
+    std::condition_variable cv;
+    int fetchCount = 0;
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                     uint64_t &newVersion, bool &changed, std::unordered_map<std::string, std::string> &hostIdMap) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto currentFetch = ++fetchCount;
+        changed = currentFetch == 1 || currentFetch == 3 || currentFetch >= 17;
+        newVersion = currentFetch >= 17 ? 3 : (currentFetch >= 3 ? 2 : 1);
+        FillRing(ring, hostIdMap, currentFetch >= 17 ? "127.0.0.1:2000" : "127.0.0.1:1000");
+        cv.notify_all();
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(2), [&] { return fetchCount >= 2; }));
+    }
+
+    ASSERT_TRUE(refresher.ForceRefresh());
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(6), [&] { return fetchCount >= 13; }));
+    }
+    EXPECT_FALSE(refresher.ForceRefresh());
+    bool isolationPublished = false;
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        isolationPublished = cv.wait_for(lock, std::chrono::seconds(4), [&] { return fetchCount >= 17; });
+    }
+    refresher.Stop();
+    ASSERT_TRUE(isolationPublished);
+
+    HostPort selected;
+    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    EXPECT_EQ(selected.ToString(), "127.0.0.1:2000");
+}
+
 TEST_F(HashRingRefresherTest, TestAllWorkersUnreachableKeepsCurrentRing)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
@@ -552,6 +702,84 @@ TEST_F(HashRingRefresherTest, TestFilterNotifiedOnlyWhenRingChanges)
     EXPECT_EQ(selected.ToString(), "127.0.0.1:2000");
 }
 
+TEST_F(HashRingRefresherTest, BackgroundRefreshContinuesPastReachableUnchangedWorker)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::mutex mutex;
+    std::condition_variable cv;
+    int fetchCount = 0;
+    auto fetch = [&](const HostPort &worker, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                     uint64_t &newVersion, bool &changed, std::unordered_map<std::string, std::string> &hostIdMap,
+                     int32_t timeoutMs) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++fetchCount;
+        if (timeoutMs == 0) {
+            FillRing(ring, hostIdMap, "127.0.0.1:1000");
+            FillRing(ring, hostIdMap, "127.0.0.1:2000");
+            newVersion = 1;
+            changed = true;
+        } else if (worker == HostPort("127.0.0.1", 1000)) {
+            EXPECT_EQ(timeoutMs, 250);
+            newVersion = 1;
+            changed = false;
+        } else {
+            EXPECT_EQ(timeoutMs, 250);
+            FillRing(ring, hostIdMap, "127.0.0.1:2000");
+            newVersion = 2;
+            changed = true;
+        }
+        cv.notify_all();
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(2), [&] { return fetchCount >= 3; }));
+    }
+    refresher.Stop();
+
+    HostPort selected;
+    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    EXPECT_EQ(selected, HostPort("127.0.0.1", 2000));
+}
+
+TEST_F(HashRingRefresherTest, StopWaitsForAtMostOneBoundedBackgroundRpc)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::promise<void> backgroundStarted;
+    std::atomic<int> fetchCount{ 0 };
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                     uint64_t &newVersion, bool &changed, std::unordered_map<std::string, std::string> &hostIdMap,
+                     int32_t timeoutMs) {
+        ++fetchCount;
+        if (timeoutMs == 0) {
+            FillRing(ring, hostIdMap, "127.0.0.1:1000");
+            FillRing(ring, hostIdMap, "127.0.0.1:2000");
+            newVersion = 1;
+            changed = true;
+            return Status::OK();
+        }
+        EXPECT_EQ(timeoutMs, 250);
+        backgroundStarted.set_value();
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        return Status(K_RPC_DEADLINE_EXCEEDED, "simulated bounded timeout");
+    };
+    client::HashRingRefresher refresher(router, fetch);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+    ASSERT_EQ(backgroundStarted.get_future().wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    const auto start = std::chrono::steady_clock::now();
+    refresher.Stop();
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_LT(elapsed, std::chrono::milliseconds(500));
+    EXPECT_EQ(fetchCount.load(), 2);
+}
+
 TEST_F(HashRingRefresherTest, TestInvalidRefreshIntervalFails)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
@@ -565,7 +793,7 @@ TEST_F(HashRingRefresherTest, TestInvalidRefreshIntervalFails)
 TEST_F(HashRingRefresherTest, TestInitialFetchValidatesDependencies)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    client::HashRingRefresher noFetch(router, {});
+    client::HashRingRefresher noFetch(router, client::HashRingRefresher::FetchRpc{});
     EXPECT_EQ(noFetch.InitialFetch(HostPort("127.0.0.1", 1000)).GetCode(), K_INVALID);
 
     auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,

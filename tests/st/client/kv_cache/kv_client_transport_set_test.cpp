@@ -67,9 +67,13 @@ constexpr char HOST_ID_VALUE[] = "routing-transport-set-host";
 bool IsCoordinatorTransportSetCase()
 {
     static const std::unordered_set<std::string> coordinatorCases = {
-        "RoutedSetPublishesDataAndMetadata", "LocalCacheEnabledSetUsesConnectedWorker",
-        "RoutedMSetGroupsObjectsByMetadataOwner", "LocalCacheEnabledMSetUsesConnectedWorker",
-        "ScaleDownPublishReroutesWholeTransaction", "AmbiguousPublishFailureIsNotReplayedOnAnotherWorker"
+        "RoutedSetPublishesDataAndMetadata",
+        "LocalCacheEnabledSetUsesConnectedWorker",
+        "RoutedMSetGroupsObjectsByMetadataOwner",
+        "LocalCacheEnabledMSetUsesConnectedWorker",
+        "ScaleDownPublishReroutesWholeTransaction",
+        "AmbiguousPublishFailureIsNotReplayedOnAnotherWorker",
+        "MetadataOwnerFailureRefreshesRingWithoutEvictingIngress"
     };
     std::string suiteName;
     std::string caseName;
@@ -801,6 +805,41 @@ TEST_F(KVClientTransportSetTest, AmbiguousPublishFailureIsNotReplayedOnAnotherWo
     // of failing over to another.
     ASSERT_EQ(retryWorker, firstWorker);
     AssertValue(key, value);
+}
+
+TEST_F(KVClientTransportSetTest, MetadataOwnerFailureRefreshesRingWithoutEvictingIngress)
+{
+    std::string routedKey;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_meta_owner_failure_routed_", routedKey));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, READER_WORKER_INDEX, "worker.before_CreateMetadataToMaster",
+                                           "1*return(K_RPC_UNAVAILABLE)"));
+    ASSERT_EQ(routedClient_->Set(routedKey, std::string(VALUE_SIZE, 'r')).GetCode(), K_METADATA_OWNER_UNAVAILABLE);
+
+    std::string routedRetryKey;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_meta_owner_retry_routed_", routedRetryKey));
+    DS_ASSERT_OK(routedClient_->Set(routedRetryKey, std::string(VALUE_SIZE, 's')));
+    AssertPrimaryWorker(routedRetryKey, READER_WORKER_INDEX);
+
+    std::string msetKey;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_meta_owner_failure_mset_", msetKey));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, READER_WORKER_INDEX, "master.CreateMultiMeta.begin",
+                                           "20*return(K_RPC_UNAVAILABLE)"));
+    std::vector<std::string> failedKeys;
+    const std::string msetValue(VALUE_SIZE, 'b');
+    ASSERT_EQ(routedClient_->MSet({ msetKey }, { StringView(msetValue) }, failedKeys).GetCode(),
+              K_METADATA_OWNER_UNAVAILABLE);
+    EXPECT_EQ(failedKeys, std::vector<std::string>({ msetKey }));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, READER_WORKER_INDEX, "master.CreateMultiMeta.begin"));
+
+    // local-cache clients do not own a hash ring; they keep using the healthy ingress worker,
+    // whose worker-side ring converges independently.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, ROUTED_CLIENT_WORKER_INDEX, "worker.before_CreateMetadataToMaster",
+                                           "1*return(K_RPC_UNAVAILABLE)"));
+    ASSERT_EQ(localClient_->Set("transport_meta_owner_failure_local", std::string(VALUE_SIZE, 'l')).GetCode(),
+              K_METADATA_OWNER_UNAVAILABLE);
+    const std::string localRetryKey = "transport_meta_owner_retry_local";
+    DS_ASSERT_OK(localClient_->Set(localRetryKey, std::string(VALUE_SIZE, 'm')));
+    AssertPrimaryWorker(localRetryKey, ROUTED_CLIENT_WORKER_INDEX);
 }
 
 class KVClientTransportSetWithShmTest : public KVClientTransportSetTest {

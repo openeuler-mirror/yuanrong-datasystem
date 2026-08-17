@@ -3098,7 +3098,7 @@ TEST(TopologyControllerTest, ExternalEventSourceConfirmsMultipleFailuresWithoutW
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
-TEST(TopologyControllerTest, FailureSummaryCandidateProviderCommitsFailureForReadyMember)
+TEST(TopologyControllerTest, ActiveFailureCandidateProviderCommitsFailureForReadyMember)
 {
     FakeCoordinationBackend backend;
     std::unique_ptr<TopologyKeyHelper> keys;
@@ -3118,22 +3118,269 @@ TEST(TopologyControllerTest, FailureSummaryCandidateProviderCommitsFailureForRea
     }
 
     TopologyControllerOptions options;
-    options.reconcileTick = std::chrono::milliseconds(1);
+    options.reconcileTick = std::chrono::seconds(5);
     options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
     options.probeEpoch = "active-failure-candidate-provider";
+    std::atomic<int64_t> nowMs{ 0 };
+    options.now = [&] { return std::chrono::steady_clock::time_point(std::chrono::milliseconds(nowMs.load())); };
     options.failureSummaryCandidateProvider = [&](const TopologySnapshot &, const std::vector<MembershipRecord> &,
                                                   std::chrono::steady_clock::time_point) {
-        return std::vector<MemberIdentity>{ latest.members[1].identity };
+        return std::vector<MemberIdentity>{ latest.members[1].identity, latest.members[2].identity };
+    };
+    std::atomic<size_t> probeCalls{ 0 };
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        ++probeCalls;
+        EXPECT_EQ(targets, std::vector<MemberIdentity>({ latest.members[1].identity, latest.members[2].identity }));
+        std::vector<ControlBackendProbeResult> results;
+        for (const auto &target : targets) {
+            results.push_back(
+                { target, std::nullopt, ControlBackendProbeOutcome::UNAVAILABLE, std::chrono::milliseconds(1) });
+        }
+        return results;
+    };
+    std::atomic<bool> allowCommit{ false };
+    std::atomic<size_t> fenceCalls{ 0 };
+    options.activeFailureCommitFence = [&](const TopologySnapshot &, const std::vector<MembershipRecord> &,
+                                           std::chrono::steady_clock::time_point, std::optional<uint64_t>,
+                                           const std::vector<MemberIdentity> &expected,
+                                           const std::function<Status(int64_t)> &mutation) {
+        ++fenceCalls;
+        EXPECT_EQ(expected, std::vector<MemberIdentity>({ latest.members[1].identity, latest.members[2].identity }));
+        return allowCommit.load() ? mutation(0) : Status::OK();
     };
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
 
     DS_ASSERT_OK(controller.Start());
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 1; }));
+
+    TopologyState advanced = latest;
+    advanced.version = 2;
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), advanced);
+    nowMs.store(800);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return fenceCalls.load() > 0; }));
+    TopologyState preserved;
+    int64_t preservedRevision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, preserved, preservedRevision));
+    EXPECT_EQ(preserved.members[1].state, MemberState::ACTIVE);
+
+    allowCommit.store(true);
+    nowMs.store(1600);
     DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
     const auto deadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
     EXPECT_TRUE(WaitForTopology(repository, deadline, [](const auto &state) {
         if (!state.activeBatch.has_value() || state.activeBatch->type != TopologyChangeType::FAILURE) {
             return false;
         }
+        return std::count_if(state.members.begin(), state.members.end(),
+                             [](const auto &member) { return member.state == MemberState::FAILED; })
+               == 2;
+    }));
+    EXPECT_EQ(probeCalls.load(), 3U);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, ActiveFailureDirectProbeBoundsEachRoundAndRotatesCandidates)
+{
+    constexpr size_t candidateCount = 270;
+    constexpr size_t probeLimit = 128;
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("active-failure-probe-bound", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(128);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    std::vector<MemberIdentity> candidates;
+    for (size_t i = 0; i <= candidateCount; ++i) {
+        auto memberId = std::string(16, 'a');
+        const auto suffix = std::to_string(i);
+        memberId.replace(memberId.size() - suffix.size(), suffix.size(), suffix);
+        MemberIdentity identity{ memberId, "127.0.0.1:" + std::to_string(10'000 + i) };
+        latest.members.push_back(Member{ identity, MemberState::ACTIVE, { static_cast<uint32_t>(i + 1) } });
+        PutMembership(backend, *keys, identity.address, MemberLifecycleState::READY);
+        if (i > 0) {
+            candidates.push_back(identity);
+        }
+    }
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::seconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "active-failure-probe-bound";
+    std::atomic<size_t> candidateProviderCalls{ 0 };
+    options.failureSummaryCandidateProvider = [candidates, &candidateProviderCalls](
+                                                  const TopologySnapshot &, const std::vector<MembershipRecord> &,
+                                                  std::chrono::steady_clock::time_point) {
+        ++candidateProviderCalls;
+        return candidates;
+    };
+    options.activeFailureCommitFence = [](const TopologySnapshot &, const std::vector<MembershipRecord> &,
+                                          std::chrono::steady_clock::time_point, std::optional<uint64_t>,
+                                          const std::vector<MemberIdentity> &,
+                                          const std::function<Status(int64_t)> &) { return Status::OK(); };
+    std::mutex probeMutex;
+    std::unordered_set<std::string> probedAddresses;
+    std::vector<size_t> batchSizes;
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        std::lock_guard<std::mutex> lock(probeMutex);
+        batchSizes.push_back(targets.size());
+        std::vector<ControlBackendProbeResult> results;
+        for (const auto &target : targets) {
+            probedAddresses.insert(target.address);
+            results.push_back(
+                { target, std::nullopt, ControlBackendProbeOutcome::RESPONSE, std::chrono::milliseconds(1) });
+        }
+        return results;
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] {
+        std::lock_guard<std::mutex> lock(probeMutex);
+        return probedAddresses.size() == candidateCount;
+    }));
+    {
+        std::lock_guard<std::mutex> lock(probeMutex);
+        ASSERT_GE(batchSizes.size(), 3U);
+        EXPECT_EQ(batchSizes.front(), probeLimit);
+        EXPECT_TRUE(std::all_of(batchSizes.begin(), batchSizes.end(),
+                                [](size_t size) { return size > 0 && size <= probeLimit; }));
+    }
+    EXPECT_EQ(candidateProviderCalls.load(), 1U);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, TwoWorkerActiveFailureRequiresCoordinatorProbe)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("two-worker-active-failure-probe", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    for (const auto &member : latest.members) {
+        PutMembership(backend, *keys, member.identity.address, MemberLifecycleState::READY);
+    }
+
+    std::atomic<ControlBackendProbeOutcome> probeOutcome{ ControlBackendProbeOutcome::UNAVAILABLE };
+    std::atomic<size_t> probeCalls{ 0 };
+    std::atomic<size_t> candidateCalls{ 0 };
+    std::atomic<bool> ambiguousCandidates{ false };
+    std::atomic<bool> candidateCurrentAtCommit{ true };
+    std::atomic<bool> changeEpochBeforeProbeReturn{ false };
+    std::atomic<int64_t> nowMs{ 0 };
+    std::atomic<uint64_t> controlEpoch{ 1 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::seconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.probeEpoch = "two-worker-active-failure-probe";
+    options.now = [&] { return std::chrono::steady_clock::time_point(std::chrono::milliseconds(nowMs.load())); };
+    options.collectiveControlEpoch = [&] { return std::optional<uint64_t>{ controlEpoch.load() }; };
+    options.collectiveReplacementFence = [&](uint64_t expectedEpoch, const std::function<Status()> &mutation) {
+        return expectedEpoch == controlEpoch.load() ? mutation() : Status::OK();
+    };
+    options.failureSummaryCandidateProvider = [&](const TopologySnapshot &, const std::vector<MembershipRecord> &,
+                                                  std::chrono::steady_clock::time_point) {
+        ++candidateCalls;
+        return ambiguousCandidates.load()
+                   ? std::vector<MemberIdentity>{ latest.members[0].identity, latest.members[1].identity }
+                   : std::vector<MemberIdentity>{ latest.members[1].identity };
+    };
+    options.activeFailureCommitFence =
+        [&](const TopologySnapshot &, const std::vector<MembershipRecord> &, std::chrono::steady_clock::time_point,
+            std::optional<uint64_t> expectedControlEpoch, const std::vector<MemberIdentity> &,
+            const std::function<Status(int64_t)> &mutation) {
+            return candidateCurrentAtCommit.load() && expectedControlEpoch == controlEpoch.load() ? mutation(0)
+                                                                                                  : Status::OK();
+        };
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        ++probeCalls;
+        if (changeEpochBeforeProbeReturn.exchange(false)) {
+            ++controlEpoch;
+        }
+        return std::vector<ControlBackendProbeResult>{ { targets.front(), std::nullopt, probeOutcome.load(),
+                                                         std::chrono::milliseconds(1) } };
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 1; }));
+
+    ambiguousCandidates.store(true);
+    nowMs.store(600);
+    const auto callsBeforeAmbiguous = candidateCalls.load();
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return candidateCalls.load() > callsBeforeAmbiguous; }));
+    EXPECT_EQ(probeCalls.load(), 1UL);
+
+    ambiguousCandidates.store(false);
+    probeOutcome.store(ControlBackendProbeOutcome::RESPONSE);
+    nowMs.store(1'200);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 2; }));
+
+    probeOutcome.store(ControlBackendProbeOutcome::DEADLINE_EXCEEDED);
+    nowMs.store(1'800);
+    const auto callsBeforeThrottle = candidateCalls.load();
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return candidateCalls.load() > callsBeforeThrottle; }));
+    EXPECT_EQ(probeCalls.load(), 2UL);
+
+    nowMs.store(2'200);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 3; }));
+    TopologyState observed;
+    int64_t revision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    const auto target = std::find_if(observed.members.begin(), observed.members.end(), [&](const auto &member) {
+        return member.identity.address == latest.members[1].identity.address;
+    });
+    ASSERT_NE(target, observed.members.end());
+    EXPECT_EQ(target->state, MemberState::ACTIVE);
+
+    controlEpoch.store(2);
+    nowMs.store(3'200);
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 4; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    const auto preserved = std::find_if(observed.members.begin(), observed.members.end(), [&](const auto &member) {
+        return member.identity.address == latest.members[1].identity.address;
+    });
+    ASSERT_NE(preserved, observed.members.end());
+    EXPECT_EQ(preserved->state, MemberState::ACTIVE);
+
+    changeEpochBeforeProbeReturn.store(true);
+    nowMs.store(4'200);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 5; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, observed, revision));
+    const auto fenced = std::find_if(observed.members.begin(), observed.members.end(), [&](const auto &member) {
+        return member.identity.address == latest.members[1].identity.address;
+    });
+    ASSERT_NE(fenced, observed.members.end());
+    EXPECT_EQ(fenced->state, MemberState::ACTIVE);
+
+    nowMs.store(5'200);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 6; }));
+    nowMs.store(6'200);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    const auto deadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
+    EXPECT_TRUE(WaitForTopology(repository, deadline, [](const auto &state) {
         return std::any_of(state.members.begin(), state.members.end(), [](const auto &member) {
             return member.identity.address == "127.0.0.1:2" && member.state == MemberState::FAILED;
         });
@@ -3162,10 +3409,12 @@ TEST(TopologyControllerTest, FailureSummaryCandidateProviderReplansJoiningScaleO
 
     std::atomic<bool> reportJoining{ false };
     TopologyControllerOptions options;
-    options.reconcileTick = std::chrono::milliseconds(1);
+    options.reconcileTick = std::chrono::seconds(5);
     options.scaleOutCollectWindow = std::chrono::milliseconds(0);
     options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
     options.probeEpoch = "joining-failure-summary-provider";
+    std::atomic<int64_t> nowMs{ 0 };
+    options.now = [&] { return std::chrono::steady_clock::time_point(std::chrono::milliseconds(nowMs.load())); };
     options.failureSummaryCandidateProvider = [&](const TopologySnapshot &snapshot,
                                                   const std::vector<MembershipRecord> &,
                                                   std::chrono::steady_clock::time_point) {
@@ -3177,6 +3426,22 @@ TEST(TopologyControllerTest, FailureSummaryCandidateProviderReplansJoiningScaleO
         return iter == snapshot.Members().end() ? std::vector<MemberIdentity>{}
                                                 : std::vector<MemberIdentity>{ iter->identity };
     };
+    std::atomic<size_t> probeCalls{ 0 };
+    std::atomic<size_t> fenceCalls{ 0 };
+    std::atomic<bool> allowCommit{ false };
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        ++probeCalls;
+        return std::vector<ControlBackendProbeResult>{
+            { targets.front(), std::nullopt, ControlBackendProbeOutcome::UNAVAILABLE, std::chrono::milliseconds(1) }
+        };
+    };
+    options.activeFailureCommitFence =
+        [&](const TopologySnapshot &, const std::vector<MembershipRecord> &, std::chrono::steady_clock::time_point,
+            std::optional<uint64_t>, const std::vector<MemberIdentity> &,
+            const std::function<Status(int64_t)> &mutation) {
+            ++fenceCalls;
+            return allowCommit.load() ? mutation(0) : Status::OK();
+        };
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
 
     DS_ASSERT_OK(controller.Start());
@@ -3184,12 +3449,28 @@ TEST(TopologyControllerTest, FailureSummaryCandidateProviderReplansJoiningScaleO
     ASSERT_TRUE(ActiveScaleOutBatchHasJoiningCount(repository, scaleOutDeadline, 1));
     reportJoining.store(true);
     DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return probeCalls.load() == 1; }));
+    TopologyState preserved;
+    int64_t preservedRevision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, preserved, preservedRevision));
+    EXPECT_TRUE(preserved.activeBatch.has_value());
+
+    nowMs.store(800);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition([&] { return fenceCalls.load() == 1; }));
+    DS_ASSERT_OK(repository.ReadTopology(CONTROLLER_TEST_READ_TIMEOUT_MS, preserved, preservedRevision));
+    EXPECT_TRUE(preserved.activeBatch.has_value());
+
+    allowCommit.store(true);
+    nowMs.store(1'600);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
     const auto replanDeadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
     EXPECT_TRUE(WaitForTopology(repository, replanDeadline, [](const auto &state) {
         return !state.activeBatch.has_value() && state.members.size() == 2
                && std::all_of(state.members.begin(), state.members.end(),
                               [](const auto &member) { return member.state == MemberState::ACTIVE; });
     }));
+    EXPECT_EQ(probeCalls.load(), 3U);
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 

@@ -256,7 +256,8 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
                                                   options.allowUbRuntimeFailure);
     auto retry = std::make_shared<DeadlineRetry>(std::move(options.retryAdmissionCheck));
     auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry, advisor_, std::move(ubBufferProvider),
-                                                           GetConfiguredUbInlineBufferSize());
+                                                           GetConfiguredUbInlineBufferSize(),
+                                                           std::move(options.metadataFailureHandler));
     auto executor = std::make_shared<DataPlaneExecutor>(manager_, advisor_);
     healthFilter_ = options.readSourceFilter == nullptr ? std::make_shared<UbHealthFilter>()
                                                         : std::move(options.readSourceFilter);

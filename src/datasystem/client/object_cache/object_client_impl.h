@@ -820,6 +820,13 @@ private:
     bool HandleSetRouteFailure(const Status &status, SetFailureStage failureStage, const HostPort &worker,
                                std::vector<HostPort> &excludedWorkers, bool safeWriteTargetReplay = false);
 
+    Status ProcessDirectSetWithoutTransport(const std::string &objectKey, const uint8_t *data, uint64_t size,
+                                            const FullParam &param,
+                                            const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
+                                            int existence, const SetRouteContext &routeContext,
+                                            SetFailureStage &failureStage, std::vector<HostPort> &excludedWorkers,
+                                            int32_t requestTimeoutMs);
+
     Status ExecuteSetFlow(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                           const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
                           int32_t requestTimeoutMs);
@@ -1677,13 +1684,28 @@ private:
     bool SubmitUrmaDataPlaneSwitch(WorkerNode node, std::weak_ptr<client::IClientWorkerCommonApi> weakWorkerApi);
 
     /**
-     * @brief Check whether a URMA failure callback still belongs to the current worker.
-     * @param[in] node The worker node slot captured by the callback.
-     * @param[in] workerApi The worker API that reported the failure.
-     * @return True if the callback source is still current and should trigger a switch.
+     * @brief Submit an asynchronous switch away from an unavailable bound worker.
+     * @param[in] workerApi The worker API that triggered the switch.
+     * @return True if a switch task was submitted; false if it was stale, duplicate, or switching is disabled.
      */
-    bool IsCurrentUrmaDataPlaneTrigger(WorkerNode node,
-                                       const std::shared_ptr<client::IClientWorkerCommonApi> &workerApi);
+    bool SubmitUnavailableWorkerSwitch(const std::shared_ptr<IClientWorkerApi> &workerApi);
+
+    static bool ShouldRefreshRoutingAfterFailure(StatusCode code);
+
+    void HandleDirectGetFailure(const std::shared_ptr<IClientWorkerApi> &workerApi, const Status &status);
+
+    void MaybeSwitchWorkerRemovedFromRing(const ::datasystem::ClusterTopologyPb &ring);
+
+    void DrainAsyncSwitchWorkerPool();
+
+    /**
+     * @brief Check whether an asynchronous switch trigger still belongs to the current worker.
+     * @param[in] node The worker node slot captured by the trigger.
+     * @param[in] workerApi The worker API that reported the failure.
+     * @return True if the trigger source is still current and should switch.
+     */
+    bool IsCurrentWorkerSwitchTrigger(WorkerNode node,
+                                      const std::shared_ptr<client::IClientWorkerCommonApi> &workerApi);
 
     Status InitListenWorker();
 
@@ -1962,6 +1984,9 @@ private:
     std::shared_ptr<ThreadPool> asyncPipelineRH2DPool_;
     std::shared_ptr<ThreadPool> asyncGetCopyPool_;
     std::shared_ptr<ThreadPool> asyncSwitchWorkerPool_;
+    ThreadPool *asyncSwitchWorkerPoolHandle_{ nullptr };
+    std::mutex asyncSwitchWorkerMutex_;
+    std::unordered_set<const IClientWorkerApi *> unavailableWorkerSwitchPending_;
     std::shared_ptr<ThreadPool> asyncDevDeletePool_;
     std::shared_ptr<ThreadPool> asyncReleasePool_;
     std::shared_ptr<Signature> transportSignature_;

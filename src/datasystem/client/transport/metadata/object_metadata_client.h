@@ -19,6 +19,7 @@
 #define DATASYSTEM_CLIENT_TRANSPORT_METADATA_OBJECT_METADATA_CLIENT_H
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -49,7 +50,8 @@ public:
     ObjectMetadataClient(std::shared_ptr<DataPlaneManager> manager, std::shared_ptr<DeadlineRetry> retry,
                          std::shared_ptr<TransportAdvisor> advisor = nullptr,
                          std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider = nullptr,
-                         uint64_t ubBufferSize = 0);
+                         uint64_t ubBufferSize = 0,
+                         std::function<void(const HostPort &, const Status &)> metadataFailureHandler = {});
     virtual ~ObjectMetadataClient() = default;
 
     /**
@@ -85,9 +87,11 @@ private:
     Status QueryWithRetry(const HostPort &address, const ObjectMetadataBatch &items, bool allowRedirect,
                           master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
                           InlineRequestContext &context);
+    Status BuildQueryRequest(const ObjectMetadataBatch &items, bool allowRedirect,
+                             const InlineRequestContext &context, master::QueryAndGetReqPb &request) const;
     Status InvokeQueryAndGet(const HostPort &address, master::QueryAndGetReqPb &request,
                              master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
-                             InlineRequestContext &context);
+                             InlineRequestContext &context, bool &rpcDispatched);
 
     /**
      * @brief Select and initialize the inline transport for one metadata-owner request.
@@ -175,6 +179,7 @@ private:
     std::shared_ptr<TransportAdvisor> advisor_;
     std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider_;
     uint64_t ubBufferSize_ = 0;
+    std::function<void(const HostPort &, const Status &)> metadataFailureHandler_;
 };
 }  // namespace client
 }  // namespace datasystem

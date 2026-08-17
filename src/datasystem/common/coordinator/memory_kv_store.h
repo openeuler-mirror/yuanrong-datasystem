@@ -51,11 +51,13 @@ public:
      * @param[out] revision The new global revision after put.
      * @param[out] ttlGeneration TTL generation after this mutation.
      * @param[in] expectedModRevision Expected modification revision. Zero disables the incarnation fence.
-     * @return Status of the operation. K_INVALID for version mismatch; K_TRY_AGAIN for a stale modification revision.
+     * @param[in] expectedGlobalRevision Expected Store revision. Zero disables the snapshot fence.
+     * @return Status of the operation. K_INVALID for version mismatch; K_TRY_AGAIN for a stale revision.
      */
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
                int64_t &version, int64_t &revision, uint64_t &ttlGeneration,
-               int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
+               int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK,
+               int64_t expectedGlobalRevision = COORDINATOR_NO_GLOBAL_REVISION_CHECK);
 
     /**
      * @brief Range query over [key, rangeEnd).

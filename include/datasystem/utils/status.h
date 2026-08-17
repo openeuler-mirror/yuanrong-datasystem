@@ -66,6 +66,7 @@ enum StatusCode : uint32_t {
     K_NOT_SUPPORTED = 36,
     K_NO_AVAILABLE_WORKER = 37,
     K_NOT_OWNER = 38,
+    K_METADATA_OWNER_UNAVAILABLE = 39,
 
     // rpc error code, range: [1000, 2000)
     K_RPC_CANCELLED = 1000,

@@ -15,9 +15,14 @@
  * Description: Unit tests for Coordinator leader serving gates.
  */
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <functional>
 #include <future>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "ut/common.h"
@@ -25,6 +30,7 @@
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #define private public
 #include "datasystem/coordinator/coordinator_service_impl.h"
 #include "datasystem/coordinator/topology_control_host.h"
@@ -49,6 +55,32 @@ public:
         addresses = { "127.0.0.1:18501", "127.0.0.1:18502" };
         return Status::OK();
     }
+};
+
+class SlowProbeWatchDispatcher final : public coordinator::WatchDispatcherImpl {
+public:
+    explicit SlowProbeWatchDispatcher(WatchRegistry *registry, std::function<void()> onFirstProbe = {})
+        : WatchDispatcherImpl(registry, "test-coordinator"), onFirstProbe_(std::move(onFirstProbe))
+    {
+    }
+
+    coordinator::WorkerReachabilityProbeResult ProbeWorkerReachable(
+        const std::string &, std::chrono::steady_clock::time_point deadline) override
+    {
+        if (!firstProbeCalled_.exchange(true) && onFirstProbe_) {
+            onFirstProbe_();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            return { Status(K_RPC_DEADLINE_EXCEEDED, "probe deadline expired"), false };
+        }
+        SleepCurrentFor(std::min(deadline, now + std::chrono::milliseconds(150)) - now);
+        return { Status(K_RPC_DEADLINE_EXCEEDED, "probe timed out"), true };
+    }
+
+private:
+    std::function<void()> onFirstProbe_;
+    std::atomic<bool> firstProbeCalled_{ false };
 };
 
 class CoordinatorServiceImplTest : public CommonTest {
@@ -153,12 +185,20 @@ TEST_F(CoordinatorServiceImplTest, RecoveringLeaderAcceptsOnlyEnsureAndExistingR
     keepAliveRequest.set_key(MembershipKey(ensureRequest.reporter_address()));
     keepAliveRequest.set_expected_coordinator_id(ensureResponse.header().coordinator_id());
     keepAliveRequest.set_expected_mod_revision(ensureResponse.membership_mod_revision());
+    service_->topologyControlHost_->RecordWorkerFailureSummaries(VALID_CLUSTER_NAME, ensureRequest.reporter_address(),
+                                                                 { "127.0.0.1:31502" });
     coordinator::KeepAliveRspPb keepAliveResponse;
     DS_ASSERT_OK(service_->KeepAlive(keepAliveRequest, keepAliveResponse));
     EXPECT_GT(keepAliveResponse.ttl(), 0);
     EXPECT_GT(keepAliveResponse.remaining_ttl(), 0);
     ExpectHeader(keepAliveResponse.header(), false, coordinator::ResponseHeader::LEADER_RECOVERING, RECOVERING_TERM,
                  RECOVERING_LEADER_ADDRESS);
+    {
+        std::lock_guard<std::mutex> lock(service_->topologyControlHost_->failureReportMutex_);
+        const auto cluster = service_->topologyControlHost_->failureReportsByCluster_.find(VALID_CLUSTER_NAME);
+        EXPECT_TRUE(cluster == service_->topologyControlHost_->failureReportsByCluster_.end()
+                    || cluster->second.empty());
+    }
 
     coordinator::ReportTopologyRecoveryCandidateReqPb reportRequest;
     reportRequest.set_cluster_name(VALID_CLUSTER_NAME);
@@ -171,6 +211,64 @@ TEST_F(CoordinatorServiceImplTest, RecoveringLeaderAcceptsOnlyEnsureAndExistingR
     EXPECT_EQ(reportResponse.result(), coordinator::ReportTopologyRecoveryCandidateRspPb::ACCEPTED);
     ExpectHeader(reportResponse.header(), false, coordinator::ResponseHeader::LEADER_RECOVERING,
                  RECOVERING_TERM, RECOVERING_LEADER_ADDRESS);
+}
+
+TEST_F(CoordinatorServiceImplTest, ProbesMultipleFailedMembersWithinSharedDeadline)
+{
+    service_->coordinatorDiscovery_.reset();
+    service_->expectedMemberCount_ = 0;
+    service_->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING,
+                                  std::memory_order_release);
+    service_->watchDispatcher_ = std::make_shared<SlowProbeWatchDispatcher>(service_->watchRegistry_.get());
+    std::vector<cluster::MemberIdentity> targets;
+    for (size_t index = 0; index < 10; ++index) {
+        targets.push_back({ "member-" + std::to_string(index), "127.0.0.1:" + std::to_string(31501 + index) });
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto results = service_->ProbeMembersLiveness(targets, start + std::chrono::milliseconds(250));
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+
+    ASSERT_EQ(results.size(), targets.size());
+    EXPECT_TRUE(std::all_of(results.begin(), results.end(), [](const auto &result) {
+        return result.outcome == cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED;
+    }));
+    EXPECT_LT(elapsed, std::chrono::milliseconds(220));
+}
+
+TEST_F(CoordinatorServiceImplTest, DiscardsProbeResultsWhenControlEpochChanges)
+{
+    service_->coordinatorDiscovery_.reset();
+    service_->expectedMemberCount_ = 0;
+    service_->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING,
+                                  std::memory_order_release);
+    service_->watchDispatcher_ = std::make_shared<SlowProbeWatchDispatcher>(service_->watchRegistry_.get(), [this] {
+        service_->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::STOPPING,
+                                      std::memory_order_release);
+    });
+    const std::vector<cluster::MemberIdentity> targets{ { "member-0", "127.0.0.1:31501" },
+                                                        { "member-1", "127.0.0.1:31502" } };
+
+    const auto results =
+        service_->ProbeMembersLiveness(targets, std::chrono::steady_clock::now() + std::chrono::milliseconds(250));
+    service_->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING,
+                                  std::memory_order_release);
+
+    ASSERT_EQ(results.size(), targets.size());
+    EXPECT_TRUE(std::all_of(results.begin(), results.end(), [](const auto &result) {
+        return result.outcome == cluster::ControlBackendProbeOutcome::CANCELLED;
+    }));
+}
+
+TEST_F(CoordinatorServiceImplTest, DisablesActiveFailureDirectProbeForZmq)
+{
+    FLAGS_use_brpc = false;
+    coordinator::TopologyControlHost::Options options;
+
+    service_->ConfigureTopologyHostOptions(options);
+
+    EXPECT_FALSE(options.controller.memberLivenessProbe);
 }
 
 TEST_F(CoordinatorServiceImplTest, StaleTermEnsureDoesNotCreateMembership)

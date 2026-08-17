@@ -317,6 +317,7 @@ public:
     Status GetMembershipSidecar(const std::string &tableName,
                                 std::vector<std::pair<std::string, std::string>> &records) const;
     void ObservePeerRpcResult(const HostPort &target, const Status &status);
+    bool IsPeerRpcFailureReported(const HostPort &target) const;
 
     /**
      * @brief Read membership host identifiers for the existing routing response.

@@ -95,13 +95,15 @@ Status CoordinatorStore::CheckInitialized() const
 }
 
 Status CoordinatorStore::Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
-                             int64_t &version, int64_t &revision, int64_t expectedModRevision)
+                             int64_t &version, int64_t &revision, int64_t expectedModRevision,
+                             int64_t expectedGlobalRevision)
 {
     RETURN_IF_NOT_OK(CheckInitialized());
 
     uint64_t ttlGeneration = 0;
     RETURN_IF_NOT_OK(
-        memKvStore_->Put(key, value, ttlMs, expectedVersion, version, revision, ttlGeneration, expectedModRevision));
+        memKvStore_->Put(key, value, ttlMs, expectedVersion, version, revision, ttlGeneration, expectedModRevision,
+                         expectedGlobalRevision));
     VLOG(1) << "Put key: " << key << " revision: " << revision;
 
     if (ttlMs > 0) {

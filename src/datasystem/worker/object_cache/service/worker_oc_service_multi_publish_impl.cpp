@@ -66,8 +66,14 @@ bool IsCreateMultiMetaRetryable(const Status &rc)
 
 void SetLastError(const Status &rc, CreateMultiMetaRspPb &rsp)
 {
-    rsp.mutable_last_rc()->set_error_code(rc.GetCode());
-    rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
+    const auto code = rc.GetCode();
+    if (code == K_RPC_UNAVAILABLE || code == K_RPC_PEER_DEAD) {
+        rsp.mutable_last_rc()->set_error_code(K_METADATA_OWNER_UNAVAILABLE);
+        rsp.mutable_last_rc()->set_error_msg(FormatString("Metadata owner RPC failed. detail: %s", rc.ToString()));
+    } else {
+        rsp.mutable_last_rc()->set_error_code(code);
+        rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
+    }
 }
 }  // namespace
 
@@ -401,7 +407,9 @@ Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMeta(std::shared_ptr<Wor
         CHECK_FAIL_RETURN_STATUS(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
                                  K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
         rsp.Clear();
-        RETURN_IF_NOT_OK(api->CreateMultiMeta(req, rsp, true));
+        auto rc = api->CreateMultiMeta(req, rsp, true);
+        ObserveMetadataRpc(api, rc);
+        RETURN_IF_NOT_OK(TranslateQualifiedMetadataDeadline(api, rc, true));
         if (rsp.meta_is_moving()) {
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
@@ -491,7 +499,9 @@ Status WorkerOcServiceMultiPublishImpl::SendCreateMultiMetaSubRequest(
     CreateMultiMetaRspPb response;
     do {
         response.Clear();
-        RETURN_IF_NOT_OK(api->CreateMultiMeta(req, response, true));
+        auto rc = api->CreateMultiMeta(req, response, true);
+        ObserveMetadataRpc(api, rc);
+        RETURN_IF_NOT_OK(TranslateQualifiedMetadataDeadline(api, rc, true));
         if (response.meta_is_moving()) {
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");

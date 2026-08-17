@@ -63,6 +63,9 @@ public:
     Status GetAll(const std::string &tableName,
                   std::vector<std::pair<std::string, std::string>> &outKeyValues) override;
 
+    Status GetAll(const std::string &tableName, std::vector<std::pair<std::string, std::string>> &outKeyValues,
+                  int64_t &responseRevision) override;
+
     /**
      * @brief Read one exact key and return its value.
      * @param[in] tableName Logical table name.
@@ -93,6 +96,9 @@ public:
      */
     Status CAS(const std::string &tableName, const std::string &key, const ProcessFunction &process,
                RangeSearchResult &result) override;
+
+    Status CASAtRevision(const std::string &tableName, const std::string &key, const ProcessFunction &process,
+                         int64_t expectedRevision, RangeSearchResult &result) override;
 
     /**
      * @brief Execute bounded callback-form CAS.
@@ -233,7 +239,8 @@ private:
      * @param[out] result Result replaced only after success.
      * @return K_OK, a non-retryable error, or the final retryable error.
      */
-    Status RunCas(const std::string &physicalKey, const ProcessFunction &process, RangeSearchResult &result);
+    Status RunCas(const std::string &physicalKey, const ProcessFunction &process, RangeSearchResult &result,
+                  int64_t expectedRevision = 0);
 
     // Borrowed by the adapter and guaranteed to outlive it by TopologyControlHost.
     CoordinatorStore &store_;

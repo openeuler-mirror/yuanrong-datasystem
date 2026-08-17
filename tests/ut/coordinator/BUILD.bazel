@@ -17,6 +17,7 @@ ds_cc_test(
     srcs = ["coordinator_service_impl_test.cpp"],
     deps = [
         "//src/datasystem/cluster:cluster_membership_codec",
+        "//src/datasystem/common/rpc:bthread_utils",
         "//src/datasystem/coordinator:coordinator_service_impl",
         "//tests/ut:ut_common",
     ],
@@ -28,6 +29,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/coordinator:coordinator_topology_control_host",
         "//tests/ut:ut_common",
     ],

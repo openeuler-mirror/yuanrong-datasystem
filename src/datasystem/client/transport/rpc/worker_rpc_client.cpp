@@ -235,8 +235,11 @@ Status WorkerRpcClient::InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request,
 }
 
 Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
-                                          std::vector<RpcMessage> &payloads)
+                                          std::vector<RpcMessage> &payloads, bool *rpcDispatched)
 {
+    if (rpcDispatched != nullptr) {
+        *rpcDispatched = false;
+    }
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
                              "Routed master RPC client is not initialized");
     int32_t rpcTimeout;
@@ -245,6 +248,9 @@ Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, mas
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     INJECT_POINT("client.transport.query_and_get", []() { return Status::OK(); });
+    if (rpcDispatched != nullptr) {
+        *rpcDispatched = true;
+    }
     Status rc = DoInvokeQueryAndGet(options, request, response, payloads);
     return rc.IsError() ? WithRpcDiag(rc, "QueryAndGet", workerAddress_) : Status::OK();
 }

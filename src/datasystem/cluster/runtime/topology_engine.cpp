@@ -1088,6 +1088,11 @@ void TopologyEngine::ObservePeerRpcResult(const HostPort &target, const Status &
     }
 }
 
+bool TopologyEngine::IsPeerRpcFailureReported(const HostPort &target) const
+{
+    return memberBackend_ != nullptr && memberBackend_->IsPeerRpcFailureReported(target);
+}
+
 Status TopologyEngine::GetRoutingHostIds(std::unordered_map<std::string, std::string> &hostIds) const
 {
     std::vector<std::pair<std::string, std::string>> members;
@@ -1195,6 +1200,18 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     RETURN_IF_NOT_OK(rc);
     std::shared_ptr<const TopologySnapshot> published;
     RETURN_IF_NOT_OK(snapshots_.Load(published));
+    if (newlyPublished && hasPrevious) {
+        for (const auto &oldMember : previous->Members()) {
+            const Member *member = nullptr;
+            if (published->FindMemberByAddress(oldMember.identity.address, member).IsError() || member == nullptr
+                || oldMember.identity.id != member->identity.id) {
+                HostPort target;
+                if (target.ParseString(oldMember.identity.address).IsOk()) {
+                    memberBackend_->DiscardPeerRpcFailure(target);
+                }
+            }
+        }
+    }
     VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL) << "CLUSTER_RING cluster=" << options_.clusterName
                                      << " version=" << published->Version()
                                      << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest())
@@ -1202,28 +1219,6 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     RETURN_IF_NOT_OK(PublishBackendEvidence(*published));
     RestoreReadyAfterCoordinatorTopologyReload(*published);
     if (newlyPublished) {
-        if (hasPrevious) {
-            for (const auto &member : previous->Members()) {
-                const Member *current = nullptr;
-                const auto currentStatus = published->FindMemberByAddress(member.identity.address, current);
-                if (currentStatus.IsOk() && current->state == MemberState::FAILED) {
-                    continue;
-                }
-                HostPort address;
-                if (address.ParseString(member.identity.address).IsOk()) {
-                    memberBackend_->RecordPeerRpcSuccess(address);
-                }
-            }
-        }
-        for (const auto &member : published->Members()) {
-            if (member.state == MemberState::FAILED || member.identity.address == options_.localAddress) {
-                continue;
-            }
-            HostPort address;
-            if (address.ParseString(member.identity.address).IsOk()) {
-                memberBackend_->RecordPeerRpcSuccess(address);
-            }
-        }
         LogAndNotifyPublishedSnapshot(std::move(published));
     }
     return Status::OK();

@@ -111,13 +111,14 @@ Status CoordinatorLeaderRouter::Execute(const AttemptFn &attempt, bool recoveryC
         const auto refreshStatus = RefreshCandidates(deadline, candidates);
         if (refreshStatus.IsOk()) {
             cached = CoordinatorLeaderIdentity();
-        } else if (!hasCoordinatorResponse && lastStatus.GetCode() == K_NOT_READY) {
+        } else if (!hasCoordinatorResponse && attempted.empty() && lastStatus.GetCode() == K_NOT_READY) {
             lastStatus = refreshStatus;
         }
         refreshImmediately = false;
     }
-    return hasCoordinatorResponse ? lastStatus
-                                  : Status(K_RPC_DEADLINE_EXCEEDED, "Coordinator routing deadline exceeded");
+    return hasCoordinatorResponse || !attempted.empty()
+               ? lastStatus
+               : Status(K_RPC_DEADLINE_EXCEEDED, "Coordinator routing deadline exceeded");
 }
 
 void CoordinatorLeaderRouter::LoadCandidateSnapshot(CoordinatorLeaderIdentity &cached,

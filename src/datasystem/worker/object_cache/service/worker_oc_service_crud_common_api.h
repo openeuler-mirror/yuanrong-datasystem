@@ -109,6 +109,7 @@ struct WorkerOcServiceCrudParam {
     PeerUbAdmission *ubAdmission{ nullptr };
     std::function<void(const HostPort &, const Status &)> metadataRpcObserver;
     bool allowDirectoryLag;
+    std::function<bool(const HostPort &)> metadataRpcFailureReported;
 };
 
 class WorkerOcServiceCrudCommonApi {
@@ -449,6 +450,11 @@ protected:
     void ObserveMetadataRpc(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                             const Status &status) const;
 
+    bool IsMetadataRpcFailureReported(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi) const;
+
+    Status TranslateQualifiedMetadataDeadline(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+                                              const Status &status, bool rpcDispatched) const;
+
 private:
     /**
      * @brief Partition a multi-copy metadata request into local and redirected sub-requests.
@@ -513,6 +519,7 @@ protected:
     const std::atomic<bool> *exitRequested_{ nullptr };
     std::function<void(const HostPort &, const Status &)> metadataRpcObserver_;
     const bool allowDirectoryLag_{ false };
+    std::function<bool(const HostPort &)> metadataRpcFailureReported_;
 
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager_{ nullptr };
 };

@@ -173,7 +173,9 @@
     non-blocking TCP probe and classifies only explicit `ECONNREFUSED`, `ENOTCONN`, or `EHOSTDOWN` results as
     `K_RPC_PEER_DEAD`; timeouts and local probe failures remain unknown and do not poison the client. The successful
     Set/Get hot paths do not add an active probe; routed `Exist` pays one bounded probe to preserve the bound-client
-    liveness contract.
+    liveness contract. An explicit peer-dead result also wakes the existing HashRing refresher without changing the
+    returned error, replaying the operation, or switching Workers speculatively. The eventual versioned ring remains
+    authoritative for rebinding the client.
   - Routed transport requests carry the gateway client id, token snapshot, thread tenant context, and shared transport
     `Signature`. Target workers authenticate routed Create, Publish, and cleanup requests by signature without requiring
     endpoint-local client registration. UB allocations are released asynchronously after the final Publish attempt, or
@@ -199,13 +201,27 @@
     at upgrade without changing the policy contract.
   - The Routing-owned `GetHashRing` control request is AK/SK signed. A matching topology version returns only the
     current version and `hash_ring_changed=false`; a mismatch returns one immutable ring snapshot together with its
-    host-id map and current master address.
+    host-id map and current master address. The initial fetch uses the configured SDK timeout. Periodic and forced
+    refreshes rotate across the active Worker list, cap each RPC at 250 ms and each round at four endpoints, and keep
+    probing after a reachable unchanged response so a lagging Worker cannot hide a newer ring published by another
+    Worker. Metadata-owner-unavailable Set failures at either Create or Publish, and an explicitly dead bound Worker,
+    open the existing six-second forced-refresh window; retries inside that window use a 250 ms interval. Force requests
+    coalesce through the refresher deadline and never replay an ambiguous Create. Shutdown checks cancellation between
+    probes, so it waits for at most one bounded refresh RPC.
+  - A direct local-cache Get that observes `K_RPC_PEER_DEAD` submits one deduplicated switch task per concrete Worker API
+    to the existing single-thread switch pool. Client shutdown first stops heartbeat producers, atomically closes that
+    pool to new peer-dead submissions, and drains queued tasks before Worker APIs and pending-switch state are released.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
   - `ListenWorker` closes request admission before invoking recovery callbacks for a changed `worker_start_id` or a
     worker-reported missing client. Recovery callbacks return `Status`; successful heartbeats do not reopen admission
     while mandatory client resources are still pending. Object/KV recovery separates one-shot worker registration from
     retryable decrease-ref and pipeline SHM mmap rebuild, while Stream clears producer/consumer and mmap state before
     reconnecting. During recovery, new requests fail with `K_RPC_UNAVAILABLE`.
+    For local-cache cross-node clients, a direct Get that receives `K_RPC_PEER_DEAD` from the currently bound Worker
+    also queues a switch on the existing single-thread switch pool, deduplicated by the exact Worker API instance.
+    The failed request still returns its original status; the background task retains and revalidates the exact Worker
+    slot and API before switching, so a stale failure cannot move a client that has already rebound or suppress a
+    peer-dead trigger from the replacement Worker. Submission failures clear the per-instance pending marker.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
   - `src/datasystem/client/cluster_query` is a dscli-only read facade with protobuf hidden behind its native
     boundary. It reads one explicitly selected ETCD or Coordinator backend, decodes raw facts locally, and
@@ -412,14 +428,16 @@
   - `ObjectClientImpl` is shared by both KV and Object API families, so “KV-only” changes may regress object behavior;
   - direct-read metadata and replica retries share the caller's API deadline. The data phase first polls replicas from
     the fixed metadata location snapshot, but `K_NOT_READY` with `Worker endpoint is absent from latest transport
-    snapshot` are treated as stale topology/location signals; `K_RPC_PEER_DEAD` is converted to that signal only when
-    the metadata owner RPC fails:
+    snapshot` are treated as stale topology/location signals. Metadata-owner connection, dispatch-deadline,
+    peer-dead, client-disconnect, and owner-unavailable failures report the failed endpoint and return that stale
+    signal immediately instead of retrying the fixed owner; the outer ObjectClient retry then rebuilds routing from the
+    latest authoritative ring:
     the reader tries remaining replicas, and
     `ObjectClientImpl::GetFromTransportLayer` forces the existing hash-ring refresher before it re-routes and re-queries
     metadata only for affected keys with deadline-bounded backoff. Retry state is allocated only for affected keys;
     draining and stale-location budgets advance independently and never reset when the observed policy alternates.
     Concurrent force-refresh requests are coalesced by the refresher's atomic budget, and forced retries retain their
-    500 ms minimum interval instead of letting request traffic wake the refresh loop continuously. The transport round
+    250 ms minimum interval instead of letting request traffic wake the refresh loop continuously. The transport round
     must still apply structured per-item results before deciding which keys are affected, so mixed batches do not turn
     object-level failures such as `K_NOT_FOUND` into stale-location retries.
     A dead data replica is advanced within the current fixed-location round and does not trigger a metadata refresh.

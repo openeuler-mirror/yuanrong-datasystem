@@ -122,6 +122,9 @@ private:
     void ConstructCreateMetaRequest(const ObjectKV &objectKV, const PublishParams &params,
                                     master::CreateMetaReqPb &metaReq) const;
 
+    void ConstructUpdateMetaRequest(const ObjectKV &objectKV, const PublishParams &params,
+                                    master::UpdateMetaReqPb &metaReq) const;
+
     /**
      * @brief Create a new object metadata to master.
      * @param[in] objectKV The object to be sealed and its corresponding objectKey.
