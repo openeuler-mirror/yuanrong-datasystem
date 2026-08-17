@@ -66,6 +66,7 @@ struct TransportLayerOptions {
     std::shared_ptr<UbHealthFilter> readSourceFilter;
     // Synchronous client-lifecycle admission checked around transport retry backoff.
     std::function<Status()> retryAdmissionCheck;
+    std::function<void(const HostPort &, const Status &)> metadataFailureHandler;
 };
 
 class TransportLayer {

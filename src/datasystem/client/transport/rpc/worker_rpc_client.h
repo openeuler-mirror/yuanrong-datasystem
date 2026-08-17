@@ -63,7 +63,7 @@ public:
 
     /** @brief Sign and query object locations and optional inline data from the master service at this endpoint. */
     virtual Status InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
-                                     std::vector<RpcMessage> &payloads);
+                                     std::vector<RpcMessage> &payloads, bool *rpcDispatched = nullptr);
 
     /** @brief Sign and invoke Exist through the cached control connection. */
     virtual Status InvokeExist(int64_t subTimeoutMs, ExistReqPb &request, ExistRspPb &response);

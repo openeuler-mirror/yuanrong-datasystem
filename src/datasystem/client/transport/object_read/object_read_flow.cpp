@@ -238,8 +238,8 @@ Status BuildResult(std::vector<ReadItem> &items, ObjectReadResult &result)
 }
 }  // namespace
 
-ObjectReadFlow::ObjectReadFlow(std::shared_ptr<ObjectMetadataClient> metadata,
-                               std::shared_ptr<ReplicaReader> replicas, std::shared_ptr<ThreadPool> taskPool)
+ObjectReadFlow::ObjectReadFlow(std::shared_ptr<ObjectMetadataClient> metadata, std::shared_ptr<ReplicaReader> replicas,
+                               std::shared_ptr<ThreadPool> taskPool)
     : metadata_(std::move(metadata)), replicas_(std::move(replicas)), taskPool_(std::move(taskPool))
 {
 }

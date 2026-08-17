@@ -70,6 +70,7 @@ ds_cc_library(
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:bthread_utils",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
         "//src/datasystem/common/rpc:rpc_channel",
         "//src/datasystem/common/rpc:rpc_server",

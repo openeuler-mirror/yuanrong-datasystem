@@ -57,8 +57,8 @@ public:
     ~WatchDispatcherImpl() override;
 
     // The absolute deadline covers endpoint parsing, stub acquisition/cast, and HandleEvent.
-    WorkerReachabilityProbeResult ProbeWorkerReachable(
-        const std::string &watcherAddr, std::chrono::steady_clock::time_point absoluteDeadline);
+    virtual WorkerReachabilityProbeResult ProbeWorkerReachable(const std::string &watcherAddr,
+                                                               std::chrono::steady_clock::time_point absoluteDeadline);
 
 protected:
     /**

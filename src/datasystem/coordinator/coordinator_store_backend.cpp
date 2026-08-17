@@ -63,12 +63,19 @@ CoordinatorStoreBackend::~CoordinatorStoreBackend() = default;
 Status CoordinatorStoreBackend::GetAll(
     const std::string &tableName, std::vector<std::pair<std::string, std::string>> &outKeyValues)
 {
+    int64_t responseRevision = 0;
+    return GetAll(tableName, outKeyValues, responseRevision);
+}
+
+Status CoordinatorStoreBackend::GetAll(
+    const std::string &tableName, std::vector<std::pair<std::string, std::string>> &outKeyValues,
+    int64_t &responseRevision)
+{
     std::string prefix;
     RETURN_IF_NOT_OK(GetStorePrefix(tableName, prefix));
     const std::string rangeKey = prefix + "/";
     std::vector<KeyValueEntry> entries;
-    int64_t revision = 0;
-    RETURN_IF_NOT_OK(store_.Range(rangeKey, StringPlusOne(rangeKey), entries, revision));
+    RETURN_IF_NOT_OK(store_.Range(rangeKey, StringPlusOne(rangeKey), entries, responseRevision));
     outKeyValues.reserve(outKeyValues.size() + entries.size());
     for (auto &entry : entries) {
         outKeyValues.emplace_back(RemoveTablePrefix(entry.key, prefix), std::move(entry.value));
@@ -103,6 +110,17 @@ Status CoordinatorStoreBackend::CAS(const std::string &tableName, const std::str
     std::string prefix;
     RETURN_IF_NOT_OK(GetStorePrefix(tableName, prefix));
     return RunCas(BuildPhysicalKey(prefix, key), process, result);
+}
+
+Status CoordinatorStoreBackend::CASAtRevision(const std::string &tableName, const std::string &key,
+                                              const ProcessFunction &process, int64_t expectedRevision,
+                                              RangeSearchResult &result)
+{
+    CHECK_FAIL_RETURN_STATUS(process != nullptr, K_INVALID, "Coordinator process function is null");
+    CHECK_FAIL_RETURN_STATUS(expectedRevision > 0, K_INVALID, "Coordinator expected revision is invalid");
+    std::string prefix;
+    RETURN_IF_NOT_OK(GetStorePrefix(tableName, prefix));
+    return RunCas(BuildPhysicalKey(prefix, key), process, result, expectedRevision);
 }
 
 Status CoordinatorStoreBackend::CAS(const std::string &tableName, const std::string &key,
@@ -233,7 +251,7 @@ Status CoordinatorStoreBackend::ReadExact(const std::string &physicalKey, KeyVal
 }
 
 Status CoordinatorStoreBackend::RunCas(const std::string &physicalKey, const ProcessFunction &process,
-                                       RangeSearchResult &result)
+                                       RangeSearchResult &result, int64_t expectedRevision)
 {
     Status lastError(K_TRY_AGAIN, "Coordinator CAS exceeded retry limit");
     for (size_t attempt = 0; attempt < MAX_CAS_ATTEMPTS; ++attempt) {
@@ -258,7 +276,8 @@ Status CoordinatorStoreBackend::RunCas(const std::string &physicalKey, const Pro
         }
         int64_t version = 0;
         int64_t revision = 0;
-        const auto putStatus = store_.Put(physicalKey, *next, 0, current.version, version, revision);
+        const auto putStatus = store_.Put(physicalKey, *next, 0, current.version, version, revision,
+                                          COORDINATOR_NO_MOD_REVISION_CHECK, expectedRevision);
         if (putStatus.IsOk()) {
             RangeSearchResult committed;
             committed.key = physicalKey;
@@ -267,6 +286,9 @@ Status CoordinatorStoreBackend::RunCas(const std::string &physicalKey, const Pro
             committed.modRevision = revision;
             result = std::move(committed);
             return Status::OK();
+        }
+        if (expectedRevision != COORDINATOR_NO_GLOBAL_REVISION_CHECK && putStatus.GetCode() == K_TRY_AGAIN) {
+            return putStatus;
         }
         if (!IsRetryableCasConflict(putStatus)) {
             return putStatus;

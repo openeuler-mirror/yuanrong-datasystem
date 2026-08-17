@@ -13,6 +13,7 @@
 #include "datasystem/common/coordinator/coordinator_leader_router.h"
 
 #include <chrono>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,11 +40,18 @@ public:
         if (deadlineAwareStatus_.IsError()) {
             return deadlineAwareStatus_;
         }
+        if (deadlineAwareHook_) {
+            deadlineAwareHook_();
+        }
         addresses = addresses_;
         return Status::OK();
     }
 
     size_t DeadlineAwareCalls() const { return deadlineAwareCalls_; }
+    void SetDeadlineAwareHook(std::function<void()> hook)
+    {
+        deadlineAwareHook_ = std::move(hook);
+    }
     void SetAddresses(std::vector<std::string> addresses)
     {
         addresses_ = std::move(addresses);
@@ -57,6 +65,7 @@ private:
     std::vector<std::string> addresses_;
     size_t deadlineAwareCalls_{ 0 };
     Status deadlineAwareStatus_;
+    std::function<void()> deadlineAwareHook_;
 };
 
 HostPort Address(const std::string &value)
@@ -311,6 +320,22 @@ TEST(CoordinatorLeaderRouterTest, PreservesLastFailureWhenRefreshHasNoNewCandida
 
     EXPECT_EQ(status.GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_EQ(calls, 1UL);
+    EXPECT_EQ(discovery->DeadlineAwareCalls(), 1UL);
+}
+
+TEST(CoordinatorLeaderRouterTest, PreservesNotReadyWhenDiscoveryRefreshConsumesDeadline)
+{
+    auto now = std::chrono::steady_clock::time_point{};
+    auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001" });
+    discovery->SetDeadlineAwareHook([&now] { now += std::chrono::milliseconds(3'000); });
+    CoordinatorLeaderRouter router(
+        discovery, { Address("127.0.0.1:30001") }, [&now] { return now; }, {}, std::chrono::milliseconds(3'000));
+
+    const auto status = router.Execute([](const HostPort &, int32_t, coordinator::ResponseHeader &, bool &) {
+        return Status(K_NOT_READY, "topology bootstrap is not ready");
+    });
+
+    EXPECT_EQ(status.GetCode(), K_NOT_READY);
     EXPECT_EQ(discovery->DeadlineAwareCalls(), 1UL);
 }
 

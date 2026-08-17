@@ -46,6 +46,10 @@ public:
                                           ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress,
                                           uint64_t &newVersion, bool &changed,
                                           std::unordered_map<std::string, std::string> &hostIdMap)>;
+    using TimedFetchRpc =
+        std::function<Status(const HostPort &workerAddr, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
+                             std::string &masterAddress, uint64_t &newVersion, bool &changed,
+                             std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs)>;
     using RingUpdateHook = std::function<Status(uint64_t newVersion,
                                                 const ::datasystem::ClusterTopologyPb &ring,
                                                 const std::unordered_map<std::string, std::string> &hostIdMap)>;
@@ -55,35 +59,42 @@ public:
 
     HashRingRefresher(std::shared_ptr<WorkerRouter> router, FetchRpc fetchRpc, RingUpdateHook ringUpdateHook = {},
                       WaitFn waitFn = {});
+    HashRingRefresher(std::shared_ptr<WorkerRouter> router, TimedFetchRpc fetchRpc, RingUpdateHook ringUpdateHook = {},
+                      WaitFn waitFn = {});
     ~HashRingRefresher();
 
     Status InitialFetch(const HostPort &initialWorkerAddr);
     Status StartPeriodicRefresh(int64_t intervalMs);
     void Stop();
-    void ForceRefresh();
+    bool ForceRefresh();
 
 private:
     void RefreshLoop();
-    Status DoRefresh();
+    Status DoRefresh(bool stopAware);
+    Status PublishHashRing(uint64_t newVersion, ::datasystem::ClusterTopologyPb &&ring,
+                           std::unordered_map<std::string, std::string> &&hostIdMap);
     void UpdateWorkerList(const ::datasystem::ClusterTopologyPb &ring);
 
-    // Keep force refresh active for about 3s without turning worker disconnects into tight polling.
-    static constexpr int FORCED_REFRESH_RETRY_COUNT = 6;
-    static constexpr int64_t FORCED_REFRESH_RETRY_INTERVAL_MS = 500;
+    // Cover the online 3s isolation target plus reconciliation and publication margin.
+    static constexpr int64_t FORCED_REFRESH_WINDOW_MS = 6'000;
+    static constexpr int64_t FORCED_REFRESH_RETRY_INTERVAL_MS = 250;
+    static constexpr int32_t BACKGROUND_REFRESH_RPC_TIMEOUT_MS = 250;
+    static constexpr size_t MAX_BACKGROUND_PROBES_PER_ROUND = 4;
 
     std::shared_ptr<WorkerRouter> router_;
-    FetchRpc fetchRpc_;
+    TimedFetchRpc fetchRpc_;
     RingUpdateHook ringUpdateHook_;
     WaitFn waitFn_;
 
     std::mutex workerListMutex_;
     std::vector<HostPort> workerList_;
+    size_t nextWorkerIndex_{ 0 };
     std::atomic<uint64_t> currentVersion_{ 0 };
 
     std::atomic<bool> running_{ false };
     std::atomic<bool> forceRefresh_{ false };
-    // Remaining retry slots after a worker disconnect forces topology refresh.
-    std::atomic<int> forceRefreshBudget_{ 0 };
+    // Steady-clock deadline extended by repeated failures; zero means inactive.
+    std::atomic<int64_t> forceRefreshDeadlineMs_{ 0 };
     std::thread refreshThread_;
     std::mutex cvMutex_;
     std::condition_variable cv_;

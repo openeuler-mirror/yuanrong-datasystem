@@ -129,8 +129,18 @@
   unreachable `ACTIVE` migration target without making old serving evidence valid after exit. The same summary can
   remove a `JOINING` target only from the currently active ScaleOut batch through the existing ScaleOut replan; it never
   converts that target to `FAILED`. Reporter and target incarnation checks, report expiry, self-report rejection, and
-  the existing quorum threshold remain mandatory. `PRE_LEAVING` members cannot report, but remain in the ScaleIn quorum
-  population so partial batch progress cannot lower the isolation threshold.
+  the existing quorum safety floor remain mandatory. For clusters larger than two Workers, the configured threshold is
+  capped by the reporters that remain lifecycle-eligible after excluding the target, but never below two reporters.
+  This allows two simultaneous failures in a four-Worker cluster to be confirmed by both survivors without admitting a
+  single-reporter isolation. `PRE_LEAVING` members cannot report, but remain in the ScaleIn quorum
+  population so partial batch progress cannot lower the isolation threshold. Coordinator bookkeeping maintains both
+  target-to-reporter evidence and a reporter-to-target reverse index; a new summary clears only that reporter's prior
+  targets rather than scanning the whole cluster failure table. Expiry and incarnation pruning update both indexes.
+  Summary candidates are direct-probed in address order with a rotating cursor and at most 128 targets per reconcile,
+  bounding bthread/RPC fanout while allowing every continuously eligible target to make progress. One candidate sweep
+  reuses its snapshot across bounded pages, avoiding repeated full evidence scans; any newly drained event or reconcile
+  error invalidates that snapshot before more probes are admitted. Active candidates are re-probed no faster than every
+  750 ms, still require two unreachable results, and retain the 250 ms per-probe deadline.
   Coordinator collective probe progress is additionally bound to the current nonzero Raft leader term; loss of control
   authority or a term change discards accumulated samples before any further probe or replacement attempt. Each
   Coordinator-to-Worker control probe and the final collective replacement commit use that expected term under the
@@ -407,6 +417,10 @@
   commit without rewriting membership or resetting the classifier's missing fact. Expired rounds without reachable
   evidence proceed through the existing Failure path; long Coordinator partitions remain protected only while successive
   rounds keep producing fresh reachable evidence. Probe delivery and reporting are not end-to-end guaranteed.
+- Coordinator summary-driven active Failure commits exact-read the current membership collection together with its
+  Store revision. Candidate and control-epoch revalidation precede a topology CAS that checks the same global revision
+  atomically under the Store write lock. A membership replacement, expiry, or any other committed Store mutation in
+  between preserves the old topology and retries reconciliation; keepalive renewal does not advance the Store revision.
 - Worker startup selects the coordination backend once: a non-null `ICoordinatorDiscovery` selects Coordinator mode, while a null pointer selects ETCD/metastore. All Worker composition branches use that constructor-selected pointer instead of independently re-reading `coordinator_address`.
 - At most one change type is active at a time; one batch may contain many members. Failure has highest priority and may
   preempt ordinary work. With no active batch, a READY ScaleOut candidate starts before pending ScaleIn candidates;

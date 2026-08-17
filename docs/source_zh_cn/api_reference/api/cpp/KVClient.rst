@@ -100,7 +100,8 @@ KVClient
             - **buffer** - 共享内存 :cpp:class:`Buffer` 。
 
         返回值
-            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功。返回
+            ``StatusCode::K_METADATA_OWNER_UNAVAILABLE`` 表示元数据发布结果不确定，调用方不得自动重放同一写请求。
 
     .. cpp:function:: Status Set(const std::string &key, const StringView &val, const SetParam &param)
 
@@ -113,7 +114,8 @@ KVClient
             - **param** - 设置参数，详见 :cpp:class:`SetParam` 章节。
 
         返回：
-            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功。返回
+            ``StatusCode::K_METADATA_OWNER_UNAVAILABLE`` 表示元数据发布结果不确定，调用方不得自动重放同一写请求。
 
     .. cpp:function:: std::string Set(const StringView &val, const SetParam &param)
 
@@ -147,7 +149,8 @@ KVClient
             - **buffers** - 需要缓存到数据系统的共享内存 :cpp:class:`Buffer` 数组。
 
         返回：
-            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
+            部分对象设置成功时也返回 ``StatusCode::K_OK``，该重载不提供逐 key 失败列表。整批对象均失败且
+            元数据发布结果不确定时可能返回 ``StatusCode::K_METADATA_OWNER_UNAVAILABLE``，调用方不得自动重放同一写请求。
 
     .. cpp:function:: Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals, std::vector<std::string> &outFailedKeys, const MSetParam &param)
 
@@ -161,7 +164,9 @@ KVClient
             - **param** - 设置参数，详见 :cpp:class:`MSetParam` 章节。
 
         返回：
-            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
+            至少一个 key 设置成功时返回 ``StatusCode::K_OK``，调用方需通过 ``outFailedKeys`` 判断逐 key 结果。
+            整批 key 均失败且元数据发布结果不确定时可能返回 ``StatusCode::K_METADATA_OWNER_UNAVAILABLE``，
+            调用方不得自动重放同一写请求。
 
     .. cpp:function:: Status MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals, const MSetParam &param)
 

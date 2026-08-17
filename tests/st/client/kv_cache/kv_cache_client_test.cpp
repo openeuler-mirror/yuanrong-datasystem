@@ -533,6 +533,36 @@ TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_DeferUnmapUntilInFlightGetCompletes)
         << getStatus.ToString();
 }
 
+TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_PeerDeadGetTriggersWorkerSwitchBeforeHeartbeatTimeout)
+{
+    // Keep the heartbeat fallback outside this test's observation window. The switch must be caused by the
+    // synchronous Get result, not by ListenWorker eventually noticing the dead process.
+    constexpr int kHeartbeatFallbackMs = 30'000;
+    DS_ASSERT_OK(datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval",
+                                         FormatString("call(%d)", kHeartbeatFallbackMs)));
+    DS_ASSERT_OK(datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms",
+                                         FormatString("call(%d)", kHeartbeatFallbackMs)));
+    InitSwitchableClient();
+
+    HostPort worker1Address;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Address));
+    DS_ASSERT_OK(SetSwitchWorkerExpected(1, worker1Address));
+    DS_ASSERT_OK(datasystem::inject::Set("client.standby_worker", "call(" + worker1Address.ToString() + ")"));
+
+    const std::string value = "peer-dead Get must trigger immediate rebind";
+    const std::string keyOnWorker0 = client_->Set(value);
+    ASSERT_FALSE(keyOnWorker0.empty());
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+
+    std::string result;
+    auto getStatus = client_->Get(keyOnWorker0, result);
+    ASSERT_EQ(getStatus.GetCode(), K_RPC_PEER_DEAD) << getStatus.ToString();
+
+    constexpr int kDirectFailureSwitchMs = 5'000;
+    ASSERT_TRUE(WaitUntil([]() { return GetSwitchWorkerMatchedCount(1) > 0; }, kDirectFailureSwitchMs))
+        << "peer-dead Get did not switch the client before heartbeat fallback";
+}
+
 TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvSuccess)
 {
     ConnectOptions connectOptions;
@@ -1548,7 +1578,8 @@ TEST_P(KVCacheClientDistributedMetaDeadPeerTest, OperationsFastFailAfterMetadata
 
         Timer setTimer;
         Status setStatus = client->Set(key, "value");
-        ASSERT_EQ(setStatus.GetCode(), K_RPC_PEER_DEAD) << key << ": " << setStatus.ToString();
+        ASSERT_TRUE(setStatus.GetCode() == K_METADATA_OWNER_UNAVAILABLE || setStatus.GetCode() == K_URMA_CONNECT_FAILED)
+            << key << ": " << setStatus.ToString();
         ASSERT_LT(setTimer.ElapsedMilliSecond(), kFastFailMaxMs) << key << ": " << setStatus.ToString();
     }
 }
@@ -1806,7 +1837,11 @@ TEST_F(KVCacheClientTest, TestCreateMetaFailed)
         cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMetadataToMaster", "return(K_RPC_UNAVAILABLE)"));
     Status status = client->Set("key", "value");
     LOG(INFO) << "status code: " << status.GetCode();
-    ASSERT_TRUE(status.GetCode() == K_RPC_UNAVAILABLE);
+    ASSERT_EQ(status.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
+
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMetadataToMaster", "return(K_RPC_CANCELLED)"));
+    EXPECT_EQ(client->Set("cancelled-key", "value").GetCode(), K_RPC_CANCELLED);
 }
 
 TEST_F(KVCacheClientTest, TestCreateAndSetBufferSuccess)

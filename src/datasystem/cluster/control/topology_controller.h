@@ -26,6 +26,7 @@
 #include "datasystem/cluster/control/topology_task_materializer.h"
 #include "datasystem/cluster/repository/topology_repository.h"
 #include "datasystem/cluster/runtime/control_backend_state.h"
+#include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/cluster/runtime/worker_liveness.h"
 #include "datasystem/common/util/thread.h"
@@ -114,6 +115,14 @@ struct TopologyControllerOptions {
     std::function<std::vector<MemberIdentity>(const TopologySnapshot &, const std::vector<MembershipRecord> &,
                                               std::chrono::steady_clock::time_point)>
         failureSummaryCandidateProvider;
+
+    /**
+     * @brief Revalidate active failure candidates and run their topology mutation atomically.
+     */
+    std::function<Status(const TopologySnapshot &, const std::vector<MembershipRecord> &,
+                         std::chrono::steady_clock::time_point, std::optional<uint64_t>,
+                         const std::vector<MemberIdentity> &, const std::function<Status(int64_t)> &)>
+        activeFailureCommitFence;
 
     /**
      * @brief Semantic policy clock; production uses steady time and tests may inject virtual time.
@@ -241,6 +250,8 @@ private:
 
     bool StopRequested() const;
 
+    void ConsumeRuntimeEvent(const RuntimeEvent &event);
+
     Status WaitForReconcile(bool immediate, size_t &drained);
 
     void RecordReconcileResult(const Status &status, std::chrono::steady_clock::time_point now,
@@ -264,6 +275,20 @@ private:
     Status ReconcileDerivedSlice();
 
     Status TryConfirmFailures(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
+
+    Status ProbeActiveFailureCandidates(const TopologySnapshot &latest, const std::vector<MemberIdentity> &targets,
+                                        std::vector<MemberIdentity> &confirmed, std::optional<uint64_t> &controlEpoch);
+
+    Status PrepareActiveFailureProbeRound(const std::vector<MemberIdentity> &targets,
+                                          std::vector<MemberIdentity> &dueTargets,
+                                          std::optional<uint64_t> &controlEpoch);
+
+    void ResetActiveFailureProbeAuthorityState();
+    Status ResolveActiveFailureControlEpoch(std::optional<uint64_t> &controlEpoch);
+
+    void ApplyActiveFailureProbeResults(const TopologySnapshot &latest, const std::vector<MemberIdentity> &dueTargets,
+                                        const std::vector<ControlBackendProbeResult> &results,
+                                        std::vector<MemberIdentity> &confirmed, std::optional<uint64_t> &controlEpoch);
 
     Status PrepareCollectiveProbeContext(const TopologySnapshot &latest,
                                          const std::vector<MembershipRecord> &memberships,
@@ -299,12 +324,15 @@ private:
 
     Status CommitClusterShutdown(const TopologySnapshot &latest);
 
-    Status CommitConfirmedFailures(const TopologySnapshot &latest, const FailureClassification &classification);
+    Status CommitConfirmedFailures(const TopologySnapshot &latest, const FailureClassification &classification,
+                                   int64_t expectedAuthorityRevision = 0);
 
-    Status CommitUncommittedCleanup(const TopologySnapshot &latest, const FailureClassification &classification);
+    Status CommitUncommittedCleanup(const TopologySnapshot &latest, const FailureClassification &classification,
+                                    int64_t expectedAuthorityRevision = 0);
 
     Status CommitAndLogMemberTransition(const TopologySnapshot &latest, const TopologyState &next,
-                                        const std::vector<MemberIdentity> &members, const char *action);
+                                        const std::vector<MemberIdentity> &members, const char *action,
+                                        int64_t expectedAuthorityRevision = 0);
 
     Status CommitMembershipFacts(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
@@ -368,7 +396,8 @@ private:
                        const std::vector<MemberIdentity> &participants, const char *action) const;
 
     Status CommitAndReadBack(uint64_t expectedVersion, const TopologyState &desired,
-                             std::shared_ptr<const TopologySnapshot> &committed);
+                             std::shared_ptr<const TopologySnapshot> &committed,
+                             int64_t expectedAuthorityRevision = 0);
 
     struct ProbeReport {
         WorkerLivenessResult result{ WorkerLivenessResult::UNKNOWN };
@@ -433,6 +462,17 @@ private:
     std::optional<std::string> collectiveProbeOwner_;
     std::optional<uint64_t> collectiveProbeControlEpoch_;
     std::unordered_set<std::string> collectiveUnreachableSamples_;
+    struct ActiveFailureProbeState {
+        MemberIdentity target;
+        std::optional<uint64_t> controlEpoch;
+        std::chrono::steady_clock::time_point notBefore;
+        uint32_t consecutiveUnreachable{ 0 };
+    };
+    std::unordered_map<std::string, ActiveFailureProbeState> activeFailureProbeStates_;
+    size_t activeFailureProbeCursor_{ 0 };
+    std::vector<MemberIdentity> activeFailureProbeCandidateSweep_;
+    bool activeFailureProbeSweepInProgress_{ false };
+    std::optional<std::chrono::steady_clock::time_point> activeFailureProbeWakeDeadline_;
     std::string membershipEventPrefix_;
     // Protects membershipEventPrefix_, latestRestartTimestampByAddress_, and pendingRestartTimestampByAddress_.
     std::mutex membershipRestartMutex_;

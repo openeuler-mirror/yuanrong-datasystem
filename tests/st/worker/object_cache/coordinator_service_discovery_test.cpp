@@ -203,7 +203,16 @@ TEST_F(CoordinatorServiceDiscoveryTest, RestartedCoordinatorRecoversMembershipAn
     std::shared_ptr<KVClient> recoveredClient;
     InitKVClientWithCoordinatorServiceDiscovery(recoveredClient, ServiceAffinityPolicy::RANDOM);
     std::string actual;
-    DS_ASSERT_OK(recoveredClient->Get(key, actual));
+    Status getRc;
+    do {
+        actual.clear();
+        getRc = recoveredClient->Get(key, actual);
+        if (getRc.IsOk()) {
+            break;
+        }
+        std::this_thread::sleep_for(COORDINATOR_RETRY_INTERVAL);
+    } while (std::chrono::steady_clock::now() < deadline);
+    DS_ASSERT_OK(getRc);
     EXPECT_EQ(actual, value);
 }
 

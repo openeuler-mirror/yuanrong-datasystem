@@ -18,6 +18,8 @@
 
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
 
+#include "datasystem/client/transport/object_read/object_read_types.h"
+
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -44,6 +46,12 @@ struct PendingMetadataBatch {
 };
 
 using RedirectTargets = std::unordered_map<std::string, std::deque<HostPort>>;
+
+bool IsMetadataOwnerRouteFailure(StatusCode code)
+{
+    return code == K_RPC_UNAVAILABLE || code == K_RPC_DEADLINE_EXCEEDED || code == K_RPC_PEER_DEAD
+           || code == K_CLIENT_WORKER_DISCONNECT || code == K_METADATA_OWNER_UNAVAILABLE;
+}
 
 Status ValidateAndResetItems(const ObjectMetadataBatch &items)
 {
@@ -125,9 +133,14 @@ ObjectMetadataClient::ObjectMetadataClient(std::shared_ptr<DataPlaneManager> man
                                            std::shared_ptr<DeadlineRetry> retry,
                                            std::shared_ptr<TransportAdvisor> advisor,
                                            std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider,
-                                           uint64_t ubBufferSize)
-    : manager_(std::move(manager)), retry_(std::move(retry)), advisor_(std::move(advisor)),
-      ubBufferProvider_(std::move(ubBufferProvider)), ubBufferSize_(ubBufferSize)
+                                           uint64_t ubBufferSize,
+                                           std::function<void(const HostPort &, const Status &)> metadataFailureHandler)
+    : manager_(std::move(manager)),
+      retry_(std::move(retry)),
+      advisor_(std::move(advisor)),
+      ubBufferProvider_(std::move(ubBufferProvider)),
+      ubBufferSize_(ubBufferSize),
+      metadataFailureHandler_(std::move(metadataFailureHandler))
 {
 }
 
@@ -222,10 +235,10 @@ Status ObjectMetadataClient::AddInlineDataRequest(const ObjectMetadataBatch &ite
 }
 
 Status ObjectMetadataClient::InvokeQueryAndGet(const HostPort &address, master::QueryAndGetReqPb &request,
-                                               master::QueryAndGetRspPb &response,
-                                               std::vector<RpcMessage> &payloads,
-                                               InlineRequestContext &context)
+                                               master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
+                                               InlineRequestContext &context, bool &rpcDispatched)
 {
+    rpcDispatched = false;
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     if (context.mode == InlineTransportMode::UB) {
         bool invoked = false;
@@ -233,7 +246,7 @@ Status ObjectMetadataClient::InvokeQueryAndGet(const HostPort &address, master::
             address, TransportHint::UB_CANDIDATE,
             [&](const std::shared_ptr<IDataTransporter> &, const std::shared_ptr<WorkerRpcClient> &rpcClient) {
                 invoked = true;
-                return rpcClient->InvokeQueryAndGet(request, response, payloads);
+                return rpcClient->InvokeQueryAndGet(request, response, payloads, &rpcDispatched);
             });
         if (invoked) {
             // Once sent, RPC failures retain UB mode and follow the normal retry policy.
@@ -250,7 +263,7 @@ Status ObjectMetadataClient::InvokeQueryAndGet(const HostPort &address, master::
     std::shared_ptr<WorkerRpcClient> rpcClient;
     RETURN_IF_NOT_OK(manager_->GetOrCreateRpcClient(address, rpcClient));
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient);
-    return rpcClient->InvokeQueryAndGet(request, response, payloads);
+    return rpcClient->InvokeQueryAndGet(request, response, payloads, &rpcDispatched);
 }
 
 Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const ObjectMetadataBatch &items,
@@ -266,18 +279,19 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
         ++attempt;
         RETURN_IF_NOT_OK(retry_->CheckDeadline());
         master::QueryAndGetReqPb request;
-        for (const auto *item : items) {
-            request.add_object_keys(item->objectKey);
-        }
-        request.set_redirect(allowRedirect);
-        RETURN_IF_NOT_OK(AddInlineDataRequest(items, context, request));
+        RETURN_IF_NOT_OK(BuildQueryRequest(items, allowRedirect, context, request));
         response.Clear();
         payloads.clear();
         VLOG(1) << "[TransportGet][Metadata] Query, meta owner: " << address.ToString()
                 << ", key count: " << items.size() << ", redirect: " << allowRedirect
                 << ", attempt: " << attempt;
-        Status rc = InvokeQueryAndGet(address, request, response, payloads, context);
+        bool rpcDispatched = false;
+        Status rc = InvokeQueryAndGet(address, request, response, payloads, context, rpcDispatched);
         if (rc.IsError()) {
+            const bool routeFailure = IsMetadataOwnerRouteFailure(rc.GetCode());
+            if (routeFailure && metadataFailureHandler_) {
+                metadataFailureHandler_(address, rc);
+            }
             // Tear down the shared channel only when the connection is genuinely unusable:
             // a dead peer, a legacy peer-unreachable (K_RPC_UNAVAILABLE), or a transient
             // blip we can prove never left the client (request definitely not sent). Pure
@@ -291,6 +305,12 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
                 || (IsRetryableRpcError(rc) && IsBrpcRequestDefinitelyNotSent(rc));
             if (teardownWarranted && manager_ != nullptr) {
                 manager_->Teardown(address);
+            }
+            if (routeFailure) {
+                VLOG(1) << "[TransportGet][Metadata] Return stale route for outer retry, meta owner: "
+                        << address.ToString() << ", dispatched: " << rpcDispatched
+                        << ", status: " << rc.ToString();
+                return Status(K_NOT_READY, STALE_TRANSPORT_SNAPSHOT_MESSAGE);
             }
             if (!retry_->IsRetryableRpcError(rc)) {
                 VLOG(1) << "[TransportGet][Metadata] Query failed without retry, meta owner: "
@@ -309,6 +329,17 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
                 << ", key count: " << items.size();
         RETURN_IF_NOT_OK(retry_->Backoff(backoffMs));
     }
+}
+
+Status ObjectMetadataClient::BuildQueryRequest(const ObjectMetadataBatch &items, bool allowRedirect,
+                                               const InlineRequestContext &context,
+                                               master::QueryAndGetReqPb &request) const
+{
+    for (const auto *item : items) {
+        request.add_object_keys(item->objectKey);
+    }
+    request.set_redirect(allowRedirect);
+    return AddInlineDataRequest(items, context, request);
 }
 
 Status ObjectMetadataClient::ApplyResults(const ObjectMetadataBatch &items,

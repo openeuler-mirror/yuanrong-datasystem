@@ -43,7 +43,8 @@ public:
 
     Status Init();
 
-    Status GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response);
+    Status GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response,
+                       int32_t timeoutMs = 0);
 
     void Shutdown();
 

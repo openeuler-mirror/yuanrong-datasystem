@@ -184,6 +184,7 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
       exitRequested_(initParam.exitRequested),
       metadataRpcObserver_(initParam.metadataRpcObserver),
       allowDirectoryLag_(initParam.allowDirectoryLag),
+      metadataRpcFailureReported_(initParam.metadataRpcFailureReported),
       asyncPersistenceDelManager_(initParam.asyncPersistenceDelManager)
 {
     supportL2Storage_ = GetCurrentStorageType();
@@ -200,6 +201,27 @@ void WorkerOcServiceCrudCommonApi::ObserveMetadataRpc(const std::shared_ptr<work
         return;
     }
     metadataRpcObserver_(target, status);
+}
+
+bool WorkerOcServiceCrudCommonApi::IsMetadataRpcFailureReported(
+    const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi) const
+{
+    if (metadataRpcFailureReported_ == nullptr || workerMasterApi == nullptr) {
+        return false;
+    }
+    HostPort target;
+    return target.ParseString(workerMasterApi->GetHostPort()).IsOk() && metadataRpcFailureReported_(target);
+}
+
+Status WorkerOcServiceCrudCommonApi::TranslateQualifiedMetadataDeadline(
+    const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi, const Status &status, bool rpcDispatched) const
+{
+    if (!rpcDispatched || status.GetCode() != K_RPC_DEADLINE_EXCEEDED
+        || !IsMetadataRpcFailureReported(workerMasterApi)) {
+        return status;
+    }
+    return Status(K_METADATA_OWNER_UNAVAILABLE,
+                  FormatString("Metadata owner RPC failure qualified. detail: %s", status.ToString()));
 }
 
 Status WorkerOcServiceCrudCommonApi::PartitionMultiCopyMetaRequest(

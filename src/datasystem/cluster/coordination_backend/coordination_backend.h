@@ -147,6 +147,16 @@ public:
                        RangeSearchResult &res) = 0;
 
     /**
+     * @brief Execute callback-form CAS only while the backend-wide authority revision is unchanged.
+     * @return K_NOT_SUPPORTED when the backend has no atomic global-revision fence.
+     */
+    virtual Status CASAtRevision(const std::string &, const std::string &, const ProcessFunction &, int64_t,
+                                 RangeSearchResult &)
+    {
+        return Status(K_NOT_SUPPORTED, "backend does not support global revision fenced CAS");
+    }
+
+    /**
      * @brief Execute callback-form single-key CAS.
      * @param[in] tableName Logical table name.
      * @param[in] key Exact relative key.
@@ -217,8 +227,19 @@ public:
         (void)target;
     }
 
+    virtual bool IsPeerRpcFailureReported(const HostPort &target) const
+    {
+        (void)target;
+        return false;
+    }
+
     virtual void ClearPeerRpcFailureObservations()
     {
+    }
+
+    virtual void DiscardPeerRpcFailure(const HostPort &target)
+    {
+        (void)target;
     }
 
     /**

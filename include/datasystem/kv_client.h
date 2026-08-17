@@ -122,7 +122,7 @@ public:
     ///
     /// \return Client instance.
     static KVClient &EmbeddedInstance();
- 
+
     /// \brief Invoke worker client to set the value of a key.
     ///
     /// \param[in] key The key.
@@ -131,6 +131,7 @@ public:
     ///
     /// \return K_OK on success; the error code otherwise.
     ///         K_INVALID: the key or val is empty.
+    ///         K_METADATA_OWNER_UNAVAILABLE: metadata publication result is unknown; do not automatically replay.
     ///         For ExistenceOpt::NX, if key already exists, returns K_OK and keeps existing value unchanged.
     Status Set(const std::string &key, const StringView &val, const SetParam &param = {});
 
@@ -161,6 +162,7 @@ public:
     ///
     /// \return K_OK on success; the error code otherwise.
     ///         K_RUNTIME_ERROR: client fd mmap failed
+    ///         K_METADATA_OWNER_UNAVAILABLE: metadata publication result is unknown; do not automatically replay.
     Status Set(const std::shared_ptr<Buffer> &buffer);
 
     /// \brief Batch create shared-memory Buffers in datasystem.
@@ -191,6 +193,8 @@ public:
     /// \return K_OK on success; the error code otherwise.
     ///         K_INVALID: buffers is empty.
     ///         K_RUNTIME_ERROR: client fd mmap failed
+    ///         K_METADATA_OWNER_UNAVAILABLE: all objects failed and metadata publication result is unknown; do not
+    ///         automatically replay. Partial success returns K_OK; this overload does not report failed keys.
     Status MSet(const std::vector<std::shared_ptr<Buffer>> &buffers);
 
     /// \brief Deprecated transactional multi-key set interface.
@@ -214,6 +218,8 @@ public:
     /// \param[in] param The set parameters.
     ///
     /// \return K_OK on any key success; the error code otherwise.
+    ///         K_METADATA_OWNER_UNAVAILABLE: all keys failed and metadata publication result is unknown; do not
+    ///         automatically replay. Partial success returns K_OK; inspect outFailedKeys for per-key failures.
     ///         For ExistenceOpt::NX, existing keys are treated as success and are not added to outFailedKeys.
     Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                 std::vector<std::string> &outFailedKeys, const MSetParam &param = {});

@@ -16,11 +16,13 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 
@@ -44,6 +46,7 @@ constexpr size_t HOST_CAPACITY_LOG_INTERVAL = 128;
 constexpr size_t HOST_LIFECYCLE_LOG_INTERVAL = 100;
 constexpr size_t MAX_PENDING_LIVENESS_REPORTS = 1'024;
 constexpr size_t MIN_ACTIVE_FAILURE_REPORTERS = 2;
+constexpr size_t TWO_WORKER_CLUSTER_SIZE = 2;
 constexpr int RETRY_BACKOFF_MULTIPLIER = 2;
 constexpr int64_t RUNTIME_START_WARN_MS = 500;
 constexpr int64_t RUNTIME_STOP_WARN_MS = 1'000;
@@ -61,6 +64,17 @@ void PreserveFirstError(const Status &candidate, Status &firstError)
     if (firstError.IsOk() && candidate.IsError()) {
         firstError = candidate;
     }
+}
+
+std::unordered_map<std::string, cluster::MembershipRecord> IndexMembershipsByAddress(
+    const std::vector<cluster::MembershipRecord> &memberships)
+{
+    std::unordered_map<std::string, cluster::MembershipRecord> byAddress;
+    byAddress.reserve(memberships.size());
+    for (const auto &membership : memberships) {
+        byAddress.emplace(membership.address, membership);
+    }
+    return byAddress;
 }
 
 size_t CountFailurePopulation(const cluster::TopologySnapshot &latest)
@@ -153,6 +167,8 @@ Status TopologyControlHost::PrepareMembershipPut(const std::string &clusterName)
                              "topology Control Host does not accept membership admission");
     auto found = entries_.find(clusterName);
     if (found != entries_.end()) {
+        CHECK_FAIL_RETURN_STATUS(!found->second->activeFailureCommitInProgress, K_TRY_AGAIN,
+                                 "active failure commit is in progress");
         ++found->second->mutationGeneration;
         ++found->second->pendingMembershipPuts;
         found->second->releaseAfterStop = false;
@@ -166,6 +182,7 @@ Status TopologyControlHost::PrepareMembershipPut(const std::string &clusterName)
         RETURN_STATUS(K_TRY_AGAIN, "controller_capacity_exhausted");
     }
     auto entry = std::make_unique<ClusterEntry>(clusterName);
+    entry->clusterGeneration = nextClusterGeneration_++;
     ++entry->mutationGeneration;
     entry->pendingMembershipPuts = 1;
     entries_.emplace(clusterName, std::move(entry));
@@ -256,41 +273,150 @@ void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &cluste
                                                        const cluster::MembershipRecord &reporter,
                                                        const std::vector<cluster::MembershipRecord> &targets)
 {
-    if (reporter.address.empty() || targets.empty()) {
+    if (reporter.address.empty()) {
         return;
     }
+    uint64_t clusterGeneration = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto entry = entries_.find(clusterName);
+        if (entry != entries_.end()) {
+            clusterGeneration = entry->second->clusterGeneration;
+        }
+    }
+    INJECT_POINT_NO_RETURN("TopologyControlHost.RecordWorkerFailureSummaries.afterGenerationCapture");
     // Eligibility is evaluated later against one current topology and membership snapshot.
     const auto now = options_.controller.now();
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto &clusterReports = failureReportsByCluster_[clusterName];
+    std::unordered_set<std::string> reportedTargets;
+    reportedTargets.reserve(targets.size());
+    for (const auto &target : targets) {
+        if (!target.address.empty() && target.address != reporter.address) {
+            reportedTargets.emplace(target.address);
+        }
+    }
+    std::vector<std::string> newTargets;
+    std::vector<std::string> clearedTargets;
+    const bool shouldWake = UpdateFailureReports(clusterName, reporter, targets, reportedTargets, clusterGeneration,
+                                                 now, newTargets, clearedTargets);
+    bool currentGeneration = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto entry = entries_.find(clusterName);
+        currentGeneration = entry != entries_.end() && entry->second->clusterGeneration == clusterGeneration;
+        if (currentGeneration && shouldWake) {
+            entry->second->storeDirty = true;
+            wakeCv_.notify_all();
+        }
+    }
+    if (currentGeneration && shouldWake) {
+        if (!newTargets.empty()) {
+            LOG(INFO) << "CLUSTER_FAILURE_REPORT role=coordinator action=summary_received cluster=" << clusterName
+                      << " reporter=" << reporter.address << " targets=" << VectorToString(newTargets);
+        }
+        if (!clearedTargets.empty()) {
+            LOG(INFO) << "CLUSTER_FAILURE_REPORT role=coordinator action=summary_cleared cluster=" << clusterName
+                      << " reporter=" << reporter.address << " targets=" << VectorToString(clearedTargets);
+        }
+    }
+}
+
+bool TopologyControlHost::UpdateFailureReports(const std::string &clusterName,
+                                               const cluster::MembershipRecord &reporter,
+                                               const std::vector<cluster::MembershipRecord> &targets,
+                                               const std::unordered_set<std::string> &reportedTargets,
+                                               uint64_t clusterGeneration, std::chrono::steady_clock::time_point now,
+                                               std::vector<std::string> &newTargets,
+                                               std::vector<std::string> &clearedTargets)
+{
     bool shouldWake = false;
+    auto clusterMutex = GetFailureReportClusterMutex(clusterName);
+    if (clusterMutex == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> clusterLock(*clusterMutex);
+    {
+        std::lock_guard<std::mutex> hostLock(mutex_);
+        const auto entry = entries_.find(clusterName);
+        if (entry == entries_.end() || entry->second->state != EntryState::RUNNING
+            || entry->second->clusterGeneration != clusterGeneration) {
+            return false;
+        }
+    }
+    std::lock_guard<std::mutex> lock(failureReportMutex_);
+    auto clusterIter = failureReportsByCluster_.find(clusterName);
+    if (clusterIter == failureReportsByCluster_.end()) {
+        if (reportedTargets.empty()) {
+            return false;
+        }
+        clusterIter =
+            failureReportsByCluster_.emplace(clusterName, decltype(failureReportsByCluster_)::mapped_type{}).first;
+    }
+    auto &clusterReports = clusterIter->second;
+    shouldWake = ClearUnreportedTargets(clusterReports, reporter, reportedTargets, clusterGeneration, clearedTargets);
     for (const auto &target : targets) {
         if (target.address.empty() || target.address == reporter.address) {
             continue;
         }
-        auto &reporters = clusterReports[target.address];
-        const auto oldSize = reporters.size();
-        auto &state = reporters[reporter.address];
-        const bool newReporter = reporters.size() != oldSize;
-        state = FailureReportState{
-            now,
-            reporter.state,
-            reporter.timestamp,
-            reporter.hostId,
-            target.timestamp,
-            target.hostId
-        };
+        auto &reporters = clusterReports.byTarget[target.address];
+        auto reporterIter = reporters.find(reporter.address);
+        if (reporterIter != reporters.end() && reporterIter->second.clusterGeneration > clusterGeneration) {
+            continue;
+        }
+        const bool newReporter =
+            reporterIter == reporters.end() || reporterIter->second.clusterGeneration != clusterGeneration;
+        if (newReporter) {
+            newTargets.emplace_back(target.address);
+        }
+        reporters[reporter.address] =
+            FailureReportState{ now,           reporter.state,   reporter.timestamp, reporter.hostId, target.timestamp,
+                                target.hostId, clusterGeneration };
+        clusterReports.targetsByReporter[reporter.address].insert(target.address);
         shouldWake = shouldWake || newReporter;
     }
-    if (shouldWake) {
-        auto entry = entries_.find(clusterName);
-        if (entry != entries_.end()) {
-            entry->second->storeDirty = true;
-        }
-        VLOG(1) << "CLUSTER_FAILURE_REPORT role=coordinator cluster=" << clusterName
-                << " reporter=" << reporter.address;
-        wakeCv_.notify_all();
+    if (clusterReports.empty()) {
+        failureReportsByCluster_.erase(clusterIter);
     }
+    return shouldWake;
+}
+
+bool TopologyControlHost::ClearUnreportedTargets(ClusterFailureReports &clusterReports,
+                                                 const cluster::MembershipRecord &reporter,
+                                                 const std::unordered_set<std::string> &reportedTargets,
+                                                 uint64_t clusterGeneration, std::vector<std::string> &clearedTargets)
+{
+    bool cleared = false;
+    auto reverseIter = clusterReports.targetsByReporter.find(reporter.address);
+    if (reverseIter == clusterReports.targetsByReporter.end()) {
+        return false;
+    }
+    for (auto previousIter = reverseIter->second.begin(); previousIter != reverseIter->second.end();) {
+        const auto &target = *previousIter;
+        if (reportedTargets.count(target) > 0) {
+            ++previousIter;
+            continue;
+        }
+        auto targetIter = clusterReports.byTarget.find(target);
+        if (targetIter == clusterReports.byTarget.end()) {
+            previousIter = reverseIter->second.erase(previousIter);
+            continue;
+        }
+        auto reporterIter = targetIter->second.find(reporter.address);
+        if (reporterIter != targetIter->second.end() && reporterIter->second.clusterGeneration == clusterGeneration) {
+            targetIter->second.erase(reporterIter);
+            cleared = true;
+            clearedTargets.emplace_back(target);
+            previousIter = reverseIter->second.erase(previousIter);
+        } else {
+            ++previousIter;
+        }
+        if (targetIter->second.empty()) {
+            clusterReports.byTarget.erase(targetIter);
+        }
+    }
+    if (reverseIter->second.empty()) {
+        clusterReports.targetsByReporter.erase(reverseIter);
+    }
+    return cleared;
 }
 
 std::unordered_map<std::string, cluster::MembershipRecord> TopologyControlHost::BuildEligibleFailureReporters(
@@ -322,20 +448,40 @@ std::unordered_map<std::string, cluster::MembershipRecord> TopologyControlHost::
     return eligibleReporters;
 }
 
-size_t TopologyControlHost::FailureReporterThreshold(size_t totalWorkers)
+size_t TopologyControlHost::FailureReporterThreshold(size_t totalWorkers, size_t eligibleReporterCount)
 {
     if (totalWorkers <= 1) {
         return std::numeric_limits<size_t>::max();
     }
+    if (totalWorkers == TWO_WORKER_CLUSTER_SIZE) {
+        return 1;
+    }
     const auto percentThreshold = (totalWorkers + 19) / 20;
     const auto configuredThreshold = std::min(std::max<size_t>(percentThreshold, 5), totalWorkers - 1);
-    return std::max<size_t>(configuredThreshold, MIN_ACTIVE_FAILURE_REPORTERS);
+    // Concurrent failures can make the configured threshold unattainable. In that case require every reporter that
+    // remains eligible in the Coordinator's current membership view, while preserving the multi-reporter safety floor.
+    const auto attainableThreshold = std::max<size_t>(eligibleReporterCount, MIN_ACTIVE_FAILURE_REPORTERS);
+    return std::min(std::max<size_t>(configuredThreshold, MIN_ACTIVE_FAILURE_REPORTERS), attainableThreshold);
+}
+
+void TopologyControlHost::RemoveTargetFromReporterIndex(ClusterFailureReports &clusterReports,
+                                                        const std::string &reporter, const std::string &target)
+{
+    auto reverseIter = clusterReports.targetsByReporter.find(reporter);
+    if (reverseIter == clusterReports.targetsByReporter.end()) {
+        return;
+    }
+    reverseIter->second.erase(target);
+    if (reverseIter->second.empty()) {
+        clusterReports.targetsByReporter.erase(reverseIter);
+    }
 }
 
 size_t TopologyControlHost::PruneAndCountFailureReporters(
     const cluster::TopologySnapshot &latest,
     const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
     const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress, const std::string &target,
+    uint64_t clusterGeneration, ClusterFailureReports &clusterReports,
     std::unordered_map<std::string, FailureReportState> &reporters, std::chrono::steady_clock::time_point now) const
 {
     size_t validReports = 0;
@@ -367,7 +513,9 @@ size_t TopologyControlHost::PruneAndCountFailureReporters(
                 || (state.targetTimestamp > 0
                     && (state.targetTimestamp != targetMembership->second.timestamp
                         || state.targetHostId != targetMembership->second.hostId)));
-        if (expired || !targetEligible || !reporterEligible || reporter == target || reporterChanged || targetChanged) {
+        if (state.clusterGeneration != clusterGeneration || expired || !targetEligible || !reporterEligible
+            || reporter == target || reporterChanged || targetChanged) {
+            RemoveTargetFromReporterIndex(clusterReports, reporter, target);
             reporterIter = reporters.erase(reporterIter);
             continue;
         }
@@ -381,26 +529,52 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
     const std::string &clusterName, const cluster::TopologySnapshot &latest,
     const std::vector<cluster::MembershipRecord> &memberships, std::chrono::steady_clock::time_point now)
 {
-    const auto eligibleReporters = BuildEligibleFailureReporters(latest, memberships);
-    std::unordered_map<std::string, cluster::MembershipRecord> membershipsByAddress;
-    membershipsByAddress.reserve(memberships.size());
-    for (const auto &membership : memberships) {
-        membershipsByAddress.emplace(membership.address, membership);
+    uint64_t clusterGeneration = 0;
+    auto clusterMutex = GetFailureReportClusterMutex(clusterName);
+    if (clusterMutex == nullptr) {
+        return {};
     }
-    const auto failurePopulation = CountFailurePopulation(latest);
-    std::vector<cluster::MemberIdentity> candidates;
+    std::lock_guard<std::mutex> clusterLock(*clusterMutex);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto entry = entries_.find(clusterName);
+        if (entry == entries_.end() || entry->second->state != EntryState::RUNNING) {
+            return {};
+        }
+        clusterGeneration = entry->second->clusterGeneration;
+    }
+    const auto eligibleReporters = BuildEligibleFailureReporters(latest, memberships);
+    const auto membershipsByAddress = IndexMembershipsByAddress(memberships);
+    std::lock_guard<std::mutex> lock(failureReportMutex_);
+    return GetIsolationCandidatesLocked(clusterName, latest, eligibleReporters, membershipsByAddress,
+                                        CountFailurePopulation(latest), clusterGeneration, now);
+}
+
+std::shared_ptr<std::mutex> TopologyControlHost::GetFailureReportClusterMutex(const std::string &clusterName)
+{
     std::lock_guard<std::mutex> lock(mutex_);
+    const auto entry = entries_.find(clusterName);
+    return entry == entries_.end() ? nullptr : entry->second->failureReportMutex;
+}
+
+std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidatesLocked(
+    const std::string &clusterName, const cluster::TopologySnapshot &latest,
+    const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
+    const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress, size_t failurePopulation,
+    uint64_t clusterGeneration, std::chrono::steady_clock::time_point now)
+{
+    std::vector<cluster::MemberIdentity> candidates;
     auto clusterIter = failureReportsByCluster_.find(clusterName);
     if (clusterIter == failureReportsByCluster_.end()) {
         return candidates;
     }
     auto &clusterReports = clusterIter->second;
     const auto activeBatch = latest.GetActiveBatch();
-    for (auto targetIter = clusterReports.begin(); targetIter != clusterReports.end();) {
+    for (auto targetIter = clusterReports.byTarget.begin(); targetIter != clusterReports.byTarget.end();) {
         const auto &target = targetIter->first;
         auto &reporters = targetIter->second;
-        const auto validReports = PruneAndCountFailureReporters(
-            latest, eligibleReporters, membershipsByAddress, target, reporters, now);
+        const auto validReports = PruneAndCountFailureReporters(latest, eligibleReporters, membershipsByAddress, target,
+                                                                clusterGeneration, clusterReports, reporters, now);
         const cluster::Member *targetMember = nullptr;
         const bool joiningScaleOutTarget = activeBatch.has_value()
                                            && activeBatch->type == cluster::TopologyChangeType::SCALE_OUT
@@ -408,7 +582,9 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
                                            && targetMember != nullptr
                                            && targetMember->state == cluster::MemberState::JOINING;
         const size_t totalWorkers = failurePopulation + (joiningScaleOutTarget ? 1 : 0);
-        const auto reporterThreshold = FailureReporterThreshold(totalWorkers);
+        const auto targetIsEligibleReporter = eligibleReporters.count(target) > 0;
+        const auto eligibleReporterCount = eligibleReporters.size() - static_cast<size_t>(targetIsEligibleReporter);
+        const auto reporterThreshold = FailureReporterThreshold(totalWorkers, eligibleReporterCount);
         if (validReports >= reporterThreshold) {
             const cluster::Member *member = nullptr;
             if (latest.FindMemberByAddress(target, member).IsOk() && member != nullptr) {
@@ -416,7 +592,7 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
             }
         }
         if (reporters.empty()) {
-            targetIter = clusterReports.erase(targetIter);
+            targetIter = clusterReports.byTarget.erase(targetIter);
         } else {
             ++targetIter;
         }
@@ -425,6 +601,125 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
         failureReportsByCluster_.erase(clusterIter);
     }
     return candidates;
+}
+
+Status TopologyControlHost::RunUnderActiveFailureCommitFence(const std::string &clusterName,
+                                                             const cluster::TopologySnapshot &latest,
+                                                             const std::vector<cluster::MembershipRecord> &,
+                                                             std::chrono::steady_clock::time_point,
+                                                             std::optional<uint64_t> expectedControlEpoch,
+                                                             const std::vector<cluster::MemberIdentity> &expected,
+                                                             const std::function<Status(int64_t)> &mutation)
+{
+    ActiveFailureReservation reservation;
+    if (!TryReserveActiveFailureCommit(clusterName, reservation)) {
+        return Status::OK();
+    }
+    Raii releaseReservation(
+        [this, &clusterName, &reservation] { ReleaseActiveFailureCommit(clusterName, reservation.clusterGeneration); });
+    std::vector<cluster::MembershipRecord> currentMemberships;
+    int64_t authorityRevision = 0;
+    RETURN_IF_NOT_OK(ReadCurrentMemberships(clusterName, currentMemberships, authorityRevision));
+    const auto eligibleReporters = BuildEligibleFailureReporters(latest, currentMemberships);
+    const auto membershipsByAddress = IndexMembershipsByAddress(currentMemberships);
+    const auto validateAndCommit = [&]() {
+        auto clusterMutex = GetFailureReportClusterMutex(clusterName);
+        CHECK_FAIL_RETURN_STATUS(clusterMutex != nullptr, K_NOT_READY, "Cluster failure report state is unavailable");
+        std::lock_guard<std::mutex> clusterLock(*clusterMutex);
+        std::vector<cluster::MemberIdentity> candidates;
+        {
+            std::lock_guard<std::mutex> lock(failureReportMutex_);
+            candidates = GetIsolationCandidatesLocked(clusterName, latest, eligibleReporters, membershipsByAddress,
+                                                      CountFailurePopulation(latest), reservation.clusterGeneration,
+                                                      options_.controller.now());
+        }
+        if (!ActiveFailureCandidatesContainExpected(candidates, expected)) {
+            LOG(INFO) << "CLUSTER_FAILURE_DETECT cluster=" << clusterName << " version=" << latest.Version()
+                      << " action=active_summary_commit_fence decision=preserve expected_count=" << expected.size()
+                      << " candidate_count=" << candidates.size();
+            return Status::OK();
+        }
+        if (!IsActiveFailureReservationCurrent(clusterName, reservation)) {
+            LOG(INFO) << "CLUSTER_FAILURE_DETECT cluster=" << clusterName << " version=" << latest.Version()
+                      << " action=active_summary_commit_fence decision=preserve reason=control_mutated";
+            return Status::OK();
+        }
+        return mutation(authorityRevision);
+    };
+    return options_.activeFailureAuthorityFence
+               ? options_.activeFailureAuthorityFence(expectedControlEpoch, validateAndCommit)
+               : validateAndCommit();
+}
+
+Status TopologyControlHost::ReadCurrentMemberships(const std::string &clusterName,
+                                                   std::vector<cluster::MembershipRecord> &memberships,
+                                                   int64_t &authorityRevision)
+{
+    CoordinatorStoreBackend backend(store_);
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(clusterName, keys));
+    std::vector<std::pair<std::string, std::string>> values;
+    RETURN_IF_NOT_OK(backend.GetAll(keys->MembershipTable(), values, authorityRevision));
+    memberships.clear();
+    memberships.reserve(values.size());
+    for (const auto &[address, bytes] : values) {
+        cluster::MembershipValue value;
+        RETURN_IF_NOT_OK(cluster::MembershipValueCodec::Decode(bytes, value));
+        memberships.push_back({ address, value.lifecycleState, value.timestamp, value.hostId });
+    }
+    return Status::OK();
+}
+
+bool TopologyControlHost::TryReserveActiveFailureCommit(const std::string &clusterName,
+                                                        ActiveFailureReservation &reservation)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto entry = entries_.find(clusterName);
+    if (entry == entries_.end() || entry->second->state != EntryState::RUNNING
+        || entry->second->pendingMembershipPuts > 0 || entry->second->activeFailureCommitInProgress) {
+        return false;
+    }
+    entry->second->activeFailureCommitInProgress = true;
+    reservation = { entry->second->clusterGeneration, entry->second->mutationGeneration };
+    return true;
+}
+
+bool TopologyControlHost::IsActiveFailureReservationCurrent(const std::string &clusterName,
+                                                            const ActiveFailureReservation &reservation)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto entry = entries_.find(clusterName);
+    return entry != entries_.end() && entry->second->state == EntryState::RUNNING
+           && entry->second->activeFailureCommitInProgress && entry->second->pendingMembershipPuts == 0
+           && entry->second->clusterGeneration == reservation.clusterGeneration
+           && entry->second->mutationGeneration == reservation.mutationGeneration;
+}
+
+void TopologyControlHost::ReleaseActiveFailureCommit(const std::string &clusterName, uint64_t clusterGeneration)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto entry = entries_.find(clusterName);
+    if (entry != entries_.end() && entry->second->clusterGeneration == clusterGeneration) {
+        entry->second->activeFailureCommitInProgress = false;
+        wakeCv_.notify_all();
+    }
+}
+
+bool TopologyControlHost::ActiveFailureCandidatesContainExpected(const std::vector<cluster::MemberIdentity> &candidates,
+                                                                 const std::vector<cluster::MemberIdentity> &expected)
+{
+    if (expected.size() > candidates.size()) {
+        return false;
+    }
+    std::unordered_map<std::string, std::string> current;
+    current.reserve(candidates.size());
+    for (const auto &candidate : candidates) {
+        current.emplace(candidate.address, candidate.id);
+    }
+    return std::all_of(expected.begin(), expected.end(), [&](const auto &identity) {
+        const auto iter = current.find(identity.address);
+        return iter != current.end() && iter->second == identity.id;
+    });
 }
 
 void TopologyControlHost::Run() noexcept
@@ -482,6 +777,8 @@ void TopologyControlHost::ReconcileCluster(const std::string &clusterName)
 {
     ClusterEntry *entry = nullptr;
     EntryState state = EntryState::RESERVED;
+    bool releaseReserved = false;
+    uint64_t mutationGeneration = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto found = entries_.find(clusterName);
@@ -490,10 +787,12 @@ void TopologyControlHost::ReconcileCluster(const std::string &clusterName)
         }
         entry = found->second.get();
         state = entry->state;
-        if (state == EntryState::RESERVED && entry->releaseAfterStop) {
-            EraseClusterLocked(clusterName);
-            return;
-        }
+        releaseReserved = state == EntryState::RESERVED && entry->releaseAfterStop;
+        mutationGeneration = entry->mutationGeneration;
+    }
+    if (releaseReserved) {
+        static_cast<void>(EraseClusterIfCurrent(clusterName, entry, mutationGeneration));
+        return;
     }
     if (state == EntryState::WAITING_RECOVERY) {
         ReconcileWaitingEntry(clusterName, *entry);
@@ -518,11 +817,15 @@ void TopologyControlHost::ReconcileWaitingEntry(const std::string &clusterName, 
         uint64_t observationGeneration = 0;
         const auto status = ReleaseClusterIfEmpty(entry, released, observationGeneration);
         if (status.IsOk() && released) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            auto found = entries_.find(clusterName);
-            if (found != entries_.end() && found->second.get() == &entry
-                && IsEmptyObservationCurrent(entry, observationGeneration)) {
-                EraseClusterLocked(clusterName);
+            bool observationCurrent = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                auto found = entries_.find(clusterName);
+                observationCurrent = found != entries_.end() && found->second.get() == &entry
+                                     && IsEmptyObservationCurrent(entry, observationGeneration);
+            }
+            if (observationCurrent) {
+                static_cast<void>(EraseClusterIfCurrent(clusterName, &entry, observationGeneration));
             }
             return;
         }
@@ -690,6 +993,15 @@ Status TopologyControlHost::StartRuntime(ClusterEntry &entry)
                                                 std::chrono::steady_clock::time_point now) {
             return GetIsolationCandidates(clusterName, latest, memberships, now);
         };
+    runtimeOptions.controller.activeFailureCommitFence =
+        [this, clusterName = entry.clusterName](
+            const cluster::TopologySnapshot &latest, const std::vector<cluster::MembershipRecord> &memberships,
+            std::chrono::steady_clock::time_point now, std::optional<uint64_t> expectedControlEpoch,
+            const std::vector<cluster::MemberIdentity> &expected,
+            const std::function<Status(int64_t)> &mutation) {
+            return RunUnderActiveFailureCommitFence(clusterName, latest, memberships, now, expectedControlEpoch,
+                                                    expected, mutation);
+        };
     runtimeOptions.janitor = cluster::TopologyTaskJanitorOptions{
         COORDINATOR_JANITOR_INTERVAL, COORDINATOR_JANITOR_SCAN_LIMIT, COORDINATOR_JANITOR_DELETE_BATCH
     };
@@ -758,10 +1070,26 @@ Status TopologyControlHost::ReleaseClusterIfEmpty(ClusterEntry &entry, bool &rel
     return Status::OK();
 }
 
-void TopologyControlHost::EraseClusterLocked(const std::string &clusterName)
+bool TopologyControlHost::EraseClusterIfCurrent(const std::string &clusterName, const ClusterEntry *expected,
+                                                uint64_t mutationGeneration)
 {
+    auto clusterMutex = GetFailureReportClusterMutex(clusterName);
+    if (clusterMutex == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> clusterLock(*clusterMutex);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto found = entries_.find(clusterName);
+        if (found == entries_.end() || found->second.get() != expected
+            || found->second->mutationGeneration != mutationGeneration) {
+            return false;
+        }
+        entries_.erase(found);
+    }
+    std::lock_guard<std::mutex> lock(failureReportMutex_);
     failureReportsByCluster_.erase(clusterName);
-    entries_.erase(clusterName);
+    return true;
 }
 
 bool TopologyControlHost::IsEmptyObservationCurrent(const ClusterEntry &entry,
@@ -800,7 +1128,7 @@ void TopologyControlHost::FinishStoppedEntry(const std::string &clusterName, Clu
     bool released = false;
     uint64_t observationGeneration = 0;
     const auto releaseStatus = ReleaseClusterIfEmpty(entry, released, observationGeneration);
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     auto found = entries_.find(clusterName);
     if (found == entries_.end()) {
         return;
@@ -809,7 +1137,8 @@ void TopologyControlHost::FinishStoppedEntry(const std::string &clusterName, Clu
     entry.deliveringLivenessReports = 0;
     if (releaseStatus.IsOk() && released && IsEmptyObservationCurrent(entry, observationGeneration)) {
         LOG(INFO) << "CLUSTER_CONTROL_HOST cluster=" << clusterName << " state=released";
-        EraseClusterLocked(clusterName);
+        lock.unlock();
+        static_cast<void>(EraseClusterIfCurrent(clusterName, &entry, observationGeneration));
         return;
     }
     entry.state = EntryState::WAITING_RECOVERY;

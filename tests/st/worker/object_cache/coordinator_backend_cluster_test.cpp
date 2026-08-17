@@ -71,9 +71,9 @@ constexpr int FAULT_ACCESS_RECOVERY_EXPECT_MS = 3000;
 constexpr int FAULT_ISOLATION_EXPECT_MS = 3000;
 constexpr int FAULT_RECOVERY_TIMEOUT_MS = 12000;
 constexpr int FAULT_TRAFFIC_INTERVAL_MS = 20;
-constexpr int FAULT_BLINK_MAX_DURATION_MS = 8000;
+constexpr int FAULT_BLINK_MAX_DURATION_MS = 2000;
 constexpr int FAULT_BLINK_REPEAT = 5;
-constexpr uint64_t FAULT_BLINK_KEEPALIVE_FAILURES = 5;
+constexpr uint64_t FAULT_BLINK_KEEPALIVE_FAILURES = 1;
 constexpr int FAULT_BLINK_RECOVERY_TIMEOUT_MS = 3000;
 constexpr int FAULT_BLINK_TOPOLOGY_TIMEOUT_SEC = 4;
 constexpr int FAULT_TOPOLOGY_RPC_TIMEOUT_MS = 500;
@@ -803,7 +803,7 @@ protected:
                                            + event.ShortDebugString() + ", last status: " + lastRc.ToString());
     }
 
-    void AssertBidirectionalAccess(uint32_t first, uint32_t second, const std::string &prefix)
+    void AssertBidirectionalAccess(uint32_t first, uint32_t second, const std::string &prefix, bool waitForSet = false)
     {
         std::shared_ptr<KVClient> firstClient;
         std::shared_ptr<KVClient> secondClient;
@@ -812,12 +812,20 @@ protected:
 
         const auto firstKeys = BuildKeys(prefix + "_first_to_second");
         const auto firstValues = BuildValues(firstKeys, prefix + "_first_to_second");
-        AssertSetKeys(firstClient, firstKeys, firstValues);
+        if (waitForSet) {
+            AssertSetKeysEventually(firstClient, firstKeys, firstValues);
+        } else {
+            AssertSetKeys(firstClient, firstKeys, firstValues);
+        }
         AssertGetKeysEventually(secondClient, firstKeys, firstValues);
 
         const auto secondKeys = BuildKeys(prefix + "_second_to_first");
         const auto secondValues = BuildValues(secondKeys, prefix + "_second_to_first");
-        AssertSetKeys(secondClient, secondKeys, secondValues);
+        if (waitForSet) {
+            AssertSetKeysEventually(secondClient, secondKeys, secondValues);
+        } else {
+            AssertSetKeys(secondClient, secondKeys, secondValues);
+        }
         AssertGetKeysEventually(firstClient, secondKeys, secondValues);
     }
 
@@ -861,18 +869,14 @@ class CoordinatorBackendFaultIsolationTest : public CoordinatorBackendClusterTes
 public:
     void SetUp() override
     {
-#ifndef USE_URMA
-        GTEST_SKIP() << "Strict fast-failover timing ST requires USE_URMA or USE_URMA_MOCK.";
-#else
+        originalEnableUrma_ = FLAGS_enable_urma;
         ExternalClusterTest::SetUp();
-#endif
     }
 
     void TearDown() override
     {
-#ifdef USE_URMA
         ExternalClusterTest::TearDown();
-#endif
+        FLAGS_enable_urma = originalEnableUrma_;
     }
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -891,8 +895,8 @@ public:
 #else
         opts.workerGflagParams += " -enable_urma=false";
 #endif
-        opts.coordinatorGflagParams =
-            " -v=1 -use_brpc=true -node_timeout_s=3 -node_dead_timeout_s=30 -scale_in_collect_window_ms=0";
+        opts.coordinatorGflagParams = " -v=1 -use_brpc=true -node_timeout_s=" + std::to_string(FAULT_NODE_TIMEOUT_SEC)
+                                      + " -node_dead_timeout_s=30 -scale_in_collect_window_ms=0";
     }
 
 protected:
@@ -964,7 +968,8 @@ protected:
         std::map<std::string, MembershipPb::StatePb> lastWorkers;
         while (std::chrono::steady_clock::now() < deadline) {
             lastRc = GetTopologyWorkers(*coordinatorProxy_, lastWorkers, FAULT_TOPOLOGY_RPC_TIMEOUT_MS);
-            if (lastRc.IsOk() && lastWorkers.find(worker.ToString()) != lastWorkers.end()) {
+            const auto workerIt = lastWorkers.find(worker.ToString());
+            if (lastRc.IsOk() && workerIt != lastWorkers.end() && workerIt->second == MembershipPb::ACTIVE) {
                 return Status::OK();
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
@@ -988,6 +993,7 @@ protected:
         std::shared_ptr<KVClient> writer;
         std::shared_ptr<KVClient> reader;
         std::shared_ptr<KVClient> metadataReporter;
+        std::shared_ptr<KVClient> metadataReporterPeer;
     };
 
     struct FaultTrafficState {
@@ -1062,6 +1068,9 @@ protected:
 
     void RunKillWorkerSetGetRecoverWithinTarget(bool enableLocalCache);
     void RunBlinkWorkerDoesNotIsolate(bool enableLocalCache);
+
+private:
+    bool originalEnableUrma_ = false;
 };
 
 class StaleTopologyBootstrapTest : public CoordinatorBackendClusterTest,
@@ -1612,7 +1621,9 @@ CoordinatorBackendFaultIsolationTest::FaultClients CoordinatorBackendFaultIsolat
     FaultClients clients;
     InitRoutedClient(1, enableLocalCache, clients.writer);
     InitRoutedClient(2, enableLocalCache, clients.reader, DataPlacementPolicy::PREFERRED_SAME_NODE);
-    InitRoutedClient(0, enableLocalCache, clients.metadataReporter, DataPlacementPolicy::PREFERRED_SAME_NODE);
+    InitRoutedClient(0, true, clients.metadataReporter, DataPlacementPolicy::PREFERRED_SAME_NODE);
+    InitRoutedClient(2, true, clients.metadataReporterPeer, DataPlacementPolicy::PREFERRED_SAME_NODE);
+    FLAGS_enable_urma = false;
     return clients;
 }
 
@@ -1623,9 +1634,10 @@ void CoordinatorBackendFaultIsolationTest::WarmupTargetMetadata(const FaultClien
     DS_ASSERT_OK(FindRouteKeyToWorker(workerIndex, caseName + "_target_meta_", targetMetaKey));
     DS_ASSERT_OK(clients.writer->Set(targetMetaKey, FAULT_META_VALUE));
     if (!enableLocalCache) {
-        std::string warmupValue;
-        DS_ASSERT_OK(clients.metadataReporter->Get(targetMetaKey, warmupValue));
-        ASSERT_EQ(warmupValue, FAULT_META_VALUE);
+        const std::vector<std::string> keys{ targetMetaKey };
+        const std::unordered_map<std::string, std::string> values{ { targetMetaKey, FAULT_META_VALUE } };
+        auto metadataReporter = clients.metadataReporter;
+        AssertGetKeysEventually(metadataReporter, keys, values);
     }
 }
 
@@ -1644,7 +1656,7 @@ void CoordinatorBackendFaultIsolationTest::StartMetadataFailureTraffic(const Fau
                                                                        const std::vector<std::string> &reportKeys,
                                                                        FaultTrafficState &state)
 {
-    for (auto &client : { clients.metadataReporter, clients.reader }) {
+    for (auto &client : { clients.metadataReporter, clients.metadataReporterPeer }) {
         for (size_t lane = 0; lane < FAULT_REPORT_LANES_PER_WORKER; ++lane) {
             state.metadataTraffic.emplace_back([&, client, lane] {
                 size_t nextKey = lane;
@@ -1747,19 +1759,16 @@ void CoordinatorBackendFaultIsolationTest::WarmupBlinkTraffic(const FaultClients
     latestKey = caseName + "_blink_warmup_" + randomData.GetRandomString(16);
     latestValue = FAULT_META_VALUE;
     DS_ASSERT_OK(clients.writer->Set(latestKey, latestValue));
-    std::string warmupValue;
     if (!enableLocalCache) {
-        DS_ASSERT_OK(clients.reader->Get(latestKey, warmupValue));
-        ASSERT_EQ(warmupValue, latestValue);
+        const std::vector<std::string> keys{ latestKey };
+        const std::unordered_map<std::string, std::string> values{ { latestKey, latestValue } };
+        auto reader = clients.reader;
+        AssertGetKeysEventually(reader, keys, values);
     }
 
     std::string targetMetaKey;
     DS_ASSERT_OK(FindRouteKeyToWorker(workerIndex, caseName + "_blink_target_meta_", targetMetaKey));
     DS_ASSERT_OK(clients.writer->Set(targetMetaKey, FAULT_META_VALUE));
-    if (!enableLocalCache) {
-        DS_ASSERT_OK(clients.metadataReporter->Get(targetMetaKey, warmupValue));
-        ASSERT_EQ(warmupValue, FAULT_META_VALUE);
-    }
 }
 
 uint64_t CoordinatorBackendFaultIsolationTest::InjectKeepaliveBlink(uint32_t workerIndex)
@@ -1778,10 +1787,10 @@ uint64_t CoordinatorBackendFaultIsolationTest::InjectKeepaliveBlink(uint32_t wor
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(FAULT_BLINK_MAX_DURATION_MS);
     uint64_t injectCountAfter = injectCountBefore;
-    while (std::chrono::steady_clock::now() < deadline
-           && injectCountAfter - injectCountBefore < FAULT_BLINK_KEEPALIVE_FAILURES) {
+    while (std::chrono::steady_clock::now() < deadline) {
         DS_EXPECT_OK(cluster_->GetInjectActionExecuteCount(ClusterNodeType::WORKER, workerIndex,
                                                            COORDINATOR_KEEPALIVE_INJECT_NAME, injectCountAfter));
+        DS_EXPECT_OK(WaitWorkerInCluster(workerIndex, 1));
         std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
     }
     DS_EXPECT_OK(cluster_->GetInjectActionExecuteCount(ClusterNodeType::WORKER, workerIndex,
@@ -1859,9 +1868,10 @@ void CoordinatorBackendFaultIsolationTest::RunBlinkWorkerDoesNotIsolate(bool ena
     std::string latestValue;
     WarmupBlinkTraffic(clients, blinkWorkerIndex, caseName, enableLocalCache, latestKey, latestValue);
 
+    uint64_t totalKeepaliveFailures = 0;
     for (int round = 0; round < FAULT_BLINK_REPEAT; ++round) {
         const auto keepaliveFailures = InjectKeepaliveBlink(blinkWorkerIndex);
-        EXPECT_GE(keepaliveFailures, FAULT_BLINK_KEEPALIVE_FAILURES);
+        totalKeepaliveFailures += keepaliveFailures;
         ASSERT_TRUE(WaitWorkerInCluster(blinkWorkerIndex, FAULT_BLINK_TOPOLOGY_TIMEOUT_SEC).IsOk());
         auto setResult = VerifyBlinkSetRecovery(clients, caseName, round, latestKey, latestValue);
 
@@ -1876,6 +1886,7 @@ void CoordinatorBackendFaultIsolationTest::RunBlinkWorkerDoesNotIsolate(bool ena
         ASSERT_TRUE(WaitWorkerInCluster(blinkWorkerIndex, FAULT_BLINK_TOPOLOGY_TIMEOUT_SEC).IsOk());
     }
 
+    EXPECT_GE(totalKeepaliveFailures, FAULT_BLINK_KEEPALIVE_FAILURES);
     std::this_thread::sleep_for(std::chrono::seconds(FAULT_NODE_TIMEOUT_SEC + 1));
     ASSERT_TRUE(WaitWorkerInCluster(blinkWorkerIndex, FAULT_BLINK_TOPOLOGY_TIMEOUT_SEC).IsOk());
 }

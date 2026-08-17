@@ -41,6 +41,11 @@ constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
 constexpr int TOPOLOGY_RECONCILE_LOG_INTERVAL = 128;
 constexpr int64_t DERIVED_SLICE_WARN_THRESHOLD_MS = 20;
 constexpr size_t MAX_EXTERNAL_BOOTSTRAP_ATTEMPTS = 8;
+constexpr auto ACTIVE_FAILURE_DIRECT_PROBE_TIMEOUT = std::chrono::milliseconds(250);
+constexpr auto ACTIVE_FAILURE_DIRECT_PROBE_INTERVAL = std::chrono::milliseconds(750);
+constexpr uint32_t MIN_ACTIVE_FAILURE_UNREACHABLE_PROBES = 2;
+constexpr size_t MAX_ACTIVE_FAILURE_PROBES_PER_ROUND = 128;
+constexpr size_t TWO_WORKER_CLUSTER_SIZE = 2;
 
 Status BuildWatchedTopology(const CoordinationEvent &event, std::shared_ptr<const TopologySnapshot> &snapshot)
 {
@@ -73,6 +78,23 @@ std::string MembershipDigest(const std::vector<MembershipRecord> &memberships)
 bool IsTransientReconcileStatus(StatusCode code)
 {
     return code == K_TRY_AGAIN || code == K_NOT_READY;
+}
+
+const char *ControlBackendProbeOutcomeName(ControlBackendProbeOutcome outcome)
+{
+    switch (outcome) {
+        case ControlBackendProbeOutcome::RESPONSE:
+            return "response";
+        case ControlBackendProbeOutcome::DEADLINE_EXCEEDED:
+            return "deadline_exceeded";
+        case ControlBackendProbeOutcome::UNAVAILABLE:
+            return "unavailable";
+        case ControlBackendProbeOutcome::CANCELLED:
+            return "cancelled";
+        case ControlBackendProbeOutcome::ERROR:
+            return "error";
+    }
+    return "error";
 }
 
 const Member *FailureProbeTargetOwnedBy(const TopologySnapshot &latest, const std::string &localAddress)
@@ -218,6 +240,7 @@ bool TopologyControllerOptions::IsValid() const noexcept
            && scaleInCollectWindow.count() <= MAX_SCALE_IN_COLLECT_WINDOW_MS
            && (!memberLivenessProbe || !localAddress.empty() || eventSourceMode == TopologyEventSourceMode::EXTERNAL)
            && static_cast<bool>(collectiveControlEpoch) == static_cast<bool>(collectiveReplacementFence)
+           && static_cast<bool>(failureSummaryCandidateProvider) == static_cast<bool>(activeFailureCommitFence)
            && (eventSourceMode != TopologyEventSourceMode::EXTERNAL || !probeEpoch.empty())
            && (eventSourceMode == TopologyEventSourceMode::SELF_MANAGED
                || eventSourceMode == TopologyEventSourceMode::EXTERNAL
@@ -601,6 +624,10 @@ void TopologyController::Run()
         if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL_ETCD && !externalEventSourceReady_) {
             continue;
         }
+        if (drained > 0) {
+            activeFailureProbeCandidateSweep_.clear();
+            activeFailureProbeSweepInProgress_ = false;
+        }
         const auto now = std::chrono::steady_clock::now();
         if (reconcileNotBefore_ != std::chrono::steady_clock::time_point{} && now < reconcileNotBefore_) {
             continue;
@@ -620,24 +647,26 @@ bool TopologyController::StopRequested() const
     return stopping_;
 }
 
+void TopologyController::ConsumeRuntimeEvent(const RuntimeEvent &event)
+{
+    if (const auto *report = std::get_if<WorkerLivenessReport>(&event.payload)) {
+        ApplyWorkerLivenessReport(*report);
+        return;
+    }
+    if (options_.eventSourceMode != TopologyEventSourceMode::EXTERNAL_ETCD) {
+        membershipDirty_ = true;
+        return;
+    }
+    const auto *coordination = std::get_if<CoordinationEvent>(&event.payload);
+    externalEventSourceReady_ = true;
+    if (coordination == nullptr || ApplyExternalEvent(*coordination).IsError()) {
+        externalResyncRequired_ = true;
+        failureClassifier_.Pause(options_.now());
+    }
+}
+
 Status TopologyController::WaitForReconcile(bool immediate, size_t &drained)
 {
-    const auto consumeEvent = [this](RuntimeEvent &event) {
-        if (const auto *report = std::get_if<WorkerLivenessReport>(&event.payload)) {
-            ApplyWorkerLivenessReport(*report);
-            return;
-        }
-        if (options_.eventSourceMode != TopologyEventSourceMode::EXTERNAL_ETCD) {
-            membershipDirty_ = true;
-            return;
-        }
-        const auto *coordination = std::get_if<CoordinationEvent>(&event.payload);
-        externalEventSourceReady_ = true;
-        if (coordination == nullptr || ApplyExternalEvent(*coordination).IsError()) {
-            externalResyncRequired_ = true;
-            failureClassifier_.Pause(options_.now());
-        }
-    };
     drained = 0;
     RuntimeEvent event;
     auto wakeDeadline =
@@ -648,6 +677,15 @@ Status TopologyController::WaitForReconcile(bool immediate, size_t &drained)
     if (scaleOutCollect_.has_value() && scaleOutCollect_->deadline < wakeDeadline) {
         wakeDeadline = scaleOutCollect_->deadline;
     }
+    const auto steadyNow = std::chrono::steady_clock::now();
+    if (activeFailureProbeWakeDeadline_.has_value()) {
+        if (*activeFailureProbeWakeDeadline_ <= steadyNow) {
+            activeFailureProbeWakeDeadline_.reset();
+            wakeDeadline = steadyNow;
+        } else if (*activeFailureProbeWakeDeadline_ < wakeDeadline) {
+            wakeDeadline = *activeFailureProbeWakeDeadline_;
+        }
+    }
     auto rc = dispatcher_.WaitPop(wakeDeadline, event);
     if (rc.IsError() && rc.GetCode() != K_RPC_DEADLINE_EXCEEDED) {
         return rc;
@@ -656,11 +694,11 @@ Status TopologyController::WaitForReconcile(bool immediate, size_t &drained)
     if (rc.IsError()) {
         return Status::OK();
     }
-    consumeEvent(event);
+    ConsumeRuntimeEvent(event);
     drained = FIRST_DRAINED_EVENT_COUNT;
     while (drained < MAX_DOORBELLS_PER_RECONCILE
            && dispatcher_.WaitPop(std::chrono::steady_clock::now(), event).IsOk()) {
-        consumeEvent(event);
+        ConsumeRuntimeEvent(event);
         ++drained;
     }
     return Status::OK();
@@ -674,6 +712,8 @@ void TopologyController::RecordReconcileResult(const Status &status, std::chrono
         // This deliberately trades at most one reconcile tick for avoiding a busy loop on persistent Store failures.
         derivedWorkPending_ = false;
         progressWorkPending_ = false;
+        activeFailureProbeCandidateSweep_.clear();
+        activeFailureProbeSweepInProgress_ = false;
     }
     const bool externalResyncNeedsBackoff = status.GetCode() == K_TRY_AGAIN
                                             && options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL_ETCD
@@ -984,6 +1024,8 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
     if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL) {
         ApplyWitnessFailureGate(classification);
     }
+    std::vector<MemberIdentity> fencedSummaryFailures;
+    std::optional<uint64_t> activeFailureControlEpoch;
     if (options_.failureSummaryCandidateProvider) {
         std::unordered_set<std::string> confirmedAddresses;
         confirmedAddresses.reserve(classification.confirmedFailure.size());
@@ -995,39 +1037,281 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
         for (const auto &identity : classification.removeJoining) {
             joiningAddresses.emplace(identity.address);
         }
-        const auto candidates = options_.failureSummaryCandidateProvider(latest, memberships, options_.now());
+        std::vector<MemberIdentity> candidates;
+        if (activeFailureProbeSweepInProgress_) {
+            candidates = activeFailureProbeCandidateSweep_;
+        } else {
+            candidates = options_.failureSummaryCandidateProvider(latest, memberships, options_.now());
+            activeFailureProbeCandidateSweep_ = candidates;
+        }
+        std::vector<MemberIdentity> probeCandidates;
+        probeCandidates.reserve(candidates.size());
+        size_t activeCandidateCount = 0;
         for (const auto &identity : candidates) {
             const Member *member = nullptr;
             if (latest.FindMemberByAddress(identity.address, member).IsError() || member == nullptr) {
                 continue;
             }
-            if (member->state == MemberState::ACTIVE && confirmedAddresses.insert(identity.address).second) {
-                classification.confirmedFailure.push_back(identity);
-                LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
-                             << " version=" << latest.Version() << " address=" << identity.address
-                             << " member_id_prefix=" << MemberIdForLog(identity.id)
-                             << " action=active_summary_confirmed";
+            if (member->state == MemberState::ACTIVE) {
+                probeCandidates.emplace_back(identity);
+                ++activeCandidateCount;
                 continue;
             }
             const auto activeBatch = latest.GetActiveBatch();
             if (member->state == MemberState::JOINING && activeBatch.has_value()
                 && activeBatch->type == TopologyChangeType::SCALE_OUT
-                && joiningAddresses.insert(identity.address).second) {
+                && joiningAddresses.count(identity.address) == 0) {
+                probeCandidates.emplace_back(identity);
+            }
+        }
+        std::unordered_set<std::string> candidateAddresses;
+        candidateAddresses.reserve(probeCandidates.size());
+        for (const auto &identity : probeCandidates) {
+            candidateAddresses.emplace(identity.address);
+        }
+        const bool ambiguousTwoWorkerCandidates =
+            latest.ActiveMembers().size() == TWO_WORKER_CLUSTER_SIZE && activeCandidateCount != 1;
+        if (ambiguousTwoWorkerCandidates && activeCandidateCount > 0) {
+            LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL)
+                << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+                << " action=active_summary_ambiguous candidate_count=" << activeCandidateCount << " decision=preserve";
+        }
+        std::vector<MemberIdentity> candidatesToProbe;
+        for (const auto &identity : probeCandidates) {
+            const Member *member = nullptr;
+            if (latest.FindMemberByAddress(identity.address, member).IsError() || member == nullptr) {
+                continue;
+            }
+            if (member->state == MemberState::ACTIVE) {
+                if (!ambiguousTwoWorkerCandidates && confirmedAddresses.count(identity.address) == 0) {
+                    candidatesToProbe.push_back(identity);
+                }
+            } else if (member->state == MemberState::JOINING && joiningAddresses.count(identity.address) == 0) {
+                candidatesToProbe.push_back(identity);
+            }
+        }
+        std::vector<MemberIdentity> probeConfirmed;
+        RETURN_IF_NOT_OK(
+            ProbeActiveFailureCandidates(latest, candidatesToProbe, probeConfirmed, activeFailureControlEpoch));
+        for (const auto &identity : probeConfirmed) {
+            const Member *member = nullptr;
+            if (latest.FindMemberByAddress(identity.address, member).IsError() || member == nullptr) {
+                continue;
+            }
+            if (member->state == MemberState::JOINING) {
                 classification.removeJoining.push_back(identity);
+                joiningAddresses.emplace(identity.address);
                 LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
                              << " version=" << latest.Version() << " address=" << identity.address
                              << " member_id_prefix=" << MemberIdForLog(identity.id)
                              << " action=joining_summary_confirmed";
+            } else if (member->state == MemberState::ACTIVE) {
+                classification.confirmedFailure.push_back(identity);
+                confirmedAddresses.emplace(identity.address);
+                LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
+                             << " version=" << latest.Version() << " address=" << identity.address
+                             << " member_id_prefix=" << MemberIdForLog(identity.id)
+                             << " action=active_summary_confirmed";
             }
+            fencedSummaryFailures.emplace_back(identity);
+        }
+        for (auto iter = activeFailureProbeStates_.begin(); iter != activeFailureProbeStates_.end();) {
+            iter = candidateAddresses.count(iter->first) == 0 ? activeFailureProbeStates_.erase(iter) : std::next(iter);
+        }
+        if (activeFailureProbeStates_.empty()) {
+            activeFailureProbeWakeDeadline_.reset();
         }
     }
     if (!classification.confirmedFailure.empty()) {
-        return CommitConfirmedFailures(latest, classification);
+        const auto commit = [&](int64_t expectedAuthorityRevision) {
+            return CommitConfirmedFailures(latest, classification, expectedAuthorityRevision);
+        };
+        if (!fencedSummaryFailures.empty()) {
+            try {
+                return options_.activeFailureCommitFence(latest, memberships, options_.now(), activeFailureControlEpoch,
+                                                         fencedSummaryFailures, commit);
+            } catch (const std::exception &error) {
+                RETURN_STATUS(K_RUNTIME_ERROR, std::string("active failure commit fence threw: ") + error.what());
+            } catch (...) {
+                RETURN_STATUS(K_RUNTIME_ERROR, "active failure commit fence threw an unknown exception");
+            }
+        }
+        return commit(0);
     }
     if (!classification.removeInitial.empty() || !classification.removeJoining.empty()) {
-        return CommitUncommittedCleanup(latest, classification);
+        const auto commit = [&](int64_t expectedAuthorityRevision) {
+            return CommitUncommittedCleanup(latest, classification, expectedAuthorityRevision);
+        };
+        if (!fencedSummaryFailures.empty()) {
+            try {
+                return options_.activeFailureCommitFence(latest, memberships, options_.now(), activeFailureControlEpoch,
+                                                         fencedSummaryFailures, commit);
+            } catch (const std::exception &error) {
+                RETURN_STATUS(K_RUNTIME_ERROR, std::string("joining failure commit fence threw: ") + error.what());
+            } catch (...) {
+                RETURN_STATUS(K_RUNTIME_ERROR, "joining failure commit fence threw an unknown exception");
+            }
+        }
+        return commit(0);
     }
     return CommitMembershipFacts(latest, memberships);
+}
+
+void TopologyController::ResetActiveFailureProbeAuthorityState()
+{
+    activeFailureProbeStates_.clear();
+    activeFailureProbeWakeDeadline_.reset();
+    activeFailureProbeCursor_ = 0;
+    activeFailureProbeCandidateSweep_.clear();
+    activeFailureProbeSweepInProgress_ = false;
+}
+
+Status TopologyController::ResolveActiveFailureControlEpoch(std::optional<uint64_t> &controlEpoch)
+{
+    if (!options_.collectiveControlEpoch) {
+        return Status::OK();
+    }
+    try {
+        controlEpoch = options_.collectiveControlEpoch();
+    } catch (const std::exception &error) {
+        RETURN_STATUS(K_RUNTIME_ERROR, std::string("active failure control epoch threw: ") + error.what());
+    } catch (...) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "active failure control epoch threw an unknown exception");
+    }
+    if (!controlEpoch.has_value()) {
+        ResetActiveFailureProbeAuthorityState();
+    }
+    return Status::OK();
+}
+
+Status TopologyController::PrepareActiveFailureProbeRound(const std::vector<MemberIdentity> &targets,
+                                                          std::vector<MemberIdentity> &dueTargets,
+                                                          std::optional<uint64_t> &controlEpoch)
+{
+    const auto now = options_.now();
+    RETURN_IF_NOT_OK(ResolveActiveFailureControlEpoch(controlEpoch));
+    if (options_.collectiveControlEpoch && !controlEpoch.has_value()) {
+        return Status::OK();
+    }
+    std::vector<MemberIdentity> orderedTargets = targets;
+    std::sort(orderedTargets.begin(), orderedTargets.end(),
+              [](const auto &lhs, const auto &rhs) { return lhs.address < rhs.address; });
+    auto nextProbeDelay = ACTIVE_FAILURE_DIRECT_PROBE_INTERVAL;
+    for (const auto &target : orderedTargets) {
+        ActiveFailureProbeState initial{ target, controlEpoch, now, 0 };
+        auto [stateIter, inserted] = activeFailureProbeStates_.try_emplace(target.address, initial);
+        auto &state = stateIter->second;
+        if (!inserted && (!(state.target == target) || state.controlEpoch != controlEpoch)) {
+            state = std::move(initial);
+            inserted = true;
+        }
+        if (!inserted && now < state.notBefore) {
+            nextProbeDelay =
+                std::min(nextProbeDelay, std::chrono::duration_cast<std::chrono::milliseconds>(state.notBefore - now));
+        }
+    }
+    if (!orderedTargets.empty()) {
+        const size_t startIndex = activeFailureProbeCursor_ % orderedTargets.size();
+        size_t inspected = 0;
+        while (inspected < orderedTargets.size() && dueTargets.size() < MAX_ACTIVE_FAILURE_PROBES_PER_ROUND) {
+            const size_t index = (startIndex + inspected) % orderedTargets.size();
+            const auto &target = orderedTargets[index];
+            auto &state = activeFailureProbeStates_.at(target.address);
+            ++inspected;
+            if (now < state.notBefore) {
+                continue;
+            }
+            dueTargets.push_back(target);
+            state.notBefore = now + ACTIVE_FAILURE_DIRECT_PROBE_INTERVAL;
+        }
+        activeFailureProbeCursor_ = (startIndex + inspected) % orderedTargets.size();
+        activeFailureProbeSweepInProgress_ = inspected < orderedTargets.size();
+        if (activeFailureProbeSweepInProgress_) {
+            nextProbeDelay = std::chrono::milliseconds(0);
+        } else {
+            activeFailureProbeCandidateSweep_.clear();
+        }
+        activeFailureProbeWakeDeadline_ = std::chrono::steady_clock::now() + nextProbeDelay;
+    } else {
+        activeFailureProbeCandidateSweep_.clear();
+        activeFailureProbeSweepInProgress_ = false;
+    }
+    return Status::OK();
+}
+
+void TopologyController::ApplyActiveFailureProbeResults(const TopologySnapshot &latest,
+                                                        const std::vector<MemberIdentity> &dueTargets,
+                                                        const std::vector<ControlBackendProbeResult> &results,
+                                                        std::vector<MemberIdentity> &confirmed,
+                                                        std::optional<uint64_t> &controlEpoch)
+{
+    std::unordered_map<std::string, const ControlBackendProbeResult *> resultsByAddress;
+    resultsByAddress.reserve(results.size());
+    for (const auto &result : results) {
+        resultsByAddress[result.target.address] = &result;
+    }
+    for (const auto &target : dueTargets) {
+        const auto result = resultsByAddress.find(target.address);
+        const bool matched = result != resultsByAddress.end() && result->second->target == target;
+        const auto outcome = matched ? result->second->outcome : ControlBackendProbeOutcome::CANCELLED;
+        const bool unreachable = matched
+                                 && (outcome == ControlBackendProbeOutcome::UNAVAILABLE
+                                     || outcome == ControlBackendProbeOutcome::DEADLINE_EXCEEDED);
+        auto &state = activeFailureProbeStates_.at(target.address);
+        state.consecutiveUnreachable = unreachable ? state.consecutiveUnreachable + 1 : 0;
+        const bool targetConfirmed = state.consecutiveUnreachable >= MIN_ACTIVE_FAILURE_UNREACHABLE_PROBES;
+        if (targetConfirmed) {
+            confirmed.push_back(target);
+            controlEpoch = state.controlEpoch;
+        }
+        std::ostringstream probeLog;
+        probeLog << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+                 << " address=" << target.address << " member_id_prefix=" << MemberIdForLog(target.id)
+                 << " action=active_summary_direct_probe probe_result="
+                 << (matched ? ControlBackendProbeOutcomeName(outcome) : "mismatched")
+                 << " probe_elapsed_ms=" << (matched ? result->second->elapsed.count() : 0)
+                 << " consecutive_unreachable=" << state.consecutiveUnreachable
+                 << " decision=" << (targetConfirmed ? "confirm" : "preserve");
+        if (targetConfirmed) {
+            LOG(WARNING) << probeLog.str();
+        } else {
+            VLOG(1) << probeLog.str();
+        }
+    }
+}
+
+Status TopologyController::ProbeActiveFailureCandidates(const TopologySnapshot &latest,
+                                                        const std::vector<MemberIdentity> &targets,
+                                                        std::vector<MemberIdentity> &confirmed,
+                                                        std::optional<uint64_t> &controlEpoch)
+{
+    confirmed.clear();
+    controlEpoch.reset();
+    std::vector<MemberIdentity> dueTargets;
+    RETURN_IF_NOT_OK(PrepareActiveFailureProbeRound(targets, dueTargets, controlEpoch));
+    if (dueTargets.empty()) {
+        return Status::OK();
+    }
+    if (!options_.memberLivenessProbe) {
+        for (const auto &target : dueTargets) {
+            activeFailureProbeStates_.at(target.address).consecutiveUnreachable = 0;
+            LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+                         << " address=" << target.address << " member_id_prefix=" << MemberIdForLog(target.id)
+                         << " action=active_summary_direct_probe probe_result=missing decision=preserve";
+        }
+        return Status::OK();
+    }
+    std::vector<ControlBackendProbeResult> results;
+    try {
+        results = options_.memberLivenessProbe(dueTargets,
+                                               std::chrono::steady_clock::now() + ACTIVE_FAILURE_DIRECT_PROBE_TIMEOUT);
+    } catch (const std::exception &error) {
+        RETURN_STATUS(K_RUNTIME_ERROR, std::string("active failure direct probe threw: ") + error.what());
+    } catch (...) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "active failure direct probe threw an unknown exception");
+    }
+    ApplyActiveFailureProbeResults(latest, dueTargets, results, confirmed, controlEpoch);
+    return Status::OK();
 }
 
 bool TopologyController::HasReachableWitness(const SuspectProbeRound &round) const
@@ -1591,21 +1875,6 @@ Status TopologyController::ConfirmMissingMembersUnreachable(const TopologySnapsh
     for (const auto &result : probeResults) {
         resultsByAddress.emplace(result.target.address, &result);
     }
-    const auto outcomeName = [](ControlBackendProbeOutcome outcome) {
-        switch (outcome) {
-            case ControlBackendProbeOutcome::RESPONSE:
-                return "response";
-            case ControlBackendProbeOutcome::DEADLINE_EXCEEDED:
-                return "deadline_exceeded";
-            case ControlBackendProbeOutcome::UNAVAILABLE:
-                return "unavailable";
-            case ControlBackendProbeOutcome::CANCELLED:
-                return "cancelled";
-            case ControlBackendProbeOutcome::ERROR:
-                return "error";
-        }
-        return "error";
-    };
     std::unordered_set<std::string> directlyUnreachable;
     directlyUnreachable.reserve(targets.size());
     for (const auto &target : targets) {
@@ -1619,7 +1888,8 @@ Status TopologyController::ConfirmMissingMembersUnreachable(const TopologySnapsh
                          << " address=" << target.address << " member_id_prefix=" << MemberIdForLog(target.id)
                          << " action="
                          << (hasObservation ? "direct_probe_invalid_response" : "direct_probe_no_response")
-                         << " probe_result=" << (result == nullptr ? "missing" : outcomeName(result->outcome))
+                         << " probe_result="
+                         << (result == nullptr ? "missing" : ControlBackendProbeOutcomeName(result->outcome))
                          << " probe_elapsed_ms="
                          << (result == nullptr ? probeElapsed.count() : result->elapsed.count());
             continue;
@@ -1637,7 +1907,7 @@ Status TopologyController::ConfirmMissingMembersUnreachable(const TopologySnapsh
         LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
                      << " address=" << target.address << " member_id_prefix=" << MemberIdForLog(target.id)
                      << " action=" << (matchingEvidence ? "direct_probe_reachable" : "direct_probe_inconclusive")
-                     << " probe_result=" << outcomeName(result->outcome)
+                     << " probe_result=" << ControlBackendProbeOutcomeName(result->outcome)
                      << " probe_elapsed_ms=" << result->elapsed.count()
                      << " evidence_version=" << evidence.topologyVersion
                      << " evidence_revision=" << evidence.topologyRevision;
@@ -1705,7 +1975,8 @@ Status TopologyController::CommitClusterShutdown(const TopologySnapshot &latest)
 }
 
 Status TopologyController::CommitConfirmedFailures(const TopologySnapshot &latest,
-                                                   const FailureClassification &classification)
+                                                   const FailureClassification &classification,
+                                                   int64_t expectedAuthorityRevision)
 {
     std::vector<MemberIdentity> confirmed;
     std::unordered_set<std::string> retainedAddresses;
@@ -1740,7 +2011,7 @@ Status TopologyController::CommitConfirmedFailures(const TopologySnapshot &lates
     EraseMembers(plan.next, classification.removeInitial);
     EraseMembers(plan.next, classification.removeJoining);
     std::shared_ptr<const TopologySnapshot> committed;
-    auto rc = CommitAndReadBack(latest.Version(), plan.next, committed);
+    auto rc = CommitAndReadBack(latest.Version(), plan.next, committed, expectedAuthorityRevision);
     if (rc.IsOk()) {
         for (const auto &identity : classification.confirmedFailure) {
             suspectRoundsByTarget_.erase(identity.address);
@@ -1751,7 +2022,8 @@ Status TopologyController::CommitConfirmedFailures(const TopologySnapshot &lates
 }
 
 Status TopologyController::CommitUncommittedCleanup(const TopologySnapshot &latest,
-                                                    const FailureClassification &classification)
+                                                    const FailureClassification &classification,
+                                                    int64_t expectedAuthorityRevision)
 {
     TopologyState next;
     const auto activeBatch = latest.GetActiveBatch();
@@ -1773,21 +2045,23 @@ Status TopologyController::CommitUncommittedCleanup(const TopologySnapshot &late
         }
         EraseMembers(plan.next, classification.removeInitial);
         return CommitAndLogMemberTransition(latest, plan.next, classification.removeJoining,
-                                            "remove_uncommitted_joining");
+                                            "remove_uncommitted_joining", expectedAuthorityRevision);
     }
     if (classification.removeInitial.empty()) {
         return Status::OK();
     }
     next = { latest.ClusterHasInit(), latest.Version() + 1, latest.Members(), activeBatch };
     EraseMembers(next, classification.removeInitial);
-    return CommitAndLogMemberTransition(latest, next, classification.removeInitial, "remove_initial");
+    return CommitAndLogMemberTransition(latest, next, classification.removeInitial, "remove_initial",
+                                        expectedAuthorityRevision);
 }
 
 Status TopologyController::CommitAndLogMemberTransition(const TopologySnapshot &latest, const TopologyState &next,
-                                                        const std::vector<MemberIdentity> &members, const char *action)
+                                                        const std::vector<MemberIdentity> &members, const char *action,
+                                                        int64_t expectedAuthorityRevision)
 {
     std::shared_ptr<const TopologySnapshot> committed;
-    auto rc = CommitAndReadBack(latest.Version(), next, committed);
+    auto rc = CommitAndReadBack(latest.Version(), next, committed, expectedAuthorityRevision);
     if (rc.IsOk()) {
         LogMemberTransition(keys_.ClusterName(), action, members.size(), members, committed->Version());
     }
@@ -2303,10 +2577,12 @@ void TopologyController::LogBatchStart(const TopologySnapshot &latest, const Top
 }
 
 Status TopologyController::CommitAndReadBack(uint64_t expectedVersion, const TopologyState &desired,
-                                             std::shared_ptr<const TopologySnapshot> &committed)
+                                             std::shared_ptr<const TopologySnapshot> &committed,
+                                             int64_t expectedAuthorityRevision)
 {
     TopologyCasResult result;
-    RETURN_IF_NOT_OK(repository_.CompareAndSwapTopology(expectedVersion, desired, result));
+    RETURN_IF_NOT_OK(
+        repository_.CompareAndSwapTopology(expectedVersion, desired, result, expectedAuthorityRevision));
     CHECK_FAIL_RETURN_STATUS(result.outcome == TopologyCasOutcome::COMMITTED, K_TRY_AGAIN,
                              "topology CAS lost to another Controller");
     TopologyReader reader(repository_);

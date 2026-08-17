@@ -23,6 +23,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -30,6 +31,7 @@
 #include <vector>
 
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/raii.h"
 
 #include "gtest/gtest.h"
@@ -737,7 +739,28 @@ TEST(DsCoordinationBackendSessionTest, PeerRpcSuccessClearsFailureSummary)
     backend.RecordPeerRpcSuccess(target);
 
     EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(1'501)).empty());
-    EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
+    EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
+}
+
+TEST(DsCoordinationBackendSessionTest, PeerRpcFailureQualificationMatchesReportedSummary)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(750));
+    EXPECT_FALSE(backend.IsPeerRpcFailureReported(target));
+
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(1'500));
+    EXPECT_TRUE(backend.IsPeerRpcFailureReported(target));
+
+    backend.RecordPeerRpcSuccess(target);
+    EXPECT_FALSE(backend.IsPeerRpcFailureReported(target));
 }
 
 TEST(DsCoordinationBackendSessionTest, ClearPeerRpcFailureObservationsDropsAllPreExitEvidence)
@@ -825,6 +848,39 @@ TEST(DsCoordinationBackendSessionTest, ContinuousPeerRpcFailuresReportAcrossFail
     EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(1'600)),
               (std::vector<std::string>{ "127.0.0.1:12002" }));
     EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
+}
+
+TEST(DsCoordinationBackendSessionTest, FailureSummaryWakeCannotBeLostAtKeepAliveWaitBoundary)
+{
+    constexpr char injectPoint[] = "CoordinationBackend.KeepAlive.afterWakePredicate";
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    ASSERT_TRUE(inject::Set(injectPoint, "pause").IsOk());
+    Raii clearInject([&] { (void)inject::Clear(injectPoint); });
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(proxy.WaitForKeepAliveRevision(1, 1, std::chrono::milliseconds(200)));
+    for (size_t retry = 0; retry < 200 && inject::GetExecuteCount(injectPoint) == 0; ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(inject::GetExecuteCount(injectPoint), 0);
+    const auto callsBeforeReport = proxy.KeepAliveCalls();
+
+    const HostPort target("127.0.0.1", 12002);
+    const auto qualifiedAt = std::chrono::steady_clock::now();
+    const auto start = qualifiedAt - std::chrono::milliseconds(1'500);
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(750));
+    auto report = std::async(std::launch::async, [&] { backend.RecordPeerRpcFailure(target, qualifiedAt); });
+    ASSERT_TRUE(inject::Clear(injectPoint).IsOk());
+    report.get();
+
+    EXPECT_TRUE(proxy.WaitForKeepAliveRevision(1, callsBeforeReport + 1, std::chrono::milliseconds(300)));
+    EXPECT_EQ(proxy.LastFailedTargets(), (std::vector<std::string>{ target.ToString() }));
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
 TEST(DsCoordinationBackendSessionTest, CoordinatorKeepAliveLeaseTtlUsesNodeTimeoutBudget)

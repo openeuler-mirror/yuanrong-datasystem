@@ -622,14 +622,34 @@ void DsCoordinationBackend::RecordPeerRpcFailure(const HostPort &target, std::ch
         failedCount = state.failedCount;
         failedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - state.firstFailedAt).count();
     }
-    VLOG(1) << "CLUSTER_FAILURE_OBSERVE role=worker reporter=" << watcherAddr_ << " target=" << targetAddress
-            << " failed_count=" << failedCount << " failed_ms=" << failedMs << " wake=" << shouldWake;
     if (shouldWake) {
-        keepAliveCv_.notify_all();
+        LOG(INFO) << "CLUSTER_FAILURE_REPORT role=worker action=summary_qualified reporter=" << watcherAddr_
+                  << " target=" << targetAddress << " failed_count=" << failedCount << " failed_ms=" << failedMs;
+        WakeKeepAliveForFailureSummary();
+    } else {
+        VLOG(1) << "CLUSTER_FAILURE_OBSERVE role=worker reporter=" << watcherAddr_ << " target=" << targetAddress
+                << " failed_count=" << failedCount << " failed_ms=" << failedMs;
     }
 }
 
 void DsCoordinationBackend::RecordPeerRpcSuccess(const HostPort &target)
+{
+    ClearPeerRpcFailure(target, "success_reset");
+}
+
+bool DsCoordinationBackend::IsPeerRpcFailureReported(const HostPort &target) const
+{
+    std::lock_guard<std::mutex> lock(rpcFailedMutex_);
+    const auto state = rpcFailedStates_.find(target.ToString());
+    return state != rpcFailedStates_.end() && state->second.reported;
+}
+
+void DsCoordinationBackend::DiscardPeerRpcFailure(const HostPort &target)
+{
+    ClearPeerRpcFailure(target, "incarnation_reset");
+}
+
+void DsCoordinationBackend::ClearPeerRpcFailure(const HostPort &target, const char *action)
 {
     const auto targetAddress = target.ToString();
     if (targetAddress.empty()) {
@@ -638,16 +658,43 @@ void DsCoordinationBackend::RecordPeerRpcSuccess(const HostPort &target)
     if (!hasRpcFailures_.load(std::memory_order_acquire)) {
         return;
     }
-    std::lock_guard<std::mutex> lock(rpcFailedMutex_);
-    const auto erased = rpcFailedStates_.erase(targetAddress);
-    if (erased > 0) {
-        VLOG(1) << "CLUSTER_FAILURE_OBSERVE role=worker reporter=" << watcherAddr_
-                << " target=" << targetAddress << " action=success_reset";
+    bool shouldWake = false;
+    {
+        std::lock_guard<std::mutex> lock(rpcFailedMutex_);
+        const auto found = rpcFailedStates_.find(targetAddress);
+        const bool existed = found != rpcFailedStates_.end();
+        const bool reported = existed && found->second.reported;
+        if (existed) {
+            rpcFailedStates_.erase(found);
+        }
+        if (reported) {
+            immediateReportSignal_ = true;
+            shouldWake = true;
+            LOG(INFO) << "CLUSTER_FAILURE_OBSERVE role=worker reporter=" << watcherAddr_ << " target=" << targetAddress
+                      << " action=" << action;
+        } else if (existed) {
+            VLOG(1) << "CLUSTER_FAILURE_OBSERVE role=worker reporter=" << watcherAddr_ << " target=" << targetAddress
+                    << " action=" << action;
+        }
+        if (rpcFailedStates_.empty()) {
+            if (!shouldWake) {
+                immediateReportSignal_ = false;
+            }
+            hasRpcFailures_.store(false, std::memory_order_release);
+        }
     }
-    if (rpcFailedStates_.empty()) {
-        immediateReportSignal_ = false;
-        hasRpcFailures_.store(false, std::memory_order_release);
+    if (shouldWake) {
+        WakeKeepAliveForFailureSummary();
     }
+}
+
+void DsCoordinationBackend::WakeKeepAliveForFailureSummary()
+{
+    {
+        std::lock_guard<std::mutex> lock(keepAliveMutex_);
+        ++keepAliveWakeEpoch_;
+    }
+    keepAliveCv_.notify_all();
 }
 
 void DsCoordinationBackend::ClearPeerRpcFailureObservations()
@@ -735,7 +782,16 @@ void DsCoordinationBackend::RunKeepAliveLoop()
         }
         std::unique_lock<std::mutex> lock(keepAliveMutex_);
         keepAliveCv_.wait_for(lock, std::chrono::milliseconds(intervalMs), [this, wakeEpoch]() {
-            return keepAliveExit_.load() || keepAliveWakeEpoch_ != wakeEpoch || ConsumeImmediateReportSignal();
+            if (keepAliveExit_.load()) {
+                return true;
+            }
+            if (keepAliveWakeEpoch_ != wakeEpoch) {
+                static_cast<void>(ConsumeImmediateReportSignal());
+                return true;
+            }
+            const bool immediateReport = ConsumeImmediateReportSignal();
+            INJECT_POINT_NO_RETURN("CoordinationBackend.KeepAlive.afterWakePredicate");
+            return immediateReport;
         });
     }
 }

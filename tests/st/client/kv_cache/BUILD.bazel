@@ -261,6 +261,20 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "coordinator_active_failure_stop_resume_test",
+    srcs = ["coordinator_active_failure_stop_resume_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client:client_transport",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
     name = "kv_client_dist_master_test",
     srcs = ["kv_client_dist_master_test.cpp"],
     tags = ["manual"],

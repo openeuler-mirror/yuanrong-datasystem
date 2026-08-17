@@ -119,6 +119,32 @@ TEST_F(CoordinatorStoreBackendTest, ExactReadUsesTrailingSlashAndPreservesMissin
     EXPECT_EQ(value, "unchanged");
 }
 
+TEST_F(CoordinatorStoreBackendTest, RevisionFencedCasRejectsConcurrentStoreMutation)
+{
+    DS_ASSERT_OK(backend_->CAS(BLUE_TABLE, "", "", "topology-v1"));
+    const int64_t snapshotRevision = memoryStore_->CurrentRevision();
+    cluster::CoordinationStoreResult result;
+    const auto commitV2 = [](const std::string &, std::unique_ptr<std::string> &next, bool &retry) {
+        retry = false;
+        next = std::make_unique<std::string>("topology-v2");
+        return Status::OK();
+    };
+    DS_ASSERT_OK(backend_->CASAtRevision(BLUE_TABLE, "", commitV2, snapshotRevision, result));
+
+    const int64_t staleRevision = memoryStore_->CurrentRevision();
+    DS_ASSERT_OK(PutPhysical("/datasystem/blue/cluster/127.0.0.1:12001", "new-membership"));
+    const auto commitV3 = [](const std::string &, std::unique_ptr<std::string> &next, bool &retry) {
+        retry = false;
+        next = std::make_unique<std::string>("topology-v3");
+        return Status::OK();
+    };
+
+    EXPECT_EQ(backend_->CASAtRevision(BLUE_TABLE, "", commitV3, staleRevision, result).GetCode(), K_TRY_AGAIN);
+    std::string value;
+    DS_ASSERT_OK(backend_->Get(BLUE_TABLE, "", value));
+    EXPECT_EQ(value, "topology-v2");
+}
+
 TEST_F(CoordinatorStoreBackendTest, RangeReadsOnlyExactTablePrefixAndReturnsRelativeKeys)
 {
     DS_ASSERT_OK(PutPhysical(std::string(BLUE_TABLE) + "/" + TEST_KEY, "blue"));

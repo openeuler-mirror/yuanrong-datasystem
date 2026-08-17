@@ -708,6 +708,33 @@ TEST_F(CoordinatorStoreTest, MemoryKvStoreRejectsPutFromStaleMembershipIncarnati
     EXPECT_EQ(entries.front().modRevision, currentRevision);
 }
 
+TEST_F(CoordinatorStoreTest, MemoryKvStoreRejectsPutAfterGlobalRevisionChanges)
+{
+    MemoryKvStore store;
+    int64_t version = 0;
+    int64_t revision = 0;
+    uint64_t ttlGeneration = 0;
+    DS_ASSERT_OK(store.Put("/membership", "ready", 100, COORDINATOR_KEY_NOT_EXISTS_VERSION, version, revision,
+                           ttlGeneration));
+    const int64_t membershipSnapshotRevision = store.CurrentRevision();
+    DS_ASSERT_OK(store.Put("/other", "changed", 0, COORDINATOR_KEY_NOT_EXISTS_VERSION, version, revision,
+                           ttlGeneration));
+
+    int64_t topologyVersion = 0;
+    int64_t topologyRevision = 0;
+    uint64_t topologyTtlGeneration = 0;
+    EXPECT_EQ(store.Put("/topology", "next", 0, COORDINATOR_KEY_NOT_EXISTS_VERSION, topologyVersion,
+                        topologyRevision, topologyTtlGeneration, COORDINATOR_NO_MOD_REVISION_CHECK,
+                        membershipSnapshotRevision)
+                  .GetCode(),
+              K_TRY_AGAIN);
+
+    std::vector<KeyValueEntry> entries;
+    int64_t rangeRevision = 0;
+    store.Range("/topology", "", entries, rangeRevision);
+    EXPECT_TRUE(entries.empty());
+}
+
 TEST_F(CoordinatorStoreTest, MemoryKvStoreRejectsKeepAliveFromStaleMembershipIncarnation)
 {
     MemoryKvStore store;

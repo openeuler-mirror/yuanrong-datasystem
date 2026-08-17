@@ -511,7 +511,8 @@ public:
     WorkerOcServiceCrudParam MakeCrudParam(std::shared_ptr<WorkerMasterOCApiManager> apiManager = nullptr,
                                            const worker::MetadataRouteResolver *metadataRoute = nullptr,
                                            const ObjectEndpointPolicy *endpointPolicy = nullptr,
-                                           std::function<void(const HostPort &, const Status &)> observer = nullptr)
+                                           std::function<void(const HostPort &, const Status &)> observer = nullptr,
+                                           std::function<bool(const HostPort &)> failureReported = nullptr)
     {
         return WorkerOcServiceCrudParam{
             .workerMasterApiManager = std::move(apiManager),
@@ -529,6 +530,7 @@ public:
             .exitRequested = &exitRequested_,
             .metadataRpcObserver = std::move(observer),
             .allowDirectoryLag = false,
+            .metadataRpcFailureReported = std::move(failureReported),
         };
     }
 
@@ -586,6 +588,30 @@ TEST_F(WorkerOcServiceImplTest, RemoteGetL2MissDoesNotLeaveEmptyEntry)
     EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
 }
 
+class TestWorkerOcServiceCrudCommonApi : public WorkerOcServiceCrudCommonApi {
+public:
+    using WorkerOcServiceCrudCommonApi::TranslateQualifiedMetadataDeadline;
+    using WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi;
+};
+
+TEST_F(WorkerOcServiceImplTest, MetadataDeadlineTriggersRefreshStatusOnlyAfterFailureQualification)
+{
+    const HostPort masterAddress("127.0.0.1", 18482);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    bool qualified = false;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        nullptr, nullptr, nullptr, nullptr,
+        [&qualified, &masterAddress](const HostPort &target) { return qualified && target == masterAddress; });
+    TestWorkerOcServiceCrudCommonApi common(param);
+    const Status deadline(K_RPC_DEADLINE_EXCEEDED, "metadata timeout");
+
+    EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, deadline, true).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    qualified = true;
+    EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, deadline, false).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, deadline, true).GetCode(), K_METADATA_OWNER_UNAVAILABLE);
+    EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, Status::OK(), true).GetCode(), K_OK);
+}
+
 TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaFollowsRedirectToTarget)
 {
     ScopedRequestContext requestContext;
@@ -630,6 +656,39 @@ TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaFollowsRedirectToTarg
     EXPECT_EQ(versionsByKey.at(objectKey), 42U);
     EXPECT_EQ(sourceApi->CreateMultiMetaRequests().size(), 1U);
     EXPECT_EQ(targetApi->CreateMultiMetaRequests().size(), 1U);
+}
+
+TEST_F(WorkerOcServiceImplTest, MultiPublishQualifiedMetadataDeadlineRequestsRingRefresh)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    auto sourceApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    sourceApi->SetCreateMultiMetaHandler([](master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &) {
+        return Status(K_RPC_DEADLINE_EXCEEDED, "metadata timeout");
+    });
+    size_t observedFailures = 0;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        nullptr, nullptr, nullptr,
+        [&observedFailures](const HostPort &, const Status &status) {
+            if (status.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
+                ++observedFailures;
+            }
+        },
+        [](const HostPort &) { return true; });
+    auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
+    auto notifyThreadPool = std::make_shared<ThreadPool>(1);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
+                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    master::CreateMultiMetaReqPb request;
+    request.set_redirect(true);
+    request.add_metas()->set_object_key("qualified-deadline-key");
+    master::CreateMultiMetaRspPb response;
+    std::unordered_map<std::string, uint64_t> versionsByKey;
+
+    const auto status = multiPublish.RetryCreateMultiMetaForTest(sourceApi, request, response, versionsByKey);
+
+    EXPECT_EQ(observedFailures, 1U);
+    EXPECT_EQ(status.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
 }
 
 TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaPartitionsLocalAndMultipleRedirectTargets)

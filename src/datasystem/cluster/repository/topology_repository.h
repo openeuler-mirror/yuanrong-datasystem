@@ -95,7 +95,8 @@ public:
      * @param[out] result Semantic CAS outcome and optional observation.
      * @return Backend/read-back status.
      */
-    Status CompareAndSwapTopology(uint64_t expectedVersion, const TopologyState &desired, TopologyCasResult &result);
+    Status CompareAndSwapTopology(uint64_t expectedVersion, const TopologyState &desired, TopologyCasResult &result,
+                                  int64_t expectedAuthorityRevision = 0);
 
     /**
      * @brief Read the authoritative membership collection.

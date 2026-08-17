@@ -43,11 +43,11 @@ Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> sig
         rpcClient_->PruneConnections(ring);
         return Status::OK();
     };
-    auto fetchRpc = [this](const HostPort &workerAddr, uint64_t currentVersion,
-                           ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress,
-                           uint64_t &newVersion, bool &changed,
-                           std::unordered_map<std::string, std::string> &hostIdMap) {
-        return FetchHashRing(workerAddr, currentVersion, ring, masterAddress, newVersion, changed, hostIdMap);
+    auto fetchRpc = [this](const HostPort &workerAddr, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
+                           std::string &masterAddress, uint64_t &newVersion, bool &changed,
+                           std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs) {
+        return FetchHashRing(workerAddr, currentVersion, ring, masterAddress, newVersion, changed, hostIdMap,
+                             timeoutMs);
     };
     refresher_ = std::make_shared<HashRingRefresher>(router_, std::move(fetchRpc), std::move(applyRingUpdate));
 }
@@ -84,13 +84,12 @@ Status Routing::Init(const std::string &hostId, const HostPort &initialWorkerAdd
 }
 
 Status Routing::FetchHashRing(const HostPort &workerAddr, uint64_t currentVersion,
-                              ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress,
-                              uint64_t &newVersion, bool &changed,
-                              std::unordered_map<std::string, std::string> &hostIdMap)
+                              ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress, uint64_t &newVersion,
+                              bool &changed, std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
     GetHashRingRspPb response;
-    RETURN_IF_NOT_OK(rpcClient_->GetHashRing(workerAddr, currentVersion, response));
+    RETURN_IF_NOT_OK(rpcClient_->GetHashRing(workerAddr, currentVersion, response, timeoutMs));
     newVersion = response.version();
     changed = response.hash_ring_changed();
     masterAddress = response.master_address();
@@ -180,11 +179,12 @@ void Routing::UpdateState(const HostPort &addr, StatusCode status)
     }
 }
 
-void Routing::ForceRefresh()
+bool Routing::ForceRefresh()
 {
     if (initialized_.load() && refresher_ != nullptr) {
-        refresher_->ForceRefresh();
+        return refresher_->ForceRefresh();
     }
+    return false;
 }
 
 void Routing::Shutdown()

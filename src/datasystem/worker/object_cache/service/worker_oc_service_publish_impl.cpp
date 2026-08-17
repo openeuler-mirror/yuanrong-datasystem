@@ -195,6 +195,24 @@ void WorkerOcServicePublishImpl::ConstructCreateMetaRequest(const ObjectKV &obje
     metaReq.set_redirect(true);
 }
 
+void WorkerOcServicePublishImpl::ConstructUpdateMetaRequest(const ObjectKV &objectKV, const PublishParams &params,
+                                                            UpdateMetaReqPb &metaReq) const
+{
+    const auto &safeObj = objectKV.GetObjEntry();
+    metaReq.set_object_key(objectKV.GetObjKey());
+    metaReq.set_address(localAddress_.ToString());
+    metaReq.set_life_state(static_cast<uint32_t>(params.lifeState));
+    metaReq.set_data_size(safeObj->GetDataSize());
+    metaReq.set_redirect(true);
+    *metaReq.mutable_nested_keys() = { params.nestedObjectKeys.begin(), params.nestedObjectKeys.end() };
+    metaReq.set_ttl_second(params.ttlSecond);
+    auto binaryFormatParams = metaReq.mutable_binary_format_params();
+    binaryFormatParams->set_write_mode((uint32_t)safeObj->modeInfo.GetWriteMode());
+    binaryFormatParams->set_data_format((uint32_t)safeObj->stateInfo.GetDataFormat());
+    binaryFormatParams->set_consistency_type((uint32_t)safeObj->modeInfo.GetConsistencyType());
+    binaryFormatParams->set_cache_type(static_cast<uint32_t>(params.cacheType));
+}
+
 Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params,
                                                           uint64_t &version)
 {
@@ -214,17 +232,19 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
     Timer rpcTimer;
     const bool retryRequestFailure = params.lifeState != ObjectLifeState::OBJECT_SEALED;
+    bool rpcDispatched = false;
     Status rc = RetryMetadataRequestWithRouteRefresh(
         workerMasterApi, retryRequestFailure,
         [this, &objectKey](std::shared_ptr<WorkerMasterOCApi> &api) {
             return workerMasterApiManager_->GetWorkerMasterApi(objectKey, api);
         },
-        [this, &metaReq, &metaResp](std::shared_ptr<WorkerMasterOCApi> &api) {
+        [this, &metaReq, &metaResp, &rpcDispatched](std::shared_ptr<WorkerMasterOCApi> &api) {
             metaResp.Clear();
             std::function<Status(CreateMetaReqPb &, CreateMetaRspPb &)> func =
-                [&api](CreateMetaReqPb &req, CreateMetaRspPb &rsp) {
+                [&api, &rpcDispatched](CreateMetaReqPb &req, CreateMetaRspPb &rsp) {
                     VLOG(1) << AppendSrcDstForLog(FormatString("Create meta to master[%s]", api->GetHostPort()),
                                                   req.address(), api->GetHostPort());
+                    rpcDispatched = true;
                     return api->CreateMeta(req, rsp);
                 };
             return RedirectRetryWhenMetaMoving(metaReq, metaResp, api, func);
@@ -234,6 +254,7 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
     Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::WORKER_RPC_CREATE_META, traceEnabled);
     FinalizeMasterRpcLatency(LatencyTickKey::WORKER_CREATE_META_RPC_END, config, traceEnabled,
                              metaResp, objectKey, rpcUs, rc, workerMasterApi, "CreateMeta");
+    rc = TranslateQualifiedMetadataDeadline(workerMasterApi, rc, rpcDispatched);
     RETURN_IF_NOT_OK(rc);
     point.Record();
     version = metaResp.version();
@@ -249,21 +270,9 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
         Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_UPDATE_META_RPC_START);
     }
     const auto &objectKey = objectKV.GetObjKey();
-    const SafeObjType &safeObj = objectKV.GetObjEntry();
 
     UpdateMetaReqPb metaReq;
-    metaReq.set_object_key(objectKey);
-    metaReq.set_address(localAddress_.ToString());
-    metaReq.set_life_state(static_cast<uint32_t>(params.lifeState));
-    metaReq.set_data_size(safeObj->GetDataSize());
-    metaReq.set_redirect(true);
-    *metaReq.mutable_nested_keys() = { params.nestedObjectKeys.begin(), params.nestedObjectKeys.end() };
-    metaReq.set_ttl_second(params.ttlSecond);
-    auto binaryFormatParams = metaReq.mutable_binary_format_params();
-    binaryFormatParams->set_write_mode((uint32_t)safeObj->modeInfo.GetWriteMode());
-    binaryFormatParams->set_data_format((uint32_t)safeObj->stateInfo.GetDataFormat());
-    binaryFormatParams->set_consistency_type((uint32_t)safeObj->modeInfo.GetConsistencyType());
-    binaryFormatParams->set_cache_type(static_cast<uint32_t>(params.cacheType));
+    ConstructUpdateMetaRequest(objectKV, params, metaReq);
 
     UpdateMetaRspPb metaRsp;
     VLOG(1) << FormatString("Send Update metadata to master for object: %s, address: %s", objectKey,
@@ -271,17 +280,19 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
     Timer rpcTimer;
     const bool retryRequestFailure = params.lifeState != ObjectLifeState::OBJECT_SEALED;
+    bool rpcDispatched = false;
     Status rc = RetryMetadataRequestWithRouteRefresh(
         workerMasterApi, retryRequestFailure,
         [this, &objectKey](std::shared_ptr<WorkerMasterOCApi> &api) {
             return workerMasterApiManager_->GetWorkerMasterApi(objectKey, api);
         },
-        [this, &metaReq, &metaRsp](std::shared_ptr<WorkerMasterOCApi> &api) {
+        [this, &metaReq, &metaRsp, &rpcDispatched](std::shared_ptr<WorkerMasterOCApi> &api) {
             metaRsp.Clear();
             std::function<Status(UpdateMetaReqPb &, UpdateMetaRspPb &)> func =
-                [&api](UpdateMetaReqPb &req, UpdateMetaRspPb &rsp) {
+                [&api, &rpcDispatched](UpdateMetaReqPb &req, UpdateMetaRspPb &rsp) {
                     VLOG(1) << AppendSrcDstForLog(FormatString("Update meta to master[%s]", api->GetHostPort()),
                                                   req.address(), api->GetHostPort());
+                    rpcDispatched = true;
                     return api->UpdateMeta(req, rsp);
                 };
             return RedirectRetryWhenMetaMoving(metaReq, metaRsp, api, func);
@@ -291,6 +302,7 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
     Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::WORKER_RPC_UPDATE_META, traceEnabled);
     FinalizeMasterRpcLatency(LatencyTickKey::WORKER_UPDATE_META_RPC_END, config, traceEnabled,
                              metaRsp, objectKey, rpcUs, rc, workerMasterApi, "UpdateMeta");
+    rc = TranslateQualifiedMetadataDeadline(workerMasterApi, rc, rpcDispatched);
     RETURN_IF_NOT_OK(rc);
     version = metaRsp.version();
     return Status::OK();
@@ -412,8 +424,16 @@ Status WorkerOcServicePublishImpl::RequestingToMasterCore(ObjectKV &objectKV, co
             // this worker and evict it from routing. Other codes keep their transparency.
             return Status(K_MASTER_TIMEOUT, FormatString("Create meta to master failed. detail: %s", rc.ToString()));
         }
+        const auto code = rc.GetCode();
+        if (code == K_METADATA_OWNER_UNAVAILABLE) {
+            return rc;
+        }
+        if (code == K_RPC_UNAVAILABLE) {
+            return Status(K_METADATA_OWNER_UNAVAILABLE,
+                          FormatString("Metadata owner RPC failed. detail: %s", rc.ToString()));
+        }
         if (IsRetryableRpcError(rc) || IsNonRetryableRpcError(rc)) {
-            return Status(rc.GetCode(), FormatString("Create meta to master failed. detail: %s", rc.ToString()));
+            return Status(code, FormatString("Create meta to master failed. detail: %s", rc.ToString()));
         }
         const std::unordered_set<StatusCode> passthroughError{
             StatusCode::K_WORKER_TIMEOUT,    StatusCode::K_KVSTORE_ERROR, StatusCode::K_OC_KEY_ALREADY_EXIST,

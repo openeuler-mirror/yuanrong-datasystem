@@ -26,6 +26,8 @@
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/protos/coordinator.pb.h"
 #include "gtest/gtest.h"
 #include "ut/cluster/testing/fake_coordinator_service_proxy.h"
@@ -35,6 +37,26 @@ namespace datasystem::cluster {
 
 class TopologyEngineTestPeer final {
 public:
+    static Status ReloadTopology(TopologyEngine &engine)
+    {
+        return engine.ReloadTopology(true);
+    }
+
+    static void RecordPeerRpcFailure(TopologyEngine &engine, const HostPort &target,
+                                     std::chrono::steady_clock::time_point now)
+    {
+        auto *backend = dynamic_cast<DsCoordinationBackend *>(engine.memberBackend_.get());
+        ASSERT_NE(backend, nullptr);
+        backend->RecordPeerRpcFailure(target, now);
+    }
+
+    static std::vector<std::string> GetFailedTargets(TopologyEngine &engine, std::chrono::steady_clock::time_point now)
+    {
+        auto *backend = dynamic_cast<DsCoordinationBackend *>(engine.memberBackend_.get());
+        EXPECT_NE(backend, nullptr);
+        return backend == nullptr ? std::vector<std::string>{} : backend->GetFailedTargets(now);
+    }
+
     static Status RestoreReadyAfterLocalRecovery(TopologyEngine &engine)
     {
         return engine.RestoreReadyAfterLocalRecovery();
@@ -198,14 +220,14 @@ TopologyState MakeTopology(uint64_t version = 1)
     return state;
 }
 
-TopologyState MakeTopologyWithPeer(uint64_t version = 1, size_t peerCount = 1)
+TopologyState MakeTopologyWithPeer(uint64_t version = 1, size_t peerCount = 1, char firstPeerId = 'b')
 {
     auto state = MakeTopology(version);
     for (size_t i = 0; i < peerCount; ++i) {
-        state.members.emplace_back(Member{ { std::string(16, static_cast<char>('b' + i)),
-                                             "127.0.0.1:" + std::to_string(10'002 + i) },
-                                           MemberState::ACTIVE,
-                                           { static_cast<uint32_t>((i + 1) * 1'000'000'000 / (peerCount + 1)) } });
+        state.members.emplace_back(
+            Member{ { std::string(16, static_cast<char>(firstPeerId + i)), "127.0.0.1:" + std::to_string(10'002 + i) },
+                    MemberState::ACTIVE,
+                    { static_cast<uint32_t>((i + 1) * 1'000'000'000 / (peerCount + 1)) } });
     }
     return state;
 }
@@ -916,6 +938,67 @@ TEST(TopologyEngineTest, IdempotentExactReadDoesNotRepublishSnapshotCallback)
 
     EXPECT_EQ(published.load(), 1U);
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, TopologyPublicationPreservesFailuresUntilPeerIncarnationChanges)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restoreNodeTimeout([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "preserve-peer-rpc-failure";
+    PutTopology(proxy, clusterName, MakeTopologyWithPeer(1));
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    ASSERT_NE(engine, nullptr);
+
+    HostPort peer("127.0.0.1", 10'002);
+    const auto now = std::chrono::steady_clock::now();
+    TopologyEngineTestPeer::RecordPeerRpcFailure(*engine, peer, now - std::chrono::milliseconds(1'600));
+    TopologyEngineTestPeer::RecordPeerRpcFailure(*engine, peer, now - std::chrono::milliseconds(800));
+    TopologyEngineTestPeer::RecordPeerRpcFailure(*engine, peer, now);
+    ASSERT_EQ(TopologyEngineTestPeer::GetFailedTargets(*engine, now), std::vector<std::string>({ peer.ToString() }));
+
+    PutTopology(proxy, clusterName, MakeTopologyWithPeer(2));
+    DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
+
+    EXPECT_EQ(TopologyEngineTestPeer::GetFailedTargets(*engine, now), std::vector<std::string>({ peer.ToString() }));
+
+    PutTopology(proxy, clusterName, MakeTopologyWithPeer(3, 1, 'c'));
+    DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
+
+    EXPECT_TRUE(TopologyEngineTestPeer::GetFailedTargets(*engine, now).empty());
+}
+
+TEST(TopologyEngineTest, RemovedPeerCannotCarryFailureEvidenceIntoReplacement)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restoreNodeTimeout([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "discard-removed-peer-rpc-failure";
+    PutTopology(proxy, clusterName, MakeTopologyWithPeer(1));
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    ASSERT_NE(engine, nullptr);
+    DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
+
+    HostPort peer("127.0.0.1", 10'002);
+    const auto now = std::chrono::steady_clock::now();
+    TopologyEngineTestPeer::RecordPeerRpcFailure(*engine, peer, now - std::chrono::milliseconds(1'600));
+    TopologyEngineTestPeer::RecordPeerRpcFailure(*engine, peer, now - std::chrono::milliseconds(800));
+    TopologyEngineTestPeer::RecordPeerRpcFailure(*engine, peer, now);
+    ASSERT_EQ(TopologyEngineTestPeer::GetFailedTargets(*engine, now), std::vector<std::string>({ peer.ToString() }));
+
+    PutTopology(proxy, clusterName, MakeTopology(2));
+    DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
+    EXPECT_TRUE(TopologyEngineTestPeer::GetFailedTargets(*engine, now).empty());
+
+    PutTopology(proxy, clusterName, MakeTopologyWithPeer(3, 1, 'c'));
+    DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
+    EXPECT_TRUE(TopologyEngineTestPeer::GetFailedTargets(*engine, now).empty());
 }
 
 TEST(TopologyEngineTest, SnapshotPublicationExceptionDoesNotTerminateStateThread)
