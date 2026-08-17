@@ -189,6 +189,18 @@ def main():
                                help='k8s namespace (default: default)')
     parent_parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT,
                                help=f'Operation timeout in seconds (default: {DEFAULT_TIMEOUT})')
+    parent_parser.add_argument('--count', type=int, default=None,
+                               help='Limit operation to N matching pods starting '
+                                    'at --offset (pods are sorted by name, so the '
+                                    'subset is deterministic across runs). Useful '
+                                    'for scale-in/out tests at specific sizes '
+                                    '(e.g. --count 10 / 100 / 500).')
+    parent_parser.add_argument('--offset', type=int, default=0,
+                               help='Skip the first N matching pods before applying '
+                                    '--count (default: 0). Pair with --count to '
+                                    'scale out on top of an already-deployed base: '
+                                    'e.g. deploy 1900 workers, then --offset 1900 '
+                                    '--count 1 (or 10 / 50) to add more on top.')
 
     # Start subcommand
     parser_start = subparsers.add_parser('start', parents=[parent_parser],
@@ -279,6 +291,27 @@ def main():
         print(f'No running pods found matching prefixes {args.prefixes} '
               f'in namespace "{args.namespace}"')
         return 1
+
+    if args.count is not None:
+        if args.count <= 0:
+            print(f'ERROR: --count must be a positive integer, got {args.count}',
+                  file=sys.stderr)
+            return 1
+        if args.offset < 0:
+            print(f'ERROR: --offset must be >= 0, got {args.offset}',
+                  file=sys.stderr)
+            return 1
+        if args.offset >= len(pods):
+            print(f'ERROR: --offset {args.offset} reaches end of the '
+                  f'{len(pods)} pods matching prefixes {args.prefixes}',
+                  file=sys.stderr)
+            return 1
+        if args.offset + args.count > len(pods):
+            print(f'ERROR: --offset {args.offset} + --count {args.count} '
+                  f'exceeds the {len(pods)} pods matching prefixes '
+                  f'{args.prefixes}', file=sys.stderr)
+            return 1
+        pods = pods[args.offset:args.offset + args.count]
 
     print(f'Found {len(pods)} pods:')
     for p in pods:
