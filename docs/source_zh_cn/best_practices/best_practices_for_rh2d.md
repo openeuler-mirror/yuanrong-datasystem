@@ -184,6 +184,7 @@ dscli start \
     --worker_address "${node_address}" \
     --etcd_address "${etcd_address}" \
     --arena_per_tenant 1 \
+    --shared_memory_size_mb 51200 \
     --remote_h2d_device_ids "0" \
     --remote_h2d_link_type "ROCE"
 ```
@@ -196,6 +197,7 @@ dscli start \
     --worker_address "${node_address}" \
     --etcd_address "${etcd_address}" \
     --arena_per_tenant 1 \
+    --shared_memory_size_mb 51200 \
     --remote_h2d_device_ids "0" \
     --remote_h2d_link_type "HCCS" \
     --remote_h2d_hccs_buffer_pool "4:8" \
@@ -209,6 +211,7 @@ Worker 参数说明：
 | `worker_address` | - | 当前节点通信地址，格式为 `IP:Port`，例如：`192.168.0.1:31501`。HCCS 场景中的 IP 还会作为 HIXL endpoint IP |
 | `etcd_address` | - | ETCD 集群访问地址列表，多个 `IP:Port` 使用逗号分隔 |
 | `arena_per_tenant` | - | 不应超过系统内存资源限制，避免初始化失败，初始建议值为 `1` |
+| `shared_memory_size_mb` | `1024` | Worker 可用于缓存数据的共享内存上限，单位为 MB；RH2D 场景推荐值为 `51200`，普通场景可使用默认值 |
 | `remote_h2d_device_ids` | 空 | 非空时启用 Worker RH2D；多个 device id 使用逗号分隔，例如：`0,1,2,3,4,5,6,7` |
 | `remote_h2d_link_type` | `ROCE` | 支持 `ROCE`、`HCCS`，区分大小写 |
 | `remote_h2d_hccs_buffer_pool` | `4:8` | HIXL buffer-pool 参数，仅 HCCS 使用，格式为两个正整数 `<count>:<size>`；无明确调优需求时保持默认值 |
