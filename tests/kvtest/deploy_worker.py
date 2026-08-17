@@ -12,6 +12,7 @@ exec/collect/clean orchestration live in deploy_common.py.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 
@@ -27,6 +28,7 @@ from deploy_common import (
     do_for_all_pods,
     find_default_whl,
     get_pods,
+    kubectl_exec,
     resolve_procmon_dir,
     start_service,
     stop_service,
@@ -149,8 +151,70 @@ def cmd_check(args, pods):
 
 
 def cmd_exec(args, pods):
-    """Execute command in pods."""
-    return cmd_exec_impl(pods, args.namespace, args.cmd, args.timeout)
+    """Execute command in pods.
+
+    With --expected-commit, run ``dscli --version`` in each pod, parse the
+    commit hash from stdout, and list pod IPs whose commit differs from the
+    expected one. The command actually executed is fixed to
+    ``dscli --version`` so the --cmd argument is only used as a hint that the
+    user wants a version check (must contain 'dscli' and 'version'). Returns 0
+    regardless of mismatches -- the mismatched IP list is the actionable
+    output, not the exit code.
+    """
+    if not args.expected_commit:
+        return cmd_exec_impl(pods, args.namespace, args.cmd, args.timeout)
+
+    cmd = 'dscli --version'
+    expected = args.expected_commit.strip().lower()
+    mismatches = []
+    matches = []
+    failures = []
+
+    def do_op(pod):
+        pod_name = pod['name']
+        pod_ip = pod['ip']
+        try:
+            result = kubectl_exec(pod_name, namespace=args.namespace,
+                                  cmd=cmd, check=False, timeout=args.timeout)
+        except Exception as e:
+            print(f'  {pod_name} ({pod_ip}) -> ERROR: {e}')
+            failures.append((pod_name, pod_ip, str(e)))
+            return False
+        if result.returncode != 0:
+            print(f'  {pod_name} ({pod_ip}) -> FAILED rc={result.returncode}')
+            failures.append((pod_name, pod_ip,
+                              result.stderr.strip() or 'rc!=0'))
+            return False
+        m = re.search(r'commit:\s*([0-9a-f]+)', result.stdout)
+        if not m:
+            print(f'  {pod_name} ({pod_ip}) -> commit not found in stdout')
+            failures.append((pod_name, pod_ip, 'commit not found'))
+            return False
+        actual = m.group(1).lower()
+        ok = actual == expected or actual.startswith(expected) or expected.startswith(actual)
+        if ok:
+            matches.append((pod_name, pod_ip, actual))
+            print(f'  {pod_name} ({pod_ip}) -> OK commit={actual[:12]}')
+        else:
+            mismatches.append((pod_name, pod_ip, actual))
+            print(f'  {pod_name} ({pod_ip}) -> MISMATCH expected={expected[:12]} actual={actual[:12]}')
+        return True
+
+    rc = do_for_all_pods(pods, do_op, f'Checking dscli version (expected: {expected[:12]})')
+
+    print(f'\nVersion check summary:')
+    print(f'  matched: {len(matches)}')
+    print(f'  mismatched: {len(mismatches)}')
+    print(f'  failed: {len(failures)}')
+    if mismatches:
+        print(f'\nPods with mismatched commit (expected {expected[:12]}):')
+        for name, ip, actual in mismatches:
+            print(f'  {name} ({ip}) actual={actual[:12]}')
+    if failures:
+        print(f'\nPods where dscli --version failed:')
+        for name, ip, err in failures:
+            print(f'  {name} ({ip}) {err}')
+    return 0
 
 
 def cmd_collect(args, pods):
@@ -249,7 +313,18 @@ def main():
     parser_exec = subparsers.add_parser('exec', parents=[parent_parser],
                                         help='Execute command in pods')
     parser_exec.add_argument('--cmd', '-c', required=True,
-                             help='Command to execute (required)')
+                             help='Command to execute (required). When '
+                                  '--expected-commit is set, the cmd is ignored '
+                                  'and dscli --version is run instead.')
+    parser_exec.add_argument('--expected-commit', default=None,
+                             help='When set, run dscli --version in each pod '
+                                  'and list pod IPs whose commit hash differs '
+                                  'from this value. Accepts full or prefix '
+                                  'match (first 12+ chars). Returns 0 regardless '
+                                  'of mismatches; the mismatched IP list is '
+                                  'the actionable output. --cmd is still '
+                                  'required but only needs to mention dscli '
+                                  '(e.g. --cmd "dscli --version").')
 
     # Collect subcommand
     parser_collect = subparsers.add_parser('collect', parents=[parent_parser],
