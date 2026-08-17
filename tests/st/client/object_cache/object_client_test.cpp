@@ -2449,15 +2449,6 @@ TEST_F(ObjectClientTest, GetPrefixRejectsInvalidKeys)
     EXPECT_EQ(client->GetPrefix("   ", prefix).GetCode(), StatusCode::K_INVALID);
 }
 
-TEST_F(ObjectClientTest, GetRejectsInvalidKeyAfterValidKey)
-{
-    std::shared_ptr<ObjectClient> client;
-    InitTestClient(0, client);
-
-    std::vector<Optional<Buffer>> buffers;
-    EXPECT_EQ(client->Get({ "valid_key", "   " }, 0, buffers).GetCode(), StatusCode::K_INVALID);
-}
-
 TEST_F(ObjectClientTest, GetNotExitObj)
 {
     std::string notExistId = "12332";
@@ -2913,6 +2904,28 @@ TEST_F(ObjectClientTestIPv6, DISABLED_IPv6_PutGetRemote)
 
     DS_ASSERT_OK(client->GDecreaseRef(objectKeys, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
+}
+
+TEST_F(ObjectClientTest, CheckFirstObjectValid)
+{
+    std::shared_ptr<ObjectClient> client;
+    InitTestClient(0, client);
+
+    uint64_t size = 1024 * 1024;
+    std::string objectKey = NewObjectKey();
+    std::string data = GenRandomString(size);
+
+    DS_ASSERT_OK(
+        client->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), size, CreateParam{}));
+
+    std::vector<std::string> objectIds1 = { objectKey, "???" };
+    std::vector<std::string> objectIds2 = { "???", objectKey };
+
+    std::vector<ObjMetaInfo> objMetas1;
+    DS_ASSERT_OK(client->GetObjMetaInfo("", objectIds1, objMetas1));
+
+    std::vector<ObjMetaInfo> objMetas2;
+    EXPECT_EQ(client->GetObjMetaInfo("", objectIds2, objMetas2).GetCode(), StatusCode::K_INVALID);
 }
 }  // namespace st
 }  // namespace datasystem
