@@ -161,6 +161,9 @@ private:
 
     Status BuildExtentOomStatus(uint32_t arenaId, bool freshExtentUnavailable) const;
 
+    /** @brief Query the NUMA node for an allocation when whole-arena registration is enabled. */
+    void QueryAllocNumaId(const std::shared_ptr<Arena> &arena, void *pointer, uint8_t &numaId);
+
     // The arena in this group. Not modified after creation, so no lock protection required.
     std::vector<std::shared_ptr<Arena>> arenas_;
 
@@ -328,6 +331,30 @@ private:
      * @return aligned size
      */
     uint64_t RoundUpToNextMultiple(uint64_t size);
+
+    /**
+     * @brief Create and initialize one arena.
+     * @param[in] type Arena cache type.
+     * @param[in] mmapSize Arena mmap size.
+     * @param[out] arenaInd Created arena index.
+     * @return Status of this call.
+     */
+    Status CreateSingleArena(CacheType type, uint64_t mmapSize, uint32_t &arenaInd);
+
+    struct ArenaParams {
+        uint64_t mmapSizeForArena = 0;
+        uint64_t fakeAllocateSizeForArena = 0;
+        uint32_t arenasNum = 0;
+    };
+
+    /**
+     * @brief Compute the mmap size, fake allocation size, and arena count.
+     * @param[in] type Arena cache type.
+     * @param[in] maxSize Arena group logical size.
+     * @param[out] params Computed arena parameters.
+     * @return Status of this call.
+     */
+    Status ComputeArenaParams(CacheType type, uint64_t maxSize, ArenaParams &params);
 
     /**
      * @brief The alloc hook is invoked whenever the arena needs additional memory from the OS, e.g. when

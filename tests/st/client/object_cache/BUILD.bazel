@@ -344,6 +344,17 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "urma_numa_inflight_balance_test",
+    srcs = ["urma_numa_inflight_balance_test.cpp"],
+    tags = ["manual", "urma_mock"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
     name = "urma_send_jetty_pool_test",
     srcs = ["urma_send_jetty_pool_test.cpp"],
     tags = ["manual", "urma"],

@@ -37,9 +37,24 @@ void ClearThreadPoolEnv()
     unsetenv("URMA_MOCK_THREAD_POOL_SIZE");
     unsetenv("URMA_MOCK_QUEUE_CAP");
     unsetenv("URMA_MOCK_LATENCY_US");
-    unsetenv("URMA_MOCK_THREAD_POOL_SIZE");
-    unsetenv("URMA_MOCK_QUEUE_CAP");
-    unsetenv("URMA_MOCK_LATENCY_US");
+    unsetenv("URMA_MOCK_CHIP_1_LATENCY_US");
+    unsetenv("URMA_MOCK_CHIP_2_LATENCY_US");
+}
+
+TEST(MockThreadPoolTest, ResolvesSourceChipLatencyWithGlobalFallback)
+{
+    ClearThreadPoolEnv();
+    setenv("URMA_MOCK_LATENCY_US", "30", 1);
+    setenv("URMA_MOCK_CHIP_1_LATENCY_US", "3000", 1);
+    setenv("URMA_MOCK_CHIP_2_LATENCY_US", "0", 1);
+
+    EXPECT_EQ(MockThreadPool::ResolveLatencyFromEnv(1), 3000u);
+    EXPECT_EQ(MockThreadPool::ResolveLatencyFromEnv(2), 0u);
+    EXPECT_EQ(MockThreadPool::ResolveLatencyFromEnv(3), 30u);
+
+    unsetenv("URMA_MOCK_CHIP_1_LATENCY_US");
+    EXPECT_EQ(MockThreadPool::ResolveLatencyFromEnv(1), 30u);
+    ClearThreadPoolEnv();
 }
 
 }  // namespace

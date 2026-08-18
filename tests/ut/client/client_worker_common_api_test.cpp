@@ -98,6 +98,17 @@ TEST(ClientWorkerCommonApiTest, CarriesWorkerUrmaRoundRobinType)
     EXPECT_EQ(rsp.ub_numa_rr_type(), 0u);
 }
 
+TEST(ClientWorkerCommonApiTest, CarriesWorkerUrmaInflightDifferenceThreshold)
+{
+    RegisterClientRspPb rsp;
+
+    EXPECT_EQ(rsp.ub_numa_inflight_wr_diff_threshold(), 0u);
+    rsp.set_ub_numa_inflight_wr_diff_threshold(15);
+    EXPECT_EQ(rsp.ub_numa_inflight_wr_diff_threshold(), 15u);
+    rsp.set_ub_numa_inflight_wr_diff_threshold(0);
+    EXPECT_EQ(rsp.ub_numa_inflight_wr_diff_threshold(), 0u);
+}
+
 TEST(ClientWorkerCommonApiTest, SeparatesWorkerUbCapabilityFromEndpointTransportMode)
 {
     RegisterClientRspPb rsp;
@@ -106,12 +117,14 @@ TEST(ClientWorkerCommonApiTest, SeparatesWorkerUbCapabilityFromEndpointTransport
     rsp.set_ub_runtime_enabled(true);
     rsp.set_ub_numa_affinity_enabled(true);
     rsp.set_ub_numa_rr_type(2);
+    rsp.set_ub_numa_inflight_wr_diff_threshold(15);
 
     // A same-host endpoint remains SHM/default while advertising the UB policy needed by cross-node connections.
     EXPECT_TRUE(rsp.ub_runtime_enabled());
     EXPECT_EQ(rsp.fast_transport_mode(), FastTransportMode::TCPIP);
     EXPECT_TRUE(rsp.ub_numa_affinity_enabled());
     EXPECT_EQ(rsp.ub_numa_rr_type(), 2u);
+    EXPECT_EQ(rsp.ub_numa_inflight_wr_diff_threshold(), 15u);
 }
 
 TEST(ClientWorkerCommonApiTest, AppliesUbConfigDuringPostRegisterBeforeDeferredHandshake)

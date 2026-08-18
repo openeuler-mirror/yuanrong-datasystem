@@ -212,17 +212,75 @@ bool ParseCpuList(const std::string &cpuListRaw, std::vector<int> &cpus)
     return !cpus.empty();
 }
 
-Status DistributeMemoryAcrossAllNumaNodes(void *pointer, size_t size)
+Status GetNumaNodeIds(std::vector<int> &nodeIds)
 {
+    nodeIds.clear();
     auto &nodeInfos = GetNumaNodes();
-    if (nodeInfos.empty()) {
-        return Status::OK();
-    }
-    std::vector<int> nodeIds;
     nodeIds.reserve(nodeInfos.size());
     for (const auto &nodeInfo : nodeInfos) {
         nodeIds.push_back(nodeInfo.nodeId);
     }
+    return Status::OK();
+}
+
+Status BuildRoundRobinNumaBindingPlan(uint8_t *pointer, size_t size, uint32_t rangeCount,
+                                      const std::vector<int> &nodeIds, std::vector<NumaBindingRange> &ranges)
+{
+    ranges.clear();
+    CHECK_FAIL_RETURN_STATUS(pointer != nullptr, K_INVALID, "memory pointer is null");
+    CHECK_FAIL_RETURN_STATUS(size > 0, K_INVALID, "memory size is zero");
+    CHECK_FAIL_RETURN_STATUS(rangeCount > 0, K_INVALID, "range count is zero");
+    CHECK_FAIL_RETURN_STATUS(!nodeIds.empty(), K_INVALID, "NUMA node list is empty");
+    CHECK_FAIL_RETURN_STATUS(size % rangeCount == 0, K_INVALID, "memory size is not divisible by range count");
+    CHECK_FAIL_RETURN_STATUS(std::all_of(nodeIds.begin(), nodeIds.end(), [](int nodeId) { return nodeId >= 0; }),
+                             K_INVALID, "NUMA node id is negative");
+
+    const auto maxNodeId = *std::max_element(nodeIds.begin(), nodeIds.end());
+    CHECK_FAIL_RETURN_STATUS(maxNodeId <= std::numeric_limits<uint8_t>::max(), K_INVALID,
+                             "NUMA node id exceeds supported range");
+    const size_t numaCount = static_cast<size_t>(maxNodeId) + 1;
+    constexpr uint8_t firstChipId = 1;
+    constexpr uint8_t secondChipId = 2;
+    std::vector<int> firstChipNodes;
+    std::vector<int> secondChipNodes;
+    std::vector<int> unmappedNodes;
+    for (int nodeId : nodeIds) {
+        const auto chipId = NumaIdToChipId(static_cast<uint8_t>(nodeId), numaCount);
+        if (chipId == firstChipId) {
+            firstChipNodes.emplace_back(nodeId);
+        } else if (chipId == secondChipId) {
+            secondChipNodes.emplace_back(nodeId);
+        } else {
+            unmappedNodes.emplace_back(nodeId);
+        }
+    }
+    std::vector<int> chipInterleavedNodeIds;
+    chipInterleavedNodeIds.reserve(nodeIds.size());
+    const size_t maxChipNodeCount = std::max(firstChipNodes.size(), secondChipNodes.size());
+    for (size_t i = 0; i < maxChipNodeCount; ++i) {
+        if (i < firstChipNodes.size()) {
+            chipInterleavedNodeIds.emplace_back(firstChipNodes[i]);
+        }
+        if (i < secondChipNodes.size()) {
+            chipInterleavedNodeIds.emplace_back(secondChipNodes[i]);
+        }
+    }
+    chipInterleavedNodeIds.insert(chipInterleavedNodeIds.end(), unmappedNodes.begin(), unmappedNodes.end());
+
+    const size_t rangeSize = size / rangeCount;
+    ranges.reserve(rangeCount);
+    for (uint32_t i = 0; i < rangeCount; ++i) {
+        ranges.emplace_back(NumaBindingRange{ pointer + static_cast<size_t>(i) * rangeSize, rangeSize,
+                                              chipInterleavedNodeIds[i % chipInterleavedNodeIds.size()] });
+    }
+    return Status::OK();
+}
+
+Status DistributeMemoryAcrossAllNumaNodes(void *pointer, size_t size)
+{
+    std::vector<int> nodeIds;
+    RETURN_IF_NOT_OK(GetNumaNodeIds(nodeIds));
+    RETURN_OK_IF_TRUE(nodeIds.empty());
     return DistributeMemoryAcrossNumaNodeList(pointer, size, nodeIds);
 }
 
@@ -256,6 +314,11 @@ Status DistributeMemoryAcrossAffinityNumaNodes(void *pointer, size_t size)
     CHECK_FAIL_RETURN_STATUS(!affinityNodeIds.empty(), K_RUNTIME_ERROR,
                              "No NUMA node intersects with current process affinity cpuset");
     return DistributeMemoryAcrossNumaNodeList(pointer, size, affinityNodeIds);
+}
+
+Status BindMemoryToNumaNode(void *pointer, size_t size, int nodeId)
+{
+    return DistributeMemoryAcrossNumaNodeList(pointer, size, { nodeId });
 }
 
 uint8_t NumaIdToChipId(uint8_t numaId, size_t numaCount)

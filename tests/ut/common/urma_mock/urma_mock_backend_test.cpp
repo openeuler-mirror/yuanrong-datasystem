@@ -270,6 +270,31 @@ TEST_F(UrmaMockBackendTest, UnregisterBorrowedBusinessMemfdKeepsMappingAlive)
     EXPECT_EQ(::close(businessFd), 0);
 }
 
+TEST_F(UrmaMockBackendTest, RegisterSegPreservesBusinessVaAcrossAdjacentMappings)
+{
+    auto *rawDev = datasystem::urma_mock::MockUrmaBackend::Instance().GetDevices()[0]->GetPrivRawDev();
+    urma_context_t *ctx = ds_urma_mock_create_context(rawDev, 0);
+    ASSERT_NE(ctx, nullptr);
+
+    const size_t pageSize = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
+    const size_t segSize = pageSize * 2;
+    void *businessPtr = ::mmap(nullptr, segSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    ASSERT_NE(businessPtr, MAP_FAILED);
+    ASSERT_EQ(::mprotect(businessPtr, pageSize, PROT_READ), 0);
+
+    urma_seg_cfg_t segCfg{};
+    segCfg.len = segSize;
+    segCfg.va = reinterpret_cast<uint64_t>(businessPtr);
+    auto *tseg = ds_urma_mock_register_seg(ctx, &segCfg);
+    ASSERT_NE(tseg, nullptr);
+    EXPECT_EQ(tseg->seg.ubva.va, reinterpret_cast<uint64_t>(businessPtr));
+    EXPECT_EQ(tseg->seg.priv, businessPtr);
+
+    EXPECT_EQ(ds_urma_mock_unregister_seg(tseg), URMA_SUCCESS);
+    EXPECT_EQ(ds_urma_mock_delete_context(ctx), URMA_SUCCESS);
+    EXPECT_EQ(::munmap(businessPtr, segSize), 0);
+}
+
 TEST_F(UrmaMockBackendTest, PostSendTransfersBytesAndCompletes)
 {
     // Use one ctx with separate src and dst segs.

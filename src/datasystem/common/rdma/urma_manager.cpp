@@ -31,6 +31,7 @@
 
 #include <sys/mman.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #ifndef USE_URMA_MOCK
 #include <ub/umdk/urma/urma_opcode.h>
@@ -55,6 +56,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/sched_runtime.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/wait_post.h"
@@ -75,9 +77,10 @@ constexpr uint32_t URMA_LOG_LIMIT_MS = 1;
 constexpr uint32_t URMA_LOG_LIMIT_US = 250;
 constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
 constexpr size_t URMA_CHIP_INFLIGHT_TRACKED_COUNT = 10;
-constexpr size_t URMA_CHIP_INFLIGHT_LOG_BUFFER_SIZE = 160;
+constexpr size_t URMA_CHIP_INFLIGHT_LOG_BUFFER_SIZE = 320;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_MIN = 1;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_COUNT = 2;
+constexpr uint8_t URMA_AFFINITY_SRC_CHIP_MAX = URMA_AFFINITY_SRC_CHIP_MIN + URMA_AFFINITY_SRC_CHIP_COUNT - 1;
 constexpr uint64_t URMA_RECOVERY_PROBE_SEGMENT_SIZE = 4096;
 constexpr uint64_t URMA_FIRST_WRITE_CHUNK_INDEX = 1;
 constexpr uint64_t URMA_SECOND_WRITE_CHUNK_INDEX = 2;
@@ -162,8 +165,16 @@ UrmaManager::UrmaManager()
     importSegmentFlag_.bs.access = URMA_ACCESS_READ | URMA_ACCESS_WRITE | URMA_ACCESS_ATOMIC;
     localSegmentMap_ = std::make_unique<UrmaLocalSegmentMap>();
     urmaResource_ = std::make_unique<UrmaResource>();
-    srcChipInflightWrCounts_ = std::vector<std::atomic<int>>(URMA_CHIP_INFLIGHT_TRACKED_COUNT);
+    srcChipInflightWrCounts_ = std::vector<SrcChipInflightCounter>(URMA_CHIP_INFLIGHT_TRACKED_COUNT);
     for (auto &count : srcChipInflightWrCounts_) {
+        count.value.store(0, std::memory_order_relaxed);
+    }
+    srcChipWriteCounts_ = std::vector<std::atomic<uint64_t>>(URMA_CHIP_INFLIGHT_TRACKED_COUNT);
+    dstChipWriteCounts_ = std::vector<std::atomic<uint64_t>>(URMA_CHIP_INFLIGHT_TRACKED_COUNT);
+    for (auto &count : srcChipWriteCounts_) {
+        count.store(0, std::memory_order_relaxed);
+    }
+    for (auto &count : dstChipWriteCounts_) {
         count.store(0, std::memory_order_relaxed);
     }
 }
@@ -350,32 +361,16 @@ Status UrmaManager::InitMemoryBufferPool()
     // Parse max get data size and max set buffer size from environment
     RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_GET_DATA_SIZE, ubMaxGetDataSize_));
     RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_SET_BUFFER_SIZE, ubMaxSetBufferSize_));
+    SetClientTransportArenaConfig();
 
-    if (ubTransportMemSize_.load() > MAX_TRANSPORT_MEM_SIZE || ubTransportMemSize_.load() <= 0) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID,
-                                FormatString("ubTransportMemSize %lu is invalid, must be between %lu and %lu",
-                                             ubTransportMemSize_.load(), 0, MAX_TRANSPORT_MEM_SIZE));
-    }
-
+    const uint32_t arenaNum = FLAGS_ub_transport_arena_num;
+    const long pageSize = getpagesize();
+    uint64_t poolSize = 0;
+    RETURN_IF_NOT_OK(NormalizeClientTransportPoolSize(ubTransportMemSize_.load(), arenaNum,
+                                                      pageSize > 0 ? static_cast<uint64_t>(pageSize) : 0, poolSize));
+    ubTransportMemSize_.store(poolSize, std::memory_order_relaxed);
     AllocatorFuncRegister regFunc;
-    auto hostAllocFunc = [this](void **ptr, size_t maxSize) -> Status {
-        memoryBuffer_ = mmap(nullptr, maxSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        *ptr = memoryBuffer_;
-        if (memoryBuffer_ == MAP_FAILED) {
-            RETURN_STATUS(K_OUT_OF_MEMORY, "Failed to allocate memory buffer pool for client");
-        }
-        RETURN_IF_NOT_OK(RegisterSegment(reinterpret_cast<uint64_t>(*ptr), maxSize));
-        return Status::OK();
-    };
-    auto hostdestroyFunc = [](void *ptr, size_t destroySize) -> Status {
-        // unmmap in urma manager
-        (void)ptr;
-        (void)destroySize;
-        return Status::OK();
-    };
-
-    regFunc.createFunc = hostAllocFunc;
-    regFunc.destroyFunc = hostdestroyFunc;
+    BuildTransportRegFunc(regFunc);
 
     auto *allocator = Allocator::Instance();
     auto rc = allocator->InitWithFlexibleRegister(AllocateType::UB_TRANSPORT, ubTransportMemSize_, regFunc);
@@ -385,6 +380,8 @@ Status UrmaManager::InitMemoryBufferPool()
         rc =
             allocator->CreateArenaGroup(DEFAULT_TENANT_ID, ubTransportMemSize_, arenaGroup, AllocateType::UB_TRANSPORT);
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Failed to get arena group for client");
+        LOG(INFO) << FormatString("UB transport memory pool initialized, poolSize=%lu, arenaNum=%u, arenaSize=%lu",
+                                  poolSize, arenaNum, poolSize / arenaNum);
     }
     if (rc.IsError()) {
         rc = rc.GetCode() == K_DUPLICATED ? Status::OK() : rc;
@@ -392,6 +389,98 @@ Status UrmaManager::InitMemoryBufferPool()
     }
 
     return rc;
+}
+
+Status UrmaManager::NormalizeClientTransportPoolSize(uint64_t requestedSize, uint32_t arenaNum, uint64_t pageSize,
+    uint64_t &effectiveSize)
+{
+    CHECK_FAIL_RETURN_STATUS(requestedSize > 0 && requestedSize <= MAX_TRANSPORT_MEM_SIZE, K_INVALID,
+                             FormatString("ubTransportMemSize %lu is invalid, must be between 0 and %lu", requestedSize,
+                                          MAX_TRANSPORT_MEM_SIZE));
+    CHECK_FAIL_RETURN_STATUS(arenaNum > 0, K_INVALID, "ub_transport_arena_num must be greater than 0");
+    CHECK_FAIL_RETURN_STATUS(pageSize > 0 && pageSize <= MAX_TRANSPORT_MEM_SIZE / arenaNum, K_INVALID,
+                             "System page size is invalid for the configured transport arena count");
+
+    const uint64_t alignment = pageSize * arenaNum;
+    const uint64_t remainder = requestedSize % alignment;
+    const uint64_t increment = remainder == 0 ? 0 : alignment - remainder;
+    CHECK_FAIL_RETURN_STATUS(
+        requestedSize <= MAX_TRANSPORT_MEM_SIZE - increment, K_INVALID,
+        FormatString("Aligned UB transport memory size exceeds limit %lu", MAX_TRANSPORT_MEM_SIZE));
+    effectiveSize = requestedSize + increment;
+    return Status::OK();
+}
+
+void UrmaManager::BuildTransportRegFunc(AllocatorFuncRegister &regFunc)
+{
+    const uint64_t poolSize = ubTransportMemSize_.load();
+    regFunc.createFunc = [this, poolSize](void **ptr, size_t arenaSize) -> Status {
+        CHECK_FAIL_RETURN_STATUS(arenaSize > 0 && poolSize % arenaSize == 0, K_RUNTIME_ERROR,
+                                 "Invalid UB transport arena size");
+        CHECK_FAIL_RETURN_STATUS(clientTransportSegmentIndex_ < poolSize / arenaSize, K_RUNTIME_ERROR,
+                                 "UB transport arena count exceeds the mapped pool");
+        if (memoryBuffer_ == nullptr) {
+            memoryBuffer_ = mmap(nullptr, poolSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (memoryBuffer_ == MAP_FAILED) {
+                memoryBuffer_ = nullptr;
+                RETURN_STATUS(K_OUT_OF_MEMORY, "Failed to allocate memory buffer pool for client");
+            }
+            Status bindRc = BindClientTransportMemory(memoryBuffer_, poolSize);
+            if (bindRc.IsError()) {
+                (void)munmap(memoryBuffer_, poolSize);
+                memoryBuffer_ = nullptr;
+                return bindRc;
+            }
+            Status rc = RegisterSegment(reinterpret_cast<uint64_t>(memoryBuffer_), poolSize);
+            if (rc.IsError()) {
+                (void)munmap(memoryBuffer_, poolSize);
+                memoryBuffer_ = nullptr;
+                return rc;
+            }
+        }
+        *ptr = reinterpret_cast<uint8_t *>(memoryBuffer_)
+            + static_cast<uint64_t>(clientTransportSegmentIndex_) * arenaSize;
+        ++clientTransportSegmentIndex_;
+        return Status::OK();
+    };
+    regFunc.destroyFunc = [](void *, size_t) { return Status::OK(); };
+}
+
+void UrmaManager::SetClientTransportArenaConfig()
+{
+    const char *value = std::getenv("DATASYSTEM_UB_TRANSPORT_ARENA_NUM");
+    if (value == nullptr || strlen(value) == 0) {
+        return;
+    }
+    std::string errorMsg;
+    if (SetCommandLineOption("ub_transport_arena_num", value, errorMsg)) {
+        LOG(INFO) << "ub_transport_arena_num overridden by DATASYSTEM_UB_TRANSPORT_ARENA_NUM=" << value;
+    } else {
+        LOG(ERROR) << "Invalid DATASYSTEM_UB_TRANSPORT_ARENA_NUM: " << errorMsg;
+    }
+}
+
+Status UrmaManager::BindClientTransportMemory(void *pointer, size_t size)
+{
+    const uint32_t arenaNum = FLAGS_ub_transport_arena_num;
+    if (!FLAGS_enable_ub_numa_affinity || !FLAGS_urma_register_whole_arena || arenaNum <= 1) {
+        return Status::OK();
+    }
+
+    std::vector<int> nodeIds;
+    RETURN_IF_NOT_OK(GetNumaNodeIds(nodeIds));
+    CHECK_FAIL_RETURN_STATUS(!nodeIds.empty(), K_RUNTIME_ERROR,
+                             "No NUMA nodes available for client transport memory binding");
+
+    Timer timer;
+    std::vector<NumaBindingRange> ranges;
+    RETURN_IF_NOT_OK(BuildRoundRobinNumaBindingPlan(static_cast<uint8_t *>(pointer), size, arenaNum, nodeIds, ranges));
+    for (const auto &range : ranges) {
+        RETURN_IF_NOT_OK(BindMemoryToNumaNode(range.pointer, range.size, range.nodeId));
+    }
+    LOG(INFO) << "Binding " << arenaNum << " client transport arenas to NUMA nodes took "
+              << timer.ElapsedMilliSecond() << "ms";
+    return Status::OK();
 }
 
 Status UrmaManager::EnsureClientPipelineH2DEnv()
@@ -1167,7 +1256,8 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
                                 uint64_t dataSize, UrmaEvent::OperationType operationType,
                                 std::atomic<int> *srcChipInflightCounter,
                                 std::shared_ptr<EventWaiter> waiter, std::shared_ptr<UrmaEvent> *event,
-                                std::optional<UrmaLateCompletionContext> lateCompletionContext)
+                                std::optional<UrmaLateCompletionContext> lateCompletionContext,
+                                bool observeGatherInflightDrain)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(laneLease != nullptr, K_RUNTIME_ERROR, "URMA send lane lease is null");
     auto jetty = laneLease->GetJetty();
@@ -1191,7 +1281,8 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
         mapAccessor->second = std::make_shared<UrmaEvent>(requestId, laneLease, remoteAddress,
                                                           connection->GetUrmaJfrInfo().uniqueInstanceId, dataSize,
                                                           operationType, srcChipInflightCounter, std::move(waiter),
-                                                          std::move(lateCompletionContext));
+                                                          std::move(lateCompletionContext),
+                                                          observeGatherInflightDrain);
         if (event != nullptr) {
             *event = mapAccessor->second;
         }
@@ -1206,7 +1297,7 @@ const char *UrmaManager::GetSrcChipInflightWrCountsString() const
     buffer[length++] = '{';
     bool first = true;
     for (size_t i = 0; i < srcChipInflightWrCounts_.size(); ++i) {
-        const auto count = srcChipInflightWrCounts_[i].load(std::memory_order_relaxed);
+        const auto count = srcChipInflightWrCounts_[i].value.load(std::memory_order_relaxed);
         if (count == 0) {
             continue;
         }
@@ -1227,7 +1318,60 @@ std::atomic<int> *UrmaManager::GetSrcChipInflightWrCounter(uint8_t chipId)
     if (chipId == INVALID_CHIP_ID || chipId >= srcChipInflightWrCounts_.size()) {
         return nullptr;
     }
-    return &srcChipInflightWrCounts_[chipId];
+    return &srcChipInflightWrCounts_[chipId].value;
+}
+
+void UrmaManager::RecordNumaWriteChipCounts(uint8_t srcChipId, uint8_t dstChipId)
+{
+    if (srcChipId < srcChipWriteCounts_.size() && srcChipId != INVALID_CHIP_ID) {
+        srcChipWriteCounts_[srcChipId].fetch_add(1, std::memory_order_relaxed);
+    }
+    if (dstChipId < dstChipWriteCounts_.size() && dstChipId != INVALID_CHIP_ID) {
+        dstChipWriteCounts_[dstChipId].fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void UrmaManager::RecordNumaWriteCrossChipCount(uint8_t srcChipId, uint8_t dstChipId)
+{
+    if (srcChipId == URMA_AFFINITY_SRC_CHIP_MIN && dstChipId == URMA_AFFINITY_SRC_CHIP_MAX) {
+        src1Dst2WriteCount_.fetch_add(1, std::memory_order_relaxed);
+    } else if (srcChipId == URMA_AFFINITY_SRC_CHIP_MAX && dstChipId == URMA_AFFINITY_SRC_CHIP_MIN) {
+        src2Dst1WriteCount_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+const char *UrmaManager::GetNumaWriteChipCountsString() const
+{
+    static thread_local char buffer[URMA_CHIP_INFLIGHT_LOG_BUFFER_SIZE];
+    const auto src1 = srcChipWriteCounts_[URMA_AFFINITY_SRC_CHIP_MIN].load(std::memory_order_relaxed);
+    const auto src2 = srcChipWriteCounts_[URMA_AFFINITY_SRC_CHIP_MAX].load(std::memory_order_relaxed);
+    const auto dst1 = dstChipWriteCounts_[URMA_AFFINITY_SRC_CHIP_MIN].load(std::memory_order_relaxed);
+    const auto dst2 = dstChipWriteCounts_[URMA_AFFINITY_SRC_CHIP_MAX].load(std::memory_order_relaxed);
+    const auto src1Dst2 = src1Dst2WriteCount_.load(std::memory_order_relaxed);
+    const auto src2Dst1 = src2Dst1WriteCount_.load(std::memory_order_relaxed);
+    static constexpr char initialFormat[] =
+        "{src1:%lu,src2:%lu,dst1:%lu,dst2:%lu,src1_dst2:%lu,"
+        "src2_dst1:%lu";
+    size_t length = static_cast<size_t>(
+        std::snprintf(buffer, sizeof(buffer), initialFormat, src1, src2, dst1, dst2, src1Dst2, src2Dst1));
+    for (size_t chipId = URMA_AFFINITY_SRC_CHIP_MAX + 1;
+         chipId < srcChipWriteCounts_.size() && length < sizeof(buffer); ++chipId) {
+        const auto srcCount = srcChipWriteCounts_[chipId].load(std::memory_order_relaxed);
+        const auto dstCount = dstChipWriteCounts_[chipId].load(std::memory_order_relaxed);
+        if (srcCount == 0 && dstCount == 0) {
+            continue;
+        }
+        const auto written = std::snprintf(buffer + length, sizeof(buffer) - length, ",src%zu:%lu,dst%zu:%lu",
+                                           chipId, srcCount, chipId, dstCount);
+        if (written < 0 || static_cast<size_t>(written) >= sizeof(buffer) - length) {
+            break;
+        }
+        length += static_cast<size_t>(written);
+    }
+    if (length < sizeof(buffer)) {
+        std::snprintf(buffer + length, sizeof(buffer) - length, "}");
+    }
+    return buffer;
 }
 
 uint8_t UrmaManager::GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity)
@@ -1236,7 +1380,48 @@ uint8_t UrmaManager::GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNum
         return transmittedChipId;
     }
     const uint64_t sequence = affinitySrcChipIdSequence_.fetch_add(1, std::memory_order_relaxed);
-    return static_cast<uint8_t>(URMA_AFFINITY_SRC_CHIP_MIN + sequence % URMA_AFFINITY_SRC_CHIP_COUNT);
+    const auto candidate =
+        static_cast<uint8_t>(URMA_AFFINITY_SRC_CHIP_MIN + sequence % URMA_AFFINITY_SRC_CHIP_COUNT);
+    const uint32_t threshold = FLAGS_ub_numa_inflight_wr_diff_threshold;
+    uint8_t selected = candidate;
+    int chip1Inflight = 0;
+    int chip2Inflight = 0;
+    uint64_t difference = 0;
+    if (threshold > 0) {
+        chip1Inflight =
+            std::max(srcChipInflightWrCounts_[URMA_AFFINITY_SRC_CHIP_MIN].value.load(std::memory_order_relaxed), 0);
+        chip2Inflight =
+            std::max(srcChipInflightWrCounts_[URMA_AFFINITY_SRC_CHIP_MAX].value.load(std::memory_order_relaxed), 0);
+#ifdef WITH_TESTS
+        INJECT_POINT_NO_RETURN("UrmaManager.OverrideSrcChipInflightSnapshot",
+                               [&chip1Inflight, &chip2Inflight](int chip1, int chip2) {
+            chip1Inflight = std::max(chip1, 0);
+            chip2Inflight = std::max(chip2, 0);
+        });
+#endif
+        difference = chip1Inflight >= chip2Inflight ? static_cast<uint64_t>(chip1Inflight - chip2Inflight)
+                                                    : static_cast<uint64_t>(chip2Inflight - chip1Inflight);
+        if (difference > threshold) {
+            selected = chip1Inflight < chip2Inflight ? URMA_AFFINITY_SRC_CHIP_MIN : URMA_AFFINITY_SRC_CHIP_MAX;
+        }
+    }
+    if (selected != candidate) {
+        LOG_FIRST_AND_EVERY_N(INFO, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_SRC_CHIP_BALANCE] override RR candidate " << static_cast<uint32_t>(candidate) << " with chip "
+            << static_cast<uint32_t>(selected) << ", chip1Inflight=" << chip1Inflight
+            << ", chip2Inflight=" << chip2Inflight << ", difference=" << difference << ", threshold=" << threshold;
+#ifdef WITH_TESTS
+        INJECT_POINT_NO_RETURN("UrmaManager.SrcChipInflightBalanceOverride");
+#endif
+    }
+#ifdef WITH_TESTS
+    if (selected == 1) {
+        INJECT_POINT_NO_RETURN("UrmaManager.SrcChipSelected.1");
+    } else {
+        INJECT_POINT_NO_RETURN("UrmaManager.SrcChipSelected.2");
+    }
+#endif
+    return selected;
 }
 
 uint8_t UrmaManager::GetAffinitySrcChipIdForPost(uint8_t transmittedChipId, bool useNumaAffinity, bool firstPost,
@@ -1249,6 +1434,28 @@ uint8_t UrmaManager::GetAffinitySrcChipIdForPost(uint8_t transmittedChipId, bool
         return GetAffinitySrcChipId(transmittedChipId, true);
     }
     return logicalWriteChipId;
+}
+
+UrmaManager::UrmaNumaPostConfig UrmaManager::ResolveNumaPostConfig(uint8_t transmittedSrcChipId, uint8_t dstChipId,
+                                                                   bool firstPost, uint8_t logicalWriteChipId)
+{
+    bool enabled = IsUbNumaAffinityEnabled() && transmittedSrcChipId != INVALID_CHIP_ID
+                   && dstChipId != INVALID_CHIP_ID;
+#ifdef WITH_TESTS
+    // URMA Mock remaps anonymous registered memory onto memfd-backed VMAs for cross-process access. That remap
+    // intentionally cannot preserve physical NUMA placement, so end-to-end tests inject a valid chip while allocator
+    // and binding-plan tests independently cover placement.
+    INJECT_POINT_NO_RETURN("UrmaManager.ForceNumaAffinityForMock",
+                           [&enabled, &transmittedSrcChipId](bool forceEnabled) {
+        if (forceEnabled) {
+            enabled = true;
+            transmittedSrcChipId = URMA_AFFINITY_SRC_CHIP_MIN;
+        }
+    });
+#endif
+    const auto srcChipId =
+        GetAffinitySrcChipIdForPost(transmittedSrcChipId, enabled, firstPost, logicalWriteChipId);
+    return { enabled, srcChipId, GetSrcChipInflightWrCounter(srcChipId) };
 }
 
 void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
@@ -1893,12 +2100,11 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     }
     urma_jfs_wr_flag_t flag{};
     flag.bs.complete_enable = 1;
-    const bool useNumaAffinity =
-        IsUbNumaAffinityEnabled() && args.srcChipId != INVALID_CHIP_ID && args.dstChipId != INVALID_CHIP_ID;
+    uint8_t transmittedSrcChipId = args.srcChipId;
     // Type 0 keeps the transmitted chip, type 1 selects on the first post and reuses it for the logical write,
     // and type 2 selects independently for every post. Keep this decision inside GetAffinitySrcChipIdForPost so
     // tests can guard the loop granularity rather than only the underlying round-robin counter.
-    uint8_t srcChipId = args.srcChipId;
+    uint8_t srcChipId = transmittedSrcChipId;
 
     uint64_t writtenSize = 0;
     uint64_t remainSize = args.size;
@@ -1958,8 +2164,11 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         eventKeys.clear();
     };
     while (remainSize > 0) {
-        srcChipId = GetAffinitySrcChipIdForPost(args.srcChipId, useNumaAffinity, writeChunkIndex == 0, srcChipId);
-        auto *srcChipInflightCounter = GetSrcChipInflightWrCounter(srcChipId);
+        const auto numaConfig =
+            ResolveNumaPostConfig(transmittedSrcChipId, args.dstChipId, writeChunkIndex == 0, srcChipId);
+        srcChipId = numaConfig.srcChipId;
+        const bool useNumaAffinity = numaConfig.enabled;
+        auto *srcChipInflightCounter = numaConfig.inflightCounter;
         const uint64_t writeSize = std::min(remainSize, maxWriteSize);
         ++writeChunkIndex;
         const uint64_t key = GenerateReqId();
@@ -1998,10 +2207,15 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         event->SetWritePostTimeUs(t.GetStartTimeStampUs());
         METRIC_TIMER(metrics::KvMetricId::URMA_WRITE_LATENCY);
         auto jettyId = jetty->GetJettyId();
+        RecordNumaWriteChipCounts(srcChipId, args.dstChipId);
+        if (useNumaAffinity && FLAGS_ub_numa_rr_type != static_cast<uint32_t>(UbNumaRrType::DISABLED)) {
+            RecordNumaWriteCrossChipCount(srcChipId, args.dstChipId);
+        }
         LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL1)
             << "URMA write useNumaAffinity:" << useNumaAffinity << ", src:" << static_cast<uint32_t>(srcChipId)
             << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId
-            << ", urma_inflight_wr_count:" << tbbEventMap_.size();
+            << ", urma_inflight_wr_count:" << tbbEventMap_.size()
+            << ", numa_write_counts:" << GetNumaWriteChipCountsString();
         if (useNumaAffinity) {
             auto numaInjectRc = []() -> Status {
                 INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
@@ -2453,33 +2667,49 @@ Status UrmaManager::AppendGatherWriteRequest(
                                       .user_tseg = nullptr };
     context.totalWriteSize += singleDstWriteSize;
     urma_sg_t dstSg = { .sge = &context.dstSgeList[dstSgeIdx], .num_sge = 1 };
-    return CreateGatherWriteEvent(dstSgeIdx, singleDstWriteSize, srcSg, dstSg, lateCompletionContext, context);
+    return CreateGatherWriteEvent(dstSgeIdx, singleDstWriteSize, objInfos[srcSgeStart].srcChipId,
+                                  remoteInfo.dstChipId, srcSg, dstSg, lateCompletionContext, context);
 }
 
 Status UrmaManager::CreateGatherWriteEvent(
-    size_t dstSgeIdx, uint64_t writeSize, const urma_sg_t &srcSg, const urma_sg_t &dstSg,
+    size_t dstSgeIdx, uint64_t writeSize, uint8_t transmittedSrcChipId, uint8_t dstChipId,
+    const urma_sg_t &srcSg, const urma_sg_t &dstSg,
     const std::optional<UrmaLateCompletionContext> &lateCompletionContext, UrmaGatherWriteContext &context)
 {
     urma_jfs_wr_flag_t flag = { .value = 0 };
     flag.bs.complete_enable = 1;
+    const auto numaConfig = ResolveNumaPostConfig(transmittedSrcChipId, dstChipId, dstSgeIdx == 0,
+                                                  context.logicalWriteChipId);
+    context.logicalWriteChipId = numaConfig.srcChipId;
+    flag.bs.has_drv_ext = numaConfig.enabled ? 1 : 0;
     urma_rw_wr_t rw = { .src = srcSg, .dst = dstSg, .target_hint = 0, .notify_data = 0 };
     const uint64_t requestId = GenerateReqId();
-    auto &wr = context.wrList[dstSgeIdx];
-    wr = urma_jfs_wr_t{};
+    auto &bondpWr = context.wrList[dstSgeIdx];
+    bondpWr = bondp_jfs_wr_t{};
+    auto &wr = bondpWr.base;
     wr.opcode = URMA_OPC_WRITE;
     wr.flag = flag;
     wr.tjetty = context.targetJetty;
     wr.user_ctx = requestId;
     wr.rw = rw;
     wr.next = nullptr;
-    RETURN_IF_NOT_OK(CreateEvent(requestId, context.connection, context.laneLease, context.remoteAddress,
-                                 writeSize, UrmaEvent::OperationType::WRITE, nullptr, nullptr, nullptr,
-                                 lateCompletionContext));
+    bondpWr.src_chip_id = numaConfig.srcChipId;
+    bondpWr.dst_chip_id = dstChipId;
+    RETURN_IF_NOT_OK(CreateEvent(requestId, context.connection, context.laneLease, context.remoteAddress, writeSize,
+                                 UrmaEvent::OperationType::WRITE, numaConfig.inflightCounter, nullptr, nullptr,
+                                 lateCompletionContext, true));
     context.laneLease->AddWr();
     context.createdEventKeys.emplace_back(requestId);
     if (dstSgeIdx > 0) {
-        context.wrList[dstSgeIdx - 1].next = &wr;
+        context.wrList[dstSgeIdx - 1].base.next = &wr;
     }
+#ifdef WITH_TESTS
+    if (numaConfig.enabled && numaConfig.srcChipId == URMA_AFFINITY_SRC_CHIP_MIN) {
+        INJECT_POINT_NO_RETURN("UrmaManager.GatherSrcChipSelected.1");
+    } else if (numaConfig.enabled && numaConfig.srcChipId == URMA_AFFINITY_SRC_CHIP_MAX) {
+        INJECT_POINT_NO_RETURN("UrmaManager.GatherSrcChipSelected.2");
+    }
+#endif
     return Status::OK();
 }
 
@@ -2535,7 +2765,7 @@ size_t UrmaManager::ResolveSubmittedGatherWriteCount(const RemoteSegInfo &remote
 {
     if (badWr != nullptr) {
         for (size_t i = 0; i < context.wrList.size(); ++i) {
-            if (badWr == &context.wrList[i]) {
+            if (badWr == &context.wrList[i].base) {
                 return i;
             }
         }
@@ -2566,12 +2796,25 @@ Status UrmaManager::PostGatherWriteRequests(const RemoteSegInfo &remoteInfo, Urm
     }
     urma_jfs_wr_t *badWr = nullptr;
     Timer timer;
-    auto ret = ds_urma_post_jetty_send_wr(gatherPermit.Raw(), &context.wrList[0], &badWr);
+    auto ret = ds_urma_post_jetty_send_wr(gatherPermit.Raw(), &context.wrList[0].base, &badWr);
     GetWorkerTimeCost().Append("Urma gather write.", timer.ElapsedMilliSecond());
     if (ret == URMA_SUCCESS) {
+        for (const auto &wr : context.wrList) {
+            RecordNumaWriteChipCounts(wr.src_chip_id, wr.dst_chip_id);
+            if (wr.base.flag.bs.has_drv_ext != 0) {
+                RecordNumaWriteCrossChipCount(wr.src_chip_id, wr.dst_chip_id);
+            }
+        }
         return Status::OK();
     }
     const size_t submittedCount = ResolveSubmittedGatherWriteCount(remoteInfo, badWr, context);
+    for (size_t i = 0; i < submittedCount; ++i) {
+        const auto &wr = context.wrList[i];
+        RecordNumaWriteChipCounts(wr.src_chip_id, wr.dst_chip_id);
+        if (wr.base.flag.bs.has_drv_ext != 0) {
+            RecordNumaWriteCrossChipCount(wr.src_chip_id, wr.dst_chip_id);
+        }
+    }
     CleanupGatherWriteEvents(context, submittedCount);
     const auto srcAddress = localUrmaInfo_.localAddress.ToString();
     RETURN_STATUS_LOG_ERROR(
@@ -2774,22 +3017,28 @@ uint32_t UrmaManager::NormalizeUbNumaRrType(uint32_t rrType, const std::string &
     return rrType;
 }
 
-void UrmaManager::SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, const std::string &configSource)
+void UrmaManager::SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, uint32_t inflightWrDiffThreshold,
+                                        const std::string &configSource)
 {
     rrType = NormalizeUbNumaRrType(rrType, configSource);
     bool isFirstWorker = false;
     std::call_once(Instance().clientUbNumaConfigOnce_, [&]() {
         FLAGS_enable_ub_numa_affinity = affinityEnabled;
         FLAGS_ub_numa_rr_type = rrType;
+        FLAGS_ub_numa_inflight_wr_diff_threshold = inflightWrDiffThreshold;
         isFirstWorker = true;
         LOG(INFO) << "Set client UB NUMA config from worker " << configSource
-                  << ", affinityEnabled=" << affinityEnabled << ", rrType=" << rrType;
+                  << ", affinityEnabled=" << affinityEnabled << ", rrType=" << rrType
+                  << ", inflightWrDiffThreshold=" << inflightWrDiffThreshold;
     });
     if (!isFirstWorker
-        && (FLAGS_enable_ub_numa_affinity != affinityEnabled || FLAGS_ub_numa_rr_type != rrType)) {
+        && (FLAGS_enable_ub_numa_affinity != affinityEnabled || FLAGS_ub_numa_rr_type != rrType
+            || FLAGS_ub_numa_inflight_wr_diff_threshold != inflightWrDiffThreshold)) {
         LOG(WARNING) << "Worker " << configSource << " reported UB NUMA config affinityEnabled=" << affinityEnabled
-                     << ", rrType=" << rrType << ", but the client keeps affinityEnabled="
-                     << FLAGS_enable_ub_numa_affinity << ", rrType=" << FLAGS_ub_numa_rr_type;
+                     << ", rrType=" << rrType << ", inflightWrDiffThreshold=" << inflightWrDiffThreshold
+                     << ", but the client keeps affinityEnabled=" << FLAGS_enable_ub_numa_affinity
+                     << ", rrType=" << FLAGS_ub_numa_rr_type << ", inflightWrDiffThreshold="
+                     << FLAGS_ub_numa_inflight_wr_diff_threshold;
     }
 }
 

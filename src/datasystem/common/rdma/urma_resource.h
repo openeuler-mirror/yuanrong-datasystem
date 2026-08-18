@@ -48,6 +48,9 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
+#ifdef WITH_TESTS
+#include "datasystem/common/inject/inject_point.h"
+#endif
 
 #define URMA_DISABLE_COPY_AND_MOVE(CLASS)     \
     CLASS(const CLASS &) = delete;            \
@@ -115,7 +118,8 @@ public:
               std::string remoteInstanceId, uint64_t dataSize, OperationType operationType,
               std::atomic<int> *srcChipInflightCounter,
               std::shared_ptr<EventWaiter> waiter = nullptr,
-              std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt)
+              std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt,
+              bool observeGatherInflightDrain = false)
         : Event(requestId, std::move(waiter)),
           laneLease_(std::move(laneLease)),
           remoteAddress_(std::move(remoteAddress)),
@@ -123,6 +127,7 @@ public:
           dataSize_(dataSize),
           operationType_(operationType),
           srcChipInflightCounter_(srcChipInflightCounter),
+          observeGatherInflightDrain_(observeGatherInflightDrain),
           lateCompletionContext_(std::move(lateCompletionContext))
     {
         if (srcChipInflightCounter_ != nullptr) {
@@ -133,7 +138,12 @@ public:
     ~UrmaEvent() override
     {
         if (srcChipInflightCounter_ != nullptr) {
-            srcChipInflightCounter_->fetch_sub(1, std::memory_order_relaxed);
+            const auto previous = srcChipInflightCounter_->fetch_sub(1, std::memory_order_relaxed);
+#ifdef WITH_TESTS
+            if (observeGatherInflightDrain_ && previous == 1) {
+                INJECT_POINT_NO_RETURN("UrmaManager.GatherInflightCountersDrained");
+            }
+#endif
         }
     }
 
@@ -460,6 +470,7 @@ private:
     std::atomic<uint64_t> eventProcessingAndWaitLatencyUs_{ 0 };
     UrmaWriteTrace writeTrace_;
     std::atomic<int> *srcChipInflightCounter_{ nullptr };
+    bool observeGatherInflightDrain_{ false };
     Lifecycle lifecycle_{ Lifecycle::WAITING };
     std::optional<UrmaLateCompletionContext> lateCompletionContext_;
 };

@@ -53,6 +53,18 @@ bool ValidateSharedMemoryDistributionPolicy(const char *flagName, const std::str
     return false;
 }
 
+bool ValidateUbTransportArenaNum(const char *flagName, uint32_t value)
+{
+    constexpr uint32_t kMinArenaNum = 1;
+    constexpr uint32_t kMaxArenaNum = 32;
+    if (value < kMinArenaNum || value > kMaxArenaNum) {
+        LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value,
+                                   kMinArenaNum, kMaxArenaNum);
+        return false;
+    }
+    return true;
+}
+
 bool ValidateUbNumaRrType(const char *flagName, uint32_t value)
 {
     constexpr auto kMaxType = datasystem::UbNumaRrType::PER_POST;
@@ -231,6 +243,7 @@ DS_DEFINE_validator(urma_send_jetty_lane_refill_extra_size, &Validator::Validate
 DS_DEFINE_validator(urma_failover_success_rate_ratio, &ValidateUrmaFailoverSuccessRateRatio);
 DS_DEFINE_validator(urma_failover_min_sample_count, &ValidateUrmaFailoverMinSampleCount);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
+DS_DEFINE_validator(ub_transport_arena_num, &ValidateUbTransportArenaNum);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(remote_h2d_link_type, &ValidateRemoteH2DLinkType);
 DS_DEFINE_validator(remote_h2d_hccs_buffer_pool, &ValidateRemoteH2DHccsBufferPool);

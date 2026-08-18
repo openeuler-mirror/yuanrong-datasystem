@@ -1135,6 +1135,24 @@ TEST_F(FlagsTest, TestDoubleFlagAcceptsScientificNotation)
     FLAGS_double_flag = 1.0;
 }
 
+TEST_F(FlagsTest, UbTransportArenaNumDefaultsToFour)
+{
+    EXPECT_EQ(FLAGS_ub_transport_arena_num, 4u);
+}
+
+TEST_F(FlagsTest, UbTransportArenaNumAccepts32AndRejects33)
+{
+    const uint32_t oldArenaNum = FLAGS_ub_transport_arena_num;
+    std::string errMsg;
+
+    ASSERT_TRUE(SetCommandLineOption("ub_transport_arena_num", "32", errMsg));
+    EXPECT_EQ(FLAGS_ub_transport_arena_num, 32u);
+    ASSERT_FALSE(SetCommandLineOption("ub_transport_arena_num", "33", errMsg));
+    EXPECT_EQ(FLAGS_ub_transport_arena_num, 32u);
+
+    FLAGS_ub_transport_arena_num = oldArenaNum;
+}
+
 TEST_F(FlagsTest, GetExplicitDeclaredFlagsIncludesExplicitDefault)
 {
     const char *argv[] = { "./program", "-uint32_flag=32" };

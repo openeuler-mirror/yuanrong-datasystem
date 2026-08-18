@@ -2023,7 +2023,16 @@ TEST_F(KVCacheClientTest, CreateSetAndGetUsePageableMemoryWhilePinPending)
     ASSERT_EQ(std::memcmp(fastGet->ImmutableData(), singleValue.data(), singleValue.size()), 0);
 
     std::shared_ptr<Buffer> fastBuffer;
-    DS_ASSERT_OK(client->Create("pageable_fast_" + client->GenerateKey(), SHM_SIZE, param, fastBuffer));
+    Status fastCreateRc;
+    for (int retry = 0; retry < 500; ++retry) {
+        fastCreateRc = client->Create("pageable_fast_" + client->GenerateKey(), SHM_SIZE, param, fastBuffer);
+        if (fastCreateRc.IsOk()) {
+            break;
+        }
+        ASSERT_EQ(fastCreateRc.GetCode(), K_OUT_OF_MEMORY);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    DS_ASSERT_OK(fastCreateRc);
     ASSERT_NE(fastBuffer, nullptr);
 }
 

@@ -170,7 +170,7 @@ bool ShouldBuildUbNumaRangeTable()
 #ifdef USE_URMA
     // Initialization must use "configured/requested", not "ready": the range table is built from inside
     // UrmaManager::Init, before PublishClientUrmaRuntimeReady can run.
-    return IsUrmaRuntimeConfigured() && FLAGS_enable_ub_numa_affinity && IsRegisterWholeArenaEnabled();
+    return IsUrmaRuntimeConfigured() && IsRegisterWholeArenaEnabled();
 #else
     return false;
 #endif

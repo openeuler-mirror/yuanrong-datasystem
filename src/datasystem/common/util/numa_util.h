@@ -32,6 +32,12 @@ namespace datasystem {
 const uint8_t INVALID_NUMA_ID = std::numeric_limits<uint8_t>::max();
 const uint8_t INVALID_CHIP_ID = std::numeric_limits<uint8_t>::max();
 
+struct NumaBindingRange {
+    uint8_t *pointer;
+    size_t size;
+    int nodeId;
+};
+
 /**
  * @brief Parse Linux cpulist format (e.g., "0,2,4-6") into sorted CPU ids.
  * @param[in] cpuListRaw Raw cpulist string.
@@ -55,6 +61,34 @@ Status DistributeMemoryAcrossAllNumaNodes(void *pointer, size_t size);
  * @return Status of this call.
  */
 Status DistributeMemoryAcrossAffinityNumaNodes(void *pointer, size_t size);
+
+/**
+ * @brief Bind a memory range to one NUMA node.
+ * @param[in] pointer Memory range start address.
+ * @param[in] size Memory range size in bytes.
+ * @param[in] nodeId NUMA node id.
+ * @return Status of this call.
+ */
+Status BindMemoryToNumaNode(void *pointer, size_t size, int nodeId);
+
+/**
+ * @brief Get discovered NUMA node ids.
+ * @param[out] nodeIds Sorted NUMA node ids.
+ * @return Status of this call.
+ */
+Status GetNumaNodeIds(std::vector<int> &nodeIds);
+
+/**
+ * @brief Split one memory range into equal ranges and assign NUMA nodes round-robin.
+ * @param[in] pointer Memory range start address.
+ * @param[in] size Memory range size in bytes.
+ * @param[in] rangeCount Number of equal ranges.
+ * @param[in] nodeIds NUMA node ids in assignment order.
+ * @param[out] ranges Binding plan. Cleared on entry and on failure.
+ * @return Status of this call.
+ */
+Status BuildRoundRobinNumaBindingPlan(uint8_t *pointer, size_t size, uint32_t rangeCount,
+                                      const std::vector<int> &nodeIds, std::vector<NumaBindingRange> &ranges);
 
 /**
  * @brief Convert NUMA id to chip id used by transport logic.
