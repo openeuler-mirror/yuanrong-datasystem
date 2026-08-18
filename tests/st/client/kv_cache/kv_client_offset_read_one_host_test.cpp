@@ -21,9 +21,11 @@
 
 #include <unistd.h>
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -54,6 +56,7 @@ namespace st {
 namespace {
 const std::string HOST_IP = "127.0.0.1";
 constexpr int32_t FAILURE_REQUEST_TIMEOUT_MS = 3'000;
+
 }  // namespace
 
 class KVClientOffsetReadOneHostTest : public OCClientCommon,
@@ -1077,6 +1080,21 @@ public:
     }
 
 protected:
+    bool WaitForInjectCount(uint32_t workerIndex, const std::string &name, uint64_t expectedCount,
+                            int timeoutMs = 5'000)
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        do {
+            uint64_t count = 0;
+            if (cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, name, count).IsOk()
+                && count >= expectedCount) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        } while (std::chrono::steady_clock::now() < deadline);
+        return false;
+    }
+
     std::shared_ptr<KVClient> client_;
     std::shared_ptr<KVClient> client1_;
     uint64_t maxSize_ = 64 * 1024ul * 1024ul;
@@ -1096,6 +1114,148 @@ TEST_F(KVClientWithoutL2Test, TestReadKeyRemoteGet)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "set.objectIsInComplete", "1*call()"));
     buffers.clear();
     DS_ASSERT_OK(client_->Get({ key }, buffers));
+}
+
+class KVClientOffsetReadDeleteRaceTest : public KVClientWithoutL2Test {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.enableSpill = true;
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=10 -log_async=false -log_monitor=true -v=2 -spill_size_limit=67108864";
+        opts.numEtcd = 1;
+        opts.numWorkers = 2;
+        opts.numOBS = 0;
+        opts.enableDistributedMaster = "false";
+        opts.injectActions = "worker.Spill.Sync:return()";
+    }
+
+protected:
+    Status PrepareSpilledObject(const std::string &key, const std::string &data)
+    {
+        SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+        RETURN_IF_NOT_OK(client_->Set(key, data, param));
+        const std::string fillData(1 * 1024 * 1024, 'f');
+        for (int i = 0; i < 16; ++i) {
+            RETURN_IF_NOT_OK(client_->Set(key + "_fill_" + std::to_string(i), fillData, param));
+        }
+        return Status::OK();
+    }
+};
+
+TEST_F(KVClientOffsetReadDeleteRaceTest, TestOffsetReadDeleteRaceAfterWLock)
+{
+    constexpr uint32_t workerIndex = 0;
+    const std::string pausePoint = "worker.PreProcessGetObject.afterWLockBeforeReadObjectKV";
+    std::shared_ptr<KVClient> readClient;
+    std::shared_ptr<KVClient> deleteClient;
+    InitTestKVClient(workerIndex, readClient, 60'000, false, 5'000);
+    InitTestKVClient(workerIndex, deleteClient);
+
+    const auto key = GetStringUuid();
+    constexpr size_t dataSize = 4 * 1024;
+    const std::string data = randomData_.GetRandomString(dataSize);
+    DS_ASSERT_OK(PrepareSpilledObject(key, data));
+
+    uint64_t pauseBaseline = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, pausePoint, pauseBaseline));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, pausePoint, "1*pause()"));
+
+    std::vector<Optional<ReadOnlyBuffer>> buffers;
+    auto readFuture = std::async(std::launch::async, [&] {
+        std::vector<ReadParam> params{ ReadParam{ .key = key, .offset = 100, .size = 2000 } };
+        return readClient->Read(params, buffers);
+    });
+
+    bool paused = WaitForInjectCount(workerIndex, pausePoint, pauseBaseline + 1);
+    if (!paused) {
+        (void)cluster_->ClearInjectAction(WORKER, workerIndex, pausePoint);
+        auto rc = readFuture.get();
+        FAIL() << "Read did not pause after WLock before ReadObjectKV; object may not be spilled, read rc: "
+               << rc.ToString();
+    }
+
+    // The paused read already holds the SafeObject WLock. Del must not reset the object before ReadObjectKV is built.
+    auto delFuture = std::async(std::launch::async, [&] { return deleteClient->Del(key); });
+    auto delState = delFuture.wait_for(std::chrono::milliseconds(200));
+    if (delState != std::future_status::timeout) {
+        (void)cluster_->ClearInjectAction(WORKER, workerIndex, pausePoint);
+        auto readRc = readFuture.get();
+        auto delRc = delFuture.get();
+        FAIL() << "Delete finished while read holds WLock before ReadObjectKV; read rc: " << readRc.ToString()
+               << ", del rc: " << delRc.ToString();
+    }
+
+    (void)cluster_->ClearInjectAction(WORKER, workerIndex, pausePoint);
+
+    auto readRc = readFuture.get();
+    DS_ASSERT_OK(readRc);
+    ASSERT_EQ(buffers.size(), 1);
+    ASSERT_TRUE(buffers[0]);
+    ASSERT_EQ(buffers[0]->GetSize(), static_cast<int64_t>(2000));
+    std::string actual(reinterpret_cast<const char *>(buffers[0]->ImmutableData()), buffers[0]->GetSize());
+    ASSERT_EQ(actual, data.substr(100, 2000));
+
+    auto delRc = delFuture.get();
+    DS_ASSERT_OK(delRc);
+
+    Optional<ReadOnlyBuffer> deletedBuffer;
+    auto getDeletedRc = deleteClient->Get(key, deletedBuffer);
+    ASSERT_EQ(getDeletedRc.GetCode(), K_NOT_FOUND) << getDeletedRc.ToString();
+
+    const auto aliveKey = GetStringUuid();
+    DS_ASSERT_OK(deleteClient->Set(aliveKey, "alive", SetParam{}));
+    DS_ASSERT_OK(deleteClient->Del(aliveKey));
+}
+
+TEST_F(KVClientOffsetReadDeleteRaceTest, TestOffsetReadDeleteRaceBeforeWLock)
+{
+    constexpr uint32_t workerIndex = 0;
+    const std::string pausePoint = "worker.PreProcessGetObject.afterTableGetBeforeWLock";
+    std::shared_ptr<KVClient> readClient;
+    std::shared_ptr<KVClient> deleteClient;
+    InitTestKVClient(workerIndex, readClient, 60'000, false, 5'000);
+    InitTestKVClient(workerIndex, deleteClient);
+
+    const auto key = GetStringUuid();
+    constexpr size_t dataSize = 4 * 1024;
+    const std::string data = randomData_.GetRandomString(dataSize);
+    DS_ASSERT_OK(PrepareSpilledObject(key, data));
+
+    uint64_t pauseBaseline = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, pausePoint, pauseBaseline));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, pausePoint, "1*pause()"));
+
+    std::vector<Optional<ReadOnlyBuffer>> buffers;
+    auto readFuture = std::async(std::launch::async, [&] {
+        std::vector<ReadParam> params{ ReadParam{ .key = key, .offset = 100, .size = 2000 } };
+        return readClient->Read(params, buffers);
+    });
+
+    bool paused = WaitForInjectCount(workerIndex, pausePoint, pauseBaseline + 1);
+    if (!paused) {
+        (void)cluster_->ClearInjectAction(WORKER, workerIndex, pausePoint);
+        auto rc = readFuture.get();
+        FAIL() << "Read did not pause after objectTable Get before WLock; object may not be spilled, read rc: "
+               << rc.ToString();
+    }
+
+    Status delRc = deleteClient->Del(key);
+    if (delRc.IsError()) {
+        (void)cluster_->ClearInjectAction(WORKER, workerIndex, pausePoint);
+        auto rc = readFuture.get();
+        FAIL() << "Delete failed while read is paused before WLock; del rc: " << delRc.ToString()
+               << ", read rc: " << rc.ToString();
+    }
+
+    (void)cluster_->ClearInjectAction(WORKER, workerIndex, pausePoint);
+
+    auto readRc = readFuture.get();
+    ASSERT_EQ(readRc.GetCode(), K_NOT_FOUND) << readRc.ToString();
+
+    const auto aliveKey = GetStringUuid();
+    DS_ASSERT_OK(deleteClient->Set(aliveKey, "alive", SetParam{}));
+    DS_ASSERT_OK(deleteClient->Del(aliveKey));
 }
 
 class KVClientSpillTest : public KVClientWithoutL2Test {

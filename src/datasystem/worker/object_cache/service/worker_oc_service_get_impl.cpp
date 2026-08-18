@@ -777,7 +777,7 @@ Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, GetOb
         (void)remoteObjectKeys.emplace(readKey);
         return Status::OK();
     }
-    ReadObjectKV objectKV(readKey, *entry);
+    INJECT_POINT("worker.PreProcessGetObject.afterTableGetBeforeWLock");
     // If entry WLock is not found, it means the object is deleting locally.
     // Try to get object from remote.
     INJECT_POINT("local.get.sleep");
@@ -792,6 +792,8 @@ Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, GetOb
         (void)remoteObjectKeys.emplace(readKey);
         return Status::OK();
     }
+    INJECT_POINT("worker.PreProcessGetObject.afterWLockBeforeReadObjectKV");
+    ReadObjectKV objectKV(readKey, *entry);
     INJECT_POINT("set.objectIsInComplete", [&entry]() {
         entry->Get()->stateInfo.SetIncompleted(true);
         return Status::OK();
