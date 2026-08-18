@@ -66,10 +66,17 @@ RPC错误码 (范围: [1000, 2000))
 ==================================================  =========  ==================================================================
 ``StatusCode::K_RPC_CANCELLED``                     1000       表示请求的连接通道被意外关闭
 ``StatusCode::K_RPC_DEADLINE_EXCEEDED``             1001       表示RPC请求超时
-``StatusCode::K_RPC_UNAVAILABLE``                   1002       表示请求发生超时
+``StatusCode::K_RPC_UNAVAILABLE``                   1002       表示 RPC 对端不可用（旧语义，新代码应优先返回 ``K_RPC_PEER_DEAD`` 或 ``K_RPC_NETWORK_BLIP``）
 ``StatusCode::K_RPC_STREAM_END``                    1003       表示RPC流结束
 ``StatusCode::K_URMA_ERROR``                         1004       表示发生了URMA相关的错误
 ``StatusCode::K_RDMA_ERROR``                         1005       表示发生了RDMA相关的错误
+``StatusCode::K_URMA_NEED_CONNECT``                  1006       表示 URMA(UB) 连接断开或尚未建立，需要重新建立连接后才能继续传输
+``StatusCode::K_RDMA_NEED_CONNECT``                 1007       表示 RDMA(UCP) 连接断开或尚未建立，需要重新建立连接（与 ``K_URMA_NEED_CONNECT`` 对应的旧栈语义，当前代码路径默认不返回此码）
+``StatusCode::K_URMA_TRY_AGAIN``                    1008       表示 URMA 操作因资源暂不可用（如无空闲 send Jetty、Jetty 正在关闭）暂未完成，调用方可重试
+``StatusCode::K_URMA_CONNECT_FAILED``                1009       表示 URMA 建链失败（如 Urma 未启用、jetty 建链失败等）
+``StatusCode::K_URMA_WAIT_TIMEOUT``                 1010       表示 URMA 等待操作完成超时
+``StatusCode::K_RPC_PEER_DEAD``                     1011       表示 RPC 对端进程已死或不可达（常见于 worker 缩容、pod 删除等场景；如对端 socket 失败、连接被拒绝、host down、logoff/close 等），不可重试，调用方应快速失败并清理本地缓存的 channel/stub
+``StatusCode::K_RPC_NETWORK_BLIP``                  1012       表示 RPC 网络瞬断（短暂不可达，如 EOF、SSL 错误、连接 reset/abort、host/network unreachable 等），可重试，旧 ``K_RPC_UNAVAILABLE`` 的重试策略自动覆盖
 ==================================================  =========  ==================================================================
 
 对象错误码 (范围: [2000, 3000))
