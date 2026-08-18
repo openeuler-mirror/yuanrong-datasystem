@@ -52,6 +52,10 @@ StatusCode
 ``StatusCode::K_CLIENT_DEADLOCK``                    33         表示客户端请求冲突，处理超时
 ``StatusCode::K_LRU_HARD_LIMIT``                     34         表示LRU硬限制
 ``StatusCode::K_LRU_SOFT_LIMIT``                     35         表示LRU软限制
+``StatusCode::K_NOT_SUPPORTED``                      36         表示当前能力不支持
+``StatusCode::K_NO_AVAILABLE_WORKER``                37         表示没有可用于路由的Worker
+``StatusCode::K_NOT_OWNER``                          38         表示请求被路由到非元数据属主Worker
+``StatusCode::K_METADATA_OWNER_UNAVAILABLE``         39         表示元数据发布结果不确定，调用方不得自动重放同一写请求
 ==================================================  =========  ==================================================================
 
 RPC错误码 (范围: [1000, 2000))

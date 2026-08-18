@@ -1273,9 +1273,12 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | io_thread_nice | int | `0` | 否 | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
 | enable_sched_runtime | bool | `true` | 否 | 是否允许指定 worker 线程设置 Linux 调度 runtime。当前仅用于 URMA JFC poll 线程；设置为 `false` 时保留线程继承的调度参数且不调用 `sched_setattr`。 |
 | zmq_chunk_sz | int | `1048576` | 否 | 并行负载分块大小配置（以字节为单位） |
+| brpc_event_dispatcher_num | int | `0` | 否 | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | max_rpc_session_num | int | `2048` | 否 | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | remote_send_thread_num | int | `8` | 否 | 配置服务端用于将元素发送到远程工作线程的线程数量 |
 | stream_idle_time_s | int | `300` | 否 | 配置流的空闲时间。默认值为300秒（5分钟） |
+
+`brpc_event_dispatcher_num` 与 `rpc_thread_num`、`oc_thread_num` 的职责不同。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。业务处理、锁竞争、服务线程池饱和或单监听 fd 的 accept 是瓶颈时，增大该值通常无效。
 
 > **升级提示：** `io_thread_nice` 的新默认值 `0` 仅影响新生成的配置文件，或启动时未显式传入该参数的场景。已有 `worker_config.json` 中的 `-15` 仍会作为显式配置在后续启动时使用；如需停用 nice 调整，请在启动 worker 前手动将其改为 `0`。
 
@@ -1335,11 +1338,11 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
 |-----|------|---------|-----|-------------|
 | enable_memory_rebalance | bool | `false` | 否 | 是否开启由 master 调度的内存均衡能力。开启后，master 会将高共享内存使用率 worker 上的对象迁移到低使用率 worker，以均衡集群内 object cache 的共享内存压力 |
-| rebalance_source_usage_percent | uint32 | `70` | 否 | source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。取值范围：1-100 |
+| rebalance_source_usage_percent | uint32 | `80` | 否 | source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。该参数为双重语义：同一百分比同时作为 target worker 的迁移上限，当 target 投影使用率达到该值时停止后续迁移批次。默认值 80% 与 eviction 低水位一致；调高该值会让 target 上限向 eviction 高水位（默认 90%）靠拢，更易触发驱逐。取值范围：1-100 |
 | rebalance_usage_gap_percent | uint32 | `20` | 否 | source 与 target worker 之间的最小共享内存使用率差值（百分比）。仅当差值不小于该值时才下发迁移任务。取值范围：1-100 |
 | rebalance_task_report_grace_ms | uint32 | `30000` | 否 | 均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试 |
 
-> 兼容性说明：`rebalance_cooldown_s` 与 `rebalance_max_migrate_bytes_per_round` 已移除，冷却时长固定为 60s。单次任务迁移上限由原 1GB/轮改为 300MB/批的连续反馈回路：master 在 30s 调度周期内钉死总迁移预算（`min(usageGap/2, headroomToWatermark, targetAvail)`），worker 每完成一批 300MB 迁移即上报目标剩余内存，master 据此决策继续发放下一批或停止（预算耗尽或目标达 70% 水位线）。升级前请从 worker 启动参数（如 `workerGflagParams`/`extraArgs`）和自定义 `worker_config.json` 中移除这两个配置项，否则 worker 会因识别到未知 flag 而启动失败。
+> 兼容性说明：`rebalance_cooldown_s` 与 `rebalance_max_migrate_bytes_per_round` 已移除，冷却时长固定为 60s。单次任务迁移上限由原 1GB/轮改为 300MB/批的连续反馈回路：master 在 30s 调度周期内钉死总迁移预算（`min(usageGap/2, headroomToWatermark, targetAvail)`），worker 每完成一批 300MB 迁移即上报目标剩余内存，master 据此决策继续发放下一批或停止（预算耗尽或目标达水位线，即 `rebalance_source_usage_percent`，默认 80%）。升级前请从 worker 启动参数（如 `workerGflagParams`/`extraArgs`）和自定义 `worker_config.json` 中移除这两个配置项，否则 worker 会因识别到未知 flag 而启动失败。
 
 #### 日志与可观测相关配置
 

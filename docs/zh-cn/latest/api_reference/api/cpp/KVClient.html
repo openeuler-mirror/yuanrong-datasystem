@@ -721,7 +721,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><strong>buffer</strong> - 共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 。</p></li>
 </ul>
 </dd>
-<dt>返回值</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回值</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功。返回
+<code class="docutils literal notranslate"><span class="pre">StatusCode::K_METADATA_OWNER_UNAVAILABLE</span></code> 表示元数据发布结果不确定，调用方不得自动重放同一写请求。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -738,7 +739,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><strong>param</strong> - 设置参数，详见 <a class="reference internal" href="struct-SetParam.html#_CPPv48SetParam" title="SetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">SetParam</span></code></a> 章节。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功。返回
+<code class="docutils literal notranslate"><span class="pre">StatusCode::K_METADATA_OWNER_UNAVAILABLE</span></code> 表示元数据发布结果不确定，调用方不得自动重放同一写请求。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -784,7 +786,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><strong>buffers</strong> - 需要缓存到数据系统的共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 数组。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>部分对象设置成功时也返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code>，该重载不提供逐 key 失败列表。整批对象均失败且
+元数据发布结果不确定时可能返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_METADATA_OWNER_UNAVAILABLE</span></code>，调用方不得自动重放同一写请求。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -802,7 +805,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><strong>param</strong> - 设置参数，详见 <a class="reference internal" href="struct-MSetParam.html#_CPPv49MSetParam" title="MSetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">MSetParam</span></code></a> 章节。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>至少一个 key 设置成功时返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code>，调用方需通过 <code class="docutils literal notranslate"><span class="pre">outFailedKeys</span></code> 判断逐 key 结果。
+整批 key 均失败且元数据发布结果不确定时可能返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_METADATA_OWNER_UNAVAILABLE</span></code>，
+调用方不得自动重放同一写请求。</p>
 </dd>
 </dl>
 </dd></dl>

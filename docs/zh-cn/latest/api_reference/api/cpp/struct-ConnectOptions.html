@@ -691,11 +691,20 @@ Get 类接口的 <code class="docutils literal notranslate"><span class="pre">su
 </dd></dl>
 
 <dl class="cpp member">
+<dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions16enableLocalCacheE">
+<span id="_CPPv3N14ConnectOptions16enableLocalCacheE"></span><span id="_CPPv2N14ConnectOptions16enableLocalCacheE"></span><span id="ConnectOptions::enableLocalCache__b"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">enableLocalCache</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions16enableLocalCacheE" title="Link to this definition">¶</a><br /></dt>
+<dd><p>控制 Get/MGet 的读路径。为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时，Get/MGet 固定走当前绑定 Worker 的 legacy 路径；为
+<code class="docutils literal notranslate"><span class="pre">false</span></code> 时，Get/MGet 固定通过 TransportLayer 按 metadata owner 执行 <code class="docutils literal notranslate"><span class="pre">QueryAndGet</span></code>，再按
+metadata 返回的实际副本位置读取数据。同机副本且 SHM 可用时，TransportLayer 仍会使用 SHM。
+默认值：<code class="docutils literal notranslate"><span class="pre">true</span></code>。</p>
+</dd></dl>
+
+<dl class="cpp member">
 <dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions19dataPlacementPolicyE">
 <span id="_CPPv3N14ConnectOptions19dataPlacementPolicyE"></span><span id="_CPPv2N14ConnectOptions19dataPlacementPolicyE"></span><span id="ConnectOptions::dataPlacementPolicy__DataPlacementPolicy"></span><span class="n"><span class="pre">DataPlacementPolicy</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">dataPlacementPolicy</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DataPlacementPolicy</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">PREFERRED_SAME_NODE</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions19dataPlacementPolicyE" title="Link to this definition">¶</a><br /></dt>
 <dd><p><code class="docutils literal notranslate"><span class="pre">enableLocalCache=false</span></code> 时 Set/MSet 使用的数据放置策略。该配置按客户端实例生效，
 默认值为 <code class="docutils literal notranslate"><span class="pre">PREFERRED_SAME_NODE</span></code>，不受同一进程中其他 <code class="docutils literal notranslate"><span class="pre">KVClient</span></code> 的初始化顺序影响。
-该配置不改变 Get/MGet 的现有路由和传输行为。</p>
+该配置不改变 Get/MGet 的 metadata owner 路由和传输行为。</p>
 </dd></dl>
 
 <dl class="cpp member">
@@ -824,6 +833,7 @@ Client-Local-Worker RH2D 路径。</p>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions9secretKeyE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::secretKey</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions8tenantIdE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::tenantId</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions25enableCrossNodeConnectionE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableCrossNodeConnection</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4N14ConnectOptions16enableLocalCacheE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableLocalCache</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions19dataPlacementPolicyE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::dataPlacementPolicy</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions15enableRemoteH2DE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableRemoteH2D</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions29enableClientDirectPipelineH2DE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableClientDirectPipelineH2D</span></code></a></li>

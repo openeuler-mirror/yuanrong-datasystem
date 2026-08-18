@@ -955,32 +955,37 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否使用 brpc 替代 ZMQ 作为 RPC 通信传输。启用后 brpc 独占 worker 的 TCP 端口（与 <code class="docutils literal notranslate"><span class="pre">worker_address</span></code> 同端口，无端口偏移），ZMQ 的 TCP 端点不再创建，上述 ZMQ 专属参数（<code class="docutils literal notranslate"><span class="pre">zmqServerIoContext</span></code>、<code class="docutils literal notranslate"><span class="pre">zmqClientIoContext</span></code>、<code class="docutils literal notranslate"><span class="pre">zmqClientIoThread</span></code>、<code class="docutils literal notranslate"><span class="pre">zmqChunkSz</span></code>）在 brpc 模式下不生效。各服务的线程池参数（<code class="docutils literal notranslate"><span class="pre">rpcThreadNum</span></code>、<code class="docutils literal notranslate"><span class="pre">ocThreadNum</span></code>、<code class="docutils literal notranslate"><span class="pre">scThreadNum</span></code> 等）仍然生效</p></td>
 </tr>
-<tr class="row-even"><td><p>global.rpc.brpc.brpcServerNumThreads</p></td>
+<tr class="row-even"><td><p>global.rpc.brpc.eventDispatcherNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。该值仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.rpc.brpc.brpcServerNumThreads</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>brpc 服务端工作线程数（bthread 工作线程池大小）</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.brpc.brpcMaxConcurrency</p></td>
+<tr class="row-even"><td><p>global.rpc.brpc.brpcMaxConcurrency</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
 <td><p>单个 brpc 服务的最大并发在途 RPC 数，0 表示不限制。推荐值为 <code class="docutils literal notranslate"><span class="pre">brpcServerNumThreads</span></code> 的 2 倍（如 64 线程对应 128）。超过该值时 brpc 会立即向客户端返回 ELIMIT，避免慢请求耗尽 bthread 导致 OOM。该值不得小于 <code class="docutils literal notranslate"><span class="pre">brpcServerNumThreads</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>global.rpc.maxRpcSessionNum</p></td>
+<tr class="row-odd"><td><p>global.rpc.maxRpcSessionNum</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
 <td><p>单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000]</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.streamIdleTimes</p></td>
+<tr class="row-even"><td><p>global.rpc.streamIdleTimes</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
 <td><p>配置流的空闲时间。默认值为300秒（5分钟）</p></td>
 </tr>
-<tr class="row-even"><td><p>global.rpc.remoteSendThreadNum</p></td>
+<tr class="row-odd"><td><p>global.rpc.remoteSendThreadNum</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>配置服务端用于将元素发送到远程工作线程的线程数量</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.scThreadNum</p></td>
+<tr class="row-even"><td><p>global.rpc.scThreadNum</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
 <td><p>配置流缓存master工作的最大线程数</p></td>
@@ -988,6 +993,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </tbody>
 </table>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">eventDispatcherNum</span></code> 不等同于业务 RPC 线程数。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 <code class="docutils literal notranslate"><span class="pre">event_dispatcher_read_latency</span></code> 与 handler 入场时序判断。若瓶颈位于业务处理、锁竞争、<code class="docutils literal notranslate"><span class="pre">rpcThreadNum</span></code>/<code class="docutils literal notranslate"><span class="pre">ocThreadNum</span></code> 线程池或单监听 fd 的 accept，增大该值通常无效；连接较少或 CPU 资源紧张时应保持默认值。</p>
 <p><strong>样例</strong>：
 配置一个Unix Domain Socket路径为 “/home/uds”，并使用31501作为openYuanrong datasystem DaemonSet的监听端口号</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
@@ -1239,8 +1245,8 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-odd"><td><p>global.memoryRebalance.rebalanceSourceUsagePercent</p></td>
 <td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">70</span></code></p></td>
-<td><p>source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。取值范围：1-100</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
+<td><p>source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。该参数为双重语义：同一百分比同时作为 target worker 的迁移上限，当 target 投影使用率达到该值时停止后续迁移批次。默认值 80% 与 eviction 低水位一致；调高该值会让 target 上限向 eviction 高水位（默认 90%）靠拢，更易触发驱逐。取值范围：1-100</p></td>
 </tr>
 <tr class="row-even"><td><p>global.memoryRebalance.rebalanceUsageGapPercent</p></td>
 <td><p>int</p></td>
@@ -1259,13 +1265,13 @@ document.addEventListener('DOMContentLoaded', function() {
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">memoryRebalance</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="w">    </span><span class="nt">rebalanceSourceUsagePercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">70</span>
+<span class="w">    </span><span class="nt">rebalanceSourceUsagePercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
 <span class="w">    </span><span class="nt">rebalanceUsageGapPercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20</span>
 <span class="w">    </span><span class="nt">rebalanceTaskReportGraceMs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30000</span>
 </pre></div>
 </div>
 <blockquote>
-<div><p>兼容性说明：<code class="docutils literal notranslate"><span class="pre">rebalanceCooldownS</span></code> 与 <code class="docutils literal notranslate"><span class="pre">rebalanceMaxMigrateBytesPerRound</span></code> 已移除，冷却时长固定为 60s。单次任务迁移上限由原 1GB/轮改为 300MB/批的连续反馈回路：master 在 30s 调度周期内钉死总迁移预算（<code class="docutils literal notranslate"><span class="pre">min(usageGap/2,</span> <span class="pre">headroomToWatermark,</span> <span class="pre">targetAvail)</span></code>），worker 每完成一批 300MB 迁移即上报目标剩余内存，master 据此决策继续发放下一批或停止（预算耗尽或目标达 70% 水位线）。升级前请从自定义 <code class="docutils literal notranslate"><span class="pre">workerGflagParams</span></code>/<code class="docutils literal notranslate"><span class="pre">extraArgs</span></code> 及历史 <code class="docutils literal notranslate"><span class="pre">values.yaml</span></code> 中移除这两项，否则 worker 会因识别到未知 flag 而启动失败。</p>
+<div><p>兼容性说明：<code class="docutils literal notranslate"><span class="pre">rebalanceCooldownS</span></code> 与 <code class="docutils literal notranslate"><span class="pre">rebalanceMaxMigrateBytesPerRound</span></code> 已移除，冷却时长固定为 60s。单次任务迁移上限由原 1GB/轮改为 300MB/批的连续反馈回路：master 在 30s 调度周期内钉死总迁移预算（<code class="docutils literal notranslate"><span class="pre">min(usageGap/2,</span> <span class="pre">headroomToWatermark,</span> <span class="pre">targetAvail)</span></code>），worker 每完成一批 300MB 迁移即上报目标剩余内存，master 据此决策继续发放下一批或停止（预算耗尽或目标达水位线，即 <code class="docutils literal notranslate"><span class="pre">rebalance_source_usage_percent</span></code>，默认 80%）。升级前请从自定义 <code class="docutils literal notranslate"><span class="pre">workerGflagParams</span></code>/<code class="docutils literal notranslate"><span class="pre">extraArgs</span></code> 及历史 <code class="docutils literal notranslate"><span class="pre">values.yaml</span></code> 中移除这两项，否则 worker 会因识别到未知 flag 而启动失败。</p>
 </div></blockquote>
 </section>
 <section id="id6">

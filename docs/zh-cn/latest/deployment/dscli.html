@@ -2321,19 +2321,25 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p>否</p></td>
 <td><p>并行负载分块大小配置（以字节为单位）</p></td>
 </tr>
-<tr class="row-odd"><td><p>max_rpc_session_num</p></td>
+<tr class="row-odd"><td><p>brpc_event_dispatcher_num</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>否</p></td>
+<td><p>brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker</p></td>
+</tr>
+<tr class="row-even"><td><p>max_rpc_session_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
 <td><p>否</p></td>
 <td><p>单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000]</p></td>
 </tr>
-<tr class="row-even"><td><p>remote_send_thread_num</p></td>
+<tr class="row-odd"><td><p>remote_send_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>否</p></td>
 <td><p>配置服务端用于将元素发送到远程工作线程的线程数量</p></td>
 </tr>
-<tr class="row-odd"><td><p>stream_idle_time_s</p></td>
+<tr class="row-even"><td><p>stream_idle_time_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
 <td><p>否</p></td>
@@ -2342,6 +2348,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 </tbody>
 </table>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">brpc_event_dispatcher_num</span></code> 与 <code class="docutils literal notranslate"><span class="pre">rpc_thread_num</span></code>、<code class="docutils literal notranslate"><span class="pre">oc_thread_num</span></code> 的职责不同。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 <code class="docutils literal notranslate"><span class="pre">event_dispatcher_read_latency</span></code> 与 handler 入场时序判断。业务处理、锁竞争、服务线程池饱和或单监听 fd 的 accept 是瓶颈时，增大该值通常无效。</p>
 <blockquote>
 <div><p><strong>升级提示：</strong> <code class="docutils literal notranslate"><span class="pre">io_thread_nice</span></code> 的新默认值 <code class="docutils literal notranslate"><span class="pre">0</span></code> 仅影响新生成的配置文件，或启动时未显式传入该参数的场景。已有 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">-15</span></code> 仍会作为显式配置在后续启动时使用；如需停用 nice 调整，请在启动 worker 前手动将其改为 <code class="docutils literal notranslate"><span class="pre">0</span></code>。</p>
 </div></blockquote>
@@ -2621,9 +2628,9 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 </tr>
 <tr class="row-odd"><td><p>rebalance_source_usage_percent</p></td>
 <td><p>uint32</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">70</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
 <td><p>否</p></td>
-<td><p>source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。取值范围：1-100</p></td>
+<td><p>source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。该参数为双重语义：同一百分比同时作为 target worker 的迁移上限，当 target 投影使用率达到该值时停止后续迁移批次。默认值 80% 与 eviction 低水位一致；调高该值会让 target 上限向 eviction 高水位（默认 90%）靠拢，更易触发驱逐。取值范围：1-100</p></td>
 </tr>
 <tr class="row-even"><td><p>rebalance_usage_gap_percent</p></td>
 <td><p>uint32</p></td>
@@ -2641,7 +2648,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 </table>
 </div>
 <blockquote>
-<div><p>兼容性说明：<code class="docutils literal notranslate"><span class="pre">rebalance_cooldown_s</span></code> 与 <code class="docutils literal notranslate"><span class="pre">rebalance_max_migrate_bytes_per_round</span></code> 已移除，冷却时长固定为 60s。单次任务迁移上限由原 1GB/轮改为 300MB/批的连续反馈回路：master 在 30s 调度周期内钉死总迁移预算（<code class="docutils literal notranslate"><span class="pre">min(usageGap/2,</span> <span class="pre">headroomToWatermark,</span> <span class="pre">targetAvail)</span></code>），worker 每完成一批 300MB 迁移即上报目标剩余内存，master 据此决策继续发放下一批或停止（预算耗尽或目标达 70% 水位线）。升级前请从 worker 启动参数（如 <code class="docutils literal notranslate"><span class="pre">workerGflagParams</span></code>/<code class="docutils literal notranslate"><span class="pre">extraArgs</span></code>）和自定义 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 中移除这两个配置项，否则 worker 会因识别到未知 flag 而启动失败。</p>
+<div><p>兼容性说明：<code class="docutils literal notranslate"><span class="pre">rebalance_cooldown_s</span></code> 与 <code class="docutils literal notranslate"><span class="pre">rebalance_max_migrate_bytes_per_round</span></code> 已移除，冷却时长固定为 60s。单次任务迁移上限由原 1GB/轮改为 300MB/批的连续反馈回路：master 在 30s 调度周期内钉死总迁移预算（<code class="docutils literal notranslate"><span class="pre">min(usageGap/2,</span> <span class="pre">headroomToWatermark,</span> <span class="pre">targetAvail)</span></code>），worker 每完成一批 300MB 迁移即上报目标剩余内存，master 据此决策继续发放下一批或停止（预算耗尽或目标达水位线，即 <code class="docutils literal notranslate"><span class="pre">rebalance_source_usage_percent</span></code>，默认 80%）。升级前请从 worker 启动参数（如 <code class="docutils literal notranslate"><span class="pre">workerGflagParams</span></code>/<code class="docutils literal notranslate"><span class="pre">extraArgs</span></code>）和自定义 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 中移除这两个配置项，否则 worker 会因识别到未知 flag 而启动失败。</p>
 </div></blockquote>
 </section>
 <section id="id26">
