@@ -58,10 +58,38 @@ Status BuildWatchedTopology(const CoordinationEvent &event, std::shared_ptr<cons
     return TopologySnapshot::Create(std::move(state), event.revision, std::move(digest), snapshot);
 }
 
-std::string MembershipDigest(const std::vector<MembershipRecord> &memberships)
+void CollectTopologyMemberships(const std::vector<MembershipRecord> &memberships,
+                                const TopologySnapshot &topology,
+                                std::vector<MembershipRecord> &scoped)
+{
+    auto memberIter = topology.Members().begin();
+    for (const auto &record : memberships) {
+        while (memberIter != topology.Members().end() && memberIter->identity.address < record.address) {
+            ++memberIter;
+        }
+        if (memberIter != topology.Members().end() && memberIter->identity.address == record.address) {
+            scoped.push_back(record);
+        }
+    }
+}
+
+std::string MembershipDigest(const std::vector<MembershipRecord> &memberships,
+                             const TopologySnapshot *topologyScope = nullptr)
 {
     std::string seed;
+    size_t memberIndex = 0;
     for (const auto &record : memberships) {
+        if (topologyScope != nullptr) {
+            const auto &topologyMembers = topologyScope->Members();
+            while (memberIndex < topologyMembers.size()
+                   && topologyMembers[memberIndex].identity.address < record.address) {
+                ++memberIndex;
+            }
+            if (memberIndex == topologyMembers.size()
+                || topologyMembers[memberIndex].identity.address != record.address) {
+                continue;
+            }
+        }
         seed.append(record.address).push_back('\0');
         seed.append(std::to_string(static_cast<uint32_t>(record.state))).push_back('\0');
         seed.append(std::to_string(record.timestamp)).push_back('\0');
@@ -674,7 +702,7 @@ Status TopologyController::WaitForReconcile(bool immediate, size_t &drained)
     if (scaleInCollect_.has_value() && scaleInCollect_->deadline < wakeDeadline) {
         wakeDeadline = scaleInCollect_->deadline;
     }
-    if (scaleOutCollect_.has_value() && scaleOutCollect_->deadline < wakeDeadline) {
+    if (!activeBatchObserved_ && scaleOutCollect_.has_value() && scaleOutCollect_->deadline < wakeDeadline) {
         wakeDeadline = scaleOutCollect_->deadline;
     }
     const auto steadyNow = std::chrono::steady_clock::now();
@@ -814,6 +842,7 @@ Status TopologyController::RecoverFromLatestTopology()
             return membershipStatus;
         }
     }
+    activeBatchObserved_ = latest->GetActiveBatch().has_value();
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         diagnostics_.topologyVersion = latest->Version();
@@ -904,13 +933,24 @@ Status TopologyController::ReconcileDerivedState(const TopologySnapshot &latest,
 Status TopologyController::PrepareDerivedGeneration(const TopologySnapshot &latest,
                                                     const std::vector<MembershipRecord> &memberships)
 {
-    const auto membershipDigest = options_.materializeRestartFacts ? MembershipDigest(memberships) : "";
+    const bool scopeMembershipsToTopology =
+        options_.materializeRestartFacts && latest.GetActiveBatch().has_value();
+    const auto membershipDigest = options_.materializeRestartFacts
+                                      ? MembershipDigest(memberships, scopeMembershipsToTopology ? &latest : nullptr)
+                                      : "";
     if (derivedTopologyVersion_ == latest.Version() && derivedMembershipDigest_ == membershipDigest) {
         return Status::OK();
     }
+    std::vector<MembershipRecord> scopedMemberships;
+    const auto *generationMemberships = &memberships;
+    if (scopeMembershipsToTopology) {
+        scopedMemberships.reserve(std::min(memberships.size(), latest.Members().size()));
+        CollectTopologyMemberships(memberships, latest, scopedMemberships);
+        generationMemberships = &scopedMemberships;
+    }
     ExpectedDerivedState candidate;
-    RETURN_IF_NOT_OK(
-        materializer_.RebuildExpected(latest, algorithm_, memberships, options_.materializeRestartFacts, candidate));
+    RETURN_IF_NOT_OK(materializer_.RebuildExpected(latest, algorithm_, *generationMemberships,
+                                                   options_.materializeRestartFacts, candidate));
     expectedDerivedState_ = std::move(candidate);
     derivedTopologyVersion_ = latest.Version();
     derivedMembershipDigest_ = membershipDigest;
@@ -2131,6 +2171,61 @@ Status TopologyController::ApplyReadyMembershipFacts(TopologyState &next, const 
     return Status::OK();
 }
 
+bool TopologyController::ShouldApplyReadyScaleOutAdmission(
+    const TopologySnapshot &latest, const std::vector<MembershipRecord> &ready,
+    const std::unordered_set<std::string> &known)
+{
+    const auto hasUnknownReady = [&ready, &known]() {
+        return std::any_of(ready.begin(), ready.end(), [&known](const auto &record) {
+            return known.count(record.address) == 0;
+        });
+    };
+    if (latest.GetActiveBatch().has_value()) {
+        if (!latest.ClusterHasInit()) {
+            return true;
+        }
+        const bool unknownReadyObserved = hasUnknownReady();
+        if (!unknownReadyObserved) {
+            if (scaleOutCollect_.has_value() && scaleOutCollect_->awaitingAdmission) {
+                ClearBatchCollectState(TopologyChangeType::SCALE_OUT, "deferred_candidate_gone");
+            }
+            return false;
+        }
+        if (options_.scaleOutCollectWindow.count() > 0
+            && (!scaleOutCollect_.has_value() || !scaleOutCollect_->awaitingAdmission)) {
+            scaleOutCollect_ =
+                BatchCollectState{ options_.now() + options_.scaleOutCollectWindow, false, true };
+        }
+        return false;
+    }
+    if (!scaleOutCollect_.has_value()) {
+        return true;
+    }
+    if (!hasUnknownReady()) {
+        return false;
+    }
+    std::vector<MemberIdentity> leaving;
+    std::vector<MemberIdentity> joining;
+    CollectNextBatchCandidates(latest, ready, leaving, joining);
+    const bool hasReadyInitial = !joining.empty();
+    if (!scaleOutCollect_->awaitingAdmission && !hasReadyInitial) {
+        ClearBatchCollectState(TopologyChangeType::SCALE_OUT, "previous_cohort_consumed");
+    }
+    if (!scaleOutCollect_.has_value() || options_.now() < scaleOutCollect_->deadline) {
+        return true;
+    }
+    if (scaleOutCollect_->awaitingAdmission && hasReadyInitial) {
+        scaleOutCollect_->awaitingAdmission = false;
+    }
+    if (scaleOutCollect_->awaitingAdmission) {
+        return true;
+    }
+    if (!hasReadyInitial) {
+        ClearBatchCollectState(TopologyChangeType::SCALE_OUT, "collected_candidate_gone");
+    }
+    return !hasReadyInitial;
+}
+
 void TopologyController::LogMembershipFactsCommit(uint64_t committedVersion,
                                                   const std::vector<MemberIdentity> &admittedLeaving,
                                                   const std::vector<MemberIdentity> &admittedJoining) const
@@ -2157,7 +2252,9 @@ Status TopologyController::CommitMembershipFacts(const TopologySnapshot &latest,
     std::vector<MemberIdentity> admittedLeaving;
     std::vector<MemberIdentity> admittedJoining;
     ApplyExitingMembershipFacts(next, exiting, known, admittedLeaving, changed);
-    RETURN_IF_NOT_OK(ApplyReadyMembershipFacts(next, ready, known, admittedJoining, changed));
+    if (ShouldApplyReadyScaleOutAdmission(latest, ready, known)) {
+        RETURN_IF_NOT_OK(ApplyReadyMembershipFacts(next, ready, known, admittedJoining, changed));
+    }
     if (changed == 0) {
         return Status::OK();
     }
@@ -2171,6 +2268,9 @@ Status TopologyController::CommitMembershipFacts(const TopologySnapshot &latest,
         if (latest.ClusterHasInit() && !admittedJoining.empty() && options_.scaleOutCollectWindow.count() > 0
             && !scaleOutCollect_.has_value()) {
             scaleOutCollect_ = BatchCollectState{ options_.now() + options_.scaleOutCollectWindow };
+        }
+        if (!admittedJoining.empty() && scaleOutCollect_.has_value()) {
+            scaleOutCollect_->awaitingAdmission = false;
         }
     }
     return rc;
@@ -2437,7 +2537,6 @@ Status TopologyController::TryStartNextBatch(const TopologySnapshot &latest,
 {
     if (latest.GetActiveBatch().has_value()) {
         ClearBatchCollectState(TopologyChangeType::SCALE_IN, "active_batch");
-        ClearBatchCollectState(TopologyChangeType::SCALE_OUT, "active_batch");
         return Status::OK();
     }
     std::vector<MemberIdentity> leaving;

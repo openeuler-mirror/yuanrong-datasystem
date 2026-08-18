@@ -169,7 +169,16 @@
   migration; an initialized cluster starts one multi-member ScaleOut batch. While no batch is active, READY ScaleOut
   candidates take priority over pending `PRE_LEAVING` ScaleIn candidates, so a replacement Worker reaches
   `JOINING`/`ACTIVE` before old committed owners enter ScaleIn. Once any batch is active, later ordinary candidates wait
-  and never preempt it. Failure remains higher priority.
+  and never preempt it. Their first observation starts the next ScaleOut collection deadline, but they remain
+  membership-only until the active batch finalizes; this keeps the active topology generation and restart-fact
+  recipients stable. After finalization the Controller exact-rereads membership, admits the still-valid candidates, and
+  starts the next batch immediately when that preserved deadline has already expired. An expired next-batch collection
+  deadline does not wake-spin while a batch is active. At expiry, an `INITIAL` candidate in the authoritative topology
+  reconciles a process-local admission whose CAS succeeded but exact read-back failed, including another Controller's
+  equivalent commit. Before reusing a non-expired admitted-candidate deadline, the Controller also revalidates that a
+  READY `INITIAL` still exists; if another Controller already consumed that cohort, the next unknown READY starts a new
+  full window. Once a no-batch collection expires with valid `INITIAL` candidates, later READY arrivals are left for the
+  following cohort instead of starving the closed cohort. Failure remains higher priority.
 - Repeated expected backend-access failures while already in `CONTROL_DEGRADED` still refresh the diagnostic
   `lastError`, but the warning log is sampled. State transitions and unexpected runtime failures remain unsampled.
 - Topology observability is carried by structured `CLUSTER_*` logs on the low-frequency control path: watch events and

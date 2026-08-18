@@ -228,6 +228,7 @@ private:
     struct BatchCollectState {
         std::chrono::steady_clock::time_point deadline;
         bool started{ false };
+        bool awaitingAdmission{ false };
     };
 
     Status EnqueueCoordinationEvent(CoordinationEvent &&event);
@@ -348,6 +349,10 @@ private:
                                      std::unordered_set<std::string> &known,
                                      std::vector<MemberIdentity> &admittedJoining, size_t &changed) const;
 
+    bool ShouldApplyReadyScaleOutAdmission(const TopologySnapshot &latest,
+                                           const std::vector<MembershipRecord> &ready,
+                                           const std::unordered_set<std::string> &known);
+
     void LogMembershipFactsCommit(uint64_t committedVersion, const std::vector<MemberIdentity> &admittedLeaving,
                                   const std::vector<MemberIdentity> &admittedJoining) const;
 
@@ -444,6 +449,7 @@ private:
     std::optional<BatchCollectState> scaleInCollect_;
     // State-thread-owned bounded quiet window that coalesces INITIAL members into one SCALE_OUT batch.
     std::optional<BatchCollectState> scaleOutCollect_;
+    bool activeBatchObserved_{ false };
     // The Controller state thread exclusively owns derived-generation and task-progress cursors/caches below.
     size_t admissionCursor_{ 0 };
     uint64_t derivedTopologyVersion_{ 0 };
