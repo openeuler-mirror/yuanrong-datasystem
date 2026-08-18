@@ -338,6 +338,7 @@ TEST_F(STCClientDistMasterTest, TestMetaIsMoving)
         cluster_->SetInjectAction(WORKER, i, "metas.moving", "1*call()");
     }
     DS_ASSERT_OK(client1_->Del(key));
+    ASSERT_EQ(client2_->Get(key, valueGet).GetCode(), StatusCode::K_NOT_FOUND);
 }
 
 TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeSet)
