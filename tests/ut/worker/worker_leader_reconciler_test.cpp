@@ -415,8 +415,7 @@ TEST(WorkerLeaderReconcilerTest, RouteChangeDuringRecreateGateRetriesWithLatestI
         gateCv.wait(lock, [&] { return releaseGate; });
         return Status::OK();
     });
-    Status reconcileStatus;
-    std::thread reconcileThread([&] { reconcileStatus = reconciler.Reconcile(true); });
+    ASSERT_TRUE(reconciler.Rejoin().IsOk());
     {
         std::unique_lock<std::mutex> lock(gateMutex);
         ASSERT_TRUE(gateCv.wait_for(lock, 2s, [&] { return gateEntered; }));
@@ -436,17 +435,18 @@ TEST(WorkerLeaderReconcilerTest, RouteChangeDuringRecreateGateRetriesWithLatestI
     }
     gateCv.notify_all();
 
-    reconcileThread.join();
-    EXPECT_TRUE(reconcileStatus.IsOk());
-    ASSERT_EQ(proxy.EnsureCount(), 1UL);
-    EXPECT_EQ(proxy.EnsureAt(0).leader_term(), NEW_LEADER_TERM);
-    EXPECT_EQ(proxy.ReportCount(), 0UL);
+    // The first Rejoin pass fails with K_TRY_AGAIN after the recreate gate because the Leader changed; the queued
+    // route callback installs the successor identity so the retry publishes the latest one.
     {
         std::lock_guard<std::mutex> lock(gateMutex);
         resumeRouteCallback = true;
     }
     gateCv.notify_all();
     routeChange.join();
+
+    ASSERT_TRUE(proxy.WaitForEnsures(1));
+    EXPECT_EQ(proxy.EnsureAt(0).leader_term(), NEW_LEADER_TERM);
+    EXPECT_EQ(proxy.ReportCount(), 0UL);
     reconciler.Shutdown();
     EXPECT_TRUE(reporter.Shutdown().IsOk());
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
@@ -489,6 +489,9 @@ TEST(WorkerLeaderReconcilerTest, ExplicitMembershipLossResubmitsEnsureForSameLea
     ASSERT_TRUE(reconciler.Reconcile(false).IsOk());
     ASSERT_TRUE(proxy.WaitForEnsures(2));
     EXPECT_EQ(proxy.EnsureAt(1).leader_term(), 9UL);
+    MembershipValue payload;
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.EnsureAt(1).membership_value(), payload).IsOk());
+    EXPECT_NE(payload.lifecycleState, MemberLifecycleState::RESTARTING);
 
     reconciler.Shutdown();
     EXPECT_TRUE(reporter.Shutdown().IsOk());
@@ -531,10 +534,75 @@ TEST(WorkerLeaderReconcilerTest, AsyncRejoinCompletesMembershipReadyAfterEnsure)
     ASSERT_TRUE(proxy.WaitForEnsures(1));
     ASSERT_TRUE(proxy.WaitForReports(1));
 
-    ASSERT_TRUE(reconciler.Reconcile(false).IsOk());
+    ASSERT_TRUE(reconciler.Rejoin().IsOk());
 
     ASSERT_TRUE(proxy.WaitForEnsures(2));
     ASSERT_TRUE(proxy.WaitForMembershipState(MemberLifecycleState::READY));
+
+    reconciler.Shutdown();
+    EXPECT_TRUE(reporter.Shutdown().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(WorkerLeaderReconcilerTest, InflightReconcileDefersQueuedRejoinCleanupToRestartingRound)
+{
+    FakeProxy proxy;
+    DsCoordinationBackend backend(&proxy, kWorkerAddress);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
+    TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
+                                      [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
+                                      ReporterOptions());
+    reporter.NotifyRuntimeReady();
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    proxy.routes_.SetCacheWithoutCallback(Identity(9, 2));
+    proxy.BlockEnsure();
+    std::mutex gateMutex;
+    std::condition_variable gateCv;
+    bool releaseGate = false;
+    int gateInvocations = 0;
+    backend.SetMembershipRecreateGate([&] {
+        std::unique_lock<std::mutex> lock(gateMutex);
+        ++gateInvocations;
+        gateCv.notify_all();
+        gateCv.wait(lock, [&] { return releaseGate; });
+        return Status::OK();
+    });
+
+    // The Reconcile Ensure is already drained and in flight when the confirmed Rejoin arrives, so the Rejoin can only
+    // win the next round, which is the only round allowed to run the destructive recreate gate.
+    ASSERT_TRUE(reconciler.Reconcile(false).IsOk());
+    ASSERT_TRUE(proxy.WaitForEnsures(1));
+    ASSERT_TRUE(reconciler.Rejoin().IsOk());
+    {
+        std::lock_guard<std::mutex> lock(gateMutex);
+        EXPECT_EQ(gateInvocations, 0);
+    }
+    proxy.ReleaseEnsure();
+
+    {
+        std::unique_lock<std::mutex> lock(gateMutex);
+        ASSERT_TRUE(gateCv.wait_for(lock, 2s, [&] { return gateInvocations > 0; }));
+    }
+    // The drained Reconcile pass completed without the gate and without a RESTARTING payload; only the queued Rejoin
+    // round entered the destructive gate, and it blocks before publishing its Ensure.
+    ASSERT_EQ(proxy.EnsureCount(), 1UL);
+    MembershipValue payload;
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.EnsureAt(0).membership_value(), payload).IsOk());
+    EXPECT_NE(payload.lifecycleState, MemberLifecycleState::RESTARTING);
+    {
+        std::lock_guard<std::mutex> lock(gateMutex);
+        releaseGate = true;
+    }
+    gateCv.notify_all();
+
+    ASSERT_TRUE(proxy.WaitForEnsures(2));
+    ASSERT_TRUE(proxy.WaitForMembershipState(MemberLifecycleState::READY));
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.EnsureAt(1).membership_value(), payload).IsOk());
+    EXPECT_EQ(payload.lifecycleState, MemberLifecycleState::RESTARTING);
+    {
+        std::lock_guard<std::mutex> lock(gateMutex);
+        EXPECT_EQ(gateInvocations, 1);
+    }
 
     reconciler.Shutdown();
     EXPECT_TRUE(reporter.Shutdown().IsOk());
