@@ -1673,7 +1673,7 @@ private:
                                      bool initWithWorker, int32_t connectTimeoutMs);
 
     Status InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker,
-                               bool routedWorkerIsLocal = true);
+                               bool routedWorkerIsLocal);
 
     Status GetCurrentWorkerHostPort(HostPort &addr) const;
 

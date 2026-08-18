@@ -846,7 +846,7 @@ Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool init
     // isLocalWorker stays true so InitListenWorkerAt recovery wiring is unchanged; routedWorkerIsLocal
     // carries the real locality of the bound worker so InitRouting does not adopt a cross-node bound
     // worker's hostId (which would misclassify that whole remote host as same-host and time out Gets
-    // on the SHM/UDS path). Defaults to true for callers without locality (embedded client).
+    // on the SHM/UDS path).
     return InitClientRuntimeAt(LOCAL_WORKER, initWithWorker, true, routedWorkerIsLocal);
 }
 
@@ -1024,7 +1024,7 @@ Status ObjectClientImpl::InitPreferredRemoteFallback(const HostPort &remoteAddre
     RETURN_IF_NOT_OK(InitClientWorkerConnectAt(STANDBY1_WORKER, remoteAddress, enableHeartbeat, false,
                                                connectTimeoutMs));
     currentNode_ = STANDBY1_WORKER;
-    RETURN_IF_NOT_OK(InitClientRuntimeAt(STANDBY1_WORKER, false, false));
+    RETURN_IF_NOT_OK(InitClientRuntimeAt(STANDBY1_WORKER, false, false, false));
     LOG(INFO) << "[Switch] Preferred same-node local worker is absent, use remote fallback "
               << remoteAddress.ToString();
     return Status::OK();
