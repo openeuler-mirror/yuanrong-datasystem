@@ -131,6 +131,15 @@ static void SleepForClientIdRefMigration(std::chrono::milliseconds sleepTime)
     std::this_thread::sleep_for(sleepTime);
 }
 
+template <typename Response, typename Request>
+static void WriteReplyToClientStreamIfNeeded(
+    const std::shared_ptr<ServerUnaryWriterReader<Response, Request>> &serverApi, const Response &response)
+{
+    if (serverApi != nullptr) {
+        LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
+    }
+}
+
 // A WAIT decision has no redirect destination yet. Keep the operation on its committed owner until the final CAS.
 static Status WaitForClientIdRefMigration(MasterMasterOCApi &api, const GIncreaseReqPb &req, GIncreaseRspPb &rsp)
 {
@@ -1844,13 +1853,14 @@ Status OCMetadataManager::DeleteAllCopyMetaImpl(
     }
     if (sourceWorker.empty()) {
         SetDeleteAllCopyMetaRspPb({ K_INVALID, "Cannot RemoveMeta with empty server address." }, objectKeys, response);
-        if (serverApi != nullptr) {
-            LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
-        }
+        WriteReplyToClientStreamIfNeeded(serverApi, response);
         return Status(K_INVALID, "Cannot RemoveMeta with empty server address.");
     }
     RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, objectKeys, request.redirect()));
-    RETURN_OK_IF_TRUE(response.meta_is_moving());
+    if (response.meta_is_moving()) {
+        WriteReplyToClientStreamIfNeeded(serverApi, response);
+        return Status::OK();
+    }
     VLOG(1) << "DeleteAllCopyMeta begin, sourceWorker: " << sourceWorker;
     std::unordered_map<std::string, bool> requestObjKeyMap;
     std::transform(objectKeys.begin(), objectKeys.end(), std::inserter(requestObjKeyMap, requestObjKeyMap.end()),
@@ -1881,9 +1891,7 @@ Status OCMetadataManager::DeleteAllCopyMetaImpl(
         LOG(ERROR) << "Delete failed with error: " << deleteMediator.GetStatus().ToString();
     }
     SetDeleteAllCopyMetaRspPb(deleteMediator.GetStatus(), deleteMediator.GetFailedObjs(), response);
-    if (serverApi != nullptr) {
-        LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
-    }
+    WriteReplyToClientStreamIfNeeded(serverApi, response);
     return Status::OK();
 }
 
@@ -3410,9 +3418,7 @@ Status OCMetadataManager::GDecreaseRefImplWithRemoteClientId(
     std::vector<std::string> finishDecIds;
     RETURN_IF_NOT_OK(RedirectObjectRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
-        if (serverApi != nullptr) {
-            LOG_IF_ERROR(serverApi->Write(resp), "Write reply to client stream failed.");
-        }
+        WriteReplyToClientStreamIfNeeded(serverApi, resp);
         return Status::OK();
     }
     Status lastErr =
@@ -3435,9 +3441,7 @@ Status OCMetadataManager::GDecreaseRefImplWithRemoteClientId(
     }
     RollbackIfGDecRefFail(delMediator, failedDecIds, req.remote_client_id());
     SetGDecreaseRefRspPb(delMediator.GetStatus(), std::move(failedDecIds), delMediator.GetNotRefIds(), resp);
-    if (serverApi != nullptr) {
-        LOG_IF_ERROR(serverApi->Write(resp), "Write reply to client stream failed.");
-    }
+    WriteReplyToClientStreamIfNeeded(serverApi, resp);
     return Status::OK();
 }
 
@@ -3491,9 +3495,7 @@ Status OCMetadataManager::GDecreaseRefImpl(
             TbbMetaTable::const_accessor accessor;
             auto found = metaShards_[shardIdx].table.find(accessor, objKey);
             Status rc = Status::OK();
-            if (found && nestedRefManager_->CheckIsNoneNestedRefById(objKey)) {
-                needDelete = true;
-            }
+            needDelete = found && nestedRefManager_->CheckIsNoneNestedRefById(objKey);
 
             if (!found && rc.IsError() && !FLAGS_oc_io_from_l2cache_need_metadata) {
                 // Could not find the object in meta table (for both regular and device object) and not a device object.
@@ -3523,9 +3525,7 @@ Status OCMetadataManager::GDecreaseRefImpl(
     }
     RollbackIfGDecRefFail(delMediator, failedDecIds);
     SetGDecreaseRefRspPb(delMediator.GetStatus(), std::move(failedDecIds), delMediator.GetNotRefIds(), resp);
-    if (serverApi != nullptr) {
-        LOG_IF_ERROR(serverApi->Write(resp), "Write reply to client stream failed.");
-    }
+    WriteReplyToClientStreamIfNeeded(serverApi, resp);
     return Status::OK();
 }
 

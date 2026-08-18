@@ -7,6 +7,7 @@
  * Description: Test topology-fenced object metadata mutations.
  */
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <limits>
 #include <map>
@@ -392,7 +393,7 @@ TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaDoesNotQueueRedirect
     EXPECT_EQ(manager.expiredObjectManager_->GetExpiredObject().count(objectKey), 0U);
 }
 
-TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaRetriesWholeBatchWhenOneScaleOutKeyIsMoving)
+TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaWithServerApiWritesMovingResponse)
 {
     cluster::TopologyState topology;
     topology.version = 2;
@@ -425,10 +426,17 @@ TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaRetriesWholeBatchWhenOneS
     request.set_async_delete(true);
     request.add_object_keys(localKey);
     request.add_object_keys(movingKey);
-    DeleteAllCopyMetaRspPb response;
+    std::promise<std::pair<DeleteAllCopyMetaRspPb, Status>> responsePromise;
+    auto responseFuture = responsePromise.get_future();
+    DeleteAllCopyMetaReqPb serverRequest = request;
+    auto serverApi = std::make_shared<LocalServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>>(
+        serverRequest, std::move(responsePromise));
 
-    DS_ASSERT_OK(manager.DeleteAllCopyMeta(request, response));
+    DS_ASSERT_OK(manager.DeleteAllCopyMetaWithServerApi(request, serverApi));
 
+    ASSERT_EQ(responseFuture.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+    auto [response, status] = responseFuture.get();
+    DS_ASSERT_OK(status);
     EXPECT_TRUE(response.meta_is_moving());
     EXPECT_TRUE(response.info().empty());
     EXPECT_TRUE(manager.expiredObjectManager_->GetExpiredObject().empty());
