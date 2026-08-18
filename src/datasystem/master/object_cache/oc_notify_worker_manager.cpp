@@ -1234,6 +1234,13 @@ Status OCNotifyWorkerManager::CheckWorkerIsHealthy(const std::string &workerAddr
     return Status::OK();
 }
 
+bool OCNotifyWorkerManager::IsWorkerDead(const std::string &workerAddr)
+{
+    std::shared_lock<SharedMutex> lck(faultWorkerMutex_);
+    const auto iter = faultWorkers_.find(workerAddr);
+    return iter != faultWorkers_.end() && iter->second;
+}
+
 void OCNotifyWorkerManager::AsyncChangePrimaryCopy(
     const std::unordered_map<std::string, std::unordered_set<std::string>> &toBeChanged, bool ifvoluntaryScaleDown)
 {

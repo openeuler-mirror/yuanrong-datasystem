@@ -204,6 +204,13 @@ public:
     Status CheckWorkerIsHealthy(const std::string &workerAddr);
 
     /**
+     * @brief Check whether the worker has been confirmed dead.
+     * @param[in] workerAddr Address of the worker.
+     * @return True if the worker has been confirmed dead.
+     */
+    bool IsWorkerDead(const std::string &workerAddr);
+
+    /**
      * @brief Insert data to async notify worker operator table.
      * @param[in] workerId The worker address of the object.
      * @param[in] objectKey The uuid of the object.

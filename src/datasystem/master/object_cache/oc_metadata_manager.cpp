@@ -4221,6 +4221,51 @@ Status OCMetadataManager::SaveNestedMigrationMetadata(const MetaForMigrationPb &
     return Status::OK();
 }
 
+void OCMetadataManager::AddMigrationLocations(const MetaForMigrationPb &objMeta, const ObjectMetaPb &metaPb,
+                                              ObjectMeta &metaCache,
+                                              std::vector<std::string> &locationsToReconcile)
+{
+    const auto &objectKey = metaPb.object_key();
+    auto addLocation = [&](const std::string &location, AckState ackState) {
+        locationsToReconcile.emplace_back(location);
+        if (notifyWorkerManager_ != nullptr && notifyWorkerManager_->IsWorkerDead(location)) {
+            VLOG(1) << FormatString("[ObjectKey %s] Skip dead worker location %s during metadata migration", objectKey,
+                                    location);
+            return;
+        }
+        LOG_IF_ERROR(AddLocation(metaCache, location, ackState, objectKey, metaPb), "AddLocation failed.");
+    };
+    if (objMeta.new_locations_size() > 0) {
+        for (const auto &loc : objMeta.new_locations()) {
+            addLocation(loc.location(), static_cast<AckState>(loc.ack()));
+        }
+    } else {  // Consider compatibility
+        for (const auto &loc : objMeta.locations()) {
+            addLocation(loc, AckState::ACK);
+        }
+    }
+    const auto &primaryAddress = metaPb.primary_address();
+    if (!primaryAddress.empty()
+        && std::find(locationsToReconcile.begin(), locationsToReconcile.end(), primaryAddress)
+        == locationsToReconcile.end()) {
+        locationsToReconcile.emplace_back(primaryAddress);
+    }
+}
+
+Status OCMetadataManager::ReconcileDeadMigrationLocations(
+    const std::string &objectKey, const std::vector<std::string> &locationsToReconcile)
+{
+    if (notifyWorkerManager_ == nullptr) {
+        return Status::OK();
+    }
+    for (const auto &location : locationsToReconcile) {
+        if (notifyWorkerManager_->IsWorkerDead(location)) {
+            RETURN_IF_NOT_OK(RemoveMetaByWorkerForKey(objectKey, location));
+        }
+    }
+    return Status::OK();
+}
+
 bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &status)
 {
     ObjectMetaPb metaPb;
@@ -4240,19 +4285,17 @@ bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &s
     VLOG(1) << "receive migrate object meta:" << objectKey;
     ObjectMeta metaCache;
     metaCache.meta = metaPb;
-    if (objMeta.new_locations_size() > 0) {
-        for (const auto &loc : objMeta.new_locations()) {
-            LOG_IF_ERROR(AddLocation(metaCache, loc.location(), static_cast<AckState>(loc.ack()), objectKey, metaPb),
-                         "AddLocation failed.");
-        }
-    } else {  // Consider compatibility
-        for (const auto &loc : objMeta.locations()) {
-            LOG_IF_ERROR(AddLocation(metaCache, loc, AckState::ACK, objectKey, metaPb), "AddLocation failed.");
-        }
-    }
+    std::vector<std::string> locationsToReconcile;
+    AddMigrationLocations(objMeta, metaPb, metaCache, locationsToReconcile);
 
     metaCache.value = static_cast<int64_t>(objMeta.value());
+    INJECT_POINT_NO_RETURN("OCMetadataManager.SaveOneMeta.before_save");
     if (SaveMigrationData(objectKey, metaCache, status).IsError()) {
+        return false;
+    }
+
+    status = ReconcileDeadMigrationLocations(objectKey, locationsToReconcile);
+    if (status.IsError()) {
         return false;
     }
 
