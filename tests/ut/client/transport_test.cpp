@@ -2008,6 +2008,28 @@ TEST(ResolveSdkHostIdTest, DoesNotAdoptCrossNodeBoundWorkerHostId)
     EXPECT_TRUE(ResolveSdkHostId(/*boundWorkerIsLocal=*/false, bound, hostIdMap).empty());
 }
 
+TEST(ResolveSdkHostIdTest, RemoteFallbackWorkerDoesNotSelectShmTransport)
+{
+    const HostPort remoteFallback = MakeAddress(503);
+    ::datasystem::ClusterTopologyPb ring;
+    (*ring.mutable_members())[remoteFallback.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+    std::unordered_map<std::string, std::string> hostIdMap = {
+        { remoteFallback.ToString(), "remoteHost" }
+    };
+
+    const auto sdkHostId =
+        ResolveSdkHostId(/*boundWorkerIsLocal=*/false, remoteFallback, hostIdMap);
+    WorkerSnapshot snapshot;
+    ASSERT_TRUE(BuildWorkerSnapshot(16, ring, hostIdMap, sdkHostId, snapshot).IsOk());
+    ASSERT_TRUE(snapshot.sameHostAddrs.empty());
+    ASSERT_EQ(snapshot.otherAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.otherAddrs.front(), remoteFallback);
+
+    TransportAdvisor advisor;
+    advisor.SetSameHostWorkers(snapshot.sameHostAddrs);
+    EXPECT_NE(advisor.GetTransportHint(remoteFallback), TransportHint::SHM_CANDIDATE);
+}
+
 TEST(ResolveSdkHostIdTest, AdoptsGenuineLocalBoundWorkerHostId)
 {
     const HostPort bound = MakeAddress(502);
