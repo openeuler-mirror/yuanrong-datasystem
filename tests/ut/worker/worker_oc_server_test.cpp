@@ -48,18 +48,24 @@ cluster::Member MakeMember(char idByte, std::string address, cluster::MemberStat
     return cluster::Member{ { std::string(16, idByte), std::move(address) }, state, { token } };
 }
 
-Status MakeSnapshot(cluster::MemberState targetState, uint64_t version,
+Status MakeSnapshot(cluster::MemberState localState, cluster::MemberState targetState, uint64_t version,
                     std::shared_ptr<const cluster::TopologySnapshot> &snapshot)
 {
     cluster::TopologyState state;
     state.clusterHasInit = true;
     state.version = version;
-    state.members = { MakeMember('a', "127.0.0.1:31501", cluster::MemberState::ACTIVE, 10),
+    state.members = { MakeMember('a', "127.0.0.1:31501", localState, 10),
                       MakeMember('b', "127.0.0.1:31502", targetState, 20) };
     if (targetState == cluster::MemberState::FAILED) {
         state.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::FAILURE, version };
     }
     return cluster::TopologySnapshot::Create(std::move(state), version, std::string(64, 'a'), snapshot);
+}
+
+Status MakeSnapshot(cluster::MemberState targetState, uint64_t version,
+                    std::shared_ptr<const cluster::TopologySnapshot> &snapshot)
+{
+    return MakeSnapshot(cluster::MemberState::ACTIVE, targetState, version, snapshot);
 }
 
 Status MakeLocalScaleInSnapshot(uint64_t version, std::shared_ptr<const cluster::TopologySnapshot> &snapshot)
@@ -80,6 +86,26 @@ Status MakeSnapshotWithoutLocal(uint64_t version, std::shared_ptr<const cluster:
     state.version = version;
     state.members = { MakeMember('b', "127.0.0.1:31502", cluster::MemberState::ACTIVE, 20) };
     return cluster::TopologySnapshot::Create(std::move(state), version, std::string(64, 'a'), snapshot);
+}
+
+Status MakeMultiWorkerSnapshotWithoutLocal(uint64_t version,
+                                           std::shared_ptr<const cluster::TopologySnapshot> &snapshot)
+{
+    cluster::TopologyState state;
+    state.clusterHasInit = true;
+    state.version = version;
+    state.members = { MakeMember('x', "127.0.0.1:31598", cluster::MemberState::ACTIVE, 10),
+                      MakeMember('y', "127.0.0.1:31502", cluster::MemberState::ACTIVE, 20) };
+    return cluster::TopologySnapshot::Create(std::move(state), version, std::string(64, 'a'), snapshot);
+}
+
+Status MakeSingleWorkerSnapshot(std::shared_ptr<const cluster::TopologySnapshot> &snapshot)
+{
+    cluster::TopologyState state;
+    state.clusterHasInit = true;
+    state.version = 1;
+    state.members = { MakeMember('a', "127.0.0.1:31501", cluster::MemberState::ACTIVE, 10) };
+    return cluster::TopologySnapshot::Create(std::move(state), 1, std::string(64, 'a'), snapshot);
 }
 }  // namespace
 
@@ -186,6 +212,11 @@ public:
     std::chrono::milliseconds ScaleInExitRetryDelay(const std::string &address, size_t consecutiveFailures) const
     {
         return worker::WorkerOCServer::ComputeScaleInExitRetryDelay(address, consecutiveFailures);
+    }
+
+    bool IsLocalUbVerificationEligible(const cluster::TopologySnapshot &snapshot) const
+    {
+        return server_->IsLocalUbVerificationEligible(snapshot);
     }
 
     Status WaitForExitingRemoval(std::chrono::steady_clock::time_point deadline,
@@ -498,6 +529,20 @@ TEST_F(WorkerOCServerTest, ExistingScaleInPreparationIsNotClaimedAsRestartRecove
 
     EXPECT_EQ(publishCount.load(), 0UL);
     EXPECT_EQ(shutdownRequestCount_, 0UL);
+}
+
+TEST_F(WorkerOCServerTest, LocalUbVerificationRequiresActiveMultiWorkerTopology)
+{
+    std::shared_ptr<const cluster::TopologySnapshot> active;
+    std::shared_ptr<const cluster::TopologySnapshot> single;
+    std::shared_ptr<const cluster::TopologySnapshot> localAbsent;
+    DS_ASSERT_OK(MakeSnapshot(cluster::MemberState::ACTIVE, cluster::MemberState::ACTIVE, 3, active));
+    DS_ASSERT_OK(MakeSingleWorkerSnapshot(single));
+    DS_ASSERT_OK(MakeMultiWorkerSnapshotWithoutLocal(4, localAbsent));
+
+    EXPECT_TRUE(IsLocalUbVerificationEligible(*active));
+    EXPECT_FALSE(IsLocalUbVerificationEligible(*single));
+    EXPECT_FALSE(IsLocalUbVerificationEligible(*localAbsent));
 }
 
 TEST_F(WorkerOCServerTest, FailedProbeResultAttachesObservationOnlyToErrorOutcome)

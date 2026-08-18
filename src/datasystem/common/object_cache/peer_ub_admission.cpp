@@ -157,15 +157,15 @@ void PeerUbAdmission::ReplaceGlobalSummaries(const std::vector<UbHealthSummary> 
     INJECT_POINT_NO_RETURN("PeerUbAdmission.ReplaceGlobalSummaries.afterCommit");
 }
 
-void PeerUbAdmission::InitializeProbing(const HostPort &peer, uint64_t nowMs)
+void PeerUbAdmission::InitializeVerification(const HostPort &peer, uint64_t nowMs)
 {
     if (peer.Empty()) {
         return;
     }
     std::lock_guard<std::shared_mutex> lock(mutex_);
     auto &state = states_[peer];
-    state.state = UbAdmissionState::PROBING;
-    state.lastStatus = Status(K_NOT_READY, "UB data plane requires recovery probe");
+    state.state = UbAdmissionState::SUSPECT;
+    state.lastStatus = Status(K_NOT_READY, "UB data plane requires verification probe");
     state.lastFailureClass = UbFailureClass::CONNECT_OR_PATH_FAILURE;
     state.backoffLevel = 0;
     state.backoffDeadlineMs = nowMs;

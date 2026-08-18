@@ -1713,9 +1713,20 @@ void WorkerOCServer::ReconcileUbAdmissionTopology(const cluster::TopologySnapsho
     auto *admission = objCacheClientWorkerSvc_->GetUbAdmission();
     const auto nowMs = GetSteadyClockTimeStampMs();
     admission->ReconcileTopologyWorkers(workers, nowMs, graceMs);
-    if (IsUrmaEnabled() && workers.size() > 1 && !admission->GetState(hostPort_).has_value()) {
-        admission->InitializeProbing(hostPort_, nowMs);
+    if (IsUrmaEnabled() && IsLocalUbVerificationEligible(snapshot)
+        && !admission->GetState(hostPort_).has_value()) {
+        admission->InitializeVerification(hostPort_, nowMs);
     }
+}
+
+bool WorkerOCServer::IsLocalUbVerificationEligible(const cluster::TopologySnapshot &snapshot) const
+{
+    if (snapshot.Members().size() <= 1) {
+        return false;
+    }
+    const cluster::Member *localMember = nullptr;
+    return snapshot.FindMemberByAddress(hostPort_.ToString(), localMember).IsOk() && localMember != nullptr
+           && localMember->state == cluster::MemberState::ACTIVE;
 }
 
 void WorkerOCServer::HandleTopologySnapshotPublished(std::shared_ptr<const cluster::TopologySnapshot> snapshot)

@@ -611,6 +611,7 @@ private:
      * @param[in] snapshot Published immutable topology.
      */
     void ReconcileUbAdmissionTopology(const cluster::TopologySnapshot &snapshot);
+    bool IsLocalUbVerificationEligible(const cluster::TopologySnapshot &snapshot) const;
     Status RestoreScaleInPreparation(const cluster::TopologySnapshot &snapshot);
     void HandleTopologySnapshotPublished(std::shared_ptr<const cluster::TopologySnapshot> snapshot);
 
