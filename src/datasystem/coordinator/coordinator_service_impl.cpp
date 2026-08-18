@@ -233,12 +233,14 @@ ReportTopologyRecoveryCandidateRspPb::ResultPb ToPbReportResult(TopologyRecovery
 
 CoordinatorServiceImpl::CoordinatorServiceImpl(const HostPort &localAddress,
                                                std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery,
-                                               size_t expectedMemberCount, CoordinatorRaftFlags raftFlags)
+                                               size_t expectedMemberCount, CoordinatorRaftFlags raftFlags,
+                                               bthread_tag_t watchDispatcherBthreadTag)
     : CoordinatorService(localAddress),
       coordinatorAddr_(localAddress),
       coordinatorDiscovery_(std::move(coordinatorDiscovery)),
       expectedMemberCount_(expectedMemberCount),
-      raftFlags_(std::move(raftFlags))
+      raftFlags_(std::move(raftFlags)),
+      watchDispatcherBthreadTag_(watchDispatcherBthreadTag)
 {
 }
 
@@ -649,8 +651,8 @@ Status CoordinatorServiceImpl::BuildComponentTree()
     const size_t watchDispatchThreadCount =
         FLAGS_watch_event_dispatch_thread > 0 ? static_cast<size_t>(FLAGS_watch_event_dispatch_thread)
                                               : WatchDispatcher::DEFAULT_DISPATCH_THREAD_COUNT;
-    watchDispatcher_ =
-        std::make_shared<WatchDispatcherImpl>(watchRegistry_.get(), coordinatorId_, watchDispatchThreadCount);
+    watchDispatcher_ = std::make_shared<WatchDispatcherImpl>(watchRegistry_.get(), coordinatorId_,
+                                                             watchDispatchThreadCount, watchDispatcherBthreadTag_);
     clock_ = std::make_shared<SteadyClockReal>();
     ttlManager_ = std::make_shared<TtlManager>(clock_);
     store_ = std::make_shared<CoordinatorStore>(memStore_, watchRegistry_, watchDispatcher_, ttlManager_);

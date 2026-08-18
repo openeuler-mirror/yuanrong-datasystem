@@ -67,10 +67,12 @@ public:
      * @param[in] coordinatorDiscovery Election candidate provider.
      * @param[in] expectedMemberCount Fixed election voting-member target.
      * @param[in] raftFlags Immutable Raft identity and timing snapshot for this service generation.
+     * @param[in] watchDispatcherBthreadTag Bthread tag used by watch notification tasks.
      */
     explicit CoordinatorServiceImpl(const HostPort &localAddress,
                                     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery = nullptr,
-                                    size_t expectedMemberCount = 0, CoordinatorRaftFlags raftFlags = {});
+                                    size_t expectedMemberCount = 0, CoordinatorRaftFlags raftFlags = {},
+                                    bthread_tag_t watchDispatcherBthreadTag = BTHREAD_TAG_DEFAULT);
 
     /**
      * @brief Invoke best-effort Shutdown without allowing exceptions to escape destruction.
@@ -310,6 +312,7 @@ private:
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
     size_t expectedMemberCount_{ 0 };
     CoordinatorRaftFlags raftFlags_;
+    const bthread_tag_t watchDispatcherBthreadTag_;
     RpcServer::Builder builder_;
     std::shared_ptr<MemoryKvStore> memStore_;
     std::shared_ptr<WatchRegistry> watchRegistry_;

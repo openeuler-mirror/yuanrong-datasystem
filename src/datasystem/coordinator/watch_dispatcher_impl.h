@@ -45,8 +45,9 @@ public:
      * @param[in] watchRegistry Registry that owns watch IDs.
      * @param[in] coordinatorId Immutable Coordinator process identity.
      */
-    WatchDispatcherImpl(WatchRegistry *watchRegistry, std::string coordinatorId, size_t dispatchThreadCount)
-        : WatchDispatcher(watchRegistry, BTHREAD_TAG_DEFAULT, dispatchThreadCount),
+    WatchDispatcherImpl(WatchRegistry *watchRegistry, std::string coordinatorId, size_t dispatchThreadCount,
+                        bthread_tag_t notifyTag = BTHREAD_TAG_DEFAULT)
+        : WatchDispatcher(watchRegistry, notifyTag, dispatchThreadCount),
           coordinatorId_(std::move(coordinatorId))
     {
     }

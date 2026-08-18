@@ -13,9 +13,12 @@
 
 #include "datasystem/coordinator/coordinator_runtime.h"
 
+#include <cerrno>
 #include <chrono>
 #include <exception>
 #include <utility>
+
+#include <gflags/gflags.h>
 
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -40,10 +43,14 @@ DS_DECLARE_int32(coordinator_raft_heartbeat_interval_ms);
 DS_DECLARE_int32(coordinator_raft_election_timeout_ms);
 DS_DECLARE_uint32(coordinator_member_failure_grace_ms);
 DS_DECLARE_uint32(coordinator_discovery_retry_interval_ms);
+DS_DECLARE_int32(watch_event_dispatch_thread);
+DECLARE_int32(task_group_ntags);
 namespace datasystem {
 namespace {
 
 constexpr int kStopPollIntervalMs = 100;
+constexpr int kWatchDispatcherBthreadTag = 1;
+constexpr int kCoordinatorBthreadTagCount = 2;
 
 bool IsCoordinatorRuntimeApplicableFlag(const std::string &flagName)
 {
@@ -120,6 +127,7 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
             FlagManager::GetInstance()->ParseConfigFile(options->configFilePath, errMsg), K_INVALID,
             FormatString("Parse config file %s error: %s", options->configFilePath, errMsg));
     }
+    RETURN_IF_NOT_OK(InitWatchDispatcherBthreadPool());
 
     const std::string logFilename = FLAGS_log_filename.empty() ? "datasystem_coordinator" : FLAGS_log_filename;
     Logging::GetInstance()->Start(logFilename, LogProcessRole::COORDINATOR);
@@ -156,7 +164,8 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
         RETURN_IF_NOT_OK(localAddress.ParseString(raftFlags.localAddress));
 
         service_ = std::make_unique<coordinator::CoordinatorServiceImpl>(localAddress, std::move(coordinatorDiscovery),
-                                                                         expectedMemberCount, std::move(raftFlags));
+                                                                         expectedMemberCount, std::move(raftFlags),
+                                                                         watchDispatcherBthreadTag_);
         firstError = service_->Init();
         if (firstError.IsError()) {
             break;
@@ -184,6 +193,22 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
     PreserveFirstError(firstError, InvokeOnStop(), "Coordinator lifecycle onStop");
     PreserveFirstError(firstError, ShutdownService(), "Coordinator service shutdown");
     return firstError;
+}
+
+Status CoordinatorRuntime::InitWatchDispatcherBthreadPool()
+{
+    if (bthread_getconcurrency_by_tag(BTHREAD_TAG_DEFAULT) != EPERM) {
+        return Status::OK();
+    }
+    FLAGS_task_group_ntags = kCoordinatorBthreadTagCount;
+    CHECK_FAIL_RETURN_STATUS(
+        bthread_setconcurrency_by_tag(FLAGS_watch_event_dispatch_thread, kWatchDispatcherBthreadTag) == 0, K_RUNTIME_ERROR,
+        FormatString("Failed to configure watch event bthread pool, tag: %d, pthread count: %d",
+                     kWatchDispatcherBthreadTag, FLAGS_watch_event_dispatch_thread));
+    watchDispatcherBthreadTag_ = kWatchDispatcherBthreadTag;
+    LOG(INFO) << "Coordinator watch notifications will use an isolated bthread pool, tag="
+              << watchDispatcherBthreadTag_ << ", pthreadCount=" << FLAGS_watch_event_dispatch_thread;
+    return Status::OK();
 }
 
 Status CoordinatorRuntime::UpdateConfig(const std::string &configJson)
