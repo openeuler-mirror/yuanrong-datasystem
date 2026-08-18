@@ -14,10 +14,11 @@ kvtest 是 datasystem KVClient 的独立性能压测工具，用于在真实集�
 - **性能指标**：窗口指标（3s 粒度 CSV，P50/P90/P99/P99.9/P99.99）+ 全局汇总（环形缓冲区 100000 条样本）
 - **进程级 CPU 绑核**：自动检测容器可用 CPU 或手动指定
 - **远程部署**：deploy_client.py（SSH/Kubectl）和 deploy_worker.py（K8s Pod 管理）两种部署方式
+- **独立部署测试**：coordinator_test / worker_test 独立二进制，验证 Worker/Coordinator 用户集成部署；mock_jf_server.py 模拟外部服务发现系统（注册/发现/心跳/TTL 过期），支持 deploy 脚本 `--standalone` 模式
 
 ## 2. 架构设计（4+1 视图）
 
-### 2.1 Logical View — 核心抽象与关系
+### 2.1 Logical View -- 核心抽象与关系
 
 ```mermaid
 classDiagram
@@ -119,7 +120,7 @@ classDiagram
 | **HttpServer** | 进程间通知（/notify）、控制（/stop）、观测（/stats） | ThreadPool 异步处理通知，thread_local 连接复用 |
 | **Config** | JSON 配置解析与参数校验 | 启动时严格校验，拒绝非法配置 |
 
-### 2.2 Development View — 代码组织与模块依赖
+### 2.2 Development View -- 代码组织与模块依赖
 
 ```mermaid
 graph TB
@@ -193,7 +194,7 @@ graph TB
 - 基础层无内部依赖，可独立测试
 - SDK 依赖仅出现在 Pipeline 层（通过 `stubs/` 桩编译测试）
 
-### 2.3 Process View — 线程模型与并发
+### 2.3 Process View -- 线程模型与并发
 
 #### 线程拓扑
 
@@ -286,7 +287,7 @@ sleep_until(fireTime)
 | keyPool (CacheReader) | `shared_mutex` | 读多写少，ReaderLoop 用 shared_lock |
 | opsMap_ | `started_` 标志 | Start() 后只读，fast-path 无锁查找 |
 
-### 2.4 Physical View — 部署拓扑
+### 2.4 Physical View -- 部署拓扑
 
 ```mermaid
 graph TB
@@ -348,7 +349,7 @@ graph TB
 | 部署工具 → 节点 | SSH / kubectl | 运维 → 远程 | SCP 二进制、启动/停止命令 |
 | 用户 → kvtest | HTTP（路径不变：/stats /stop /summary /notify） | 运维 → 进程 | 查看/停止/汇总（bazel brpc restful 映射保留路径） |
 
-### 2.5 Scenarios — 关键使用场景
+### 2.5 Scenarios -- 关键使用场景
 
 #### 进程生命周期
 
@@ -413,8 +414,8 @@ sequenceDiagram
             SDK-->>R: miss
             R->>SDK: Exist(key) → verify key state
             R->>M: Record cacheExist
-            R->>R: sleep(inferenceDelayMs) — simulate inference
-            R->>SDK: Set(key, data) — backfill
+            R->>R: sleep(inferenceDelayMs) -- simulate inference
+            R->>SDK: Set(key, data) -- backfill
             R->>M: Record cacheSetFill
             R->>M: Record cacheGetOrFill_miss (total latency)
             R->>M: RecordCacheMiss
@@ -457,11 +458,11 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> Stage1: Start
-    Stage1: Stage 1 — 100 QPS / 60s
+    Stage1: Stage 1 -- 100 QPS / 60s
     Stage1 --> Stage2: AdvanceStage()
-    Stage2: Stage 2 — 200 QPS / 60s
+    Stage2: Stage 2 -- 200 QPS / 60s
     Stage2 --> Stage3: AdvanceStage()
-    Stage3: Stage 3 — 500 QPS / 60s
+    Stage3: Stage 3 -- 500 QPS / 60s
     Stage3 --> [*]: all complete
 
     note right of Stage1
@@ -570,7 +571,7 @@ PipelineLoop(threadId):
 
 #### QPS 限速与 Jitter 机制
 
-详见 [2.3 Process View — QPS 控制机制](#23-process-view--线程模型与并发)。
+详见 [2.3 Process View -- QPS 控制机制](#23-process-view--线程模型与并发)。
 
 #### 数据预生成
 
@@ -601,7 +602,7 @@ NotifyPeers(keys, size):
 
 控制面有两条等价传输实现，由 `KVTEST_USE_BRPC` 编译期开关选择，notify 协议语义（NotifyDispatcher）完全一致：
 
-- **bazel 模式**：brpc 服务 `KvtestControl`，4 个 RPC。经 brpc restful 映射 **保留 httplib 旧路径**（`/stats`、`/stop`、`/summary`、`/notify`），`allow_default_url=false` 隐藏 `/KvtestControl/<Method>` 默认网关路径——外部 curl/脚本路径不变。C++ peer 客户端（`BrpcPeerClient`）用 `KvtestControl::Stub` 走二进制 protobuf，不经 HTTP 路径。
+- **bazel 模式**：brpc 服务 `KvtestControl`，4 个 RPC。经 brpc restful 映射 **保留 httplib 旧路径**（`/stats`、`/stop`、`/summary`、`/notify`），`allow_default_url=false` 隐藏 `/KvtestControl/<Method>` 默认网关路径----外部 curl/脚本路径不变。C++ peer 客户端（`BrpcPeerClient`）用 `KvtestControl::Stub` 走二进制 protobuf，不经 HTTP 路径。
 - **cmake 模式**：cpp-httplib 轻量 HTTP 服务，4 个端点。
 
 | HTTP 路径（bazel restful 映射 + cmake httplib 一致） | 方法 | 用途 | 响应 |

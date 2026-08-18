@@ -187,3 +187,35 @@ endif()
 # Statically link libstdc++ and libgcc so the binary runs on systems with
 # older GCC (e.g. openEuler 22.04 with GCC 10 / GLIBCXX_3.4.29).
 target_link_options(kvtest PRIVATE -static-libstdc++ -static-libgcc)
+
+# ---------------------------------------------------------------------------
+# coordinator_test: standalone Coordinator deployment test program
+# Links against libdatasystem_coordinator.so from the SDK.
+# ---------------------------------------------------------------------------
+add_executable(coordinator_test src/coordinator_main.cpp)
+target_include_directories(coordinator_test PRIVATE
+    ${DATASYSTEM_SDK_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(coordinator_test PRIVATE
+    ${DATASYSTEM_SDK_DIR}/lib/libdatasystem_coordinator.so
+    pthread)
+set_target_properties(coordinator_test PROPERTIES
+    BUILD_RPATH "${DATASYSTEM_SDK_DIR}/lib"
+    INSTALL_RPATH "$ORIGIN/lib")
+target_link_options(coordinator_test PRIVATE -static-libstdc++ -static-libgcc)
+
+# ---------------------------------------------------------------------------
+# worker_test: standalone Worker deployment test program
+# Links against libdatasystem_worker.so from the SDK.
+# ---------------------------------------------------------------------------
+add_executable(worker_test src/data_worker_main.cpp)
+target_include_directories(worker_test PRIVATE
+    ${DATASYSTEM_SDK_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(worker_test PRIVATE
+    ${DATASYSTEM_SDK_DIR}/lib/libdatasystem_worker.so
+    pthread)
+set_target_properties(worker_test PROPERTIES
+    BUILD_RPATH "${DATASYSTEM_SDK_DIR}/lib"
+    INSTALL_RPATH "$ORIGIN/lib")
+target_link_options(worker_test PRIVATE -static-libstdc++ -static-libgcc)

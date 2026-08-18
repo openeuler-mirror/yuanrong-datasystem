@@ -91,6 +91,7 @@ cc_library(
     ],
     hdrs = [
         "src/common/config.h",
+        "src/common/jf_service_discovery.h",
         "src/common/simple_log.h",
         "src/common/bthread_compat.h",
         "src/common/thread_pool.h",
@@ -160,4 +161,48 @@ cc_binary(
     name = "kvtest",
     srcs = ["src/main.cpp"],
     deps = [":kvtest_lib"],
+)
+
+# JF client library (header-only, shared by coordinator_test and worker_test)
+cc_library(
+    name = "jf_lib",
+    hdrs = [
+        "src/common/jf_service_discovery.h",
+        "src/vendor/httplib.h",
+        "src/vendor/nlohmann_json.hpp",
+    ],
+    strip_include_prefix = "src",
+    deps = [
+        "//include/datasystem:headers",
+        "//src/datasystem/common/coordinator:coordinator_leader_router",
+    ],
+)
+
+# Coordinator standalone deployment test program
+cc_binary(
+    name = "coordinator_test",
+    srcs = ["src/coordinator_main.cpp"],
+    deps = [
+        ":jf_lib",
+        "//src/datasystem/coordinator:coordinator_server",
+        "//include/datasystem:headers",
+        "//src/datasystem/common/flags:dynamic_flag_config",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+# Worker standalone deployment test program
+cc_binary(
+    name = "worker_test",
+    srcs = ["src/data_worker_main.cpp"],
+    deps = [
+        ":jf_lib",
+        "//src/datasystem/worker:worker",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//include/datasystem:headers",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:request_context",
+    ],
 )

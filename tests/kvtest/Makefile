@@ -24,7 +24,12 @@ package:
 		echo "  (patchelf not found — RPATH left as build-time paths; LD_LIBRARY_PATH will be used at runtime)"; \
 	fi
 	@cp deploy_client.py tools/procmon.py VERSION $(OUTPUT)/
+	@cp deploy_jf.py $(OUTPUT)/ 2>/dev/null || true
+	@cp src/mock_jf_server.py $(OUTPUT)/ 2>/dev/null || true
 	@cp tests/test_deploy.sh $(OUTPUT)/
+	@cp tests/test_standalone_mode.sh $(OUTPUT)/ 2>/dev/null || true
+	@cp build/coordinator_test $(OUTPUT)/ 2>/dev/null || echo "WARNING: coordinator_test not found"
+	@cp build/worker_test $(OUTPUT)/ 2>/dev/null || echo "WARNING: worker_test not found"
 	@cp config/config.json.example $(OUTPUT)/config/
 	@cp config/deploy.json.example $(OUTPUT)/config/
 	@echo "Packaged to $(OUTPUT)/:"

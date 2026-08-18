@@ -20,44 +20,27 @@ from deploy_common import (
     DEFAULT_TIMEOUT,
     apply_config_overrides,
     cmd_check_impl,
-    cmd_clean_impl,
-    cmd_collect_impl,
-    cmd_exec_impl,
-    cmd_install_impl,
-    cmd_kill_impl,
+    cmd_clean_shared,
+    cmd_collect_shared,
+    cmd_exec_shared,
+    cmd_install_shared,
+    cmd_kill_shared,
+    cmd_stop_shared,
     do_for_all_pods,
     find_default_whl,
     get_pods,
     kubectl_exec,
     resolve_procmon_dir,
     start_service,
+    start_service_standalone,
     stop_service,
+    _print_timings,
 )
 
 
 PROCESS_NAME = 'datasystem_worker'
+PROCESS_NAME_STANDALONE = 'worker_test'
 ADDRESS_KEY = 'worker_address'
-
-
-def _print_timings(action, timings):
-    """Print per-pod duration stats for a start/stop action.
-
-    ``timings`` is a list of ``(pod_name, elapsed_seconds, succeeded)``
-    tuples populated from worker threads (list.append is GIL-atomic in
-    CPython, so concurrent appends from the thread pool are safe).
-    """
-    if not timings:
-        return
-    print(f'\n{action} per-pod timings:')
-    for pod_name, elapsed, ok in sorted(timings, key=lambda x: x[0]):
-        print(f'  {pod_name:<40} {elapsed:7.2f}s  {"OK" if ok else "FAIL"}')
-    elapsed_all = [t for _, t, _ in timings]
-    ok_count = sum(1 for _, _, ok in timings if ok)
-    fail_count = len(timings) - ok_count
-    print(f'  min={min(elapsed_all):.2f}s  max={max(elapsed_all):.2f}s  '
-          f'avg={sum(elapsed_all) / len(elapsed_all):.2f}s  '
-          f'total={sum(elapsed_all):.2f}s  '
-          f'(succeeded={ok_count}, failed={fail_count})')
 
 
 def start_worker(pod, namespace, config, worker_port, remote_config,
@@ -76,6 +59,9 @@ def start_worker(pod, namespace, config, worker_port, remote_config,
 
 def cmd_start(args, pods):
     """Start workers from a config template."""
+    if getattr(args, 'standalone', False):
+        return cmd_start_standalone(args, pods)
+
     with open(args.config) as f:
         config_template = json.load(f)
 
@@ -118,52 +104,75 @@ def cmd_start(args, pods):
     return rc
 
 
-def cmd_stop(args, pods):
-    """Stop workers gracefully using dscli."""
+def cmd_start_standalone(args, pods):
+    """Start worker_test binary in standalone mode."""
+    with open(args.config) as f:
+        config_template = json.load(f)
+
+    if args.set:
+        apply_config_overrides(config_template, args.set)
+
+    remote_dir = getattr(args, 'remote_dir', None) or os.path.dirname(args.remote_config) or '/tmp/ds_worker'
     timings = []
 
     def do_op(pod):
+        cfg = json.loads(json.dumps(config_template))
+        cfg[ADDRESS_KEY] = {'value': f'{pod["ip"]}:{args.port}'}
         t0 = time.monotonic()
         ok = False
         try:
-            ok = stop_service(pod, args.namespace, args.remote_config,
-                              timeout=args.timeout)
+            ok = start_service_standalone(
+                pod, args.namespace, PROCESS_NAME_STANDALONE, remote_dir,
+                args.remote_config, args.jf, args.service, '',
+                config=cfg,
+                enable_procmon=args.enable_procmon,
+                procmon_remote_dir=args.procmon_dir or '/tmp',
+                port=args.port,
+                process_name=PROCESS_NAME_STANDALONE,
+                timeout=args.timeout)
             return ok
         finally:
             elapsed = time.monotonic() - t0
             timings.append((pod['name'], elapsed, bool(ok)))
 
-    rc = do_for_all_pods(pods, do_op, 'Stopping workers')
-    _print_timings('stop', timings)
+    rc = do_for_all_pods(pods, do_op, 'Starting workers (standalone)')
+    _print_timings('start', timings)
     return rc
+
+
+def cmd_stop(args, pods):
+    """Stop workers gracefully."""
+    return cmd_stop_shared(args, pods, PROCESS_NAME_STANDALONE, 'workers',
+                           service_type='worker', with_timings=True,
+                           timeout=args.timeout)
 
 
 def cmd_kill(args, pods):
     """Force kill workers."""
-    return cmd_kill_impl(pods, args.namespace, args.process,
-                         'workers', args.timeout)
+    return cmd_kill_shared(args, pods, PROCESS_NAME_STANDALONE,
+                           'workers', timeout=args.timeout)
 
 
 def cmd_check(args, pods):
     """Check workers."""
-    return cmd_check_impl(pods, args.namespace, args.process,
+    proc = PROCESS_NAME_STANDALONE if getattr(args, 'standalone', False) else args.process
+    return cmd_check_impl(pods, args.namespace, proc,
                           'worker processes', args.timeout)
 
 
 def cmd_exec(args, pods):
-    """Execute command in pods.
+    """Execute command in pods."""
+    return cmd_exec_shared(args, pods, args.timeout)
 
-    With --expected-commit, run ``dscli --version`` in each pod, parse the
-    commit hash from stdout, and list pod IPs whose commit differs from the
-    expected one. The command actually executed is fixed to
-    ``dscli --version`` so the --cmd argument is only used as a hint that the
-    user wants a version check (must contain 'dscli' and 'version'). Returns 0
+
+def cmd_check_commit(args, pods):
+    """Check dscli commit hash across all pods against an expected value.
+
+    Runs ``dscli --version`` in each pod, parses the commit hash from stdout,
+    and lists pod IPs whose commit differs from the expected one. Returns 0
     regardless of mismatches -- the mismatched IP list is the actionable
     output, not the exit code.
     """
-    if not args.expected_commit:
-        return cmd_exec_impl(pods, args.namespace, args.cmd, args.timeout)
-
     cmd = 'dscli --version'
     expected = args.expected_commit.strip().lower()
     mismatches = []
@@ -219,19 +228,20 @@ def cmd_exec(args, pods):
 
 def cmd_collect(args, pods):
     """Collect worker logs from pods."""
-    return cmd_collect_impl(pods, args.namespace, args.remote_config,
-                            args.output, 'worker logs', args.timeout)
+    return cmd_collect_shared(args, pods, 'worker logs', args.timeout)
 
 
 def cmd_clean(args, pods):
     """Kill workers and clean log directories."""
-    return cmd_clean_impl(pods, args.namespace, args.remote_config,
-                          PROCESS_NAME, 'worker logs', args.timeout)
+    return cmd_clean_shared(args, pods, PROCESS_NAME, 'worker logs', args.timeout)
 
 
 def cmd_install(args, pods):
-    """Install worker whl package."""
-    return cmd_install_impl(pods, args.namespace, args.whl, args.timeout)
+    """Install worker: always install whl first, then optionally copy
+    standalone binary (standalone mode adds the binary on top of the whl)."""
+    return cmd_install_shared(args, pods, PROCESS_NAME_STANDALONE, 'worker',
+                              os.path.dirname(os.path.abspath(__file__)),
+                              args.timeout)
 
 
 def main():
@@ -289,42 +299,51 @@ def main():
     parser_start.add_argument('-N', '--numa-nodes', default=None,
                               help='NUMA node(s) to bind worker to, passed to dscli start -N (e.g. "0" or "0,1")')
     parser_start.add_argument('-C', '--cpu-bind', default=None,
-                              help='CPU core(s) to bind worker to, passed to dscli start -C (e.g. "0-7" or "0,2,4,6")')
+                               help='CPU core(s) to bind worker to (dscli mode only)')
+    # Standalone mode
+    parser_start.add_argument('-S', '--standalone', action='store_true', default=False,
+                               help='Use worker_test binary instead of dscli')
+    parser_start.add_argument('--jf', default=None,
+                               help='JF mock address for service discovery (standalone mode)')
+    parser_start.add_argument('--service', default='kvcache_coordinator',
+                               help='JF service name (standalone mode, default: kvcache_coordinator)')
+    parser_start.add_argument('--remote-dir', default='/tmp/ds_worker',
+                               help='Remote directory with standalone binary (must match install --remote-dir)')
 
-    # Stop subcommand (graceful stop using dscli)
+    # Stop subcommand
     parser_stop = subparsers.add_parser('stop', parents=[parent_parser],
-                                        help='Stop workers gracefully using dscli')
+                                        help='Stop workers gracefully')
     parser_stop.add_argument('--remote-config', default='/tmp/worker.config',
                              help='Worker config file path (default: /tmp/worker.config)')
+    parser_stop.add_argument('-S', '--standalone', action='store_true', default=False)
 
     # Kill subcommand (force kill using kill -9)
     parser_kill = subparsers.add_parser('kill', parents=[parent_parser],
                                         help='Force kill workers')
     parser_kill.add_argument('--process', default=PROCESS_NAME,
                              help=f'Process name to kill (default: {PROCESS_NAME})')
+    parser_kill.add_argument('-S', '--standalone', action='store_true', default=False)
 
     # Check subcommand
     parser_check = subparsers.add_parser('check', parents=[parent_parser],
                                          help='Check worker status')
     parser_check.add_argument('--process', default=PROCESS_NAME,
                               help=f'Process name to check (default: {PROCESS_NAME})')
+    parser_check.add_argument('-S', '--standalone', action='store_true', default=False)
 
     # Exec subcommand
     parser_exec = subparsers.add_parser('exec', parents=[parent_parser],
                                         help='Execute command in pods')
     parser_exec.add_argument('--cmd', '-c', required=True,
-                             help='Command to execute (required). When '
-                                  '--expected-commit is set, the cmd is ignored '
-                                  'and dscli --version is run instead.')
-    parser_exec.add_argument('--expected-commit', default=None,
-                             help='When set, run dscli --version in each pod '
-                                  'and list pod IPs whose commit hash differs '
-                                  'from this value. Accepts full or prefix '
-                                  'match (first 12+ chars). Returns 0 regardless '
-                                  'of mismatches; the mismatched IP list is '
-                                  'the actionable output. --cmd is still '
-                                  'required but only needs to mention dscli '
-                                  '(e.g. --cmd "dscli --version").')
+                              help='Command to execute (required)')
+
+    # Check-commit subcommand
+    parser_check_commit = subparsers.add_parser('check-commit', parents=[parent_parser],
+                                                help='Check dscli commit hash across pods')
+    parser_check_commit.add_argument('--expected-commit', required=True,
+                                     help='Expected commit hash (full or prefix, '
+                                          'first 12+ chars). Runs dscli --version '
+                                          'in each pod and lists mismatched IPs.')
 
     # Collect subcommand
     parser_collect = subparsers.add_parser('collect', parents=[parent_parser],
@@ -342,10 +361,15 @@ def main():
 
     # Install subcommand
     parser_install = subparsers.add_parser('install', parents=[parent_parser],
-                                           help='Install worker whl package')
+                                           help='Install worker binary or whl')
+    parser_install.add_argument('-S', '--standalone', action='store_true', default=False,
+                                help='Install standalone binary + .so (default: install whl)')
     parser_install.add_argument('--whl', default=default_whl,
-                                help='Path to worker whl package '
-                                     '(default: auto-detect from ../../output)')
+                                help='Path to worker whl package (dscli mode)')
+    parser_install.add_argument('--binary', default=None,
+                                help='Local path to worker_test binary (standalone mode)')
+    parser_install.add_argument('--remote-dir', default='/tmp/ds_worker',
+                                help='Remote directory for standalone binary (default: /tmp/ds_worker)')
 
     args = parser.parse_args()
 
@@ -403,6 +427,8 @@ def main():
         return cmd_check(args, pods)
     elif args.action == 'exec':
         return cmd_exec(args, pods)
+    elif args.action == 'check-commit':
+        return cmd_check_commit(args, pods)
     elif args.action == 'collect':
         return cmd_collect(args, pods)
     elif args.action == 'clean':

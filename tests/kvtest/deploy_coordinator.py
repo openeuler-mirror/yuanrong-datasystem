@@ -27,22 +27,27 @@ from deploy_common import (
     apply_config_overrides,
     check_process,
     cmd_check_impl,
-    cmd_clean_impl,
-    cmd_collect_impl,
-    cmd_exec_impl,
+    cmd_clean_shared,
+    cmd_collect_shared,
+    cmd_exec_shared,
     cmd_install_impl,
-    cmd_kill_impl,
-    cmd_stop_impl,
+    cmd_install_shared,
+    cmd_kill_shared,
+    cmd_stop_shared,
     discover_nodes,
     do_for_all_pods,
     find_default_whl,
     get_pods,
+    kubectl_exec_raw,
+    read_remote_log_dir,
     resolve_procmon_dir,
     start_service,
+    start_service_standalone,
 )
 
 
 PROCESS_NAME = 'datasystem_coordinator'
+PROCESS_NAME_STANDALONE = 'coordinator_test'
 ADDRESS_KEY = 'coordinator_address'
 
 
@@ -81,20 +86,13 @@ def _inject_raft_initial_peers(cfg, pods, port):
 def cmd_start(args, pods):
     """Start coordinators from a config template.
 
-    Each matching pod gets its own ``coordinator_address`` (``pod_ip:port``)
-    and, when 2+ pods are matched, the same ``coordinator_raft_initial_peers``
-    list built from every matched pod so a multi-instance cluster can run
-    static-peers Raft election. A single matched pod is left in single-node
-    no-election mode.
-
-    Pods that already have a live ``datasystem_coordinator`` process are
-    skipped (not re-started). This lets an operator restart a single member
-    of an existing cluster by passing every cluster prefix: the live members
-    are skipped and only the stopped one is started, still carrying the full
-    peer list so it can rejoin via persisted Raft recovery. A pod whose
-    liveness probe errors is treated as dead and started (so a flaky check
-    surfaces a real start failure rather than silently skipping).
+    In standalone mode (--standalone), uses coordinator_test binary instead
+    of dscli. The binary and .so deps must be pre-installed via
+    ``install --standalone`` or the deploy command.
     """
+    if getattr(args, 'standalone', False):
+        return cmd_start_standalone(args, pods)
+
     with open(args.config) as f:
         config_template = json.load(f)
 
@@ -124,6 +122,45 @@ def cmd_start(args, pods):
                                  timeout=args.timeout)
 
     return do_for_all_pods(pods, do_op, 'Starting coordinators')
+
+
+def cmd_start_standalone(args, pods):
+    """Start coordinator_test binary in standalone mode."""
+    with open(args.config) as f:
+        config_template = json.load(f)
+
+    if args.set:
+        apply_config_overrides(config_template, args.set)
+
+    remote_dir = getattr(args, 'remote_dir', None) or os.path.dirname(args.remote_config) or '/tmp/ds_coordinator'
+    binary_name = PROCESS_NAME_STANDALONE
+
+    extra = f'--coordinator {{pod_ip}}:{args.port} --hooks --ttl {args.ttl} --expected-member-count {args.expected_member_count}'
+
+    def do_op(pod):
+        _, status, _ = check_process(pod, args.namespace, binary_name,
+                                     timeout=args.timeout)
+        if status == 'alive':
+            print(f'  {pod["name"]} ({pod["ip"]}) -> already running, skip')
+            return True
+        cfg = json.loads(json.dumps(config_template))
+        cfg[ADDRESS_KEY] = {'value': f'{pod["ip"]}:{args.port}'}
+        # When using JF for service discovery, peers are discovered
+        # dynamically from JF; no need to inject static peers.
+        if not args.jf:
+            _inject_raft_initial_peers(cfg, pods, args.port)
+        pod_extra = extra.replace('{pod_ip}', pod['ip'])
+        return start_service_standalone(
+            pod, args.namespace, binary_name, remote_dir, args.remote_config,
+            args.jf, args.service, pod_extra,
+            config=cfg,
+            enable_procmon=args.enable_procmon,
+            procmon_remote_dir=args.procmon_dir or '/tmp',
+            port=args.port,
+            process_name=binary_name,
+            timeout=args.timeout)
+
+    return do_for_all_pods(pods, do_op, 'Starting coordinators (standalone)')
 
 
 def _distribute_instances_across_nodes(num_instances, nodes):
@@ -289,38 +326,112 @@ def cmd_deploy(args, pods=None):
 
 
 def cmd_stop(args, pods):
-    """Stop coordinators gracefully using dscli."""
-    return cmd_stop_impl(pods, args.namespace, args.remote_config,
-                         'coordinators', args.timeout)
+    """Stop coordinators gracefully."""
+    return cmd_stop_shared(args, pods, PROCESS_NAME_STANDALONE, 'coordinators',
+                           service_type='coordinator', timeout=args.timeout)
 
 
 def cmd_kill(args, pods):
     """Force kill coordinators."""
-    return cmd_kill_impl(pods, args.namespace, args.process,
-                         'coordinators', args.timeout)
+    return cmd_kill_shared(args, pods, PROCESS_NAME_STANDALONE,
+                           'coordinators', timeout=args.timeout)
 
 
 def cmd_check(args, pods):
-    """Check coordinators."""
-    return cmd_check_impl(pods, args.namespace, args.process,
-                          'coordinator processes', args.timeout)
+    """Check coordinators.
+
+    With --standalone --ready, after checking process is alive, also polls:
+    1. TCP port connectable on each coordinator
+    2. For multi-replica: at least one coordinator log shows
+       CONFIGURATION_COMMITTED (leader elected, cluster ready to serve)
+    """
+    import time
+    proc = PROCESS_NAME_STANDALONE if getattr(args, 'standalone', False) else args.process
+
+    # Step 1: Basic process check
+    rc = cmd_check_impl(pods, args.namespace, proc,
+                        'coordinator processes', args.timeout)
+    if rc != 0:
+        return rc
+
+    # Step 2: Ready check (--ready, both standalone and dscli modes)
+    if not getattr(args, 'ready', False):
+        return 0
+
+    port = getattr(args, 'port', 31511)
+
+    # 2a: TCP port check on each pod
+    print('\nChecking coordinator port readiness...')
+    all_port_ok = True
+    for pod in pods:
+        pod_ip = pod['ip']
+        r = kubectl_exec_raw(pod, namespace=args.namespace,
+                             cmd=f'python3 -c "import socket;s=socket.socket();s.settimeout(2);'
+                                 f's.connect((\\\"{pod_ip}\\\",{port}));s.close()" 2>/dev/null '
+                                 f'&& echo OK || echo FAIL', timeout=10)
+        status = r.strip() if r else 'FAIL'
+        print(f'  {pod["name"]} ({pod_ip}:{port}) -> {status}')
+        if status != 'OK':
+            all_port_ok = False
+    if not all_port_ok:
+        print('Result: some coordinator ports not ready')
+        return 1
+
+    # 2b: Leader elected check (for multi-replica)
+    expected_members = getattr(args, 'expected_member_count', 1)
+    if expected_members > 1:
+        print(f'\nChecking leader election (expected {expected_members} members)...')
+        # Read log_dir from the remote config (same as collect command)
+        remote_config = getattr(args, 'remote_config', '/tmp/coordinator.config')
+        log_dir, _ = read_remote_log_dir(args.namespace, pods, remote_config, args.timeout)
+        if not log_dir:
+            print(f'  WARNING: log_dir not found in remote config, '
+                  f'cannot check leader election')
+            return 0
+        leader_found = False
+        check_pod = pods[0]
+        for i in range(60):
+            r = kubectl_exec_raw(
+                check_pod, namespace=args.namespace,
+                cmd=f'grep -rl "CONFIGURATION_COMMITTED\\|LEADER_ELECTED" '
+                    f'{log_dir}/ 2>/dev/null | head -1',
+                timeout=10)
+            if r and r.strip():
+                leader_found = True
+                print(f'  Leader elected (detected in {check_pod["name"]})')
+                break
+            if i % 5 == 0:
+                print(f'  Waiting for leader election... ({i}s)')
+            time.sleep(1)
+        if not leader_found:
+            print('  Leader not elected after 60s')
+            return 1
+
+    print('\nAll coordinators ready')
+    return 0
 
 
 def cmd_exec(args, pods):
     """Execute command in pods."""
-    return cmd_exec_impl(pods, args.namespace, args.cmd, args.timeout)
+    return cmd_exec_shared(args, pods, args.timeout)
 
 
 def cmd_collect(args, pods):
     """Collect coordinator logs from pods."""
-    return cmd_collect_impl(pods, args.namespace, args.remote_config,
-                            args.output, 'coordinator logs', args.timeout)
+    return cmd_collect_shared(args, pods, 'coordinator logs', args.timeout)
 
 
 def cmd_clean(args, pods):
     """Kill coordinators and clean log directories."""
-    return cmd_clean_impl(pods, args.namespace, args.remote_config,
-                          PROCESS_NAME, 'coordinator logs', args.timeout)
+    return cmd_clean_shared(args, pods, PROCESS_NAME, 'coordinator logs', args.timeout)
+
+
+def cmd_install(args, pods):
+    """Install coordinator: always install whl first, then optionally copy
+    standalone binary (standalone mode adds the binary on top of the whl)."""
+    return cmd_install_shared(args, pods, PROCESS_NAME_STANDALONE, 'coordinator',
+                              os.path.dirname(os.path.abspath(__file__)),
+                              args.timeout)
 
 
 def main():
@@ -365,25 +476,50 @@ def main():
                               dest='enable_procmon',
                               help='Disable procmon.py monitoring (default)')
     parser_start.add_argument('--procmon-dir', default=None,
-                              help='Remote directory for procmon files (default: same as --remote-config dir)')
+                               help='Remote directory for procmon files (default: same as --remote-config dir)')
+    # Standalone mode (coordinator_test binary instead of dscli)
+    parser_start.add_argument('-S', '--standalone', action='store_true', default=False,
+                               help='Use coordinator_test binary instead of dscli')
+    parser_start.add_argument('--jf', default=None,
+                               help='JF mock address for service discovery (standalone mode only)')
+    parser_start.add_argument('--service', default='kvcache_coordinator',
+                               help='JF service name (standalone mode only, default: kvcache_coordinator)')
+    parser_start.add_argument('--ttl', type=int, default=30,
+                               help='Heartbeat TTL seconds (standalone mode only, default: 30)')
+    parser_start.add_argument('--expected-member-count', type=int, default=1,
+                               help='Raft member count for multi-replica (standalone mode only, default: 1)')
+    parser_start.add_argument('--remote-dir', default='/tmp/ds_coordinator',
+                               help='Remote directory with standalone binary (must match install --remote-dir)')
 
     # Stop subcommand (graceful stop using dscli)
     parser_stop = subparsers.add_parser('stop', parents=[parent_parser],
-                                        help='Stop coordinators gracefully using dscli')
+                                        help='Stop coordinators gracefully')
     parser_stop.add_argument('--remote-config', default='/tmp/coordinator.config',
-                             help='Coordinator config file path (default: /tmp/coordinator.config)')
+                             help='Config file path (default: /tmp/coordinator.config)')
+    parser_stop.add_argument('-S', '--standalone', action='store_true', default=False)
 
     # Kill subcommand (force kill using kill -9)
     parser_kill = subparsers.add_parser('kill', parents=[parent_parser],
                                         help='Force kill coordinators')
     parser_kill.add_argument('--process', default=PROCESS_NAME,
                              help=f'Process name to kill (default: {PROCESS_NAME})')
+    parser_kill.add_argument('-S', '--standalone', action='store_true', default=False)
 
     # Check subcommand
     parser_check = subparsers.add_parser('check', parents=[parent_parser],
                                          help='Check coordinator status')
     parser_check.add_argument('--process', default=PROCESS_NAME,
                               help=f'Process name to check (default: {PROCESS_NAME})')
+    parser_check.add_argument('-S', '--standalone', action='store_true', default=False)
+    parser_check.add_argument('--ready', action='store_true', default=False,
+                               help='Wait for coordinator readiness: port connectable, '
+                                    'leader elected (standalone only)')
+    parser_check.add_argument('--port', type=int, default=31511,
+                               help='Coordinator port for TCP check (default: 31511)')
+    parser_check.add_argument('--expected-member-count', type=int, default=1,
+                               help='Expected member count for leader election check (default: 1)')
+    parser_check.add_argument('--remote-config', default='/tmp/coordinator.config',
+                               help='Remote config path (used to read log_dir for leader check)')
 
     # Exec subcommand
     parser_exec = subparsers.add_parser('exec', parents=[parent_parser],
@@ -404,6 +540,19 @@ def main():
                                          help='Kill coordinators and clean log directories')
     parser_clean.add_argument('--remote-config', default='/tmp/coordinator.config',
                               help='Config path inside pod (default: /tmp/coordinator.config)')
+    parser_clean.add_argument('-S', '--standalone', action='store_true', default=False)
+
+    # Install subcommand
+    parser_install = subparsers.add_parser('install', parents=[parent_parser],
+                                           help='Install coordinator binary or whl')
+    parser_install.add_argument('-S', '--standalone', action='store_true', default=False,
+                                help='Install standalone binary + .so (mutually exclusive with --whl)')
+    parser_install.add_argument('--whl', default=find_default_whl(),
+                                help='Path to datasystem whl package (dscli mode)')
+    parser_install.add_argument('--binary', default=None,
+                                help='Local path to coordinator_test binary (standalone mode)')
+    parser_install.add_argument('--remote-dir', default='/tmp/ds_coordinator',
+                                help='Remote directory for standalone binary (default: /tmp/ds_coordinator)')
 
     # Deploy subcommand (full lifecycle: bring up pods + install whl +
     # start multi-instance coordinators with Raft peers)
@@ -501,6 +650,8 @@ def main():
         return cmd_collect(args, pods)
     elif args.action == 'clean':
         return cmd_clean(args, pods)
+    elif args.action == 'install':
+        return cmd_install(args, pods)
     elif args.action == 'deploy':
         return cmd_deploy(args, pods)
 

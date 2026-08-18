@@ -245,16 +245,18 @@ def kill_process(pod, namespace, process_name, timeout=DEFAULT_TIMEOUT):
         return False
 
 
-def stop_service(pod, namespace, remote_config, timeout=DEFAULT_TIMEOUT):
-    """Stop a service gracefully using dscli stop -f <config>.
+def stop_service(pod, namespace, remote_config, timeout=DEFAULT_TIMEOUT,
+                 service_type='worker'):
+    """Stop a service gracefully using dscli stop.
 
-    dscli uses service address fields in the config to stop the matching
-    datasystem_worker or datasystem_coordinator process.
+    Uses -W (worker_config_path) or -C (coordinator_config_path) depending on
+    service_type, matching the dscli stop argument changes in 42d8950d.
     """
     pod_name = pod['name']
     pod_ip = pod['ip']
+    flag = '-C' if service_type == 'coordinator' else '-W'
     try:
-        kubectl_exec(pod_name, namespace, f'dscli stop -f {remote_config}',
+        kubectl_exec(pod_name, namespace, f'dscli stop {flag} {remote_config} -t {timeout}',
                       timeout=timeout)
         print(f'  {pod_name} ({pod_ip}) -> stopped')
         return True
@@ -625,10 +627,11 @@ def cmd_check_impl(pods, namespace, process_name, label, timeout=DEFAULT_TIMEOUT
     return 0
 
 
-def cmd_stop_impl(pods, namespace, remote_config, label, timeout=DEFAULT_TIMEOUT):
+def cmd_stop_impl(pods, namespace, remote_config, label, timeout=DEFAULT_TIMEOUT,
+                  service_type='worker'):
     """Stop services gracefully using dscli across all pods."""
     def do_op(pod):
-        return stop_service(pod, namespace, remote_config, timeout)
+        return stop_service(pod, namespace, remote_config, timeout, service_type)
     return do_for_all_pods(pods, do_op, f'Stopping {label}')
 
 
@@ -682,3 +685,258 @@ def cmd_install_impl(pods, namespace, whl, timeout=DEFAULT_TIMEOUT):
     def do_op(pod):
         return install_whl(pod, namespace, whl, timeout)
     return do_for_all_pods(pods, do_op, 'Installing whl')
+
+
+# ============================================================================
+# Standalone mode helpers (coordinator_test / worker_test binary)
+# ============================================================================
+
+def kubectl_exec_raw(pod, namespace, cmd, timeout=DEFAULT_TIMEOUT):
+    """Execute a command in a pod, return stdout string."""
+    full = ['kubectl', 'exec', '-n', namespace, pod['name'], '--', 'bash', '-c', cmd]
+    try:
+        r = subprocess.run(full, capture_output=True, text=True, timeout=timeout)
+        return r.stdout if r.returncode == 0 else ''
+    except Exception:
+        return ''
+
+
+def install_binary(pod, namespace, local_binary, remote_dir,
+                    timeout=DEFAULT_TIMEOUT):
+    """Copy a standalone binary to a pod (no lib directory needed -- the whl
+    package provides all .so files via pip3 install).
+
+    Caller must ensure whl is already installed (via install_whl) before
+    calling this; the standalone binary's LD_LIBRARY_PATH is set to the
+    whl-installed lib directory at start time.
+    """
+    if not os.path.exists(local_binary):
+        print(f'ERROR: binary not found: {local_binary}', file=sys.stderr)
+        return False
+    name = pod['name']
+    subprocess.run(['kubectl', 'exec', '-n', namespace, name, '--', 'mkdir', '-p', remote_dir],
+                    timeout=timeout)
+    subprocess.run(['kubectl', 'cp', '-n', namespace, local_binary, f'{name}:{remote_dir}/'],
+                    timeout=timeout)
+    subprocess.run(['kubectl', 'exec', '-n', namespace, name, '--', 'chmod', '+x',
+                     f'{remote_dir}/{os.path.basename(local_binary)}'], timeout=timeout)
+    return True
+
+
+def find_whl_lib_dir(pod, namespace, timeout=DEFAULT_TIMEOUT):
+    """Find the lib directory inside the pip-installed datasystem package.
+
+    The whl installs .so files under yr/datasystem/lib/ inside the Python
+    site-packages directory. Returns the path (e.g.
+    /usr/local/lib64/python3.11/site-packages/yr/datasystem/lib) or '' if not
+    found.
+    """
+    # Primary: use Python introspection to locate the package directory
+    cmd = ('python3 -c "import yr.datasystem, os; '
+           'print(os.path.join(os.path.dirname(yr.datasystem.__file__), \'lib\'))" 2>/dev/null')
+    result = kubectl_exec_raw(pod, namespace, cmd, timeout=timeout)
+    if result and result.strip() and os.path.basename(result.strip()) == 'lib':
+        return result.strip()
+    # Fallback: find via pip show -- works even if yr.datasystem can't be
+    # imported (e.g. broken .pyc, missing __init__.py, wrong python version)
+    cmd2 = 'pip3 show -f openyuanrong-datasystem 2>/dev/null | grep "yr/datasystem/lib$" | head -1'
+    rel_path = kubectl_exec_raw(pod, namespace, cmd2, timeout=timeout)
+    if rel_path and rel_path.strip():
+        cmd3 = 'python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null'
+        sp = kubectl_exec_raw(pod, namespace, cmd3, timeout=timeout)
+        if sp and sp.strip():
+            return f'{sp.strip()}/{rel_path.strip()}'
+    return ''
+
+
+def start_service_standalone(pod, namespace, binary_name, remote_dir, config_path,
+                              jf_addr, service_name, extra_args='',
+                              config=None,
+                              enable_procmon=True, procmon_remote_dir='/tmp',
+                              port=None, process_name=None,
+                              timeout=DEFAULT_TIMEOUT):
+    """Start a standalone test binary in a pod.
+
+    ``config`` is the per-pod config dict built by the caller. It is written
+    to ``config_path`` inside the pod via ``kubectl cp`` before launch.
+    ``port`` and ``process_name`` are used for procmon PID lookup (same logic
+    as ``start_service`` dscli path).
+    """
+    name = pod['name']
+    pod_ip = pod['ip']
+    # Find the whl-installed lib directory for LD_LIBRARY_PATH
+    whl_lib_dir = find_whl_lib_dir(pod, namespace, timeout)
+    if config is not None:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json',
+                                         prefix=f'standalone_{name}_',
+                                         delete=False) as tf:
+            json.dump(config, tf, indent=2)
+            tmp_cfg = tf.name
+        try:
+            kubectl_cp_to(name, namespace, tmp_cfg, config_path, timeout=timeout)
+        finally:
+            os.unlink(tmp_cfg)
+    # nohup + </dev/null detaches stdin; echo $! makes shell print PID and exit.
+    # LD_LIBRARY_PATH points at the whl-installed lib dir so the standalone
+    # binary finds libdatasystem_worker.so / libdatasystem_coordinator.so etc.
+    ld_path = whl_lib_dir or f'{remote_dir}/lib'
+    cmd = (f'cd {remote_dir} && '
+           f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH nohup ./{binary_name} '
+           f'--config {config_path} --jf {jf_addr} --service {service_name} {extra_args} '
+           f'> {remote_dir}/stdout.log 2>&1 </dev/null & '
+           f'echo $!')
+    try:
+        subprocess.run(
+            ['kubectl', 'exec', '-n', namespace, name, '--', 'sh', '-c', cmd],
+            capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+    # Verify process started (mirrors deploy_client.py pgrep check)
+    import time
+    time.sleep(1)
+    pid = None
+    if port and process_name:
+        pid = find_pid_by_port(pod, namespace, port, process_name, timeout)
+    else:
+        verify = kubectl_exec_raw({'name': name}, namespace,
+                                  f'pgrep -f {binary_name}', timeout=10)
+        if verify and verify.strip():
+            pid = verify.strip().split('\n')[0]
+    if not pid:
+        print(f'  {name} ({pod_ip}) -> FAILED: process not found')
+        return False
+    print(f'  {name} ({pod_ip}) -> started (pid={pid})')
+    # Attach procmon (same logic as start_service dscli path)
+    if enable_procmon:
+        if upload_procmon(pod, namespace, procmon_remote_dir, timeout):
+            procmon_pid = start_procmon(pod, namespace, pid, procmon_remote_dir)
+            if procmon_pid:
+                print(f'  {name} ({pod_ip}) -> procmon started '
+                      f'(pid={procmon_pid}, monitoring pid={pid})')
+            else:
+                print(f'  {name} ({pod_ip}) -> procmon start failed')
+        else:
+            print(f'  {name} ({pod_ip}) -> procmon skipped: upload failed')
+    return True
+
+
+def stop_service_standalone(pod, namespace, process_name, timeout=DEFAULT_TIMEOUT):
+    """Stop a standalone test binary via SIGTERM."""
+    name = pod['name']
+    r = subprocess.run(['kubectl', 'exec', '-n', namespace, name, '--', 'bash', '-c',
+                        f'pkill -TERM -f {process_name} 2>/dev/null || true'],
+                       capture_output=True, text=True, timeout=timeout)
+    import time
+    time.sleep(3)
+    return True
+
+
+# ============================================================================
+# Shared command implementations (used by deploy_coordinator + deploy_worker)
+# ============================================================================
+
+def _print_timings(action, timings):
+    """Print per-pod duration stats for a start/stop action.
+
+    ``timings`` is a list of ``(pod_name, elapsed_seconds, succeeded)``
+    tuples populated from worker threads (list.append is GIL-atomic in
+    CPython, so concurrent appends from the thread pool are safe).
+    """
+    if not timings:
+        return
+    print(f'\n{action} per-pod timings:')
+    for pod_name, elapsed, ok in sorted(timings, key=lambda x: x[0]):
+        print(f'  {pod_name:<40} {elapsed:7.2f}s  {"OK" if ok else "FAIL"}')
+    elapsed_all = [t for _, t, _ in timings]
+    ok_count = sum(1 for _, _, ok in timings if ok)
+    fail_count = len(timings) - ok_count
+    print(f'  min={min(elapsed_all):.2f}s  max={max(elapsed_all):.2f}s  '
+          f'avg={sum(elapsed_all) / len(elapsed_all):.2f}s  '
+          f'total={sum(elapsed_all):.2f}s  '
+          f'(succeeded={ok_count}, failed={fail_count})')
+
+
+def cmd_exec_shared(args, pods, timeout=DEFAULT_TIMEOUT):
+    """Execute command in pods."""
+    return cmd_exec_impl(pods, args.namespace, args.cmd, timeout)
+
+
+def cmd_collect_shared(args, pods, label, timeout=DEFAULT_TIMEOUT):
+    """Collect service logs from pods."""
+    return cmd_collect_impl(pods, args.namespace, args.remote_config,
+                            args.output, label, timeout)
+
+
+def cmd_clean_shared(args, pods, process_name, label, timeout=DEFAULT_TIMEOUT):
+    """Kill service processes and clean log directories."""
+    return cmd_clean_impl(pods, args.namespace, args.remote_config,
+                           process_name, label, timeout)
+
+
+def cmd_kill_shared(args, pods, process_name_standalone, label,
+                    timeout=DEFAULT_TIMEOUT):
+    """Force kill service processes across all pods."""
+    proc = (process_name_standalone if getattr(args, 'standalone', False)
+            else args.process)
+    return cmd_kill_impl(pods, args.namespace, proc, label, timeout)
+
+
+def cmd_install_shared(args, pods, process_name_standalone, label,
+                        script_dir, timeout=DEFAULT_TIMEOUT):
+    """Install whl first (both modes need .so deps), then optionally copy
+    standalone binary on top."""
+    whl_rc = cmd_install_impl(pods, args.namespace, args.whl, timeout)
+    if whl_rc != 0:
+        return whl_rc
+    if getattr(args, 'standalone', False):
+        binary = args.binary or os.path.join(
+            script_dir, 'output', process_name_standalone)
+        def do_op(pod):
+            return install_binary(pod, args.namespace, binary,
+                                  args.remote_dir, timeout)
+        return do_for_all_pods(pods, do_op, f'Installing {label} binary (standalone)')
+    return 0
+
+
+def cmd_stop_shared(args, pods, process_name_standalone, label,
+                    service_type='worker', with_timings=False,
+                    timeout=DEFAULT_TIMEOUT):
+    """Stop service gracefully. Standalone mode uses SIGTERM + do_for_all_pods;
+    non-standalone uses dscli stop."""
+    if getattr(args, 'standalone', False):
+        timings = []
+        def do_op(pod):
+            import time as _time
+            t0 = _time.monotonic()
+            ok = False
+            try:
+                ok = stop_service_standalone(pod, args.namespace,
+                                             process_name_standalone, timeout)
+                return ok
+            finally:
+                elapsed = _time.monotonic() - t0
+                timings.append((pod['name'], elapsed, bool(ok)))
+        rc = do_for_all_pods(pods, do_op, f'Stopping {label} (standalone)')
+        if with_timings:
+            _print_timings('stop', timings)
+        return rc
+
+    if with_timings:
+        import time as _time
+        timings = []
+        def do_op(pod):
+            t0 = _time.monotonic()
+            ok = False
+            try:
+                ok = stop_service(pod, args.namespace, args.remote_config,
+                                  timeout=timeout)
+                return ok
+            finally:
+                elapsed = _time.monotonic() - t0
+                timings.append((pod['name'], elapsed, bool(ok)))
+        rc = do_for_all_pods(pods, do_op, f'Stopping {label}')
+        _print_timings('stop', timings)
+        return rc
+
+    return cmd_stop_impl(pods, args.namespace, args.remote_config,
+                         label, timeout, service_type=service_type)

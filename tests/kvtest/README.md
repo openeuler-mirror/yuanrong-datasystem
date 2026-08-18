@@ -1,6 +1,6 @@
 # kvtest
 
-独立的 datasystem KVClient 性能测试工具，支持 Writer/Reader 角色分离、Cache 模式、Benchmark Set/Get 模式、多节点部署、K8s 自动发现。
+独立的 datasystem KVClient 性能测试工具，支持 Writer/Reader 角色分离、Cache 模式、Benchmark Set/Get 模式、多节点部署、K8s 自动发现。同时提供 Worker/Coordinator 独立部署测试程序（coordinator_test / worker_test）和外部服务发现模拟（mock_jf_server.py），用于验证独立集成部署与服务发现对接流程。
 
 ## 编译与运行
 
@@ -8,7 +8,7 @@
 cd tests/kvtest
 
 # 编译（默认 Bazel：in-tree datasystem，自包含二进制，无需预装 SDK；
-#       自动启用 KVTEST_USE_BRPC —— brpc 控制面 + bthread pipeline/notify 池）
+#       自动启用 KVTEST_USE_BRPC ---- brpc 控制面 + bthread pipeline/notify 池）
 ./build.sh
 
 # 或指定 SDK 路径
@@ -97,6 +97,11 @@ bash tests/run_all_tests.sh
 bash tests/test_cpu_affinity.sh   # CPU 绑核验证
 bash tests/test_deploy.sh          # 多节点部署验证
 bash tests/test_e2e.sh             # 端到端验收测试
+
+# Worker/Coordinator 独立部署 + 服务发现模拟测试
+bash tests/test_standalone_mode.sh
+# 覆盖场景：Coordinator 注册/心跳/反注册、Worker 从服务发现获取 Coordinator、
+#           Coordinator 崩溃 + TTL 过期、Coordinator 重启恢复
 ```
 
 ## 文档
@@ -108,3 +113,4 @@ bash tests/test_e2e.sh             # 端到端验收测试
 | [docs/cache-guide.md](docs/cache-guide.md) | Cache 模式：cacheGetOrCreate、命中率控制、Key Pool 管理 |
 | [docs/benchmark-guide.md](docs/benchmark-guide.md) | Benchmark 模式：8 种 Set/Get/Mixed 测试模式、per-phase 计时 |
 | [docs/design.md](docs/design.md) | 架构设计：模块设计、线程模型、指标系统、QPS 控制机制 |
+| [docs/jf-integration-design.md](docs/jf-integration-design.md) | 独立部署 + 服务发现模拟：JfClient、mock server、deploy 脚本 standalone 模式、E2E 测试 |
