@@ -38,7 +38,6 @@ class Command(BaseCommand):
     _force_kill_wait_timeout = 10
     _default_shared_memory_size_mb = 1024
     _default_data_migrate_rate_limit_mb = 40
-    _service_type_key = "service_type"
     _worker_service = "worker"
     _coordinator_service = "coordinator"
 
@@ -50,17 +49,26 @@ class Command(BaseCommand):
             parser (ArgumentParser): Specify parser to which arguments are added.
         """
         parser.add_argument(
+            "-W",
+            "--worker_config_path",
             "-f",
             "--config_path",
-            "--worker_config_path",
-            dest="config_path",
+            dest="worker_config_path",
             metavar="FILE",
             help=(
-                "stop service by using configuration file (JSON format), "
+                "stop worker by using worker configuration file (JSON format), "
                 "which can be obtained through the generate_config command"
             ),
         )
-
+        parser.add_argument(
+            "-C",
+            "--coordinator_config_path",
+            metavar="FILE",
+            help=(
+                "stop coordinator by using coordinator configuration file (JSON format), "
+                "which can be obtained through the generate_config command"
+            ),
+        )
         parser.add_argument(
             "-w",
             "--worker_address",
@@ -68,9 +76,22 @@ class Command(BaseCommand):
             help="stop worker by specifying the worker address(ip:port), e.g., 127.0.0.1:31501",
         )
         parser.add_argument(
+            "-c",
             "--coordinator_address",
             metavar="ADDR",
             help="stop coordinator by specifying the coordinator address(ip:port), e.g., 127.0.0.1:31511",
+        )
+        parser.add_argument(
+            "-t",
+            "--timeout",
+            type=int,
+            default=None,
+            metavar="SECONDS",
+            help=(
+                "Maximum time to wait for service to be stopped, must be positive"
+                "(worker default: 180s + shared_memory_size_mb / data_migrate_rate_limit_mb, "
+                "coordinator default: 180s)"
+            ),
         )
 
     def run(self, args):
@@ -85,22 +106,21 @@ class Command(BaseCommand):
         """
         try:
             stopped = False
-            if args.config_path:
-                config = self.load_config(args.config_path)
-                service_type = self.get_service_type(config)
-                if service_type == self._coordinator_service:
-                    address = self.get_address(config, "coordinator_address")
-                    self.stop_service(self._coordinator_service, address, config)
-                else:
-                    address = self.get_address(config, "worker_address")
-                    self.stop_service(self._worker_service, address, config)
+            if args.worker_config_path:
+                config = self.load_config(args.worker_config_path)
+                address = self.get_address(config, "worker_address")
+                self.stop_service(self._worker_service, address, config, args.timeout)
                 return self.SUCCESS
-
+            if args.coordinator_config_path:
+                config = self.load_config(args.coordinator_config_path)
+                address = self.get_address(config, "coordinator_address")
+                self.stop_service(self._coordinator_service, address, config, args.timeout)
+                return self.SUCCESS
             if args.worker_address:
-                self.stop_service(self._worker_service, args.worker_address)
+                self.stop_service(self._worker_service, args.worker_address, None, args.timeout)
                 stopped = True
             if args.coordinator_address:
-                self.stop_service(self._coordinator_service, args.coordinator_address)
+                self.stop_service(self._coordinator_service, args.coordinator_address, None, args.timeout)
                 stopped = True
             if not stopped:
                 raise RuntimeError(
@@ -136,20 +156,6 @@ class Command(BaseCommand):
         """Backward-compatible wrapper for old worker-only helpers."""
         return self.load_config(worker_config_path)
 
-    def get_service_type(self, config):
-        """Resolve service type from config content without requiring service_type."""
-        service_type = self.get_config_value(config, self._service_type_key)
-        if service_type not in (None, ""):
-            service_type = str(service_type).strip().lower()
-            if service_type not in (self._worker_service, self._coordinator_service):
-                raise ValueError("service_type must be coordinator or worker")
-            return service_type
-        if self.get_config_value(config, "worker_address"):
-            return self._worker_service
-        if self.get_config_value(config, "coordinator_address"):
-            return self._coordinator_service
-        raise RuntimeError("The configuration file is missing worker_address or coordinator_address")
-
     def get_address(self, config, key):
         """Get a required service address from config."""
         if key not in config:
@@ -176,7 +182,7 @@ class Command(BaseCommand):
         config = (
             worker_config
             if worker_config is not None
-            else self.load_config(args.config_path)
+            else self.load_config(args.worker_config_path)
         )
         return self.get_address(config, "worker_address")
 
@@ -296,7 +302,22 @@ class Command(BaseCommand):
         )
         return self._base_timeout + (shared_memory_size_mb / data_migrate_rate_limit_mb)
 
-    def stop_service(self, service_type, address, config=None):
+    def resolve_stop_timeout(self, service_type, pid, config=None, timeout_override=None):
+        """Resolve the stop timeout, validating and falling back to calculated/default values."""
+        if timeout_override is not None and timeout_override <= 0:
+            self.logger.warning(
+                f"Timeout ({timeout_override}) is invalid."
+            )
+            timeout_override = None
+        if timeout_override is not None:
+            self._timeout = timeout_override
+            return
+        if service_type == self._worker_service:
+            self._timeout = self.calculate_stop_timeout(pid, config)
+            return
+        self._timeout = self._base_timeout
+
+    def stop_service(self, service_type, address, config=None, timeout_override=None):
         """Stop one service by address."""
         flag_name = (
             "coordinator_address"
@@ -309,9 +330,7 @@ class Command(BaseCommand):
             else "datasystem_worker"
         )
         pid = self.get_unique_pid(address, flag_name, binary_name)
-        self._timeout = self._base_timeout
-        if service_type == self._worker_service:
-            self._timeout = self.calculate_stop_timeout(pid, config)
+        self.resolve_stop_timeout(service_type, pid, config, timeout_override)
         self.graceful_kill(pid)
         if self.wait_exit(pid):
             self.logger.info(

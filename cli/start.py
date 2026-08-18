@@ -211,6 +211,11 @@ class Command(BaseCommand):
             'resides (the "local node"). If the local node has no free memory, the '
             "kernel will fall back to nearby nodes.",
         )
+        parser.epilog = (
+            "Note: dscli options (e.g., -d, -N, --enable_ums) must be placed BEFORE "
+            "-w/-c/-a, otherwise they will be consumed by the REMAINDER service arguments. "
+            "Use '--' to explicitly separate: dscli start -d /home/ds -w -- worker_args..."
+        )
 
     def run(self, args):
         """
