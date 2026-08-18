@@ -847,8 +847,10 @@ C++</label><div class="sd-tab-content docutils">
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">memoryRebalance</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="w">    </span><span class="c1"># source worker 的共享内存使用率阈值（百分比），取值范围：1-100</span>
-<span class="w">    </span><span class="nt">rebalanceSourceUsagePercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">70</span>
+<span class="w">    </span><span class="c1"># source worker 的共享内存使用率阈值（百分比）。双重语义：同一百分比同时作为 target 迁移上限，</span>
+<span class="w">    </span><span class="c1"># target 投影达该值即停止后续迁移批次。默认 80% 与 eviction 低水位一致；调高会让 target 上限向</span>
+<span class="w">    </span><span class="c1"># eviction 高水位（默认 90%）靠拢，更易触发驱逐。取值范围：1-100</span>
+<span class="w">    </span><span class="nt">rebalanceSourceUsagePercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
 <span class="w">    </span><span class="c1"># source 与 target 之间的最小使用率差值（百分比），取值范围：1-100</span>
 <span class="w">    </span><span class="nt">rebalanceUsageGapPercent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20</span>
 <span class="w">    </span><span class="c1"># 任务上报宽限时间（毫秒）</span>

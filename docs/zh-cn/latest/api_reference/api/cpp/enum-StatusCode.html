@@ -765,6 +765,22 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p>35</p></td>
 <td><p>表示LRU软限制</p></td>
 </tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_SUPPORTED</span></code></p></td>
+<td><p>36</p></td>
+<td><p>表示当前能力不支持</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NO_AVAILABLE_WORKER</span></code></p></td>
+<td><p>37</p></td>
+<td><p>表示没有可用于路由的Worker</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_OWNER</span></code></p></td>
+<td><p>38</p></td>
+<td><p>表示请求被路由到非元数据属主Worker</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_METADATA_OWNER_UNAVAILABLE</span></code></p></td>
+<td><p>39</p></td>
+<td><p>表示元数据发布结果不确定，调用方不得自动重放同一写请求</p></td>
+</tr>
 </tbody>
 </table>
 </div>
