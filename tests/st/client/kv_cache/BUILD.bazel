@@ -423,3 +423,15 @@ ds_cc_test(
         "//src/datasystem/common/util:timer",
     ],
 )
+
+ds_cc_test(
+    name = "kv_client_peer_dead_l2_fallback_test",
+    srcs = ["kv_client_peer_dead_l2_fallback_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+    ],
+)

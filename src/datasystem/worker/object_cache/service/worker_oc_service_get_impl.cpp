@@ -2401,8 +2401,14 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
             status =
                 GetObjectFromRemoteWorkerAndDump(address, meta.primary_address(), meta.data_size(), objectKV, false);
+            // Peer may die between CheckEndpoint and this RPC (scale-down);
+            // L2-backed objects fall through to the L2 fallback below instead of fast-failing.
+            // entry.Get() is non-null here: the caller called SetObjectEntryAccordingToMeta before
+            // the RPC; the nullptr check below targets CreateCopyMeta failure, not RPC failure.
+            const bool l2Backed = IsL2BackedWriteMode(WriteMode(meta.config().write_mode()));
             if (status.GetCode() == K_OUT_OF_MEMORY || status.GetCode() == K_TRY_AGAIN
-                || IsRetryableRpcError(status) || IsNonRetryableRpcError(status)) {
+                || IsRetryableRpcError(status)
+                || (IsNonRetryableRpcError(status) && !(l2Backed && FLAGS_enable_l2_cache_fallback))) {
                 return status;
             }
             if (entry.Get() == nullptr) {
@@ -2445,8 +2451,7 @@ void WorkerOcServiceGetImpl::TryGetFromL2CacheWhenNotFoundInWorker(const ObjectM
         return;
     }
     const ConfigPb &configPb = meta.config();
-    bool writeToL2Storage = WriteMode(configPb.write_mode()) != WriteMode::NONE_L2_CACHE
-                            && WriteMode(configPb.write_mode()) != WriteMode::NONE_L2_CACHE_EVICT;
+    bool writeToL2Storage = IsL2BackedWriteMode(WriteMode(configPb.write_mode()));
     // If a copy exists and the worker where the copy is located is disconnected, the data will not be cached locally
     // (the data obtained from L2 cache may be inconsistent with the copy, avoiding consistency issues).
     bool isQueryWithoutCopy = !address.empty() && !ifWorkerConnected;
@@ -3269,8 +3274,7 @@ Status WorkerOcServiceGetImpl::KeepObjectDataInMemory(ReadObjectKV &objectKV)
 
 bool WorkerOcServiceGetImpl::ToleranceNotExistNode(bool singleCopy, uint32_t writeMode)
 {
-    bool writeToL2Storage =
-        WriteMode(writeMode) != WriteMode::NONE_L2_CACHE && WriteMode(writeMode) != WriteMode::NONE_L2_CACHE_EVICT;
+    bool writeToL2Storage = IsL2BackedWriteMode(WriteMode(writeMode));
     return singleCopy && !writeToL2Storage;
 }
 

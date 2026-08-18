@@ -55,6 +55,7 @@
 DS_DEFINE_int64(batch_get_threshold_mb, 100, "The payload threshold to batch get objects");
 DS_DEFINE_validator(batch_get_threshold_mb, &Validator::ValidateBatchGetThreshold);
 DS_DECLARE_bool(enable_data_replication);
+DS_DECLARE_bool(enable_l2_cache_fallback);
 DS_DECLARE_int32(oc_worker_worker_parallel_min);
 
 using namespace datasystem::master;
@@ -642,8 +643,11 @@ void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const st
         point.Record();
     }
     // Handle error as in GetObjectFromRemoteOnLock code path, move on to the next request.
+    // L2-backed objects fall through to L2 fallback (tryGetFromElsewhere stays true) when
+    // FLAGS_enable_l2_cache_fallback is set; non-L2 and flag-disabled keep fast-fail.
     if (subRc.GetCode() == K_OUT_OF_MEMORY || subRc.GetCode() == K_TRY_AGAIN || IsRetryableRpcError(subRc)
-        || IsNonRetryableRpcError(subRc)) {
+        || (IsNonRetryableRpcError(subRc)
+            && !(IsL2BackedWriteMode(WriteMode(meta->config().write_mode())) && FLAGS_enable_l2_cache_fallback))) {
         tryGetFromElsewhere = false;
     } else if (checkConnectStatus.IsOk() && !address.empty() && entry.Get() == nullptr) {
         subRc = Status(K_NOT_FOUND, FormatString("Get from remote worker failed, object(%s) not exist in "
