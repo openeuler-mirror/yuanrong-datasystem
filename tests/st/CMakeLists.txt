@@ -56,6 +56,7 @@ file(GLOB_RECURSE DS_ST_STREAM_CACHE_SRCS CONFIGURE_DEPENDS
 
 file(GLOB_RECURSE DS_ST_OBJECT_CACHE_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/**/object_cache/*.cpp")
+list(FILTER DS_ST_OBJECT_CACHE_SRCS EXCLUDE REGEX .*urma_numa_inflight_balance_test\.cpp)
 
 file(GLOB_RECURSE DS_ST_KV_CACHE_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/**/kv_cache/*.cpp")
@@ -151,6 +152,12 @@ add_executable(dead_peer_fast_fail_test
         common/rpc/brpc/dead_peer_fast_fail_test.cpp
         $<TARGET_OBJECTS:_ds_st_main_obj>
         $<TARGET_OBJECTS:_ds_st_group_common_obj>)
+if (BUILD_WITH_URMA_MOCK)
+    add_executable(ds_st_urma_numa_inflight_balance
+            client/object_cache/urma_numa_inflight_balance_test.cpp
+            $<TARGET_OBJECTS:_ds_st_main_obj>
+            $<TARGET_OBJECTS:_ds_st_group_common_obj>)
+endif()
 
 # Heavy ST link targets (ds_st / ds_st_stream_cache / ds_st_object_cache /
 # ds_st_kv_cache) pull in worker+master+rocksdb+zmq and trip the OOM killer on
@@ -184,6 +191,10 @@ if (BUILD_WITH_URMA_MOCK)
     target_link_libraries(ds_st_kv_cache PRIVATE common_urma_mock_obj)
     target_link_libraries(ds_st_coordinator_backend_manual PRIVATE common_urma_mock_obj)
     target_link_libraries(dead_peer_fast_fail_test PRIVATE common_urma_mock_obj)
+    target_compile_definitions(ds_st_urma_numa_inflight_balance PRIVATE USE_URMA USE_URMA_MOCK)
+    target_link_libraries(ds_st_urma_numa_inflight_balance PRIVATE
+            ${DS_ST_DEPEND_LIBS} binmock static_coordinator_discovery common_urma_mock_obj
+            -Wl,--reduce-memory-overheads)
 endif()
 
 find_package(absl PATHS absl_PKG_PATH)
@@ -345,6 +356,9 @@ add_datasystem_test(coordinator_raft_node_test TEST_ENVIRONMENTS ${TEST_ENVIRONM
 add_datasystem_test(coordinator_service_election_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_runtime_election_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(dead_peer_fast_fail_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+if (BUILD_WITH_URMA_MOCK)
+    add_datasystem_test(ds_st_urma_numa_inflight_balance TIMEOUT 180 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+endif()
 
 file(GLOB_RECURSE DS_DEVICE_TEST_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cpp"

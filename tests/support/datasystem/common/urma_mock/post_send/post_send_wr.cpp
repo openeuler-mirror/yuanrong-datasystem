@@ -342,7 +342,11 @@ private:
 
     urma_status_t Submit(PostSendLookup &lookup, urma_jfs_wr_t **badWr) const
     {
-        const uint64_t latencyUs = MockThreadPool::ResolveLatencyFromEnv();
+        int srcChipId = 0;
+        if (wr_.flag.bs.has_drv_ext != 0) {
+            srcChipId = reinterpret_cast<const bondp_jfs_wr_t *>(&wr_)->src_chip_id;
+        }
+        const uint64_t latencyUs = MockThreadPool::ResolveLatencyFromEnv(srcChipId);
         if (latencyUs == 0) {
             Execute(lookup);
             SetBadWr(badWr, nullptr);

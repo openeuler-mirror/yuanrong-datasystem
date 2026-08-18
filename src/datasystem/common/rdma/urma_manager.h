@@ -154,7 +154,8 @@ public:
 
         uint32_t GetOffset() const
         {
-            return shmUnit_->GetOffset();
+            return static_cast<uint32_t>(reinterpret_cast<uint64_t>(shmUnit_->GetPointer())
+                                         - reinterpret_cast<uint64_t>(basePtr_));
         }
 
         uint8_t GetNumaId() const
@@ -238,10 +239,11 @@ public:
                                     bool enablePipelineH2D = false);
 
     /**
-     * @brief Set the client process UB NUMA-affinity and source-chip round-robin policy from a worker response.
+     * @brief Set the client process UB NUMA-affinity, source-chip round-robin, and inflight feedback policy.
      * The first worker fixes the policy; later conflicts are logged and ignored.
      */
-    static void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, const std::string &configSource);
+    static void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, uint32_t inflightWrDiffThreshold,
+                                      const std::string &configSource);
 
     /**
      * @brief Get client id for current process; non-empty when set by SetClientUrmaConfig (client mode).
@@ -588,6 +590,12 @@ public:
     uint64_t GenerateReqId();
 
 private:
+    static constexpr size_t URMA_INFLIGHT_COUNTER_CACHE_LINE_SIZE = 64;
+
+    struct alignas(URMA_INFLIGHT_COUNTER_CACHE_LINE_SIZE) SrcChipInflightCounter {
+        std::atomic<int> value{ 0 };
+    };
+
     UrmaManager();
 
     /**
@@ -770,7 +778,8 @@ private:
                        uint64_t dataSize, UrmaEvent::OperationType operationType,
                        std::atomic<int> *srcChipInflightCounter = nullptr,
                        std::shared_ptr<EventWaiter> waiter = nullptr, std::shared_ptr<UrmaEvent> *event = nullptr,
-                       std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt);
+                       std::optional<UrmaLateCompletionContext> lateCompletionContext = std::nullopt,
+                       bool observeGatherInflightDrain = false);
     struct UrmaWriteArgs {
         std::shared_ptr<UrmaConnection> connection;
         std::shared_ptr<EventWaiter> waiter;
@@ -798,10 +807,17 @@ private:
         bool laneLeaseSealed = false;
         std::vector<urma_sge_t> srcSgeList;
         std::vector<urma_sge_t> dstSgeList;
-        std::vector<urma_jfs_wr_t> wrList;
+        std::vector<bondp_jfs_wr_t> wrList;
         std::vector<uint64_t> createdEventKeys;
         std::vector<uint64_t> submittedEventKeys;
+        uint8_t logicalWriteChipId = INVALID_CHIP_ID;
         uint32_t totalWriteSize = 0;
+    };
+
+    struct UrmaNumaPostConfig {
+        bool enabled = false;
+        uint8_t srcChipId = INVALID_CHIP_ID;
+        std::atomic<int> *inflightCounter = nullptr;
     };
 
     Status UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys,
@@ -828,8 +844,8 @@ private:
                                     size_t dstSgeIdx, size_t &srcSgeIdx,
                                     const std::optional<UrmaLateCompletionContext> &lateCompletionContext,
                                     UrmaGatherWriteContext &context);
-    Status CreateGatherWriteEvent(size_t dstSgeIdx, uint64_t writeSize, const urma_sg_t &srcSg,
-                                  const urma_sg_t &dstSg,
+    Status CreateGatherWriteEvent(size_t dstSgeIdx, uint64_t writeSize, uint8_t transmittedSrcChipId,
+                                  uint8_t dstChipId, const urma_sg_t &srcSg, const urma_sg_t &dstSg,
                                   const std::optional<UrmaLateCompletionContext> &lateCompletionContext,
                                   UrmaGatherWriteContext &context);
     Status BuildGatherWriteRequests(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
@@ -853,16 +869,34 @@ private:
     void ClearRetainedTimeoutEvents();
     static void DispatchLateCompletion(const std::shared_ptr<UrmaEvent> &event, int cqeStatus);
 
+    /** @brief Build allocator callbacks for the client UB transport memory pool. */
+    void BuildTransportRegFunc(AllocatorFuncRegister &regFunc);
+
+    /** @brief Apply the client environment override for the transport arena count. */
+    void SetClientTransportArenaConfig();
+
+    /** @brief Round the client pool so every transport arena occupies whole system pages. */
+    static Status NormalizeClientTransportPoolSize(uint64_t requestedSize, uint32_t arenaNum, uint64_t pageSize,
+                                                   uint64_t &effectiveSize);
+
+    /** @brief Bind equal transport arena ranges to NUMA nodes. */
+    Status BindClientTransportMemory(void *pointer, size_t size);
+
     Status InitLocalUrmaInfo(const HostPort &hostport);
     Status RemoveRemoteResources(const std::string &connectionKey);
     uint8_t GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity);
     uint8_t GetAffinitySrcChipIdForPost(uint8_t transmittedChipId, bool useNumaAffinity, bool firstPost,
                                         uint8_t logicalWriteChipId);
+    UrmaNumaPostConfig ResolveNumaPostConfig(uint8_t transmittedSrcChipId, uint8_t dstChipId, bool firstPost,
+                                             uint8_t logicalWriteChipId);
 
     /** @brief Normalize a worker-provided UB NUMA round-robin type to the supported range. */
     static uint32_t NormalizeUbNumaRrType(uint32_t rrType, const std::string &configSource);
     std::atomic<int> *GetSrcChipInflightWrCounter(uint8_t chipId);
     const char *GetSrcChipInflightWrCountsString() const;
+    void RecordNumaWriteChipCounts(uint8_t srcChipId, uint8_t dstChipId);
+    void RecordNumaWriteCrossChipCount(uint8_t srcChipId, uint8_t dstChipId);
+    const char *GetNumaWriteChipCountsString() const;
     void LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                     uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
                                     uint64_t wakeSchedLatencyUs, uint64_t completionObservationLatencyUs,
@@ -905,7 +939,12 @@ private:
     std::atomic<uint64_t> nextRetainedTimeoutPruneMs_{ 0 };
     std::atomic<bool> serverStop_{ false };
     std::atomic<uint64_t> affinitySrcChipIdSequence_{ 0 };
-    std::vector<std::atomic<int>> srcChipInflightWrCounts_;
+    // Isolate chips on separate cache lines because completion threads update these counters concurrently.
+    std::vector<SrcChipInflightCounter> srcChipInflightWrCounts_;
+    std::vector<std::atomic<uint64_t>> srcChipWriteCounts_;
+    std::vector<std::atomic<uint64_t>> dstChipWriteCounts_;
+    std::atomic<uint64_t> src1Dst2WriteCount_{ 0 };
+    std::atomic<uint64_t> src2Dst1WriteCount_{ 0 };
     mutable std::mutex connectionKeyMutex_;
     std::unordered_map<UrmaConnection *, std::string> connectionKeys_;
     urma_log_cb_t urmaLogCallback_{};
@@ -918,6 +957,8 @@ private:
     // The singleton freezes the process-global UB NUMA policy on its first worker response.
     std::once_flag clientUbNumaConfigOnce_;
     void *memoryBuffer_ = nullptr;
+    // Arena creation is serialized by ArenaManager; this index is used only during pool initialization.
+    uint32_t clientTransportSegmentIndex_ = 0;
     std::mutex recoveryProbeMutex_;
     void *recoveryProbeBuffer_ = nullptr;
     std::mutex recoveryProbeSourceMutex_;

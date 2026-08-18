@@ -104,6 +104,13 @@ public:
      */
     static uint64_t ResolveLatencyFromEnv();
 
+    /**
+     * @brief Resolve latency for one source chip, falling back to the global mock latency.
+     * @param[in] srcChipId Source chip id from the BONDP work request.
+     * @return Latency in microseconds.
+     */
+    static uint64_t ResolveLatencyFromEnv(int srcChipId);
+
 private:
     /**
      * @brief Resolve queue capacity from mock environment variables.

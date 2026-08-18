@@ -1489,6 +1489,9 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | enable_worker_worker_batch_get | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
 | enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
 | enable_ub_numa_affinity | bool | `false` | 是否开启 UB NUMA 亲和优化。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。Worker 集群必须保持一致；client 从首个返回 UB 配置的 worker 固化该值，后续不一致仅记录 WARNING，不会修改 client 进程配置。 |
+| ub_transport_arena_num | int | `4` | UB 传输内存池拆分的等大 Arena 数量，取值范围为 `[1, 32]`。开启 UB NUMA 亲和时，优先在不同芯片间轮询分配 Arena，再复用同一芯片内的 NUMA 节点。使用多个 Arena 时，任一 NUMA 绑定失败都会导致 client 初始化失败。 |
+| ub_numa_rr_type | int | `1` | UB NUMA 源芯片轮询粒度。`0` 表示关闭源芯片轮询，`1` 表示每次逻辑写选择一次，`2` 表示每个 WR Post 选择一次。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
+| ub_numa_inflight_wr_diff_threshold | int | `15` | 两个源芯片 inflight WR 数量的最大允许差值。差值严格大于该值时，后续 WR 改用 inflight 较低的芯片；`0` 表示关闭深度反馈并保留纯轮询。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
 | shared_memory_distribution_policy | string | `none` | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
 | urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |

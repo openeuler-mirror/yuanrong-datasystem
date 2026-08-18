@@ -66,6 +66,7 @@ bool IsMappedRange(uint64_t va, uint64_t len)
         return false;
     }
     const uint64_t end = va + len;
+    uint64_t coveredEnd = va;
     std::string line;
     while (std::getline(maps, line)) {
         auto separator = line.find('-');
@@ -81,7 +82,14 @@ bool IsMappedRange(uint64_t va, uint64_t len)
             || endResult.ptr == endBegin) {
             continue;
         }
-        if (va >= startAddr && end <= endAddr) {
+        if (endAddr <= coveredEnd) {
+            continue;
+        }
+        if (startAddr > coveredEnd) {
+            return false;
+        }
+        coveredEnd = std::min(endAddr, end);
+        if (coveredEnd == end) {
             return true;
         }
     }

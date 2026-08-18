@@ -23,8 +23,10 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <sys/mman.h>
 #include <unordered_set>
 #include <vector>
+
 #include "datasystem/common/string_intern/string_ref.h"
 #include "gtest/gtest.h"
 
@@ -46,6 +48,7 @@
 #include "datasystem/common/shared_memory/shm_unit_info.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/validator.h"
@@ -810,6 +813,71 @@ TEST_F(AllocatorTest, TestReuseArena)
 
     allocator->Shutdown();
     ASSERT_EQ(allocator->GetArenaManager()->GetArenaCounts(), 0ul);
+}
+
+TEST_F(AllocatorTest, UbTransportCreatesEqualArenasAndAllocatesRoundRobin)
+{
+    const uint32_t oldArenaNum = FLAGS_ub_transport_arena_num;
+    const bool oldRegisterWholeArena = FLAGS_urma_register_whole_arena;
+    const bool oldNumaAffinity = FLAGS_enable_ub_numa_affinity;
+    Raii restoreFlags([oldArenaNum, oldRegisterWholeArena, oldNumaAffinity] {
+        FLAGS_ub_transport_arena_num = oldArenaNum;
+        FLAGS_urma_register_whole_arena = oldRegisterWholeArena;
+        FLAGS_enable_ub_numa_affinity = oldNumaAffinity;
+    });
+    FLAGS_ub_transport_arena_num = 2;
+    FLAGS_urma_register_whole_arena = false;
+    FLAGS_enable_ub_numa_affinity = false;
+
+    constexpr uint64_t poolSize = 16 * 1024 * 1024;
+    std::vector<std::pair<void *, size_t>> arenaMappings;
+    memory::AllocatorFuncRegister regFunc;
+    regFunc.createFunc = [&arenaMappings](void **pointer, size_t size) -> Status {
+        *pointer = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (*pointer == MAP_FAILED) {
+            *pointer = nullptr;
+            return Status(K_OUT_OF_MEMORY, "test mmap failed");
+        }
+        arenaMappings.emplace_back(*pointer, size);
+        return Status::OK();
+    };
+    regFunc.destroyFunc = [](void *pointer, size_t size) {
+        return munmap(pointer, size) == 0 ? Status::OK() : Status(K_RUNTIME_ERROR, "test munmap failed");
+    };
+
+    auto *allocator = memory::Allocator::Instance();
+    DS_ASSERT_OK(allocator->InitWithFlexibleRegister(memory::CacheType::UB_TRANSPORT, poolSize, regFunc));
+    std::shared_ptr<ArenaGroup> arenaGroup;
+    DS_ASSERT_OK(allocator->CreateArenaGroup(DEFAULT_TENANT_ID, poolSize, arenaGroup,
+                                             memory::CacheType::UB_TRANSPORT));
+
+    ASSERT_EQ(arenaMappings.size(), 2u);
+    ASSERT_EQ(arenaGroup->GetArenaIds().size(), 2u);
+    EXPECT_EQ(arenaMappings[0].second, poolSize / 2);
+    EXPECT_EQ(arenaMappings[1].second, poolSize / 2);
+
+    auto allocate = [&arenaGroup]() {
+        void *pointer = nullptr;
+        uint64_t realSize = 0;
+        int fd = -1;
+        ptrdiff_t offset = 0;
+        uint64_t mmapSize = 0;
+        EXPECT_TRUE(arenaGroup->AllocateMemory(4096, false, realSize, pointer, fd, offset, mmapSize,
+                                               ServiceType::OBJECT)
+                        .IsOk());
+        return pointer;
+    };
+    void *first = allocate();
+    void *second = allocate();
+    auto belongsTo = [](void *pointer, const std::pair<void *, size_t> &mapping) {
+        auto address = reinterpret_cast<uintptr_t>(pointer);
+        auto begin = reinterpret_cast<uintptr_t>(mapping.first);
+        return address >= begin && address < begin + mapping.second;
+    };
+    EXPECT_TRUE(belongsTo(first, arenaMappings[0]));
+    EXPECT_TRUE(belongsTo(second, arenaMappings[1]));
+    DS_EXPECT_OK(arenaGroup->FreeMemory(first));
+    DS_EXPECT_OK(arenaGroup->FreeMemory(second));
 }
 
 void AllocatorTest::TestShmUnits1()

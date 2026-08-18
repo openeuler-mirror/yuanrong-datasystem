@@ -27,6 +27,7 @@
 #ifdef __linux__
 #include <linux/memfd.h>
 #endif
+#include <sched.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -47,6 +48,7 @@
 #include "datasystem/common/shared_memory/mmap/disk_mmap.h"
 #include "datasystem/common/shared_memory/mmap/mem_mmap.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
@@ -65,6 +67,7 @@ DS_DEFINE_uint32_dynamic(
 DS_DEFINE_validator(shared_disk_arena_per_tenant, &Validator::ValidateSharedDiskArenaPerTenant);
 DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_bool(enable_fallocate);
+DS_DECLARE_uint32(ub_transport_arena_num);
 
 namespace datasystem {
 namespace memory {
@@ -153,7 +156,19 @@ Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSi
     auto arena = arenas_[index];
     arena->AddRealMemoryUsage(realSize);
     (void)realMemoryUsage_.fetch_add(realSize, std::memory_order_relaxed);
-    if (IsUbNumaAffinityEnabled()) {
+    QueryAllocNumaId(arena, pointer, numaId);
+    VLOG(1) << "[Allocator] Arena " << arena->GetArenaId() << " allocate require size: " << size
+            << ", real size: " << realSize << ", offset: " << offset;
+    if (FLAGS_enable_perf_trace_log) {
+        LOG(INFO) << FormatString("[ARENA_NUMA_ALLOC] arenaId:%u, numaId:%u, cpuid:%d", arena->GetArenaId(),
+                                  static_cast<uint32_t>(numaId), sched_getcpu());
+    }
+    return Status::OK();
+}
+
+void ArenaGroup::QueryAllocNumaId(const std::shared_ptr<Arena> &arena, void *pointer, uint8_t &numaId)
+{
+    if (NeedRegisterWholeArena()) {
         Status queryRc = arena->QueryNumaId(pointer, numaId);
         if (queryRc.IsError()) {
             LOG(WARNING) << "QueryNumaId failed for pointer " << pointer << ": " << queryRc.ToString();
@@ -162,9 +177,6 @@ Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSi
     } else {
         numaId = std::numeric_limits<uint8_t>::max();
     }
-    VLOG(1) << "[Allocator] Arena " << arena->GetArenaId() << " allocate require size: " << size
-            << ", real size: " << realSize << ", offset: " << offset;
-    return Status::OK();
 }
 
 Status ArenaGroup::BuildExtentOomStatus(uint32_t arenaId, bool freshExtentUnavailable) const
@@ -413,12 +425,49 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!destroyed_, K_RUNTIME_ERROR, "ArenaManager already destroyed");
     std::vector<uint64_t> arenaInds;
+    ArenaParams params;
+    RETURN_IF_NOT_OK(ComputeArenaParams(type, maxSize, params));
+    {
+        std::lock_guard<SharedMutex> l(mutex_);
+        std::vector<std::shared_ptr<Arena>> arenas;
+        arenas.reserve(params.arenasNum);
+        bool built = false;
+        Raii rollback([this, &arenaInds, &built] {
+            if (built) {
+                return;
+            }
+            for (const auto arenaInd : arenaInds) {
+                if (arenas_[arenaInd] != nullptr) {
+                    LOG_IF_ERROR(arenas_[arenaInd]->DestroyArena(), "Rollback arena failed");
+                    arenas_[arenaInd] = nullptr;
+                    (void)numArenas_.fetch_sub(1, std::memory_order_relaxed);
+                }
+            }
+        });
+        for (uint32_t i = 0; i < params.arenasNum; i++) {
+            uint32_t arenaInd = 0;
+            RETURN_IF_NOT_OK(CreateSingleArena(type, params.mmapSizeForArena, arenaInd));
+            arenaInds.emplace_back(arenaInd);
+            (void)numArenas_.fetch_add(1, std::memory_order_relaxed);
+            arenas.emplace_back(arenas_[arenaInd]);
+        }
+        arenaGroup = std::make_shared<ArenaGroup>(std::move(arenas), maxSize, type);
+        built = true;
+    }
+
+    FakeAllocate(type, arenaInds, params.fakeAllocateSizeForArena);
+    return Status::OK();
+}
+
+Status ArenaManager::ComputeArenaParams(CacheType type, uint64_t maxSize, ArenaParams &params)
+{
     auto rate = 0.78;  // class size is 0.8.
     CHECK_FAIL_RETURN_STATUS(
         static_cast<uint64_t>(static_cast<long double>(std::numeric_limits<uint64_t>::max()) * rate) > maxSize,
         K_RUNTIME_ERROR, "mmapSize overflow.");
     auto fakeAllocateSize = maxSize;
-    if (populate_ || IsFastTransportEnabled() || IsRemoteH2DEnabled() || FLAGS_enable_huge_tlb) {
+    if (populate_ || IsFastTransportEnabled() || IsRemoteH2DEnabled() || FLAGS_enable_huge_tlb
+        || type == CacheType::UB_TRANSPORT) {
         // Here we ensure total allocated memory
         // does not exceed max requested by user
         rate = 1;
@@ -431,59 +480,56 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
     if (FLAGS_enable_huge_tlb) {
         mmapSize = RoundUpToNextMultiple(mmapSize);
     }
+    uint32_t arenasNum = type == CacheType::MEMORY ? FLAGS_arena_per_tenant : FLAGS_shared_disk_arena_per_tenant;
+    arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST) ? 1 : arenasNum;
+    params.mmapSizeForArena = mmapSize;
+    params.fakeAllocateSizeForArena = fakeAllocateSize;
+    if (type == CacheType::UB_TRANSPORT) {
+        arenasNum = FLAGS_ub_transport_arena_num;
+        CHECK_FAIL_RETURN_STATUS(arenasNum > 0, K_RUNTIME_ERROR, "Arena number must be greater than 0");
+        CHECK_FAIL_RETURN_STATUS(mmapSize % arenasNum == 0, K_RUNTIME_ERROR,
+                                 FormatString("mmapSize %lu must be divisible by arena num %u", mmapSize, arenasNum));
+        params.mmapSizeForArena = mmapSize / arenasNum;
+        params.fakeAllocateSizeForArena = fakeAllocateSize / arenasNum;
+    }
+    CHECK_FAIL_RETURN_STATUS(arenasNum > 0, K_RUNTIME_ERROR, "Arena number must be greater than 0");
+    params.arenasNum = arenasNum;
+    return Status::OK();
+}
+
+Status ArenaManager::CreateSingleArena(CacheType type, uint64_t mmapSize, uint32_t &arenaInd)
+{
+    void *handler = nullptr;
+    RETURN_IF_NOT_OK(Jemalloc::CreateArena(decayMs_, arenaInd, handler));
+    if (ARENAS_INIT_SIZE <= arenaInd) {
+        LOG_IF_ERROR(Jemalloc::DestroyArena(arenaInd), "Too many arena create, destroy arena failed");
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      FormatString("Too many arena created! areneInd: %d, arena init size: %d", arenaInd,
+                                   ARENAS_INIT_SIZE));
+    }
+    if (arenas_[arenaInd] != nullptr) {
+        LOG_IF_ERROR(Jemalloc::DestroyArena(arenaInd), "Reused arena index cleanup failed");
+        RETURN_STATUS(K_RUNTIME_ERROR, FormatString("arena %d reuse, but exists in ArenaManager.", arenaInd));
+    }
+
+    auto arena = std::make_shared<Arena>(arenaInd, handler, populate_, scaling_, mmapSize, type);
+    arenas_[arenaInd] = arena;
+    AllocatorFuncRegister regFunc;
     {
-        std::lock_guard<SharedMutex> l(mutex_);
-        std::vector<std::shared_ptr<Arena>> arenas;
-        auto arenasNum = type == CacheType::MEMORY ? FLAGS_arena_per_tenant : FLAGS_shared_disk_arena_per_tenant;
-        arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST || type == CacheType::UB_TRANSPORT)
-                        ? 1
-                        : arenasNum;
-        arenas.reserve(arenasNum);
-        for (uint32_t i = 0; i < arenasNum; i++) {
-            uint32_t arenaInd = 0;
-            void *handler = nullptr;
-            RETURN_IF_NOT_OK(Jemalloc::CreateArena(decayMs_, arenaInd, handler));
-            if (ARENAS_INIT_SIZE <= arenaInd) {
-                LOG_IF_ERROR(Jemalloc::DestroyArena(arenaInd), "Too many arena create, destroy arena failed");
-                RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
-                              FormatString("Too many arena created! areneInd: %d, arena init size: %d", arenaInd,
-                                           ARENAS_INIT_SIZE));
-            }
-
-            std::shared_ptr<Arena> arena;
-            if (arenas_[arenaInd] == nullptr) {
-                arena = std::make_shared<Arena>(arenaInd, handler, populate_, scaling_, mmapSize, type);
-                arenas_[arenaInd] = arena;
-            } else {
-                RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
-                              FormatString("arena %d reuse, but exists in ArenaManager.", arenaInd));
-            }
-
-            AllocatorFuncRegister regFunc;
-            {
-                std::shared_lock<SharedMutex> l(registerMutex_);
-                auto it = funcRegisterList_.find(type);
-                if (it != funcRegisterList_.end()) {
-                    regFunc = it->second;
-                }
-            }
-            Status rc = arena->Init(regFunc);
-            if (rc.IsError()) {
-                LOG(ERROR) << "Init arena " << arenaInd << " failed: " << rc;
-                arenas_[arenaInd] = nullptr;
-                return rc;
-            }
-
-            VLOG(1) << "Create arena:" << arenaInd << ", fd:" << arena->GetFd() << ", mmap size:" << mmapSize;
-            arenaInds.emplace_back(arenaInd);
-            (void)numArenas_.fetch_add(1, std::memory_order_relaxed);
-            arenas.emplace_back(std::move(arena));
+        std::shared_lock<SharedMutex> l(registerMutex_);
+        auto it = funcRegisterList_.find(type);
+        if (it != funcRegisterList_.end()) {
+            regFunc = it->second;
         }
-
-        arenaGroup = std::make_shared<ArenaGroup>(std::move(arenas), maxSize, type);
-    };
-
-    FakeAllocate(type, arenaInds, fakeAllocateSize);
+    }
+    Status rc = arena->Init(regFunc);
+    if (rc.IsError()) {
+        LOG(ERROR) << "Init arena " << arenaInd << " failed: " << rc;
+        LOG_IF_ERROR(arena->DestroyArena(), "Failed to destroy an uninitialized arena");
+        arenas_[arenaInd] = nullptr;
+        return rc;
+    }
+    VLOG(1) << "Create arena:" << arenaInd << ", fd:" << arena->GetFd() << ", mmap size:" << mmapSize;
     return Status::OK();
 }
 
@@ -785,11 +831,9 @@ Status Arena::Init(AllocatorFuncRegister funcRegister)
                           FormatString("Unkowned cache type: %d", static_cast<int32_t>(cacheType_)));
     }
     RETURN_IF_NOT_OK(mmap_->Initialize(mmapSize_, populate_, FLAGS_enable_huge_tlb));
-    // Use the requested/configured state during initialization: UrmaManager cannot become ready until its transport
-    // arena has been created. Replacing this with IsUbNumaAffinityEnabled() creates a ready-before-init cycle and
-    // silently skips the table that maps source addresses to NUMA nodes.
+    // Client initialization needs the requested state because URMA cannot become ready before its arena is created.
     if ((cacheType_ == CacheType::MEMORY || cacheType_ == CacheType::UB_TRANSPORT)
-        && ShouldBuildUbNumaRangeTable()) {
+        && (NeedRegisterWholeArena() || ShouldBuildUbNumaRangeTable())) {
         Status rc = BuildNumaRangeTable();
         if (rc.IsError()) {
             LOG(WARNING) << "BuildNumaRangeTable failed for arena " << arenaId_

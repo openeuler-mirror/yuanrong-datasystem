@@ -121,6 +121,8 @@ message RegisterClientRspPb {
     // Whether this worker process has UB runtime capability. This is independent of fast_transport_mode:
     // a same-host endpoint can use SHM while the client still needs UB for other cross-node workers.
     bool ub_runtime_enabled = 31;
+    // Maximum source-chip inflight WR difference before selecting the less busy chip. Zero disables feedback.
+    uint32 ub_numa_inflight_wr_diff_threshold = 32;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;

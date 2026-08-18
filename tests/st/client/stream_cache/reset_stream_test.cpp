@@ -28,6 +28,10 @@
 using namespace datasystem::client::stream_cache;
 namespace datasystem {
 namespace st {
+namespace {
+constexpr int WORKER_RECOVERY_TIMEOUT_SEC = 30;
+}
+
 class ResetStreamTest : public SCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -135,7 +139,8 @@ protected:
         cluster_->StartNode(WORKER, workerIdx, "");
         cluster_->WaitNodeReady(WORKER, workerIdx);
 
-        // wait for heartbeat interval so client can detect worker restarted
+        // Give heartbeat-based recovery a chance to start. Callers that depend on recovery completion must poll for
+        // their expected observable result instead of assuming this delay is sufficient.
         std::this_thread::sleep_for(std::chrono::seconds(6));
         return Status::OK();
     }
@@ -394,8 +399,8 @@ TEST_F(ResetStreamTest, LEVEL1_TestClientLostWorkerSameNode)
 
     std::string data = "Hello World";
     Element element(reinterpret_cast<uint8_t *>(&data.front()), data.size());
-    Status rc = prod1->Send(element);
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_SC_WORKER_WAS_LOST);
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([&prod1, &element] { return prod1->Send(element); },
+                                                 WORKER_RECOVERY_TIMEOUT_SEC, StatusCode::K_SC_WORKER_WAS_LOST));
     // close client and producer
     client_.reset();
     prod1.reset();
@@ -466,10 +471,21 @@ TEST_F(ResetStreamTest, LEVEL1_TestClientNotTrackLostWorker)
     DS_ASSERT_NOT_OK(rc);
     ASSERT_NE(rc.GetCode(), StatusCode::K_SC_WORKER_WAS_LOST);
 
-    // However, we can add new producers and consumers as the worker lost is not tracked.
-    DS_ASSERT_OK(client1->CreateProducer(streamName, prod2, defaultProducerConf_));
+    // However, the same clients can add new producers and consumers after automatic recovery because worker loss is
+    // not reported to the caller.
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&client1, &streamName, &prod2, this] {
+            prod2.reset();
+            return client1->CreateProducer(streamName, prod2, defaultProducerConf_);
+        },
+        WORKER_RECOVERY_TIMEOUT_SEC, StatusCode::K_OK));
     SubscriptionConfig config2("sub2", SubscriptionType::STREAM);
-    DS_ASSERT_OK(client2->Subscribe(streamName, config2, con2));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&client2, &streamName, &config2, &con2] {
+            con2.reset();
+            return client2->Subscribe(streamName, config2, con2);
+        },
+        WORKER_RECOVERY_TIMEOUT_SEC, StatusCode::K_OK));
 
     DS_ASSERT_OK(DataFlowAfterResetResume(prod2, con2));
 }

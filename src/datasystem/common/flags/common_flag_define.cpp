@@ -68,11 +68,17 @@ DS_DEFINE_uint32(urma_send_jetty_lane_refill_extra_size, 200,
                  "Maximum number of retiring or pending URMA send Jetty lanes allowed above the active pool size.");
 DS_DEFINE_bool(urma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
+DS_DEFINE_uint32(ub_transport_arena_num, 4,
+                 "Number of arenas for UB transport memory pool. Each arena owns an equal share of the pool. "
+                 "The default is 4.");
 DS_DEFINE_bool(enable_ub_numa_affinity, false,
                "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled.");
 DS_DEFINE_uint32(ub_numa_rr_type, 1,
                  "UB NUMA source-chip round-robin type: 0=disabled, 1=one chip per logical write, "
                  "2=one chip per post.");
+DS_DEFINE_uint32(ub_numa_inflight_wr_diff_threshold, 15,
+                 "Maximum allowed difference between source-chip inflight WR counts before selecting the less busy "
+                 "chip. Set to 0 to preserve pure round-robin selection.");
 DS_DEFINE_string(shared_memory_distribution_policy, "none",
                  "Shared memory NUMA distribution policy. Optional values: "
                  "'none', 'interleave_all_numa', 'interleave_affinity_numa'.");

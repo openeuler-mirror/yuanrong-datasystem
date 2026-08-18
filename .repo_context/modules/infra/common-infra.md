@@ -110,6 +110,13 @@ Detailed follow-up docs now exist for:
     while `enable_thp=true` leaves the process THP setting enabled and additionally applies `madvise(...,
 MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when the mapping is not using
     `MAP_HUGETLB`.
+    Client UB transport pools can set `ub_transport_arena_num` above `1` to split the single registered mapping into
+    equal arenas. The requested pool size is rounded up so that each arena covers whole system pages, and the aligned
+    size must remain within the 2GB client limit. When `enable_ub_numa_affinity=true` and whole-arena registration is
+    enabled, the binding plan interleaves NUMA nodes from different chips before reusing another node on the same chip,
+    while `ArenaGroup` round-robin allocation spreads buffers across those ranges; topology discovery and every NUMA
+    bind are then required initialization steps. With affinity disabled, multi-arena allocation remains enabled but
+    NUMA binding is skipped, so the default four-arena setting does not add a NUMA topology or `mbind` requirement.
   - `rdma` always builds fast-transport wrapper pieces and conditionally adds URMA and RDMA implementations.
   - Fast-transport `Event` completion waits use `bthread::Mutex` and `bthread::ConditionVariable`. A BRPC handler waiting for
     URMA or UCP completion therefore suspends its bthread instead of blocking the scheduler's worker pthread; completion
@@ -123,6 +130,12 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     `bonding*` device and failed startup when it was unavailable.
   - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
     to `4` MB and is validated in the range `[1, 2048]` MB.
+  - With UB NUMA affinity enabled, source-chip selection keeps the existing per-logical-write/per-post RR candidate but
+    uses the existing per-chip `UrmaEvent` inflight-WR counters as relaxed feedback. If the absolute chip-1/chip-2
+    difference is strictly greater than `ub_numa_inflight_wr_diff_threshold` (default `15`), the lower-depth chip
+    overrides the RR candidate; `0` disables feedback. No lock or reservation is added, so short concurrent overshoot
+    is accepted. Workers publish the threshold in `RegisterClientRspPb`; a Client freezes affinity, RR type, and the
+    threshold from the first successful Worker registration and warns on later mismatches.
   - URMA Jetty modify/flush/delete work runs on the lazy `RetireJfs` thread pool with an internal concurrency of `4`.
     Resource shutdown drains and joins this non-droppable pool before releasing the Jetty registry and provider
     dependencies.

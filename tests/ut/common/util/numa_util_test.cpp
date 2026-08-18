@@ -129,6 +129,53 @@ TEST_F(NumaUtilTest, TestNumaIdToChipIdInvalidWhenNumaIdOutOfRange)
     EXPECT_EQ(NumaIdToChipId(4, 4), INVALID_CHIP_ID);
 }
 
+TEST_F(NumaUtilTest, BuildsEqualRoundRobinNumaBindingRanges)
+{
+    constexpr size_t totalSize = 8 * 1024 * 1024;
+    using BuildPlanFunction = Status (*)(uint8_t *, size_t, uint32_t, const std::vector<int> &,
+                                         std::vector<NumaBindingRange> &);
+    BuildPlanFunction buildPlan = &BuildRoundRobinNumaBindingPlan;
+    std::vector<uint8_t> memory(totalSize);
+    std::vector<NumaBindingRange> ranges;
+
+    DS_ASSERT_OK(buildPlan(memory.data(), totalSize, 4, { 2, 6 }, ranges));
+
+    ASSERT_EQ(ranges.size(), 4u);
+    constexpr size_t rangeSize = totalSize / 4;
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        EXPECT_EQ(ranges[i].pointer, memory.data() + i * rangeSize);
+        EXPECT_EQ(ranges[i].size, rangeSize);
+        EXPECT_EQ(ranges[i].nodeId, i % 2 == 0 ? 2 : 6);
+    }
+}
+
+TEST_F(NumaUtilTest, CoversDistinctChipsBeforeReusingNumaNodes)
+{
+    constexpr size_t totalSize = 8 * 1024 * 1024;
+    std::vector<uint8_t> memory(totalSize);
+    std::vector<NumaBindingRange> ranges;
+
+    DS_ASSERT_OK(BuildRoundRobinNumaBindingPlan(memory.data(), totalSize, 2, { 0, 1, 2, 3 }, ranges));
+
+    ASSERT_EQ(ranges.size(), 2u);
+    EXPECT_EQ(NumaIdToChipId(ranges[0].nodeId, 4), 1);
+    EXPECT_EQ(NumaIdToChipId(ranges[1].nodeId, 4), 2);
+}
+
+TEST_F(NumaUtilTest, RejectsInvalidNumaBindingPlans)
+{
+    std::vector<uint8_t> memory(8193);
+    std::vector<NumaBindingRange> ranges = { { memory.data(), 4096, 0 } };
+
+    EXPECT_EQ(BuildRoundRobinNumaBindingPlan(nullptr, 8192, 2, { 0, 1 }, ranges).GetCode(), K_INVALID);
+    EXPECT_TRUE(ranges.empty());
+    EXPECT_EQ(BuildRoundRobinNumaBindingPlan(memory.data(), 0, 2, { 0, 1 }, ranges).GetCode(), K_INVALID);
+    EXPECT_EQ(BuildRoundRobinNumaBindingPlan(memory.data(), 8192, 0, { 0, 1 }, ranges).GetCode(), K_INVALID);
+    EXPECT_EQ(BuildRoundRobinNumaBindingPlan(memory.data(), 8193, 2, { 0, 1 }, ranges).GetCode(),
+              K_INVALID);
+    EXPECT_EQ(BuildRoundRobinNumaBindingPlan(memory.data(), 8192, 2, {}, ranges).GetCode(), K_INVALID);
+}
+
 TEST_F(NumaUtilTest, TestNumaIdToChipIdConcurrentFirstCallDoesNotCrash)
 {
     constexpr int threadCount = 32;

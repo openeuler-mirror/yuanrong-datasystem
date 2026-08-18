@@ -82,6 +82,18 @@ uint64_t MockThreadPool::ResolveLatencyFromEnv()
     return ReadEnvU64("URMA_MOCK_LATENCY_US", 0);
 }
 
+uint64_t MockThreadPool::ResolveLatencyFromEnv(int srcChipId)
+{
+    const uint64_t fallback = ResolveLatencyFromEnv();
+    if (srcChipId == 1) {
+        return ReadEnvU64("URMA_MOCK_CHIP_1_LATENCY_US", fallback);
+    }
+    if (srcChipId == 2) {
+        return ReadEnvU64("URMA_MOCK_CHIP_2_LATENCY_US", fallback);
+    }
+    return fallback;
+}
+
 size_t MockThreadPool::ResolveQueueCapFromEnv()
 {
     size_t v = ReadEnvSize("URMA_MOCK_QUEUE_CAP", K_DEFAULT_QUEUE_CAP);

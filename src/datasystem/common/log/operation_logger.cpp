@@ -141,7 +141,8 @@ const std::unordered_set<std::string> &ClientUsedFlagNames()
         "enable_urma", "urma_send_jetty_lane_pool_size",
         "urma_failover_success_rate_ratio", "urma_failover_min_sample_count",
         // ---- conditionally reached by client ----
-        "encrypt_kit", "shared_memory_distribution_policy",
+        "encrypt_kit", "shared_memory_distribution_policy", "ub_transport_arena_num",
+        "ub_numa_inflight_wr_diff_threshold",
         // read via etcd_keep_alive on the client etcd path (router_client / service_discovery)
         "heartbeat_interval_ms",
         // read via arena.cpp on the embedded, client + URMA arena registration path
