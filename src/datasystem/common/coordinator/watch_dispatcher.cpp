@@ -237,13 +237,6 @@ Status WatchDispatcher::Start()
         return Status::OK();
     }
 
-    if (notifyTag_ != BTHREAD_TAG_DEFAULT
-        && bthread_setconcurrency_by_tag(static_cast<int>(dispatchThreadCount_), notifyTag_) != 0) {
-        running_.store(false);
-        LOG(ERROR) << "Failed to configure watch event bthread tag, tag=" << notifyTag_
-                   << ", pthreadCount=" << dispatchThreadCount_;
-        RETURN_STATUS(K_RUNTIME_ERROR, "Failed to configure watch event bthread tag");
-    }
     const size_t workerCount = dispatchThreadCount_ * BTHREADS_PER_DISPATCH_THREAD;
     const size_t groupCount = std::min(dispatchThreadCount_, MAX_READY_CHANNEL_GROUPS);
     dispatchChannelGroups_.reserve(groupCount);

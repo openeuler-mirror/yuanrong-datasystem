@@ -84,6 +84,7 @@ private:
     enum class ConfigState : uint8_t { NOT_READY, READY, STOPPING };
 
     Status InitAndRunInternal(const CoordinatorOptions *options);
+    Status InitWatchDispatcherBthreadPool();
     Status InvokeOnStart();
     Status InvokeOnStop();
     Status ShutdownService();
@@ -102,6 +103,7 @@ private:
     std::unique_ptr<DynamicFlagConfig> runtimeFlags_;
     std::unique_ptr<DynamicConfigUpdater> configUpdater_;
     ConfigState configState_{ ConfigState::NOT_READY };
+    int watchDispatcherBthreadTag_{ 0 };
 };
 
 }  // namespace datasystem
