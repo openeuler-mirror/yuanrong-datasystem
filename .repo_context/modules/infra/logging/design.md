@@ -424,7 +424,7 @@ Failure-sensitive steps:
 | --- | --- | --- | --- | --- | --- | --- |
 | `spdlog` via `ds_spdlog` | ordinary file and stderr logging, async logger support, rotating sink support | mature logging backend with async and sink abstractions while preserving a repository-owned macro surface | keep a fully custom logger, or expose backend implementation details directly | `MIT` | pinned to `spdlog-1.12.0` in `bazel/ds_deps.bzl`; upgrade through wrapper and patch review | repository applies namespace and rotating-sink patches under `third_party/patches/spdlog/*`; retention remains externally managed by `LogManager` |
 | `abseil-cpp` | failure-signal handling and symbolization for crash-path output | reduces custom signal-handler code and keeps crash output integrated with stack symbolization | custom signal handling only | `Apache-2.0` | pinned to `abseil-cpp-20250127.1` in `bazel/ds_deps.bzl`; upgrade with crash-path regression checks | signal-handler behavior is high risk; verify `container.log` output and handler install paths after upgrades |
-| `RE2` | log-name validation in `Logging::ValidateLogName(...)` | safe and predictable regex engine for user-controlled environment input | manual validation logic | `BSD-3-Clause` | pinned to `re2-2024-07-02` in `bazel/ds_deps.bzl`; upgrade with validation tests | repository carries an absl-related patch for Bazel integration |
+| `RE2` | log-name validation in `Validator::ValidateLogName(...)` | safe and predictable regex engine for user-controlled configuration and environment input | manual validation logic | `BSD-3-Clause` | pinned to `re2-2024-07-02` in `bazel/ds_deps.bzl`; upgrade with validation tests | repository carries an absl-related patch for Bazel integration |
 
 TransferEngine reuses the same patched `libds-spdlog.so` ABI but constructs its file and console loggers directly without registering them globally. The private facade owns severity files, stderr thresholds, verbosity controls, flush intervals, rotation size, and default `/tmp`-style directory selection under the `TRANSFER_ENGINE_*` namespace. This boundary is required because `_transfer_engine.so` can coexist with other native Python modules that bring independent logging runtimes.
 
@@ -442,6 +442,8 @@ TransferEngine reuses the same patched `libds-spdlog.so` ABI but constructs its 
 | `DATASYSTEM_CLIENT_LOG_DIR` | environment | client-only override | changes client log destination directory | can redirect output unexpectedly or fail on bad permissions |
 | `DATASYSTEM_CLIENT_LOG_NAME` | environment | client-only override validated by RE2 | changes client ordinary log base name | unsafe naming would break file handling if validation changed |
 | `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` | environment | client-only override validated by RE2 | changes client access-log base name | can break downstream file discovery assumptions |
+| `KVClientConfig::LogName` | client initialization config | explicit value takes priority over `DATASYSTEM_CLIENT_LOG_NAME`; explicit empty selects the default name | changes client ordinary log base name | config presence must remain distinct from an empty value |
+| `KVClientConfig::AccessLogName` | client initialization config | explicit value takes priority over `DATASYSTEM_CLIENT_ACCESS_LOG_NAME`; explicit empty selects the default name | changes client access-log base name | config presence must remain distinct from an empty value |
 | `DATASYSTEM_LOG_MONITOR_ENABLE` | environment | client-only override | enables or disables client monitor logging | may create client and server observability mismatch |
 | `log_only_write_info_file` / `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` | gflag or client-only env override | default `true` | INFO files always receive all severities; `true` suppresses additional WARNING/ERROR files, while `false` restores dedicated WARNING/ERROR files and severity fanout | changes file discovery assumptions and disk usage |
 | `TRANSFER_ENGINE_LOG_DIR` | environment | unset; then `TEST_TMPDIR`, `TMPDIR`, `TMP`, `/tmp`, `.` | changes TransferEngine severity-log destination | invalid or unwritable paths fall through to stderr fallback and reduce persisted diagnostics |
@@ -546,7 +548,7 @@ TransferEngine reuses the same patched `libds-spdlog.so` ABI but constructs its 
   - most logging behavior remains configurable through gflags and client environment overrides;
   - `log_monitor` is the main kill switch for structured monitor logging.
 - Attack or fault scenarios the module should continue to tolerate:
-  - malformed client-provided log names rejected by `ValidateLogName(...)`;
+  - malformed non-empty client-provided log names rejected by `Validator::ValidateLogName(...)`;
   - async trace discontinuity at one callsite should not corrupt unrelated threads;
   - crash handler should still emit direct file output when normal logger sinks are unhealthy.
 
@@ -556,7 +558,8 @@ TransferEngine reuses the same patched `libds-spdlog.so` ABI but constructs its 
   - the module is infrastructure only and must not become an authority for permission decisions.
 - Input validation requirements:
   - `Context::SetTraceId(...)` validates trace-prefix characters and length;
-  - `Logging::ValidateLogName(...)` only accepts `[a-zA-Z0-9_]*` for client-supplied log names.
+  - `Validator::ValidateLogName(...)` only accepts `[a-zA-Z0-9_]+` for client-supplied log names; optional configuration
+    adapters handle an explicit empty value before invoking the common validator.
 - Data sensitivity or privacy requirements:
   - request and response metadata logged by `AccessRecorder` may contain sensitive business context, so any schema expansion requires review for secrets, personal data, or credentials.
 - Secrets, credentials, or key-management requirements:

@@ -70,6 +70,15 @@ TEST_F(ValidatorTest, TestIsRegexMatch)
     EXPECT_FALSE(Validator::IsRegexMatch(simpleIdRe1, "wqeiqwo$"));
 }
 
+TEST_F(ValidatorTest, TestValidateLogName)
+{
+    EXPECT_TRUE(Validator::ValidateLogName("client_log_01"));
+    EXPECT_FALSE(Validator::ValidateLogName(""));
+    EXPECT_FALSE(Validator::ValidateLogName("client-log"));
+    EXPECT_FALSE(Validator::ValidateLogName("client/log"));
+    EXPECT_FALSE(Validator::ValidateLogName("client.log"));
+}
+
 TEST_F(ValidatorTest, TestValidateHostPortString)
 {
     EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", ""));

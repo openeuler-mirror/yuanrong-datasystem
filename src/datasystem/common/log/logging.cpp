@@ -28,7 +28,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "re2/re2.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
 #include "datasystem/common/log/log.h"
@@ -141,6 +140,8 @@ namespace {
 std::mutex g_clientLogConfigMutex;
 bool g_hasClientLogWithoutPidConfig = false;
 bool g_clientLogWithoutPidConfig = false;
+bool g_hasClientLogNameConfig = false;
+std::string g_clientLogNameConfig;
 bool g_hasClientAccessLogNameConfig = false;
 std::string g_clientAccessLogNameConfig;
 }  // namespace
@@ -481,6 +482,23 @@ void Logging::SetClientLogWithoutPid(bool enabled)
     g_clientLogWithoutPidConfig = enabled;
 }
 
+void Logging::SetClientLogName(const std::string &logName)
+{
+    std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
+    g_hasClientLogNameConfig = true;
+    g_clientLogNameConfig = logName;
+}
+
+bool Logging::TryGetClientLogName(std::string &logName)
+{
+    std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
+    if (!g_hasClientLogNameConfig) {
+        return false;
+    }
+    logName = g_clientLogNameConfig;
+    return true;
+}
+
 void Logging::SetClientAccessLogName(const std::string &logName)
 {
     std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
@@ -503,6 +521,8 @@ void Logging::ResetClientLogConfigForTest()
     std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
     g_hasClientLogWithoutPidConfig = false;
     g_clientLogWithoutPidConfig = false;
+    g_hasClientLogNameConfig = false;
+    g_clientLogNameConfig.clear();
     g_hasClientAccessLogNameConfig = false;
     g_clientAccessLogNameConfig.clear();
 }
@@ -552,14 +572,17 @@ void Logging::Start(const std::string &logFilename, LogProcessRole processRole, 
     if (isClient_) {
         GetInstance()->InitClientConfig();
 
-        if (!FLAGS_log_filename.empty()) {
+        std::string configuredLogName;
+        if (TryGetClientLogName(configuredLogName)) {
+            clientLogName = configuredLogName.empty() ? GetClientLogName(logFilename, getpid()) : configuredLogName;
+        } else if (!FLAGS_log_filename.empty()) {
             clientLogName = FLAGS_log_filename;
         } else {
             clientLogName = GetClientLogName(logFilename, getpid());
 
             // Allow overriding client log filename via environment variable
             std::string logName = GetStringFromEnv(LOG_NAME_ENV.c_str(), "");
-            if (ValidateLogName(logName)) {
+            if (Validator::ValidateLogName(logName)) {
                 clientLogName = std::move(logName);
             }
         }
@@ -630,14 +653,4 @@ Status Logging::WriteLogToFile(int lineOfCode, const std::string &fileNameOfCode
     return Status::OK();
 }
 
-bool Logging::ValidateLogName(const std::string &logName)
-{
-    if (logName.empty()) {
-        return false;
-    }
-
-    // Only allow: a-z, A-Z, 0-9, _
-    static const re2::RE2 re("^[a-zA-Z0-9_]*$");
-    return re2::RE2::FullMatch(logName, re);
-}
 }  // namespace datasystem

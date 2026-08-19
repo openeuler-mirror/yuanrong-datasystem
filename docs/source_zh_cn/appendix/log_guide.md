@@ -29,9 +29,9 @@ openYuanrong datasystem 的日志分为以下类型：
 | 7 | datasystem_worker | `/path/yr_datasystem/logs/{log_filename}_operation.log` | 操作审计日志；记录 Init/Shutdown、构建 Commit、配置初始化快照及运行时 flag 变更（`UpdateConfig` 或配置文件热更新） |
 | 8 | datasystem_worker | `/path/yr_datasystem/logs/kv_resource.log` | 资源快照 JSON-Lines；`resource.log` 同源字段的纯 JSON 输出，顶层 `time`/`pod_name`/`cluster_name`，`metrics` 按 schema 输出已配置的 metric 组；由 `json_log_monitor` 且 `log_monitor_exporter=harddisk` 控制 |
 | 9 | datasystem_worker | `/path/yr_datasystem/logs/kv_metrics.log` | 指标摘要 JSON-Lines；INFO.log 中 `metrics_summary` 的并行输出，body 逐字一致，额外前置 `time`/`pod_name`/`cluster_name`；由 `json_log_monitor` 控制（INFO.log 原输出仍由 `log_monitor` 控制） |
-| 10 | Client | `/path/client/ds_client.INFO.log`（及 `.WARNING`、`.ERROR` 等；关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}.INFO.log`） | SDK 运行日志；基名可由启动参数与环境变量 `DATASYSTEM_CLIENT_LOG_NAME` 覆盖 |
-| 11 | Client | `/path/client/ds_client_operation.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}_operation.log`） | Client 操作审计日志；记录 Init/Shutdown 及 `UpdateConfig` 动态配置变更 |
-| 12 | Client | `/path/client/ds_client_access.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_access_{pid}.log`） | SDK 接口访问日志；基名可由 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖 |
+| 10 | Client | `/path/client/ds_client_{pid}.INFO.log`（及 `.WARNING`、`.ERROR` 等；开启 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后为 `/path/client/ds_client.INFO.log`） | SDK 运行日志；基名可由 `KVClientConfig::LogName` 与环境变量 `DATASYSTEM_CLIENT_LOG_NAME` 覆盖，非空时仅允许英文字母、数字和下划线；显式配置空串时忽略环境变量并使用默认基名 |
+| 11 | Client | `/path/client/ds_client_{pid}_operation.log`（开启 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后为 `/path/client/ds_client_operation.log`） | Client 操作审计日志；记录 Init/Shutdown 及 `UpdateConfig` 动态配置变更 |
+| 12 | Client | `/path/client/ds_client_access_{pid}.log`（开启 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后为 `/path/client/ds_client_access.log`） | SDK 接口访问日志；基名可由 `KVClientConfig::AccessLogName` 与环境变量 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖，非空时仅允许英文字母、数字和下划线；显式配置空串时忽略环境变量并使用默认基名 |
 | 13 | datasystem_coordinator | `/path/yr_datasystem/logs/datasystem_coordinator.INFO.log`（及 `.WARNING`、`.ERROR` 等轮转文件） | Coordinator 运行日志；启动时记录 Git Commit 和 Branch |
 | 14 | datasystem_coordinator | `/path/yr_datasystem/logs/datasystem_coordinator_operation.log` | Coordinator 操作审计日志；记录 Init/Shutdown、构建 Commit、配置初始化及运行时 `UpdateConfig` 变更 |
 

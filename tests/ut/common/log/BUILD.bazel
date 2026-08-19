@@ -36,6 +36,7 @@ ds_cc_test(
     tags = ["manual"],
     deps = [
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:validator",
         "//tests/ut:ut_common",
     ],
 )

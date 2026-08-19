@@ -60,6 +60,7 @@ DS_DECLARE_uint32(log_retention_day);
 DS_DECLARE_uint32(max_log_file_num);
 DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_uint32(stderrthreshold);
+DS_DECLARE_string(log_filename);
 DS_DECLARE_string(monitor_config_file);
 
 namespace {
@@ -282,6 +283,10 @@ private:
 void ApplyKvClientLogConfigFromConfig(const KVClientConfig &clientConfig)
 {
     const auto &args = clientConfig.GetArgs();
+    auto logName = args.find("log_filename");
+    if (logName != args.end()) {
+        Logging::SetClientLogName(logName->second);
+    }
     auto logWithoutPid = args.find("client_log_without_pid");
     if (logWithoutPid != args.end()) {
         Logging::SetClientLogWithoutPid(ParseBoolFromString(logWithoutPid->second, false));
@@ -295,6 +300,11 @@ void ApplyKvClientLogConfigFromConfig(const KVClientConfig &clientConfig)
 class ClientLogConfigPriorityTest : public ::testing::Test {
 protected:
     void SetUp() override
+    {
+        Logging::ResetClientLogConfigForTest();
+    }
+
+    void TearDown() override
     {
         Logging::ResetClientLogConfigForTest();
     }
@@ -479,6 +489,27 @@ TEST_F(ClientLogConfigPriorityTest, ExplicitClientAccessLogNameIsNotOverriddenBy
     }
 }
 
+TEST_F(ClientLogConfigPriorityTest, ExplicitEmptyClientLogNameIsPreserved)
+{
+    KVClientConfig config;
+    ASSERT_EQ(KVClientConfig::Builder().LogName("").Build(config), Status::OK());
+    ApplyKvClientLogConfigFromConfig(config);
+
+    std::string logName;
+    ASSERT_TRUE(Logging::TryGetClientLogName(logName));
+    ASSERT_TRUE(logName.empty());
+}
+
+TEST_F(ClientLogConfigPriorityTest, UnspecifiedClientLogNameHasNoExplicitConfig)
+{
+    KVClientConfig config;
+    ASSERT_EQ(KVClientConfig::Builder().Build(config), Status::OK());
+    ApplyKvClientLogConfigFromConfig(config);
+
+    std::string logName;
+    ASSERT_FALSE(Logging::TryGetClientLogName(logName));
+}
+
 TEST_F(ClientLogConfigPriorityTest, ExplicitEmptyClientAccessLogNameIsNotOverriddenByEnv)
 {
     const char *envName = ACCESS_LOG_NAME_ENV.c_str();
@@ -630,16 +661,35 @@ TEST_F(FlagsTest, KVClientConfigBuilderAggregatesInvalidValues)
     EXPECT_TRUE(config.GetArgs().empty());
 }
 
-TEST_F(FlagsTest, KVClientConfigBuilderRejectsEmptyGflagStrings)
+TEST_F(FlagsTest, KVClientConfigBuilderValidatesLogName)
+{
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().LogName("client_log_01").Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_EQ(config.GetArgs().at("log_filename"), "client_log_01");
+
+    KVClientConfig emptyConfig;
+    status = KVClientConfig::Builder().LogName("").Build(emptyConfig);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_EQ(emptyConfig.GetArgs().at("log_filename"), "");
+
+    const std::vector<std::string> invalidLogNames = { "client-log", "a b",       "a/b",     "../client",
+                                                       "client.log", "client:name", "客户端" };
+    for (const auto &logName : invalidLogNames) {
+        KVClientConfig invalidConfig;
+        status = KVClientConfig::Builder().LogName(logName).Build(invalidConfig);
+        EXPECT_EQ(status.GetCode(), StatusCode::K_INVALID) << logName;
+        EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogName")) << logName;
+        EXPECT_TRUE(invalidConfig.GetArgs().empty()) << logName;
+    }
+}
+
+TEST_F(FlagsTest, KVClientConfigBuilderRejectsEmptyRequiredGflagStrings)
 {
     KVClientConfig config;
     Status status = KVClientConfig::Builder().LogDir("").Build(config);
     ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogDir"));
-
-    status = KVClientConfig::Builder().LogName("").Build(config);
-    ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
-    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogName"));
 }
 
 TEST_F(FlagsTest, KVClientConfigBuilderAcceptsEmptyMonitorConfigPath)
@@ -682,13 +732,37 @@ TEST_F(FlagsTest, ParseCommandLineFlagsRejectsEmptyStringWhenValidatorDisallows)
     EXPECT_THAT(errMsg, testing::HasSubstr("illegal value"));
 }
 
-TEST_F(FlagsTest, KVClientConfigBuilderRejectsInvalidAccessLogName)
+TEST_F(FlagsTest, KVClientConfigBuilderValidatesAccessLogName)
 {
     KVClientConfig config;
-    Status status = KVClientConfig::Builder().AccessLogName("client-access").Build(config);
-    ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
-    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("AccessLogName"));
-    EXPECT_TRUE(config.GetArgs().empty());
+    Status status = KVClientConfig::Builder().AccessLogName("client_access_01").Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_EQ(config.GetArgs().at("client_access_log_filename"), "client_access_01");
+
+    KVClientConfig emptyConfig;
+    status = KVClientConfig::Builder().AccessLogName("").Build(emptyConfig);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_EQ(emptyConfig.GetArgs().at("client_access_log_filename"), "");
+
+    for (const auto &logName : { "client-access", "client/access", "client.access" }) {
+        KVClientConfig invalidConfig;
+        status = KVClientConfig::Builder().AccessLogName(logName).Build(invalidConfig);
+        EXPECT_EQ(status.GetCode(), StatusCode::K_INVALID) << logName;
+        EXPECT_THAT(status.GetMsg(), testing::HasSubstr("AccessLogName")) << logName;
+        EXPECT_TRUE(invalidConfig.GetArgs().empty()) << logName;
+    }
+}
+
+TEST_F(FlagsTest, LogFilenameFlagUsesUnifiedCharacterContract)
+{
+    const std::string originalLogFilename = FLAGS_log_filename;
+    std::string errMsg;
+    EXPECT_TRUE(SetCommandLineOption("log_filename", "client_log_01", errMsg));
+    EXPECT_FALSE(SetCommandLineOption("log_filename", "client-log", errMsg));
+    EXPECT_EQ(FLAGS_log_filename, "client_log_01");
+    EXPECT_TRUE(SetCommandLineOption("log_filename", "", errMsg));
+    EXPECT_TRUE(FLAGS_log_filename.empty());
+    FLAGS_log_filename = originalLogFilename;
 }
 
 TEST_F(FlagsTest, ParseCommandLineFlagsClearsErrorStateOnRetry)

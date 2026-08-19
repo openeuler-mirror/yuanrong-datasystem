@@ -108,7 +108,6 @@ ds_cc_library(
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:validator",
-        "@re2",
     ],
     alwayslink = True,
 )

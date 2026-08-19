@@ -40,7 +40,8 @@ DS_DEFINE_string(
     unix_domain_socket_dir, "~/datasystem/unix_domain_socket_dir",
     "The directory to store unix domain socket file. The UDS generates temporary files in this path. Max lenth: 80");
 DS_DEFINE_string(log_filename, "",
-                 "Prefix of log filename, default is program invocation short name. Use standard characters only.");
+                 "Prefix of log filename, default is program invocation short name. Only letters, digits, and "
+                 "underscores are allowed.");
 DS_DEFINE_string(curve_key_dir, "",
                  "The directory to find ZMQ curve key files. This path must be specified "
                  "when zmq authentication is enabled. Path must be less than 4095 characters (PATH_MAX).");

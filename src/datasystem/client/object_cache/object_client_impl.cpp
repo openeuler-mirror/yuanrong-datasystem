@@ -184,7 +184,8 @@ constexpr int64_t DRAINING_LOCATION_REFRESH_INITIAL_BACKOFF_MS = 1;
 constexpr int32_t HASH_RING_RPC_MIN_TIMEOUT_MS = 100;
 constexpr int BOUND_WORKER_PROBE_TIMEOUT_MS = 10;
 constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
-const std::unordered_set<std::string> NON_GFLAG_KV_CLIENT_CONFIG_KEYS = {
+const std::unordered_set<std::string> KV_CLIENT_LOG_CONFIG_KEYS = {
+    "log_filename",
     "client_access_log_filename",
     "client_log_without_pid",
 };
@@ -396,7 +397,7 @@ std::unordered_map<std::string, std::string> GetGflagArgs(const KVClientConfig &
 {
     std::unordered_map<std::string, std::string> args;
     for (const auto &arg : clientConfig.GetArgs()) {
-        if (NON_GFLAG_KV_CLIENT_CONFIG_KEYS.find(arg.first) == NON_GFLAG_KV_CLIENT_CONFIG_KEYS.end()) {
+        if (KV_CLIENT_LOG_CONFIG_KEYS.find(arg.first) == KV_CLIENT_LOG_CONFIG_KEYS.end()) {
             args.emplace(arg.first, arg.second);
         }
     }
@@ -405,12 +406,17 @@ std::unordered_map<std::string, std::string> GetGflagArgs(const KVClientConfig &
 
 void ApplyKvClientLogConfig(const KVClientConfig &clientConfig)
 {
-    auto logWithoutPid = clientConfig.GetArgs().find("client_log_without_pid");
-    if (logWithoutPid != clientConfig.GetArgs().end()) {
+    const auto &args = clientConfig.GetArgs();
+    auto logName = args.find("log_filename");
+    if (logName != args.end()) {
+        Logging::SetClientLogName(logName->second);
+    }
+    auto logWithoutPid = args.find("client_log_without_pid");
+    if (logWithoutPid != args.end()) {
         Logging::SetClientLogWithoutPid(ParseBoolFromString(logWithoutPid->second, false));
     }
-    auto accessLogName = clientConfig.GetArgs().find("client_access_log_filename");
-    if (accessLogName != clientConfig.GetArgs().end()) {
+    auto accessLogName = args.find("client_access_log_filename");
+    if (accessLogName != args.end()) {
         Logging::SetClientAccessLogName(accessLogName->second);
     }
 }

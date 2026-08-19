@@ -222,6 +222,16 @@ bool ValidateSampleRateRange(const char *flagName, double value)
     }
     return true;
 }
+
+bool ValidateOptionalLogName(const char *flagName, const std::string &value)
+{
+    if (value.empty() || Validator::ValidateLogName(value)) {
+        return true;
+    }
+    LOG(ERROR) << FormatString("The value of %s flag is %s, which must contain only a-z, A-Z, 0-9, and underscore.",
+                               flagName, value);
+    return false;
+}
 }  // namespace
 
 DS_DEFINE_validator(l2_cache_type, &Validator::ValidateL2CacheType);
@@ -253,7 +263,7 @@ DS_DEFINE_validator(rebalance_usage_gap_percent, &ValidatePercent);
 DS_DEFINE_validator(rebalance_task_report_grace_ms, &Validator::ValidateUint32);
 DS_DEFINE_validator(monitor_config_file, &Validator::ValidatePathString);
 DS_DEFINE_validator(unix_domain_socket_dir, &Validator::ValidateUnixDomainSocketDir);
-DS_DEFINE_validator(log_filename, &Validator::ValidateEligibleChar);
+DS_DEFINE_validator(log_filename, &ValidateOptionalLogName);
 DS_DEFINE_validator(curve_key_dir, &Validator::ValidatePathString);
 DS_DEFINE_validator(shared_disk_directory, &Validator::ValidatePathString);
 DS_DEFINE_validator(distributed_disk_path, &Validator::ValidatePathString);

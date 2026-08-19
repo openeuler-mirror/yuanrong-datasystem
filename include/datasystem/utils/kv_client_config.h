@@ -62,7 +62,8 @@ public:
 
         /**
          * @brief Client log file base name.
-         * @param[in] name Equivalent to flag log_filename.
+         * @param[in] name Equivalent to flag log_filename. A non-empty name must contain only letters, digits, and
+         * underscores. An empty name ignores DATASYSTEM_CLIENT_LOG_NAME and selects the default client log name.
          * @return Reference to self for chaining.
          */
         Builder &LogName(const std::string &name);
@@ -76,7 +77,9 @@ public:
 
         /**
          * @brief Client access log file base name.
-         * @param[in] name Equivalent to client access log filename config.
+         * @param[in] name Equivalent to client access log filename config. A non-empty name must contain only letters,
+         * digits, and underscores. An empty name ignores DATASYSTEM_CLIENT_ACCESS_LOG_NAME and selects the default
+         * client access log name.
          * @return Reference to self for chaining.
          */
         Builder &AccessLogName(const std::string &name);

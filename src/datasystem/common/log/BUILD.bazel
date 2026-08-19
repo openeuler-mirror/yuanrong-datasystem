@@ -142,7 +142,6 @@ ds_cc_library(
         "//src/datasystem/common/util:request_context",
         "//src/datasystem/common/util:thread",
         "//src/datasystem/common/util:uuid_generator",
-        "@re2",
         "@securec",
     ],
     alwayslink = 1,

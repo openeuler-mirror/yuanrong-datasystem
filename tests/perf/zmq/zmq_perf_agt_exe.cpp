@@ -44,7 +44,7 @@ void SignalHandler(int signum)
 int main(int argc, char **argv)
 {
     auto pid = getpid();
-    FLAGS_log_filename = datasystem::FormatString("%s.%d", "zmq_perf_agent", pid);
+    FLAGS_log_filename = datasystem::FormatString("%s_%d", "zmq_perf_agent", pid);
     FLAGS_v = datasystem::RPC_KEY_LOG_LEVEL;
     datasystem::Logging::GetInstance()->Start(FLAGS_log_filename, datasystem::LogProcessRole::WORKER);
     datasystem::st::ZmqPerfAgent zmqPerfAgent;

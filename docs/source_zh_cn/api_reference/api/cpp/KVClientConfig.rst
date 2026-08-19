@@ -78,18 +78,21 @@ KVClientConfig
     .. cpp:function:: Builder &LogName(const std::string &name)
 
        设置客户端日志文件名（不含目录和扩展名）。对应内部配置项 ``log_filename``。
-       不允许为空；允许字符为英文字母、数字及路径字符集中的符号。默认值为 ``ds_client``。
+       非空时仅允许英文字母、数字和下划线；为空时忽略环境变量
+       ``DATASYSTEM_CLIENT_LOG_NAME`` 并使用默认基名 ``ds_client``。默认情况下实际基名为
+       ``ds_client_<pid>``，启用 ``LogWithoutPid`` 后为 ``ds_client``。
 
     .. cpp:function:: Builder &LogWithoutPid(bool enable)
 
        设置客户端日志文件名是否不带 pid。对应环境变量 ``DATASYSTEM_CLIENT_LOG_WITHOUT_PID``。
        为 ``true`` 时输出为 ``ds_client.log``、``ds_client_access.log``；为 ``false`` 时恢复带
-       ``<pid>`` 后缀的命名，适合多 client 进程同时运行且不希望覆盖日志的场景。默认值为 ``true``。
+       ``<pid>`` 后缀的命名，适合多 client 进程同时运行且不希望覆盖日志的场景。默认值为 ``false``。
 
     .. cpp:function:: Builder &AccessLogName(const std::string &name)
 
        设置客户端访问日志文件名（不含目录和扩展名）。非空时仅允许英文字母、数字和下划线。
-       默认值为 ``ds_client_access``。
+       为空时忽略环境变量 ``DATASYSTEM_CLIENT_ACCESS_LOG_NAME`` 并使用默认基名
+       ``ds_client_access``。
 
     .. cpp:function:: Builder &MinLogLevel(int level)
 

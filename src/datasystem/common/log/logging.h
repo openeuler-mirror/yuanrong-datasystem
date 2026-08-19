@@ -126,8 +126,6 @@ public:
         return podName_;
     }
 
-    static bool ValidateLogName(const std::string &logName);
-
     /**
      * @brief Build client log filename.
      * @param[in] baseName Log file base name.
@@ -147,6 +145,19 @@ public:
      * @param[in] enabled Whether to omit pid in client log filename.
      */
     static void SetClientLogWithoutPid(bool enabled);
+
+    /**
+     * @brief Set client log filename configured by KVClientConfig.
+     * @param[in] logName Client log file base name. An empty value selects the default name.
+     */
+    static void SetClientLogName(const std::string &logName);
+
+    /**
+     * @brief Get client log filename explicitly configured by KVClientConfig.
+     * @param[out] logName Client log file base name, which may be empty.
+     * @return True if KVClientConfig explicitly configured the log name.
+     */
+    static bool TryGetClientLogName(std::string &logName);
 
     /**
      * @brief Set client access log filename.

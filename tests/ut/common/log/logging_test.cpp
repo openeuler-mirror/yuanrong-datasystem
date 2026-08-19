@@ -54,6 +54,7 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_bool(alsologtostderr);
@@ -157,7 +158,7 @@ public:
     std::string ClientAccessLogName()
     {
         std::string accessLogName = GetStringFromEnv(ACCESS_LOG_NAME_ENV.c_str(), "");
-        if (Logging::ValidateLogName(accessLogName)) {
+        if (Validator::ValidateLogName(accessLogName)) {
             return accessLogName;
         }
         return Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, getpid());
@@ -1056,6 +1057,38 @@ TEST_F(LoggingTest, TestLogName)
     ASSERT_TRUE(FileExist(filepath));
     filepath = FLAGS_log_dir + "/test_client.INFO.log";
     ASSERT_TRUE(FileExist(filepath));
+}
+
+TEST_F(LoggingTest, TestExplicitEmptyClientLogNameUsesDefault)
+{
+    ScopedEnv logName(LOG_NAME_ENV, "env_client");
+    ScopedEnv clientLogWithoutPid(CLIENT_LOG_WITHOUT_PID_ENV, "true");
+    Logging::SetClientLogName("");
+
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT, 1);
+
+    ASSERT_EQ(FLAGS_log_filename, CLIENT_LOG_FILENAME);
+}
+
+TEST_F(LoggingTest, TestExplicitClientLogNameOverridesEnv)
+{
+    ScopedEnv logName(LOG_NAME_ENV, "env_client");
+    Logging::SetClientLogName("config_client");
+
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT, 1);
+
+    ASSERT_EQ(FLAGS_log_filename, "config_client");
+}
+
+TEST_F(LoggingTest, TestClientLogNameEnvAfterLoggingRestart)
+{
+    Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR, 1);
+    ResetLoggingForTest();
+    ScopedEnv logName(LOG_NAME_ENV, "test_client_after_restart");
+
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT, 1);
+
+    ASSERT_EQ(FLAGS_log_filename, "test_client_after_restart");
 }
 }  // namespace ut
 }  // namespace datasystem
