@@ -222,6 +222,8 @@ KVClient
             - 返回 ``StatusCode::K_INVALID`` 表示 ``key`` 校验不通过。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示 ``key`` 不存在。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
     .. cpp:function:: Status Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer, int32_t subTimeoutMs)
@@ -242,6 +244,8 @@ KVClient
             - 返回 ``StatusCode::K_INVALID`` 表示 ``key`` 校验不通过。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示 ``key`` 不存在。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
     .. cpp:function:: Status Get(const std::string &key, Optional<Buffer> &buffer, int32_t subTimeoutMs)
@@ -263,6 +267,8 @@ KVClient
             - 返回 ``StatusCode::K_INVALID`` 表示 ``key`` 校验不通过。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示 ``key`` 不存在。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
 
@@ -284,6 +290,8 @@ KVClient
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
             - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
@@ -304,6 +312,8 @@ KVClient
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
             - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
@@ -340,6 +350,8 @@ KVClient
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
             - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
@@ -365,6 +377,8 @@ KVClient
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据删除成功。
             - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
             - 返回值状态码为 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回值状态码为 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回值状态码为 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
     .. cpp:function:: std::string GenerateKey(const std::string &prefixKey = "")
@@ -401,6 +415,8 @@ KVClient
             - 返回 ``StatusCode::K_INVALID`` 表示 objectKeys 为空或无效。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 objectKeys 未找到。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 表示网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_NOT_READY`` 表示 Worker 未就绪。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示无法从 Worker 获取 objectKey 大小。
     
@@ -441,6 +457,8 @@ KVClient
             - 返回 ``StatusCode::K_OK`` 表示查询成功。
             - 返回 ``StatusCode::K_INVALID`` 表示提供的键中包含非法字符或为空。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_NOT_READY`` 表示服务当前无法处理请求。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
@@ -458,5 +476,7 @@ KVClient
             - 返回 ``StatusCode::K_INVALID`` 表示提供的键中包含非法字符或为空。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_NOT_READY`` 表示服务当前无法处理请求。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。

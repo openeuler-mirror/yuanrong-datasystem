@@ -117,6 +117,8 @@ ObjectClient
             - 返回 ``StatusCode::K_INVALID`` 表示对象名称校验不通过。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示对象名称不存在。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RPC_PEER_DEAD`` 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。
+            - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
 

@@ -925,7 +925,7 @@ pip<span class="w"> </span>install<span class="w"> </span>https://ms-release.obs
 </li>
 <li><p>卸载通过配置项部署方式部署的 Worker：</p>
 <p>此种方式需要指定 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 文件。</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./worker_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--worker_config_path<span class="w"> </span>./worker_config.json
 <span class="c1"># [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100</span>
 </pre></div>
 </div>
@@ -1102,7 +1102,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<
 </pre></div>
 </div>
 <p>应在所有 Worker 停止后，使用同一配置文件停止 Coordinator：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./coordinator_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--coordinator_config_path<span class="w"> </span>./coordinator_config.json
 </pre></div>
 </div>
 </li>
@@ -1178,7 +1178,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<
 </pre></div>
 </div>
 <p>停止时应先停止所有 Worker，再在每个 Coordinator 节点使用对应配置文件停止本机进程：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./coordinator_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--coordinator_config_path<span class="w"> </span>./coordinator_config.json
 </pre></div>
 </div>
 <blockquote>
@@ -1241,9 +1241,15 @@ dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<
 </pre></div>
 </div>
 </li>
+<li><p>或分别停止（需要先停止 Worker，再停止 Coordinator ）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--worker_address<span class="w"> </span><span class="m">127</span>.0.0.1:31501
+dscli<span class="w"> </span>stop<span class="w"> </span>--coordinator_address<span class="w"> </span><span class="m">127</span>.0.0.1:31511
+</pre></div>
+</div>
+</li>
 <li><p>使用配置文件时，先停止 Worker，再停止 Coordinator：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./worker_config.json
-dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./coordinator_config.json
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--worker_config_path<span class="w"> </span>./worker_config.json
+dscli<span class="w"> </span>stop<span class="w"> </span>--coordinator_config_path<span class="w"> </span>./coordinator_config.json
 </pre></div>
 </div>
 </li>
@@ -1587,30 +1593,59 @@ modprobe<span class="w"> </span>ums
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>–config_path &lt;FILE&gt;</p></td>
-<td><p>-f &lt;FILE&gt;</p></td>
-<td><p>通过使用配置文件（JSON格式）停止worker或coordinator。<code class="docutils literal notranslate"><span class="pre">--worker_config_path</span></code> 保留为兼容别名</p></td>
+<tr class="row-even"><td><p>–worker_config_path &lt;FILE&gt;</p></td>
+<td><p>-W &lt;FILE&gt;</p></td>
+<td><p>–config_path &lt;FILE&gt;</p></td>
 </tr>
-<tr class="row-odd"><td><p>–worker_address <ADDR></p></td>
+<tr class="row-odd"><td><p>–coordinator_config_path &lt;FILE&gt;</p></td>
+<td><p>-C &lt;FILE&gt;</p></td>
+<td><p>通过使用 Coordinator 配置文件（JSON格式）仅停止 Coordinator</p></td>
+</tr>
+<tr class="row-even"><td><p>–worker_address <ADDR></p></td>
 <td><p>-w &lt;…&gt;</p></td>
 <td><p>通过指定worker地址（IP:PORT格式，如127.0.0.1:31501）来停止worker</p></td>
 </tr>
-<tr class="row-even"><td><p>–coordinator_address <ADDR></p></td>
+<tr class="row-odd"><td><p>–coordinator_address <ADDR></p></td>
 <td><p>无</p></td>
 <td><p>通过指定coordinator地址（IP:PORT格式，如127.0.0.1:31511）来停止coordinator。与 <code class="docutils literal notranslate"><span class="pre">--worker_address</span></code> 同时指定时会先停止worker，再停止coordinator</p></td>
+</tr>
+<tr class="row-even"><td><p>–timeout &lt;SECONDS&gt;</p></td>
+<td><p>-t &lt;SECONDS&gt;</p></td>
+<td><p>覆盖动态计算的停止超时时间（有效范围：大于零）。适用于已知数据已迁移完成或测试环境无数据的快速停止场景</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<blockquote>
-<div><p><strong>配置文件停止注意事项</strong>：</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span> <span class="pre">--config_path</span></code> 根据配置文件中的服务地址字段选择停止服务：配置中包含 <code class="docutils literal notranslate"><span class="pre">worker_address</span></code> 时停止 Worker；不包含 <code class="docutils literal notranslate"><span class="pre">worker_address</span></code> 但包含 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 时停止 Coordinator。</p></li>
-<li><p>为避免歧义，Worker 配置文件应包含 <code class="docutils literal notranslate"><span class="pre">worker_address</span></code>，Coordinator 配置文件应包含 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>。</p></li>
-</ul>
-</div></blockquote>
-<p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span></code> 会先向 worker 发送 <code class="docutils literal notranslate"><span class="pre">SIGTERM</span></code>，等待超时后再发送 <code class="docutils literal notranslate"><span class="pre">SIGKILL</span></code>。等待超时时间按以下公式动态计算（单位：秒）：</p>
+<p>常用停止方式的短参数和长参数等价示例如下：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 通过地址停止 Worker</span>
+dscli<span class="w"> </span>stop<span class="w"> </span>-w<span class="w"> </span><span class="m">127</span>.0.0.1:31501
+dscli<span class="w"> </span>stop<span class="w"> </span>--worker_address<span class="w"> </span><span class="m">127</span>.0.0.1:31501
+
+<span class="c1"># 通过地址停止 Coordinator</span>
+dscli<span class="w"> </span>stop<span class="w"> </span>-c<span class="w"> </span><span class="m">127</span>.0.0.1:31511
+dscli<span class="w"> </span>stop<span class="w"> </span>--coordinator_address<span class="w"> </span><span class="m">127</span>.0.0.1:31511
+
+<span class="c1"># 同时停止 Coordinator 和 Worker</span>
+dscli<span class="w"> </span>stop<span class="w"> </span>--worker_address<span class="w"> </span><span class="m">127</span>.0.0.1:31501<span class="w"> </span>--coordinator_address<span class="w"> </span><span class="m">127</span>.0.0.1:31511
+
+<span class="c1"># 通过配置文件停止 Worker</span>
+dscli<span class="w"> </span>stop<span class="w"> </span>-f<span class="w"> </span>worker_config.json
+dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>worker_config.json
+dscli<span class="w"> </span>stop<span class="w"> </span>-W<span class="w"> </span>worker_config.json
+dscli<span class="w"> </span>stop<span class="w"> </span>--worker_config_path<span class="w"> </span>worker_config.json
+
+<span class="c1"># 通过配置文件停止 Coordinator</span>
+dscli<span class="w"> </span>stop<span class="w"> </span>-C<span class="w"> </span>coordinator_config.json
+dscli<span class="w"> </span>stop<span class="w"> </span>--coordinator_config_path<span class="w"> </span>coordinator_config.json
+
+<span class="c1"># 指定超时时间快速停止（跳过动态超时计算）</span>
+dscli<span class="w"> </span>stop<span class="w"> </span>-w<span class="w"> </span><span class="m">127</span>.0.0.1:31501<span class="w"> </span>-t<span class="w"> </span><span class="m">10</span>
+dscli<span class="w"> </span>stop<span class="w"> </span>--worker_address<span class="w"> </span><span class="m">127</span>.0.0.1:31501<span class="w"> </span>--timeout<span class="w"> </span><span class="m">10</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span></code> 会先向服务进程发送 <code class="docutils literal notranslate"><span class="pre">SIGTERM</span></code>，等待超时后再发送 <code class="docutils literal notranslate"><span class="pre">SIGKILL</span></code>。Coordinator 的等待默认超时时间为180秒，Worker 等待超时时间默认按以下公式动态计算（单位：秒）：</p>
 <p><code class="docutils literal notranslate"><span class="pre">180</span> <span class="pre">+</span> <span class="pre">shared_memory_size_mb</span> <span class="pre">/</span> <span class="pre">data_migrate_rate_limit_mb</span></code></p>
+<p>可通过 <code class="docutils literal notranslate"><span class="pre">-t</span></code>/<code class="docutils literal notranslate"><span class="pre">--timeout</span></code> 参数覆盖此动态超时。</p>
 </section>
 <section id="dscli-up">
 <h3>dscli up<a class="headerlink" href="#dscli-up" title="Link to this heading">¶</a></h3>
@@ -1959,7 +1994,7 @@ Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Wo
 <section id="id23">
 <h4>Coordinator配置项<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h4>
 <p><code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code> 包含 Coordinator 启动参数。可以使用 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--coordinator_config_path</span> <span class="pre">./coordinator_config.json</span></code> 启动，
-使用 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span> <span class="pre">--config_path</span> <span class="pre">./coordinator_config.json</span></code> 停止。</p>
+使用 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span> <span class="pre">--coordinator_config_path</span> <span class="pre">./coordinator_config.json</span></code> 停止。</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -3131,72 +3166,87 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启 UB NUMA 亲和优化。仅在 <code class="docutils literal notranslate"><span class="pre">enable_urma=true</span></code> 且 <code class="docutils literal notranslate"><span class="pre">urma_register_whole_arena=true</span></code> 时生效。Worker 集群必须保持一致；client 从首个返回 UB 配置的 worker 固化该值，后续不一致仅记录 WARNING，不会修改 client 进程配置。</p></td>
 </tr>
-<tr class="row-odd"><td><p>shared_memory_distribution_policy</p></td>
+<tr class="row-odd"><td><p>ub_transport_arena_num</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
+<td><p>UB 传输内存池拆分的等大 Arena 数量，取值范围为 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">32]</span></code>。开启 UB NUMA 亲和时，优先在不同芯片间轮询分配 Arena，再复用同一芯片内的 NUMA 节点。使用多个 Arena 时，任一 NUMA 绑定失败都会导致 client 初始化失败。</p></td>
+</tr>
+<tr class="row-even"><td><p>ub_numa_rr_type</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td><p>UB NUMA 源芯片轮询粒度。<code class="docutils literal notranslate"><span class="pre">0</span></code> 表示关闭源芯片轮询，<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示每次逻辑写选择一次，<code class="docutils literal notranslate"><span class="pre">2</span></code> 表示每个 WR Post 选择一次。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。</p></td>
+</tr>
+<tr class="row-odd"><td><p>ub_numa_inflight_wr_diff_threshold</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">15</span></code></p></td>
+<td><p>两个源芯片 inflight WR 数量的最大允许差值。差值严格大于该值时，后续 WR 改用 inflight 较低的芯片；<code class="docutils literal notranslate"><span class="pre">0</span></code> 表示关闭深度反馈并保留纯轮询。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。</p></td>
+</tr>
+<tr class="row-even"><td><p>shared_memory_distribution_policy</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">none</span></code></p></td>
 <td><p>共享内存在 NUMA 上的分布策略。可选值：<code class="docutils literal notranslate"><span class="pre">none</span></code>、<code class="docutils literal notranslate"><span class="pre">interleave_all_numa</span></code>、<code class="docutils literal notranslate"><span class="pre">interleave_affinity_numa</span></code>。仅在 <code class="docutils literal notranslate"><span class="pre">enable_urma=true</span></code> 且 <code class="docutils literal notranslate"><span class="pre">urma_register_whole_arena=true</span></code> 时生效。</p></td>
 </tr>
-<tr class="row-even"><td><p>urma_connection_size</p></td>
+<tr class="row-odd"><td><p>urma_connection_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>[已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建</p></td>
 </tr>
-<tr class="row-odd"><td><p>urma_event_mode</p></td>
+<tr class="row-even"><td><p>urma_event_mode</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否使用中断模式轮询完成事件</p></td>
 </tr>
-<tr class="row-even"><td><p>urma_poll_size</p></td>
+<tr class="row-odd"><td><p>urma_poll_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>一次可轮询的完整记录数量，该设备最多可轮询16条记录</p></td>
 </tr>
-<tr class="row-odd"><td><p>urma_max_write_size_mb</p></td>
+<tr class="row-even"><td><p>urma_max_write_size_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
 <td><p>URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048]</p></td>
 </tr>
-<tr class="row-even"><td><p>urma_register_whole_arena</p></td>
+<tr class="row-odd"><td><p>urma_register_whole_arena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-odd"><td><p>enable_rdma</p></td>
+<tr class="row-even"><td><p>enable_rdma</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启RDMA以实现对象worker之间的数据传输</p></td>
 </tr>
-<tr class="row-even"><td><p>rdma_register_whole_arena</p></td>
+<tr class="row-odd"><td><p>rdma_register_whole_arena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在RDMA初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-odd"><td><p>oc_shm_transfer_threshold_kb</p></td>
+<tr class="row-even"><td><p>oc_shm_transfer_threshold_kb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">500</span></code></p></td>
 <td><p>在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB</p></td>
 </tr>
-<tr class="row-even"><td><p>shared_disk_arena_per_tenant</p></td>
+<tr class="row-odd"><td><p>shared_disk_arena_per_tenant</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32]</p></td>
 </tr>
-<tr class="row-odd"><td><p>shared_disk_directory</p></td>
+<tr class="row-even"><td><p>shared_disk_directory</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-even"><td><p>shared_disk_size_mb</p></td>
+<tr class="row-odd"><td><p>shared_disk_size_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_alignment</p></td>
+<tr class="row-even"><td><p>memory_alignment</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。</p></td>
 </tr>
-<tr class="row-even"><td><p>oc_metadata_header</p></td>
+<tr class="row-odd"><td><p>oc_metadata_header</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否为对象缓存共享内存分配元数据头，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>则关闭此功能（此时shm latch/可见性将不可用）</p></td>

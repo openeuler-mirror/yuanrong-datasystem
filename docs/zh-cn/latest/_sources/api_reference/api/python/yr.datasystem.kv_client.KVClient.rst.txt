@@ -18,7 +18,7 @@ yr.datasystem.kv_client.KVClient
         - **tenant_id** (str) - 租户ID。默认值： ``""`` 。
         - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统Worker连接异常时自动切换到备用节点。与 ``service_discovery`` 配合使用时，已有 KVClient 实例要在当前 Worker 故障后切换到其他已发现 Worker，需要开启该参数。默认值： ``False`` 。
         - **req_timeout_ms** (int) - 请求超时时间，单位为毫秒。当 req_timeout_ms<=0 时，req_timeout_ms 与 connect_timeout_ms 相同。默认值： ``0`` 。
-        - **fast_transport_mem_size** (int) - 客户端 fast transport 内存池大小，单位为字节。默认值： ``268435456`` 。
+        - **fast_transport_mem_size** (int) - 客户端 fast transport 内存池大小，单位为字节。默认值： ``268435456`` 。初始化时会向上对齐，确保每个 UB transport Arena 占用完整系统页；对齐后的大小超过 2GB 时初始化失败。
         - **service_discovery** (:doc:`yr.datasystem.service_discovery.ServiceDiscovery <yr.datasystem.service_discovery.ServiceDiscovery>` | :doc:`yr.datasystem.service_discovery.CoordinatorServiceDiscovery <yr.datasystem.service_discovery.CoordinatorServiceDiscovery>`) - 服务发现实例。提供后，原生 KVClient 通过该实例发现可用 Worker，传入的 ``host`` 和 ``port`` 会被忽略。创建 KVClient 前需先调用 ``service_discovery.init()``。默认值： ``None`` 。
 
     输出：

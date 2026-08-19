@@ -841,6 +841,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 表示至少有一个数据删除成功。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code> 表示存在key校验不通过。</p></li>
 <li><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_UNAVAILABLE</span></code> 时表示请求遇到了网络错误。</p></li>
+<li><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_PEER_DEAD</span></code> 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。</p></li>
+<li><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_NETWORK_BLIP</span></code> 表示 RPC 遇到瞬时网络抖动，客户端在原 <code class="docutils literal notranslate"><span class="pre">K_RPC_UNAVAILABLE</span></code> 的重试预算内自动重试。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code> 表示 worker 侧存在错误。</p></li>
 </ul>
 </dd>
@@ -915,6 +917,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 表示查询成功。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code> 表示提供的key中包含非法字符或为空。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_UNAVAILABLE</span></code> 表示请求遇到了网络错误。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_PEER_DEAD</span></code> 表示 RPC 对端 worker 已死或不可达，客户端会快速失败并触发本地缓存的 channel/stub 清理与重建。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_NETWORK_BLIP</span></code> 表示 RPC 遇到瞬时网络抖动，客户端在原 <code class="docutils literal notranslate"><span class="pre">K_RPC_UNAVAILABLE</span></code> 的重试预算内自动重试。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_READY</span></code> 表示服务当前无法处理请求。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code> 表示 worker 侧存在错误。</p></li>
 </ul>
