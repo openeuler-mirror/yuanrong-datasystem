@@ -10,8 +10,12 @@ ds_cc_library(
     deps = [
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/util:status_helper",
-        "@local_cuda//:cuda_headers",
-    ],
+    ] + select({
+        # Default wheel must not fetch @local_cuda. Headers are only needed when
+        # Pipeline H2D already pulls the toolkit; otherwise __has_include compiles a no-op.
+        "//:enable_pipeline_h2d": ["@local_cuda//:cuda_headers"],
+        "//conditions:default": [],
+    }),
 )
 
 ds_cc_library(
