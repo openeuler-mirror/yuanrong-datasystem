@@ -35,6 +35,8 @@ DECLARE_int32(max_connection_pool_size);
 namespace datasystem {
 namespace {
 
+constexpr int BRPC_CHANNEL_CREATION_LOG_EVERY_N = 100;
+
 // Enable brpc wire-level delivery of timeout_ms so the server-side
 // BuildScTimeoutDurationInitSnippet (brpc_service_generator.cpp) can read
 // cntl->timeout_ms() and initialize reqTimeoutDuration from the client
@@ -204,9 +206,10 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
         LOG(ERROR) << "Failed to create brpc channel to " << cfg.endpoint;
         return nullptr;
     }
-    LOG(INFO) << "BrpcChannel created: " << cfg.endpoint << " timeout=" << cfg.timeout_ms
-              << "ms connect_timeout=" << cfg.connect_timeout_ms << "ms retry=" << cfg.max_retry
-              << " cb=" << (opts.enable_circuit_breaker ? "on" : "off");
+    LOG_FIRST_AND_EVERY_N(INFO, BRPC_CHANNEL_CREATION_LOG_EVERY_N)
+        << "BrpcChannel created: " << cfg.endpoint << " timeout=" << cfg.timeout_ms
+        << "ms connect_timeout=" << cfg.connect_timeout_ms << "ms retry=" << cfg.max_retry
+        << " cb=" << (opts.enable_circuit_breaker ? "on" : "off");
     return ch;
 }
 
