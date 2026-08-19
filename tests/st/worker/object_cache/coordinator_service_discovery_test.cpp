@@ -41,6 +41,7 @@ constexpr char COORDINATOR_SD_HOST_ID_VALUE1[] = "coordinator_sd_host_id1";
 constexpr char COORDINATOR_SD_HOST_ID_VALUE_MISSING[] = "coordinator_sd_host_id_missing";
 constexpr char COORDINATOR_SD_MISSING_CLUSTER[] = "coordinator_sd_missing_cluster";
 constexpr int COORDINATOR_SD_SELECT_LOOP_COUNT = 5;
+constexpr int COORDINATOR_SD_EMPTY_CLUSTER_CONNECT_TIMEOUT_MS = 4000;
 constexpr int COORDINATOR_SD_CONNECT_TIMEOUT_MS = 60000;
 constexpr auto COORDINATOR_RESTART_WAIT = std::chrono::seconds(10);
 constexpr auto COORDINATOR_RETRY_INTERVAL = std::chrono::milliseconds(100);
@@ -223,7 +224,7 @@ TEST_F(CoordinatorServiceDiscoveryTest, RandomSelectsReadyWorker)
     AssertSelectedWorkerInCluster(COORDINATOR_SD_HOST_ID_ENV_MISSING, ServiceAffinityPolicy::RANDOM);
 }
 
-TEST_F(CoordinatorServiceDiscoveryTest, ClusterNameScopesMembership)
+TEST_F(CoordinatorServiceDiscoveryTest, EmptyClusterMembershipReturnsNotReadyOnClientInit)
 {
     std::shared_ptr<CoordinatorServiceDiscovery> serviceDiscovery;
     GetCoordinatorServiceDiscovery(COORDINATOR_SD_HOST_ID_ENV0, ServiceAffinityPolicy::RANDOM, serviceDiscovery,
@@ -234,6 +235,26 @@ TEST_F(CoordinatorServiceDiscoveryTest, ClusterNameScopesMembership)
     DS_ASSERT_OK(serviceDiscovery->GetAllWorkers(sameHost, other));
     EXPECT_TRUE(sameHost.empty());
     EXPECT_TRUE(other.empty());
+
+    ConnectOptions connectOptions;
+    connectOptions.connectTimeoutMs = COORDINATOR_SD_EMPTY_CLUSTER_CONNECT_TIMEOUT_MS;
+    connectOptions.requestTimeoutMs = 0;
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    KVClient client(connectOptions);
+
+    auto rc = client.Init();
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY) << rc.ToString();
+    EXPECT_EQ(rc.GetMsg().find("No available worker is detected"), 0UL);
+
+    GetCoordinatorServiceDiscovery(COORDINATOR_SD_HOST_ID_ENV0, ServiceAffinityPolicy::REQUIRED_SAME_NODE,
+                                   serviceDiscovery, COORDINATOR_SD_MISSING_CLUSTER);
+
+    std::string workerIp;
+    int workerPort = 0;
+    bool isNoAvailableWorker = false;
+    auto selectRc = serviceDiscovery->SelectWorker(workerIp, workerPort, nullptr, &isNoAvailableWorker);
+    EXPECT_EQ(selectRc.GetCode(), K_TRY_AGAIN) << selectRc.ToString();
+    EXPECT_TRUE(isNoAvailableWorker);
 }
 
 TEST_F(CoordinatorServiceDiscoveryTest, RequiredSameNodeSelectsMatchingHost)
