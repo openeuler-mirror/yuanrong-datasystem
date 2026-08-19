@@ -14,13 +14,110 @@
  * limitations under the License.
  */
 #include "communication/TcpServer.h"
-#include "securec.h"
+#include <cerrno>
+#include <cstring>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <string>
+#include "securec.h"
 
 constexpr int LISTEN_BACKLOG = 3;
 
+namespace {
+
+std::string SocketErrorString(int err)
+{
+    char errBuf[256] = {0};
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+    return strerror_r(err, errBuf, sizeof(errBuf));
+#else
+    if (strerror_r(err, errBuf, sizeof(errBuf)) != 0) {
+        return "unknown error";
+    }
+    return errBuf;
+#endif
+}
+
+std::string NormalizeBindIp(const std::string &ip)
+{
+    if (ip.empty()) {
+        return "";
+    }
+    return ip;
+}
+
+Status SetTcpSocketOptions(int fd, int family)
+{
+    int optval = 1;
+    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval)) == -1) {
+        return Status::Error(ErrorCode::SOCKET_ERROR,
+                             "Failed to set socket option TCP_NODELAY: " + SocketErrorString(errno));
+    }
+    if (family == AF_INET6) {
+        (void)setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &optval, sizeof(optval));
+    }
+    return Status::Success();
+}
+
+struct ListenCandidate {
+    int fd = -1;
+    sockaddr_storage address {};
+    socklen_t addressLen = 0;
+    int family = AF_UNSPEC;
+};
+
+Status TryCreateListenCandidate(const addrinfo &info, ListenCandidate &candidate, int &lastErrno, bool &retryable)
+{
+    retryable = false;
+    int fd = socket(info.ai_family, info.ai_socktype, info.ai_protocol);
+    if (fd < 0) {
+        lastErrno = errno;
+        retryable = true;
+        return Status::Error(ErrorCode::SOCKET_ERROR, "Failed to create socket");
+    }
+
+    Status optionStatus = SetTcpSocketOptions(fd, info.ai_family);
+    if (!optionStatus.IsSuccess()) {
+        close(fd);
+        return optionStatus;
+    }
+
+    if (bind(fd, info.ai_addr, info.ai_addrlen) < 0) {
+        lastErrno = errno;
+        retryable = true;
+        close(fd);
+        return Status::Error(ErrorCode::SOCKET_ERROR, "Failed to bind socket");
+    }
+    if (listen(fd, LISTEN_BACKLOG) < 0) {
+        lastErrno = errno;
+        retryable = true;
+        close(fd);
+        return Status::Error(ErrorCode::SOCKET_ERROR, "Failed to listen on socket");
+    }
+
+    errno_t err = memcpy_s(&candidate.address, sizeof(candidate.address), info.ai_addr, info.ai_addrlen);
+    if (err != EOK) {
+        close(fd);
+        return Status::Error(ErrorCode::INTERNAL_ERROR, "Failed to copy server address");
+    }
+    candidate.fd = fd;
+    candidate.addressLen = static_cast<socklen_t>(info.ai_addrlen);
+    candidate.family = info.ai_family;
+    return Status::Success();
+}
+
+}  // namespace
+
 TCPServer::TCPServer(const std::string &interfaceIp, uint32_t acceptTimeOut)
-    : interface_ip(interfaceIp), serverFd(-1), client_fd(-1), acceptTimeOut(acceptTimeOut)
+    : serverFd(-1),
+      server_port(0),
+      client_fd(-1),
+      interface_ip(interfaceIp),
+      addressLen(0),
+      addressFamily(AF_UNSPEC),
+      initialized(false),
+      acceptTimeOut(acceptTimeOut)
 {
     memset_s(&address, sizeof(address), 0, sizeof(address));
 }
@@ -35,40 +132,48 @@ TCPServer::~TCPServer()
 
 Status TCPServer::Listen(uint16_t port)
 {
-    // Create server socket
-    serverFd = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverFd == 0) {
-        return Status::Error(ErrorCode::SOCKET_ERROR, "Failed to create socket");
+    const std::string bindIp = NormalizeBindIp(interface_ip);
+    struct addrinfo hints {};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    struct addrinfo *result = nullptr;
+    const std::string portStr = std::to_string(port);
+    const char *node = bindIp.empty() ? nullptr : bindIp.c_str();
+    int rc = getaddrinfo(node, portStr.c_str(), &hints, &result);
+    if (rc != 0) {
+        return Status::Error(ErrorCode::INVALID_INPUT,
+                             "Failed to resolve bind address " + bindIp + ": " + gai_strerror(rc));
     }
 
-    int optval = 1;  // Value for TCP_NODELAY
-    if (setsockopt(serverFd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval)) == -1) {
-        return Status::Error(ErrorCode::SOCKET_ERROR,
-                             std::string("Failed to set socket option TCP_NODELAY: ") + strerror(errno));
-    }
-
-    address.sin_family = AF_INET;
-    if (interface_ip.empty() || interface_ip == "0.0.0.0") {
-        address.sin_addr.s_addr = INADDR_ANY;
-    } else {
-        if (inet_pton(AF_INET, interface_ip.c_str(), &address.sin_addr) <= 0) {
-            return Status::Error(ErrorCode::INVALID_INPUT,
-                                 "Failed to convert IP address " + interface_ip + " to binary");
+    int lastErrno = 0;
+    ListenCandidate candidate;
+    for (auto *it = result; it != nullptr; it = it->ai_next) {
+        bool retryable = false;
+        Status candidateStatus = TryCreateListenCandidate(*it, candidate, lastErrno, retryable);
+        if (candidateStatus.IsSuccess()) {
+            errno_t err = memcpy_s(&address, sizeof(address), &candidate.address, sizeof(candidate.address));
+            if (err != EOK) {
+                close(candidate.fd);
+                freeaddrinfo(result);
+                return Status::Error(ErrorCode::INTERNAL_ERROR, "Failed to copy server address");
+            }
+            addressLen = candidate.addressLen;
+            addressFamily = candidate.family;
+            serverFd = candidate.fd;
+            break;
+        }
+        if (!retryable) {
+            freeaddrinfo(result);
+            return candidateStatus;
         }
     }
+    freeaddrinfo(result);
 
-    address.sin_port = htons(port);
-
-    // Bind the socket to the port
-    if (bind(serverFd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        close(serverFd);
-        return Status::Error(ErrorCode::SOCKET_ERROR, "Failed to bind socket to port");
-    }
-
-    // Start listening for connections
-    if (listen(serverFd, LISTEN_BACKLOG) < 0) {
-        close(serverFd);
-        return Status::Error(ErrorCode::SOCKET_ERROR, "Failed to listen on socket");
+    if (serverFd < 0) {
+        errno = lastErrno;
+        return Status::Error(ErrorCode::SOCKET_ERROR, "Failed to bind or listen on socket");
     }
 
     server_port = port;
@@ -103,12 +208,13 @@ Status TCPServer::Accept()
 
         if (setsockopt(serverFd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv) < 0) {
             return Status::Error(ErrorCode::SOCKET_ERROR,
-                                 std::string("Failed to set socket option SO_RCVTIMEO: ") + strerror(errno));
+                                 "Failed to set socket option SO_RCVTIMEO: " + SocketErrorString(errno));
         }
     }
 
-    socklen_t addrlen = sizeof(address);
-    client_fd = accept(serverFd, (struct sockaddr *)&address, &addrlen);
+    struct sockaddr_storage clientAddress {};
+    socklen_t addrlen = sizeof(clientAddress);
+    client_fd = accept(serverFd, reinterpret_cast<struct sockaddr *>(&clientAddress), &addrlen);
     if (client_fd < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return Status::Error(ErrorCode::TCP_ERROR, "TCPServer accept timed out");
@@ -127,11 +233,16 @@ std::string TCPServer::GetIp()
     return interface_ip;
 }
 
+int TCPServer::GetIpFamily()
+{
+    return addressFamily;
+}
+
 Status TCPServer::Disconnect()
 {
     if (client_fd != -1) {
         if (close(client_fd) == -1) {
-            return Status::Error(ErrorCode::SOCKET_ERROR, std::string("Failed to close client fd ") + strerror(errno));
+            return Status::Error(ErrorCode::SOCKET_ERROR, "Failed to close client fd " + SocketErrorString(errno));
         }
         client_fd = -1;
     }
@@ -156,8 +267,8 @@ Status TCPServer::Close()
     this->Disconnect();
 
     if ((serverFd) != -1) {
-        if (close(client_fd) == -1) {
-            return Status::Error(ErrorCode::SOCKET_ERROR, std::string("Failed to close server fd ") + strerror(errno));
+        if (close(serverFd) == -1) {
+            return Status::Error(ErrorCode::SOCKET_ERROR, "Failed to close server fd " + SocketErrorString(errno));
         }
         (serverFd) = -1;
     }

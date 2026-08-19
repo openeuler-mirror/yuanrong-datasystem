@@ -16,8 +16,52 @@
 #include "npu/RdmaDev.h"
 #include "npu/RdmaAgent.h"
 #include "npu/RaWrapper.h"
-#include <string>
 #include <arpa/inet.h>
+#include <cstring>
+#include <string>
+
+namespace {
+
+bool IsValidIpFamily(int family)
+{
+    return family == AF_INET || family == AF_INET6;
+}
+
+P2PIpAddress NormalizeSegmentIp(const P2PSegmentHandle &segmentHandle)
+{
+    P2PIpAddress ip;
+    // An unrecognized tag comes from the padding bytes of the legacy IPv4-only wire layout.
+    ip.family = segmentHandle.ipFamilyTag == P2P_SEGMENT_IPV6_FAMILY_TAG ? AF_INET6 : AF_INET;
+    ip.addr = segmentHandle.ipAddr;
+    return ip;
+}
+
+RdmaDev::RemoteRegionKey MakeRemoteRegionKey(uintptr_t ddrAddr, const P2PIpAddress &ip)
+{
+    RdmaDev::RemoteRegionKey key {};
+    key.family = ip.family;
+    key.ddrAddr = ddrAddr;
+    if (ip.family == AF_INET6) {
+        std::memcpy(key.addr.data(), &ip.addr.addr6, sizeof(ip.addr.addr6));
+    } else {
+        key.family = AF_INET;
+        std::memcpy(key.addr.data(), &ip.addr.addr, sizeof(ip.addr.addr));
+    }
+    return key;
+}
+
+bool SameIpAddress(const P2PIpAddress &left, const P2PIpAddress &right)
+{
+    if (left.family != right.family) {
+        return false;
+    }
+    if (left.family == AF_INET6) {
+        return std::memcmp(&left.addr.addr6, &right.addr.addr6, sizeof(left.addr.addr6)) == 0;
+    }
+    return left.addr.addr.s_addr == right.addr.addr.s_addr;
+}
+
+}  // namespace
 
 std::shared_ptr<RdmaDev> RdmaDev::instances[MAX_LOCAL_DEVICES];
 std::mutex RdmaDev::instanceMutex;
@@ -35,10 +79,10 @@ Status RdmaDev::GetInstance(uint32_t deviceId, std::shared_ptr<RdmaDev> &outDev)
         std::shared_ptr<RdmaAgent> agent;
         CHECK_STATUS(RdmaAgent::GetInstance(deviceId, agent));
 
-        union hccp_ip_addr ipv4Addr;
-        CHECK_STATUS(agent->getDeviceIpv4(&ipv4Addr));
+        P2PIpAddress localIp;
+        CHECK_STATUS(agent->getDeviceIp(&localIp));
 
-        instances[deviceId] = std::make_shared<RdmaDev>(deviceId, ipv4Addr);
+        instances[deviceId] = std::make_shared<RdmaDev>(deviceId, localIp);
         CHECK_STATUS(instances[deviceId]->init());
     }
 
@@ -46,12 +90,12 @@ Status RdmaDev::GetInstance(uint32_t deviceId, std::shared_ptr<RdmaDev> &outDev)
     return Status::Success();
 }
 
-RdmaDev::RdmaDev(uint32_t phyId, union hccp_ip_addr ipv4Addr)
-    : status(RdmaDevStatus::RDEV_UNINITIALIZED), phyId(phyId), ipv4Addr(ipv4Addr)
+RdmaDev::RdmaDev(uint32_t phyId, P2PIpAddress localIp)
+    : status(RdmaDevStatus::RDEV_UNINITIALIZED), phyId(phyId), localIp(localIp)
 {
     roceDevInfo.phy_id = phyId;
-    roceDevInfo.family = AF_INET;
-    roceDevInfo.local_ip = ipv4Addr;
+    roceDevInfo.family = localIp.family;
+    roceDevInfo.local_ip = localIp.addr;
 }
 
 RdmaDev::~RdmaDev()
@@ -88,12 +132,30 @@ Status RdmaDev::getRdmaHandle(void **rdmaHandle)
     return Status::Success();
 }
 
+Status RdmaDev::getIp(P2PIpAddress *ipAddr)
+{
+    if (status != RdmaDevStatus::RDEV_INITIALIZED) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma dev is not yet initialized");
+    }
+    if (ipAddr == nullptr) {
+        return Status::Error(ErrorCode::INVALID_INPUT, "ipAddr should not be null");
+    }
+    *ipAddr = localIp;
+    return Status::Success();
+}
+
 Status RdmaDev::getIpv4(union hccp_ip_addr *retIpv4Addr)
 {
     if (status != RdmaDevStatus::RDEV_INITIALIZED) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma dev is not yet initialized");
     }
-    retIpv4Addr->addr = ipv4Addr.addr;
+    if (retIpv4Addr == nullptr) {
+        return Status::Error(ErrorCode::INVALID_INPUT, "ipv4Addr should not be null");
+    }
+    if (localIp.family != AF_INET) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma dev local IP is not IPv4");
+    }
+    retIpv4Addr->addr = localIp.addr.addr;
     return Status::Success();
 }
 
@@ -140,7 +202,9 @@ Status RdmaDev::getSegmentHandle(void *addr, struct P2PSegmentHandle &segmentHan
         segmentHandle.devPtr = localSegment.devPtr;
         segmentHandle.ddrPtr = localSegment.ddrPtr;
         segmentHandle.rKey = localSegment.rKey;
-        segmentHandle.ipAddr = ipv4Addr;
+        segmentHandle.ipAddr = localIp.addr;
+        segmentHandle.ipFamilyTag = localIp.family == AF_INET6 ? P2P_SEGMENT_IPV6_FAMILY_TAG
+                                                               : P2P_SEGMENT_IPV4_FAMILY_TAG;
     }
 
     return Status::Success();
@@ -192,8 +256,8 @@ Status RdmaDev::addRemoteSegment(struct P2PSegmentHandle segmentHandle)
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma dev is not yet initialized");
     }
 
-    // Later check if not nullptr
-    RemoteRegionKey key = { segmentHandle.ipAddr.addr.s_addr, segmentHandle.ddrPtr };
+    P2PIpAddress segmentIp = NormalizeSegmentIp(segmentHandle);
+    RemoteRegionKey key = MakeRemoteRegionKey(reinterpret_cast<uintptr_t>(segmentHandle.ddrPtr), segmentIp);
     {
         std::lock_guard<std::mutex> lock(remoteMrMut);
         auto it = remoteMrs.find(key);
@@ -207,13 +271,17 @@ Status RdmaDev::addRemoteSegment(struct P2PSegmentHandle segmentHandle)
     return Status::Success();
 }
 
-Status RdmaDev::getRemoteSegment(void *ddrPtr, union hccp_ip_addr ipv4Addr, struct P2PSegmentHandle &segmentHandle)
+Status RdmaDev::getRemoteSegment(void *ddrPtr, P2PIpAddress remoteIp, struct P2PSegmentHandle &segmentHandle)
 {
     if (status != RdmaDevStatus::RDEV_INITIALIZED) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma dev is not yet initialized");
     }
+    if (!IsValidIpFamily(remoteIp.family)) {
+        return Status::Error(ErrorCode::INVALID_INPUT, "remote host segment lookup got invalid address family");
+    }
 
-    RemoteRegionKey key = { ipv4Addr.addr.s_addr, ddrPtr };
+    uintptr_t targetAddr = reinterpret_cast<uintptr_t>(ddrPtr);
+    RemoteRegionKey key = MakeRemoteRegionKey(targetAddr, remoteIp);
 
     {
         std::lock_guard<std::mutex> lock(remoteMrMut);
@@ -229,16 +297,15 @@ Status RdmaDev::getRemoteSegment(void *ddrPtr, union hccp_ip_addr ipv4Addr, stru
         --it;
 
         const P2PSegmentHandle &candidate = it->second;
-
-        // Verify region found is the correct region
-        if (candidate.ipAddr.addr.s_addr != ipv4Addr.addr.s_addr || ddrPtr < candidate.ddrPtr
-            || ddrPtr >= (char *)candidate.ddrPtr + candidate.size) {
+        P2PIpAddress candidateIp = NormalizeSegmentIp(candidate);
+        uintptr_t candidateStart = reinterpret_cast<uintptr_t>(candidate.ddrPtr);
+        const bool containsTarget = targetAddr >= candidateStart && targetAddr - candidateStart < candidate.size;
+        if (!SameIpAddress(candidateIp, remoteIp) || !containsTarget) {
             std::cerr << "tried to get ddrPtr 2 " << ddrPtr << std::endl;
-            std::cerr << "candidate.ipAddr.addr.s_addr " << candidate.ipAddr.addr.s_addr << "!= ipv4Addr.addr.s_addr "
-                      << ipv4Addr.addr.s_addr << std::endl;
-            std::cerr << "ddrPtr " << ddrPtr << "< candidate.ddrPtr " << candidate.ddrPtr << std::endl;
-            std::cerr << "ddrPtr " << ddrPtr << ">= (char*)candidate.ddrPtr + candidate.size) "
-                      << (char *)candidate.ddrPtr + candidate.size << std::endl;
+            std::cerr << "candidate family " << candidateIp.family << "!= remote family " << remoteIp.family
+                      << std::endl;
+            std::cerr << "target address " << targetAddr << ", candidate start " << candidateStart
+                      << ", candidate size " << candidate.size << std::endl;
 
             return Status::Error(ErrorCode::NOT_SUPPORTED, "address not registered to rdma dev");
         }
@@ -247,6 +314,14 @@ Status RdmaDev::getRemoteSegment(void *ddrPtr, union hccp_ip_addr ipv4Addr, stru
     }
 
     return Status::Success();
+}
+
+Status RdmaDev::getRemoteSegment(void *ddrPtr, union hccp_ip_addr ipv4Addr, struct P2PSegmentHandle &segmentHandle)
+{
+    P2PIpAddress remoteIp;
+    remoteIp.family = AF_INET;
+    remoteIp.addr = ipv4Addr;
+    return getRemoteSegment(ddrPtr, remoteIp, segmentHandle);
 }
 
 // Add mutex for registering mr etc. if necessary

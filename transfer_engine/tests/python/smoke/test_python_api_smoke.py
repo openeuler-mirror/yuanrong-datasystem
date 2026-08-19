@@ -212,14 +212,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Python cross-node smoke tool for transfer_engine (owner/requester).")
     parser.add_argument("--role", choices=["owner", "requester"], required=True)
-    parser.add_argument("--local-hostname", required=True, help='e.g. "127.0.0.1:18481"')
+    parser.add_argument("--local-hostname", required=True, help='e.g. "127.0.0.1:18481" or "[::1]:18481"')
     parser.add_argument("--device-id", type=int, required=True)
     parser.add_argument("--size", type=int, required=True, help="bytes per buffer")
     parser.add_argument("--hold-seconds", type=int, default=600)
     parser.add_argument("--register-count", type=int, default=1)
     parser.add_argument("--src-addrs", default="", help="owner custom source addrs, comma-separated")
 
-    parser.add_argument("--peer-hostname", default="", help='e.g. "10.1.1.8:18481"')
+    parser.add_argument("--peer-hostname", default="", help='e.g. "10.1.1.8:18481" or "[fd00::1]:18481"')
     parser.add_argument("--peer-device-id", type=int, default=None)
     parser.add_argument("--remote-addrs", default="", help="requester remote addrs, comma-separated")
     parser.add_argument("--auto-verify-data", action="store_true")

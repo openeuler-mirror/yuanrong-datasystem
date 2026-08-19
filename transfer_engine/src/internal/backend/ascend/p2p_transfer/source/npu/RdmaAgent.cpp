@@ -3,7 +3,9 @@
  */
 #include "npu/RdmaAgent.h"
 #include "npu/RaWrapper.h"
+#include <cstdlib>
 #include <string>
+#include <vector>
 #include "tools/env.h"
 #include "tools/logging.h"
 #include "tools/tools.h"
@@ -13,6 +15,49 @@
 
 std::shared_ptr<RdmaAgent> RdmaAgent::instances[MAX_LOCAL_DEVICES];
 std::mutex RdmaAgent::instanceMutex;
+
+namespace {
+
+Status ParseRoceAddressFamily(int &family)
+{
+    family = AF_UNSPEC;
+    const char *envValue = std::getenv(ROCE_ADDR_FAMILY_ENV);
+    if (envValue == nullptr || envValue[0] == '\0' || std::string(envValue) == "auto") {
+        return Status::Success();
+    }
+    if (std::string(envValue) == "ipv4" || std::string(envValue) == "IPv4") {
+        family = AF_INET;
+        return Status::Success();
+    }
+    if (std::string(envValue) == "ipv6" || std::string(envValue) == "IPv6") {
+        family = AF_INET6;
+        return Status::Success();
+    }
+    return Status::Error(ErrorCode::INVALID_ENV, std::string("Invalid ") + ROCE_ADDR_FAMILY_ENV + " value.");
+}
+
+bool FamilyMatches(int actualFamily, int preferredFamily)
+{
+    return preferredFamily == AF_UNSPEC || actualFamily == preferredFamily;
+}
+
+Status CopyDeviceIp(const interface_info &info, P2PIpAddress *ipAddr)
+{
+    ipAddr->family = info.family;
+    ipAddr->addr = info.ifaddr.ip;
+    return Status::Success();
+}
+
+template <typename T>
+Status ValidateOutputAddress(const T *address, const char *name)
+{
+    if (address == nullptr) {
+        return Status::Error(ErrorCode::INVALID_INPUT, std::string(name) + " should not be null");
+    }
+    return Status::Success();
+}
+
+}  // namespace
 
 Status RdmaAgent::GetInstance(uint32_t deviceId, std::shared_ptr<RdmaAgent> &outAgent)
 {
@@ -87,8 +132,56 @@ Status RdmaAgent::init()
     return Status::Success();
 }
 
+Status RdmaAgent::getDeviceIp(P2PIpAddress *ipAddr)
+{
+    if (status != RdmaAgentStatus::RA_INITIALIZED) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma agent is not initialized");
+    }
+    CHECK_STATUS(ValidateOutputAddress(ipAddr, "ipAddr"));
+
+    unsigned int num = 0;
+    struct ra_get_ifattr ifAttr{};
+    ifAttr.phy_id = phyId;
+    ifAttr.nic_position = static_cast<int>(nicDeployment);
+    ifAttr.is_all = false;
+    CHECK_STATUS(RaGetIfNumWrapper(&ifAttr, &num));
+    if (num == 0) {
+        return Status::Error(ErrorCode::NOT_FOUND, "NPU network interface not found");
+    }
+
+    std::vector<interface_info> interfaceInfos(num);
+    CHECK_STATUS(RaGetIfaddrsWrapper(&ifAttr, interfaceInfos.data(), &num));
+
+    int preferredFamily = AF_UNSPEC;
+    CHECK_STATUS(ParseRoceAddressFamily(preferredFamily));
+
+    if (preferredFamily == AF_INET || preferredFamily == AF_INET6) {
+        for (unsigned int i = 0; i < num; i++) {
+            if (interfaceInfos[i].family == preferredFamily) {
+                return CopyDeviceIp(interfaceInfos[i], ipAddr);
+            }
+        }
+        return Status::Error(ErrorCode::NOT_FOUND,
+                             (preferredFamily == AF_INET6) ? "IPv6 device IP not found" : "IPv4 device IP not found");
+    }
+
+    for (unsigned int i = 0; i < num; i++) {
+        if (interfaceInfos[i].family == AF_INET && FamilyMatches(interfaceInfos[i].family, preferredFamily)) {
+            return CopyDeviceIp(interfaceInfos[i], ipAddr);
+        }
+    }
+    for (unsigned int i = 0; i < num; i++) {
+        if (interfaceInfos[i].family == AF_INET6 && FamilyMatches(interfaceInfos[i].family, preferredFamily)) {
+            return CopyDeviceIp(interfaceInfos[i], ipAddr);
+        }
+    }
+
+    return Status::Error(ErrorCode::NOT_FOUND, "device IP not found");
+}
+
 Status RdmaAgent::getDeviceIpv4(union hccp_ip_addr *ipv4Addr)
 {
+    CHECK_STATUS(ValidateOutputAddress(ipv4Addr, "ipv4Addr"));
     if (status != RdmaAgentStatus::RA_INITIALIZED) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma agent is not initialized");
     }

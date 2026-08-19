@@ -16,7 +16,10 @@
 #include "tools/host-interface.h"
 #include "tools/npu-error.h"
 #include "tools/env.h"
+#include <cctype>
+#include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <sys/types.h>
@@ -29,6 +32,73 @@
 
 static constexpr int DECIMAL = 10;
 static constexpr int IPV4_LIMIT = 255;
+static constexpr int ADDR_FAMILY_AUTO = AF_UNSPEC;
+
+struct InterfaceGroups {
+    const std::vector<InterfaceInfo> &external;
+    const std::vector<InterfaceInfo> &container;
+    const std::vector<InterfaceInfo> &lo;
+};
+
+struct EnvLookupContext {
+    const InterfaceGroups &interfaces;
+    const std::string &envName;
+    int preferredFamily;
+};
+
+std::string FamilyToString(int family)
+{
+    if (family == AF_INET) {
+        return "IPv4";
+    }
+    if (family == AF_INET6) {
+        return "IPv6";
+    }
+    return "Unknown";
+}
+
+Status ParseAddressFamilyPreference(const char *envValue, int &family)
+{
+    family = ADDR_FAMILY_AUTO;
+    if (envValue == nullptr || envValue[0] == '\0') {
+        return Status::Success();
+    }
+
+    std::string value(envValue);
+    if (value == "auto") {
+        family = ADDR_FAMILY_AUTO;
+        return Status::Success();
+    }
+    if (value == "ipv4" || value == "IPv4") {
+        family = AF_INET;
+        return Status::Success();
+    }
+    if (value == "ipv6" || value == "IPv6") {
+        family = AF_INET6;
+        return Status::Success();
+    }
+    return Status::Error(ErrorCode::INVALID_ENV, std::string("Invalid ") + ADDR_FAMILY_ENV + " value.");
+}
+
+bool AddressFamilyAccepted(int family, int preferredFamily)
+{
+    return preferredFamily == ADDR_FAMILY_AUTO || family == preferredFamily;
+}
+
+int DetectIpFamily(const std::string &ipString)
+{
+    struct in_addr addr4 {};
+    if (inet_pton(AF_INET, ipString.c_str(), &addr4) == 1) {
+        return AF_INET;
+    }
+
+    struct in6_addr addr6 {};
+    if (inet_pton(AF_INET6, ipString.c_str(), &addr6) == 1) {
+        return AF_INET6;
+    }
+
+    return AF_UNSPEC;
+}
 
 std::vector<std::string> split(const std::string &s, char delimiter)
 {
@@ -112,7 +182,7 @@ Status GetHostInterfaces(std::vector<InterfaceInfo> &external_interfaces,
 
         int family = ifa->ifa_addr->sa_family;
 
-        if (family == AF_INET) {
+        if (family == AF_INET || family == AF_INET6) {
             char host[NI_MAXHOST];
             int s = getnameinfo(ifa->ifa_addr,
                                 (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6), host,
@@ -124,7 +194,7 @@ Status GetHostInterfaces(std::vector<InterfaceInfo> &external_interfaces,
 
             InterfaceInfo info;
             info.name = ifa->ifa_name;
-            info.family = (family == AF_INET) ? "IPv4" : "IPv6";
+            info.family = family;
             info.address = host;
 
             // Refined categorization logic
@@ -154,106 +224,164 @@ bool containsIp(const std::vector<InterfaceInfo> &interfaces, const std::string 
     return false;
 }
 
-bool findIfNameIp(const std::vector<InterfaceInfo> &interfaces, const std::string &ifName, std::string &ip)
+bool containsIp(const std::vector<InterfaceInfo> &interfaces, const std::string &ipToCheck, int family)
 {
     for (const auto &iface : interfaces) {
-        if (iface.name == ifName) {
-            ip = iface.address;
+        if (iface.address == ipToCheck && iface.family == family) {
             return true;
         }
     }
     return false;
 }
 
+bool findIfNameIp(const std::vector<InterfaceInfo> &interfaces, const std::string &ifName, int preferredFamily,
+                  std::string &ip, int &family)
+{
+    for (const auto &iface : interfaces) {
+        if (iface.name == ifName && AddressFamilyAccepted(iface.family, preferredFamily)) {
+            ip = iface.address;
+            family = iface.family;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ContainsIpInAnyGroup(const InterfaceGroups &interfaces, const std::string &ipToCheck, int family)
+{
+    return containsIp(interfaces.external, ipToCheck, family) || containsIp(interfaces.container, ipToCheck, family)
+           || containsIp(interfaces.lo, ipToCheck, family);
+}
+
 // Helper function to handle environment variable IP lookup
-Status findAndValidateIp(const char *env_var, std::string &ip, const std::vector<InterfaceInfo> &external_interfaces,
-                         const std::vector<InterfaceInfo> &container_interfaces,
-                         const std::vector<InterfaceInfo> &lo_interfaces, const std::string &env_name)
+Status findAndValidateIp(const char *env_var, std::string &ip, int &family, const EnvLookupContext &context)
 {
     if (env_var != nullptr) {
         std::string ip_str(env_var);
-        if (!IsValidIPv4(ip_str)) {
-            return Status::Error(ErrorCode::INVALID_ENV, "Invalid format for " + env_name + " IP address.");
+        int detectedFamily = DetectIpFamily(ip_str);
+        if (detectedFamily == AF_UNSPEC) {
+            return Status::Error(ErrorCode::INVALID_ENV, "Invalid format for " + context.envName + " IP address.");
         }
-        if (!containsIp(external_interfaces, ip_str) && !containsIp(container_interfaces, ip_str)
-            && !containsIp(lo_interfaces, ip_str) && ip_str != "0.0.0.0") {
-            std::cerr << "[Warning] IP specified in " + env_name + " was not found on any active interface.";
+        if (!AddressFamilyAccepted(detectedFamily, context.preferredFamily)) {
+            return Status::Error(ErrorCode::INVALID_ENV,
+                                 context.envName + " IP address does not match address family.");
+        }
+        if (!ContainsIpInAnyGroup(context.interfaces, ip_str, detectedFamily) && ip_str != "0.0.0.0" &&
+            ip_str != "::") {
+            std::cerr << "[Warning] IP specified in " + context.envName + " was not found on any active interface.";
         }
         ip = ip_str;
+        family = detectedFamily;
         return Status::Success();
     }
     return Status::Error(ErrorCode::NOT_FOUND, "IP not found or environment variable not set.");
 }
 
 // Helper function to handle environment variable interface name lookup
-Status findAndValidateInterface(const char *env_var, std::string &ip,
-                                const std::vector<InterfaceInfo> &external_interfaces,
-                                const std::vector<InterfaceInfo> &container_interfaces,
-                                const std::vector<InterfaceInfo> &lo_interfaces, const std::string &env_name)
+Status findAndValidateInterface(const char *env_var, std::string &ip, int &family, const EnvLookupContext &context)
 {
     if (env_var != nullptr) {
-        if (findIfNameIp(external_interfaces, env_var, ip) || findIfNameIp(container_interfaces, env_var, ip)
-            || findIfNameIp(lo_interfaces, env_var, ip)) {
+        if (findIfNameIp(context.interfaces.external, env_var, context.preferredFamily, ip, family)
+            || findIfNameIp(context.interfaces.container, env_var, context.preferredFamily, ip, family)
+            || findIfNameIp(context.interfaces.lo, env_var, context.preferredFamily, ip, family)) {
             return Status::Success();
         } else {
-            return Status::Error(ErrorCode::INVALID_ENV, "IP for " + env_name + " environment variable not found.");
+            return Status::Error(ErrorCode::INVALID_ENV,
+                                 "IP for " + context.envName + " environment variable not found.");
         }
     }
     return Status::Error(ErrorCode::NOT_FOUND, "Interface name not found or environment variable not set.");
 }
 
-Status GetHostIp(std::string &ip)
+bool PickFirstAddress(const std::vector<InterfaceInfo> &interfaces, int preferredFamily, std::string &ip, int &family)
+{
+    if (preferredFamily == AF_INET || preferredFamily == AF_INET6) {
+        for (const auto &iface : interfaces) {
+            if (iface.family == preferredFamily) {
+                ip = iface.address;
+                family = iface.family;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    for (const auto &iface : interfaces) {
+        if (iface.family == AF_INET) {
+            ip = iface.address;
+            family = iface.family;
+            return true;
+        }
+    }
+    for (const auto &iface : interfaces) {
+        if (iface.family == AF_INET6) {
+            ip = iface.address;
+            family = iface.family;
+            return true;
+        }
+    }
+    return false;
+}
+
+Status GetHostIp(std::string &ip, int &family)
 {
     std::vector<InterfaceInfo> external_interfaces;
     std::vector<InterfaceInfo> container_interfaces;
     std::vector<InterfaceInfo> lo_interfaces;
     CHECK_STATUS(GetHostInterfaces(external_interfaces, container_interfaces, lo_interfaces));
+    InterfaceGroups interfaces{ external_interfaces, container_interfaces, lo_interfaces };
+
+    int preferredFamily = ADDR_FAMILY_AUTO;
+    CHECK_STATUS(ParseAddressFamilyPreference(std::getenv(ADDR_FAMILY_ENV), preferredFamily));
 
     // 1. P2P_IF_IP
-    Status p2pIpStatus = findAndValidateIp(std::getenv(IF_IP_ENV), ip, external_interfaces, container_interfaces,
-                                           lo_interfaces, IF_IP_ENV);
+    EnvLookupContext p2pIpContext{ interfaces, IF_IP_ENV, preferredFamily };
+    Status p2pIpStatus = findAndValidateIp(std::getenv(IF_IP_ENV), ip, family, p2pIpContext);
     if (p2pIpStatus.IsSuccess()) {
         return p2pIpStatus;
     }
 
     // 2. P2P_SOCKET_IFNAME
-    Status p2pIfNameStatus = findAndValidateInterface(std::getenv(IF_NAME_ENV), ip, external_interfaces,
-                                                      container_interfaces, lo_interfaces, IF_NAME_ENV);
+    EnvLookupContext p2pIfNameContext{ interfaces, IF_NAME_ENV, preferredFamily };
+    Status p2pIfNameStatus = findAndValidateInterface(std::getenv(IF_NAME_ENV), ip, family, p2pIfNameContext);
     if (p2pIfNameStatus.IsSuccess()) {
         return p2pIfNameStatus;
     }
 
     // 3. HCCL_IF_IP
-    Status hcclIpStatus = findAndValidateIp(std::getenv(IF_IP_ENV_HCCL), ip, external_interfaces, container_interfaces,
-                                            lo_interfaces, IF_IP_ENV_HCCL);
+    EnvLookupContext hcclIpContext{ interfaces, IF_IP_ENV_HCCL, preferredFamily };
+    Status hcclIpStatus = findAndValidateIp(std::getenv(IF_IP_ENV_HCCL), ip, family, hcclIpContext);
     if (hcclIpStatus.IsSuccess()) {
         return hcclIpStatus;
     }
 
     // 4. HCCL_SOCKET_IFNAME
-    Status hcclIfNameStatus = findAndValidateInterface(std::getenv(IF_NAME_ENV_HCCL), ip, external_interfaces,
-                                                       container_interfaces, lo_interfaces, IF_NAME_ENV_HCCL);
+    EnvLookupContext hcclIfNameContext{ interfaces, IF_NAME_ENV_HCCL, preferredFamily };
+    Status hcclIfNameStatus = findAndValidateInterface(std::getenv(IF_NAME_ENV_HCCL), ip, family, hcclIfNameContext);
     if (hcclIfNameStatus.IsSuccess()) {
         return hcclIfNameStatus;
     }
 
     // 5. external network card (in order appears)
-    if (!external_interfaces.empty()) {
-        ip = external_interfaces[0].address;
+    if (PickFirstAddress(external_interfaces, preferredFamily, ip, family)) {
         return Status::Success();
     }
 
     // 6. docker network card
-    if (!container_interfaces.empty()) {
-        ip = container_interfaces[0].address;
+    if (PickFirstAddress(container_interfaces, preferredFamily, ip, family)) {
         return Status::Success();
     }
 
     // 7. lo network card
-    if (!lo_interfaces.empty()) {
-        ip = lo_interfaces[0].address;
+    if (PickFirstAddress(lo_interfaces, preferredFamily, ip, family)) {
         return Status::Success();
     }
 
     return Status::Error(ErrorCode::NOT_FOUND, "No valid host interface IP found.");
+}
+
+Status GetHostIp(std::string &ip)
+{
+    int family = AF_UNSPEC;
+    return GetHostIp(ip, family);
 }

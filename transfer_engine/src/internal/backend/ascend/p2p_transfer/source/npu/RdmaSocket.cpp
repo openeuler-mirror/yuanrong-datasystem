@@ -8,6 +8,35 @@
 #include <thread>
 #include <unistd.h>
 
+namespace {
+
+P2PIpAddress MakeIpv4Address(union hccp_ip_addr ipv4Addr)
+{
+    P2PIpAddress ipAddr;
+    ipAddr.family = AF_INET;
+    ipAddr.addr = ipv4Addr;
+    return ipAddr;
+}
+
+Status CheckRemoteFamily(const struct rdev &localDevInfo, const P2PIpAddress &remoteIp)
+{
+    if (remoteIp.family != localDevInfo.family) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "local and remote RDMA IP family mismatch");
+    }
+    return Status::Success();
+}
+
+std::string IpAddressToString(int family, const union hccp_ip_addr &ipAddr)
+{
+    char buffer[INET6_ADDRSTRLEN] = { 0 };
+    const void *address = family == AF_INET6 ? static_cast<const void *>(&ipAddr.addr6)
+                                             : static_cast<const void *>(&ipAddr.addr);
+    const char *result = inet_ntop(family, address, buffer, sizeof(buffer));
+    return result == nullptr ? "<invalid>" : std::string(result);
+}
+
+}  // namespace
+
 RdmaSocket::~RdmaSocket()
 {
     if (status == RdmaSocketStatus::SOCKET_LISTENING) {
@@ -75,7 +104,7 @@ Status RdmaSocket::getListenPort(unsigned int &listenPort)
     return Status::Success();
 }
 
-Status RdmaSocket::connect(union hccp_ip_addr remoteIp, unsigned int remotePort, std::string tag)
+Status RdmaSocket::connect(P2PIpAddress remoteIp, unsigned int remotePort, std::string tag)
 {
     if (socketRole != socket_role::CLIENT) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "connect only supported for client socket");
@@ -84,16 +113,17 @@ Status RdmaSocket::connect(union hccp_ip_addr remoteIp, unsigned int remotePort,
     if (status != RdmaSocketStatus::SOCKET_INITIALIZED) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "socket must be initialized to connect");
     }
+    CHECK_STATUS(CheckRemoteFamily(roceDevInfo, remoteIp));
 
     struct socket_connect_info_t connectInfo {};
     connectInfo.socket_handle = roceSocketHandle;
-    connectInfo.remote_ip = remoteIp;
+    connectInfo.remote_ip = remoteIp.addr;
     connectInfo.port = remotePort;
     snprintf(connectInfo.tag, sizeof(connectInfo.tag), "%s", tag.c_str());
     CHECK_STATUS(RaSocketBatchConnectWrapper(&connectInfo, 1));
     status = RdmaSocketStatus::SOCKET_CONNECTING;
 
-    socketInfo.remote_ip = remoteIp;
+    socketInfo.remote_ip = remoteIp.addr;
     socketInfo.socket_handle = roceSocketHandle;
     snprintf(socketInfo.tag, sizeof(socketInfo.tag), "%s", tag.c_str());
 
@@ -102,6 +132,11 @@ Status RdmaSocket::connect(union hccp_ip_addr remoteIp, unsigned int remotePort,
     this->tag = tag;
 
     return Status::Success();
+}
+
+Status RdmaSocket::connect(union hccp_ip_addr remoteIp, unsigned int remotePort, std::string tag)
+{
+    return connect(MakeIpv4Address(remoteIp), remotePort, tag);
 }
 
 Status RdmaSocket::getSocketStatus(RdmaSocketStatus *socketStatus)
@@ -127,7 +162,7 @@ Status RdmaSocket::waitReady(uint32_t timeOutMs)
 
     p2p::LogInfo(std::string("RdmaSocket::waitReady begin, phy_id=") + std::to_string(phyId) +
                  ", role=" + std::to_string(static_cast<int>(socketRole)) +
-                 ", local_npu_ip=" + in_addr_to_string(roceDevInfo.local_ip.addr) +
+                 ", local_npu_ip=" + IpAddressToString(roceDevInfo.family, roceDevInfo.local_ip) +
                  ", timeout_ms=" + std::to_string(timeOutMs) +
                  (timeOutMs == 0 ? ", timeout_disabled=true" : ""));
     auto startTime = std::chrono::steady_clock::now();
@@ -138,7 +173,7 @@ Status RdmaSocket::waitReady(uint32_t timeOutMs)
         auto currentTime = std::chrono::steady_clock::now();
         if (timeOutMs > 0 && currentTime - startTime >= timeOutDuration) {
             std::string msg = "Timeout waiting for RoCE socket to connect, phy_id=" + std::to_string(phyId) +
-                              ", local_npu_ip=" + in_addr_to_string(roceDevInfo.local_ip.addr) +
+                              ", local_npu_ip=" + IpAddressToString(roceDevInfo.family, roceDevInfo.local_ip) +
                               ", timeout_ms=" + std::to_string(timeOutMs);
             p2p::LogError(std::string("RdmaSocket::waitReady failed, reason=") + msg);
             return Status::Error(ErrorCode::TIMEOUT, msg);
@@ -147,14 +182,15 @@ Status RdmaSocket::waitReady(uint32_t timeOutMs)
         Status statusRc = this->getSocketStatus(&socketStatus);
         if (!statusRc.IsSuccess()) {
             p2p::LogError(std::string("RdmaSocket::waitReady query status failed, phy_id=") +
-                          std::to_string(phyId) + ", local_npu_ip=" + in_addr_to_string(roceDevInfo.local_ip.addr) +
+                          std::to_string(phyId) +
+                          ", local_npu_ip=" + IpAddressToString(roceDevInfo.family, roceDevInfo.local_ip) +
                           ", reason=" + statusRc.ToString());
             return statusRc;
         }
     }
 
     p2p::LogInfo(std::string("RdmaSocket::waitReady success, phy_id=") + std::to_string(phyId) +
-                 ", local_npu_ip=" + in_addr_to_string(roceDevInfo.local_ip.addr));
+                 ", local_npu_ip=" + IpAddressToString(roceDevInfo.family, roceDevInfo.local_ip));
     return Status::Success();
 }
 
@@ -183,7 +219,7 @@ Status RdmaSocket::close()
     return Status::Success();
 }
 
-Status RdmaSocket::addWhitelist(union hccp_ip_addr remoteIp, std::string tag)
+Status RdmaSocket::addWhitelist(P2PIpAddress remoteIp, std::string tag)
 {
     if (socketRole != socket_role::SERVER) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "whitelist only supported for server socket");
@@ -192,12 +228,13 @@ Status RdmaSocket::addWhitelist(union hccp_ip_addr remoteIp, std::string tag)
     if (status != RdmaSocketStatus::SOCKET_LISTENING) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "socket is not listening");
     }
+    CHECK_STATUS(CheckRemoteFamily(roceDevInfo, remoteIp));
 
     socket_wlist_info_t whiteListEntry = {};
     const unsigned int kConnectionLimit = 8;
     const unsigned int kNumEntries = 1;
 
-    whiteListEntry.remote_ip = remoteIp;
+    whiteListEntry.remote_ip = remoteIp.addr;
 
     snprintf(whiteListEntry.tag, sizeof(whiteListEntry.tag), "%s", tag.c_str());
 
@@ -205,7 +242,7 @@ Status RdmaSocket::addWhitelist(union hccp_ip_addr remoteIp, std::string tag)
     CHECK_STATUS(RaSocketWhiteListAddWrapper(roceSocketHandle, &whiteListEntry, kNumEntries));
     whiteList.push_back(whiteListEntry);
 
-    socketInfo.remote_ip = remoteIp;
+    socketInfo.remote_ip = remoteIp.addr;
     socketInfo.socket_handle = roceSocketHandle;
 
     snprintf(socketInfo.tag, sizeof(socketInfo.tag), "%s", tag.c_str());
@@ -213,4 +250,9 @@ Status RdmaSocket::addWhitelist(union hccp_ip_addr remoteIp, std::string tag)
     status = RdmaSocketStatus::SOCKET_WHITELISTED;
 
     return Status::Success();
+}
+
+Status RdmaSocket::addWhitelist(union hccp_ip_addr remoteIp, std::string tag)
+{
+    return addWhitelist(MakeIpv4Address(remoteIp), tag);
 }

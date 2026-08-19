@@ -86,7 +86,7 @@ private:
     std::unique_ptr<RdmaNotify> writeOpFinishNotify;
     uint32_t curOneSidedChunk = 0;
     uint32_t curOneSidedBuffer = 0;
-    union hccp_ip_addr remoteIp;
+    P2PIpAddress remoteIp;
 
     RoceReceiverStatus state = ROCE_RECEIVER_UNINITIALIZED;
     bool isRoot;

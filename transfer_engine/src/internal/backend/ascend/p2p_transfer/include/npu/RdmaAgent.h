@@ -12,6 +12,7 @@
 #include "../tools/npu-error.h"
 #include "acl/acl.h"
 #include <arpa/inet.h>
+#include "external/ra.h"
 #include "tools/common.h"
 #include "version/hccl_version.h"
 
@@ -28,6 +29,13 @@ enum class NICDeployment {
 constexpr uint32_t DEFAULT_HDC_TYPE = 6;
 
 enum RdmaAgentStatus { RA_INITIALIZED, RA_UNINITIALIZED };
+
+using HccpIpAddr = decltype(interface_info{}.ifaddr.ip);
+
+struct P2PIpAddress {
+    int family = AF_INET;
+    HccpIpAddr addr {};
+};
 
 class RdmaAgent {
 public:
@@ -51,6 +59,7 @@ public:
     RdmaAgent &operator=(const RdmaAgent &) = delete;
 
     Status init();
+    Status getDeviceIp(P2PIpAddress *addr);
     Status getDeviceIpv4(union hccp_ip_addr *addr);
 
 private:

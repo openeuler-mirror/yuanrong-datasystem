@@ -5,6 +5,7 @@
 #define P2P_TCP_CLIENT_H
 
 #include <unistd.h>
+#include <sys/socket.h>
 #include "TcpCommunicator.h"
 #include "Serializer.h"
 #include "../tools/Status.h"
@@ -42,7 +43,8 @@ private:
     int serverFd;
     uint16_t port;
     std::string server_address;
-    struct sockaddr_in address;
+    struct sockaddr_storage address;
+    socklen_t addressLen;
     bool initialized;
     uint32_t connectTimeOut;  // Seconds
 };

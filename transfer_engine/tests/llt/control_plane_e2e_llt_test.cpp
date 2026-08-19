@@ -145,6 +145,34 @@ TEST(RpcFrameworkLltTest, SingleThreadRoundTrip)
     server->Stop();
 }
 
+// Verifies that the control-plane socket transport supports IPv6 loopback.
+TEST(RpcFrameworkLltTest, Ipv6LoopbackRoundTrip)
+{
+    constexpr uint16_t kPort = 55104;
+    auto service = std::make_shared<FakeControlService>();
+    auto server = std::make_shared<SocketControlServer>();
+    Result startRc = server->Start("::1", kPort, service);
+    if (startRc.IsError()) {
+        GTEST_SKIP() << "IPv6 loopback is not available: " << startRc.ToString();
+    }
+
+    SocketControlClient client;
+    QueryConnReadyRequest queryReq;
+    queryReq.requesterHost = "::1";
+    queryReq.requesterPort = 66004;
+    queryReq.requesterDeviceId = 4;
+    queryReq.ownerDeviceId = 7;
+
+    QueryConnReadyResponse queryRsp;
+    ASSERT_TRUE(client.QueryConnReady("::1", kPort, queryReq, &queryRsp).IsOk());
+    EXPECT_EQ(queryRsp.code, 0);
+    EXPECT_EQ(queryRsp.msg, "ok_query");
+    EXPECT_TRUE(queryRsp.ready);
+    EXPECT_EQ(service->queryCallCount.load(), 1);
+
+    server->Stop();
+}
+
 // 中文说明：该用例验证并发场景下多客户端同时发起 QueryConnReady 时，RPC 框架收发与解析稳定性。
 TEST(RpcFrameworkLltTest, ConcurrentQueryConnReady)
 {
