@@ -151,6 +151,15 @@ public:
     Status GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response);
 
     /**
+     * @brief Report whether the target worker is same-host (eligible for SHM fd-passing) per the
+     * routing topology. Local-cache Create/Set(buffer) use this to route cross-host writes through
+     * the transport layer (UB/TCP) instead of the bound-worker SHM path, matching Set(string).
+     * @param[in] workerAddr Target worker address.
+     * @return true when the advisor treats the worker as same-host (SHM_CANDIDATE).
+     */
+    bool IsSameHostWorker(const HostPort &workerAddr) const;
+
+    /**
      * @brief Publish worker admission synchronously and schedule latest-wins connection cleanup asynchronously.
      * @param[in] snapshot Validated worker snapshot associated with the pending route update.
      * @return K_OK when admitted and queued; the error code otherwise.

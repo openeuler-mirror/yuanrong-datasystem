@@ -676,6 +676,17 @@ Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentV
     return rpcClient->InvokeGetHashRing(currentVersion, response);
 }
 
+bool TransportLayer::IsSameHostWorker(const HostPort &workerAddr) const
+{
+    // No transport layer (local-only mode) or no topology yet: fall back to false so cross-host
+    // callers route through the transport layer. The bound-worker SHM path is taken only when the
+    // advisor explicitly classifies the worker as same-host.
+    if (advisor_ == nullptr) {
+        return false;
+    }
+    return advisor_->GetTransportHint(workerAddr) == TransportHint::SHM_CANDIDATE;
+}
+
 Status TransportLayer::Create(const HostPort &workerAddr, const std::string &objectKey, uint64_t dataSize,
                               const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer)
 {

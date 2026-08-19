@@ -23,6 +23,8 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -47,6 +49,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 DS_DECLARE_string(sdk_data_placement_policy);
+DS_DECLARE_string(host_id_env_name);
 namespace datasystem {
 namespace st {
 namespace {
@@ -1061,6 +1064,134 @@ TEST_F(KVClientTransportSetWithShmTest, RoutedSetUsesShmZeroCopy)
     DS_ASSERT_OK(routedClient_->Set(key, value));
     ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
     AssertValue(key, value);
+}
+
+// Reproduces the SCMTCP cross-host misclassification fixed by routing enableLocalCache Create
+// through the transport layer when the bound worker is cross-host. Under SCMTCP, a cross-host
+// bound worker still reports IsShmEnable()=true (SCMTCP handshake succeeds), so the old path
+// built a SHM buffer and Set(buffer) logged transportType=SHM even though the bytes travel over
+// UB/TCP. The transport advisor (sameHostWorkers, hostId-based) is the single source of truth.
+class KVClientTransportSetLocalCacheScmTcpTest : public KVClientTransportSetTest {
+public:
+    static constexpr char REMOTE_HOST_ID_ENV[] = "transport_set_scm_tcp_remote_host_id";
+    static constexpr char REMOTE_HOST_ID_VALUE[] = "transport-set-scm-tcp-remote-host";
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        // Reuse the base layout (URMA, distributed master, etcd) but flip SHM fd-passing on and
+        // add per-worker SCMTCP ports. Worker 0 keeps the SDK hostId (same-host control); worker 1
+        // gets a distinct hostId so the advisor classifies it as cross-host. The base class emits a
+        // global host_id_env_name; move it per-worker so worker 1 can override it without a duplicate.
+        KVClientTransportSetTest::SetClusterSetupOptions(opts);
+        constexpr char DISABLED_SHM_OPTION[] = "-ipc_through_shared_memory=false";
+        const auto pos = opts.workerGflagParams.find(DISABLED_SHM_OPTION);
+        ASSERT_NE(pos, std::string::npos);
+        opts.workerGflagParams.replace(pos, sizeof(DISABLED_SHM_OPTION) - 1, "-ipc_through_shared_memory=true");
+        constexpr char GLOBAL_HOST_ID_OPT[] = " -host_id_env_name=";
+        const auto hidPos = opts.workerGflagParams.find(GLOBAL_HOST_ID_OPT);
+        ASSERT_NE(hidPos, std::string::npos);
+        const auto hidEnd = opts.workerGflagParams.find(' ', hidPos + 1);
+        const std::string sdkHostIdEnv = opts.workerGflagParams.substr(
+            hidPos + std::string(GLOBAL_HOST_ID_OPT).size(),
+            hidEnd == std::string::npos ? std::string::npos : hidEnd - (hidPos + std::string(GLOBAL_HOST_ID_OPT).size()));
+        opts.workerGflagParams.erase(hidPos, hidEnd == std::string::npos ? std::string::npos : hidEnd - hidPos);
+        for (uint32_t i = 0; i < opts.numWorkers; ++i) {
+            opts.workerSpecifyGflagParams[i] += FormatString(" -shared_memory_worker_port=%d", GetFreePort());
+            // Worker 0 reports the SDK hostId (same-host); worker 1 reports a distinct hostId (cross-host).
+            const auto &env = (i == ROUTED_CLIENT_WORKER_INDEX) ? std::string(REMOTE_HOST_ID_ENV) : sdkHostIdEnv;
+            opts.workerSpecifyGflagParams[i] += " -host_id_env_name=" + env;
+        }
+    }
+
+    void SetUp() override
+    {
+        if (!SupportScmTcp()) {
+            skipped_ = true;
+            GTEST_SKIP() << "SMC over TCP not supported on this kernel";
+        }
+        ASSERT_EQ(setenv(REMOTE_HOST_ID_ENV, REMOTE_HOST_ID_VALUE, 1), 0);
+        // The SDK reads its own host_id from FLAGS_host_id_env_name; set it before Init so the
+        // advisor partitions same-host (worker 0) vs cross-host (worker 1) workers correctly.
+        previousHostIdEnvName_ = FLAGS_host_id_env_name;
+        FLAGS_host_id_env_name = HOST_ID_ENV_NAME;
+        KVClientTransportSetTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        if (!skipped_) {
+            KVClientTransportSetTest::TearDown();
+        }
+        FLAGS_host_id_env_name = previousHostIdEnvName_;
+        (void)unsetenv(REMOTE_HOST_ID_ENV);
+    }
+
+    static bool SupportScmTcp()
+    {
+        const int proto = 518;  // IPPROTO_SCMTCP
+        auto fd = socket(AF_INET, SOCK_STREAM, proto);
+        bool ret = fd >= 0;
+        if (ret) {
+            close(fd);
+        }
+        return ret;
+    }
+
+private:
+    bool skipped_ = false;
+    std::string previousHostIdEnvName_;
+};
+
+// Cross-host bound worker: SCMTCP makes IsShmEnable() true, but the advisor excludes it from
+// sameHostWorkers (hostId mismatch). Create+MemoryCopy+Set(buffer) must route through the
+// transport layer and record the real medium (UB under USE_URMA, TCP otherwise).
+TEST_F(KVClientTransportSetLocalCacheScmTcpTest, LocalCacheBufferSetRoutesCrossHostWorkerToTransport)
+{
+    // enableLocalCache=true + enableCrossNodeConnection=true bound to worker 1 (cross-host hostId).
+    // enableCrossNodeConnection forces InitRouting so sameHostWorkers is built from the hostId
+    // topology, not the SCMTCP IsShmEnable() fallback that would misclassify worker 1 as same-host.
+    std::shared_ptr<KVClient> crossHostClient;
+    InitTestKVClient(ROUTED_CLIENT_WORKER_INDEX, crossHostClient, [](ConnectOptions &opts) {
+        opts.enableLocalCache = true;
+        opts.enableCrossNodeConnection = true;
+    });
+    const std::string key = "transport_local_cache_scm_tcp_cross_host";
+    const std::string value(VALUE_SIZE, 'u');
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 5 };
+    std::shared_ptr<Buffer> buffer;
+    DS_ASSERT_OK(crossHostClient->Create(key, value.size(), param, buffer));
+    DS_ASSERT_OK(buffer->MemoryCopy(value.data(), value.size()));
+    DS_ASSERT_OK(crossHostClient->Set(buffer));
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+    // Verify round-trip from the same cross-host client so the assertion is not affected by
+    // another client's enableCrossNodeConnection / routing configuration.
+    std::string actual;
+    DS_ASSERT_OK(crossHostClient->Get(key, actual));
+    ASSERT_EQ(actual, value);
+}
+
+// Same-host control: the bound worker's hostId matches the SDK hostId, so Create keeps the SHM
+// bound-worker path and Set(buffer) records SHM. Uses enableCrossNodeConnection=true so the
+// advisor sameHostWorkers set is hostId-based (same path as the cross-host case), and worker 0's
+// matching hostId keeps it on the SHM path.
+TEST_F(KVClientTransportSetLocalCacheScmTcpTest, LocalCacheBufferSetSameHostWorkerRecordsShm)
+{
+    std::shared_ptr<KVClient> sameHostClient;
+    InitTestKVClient(READER_WORKER_INDEX, sameHostClient, [](ConnectOptions &opts) {
+        opts.enableLocalCache = true;
+        opts.enableCrossNodeConnection = true;
+    });
+    const std::string key = "transport_local_cache_scm_tcp_same_host";
+    const std::string value(VALUE_SIZE, 'h');
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 5 };
+    std::shared_ptr<Buffer> buffer;
+    DS_ASSERT_OK(sameHostClient->Create(key, value.size(), param, buffer));
+    DS_ASSERT_OK(buffer->MemoryCopy(value.data(), value.size()));
+    DS_ASSERT_OK(sameHostClient->Set(buffer));
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    std::string actual;
+    DS_ASSERT_OK(sameHostClient->Get(key, actual));
+    ASSERT_EQ(actual, value);
 }
 }  // namespace st
 }  // namespace datasystem
