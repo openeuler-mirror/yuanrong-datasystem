@@ -806,7 +806,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_UNAVAILABLE</span></code></p></td>
 <td><p>1002</p></td>
-<td><p>表示请求发生超时</p></td>
+<td><p>表示 RPC 对端不可用（旧语义，新代码应优先返回 <code class="docutils literal notranslate"><span class="pre">K_RPC_PEER_DEAD</span></code> 或 <code class="docutils literal notranslate"><span class="pre">K_RPC_NETWORK_BLIP</span></code>）</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_STREAM_END</span></code></p></td>
 <td><p>1003</p></td>
@@ -819,6 +819,34 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RDMA_ERROR</span></code></p></td>
 <td><p>1005</p></td>
 <td><p>表示发生了RDMA相关的错误</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_URMA_NEED_CONNECT</span></code></p></td>
+<td><p>1006</p></td>
+<td><p>表示 URMA(UB) 连接断开或尚未建立，需要重新建立连接后才能继续传输</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RDMA_NEED_CONNECT</span></code></p></td>
+<td><p>1007</p></td>
+<td><p>表示 RDMA(UCP) 连接断开或尚未建立，需要重新建立连接（与 <code class="docutils literal notranslate"><span class="pre">K_URMA_NEED_CONNECT</span></code> 对应的旧栈语义，当前代码路径默认不返回此码）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_URMA_TRY_AGAIN</span></code></p></td>
+<td><p>1008</p></td>
+<td><p>表示 URMA 操作因资源暂不可用（如无空闲 send Jetty、Jetty 正在关闭）暂未完成，调用方可重试</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_URMA_CONNECT_FAILED</span></code></p></td>
+<td><p>1009</p></td>
+<td><p>表示 URMA 建链失败（如 Urma 未启用、jetty 建链失败等）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_URMA_WAIT_TIMEOUT</span></code></p></td>
+<td><p>1010</p></td>
+<td><p>表示 URMA 等待操作完成超时</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_PEER_DEAD</span></code></p></td>
+<td><p>1011</p></td>
+<td><p>表示 RPC 对端进程已死或不可达（常见于 worker 缩容、pod 删除等场景；如对端 socket 失败、连接被拒绝、host down、logoff/close 等），不可重试，调用方应快速失败并清理本地缓存的 channel/stub</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_NETWORK_BLIP</span></code></p></td>
+<td><p>1012</p></td>
+<td><p>表示 RPC 网络瞬断（短暂不可达，如 EOF、SSL 错误、连接 reset/abort、host/network unreachable 等），可重试，旧 <code class="docutils literal notranslate"><span class="pre">K_RPC_UNAVAILABLE</span></code> 的重试策略自动覆盖</p></td>
 </tr>
 </tbody>
 </table>

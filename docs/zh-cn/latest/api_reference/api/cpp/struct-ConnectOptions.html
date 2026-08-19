@@ -633,7 +633,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <span id="_CPPv3N14ConnectOptions16connectTimeoutMsE"></span><span id="_CPPv2N14ConnectOptions16connectTimeoutMsE"></span><span id="ConnectOptions::connectTimeoutMs__int32_t"></span><span class="n"><span class="pre">int32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">connectTimeoutMs</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">9</span></span><span class="w"> </span><span class="o"><span class="pre">*</span></span><span class="w"> </span><span class="m"><span class="pre">1000</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions16connectTimeoutMsE" title="Link to this definition">¶</a><br /></dt>
 <dd><p>客户端连接超时时间，单位为毫秒。默认值：9’000, 数值约束&gt;=500。
 初始化阶段的 <code class="docutils literal notranslate"><span class="pre">GetSocketPath</span></code>、<code class="docutils literal notranslate"><span class="pre">RegisterClient</span></code> 等控制 RPC 从当前连接尝试预算计算超时时间，
-而不受 <code class="docutils literal notranslate"><span class="pre">requestTimeoutMs</span></code> 限制。</p>
+而不受 <code class="docutils literal notranslate"><span class="pre">requestTimeoutMs</span></code> 限制。控制 RPC 在对端不可达时返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_PEER_DEAD</span></code>
+（不可重试，调用方应快速失败），瞬时网络问题返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_NETWORK_BLIP``（可重试，</span>
+<span class="pre">旧</span> <span class="pre">``K_RPC_UNAVAILABLE</span></code> 的重试策略自动覆盖）。</p>
 </dd></dl>
 
 <dl class="cpp member">
@@ -742,7 +744,7 @@ Client-Local-Worker RH2D 路径。</p>
 <dl class="cpp member">
 <dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions20fastTransportMemSizeE">
 <span id="_CPPv3N14ConnectOptions20fastTransportMemSizeE"></span><span id="_CPPv2N14ConnectOptions20fastTransportMemSizeE"></span><span id="ConnectOptions::fastTransportMemSize__uint64_t"></span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fastTransportMemSize</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">256</span></span><span class="w"> </span><span class="o"><span class="pre">*</span></span><span class="w"> </span><span class="m"><span class="pre">1024</span></span><span class="w"> </span><span class="o"><span class="pre">*</span></span><span class="w"> </span><span class="m"><span class="pre">1024</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions20fastTransportMemSizeE" title="Link to this definition">¶</a><br /></dt>
-<dd><p>client 进程级 fast transport（URMA）传输内存池大小，单位为字节。默认值：256MB，取值范围为 <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">2GB]</span></code>。同一进程内各 client 需保持一致，由首个启用 fast transport 的 client 生效。</p>
+<dd><p>client 进程级 fast transport（URMA）传输内存池大小，单位为字节。默认值：256MB，取值范围为 <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">2GB]</span></code>。初始化时会向上对齐，确保每个 UB transport Arena 占用完整系统页；对齐后的大小超过 2GB 时初始化失败。同一进程内各 client 需保持一致，由首个启用 fast transport 的 client 生效。</p>
 </dd></dl>
 
 <p><strong>公共函数</strong></p>
