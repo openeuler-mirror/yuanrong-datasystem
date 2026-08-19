@@ -40,12 +40,12 @@ HostPort MakeWorker(int port)
 
 class FakeExistRouting : public IExistRouting {
 public:
-    Status SelectWorkers(const std::vector<std::string> &, client::SelectStrategy strategy,
+    Status SelectWorkers(const std::vector<std::string> &, client::DataPlacementPolicy policy,
                          std::unordered_map<HostPort, std::vector<std::string>> &output,
                          const std::vector<HostPort> &exclude) override
     {
         ++selectWorkersCount;
-        selectedStrategy = strategy;
+        selectedPolicy = policy;
         excludeHistory.emplace_back(exclude);
         if (!groupSequence.empty()) {
             output = groupSequence.front();
@@ -63,7 +63,7 @@ public:
     }
 
     Status selectStatus = Status::OK();
-    client::SelectStrategy selectedStrategy = client::SelectStrategy::SAME_NODE_PREFERRED;
+    client::DataPlacementPolicy selectedPolicy = client::DataPlacementPolicy::PREFERRED_SAME_NODE;
     std::unordered_map<HostPort, std::vector<std::string>> groups;
     std::vector<std::unordered_map<HostPort, std::vector<std::string>>> groupSequence;
     std::vector<HostPort> updatedWorkers;
@@ -169,7 +169,7 @@ TEST_F(ExistHandlerTest, ExistUsesRoutingAndTransportAndKeepsInputOrder)
     ASSERT_TRUE(rc.IsOk());
     EXPECT_EQ(exists, std::vector<bool>({ true, false }));
     EXPECT_EQ(routing_->selectWorkersCount, 1);
-    EXPECT_EQ(routing_->selectedStrategy, client::SelectStrategy::HASH_RING_AFFINITY);
+    EXPECT_EQ(routing_->selectedPolicy, client::DataPlacementPolicy::PREFERRED_META_OWNER);
     EXPECT_TRUE(transport_->queryL2Cache[0]);
     EXPECT_FALSE(transport_->isLocal[0]);
 }

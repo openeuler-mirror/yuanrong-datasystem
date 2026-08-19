@@ -14,19 +14,21 @@
  * limitations under the License.
  */
 
-#ifndef DATASYSTEM_CLIENT_ROUTING_SELECT_STRATEGY_H
-#define DATASYSTEM_CLIENT_ROUTING_SELECT_STRATEGY_H
+#ifndef DATASYSTEM_CLIENT_ROUTING_DATA_PLACEMENT_POLICY_H
+#define DATASYSTEM_CLIENT_ROUTING_DATA_PLACEMENT_POLICY_H
+
+#include <cstdint>
 
 namespace datasystem {
 namespace client {
 
-// Legacy compatibility enum. New routing code must use DataPlacementPolicy so REQUIRED_SAME_NODE remains expressible.
-enum class SelectStrategy {
-    HASH_RING_AFFINITY,     // Select by key hash on ring (metadata owner)
-    SAME_NODE_PREFERRED,    // Prefer same-node worker, fallback to ring
+enum class DataPlacementPolicy : uint8_t {
+    PREFERRED_SAME_NODE,   // Prefer a same-node worker, then fall back to the metadata owner.
+    REQUIRED_SAME_NODE,    // Select only from same-node workers.
+    PREFERRED_META_OWNER,  // Prefer the metadata owner selected by the hash ring.
 };
 
 }  // namespace client
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_CLIENT_ROUTING_SELECT_STRATEGY_H
+#endif  // DATASYSTEM_CLIENT_ROUTING_DATA_PLACEMENT_POLICY_H

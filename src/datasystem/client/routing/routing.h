@@ -28,6 +28,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "datasystem/client/routing/data_placement_policy.h"
 #include "datasystem/client/routing/hash_ring_refresher.h"
 #include "datasystem/client/routing/routing_rpc_client.h"
 #include "datasystem/client/routing/worker_router.h"
@@ -38,12 +39,6 @@
 
 namespace datasystem {
 namespace client {
-
-enum class DataPlacementPolicy : uint8_t {
-    PREFERRED_SAME_NODE,  // Prefer a same-node worker, then fall back to the metadata owner.
-    REQUIRED_SAME_NODE,   // Select only from same-node workers.
-    PREFERRED_META_OWNER,  // Prefer the metadata owner selected by the hash ring.
-};
 
 class Routing {
 public:
@@ -59,22 +54,9 @@ public:
 
     Status Init(const std::string &hostId, const HostPort &initialWorkerAddr, bool initialWorkerIsLocal = false);
 
-    // Legacy compatibility overload. New callers must use DataPlacementPolicy.
-    Status SelectWorker(const std::string &key, SelectStrategy strategy, HostPort &worker,
-                        const std::vector<HostPort> &exclude = {});
-
     // Routing owns only its GetHashRing control channel. The caller owns business RPC execution and retries.
     Status SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
                         const std::vector<HostPort> &exclude = {});
-
-    // Legacy compatibility overload. New callers must use DataPlacementPolicy.
-    Status SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
-                         std::unordered_map<HostPort, std::vector<std::string>> &groups);
-
-    // Legacy compatibility overload with per-request exclude list (Exist reroute).
-    Status SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
-                         std::unordered_map<HostPort, std::vector<std::string>> &groups,
-                         const std::vector<HostPort> &exclude);
 
     Status SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups,

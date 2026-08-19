@@ -24,7 +24,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "datasystem/client/routing/select_strategy.h"
+#include "datasystem/client/routing/data_placement_policy.h"
 #include "datasystem/client/transport/rpc/exist_types.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -37,7 +37,7 @@ namespace object_cache {
 class IExistRouting {
 public:
     virtual ~IExistRouting() = default;
-    virtual Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
+    virtual Status SelectWorkers(const std::vector<std::string> &keys, client::DataPlacementPolicy policy,
                                  std::unordered_map<HostPort, std::vector<std::string>> &groups,
                                  const std::vector<HostPort> &exclude = {}) = 0;
     virtual void UpdateState(const HostPort &addr, StatusCode status) = 0;
@@ -114,7 +114,7 @@ private:
         std::vector<bool> &exists;
     };
 
-    Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
+    Status SelectWorkers(const std::vector<std::string> &keys, client::DataPlacementPolicy policy,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups,
                          const std::vector<HostPort> &exclude);
 

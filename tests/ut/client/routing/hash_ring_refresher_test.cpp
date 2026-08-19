@@ -91,7 +91,7 @@ TEST_F(HashRingRefresherTest, TestInitialFetchRunsBeforePeriodicThread)
     EXPECT_EQ(fetchCount, 1);
 
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
     EXPECT_EQ(selected.ToString(), "127.0.0.1:1000");
 }
 
@@ -404,7 +404,7 @@ TEST_F(HashRingRefresherTest, TestRingUpdateHookRunsBeforeRoutePublication)
         EXPECT_EQ(ring.members_size(), 1);
         HostPort selected;
         routeWasUnpublished =
-            router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected).IsError();
+            router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected).IsError();
         return Status::OK();
     };
     client::HashRingRefresher refresher(router, fetch, hook);
@@ -413,7 +413,7 @@ TEST_F(HashRingRefresherTest, TestRingUpdateHookRunsBeforeRoutePublication)
     EXPECT_EQ(hookVersion, 5u);
     EXPECT_TRUE(routeWasUnpublished);
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
     EXPECT_EQ(selected.ToString(), "127.0.0.1:1000");
 }
 
@@ -448,7 +448,7 @@ TEST_F(HashRingRefresherTest, TestFailedRingUpdateHookRetainsVersionAndRetries)
 
     EXPECT_EQ(refresher.InitialFetch(HostPort("127.0.0.1", 1000)).GetCode(), K_RUNTIME_ERROR);
     HostPort selected;
-    EXPECT_TRUE(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected).IsError());
+    EXPECT_TRUE(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected).IsError());
     DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
     bool retried = false;
     {
@@ -461,7 +461,7 @@ TEST_F(HashRingRefresherTest, TestFailedRingUpdateHookRetainsVersionAndRetries)
     ASSERT_GE(requestedVersions.size(), 2u);
     EXPECT_EQ(requestedVersions[0], 0u);
     EXPECT_EQ(requestedVersions[1], 0u);
-    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
 }
 
 TEST_F(HashRingRefresherTest, TestStaleVersionDoesNotReplaceCurrentRing)
@@ -504,7 +504,7 @@ TEST_F(HashRingRefresherTest, TestStaleVersionDoesNotReplaceCurrentRing)
     EXPECT_EQ(requestedVersions[0], 0u);
     EXPECT_EQ(requestedVersions[1], 2u);
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
     EXPECT_EQ(selected.ToString(), "127.0.0.1:1000");
 }
 
@@ -537,7 +537,7 @@ TEST_F(HashRingRefresherTest, TestUnchangedResponseKeepsCurrentRing)
 
     EXPECT_EQ(requestedVersions[1], 5u);
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
     EXPECT_EQ(selected.ToString(), "127.0.0.1:1000");
 }
 
@@ -571,7 +571,7 @@ TEST_F(HashRingRefresherTest, TestForcedRefreshRetriesUntilRingChanges)
     refresher.Stop();
 
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
     EXPECT_EQ(selected.ToString(), "127.0.0.1:2000");
 }
 
@@ -615,7 +615,7 @@ TEST_F(HashRingRefresherTest, RepeatedFailureExtendsForcedRefreshUntilIsolationP
     ASSERT_TRUE(isolationPublished);
 
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
     EXPECT_EQ(selected.ToString(), "127.0.0.1:2000");
 }
 
@@ -644,7 +644,7 @@ TEST_F(HashRingRefresherTest, TestAllWorkersUnreachableKeepsCurrentRing)
 
     DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
     HostPort before;
-    DS_ASSERT_OK(router->SelectWorker("stable-key", client::SelectStrategy::HASH_RING_AFFINITY, before));
+    DS_ASSERT_OK(router->SelectWorker("stable-key", client::DataPlacementPolicy::PREFERRED_META_OWNER, before));
     DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
     {
         std::unique_lock<std::mutex> lock(mutex);
@@ -653,7 +653,7 @@ TEST_F(HashRingRefresherTest, TestAllWorkersUnreachableKeepsCurrentRing)
     refresher.Stop();
 
     HostPort after;
-    DS_ASSERT_OK(router->SelectWorker("stable-key", client::SelectStrategy::HASH_RING_AFFINITY, after));
+    DS_ASSERT_OK(router->SelectWorker("stable-key", client::DataPlacementPolicy::PREFERRED_META_OWNER, after));
     EXPECT_EQ(after, before);
 }
 
@@ -698,7 +698,7 @@ TEST_F(HashRingRefresherTest, TestFilterNotifiedOnlyWhenRingChanges)
 
     EXPECT_EQ(filter->UpdateCount(), 2);
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
     EXPECT_EQ(selected.ToString(), "127.0.0.1:2000");
 }
 
@@ -742,7 +742,7 @@ TEST_F(HashRingRefresherTest, BackgroundRefreshContinuesPastReachableUnchangedWo
     refresher.Stop();
 
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
     EXPECT_EQ(selected, HostPort("127.0.0.1", 2000));
 }
 
