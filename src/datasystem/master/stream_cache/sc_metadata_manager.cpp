@@ -127,13 +127,7 @@ Status ForgetDeleteStreamFanoutTag(const DeleteStreamFanoutApis &pendingApis, in
 
 Status SleepForDeleteStreamFanout(std::chrono::microseconds duration)
 {
-    if (FLAGS_use_brpc) {
-        return FanoutCollector::BthreadSleepFor(duration);
-    }
-    if (duration > std::chrono::microseconds(0)) {
-        std::this_thread::sleep_for(duration);
-    }
-    return Status::OK();
+    return FanoutCollector::BthreadSleepFor(duration);
 }
 
 Status WaitDeleteStreamFanout(FanoutCollector &collector, const DeleteStreamFanoutApis &pendingApis)

@@ -2352,8 +2352,6 @@ TEST_F(CoordinatorStoreTest, MemoryKvStoreCasMissingKeyDoesNotBumpRevisionOrEmit
 
 TEST_F(CoordinatorStoreTest, CoordinatorServiceBrpcModeInitAndStartAndShutdown)
 {
-    // Enable brpc mode before constructing the service (FLAGS_use_brpc is read in Init()).
-    FLAGS_use_brpc = true;
 
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18481));
     DS_ASSERT_OK(service.Init());
@@ -2376,9 +2374,6 @@ TEST_F(CoordinatorStoreTest, CoordinatorServiceBrpcModeInitAndStartAndShutdown)
     ASSERT_EQ(rangeRsp.kvs(0).value(), "brpc_value");
 
     DS_ASSERT_OK(service.Shutdown());
-
-    // Restore default for subsequent tests.
-    FLAGS_use_brpc = false;
 }
 }  // namespace ut
 }  // namespace datasystem

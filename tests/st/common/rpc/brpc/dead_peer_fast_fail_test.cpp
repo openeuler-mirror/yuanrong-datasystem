@@ -76,8 +76,6 @@ class BrpcDeadPeerFastFailTest : public ExternalClusterTest {
 public:
     void SetUp() override
     {
-        oldUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         const char *workerBin = std::getenv(kWorkerBinEnv);
         hadOldWorkerBinOverride_ = workerBin != nullptr;
         oldWorkerBinOverride_ = hadOldWorkerBinOverride_ ? workerBin : "";
@@ -94,7 +92,6 @@ public:
         } else {
             (void)unsetenv(kWorkerBinEnv);
         }
-        FLAGS_use_brpc = oldUseBrpc_;
     }
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

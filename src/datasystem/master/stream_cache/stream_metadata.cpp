@@ -49,11 +49,7 @@ constexpr int32_t CLEAR_REMOTE_PUB_FAST_POLL_COUNT = 10;
 
 Status SleepForClearRemotePub(std::chrono::milliseconds duration)
 {
-    if (FLAGS_use_brpc) {
-        return FanoutCollector::BthreadSleepFor(std::chrono::duration_cast<std::chrono::microseconds>(duration));
-    }
-    std::this_thread::sleep_for(duration);
-    return Status::OK();
+    return FanoutCollector::BthreadSleepFor(std::chrono::duration_cast<std::chrono::microseconds>(duration));
 }
 }  // namespace
 

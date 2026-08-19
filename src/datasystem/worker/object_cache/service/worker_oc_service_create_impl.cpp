@@ -253,7 +253,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
 
     static const int parallelThreshold = 128;
     static const int parallism = 4;
-    if (Parallel::ShouldUseServiceParallelFor(objectSize, parallelThreshold, FLAGS_use_brpc)) {
+    if (Parallel::ShouldUseServiceParallelFor(objectSize, parallelThreshold, true)) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Parallel::ParallelFor<int>(0, objectSize, createMeta, 0, parallism),
                                          "ParallelFor failed");
     } else {

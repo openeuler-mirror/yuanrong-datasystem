@@ -77,14 +77,6 @@ Status CommonServer::Init()
 
     eventLoop_ = std::make_shared<SockEventLoop>();
     RETURN_IF_NOT_OK(eventLoop_->Init());
-    // In brpc mode, brpc owns the TCP port exclusively. Do not add a ZMQ TCP
-    // endpoint — ZmqServerImpl::Bind() would create a ZMQ socket that binds the
-    // port first, causing brpc Server::Start() to fail with EADDRINUSE.
-    // ZMQ UDS endpoints (for local client-worker SHM handshake) are handled
-    // in ZmqServerImpl internally and not affected by this skip.
-    if (!FLAGS_use_brpc) {
-        builder_.AddEndPoint(RpcChannel::TcpipEndPoint(bindHostPort_));
-    }
     RETURN_IF_NOT_OK(CreateGenericService());
     CHECK_FAIL_RETURN_STATUS(TimerQueue::GetInstance()->Initialize(), K_RUNTIME_ERROR, "TimerQueue init failed!");
     RETURN_IF_NOT_OK(builder_.Init(rpcServer_));

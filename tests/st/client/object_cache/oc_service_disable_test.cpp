@@ -54,7 +54,7 @@ void OcOp(const std::shared_ptr<ObjectClient> &client, bool success)
     } else {
         auto rc = client->Put(objKey, (uint8_t *)data.data(), data.size(), CreateParam{});
         ASSERT_TRUE(rc.GetCode() == StatusCode::K_RUNTIME_ERROR ||
-                    (FLAGS_use_brpc && rc.GetCode() == StatusCode::K_RPC_CANCELLED));
+                    (rc.GetCode() == StatusCode::K_RPC_CANCELLED));
     }
 }
 
@@ -67,7 +67,7 @@ void ScOp(const std::shared_ptr<StreamClient> &client, bool success)
     } else {
         auto rc = client->Subscribe("test1", config, consumer);
         ASSERT_TRUE(rc.GetCode() == StatusCode::K_RUNTIME_ERROR ||
-                    (FLAGS_use_brpc && rc.GetCode() == StatusCode::K_RPC_CANCELLED));
+                    (rc.GetCode() == StatusCode::K_RPC_CANCELLED));
     }
 }
 
@@ -96,7 +96,7 @@ void KvOp(const std::shared_ptr<KVClient> &client, bool success)
     } else {
         auto rc = client->Set(key, val);
         ASSERT_TRUE(rc.GetCode() == StatusCode::K_RUNTIME_ERROR ||
-                    (FLAGS_use_brpc && rc.GetCode() == StatusCode::K_RPC_CANCELLED));
+                    (rc.GetCode() == StatusCode::K_RPC_CANCELLED));
     }
 }
 
@@ -113,9 +113,7 @@ public:
 
 TEST_F(OcServiceDisableTest, TestInit)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     LOG(INFO) << "Test oc client init when oc service disable.";
     ConnectOptions opts;
     InitConnectOpt(0, opts);
@@ -194,9 +192,7 @@ public:
 
 TEST_F(CommonServiceDisableTest, TestInit)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     LOG(INFO) << "Test sc client init when sc service disable.";
     ConnectOptions opts;
     InitConnectOpt(0, opts);

@@ -47,24 +47,18 @@ public:
         opts.numEtcd = 1;
         opts.enableDistributedMaster = "false";
         opts.workerGflagParams =
-            "-shared_memory_size_mb=512 -v=2 -log_monitor=true -enable_perf_trace_log=true -use_brpc=true";
+            "-shared_memory_size_mb=512 -v=2 -log_monitor=true -enable_perf_trace_log=true";
     }
 
     void SetUp() override
     {
-        restoreUseBrpc_ = std::make_unique<Raii>([oldUseBrpc = FLAGS_use_brpc]() { FLAGS_use_brpc = oldUseBrpc; });
-        FLAGS_use_brpc = true;
         ExternalClusterTest::SetUp();
     }
 
     void TearDown() override
     {
         ExternalClusterTest::TearDown();
-        restoreUseBrpc_.reset();
     }
-
-private:
-    std::unique_ptr<Raii> restoreUseBrpc_;
 };
 
 TEST_F(KVClientBrpcRemoteGetTest, LEVEL1_Get8MBValueAcrossWorkersWithShmEnabled)
@@ -103,24 +97,18 @@ public:
         // worker and the master acks it as a location, so a later Get can fetch from that replica
         // (an address != primary_address) and reach the retry-to-primary path.
         opts.workerGflagParams = "-shared_memory_size_mb=512 -v=2 -log_monitor=true -enable_perf_trace_log=true "
-                                 "-use_brpc=true -enable_data_replication=true";
+                                 "-enable_data_replication=true";
     }
 
     void SetUp() override
     {
-        restoreUseBrpc_ = std::make_unique<Raii>([oldUseBrpc = FLAGS_use_brpc]() { FLAGS_use_brpc = oldUseBrpc; });
-        FLAGS_use_brpc = true;
         ExternalClusterTest::SetUp();
     }
 
     void TearDown() override
     {
         ExternalClusterTest::TearDown();
-        restoreUseBrpc_.reset();
     }
-
-private:
-    std::unique_ptr<Raii> restoreUseBrpc_;
 };
 
 // Issue #783: when RetrieveRemotePayload fails (here via the fail_after_transfer inject on the

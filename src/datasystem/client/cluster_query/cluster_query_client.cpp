@@ -35,8 +35,6 @@
 #include "datasystem/common/util/validator.h"
 
 namespace datasystem::client::cluster_query {
-DS_DECLARE_bool(use_brpc);
-
 namespace {
 
 constexpr size_t MAX_RAW_SNAPSHOT_BYTES = 16 * 1'024 * 1'024;
@@ -220,11 +218,7 @@ Status ClusterQueryClient::Impl::InitCoordinator()
         "invalid coordinator address");
     auto coordinatorDiscovery = std::make_shared<StaticCoordinatorDiscovery>(options_.coordinatorAddress);
     std::unique_ptr<ICoordinatorServiceProxy> coordinatorProxy;
-    if (FLAGS_use_brpc) {
-        coordinatorProxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(coordinatorDiscovery));
-    } else {
-        coordinatorProxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(coordinatorDiscovery));
-    }
+    coordinatorProxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(coordinatorDiscovery));
     RETURN_IF_NOT_OK(coordinatorProxy->Init());
     coordinatorProxy_ = std::move(coordinatorProxy);
     return Status::OK();

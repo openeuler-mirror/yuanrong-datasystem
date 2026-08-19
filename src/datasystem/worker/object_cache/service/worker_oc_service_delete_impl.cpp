@@ -117,7 +117,7 @@ Status WorkerOcServiceDeleteImpl::DeletePersistenceObject(const DeletePersistenc
     int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, StatusCode::K_RPC_DEADLINE_EXCEEDED,
                              "DeletePersistenceObject rpc timeout before scheduling task");
-    if (!ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc)) {
+    if (!ShouldUseServiceThreadPoolFanout(true)) {
         // Avoid std::future::wait_for in a brpc bthread handler.
         auto rc = DeletePersistenceObjectImpl(req);
         if (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() <= 0) {

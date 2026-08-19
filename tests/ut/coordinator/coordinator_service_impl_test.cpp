@@ -36,7 +36,6 @@
 #include "datasystem/coordinator/topology_control_host.h"
 #undef private
 
-DS_DECLARE_bool(use_brpc);
 DS_DECLARE_uint32(node_dead_timeout_s);
 
 namespace datasystem {
@@ -89,8 +88,6 @@ public:
     void SetUp() override
     {
         CommonTest::SetUp();
-        savedUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         coordinator::CoordinatorRaftFlags raftFlags;
         raftFlags.localAddress = "127.0.0.1:18501";
         service_ = std::make_unique<coordinator::CoordinatorServiceImpl>(
@@ -104,7 +101,6 @@ public:
         if (service_ != nullptr) {
             DS_EXPECT_OK(service_->Shutdown());
         }
-        FLAGS_use_brpc = savedUseBrpc_;
         CommonTest::TearDown();
     }
 
@@ -262,14 +258,13 @@ TEST_F(CoordinatorServiceImplTest, DiscardsProbeResultsWhenControlEpochChanges)
     }));
 }
 
-TEST_F(CoordinatorServiceImplTest, DisablesActiveFailureDirectProbeForZmq)
+TEST_F(CoordinatorServiceImplTest, ConfiguresActiveFailureDirectProbe)
 {
-    FLAGS_use_brpc = false;
     coordinator::TopologyControlHost::Options options;
 
     service_->ConfigureTopologyHostOptions(options);
 
-    EXPECT_FALSE(options.controller.memberLivenessProbe);
+    EXPECT_TRUE(options.controller.memberLivenessProbe);
 }
 
 TEST_F(CoordinatorServiceImplTest, StaleTermEnsureDoesNotCreateMembership)

@@ -514,8 +514,6 @@ Status CoordinatorServiceImpl::Init(bool publishStarting)
 Status CoordinatorServiceImpl::InitInternal()
 {
     RETURN_IF_NOT_OK(ValidateElectionConfiguration());
-    CHECK_FAIL_RETURN_STATUS(!IsElectionConfigured() || FLAGS_use_brpc, K_INVALID,
-                             "Coordinator election requires use_brpc=true; ZMQ election startup is unsupported");
     CHECK_FAIL_RETURN_STATUS(!IsElectionConfigured() || raftFlags_.localAddress == coordinatorAddr_.ToString(),
                              K_INVALID,
                              "Coordinator Raft snapshot localAddress must match the Coordinator service address");
@@ -560,12 +558,10 @@ void CoordinatorServiceImpl::ConfigureTopologyHostOptions(TopologyControlHost::O
                                  "Coordinator has no active failure isolation authority");
         return RunUnderCollectiveReplacementFence(*expectedEpoch, mutation);
     };
-    if (FLAGS_use_brpc) {
-        options.controller.memberLivenessProbe = [this](const std::vector<cluster::MemberIdentity> &targets,
-                                                        std::chrono::steady_clock::time_point deadline) {
-            return ProbeMembersLiveness(targets, deadline);
-        };
-    }
+    options.controller.memberLivenessProbe = [this](const std::vector<cluster::MemberIdentity> &targets,
+                                                    std::chrono::steady_clock::time_point deadline) {
+        return ProbeMembersLiveness(targets, deadline);
+    };
 }
 
 std::optional<uint64_t> CoordinatorServiceImpl::GetCollectiveControlEpoch() const
@@ -738,23 +734,17 @@ void CoordinatorServiceImpl::ConfigureRpcService()
     cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
     cfg.udsEnabled_ = false;
 
-    if (FLAGS_use_brpc) {
-        brpcAddr_ = coordinatorAddr_.Host();
-        brpcPort_ = coordinatorAddr_.Port();
-        builder_.SetUseBrpc(true).SetBrpcAddr(brpcAddr_, brpcPort_);
-        builder_.AddService(this, cfg);
-    } else {
-        builder_.AddEndPoint(RpcChannel::TcpipEndPoint(coordinatorAddr_));
-        builder_.AddService(this, cfg);
-    }
+    brpcAddr_ = coordinatorAddr_.Host();
+    brpcPort_ = coordinatorAddr_.Port();
+    builder_.SetUseBrpc(true).SetBrpcAddr(brpcAddr_, brpcPort_);
+    builder_.AddService(this, cfg);
 }
 
 Status CoordinatorServiceImpl::FinishSuccessfulStart()
 {
     const auto listenAddress = coordinatorAddr_.ToString();
-    const char *transport = rpcServer_ != nullptr && rpcServer_->IsBrpc() ? "brpc" : "ZMQ";
     Status readyStatus = Status::OK();
-    LOG(INFO) << "datasystem coordinator started at " << listenAddress << " (" << transport << ")";
+    LOG(INFO) << "datasystem coordinator started at " << listenAddress << " (brpc)";
     if (IsElectionConfigured()) {
         auto expected = ServingState::STARTING;
         servingState_.compare_exchange_strong(expected, ServingState::FOLLOWER_SERVING, std::memory_order_acq_rel);
@@ -793,9 +783,6 @@ Status CoordinatorServiceImpl::StartInternal()
     if (configurationStatus.IsError()) {
         return configurationStatus;
     }
-    if (IsElectionConfigured() && !FLAGS_use_brpc) {
-        return Status(K_INVALID, "Coordinator election requires use_brpc=true; ZMQ election startup is unsupported");
-    }
     CHECK_FAIL_RETURN_STATUS(!IsElectionConfigured() || raftFlags_.localAddress == coordinatorAddr_.ToString(),
                              K_INVALID,
                              "Coordinator Raft snapshot localAddress must match the Coordinator service address");
@@ -809,7 +796,7 @@ Status CoordinatorServiceImpl::StartInternal()
         return status;
     }
 
-    if (FLAGS_use_brpc && rpcServer_->IsBrpc()) {
+    if (rpcServer_->IsBrpc()) {
         brpcAdapter_ = std::make_unique<CoordinatorServiceBrpcAdapter>(*this);
         status = rpcServer_->AddBrpcService(brpcAdapter_.get());
         if (status.IsError()) {

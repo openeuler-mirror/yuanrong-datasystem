@@ -16,7 +16,7 @@
 
 /**
  * Description: ST that validates the end-to-end client-deadline propagation
- * through brpc.  Requires brpc mode (--use_brpc=true on the test binary).
+ * through brpc.  Requires brpc mode (-on the test binary).
  * Injects a 300ms master-side delay and issues a Set with a 20ms request
  * budget from worker 1 (master on worker 0, non-distributed).
  *
@@ -28,7 +28,7 @@
  * returns OK — the assertion fails, catching the regression.
  *
  * Important: the test forces workers AND the client onto brpc. Without
- * --use_brpc=true at the test-binary level, ZMQ is the default transport
+ * -at the test-binary level, ZMQ is the default transport
  * and the ST validates the wrong code path (ZMQ does not exercise the
  * brpc_service_generator changes at all).
  */
@@ -44,7 +44,6 @@
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
 
-DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 namespace st {
@@ -61,10 +60,9 @@ public:
         opts.enableDistributedMaster = "false";
         opts.masterIdx = 0;
         opts.waitWorkerReady = true;
-        // Force brpc transport (external_cluster.cpp:1137 reads FLAGS_use_brpc).
+        // brpc is the sole transport.
         // The ZMQ default would silently skip the generator fix under test.
-        FLAGS_use_brpc = true;
-        opts.workerGflagParams = "-use_brpc=true -shared_memory_size_mb=1024 -v=2";
+        opts.workerGflagParams = "-shared_memory_size_mb=1024 -v=2";
     }
 
     void SetUp() override

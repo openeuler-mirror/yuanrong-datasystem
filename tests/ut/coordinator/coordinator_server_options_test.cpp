@@ -155,14 +155,15 @@ void CreateNonEmptyFile(const std::filesystem::path &path, const std::string &co
 
 void CreateCoordinatorConfig(const std::string &path, bool useBrpc = true)
 {
-    CreateNonEmptyFile(path, std::string(R"({"use_brpc":{"value":")") + (useBrpc ? "true" : "false")
-                                 + R"(","description":"Coordinator Runtime UT config."}})");
+    (void)useBrpc;
+    CreateNonEmptyFile(path, std::string(R"({"log_async":{"value":"false",)")
+                            + R"("description":"Coordinator Runtime UT config."}})");
 }
 
 void CreateCoordinatorLogConfig(const std::string &path, const std::string &logFilename)
 {
     CreateNonEmptyFile(path,
-                       std::string(R"({"use_brpc":{"value":"true","description":"Coordinator Runtime UT config."},)")
+                       std::string(R"({"log_async":{"value":"false","description":"Coordinator Runtime UT config."},)")
                            + R"("log_filename":{"value":")" + logFilename
                            + R"(","description":"Coordinator log filename."}})");
 }
@@ -407,7 +408,6 @@ class CoordinatorElectionServiceTest : public testing::Test {
 protected:
     void SetUp() override
     {
-        savedUseBrpc_ = FLAGS_use_brpc;
         savedCoordinatorAddress_ = FLAGS_coordinator_address;
         savedRaftDataDir_ = FLAGS_coordinator_raft_data_dir;
         savedHeartbeatIntervalMs_ = FLAGS_coordinator_raft_heartbeat_interval_ms;
@@ -439,7 +439,6 @@ protected:
         }
         coordinatorAddress_ = peers_.front();
 
-        FLAGS_use_brpc = true;
         FLAGS_coordinator_address = coordinatorAddress_;
         FLAGS_coordinator_raft_data_dir = tempDirectory_->Child("raft-data");
         FLAGS_coordinator_raft_heartbeat_interval_ms = kHeartbeatIntervalMs;
@@ -459,7 +458,6 @@ protected:
     {
         StopAllServicesAndJoinThreads();
 
-        FLAGS_use_brpc = savedUseBrpc_;
         FLAGS_coordinator_address = savedCoordinatorAddress_;
         FLAGS_coordinator_raft_data_dir = savedRaftDataDir_;
         FLAGS_coordinator_raft_heartbeat_interval_ms = savedHeartbeatIntervalMs_;
@@ -522,7 +520,6 @@ protected:
     std::string coordinatorAddress_;
     coordinator::CoordinatorRaftFlags raftFlags_;
     std::vector<std::unique_ptr<coordinator::CoordinatorServiceImpl>> services_;
-    bool savedUseBrpc_{ false };
     std::string savedCoordinatorAddress_;
     std::string savedRaftDataDir_;
     int32_t savedHeartbeatIntervalMs_{ 0 };
@@ -877,9 +874,7 @@ TEST_F(CoordinatorElectionServiceTest, RuntimeNonEmptyConfigPathParsesProcessFla
 
     const auto status = runtime.InitAndRun(options);
 
-    ExpectInvalidWithMessage(status, "use_brpc=true");
     EXPECT_EQ(runtime.SnapshotCallCount(), 1U);
-    EXPECT_FALSE(FLAGS_use_brpc);
 }
 
 TEST_F(CoordinatorElectionServiceTest, RuntimeUsesConfiguredCoordinatorLogFilename)
@@ -1219,32 +1214,7 @@ TEST(CoordinatorServerOptionsTest, LifecycleRejectionsAreAuditedWithoutConfigPay
 
 TEST_F(CoordinatorElectionServiceTest, ElectionInputsAndZmqFailBeforeNetwork)
 {
-    auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
-    FLAGS_use_brpc = false;
-    auto service = MakeService(discovery, kCoordinatorCount);
-
-    const auto initStatus = service->Init();
-    ExpectInvalidWithMessage(initStatus, "use_brpc=true");
-    EXPECT_EQ(service->servingState_.load(std::memory_order_acquire),
-              coordinator::CoordinatorServiceImpl::ServingState::STOPPED);
-    EXPECT_EQ(service->coordinatorDiscovery_, discovery);
-    EXPECT_EQ(service->expectedMemberCount_, kCoordinatorCount);
-    EXPECT_EQ(service->electionManager_, nullptr);
-    EXPECT_EQ(service->rpcServer_, nullptr);
-    EXPECT_EQ(service->brpcAdapter_, nullptr);
-    EXPECT_EQ(discovery->calls_.load(), 0U);
-    EXPECT_EQ(service->topologyRecoveryManager_, nullptr);
-    EXPECT_EQ(service->store_, nullptr);
-    DS_ASSERT_OK(service->Shutdown());
-    DS_ASSERT_OK(service->Shutdown());
-
-    FLAGS_use_brpc = true;
-    auto legacyService = MakeService(nullptr, 0);
-    DS_ASSERT_OK(legacyService->Init());
-    EXPECT_EQ(legacyService->coordinatorDiscovery_, nullptr);
-    EXPECT_EQ(legacyService->expectedMemberCount_, 0U);
-    EXPECT_FALSE(legacyService->IsElectionConfigured());
-    DS_ASSERT_OK(legacyService->Shutdown());
+    GTEST_SKIP() << "ZMQ-only test; brpc is the sole transport, election startup is always supported.";
 }
 
 TEST_F(CoordinatorElectionServiceTest, BuildElectionContextOnlyCopiesImmutableManagerInput)

@@ -121,7 +121,7 @@ void WriteLogToLogger(const std::shared_ptr<ds_spdlog::logger> &logger, const st
 const std::unordered_set<std::string> &ClientUsedFlagNames()
 {
     static const std::unordered_set<std::string> kSet = {
-        // ---- ZMQ client transport (ZmqStubConnMgrImpl, reached when use_brpc=false) ----
+        // ---- ZMQ client transport (ZmqStubConnMgrImpl) ----
         "zmq_client_io_context",
         "zmq_client_io_thread",
         // ---- logging isClient_ startup branch (InitClientConfig / InitClientAdvancedConfig) ----

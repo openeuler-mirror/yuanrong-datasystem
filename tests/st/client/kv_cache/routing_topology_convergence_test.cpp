@@ -34,7 +34,6 @@
 #include "datasystem/kv_client.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 
-DS_DECLARE_bool(use_brpc);
 
 namespace datasystem::st {
 namespace {
@@ -61,14 +60,12 @@ public:
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=true -oc_shm_transfer_threshold_kb=1"
             " -arena_per_tenant=1"
-            " -use_brpc=true -enable_urma=false -enable_leaving_intercept=true"
+            " -enable_urma=false -enable_leaving_intercept=true"
             " -enable_lossless_data_exit_mode=true";
     }
 
     void SetUp() override
     {
-        previousUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         ExternalClusterTest::SetUp();
         externalCluster_ = dynamic_cast<ExternalCluster *>(cluster_.get());
         ASSERT_NE(externalCluster_, nullptr);
@@ -91,7 +88,6 @@ public:
         }
         etcd_.reset();
         ExternalClusterTest::TearDown();
-        FLAGS_use_brpc = previousUseBrpc_;
     }
 
 protected:

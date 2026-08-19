@@ -111,9 +111,7 @@ TEST_F(UcpEndpointTest, TestEpGenerated)
 
 TEST_F(UcpEndpointTest, TestUnpackRkeyWithEmptyRkey)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; historically flaky/failing under brpc. Tracked separately.";
-    }
     std::string emptyRkey = "";
     ucp_rkey_h rkey0 = ucpEp_->GetOrUnpackRkey(emptyRkey);
     ucp_rkey_h rkey1 = ucpEp_->GetOrUnpackRkey(emptyRkey);

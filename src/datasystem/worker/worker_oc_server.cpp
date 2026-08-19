@@ -98,7 +98,6 @@
 #include "datasystem/worker/rebalance_executor.h"
 #include "datasystem/worker/worker_topology_phase_callbacks.h"
 
-DS_DECLARE_bool(use_brpc);
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_string(coordinator_address);
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
@@ -312,11 +311,9 @@ Status StartControlBackendProbe(const HostPort &localAddress, const std::shared_
     std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
     api = std::make_shared<object_cache::WorkerRemoteWorkerOCApi>(peerAddress, localAddress, akSkManager);
     RETURN_IF_NOT_OK(api->Init(deadline));
-    if (FLAGS_use_brpc) {
-        CHECK_FAIL_RETURN_STATUS(
-            WaitForBrpcSocketUntil(HostPort(peerAddress.Host(), peerAddress.Port()), deadline),
-            K_RPC_UNAVAILABLE, "cluster-state brpc connection unavailable");
-    }
+    CHECK_FAIL_RETURN_STATUS(
+        WaitForBrpcSocketUntil(HostPort(peerAddress.Host(), peerAddress.Port()), deadline),
+        K_RPC_UNAVAILABLE, "cluster-state brpc connection unavailable");
     const auto now = std::chrono::steady_clock::now();
     CHECK_FAIL_RETURN_STATUS(now < deadline, K_RPC_DEADLINE_EXCEEDED, "cluster-state probe deadline exceeded");
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
@@ -1239,11 +1236,7 @@ Status WorkerOCServer::InitializeAllServices()
 Status WorkerOCServer::InitCoordinationBackend()
 {
     if (coordinatorDiscovery_ != nullptr) {
-        if (FLAGS_use_brpc) {
-            coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyBrpcImpl>(coordinatorDiscovery_);
-        } else {
-            coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyZmqImpl>(coordinatorDiscovery_);
-        }
+        coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyBrpcImpl>(coordinatorDiscovery_);
         RETURN_IF_NOT_OK(coordinatorServiceProxy_->Init());
         LOG(INFO) << "Using DataSystem Coordinator as cluster coordination backend, source=discovery";
         return Status::OK();
@@ -2054,27 +2047,13 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetRH2DLocalEndpointIp(hostPort_.Host()), "Failed to configure HCCS worker IP");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeRemoteH2DManager(), "Remote H2D transport init failed");
 
-    if (FLAGS_use_brpc) {
-        int brpcPort = bindHostPort_.Port();
-        builder_.SetUseBrpc(true).SetBrpcAddr(bindHostPort_.Host(), brpcPort);
-        // Exclusive mode: brpc uses the same port as ZMQ would. ZMQ server is
-        // not started (see rpc_server.cpp BuildAndSTart: skips server->Run()
-        // when useBrpc_=true). No dual-listen.
-        LOG(INFO) << "brpc mode enabled, brpc listening on " << bindHostPort_.Host() << ":" << brpcPort
-                  << " (exclusive mode, ZMQ not started)";
-        // Force brpc's global one-shot init (brpc::GlobalInitializeOrDie,
-        // pthread_once-guarded) to run on THIS main thread NOW, before any
-        // topology/RPC code can trigger it lazily inside a multi-threaded
-        // context. ConstructTopologyRuntime below sends the first RPC
-        // (CoordinatorServiceProxyBase::Range via TopologyRepository::
-        // ReadTopology), which would otherwise be the first Channel::Init
-        // and thus the first call to GlobalInitializeOrDie — spawning the
-        // bthread worker pool races with the spawning thread under TSAN
-        // (bthread::TaskGroup::ready_to_run_remote, brpc 1.15.0). Pre-warming
-        // here isolates the racy init to a quiet single-threaded point; the
-        // race itself is silenced by //tools/tsan:default_suppressions.
-        BrpcChannelFactory::EnsureGlobalInitialized();
-    }
+    int brpcPort = bindHostPort_.Port();
+    builder_.SetUseBrpc(true).SetBrpcAddr(bindHostPort_.Host(), brpcPort);
+    LOG(INFO) << "brpc listening on " << bindHostPort_.Host() << ":" << brpcPort;
+    // Pre-warm brpc::GlobalInitializeOrDie on this main thread before ConstructTopologyRuntime
+    // triggers it lazily inside a multi-threaded context (TSAN: bthread worker pool spawn races
+    // the spawning thread; silenced by //tools/tsan:default_suppressions).
+    BrpcChannelFactory::EnsureGlobalInitialized();
 
     // Init shared memory
     uint64_t sharedMemoryBytes = FLAGS_shared_memory_size_mb * 1024ul * 1024ul;  // convert mb to bytes.
@@ -2146,7 +2125,7 @@ Status WorkerOCServer::StartBrpcIfEnabled()
     // registered via AddBrpcService() in InitializeAllServices().
     // BuildAndStart() in CommonServer::Init() skips brpc start because
     // services are added later via AddBrpcService() calls.
-    if (FLAGS_use_brpc && rpcServer_) {
+    if (rpcServer_) {
         int brpcPort = bindHostPort_.Port();
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rpcServer_->StartBrpcServer(bindHostPort_.Host(), brpcPort),
                                          "Failed to start brpc server");
@@ -2332,22 +2311,11 @@ void WorkerOCServer::RegisteringThirdComponentCallbackFunc()
 Status WorkerOCServer::WaitForServiceReady()
 {
     if (EnableOCService()) {
-        RpcCredential cred;
-        std::unique_ptr<WorkerOCService::Stub> stub;
-        if (!FLAGS_use_brpc) {
-            RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateCredentials(WORKER_SERVER_NAME, cred));
-            auto channel = std::make_shared<RpcChannel>(hostPort_, cred);
-            stub = std::make_unique<WorkerOCService_Stub>(channel);
-        }
-        HealthCheckRequestPb req;
-        std::string msg = "hello";
-        req.set_info(msg);
-        HealthCheckReplyPb reply;
         constexpr auto readinessRetryInterval = std::chrono::seconds(1);
         RETURN_IF_NOT_OK(WaitForStartupHealth(
             [this] { return objCacheClientWorkerSvc_->GiveUpReconciliation(); },
             [this] { return objCacheClientWorkerSvc_->RefreshStartupHealth(); }, [] { return IsHealthy(); },
-            [&stub, &req, &reply] { return FLAGS_use_brpc ? Status::OK() : stub->HealthCheck(req, reply); },
+            [] { return Status::OK(); },
             [] { return IsTermSignalReceived(); }, readinessRetryInterval));
     } else {
         LOG(INFO) << "Object cache worker service is disabled, skip health check.";

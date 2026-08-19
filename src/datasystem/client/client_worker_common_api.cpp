@@ -392,12 +392,6 @@ void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
 Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
                                          int32_t initAttemptTimeoutMs)
 {
-    // FLAGS_use_brpc default reads DATASYSTEM_USE_BRPC env var via GetBoolFromEnv,
-    // so both SDK (Python + C++) and worker processes pick it up at startup.
-    // Accepted values: "1", "true", "TRUE" → brpc; any other value → ZMQ.
-    LOG_FIRST_N(INFO, 1) << "SDK: FLAGS_use_brpc=" << FLAGS_use_brpc
-                         << " (from DATASYSTEM_USE_BRPC env or gflag default)";
-
     CHECK_FAIL_RETURN_STATUS(
         connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
         FormatString("The connectTimeoutMs(%d) should be greater than or equal to %d milliseconds.", connectTimeoutMs,
@@ -426,57 +420,42 @@ Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t conne
 Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection,
                                             int32_t stateTimeoutMs)
 {
-    if (FLAGS_use_brpc) {
-        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
-        BrpcChannelConfig cfg;
-        cfg.endpoint = brpcAddr.ToString();
-        // The channel is long-lived and carries runtime business RPCs after initialization,
-        // so its default RPC timeout follows the request budget. Initialization control RPCs
-        // override this default with the bounded timeout derived from the current attempt.
-        // TCP connection establishment continues to use the connection budget.
-        cfg.timeout_ms = requestTimeoutMs_;
-        cfg.connect_timeout_ms = connectTimeoutMs_;
-        // Disable brpc-level blind retry on client->worker channels.
-        // These channels carry non-idempotent RPCs (Delete, CloseProducer,
-        // CloseConsumer, etc.) that must not be re-driven silently.
-        cfg.max_retry = 0;
-        // Defer brpcChannel_ assignment until after all checks pass.
-        // In the reconnection path (reconnection=true), brpcChannel_ currently
-        // holds the old channel that brpcCommonStub_ references via a raw
-        // pointer.  If we overwrote brpcChannel_ first and then returned early
-        // from the socket-availability check, the old channel would be
-        // destroyed while brpcCommonStub_ still points to it — a use-after-
-        // free in subsequent Disconnect() / RegisterClient calls (issue #785).
-        auto newChannel = BrpcChannelFactory::Create(cfg);
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            newChannel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
-            FormatString("Failed to init brpc channel to %s for WorkerService", brpcAddr.ToString()));
-        // brpc Channel::Init() is non-blocking — health check runs periodically.
-        // Wait for the TCP connection to establish before returning. If the
-        // socket is still not available within the retry window, fail Connect()
-        // explicitly: otherwise the subsequent RegisterClient RPC fails and
-        // leaves the client in INIT_FAILED, surfaced as a deferred "Not ready"
-        // by IsClientReady() seconds later (issue #785).
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(WaitForBrpcSocketAvailable(brpcAddr), StatusCode::K_RPC_UNAVAILABLE,
-            FormatString("brpc socket not available to %s for WorkerService", brpcAddr.ToString()));
-        brpcChannel_ = std::move(newChannel);
-        // The stub default follows the request budget. Initialization control RPCs explicitly
-        // override it, while other RPCs either use this default or set their own timeout.
-        brpcCommonStub_ = std::make_unique<WorkerService_BrpcGenericStub>(brpcChannel_.get(), requestTimeoutMs_);
-    } else {
-        // zmq path: mirror brpc's WaitForBrpcSocketAvailable with a TCP port probe.
-        // zmq_connect always returns success asynchronously, so a worker killed by
-        // SIGKILL (port not listening) is only surfaced at RPC timeout. Probe the TCP
-        // port first to fail fast with K_RPC_UNAVAILABLE instead. The probe timeout
-        // is capped by the caller's connect budget so a host-unreachable probe never
-        // exceeds the Init budget.
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            WaitForTcpPortAvailable(hostPort_, ComputeTcpProbeTimeoutMs(connectTimeoutMs_)),
-            StatusCode::K_RPC_UNAVAILABLE,
-            FormatString("zmq tcp port not available to %s for WorkerService", hostPort_.ToString()));
-        auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
-        commonWorkerSession_ = std::make_unique<WorkerService_Stub>(channel);
-    }
+    HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
+    BrpcChannelConfig cfg;
+    cfg.endpoint = brpcAddr.ToString();
+    // The channel is long-lived and carries runtime business RPCs after initialization,
+    // so its default RPC timeout follows the request budget. Initialization control RPCs
+    // override this default with the bounded timeout derived from the current attempt.
+    // TCP connection establishment continues to use the connection budget.
+    cfg.timeout_ms = requestTimeoutMs_;
+    cfg.connect_timeout_ms = connectTimeoutMs_;
+    // Disable brpc-level blind retry on client->worker channels.
+    // These channels carry non-idempotent RPCs (Delete, CloseProducer,
+    // CloseConsumer, etc.) that must not be re-driven silently.
+    cfg.max_retry = 0;
+    // Defer brpcChannel_ assignment until after all checks pass.
+    // In the reconnection path (reconnection=true), brpcChannel_ currently
+    // holds the old channel that brpcCommonStub_ references via a raw
+    // pointer.  If we overwrote brpcChannel_ first and then returned early
+    // from the socket-availability check, the old channel would be
+    // destroyed while brpcCommonStub_ still points to it — a use-after-
+    // free in subsequent Disconnect() / RegisterClient calls (issue #785).
+    auto newChannel = BrpcChannelFactory::Create(cfg);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        newChannel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
+        FormatString("Failed to init brpc channel to %s for WorkerService", brpcAddr.ToString()));
+    // brpc Channel::Init() is non-blocking — health check runs periodically.
+    // Wait for the TCP connection to establish before returning. If the
+    // socket is still not available within the retry window, fail Connect()
+    // explicitly: otherwise the subsequent RegisterClient RPC fails and
+    // leaves the client in INIT_FAILED, surfaced as a deferred "Not ready"
+    // by IsClientReady() seconds later (issue #785).
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(WaitForBrpcSocketAvailable(brpcAddr), StatusCode::K_RPC_UNAVAILABLE,
+        FormatString("brpc socket not available to %s for WorkerService", brpcAddr.ToString()));
+    brpcChannel_ = std::move(newChannel);
+    // The stub default follows the request budget. Initialization control RPCs explicitly
+    // override it, while other RPCs either use this default or set their own timeout.
+    brpcCommonStub_ = std::make_unique<WorkerService_BrpcGenericStub>(brpcChannel_.get(), requestTimeoutMs_);
 
     bool isConnectSuccess = false;
     int32_t serverFd = INVALID_SOCKET_FD;
@@ -598,10 +577,7 @@ Status ClientWorkerRemoteCommonApi::FetchSocketPath(int64_t remainingMs, GetSock
             INJECT_POINT("client.get_sock.fail");
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            if (FLAGS_use_brpc) {
-                return brpcCommonStub_->GetSocketPath(opts, req, reply);
-            }
-            return commonWorkerSession_->GetSocketPath(opts, req, reply);
+            return brpcCommonStub_->GetSocketPath(opts, req, reply);
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
@@ -716,12 +692,7 @@ Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clie
     });
 #endif
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    Status status;
-    if (FLAGS_use_brpc) {
-        status = brpcCommonStub_->Heartbeat(opts, req, rsp);
-    } else {
-        status = commonWorkerSession_->Heartbeat(opts, req, rsp);
-    }
+    Status status = brpcCommonStub_->Heartbeat(opts, req, rsp);
     workerReboot = false;
     clientRemoved = false;
     isWorkerVoluntaryScaleDown = false;
@@ -837,10 +808,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
             INJECT_POINT("client.register.fail");
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            if (FLAGS_use_brpc) {
-                return brpcCommonStub_->RegisterClient(opts, req, rsp);
-            }
-            return commonWorkerSession_->RegisterClient(opts, req, rsp);
+            return brpcCommonStub_->RegisterClient(opts, req, rsp);
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
@@ -921,8 +889,7 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
     // frames; keep the legacy 10 min timeout.  brpc connections use a short
     // 1 s timeout — the DisconnectClient RPC is a lightweight handshake.
     static constexpr int32_t BRPC_DISCONNECT_RPC_TIMEOUT_MS = 1000;           // 1s, brpc lightweight handshake
-    static constexpr int32_t ZMQ_DISCONNECT_RPC_TIMEOUT_MS = 10 * 60 * 1000;  // 10min, ZMQ sync teardown needs headroom
-    int rpcTimeoutMs = FLAGS_use_brpc ? BRPC_DISCONNECT_RPC_TIMEOUT_MS : ZMQ_DISCONNECT_RPC_TIMEOUT_MS;
+    int rpcTimeoutMs = BRPC_DISCONNECT_RPC_TIMEOUT_MS;
 #ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.Disconnect.ShutdownQuickily", [&rpcTimeoutMs](int time) {
         rpcTimeoutMs = time;
@@ -931,11 +898,7 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
 #endif
     RpcOptions opts;
     opts.SetTimeout(rpcTimeoutMs);
-    if (FLAGS_use_brpc) {
-        RETURN_IF_NOT_OK(brpcCommonStub_->DisconnectClient(opts, req, rsp));
-    } else {
-        RETURN_IF_NOT_OK(commonWorkerSession_->DisconnectClient(opts, req, rsp));
-    }
+    RETURN_IF_NOT_OK(brpcCommonStub_->DisconnectClient(opts, req, rsp));
     return Status::OK();
 }
 
@@ -1001,12 +964,7 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
 
     // Notice: GetClientFd should not be retried. Otherwise, Fd resources may remain or the process may be suspended.
-    Status status;
-    if (FLAGS_use_brpc) {
-        status = brpcCommonStub_->GetClientFd(opts, req, rsp);
-    } else {
-        status = commonWorkerSession_->GetClientFd(opts, req, rsp);
-    }
+    Status status = brpcCommonStub_->GetClientFd(opts, req, rsp);
 #ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.GetClientFd.preReceive");
 #endif

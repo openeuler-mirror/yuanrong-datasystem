@@ -245,9 +245,7 @@ TEST_F(OCClientGetTest, GetRemoteObjectMeetsRPCError)
 
 TEST_F(OCClientGetTest, GetRemoteObjectShmError)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::shared_ptr<ObjectClient> client0;
     std::shared_ptr<ObjectClient> client1;
     InitTestClient(0, client0);
@@ -864,9 +862,7 @@ TEST_F(OCClientGetTest, DISABLED_ThreadBusySubTimeoutTest)
 
 TEST_F(OCClientGetTest, OOMSubTimeoutTest)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: 100x OOM inject causes worker to exceed 2500ms client deadline (brpc retry budget); real brpc gap. Tracked separately.";
-    }
 
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
@@ -1663,9 +1659,7 @@ public:
 
 TEST_F(MultiObjectClientTest, TestMultiRemoteGet)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     int numClient = 10;
     std::vector<std::shared_ptr<ObjectClient>> clientVec(numClient);
     int index = 0;

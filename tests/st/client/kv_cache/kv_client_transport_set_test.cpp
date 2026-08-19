@@ -46,7 +46,6 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
-DS_DECLARE_bool(use_brpc);
 DS_DECLARE_string(sdk_data_placement_policy);
 namespace datasystem {
 namespace st {
@@ -101,7 +100,7 @@ public:
         opts.numWorkers = WORKER_NUM;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
-            " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1 -use_brpc=true";
+            " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1";
         opts.workerGflagParams += " -host_id_env_name=" + std::string(HOST_ID_ENV_NAME);
 #ifdef USE_URMA
         opts.workerGflagParams += " -enable_urma=true -enable_transport_fallback=false";
@@ -112,8 +111,6 @@ public:
 
     void SetUp() override
     {
-        previousUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         ASSERT_EQ(setenv(HOST_ID_ENV_NAME, HOST_ID_VALUE, 1), 0);
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
         ExternalClusterTest::SetUp();
@@ -143,7 +140,6 @@ public:
         (void)inject::Clear(SKIP_WARMUP_INJECT);
         ExternalClusterTest::TearDown();
         (void)unsetenv(HOST_ID_ENV_NAME);
-        FLAGS_use_brpc = previousUseBrpc_;
     }
 
 protected:

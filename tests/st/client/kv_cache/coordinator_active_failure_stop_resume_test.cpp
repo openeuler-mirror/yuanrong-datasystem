@@ -42,7 +42,6 @@
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/utils/service_discovery.h"
 
-DS_DECLARE_bool(use_brpc);
 
 namespace datasystem::st {
 namespace {
@@ -123,7 +122,6 @@ public:
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1"
-            " -use_brpc=true"
             " -node_timeout_s="
             + std::to_string(ONLINE_NODE_TIMEOUT_S)
             + " -node_dead_timeout_s=" + std::to_string(ONLINE_NODE_DEAD_TIMEOUT_S);
@@ -148,8 +146,6 @@ public:
 #ifndef USE_URMA
         GTEST_SKIP() << "Strict fast-failover timing ST requires USE_URMA or USE_URMA_MOCK.";
 #else
-        previousUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         ExternalClusterTest::SetUp();
         clusterStarted_ = true;
         InitHealthyWorkerClient(0);
@@ -175,7 +171,6 @@ public:
         (void)unsetenv(CLIENT_SD_HOST_ID_ENV1);
         (void)unsetenv(CLIENT_SD_HOST_ID_ENV2);
         (void)unsetenv(CLIENT_SD_HOST_ID_ENV3);
-        FLAGS_use_brpc = previousUseBrpc_;
 #endif
     }
 
@@ -395,8 +390,6 @@ public:
 #ifndef USE_URMA
         GTEST_SKIP() << "Strict fast-failover timing ST requires USE_URMA or USE_URMA_MOCK.";
 #else
-        previousUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         ExternalClusterTest::SetUp();
         clusterStarted_ = true;
         InitHealthyWorkerClient(0);
@@ -434,7 +427,7 @@ public:
         opts.numRpcThreads = 32;
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1"
-            " -use_brpc=true -heartbeat_interval_ms=750 -node_timeout_s="
+            " -heartbeat_interval_ms=750 -node_timeout_s="
             + std::to_string(ONLINE_NODE_TIMEOUT_S)
             + " -node_dead_timeout_s=" + std::to_string(ONLINE_NODE_DEAD_TIMEOUT_S);
 #ifdef USE_URMA

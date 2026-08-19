@@ -85,13 +85,8 @@ Status WorkerRemoteMasterSCApi::Init()
     std::shared_ptr<RpcStubBase> rpcStub;
     RETURN_IF_NOT_OK(
         RpcStubCacheMgr::Instance().GetStub(masterAddress_, StubType::WORKER_MASTER_SC_SVC, rpcStub));
-    if (FLAGS_use_brpc) {
-        brpcSession_ = std::dynamic_pointer_cast<master::MasterSCService_BrpcGenericStub>(rpcStub);
-        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
-    } else {
-        rpcSession_ = std::dynamic_pointer_cast<master::MasterSCService_Stub>(rpcStub);
-        RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
-    }
+    brpcSession_ = std::dynamic_pointer_cast<master::MasterSCService_BrpcGenericStub>(rpcStub);
+    RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
     return Status::OK();
 }
 

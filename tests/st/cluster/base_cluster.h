@@ -165,31 +165,20 @@ public:
     // Pick the GenericService stub matching the active transport so the test
     // control-plane RPCs (SetInjectAction / ClearInjectAction /
     // GetInjectActionExecuteCount / GcovFlush) reach a handler the server
-    // actually registered. brpc mode registers GenericServiceBrpcAdapter on the
-    // worker; ZMQ mode uses the ZMQ GenericService. brpc shares the configured
-    // port so the same worker port is used for both.
     void InitRpcSession(const RpcCredential &cred = RpcCredential())
     {
-        if (FLAGS_use_brpc) {
-            BrpcChannelConfig cfg;
-            cfg.endpoint = HostPort(addr_.Host(), addr_.Port()).ToString();
-            cfg.timeout_ms = 500;
-            cfg.connect_timeout_ms = 500;
-            // Disable the circuit breaker on the test control-plane channel. ST tests
-            // deliberately kill/restart workers (crash/restart DFX), which trips the
-            // breaker on a transiently-unreachable peer and isolates the socket —
-            // after that the harness keeps hitting E112 "Not connected yet" on
-            // QueryGlobalProducersNum / CloseProducer etc. instead of reconnecting.
-            // The worker<->worker mesh channels (rpc_stub_cache_mgr) already disable
-            // the breaker for the same reason; the test harness control channel must
-            // too, or worker-restart stream/OC tests never recover.
-            cfg.enable_circuit_breaker = false;
-            brpcChannel_ = BrpcChannelFactory::Create(cfg);
-            if (brpcChannel_ != nullptr) {
-                brpcSession_ = std::make_unique<GenericService_BrpcGenericStub>(brpcChannel_.get(), 500);
-            }
-        } else {
-            rpcSession_ = std::make_unique<GenericService_Stub>(std::make_shared<RpcChannel>(addr_, cred));
+        (void)cred;
+        BrpcChannelConfig cfg;
+        cfg.endpoint = HostPort(addr_.Host(), addr_.Port()).ToString();
+        cfg.timeout_ms = 500;
+        cfg.connect_timeout_ms = 500;
+        // Disable the circuit breaker on the test control-plane channel: ST tests kill/restart
+        // workers (crash/restart DFX), which would isolate a transiently-unreachable socket and
+        // leave the harness hitting E112 "Not connected yet" instead of reconnecting.
+        cfg.enable_circuit_breaker = false;
+        brpcChannel_ = BrpcChannelFactory::Create(cfg);
+        if (brpcChannel_ != nullptr) {
+            brpcSession_ = std::make_unique<GenericService_BrpcGenericStub>(brpcChannel_.get(), 500);
         }
     }
 
@@ -214,12 +203,8 @@ public:
         LOG(INFO) << FormatString("Process %s start to send flush coverage request.", addr_.ToString());
         GcovFlushReqPb req;
         GcovFlushRspPb rsp;
-        if (FLAGS_use_brpc) {
-            RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
-            RETURN_IF_NOT_OK(brpcSession_->GcovFlush(opts_, req, rsp));
-        } else {
-            RETURN_IF_NOT_OK(rpcSession_->GcovFlush(opts_, req, rsp));
-        }
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+        RETURN_IF_NOT_OK(brpcSession_->GcovFlush(opts_, req, rsp));
         LOG(INFO) << FormatString("Process %s flush coverage request succeed.", addr_.ToString());
         return Status::OK();
     }
@@ -234,12 +219,8 @@ public:
         datasystem::SetInjectActionRspPb rsp;
         req.set_name(name);
         req.set_action(action);
-        if (FLAGS_use_brpc) {
-            RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
-            RETURN_IF_NOT_OK(brpcSession_->SetInjectAction(opts_, req, rsp));
-        } else {
-            RETURN_IF_NOT_OK(rpcSession_->SetInjectAction(opts_, req, rsp));
-        }
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+        RETURN_IF_NOT_OK(brpcSession_->SetInjectAction(opts_, req, rsp));
 
         return Status::OK();
     }
@@ -250,12 +231,8 @@ public:
         datasystem::ClearInjectActionReqPb req;
         datasystem::ClearInjectActionRspPb rsp;
         req.set_name(name);
-        if (FLAGS_use_brpc) {
-            RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
-            RETURN_IF_NOT_OK(brpcSession_->ClearInjectAction(opts_, req, rsp));
-        } else {
-            RETURN_IF_NOT_OK(rpcSession_->ClearInjectAction(opts_, req, rsp));
-        }
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+        RETURN_IF_NOT_OK(brpcSession_->ClearInjectAction(opts_, req, rsp));
         return Status::OK();
     }
 
@@ -264,28 +241,14 @@ public:
         datasystem::GetInjectActionExecuteCountReqPb req;
         datasystem::GetInjectActionExecuteCountRspPb rsp;
         req.set_name(name);
-        if (FLAGS_use_brpc) {
-            RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
-            RETURN_IF_NOT_OK(brpcSession_->GetInjectActionExecuteCount(opts_, req, rsp));
-        } else {
-            RETURN_IF_NOT_OK(rpcSession_->GetInjectActionExecuteCount(opts_, req, rsp));
-        }
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+        RETURN_IF_NOT_OK(brpcSession_->GetInjectActionExecuteCount(opts_, req, rsp));
         executeCount = rsp.execute_count();
         return Status::OK();
     }
 
-    void SetRpcSession(const RpcCredential &cred)
-    {
-        // Recreate with the supplied credential (ZMQ path only; the brpc channel
-        // established in InitRpcSession is credential-agnostic here).
-        if (!FLAGS_use_brpc) {
-            rpcSession_ = std::make_unique<GenericService_Stub>(std::make_shared<RpcChannel>(addr_, cred));
-        }
-    }
-
 protected:
     HostPort addr_;
-    std::unique_ptr<GenericService_Stub> rpcSession_;
     std::unique_ptr<brpc::Channel> brpcChannel_;
     std::unique_ptr<GenericService_BrpcGenericStub> brpcSession_;
     RpcOptions opts_;

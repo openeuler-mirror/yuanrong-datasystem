@@ -546,7 +546,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
     };
     const size_t parallelLimit = 128;
     const size_t objectKeyCount = uniqueObjectMap.size();
-    if (!Parallel::ShouldUseServiceParallelFor(objectKeyCount, parallelLimit, FLAGS_use_brpc)) {
+    if (!Parallel::ShouldUseServiceParallelFor(objectKeyCount, parallelLimit, true)) {
         for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
             auto rc = func(objectKey, objectInfo, remoteObjectKeys, needEvictKeys);
             lastRc = rc.IsError() ? rc : lastRc;
@@ -1919,7 +1919,7 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
     auto dispatchTime = std::chrono::steady_clock::now();
     Status lastRc;
     size_t idx = 0;
-    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(true);
     for (auto &item : objectKeysByMaster) {
         BatchQueryMetaResult &result = batchQueryResults[idx++];
         auto *itemPtr = &item;
@@ -2135,7 +2135,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
                                                                 std::set<ReadKey> &needRetryIds)
 {
     const size_t kMinParallelRequests = 2;
-    if (queryMetas.size() < kMinParallelRequests || !ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc)) {
+    if (queryMetas.size() < kMinParallelRequests || !ShouldUseServiceThreadPoolFanout(true)) {
         return GetObjectsFromAnywhereSerially(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     }
     Status lastRc = Status::OK();
@@ -3624,7 +3624,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(NotifyRemoteGe
             }
             return lastRc;
         };
-        if (!ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc) || index + 1 == context.groups.size()) {
+        if (!ShouldUseServiceThreadPoolFanout(true) || index + 1 == context.groups.size()) {
             auto rc = func();
             RecordBatchGetObjectError(std::move(rc), lastRc);
         } else {

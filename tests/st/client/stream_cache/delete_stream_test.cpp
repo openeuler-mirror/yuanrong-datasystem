@@ -465,9 +465,7 @@ protected:
 
 TEST_F(DeleteStreamTimingTest, TestDeleteStreamFanoutAsyncReadDeadline)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream data-plane gap; flaky under brpc. Tracked separately.";
-    }
     constexpr int32_t REQUEST_TIMEOUT_MS = 1000;
     constexpr int32_t REMOTE_DELETE_SLEEP_MS = 3000;
     constexpr int32_t MAX_EXPECTED_ELAPSED_MS = 2500;
@@ -637,9 +635,7 @@ TEST_F(DeleteStreamTimingTest, TestDeleteStreamTimingHole5)
 
 TEST_F(DeleteStreamTimingTest, LEVEL1_TestDeleteStreamTimingHole7)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream/worker-restart migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     std::string streamName = "testDelStreamTimingHole7";
     // The purpose of the testcase is to test the UndoDeleteStream. We ensure that there is at least one reference to
     // DeleteStream on master, inject an RPC failure so that DeleteStream fails and hits UndoDeleteStream,

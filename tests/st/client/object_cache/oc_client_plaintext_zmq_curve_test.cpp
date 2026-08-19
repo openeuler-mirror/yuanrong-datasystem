@@ -42,8 +42,7 @@ public:
     {
         // This test exercises ZMQ CURVE/ZAP auth (enable_curve_zmq, plaintext kit).
         // brpc has no equivalent auth path, so force ZMQ for the spawned workers
-        // (external_cluster propagates FLAGS_use_brpc to workers).
-        FLAGS_use_brpc = false;
+        // (workers run brpc by default).
         opts.numWorkers = workerCount;
         opts.numEtcd = 1;
 
@@ -64,12 +63,9 @@ public:
     {
         FLAGS_encrypt_kit = "plaintext";
         RETURN_IF_NOT_OK(ClientPreLoadKey(validClientName, authKeys_));
-        RpcCredential cred;
-        RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred));
         ServerProcess *serverProcess = nullptr;
         for (uint8_t i = 0; i < workerCount; i++) {
             cluster_->GetProcess(WORKER, i, serverProcess);
-            serverProcess->SetRpcSession(cred);
         }
         return Status::OK();
     }
@@ -101,6 +97,7 @@ public:
 
 TEST_F(OCClientPlaintextZmqCurveTest, TestValidClientCurve)
 {
+    GTEST_SKIP() << "ZMQ CURVE/ZAP auth; brpc is the sole transport, no CURVE auth path.";
     LOG(INFO) << "Start to test plaintext zmq curve for valid client.";
     std::shared_ptr<ObjectClient> client;
     RpcAuthKeys authKeys = {};
@@ -123,6 +120,7 @@ TEST_F(OCClientPlaintextZmqCurveTest, TestValidClientCurve)
 
 TEST_F(OCClientPlaintextZmqCurveTest, TestInValidClientCurve)
 {
+    GTEST_SKIP() << "ZMQ CURVE/ZAP auth; brpc is the sole transport, no CURVE auth path.";
     LOG(INFO) << "Start to test plaintext zmq curve for invalid client.";
     std::shared_ptr<ObjectClient> client;
     RpcAuthKeys authKeys = {};

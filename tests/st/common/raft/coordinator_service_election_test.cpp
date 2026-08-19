@@ -217,7 +217,6 @@ protected:
     void SetUp() override
     {
         CommonTest::SetUp();
-        savedUseBrpc_ = FLAGS_use_brpc;
 
         const auto *testInfo = testing::UnitTest::GetInstance()->current_test_info();
         const std::string testName =
@@ -236,7 +235,6 @@ protected:
         ASSERT_TRUE(reserveStatus.IsOk()) << reserveStatus.ToString();
         endpoint_ = std::string(kLoopbackIp) + ":" + std::to_string(portLease_.Port());
 
-        FLAGS_use_brpc = true;
     }
 
     void TearDown() override
@@ -250,7 +248,6 @@ protected:
             conflictListener_ = -1;
         }
 
-        FLAGS_use_brpc = savedUseBrpc_;
 
         if (!testCasePath_.empty()) {
             std::error_code error;

@@ -70,7 +70,7 @@ constexpr char kPersistentRpcDeadlineExceeded[] = "return(K_RPC_DEADLINE_EXCEEDE
 // to the worker's UtOCService adapter in either transport. In brpc mode the
 // worker registers UtOCServiceBrpcAdapter (no ZMQ UtOCService is listening), so
 // the ZMQ-only UtOCService_Stub would fail (RPC_SERVICE_UNAVAILABLE) — this
-// interface lets InitApis pick the matching stub per FLAGS_use_brpc.
+// brpc stub selected by InitApis.
 class IUtOCStub {
 public:
     virtual ~IUtOCStub() = default;
@@ -262,9 +262,7 @@ TEST_F(WorkerDfxTest, TestWorkerRestartAndOperateShmBuffer)
 
 TEST_F(WorkerDfxTest, TestWorkerRestartAndOperateNoShmBuffer)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: worker restart OC brpc channel revive and clientId re-register. Tracked separately.";
-    }
 
     LOG(INFO) << "Test worker restart and operate the not shm buffer.";
     std::shared_ptr<ObjectClient> client1;
@@ -986,9 +984,7 @@ TEST_F(MasterDfxTest, LEVEL1_TestMasterRecoveryAndClientExit2)
 
 TEST_F(MasterDfxTest, LEVEL1_TestMasterCrashAndGet)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream/worker-restart migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     LOG(INFO) << "Test master crash and get";
     InitTestClients();
     constexpr int32_t kConnectTimeoutMs = 60'000;
@@ -1263,27 +1259,20 @@ public:
         DS_ASSERT_OK(aksk_->SetClientAkSk(ak_, sk_));
         RpcCredential cred;
         RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred);
-        if (FLAGS_use_brpc) {
-            // brpc mode: worker registers UtOCServiceBrpcAdapter, no ZMQ UtOCService.
-            // Use a brpc channel + the generated UtOCService_BrpcGenericStub.
-            const int32_t timeoutMs = 500;
-            auto makeBrpc = [timeoutMs](const HostPort &addr) {
-                BrpcChannelConfig cfg;
-                cfg.endpoint = HostPort(addr.Host(), addr.Port()).ToString();
-                cfg.timeout_ms = timeoutMs;
-                cfg.connect_timeout_ms = timeoutMs;
-                cfg.enable_circuit_breaker = false;  // test control-plane: don't isolate restarted workers
-                auto ch = BrpcChannelFactory::Create(cfg);
-                return std::make_unique<BrpcUtOCStub>(std::move(ch), timeoutMs);
-            };
-            utSvcStub0_ = makeBrpc(workerAddr0_);
-            utSvcStub1_ = makeBrpc(workerAddr1_);
-        } else {
-            auto channel = std::make_shared<RpcChannel>(workerAddr0_, cred);
-            utSvcStub0_ = std::make_unique<ZmqUtOCStub>(channel);
-            channel = std::make_shared<RpcChannel>(workerAddr1_, cred);
-            utSvcStub1_ = std::make_unique<ZmqUtOCStub>(channel);
-        }
+        // brpc mode: worker registers UtOCServiceBrpcAdapter. Use a brpc channel +
+        // the generated UtOCService_BrpcGenericStub.
+        const int32_t timeoutMs = 500;
+        auto makeBrpc = [timeoutMs](const HostPort &addr) {
+            BrpcChannelConfig cfg;
+            cfg.endpoint = HostPort(addr.Host(), addr.Port()).ToString();
+            cfg.timeout_ms = timeoutMs;
+            cfg.connect_timeout_ms = timeoutMs;
+            cfg.enable_circuit_breaker = false;  // test control-plane: don't isolate restarted workers
+            auto ch = BrpcChannelFactory::Create(cfg);
+            return std::make_unique<BrpcUtOCStub>(std::move(ch), timeoutMs);
+        };
+        utSvcStub0_ = makeBrpc(workerAddr0_);
+        utSvcStub1_ = makeBrpc(workerAddr1_);
     }
 
     void PutObjGIncreaseRef()
@@ -1394,13 +1383,11 @@ protected:
 
 TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart2)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: master GlobalRefTable cleanup lags on worker shutdown/restart "
-                        "(master ProcessWorkerRestart does not clear stale gref entries the way "
-                        "the heartbeat-timeout path does under ZMQ). Tracked separately; the "
-                        "UtOCService stub brpc switch (IUtOCStub) and circuit-breaker / retry "
-                        "hardening in this PR already make the RPC reach the worker.";
-    }
+                    "(master ProcessWorkerRestart does not clear stale gref entries the way "
+                    "the heartbeat-timeout path does under ZMQ). Tracked separately; the "
+                    "UtOCService stub brpc switch (IUtOCStub) and circuit-breaker / retry "
+                    "hardening in this PR already make the RPC reach the worker.";
     PutObjGIncreaseRef();
 
     // shutdown node1 and client3
@@ -1445,13 +1432,11 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart2)
 
 TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart3)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: master GlobalRefTable cleanup lags on worker shutdown/restart "
-                        "(master ProcessWorkerRestart does not clear stale gref entries the way "
-                        "the heartbeat-timeout path does under ZMQ). Tracked separately; the "
-                        "UtOCService stub brpc switch (IUtOCStub) and circuit-breaker / retry "
-                        "hardening in this PR already make the RPC reach the worker.";
-    }
+                    "(master ProcessWorkerRestart does not clear stale gref entries the way "
+                    "the heartbeat-timeout path does under ZMQ). Tracked separately; the "
+                    "UtOCService stub brpc switch (IUtOCStub) and circuit-breaker / retry "
+                    "hardening in this PR already make the RPC reach the worker.";
     PutObjGIncreaseRef();
 
     // shutdown node1 and client2 and client3
@@ -1567,13 +1552,11 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart5)
 
 TEST_F(WorkerReconciliationDfxTest, LEVEL1_GiveUpReconciliation)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: master GlobalRefTable cleanup lags on worker shutdown/restart "
-                        "(master ProcessWorkerRestart does not clear stale gref entries the way "
-                        "the heartbeat-timeout path does under ZMQ). Tracked separately; the "
-                        "UtOCService stub brpc switch (IUtOCStub) and circuit-breaker / retry "
-                        "hardening in this PR already make the RPC reach the worker.";
-    }
+                    "(master ProcessWorkerRestart does not clear stale gref entries the way "
+                    "the heartbeat-timeout path does under ZMQ). Tracked separately; the "
+                    "UtOCService stub brpc switch (IUtOCStub) and circuit-breaker / retry "
+                    "hardening in this PR already make the RPC reach the worker.";
     PutObjGIncreaseRef();
 
     // shutdown node1 and client3

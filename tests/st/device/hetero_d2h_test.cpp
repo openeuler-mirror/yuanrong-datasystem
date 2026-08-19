@@ -91,9 +91,7 @@ class HeteroD2HThroughTcpTest : public DevTestHelper {
 
 TEST_F(HeteroD2HThroughTcpTest, SetGet)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     std::shared_ptr<HeteroClient> c0, c1;
     size_t numOfObjs = 10, blksPerObj = 1024, blkSz = 1024;
     std::vector<std::string> inObjectKeys, failedKeys;

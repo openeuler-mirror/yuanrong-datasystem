@@ -81,18 +81,10 @@ Status ProducerConsumerWorkerApi::DoGetDataPageRpc(ClientWorkerApi &workerApi, G
     GetRequestContext()->reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
     req.set_timeout_ms(pair.second);
     RETURN_IF_NOT_OK(workerApi.signature_->GenerateSignature(req));
-    if (FLAGS_use_brpc) {
-        auto session = workerApi.brpcRpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null, RPC not executed", workerApi.LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
-        }
-        return session->GetDataPage(opts, req, rsp);
-    }
-    auto session = workerApi.rpcSession_;
+    auto session = workerApi.brpcRpcSession_;
     if (session == nullptr) {
-        LOG(WARNING) << FormatString("[%s] rpcSession_ is null, RPC not executed", workerApi.LogPrefix());
-        RETURN_STATUS(K_RPC_UNAVAILABLE, "ZMQ RPC session not initialized");
+        LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null, RPC not executed", workerApi.LogPrefix());
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
     }
     return session->GetDataPage(opts, req, rsp);
 }
@@ -150,18 +142,10 @@ Status ProducerConsumerWorkerApi::DoAllocBigShmMemoryRpc(ClientWorkerApi &worker
     // relies on this field to determine the order of requests.
     req.set_timestamp(GetSystemClockTimeStampUs());
     RETURN_IF_NOT_OK(workerApi.signature_->GenerateSignature(req));
-    if (FLAGS_use_brpc) {
-        auto session = workerApi.brpcRpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null, RPC not executed", workerApi.LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
-        }
-        return session->AllocBigShmMemory(opts, req, rsp);
-    }
-    auto session = workerApi.rpcSession_;
+    auto session = workerApi.brpcRpcSession_;
     if (session == nullptr) {
-        LOG(WARNING) << FormatString("[%s] rpcSession_ is null, RPC not executed", workerApi.LogPrefix());
-        RETURN_STATUS(K_RPC_UNAVAILABLE, "ZMQ RPC session not initialized");
+        LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null, RPC not executed", workerApi.LogPrefix());
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
     }
     return session->AllocBigShmMemory(opts, req, rsp);
 }
@@ -187,21 +171,12 @@ Status ProducerConsumerWorkerApi::ReleaseBigElementMemory(const std::string &str
     // Note: timeout is not relevant here but thread_local must be set
     // variable.
     GetRequestContext()->reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(RpcOptions().GetTimeout()));
-    if (FLAGS_use_brpc) {
-        auto session = workerApi->brpcRpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null", workerApi->LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
-        }
-        RETURN_IF_NOT_OK(session->ReleaseBigShmMemory(req, rsp));
-    } else {
-        auto session = workerApi->rpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] rpcSession_ is null", workerApi->LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "ZMQ RPC session not initialized");
-        }
-        RETURN_IF_NOT_OK(session->ReleaseBigShmMemory(req, rsp));
+    auto session = workerApi->brpcRpcSession_;
+    if (session == nullptr) {
+        LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null", workerApi->LogPrefix());
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
     }
+    RETURN_IF_NOT_OK(session->ReleaseBigShmMemory(req, rsp));
     LOG(INFO) << FormatString("[%s, S:%s, P:%s] Client release big element page success. ShmView %s",
                               workerApi->LogPrefix(), streamName, producerId, pageView.ToStr());
     return Status::OK();
@@ -282,18 +257,10 @@ Status ProducerConsumerWorkerApi::DoCreateShmPageRpc(ClientWorkerApi &workerApi,
     // relies on this field to determine the order of requests.
     req.set_timestamp(GetSystemClockTimeStampUs());
     RETURN_IF_NOT_OK(workerApi.signature_->GenerateSignature(req));
-    if (FLAGS_use_brpc) {
-        auto session = workerApi.brpcRpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null, RPC not executed", workerApi.LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
-        }
-        return session->CreateShmPage(opts, req, rsp);
-    }
-    auto session = workerApi.rpcSession_;
+    auto session = workerApi.brpcRpcSession_;
     if (session == nullptr) {
-        LOG(WARNING) << FormatString("[%s] rpcSession_ is null, RPC not executed", workerApi.LogPrefix());
-        RETURN_STATUS(K_RPC_UNAVAILABLE, "ZMQ RPC session not initialized");
+        LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null, RPC not executed", workerApi.LogPrefix());
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
     }
     return session->CreateShmPage(opts, req, rsp);
 }
@@ -321,21 +288,12 @@ Status ProducerConsumerWorkerApi::CloseProducer(const std::string &streamName, c
     opts.SetTimeout(workerApi->requestTimeoutMs_);
     GetRequestContext()->reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(workerApi->requestTimeoutMs_));
     PerfPoint point(PerfKey::RPC_WORKER_CLOSE_PRODUCER);
-    if (FLAGS_use_brpc) {
-        auto session = workerApi->brpcRpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null", workerApi->LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
-        }
-        RETURN_IF_NOT_OK_EXCEPT(session->CloseProducer(opts, req, rsp), StatusCode::K_SC_PRODUCER_NOT_FOUND);
-    } else {
-        auto session = workerApi->rpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] rpcSession_ is null", workerApi->LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "ZMQ RPC session not initialized");
-        }
-        RETURN_IF_NOT_OK_EXCEPT(session->CloseProducer(opts, req, rsp), StatusCode::K_SC_PRODUCER_NOT_FOUND);
+    auto session = workerApi->brpcRpcSession_;
+    if (session == nullptr) {
+        LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null", workerApi->LogPrefix());
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
     }
+    RETURN_IF_NOT_OK_EXCEPT(session->CloseProducer(opts, req, rsp), StatusCode::K_SC_PRODUCER_NOT_FOUND);
     point.Record();
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, P:%s] Close producer success", workerApi->LogPrefix(),
                                               streamName, producerId);
@@ -367,21 +325,12 @@ Status ProducerConsumerWorkerApi::CloseConsumer(const std::string &streamName, c
     opts.SetTimeout(workerApi->requestTimeoutMs_);
     GetRequestContext()->reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(workerApi->requestTimeoutMs_));
     PerfPoint point(PerfKey::RPC_WORKER_CLOSE_CONSUMER);
-    if (FLAGS_use_brpc) {
-        auto session = workerApi->brpcRpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null", workerApi->LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
-        }
-        RETURN_IF_NOT_OK_EXCEPT(session->CloseConsumer(opts, req, rsp), StatusCode::K_SC_CONSUMER_NOT_FOUND);
-    } else {
-        auto session = workerApi->rpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] rpcSession_ is null", workerApi->LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "ZMQ RPC session not initialized");
-        }
-        RETURN_IF_NOT_OK_EXCEPT(session->CloseConsumer(opts, req, rsp), StatusCode::K_SC_CONSUMER_NOT_FOUND);
+    auto session = workerApi->brpcRpcSession_;
+    if (session == nullptr) {
+        LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null", workerApi->LogPrefix());
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
     }
+    RETURN_IF_NOT_OK_EXCEPT(session->CloseConsumer(opts, req, rsp), StatusCode::K_SC_CONSUMER_NOT_FOUND);
     point.Record();
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, P:%s] Close consumer success", workerApi->LogPrefix(),
                                               streamName, consumerId);
@@ -409,21 +358,12 @@ Status ProducerConsumerWorkerApi::GetLastAppendCursor(const std::string &streamN
     RpcOptions opts;
     opts.SetTimeout(workerApi->rpcTimeoutMs_);
     GetRequestContext()->reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(workerApi->rpcTimeoutMs_));
-    if (FLAGS_use_brpc) {
-        auto session = workerApi->brpcRpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null", workerApi->LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
-        }
-        RETURN_IF_NOT_OK(session->GetLastAppendCursor(opts, req, rsp));
-    } else {
-        auto session = workerApi->rpcSession_;
-        if (session == nullptr) {
-            LOG(WARNING) << FormatString("[%s] rpcSession_ is null", workerApi->LogPrefix());
-            RETURN_STATUS(K_RPC_UNAVAILABLE, "ZMQ RPC session not initialized");
-        }
-        RETURN_IF_NOT_OK(session->GetLastAppendCursor(opts, req, rsp));
+    auto session = workerApi->brpcRpcSession_;
+    if (session == nullptr) {
+        LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null", workerApi->LogPrefix());
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "brpc RPC session not initialized");
     }
+    RETURN_IF_NOT_OK(session->GetLastAppendCursor(opts, req, rsp));
     lastAppendCursor = rsp.last_append_cursor();
     return Status::OK();
 }

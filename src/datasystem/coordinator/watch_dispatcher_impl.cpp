@@ -135,15 +135,8 @@ Status WatchDispatcherImpl::SendEventRequest(const std::string &watcherAddr, con
         watcherHostPort, StubType::COORDINATOR_WORKER_SVC, rpcStub, absoluteDeadline));
     RpcOptions opts;
     EventRspPb rsp;
-    std::shared_ptr<CoordinatorWatchService_BrpcGenericStub> brpcStub;
-    std::shared_ptr<CoordinatorWatchService_Stub> stub;
-    if (FLAGS_use_brpc) {
-        brpcStub = std::dynamic_pointer_cast<CoordinatorWatchService_BrpcGenericStub>(rpcStub);
-        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
-    } else {
-        stub = std::dynamic_pointer_cast<CoordinatorWatchService_Stub>(rpcStub);
-        RETURN_RUNTIME_ERROR_IF_NULL(stub);
-    }
+    auto brpcStub = std::dynamic_pointer_cast<CoordinatorWatchService_BrpcGenericStub>(rpcStub);
+    RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
     if (absoluteDeadline != std::chrono::steady_clock::time_point::max()) {
         const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                      absoluteDeadline - std::chrono::steady_clock::now())
@@ -156,7 +149,7 @@ Status WatchDispatcherImpl::SendEventRequest(const std::string &watcherAddr, con
     if (rpcDispatched != nullptr) {
         *rpcDispatched = true;
     }
-    return FLAGS_use_brpc ? brpcStub->HandleEvent(opts, req, rsp) : stub->HandleEvent(opts, req, rsp);
+    return brpcStub->HandleEvent(opts, req, rsp);
 }
 }  // namespace coordinator
 }  // namespace datasystem

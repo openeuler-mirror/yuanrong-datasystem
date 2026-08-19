@@ -51,7 +51,7 @@ public:
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1"
-            " -use_brpc=true -enable_urma=false";
+            " -enable_urma=false";
     }
 
     void SetUp() override

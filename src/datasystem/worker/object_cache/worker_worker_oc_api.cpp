@@ -83,13 +83,8 @@ Status WorkerRemoteWorkerOCApi::Init(std::chrono::steady_clock::time_point deadl
     std::shared_ptr<RpcStubBase> rpcStub;
     RETURN_IF_NOT_OK(
         RpcStubCacheMgr::Instance().GetStub(hostPort_, StubType::WORKER_WORKER_OC_SVC, rpcStub, deadline));
-    if (FLAGS_use_brpc) {
-        brpcSession_ = std::dynamic_pointer_cast<WorkerWorkerOCService_BrpcGenericStub>(rpcStub);
-        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
-    } else {
-        rpcSession_ = std::dynamic_pointer_cast<WorkerWorkerOCService_Stub>(rpcStub);
-        RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
-    }
+    brpcSession_ = std::dynamic_pointer_cast<WorkerWorkerOCService_BrpcGenericStub>(rpcStub);
+    RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
     return Status::OK();
 }
 

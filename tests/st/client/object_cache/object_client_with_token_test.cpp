@@ -359,9 +359,7 @@ TEST_F(ObjectClientWithTokenTest, ConnectAndDisconnectConcurrently)
 
 TEST_F(ObjectClientWithTokenTest, RemoteGetBig)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
     InitTestTokenClient(0, client1, "token1");
@@ -382,9 +380,7 @@ TEST_F(ObjectClientWithTokenTest, RemoteGetBig)
 
 TEST_F(ObjectClientWithTokenTest, TenantArenaReleaseTest)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
     InitTestTokenClient(0, client1, "token1");

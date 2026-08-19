@@ -48,7 +48,6 @@
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_bool(enable_etcd_auth);
 DS_DECLARE_string(cluster_name);
-DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 namespace st {
@@ -103,11 +102,7 @@ Status FindReadyCoordinatorLeader(const std::vector<HostPort> &coordinatorConfig
         for (size_t i = 0; i < coordinatorCount; ++i) {
             auto discovery = std::make_shared<StaticCoordinatorDiscovery>(coordinatorConfigs[i].ToString());
             std::unique_ptr<ICoordinatorServiceProxy> proxy;
-            if (FLAGS_use_brpc) {
-                proxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(discovery));
-            } else {
-                proxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(discovery));
-            }
+            proxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(discovery));
             lastRc = proxy->Init();
             if (lastRc.IsError()) {
                 continue;
@@ -571,11 +566,7 @@ Status ExternalCluster::ReadClusterTopology(ClusterTopologyPb &topology) const
         RETURN_IF_NOT_OK(InitTopologyReaderRpcCache());
         auto discovery = std::make_shared<StaticCoordinatorDiscovery>(coordinatorAddress.ToString());
         std::unique_ptr<ICoordinatorServiceProxy> proxy;
-        if (FLAGS_use_brpc) {
-            proxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(discovery));
-        } else {
-            proxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(discovery));
-        }
+        proxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(discovery));
         RETURN_IF_NOT_OK(proxy->Init());
         std::vector<KeyValueEntry> entries;
         int64_t revision = 0;
@@ -1131,7 +1122,7 @@ Status ExternalCluster::StartCoordinatorNode(int index)
             }
             coordinatorPeers += config.ToString();
         }
-        coordinatorCmd += " -use_brpc=true -coordinator_raft_initial_peers=" + coordinatorPeers
+        coordinatorCmd += " -coordinator_raft_initial_peers=" + coordinatorPeers
                           + " -coordinator_raft_data_dir=" + rootDir
                           + "/raft -coordinator_raft_heartbeat_interval_ms=50"
                             " -coordinator_raft_election_timeout_ms=300"
@@ -1288,9 +1279,6 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
     RETURN_IF_NOT_OK(AppendWorkerBackendFlags(index, address, cmd));
     // Explicitly propagate the test process's transport selection to the worker
     // subprocess. ZMQ-scoped tests (e.g. CURVE auth, ZmqService fault injection)
-    // set FLAGS_use_brpc=false in their SetUp so the spawned worker runs ZMQ too,
-    // rather than inheriting the global brpc default.
-    cmd += " -use_brpc=" + std::string(FLAGS_use_brpc ? "true" : "false");
     LOG(INFO) << "Launch worker [" << index << "] command: " << cmd;
     auto workerProcess = std::make_unique<WorkerProcess>(cmd, opts_.workerConfigs[index]);
     std::string workerName = "worker_" + std::to_string(index);
