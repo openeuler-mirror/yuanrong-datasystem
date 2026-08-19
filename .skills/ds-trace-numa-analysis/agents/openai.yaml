@@ -1,0 +1,4 @@
+interface:
+  display_name: "DataSystem NUMA Trace Analysis"
+  short_description: "分析NUMA source-chip、inflight与URMA超时错误链"
+  default_prompt: "Use $ds-trace-numa-analysis after ds-trace-triage and bottleneck analysis to diagnose NUMA/source-chip behavior and URMA timeout error chains without treating missing evidence as zero."

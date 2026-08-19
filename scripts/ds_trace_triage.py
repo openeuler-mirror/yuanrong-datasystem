@@ -94,7 +94,11 @@ class AnalyzerDeps:
     rules: Any = None
 
 
-TRACE_ID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
+TRACE_ID_RE = re.compile(
+    r"(?:\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|"
+    r"\b(?:getBuffer|setStringView)-\d{1,10}-\d{8};[0-9a-f]{12}\b)",
+    re.I,
+)
 TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 POD_NAME_RE = re.compile(
     r"(kv[A-Za-z0-9_.-]*(?:client|worker)-\d+-(?:worker\d+|master)(?:_\d+)?)",

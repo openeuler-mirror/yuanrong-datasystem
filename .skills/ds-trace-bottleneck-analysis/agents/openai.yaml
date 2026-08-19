@@ -1,0 +1,4 @@
+interface:
+  display_name: "DataSystem Bottleneck Analysis"
+  short_description: "对多run分档Trace执行控制变量与关键瓶颈分析"
+  default_prompt: "Use $ds-trace-bottleneck-analysis after ds-trace-triage to compare distinct DataSystem runs by implementation, QPS, client shape, object size, and latency band without mixing traces or treating capped samples as occurrence rates."
