@@ -23,7 +23,6 @@
 #include <cstddef>
 #include <shared_mutex>
 #include <sys/mman.h>
-#include <unistd.h>
 
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/arena.h"
@@ -73,8 +72,7 @@ Status EmbeddedMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenan
         LOG(WARNING) << "madvise DONTDUMP memory failed: " << StrErr(errno);
     }
 
-    // Closing this fd has an effect on performance.
-    RETRY_ON_EINTR(close(fd_));
+    // Embedded clients borrow the allocator's worker fd; the allocator retains ownership and closes it at shutdown.
     LOG(INFO) << "mmap success, fd " << fd_;
     return Status::OK();
 }

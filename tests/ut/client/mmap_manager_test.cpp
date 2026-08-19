@@ -21,9 +21,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <fcntl.h>
 #include <thread>
 
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -108,6 +110,32 @@ TEST_F(MmapManagerTest, TestCleanRef)
 
     mmapManager.CleanInvalidMmapTable();
     mmapManager.GetMmapEntryByFd(-1);
+}
+
+TEST_F(MmapManagerTest, TestEmbeddedMmapKeepsWorkerOwnedFdOpen)
+{
+#if defined(__linux__)
+    constexpr uint64_t allocatorSize = 1024 * 1024;
+    auto allocator = memory::Allocator::Instance();
+    DS_ASSERT_OK(allocator->Init(allocatorSize));
+    Raii shutdownAllocator([allocator] { allocator->Shutdown(); });
+
+    void *pointer = nullptr;
+    int workerFd = -1;
+    ptrdiff_t offset = 0;
+    uint64_t mmapSize = 0;
+    DS_ASSERT_OK(allocator->AllocateMemory(DEFAULT_TENANT_ID, 1, false, pointer, workerFd, offset, mmapSize));
+
+    auto api = std::make_shared<MmapUtFakeWorkerApi>(HostPort("127.0.0.1", 1));
+    MmapManager mmapManager(api, true);
+    auto unit = std::make_shared<ShmUnitInfo>(workerFd, mmapSize);
+    DS_ASSERT_OK(mmapManager.LookupUnitsAndMmapFd(DEFAULT_TENANT_ID, unit));
+
+    EXPECT_NE(fcntl(workerFd, F_GETFD), -1);
+    DS_EXPECT_OK(allocator->FreeMemory(DEFAULT_TENANT_ID, pointer));
+#else
+    GTEST_SKIP() << "Embedded mmap fd ownership is Linux-specific";
+#endif
 }
 
 TEST_F(MmapManagerTest, TestLookupUnitsAndMmapFdsShmPathWithStubGetClientFd)

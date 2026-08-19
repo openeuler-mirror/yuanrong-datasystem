@@ -1413,7 +1413,10 @@ private:
 
     Status WarmupOneClientWorkerConnection(const std::string &key, const std::string &value,
                                            const SetParam &setParam, TimeoutDuration &warmupBudget,
-                                           std::vector<Optional<Buffer>> &buffers);
+                                           std::vector<Optional<Buffer>> &buffers,
+                                           std::vector<std::string> &warmupKeys);
+
+    void CleanupWarmupObjects(const std::vector<std::string> &warmupKeys);
 
     Status Set(const std::string &key, const StringView &val, const SetParam &setParam,
                int32_t requestTimeoutMs);

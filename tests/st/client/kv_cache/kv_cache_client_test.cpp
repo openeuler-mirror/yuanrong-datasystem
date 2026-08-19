@@ -109,6 +109,7 @@ constexpr char PAGEABLE_ALLOC_INJECT[] = "Buffer.AllocatePageableMemory";
 constexpr char PAGEABLE_BAD_ALLOC_INJECT[] = "Buffer.AllocatePageableMemory.bad_alloc";
 constexpr char PAGEABLE_COPY_TO_SHM_INJECT[] = "Buffer.CopyPageableDataToShm";
 constexpr char SHM_PIN_INJECT[] = "ShmMmapTableEntry.PinHostMemory";
+constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
 constexpr int REMOTE_INITIAL_WORKER_TIMEOUT_MS = 10'000;
 constexpr int ENV_RECOVERY_LOG_WAIT_MS = 5'000;
 constexpr int ENV_RECOVERY_LOG_POLL_MS = 100;
@@ -2298,6 +2299,8 @@ TEST_F(KVCacheClientTest, LEVEL1_TestUnableToGetOldFd)
 {
     std::shared_ptr<KVClient> client0, client1;
     int timeoutMs = 5000;
+    DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
+    Raii clearWarmupInject([] { (void)inject::Clear(SKIP_WARMUP_INJECT); });
     InitTestKVClient(0, client0, timeoutMs);
     InitTestKVClient(1, client1, timeoutMs);
 

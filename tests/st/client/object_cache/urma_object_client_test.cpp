@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: This is used to test the ObjectClient class when URMA is enabled.
+ * Description: This is used to test ObjectClient warmup and URMA-specific behavior.
  */
 #include <gtest/gtest.h>
 #include <future>
@@ -151,8 +151,7 @@ public:
         GetCurTestName(suiteName, caseName);
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster =
-            caseName == "ClientInitWarmsRoutedMetaOwnerSetGetAndBatchDelete" ? "true" : "false";
+        opts.enableDistributedMaster = caseName == "ClientInitWarmsRoutedMetaOwnerSetGet" ? "true" : "false";
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         for (const auto &addr : opts.workerConfigs) {
@@ -314,19 +313,15 @@ protected:
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
 };
 
-TEST_F(UrmaObjectClientTest, ClientInitWarmsLegacySameNodeSetGetAndBatchDelete)
+TEST_F(UrmaObjectClientTest, ClientInitWarmsSetGetForEveryTransport)
 {
-#ifndef USE_URMA
-    GTEST_SKIP() << "Client init connection warmup requires USE_URMA.";
-#else
     AssertClientInitWarmup(true, DataPlacementPolicy::PREFERRED_SAME_NODE);
-#endif
 }
 
-TEST_F(UrmaObjectClientTest, ClientInitWarmsRoutedMetaOwnerSetGetAndBatchDelete)
+TEST_F(UrmaObjectClientTest, ClientInitWarmsRoutedMetaOwnerSetGet)
 {
 #ifndef USE_URMA
-    GTEST_SKIP() << "Client init connection warmup requires USE_URMA.";
+    GTEST_SKIP() << "Routed meta-owner warmup ST requires USE_URMA.";
 #else
     AssertClientInitWarmup(false, DataPlacementPolicy::PREFERRED_META_OWNER);
 #endif

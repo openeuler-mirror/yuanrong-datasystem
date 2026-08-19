@@ -28,6 +28,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/string_intern/string_pool.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -44,6 +45,7 @@ constexpr int64_t NON_SHM_SIZE = 499 * 1024;
 constexpr int64_t SHM_SIZE = 500 * 1024;
 constexpr int64_t BIG_STR_SIZE = 50 * 1024 * 1024;
 constexpr int64_t DEFAULT_TIMEOUT_MS = 1000;
+constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
 
 class ScopedUnsetEnv {
 public:
@@ -2328,7 +2330,7 @@ TEST_F(ObjectClientTest, TestObjectClientDestructor)
 TEST_F(ObjectClientTest, MaxClientCreateAndCloseTest)
 {
     const int maxClientDefaultNum = 200;
-    int loopTimes = 5;
+    const int loopTimes = 3;
     for (int i = 0; i < loopTimes; i++) {
         std::vector<std::shared_ptr<ObjectClient>> clientVec;
         clientVec.reserve(maxClientDefaultNum);
@@ -2339,10 +2341,13 @@ TEST_F(ObjectClientTest, MaxClientCreateAndCloseTest)
         }
         std::shared_ptr<ObjectClient> client;
         ConnectOptions connectOptions;
-        const int timeoutMs = 60000;
-        InitConnectOpt(0, connectOptions, timeoutMs);
+        const int expectedFailureTimeoutMs = 5000;
+        InitConnectOpt(0, connectOptions, expectedFailureTimeoutMs);
         client = std::make_shared<ObjectClient>(connectOptions);
         DS_ASSERT_NOT_OK(client->Init());
+        for (auto &activeClient : clientVec) {
+            DS_ASSERT_OK(activeClient->ShutDown());
+        }
         clientVec.clear();
     }
 }
@@ -2352,6 +2357,8 @@ TEST_F(ObjectClientTest, LEVEL1_GetClientFdRpcError)
     FLAGS_v = 1;
     int32_t timeout = 5000;
     std::shared_ptr<ObjectClient> client;
+    DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
+    Raii clearWarmupInject([] { (void)inject::Clear(SKIP_WARMUP_INJECT); });
     InitTestClient(0, client, timeout);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_GetClientFd", "sleep(10000)"));

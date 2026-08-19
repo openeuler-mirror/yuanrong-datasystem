@@ -39,6 +39,7 @@ ds_cc_test(
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:mmap_manager",
         "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/common/util:raii",
         "//tests/ut:ut_common",
     ],
