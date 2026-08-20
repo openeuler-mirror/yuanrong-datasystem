@@ -2044,6 +2044,12 @@ private:
      */
     bool SaveOneMeta(const MetaForMigrationPb &objMeta, Status &status);
 
+    void AddMigrationLocations(const MetaForMigrationPb &objMeta, const ObjectMetaPb &metaPb, ObjectMeta &metaCache,
+                               std::vector<std::string> &locationsToReconcile);
+
+    Status ReconcileDeadMigrationLocations(const std::string &objectKey,
+                                           const std::vector<std::string> &locationsToReconcile);
+
     /**
      * @brief Transfer to the deletion thread to process the sync delete process.
      * @param[in] deleteMediator Delete mediator.

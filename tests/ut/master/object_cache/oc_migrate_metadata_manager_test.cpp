@@ -10,23 +10,57 @@
 
 #include <atomic>
 #include <future>
+#include <thread>
+#include <utility>
 
 #include <gtest/gtest.h>
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_context.h"
+#include "datasystem/master/object_cache/oc_notify_worker_manager.h"
 #include "ut/common.h"
+
+DS_DECLARE_string(rocksdb_write_mode);
 
 namespace datasystem::ut {
 namespace {
 constexpr auto OBSERVER_WAIT_TIMEOUT = std::chrono::seconds(2);
+constexpr char DEAD_WORKER_ADDRESS[] = "127.0.0.1:12003";
+constexpr char SURVIVING_WORKER_ADDRESS[] = "127.0.0.1:12004";
+
+master::MetaForMigrationPb BuildMigratedMeta(const std::string &objectKey, bool useLegacyLocations)
+{
+    ObjectMetaPb objectMeta;
+    objectMeta.set_object_key(objectKey);
+    objectMeta.set_primary_address(DEAD_WORKER_ADDRESS);
+    master::MetaForMigrationPb migratedMeta;
+    migratedMeta.set_object_key(objectKey);
+    migratedMeta.set_meta(objectMeta.SerializeAsString());
+    if (useLegacyLocations) {
+        migratedMeta.add_locations(SURVIVING_WORKER_ADDRESS);
+        migratedMeta.add_locations(DEAD_WORKER_ADDRESS);
+    } else {
+        for (const auto *location : { SURVIVING_WORKER_ADDRESS, DEAD_WORKER_ADDRESS }) {
+            auto *newLocation = migratedMeta.add_new_locations();
+            newLocation->set_location(location);
+            newLocation->set_ack(static_cast<int>(master::AckState::ACK));
+        }
+    }
+    return migratedMeta;
+}
 }
 
 class OCMetadataManagerForMigrationTest : public master::OCMetadataManager {
 public:
     OCMetadataManagerForMigrationTest() : OCMetadataManager(nullptr, nullptr, nullptr, nullptr, "", nullptr, nullptr,
                                                             false, HostPort(), "", nullptr, "migration-test")
+    {
+    }
+
+    OCMetadataManagerForMigrationTest(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore)
+        : OCMetadataManager(std::move(akSkManager), rocksStore, nullptr, nullptr, SURVIVING_WORKER_ADDRESS, nullptr,
+                            nullptr, false, HostPort(), SURVIVING_WORKER_ADDRESS, nullptr, "migration-race-test")
     {
     }
 
@@ -38,6 +72,40 @@ public:
     void PrepareFailureDependencies()
     {
         expiredObjectManager_ = std::make_unique<master::ExpiredObjectManager>("", this);
+    }
+
+    Status PrepareMigrationReceiver()
+    {
+        RETURN_IF_NOT_OK(objectStore_->Init());
+        expiredObjectManager_ = std::make_unique<master::ExpiredObjectManager>(SURVIVING_WORKER_ADDRESS, this);
+        notifyWorkerManager_ = std::make_unique<master::OCNotifyWorkerManager>(objectStore_, true, akSkManager_, this);
+        return Status::OK();
+    }
+
+    void MarkWorkerFault(const std::string &workerAddress, bool isDead)
+    {
+        notifyWorkerManager_->SetFaultWorker(workerAddress, isDead);
+    }
+
+    bool SaveMigratedMeta(const master::MetaForMigrationPb &meta, Status &status)
+    {
+        return SaveOneMeta(meta, status);
+    }
+
+    bool HasLocation(const std::string &objectKey, const std::string &workerAddress)
+    {
+        auto &shard = metaShards_[GetShardIndex(objectKey)];
+        bthread::RWLockRdGuard lock(shard.mutex);
+        master::TbbMetaTable::const_accessor accessor;
+        return shard.table.find(accessor, objectKey) && accessor->second.locations.count(workerAddress) > 0;
+    }
+
+    std::string GetPrimaryAddress(const std::string &objectKey)
+    {
+        auto &shard = metaShards_[GetShardIndex(objectKey)];
+        bthread::RWLockRdGuard lock(shard.mutex);
+        master::TbbMetaTable::const_accessor accessor;
+        return shard.table.find(accessor, objectKey) ? accessor->second.meta.primary_address() : "";
     }
 };
 
@@ -192,6 +260,48 @@ TEST_F(OCMigrateMetadataManagerTest, MigrationFailureClearsMovingMarker)
 
     EXPECT_FALSE(metadataManager->ItemIsMigrating(objectKey));
     metadataManager->Shutdown();
+}
+
+TEST_F(OCMigrateMetadataManagerTest, MigrationDoesNotRestoreLocationCleanedByPassiveScaleDown)
+{
+    const auto previousWriteMode = FLAGS_rocksdb_write_mode;
+    FLAGS_rocksdb_write_mode = "sync";
+    Raii restoreWriteMode([&] { FLAGS_rocksdb_write_mode = previousWriteMode; });
+    auto rocksStore = RocksStore::GetInstance(GetTestCaseDataDir() + "/passive_scale_down_migration");
+    auto metadataManager =
+        std::make_shared<OCMetadataManagerForMigrationTest>(std::make_shared<AkSkManager>(), rocksStore.get());
+    DS_ASSERT_OK(metadataManager->PrepareMigrationReceiver());
+
+    constexpr char objectKey[] = "passive_scale_down_cleanup_before_migration";
+    constexpr char beforeSavePoint[] = "OCMetadataManager.SaveOneMeta.before_save";
+    auto migratedMeta = BuildMigratedMeta(objectKey, false);
+    DS_ASSERT_OK(inject::Set(beforeSavePoint, "1*pause()"));
+    Status saveStatus;
+    auto save = std::async(std::launch::async,
+                           [&] { return metadataManager->SaveMigratedMeta(migratedMeta, saveStatus); });
+    Raii clearInject([&] { (void)inject::Clear(beforeSavePoint); });
+    const auto deadline = std::chrono::steady_clock::now() + OBSERVER_WAIT_TIMEOUT;
+    while (inject::GetExecuteCount(beforeSavePoint) != 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(inject::GetExecuteCount(beforeSavePoint), 1U);
+
+    metadataManager->MarkWorkerFault(DEAD_WORKER_ADDRESS, true);
+    DS_ASSERT_OK(metadataManager->RemoveMetaByWorker(DEAD_WORKER_ADDRESS));
+    DS_ASSERT_OK(inject::Clear(beforeSavePoint));
+    ASSERT_TRUE(save.get()) << saveStatus.ToString();
+    EXPECT_TRUE(metadataManager->HasLocation(objectKey, SURVIVING_WORKER_ADDRESS));
+    EXPECT_FALSE(metadataManager->HasLocation(objectKey, DEAD_WORKER_ADDRESS));
+    EXPECT_EQ(metadataManager->GetPrimaryAddress(objectKey), SURVIVING_WORKER_ADDRESS);
+
+    constexpr char legacyObjectKey[] = "legacy_passive_scale_down_migration";
+    auto legacyMigratedMeta = BuildMigratedMeta(legacyObjectKey, true);
+    ASSERT_TRUE(metadataManager->SaveMigratedMeta(legacyMigratedMeta, saveStatus)) << saveStatus.ToString();
+    EXPECT_TRUE(metadataManager->HasLocation(legacyObjectKey, SURVIVING_WORKER_ADDRESS));
+    EXPECT_FALSE(metadataManager->HasLocation(legacyObjectKey, DEAD_WORKER_ADDRESS));
+
+    metadataManager->Shutdown();
+    rocksStore.reset();
 }
 
 TEST_F(OCMigrateMetadataManagerTest, MetadataRpcObserverUsesParsedTargetAndStopsOnShutdown)
