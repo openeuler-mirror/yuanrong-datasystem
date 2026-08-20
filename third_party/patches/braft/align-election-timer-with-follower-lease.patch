@@ -1,0 +1,13 @@
+--- a/src/braft/node.cpp
++++ b/src/braft/node.cpp
+@@ -466,3 +466,3 @@ int NodeImpl::init(const NodeOptions& options) {
+     CHECK_EQ(0, _vote_timer.init(this, options.election_timeout_ms + options.max_clock_drift_ms));
+-    CHECK_EQ(0, _election_timer.init(this, options.election_timeout_ms));
++    CHECK_EQ(0, _election_timer.init(this, options.election_timeout_ms + options.max_clock_drift_ms));
+     CHECK_EQ(0, _stepdown_timer.init(this, options.election_timeout_ms));
+@@ -2373,4 +2373,5 @@ void NodeImpl::handle_append_entries_request(brpc::Controller* cntl,
+     if (!from_append_entries_cache) {
+         // Requests from cache already updated timestamp
+         _follower_lease.renew(_leader_id);
++        _election_timer.reset();
+     }

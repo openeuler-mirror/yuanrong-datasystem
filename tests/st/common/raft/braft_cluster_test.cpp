@@ -31,6 +31,7 @@
 #include <butil/at_exit.h>
 #include <butil/endpoint.h>
 #include <butil/iobuf.h>
+#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
 #include "cluster/test_port_allocator.h"
@@ -43,6 +44,8 @@ namespace {
 constexpr size_t kClusterNodeCount = 3;
 constexpr int kElectionTimeoutMs = 300;
 constexpr int kLeaderPollIntervalMs = 20;
+constexpr int kHeartbeatObservationWindowMs = 80;
+constexpr int kAlignedFailoverDeadlineMs = 370;
 constexpr std::chrono::seconds kClusterCaseBudget{ 6 };
 constexpr std::chrono::seconds kReplayCaseBudget{ 6 };
 constexpr std::chrono::seconds kDefaultTestBudget{ 8 };
@@ -383,6 +386,7 @@ protected:
             EXPECT_FALSE(error) << error.message();
         }
         TestPortAllocator::Instance().ReleaseAll();
+        (void)gflags::SetCommandLineOption("raft_max_election_delay_ms", "1000");
         CommonTest::TearDown();
     }
 
@@ -407,6 +411,33 @@ protected:
             }
             const auto nextPoll = std::chrono::steady_clock::now() + std::chrono::milliseconds(kLeaderPollIntervalMs);
             std::this_thread::sleep_until(nextPoll < deadline ? nextPoll : deadline);
+        }
+        return false;
+    }
+
+    size_t LeaderIndex() const
+    {
+        for (size_t i = 0; i < kClusterNodeCount; ++i) {
+            if (nodes_[i] != nullptr && nodes_[i]->is_leader()) {
+                return i;
+            }
+        }
+        return kClusterNodeCount;
+    }
+
+    bool WaitForSurvivorLeader(size_t stoppedIndex, std::chrono::steady_clock::time_point deadline)
+    {
+        while (std::chrono::steady_clock::now() < deadline) {
+            size_t leaderCount = 0;
+            for (size_t i = 0; i < kClusterNodeCount; ++i) {
+                if (i != stoppedIndex && nodes_[i]->is_leader()) {
+                    ++leaderCount;
+                }
+            }
+            if (leaderCount == 1) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(kLeaderPollIntervalMs));
         }
         return false;
     }
@@ -451,6 +482,23 @@ TEST_F(BraftClusterTest, ThreeNodesElectOneLeader)
     for (const auto &node : nodes_) {
         EXPECT_EQ(node->leader_id(), electedLeader) << ElectionState();
     }
+}
+
+TEST_F(BraftClusterTest, AcceptedLeaderHeartbeatAlignsFollowerElectionTimer)
+{
+    const auto caseDeadline = std::chrono::steady_clock::now() + kClusterCaseBudget;
+    ASSERT_FALSE(gflags::SetCommandLineOption("raft_max_election_delay_ms", "1").empty());
+    ASSERT_TRUE(WaitForLeader(caseDeadline)) << ElectionState();
+
+    const size_t leaderIndex = LeaderIndex();
+    ASSERT_LT(leaderIndex, kClusterNodeCount);
+    std::this_thread::sleep_for(std::chrono::milliseconds(kHeartbeatObservationWindowMs));
+
+    nodes_[leaderIndex]->shutdown(nullptr);
+    nodes_[leaderIndex]->join();
+    const auto failoverDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(kAlignedFailoverDeadlineMs);
+    EXPECT_TRUE(WaitForSurvivorLeader(leaderIndex, failoverDeadline)) << ElectionState();
 }
 
 TEST_F(BraftClusterTest, UnknownUserLogFailsClosed)
