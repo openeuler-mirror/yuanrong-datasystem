@@ -1227,6 +1227,22 @@ TEST_F(FlagsTest, UbTransportArenaNumAccepts32AndRejects33)
     FLAGS_ub_transport_arena_num = oldArenaNum;
 }
 
+TEST_F(FlagsTest, UbNumaSourceChipPolicyDefaultsToRoundRobinWithAffinityAndRejectsUnknownValue)
+{
+    const uint32_t oldPolicy = FLAGS_ub_numa_src_chip_policy;
+    std::string errMsg;
+
+    EXPECT_EQ(FLAGS_ub_numa_src_chip_policy, 1u);
+    ASSERT_TRUE(SetCommandLineOption("ub_numa_src_chip_policy", "0", errMsg));
+    EXPECT_EQ(FLAGS_ub_numa_src_chip_policy, 0u);
+    ASSERT_TRUE(SetCommandLineOption("ub_numa_src_chip_policy", "1", errMsg));
+    EXPECT_EQ(FLAGS_ub_numa_src_chip_policy, 1u);
+    ASSERT_FALSE(SetCommandLineOption("ub_numa_src_chip_policy", "2", errMsg));
+    EXPECT_EQ(FLAGS_ub_numa_src_chip_policy, 1u);
+
+    FLAGS_ub_numa_src_chip_policy = oldPolicy;
+}
+
 TEST_F(FlagsTest, GetExplicitDeclaredFlagsIncludesExplicitDefault)
 {
     const char *argv[] = { "./program", "-uint32_flag=32" };

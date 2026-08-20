@@ -157,6 +157,10 @@ if (BUILD_WITH_URMA_MOCK)
             client/object_cache/urma_numa_inflight_balance_test.cpp
             $<TARGET_OBJECTS:_ds_st_main_obj>
             $<TARGET_OBJECTS:_ds_st_group_common_obj>)
+    add_executable(ds_st_urma_numa_inflight_balance_round_robin
+            client/object_cache/urma_numa_inflight_balance_test.cpp
+            $<TARGET_OBJECTS:_ds_st_main_obj>
+            $<TARGET_OBJECTS:_ds_st_group_common_obj>)
 endif()
 
 # Heavy ST link targets (ds_st / ds_st_stream_cache / ds_st_object_cache /
@@ -191,8 +195,14 @@ if (BUILD_WITH_URMA_MOCK)
     target_link_libraries(ds_st_kv_cache PRIVATE common_urma_mock_obj)
     target_link_libraries(ds_st_coordinator_backend_manual PRIVATE common_urma_mock_obj)
     target_link_libraries(dead_peer_fast_fail_test PRIVATE common_urma_mock_obj)
-    target_compile_definitions(ds_st_urma_numa_inflight_balance PRIVATE USE_URMA USE_URMA_MOCK)
+    target_compile_definitions(ds_st_urma_numa_inflight_balance PRIVATE
+            USE_URMA USE_URMA_MOCK URMA_NUMA_SRC_CHIP_POLICY_TEST_VALUE=1)
     target_link_libraries(ds_st_urma_numa_inflight_balance PRIVATE
+            ${DS_ST_DEPEND_LIBS} binmock static_coordinator_discovery common_urma_mock_obj
+            -Wl,--reduce-memory-overheads)
+    target_compile_definitions(ds_st_urma_numa_inflight_balance_round_robin PRIVATE
+            USE_URMA USE_URMA_MOCK URMA_NUMA_SRC_CHIP_POLICY_TEST_VALUE=0)
+    target_link_libraries(ds_st_urma_numa_inflight_balance_round_robin PRIVATE
             ${DS_ST_DEPEND_LIBS} binmock static_coordinator_discovery common_urma_mock_obj
             -Wl,--reduce-memory-overheads)
 endif()
@@ -358,6 +368,8 @@ add_datasystem_test(coordinator_runtime_election_test TIMEOUT 8 TEST_ENVIRONMENT
 add_datasystem_test(dead_peer_fast_fail_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 if (BUILD_WITH_URMA_MOCK)
     add_datasystem_test(ds_st_urma_numa_inflight_balance TIMEOUT 180 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+    add_datasystem_test(ds_st_urma_numa_inflight_balance_round_robin TIMEOUT 180
+            TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 endif()
 
 file(GLOB_RECURSE DS_DEVICE_TEST_SRCS CONFIGURE_DEPENDS

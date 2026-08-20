@@ -87,15 +87,17 @@ void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t tr
 #endif
 }
 
-void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, uint32_t inflightWrDiffThreshold,
+void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, uint32_t srcChipPolicy,
+                           uint32_t inflightWrDiffThreshold,
                            const std::string &configSource)
 {
     (void)affinityEnabled;
     (void)rrType;
+    (void)srcChipPolicy;
     (void)inflightWrDiffThreshold;
     (void)configSource;
 #ifdef USE_URMA
-    UrmaManager::SetClientUbNumaConfig(affinityEnabled, rrType, inflightWrDiffThreshold, configSource);
+    UrmaManager::SetClientUbNumaConfig(affinityEnabled, rrType, srcChipPolicy, inflightWrDiffThreshold, configSource);
 #endif
 }
 

@@ -123,6 +123,8 @@ message RegisterClientRspPb {
     bool ub_runtime_enabled = 31;
     // Maximum source-chip inflight WR difference before selecting the less busy chip. Zero disables feedback.
     uint32 ub_numa_inflight_wr_diff_threshold = 32;
+    // Source-chip policy: 0=round-robin for compatibility, 1=round-robin with opportunistic memory affinity.
+    uint32 ub_numa_src_chip_policy = 33;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;

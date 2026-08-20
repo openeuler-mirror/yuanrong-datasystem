@@ -1555,6 +1555,15 @@ TEST_F(KVClientTransportGetTest, AllKeysFailReturnFirstError)
     for (size_t i = 0; i < keys.size(); ++i) {
         DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
     }
+    for (uint32_t workerIndex = 0; workerIndex < WORKER_NUM; ++workerIndex) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, QUERY_AND_GET_INLINE_FAILURE_INJECT,
+                                               "return(K_RUNTIME_ERROR)"));
+    }
+    Raii clearInject([this] {
+        for (uint32_t workerIndex = 0; workerIndex < WORKER_NUM; ++workerIndex) {
+            (void)cluster_->ClearInjectAction(WORKER, workerIndex, QUERY_AND_GET_INLINE_FAILURE_INJECT);
+        }
+    });
 
     std::vector<Optional<Buffer>> buffers;
     const auto start = std::chrono::steady_clock::now();
