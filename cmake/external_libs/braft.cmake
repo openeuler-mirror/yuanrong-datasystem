@@ -57,7 +57,8 @@ set(braft_CMAKE_OPTIONS
 set(braft_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} -I${absl_INCLUDE_DIR}")
 set(braft_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 set(braft_PATCHES
-    ${CMAKE_SOURCE_DIR}/third_party/patches/braft/modern-toolchain-compat.patch)
+    ${CMAKE_SOURCE_DIR}/third_party/patches/braft/modern-toolchain-compat.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/braft/align-election-timer-with-follower-lease.patch)
 
 set(_BRAFT_PROTOBUF_LIB_DIR ${Protobuf_ROOT}/lib)
 if (EXISTS ${Protobuf_ROOT}/lib64)

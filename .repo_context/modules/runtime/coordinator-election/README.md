@@ -97,6 +97,8 @@ Updates are process-local and are not distributed or persisted.
 
 User-facing Coordinator election timing flags are `coordinator_raft_heartbeat_interval_ms`, `coordinator_raft_election_timeout_ms`, `coordinator_discovery_retry_interval_ms`, and `coordinator_member_failure_grace_ms`. `coordinator_raft_heartbeat_interval_ms` defaults to 100 ms and must be in `[10, 10000]`; `coordinator_raft_election_timeout_ms` defaults to 1000 ms and must be an integer multiple of heartbeat with a ratio in `[5, 10]`. Discovery retry defaults to 5000 ms and member failure grace defaults to 10000 ms.
 
+The repository's braft patch initializes the follower election timer with the sum of the configured election timeout and braft's clock-drift margin, while the Leader stepdown timer retains the configured election timeout. Each accepted current-Leader `AppendEntries` renews the follower lease and resets the election timer from the same observation, keeping the lease and election timer aligned.
+
 The membership health-check interval and bootstrap retry-warning interval are internal values. Production snapshots inject 3000 ms defaults, while in-process tests may override them by constructing `CoordinatorRaftFlags` directly.
 
 ## Bootstrap Convergence And Serving Gate
@@ -156,7 +158,7 @@ The current braft state machine rejects management-log apply and the Node expose
 | ST | `tests/st/common/raft/coordinator_service_election_test.cpp` | Real single-Service shared endpoint, election, recovery, and cleanup. |
 | ST | `tests/st/common/raft/coordinator_runtime_election_test.cpp` | Real in-process Runtimes launched with empty config paths, stable fixture-owned common flags, and per-generation endpoint/data/timing snapshots; covers one-candidate waiting, target-quorum bootstrap, membership, Discovery failure, serving-gate isolation, failover, persisted restart, deleted-root rebuild, and bounded quorum loss. |
 | ST | `tests/st/common/raft/coordinator_raft_node_test.cpp` | Real Node and Membership scenarios. |
-| ST | `tests/st/common/raft/braft_cluster_test.cpp` | Raw braft cluster behavior. |
+| ST | `tests/st/common/raft/braft_cluster_test.cpp` | Raw braft cluster behavior, including bounded failover after accepted Leader heartbeats align follower election timers. |
 
 The in-process Runtime ST validates non-singleton Runtime isolation, callback ordering, failure, and recovery behavior inside one address space.
 
