@@ -89,6 +89,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_global_reference_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
+#include "datasystem/worker/object_cache/service/worker_query_and_get_impl.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 // Keep bthread headers after project RPC/log headers so brpc logging macros (CHECK_EQ etc.) are
 // established before bthread/mutex.h (which uses but does not define them) avoid redefinition pitfalls.
@@ -358,6 +359,14 @@ public:
      * @return Status of the call.
      */
     Status Get(std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi) override;
+
+    /**
+     * @brief Read metadata-owner-local objects and return locations for local misses.
+     * @param[in] serverApi Unary socket carrying the request, response, and TCP payloads.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status QueryAndGet(
+        std::shared_ptr<ServerUnaryWriterReader<QueryAndGetRspPb, QueryAndGetReqPb>> serverApi) override;
 
     /**
      * @brief Decrease the reference count of client.
@@ -1479,6 +1488,8 @@ private:
     std::shared_ptr<WorkerOcServiceMultiPublishImpl> multiPublishProc_{ nullptr };
 
     std::shared_ptr<WorkerOcServiceGetImpl> getProc_{ nullptr };
+
+    std::shared_ptr<WorkerQueryAndGetImpl> queryAndGetProc_{ nullptr };
 
     std::shared_ptr<PeerUbAdmission> ubAdmission_{ std::make_shared<PeerUbAdmission>() };
 

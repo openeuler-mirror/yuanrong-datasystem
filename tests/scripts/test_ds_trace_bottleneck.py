@@ -716,7 +716,7 @@ def test_query_and_get_has_time_worker_analysis_and_unclosed_failure_boundary(ru
                 "host_ip": "",
                 "text": (
                     f"{timestamp} [BRPC_RPC_FRAMEWORK_SLOW] "
-                    "method=datasystem.master.MasterOCService.QueryAndGet "
+                    "method=datasystem.WorkerOCService.QueryAndGet "
                     "e2e_us=20150 remote_processing_us=20150 server_req_queue_us=0 "
                     "server_exec_us=0 network_residual_us=0 cntl_error_code=1008 "
                     "cntl_failed=1 resp_attachment_bytes=0"
@@ -778,7 +778,7 @@ def test_query_and_get_has_time_worker_analysis_and_unclosed_failure_boundary(ru
     assert "ObjectReadFlow::Resolve" in timeout_flow["confirmed_flow"]
     assert "不能确认" in timeout_flow["root_cause_status"]
     query_events = [event for event in correlation["events"] if event["kind"] == "query_meta"]
-    assert any(event["method"].endswith("MasterOCService.QueryAndGet") for event in query_events)
+    assert any(event["method"].endswith("WorkerOCService.QueryAndGet") for event in query_events)
     assert all(event["component_scope"] == "Client发起QueryMeta；Meta Owner目标未观测" for event in query_events)
 
     html_text = mod.render_html(analysis, "QueryMeta analysis")
@@ -1430,7 +1430,7 @@ def test_failed_urma_wait_timeout_is_an_error_family_not_unsegmented_parent(
     "method, expected_subcategory, expected_chain, expected_scope",
     [
         (
-            "datasystem.master.MasterOCService.QueryAndGet",
+            "datasystem.WorkerOCService.QueryAndGet",
             "QueryMeta RPC deadline",
             "QueryMeta RPC超时→TransportGet失败→1001",
             "Client等待Meta Owner QueryAndGet超时",
@@ -1518,7 +1518,7 @@ def test_successful_query_and_get_does_not_mask_later_data_rpc_deadline(run_dir:
                 "host_ip": "",
                 "text": (
                     "[BRPC_RPC_FRAMEWORK_SLOW] "
-                    "method=datasystem.master.MasterOCService.QueryAndGet e2e_us=18400 "
+                    "method=datasystem.WorkerOCService.QueryAndGet e2e_us=18400 "
                     "server_exec_us=8 network_residual_us=18390 cntl_error_code=0 cntl_failed=0"
                 ),
             },
@@ -1566,7 +1566,7 @@ def test_successful_query_and_get_does_not_mask_later_urma_connect_deadline(run_
                 "host_ip": "",
                 "text": (
                     "[BRPC_RPC_FRAMEWORK_SLOW] "
-                    "method=datasystem.master.MasterOCService.QueryAndGet e2e_us=19400 "
+                    "method=datasystem.WorkerOCService.QueryAndGet e2e_us=19400 "
                     "server_exec_us=8 network_residual_us=19390 cntl_error_code=0 cntl_failed=0"
                 ),
             },
@@ -1636,7 +1636,7 @@ def test_query_meta_detail_separates_retry_rpc_residual_and_inline_urma(
             "host_ip": "",
             "text": (
                 "[BRPC_RPC_FRAMEWORK_SLOW] "
-                "method=datasystem.master.MasterOCService.QueryAndGet "
+                "method=datasystem.WorkerOCService.QueryAndGet "
                 f"e2e_us={int(rpc_e2e_ms * 1000)} server_exec_us=5 "
                 f"network_residual_us={int(rpc_network_ms * 1000)} "
                 "cntl_error_code=0 cntl_failed=0"

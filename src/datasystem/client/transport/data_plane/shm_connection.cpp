@@ -413,6 +413,23 @@ Status ShmSession::BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGet
     return Status::OK();
 }
 
+Status ShmSession::BuildQueryAndGetResult(const QueryAndGetShmInfoPb &info, const DataGetRequest &input,
+                                          DataGetResult &result)
+{
+    GetRspPb::ObjectInfoPb objectInfo;
+    objectInfo.set_store_fd(info.store_fd());
+    objectInfo.set_offset(info.offset());
+    objectInfo.set_data_size(info.data_size());
+    objectInfo.set_metadata_size(info.metadata_size());
+    objectInfo.set_mmap_size(info.mmap_size());
+    objectInfo.set_shm_id(info.shm_id());
+    objectInfo.set_is_seal(info.is_seal());
+    objectInfo.set_write_mode(info.write_mode());
+    objectInfo.set_consistency_type(info.consistency_type());
+    objectInfo.set_cache_type(info.cache_type());
+    return BuildResult(objectInfo, input, result);
+}
+
 Status ShmSession::MmapWriteRegion(const CreateRspPb &createRsp, const TransportRequestContext &context,
                                    uint64_t size, ObjectBufferInfo &info)
 {

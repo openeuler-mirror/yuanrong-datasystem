@@ -264,8 +264,8 @@ def _classify_rpc_deadline_detail(status: int, evidence: list[str]) -> dict[str,
             re.I,
         )
     )
-    query_timeout = any("MasterOCService.QueryAndGet" in method for method in failed_methods) or bool(
-        re.search(r"MasterOCService\.QueryAndGet[^\n]*RPC deadline exceeded", joined, re.I)
+    query_timeout = any("WorkerOCService.QueryAndGet" in method for method in failed_methods) or bool(
+        re.search(r"WorkerOCService\.QueryAndGet[^\n]*RPC deadline exceeded", joined, re.I)
     )
     # Method-specific failure evidence wins over the mere presence of another
     # successful RPC in the same Trace. QueryAndGet may succeed before a later
@@ -281,17 +281,17 @@ def _classify_rpc_deadline_detail(status: int, evidence: list[str]) -> dict[str,
     elif query_timeout:
         subcategory = "QueryMeta RPC deadline"
         chain = f"QueryMeta RPC超时→TransportGet失败→{status}"
-        failure_point = "MasterOCService.QueryAndGet未在deadline内返回"
+        failure_point = "WorkerOCService.QueryAndGet未在deadline内返回"
     elif re.search(r"(?:WorkerWorkerOCService\.)?GetObjectRemote", joined, re.I) and not re.search(
-        r"MasterOCService\.QueryAndGet", joined, re.I
+        r"WorkerOCService\.QueryAndGet", joined, re.I
     ):
         subcategory = "Data RPC deadline"
         chain = f"Data RPC超时→TransportGet失败→{status}"
         failure_point = "GetObjectRemote未在deadline内返回"
-    elif re.search(r"MasterOCService\.QueryAndGet", joined, re.I):
+    elif re.search(r"WorkerOCService\.QueryAndGet", joined, re.I):
         subcategory = "QueryMeta RPC deadline"
         chain = f"QueryMeta RPC超时→TransportGet失败→{status}"
-        failure_point = "MasterOCService.QueryAndGet未在deadline内返回"
+        failure_point = "WorkerOCService.QueryAndGet未在deadline内返回"
     else:
         subcategory = "RPC deadline·方法未细分"
         chain = f"RPC超时→TransportGet失败→{status}"
@@ -1361,7 +1361,7 @@ def _query_meta_detail(row: dict) -> dict | None:
     entries = []
     for text in row.get("evidence", []):
         method, fields = _rpc_fields(text)
-        if method and "MasterOCService.QueryAndGet" in method:
+        if method and "WorkerOCService.QueryAndGet" in method:
             entries.append(fields)
     if not entries and not row.get("query_meta_ms"):
         return None
@@ -1875,7 +1875,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
         initiator = row.get("client_observer") or "未明确"
         if initiator == "未明确":
             for record in row.get("evidence_records", []):
-                if "MasterOCService.QueryAndGet" in record.get("text", ""):
+                if "WorkerOCService.QueryAndGet" in record.get("text", ""):
                     initiator = record.get("worker") or "未明确"
                     break
         initiator_groups[initiator].append(row)
@@ -1920,7 +1920,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
         initiator = row.get("client_observer") or "未明确"
         if initiator == "未明确":
             for record in row.get("evidence_records", []):
-                if "MasterOCService.QueryAndGet" in record.get("text", ""):
+                if "WorkerOCService.QueryAndGet" in record.get("text", ""):
                     initiator = record.get("worker") or "未明确"
                     break
         if initiator != "未明确":
@@ -1928,7 +1928,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
         query_entries = []
         for text in row.get("evidence", []):
             method, fields = _rpc_fields(text)
-            if method and "MasterOCService.QueryAndGet" in method:
+            if method and "WorkerOCService.QueryAndGet" in method:
                 query_entries.append(fields)
             target = re.search(
                 r"(?:meta owner|targetAddress|target address|peer)\s*[:=]\s*([^,\s]+)",
@@ -1938,7 +1938,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
             if target:
                 timeout_targets.add(target.group(1))
         if any(
-            "MasterOCService.QueryAndGet" in text and re.search(r"\bresp_attachment_bytes=0\b", text)
+            "WorkerOCService.QueryAndGet" in text and re.search(r"\bresp_attachment_bytes=0\b", text)
             for text in row.get("evidence", [])
         ):
             empty_response_count += 1
@@ -1972,7 +1972,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
         "dominant_second": {"second": dominant_second, "trace_count": dominant_count},
         "confirmed_flow": (
             "Client ObjectReadFlow::Resolve → ObjectMetadataClient::QueryAndGet/QueryWithRetry → "
-            "WorkerRpcClient::InvokeQueryAndGet → Meta Owner MasterOCService.QueryAndGet；"
+            "WorkerRpcClient::InvokeQueryAndGet → Meta Owner WorkerOCService.QueryAndGet；"
             "超时发生在该RPC返回前，尚未进入后续独立Data Worker GetObjectRemote阶段。"
         ),
         "likely_common_mechanism": (
@@ -2237,7 +2237,7 @@ table{width:100%;table-layout:fixed}
 CORRELATION_SECTION = r'''
 <section class="panel" id="query-meta-analysis">
 <h2>4-A. QueryMeta 根因分析</h2>
-<div class="notice"><b>定界口径：</b><code>MasterOCService.QueryAndGet</code> 不只是查元数据：携带 <code>data_request</code> 时，Meta Owner 会执行 <code>TryGetQueryAndGetData</code>，命中本地副本后可通过 UB/URMA 内联返回数据。细类按互斥优先级统计；TryGet/URMA 作为证据标签，不重复计入主类。失败且只有 <code>cntl_error_code=1008</code> 时，只能确认 Client 等待到截止点；缺少 server trailer 时，Meta Owner 执行、响应发送、RPC residual 与 Client 截止观察仍未闭合。</div>
+<div class="notice"><b>定界口径：</b><code>WorkerOCService.QueryAndGet</code> 不只是查元数据：携带 <code>data_request</code> 时，Meta Owner Worker 会读取本地驻留副本，并通过 SHM、UB/URMA 或 TCP 内联返回数据；本地 miss 才向 Master 发起 metadata-only QueryMeta。细类按互斥优先级统计；本地读取/URMA 作为证据标签，不重复计入主类。失败且只有 <code>cntl_error_code=1008</code> 时，只能确认 Client 等待到截止点；缺少 server trailer 时，Meta Owner Worker 执行、响应发送、RPC residual 与 Client 截止观察仍未闭合。</div>
 <div id="query-meta-summary" class="finding-grid"></div>
 <h3>QueryAndGet 超时流程定界</h3>
 <div id="query-meta-timeout-flow" class="finding-grid"></div>

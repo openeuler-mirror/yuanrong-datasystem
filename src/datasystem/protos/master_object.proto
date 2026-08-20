@@ -613,47 +613,6 @@ message GetObjectLocationsRspPb {
   bool meta_is_moving = 3;
 }
 
-message QueryAndGetTcpDataReqPb {}
-
-message QueryAndGetUbDataReqPb {
-  repeated datasystem.UrmaRemoteAddrPb buffer_infos = 1;
-  uint64 buffer_size = 2;
-  string urma_instance_id = 3;
-}
-
-message QueryAndGetDataReqPb {
-  oneof transport {
-    QueryAndGetTcpDataReqPb tcp = 1;
-    QueryAndGetUbDataReqPb ub = 2;
-  }
-}
-
-message QueryAndGetReqPb {
-  repeated string object_keys = 1;
-  bool redirect = 2;
-  QueryAndGetDataReqPb data_request = 3;
-
-  // put to the end, the previous data is used to generate AK and SK signatures.
-  uint64 timestamp = 100;
-  string signature = 101;
-  string access_key = 102;
-}
-
-message QueryAndGetDataResultPb {
-  repeated uint32 payload_indexes = 1;
-}
-
-message QueryAndGetResultPb {
-  ObjectLocationInfoPb location = 1;
-  QueryAndGetDataResultPb data_result = 2;
-}
-
-message QueryAndGetRspPb {
-  repeated QueryAndGetResultPb results = 1;
-  repeated RedirectMetaInfo info = 2;
-  bool meta_is_moving = 3;
-}
-
 message ReplacePrimaryReqPb {
   message ObjectInfoPb {
     string object_key = 1;
@@ -839,10 +798,6 @@ service MasterOCService {
   }
   rpc UpdateMeta(UpdateMetaReqPb) returns (UpdateMetaRspPb) {}
   rpc GetObjectLocations(GetObjectLocationsReqPb) returns (GetObjectLocationsRspPb) {}
-  rpc QueryAndGet(QueryAndGetReqPb) returns (QueryAndGetRspPb) {
-    option (datasystem.recv_payload_option) = true;
-    option (datasystem.urma_enabled_option) = true;
-  }
   rpc GIncreaseRef(GIncreaseReqPb) returns (GIncreaseRspPb) {}
   rpc GDecreaseRef(GDecreaseReqPb) returns (GDecreaseRspPb) {
     option (datasystem.unary_socket_option) = true;

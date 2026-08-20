@@ -82,6 +82,16 @@ public:
 
     Status BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGetRequest &input, DataGetResult &result);
 
+    /**
+     * @brief Materialize a QueryAndGet shared-memory result through this session.
+     * @param[in] info Shared-memory result returned by Worker QueryAndGet.
+     * @param[in] input Object identity and request context.
+     * @param[out] result Materialized zero-copy data result.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status BuildQueryAndGetResult(const QueryAndGetShmInfoPb &info, const DataGetRequest &input,
+                                  DataGetResult &result);
+
     /** Maps the shared-memory region allocated by a routed Create into the client address space (PROT_WRITE)
      * so the caller can write zero-copy, registers the worker reference, and attaches a send-side owner that
      * gates Publish on session liveness (K_BUFFER_DEPRECATED) and releases the worker reference on buffer

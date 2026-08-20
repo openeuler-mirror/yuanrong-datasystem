@@ -77,11 +77,9 @@ public:
      * @param[in] req Remote get request.
      * @param[out] rsp Remote get response.
      * @param[out] payload Out payloads.
-     * @param[in] isQueryAndGet Whether to use the metadata-query resident-data fast path.
      * @return Status of the call.
      */
-    Status GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
-                           bool isQueryAndGet = false);
+    Status GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload);
 
     /**
      * @brief Check etcd state.
@@ -216,14 +214,13 @@ private:
      * @param[out] keys The new request id to wait for if not blocking.
      * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @param[in] batchRootInfo The common root info for batched requests.
-     * @param[in] isQueryAndGet Whether this is a QueryAndGet fast-path attempt.
      * @return Status of the call.
      */
     Status GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &eventKeys,
                                std::shared_ptr<AggregateMemory> batchPtr = nullptr,
                                RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr,
-                               BatchRh2dContext *batchRh2dContext = nullptr, bool isQueryAndGet = false);
+                               BatchRh2dContext *batchRh2dContext = nullptr);
 
     Status LoadPayloadAndFillResponse(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
                                       std::vector<RpcMessage> &outPayload, const std::string &objectKey,
@@ -231,7 +228,7 @@ private:
                                       const std::shared_ptr<AggregateMemory> &batchPtr,
                                       RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext,
                                       Status *fallbackStatus, bool isFastTransportEnabled, bool isUrmaFastTransport,
-                                      bool isPipelineH2DRequest, PerfPoint &batchImplPoint, bool isQueryAndGet);
+                                      bool isPipelineH2DRequest, PerfPoint &batchImplPoint);
 
     /**
      * @brief Load a spilled object for the regular remote-get path.
@@ -239,11 +236,10 @@ private:
      * @param[out] outPayload Payload buffers loaded from spill storage.
      * @param[in] objKv Object read range.
      * @param[in,out] point Remote-get performance point.
-     * @param[in] isQueryAndGet Whether this is a QueryAndGet fast-path attempt.
      * @return K_OK on success; the error code otherwise.
      */
     Status LoadSpilledObjectData(const std::string &objectKey, std::vector<RpcMessage> &outPayload,
-                                 const ReadObjectKV &objKv, PerfPoint &point, bool isQueryAndGet);
+                                 const ReadObjectKV &objKv, PerfPoint &point);
 
     /**
      * @brief Fill a successful remote-get response and finish its performance records.
@@ -387,14 +383,13 @@ private:
      * @param[out] keys The request id to wait for if not blocking.
      * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @param[in] batchRootInfo The common root info for batched requests.
-     * @param[in] isQueryAndGet Whether this is a QueryAndGet fast-path attempt.
      * @return Status of the call.
      */
     Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                   std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &eventKeys,
                                   std::shared_ptr<AggregateMemory> batchPtr = nullptr,
                                   RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr,
-                                  BatchRh2dContext *batchRh2dContext = nullptr, bool isQueryAndGet = false);
+                                  BatchRh2dContext *batchRh2dContext = nullptr);
 
     /**
      * @brief Complete a URMA warmup request when the target warmup object is not ready locally.

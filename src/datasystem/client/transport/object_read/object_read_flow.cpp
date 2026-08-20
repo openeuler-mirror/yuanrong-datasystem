@@ -46,11 +46,13 @@ struct MetadataGroup {
     {
     }
 
-    void Resolve(ObjectMetadataClient &metadata, const Status &dispatchStatus, bool metadataOnly)
+    void Resolve(ObjectMetadataClient &metadata, const Status &dispatchStatus, bool metadataOnly,
+                 const std::shared_ptr<const TransportReadContext> &context)
     {
         Status status = dispatchStatus;
         if (status.IsOk()) {
-            status = metadataOnly ? metadata.QueryMetadata(address, items) : metadata.QueryAndGet(address, items);
+            status = metadataOnly ? metadata.QueryMetadata(address, items)
+                                  : metadata.QueryAndGet(address, items, context);
         }
         if (status.IsError()) {
             for (auto *item : items) {
@@ -144,7 +146,7 @@ Status InitializeItems(const ObjectReadRequest &request, std::vector<ReadItem> &
 }
 
 void QueryMetadata(ObjectMetadataClient &metadata, ThreadPool &taskPool, std::vector<ReadItem> &items,
-                   bool metadataOnly = false)
+                   const std::shared_ptr<const TransportReadContext> &context, bool metadataOnly = false)
 {
     auto groups = GroupByMetaOwner(items);
     VLOG(1) << "[TransportGet][Flow] Query metadata, key count: " << items.size()
@@ -156,8 +158,8 @@ void QueryMetadata(ObjectMetadataClient &metadata, ThreadPool &taskPool, std::ve
     for (auto &group : groups) {
         tasks.emplace_back(&group);
     }
-    RunTasks(taskPool, tasks, [&metadata, metadataOnly](MetadataGroup &group, const Status &dispatchStatus) {
-        group.Resolve(metadata, dispatchStatus, metadataOnly);
+    RunTasks(taskPool, tasks, [&metadata, metadataOnly, context](MetadataGroup &group, const Status &dispatchStatus) {
+        group.Resolve(metadata, dispatchStatus, metadataOnly, context);
     });
     const auto resolved = std::count_if(items.begin(), items.end(), [](const ReadItem &item) {
         return item.metadata.status.IsOk();
@@ -251,7 +253,7 @@ Status ObjectReadFlow::ResolveMetadata(const ObjectReadRequest &request,
     RETURN_RUNTIME_ERROR_IF_NULL(taskPool_);
     std::vector<ReadItem> items;
     RETURN_IF_NOT_OK(InitializeItems(request, items));
-    QueryMetadata(*metadata_, *taskPool_, items, true);
+    QueryMetadata(*metadata_, *taskPool_, items, nullptr, true);
     size_t resultSize = 0;
     for (const auto &input : request.items) {
         resultSize = std::max(resultSize, input.requestIndex + 1);
@@ -275,7 +277,7 @@ Status ObjectReadFlow::Run(const ObjectReadRequest &request, ObjectReadResult &r
     std::vector<ReadItem> items;
     RETURN_IF_NOT_OK(InitializeItems(request, items));
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_START);
-    QueryMetadata(*metadata_, *taskPool_, items);
+    QueryMetadata(*metadata_, *taskPool_, items, request.context);
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_END);
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_GET_DATA_START);
     ReadObjects(*replicas_, items, request.context, request.traceEnabled);

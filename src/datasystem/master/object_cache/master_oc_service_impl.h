@@ -144,16 +144,6 @@ public:
     Status GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &resp) override;
 
     /**
-     * @brief Query object locations for client direct reads.
-     * @param[in] req The query request.
-     * @param[out] resp The object locations and redirect state.
-     * @param[out] payloads Optional object data returned with the metadata.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &resp,
-                       std::vector<RpcMessage> &payloads) override;
-
-    /**
      * @brief Delete metadata and notify other workers to delete these objects.
      * @param[in] serverApi The ServerUnaryWriterReader object.
      * @return Status of the call.

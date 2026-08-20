@@ -339,6 +339,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache/service:worker_oc_service_delete_impl_header",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_expire_impl",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_global_reference_impl",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_get_impl",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_migrate_impl",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_multi_publish_impl_header",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_publish_impl_header",

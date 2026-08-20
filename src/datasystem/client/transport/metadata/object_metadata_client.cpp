@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-/** Description: Implements batched object metadata access and deadline-bounded redirect handling. */
+/** Description: Implements Worker-routed batched metadata and inline-data access. */
 
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
 
 #include "datasystem/client/transport/object_read/object_read_types.h"
 
 #include <cstdint>
-#include <deque>
 #include <limits>
-#include <unordered_map>
 #include <utility>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -35,25 +35,6 @@ namespace datasystem {
 namespace client {
 
 namespace {
-struct RedirectTarget {
-    HostPort address;
-    uint64_t topologyVersion = 0;
-};
-
-struct RedirectBatch {
-    HostPort address;
-    uint64_t topologyVersion = 0;
-    ObjectMetadataBatch items;
-};
-
-struct PendingMetadataBatch {
-    HostPort address;
-    uint64_t topologyVersion = 0;
-    ObjectMetadataBatch items;
-};
-
-using RedirectTargets = std::unordered_map<std::string, std::deque<RedirectTarget>>;
-
 bool IsMetadataOwnerRouteFailure(StatusCode code)
 {
     return code == K_RPC_UNAVAILABLE || code == K_RPC_DEADLINE_EXCEEDED || code == K_RPC_PEER_DEAD
@@ -73,77 +54,11 @@ Status ValidateAndResetItems(const ObjectMetadataBatch &items)
     return Status::OK();
 }
 
-Status BuildRedirectTargets(const master::QueryAndGetRspPb &response, RedirectTargets &redirectTargets)
+void CopyLocation(const QueryAndGetLocationInfoPb &source, master::ObjectLocationInfoPb &target)
 {
-    for (const auto &redirectInfo : response.info()) {
-        HostPort address;
-        RETURN_IF_NOT_OK(address.ParseString(redirectInfo.redirect_meta_address()));
-        for (const auto &objectKey : redirectInfo.change_meta_ids()) {
-            redirectTargets[objectKey].push_back({ address, redirectInfo.topology_version() });
-        }
-    }
-    return Status::OK();
-}
-
-Status PartitionInitialResponse(const ObjectMetadataBatch &items, const master::QueryAndGetRspPb &response,
-                                ObjectMetadataBatch &localItems,
-                                std::vector<RedirectBatch> &redirectBatches,
-                                std::optional<uint64_t> minimumTopologyVersion)
-{
-    RedirectTargets redirectTargets;
-    RETURN_IF_NOT_OK(BuildRedirectTargets(response, redirectTargets));
-
-    localItems.clear();
-    localItems.reserve(items.size());
-    std::unordered_map<std::string, RedirectBatch *> batchesByTarget;
-    // The target map keeps pointers into redirectBatches, so prevent vector relocation while grouping.
-    redirectBatches.reserve(response.info_size());
-    batchesByTarget.reserve(response.info_size());
-    for (auto *item : items) {
-        auto target = redirectTargets.find(item->objectKey);
-        if (target == redirectTargets.end() || target->second.empty()) {
-            localItems.push_back(item);
-            continue;
-        }
-        RedirectTarget redirectTarget = std::move(target->second.front());
-        target->second.pop_front();
-        CHECK_FAIL_RETURN_STATUS(!minimumTopologyVersion.has_value()
-                                     || redirectTarget.topologyVersion >= *minimumTopologyVersion,
-                                 K_NOT_READY,
-                                 std::string(STALE_TRANSPORT_SNAPSHOT_MESSAGE)
-                                     + ": metadata redirect topology version rolled back from "
-                                     + std::to_string(*minimumTopologyVersion) + " to "
-                                     + std::to_string(redirectTarget.topologyVersion));
-        const std::string batchKey = redirectTarget.address.ToString() + "#"
-                                     + std::to_string(redirectTarget.topologyVersion);
-        auto inserted = batchesByTarget.emplace(batchKey, nullptr);
-        if (inserted.second) {
-            redirectBatches.push_back(
-                { std::move(redirectTarget.address), redirectTarget.topologyVersion, {} });
-            inserted.first->second = &redirectBatches.back();
-        }
-        inserted.first->second->items.push_back(item);
-    }
-    return Status::OK();
-}
-
-void SetBatchError(const ObjectMetadataBatch &items, const Status &status)
-{
-    for (auto *item : items) {
-        item->status = status;
-    }
-}
-
-void QueueRedirectBatches(std::vector<RedirectBatch> &redirectBatches, std::deque<PendingMetadataBatch> &pending)
-{
-    for (auto &batch : redirectBatches) {
-        if (batch.items.empty()) {
-            continue;
-        }
-        LOG(INFO) << "[TransportGet][Metadata] Follow redirect, target: " << batch.address.ToString()
-                  << ", topology version: " << batch.topologyVersion << ", key count: " << batch.items.size();
-        pending.push_back({ std::move(batch.address), batch.topologyVersion, std::move(batch.items) });
-    }
+    target.set_object_key(source.object_key());
+    target.set_object_size(source.object_size());
+    *target.mutable_object_locations() = source.object_locations();
 }
 }  // namespace
 
@@ -163,24 +78,69 @@ ObjectMetadataClient::ObjectMetadataClient(std::shared_ptr<DataPlaneManager> man
 }
 
 Status ObjectMetadataClient::InitializeInlineRequest(const HostPort &address, const ObjectMetadataBatch &items,
+                                                     std::shared_ptr<const TransportReadContext> readContext,
                                                      InlineRequestContext &context) const
 {
     context = InlineRequestContext{};
-    // One batch uses one exclusive inline mode; phase one enables it only for a single key.
-    if (items.size() != 1 || advisor_ == nullptr) {
+    const auto hint = advisor_ == nullptr ? TransportHint::TCP_ONLY : advisor_->GetTransportHint(address);
+    if (hint == TransportHint::SHM_CANDIDATE) {
+        RETURN_IF_NOT_OK(PrepareShmInlineRequest(address, std::move(readContext), context));
+        RETURN_OK_IF_TRUE(context.mode == InlineTransportMode::SHM);
+    }
+    if (hint == TransportHint::UB_CANDIDATE || IsUrmaEnabled()) {
+        return PrepareUbInlineRequest(address, items, context);
+    }
+    context.mode = InlineTransportMode::TCP;
+    return Status::OK();
+}
+
+Status ObjectMetadataClient::PrepareShmInlineRequest(const HostPort &address,
+                                                     std::shared_ptr<const TransportReadContext> readContext,
+                                                     InlineRequestContext &context) const
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    if (readContext == nullptr) {
+        context.DisableInlineData();
         return Status::OK();
     }
-    if (advisor_->GetTransportHint(address) == TransportHint::TCP_ONLY) {
-        context.mode = InlineTransportMode::TCP;
+    std::shared_ptr<IDataTransporter> transporter;
+    Status rc = manager_->GetOrCreate(address, TransportHint::SHM_CANDIDATE, transporter);
+    auto shmTransporter = std::dynamic_pointer_cast<ShmTransporter>(transporter);
+    if (rc.IsError() || shmTransporter == nullptr) {
+        context.DisableInlineData();
         return Status::OK();
     }
-    return PrepareUbInlineRequest(address, items, context);
+    std::shared_ptr<ShmSession> session;
+    rc = shmTransporter->AcquireSession(readContext->requestContext, session);
+    if (rc.IsError()) {
+        context.DisableInlineData();
+        return Status::OK();
+    }
+    context.mode = InlineTransportMode::SHM;
+    context.shmTransporter = std::move(shmTransporter);
+    context.shmSession = std::move(session);
+    context.readContext = std::move(readContext);
+    return Status::OK();
+}
+
+Status ObjectMetadataClient::PrepareShmInlineFallback(const HostPort &address,
+                                                      const ObjectMetadataBatch &items,
+                                                      InlineRequestContext &context) const
+{
+    context.DisableInlineData();
+    if (IsUrmaEnabled()) {
+        return PrepareUbInlineRequest(address, items, context);
+    }
+    context.mode = InlineTransportMode::TCP;
+    return Status::OK();
 }
 
 Status ObjectMetadataClient::PrepareUbInlineRequest(const HostPort &address, const ObjectMetadataBatch &items,
                                                     InlineRequestContext &context) const
 {
-    if (ubBufferSize_ == 0 || ubBufferProvider_ == nullptr || ubBufferSize_ > ubBufferProvider_->MaxGetSize()) {
+    if (ubBufferSize_ == 0 || ubBufferProvider_ == nullptr || ubBufferSize_ > ubBufferProvider_->MaxGetSize()
+        || items.size() > ubBufferProvider_->MaxGetSize() / ubBufferSize_) {
+        context.mode = InlineTransportMode::TCP;
         return Status::OK();
     }
 
@@ -191,10 +151,12 @@ Status ObjectMetadataClient::PrepareUbInlineRequest(const HostPort &address, con
     if (connectionRc.IsError()) {
         VLOG(1) << "[TransportGet][Metadata] Disable UB inline data because the connection is unavailable: "
                 << connectionRc.ToString();
+        context.mode = InlineTransportMode::TCP;
         return Status::OK();
     }
 
     if (AllocateUbInlineBuffers(items, context).IsError()) {
+        context.mode = InlineTransportMode::TCP;
         return Status::OK();
     }
     context.mode = InlineTransportMode::UB;
@@ -229,7 +191,7 @@ Status ObjectMetadataClient::AllocateUbInlineBuffers(const ObjectMetadataBatch &
 
 Status ObjectMetadataClient::AddInlineDataRequest(const ObjectMetadataBatch &items,
                                                   const InlineRequestContext &context,
-                                                  master::QueryAndGetReqPb &request) const
+                                                  QueryAndGetReqPb &request) const
 {
     if (context.mode == InlineTransportMode::NONE) {
         return Status::OK();
@@ -238,11 +200,17 @@ Status ObjectMetadataClient::AddInlineDataRequest(const ObjectMetadataBatch &ite
         (void)request.mutable_data_request()->mutable_tcp();
         return Status::OK();
     }
+    if (context.mode == InlineTransportMode::SHM) {
+        CHECK_FAIL_RETURN_STATUS(context.shmSession != nullptr && context.shmSession->IsAlive(), K_NOT_READY,
+                                 "QueryAndGet shared-memory session is unavailable");
+        request.mutable_data_request()->mutable_shm()->set_client_id(context.shmSession->ClientId());
+        return Status::OK();
+    }
 
     auto *ubRequest = request.mutable_data_request()->mutable_ub();
     ubRequest->set_buffer_size(ubBufferSize_);
     ubRequest->set_urma_instance_id(context.transportInstanceId);
-    // Buffer descriptors follow object_keys order, including redirected sub-batches.
+    // Buffer descriptors follow object_keys order.
     for (auto *item : items) {
         auto buffer = context.ubBuffers.find(item);
         CHECK_FAIL_RETURN_STATUS(buffer != context.ubBuffers.end(), K_RUNTIME_ERROR,
@@ -252,132 +220,145 @@ Status ObjectMetadataClient::AddInlineDataRequest(const ObjectMetadataBatch &ite
     return Status::OK();
 }
 
-Status ObjectMetadataClient::InvokeQueryAndGet(const HostPort &address, master::QueryAndGetReqPb &request,
-                                               master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
-                                               InlineRequestContext &context,
-                                               std::optional<uint64_t> redirectTopologyVersion,
-                                               bool &rpcDispatched)
+Status ObjectMetadataClient::InvokeQueryAndGet(const HostPort &address, QueryAndGetReqPb &request,
+                                               QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
+                                               InlineRequestContext &context, bool &rpcDispatched)
 {
     rpcDispatched = false;
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
-    if (context.mode == InlineTransportMode::UB) {
+    if (context.mode == InlineTransportMode::UB || context.mode == InlineTransportMode::SHM) {
         bool invoked = false;
-        Status leaseRc = manager_->WithDataPlaneLease(
-            address, TransportHint::UB_CANDIDATE,
-            [&](const std::shared_ptr<IDataTransporter> &, const std::shared_ptr<WorkerRpcClient> &rpcClient) {
-                invoked = true;
-                return rpcClient->InvokeQueryAndGet(request, response, payloads, &rpcDispatched);
-            });
+        Status leaseRc = InvokeInlineQueryAndGet(address, request, response, payloads, context, invoked, rpcDispatched);
         if (invoked) {
-            // Once sent, RPC failures retain UB mode and follow the normal retry policy.
             return leaseRc;
         }
-        VLOG(1) << "[TransportGet][Metadata] UB inline connection is unavailable for " << address.ToString()
-                << ", query metadata only: " << leaseRc.ToString();
-        // The RPC was not sent, so permanently downgrade this request chain to metadata-only mode.
-        context.DisableInlineData();
-        request.clear_data_request();
-        payloads.clear();
+        VLOG(1) << "[TransportGet][Metadata] Inline data plane is unavailable for " << address.ToString()
+                << ", fallback to TCP: " << leaseRc.ToString();
+        SwitchInlineRequestToTcp(request, payloads, context);
     }
+    return InvokeTcpQueryAndGet(address, request, response, payloads, rpcDispatched);
+}
 
+Status ObjectMetadataClient::InvokeInlineQueryAndGet(const HostPort &address, QueryAndGetReqPb &request,
+                                                     QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
+                                                     InlineRequestContext &context, bool &invoked,
+                                                     bool &rpcDispatched)
+{
+    const auto hint = context.mode == InlineTransportMode::UB ? TransportHint::UB_CANDIDATE
+                                                             : TransportHint::SHM_CANDIDATE;
+    invoked = false;
+    return manager_->WithDataPlaneLease(
+        address, hint,
+        [&](const std::shared_ptr<IDataTransporter> &transporter,
+            const std::shared_ptr<WorkerRpcClient> &rpcClient) {
+            if (context.mode == InlineTransportMode::SHM
+                && (transporter != context.shmTransporter || !context.shmSession->IsAlive())) {
+                RETURN_STATUS(K_NOT_READY, "QueryAndGet shared-memory session changed before dispatch");
+            }
+            invoked = true;
+            return rpcClient->InvokeQueryAndGet(request, response, payloads, &rpcDispatched);
+        });
+}
+
+Status ObjectMetadataClient::InvokeTcpQueryAndGet(const HostPort &address, QueryAndGetReqPb &request,
+                                                  QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
+                                                  bool &rpcDispatched)
+{
     std::shared_ptr<WorkerRpcClient> rpcClient;
-    Status rc = manager_->GetOrCreateRpcClient(address, rpcClient);
-    if (redirectTopologyVersion.has_value() && IsTransportSnapshotStaleLocation(rc)) {
-        VLOG(1) << "[TransportGet][Metadata] Transport snapshot lags redirected owner, query metadata only: "
-                << address.ToString() << ", redirect version: " << *redirectTopologyVersion;
-        if (metadataFailureHandler_) {
-            metadataFailureHandler_(address, rc);
-        }
-        context.DisableInlineData();
-        request.clear_data_request();
-        payloads.clear();
-        rc = manager_->GetOrCreateRedirectMetadataRpcClient(address, *redirectTopologyVersion, rpcClient);
-    }
-    RETURN_IF_NOT_OK(rc);
+    RETURN_IF_NOT_OK(manager_->GetOrCreateRpcClient(address, rpcClient));
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient);
     return rpcClient->InvokeQueryAndGet(request, response, payloads, &rpcDispatched);
 }
 
+void ObjectMetadataClient::SwitchInlineRequestToTcp(QueryAndGetReqPb &request, std::vector<RpcMessage> &payloads,
+                                                    InlineRequestContext &context) const
+{
+    context.DisableInlineData();
+    context.mode = InlineTransportMode::TCP;
+    (void)request.mutable_data_request()->mutable_tcp();
+    payloads.clear();
+}
+
 Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const ObjectMetadataBatch &items,
-                                            bool allowRedirect, master::QueryAndGetRspPb &response,
-                                            std::vector<RpcMessage> &payloads, InlineRequestContext &context,
-                                            std::optional<uint64_t> redirectTopologyVersion)
+                                            QueryAndGetRspPb &response,
+                                            std::vector<RpcMessage> &payloads, InlineRequestContext &context)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(retry_);
     CHECK_FAIL_RETURN_STATUS(!items.empty(), K_INVALID, "Metadata query items are empty");
     int64_t backoffMs = 1;
     size_t attempt = 0;
-    // The context keeps prepared UB buffers reusable across RPC retries and the deadline-bounded redirect chain.
+    // The context keeps prepared data-plane state reusable across RPC retries.
     while (true) {
         ++attempt;
         RETURN_IF_NOT_OK(retry_->CheckDeadline());
-        master::QueryAndGetReqPb request;
-        RETURN_IF_NOT_OK(BuildQueryRequest(items, allowRedirect, context, request));
+        QueryAndGetReqPb request;
+        RETURN_IF_NOT_OK(BuildQueryRequest(address, items, context, request));
         response.Clear();
         payloads.clear();
         VLOG(1) << "[TransportGet][Metadata] Query, meta owner: " << address.ToString()
-                << ", key count: " << items.size() << ", redirect: " << allowRedirect
-                << ", attempt: " << attempt;
+                << ", key count: " << items.size() << ", attempt: " << attempt;
         bool rpcDispatched = false;
-        Status rc = InvokeQueryAndGet(address, request, response, payloads, context, redirectTopologyVersion,
-                                     rpcDispatched);
-        if (rc.IsError()) {
-            const bool routeFailure = IsMetadataOwnerRouteFailure(rc.GetCode());
-            if (routeFailure && metadataFailureHandler_) {
-                metadataFailureHandler_(address, rc);
-            }
-            // Tear down the shared channel only when the connection is genuinely unusable:
-            // a dead peer, a legacy peer-unreachable (K_RPC_UNAVAILABLE), or a transient
-            // blip we can prove never left the client (request definitely not sent). Pure
-            // DEADLINE/CANCELLED may have reached the master, so keep the channel and just
-            // backoff+retry — avoids rebuilding the shared channel on every slow-master
-            // timeout. K_RPC_UNAVAILABLE is torn down unconditionally to match the legacy
-            // behaviour: a peer that returned UNAVAILABLE must not be retried on the same
-            // cached connection.
-            const bool teardownWarranted = IsNonRetryableRpcError(rc)
-                || rc.GetCode() == K_RPC_UNAVAILABLE
-                || (IsRetryableRpcError(rc) && IsBrpcRequestDefinitelyNotSent(rc));
-            if (teardownWarranted && manager_ != nullptr) {
-                manager_->Teardown(address);
-            }
-            if (routeFailure) {
-                VLOG(1) << "[TransportGet][Metadata] Return stale route for outer retry, meta owner: "
-                        << address.ToString() << ", dispatched: " << rpcDispatched
-                        << ", status: " << rc.ToString();
-                return Status(K_NOT_READY, STALE_TRANSPORT_SNAPSHOT_MESSAGE);
-            }
-            if (!retry_->IsRetryableRpcError(rc)) {
-                VLOG(1) << "[TransportGet][Metadata] Query failed without retry, meta owner: "
-                        << address.ToString() << ", status: " << rc.ToString();
-                return rc;
-            }
-            VLOG(1) << "[TransportGet][Metadata] Retrying query, meta owner: " << address.ToString()
-                    << ", status: " << rc.ToString();
-            RETURN_IF_NOT_OK(retry_->Backoff(backoffMs));
-            continue;
-        }
-        if (!response.meta_is_moving()) {
-            return Status::OK();
-        }
-        VLOG(1) << "[TransportGet][Metadata] Metadata is moving, meta owner: " << address.ToString()
-                << ", key count: " << items.size();
-        RETURN_IF_NOT_OK(retry_->Backoff(backoffMs));
+        Status rc = InvokeQueryAndGet(address, request, response, payloads, context, rpcDispatched);
+        RETURN_OK_IF_TRUE(rc.IsOk());
+        RETURN_IF_NOT_OK(PrepareQueryRetry(address, rc, rpcDispatched, context, backoffMs));
     }
 }
 
-Status ObjectMetadataClient::BuildQueryRequest(const ObjectMetadataBatch &items, bool allowRedirect,
-                                               const InlineRequestContext &context,
-                                               master::QueryAndGetReqPb &request) const
+Status ObjectMetadataClient::PrepareQueryRetry(const HostPort &address, const Status &rc, bool rpcDispatched,
+                                               InlineRequestContext &context, int64_t &backoffMs)
+{
+    if (rpcDispatched && context.mode == InlineTransportMode::SHM && context.shmTransporter != nullptr) {
+        context.shmTransporter->InvalidateSession(context.shmSession);
+    }
+    const bool routeFailure = IsMetadataOwnerRouteFailure(rc.GetCode());
+    if (routeFailure && metadataFailureHandler_) {
+        metadataFailureHandler_(address, rc);
+    }
+    const bool teardownWarranted = IsNonRetryableRpcError(rc) || rc.GetCode() == K_RPC_UNAVAILABLE
+                                   || (IsRetryableRpcError(rc) && IsBrpcRequestDefinitelyNotSent(rc));
+    if (teardownWarranted) {
+        manager_->Teardown(address);
+    }
+    if (routeFailure) {
+        VLOG(1) << "[TransportGet][Metadata] Return stale route for outer retry, meta owner: "
+                << address.ToString() << ", dispatched: " << rpcDispatched << ", status: " << rc.ToString();
+        return Status(K_NOT_READY, STALE_TRANSPORT_SNAPSHOT_MESSAGE);
+    }
+    if (rpcDispatched && context.mode == InlineTransportMode::SHM) {
+        VLOG(1) << "[TransportGet][Metadata] Do not replay an ambiguous SHM QueryAndGet: " << rc.ToString();
+        return rc;
+    }
+    if (!retry_->IsRetryableRpcError(rc)) {
+        VLOG(1) << "[TransportGet][Metadata] Query failed without retry, meta owner: " << address.ToString()
+                << ", status: " << rc.ToString();
+        return rc;
+    }
+    VLOG(1) << "[TransportGet][Metadata] Retrying query, meta owner: " << address.ToString()
+            << ", status: " << rc.ToString();
+    return retry_->Backoff(backoffMs);
+}
+
+Status ObjectMetadataClient::BuildQueryRequest(const HostPort &address, const ObjectMetadataBatch &items,
+                                               InlineRequestContext &context, QueryAndGetReqPb &request) const
 {
     for (const auto *item : items) {
         request.add_object_keys(item->objectKey);
     }
-    request.set_redirect(allowRedirect);
+    if (context.mode == InlineTransportMode::SHM) {
+        bool sessionAvailable = context.shmSession != nullptr && context.shmSession->IsAlive();
+        INJECT_POINT_NO_RETURN("client.transport.query_and_get.shm_session_unavailable_before_build",
+                               [&sessionAvailable]() { sessionAvailable = false; });
+        if (!sessionAvailable) {
+            VLOG(1) << "[TransportGet][Metadata] SHM session is unavailable while building QueryAndGet; "
+                       "selecting UB or TCP fallback";
+            RETURN_IF_NOT_OK(PrepareShmInlineFallback(address, items, context));
+        }
+    }
     return AddInlineDataRequest(items, context, request);
 }
 
 Status ObjectMetadataClient::ApplyResults(const ObjectMetadataBatch &items,
-                                          const master::QueryAndGetRspPb &response,
+                                          const QueryAndGetRspPb &response,
                                           std::vector<RpcMessage> &payloads, InlineRequestContext &context) const
 {
     // Keep the count check because results are accessed positionally below.
@@ -389,16 +370,18 @@ Status ObjectMetadataClient::ApplyResults(const ObjectMetadataBatch &items,
     return Status::OK();
 }
 
-Status ObjectMetadataClient::ApplyResult(ObjectMetadataItem &item, const master::QueryAndGetResultPb &result,
+Status ObjectMetadataClient::ApplyResult(ObjectMetadataItem &item, const QueryAndGetResultPb &result,
                                          std::vector<RpcMessage> &payloads, InlineRequestContext &context) const
 {
     const auto &location = result.location();
+    CHECK_FAIL_RETURN_STATUS(location.object_key() == item.objectKey, K_RUNTIME_ERROR,
+                             "QueryAndGet result key does not match request order");
     if (location.object_locations_size() == 0) {
         item.status = Status(K_NOT_FOUND, "Object was not found");
         return Status::OK();
     }
     item.status = Status::OK();
-    item.location = location;
+    CopyLocation(location, item.location);
     if (!result.has_data_result()) {
         // Absence of data_result is a per-key fast-path miss; the caller will execute phase two.
         return Status::OK();
@@ -411,28 +394,71 @@ Status ObjectMetadataClient::ApplyResult(ObjectMetadataItem &item, const master:
     DataGetResult data;
     data.response.mutable_error()->set_error_code(K_OK);
     data.response.set_data_size(static_cast<int64_t>(location.object_size()));
-    Status rc = context.mode == InlineTransportMode::TCP
-                    ? BuildTcpInlineData(result.data_result(), payloads, data)
-                    : BuildUbInlineData(item, location, context, data);
+    Status rc;
+    if (context.mode == InlineTransportMode::TCP) {
+        CHECK_FAIL_RETURN_STATUS(!result.data_result().has_shm_info(), K_RUNTIME_ERROR,
+                                 "TCP QueryAndGet returned shared-memory data");
+        rc = BuildTcpInlineData(result.data_result(), location.object_size(), payloads, data);
+    } else if (context.mode == InlineTransportMode::UB) {
+        CHECK_FAIL_RETURN_STATUS(!result.data_result().has_shm_info(), K_RUNTIME_ERROR,
+                                 "UB QueryAndGet returned shared-memory data");
+        CHECK_FAIL_RETURN_STATUS(result.data_result().payload_indexes_size() == 0, K_RUNTIME_ERROR,
+                                 "UB QueryAndGet returned TCP payload indexes");
+        rc = BuildUbInlineData(item, item.location, context, data);
+    } else {
+        CHECK_FAIL_RETURN_STATUS(result.data_result().has_shm_info(), K_RUNTIME_ERROR,
+                                 "SHM QueryAndGet did not return shared-memory data");
+        CHECK_FAIL_RETURN_STATUS(result.data_result().payload_indexes_size() == 0, K_RUNTIME_ERROR,
+                                 "SHM QueryAndGet returned TCP payload indexes");
+        rc = BuildShmInlineData(item, result.data_result().shm_info(), context, data);
+    }
+    if (rc.IsError() && context.mode == InlineTransportMode::SHM) {
+        VLOG(1) << "[ObjectKey " << item.objectKey
+                << "] QueryAndGet SHM materialization fallback: " << rc.ToString();
+        if (context.shmTransporter != nullptr) {
+            context.shmTransporter->InvalidateSession(context.shmSession);
+        }
+        return Status::OK();
+    }
     RETURN_IF_NOT_OK(rc);
     item.inlineData.emplace(std::move(data));
     return Status::OK();
 }
 
-Status ObjectMetadataClient::BuildTcpInlineData(const master::QueryAndGetDataResultPb &dataResult,
+Status ObjectMetadataClient::BuildTcpInlineData(const QueryAndGetDataResultPb &dataResult, uint64_t objectSize,
                                                 std::vector<RpcMessage> &payloads,
                                                 DataGetResult &data) const
 {
     data.rpcPayloads.reserve(dataResult.payload_indexes_size());
+    uint64_t payloadSize = 0;
     for (uint32_t payloadIndex : dataResult.payload_indexes()) {
-        // Keep only the check required before indexing RPC payload storage.
         CHECK_FAIL_RETURN_STATUS(payloadIndex < payloads.size(), K_RUNTIME_ERROR,
                                  "QueryAndGet payload index is out of range");
+        CHECK_FAIL_RETURN_STATUS(
+            payloadSize <= objectSize && payloads[payloadIndex].Size() <= objectSize - payloadSize,
+            K_RUNTIME_ERROR, "QueryAndGet TCP payload exceeds object size");
+        payloadSize += payloads[payloadIndex].Size();
         data.rpcPayloads.emplace_back(std::move(payloads[payloadIndex]));
     }
+    CHECK_FAIL_RETURN_STATUS(payloadSize == objectSize, K_RUNTIME_ERROR,
+                             "QueryAndGet TCP payload size does not match object size");
     data.response.set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
     data.kind = AccessTransportKind::TCP;
     return Status::OK();
+}
+
+Status ObjectMetadataClient::BuildShmInlineData(ObjectMetadataItem &item, const QueryAndGetShmInfoPb &shmInfo,
+                                                InlineRequestContext &context, DataGetResult &data) const
+{
+    INJECT_POINT("client.transport.query_and_get.shm_materialization_failure");
+    CHECK_FAIL_RETURN_STATUS(context.shmSession != nullptr && context.shmTransporter != nullptr
+                                 && context.readContext != nullptr,
+                             K_RUNTIME_ERROR, "SHM QueryAndGet session context is missing");
+    CHECK_FAIL_RETURN_STATUS(shmInfo.data_size() >= 0
+                                 && static_cast<uint64_t>(shmInfo.data_size()) == item.location.object_size(),
+                             K_RUNTIME_ERROR, "SHM QueryAndGet data size does not match object size");
+    DataGetRequest input{ item.objectKey, static_cast<uint64_t>(shmInfo.data_size()), context.readContext };
+    return context.shmSession->BuildQueryAndGetResult(shmInfo, input, data);
 }
 
 Status ObjectMetadataClient::BuildUbInlineData(ObjectMetadataItem &item,
@@ -457,59 +483,28 @@ Status ObjectMetadataClient::BuildUbInlineData(ObjectMetadataItem &item,
 }
 
 Status ObjectMetadataClient::Query(const HostPort &address, const ObjectMetadataBatch &items,
-                                   bool enableInlineData)
+                                   bool enableInlineData, std::shared_ptr<const TransportReadContext> readContext)
 {
     RETURN_IF_NOT_OK(ValidateAndResetItems(items));
     InlineRequestContext context;
     if (enableInlineData) {
-        RETURN_IF_NOT_OK(InitializeInlineRequest(address, items, context));
+        RETURN_IF_NOT_OK(InitializeInlineRequest(address, items, std::move(readContext), context));
     }
 
-    master::QueryAndGetRspPb response;
+    QueryAndGetRspPb response;
     std::vector<RpcMessage> payloads;
-    RETURN_IF_NOT_OK(QueryWithRetry(address, items, true, response, payloads, context, std::nullopt));
-    ObjectMetadataBatch localItems;
-    std::vector<RedirectBatch> redirectBatches;
-    RETURN_IF_NOT_OK(PartitionInitialResponse(items, response, localItems, redirectBatches, std::nullopt));
-    VLOG(1) << "[TransportGet][Metadata] Query resolved, meta owner: " << address.ToString()
-            << ", local keys: " << localItems.size() << ", redirect groups: " << redirectBatches.size();
-    RETURN_IF_NOT_OK(ApplyResults(localItems, response, payloads, context));
-    if (redirectBatches.empty()) {
-        return Status::OK();
+    RETURN_IF_NOT_OK(QueryWithRetry(address, items, response, payloads, context));
+    Status rc = ApplyResults(items, response, payloads, context);
+    if (rc.IsError() && context.mode == InlineTransportMode::SHM && context.shmTransporter != nullptr) {
+        context.shmTransporter->InvalidateSession(context.shmSession);
     }
-
-    std::deque<PendingMetadataBatch> pending;
-    QueueRedirectBatches(redirectBatches, pending);
-    while (!pending.empty()) {
-        PendingMetadataBatch current = std::move(pending.front());
-        pending.pop_front();
-        response.Clear();
-        payloads.clear();
-        Status rc = QueryWithRetry(current.address, current.items, true, response, payloads, context,
-                                   current.topologyVersion);
-        localItems.clear();
-        redirectBatches.clear();
-        if (rc.IsOk()) {
-            rc = PartitionInitialResponse(current.items, response, localItems, redirectBatches,
-                                          current.topologyVersion);
-        }
-        if (rc.IsOk()) {
-            VLOG(1) << "[TransportGet][Metadata] Query resolved, meta owner: " << current.address.ToString()
-                    << ", local keys: " << localItems.size() << ", redirect groups: " << redirectBatches.size();
-            rc = ApplyResults(localItems, response, payloads, context);
-        }
-        if (rc.IsError()) {
-            SetBatchError(current.items, rc);
-            continue;
-        }
-        QueueRedirectBatches(redirectBatches, pending);
-    }
-    return Status::OK();
+    return rc;
 }
 
-Status ObjectMetadataClient::QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items)
+Status ObjectMetadataClient::QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items,
+                                         std::shared_ptr<const TransportReadContext> readContext)
 {
-    return Query(address, items, true);
+    return Query(address, items, true, std::move(readContext));
 }
 
 Status ObjectMetadataClient::QueryMetadata(const HostPort &address, const ObjectMetadataBatch &items)

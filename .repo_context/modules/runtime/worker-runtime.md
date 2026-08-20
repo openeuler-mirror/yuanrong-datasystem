@@ -356,6 +356,13 @@
     `MetadataRouteResolver`, `PlacementFacade`, `MembershipEndpointView`, immutable Snapshot, or an Object-specific
     endpoint policy. `WorkerOCServiceImpl` is the sole business lifecycle owner allowed to retain a non-owning Engine
     pointer for semantic lifecycle and cold Host queries.
+  - `WorkerOCService.QueryAndGet` is the metadata-affine direct-read entrypoint. It returns resident local objects over
+    SHM, UB, or bounded TCP payloads and uses routed `PureQueryMeta` only for local misses, so metadata redirect handling
+    stays inside Worker without changing `QueryMeta` semantics. The service handler owns only Worker-state validation
+    and delegates request reading, authentication, response delivery, SHM rollback, access recording, and slow logging
+    to `WorkerQueryAndGetImpl`. The local probe must remain side-effect free: no remote pull,
+    subscription, placeholder creation, L2 load, or cache insertion. The response has exactly one positional result per
+    requested key; a result without `data_result` delegates data retrieval to the Client's existing replica phase.
 - Review caution:
   - topology behavior is spread across flags, `WorkerOCServer`, and `src/datasystem/cluster`, so config-only changes
     may still impact worker request routing and recovery behavior.

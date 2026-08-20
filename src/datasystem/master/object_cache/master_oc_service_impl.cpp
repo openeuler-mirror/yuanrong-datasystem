@@ -486,36 +486,6 @@ Status MasterOCServiceImpl::GetObjectLocations(const GetObjectLocationsReqPb &re
     return Status::OK();
 }
 
-Status MasterOCServiceImpl::QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &resp,
-                                        std::vector<RpcMessage> &payloads)
-{
-    ScopedRequestContext ctx;
-    Timer timer;
-    auto config = GetServerLatencyTraceConfig();
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    VLOG(1) << FormatString("[Master] Processing QueryAndGetReq, target num: %d, redirect: %d", req.object_keys_size(),
-                            req.redirect());
-    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
-                                     "GetOcMetadataManager failed");
-    Status status = ocMetadataManager->QueryAndGet(req, resp, payloads);
-    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
-    const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
-    GetMasterTimeCost().Append("Total QueryAndGet", totalMs);
-    if (status.IsError()) {
-        LOG(ERROR) << FormatString("[Master] QueryAndGet failed, target num: %d, cost: %.3fms, status: %s",
-                                   req.object_keys_size(), totalMs, status.ToString());
-        return status;
-    }
-    SLOW_LOG_IF_OR_VLOG(
-        INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
-        FormatString("[Master] QueryAndGet done, target num: %d, result num: %d, payload num: %zu, meta moving: %d, "
-                     "cost: %.3fms, %s",
-                     req.object_keys_size(), resp.results_size(), payloads.size(), resp.meta_is_moving(), totalMs,
-                     GetMasterTimeCost().GetInfo()));
-    return status;
-}
-
 Status MasterOCServiceImpl::DeleteAllCopyMeta(
     std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> serverApi)
 {
