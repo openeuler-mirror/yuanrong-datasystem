@@ -1485,7 +1485,6 @@ Status ObjectClientImpl::SelectNextInitWorker(std::unordered_set<HostPort> &fail
     bool fallbackSameNode = false;
     Status fbRc = PickFallbackWorker(failedWorkerAddrs, fallback, fallbackSameNode);
     if (fbRc.GetCode() == K_TRY_AGAIN) {
-        outIsNoAvailableWorker = true;
         return fbRc;
     }
     RETURN_IF_NOT_OK(fbRc);
@@ -1530,8 +1529,12 @@ Status ObjectClientImpl::InitWithServiceDiscovery(bool enableHeartbeat)
         bool isNoAvailableWorker = false;
         Status selectRc = SelectNextInitWorker(failedWorkerAddrs, selectedAddr, isSameNode, isNoAvailableWorker);
         if (selectRc.GetCode() == K_TRY_AGAIN) {
-            RETURN_IF_NOT_OK(prepareNextRetry(isNoAvailableWorker ? INIT_SELECT_WORKER_NO_WORKER_RETRY_INTERVAL_MS
-                                                                  : INIT_SELECT_WORKER_RETRY_INTERVAL_MS));
+            auto retryRc = prepareNextRetry(isNoAvailableWorker ? INIT_SELECT_WORKER_NO_WORKER_RETRY_INTERVAL_MS
+                                                                : INIT_SELECT_WORKER_RETRY_INTERVAL_MS);
+            if (isNoAvailableWorker && (retryRc.IsError() || remainTimeMs <= 0)) {
+                return Status(K_NOT_READY, "No available worker is detected.");
+            }
+            RETURN_IF_NOT_OK(retryRc);
             continue;
         }
         RETURN_IF_NOT_OK(selectRc);
@@ -1542,9 +1545,8 @@ Status ObjectClientImpl::InitWithServiceDiscovery(bool enableHeartbeat)
         int32_t singleInitTimeoutMs = CalculateConnectAttemptTimeoutMs(connectTimeoutMs_);
         int32_t initTimeoutMs = std::min(remainTimeMs, singleInitTimeoutMs);
         Status rc = InitWorkerClientAtCurrentAddress(enableHeartbeat, isSameNode, initTimeoutMs);
-        if (rc.IsOk()) {
-            return Status::OK();
-        }
+        
+        RETURN_OK_IF_TRUE(rc.IsOk());
 
         ClearFailedInitAttempt();
         if (!ShouldRetryInit(rc)) {

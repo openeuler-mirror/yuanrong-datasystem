@@ -162,7 +162,7 @@ Status SelectWorkerFromPartitions(const std::vector<std::string> &sameHost, cons
                                   std::string &workerIp, int &workerPort, bool *isSameNode, bool *isNoAvailableWorker)
 {
     if (isNoAvailableWorker != nullptr) {
-        *isNoAvailableWorker = false;
+        *isNoAvailableWorker = sameHost.empty() && other.empty();
     }
 
     std::string pickedAddr;
@@ -179,9 +179,6 @@ Status SelectWorkerFromPartitions(const std::vector<std::string> &sameHost, cons
         // RANDOM, or PREFERRED_SAME_NODE with no same-host worker: pick uniformly across both partitions.
         size_t total = sameHost.size() + other.size();
         if (total == 0) {
-            if (isNoAvailableWorker != nullptr) {
-                *isNoAvailableWorker = true;
-            }
             RETURN_STATUS(K_TRY_AGAIN, "No available worker is detected.");
         }
         size_t idx = randomData->GetRandomIndex(total);
