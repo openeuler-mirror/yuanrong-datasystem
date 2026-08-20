@@ -75,11 +75,11 @@ Status InitClientUbRuntime(uint64_t fastTransportMemSize, bool enablePipelineH2D
 std::unordered_set<std::string> BuildLiveWorkerSet(const WorkerSnapshot &snapshot)
 {
     std::unordered_set<std::string> liveWorkers;
-    liveWorkers.reserve(snapshot.sameHostAddrs.size() + snapshot.otherAddrs.size());
-    for (const auto &worker : snapshot.sameHostAddrs) {
+    liveWorkers.reserve(snapshot.shmCandidateAddrs.size() + snapshot.remoteTransportAddrs.size());
+    for (const auto &worker : snapshot.shmCandidateAddrs) {
         liveWorkers.insert(worker.ToString());
     }
-    for (const auto &worker : snapshot.otherAddrs) {
+    for (const auto &worker : snapshot.remoteTransportAddrs) {
         liveWorkers.insert(worker.ToString());
     }
     return liveWorkers;

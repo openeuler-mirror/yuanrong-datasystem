@@ -33,12 +33,12 @@ namespace client {
 struct WorkerSnapshot {
     bool Empty() const
     {
-        return sameHostAddrs.empty() && otherAddrs.empty();
+        return shmCandidateAddrs.empty() && remoteTransportAddrs.empty();
     }
 
     uint64_t ringVersion = 0;
-    std::vector<HostPort> sameHostAddrs;
-    std::vector<HostPort> otherAddrs;
+    std::vector<HostPort> shmCandidateAddrs;
+    std::vector<HostPort> remoteTransportAddrs;
     // ACTIVE GlobalFact candidates eligible to receive a client sender recovery WRITE probe.
     std::vector<HostPort> writeProbeAddrs;
 };
@@ -48,8 +48,8 @@ struct WorkerSnapshot {
  * @param[in] ringVersion Version returned with the topology update.
  * @param[in] ring Complete cluster topology; every member state remains transport-admissible.
  * @param[in] hostIdMap workerAddr("host:port") -> hostId (from GetHashRingRspPb.host_id_map).
- *            When non-empty, workers whose hostId matches sdkHostId go into sameHostAddrs.
- * @param[in] sdkHostId The sdk's own host id; when empty, all workers go into otherAddrs (old behavior).
+ *            When non-empty, non-draining workers whose hostId matches sdkHostId go into shmCandidateAddrs.
+ * @param[in] sdkHostId The sdk's own host id; when empty, all workers go into remoteTransportAddrs.
  * @param[out] snapshot Validated snapshot, left unchanged when any endpoint is malformed.
  * @return K_OK on success; K_INVALID when a member endpoint cannot be parsed.
  */
@@ -58,7 +58,7 @@ Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopo
                            const std::string &sdkHostId, WorkerSnapshot &snapshot);
 
 /**
- * @brief Resolve the sdk hostId used to partition workers into sameHostAddrs/otherAddrs when service
+ * @brief Resolve the sdk hostId used to partition workers by transport eligibility when service
  *        discovery has not resolved the sdk's own host_id (the caller is inside the sdkHostIdCache
  *        empty guard).
  *
@@ -66,7 +66,7 @@ Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopo
  * (boundWorkerIsLocal). Adopting a CROSS-NODE bound worker's hostId would label that entire remote
  * host as same-host, so cross-node Gets would select the SHM/UDS transport and time out against an
  * unreachable unix-domain socket. When locality is unconfirmed (boundWorkerIsLocal == false) the sdk
- * keeps hostId empty and BuildWorkerSnapshot puts every worker into otherAddrs, so GetTransportHint
+ * keeps hostId empty and BuildWorkerSnapshot puts every worker into remoteTransportAddrs, so GetTransportHint
  * selects the correct cross-node transport (UB when URMA is enabled, otherwise TCP) instead of SHM.
  *
  * @param[in] boundWorkerIsLocal True only when the bound worker is confirmed same-host.

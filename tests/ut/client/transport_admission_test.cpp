@@ -998,8 +998,8 @@ TEST(TransportLayerAdmissionTest, DedicatedProbeRestoresClientLocalSenderWithout
     ASSERT_TRUE(layer.Init().IsOk());
     WorkerSnapshot admitted;
     admitted.ringVersion = 1;
-    admitted.otherAddrs = { MakeAddress(45) };
-    admitted.writeProbeAddrs = admitted.otherAddrs;
+    admitted.remoteTransportAddrs = { MakeAddress(45) };
+    admitted.writeProbeAddrs = admitted.remoteTransportAddrs;
     ASSERT_TRUE(manager->UpdateWorkerSnapshot(admitted).IsOk());
     std::shared_ptr<ObjectBuffer> buffer;
     ASSERT_TRUE(layer.Create(MakeAddress(45), "recover", 64, MakeCreateParam(), buffer).IsOk());
@@ -1086,8 +1086,8 @@ TEST(TransportLayerAdmissionTest, GlobalSnapshotDenyKeepsClientLocalSenderQuaran
 
     WorkerSnapshot readmitted;
     readmitted.ringVersion = 2;
-    readmitted.otherAddrs = { workerAddr };
-    readmitted.writeProbeAddrs = readmitted.otherAddrs;
+    readmitted.remoteTransportAddrs = { workerAddr };
+    readmitted.writeProbeAddrs = readmitted.remoteTransportAddrs;
     ASSERT_TRUE(manager->UpdateWorkerSnapshot(readmitted).IsOk());
     ASSERT_TRUE(manager->WaitForProbeCount(1, PROBE_OBSERVATION_TIMEOUT));
     Status recovered = Status(K_URMA_WORKER_UNAVAILABLE, "waiting for probe commit");
@@ -1110,8 +1110,8 @@ TEST(TransportLayerAdmissionTest, RemovedFailureEndpointRecoversThroughAnotherAd
     const auto replacementWorker = MakeAddress(49);
     WorkerSnapshot initial;
     initial.ringVersion = 1;
-    initial.otherAddrs = { removedWorker, replacementWorker };
-    initial.writeProbeAddrs = initial.otherAddrs;
+    initial.remoteTransportAddrs = { removedWorker, replacementWorker };
+    initial.writeProbeAddrs = initial.remoteTransportAddrs;
     ASSERT_TRUE(manager->UpdateWorkerSnapshot(initial).IsOk());
 
     std::shared_ptr<ObjectBuffer> failedBuffer;
@@ -1122,8 +1122,8 @@ TEST(TransportLayerAdmissionTest, RemovedFailureEndpointRecoversThroughAnotherAd
 
     WorkerSnapshot replacementOnly;
     replacementOnly.ringVersion = 2;
-    replacementOnly.otherAddrs = { replacementWorker };
-    replacementOnly.writeProbeAddrs = replacementOnly.otherAddrs;
+    replacementOnly.remoteTransportAddrs = { replacementWorker };
+    replacementOnly.writeProbeAddrs = replacementOnly.remoteTransportAddrs;
     ASSERT_TRUE(manager->UpdateWorkerSnapshot(replacementOnly).IsOk());
     ASSERT_TRUE(manager->WaitForProbeCount(1, PROBE_OBSERVATION_TIMEOUT));
     EXPECT_EQ(manager->GetProbedWorkers(), std::vector<HostPort>{ replacementWorker });
@@ -1145,8 +1145,8 @@ TEST(TransportLayerAdmissionTest, FailedRecoveryProbeRotatesAcrossAdmittedWorker
     const auto replacementWorker = MakeAddress(51);
     WorkerSnapshot admitted;
     admitted.ringVersion = 1;
-    admitted.otherAddrs = { failedWorker, replacementWorker };
-    admitted.writeProbeAddrs = admitted.otherAddrs;
+    admitted.remoteTransportAddrs = { failedWorker, replacementWorker };
+    admitted.writeProbeAddrs = admitted.remoteTransportAddrs;
     ASSERT_TRUE(manager->UpdateWorkerSnapshot(admitted).IsOk());
 
     std::shared_ptr<ObjectBuffer> failedBuffer;
@@ -1259,7 +1259,7 @@ TEST(DataPlaneManagerAdmissionTest, ProbeRejectsMembershipWorkerDeniedByGlobalFa
     ASSERT_TRUE(manager->Init().IsOk());
     WorkerSnapshot denied;
     denied.ringVersion = 1;
-    denied.otherAddrs = { MakeAddress(53) };
+    denied.remoteTransportAddrs = { MakeAddress(53) };
     ASSERT_TRUE(manager->UpdateWorkerSnapshot(denied).IsOk());
     bool committed = false;
 
@@ -1277,8 +1277,8 @@ TEST(DataPlaneManagerAdmissionTest, ProbeCommitAndSnapshotPostCheckAreAtomic)
     const auto workerAddr = MakeAddress(47);
     WorkerSnapshot admitted;
     admitted.ringVersion = 1;
-    admitted.otherAddrs = { workerAddr };
-    admitted.writeProbeAddrs = admitted.otherAddrs;
+    admitted.remoteTransportAddrs = { workerAddr };
+    admitted.writeProbeAddrs = admitted.remoteTransportAddrs;
     ASSERT_TRUE(manager->UpdateWorkerSnapshot(admitted).IsOk());
     std::promise<void> commitStarted;
     auto commitStartedFuture = commitStarted.get_future();

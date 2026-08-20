@@ -18,6 +18,8 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_ADVISOR_H
 #define DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_ADVISOR_H
 
+#include <atomic>
+#include <cstdint>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -42,14 +44,27 @@ public:
     virtual TransportHint GetTransportHint(const HostPort &workerAddr) const;
 
     /**
-     * @brief Update the set of same-host worker addresses (from BuildWorkerSnapshot sameHostAddrs).
+     * @brief Return the ordered fallback transports for an initial candidate.
+     * @param[in] initial Initial transport hint.
+     * @return UB then TCP for a same-host SHM candidate when URMA is enabled; otherwise TCP only.
+     */
+    std::vector<TransportHint> GetFallbackHints(TransportHint initial) const;
+
+    /**
+     * @brief Update the set of same-host workers eligible for SHM (from WorkerSnapshot::shmCandidateAddrs).
      * Called when the routing topology changes. Thread-safe.
      */
-    void SetSameHostWorkers(const std::vector<HostPort> &workers);
+    void SetShmCandidateWorkers(const std::vector<HostPort> &workers);
+
+    /** @brief Stop selecting SHM for a draining worker and allow one refresh per published snapshot. */
+    bool ObserveDrainingShmFailure(const HostPort &workerAddr);
 
 private:
     mutable bthread::RWLock mtx_;
-    std::unordered_set<HostPort> sameHostWorkers_;
+    std::unordered_set<HostPort> shmCandidateWorkers_;
+    // Protected by mtx_; refresh generations advance monotonically outside the lock.
+    uint64_t snapshotGeneration_{ 1 };
+    std::atomic<uint64_t> drainingRefreshGeneration_{ 0 };
 };
 }  // namespace client
 }  // namespace datasystem

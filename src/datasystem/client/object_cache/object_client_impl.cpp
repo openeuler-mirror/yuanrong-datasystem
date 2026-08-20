@@ -887,6 +887,13 @@ Status ObjectClientImpl::InitTransportLayer()
                       << owner.ToString() << ", status: " << status.ToString();
         }
     };
+    options.drainingFallbackHandler = [this](const HostPort &worker, const Status &status) {
+        auto routing = std::atomic_load(&routing_);
+        if (routing != nullptr && routing->ForceRefresh()) {
+            LOG(INFO) << "[Routing] Force hash ring refresh after draining SHM fallback, worker: "
+                      << worker.ToString() << ", status: " << status.ToString();
+        }
+    };
     auto transportLayer = std::make_unique<client::TransportLayer>(
         transportSignature_, asyncGetRPCPool_, fastTransportMemSize_, std::move(options));
     RETURN_IF_NOT_OK(transportLayer->Init());
@@ -959,7 +966,7 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
         if (sdkHostIdCache->empty()) {
             // initialWorkerIsLocal must reflect the real locality of the bound worker (threaded from
             // service-discovery selection), not a hardcoded default. When it is false, a cross-node
-            // bound worker's hostId is NOT adopted, so cross-node workers fall into otherAddrs and
+            // bound worker's hostId is NOT adopted, so cross-node workers use remote transport and
             // GetTransportHint selects UB/TCP instead of timing out on the SHM/UDS path.
             const auto resolved = client::ResolveSdkHostId(initialWorkerIsLocal, initialWorker, hostIdMap);
             if (!resolved.empty()) {
@@ -1231,9 +1238,9 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
         RETURN_IF_NOT_OK(InitTransportLayer());
         client::WorkerSnapshot snapshot;
         if (workerApi->IsShmEnable()) {
-            snapshot.sameHostAddrs.emplace_back(workerApi->hostPort_);
+            snapshot.shmCandidateAddrs.emplace_back(workerApi->hostPort_);
         } else {
-            snapshot.otherAddrs.emplace_back(workerApi->hostPort_);
+            snapshot.remoteTransportAddrs.emplace_back(workerApi->hostPort_);
         }
         snapshot.writeProbeAddrs.emplace_back(workerApi->hostPort_);
         RETURN_IF_NOT_OK(transportLayer_->ApplyWorkerSnapshot(std::move(snapshot)));
