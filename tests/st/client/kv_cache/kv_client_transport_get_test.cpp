@@ -70,6 +70,7 @@ constexpr char REGISTER_SHM_CLIENT_INJECT[] = "client.transport.register_shm_cli
 constexpr char GET_CLIENT_FD_INJECT[] = "client.transport.get_client_fd";
 constexpr char SHM_HEARTBEAT_INJECT[] = "client.transport.shm_heartbeat";
 constexpr char DRAIN_BEFORE_SNAPSHOT_INJECT[] = "WorkerOCServiceImpl.DrainTopologyScaleInData.beforeSnapshot";
+constexpr char HASH_RING_REFRESH_BEFORE_WAIT_INJECT[] = "HashRingRefresher.RefreshLoop.beforeWait";
 constexpr char INLINE_READ_FAILURE_INJECT[] = "worker.worker_worker_remote_get_failure";
 constexpr char SHM_LATCH_FAIL_INJECT[] = "worker.ShmGuard.TryRLatch.Fail";
 constexpr char PROVIDER_GET_ENTER_INJECT[] = "worker.GetObjectRemote.afterRead";
@@ -86,6 +87,9 @@ constexpr char GLOBAL_UNAVAILABLE_APPLIED_INJECT[] = "client.ub_health_filter.gl
 constexpr char GLOBAL_READ_DENIED_INJECT[] = "client.ub_health_filter.global_read_denied";
 constexpr char SHM_HOST_ID_ENV_NAME[] = "transport_get_shm_host_id";
 constexpr char SHM_HOST_ID_VALUE[] = "transport-get-shm-host";
+constexpr uint32_t SCALE_OUT_WORKER_INDEX = 3;
+constexpr uint32_t SCALE_OUT_WORKER_COUNT = 4;
+constexpr size_t SCALE_OUT_KEY_COUNT = 256;
 
 struct TransportRpcCounts {
     uint64_t queryAndGet = 0;
@@ -104,6 +108,21 @@ const char *ExpectedTransport()
 #else
     return "TCP";
 #endif
+}
+
+std::string SelectMetadataOwner(const ClusterTopologyPb &topology, const std::string &key)
+{
+    std::map<uint32_t, std::string> tokenWorkers;
+    for (const auto &worker : topology.members()) {
+        for (const auto token : worker.second.tokens()) {
+            tokenWorkers.emplace(token, worker.first);
+        }
+    }
+    if (tokenWorkers.empty()) {
+        return {};
+    }
+    auto owner = tokenWorkers.upper_bound(MurmurHash3_32(key));
+    return (owner == tokenWorkers.end() ? tokenWorkers.begin() : owner)->second;
 }
 }  // namespace
 
@@ -531,6 +550,40 @@ private:
     bool setupAttempted_ = false;
 };
 
+class KVClientTransportGetScaleOutRealUrmaTest : public KVClientTransportGetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientTransportGetTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -enable_lossless_data_exit_mode=true";
+    }
+
+    void SetUp() override
+    {
+#if !defined(USE_URMA)
+        GTEST_SKIP() << "Real URMA scale-out redirect ST requires USE_URMA.";
+#elif defined(USE_URMA_MOCK)
+        GTEST_SKIP() << "Real URMA scale-out redirect ST does not run with USE_URMA_MOCK.";
+#else
+        if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+            GTEST_SKIP() << "Real URMA scale-out redirect ST requires DS_URMA_DEV_NAME and a usable URMA device.";
+        }
+        setupAttempted_ = true;
+        KVClientTransportGetTest::SetUp();
+#endif
+    }
+
+    void TearDown() override
+    {
+        if (setupAttempted_) {
+            KVClientTransportGetTest::TearDown();
+        }
+    }
+
+private:
+    bool setupAttempted_ = false;
+};
+
 class KVClientTransportGetWithTargetShmDisabledTest : public KVClientTransportGetTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -891,6 +944,57 @@ TEST_F(KVClientTransportGetDrainingRealUrmaTest, DrainingTargetUsesUb)
     ASSERT_GE(after.registerShmClient, before.registerShmClient);
     ASSERT_LE(after.registerShmClient, before.registerShmClient + 1);
     ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 2);
+}
+
+TEST_F(KVClientTransportGetScaleOutRealUrmaTest, RedirectedMetadataOwnerPrecedesClientSnapshot)
+{
+    const auto keys = MakeRandomKeys(SCALE_OUT_KEY_COUNT);
+    const std::string value(VALUE_SIZE, 'u');
+    for (const auto &key : keys) {
+        DS_ASSERT_OK(writer_->Set(key, value));
+    }
+    ClusterTopologyPb initialTopology;
+    GetClusterTopologyPb(initialTopology);
+
+    const uint64_t pauseBaseline = inject::GetExecuteCount(HASH_RING_REFRESH_BEFORE_WAIT_INJECT);
+    DS_ASSERT_OK(inject::Set(HASH_RING_REFRESH_BEFORE_WAIT_INJECT, "1*pause()"));
+    Raii releaseRefresh([] { (void)inject::Clear(HASH_RING_REFRESH_BEFORE_WAIT_INJECT); });
+    const auto pauseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (inject::GetExecuteCount(HASH_RING_REFRESH_BEFORE_WAIT_INJECT) == pauseBaseline
+           && std::chrono::steady_clock::now() < pauseDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    ASSERT_GT(inject::GetExecuteCount(HASH_RING_REFRESH_BEFORE_WAIT_INJECT), pauseBaseline);
+
+    HostPort masterAddress;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(META_OWNER_INDEX, masterAddress));
+    HostPort newWorkerAddress("127.0.0.1", GetFreePort());
+    DS_ASSERT_OK(cluster_->AddNode(masterAddress, newWorkerAddress.ToString(), GetFreePort()));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, SCALE_OUT_WORKER_INDEX, 30));
+    WaitAllMembersJoinClusterTopology(SCALE_OUT_WORKER_COUNT);
+    WaitClusterTopologyChange([](const ClusterTopologyPb &topology) { return !topology.has_active_batch(); });
+
+    ClusterTopologyPb finalTopology;
+    GetClusterTopologyPb(finalTopology);
+    auto redirectedKey = std::find_if(keys.begin(), keys.end(), [&](const std::string &key) {
+        return SelectMetadataOwner(initialTopology, key) != newWorkerAddress.ToString()
+               && SelectMetadataOwner(finalTopology, key) == newWorkerAddress.ToString();
+    });
+    ASSERT_NE(redirectedKey, keys.end());
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, SCALE_OUT_WORKER_INDEX, QUERY_AND_GET_INJECT, "call()"));
+    uint64_t redirectedQueryBaseline = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, SCALE_OUT_WORKER_INDEX, QUERY_AND_GET_INJECT,
+                                                       redirectedQueryBaseline));
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(*redirectedKey, buffer));
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    uint64_t redirectedQueryCount = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, SCALE_OUT_WORKER_INDEX, QUERY_AND_GET_INJECT,
+                                                       redirectedQueryCount));
+    ASSERT_GT(redirectedQueryCount, redirectedQueryBaseline);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "UB");
 }
 
 TEST_F(KVClientTransportGetWithShmTest, PinPendingSingleAndBatchReadOnlyGetUsePageableMemory)

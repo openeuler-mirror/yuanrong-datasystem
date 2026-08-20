@@ -35,17 +35,24 @@ namespace datasystem {
 namespace client {
 
 namespace {
+struct RedirectTarget {
+    HostPort address;
+    uint64_t topologyVersion = 0;
+};
+
 struct RedirectBatch {
     HostPort address;
+    uint64_t topologyVersion = 0;
     ObjectMetadataBatch items;
 };
 
 struct PendingMetadataBatch {
     HostPort address;
+    uint64_t topologyVersion = 0;
     ObjectMetadataBatch items;
 };
 
-using RedirectTargets = std::unordered_map<std::string, std::deque<HostPort>>;
+using RedirectTargets = std::unordered_map<std::string, std::deque<RedirectTarget>>;
 
 bool IsMetadataOwnerRouteFailure(StatusCode code)
 {
@@ -72,7 +79,7 @@ Status BuildRedirectTargets(const master::QueryAndGetRspPb &response, RedirectTa
         HostPort address;
         RETURN_IF_NOT_OK(address.ParseString(redirectInfo.redirect_meta_address()));
         for (const auto &objectKey : redirectInfo.change_meta_ids()) {
-            redirectTargets[objectKey].emplace_back(address);
+            redirectTargets[objectKey].push_back({ address, redirectInfo.topology_version() });
         }
     }
     return Status::OK();
@@ -80,28 +87,39 @@ Status BuildRedirectTargets(const master::QueryAndGetRspPb &response, RedirectTa
 
 Status PartitionInitialResponse(const ObjectMetadataBatch &items, const master::QueryAndGetRspPb &response,
                                 ObjectMetadataBatch &localItems,
-                                std::vector<RedirectBatch> &redirectBatches)
+                                std::vector<RedirectBatch> &redirectBatches,
+                                std::optional<uint64_t> minimumTopologyVersion)
 {
     RedirectTargets redirectTargets;
     RETURN_IF_NOT_OK(BuildRedirectTargets(response, redirectTargets));
 
     localItems.clear();
     localItems.reserve(items.size());
-    std::unordered_map<HostPort, RedirectBatch *> batchesByAddress;
-    // The address map keeps pointers into redirectBatches, so prevent vector relocation while grouping.
+    std::unordered_map<std::string, RedirectBatch *> batchesByTarget;
+    // The target map keeps pointers into redirectBatches, so prevent vector relocation while grouping.
     redirectBatches.reserve(response.info_size());
-    batchesByAddress.reserve(response.info_size());
+    batchesByTarget.reserve(response.info_size());
     for (auto *item : items) {
         auto target = redirectTargets.find(item->objectKey);
         if (target == redirectTargets.end() || target->second.empty()) {
             localItems.push_back(item);
             continue;
         }
-        const HostPort address = std::move(target->second.front());
+        RedirectTarget redirectTarget = std::move(target->second.front());
         target->second.pop_front();
-        auto inserted = batchesByAddress.emplace(address, nullptr);
+        CHECK_FAIL_RETURN_STATUS(!minimumTopologyVersion.has_value()
+                                     || redirectTarget.topologyVersion >= *minimumTopologyVersion,
+                                 K_NOT_READY,
+                                 std::string(STALE_TRANSPORT_SNAPSHOT_MESSAGE)
+                                     + ": metadata redirect topology version rolled back from "
+                                     + std::to_string(*minimumTopologyVersion) + " to "
+                                     + std::to_string(redirectTarget.topologyVersion));
+        const std::string batchKey = redirectTarget.address.ToString() + "#"
+                                     + std::to_string(redirectTarget.topologyVersion);
+        auto inserted = batchesByTarget.emplace(batchKey, nullptr);
         if (inserted.second) {
-            redirectBatches.push_back({ address, {} });
+            redirectBatches.push_back(
+                { std::move(redirectTarget.address), redirectTarget.topologyVersion, {} });
             inserted.first->second = &redirectBatches.back();
         }
         inserted.first->second->items.push_back(item);
@@ -123,8 +141,8 @@ void QueueRedirectBatches(std::vector<RedirectBatch> &redirectBatches, std::dequ
             continue;
         }
         LOG(INFO) << "[TransportGet][Metadata] Follow redirect, target: " << batch.address.ToString()
-                  << ", key count: " << batch.items.size();
-        pending.push_back({ std::move(batch.address), std::move(batch.items) });
+                  << ", topology version: " << batch.topologyVersion << ", key count: " << batch.items.size();
+        pending.push_back({ std::move(batch.address), batch.topologyVersion, std::move(batch.items) });
     }
 }
 }  // namespace
@@ -236,7 +254,9 @@ Status ObjectMetadataClient::AddInlineDataRequest(const ObjectMetadataBatch &ite
 
 Status ObjectMetadataClient::InvokeQueryAndGet(const HostPort &address, master::QueryAndGetReqPb &request,
                                                master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
-                                               InlineRequestContext &context, bool &rpcDispatched)
+                                               InlineRequestContext &context,
+                                               std::optional<uint64_t> redirectTopologyVersion,
+                                               bool &rpcDispatched)
 {
     rpcDispatched = false;
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
@@ -261,14 +281,27 @@ Status ObjectMetadataClient::InvokeQueryAndGet(const HostPort &address, master::
     }
 
     std::shared_ptr<WorkerRpcClient> rpcClient;
-    RETURN_IF_NOT_OK(manager_->GetOrCreateRpcClient(address, rpcClient));
+    Status rc = manager_->GetOrCreateRpcClient(address, rpcClient);
+    if (redirectTopologyVersion.has_value() && IsTransportSnapshotStaleLocation(rc)) {
+        VLOG(1) << "[TransportGet][Metadata] Transport snapshot lags redirected owner, query metadata only: "
+                << address.ToString() << ", redirect version: " << *redirectTopologyVersion;
+        if (metadataFailureHandler_) {
+            metadataFailureHandler_(address, rc);
+        }
+        context.DisableInlineData();
+        request.clear_data_request();
+        payloads.clear();
+        rc = manager_->GetOrCreateRedirectMetadataRpcClient(address, *redirectTopologyVersion, rpcClient);
+    }
+    RETURN_IF_NOT_OK(rc);
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient);
     return rpcClient->InvokeQueryAndGet(request, response, payloads, &rpcDispatched);
 }
 
 Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const ObjectMetadataBatch &items,
                                             bool allowRedirect, master::QueryAndGetRspPb &response,
-                                            std::vector<RpcMessage> &payloads, InlineRequestContext &context)
+                                            std::vector<RpcMessage> &payloads, InlineRequestContext &context,
+                                            std::optional<uint64_t> redirectTopologyVersion)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(retry_);
     CHECK_FAIL_RETURN_STATUS(!items.empty(), K_INVALID, "Metadata query items are empty");
@@ -286,7 +319,8 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
                 << ", key count: " << items.size() << ", redirect: " << allowRedirect
                 << ", attempt: " << attempt;
         bool rpcDispatched = false;
-        Status rc = InvokeQueryAndGet(address, request, response, payloads, context, rpcDispatched);
+        Status rc = InvokeQueryAndGet(address, request, response, payloads, context, redirectTopologyVersion,
+                                     rpcDispatched);
         if (rc.IsError()) {
             const bool routeFailure = IsMetadataOwnerRouteFailure(rc.GetCode());
             if (routeFailure && metadataFailureHandler_) {
@@ -433,10 +467,10 @@ Status ObjectMetadataClient::Query(const HostPort &address, const ObjectMetadata
 
     master::QueryAndGetRspPb response;
     std::vector<RpcMessage> payloads;
-    RETURN_IF_NOT_OK(QueryWithRetry(address, items, true, response, payloads, context));
+    RETURN_IF_NOT_OK(QueryWithRetry(address, items, true, response, payloads, context, std::nullopt));
     ObjectMetadataBatch localItems;
     std::vector<RedirectBatch> redirectBatches;
-    RETURN_IF_NOT_OK(PartitionInitialResponse(items, response, localItems, redirectBatches));
+    RETURN_IF_NOT_OK(PartitionInitialResponse(items, response, localItems, redirectBatches, std::nullopt));
     VLOG(1) << "[TransportGet][Metadata] Query resolved, meta owner: " << address.ToString()
             << ", local keys: " << localItems.size() << ", redirect groups: " << redirectBatches.size();
     RETURN_IF_NOT_OK(ApplyResults(localItems, response, payloads, context));
@@ -451,11 +485,13 @@ Status ObjectMetadataClient::Query(const HostPort &address, const ObjectMetadata
         pending.pop_front();
         response.Clear();
         payloads.clear();
-        Status rc = QueryWithRetry(current.address, current.items, true, response, payloads, context);
+        Status rc = QueryWithRetry(current.address, current.items, true, response, payloads, context,
+                                   current.topologyVersion);
         localItems.clear();
         redirectBatches.clear();
         if (rc.IsOk()) {
-            rc = PartitionInitialResponse(current.items, response, localItems, redirectBatches);
+            rc = PartitionInitialResponse(current.items, response, localItems, redirectBatches,
+                                          current.topologyVersion);
         }
         if (rc.IsOk()) {
             VLOG(1) << "[TransportGet][Metadata] Query resolved, meta owner: " << current.address.ToString()

@@ -999,6 +999,9 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex);
         ++rpcBuildCount;
+        if (onCreateRpcClient) {
+            onCreateRpcClient(address);
+        }
         if (!rpcBuildStatuses.empty()) {
             Status rc = rpcBuildStatuses.front();
             rpcBuildStatuses.erase(rpcBuildStatuses.begin());
@@ -1087,6 +1090,7 @@ public:
     std::function<Status(const HostPort &, const master::QueryAndGetReqPb &, master::QueryAndGetRspPb &,
                          std::vector<RpcMessage> &)>
         queryAndGetHandler;
+    std::function<void(const HostPort &)> onCreateRpcClient;
     std::function<void(const HostPort &, FakeTransporter &)> configureTransporter;
     std::mutex mutex;
 };
@@ -2674,6 +2678,212 @@ TEST(ObjectMetadataClientTest, FollowsTwoRedirects)
     ASSERT_EQ(results.size(), 1u);
     EXPECT_TRUE(results[0].status.IsOk());
     EXPECT_EQ(calls, std::vector<HostPort>({ MakeAddress(41), MakeAddress(42), MakeAddress(43) }));
+}
+
+TEST(ObjectMetadataClientTest, RedirectedOwnerAbsentFromSnapshotUsesMetadataOnlyRpcAndRequestsRefresh)
+{
+    ApiDeadlineGuard deadline(1000);
+    const HostPort currentOwner = MakeAddress(41);
+    const HostPort redirectedOwner = MakeAddress(42);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 10;
+    snapshot.remoteTransportAddrs.push_back(currentOwner);
+    ASSERT_TRUE(manager->UpdateWorkerSnapshot(snapshot).IsOk());
+
+    manager->queryAndGetHandler = [currentOwner, redirectedOwner](
+                                      const HostPort &address, const master::QueryAndGetReqPb &request,
+                                      master::QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        if (address == currentOwner) {
+            EXPECT_TRUE(request.has_data_request());
+            EXPECT_TRUE(request.data_request().has_ub());
+            auto *redirect = response.add_info();
+            redirect->set_redirect_meta_address(redirectedOwner.ToString());
+            redirect->add_change_meta_ids("key");
+            redirect->set_topology_version(11);
+            return Status::OK();
+        }
+        EXPECT_EQ(address, redirectedOwner);
+        EXPECT_FALSE(request.has_data_request());
+        AddLocation(response, "key", MakeAddress(51), 6);
+        return Status::OK();
+    };
+    std::vector<std::pair<HostPort, Status>> failures;
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    ObjectMetadataClient metadata(
+        manager, std::make_shared<DeadlineRetry>(),
+        std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE), bufferProvider, 16,
+        [&failures](const HostPort &address, const Status &status) { failures.emplace_back(address, status); });
+    auto results = MakeMetadataItems({ { 0, "key", currentOwner } });
+    auto batch = MakeMetadataBatch(results);
+
+    ASSERT_TRUE(metadata.QueryAndGet(currentOwner, batch).IsOk());
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_FALSE(results[0].inlineData.has_value());
+    ASSERT_EQ(failures.size(), 1u);
+    EXPECT_EQ(failures[0].first, redirectedOwner);
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(failures[0].second));
+    EXPECT_EQ(manager->rpcBuildCount, 2);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+
+    std::shared_ptr<IDataTransporter> transporter;
+    EXPECT_EQ(manager->GetOrCreate(redirectedOwner, TransportHint::UB_CANDIDATE, transporter).GetCode(), K_NOT_READY);
+}
+
+TEST(ObjectMetadataClientTest, RedirectVersionNotNewerThanSnapshotRemainsRejected)
+{
+    for (uint64_t redirectVersion : { 0, 9, 10 }) {
+        ApiDeadlineGuard deadline(1000);
+        const HostPort currentOwner = MakeAddress(41);
+        const HostPort redirectedOwner = MakeAddress(42);
+        auto manager = std::make_shared<FakeDataPlaneManager>();
+        WorkerSnapshot snapshot;
+        snapshot.ringVersion = 10;
+        snapshot.remoteTransportAddrs.push_back(currentOwner);
+        ASSERT_TRUE(manager->UpdateWorkerSnapshot(snapshot).IsOk());
+
+        int redirectedInvocations = 0;
+        manager->queryAndGetHandler = [currentOwner, redirectedOwner, redirectVersion, &redirectedInvocations](
+                                          const HostPort &address, const master::QueryAndGetReqPb &,
+                                          master::QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+            if (address == currentOwner) {
+                auto *redirect = response.add_info();
+                redirect->set_redirect_meta_address(redirectedOwner.ToString());
+                redirect->add_change_meta_ids("key");
+                redirect->set_topology_version(redirectVersion);
+                return Status::OK();
+            }
+            ++redirectedInvocations;
+            AddLocation(response, "key", MakeAddress(51));
+            return Status::OK();
+        };
+        ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>());
+        auto results = MakeMetadataItems({ { 0, "key", currentOwner } });
+
+        ASSERT_TRUE(metadata.QueryAndGet(currentOwner, MakeMetadataBatch(results)).IsOk());
+        EXPECT_TRUE(IsTransportSnapshotStaleLocation(results[0].status));
+        EXPECT_EQ(redirectedInvocations, 0);
+        EXPECT_EQ(manager->rpcBuildCount, 1);
+    }
+}
+
+TEST(ObjectMetadataClientTest, NewerRedirectIsRejectedIfSnapshotAdvancesDuringRpcCreation)
+{
+    ApiDeadlineGuard deadline(1000);
+    const HostPort currentOwner = MakeAddress(41);
+    const HostPort redirectedOwner = MakeAddress(42);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 10;
+    snapshot.remoteTransportAddrs.push_back(currentOwner);
+    ASSERT_TRUE(manager->UpdateWorkerSnapshot(snapshot).IsOk());
+
+    int redirectedInvocations = 0;
+    manager->queryAndGetHandler = [currentOwner, redirectedOwner, &redirectedInvocations](
+                                      const HostPort &address, const master::QueryAndGetReqPb &,
+                                      master::QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        if (address == currentOwner) {
+            auto *redirect = response.add_info();
+            redirect->set_redirect_meta_address(redirectedOwner.ToString());
+            redirect->add_change_meta_ids("key");
+            redirect->set_topology_version(11);
+            return Status::OK();
+        }
+        ++redirectedInvocations;
+        AddLocation(response, "key", MakeAddress(51));
+        return Status::OK();
+    };
+    manager->onCreateRpcClient = [manager, currentOwner, redirectedOwner](const HostPort &address) {
+        if (address != redirectedOwner) {
+            return;
+        }
+        WorkerSnapshot latest;
+        latest.ringVersion = 12;
+        latest.remoteTransportAddrs.push_back(currentOwner);
+        ASSERT_TRUE(manager->UpdateWorkerSnapshot(latest).IsOk());
+    };
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>());
+    auto results = MakeMetadataItems({ { 0, "key", currentOwner } });
+
+    ASSERT_TRUE(metadata.QueryAndGet(currentOwner, MakeMetadataBatch(results)).IsOk());
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(results[0].status));
+    EXPECT_EQ(redirectedInvocations, 0);
+    EXPECT_EQ(manager->rpcBuildCount, 2);
+}
+
+TEST(ObjectMetadataClientTest, RedirectChainRejectsTopologyVersionRollback)
+{
+    constexpr uint64_t clientSnapshotVersion = 10;
+    constexpr uint64_t firstRedirectVersion = 12;
+    const std::vector<std::pair<uint64_t, bool>> cases = {
+        { 11, false },
+        { 12, true },
+        { 13, true },
+    };
+    for (const auto &[nextRedirectVersion, shouldFollow] : cases) {
+        ApiDeadlineGuard deadline(1000);
+        const HostPort initialOwner = MakeAddress(41);
+        const HostPort firstRedirectOwner = MakeAddress(42);
+        const HostPort secondRedirectOwner = MakeAddress(43);
+        auto manager = std::make_shared<FakeDataPlaneManager>();
+        WorkerSnapshot snapshot;
+        snapshot.ringVersion = clientSnapshotVersion;
+        snapshot.remoteTransportAddrs.push_back(initialOwner);
+        ASSERT_TRUE(manager->UpdateWorkerSnapshot(snapshot).IsOk());
+
+        std::vector<HostPort> calls;
+        manager->queryAndGetHandler = [initialOwner, firstRedirectOwner, secondRedirectOwner,
+                                       firstRedirectVersion, nextRedirectVersion, &calls](
+                                          const HostPort &address, const master::QueryAndGetReqPb &,
+                                          master::QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+            calls.push_back(address);
+            if (address == secondRedirectOwner) {
+                AddLocation(response, "key", MakeAddress(51));
+                return Status::OK();
+            }
+            auto *redirect = response.add_info();
+            redirect->set_redirect_meta_address(
+                (address == initialOwner ? firstRedirectOwner : secondRedirectOwner).ToString());
+            redirect->add_change_meta_ids("key");
+            redirect->set_topology_version(
+                address == initialOwner ? firstRedirectVersion : nextRedirectVersion);
+            return Status::OK();
+        };
+        ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>());
+        auto results = MakeMetadataItems({ { 0, "key", initialOwner } });
+
+        ASSERT_TRUE(metadata.QueryAndGet(initialOwner, MakeMetadataBatch(results)).IsOk());
+        if (shouldFollow) {
+            EXPECT_TRUE(results[0].status.IsOk());
+            EXPECT_EQ(calls, std::vector<HostPort>({ initialOwner, firstRedirectOwner, secondRedirectOwner }));
+            EXPECT_EQ(manager->rpcBuildCount, 3);
+        } else {
+            EXPECT_TRUE(IsTransportSnapshotStaleLocation(results[0].status));
+            EXPECT_EQ(calls, std::vector<HostPort>({ initialOwner, firstRedirectOwner }));
+            EXPECT_EQ(manager->rpcBuildCount, 2);
+        }
+    }
+}
+
+TEST(ObjectMetadataClientTest, InitialOwnerAbsentFromSnapshotRemainsRejected)
+{
+    ApiDeadlineGuard deadline(1000);
+    const HostPort initialOwner = MakeAddress(41);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 10;
+    snapshot.remoteTransportAddrs.push_back(MakeAddress(42));
+    ASSERT_TRUE(manager->UpdateWorkerSnapshot(snapshot).IsOk());
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>());
+    auto results = MakeMetadataItems({ { 0, "key", initialOwner } });
+    auto batch = MakeMetadataBatch(results);
+
+    const Status rc = metadata.QueryAndGet(initialOwner, batch);
+
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc));
+    EXPECT_EQ(manager->rpcBuildCount, 0);
+    EXPECT_EQ(manager->transportBuildCount, 0);
 }
 
 TEST(ObjectMetadataClientTest, ReportsRedirectTargetAccessFailure)
