@@ -1,10 +1,10 @@
 ---
 name: ds-trace-triage
 description: >
-  Analyze DataSystem trace bundles for slow latency or errors. Use for gzip/tar
-  trace packages, worker/client trace IDs, RPC deadline exceeded, rpc slow,
-  client summary, RemotePull, Get/Set/Create/Publish, URMA_ELAPSED_*,
-  worker/time/flow/breakdown aggregation, and CodeGraph-backed source mapping.
+  Use when analyzing DataSystem slow/error trace bundles or trace IDs, including
+  requests for main-problem key-bottleneck TopN/Top100 reports, stacked bars,
+  same-Worker time correlation, QueryMeta/RemoteGet failures, Worker/RPC/URMA
+  breakdown, RemotePull, latencySummary, or source mapping.
 ---
 
 # DataSystem Trace Triage
@@ -67,6 +67,122 @@ dominant_classifications: <top counts>
 errors: <error counts>
 access_latency: p50=<...> p90=<...> p99=<...> max=<...>
 publish: local only / dry-run / published
+```
+
+## 主问题关键瓶颈报告
+
+专项后处理只在各自 skill 维护：TopN、分档和多 run 控制变量分析使用
+`ds-trace-bottleneck-analysis`；NUMA/source-chip、`srcChipInflight` 与
+URMA timeout 错误链使用 `ds-trace-numa-analysis`。本 skill 只维护公共解析、
+run-directory 和发布契约，以下内容保留为基础调用边界，不复制 NUMA 专项流程。
+
+当用户要求“主问题关键瓶颈”、`TopN/Top100`、时间序列 stacked bars、
+Worker/RPC/URMA breakdown、逐 Trace 日志或分类下载时，先完成 `ds_trace_triage.py run`，
+再运行后置分析器。不要复制一次性解析器，也不要把某批
+Trace 的数量、ID、Worker、时间或结论写进脚本。
+
+```bash
+python3 scripts/ds_trace_triage.py run <trace-input> [more-inputs ...] \
+  --code-ref "$(git rev-parse main/master)" \
+  --case <case-name> --scenario <scenario> --out <run-root>
+
+python3 scripts/ds_trace_bottleneck.py \
+  --run-dir <run-dir-returned-above> \
+  --top <N> \
+  --local-cache <true|false> \
+  --source-ref "$(git rev-parse main/master)" \
+  --deadline-ms <known-deadline-ms> \
+  --output <run-dir-returned-above>/bottleneck.local.html
+```
+
+在生成关键瓶颈页前，从用户、运行配置或明确的 case 元数据取得
+`local_cache`，并传入 `--local-cache true|false`。不要从服务类名猜测该模式；
+若使用者无法确认，则省略参数，页面必须标注“local cache 模式未知”并保持拓扑中性。
+
+- `local_cache=false`：GET 由 Client 侧发起，链路为
+  `Client → Meta Owner → Data Worker`。`BatchGetObjectRemote` 是
+  Client→Data Worker RPC，URMA 是 Data Worker→Client。日志出现
+  `WorkerWorkerOCService`、`BatchGetObjectRemote` 或 `RemotePull`，不能单独作为
+  Worker→Worker 互拉证据。
+- `local_cache=true`：Client 通过绑定 Worker 访问。只有 Trace 同时明确调用方、
+  目标 Data Worker 和远端请求，才可标为 Worker→Worker；服务名本身仍不是证据。
+- 模式未知：使用“BatchGet”“Data Worker 服务端”“URMA 发送端/接收端”等中性术语，
+  不输出确定的 Worker→Worker 拓扑结论。
+
+`local_cache` 只确定调用拓扑，不替代逐 Trace 的访问位置判定。对每条 GET，优先读取
+Client access 日志的 `DS_KV_CLIENT_GET transportType`：`SHM` 表示本节点共享内存访问，
+`UB` 表示访问远端 Data Worker；`TCP` 可能是远端访问，也可能是同节点 SHM 失败回退，
+必须标“位置不确定（TCP）”；字段缺失标“未确认”。`DS_POSIX_GET` 所在节点
+只能称为有处理证据的 Data Worker；不得用 Worker 日志数量、BatchGet 服务名或
+`transferPath: UB` 覆盖 Client 实际 transport。页面必须支持按该位置逐 Trace 筛选，
+并注明位置统计只覆盖当前输入/TopN，不能外推整个运行。
+
+只有已从配置或用户输入确认 deadline 时才传 `--deadline-ms`。省略时页面使用
+20ms 作为图表参考线并在 limitations 中明确标为参考阈值，不得写成配置 deadline。
+
+标准输出：
+
+- `bottleneck.analysis.json`：TopN、七阶段互斥归因（含 RPC 网络与 RPC 排队）、主问题、时间、Worker、
+  RPC、URMA 和逐 Trace 诊断的机器可读模型。
+- `bottleneck.local.html`：内联 ECharts 和数据的自包含页面，包含排序、8 行分页、
+  筛选、Trace/日志联动及 TopN、分类和单条 triage 保留证据下载。若上游
+  `dropped_evidence>0`，页面与下载必须标注截断，不能称为原始日志全量。
+- `raw-inputs/`：从 triage run 的 `raw/inputs/` 原样复制输入包并在专项页提供下载；
+  保留 manifest 中的大小和 SHA256。不得从最多 200 行的 evidence 重新拼接“原始包”。
+
+当前七阶段模型面向 GET/read Trace。混合 run 中的 SET/CREATE/PUBLISH 等非 GET
+Trace 会从 Client TopN 排除并计入 limitations；不得套用读链阶段名称解释写链。
+
+`--top` 接受任意正整数，例如 100、1000。页面标题、计数、下载范围和分页都从
+实际 TopN 数据生成，不绑定 Top100；长表仍先对完整筛选结果排序，再按 8 行分页。
+
+关键瓶颈页按 Client 总时延提供五档参考筛选：`[5,6)ms`、`[6,7)ms`、
+`[7,10)ms`、`[10,20]ms`、`>20ms`。精确 20ms 归入 10–20ms，只有大于
+20ms 进入最后一档；低于 5ms 的 TopN Trace 保留在“全部”并明确显示为未纳入五档。
+档位只联动主问题图、阶段占比、TopN stacked bars 与 Trace 表；URMA、同 Worker、
+非 RPC 和 Worker 深挖继续使用全量 TopN，避免把不同 Worker 本地时钟误当同一时间轴。
+
+页面表格必须在可用宽度内自动换行，避免依赖横向拖动；窄屏可隐藏次要 breakdown
+列，但排序、分页、下载和 Trace 明细必须保留完整数据。“同 Worker 时间关联分析”
+的 RPC、UB、元数据、数据访问四张图固定一行一张，避免并排压缩时间轴。
+
+### 同 Worker 时间关联
+
+当用户询问同一 Worker 上 QueryMeta/RemoteGet 失败、RPC/UB 同期特征或慢 WR
+时间聚集时，使用关键瓶颈页的“同 Worker 时间关联分析”章节。该章节的 Worker
+选择器只过滤本章节，不得改变全局 TopN、主问题或 Trace 表。
+
+- 用日志发出方 Worker 的本地时间，按 1 秒桶聚合；对失败 QueryMeta 和
+  RemoteGet/BatchGet 查看闭区间前后各 1 秒。
+- RPC、UB、元数据、数据访问保持四个独立维度。RPC 分 network/server/queue；
+  UB 分 total/completion wait/Inflight；元数据单列 QueryMeta；数据访问单列
+  Local processing 与 RemoteGet/BatchGet。父子窗口不得相加。
+- 只有带 `URMA_ELAPSED_TOTAL` 且 total 可观测的事件才是一个 WR。
+  `URMA_ELAPSED_TOTAL > 1.5ms` 才标为慢 WR；等于 1.5ms 仍为正常。
+  缺少 total 时保持未观测，不能按 0，也不能用 `transferPath: UB` 补造 WR。
+- 同 Trace 同阶段是直接证据；不同 Trace 在同 Worker 前后各 1 秒出现只能写为
+  “同期伴随”，不能写成因果。跨 Worker 的绝对时间不直接比较。
+- 某一维没有证据时显示“未观测到对应证据”，不渲染零值趋势。
+
+先从 `summary.json` 的结构化字段取值，只对已归入 Trace 的 evidence 做补充语义识别；
+不得重新读取原始 gzip/tar 来二次解析 Trace；交付时只允许复制 triage 已归档的原包。
+父窗口与子阶段不得重复相加，七阶段之和不得超过
+Client 总时延。字段缺失时保留为“内部未细分”或“未解释残差”，不得猜测为网络、
+CPU、锁或线程调度。
+
+页面生成不得自动发布。只有用户明确要求发布时，才继续走本 skill 的
+`publish-site --dry-run`、尺寸门禁和站点目录注册流程。
+
+最小回复：
+
+```text
+bottleneck.local.html: <run-dir>/bottleneck.local.html
+bottleneck.analysis.json: <run-dir>/bottleneck.analysis.json
+top_n: <N>
+main_problems: <top counts>
+evidence_gaps: <missing surfaces>
+source_ref: <triage ref and current source verification boundary>
+publish: local only
 ```
 
 ## CLI and cache contract
@@ -264,11 +380,10 @@ Always cover:
 
 - time: first/last timestamp, burst windows if visible
 - worker: entry/provider/target concentration where logs expose it
-- UB worker: distinguish entry UB and exit UB. Entry UB comes from
-  RemoteGet/transferPath-side evidence; exit UB comes from
-  `URMA_ELAPSED_*` evidence. Use `dimensions.ub_worker_summary` to identify
-  whether bursts concentrate on the request entry side, the data-send side, or
-  both.
+- UB worker: `transferPath: UB` is only a selected-path/capability label, not a
+  timed WR. Build WR timing only from `URMA_ELAPSED_TOTAL`, and use its emitting
+  Worker as the evidence-backed URMA source Worker. Keep RemoteGet/RPC and UB
+  timing as separate dimensions.
 - UB lifecycle: keep UB/URMA in a standalone report chapter. Compare
   `URMA_ELAPSED_TOTAL`, `wait os sched thread finish time`, `wakeSchedLatencyUs`,
   `srcChipInflight`, `URMA_ELAPSED_POLL_JFC`, `URMA_ELAPSED_NOTIFY`,
@@ -307,7 +422,7 @@ For customer-facing reports, write like a diagnosis note:
 - For UB/URMA, describe the post/write wait timeline and compare total,
   `condition_variable.wait_for`, wake scheduling, poll JFC, notify, poll-loop
   gap, nanosleep wake, data size, CPU, inflight, source chip, and edge.
-- Keep long report tables paginated around 4-6 rows per page. Do this for new
+- Keep long report tables paginated at 8 rows per page. Do this for new
   UB lifecycle, UB request, UB worker role, UB time-bucket, worker, and edge
   tables so a single noisy run does not bury the charts.
 - For noisy-vs-clean comparisons, treat different runs as cohorts: paths or tar

@@ -28,6 +28,23 @@ def _write_tar_gz(path, files):
             tar.addfile(info, io.BytesIO(data))
 
 
+def test_set_string_view_trace_id_wins_over_remote_instance_uuid(tmp_path):
+    trace_id = "setStringView-94-00076420;043f53ee2192"
+    remote_instance_id = "17fd7a83-d7ca-4bd2-bf6e-b076012876ba"
+    log = tmp_path / "put-timeout.log"
+    log.write_text(
+        f"2026-08-17T15:30:51.045830 | W | urma_manager.cpp:1360 | 192.0.2.10 | 94:444 | "
+        f"{trace_id} | | [URMA_WAIT_TIMEOUT] targetAddress=192.0.2.20:31501, "
+        f"remoteInstanceId={remote_instance_id}, dataSize=4194304, op=WRITE\n",
+        encoding="utf-8",
+    )
+
+    report = _load_module().analyze_inputs([str(log)], code_ref="unit-test")
+
+    assert set(report["traces"]) == {trace_id}
+    assert report["traces"][trace_id]["errors"]["URMA_WAIT_TIMEOUT"] == 1
+
+
 def test_tar_gz_trace_bundle_is_parsed_by_trace_and_key_dimensions(tmp_path):
     trace_id = "019f7b27-56f0-74f0-9a68-5b3742f11e23"
     bundle = tmp_path / "trace-bundle.tar.gz"
@@ -166,6 +183,40 @@ def test_brpc_framework_slow_fields_are_parsed(tmp_path):
     assert rpc["remote_processing_us"]["p50"] == 20184
     assert rpc["server_exec_us"]["p50"] == 0
     assert rpc["network_residual_us"]["p50"] == 0
+
+
+def test_getbuffer_trace_id_is_grouped_across_client_and_worker_logs(tmp_path):
+    trace_id = "getBuffer-2644-00007530;dd63879d67f2"
+    log = tmp_path / "getbuffer-trace.log"
+    log.write_text(
+        "\n".join(
+            [
+                (
+                    f"2026-08-14T23:16:42.735225 | I | access_recorder.cpp:1065 | "
+                    f"192.0.2.28 | 2644:2849 | {trace_id} |  | 0 | "
+                    "DS_KV_CLIENT_GET | 3921 | 3670016 | "
+                    "{transportType:UB,latencySummary:{client.rpc.direct_get_data:3670}} |"
+                ),
+                (
+                    f"2026-08-14T23:16:42.728962 | I | urma_manager.cpp:1253 | "
+                    f"192.0.2.252 | 1715:1725 | {trace_id} | user | "
+                    "[SLOW LOG] [URMA_ELAPSED_TOTAL]: [urma_request_id:7098] "
+                    "Time from post to completion total cost 3.356ms, "
+                    "dataSize:3670016, status: code: [OK]"
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+
+    assert report["trace_count"] == 1
+    assert report["dimensions"]["flow"]["DS_KV_CLIENT_GET"] == 1
+    assert report["dimensions"]["latency_ms"]["access"]["p50"] == pytest.approx(3.921)
+    assert report["dimensions"]["urma_elapsed"]["total"]["p50"] == pytest.approx(3.356)
+    assert report["traces"][trace_id]["line_count"] == 2
 
 
 def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_path):
