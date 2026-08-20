@@ -28,6 +28,8 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/immutable_string/immutable_string.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
@@ -118,7 +120,7 @@ private:
     // In this client map is object key and objects referenced cnt by this object.
     TbbObjKeyTable objectKeys_;
     // protect the objectKeys_ map
-    mutable std::shared_timed_mutex objectKeyMapMutex_;
+    mutable SharedMutex objectKeyMapMutex_;
     bool isUniqueCnt_;
 };
 
@@ -146,7 +148,7 @@ public:
                         std::vector<std::string> &failedIncIds, std::vector<std::string> &firstIncIds,
                         bool isRemoteClient = false)
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        std::shared_lock<SharedMutex> lck(mutex_);
         typename TbbRefTable::const_accessor clientAccessor;
         while (!clientRefTable_.find(clientAccessor, refId)) {
             typename TbbRefTable::accessor accessor;
@@ -206,7 +208,7 @@ public:
                         std::vector<std::string> &failedDecIds, std::vector<std::string> &finishDecIds,
                         bool isRemoteClient = false)
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        std::shared_lock<SharedMutex> lck(mutex_);
         std::vector<std::string> successVec;
         Status rc = Status::OK();
         {
@@ -258,7 +260,7 @@ public:
      */
     void GetAllRef(std::unordered_map<std::string, std::unordered_set<KeyType>> &refTable) const
     {
-        std::lock_guard<std::shared_timed_mutex> lck(mutex_);
+        std::lock_guard<SharedMutex> lck(mutex_);
         for (const auto &kv : objectRefTable_) {
             std::unordered_set<KeyType> set(kv.second.begin(), kv.second.end());
             refTable.emplace(kv.first, std::move(set));
@@ -271,7 +273,7 @@ public:
      */
     void GetAllClientRef(std::unordered_map<KeyType, std::vector<std::string>> &refTable) const
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        std::shared_lock<SharedMutex> lck(mutex_);
         for (const auto &kv : clientRefTable_) {
             std::vector<std::string> objKeys;
             kv.second->GetRefIds(objKeys);
@@ -302,7 +304,7 @@ public:
      */
     void GetClientRefIds(const KeyType &refId, std::vector<std::string> &objectKeys) const
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        std::shared_lock<SharedMutex> lck(mutex_);
         typename TbbRefTable::const_accessor accessor;
         if (clientRefTable_.find(accessor, refId)) {
             accessor->second->GetRefIds(objectKeys);
@@ -328,7 +330,7 @@ public:
      */
     uint32_t GetRefWorkerCount(const std::string &objectKey) const
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        std::shared_lock<SharedMutex> lck(mutex_);
         typename TbbObjRefTable::accessor accessor;
         if (objectRefTable_.find(accessor, objectKey)) {
             return accessor->second.size();
@@ -355,7 +357,7 @@ public:
      */
     void GetObjRefIds(const std::string &objectKey, std::vector<KeyType> &refIds) const
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        std::shared_lock<SharedMutex> lck(mutex_);
         typename TbbObjRefTable::accessor accessor;
         if (objectRefTable_.find(accessor, objectKey)) {
             refIds.insert(refIds.end(), accessor->second.begin(), accessor->second.end());
@@ -426,7 +428,7 @@ private:
     // Use concurrent_hash_map as a set to achieve thread security. The key is remoteClientId, and the value is nullptr.
     TbbFirstRemoteClientTable remoteClientIdTable_;
 
-    mutable std::shared_timed_mutex mutex_;
+    mutable SharedMutex mutex_;
 
     std::function<Status(const std::string &, const std::string &, bool)> saveToKvStore_;
     std::function<Status(const std::string &, const std::string &, bool)> removeFromKvStore_;
@@ -584,14 +586,12 @@ private:
     std::atomic<bool> maybeExpiredFlushExit_{ false };
     WaitPost maybeExpiredFlushPost_;
     std::unique_ptr<Thread> maybeExpiredFlushThread_{ nullptr };
-
-    mutable std::shared_timed_mutex mutex_;
 };
 
 template <typename T>
 bool ObjectRefInfo<T>::AddRef(const T &objectKey, uint32_t ref)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    std::shared_lock<SharedMutex> lock(objectKeyMapMutex_);
     typename TbbObjKeyTable::accessor objAccessor;
     VLOG(1) << "add object key " << objectKey << " ref:" << ref;
     bool res = objectKeys_.emplace(objAccessor, objectKey, ref);
@@ -609,7 +609,7 @@ bool ObjectRefInfo<T>::AddRef(const T &objectKey, uint32_t ref)
 template <typename T>
 uint32_t ObjectRefInfo<T>::GetRefCount(const T &objectKey)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    std::shared_lock<SharedMutex> lock(objectKeyMapMutex_);
     typename TbbObjKeyTable::const_accessor objAccessor;
     if (objectKeys_.find(objAccessor, objectKey)) {
         return objAccessor->second;
@@ -623,7 +623,7 @@ Status ObjectRefInfo<T>::UpdateRefCount(const T &objectKey, int count)
     if (count < 0) {
         RETURN_STATUS(StatusCode::K_INVALID, FormatString("[ObjectId %s] Invalid count: %d", objectKey, count));
     }
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    std::shared_lock<SharedMutex> lock(objectKeyMapMutex_);
     typename TbbObjKeyTable::accessor objAccessor;
     if (objectKeys_.find(objAccessor, objectKey)) {
         if (isUniqueCnt_ && count > 1) {
@@ -649,7 +649,7 @@ bool ObjectRefInfo<T>::RemoveRef(const T &objectKey)
 template <typename T>
 bool ObjectRefInfo<T>::RemoveAndGetRefCnt(const T &objectKey, uint32_t &refCount)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    std::shared_lock<SharedMutex> lock(objectKeyMapMutex_);
     typename TbbObjKeyTable::accessor objAccessor;
     if (!objectKeys_.find(objAccessor, objectKey)) {
         refCount = 0;
@@ -671,14 +671,14 @@ bool ObjectRefInfo<T>::RemoveAndGetRefCnt(const T &objectKey, uint32_t &refCount
 template <typename T>
 bool ObjectRefInfo<T>::Contains(const T &objectKey) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    std::shared_lock<SharedMutex> lock(objectKeyMapMutex_);
     return objectKeys_.count(objectKey) == 1;
 }
 
 template <typename T>
 void ObjectRefInfo<T>::GetRefIds(std::vector<T> &objectKeys) const
 {
-    std::lock_guard<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    std::lock_guard<SharedMutex> lock(objectKeyMapMutex_);
     std::transform(objectKeys_.begin(), objectKeys_.end(), std::back_inserter(objectKeys),
                    [](auto &kv) { return kv.first; });
 }
@@ -686,7 +686,7 @@ void ObjectRefInfo<T>::GetRefIds(std::vector<T> &objectKeys) const
 template <typename T>
 bool ObjectRefInfo<T>::CheckIsNoneRef(const T &objectKey) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    std::shared_lock<SharedMutex> lock(objectKeyMapMutex_);
     typename TbbObjKeyTable::const_accessor objAccessor;
     if (!objectKeys_.find(objAccessor, objectKey)) {
         return true;
@@ -699,7 +699,7 @@ bool ObjectRefInfo<T>::CheckIsNoneRef(const T &objectKey) const
 template <typename T>
 bool ObjectRefInfo<T>::CheckIsRefIdsEmpty() const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    std::shared_lock<SharedMutex> lock(objectKeyMapMutex_);
     return objectKeys_.empty();
 }
 }  // namespace object_cache
