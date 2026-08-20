@@ -126,14 +126,23 @@ public:
 
     Status EvictImpl(EvictionCtrl evictFlags)
     {
-        (void)evictFlags;
         RaiiPlus raiiP;
         if (!lockedExternally_) {
             mutex_.lock();
             raiiP.AddTask([this]() { mutex_.unlock(); });
         }
         auto useCount = data_.use_count();
-        if (useCount > 1) {  // Check the number of shart_ptr holders to ensure that evict can really release fd.
+        // EVICT_REMOVE is an explicit eviction triggered when the cached socket is
+        // already detected dead (MaybeEvictStaleBrpcStub -> Remove). Holding a live
+        // fd here is impossible: the socket is dead, so other holders are running
+        // a failing RPC and will drop their reference. Skip the use_count guard so
+        // the dead stub is actually removed and the next access rebuilds a fresh
+        // one instead of repeatedly reusing the dead entry. Capacity eviction
+        // (EVICT_SOFT / EVICT_SOFT_POS) still honors the guard to avoid killing
+        // actively-shared fds.
+        const bool explicitRemove =
+            static_cast<uint8_t>(evictFlags & EvictionCtrl::EVICT_REMOVE) != 0;
+        if (!explicitRemove && useCount > 1) {
             RETURN_STATUS(K_TRY_AGAIN, FormatString("Current use count: %ld, can not evict.", useCount));
         }
         return Status::OK();

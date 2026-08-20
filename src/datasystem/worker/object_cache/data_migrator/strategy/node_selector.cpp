@@ -322,6 +322,19 @@ Status NodeSelector::CollectClusterInfo()
 {
     std::shared_ptr<worker::WorkerMasterOCApi> workerMasterApi;
     RETURN_IF_NOT_OK(GetWorkerMasterApi(workerMasterApi));
+    // Skip the report when the resolved master is already marked UNREACHABLE by the
+    // topology view. Otherwise the worker keeps retrying a dead master every 500ms
+    // (REPORT_RESOURCE_INTERVAL_TIME_MS_IF_FAILED) until the node is confirmed
+    // FAILED, flooding brpc with failing RPCs that inflate bthread stack caching.
+    if (membership_ != nullptr) {
+        const std::string masterAddr = workerMasterApi->GetHostPort();
+        cluster::MemberEndpoint endpoint;
+        auto resolveRc = membership_->ResolveByAddress(masterAddr, endpoint);
+        if (resolveRc.IsOk() && endpoint.localAvailability == cluster::EndpointAvailability::UNREACHABLE) {
+            return Status(K_MASTER_TIMEOUT,
+                          "Resource-monitor master " + masterAddr + " is unreachable, skip report");
+        }
+    }
     // Report current worker resource info to master
     master::ResourceReportReqPb req;
     master::ResourceReportRspPb rsp;
