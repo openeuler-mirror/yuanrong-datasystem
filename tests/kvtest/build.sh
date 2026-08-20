@@ -152,8 +152,7 @@ if [[ "$BUILD_SYSTEM" == "cmake" ]]; then
     cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" "${cmake_opts[@]}"
     cmake --build "$BUILD_DIR" -j"$JOBS"
 
-    echo ""
-    echo "Build OK: $BUILD_DIR/kvtest"
+    echo "Build OK: $BUILD_DIR/kvtest + $BUILD_DIR/coordinator_test + $BUILD_DIR/worker_test"
     echo ""
     echo "Packaging..."
     cd "$SCRIPT_DIR"
@@ -195,10 +194,13 @@ else  # bazel
     export KVTEST_BUILD_COMMIT="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     ba_args+=(--action_env=KVTEST_BUILD_VERSION --action_env=KVTEST_BUILD_COMMIT)
 
-    echo "bazel command: bazel build ${ba_args[*]} --jobs=$JOBS //tests/kvtest:kvtest"
-    (cd "$REPO_ROOT" && bazel build "${ba_args[@]}" --jobs="$JOBS" //tests/kvtest:kvtest)
+    echo "bazel command: bazel build ${ba_args[*]} --jobs=$JOBS //tests/kvtest:kvtest //tests/kvtest:coordinator_test //tests/kvtest:worker_test"
+    (cd "$REPO_ROOT" && bazel build "${ba_args[@]}" --jobs="$JOBS" \
+        //tests/kvtest:kvtest \
+        //tests/kvtest:coordinator_test \
+        //tests/kvtest:worker_test)
 
-    # Stage the bazel-built binary where the Makefile package target expects it.
+    # Stage the bazel-built binaries where the Makefile package target expects them.
     bazel_bin_dir="$REPO_ROOT/bazel-bin"
     kvtest_bin=""
     for cand in \
@@ -213,8 +215,20 @@ else  # bazel
     mkdir -p "$BUILD_DIR"
     cp -f "$kvtest_bin" "$BUILD_DIR/kvtest"
 
+    # Stage coordinator_test and worker_test
+    for bin_name in coordinator_test worker_test; do
+        for cand in \
+            "$bazel_bin_dir/tests/kvtest/$bin_name" \
+            "$bazel_bin_dir/tests/kvtest/$bin_name.exe"; do
+            if [[ -f "$cand" ]]; then cp -f "$cand" "$BUILD_DIR/$bin_name"; break; fi
+        done
+        if [[ ! -f "$BUILD_DIR/$bin_name" ]]; then
+            echo "WARNING: $bin_name not found in bazel output"
+        fi
+    done
+
     echo ""
-    echo "Build OK: $BUILD_DIR/kvtest (bazel, self-contained binary)"
+    echo "Build OK: $BUILD_DIR/kvtest + $BUILD_DIR/coordinator_test + $BUILD_DIR/worker_test"
     echo ""
     echo "Packaging..."
     cd "$SCRIPT_DIR"

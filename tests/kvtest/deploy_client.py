@@ -1045,9 +1045,12 @@ def cmd_gen_config(args):
             'fast_transport_mem_size': '512MB',
         },
     }
-    # Service discovery address: --coordinator-address takes priority and
-    # suppresses etcd_address; otherwise default to etcd_address.
-    if args.coordinator_address:
+    # Service discovery address: --jf takes priority (JF discovery),
+    # then --coordinator-address (direct), otherwise default to etcd_address.
+    if args.jf_address:
+        cfg['jf_address'] = args.jf_address
+        cfg['jf_service'] = args.jf_service or 'kvcache_coordinator'
+    elif args.coordinator_address:
         cfg['coordinator_address'] = args.coordinator_address
     else:
         cfg['etcd_address'] = args.etcd_address or '127.0.0.1:2379'
@@ -1164,6 +1167,11 @@ def _add_gen_config_args(p):
                    help='Use coordinator-backed service discovery instead of etcd: '
                         'sets coordinator_address in config.json and suppresses '
                         'etcd_address. Takes priority over --etcd-address.')
+    p.add_argument('--jf-address',
+                   help='Use JF service discovery: sets jf_address in config.json. '
+                        'Takes priority over --coordinator-address and --etcd-address.')
+    p.add_argument('--jf-service', default='kvcache_coordinator',
+                   help='JF service name (default: kvcache_coordinator)')
     p.add_argument('-c', '--cluster-name',
                    help='Set cluster_name in generated config.json')
     p.add_argument('--remote-sdk-dir',

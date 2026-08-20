@@ -1,4 +1,5 @@
 #include "common/config.h"
+#include "common/jf_service_discovery.h"
 #include "common/simple_log.h"
 #include "common/cpu_affinity.h"
 #include "metrics/metrics.h"
@@ -48,14 +49,16 @@ using ControlServer = HttpServer;
 
 using namespace datasystem;
 
-static std::atomic<bool> gRunning{true};
+static std::atomic<bool> gRunning{ true };
 
-static void SignalHandler(int sig) {
+static void SignalHandler(int sig)
+{
     std::cerr << "Received signal " << sig << ", shutting down..." << std::endl;
     gRunning = false;
 }
 
-static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
+static int RunBenchmarkMode(Config &cfg, const std::string &configPath)
+{
     SLOG_INFO("Benchmark mode: test_mode=" << static_cast<int>(cfg.testMode));
     std::signal(SIGTERM, SignalHandler);
     std::signal(SIGINT, SignalHandler);
@@ -79,21 +82,15 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
         numSetThreads = std::max(1, static_cast<int>(std::round(cfg.setRatio * cfg.numThreads)));
         numSetThreads = std::min(numSetThreads, cfg.numThreads - 1);
         numGetThreads = cfg.numThreads - numSetThreads;
-        SLOG_INFO("Mixed mode: set_ratio=" << cfg.setRatio
-                  << " -> " << numSetThreads << " set threads, "
-                  << numGetThreads << " get threads"
-                  << " (strategy=" << static_cast<int>(cfg.mixedKeyStrategy) << ")");
+        SLOG_INFO("Mixed mode: set_ratio=" << cfg.setRatio << " -> " << numSetThreads << " set threads, "
+                                           << numGetThreads << " get threads"
+                                           << " (strategy=" << static_cast<int>(cfg.mixedKeyStrategy) << ")");
     }
 
-    SLOG_INFO("Benchmark config: keys_per_round=" << keysPerRound
-              << ", threads=" << numThreads
-              << ", data_size=" << dataSize
-              << ", set_api=" << cfg.setApi
-              << ", cleanup=" << cfg.cleanupMethod
-              << ", is_get_mode=" << isGetMode
-              << ", is_mixed_mode=" << isMixedMode
-              << ", is_mset_mode=" << isMSetMode
-              << ", is_mget_mode=" << isMGetMode);
+    SLOG_INFO("Benchmark config: keys_per_round="
+              << keysPerRound << ", threads=" << numThreads << ", data_size=" << dataSize << ", set_api=" << cfg.setApi
+              << ", cleanup=" << cfg.cleanupMethod << ", is_get_mode=" << isGetMode << ", is_mixed_mode=" << isMixedMode
+              << ", is_mset_mode=" << isMSetMode << ", is_mget_mode=" << isMGetMode);
 
     // --- Spawn child processes ---
     // children[0] = setChild, children[1] = getChild (optional), children[2] = delChild (optional)
@@ -154,8 +151,7 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
     if (isMixedMode && cfg.mixedKeyStrategy == MixedKeyStrategy::INDEPENDENT) {
         SLOG_INFO("Pre-populating get keys (round 0)...");
         ResultMsg preRes{};
-        if (!SendCommand(children[setChildIdx], CMD_RUN_SET, 0) ||
-            !RecvResult(children[setChildIdx], preRes)) {
+        if (!SendCommand(children[setChildIdx], CMD_RUN_SET, 0) || !RecvResult(children[setChildIdx], preRes)) {
             SLOG_ERROR("Pre-population failed");
             KillAllChildren(children);
             return 1;
@@ -169,12 +165,15 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
     }
 
     for (int round = startRound; cfg.totalRounds == 0 || round < startRound + cfg.totalRounds; round++) {
-        if (!gRunning) break;
+        if (!gRunning)
+            break;
 
         if (maxDurationMs > 0) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - benchStart).count();
-            if (elapsed >= maxDurationMs) break;
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - benchStart)
+                    .count();
+            if (elapsed >= maxDurationMs)
+                break;
         }
 
         SLOG_INFO("Round " << round << " starting");
@@ -220,7 +219,8 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
             auto mixedEnd = std::chrono::steady_clock::now();
             double mixedMs = std::chrono::duration<double, std::milli>(mixedEnd - mixedStart).count();
             setPhaseMs = mixedMs;
-            if (!skipGet) getPhaseMs = mixedMs;
+            if (!skipGet)
+                getPhaseMs = mixedMs;
 
             stats.totalSet += setRes.successCount;
             stats.totalGet += getRes.successCount;
@@ -228,8 +228,8 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
             // --- MGet mode: sequential MSet -> MGet (matching GET_* pattern) ---
             // MSet phase (write data first)
             auto msetStart = std::chrono::steady_clock::now();
-            if (!SendCommand(children[setChildIdx], CMD_RUN_MSET, round, numSetThreads) ||
-                !RecvResult(children[setChildIdx], setRes)) {
+            if (!SendCommand(children[setChildIdx], CMD_RUN_MSET, round, numSetThreads)
+                || !RecvResult(children[setChildIdx], setRes)) {
                 SLOG_ERROR("MSet phase failed (pipe error) in round " << round);
                 break;
             }
@@ -239,8 +239,8 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
 
             // MGet phase (read after write completes)
             auto mgetStart = std::chrono::steady_clock::now();
-            if (!SendCommand(children[getChildIdx], CMD_RUN_MGET, round, numGetThreads) ||
-                !RecvResult(children[getChildIdx], getRes)) {
+            if (!SendCommand(children[getChildIdx], CMD_RUN_MGET, round, numGetThreads)
+                || !RecvResult(children[getChildIdx], getRes)) {
                 SLOG_ERROR("MGet phase failed (pipe error) in round " << round);
                 break;
             }
@@ -250,8 +250,8 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
         } else if (isMSetMode) {
             // --- MSet mode: MSet only (write-only, no get phase) ---
             auto msetStart = std::chrono::steady_clock::now();
-            if (!SendCommand(children[setChildIdx], CMD_RUN_MSET, round) ||
-                !RecvResult(children[setChildIdx], setRes)) {
+            if (!SendCommand(children[setChildIdx], CMD_RUN_MSET, round)
+                || !RecvResult(children[setChildIdx], setRes)) {
                 SLOG_ERROR("MSet phase failed (pipe error) in round " << round);
                 break;
             }
@@ -262,8 +262,7 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
             // --- Sequential mode: set -> get -> del ---
             // Set phase
             auto setStart = std::chrono::steady_clock::now();
-            if (!SendCommand(children[setChildIdx], CMD_RUN_SET, round) ||
-                !RecvResult(children[setChildIdx], setRes)) {
+            if (!SendCommand(children[setChildIdx], CMD_RUN_SET, round) || !RecvResult(children[setChildIdx], setRes)) {
                 SLOG_ERROR("Set phase failed (pipe error) in round " << round);
                 break;
             }
@@ -275,8 +274,7 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
             if (isGetMode) {
                 size_t getIdx = (getChildIdx != SIZE_MAX) ? getChildIdx : setChildIdx;
                 auto getStart = std::chrono::steady_clock::now();
-                if (!SendCommand(children[getIdx], CMD_RUN_GET, round) ||
-                    !RecvResult(children[getIdx], getRes)) {
+                if (!SendCommand(children[getIdx], CMD_RUN_GET, round) || !RecvResult(children[getIdx], getRes)) {
                     SLOG_ERROR("Get phase failed (pipe error) in round " << round);
                     break;
                 }
@@ -297,8 +295,8 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
             }
             if (delRound >= startRound) {
                 auto delStart = std::chrono::steady_clock::now();
-                if (!SendCommand(children[delChildIdx], CMD_RUN_DEL, delRound) ||
-                    !RecvResult(children[delChildIdx], delRes)) {
+                if (!SendCommand(children[delChildIdx], CMD_RUN_DEL, delRound)
+                    || !RecvResult(children[delChildIdx], delRes)) {
                     SLOG_ERROR("Del phase failed (pipe error) in round " << round);
                     break;
                 }
@@ -314,30 +312,27 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
         {
             double qps = setPhaseMs > 0 ? setRes.successCount * 1000.0 / setPhaseMs : 0;
             double mbps = setPhaseMs > 0 ? (setRes.successCount * dataSizeBytes) / (setPhaseMs * 1024.0) : 0;
-            benchMetrics.RecordPhase(round, "set", setRes.successCount, setRes.failureCount,
-                setRes.avgMs, setRes.minMs, setRes.p50Ms, setRes.p90Ms, setRes.p99Ms,
-                setRes.p999Ms, setRes.p9999Ms, setRes.maxMs, setRes.totalLatMs,
-                setPhaseMs, qps, mbps);
+            benchMetrics.RecordPhase(round, "set", setRes.successCount, setRes.failureCount, setRes.avgMs, setRes.minMs,
+                                     setRes.p50Ms, setRes.p90Ms, setRes.p99Ms, setRes.p999Ms, setRes.p9999Ms,
+                                     setRes.maxMs, setRes.totalLatMs, setPhaseMs, qps, mbps);
         }
 
         // Record get metrics (mixed mode always has get; sequential only if isGetMode)
         if (isMixedMode || isGetMode) {
             double qps = getPhaseMs > 0 ? getRes.successCount * 1000.0 / getPhaseMs : 0;
             double mbps = getPhaseMs > 0 ? (getRes.successCount * dataSizeBytes) / (getPhaseMs * 1024.0) : 0;
-            benchMetrics.RecordPhase(round, "get", getRes.successCount, getRes.failureCount,
-                getRes.avgMs, getRes.minMs, getRes.p50Ms, getRes.p90Ms, getRes.p99Ms,
-                getRes.p999Ms, getRes.p9999Ms, getRes.maxMs, getRes.totalLatMs,
-                getPhaseMs, qps, mbps);
+            benchMetrics.RecordPhase(round, "get", getRes.successCount, getRes.failureCount, getRes.avgMs, getRes.minMs,
+                                     getRes.p50Ms, getRes.p90Ms, getRes.p99Ms, getRes.p999Ms, getRes.p9999Ms,
+                                     getRes.maxMs, getRes.totalLatMs, getPhaseMs, qps, mbps);
         }
 
         // Record del metrics
         if (cfg.cleanupMethod == "del") {
             double qps = delPhaseMs > 0 ? delRes.successCount * 1000.0 / delPhaseMs : 0;
             double mbps = delPhaseMs > 0 ? (delRes.successCount * dataSizeBytes) / (delPhaseMs * 1024.0) : 0;
-            benchMetrics.RecordPhase(round, "del", delRes.successCount, delRes.failureCount,
-                delRes.avgMs, delRes.minMs, delRes.p50Ms, delRes.p90Ms, delRes.p99Ms,
-                delRes.p999Ms, delRes.p9999Ms, delRes.maxMs, delRes.totalLatMs,
-                delPhaseMs, qps, mbps);
+            benchMetrics.RecordPhase(round, "del", delRes.successCount, delRes.failureCount, delRes.avgMs, delRes.minMs,
+                                     delRes.p50Ms, delRes.p90Ms, delRes.p99Ms, delRes.p999Ms, delRes.p9999Ms,
+                                     delRes.maxMs, delRes.totalLatMs, delPhaseMs, qps, mbps);
         }
 
         stats.roundsCompleted++;
@@ -347,16 +342,15 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
             std::this_thread::sleep_for(std::chrono::seconds(cfg.ttlSeconds));
         }
 
-        SLOG_INFO("Round " << round << " complete: set=" << setRes.successCount
-                  << " get=" << getRes.successCount << " del=" << delRes.successCount
-                  << " setMs=" << setPhaseMs << " getMs=" << getPhaseMs << " delMs=" << delPhaseMs);
+        SLOG_INFO("Round " << round << " complete: set=" << setRes.successCount << " get=" << getRes.successCount
+                           << " del=" << delRes.successCount << " setMs=" << setPhaseMs << " getMs=" << getPhaseMs
+                           << " delMs=" << delPhaseMs);
     }
 
     // --- Final cleanup for delayed-deletion strategies ---
     if (gRunning && delChildIdx != SIZE_MAX) {
         // read_prev: delete the last round's keys (skipped by delayed deletion)
-        if (isMixedMode && cfg.mixedKeyStrategy == MixedKeyStrategy::READ_PREV
-            && stats.roundsCompleted > 0) {
+        if (isMixedMode && cfg.mixedKeyStrategy == MixedKeyStrategy::READ_PREV && stats.roundsCompleted > 0) {
             int lastRound = startRound + stats.roundsCompleted - 1;
             ResultMsg finalDelRes{};
             SLOG_INFO("read_prev final cleanup: deleting round " << lastRound);
@@ -390,14 +384,13 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
 
     benchMetrics.Flush();
 
-    SLOG_INFO("Benchmark finished: rounds=" << stats.roundsCompleted.load()
-              << ", set=" << stats.totalSet.load()
-              << ", get=" << stats.totalGet.load()
-              << ", del=" << stats.totalDel.load());
+    SLOG_INFO("Benchmark finished: rounds=" << stats.roundsCompleted.load() << ", set=" << stats.totalSet.load()
+                                            << ", get=" << stats.totalGet.load() << ", del=" << stats.totalDel.load());
     return 0;
 }
 
-static int RunServerMode(const Config &cfg) {
+static int RunServerMode(const Config &cfg)
+{
     std::cerr << "kvtest v" BUILD_VERSION << " (commit: " << BUILD_COMMIT << ")" << std::endl;
     std::cerr << "Output directory: " << cfg.outputDir << std::endl;
 
@@ -407,7 +400,15 @@ static int RunServerMode(const Config &cfg) {
     std::cerr << "Initializing ServiceDiscovery..." << std::endl;
 
     std::shared_ptr<IServiceDiscovery> sd;
-    if (!cfg.coordinatorAddress.empty()) {
+    if (!cfg.jfAddress.empty()) {
+        auto jfClient = std::make_shared<kvtest::JfClient>(cfg.jfAddress);
+        auto discovery = std::make_shared<kvtest::UserCoordinatorDiscovery>(jfClient, cfg.jfService);
+        CoordinatorServiceDiscoveryOptions cdOpts;
+        cdOpts.coordinatorDiscovery = discovery;
+        cdOpts.clusterName = cfg.clusterName;
+        cdOpts.hostIdEnvName = cfg.hostIdEnvName;
+        sd = std::make_shared<CoordinatorServiceDiscovery>(cdOpts);
+    } else if (!cfg.coordinatorAddress.empty()) {
         CoordinatorServiceDiscoveryOptions cdOpts;
         cdOpts.serviceAddress = cfg.coordinatorAddress;
         cdOpts.clusterName = cfg.clusterName;
@@ -425,8 +426,8 @@ static int RunServerMode(const Config &cfg) {
         std::cerr << "ServiceDiscovery init failed: " << rc.GetMsg() << std::endl;
         return 1;
     }
-    std::cerr << "ServiceDiscovery initialized: etcd=" << cfg.etcdAddress
-              << ", coordinator=" << cfg.coordinatorAddress << std::endl;
+    std::cerr << "ServiceDiscovery initialized: etcd=" << cfg.etcdAddress << ", coordinator=" << cfg.coordinatorAddress
+              << ", jf=" << cfg.jfAddress << std::endl;
 
     ConnectOptions connOpts;
     connOpts.serviceDiscovery = sd;
@@ -498,14 +499,16 @@ static int RunServerMode(const Config &cfg) {
         for (size_t i = 0; i < snap.size(); i++) {
             uint64_t delta = snap[i].count - prevCounts[i];
             double rate = elapsedSec > 0 ? delta / elapsedSec : 0;
-            if (!rates.empty()) rates += ", ";
+            if (!rates.empty())
+                rates += ", ";
             rates += snap[i].name + "=" + std::to_string(static_cast<int>(rate)) + "/s";
             prevCounts[i] = snap[i].count;
         }
 
         // Queue depths
         size_t notifyOutQ = 0, notifyInQ = 0;
-        if (worker) notifyOutQ = worker->NotifyQueueSize();
+        if (worker)
+            notifyOutQ = worker->NotifyQueueSize();
         notifyInQ = server.NotifyQueueSize();
 
         if (notifyOutQ > 1000) {
@@ -516,11 +519,13 @@ static int RunServerMode(const Config &cfg) {
         }
 
         SLOG_INFO("[" << rates << "] "
-                  << "[out_q=" << notifyOutQ << ", in_q=" << notifyInQ << "]"
-                  << (cacheMode ? (" [pool=" + std::to_string(worker ? worker->CurrentPoolSize() : 0) +
-                      ", hit_rate=" + std::to_string(metrics.CacheHitRate()) + "]") : "")
-                  << (!cfg.targetQpsStages.empty() && worker ?
-                      (" [qps=" + std::to_string(worker->CurrentTargetQps()) + "]") : ""));
+                      << "[out_q=" << notifyOutQ << ", in_q=" << notifyInQ << "]"
+                      << (cacheMode ? (" [pool=" + std::to_string(worker ? worker->CurrentPoolSize() : 0)
+                                       + ", hit_rate=" + std::to_string(metrics.CacheHitRate()) + "]")
+                                    : "")
+                      << (!cfg.targetQpsStages.empty() && worker
+                              ? (" [qps=" + std::to_string(worker->CurrentTargetQps()) + "]")
+                              : ""));
 
         if (worker && cfg.targetHitRate > 0.0) {
             worker->AdjustPoolSize();
@@ -534,13 +539,14 @@ static int RunServerMode(const Config &cfg) {
 
     // Wait for in-flight set/get/exist operations to complete before stopping
     constexpr int kShutdownDelaySeconds = 5;
-    std::cerr << "Waiting " << kShutdownDelaySeconds
-              << "s for in-flight operations to complete..." << std::endl;
+    std::cerr << "Waiting " << kShutdownDelaySeconds << "s for in-flight operations to complete..." << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(kShutdownDelaySeconds));
     std::cerr << "Shutdown delay complete" << std::endl;
 
-    if (cacheReader) cacheReader->Stop();
-    if (worker) worker->Stop();
+    if (cacheReader)
+        cacheReader->Stop();
+    if (worker)
+        worker->Stop();
     server.Stop();
     metrics.Stop();
 
@@ -548,7 +554,8 @@ static int RunServerMode(const Config &cfg) {
     return 0;
 }
 
-static int StopMode(const Config &cfg) {
+static int StopMode(const Config &cfg)
+{
     if (cfg.peers.empty()) {
         std::cerr << "No peers in config" << std::endl;
         return 1;
@@ -557,7 +564,8 @@ static int StopMode(const Config &cfg) {
     return (ok == static_cast<int>(cfg.peers.size())) ? 0 : 1;
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     if (IsBenchmarkChildInvocation(argc, argv)) {
         return RunBenchmarkChild(argc, argv);
     }
@@ -608,8 +616,7 @@ int main(int argc, char *argv[]) {
     if (cfg.runMode == RunMode::BENCHMARK) {
         // Log to terminal BEFORE redirect takes effect for SLOG (SLOG uses std::cout)
         // This printf goes to the original fd 1, not the redirected rdbuf
-        fprintf(stderr, "[INFO] Entering benchmark mode, detailed logs: %s/run.log\n",
-                cfg.outputDir.c_str());
+        fprintf(stderr, "[INFO] Entering benchmark mode, detailed logs: %s/run.log\n", cfg.outputDir.c_str());
         return RunBenchmarkMode(cfg, configPath);
     }
 

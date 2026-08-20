@@ -28,7 +28,7 @@
 | etcd | >= 3.5 | 集群注册发现 |
 | datasystem Worker | 运行中 | 至少 1 个 Worker 节点 |
 
-> 默认 Bazel 模式无需预装 SDK，直接构建 `//tests/kvtest:kvtest`，包含 in-tree `datasystem` 客户端，二进制自包含；并自动启用 `KVTEST_USE_BRPC` —— brpc 控制面 + bthread pipeline/notify 池。
+> 默认 Bazel 模式无需预装 SDK，直接构建 `//tests/kvtest:kvtest`，包含 in-tree `datasystem` 客户端，二进制自包含；并自动启用 `KVTEST_USE_BRPC` ---- brpc 控制面 + bthread pipeline/notify 池。
 > CMake + brpc 后端（`./build.sh -b cmake`，默认 ON）会自动下载/编译 brpc/protobuf/gflags/absl 等第三方件（缓存到 `$DS_OPENSOURCE_DIR`），用户无需预装这些 dev 包；仍需预装 datasystem SDK。
 > 仅 `./build.sh -b cmake --use-httplib` 才进入无第三方依赖的 fallback 路径。
 
@@ -83,7 +83,26 @@ kvtest 不会动态加载外部 `libdatasystem.so`，所以 URMA 必须在 kvtes
 - `export DS_OPENSOURCE_DIR=/persistent/cache/dir` 持久化编译产物缓存，避免重复编译
 - `export DATASYSTEM_GITHUB_PROXY=1` 走 gh-proxy.com 镜像（brpc/leveldb/gflags 从 GitHub 下载时）
 
-编译产物位于 `output/`：`kvtest` 可执行文件（静态链接 libstdc++ + 第三方件）、`deploy_client.py` 等。不再需要 `output/lib/` —— kvtest 只动态依赖 `libdatasystem.so`（由部署环境的 container SDK 提供）。bazel 模式自包含二进制，无任何动态依赖。
+编译产物位于 `output/`：`kvtest` 可执行文件（静态链接 libstdc++ + 第三方件）、`deploy_client.py` 等。不再需要 `output/lib/` ---- kvtest 只动态依赖 `libdatasystem.so`（由部署环境的 container SDK 提供）。bazel 模式自包含二进制，无任何动态依赖。
+
+### 1.4 Worker/Coordinator 独立部署测试程序
+
+`build.sh` 同时编译 `coordinator_test` 和 `worker_test` 两个独立部署测试程序，用于验证 Worker/Coordinator 独立集成部署与服务发现对接：
+
+```bash
+# 编译全部三个目标（kvtest + coordinator_test + worker_test）
+./build.sh -b bazel    # Bazel 源码集成模式
+./build.sh -b cmake    # CMake SDK 链接模式
+
+# 运行独立部署 E2E 测试（启动 mock 服务发现 + coordinator_test + worker_test）
+bash tests/test_standalone_mode.sh
+```
+
+- `coordinator_test`：调用 `CoordinatorServer::GetInstance()->InitAndRun(options)` 启动 Coordinator，支持 `--jf`/`--hooks`/`--ttl`/`--expected-member-count` 参数
+- `worker_test`：调用 `DataWorker::GetInstance()->InitAndRun(options)` 启动 Worker，支持 `--jf`/`--service` 参数
+- `mock_jf_server.py`：模拟外部服务发现系统（注册/发现/心跳/TTL 过期），供测试验证对接流程
+
+详细设计见 [jf-integration-design.md](jf-integration-design.md)。
 
 ---
 
@@ -129,8 +148,10 @@ kvtest 不会动态加载外部 `libdatasystem.so`，所以 URMA 必须在 kvtes
 | `mode` | string | 自动推断 | 运行模式：`"pipeline"` / `"cache"` / `"benchmark"`，不设置时根据其他参数自动推断 |
 | `instance_id` | int | 0 | 实例唯一标识，同一测试中不可重复 |
 | `listen_port` | int | 9000 | HTTP 服务端口（接收通知） |
-| `etcd_address` | string | **必填** | etcd 地址，格式 `ip:port`。与 `coordinator_address` 二选一 |
+| `etcd_address` | string | **必填** | etcd 地址，格式 `ip:port`。与 `coordinator_address` / `jf_address` 三选一 |
 | `coordinator_address` | string | "" | coordinator 服务发现地址，格式 `ip:port`。设置后使用 `CoordinatorServiceDiscovery` 替代 etcd，此时 `etcd_address` 留空 |
+| `jf_address` | string | "" | 外部服务发现地址，格式 `ip:port`。设置后通过 `UserCoordinatorDiscovery` 从服务发现获取 Coordinator 地址，优先级高于 `coordinator_address` 和 `etcd_address` |
+| `jf_service` | string | "kvcache_coordinator" | 服务发现注册的服务名，配合 `jf_address` 使用 |
 | `cluster_name` | string | "" | 集群名，多集群环境区分 |
 | `host_id_env_name` | string | "HOST_IP" | Worker IP 环境变量名 |
 | `connect_options.connect_timeout_ms` | int | 1000 | KVClient 连接超时（毫秒） |
@@ -192,7 +213,7 @@ kvtest 不会动态加载外部 `libdatasystem.so`，所以 URMA 必须在 kvtes
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `test_mode` | string | — | 测试模式（16 种），详见 [benchmark-guide.md](benchmark-guide.md) |
+| `test_mode` | string | -- | 测试模式（16 种），详见 [benchmark-guide.md](benchmark-guide.md) |
 | `worker_memory_mb` | int | 0 | Worker 共享内存上限（MB），用于计算每轮 key 数 |
 | `duration_seconds` | int | 0 | 总运行时长（秒），0 = 不限时 |
 | `total_rounds` | int | 0 | 总轮数，0 = 不限轮 |
