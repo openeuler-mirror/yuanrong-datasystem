@@ -101,7 +101,7 @@ Status ResourceManager::ReportResource(const master::ResourceReportReqPb &req, m
     std::unordered_map<std::string, NodeInfo> snapshot;
     auto *stats = rsp.mutable_stats();
     {
-        std::shared_lock<std::shared_timed_mutex> lock(readSnapshotMutex_);
+        std::shared_lock<SharedMutex> lock(readSnapshotMutex_);
         if (needScheduleSnapshot) {
             snapshot.reserve(readSnapshot_.size() + 1);
         }
@@ -179,7 +179,7 @@ void ResourceManager::ClearWriteSnapshot()
 void ResourceManager::SwitchSnapshots()
 {
     std::lock_guard<std::mutex> lock(writeSnapshotMutex_);
-    std::unique_lock<std::shared_timed_mutex> lockRead(readSnapshotMutex_);
+    std::unique_lock<SharedMutex> lockRead(readSnapshotMutex_);
     std::swap(readSnapshot_, writeSnapshot_);
 }
 } // namespace master

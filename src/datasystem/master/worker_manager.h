@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/master/node_descriptor.h"
@@ -207,7 +208,7 @@ private:
     WorkerManager() = default;
 
     // The mutex is to protect workerNodes_
-    mutable std::shared_timed_mutex mutex_;
+    mutable SharedMutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<NodeDescriptor>> workerNodes_;
     std::function<void(std::shared_ptr<WorkerNodeDescriptor>)> registerFunc_;
 };

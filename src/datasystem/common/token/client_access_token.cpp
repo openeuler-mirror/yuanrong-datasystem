@@ -27,7 +27,7 @@ ClientAccessToken::ClientAccessToken(SensitiveValue token) : token_(std::move(to
 
 void ClientAccessToken::UpdateToken(SensitiveValue &token)
 {
-    std::unique_lock<std::shared_timed_mutex> lock(tokenMutex_);
+    std::unique_lock<SharedMutex> lock(tokenMutex_);
     token_.Clear();
     token_ = std::move(token);
 }
@@ -42,7 +42,7 @@ ClientAccessToken::~ClientAccessToken()
 Status ClientAccessToken::UpdateAccessToken(SensitiveValue &token)
 {
     if (tokenValid_) {
-        std::shared_lock<std::shared_timed_mutex> lock(tokenMutex_);
+        std::shared_lock<SharedMutex> lock(tokenMutex_);
         token = token_;
         return Status::OK();
     } else {
