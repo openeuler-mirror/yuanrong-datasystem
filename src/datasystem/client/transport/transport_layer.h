@@ -67,6 +67,7 @@ struct TransportLayerOptions {
     // Synchronous client-lifecycle admission checked around transport retry backoff.
     std::function<Status()> retryAdmissionCheck;
     std::function<void(const HostPort &, const Status &)> metadataFailureHandler;
+    std::function<void(const HostPort &, const Status &)> drainingFallbackHandler;
 };
 
 class TransportLayer {

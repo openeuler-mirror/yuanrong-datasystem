@@ -22,6 +22,14 @@
 
 namespace datasystem {
 namespace client {
+namespace {
+
+bool IsDraining(::datasystem::MembershipPb::StatePb state)
+{
+    return state == ::datasystem::MembershipPb::PRE_LEAVING || state == ::datasystem::MembershipPb::LEAVING;
+}
+
+}  // namespace
 
 Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
                            const std::unordered_map<std::string, std::string> &hostIdMap,
@@ -29,7 +37,7 @@ Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopo
 {
     WorkerSnapshot updated;
     updated.ringVersion = ringVersion;
-    updated.otherAddrs.reserve(ring.members_size());
+    updated.remoteTransportAddrs.reserve(ring.members_size());
     const bool canPartition = !sdkHostId.empty() && !hostIdMap.empty();
     for (const auto &member : ring.members()) {
         HostPort worker;
@@ -45,10 +53,10 @@ Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopo
         if (member.second.state() == ::datasystem::MembershipPb::ACTIVE) {
             updated.writeProbeAddrs.emplace_back(worker);
         }
-        if (sameHost) {
-            updated.sameHostAddrs.emplace_back(std::move(worker));
+        if (sameHost && !IsDraining(member.second.state())) {
+            updated.shmCandidateAddrs.emplace_back(std::move(worker));
         } else {
-            updated.otherAddrs.emplace_back(std::move(worker));
+            updated.remoteTransportAddrs.emplace_back(std::move(worker));
         }
     }
     snapshot = std::move(updated);

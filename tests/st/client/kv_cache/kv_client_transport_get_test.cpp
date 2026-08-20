@@ -69,6 +69,7 @@ constexpr char WORKER_OC_GET_ENTRY_INJECT[] = "worker.PreProcessGetObject.begin"
 constexpr char REGISTER_SHM_CLIENT_INJECT[] = "client.transport.register_shm_client";
 constexpr char GET_CLIENT_FD_INJECT[] = "client.transport.get_client_fd";
 constexpr char SHM_HEARTBEAT_INJECT[] = "client.transport.shm_heartbeat";
+constexpr char DRAIN_BEFORE_SNAPSHOT_INJECT[] = "WorkerOCServiceImpl.DrainTopologyScaleInData.beforeSnapshot";
 constexpr char INLINE_READ_FAILURE_INJECT[] = "worker.worker_worker_remote_get_failure";
 constexpr char SHM_LATCH_FAIL_INJECT[] = "worker.ShmGuard.TryRLatch.Fail";
 constexpr char PROVIDER_GET_ENTER_INJECT[] = "worker.GetObjectRemote.afterRead";
@@ -496,6 +497,40 @@ public:
     }
 };
 
+class KVClientTransportGetDrainingRealUrmaTest : public KVClientTransportGetWithShmTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientTransportGetWithShmTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -enable_lossless_data_exit_mode=true";
+    }
+
+    void SetUp() override
+    {
+#if !defined(USE_URMA)
+        GTEST_SKIP() << "Real URMA draining fallback ST requires USE_URMA.";
+#elif defined(USE_URMA_MOCK)
+        GTEST_SKIP() << "Real URMA draining fallback ST does not run with USE_URMA_MOCK.";
+#else
+        if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+            GTEST_SKIP() << "Real URMA draining fallback ST requires DS_URMA_DEV_NAME and a usable URMA device.";
+        }
+        setupAttempted_ = true;
+        KVClientTransportGetWithShmTest::SetUp();
+#endif
+    }
+
+    void TearDown() override
+    {
+        if (setupAttempted_) {
+            KVClientTransportGetWithShmTest::TearDown();
+        }
+    }
+
+private:
+    bool setupAttempted_ = false;
+};
+
 class KVClientTransportGetWithTargetShmDisabledTest : public KVClientTransportGetTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -805,6 +840,57 @@ TEST_F(KVClientTransportGetWithShmTest, NonBoundSameHostWorkerUsesWorkerOcFdPass
     ASSERT_EQ(postHeartbeat.workerOcGet, maintained.workerOcGet + 1);
     ASSERT_EQ(postHeartbeat.registerShmClient, maintained.registerShmClient);
     ASSERT_EQ(postHeartbeat.getClientFd, maintained.getClientFd);
+}
+
+TEST_F(KVClientTransportGetDrainingRealUrmaTest, DrainingTargetUsesUb)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string value(LARGE_VALUE_SIZE, 'd');
+    DS_ASSERT_OK(writer_->Set(keys.front(), value));
+    writer_.reset();
+
+    uint64_t drainBaseline = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, DRAIN_BEFORE_SNAPSHOT_INJECT,
+                                                       drainBaseline));
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, DRAIN_BEFORE_SNAPSHOT_INJECT, "1*pause()"));
+    Raii releaseDrain([this] {
+        (void)cluster_->ClearInjectAction(WORKER, META_OWNER_INDEX, DRAIN_BEFORE_SNAPSHOT_INJECT);
+    });
+
+    VoluntaryScaleDownInject(static_cast<int>(META_OWNER_INDEX));
+    constexpr auto drainWait = std::chrono::seconds(10);
+    constexpr auto pollInterval = std::chrono::milliseconds(50);
+    const auto deadline = std::chrono::steady_clock::now() + drainWait;
+    uint64_t drainCount = drainBaseline;
+    while (drainCount == drainBaseline && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(pollInterval);
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, DRAIN_BEFORE_SNAPSHOT_INJECT,
+                                                           drainCount));
+    }
+    ASSERT_GT(drainCount, drainBaseline);
+
+    TransportRpcCounts before;
+    GetRpcCounts(before);
+    Optional<Buffer> firstBuffer;
+    Optional<Buffer> secondBuffer;
+    DS_ASSERT_OK(reader_->Get(keys.front(), firstBuffer));
+    ASSERT_EQ(AccessTransportTracker::ToString(), "UB");
+    DS_ASSERT_OK(reader_->Get(keys.front(), secondBuffer));
+    TransportRpcCounts after;
+    GetRpcCounts(after);
+
+    ASSERT_TRUE(firstBuffer);
+    ASSERT_TRUE(secondBuffer);
+    AssertBufferEqual(*firstBuffer, value);
+    AssertBufferEqual(*secondBuffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "UB");
+    ASSERT_EQ(after.queryAndGet, before.queryAndGet + 2);
+    ASSERT_GE(after.registerShmClient, before.registerShmClient);
+    ASSERT_LE(after.registerShmClient, before.registerShmClient + 1);
+    ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 2);
 }
 
 TEST_F(KVClientTransportGetWithShmTest, PinPendingSingleAndBatchReadOnlyGetUsePageableMemory)

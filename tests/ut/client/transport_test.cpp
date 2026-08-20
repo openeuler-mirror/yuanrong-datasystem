@@ -1883,8 +1883,8 @@ TEST(WorkerSnapshotTest, BuildsFromEveryTopologyMembershipState)
     std::unordered_map<std::string, std::string> emptyHostIdMap;
     ASSERT_TRUE(BuildWorkerSnapshot(42, ring, emptyHostIdMap, "", snapshot).IsOk());
     EXPECT_EQ(snapshot.ringVersion, 42u);
-    EXPECT_TRUE(snapshot.sameHostAddrs.empty());
-    EXPECT_EQ(snapshot.otherAddrs.size(), states.size());
+    EXPECT_TRUE(snapshot.shmCandidateAddrs.empty());
+    EXPECT_EQ(snapshot.remoteTransportAddrs.size(), states.size());
 }
 
 TEST(WorkerSnapshotTest, RejectsMalformedTopologyWithoutChangingOutput)
@@ -1893,21 +1893,21 @@ TEST(WorkerSnapshotTest, RejectsMalformedTopologyWithoutChangingOutput)
     (*ring.mutable_members())["malformed-endpoint"].set_state(::datasystem::MembershipPb::ACTIVE);
     WorkerSnapshot snapshot;
     snapshot.ringVersion = 7;
-    snapshot.sameHostAddrs.push_back(MakeAddress(110));
+    snapshot.shmCandidateAddrs.push_back(MakeAddress(110));
 
     EXPECT_EQ(
         BuildWorkerSnapshot(8, ring, std::unordered_map<std::string, std::string>{}, "", snapshot).GetCode(),
         K_INVALID);
     EXPECT_EQ(snapshot.ringVersion, 7u);
-    ASSERT_EQ(snapshot.sameHostAddrs.size(), 1u);
-    EXPECT_EQ(snapshot.sameHostAddrs.front(), MakeAddress(110));
+    ASSERT_EQ(snapshot.shmCandidateAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.shmCandidateAddrs.front(), MakeAddress(110));
 }
 
 TEST(WorkerSnapshotTest, AcceptsEmptyTopologyAsCleanupAll)
 {
     ::datasystem::ClusterTopologyPb ring;
     WorkerSnapshot snapshot;
-    snapshot.otherAddrs.push_back(MakeAddress(111));
+    snapshot.remoteTransportAddrs.push_back(MakeAddress(111));
 
     ASSERT_TRUE(
         BuildWorkerSnapshot(9, ring, std::unordered_map<std::string, std::string>{}, "", snapshot).IsOk());
@@ -1915,7 +1915,7 @@ TEST(WorkerSnapshotTest, AcceptsEmptyTopologyAsCleanupAll)
     EXPECT_TRUE(snapshot.Empty());
 }
 
-// canPartition=true: workers whose hostId==sdkHostId go to sameHostAddrs, others to otherAddrs.
+// canPartition=true: eligible same-host workers use SHM; all others use a remote transport.
 TEST(WorkerSnapshotTest, PartitionsByHostIdWhenSdkHostIdAndHostIdMapPresent)
 {
     ::datasystem::ClusterTopologyPb ring;
@@ -1934,18 +1934,67 @@ TEST(WorkerSnapshotTest, PartitionsByHostIdWhenSdkHostIdAndHostIdMapPresent)
     WorkerSnapshot snapshot;
     ASSERT_TRUE(BuildWorkerSnapshot(11, ring, hostIdMap, "node05", snapshot).IsOk());
     EXPECT_EQ(snapshot.ringVersion, 11u);
-    EXPECT_EQ(snapshot.sameHostAddrs.size(), 2u);
-    EXPECT_EQ(snapshot.otherAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.shmCandidateAddrs.size(), 2u);
+    EXPECT_EQ(snapshot.remoteTransportAddrs.size(), 1u);
     // same-host and other are disjoint
-    EXPECT_NE(std::find(snapshot.sameHostAddrs.begin(), snapshot.sameHostAddrs.end(), sameA),
-              snapshot.sameHostAddrs.end());
-    EXPECT_NE(std::find(snapshot.sameHostAddrs.begin(), snapshot.sameHostAddrs.end(), sameB),
-              snapshot.sameHostAddrs.end());
-    EXPECT_EQ(snapshot.otherAddrs.front(), crossC);
+    EXPECT_NE(std::find(snapshot.shmCandidateAddrs.begin(), snapshot.shmCandidateAddrs.end(), sameA),
+              snapshot.shmCandidateAddrs.end());
+    EXPECT_NE(std::find(snapshot.shmCandidateAddrs.begin(), snapshot.shmCandidateAddrs.end(), sameB),
+              snapshot.shmCandidateAddrs.end());
+    EXPECT_EQ(snapshot.remoteTransportAddrs.front(), crossC);
 }
 
-// A worker present in the ring but whose hostId != sdkHostId must NOT appear in sameHostAddrs.
-TEST(WorkerSnapshotTest, WorkerInRingButMismatchedHostIdGoesToOtherAddrs)
+#ifdef USE_URMA_MOCK
+TEST(WorkerSnapshotTest, DrainingSameHostWorkersSelectUbWithoutShmAttempt)
+{
+    const bool enableUrma = FLAGS_enable_urma;
+    Raii restoreEnableUrma([enableUrma]() { FLAGS_enable_urma = enableUrma; });
+    FLAGS_enable_urma = true;
+
+    ::datasystem::ClusterTopologyPb ring;
+    const HostPort active = MakeAddress(210);
+    const HostPort preLeaving = MakeAddress(211);
+    const HostPort leaving = MakeAddress(212);
+    (*ring.mutable_members())[active.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+    (*ring.mutable_members())[preLeaving.ToString()].set_state(::datasystem::MembershipPb::PRE_LEAVING);
+    (*ring.mutable_members())[leaving.ToString()].set_state(::datasystem::MembershipPb::LEAVING);
+
+    const std::unordered_map<std::string, std::string> hostIdMap = {
+        { active.ToString(), "node05" },
+        { preLeaving.ToString(), "node05" },
+        { leaving.ToString(), "node05" },
+    };
+    WorkerSnapshot snapshot;
+    ASSERT_TRUE(BuildWorkerSnapshot(12, ring, hostIdMap, "node05", snapshot).IsOk());
+    ASSERT_EQ(snapshot.shmCandidateAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.shmCandidateAddrs.front(), active);
+    ASSERT_EQ(snapshot.remoteTransportAddrs.size(), 2u);
+    EXPECT_NE(std::find(snapshot.remoteTransportAddrs.begin(), snapshot.remoteTransportAddrs.end(), preLeaving),
+              snapshot.remoteTransportAddrs.end());
+    EXPECT_NE(std::find(snapshot.remoteTransportAddrs.begin(), snapshot.remoteTransportAddrs.end(), leaving),
+              snapshot.remoteTransportAddrs.end());
+
+    TransportAdvisor advisor;
+    advisor.SetShmCandidateWorkers(snapshot.shmCandidateAddrs);
+    EXPECT_EQ(advisor.GetTransportHint(active), TransportHint::SHM_CANDIDATE);
+    EXPECT_EQ(advisor.GetTransportHint(preLeaving), TransportHint::UB_CANDIDATE);
+    EXPECT_EQ(advisor.GetTransportHint(leaving), TransportHint::UB_CANDIDATE);
+
+    FLAGS_enable_urma = false;
+    EXPECT_EQ(advisor.GetTransportHint(preLeaving), TransportHint::TCP_ONLY);
+    EXPECT_EQ(advisor.GetTransportHint(leaving), TransportHint::TCP_ONLY);
+
+    (*ring.mutable_members())[preLeaving.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+    (*ring.mutable_members())[leaving.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+    ASSERT_TRUE(BuildWorkerSnapshot(13, ring, hostIdMap, "node05", snapshot).IsOk());
+    advisor.SetShmCandidateWorkers(snapshot.shmCandidateAddrs);
+    EXPECT_EQ(advisor.GetTransportHint(preLeaving), TransportHint::SHM_CANDIDATE);
+    EXPECT_EQ(advisor.GetTransportHint(leaving), TransportHint::SHM_CANDIDATE);
+}
+#endif
+
+// A worker whose hostId differs from sdkHostId must not be an SHM candidate.
+TEST(WorkerSnapshotTest, WorkerInRingButMismatchedHostIdUsesRemoteTransport)
 {
     ::datasystem::ClusterTopologyPb ring;
     const HostPort w = MakeAddress(300);
@@ -1954,12 +2003,12 @@ TEST(WorkerSnapshotTest, WorkerInRingButMismatchedHostIdGoesToOtherAddrs)
     std::unordered_map<std::string, std::string> hostIdMap = { { w.ToString(), "node06" } };
     WorkerSnapshot snapshot;
     ASSERT_TRUE(BuildWorkerSnapshot(12, ring, hostIdMap, "node05", snapshot).IsOk());
-    EXPECT_TRUE(snapshot.sameHostAddrs.empty());
-    EXPECT_EQ(snapshot.otherAddrs.size(), 1u);
-    EXPECT_EQ(snapshot.otherAddrs.front(), w);
+    EXPECT_TRUE(snapshot.shmCandidateAddrs.empty());
+    EXPECT_EQ(snapshot.remoteTransportAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.remoteTransportAddrs.front(), w);
 }
 
-// sdkHostId empty or hostIdMap empty → canPartition=false, every worker to otherAddrs.
+// sdkHostId empty or hostIdMap empty → canPartition=false, every worker uses remote transport.
 TEST(WorkerSnapshotTest, NoPartitionWhenSdkHostIdOrHostIdMapEmpty)
 {
     ::datasystem::ClusterTopologyPb ring;
@@ -1969,17 +2018,17 @@ TEST(WorkerSnapshotTest, NoPartitionWhenSdkHostIdOrHostIdMapEmpty)
 
     WorkerSnapshot snapA;
     ASSERT_TRUE(BuildWorkerSnapshot(13, ring, hostIdMap, "", snapA).IsOk());
-    EXPECT_TRUE(snapA.sameHostAddrs.empty());
-    EXPECT_EQ(snapA.otherAddrs.size(), 1u);
+    EXPECT_TRUE(snapA.shmCandidateAddrs.empty());
+    EXPECT_EQ(snapA.remoteTransportAddrs.size(), 1u);
 
     WorkerSnapshot snapB;
     ASSERT_TRUE(BuildWorkerSnapshot(14, ring, std::unordered_map<std::string, std::string>{}, "node05", snapB).IsOk());
-    EXPECT_TRUE(snapB.sameHostAddrs.empty());
-    EXPECT_EQ(snapB.otherAddrs.size(), 1u);
+    EXPECT_TRUE(snapB.shmCandidateAddrs.empty());
+    EXPECT_EQ(snapB.remoteTransportAddrs.size(), 1u);
 }
 
-// A ring member missing from hostIdMap goes to otherAddrs (not crash, not sameHost).
-TEST(WorkerSnapshotTest, RingMemberMissingFromHostIdMapGoesToOtherAddrs)
+// A ring member missing from hostIdMap uses remote transport.
+TEST(WorkerSnapshotTest, RingMemberMissingFromHostIdMapUsesRemoteTransport)
 {
     ::datasystem::ClusterTopologyPb ring;
     const HostPort known = MakeAddress(500);
@@ -1990,10 +2039,10 @@ TEST(WorkerSnapshotTest, RingMemberMissingFromHostIdMapGoesToOtherAddrs)
     std::unordered_map<std::string, std::string> hostIdMap = { { known.ToString(), "node05" } };
     WorkerSnapshot snapshot;
     ASSERT_TRUE(BuildWorkerSnapshot(15, ring, hostIdMap, "node05", snapshot).IsOk());
-    EXPECT_EQ(snapshot.sameHostAddrs.size(), 1u);
-    EXPECT_EQ(snapshot.sameHostAddrs.front(), known);
-    EXPECT_EQ(snapshot.otherAddrs.size(), 1u);
-    EXPECT_EQ(snapshot.otherAddrs.front(), unknown);
+    EXPECT_EQ(snapshot.shmCandidateAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.shmCandidateAddrs.front(), known);
+    EXPECT_EQ(snapshot.remoteTransportAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.remoteTransportAddrs.front(), unknown);
 }
 
 // ResolveSdkHostId decides whether the sdk adopts the bound (initial) worker's hostId when its own
@@ -2003,7 +2052,7 @@ TEST(ResolveSdkHostIdTest, DoesNotAdoptCrossNodeBoundWorkerHostId)
 {
     const HostPort bound = MakeAddress(501);
     std::unordered_map<std::string, std::string> hostIdMap = { { bound.ToString(), "remoteHost" } };
-    // Bound worker NOT confirmed same-host: keep empty so cross-node workers fall into otherAddrs and
+    // Bound worker NOT confirmed same-host: keep empty so cross-node workers use remote transport and
     // GetTransportHint selects UB/TCP instead of SHM. This is the fix.
     EXPECT_TRUE(ResolveSdkHostId(/*boundWorkerIsLocal=*/false, bound, hostIdMap).empty());
 }
@@ -2021,12 +2070,12 @@ TEST(ResolveSdkHostIdTest, RemoteFallbackWorkerDoesNotSelectShmTransport)
         ResolveSdkHostId(/*boundWorkerIsLocal=*/false, remoteFallback, hostIdMap);
     WorkerSnapshot snapshot;
     ASSERT_TRUE(BuildWorkerSnapshot(16, ring, hostIdMap, sdkHostId, snapshot).IsOk());
-    ASSERT_TRUE(snapshot.sameHostAddrs.empty());
-    ASSERT_EQ(snapshot.otherAddrs.size(), 1u);
-    EXPECT_EQ(snapshot.otherAddrs.front(), remoteFallback);
+    ASSERT_TRUE(snapshot.shmCandidateAddrs.empty());
+    ASSERT_EQ(snapshot.remoteTransportAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.remoteTransportAddrs.front(), remoteFallback);
 
     TransportAdvisor advisor;
-    advisor.SetSameHostWorkers(snapshot.sameHostAddrs);
+    advisor.SetShmCandidateWorkers(snapshot.shmCandidateAddrs);
     EXPECT_NE(advisor.GetTransportHint(remoteFallback), TransportHint::SHM_CANDIDATE);
 }
 
@@ -2372,8 +2421,8 @@ TEST(DataPlaneManagerTest, ReconcileRemovesOnlyWorkersAbsentFromSnapshot)
     ASSERT_NE(removedTransporter, nullptr);
 
     WorkerSnapshot snapshot;
-    snapshot.sameHostAddrs.push_back(sameHost);
-    snapshot.otherAddrs.push_back(otherHost);
+    snapshot.shmCandidateAddrs.push_back(sameHost);
+    snapshot.remoteTransportAddrs.push_back(otherHost);
     manager.ReconcileWithSnapshot(snapshot);
 
     ASSERT_TRUE(manager.GetOrCreate(sameHost, TransportHint::TCP_ONLY, transporter).IsOk());
@@ -2400,7 +2449,7 @@ TEST(DataPlaneManagerTest, PublishedSnapshotRejectsAbsentWorkersBeforeCleanup)
 
     WorkerSnapshot snapshot;
     snapshot.ringVersion = 10;
-    snapshot.otherAddrs.push_back(live);
+    snapshot.remoteTransportAddrs.push_back(live);
     ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
     EXPECT_EQ(manager.GetOrCreate(removed, TransportHint::TCP_ONLY, transporter).GetCode(), K_NOT_READY);
     EXPECT_EQ(removedTransporter->closeCount, 0);
@@ -2422,7 +2471,7 @@ TEST(DataPlaneManagerTest, SupersededSnapshotCannotRemoveCurrentWorkers)
 
     WorkerSnapshot latest;
     latest.ringVersion = 12;
-    latest.otherAddrs.push_back(live);
+    latest.remoteTransportAddrs.push_back(live);
     ASSERT_TRUE(manager.UpdateWorkerSnapshot(latest).IsOk());
     WorkerSnapshot superseded;
     superseded.ringVersion = 11;
@@ -5327,6 +5376,108 @@ TEST(DataPlaneExecutorTest, DoesNotRetrySecondTransportFailure)
     EXPECT_EQ(manager->transportBuildCount, 2);
 }
 
+#ifdef USE_URMA_MOCK
+TEST(DataPlaneExecutorTest, DrainingShmUsesUrmaMockUbBeforeTcpFallback)
+{
+    const bool enableUrma = FLAGS_enable_urma;
+    Raii restoreEnableUrma([enableUrma]() { FLAGS_enable_urma = enableUrma; });
+    FLAGS_enable_urma = true;
+
+    const auto workerAddr = MakeAddress(26);
+    auto advisor = std::make_shared<TransportAdvisor>();
+    advisor->SetShmCandidateWorkers({ workerAddr });
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = {
+        { MakeWorkerDrainingStatus() }, { Status(K_URMA_CONNECT_FAILED, "mock UB connect failed") }, { Status::OK() }
+    };
+    DataPlaneExecutor executor(manager, advisor);
+    DataGetRequest request{ "draining", 1 };
+    DataGetResult result;
+
+    EXPECT_TRUE(executor.Execute(workerAddr, [&request, &result](IDataTransporter &transporter) {
+        return transporter.Get(request, result);
+    }).IsOk());
+    ASSERT_EQ(manager->builtTransporters.size(), 3u);
+    EXPECT_EQ(manager->builtTransporters[0]->kind, AccessTransportKind::SHM);
+    EXPECT_EQ(manager->builtTransporters[1]->kind, AccessTransportKind::UB);
+    EXPECT_EQ(manager->builtTransporters[2]->kind, AccessTransportKind::TCP);
+    EXPECT_EQ(manager->builtTransporters[0]->getCount, 1);
+    EXPECT_EQ(manager->builtTransporters[1]->getCount, 1);
+    EXPECT_EQ(manager->builtTransporters[2]->getCount, 1);
+}
+
+TEST(DataPlaneExecutorTest, DrainingShmFallbackReusesUbAndRefreshesOncePerPublishedSnapshot)
+{
+    const bool enableUrma = FLAGS_enable_urma;
+    Raii restoreEnableUrma([enableUrma]() { FLAGS_enable_urma = enableUrma; });
+    FLAGS_enable_urma = true;
+
+    const auto workerAddr = MakeAddress(28);
+    const auto otherWorkerAddr = MakeAddress(29);
+    auto advisor = std::make_shared<TransportAdvisor>();
+    advisor->SetShmCandidateWorkers({ workerAddr, otherWorkerAddr });
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = {
+        { MakeWorkerDrainingStatus() }, { Status::OK() }, { MakeWorkerDrainingStatus() },
+        { Status::OK() }, { MakeWorkerDrainingStatus() }, { Status::OK() }
+    };
+    int refreshCount = 0;
+    DataPlaneExecutor executor(manager, advisor,
+                               [&refreshCount](const HostPort &, const Status &) { ++refreshCount; });
+    DataGetRequest request{ "draining", 1 };
+    DataGetResult result;
+    auto get = [&request, &result](IDataTransporter &transporter) { return transporter.Get(request, result); };
+
+    EXPECT_TRUE(executor.Execute(workerAddr, get).IsOk());
+    EXPECT_TRUE(executor.Execute(workerAddr, get).IsOk());
+    EXPECT_EQ(refreshCount, 1);
+    ASSERT_EQ(manager->builtTransporters.size(), 2u);
+    EXPECT_EQ(manager->builtTransporters[0]->kind, AccessTransportKind::SHM);
+    EXPECT_EQ(manager->builtTransporters[0]->getCount, 1);
+    EXPECT_EQ(manager->builtTransporters[1]->kind, AccessTransportKind::UB);
+    EXPECT_EQ(manager->builtTransporters[1]->getCount, 2);
+
+    EXPECT_TRUE(executor.Execute(otherWorkerAddr, get).IsOk());
+    EXPECT_EQ(refreshCount, 1);
+
+    advisor->SetShmCandidateWorkers({ workerAddr, otherWorkerAddr });
+    EXPECT_TRUE(executor.Execute(workerAddr, get).IsOk());
+    EXPECT_EQ(refreshCount, 2);
+    ASSERT_EQ(manager->builtTransporters.size(), 6u);
+    for (size_t i = 0; i < manager->builtTransporters.size(); i += 2) {
+        EXPECT_EQ(manager->builtTransporters[i]->kind, AccessTransportKind::SHM);
+        EXPECT_EQ(manager->builtTransporters[i + 1]->kind, AccessTransportKind::UB);
+    }
+}
+
+TEST(DataPlaneExecutorTest, DrainingShmDoesNotHideUbApplicationError)
+{
+    const bool enableUrma = FLAGS_enable_urma;
+    Raii restoreEnableUrma([enableUrma]() { FLAGS_enable_urma = enableUrma; });
+    FLAGS_enable_urma = true;
+
+    const auto workerAddr = MakeAddress(27);
+    auto advisor = std::make_shared<TransportAdvisor>();
+    advisor->SetShmCandidateWorkers({ workerAddr });
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = {
+        { MakeWorkerDrainingStatus() }, { Status(K_NOT_FOUND, "object not found") }, { Status::OK() }
+    };
+    DataPlaneExecutor executor(manager, advisor);
+    DataGetRequest request{ "missing", 1 };
+    DataGetResult result;
+
+    EXPECT_EQ(executor.Execute(workerAddr, [&request, &result](IDataTransporter &transporter) {
+        return transporter.Get(request, result);
+    }).GetCode(), K_NOT_FOUND);
+    ASSERT_EQ(manager->builtTransporters.size(), 2u);
+    EXPECT_EQ(manager->builtTransporters[0]->kind, AccessTransportKind::SHM);
+    EXPECT_EQ(manager->builtTransporters[1]->kind, AccessTransportKind::UB);
+    EXPECT_EQ(manager->builtTransporters[0]->getCount, 1);
+    EXPECT_EQ(manager->builtTransporters[1]->getCount, 1);
+}
+#endif
+
 TEST(ReplicaReaderTest, TriesNextLocationWithoutRefreshingMetadata)
 {
     ApiDeadlineGuard deadline(1000);
@@ -6873,7 +7024,7 @@ TEST(TransportLayerTest, WorkerSnapshotCleanupIsAsyncAndCoalescesToLatest)
 
     WorkerSnapshot first;
     first.ringVersion = 1;
-    first.otherAddrs = { survivor, marker };
+    first.remoteTransportAddrs = { survivor, marker };
     ASSERT_TRUE(layer.ApplyWorkerSnapshot(first).IsOk());
     if (blockerCloseStartedFuture.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
         allowBlockerClose.set_value();
@@ -6886,7 +7037,7 @@ TEST(TransportLayerTest, WorkerSnapshotCleanupIsAsyncAndCoalescesToLatest)
     ASSERT_TRUE(layer.ApplyWorkerSnapshot(superseded).IsOk());
     WorkerSnapshot latest;
     latest.ringVersion = 3;
-    latest.otherAddrs = { survivor };
+    latest.remoteTransportAddrs = { survivor };
     ASSERT_TRUE(layer.ApplyWorkerSnapshot(latest).IsOk());
     allowBlockerClose.set_value();
     ASSERT_EQ(markerClosedFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);

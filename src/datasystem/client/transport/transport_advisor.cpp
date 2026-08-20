@@ -31,7 +31,7 @@ TransportHint TransportAdvisor::GetTransportHint(const HostPort &workerAddr) con
     // Use unordered_set<HostPort> directly so the hot path does not allocate a ToString() key.
     if (!workerAddr.Empty()) {
         bthread::RWLockRdGuard lk(mtx_);
-        if (sameHostWorkers_.count(workerAddr) > 0) {
+        if (shmCandidateWorkers_.count(workerAddr) > 0) {
             return TransportHint::SHM_CANDIDATE;
         }
     }
@@ -43,7 +43,22 @@ TransportHint TransportAdvisor::GetTransportHint(const HostPort &workerAddr) con
     return TransportHint::TCP_ONLY;
 }
 
-void TransportAdvisor::SetSameHostWorkers(const std::vector<HostPort> &workers)
+std::vector<TransportHint> TransportAdvisor::GetFallbackHints(TransportHint initial) const
+{
+    std::vector<TransportHint> hints;
+    if (initial != TransportHint::SHM_CANDIDATE) {
+        return hints;
+    }
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        hints.emplace_back(TransportHint::UB_CANDIDATE);
+    }
+#endif
+    hints.emplace_back(TransportHint::TCP_ONLY);
+    return hints;
+}
+
+void TransportAdvisor::SetShmCandidateWorkers(const std::vector<HostPort> &workers)
 {
     std::unordered_set<HostPort> updated;
     updated.reserve(workers.size());
@@ -51,7 +66,26 @@ void TransportAdvisor::SetSameHostWorkers(const std::vector<HostPort> &workers)
         updated.insert(w);
     }
     bthread::RWLockWrGuard lk(mtx_);
-    sameHostWorkers_ = std::move(updated);
+    shmCandidateWorkers_ = std::move(updated);
+    ++snapshotGeneration_;
+}
+
+bool TransportAdvisor::ObserveDrainingShmFailure(const HostPort &workerAddr)
+{
+    uint64_t snapshotGeneration;
+    {
+        bthread::RWLockWrGuard lk(mtx_);
+        shmCandidateWorkers_.erase(workerAddr);
+        snapshotGeneration = snapshotGeneration_;
+    }
+    auto refreshGeneration = drainingRefreshGeneration_.load(std::memory_order_acquire);
+    while (refreshGeneration < snapshotGeneration) {
+        if (drainingRefreshGeneration_.compare_exchange_weak(refreshGeneration, snapshotGeneration,
+                                                             std::memory_order_acq_rel)) {
+            return true;
+        }
+    }
+    return false;
 }
 }  // namespace client
 }  // namespace datasystem

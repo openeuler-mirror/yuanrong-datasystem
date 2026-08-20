@@ -101,8 +101,13 @@
     reference to the actual data Worker. Session failure closes the socket so Worker client-lost cleanup resolves any
     ambiguous Get-side reference increase before a new session is used. Target SHM capability is probed through that
     target Worker's `GetSocketPath` and `RegisterClient`; the initial bound Worker's `IsShmEnable()` is not a capability
-    gate for another endpoint. If an SHM-candidate target does not publish an fd-passing endpoint, the read returns
-    `K_NOT_SUPPORTED` without invoking WorkerOC Get or falling back to a Worker-to-Worker object RPC. Routed
+    gate for another endpoint. If an SHM-candidate target does not publish an fd-passing endpoint, or rejects
+    `RegisterClient` because lossless ScaleIn has entered draining while the object still resides there, the direct
+    read keeps the metadata-selected Worker and uses bounded transport fallback: UB first when URMA is enabled, then
+    TCP. Only transport/capability failures advance the fallback chain; object, authentication, and application errors
+    are returned unchanged. Every candidate shares the public Get deadline and is attempted at most once. The path
+    covers topology propagation and selection/admission races after the proactive draining-state route takes effect;
+    it never falls back to a Worker-to-Worker object RPC. Routed
     Create/MCreate uses a local payload buffer and never resolves a target Worker's fd
     through the initially bound Worker's fd channel or mmap namespace. If Worker allocation succeeds but local
     `ObjectBuffer` materialization fails, the transporter decreases every allocation returned by that Create/MCreate
@@ -195,6 +200,12 @@
     Each changed topology is first validated into a versioned `WorkerSnapshot`. All topology members are retained
     regardless of membership state; any malformed endpoint rejects the whole update, while an empty topology is a
     valid cleanup-all snapshot. The transport admission set is published before the new route becomes visible.
+    Same-host `PRE_LEAVING` and `LEAVING` members remain admitted for reads but enter the non-SHM partition, so
+    URMA-enabled Clients select UB directly and other Clients select TCP.
+    A draining error observed from a stale SHM selection immediately removes that worker from the local SHM candidate
+    set, preserving the fallback UB connection for subsequent Gets, and requests a hash-ring refresh even when the
+    UB/TCP fallback succeeds. The request is admitted at most once per published transport snapshot, preventing
+    concurrent Gets from continually extending the forced-refresh window. A later snapshot rebuilds the candidate set.
   - Routing owns lazy, endpoint-cached brpc channels only for versioned `GetHashRing` control requests. The channels use
     the SDK request/connect timeouts, disable brpc built-in retry and circuit breaking, and share the transport
     signature holder. Business Create/Get/Set RPCs remain owned by Transport. A later channel-unification change may

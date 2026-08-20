@@ -31,13 +31,15 @@ namespace client {
 class DataPlaneExecutor {
 public:
     using Operation = std::function<Status(IDataTransporter &)>;
+    using DrainingFallbackHandler = std::function<void(const HostPort &, const Status &)>;
 
-    DataPlaneExecutor(std::shared_ptr<DataPlaneManager> manager, std::shared_ptr<TransportAdvisor> advisor);
+    DataPlaneExecutor(std::shared_ptr<DataPlaneManager> manager, std::shared_ptr<TransportAdvisor> advisor,
+                      DrainingFallbackHandler drainingFallbackHandler = nullptr);
 
     ~DataPlaneExecutor() = default;
 
     /**
-     * @brief Execute one endpoint operation and rebuild the affected connection once when required.
+     * @brief Execute one endpoint operation with a bounded connection rebuild or transport fallback.
      * @param[in] workerAddr Target data-worker address.
      * @param[in] operation Operation invoked on the endpoint-scoped transporter.
      * @param[in] traceEnabled Whether to record detailed phase timing.
@@ -61,15 +63,20 @@ private:
     AttemptResult ExecuteAttempt(const HostPort &workerAddr, const Operation &operation, const AttemptPlan &plan,
                                  TransportPhaseLatencyRecorder *recorder);
 
+    Status ExecuteFallbacks(const HostPort &workerAddr, const Operation &operation,
+                            const std::vector<TransportHint> &fallbackHints,
+                            TransportPhaseLatencyRecorder *recorder);
+
     // Decide whether a failed operation should be retried after a transporter rebuild, perform the
     // rebuild pre-step (ResetDataPlane/Teardown), and set the retry hint. Returns false (no retry)
-    // for non-retryable errors. On a same-host SHM-off target the fd-passing negotiation returns
-    // K_NOT_SUPPORTED and the hint is switched to TCP_ONLY so the entry rebuilds as a TcpTransporter.
+    // for non-retryable errors. Transport capability/draining fallback is handled separately so each
+    // SHM->UB->TCP candidate is attempted at most once.
     bool PrepareRetry(const HostPort &workerAddr, const std::shared_ptr<IDataTransporter> &transporter,
                       const Status &rc, TransportHint hint, TransportHint &retryHint);
 
     std::shared_ptr<DataPlaneManager> manager_;
     std::shared_ptr<TransportAdvisor> advisor_;
+    DrainingFallbackHandler drainingFallbackHandler_;
 };
 }  // namespace client
 }  // namespace datasystem

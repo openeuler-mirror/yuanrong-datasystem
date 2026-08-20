@@ -96,23 +96,6 @@ const char *TransportHintName(TransportHint hint)
     }
 }
 
-// Write-path fallback order when a same-host SHM candidate cannot establish its fd-passing endpoint
-// (K_NOT_SUPPORTED): try UB (if URMA is enabled) for an RDMA zero-copy write, then plain TCP. Read path
-// stays SHM->TCP (handled in DataPlaneExecutor); writes prefer UB in between.
-std::vector<TransportHint> CreateFallbackHints(TransportHint initial)
-{
-    std::vector<TransportHint> hints;
-    if (initial != TransportHint::SHM_CANDIDATE) {
-        return hints;
-    }
-#ifdef USE_URMA
-    if (UrmaManager::IsUrmaEnabled()) {
-        hints.push_back(TransportHint::UB_CANDIDATE);
-    }
-#endif
-    hints.push_back(TransportHint::TCP_ONLY);
-    return hints;
-}
 }  // namespace
 
 struct TransportLayer::LocalUbSenderState final : public UrmaLateCompletionObserver,
@@ -258,7 +241,7 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
     auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry, advisor_, std::move(ubBufferProvider),
                                                            GetConfiguredUbInlineBufferSize(),
                                                            std::move(options.metadataFailureHandler));
-    auto executor = std::make_shared<DataPlaneExecutor>(manager_, advisor_);
+    auto executor = std::make_shared<DataPlaneExecutor>(manager_, advisor_, std::move(options.drainingFallbackHandler));
     healthFilter_ = options.readSourceFilter == nullptr ? std::make_shared<UbHealthFilter>()
                                                         : std::move(options.readSourceFilter);
     localUbSenderState_->lateCompletionPool = lateCompletionPool_;
@@ -718,7 +701,7 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
     }
     if (rc.GetCode() == K_NOT_SUPPORTED) {
         // SHM fd-passing endpoint unavailable on this worker; escalate UB then TCP for the write.
-        for (const auto &fallbackHint : CreateFallbackHints(hint)) {
+        for (const auto &fallbackHint : advisor_->GetFallbackHints(hint)) {
             LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
                 << "Create SHM unavailable on worker " << workerAddr.ToString() << ", fall back to "
                 << TransportHintName(fallbackHint);
@@ -926,7 +909,7 @@ Status TransportLayer::MCreate(const HostPort &workerAddr, const std::vector<std
         }
     }
     if (rc.GetCode() == K_NOT_SUPPORTED) {
-        for (const auto &fallbackHint : CreateFallbackHints(hint)) {
+        for (const auto &fallbackHint : advisor_->GetFallbackHints(hint)) {
             LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
                 << "MCreate SHM unavailable on worker " << workerAddr.ToString() << ", fall back to "
                 << TransportHintName(fallbackHint);
@@ -1163,11 +1146,11 @@ void TransportLayer::ScheduleMSetReleases(const std::vector<std::shared_ptr<Obje
 Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
-    // Copy the same-host list before the snapshot is moved below. SetSameHostWorkers takes the
+    // Copy the SHM candidate list before the snapshot is moved below. SetShmCandidateWorkers takes the
     // advisor's RWLock write lock; keep it out of the reconcileMutex_ critical section so the
     // reconcile thread (which touches entries_ under reconcileMutex_) never blocks on the advisor
     // write lock.
-    std::vector<HostPort> sameHostAddrs = snapshot.sameHostAddrs;
+    std::vector<HostPort> shmCandidateAddrs = snapshot.shmCandidateAddrs;
     {
         std::lock_guard<bthread::Mutex> lock(*reconcileMutex_);
         CHECK_FAIL_RETURN_STATUS(reconcileStarted_, K_NOT_READY, "Transport reconcile thread is not initialized");
@@ -1183,7 +1166,7 @@ Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
         reconcileCv_->notify_one();
     }
     if (advisor_ != nullptr) {
-        advisor_->SetSameHostWorkers(sameHostAddrs);
+        advisor_->SetShmCandidateWorkers(shmCandidateAddrs);
     }
     return Status::OK();
 }
