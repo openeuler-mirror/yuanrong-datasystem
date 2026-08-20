@@ -60,11 +60,13 @@ constexpr char kPeer1[] = "127.0.0.1:18480";
 constexpr char kPeer2[] = "127.0.0.2:18480";
 constexpr char kPeer3[] = "127.0.0.3:18480";
 constexpr char kPeer4[] = "127.0.0.4:18480";
+constexpr char kPeer5[] = "127.0.0.5:18480";
 constexpr char kDataDir[] = "coordinator-election-manager-test-data";
 constexpr char kLeader[] = "127.0.0.2:18480";
 constexpr int kHeartbeatIntervalMs = 100;
 constexpr int kElectionTimeoutMs = 1'000;
 constexpr size_t kExpectedMemberCount = 3;
+constexpr size_t kFiveMemberCount = 5;
 constexpr std::chrono::milliseconds kHealthCheckInterval{ 10 };
 constexpr std::chrono::milliseconds kMemberFailureGrace{ 20 };
 constexpr std::chrono::hours kDiscoveryRetryInterval{ 1 };
@@ -714,6 +716,62 @@ TEST(CoordinatorElectionManagerTest, SingleCommittedConfigurationObservationRetr
     EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::RETRYING);
     EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_NOT_READY));
     EXPECT_EQ(state->CallCount(kCreateNode), 0U);
+    DS_ASSERT_OK(manager->Shutdown());
+}
+
+TEST(CoordinatorElectionManagerTest, SingleFullTargetConfigurationObservationKeepsFiveFreshMembersRetrying)
+{
+    auto state = std::make_shared<DependencyState>();
+    const std::vector<std::string> peers{ kPeer1, kPeer2, kPeer3, kPeer4, kPeer5 };
+    state->discoveredCandidates = peers;
+
+    auto committedPeer = MakePeerState(kPeer2, RaftMetadataState::VALID, peers);
+    committedPeer.state.expectedMemberCount = kFiveMemberCount;
+    state->peers.emplace(kPeer2, std::move(committedPeer));
+    for (const auto *peer : { kPeer3, kPeer4, kPeer5 }) {
+        auto freshPeer = MakePeerState(peer, RaftMetadataState::ABSENT);
+        freshPeer.state.expectedMemberCount = kFiveMemberCount;
+        state->peers.emplace(peer, std::move(freshPeer));
+    }
+    auto manager = MakeManager(state, MakeOptions(kPeer1, kFiveMemberCount));
+
+    DS_ASSERT_OK(manager->Start());
+    ASSERT_TRUE(WaitForRetry(*manager));
+    EXPECT_EQ(state->discoveryCalls, 1U);
+    EXPECT_EQ(state->peerProbeCalls, 4U);
+
+    WakeRetry(*manager);
+    ASSERT_TRUE(state->WaitFor([state] { return state->discoveryCalls >= 2; }));
+    ASSERT_TRUE(WaitForRetry(*manager));
+
+    RaftBootstrapState snapshot;
+    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
+    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::RETRYING);
+    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_NOT_READY));
+    EXPECT_EQ(state->peerProbeCalls, 8U);
+    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
+    DS_ASSERT_OK(manager->Shutdown());
+}
+
+TEST(CoordinatorElectionManagerTest, ValidPeerWithoutCommittedConfigurationJoinsFreshBootstrapCandidates)
+{
+    auto state = std::make_shared<DependencyState>();
+    const std::vector<std::string> peers{ kPeer1, kPeer2, kPeer3, kPeer4, kPeer5 };
+    state->discoveredCandidates = peers;
+
+    auto startedPeer = MakePeerState(kPeer2, RaftMetadataState::VALID);
+    startedPeer.state.expectedMemberCount = kFiveMemberCount;
+    state->peers.emplace(kPeer2, std::move(startedPeer));
+    for (const auto *peer : { kPeer3, kPeer4, kPeer5 }) {
+        auto freshPeer = MakePeerState(peer, RaftMetadataState::ABSENT);
+        freshPeer.state.expectedMemberCount = kFiveMemberCount;
+        state->peers.emplace(peer, std::move(freshPeer));
+    }
+    auto manager = MakeManager(state, MakeOptions(kPeer1, kFiveMemberCount));
+
+    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
+    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers, peers);
+    EXPECT_EQ(state->CallCount(kCreateNode), 1U);
     DS_ASSERT_OK(manager->Shutdown());
 }
 

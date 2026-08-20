@@ -18,7 +18,6 @@
 #ifndef DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_NODE_H
 #define DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_NODE_H
 
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -113,9 +112,6 @@ private:
     mutable std::string lastObservedLeader_;
     mutable std::mutex committedConfigurationMutex_;
     std::optional<CommittedConfigurationSnapshot> committedConfiguration_;
-    std::mutex configurationPublishMutex_;
-    std::condition_variable configurationPublishCv_;
-    bool configurationPublishInProgress_{ false };
     // Wrapped FSM callbacks borrow this and the Node borrows the FSM; declaration order destroys the Node first.
     std::unique_ptr<CoordinatorRaftStateMachine> stateMachine_;
     std::unique_ptr<braft::Node> node_;
