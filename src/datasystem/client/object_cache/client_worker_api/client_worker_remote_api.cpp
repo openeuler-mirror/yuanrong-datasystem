@@ -685,36 +685,52 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
             static_cast<int32_t>(std::min<int64_t>(
             TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
             [this, &req, &rsp, &payloads, &isRetry](int32_t realRpcTimeout) {
-                req.set_is_retry(isRetry);
-                RpcOptions opts;
-                opts.SetTimeout(realRpcTimeout);
-                GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
-                RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-                VLOG(1) << "Start to send rpc to publish object: " << req.object_key();
-                Status s = DS_OC_DISPATCH(Publish, opts, req, rsp, payloads);
-                if (req.is_retry() && req.is_seal() && s.GetCode() == K_OC_ALREADY_SEALED) {
-                    VLOG(1) << FormatString(
-                        "Object(%s) retry seal and returned K_OC_ALREADY_SEALED, success is also considered.",
-                        req.object_key());
-                    return Status::OK();
-                }
-                isRetry = true;
-                return s;
-            },
-            []() { return Status::OK(); }, RETRY_ERROR_CODE,
-            requestTimeoutMs > 0 ? requestTimeoutMs : rpcTimeoutMs_);
+            return DoPublishRpc(req, rsp, payloads, isRetry, realRpcTimeout);
+        },
+        []() { return Status::OK(); }, RETRY_ERROR_CODE,
+        requestTimeoutMs > 0 ? requestTimeoutMs : rpcTimeoutMs_);
     const auto *path = isShm ? "SHM" : (bufferInfo->ubUrmaDataInfo != nullptr ? "UB" : "TCP");
+    RETURN_IF_NOT_OK(HandlePublishResponse(status, rsp, traceEnabled, path, rpcTimer.ElapsedMicroSecond()));
+    RecordPublishWriteBytes(bufferInfo, isShm);
+    const AccessTransportKind publishKind = isShm ? AccessTransportKind::SHM
+        : (bufferInfo->ubDataSentByMemoryCopy ? AccessTransportKind::UB : AccessTransportKind::TCP);
+    AccessTransportTracker::Record(publishKind);
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteApi::DoPublishRpc(PublishReqPb& req, PublishRspPb& rsp, std::vector<MemView>& payloads,
+                                           bool& isRetry, int32_t realRpcTimeout)
+{
+    req.set_is_retry(isRetry);
+    RpcOptions opts;
+    opts.SetTimeout(realRpcTimeout);
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    VLOG(1) << "Start to send rpc to publish object: " << req.object_key();
+    Status s = DS_OC_DISPATCH(Publish, opts, req, rsp, payloads);
+    if (req.is_retry() && req.is_seal() && s.GetCode() == K_OC_ALREADY_SEALED) {
+        VLOG(1) << FormatString(
+            "Object(%s) retry seal and returned K_OC_ALREADY_SEALED, success is also considered.",
+            req.object_key());
+        return Status::OK();
+    }
+    isRetry = true;
+    return s;
+}
+
+Status ClientWorkerRemoteApi::HandlePublishResponse(Status status, const PublishRspPb& rsp, bool traceEnabled,
+                                                    const char* path, uint64_t elapsedUs)
+{
     if (status.IsError()) {
         status = WithRpcDiag(status, "Publish", hostPort_);
     }
-    LogClientWorkerRpcDone("Publish", 1, path, static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
+    LogClientWorkerRpcDone("Publish", 1, path, elapsedUs, status);
     Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_PUBLISH, traceEnabled);
     if (traceEnabled && rsp.latency_phase_us_size() > 0) {
         std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
         MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send Publish request error");
-    RecordPublishWriteBytes(bufferInfo, isShm);
     return Status::OK();
 }
 
@@ -768,6 +784,15 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send multi publish request error");
     RecordMultiPublishWriteBytes(payloadBytes, shmBytes);
+    AccessTransportKind batchKind = AccessTransportKind::SHM;
+    for (const auto &info : bufferInfo) {
+        const AccessTransportKind k = info->ubDataSentByMemoryCopy
+            ? AccessTransportKind::UB
+            : ((info->shmId.Empty() && !IsShmEnable()) ? AccessTransportKind::TCP : AccessTransportKind::SHM);
+        batchKind = static_cast<AccessTransportKind>(
+            std::max(static_cast<uint8_t>(batchKind), static_cast<uint8_t>(k)));
+    }
+    AccessTransportTracker::Record(batchKind);
     return Status::OK();
 }
 

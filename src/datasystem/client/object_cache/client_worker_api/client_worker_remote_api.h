@@ -238,6 +238,11 @@ private:
 
     void RecordMultiPublishWriteBytes(uint64_t payloadBytes, uint64_t shmBytes);
     
+    Status DoPublishRpc(PublishReqPb& req, PublishRspPb& rsp,
+                        std::vector<MemView>& payloads, bool& isRetry, int32_t realRpcTimeout);
+    Status HandlePublishResponse(Status status, const PublishRspPb& rsp,
+                                 bool traceEnabled, const char* path, uint64_t elapsedUs);
+
     // To protect the decreaseRPCQ_ and waitRespMap_ from being manipulated by different threads of the same client.
     mutable std::mutex mtx_;
     std::unordered_map<int, uint8_t *> waitRespMap_;

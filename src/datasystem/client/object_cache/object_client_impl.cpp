@@ -5430,6 +5430,9 @@ Status ObjectClientImpl::ApplyTransportReadResult(const std::vector<std::string>
                                                   std::vector<std::shared_ptr<Buffer>> &buffers,
                                                   std::vector<Status> &itemStatuses, AccessTransportKind &actualKind)
 {
+    // a fully-failed Get still reflects the real transport instead of the SHM default from Reset().
+    actualKind = static_cast<AccessTransportKind>(
+        std::max(static_cast<uint8_t>(actualKind), static_cast<uint8_t>(result.actualKind)));
     std::vector<bool> returned(objectKeys.size(), false);
     for (auto &item : result.items) {
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(item.requestIndex < objectKeys.size(), K_RUNTIME_ERROR,
@@ -5475,8 +5478,15 @@ Status ObjectClientImpl::ApplyTransportReadResult(const std::vector<std::string>
 Status ObjectClientImpl::FinishTransportRead(const std::vector<Status> &itemStatuses,
                                              AccessTransportKind actualKind, const Status &transportStatus)
 {
-    if (std::any_of(itemStatuses.begin(), itemStatuses.end(), [](const Status &status) { return status.IsOk(); })) {
+    const bool anyOk = std::any_of(itemStatuses.begin(), itemStatuses.end(),
+                                   [](const Status &status) { return status.IsOk(); });
+    // Record the transport whenever the transport layer actually carried data over a non-SHM
+    // medium, or at least one item succeeded — covers the fully-failed Get case where
+    // ApplyTransportReadResult still seeded actualKind from result.actualKind.
+    if (anyOk || actualKind != AccessTransportKind::SHM) {
         AccessTransportTracker::Record(actualKind);
+    }
+    if (anyOk) {
         return Status::OK();
     }
     for (const auto &status : itemStatuses) {
@@ -5871,6 +5881,18 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     failedObjectKey.reserve(objectsNeedToGet.size());
     RETURN_IF_NOT_OK(ProcessGetResponse(objectsNeedToGet, readParams, rsp, version, payloads,
         buffers, failedObjectKey, ubBufferInfos));
+
+    // Derive the real medium from the response — payload_info that hits ubBufferInfos is UB,
+    // otherwise TCP; objects() with store_fd stays SHM — mirroring GetObjectBuffers' routing.
+    AccessTransportKind responseKind = AccessTransportKind::SHM;
+    for (const auto &pi : rsp.payload_info()) {
+        const std::string &k = pi.object_key().empty() ? objectsNeedToGet[pi.object_index()] : pi.object_key();
+        const AccessTransportKind itemKind = (ubBufferInfos.find(k) != ubBufferInfos.end())
+            ? AccessTransportKind::UB : AccessTransportKind::TCP;
+        responseKind = static_cast<AccessTransportKind>(std::max(static_cast<uint8_t>(responseKind),
+                                                                 static_cast<uint8_t>(itemKind)));
+    }
+    AccessTransportTracker::Record(responseKind);
 
     if (objectsNeedToGet.size() > failedObjectKey.size()) {
         totalPoint.Record();

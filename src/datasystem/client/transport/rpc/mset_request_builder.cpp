@@ -196,8 +196,10 @@ Status SetMSetResponseResult(const MultiPublishRspPb &response, size_t objectCou
                                     && !(result.failedKeys.empty() && result.lastRc.IsError());
     if (responseHasSuccess) {
         result.actualKind = kind;
-        AccessTransportTracker::Record(kind);
     }
+    // The RPC was issued over `kind` regardless of per-object success; record the transport so a
+    // fully-failed batch still logs the actual medium instead of Reset()'s SHM default.
+    AccessTransportTracker::Record(kind);
     if (result.failedKeys.empty() && result.lastRc.IsError()) {
         return result.lastRc;
     }
