@@ -186,13 +186,8 @@ Status WorkerRemoteMasterOCApi::Init()
 {
     std::shared_ptr<RpcStubBase> rpcStub;
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(hostPort_, StubType::WORKER_MASTER_OC_SVC, rpcStub));
-    if (FLAGS_use_brpc) {
-        brpcSession_ = std::dynamic_pointer_cast<master::MasterOCService_BrpcGenericStub>(rpcStub);
-        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
-    } else {
-        rpcSession_ = std::dynamic_pointer_cast<master::MasterOCService_Stub>(rpcStub);
-        RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
-    }
+    brpcSession_ = std::dynamic_pointer_cast<master::MasterOCService_BrpcGenericStub>(rpcStub);
+    RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
     return Status::OK();
 }
 

@@ -50,10 +50,8 @@ TEST_F(ObjectClientBigBufferTest, EXCLUSIVE_TestPutAndLocalGetBigData)
     // brpc's built-in max_body_size (64MB, read at input-messenger socket init)
     // rejects the ~1GB payload this test sends; brpc body-size tuning is not yet
     // wired through a datasystem flag. Skip under brpc.
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "big-buffer (~1GB) RPC body exceeds brpc max_body_size; "
-                        "brpc body-size tuning not yet wired (skipped under brpc).";
-    }
+                    "brpc body-size tuning not yet wired (skipped under brpc).";
     int64_t size = (int64_t)1024 * 1024 * 1024 * 1;
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;
@@ -84,10 +82,8 @@ TEST_F(ObjectClientBigBufferTest, EXCLUSIVE_TestPutAndLocalGetBigData)
 
 TEST_F(ObjectClientBigBufferTest, EXCLUSIVE_TestPutAndRemoteGetBigData)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "big-buffer (~1GB) RPC body exceeds brpc max_body_size; "
-                        "brpc body-size tuning not yet wired (skipped under brpc).";
-    }
+                    "brpc body-size tuning not yet wired (skipped under brpc).";
     int64_t size = (int64_t)1024 * 1024 * 1024 * 1;
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;

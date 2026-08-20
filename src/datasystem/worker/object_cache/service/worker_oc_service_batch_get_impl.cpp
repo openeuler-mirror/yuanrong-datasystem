@@ -339,7 +339,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED, "RPC deadline exceeded");
     auto dispatchTime = std::chrono::steady_clock::now();
-    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(true);
     for (size_t index = 0; index < tasks.size(); ++index) {
         auto *infos = tasks[index].infos;
         const auto address = *tasks[index].address;

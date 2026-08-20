@@ -52,7 +52,6 @@
 #include "datasystem/common/util/uuid_generator.h"
 
 DS_DECLARE_bool(ipc_through_shared_memory);
-DS_DECLARE_bool(use_brpc);
 DS_DECLARE_uint64(oc_shm_transfer_threshold_kb);
 namespace datasystem {
 namespace object_cache {
@@ -65,11 +64,7 @@ void WorkerOcServiceCrudCommonApi::SleepForMetaMovingRetry(int64_t sleepTimeMs)
         return;
     }
     auto sleepDuration = std::chrono::milliseconds(sleepTimeMs);
-    if (FLAGS_use_brpc) {
-        SleepCurrentFor(sleepDuration);
-        return;
-    }
-    std::this_thread::sleep_for(sleepDuration);
+    SleepCurrentFor(sleepDuration);
 }
 
 namespace {

@@ -218,10 +218,7 @@ Status ApplyGetAllWorkersPolicy(ServiceAffinityPolicy affinityPolicy, bool hostA
 std::shared_ptr<ICoordinatorServiceProxy> CreateCoordinatorProxy(
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery)
 {
-    if (FLAGS_use_brpc) {
-        return std::make_shared<CoordinatorServiceProxyBrpcImpl>(std::move(coordinatorDiscovery));
-    }
-    return std::make_shared<CoordinatorServiceProxyZmqImpl>(std::move(coordinatorDiscovery));
+    return std::make_shared<CoordinatorServiceProxyBrpcImpl>(std::move(coordinatorDiscovery));
 }
 }  // namespace
 

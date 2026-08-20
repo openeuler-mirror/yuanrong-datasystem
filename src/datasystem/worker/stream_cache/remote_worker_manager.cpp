@@ -1163,21 +1163,12 @@ Status RemoteWorker::BatchAsyncFlushEntry(PendingFlushList &pendingFlushList)
     RETURN_IF_NOT_OK(ParsePendingFlushList(pendingFlushList, requests, payloads, raii, moveList, needAckList));
     std::shared_ptr<RpcStubBase> stub;
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(remoteWorkerAddr_, StubType::WORKER_WORKER_SC_SVC, stub));
-    if (FLAGS_use_brpc) {
-        auto brpcStub = std::dynamic_pointer_cast<WorkerWorkerSCService_BrpcGenericStub>(stub);
-        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
-        auto numRequestSent = BatchFlushAsyncWrite(brpcStub, requests, payloads);
-        HandleBlockedElements(moveList, needAckList);
-        RETURN_OK_IF_TRUE(numRequestSent == 0);
-        BatchFlushAsyncRead(brpcStub, pendingFlushList, requests, raii);
-    } else {
-        auto derivedStub = std::dynamic_pointer_cast<WorkerWorkerSCService_Stub>(stub);
-        RETURN_RUNTIME_ERROR_IF_NULL(derivedStub);
-        auto numRequestSent = BatchFlushAsyncWrite(derivedStub, requests, payloads);
-        HandleBlockedElements(moveList, needAckList);
-        RETURN_OK_IF_TRUE(numRequestSent == 0);
-        BatchFlushAsyncRead(derivedStub, pendingFlushList, requests, raii);
-    }
+    auto brpcStub = std::dynamic_pointer_cast<WorkerWorkerSCService_BrpcGenericStub>(stub);
+    RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
+    auto numRequestSent = BatchFlushAsyncWrite(brpcStub, requests, payloads);
+    HandleBlockedElements(moveList, needAckList);
+    RETURN_OK_IF_TRUE(numRequestSent == 0);
+    BatchFlushAsyncRead(brpcStub, pendingFlushList, requests, raii);
     // Return the first non-ok error
     for (auto &req : requests) {
         if (req.rc_.IsError()) {

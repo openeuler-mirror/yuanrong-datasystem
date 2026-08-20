@@ -478,9 +478,7 @@ void QueryStreamTopoTest::TimeoutCase(size_t round, int timeoutMs)
 
 TEST_F(QueryStreamTopoTest, FinanceCaseFixedNode)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: E112 Not connected during stream topo query; brpc channel revive timing. Tracked separately.";
-    }
 
     auto rounds = 8;
     ThreadPool roundThreads(rounds);
@@ -499,9 +497,7 @@ public:
 
 TEST_F(QueryStreamTopoTest1, FinanceCaseRndNode)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; flaky/failing/timeout under brpc. Tracked separately.";
-    }
     auto rounds = 8;
     ThreadPool roundThreads(rounds);
     for (int round = 0; round < rounds; round++) {

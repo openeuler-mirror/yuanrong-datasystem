@@ -481,9 +481,7 @@ TEST_F(RetainDataTest, LEVEL1_TestRetainDataMPMC4)
 
 TEST_F(RetainDataTest, TestCloseProducerWhileRetainData1)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: stream close producer brpc stream meta recovery. Tracked separately.";
-    }
 
     // Test that retained data can be received by local consumer after producer is closed
     // Create a producer with retainForNumConsumers == 1
@@ -808,9 +806,7 @@ TEST_F(RetainDataTest, TestRetainDataSPMCConsumersComeAndGo)
 // DFX testcases - Master crash
 TEST_F(RetainDataTest, LEVEL1_TestMasterRestartWhileRetainData)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream/worker-restart migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     // In this test case,
     // we need to check if master restart
     // restores the state
@@ -930,9 +926,7 @@ TEST_F(RetainDataTest, DISABLED_TestConsumerWorkerCrashStopRemotePush)
 // Worker crash with producer
 TEST_F(RetainDataTest, LEVEL1_TestProducerWorkerCrashStopRemotePush)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream/worker-restart migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     LOG(INFO) << "TestWorkerCrashStopRemotePush start!";
     std::shared_ptr<StreamClient> client1;
     std::shared_ptr<StreamClient> client2;

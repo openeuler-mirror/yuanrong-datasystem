@@ -87,7 +87,6 @@ DS_DEFINE_bool(enable_redirect, "true",
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
 DS_DECLARE_int32(rpc_thread_num);
-DS_DECLARE_bool(use_brpc);
 
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(enable_reconciliation);
@@ -124,11 +123,7 @@ static std::chrono::milliseconds GetClientIdRefMigrationRetryDelay(std::chrono::
 
 static void SleepForClientIdRefMigration(std::chrono::milliseconds sleepTime)
 {
-    if (FLAGS_use_brpc) {
-        SleepCurrentFor(sleepTime);
-        return;
-    }
-    std::this_thread::sleep_for(sleepTime);
+    SleepCurrentFor(sleepTime);
 }
 
 template <typename Response, typename Request>
@@ -1314,8 +1309,8 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
 
     const size_t parallelLimit = 128;
     const size_t objectKeyCount = objectKeys.size();
-    // Use serial lookup when URMA is disabled, the batch is small, or brpc mode must avoid ParallelFor sem_wait.
-    if (!IsUrmaEnabled() || !Parallel::ShouldUseServiceParallelFor(objectKeyCount, parallelLimit, FLAGS_use_brpc)) {
+    // Use serial lookup when URMA is disabled or the batch is small (brpc must avoid ParallelFor sem_wait).
+    if (!IsUrmaEnabled() || !Parallel::ShouldUseServiceParallelFor(objectKeyCount, parallelLimit, true)) {
         for (const auto &objectKey : objectKeys) {
             func(objectKey, infos, notExistObjectKeys);
         }

@@ -329,24 +329,12 @@ public:
 
     static pid_t ForkForTest(std::function<void()> func)
     {
-        if (FLAGS_use_brpc) {
-            // brpc: don't fork — brpc channel/bthread global state is not fork-safe
-            // (deadlock/SIGSEGV in child). ZMQ needed fork to isolate its per-process
-            // frontend context; brpc channels are safe to use from the parent thread.
-            // Run func on a separate thread (matching the original fork-child's thread
-            // wrapper) and join, then return 0 so WaitForChildFork treats it as success.
-            std::thread thread(func);
-            thread.join();
-            return 0;
-        }
-        pid_t child = fork();
-        if (child == 0) {
-            // avoid zmq problem when fork.
-            std::thread thread(func);
-            thread.join();
-            exit(0);
-        }
-        return child;
+        // Don't fork: bthread global state is not fork-safe (deadlock/SIGSEGV in child).
+        // Run func on a separate thread and join, then return 0 so WaitForChildFork
+        // treats it as success.
+        std::thread thread(func);
+        thread.join();
+        return 0;
     }
 
     static Status IsSameContent(std::vector<DeviceBlobList> &testBlobList, std::vector<DeviceBlobList> &reference,

@@ -18,7 +18,7 @@
 
 #include "oc_client_common.h"
 
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/client/mmap_manager.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -143,15 +143,12 @@ class OCClientWorkerHeartbeatNoRocksDBTest : public OCClientCommon {
 public:
     void SetUp() override
     {
-        previousUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = false;
         OCClientCommon::SetUp();
     }
 
     void TearDown() override
     {
         OCClientCommon::TearDown();
-        FLAGS_use_brpc = previousUseBrpc_;
     }
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -165,13 +162,11 @@ public:
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
         datasystem::inject::Set("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", "call(500)");
     }
-
-private:
-    bool previousUseBrpc_{ false };
 };
 
 TEST_F(OCClientWorkerHeartbeatNoRocksDBTest, TestWorkerRestartWithoutRocksDB)
 {
+    GTEST_SKIP() << "ZMQ-only test (forced ZMQ on master); brpc is the sole transport.";
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
 

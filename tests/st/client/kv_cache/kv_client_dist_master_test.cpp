@@ -1063,9 +1063,7 @@ TEST_F(STCClientDistMasterTest, LEVEL1_ProcessRequestBeforeReady)
 
 TEST_F(STCClientDistMasterTest, TestGetReqAndObjectLock)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     const int timeout = 3000;
     StartClustersAndWaitReady(timeout);
     std::string key = "key0001";

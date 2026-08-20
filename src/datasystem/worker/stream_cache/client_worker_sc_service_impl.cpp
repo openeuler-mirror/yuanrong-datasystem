@@ -1826,13 +1826,9 @@ Status ClientWorkerSCServiceImpl::DeleteStreamContext(const std::string &streamN
 Status ClientWorkerSCServiceImpl::GetWorkerStub(const HostPort &workerHostPort,
                                                 std::shared_ptr<RpcStubBase> &stub)
 {
-    // Worker<->worker stream block/unblock RPCs (ClientWorkerSCService) must use the
-    // transport selected by FLAGS_use_brpc, exactly like WORKER_WORKER_SC_SVC. The
-    // cached stub is a ClientWorkerSCService_Stub (ZMQ) or ClientWorkerSCService_
-    // BrpcGenericStub (brpc); callers downcast per FLAGS_use_brpc. In brpc-exclusive
-    // mode the worker does not listen on a ZMQ frontend gateway, so a ZMQ stub here
-    // would hang 3s on every block/unblock RPC (RPC_SERVICE_UNAVAILABLE) and cascade
-    // into std::system_error/Resource-deadlock during stream OOM handling.
+    // Worker<->worker stream block/unblock RPCs (ClientWorkerSCService) use the brpc
+    // transport. The cached stub is a ClientWorkerSCService_BrpcGenericStub; callers
+    // downcast to it.
     return RpcStubCacheMgr::Instance().GetStub(workerHostPort, StubType::CLIENT_WORKER_SC_SVC, stub);
 }
 

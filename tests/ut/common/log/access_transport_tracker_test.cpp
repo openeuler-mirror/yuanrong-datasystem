@@ -27,7 +27,6 @@
 #include "datasystem/common/util/request_context.h"
 #include "ut/common.h"
 
-DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 namespace ut {
@@ -35,8 +34,6 @@ class AccessTransportTrackerTest : public CommonTest {
 protected:
     void SetUp() override
     {
-        oldUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         InitRequestContext();
         SetRequestContext(nullptr);
         AccessTransportTracker::Reset();
@@ -46,7 +43,6 @@ protected:
     {
         SetRequestContext(nullptr);
         AccessTransportTracker::Reset();
-        FLAGS_use_brpc = oldUseBrpc_;
     }
 
 private:

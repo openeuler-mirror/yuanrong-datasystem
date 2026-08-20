@@ -778,9 +778,7 @@ TEST_F(SafeObjectTest, BrpcIsWLockedByCurrentThreadVerifiesOwnershipAcrossBthrea
     using SafeString = SafeObject<std::string>;
     auto objPtr = std::make_shared<SafeString>("abc");
 
-    // This test only makes sense under brpc; the ZMQ path already uses precise tid comparison.
-    Raii restoreBrpcFlag([old = FLAGS_use_brpc]() { FLAGS_use_brpc = old; });
-    FLAGS_use_brpc = true;
+    // This test only makes sense under brpc.
 
     std::atomic<bool> holderStarted{ false };
     std::atomic<bool> releaseHolder{ false };

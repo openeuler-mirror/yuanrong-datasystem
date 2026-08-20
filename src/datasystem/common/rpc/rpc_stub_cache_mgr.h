@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef DATASYSTEM_COMMON_RPC_ZMQ_STUB_CACHE_MGR_H
-#define DATASYSTEM_COMMON_RPC_ZMQ_STUB_CACHE_MGR_H
+#ifndef DATASYSTEM_COMMON_RPC_STUB_CACHE_MGR_H
+#define DATASYSTEM_COMMON_RPC_STUB_CACHE_MGR_H
 
 #include <atomic>
 #include <chrono>
@@ -42,8 +42,7 @@
 
 namespace datasystem {
 
-// brpc uses the same port as ZMQ (the one specified by --worker_address / --master_address).
-// No offset: FLAGS_use_brpc selects which server listens on the port (ZMQ or brpc, not both).
+// brpc listens on the port specified by --worker_address / --master_address.
 constexpr int kBrpcPortOffset = 0;
 constexpr int kBrpcConnMaxRetries = 30;
 constexpr int kBrpcConnRetryIntervalUs = 100000;
@@ -78,8 +77,8 @@ inline int ComputeTcpProbeTimeoutMs(int budgetMs)
 TcpPortProbeResult ProbeTcpPort(const HostPort &addr, int timeoutMs = kTcpProbeDefaultTimeoutMs);
 
 // Return true only when ProbeTcpPort confirms that the endpoint is listening.
-// Mirrors the WaitForBrpcSocketAvailable intent for the ZMQ path, where zmq_connect
-// always succeeds asynchronously and a dead worker would otherwise surface only at RPC timeout.
+// Used to confirm a worker is reachable before relying on its RPC channel, since a
+// dead worker would otherwise surface only at RPC timeout.
 bool WaitForTcpPortAvailable(const HostPort& addr, int timeoutMs = kTcpProbeDefaultTimeoutMs);
 
 enum class StubPriority : int {
@@ -257,10 +256,10 @@ public:
     /**
      * @brief Verify the cached brpc stub's underlying socket is still alive; evict if stale.
      *
-     * Only meaningful under FLAGS_use_brpc. Resets rpcStub to nullptr when the cached
-     * channel's socket is dead so the caller falls through to stub recreation.
+     * Resets rpcStub to nullptr when the cached channel's socket is dead so the caller
+     * falls through to stub recreation.
      *
-     * @param[in] hostPort The worker address (zmq port convention).
+     * @param[in] hostPort The worker address.
      * @param[in] type The stub type.
      * @param[in,out] rpcStub The cached stub; reset to nullptr if evicted.
      */
@@ -352,4 +351,4 @@ protected:
     HostPort localAddress_;
 };
 };  // namespace datasystem
-#endif  // DATASYSTEM_COMMON_RPC_ZMQ_STUB_CACHE_MGR_H
+#endif  // DATASYSTEM_COMMON_RPC_STUB_CACHE_MGR_H

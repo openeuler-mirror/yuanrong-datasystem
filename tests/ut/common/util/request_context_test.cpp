@@ -45,8 +45,6 @@ class RequestContextTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
-        oldUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
     }
 
     void TearDown() override
@@ -54,11 +52,9 @@ protected:
         // Ensure no dangling stack pointer remains in the bthread key
         // when the test's stack-allocated contexts go out of scope.
         SetRequestContext(nullptr);
-        FLAGS_use_brpc = oldUseBrpc_;
     }
 
 private:
-    bool oldUseBrpc_ = false;
 };
 
 // ============================================================================
@@ -241,19 +237,15 @@ TEST_F(RequestContextTest, ClientScopePreservesActiveRequestContext)
     EXPECT_EQ(Trace::Instance().GetTraceID(), "outer_trace");
 }
 
-TEST_F(RequestContextTest, ClientScopeIsNoOpForZmq)
+TEST_F(RequestContextTest, ClientScopeInstallsRequestContext)
 {
     InitRequestContext();
     SetRequestContext(nullptr);
-    FLAGS_use_brpc = false;
-    RequestContext *fallbackContext = GetRequestContext();
 
     {
         ScopedClientRequestContext clientScope;
-        EXPECT_EQ(GetRequestContext(), fallbackContext);
+        EXPECT_NE(GetRequestContext(), nullptr);
     }
-
-    EXPECT_EQ(GetRequestContext(), fallbackContext);
 }
 
 // ============================================================================

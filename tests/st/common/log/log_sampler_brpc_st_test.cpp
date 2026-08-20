@@ -47,7 +47,6 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/kv_client.h"
 
-DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 namespace st {
@@ -105,18 +104,15 @@ public:
     void SetUp() override
     {
         ExternalClusterTest::SetUp();
-        // Client SDK selects brpc vs zmq via FLAGS_use_brpc. Force brpc so the
+        // Client SDK uses brpc. The
         // client and worker speak the same transport (the worker is started
-        // with -use_brpc=true below).
-        prevUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
+        // with below).
         InitTestKVClient(0, client_);
     }
 
     void TearDown() override
     {
         client_.reset();
-        FLAGS_use_brpc = prevUseBrpc_;
         ExternalClusterTest::TearDown();
     }
 
@@ -131,11 +127,11 @@ public:
         for (auto &addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        // -use_brpc=true so the worker binds brpc (not zmq). All three sample
+        // so the worker binds brpc (not zmq). All three sample
         // rates = 0.0 so the request is rejected and access is sampled out:
         // a successful Set/Get must leave NO access.log line for that key on
         // the worker once the fix propagates log_sample_state over brpc.
-        opts.workerGflagParams = "-use_brpc=true -shared_memory_size_mb=25 -v=1"
+        opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1"
             " -log_monitor=true -log_monitor_interval_ms=1000"
             " -request_sample_rate=0.0 -access_sample_rate=0.0 -diagnostic_sample_rate=0.0";
     }

@@ -1278,15 +1278,9 @@ Status StreamManager::SendBlockProducerReq(const std::string &remoteWorkerAddr)
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
     RETURN_IF_NOT_OK(scSvc->GetWorkerStub(workerHostPort, stub));
     std::unique_ptr<ClientUnaryWriterReader<BlockProducerReqPb, BlockProducerRspPb>> clientApi;
-    if (FLAGS_use_brpc) {
-        auto brpcStub = std::dynamic_pointer_cast<ClientWorkerSCService_BrpcGenericStub>(stub);
-        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
-        RETURN_IF_NOT_OK(brpcStub->BlockProducer(RpcOptions(), &clientApi));
-    } else {
-        auto zmqStub = std::dynamic_pointer_cast<ClientWorkerSCService_Stub>(stub);
-        RETURN_RUNTIME_ERROR_IF_NULL(zmqStub);
-        RETURN_IF_NOT_OK(zmqStub->BlockProducer(RpcOptions(), &clientApi));
-    }
+    auto brpcStub = std::dynamic_pointer_cast<ClientWorkerSCService_BrpcGenericStub>(stub);
+    RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
+    RETURN_IF_NOT_OK(brpcStub->BlockProducer(RpcOptions(), &clientApi));
     BlockProducerReqPb req;
     req.set_stream_name(streamName_);
     req.set_worker_addr(workerAddr_);
@@ -1370,15 +1364,9 @@ Status StreamManager::SendUnBlockProducerReq(const std::string &remoteWorkerAddr
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
     RETURN_IF_NOT_OK(scSvc->GetWorkerStub(workerHostPort, stub));
     std::unique_ptr<ClientUnaryWriterReader<UnblockProducerReqPb, UnblockProducerRspPb>> clientApi;
-    if (FLAGS_use_brpc) {
-        auto brpcStub = std::dynamic_pointer_cast<ClientWorkerSCService_BrpcGenericStub>(stub);
-        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
-        RETURN_IF_NOT_OK(brpcStub->UnblockProducer(RpcOptions(), &clientApi));
-    } else {
-        auto zmqStub = std::dynamic_pointer_cast<ClientWorkerSCService_Stub>(stub);
-        RETURN_RUNTIME_ERROR_IF_NULL(zmqStub);
-        RETURN_IF_NOT_OK(zmqStub->UnblockProducer(RpcOptions(), &clientApi));
-    }
+    auto brpcStub = std::dynamic_pointer_cast<ClientWorkerSCService_BrpcGenericStub>(stub);
+    RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
+    RETURN_IF_NOT_OK(brpcStub->UnblockProducer(RpcOptions(), &clientApi));
     UnblockProducerReqPb req;
     req.set_stream_name(streamName_);
     req.set_worker_addr(workerAddr_);

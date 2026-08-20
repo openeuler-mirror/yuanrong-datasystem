@@ -66,9 +66,7 @@ protected:
 
 TEST_F(RegisterClientNonShmRspTest, RegisterClientReturnsNonShmFields)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     const std::string accessKey = "QTWAOYTTINDUT2QVKYUC";
     const SensitiveValue secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     Signature signature(accessKey, secretKey);

@@ -721,9 +721,7 @@ TEST_F(KVCacheClientTest, TestSetAndExistConcurrently)
 
 TEST_F(KVCacheClientTest, SubscribeTimeoutTest)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure/flaky under brpc. Tracked separately.";
-    }
     std::shared_ptr<KVClient> client1, client2;
     InitTestKVClient(0, client1);
     InitTestKVClient(1, client2);
@@ -1469,9 +1467,6 @@ TEST_F(KVCacheClientTest, TestRemoteGetFromSelfAddressScenarios1)
 
 TEST_F(KVCacheClientTest, LEVEL1_DelSucceedsWhenTargetWorkerDiesBeforeDeleteNotificationReply)
 {
-    if (!FLAGS_use_brpc) {
-        GTEST_SKIP() << "K_RPC_PEER_DEAD is a brpc transport status";
-    }
     constexpr uint32_t kDeleteWorkerIndex = 0;
     constexpr uint32_t kTargetWorkerIndex = 1;
     constexpr int32_t kRequestTimeoutMs = 10'000;
@@ -1569,9 +1564,6 @@ TEST_F(KVCacheClientTest, TestQueryMetaRetry)
 
 TEST_F(KVCacheClientQueryMetaDeadPeerTest, QueryMetaFastFailsAfterMetadataWorkerKilled)
 {
-    if (!FLAGS_use_brpc) {
-        GTEST_SKIP() << "K_RPC_PEER_DEAD is a brpc transport status";
-    }
     constexpr int32_t kConnectTimeoutMs = 60'000;
     constexpr int32_t kRequestTimeoutMs = 30'000;
     constexpr int64_t kFastFailMaxMs = 1'000;
@@ -1594,9 +1586,6 @@ TEST_F(KVCacheClientQueryMetaDeadPeerTest, QueryMetaFastFailsAfterMetadataWorker
 
 TEST_P(KVCacheClientDistributedMetaDeadPeerTest, OperationsFastFailAfterMetadataOwnerKilled)
 {
-    if (!FLAGS_use_brpc) {
-        GTEST_SKIP() << "K_RPC_PEER_DEAD is a brpc transport status";
-    }
     constexpr int32_t kConnectTimeoutMs = 60'000;
     constexpr int32_t kRequestTimeoutMs = 30'000;
     constexpr int64_t kFastFailMaxMs = 1'000;
@@ -1685,9 +1674,7 @@ TEST_F(KVCacheClientTest, TestDelOneKeyMeetsLockErrorThenSetFail)
 
 TEST_F(KVCacheClientTest, TestGetKeyAlwaysMeetsCacheInvalid)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::string key = "key";
     std::string val = "value";
 

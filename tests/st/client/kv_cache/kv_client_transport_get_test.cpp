@@ -46,7 +46,6 @@
 #include "datasystem/kv_client.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 
-DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 namespace st {
@@ -116,7 +115,7 @@ public:
         opts.numWorkers = 3;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
-            " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1 -use_brpc=true";
+            " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1";
 #ifdef USE_URMA
         opts.workerGflagParams += " -enable_urma=true -enable_transport_fallback=false";
 #else
@@ -132,8 +131,6 @@ public:
             hadPreviousUbGetSize_ = true;
             previousUbGetSize_ = ubGetSize;
         }
-        previousUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
         DS_ASSERT_OK(inject::Set(QUERY_AND_GET_INJECT, "call()"));
         DS_ASSERT_OK(inject::Set(GET_OBJECT_REMOTE_INJECT, "call()"));
@@ -176,7 +173,6 @@ public:
         (void)inject::Clear(GET_CLIENT_FD_INJECT);
         (void)inject::Clear(SHM_HEARTBEAT_INJECT);
         ExternalClusterTest::TearDown();
-        FLAGS_use_brpc = previousUseBrpc_;
     }
 
 protected:
@@ -1556,14 +1552,12 @@ public:
         opts.enableDistributedMaster = "true";
         // Enable SHM so the worker GetObjectRemote path exercises ShmGuard::TryRLatch.
         opts.workerGflagParams =
-            " -shared_memory_size_mb=512 -ipc_through_shared_memory=true -arena_per_tenant=1 -use_brpc=true"
+            " -shared_memory_size_mb=512 -ipc_through_shared_memory=true -arena_per_tenant=1"
             " -enable_urma=false";
     }
 
     void SetUp() override
     {
-        previousUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
         DS_ASSERT_OK(inject::Set(QUERY_AND_GET_INJECT, "call()"));
         DS_ASSERT_OK(inject::Set(GET_OBJECT_REMOTE_INJECT, "call()"));
@@ -1587,7 +1581,6 @@ public:
         (void)inject::Clear(GET_OBJECT_REMOTE_INJECT);
         ClearShmLatchFailureEverywhere();
         ExternalClusterTest::TearDown();
-        FLAGS_use_brpc = previousUseBrpc_;
     }
 
 protected:

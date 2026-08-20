@@ -139,12 +139,6 @@ Status RpcStubCacheMgr::Init(uint64_t maxStubCount, const HostPort &localAddress
         return Status::OK();
     }
 
-    // Pre-warm ZmqStubConnMgr singleton to avoid initialization delay on first use.
-    // In brpc mode ZMQ stubs are never created, so skip the ZMQ context init.
-    if (!FLAGS_use_brpc) {
-        (void)ZmqStubConnMgr::Instance();
-    }
-
     auto policy = std::make_unique<LruCountPolicy>();
     policy->SetCacheCount(maxStubCount);
     RETURN_IF_NOT_OK(LruForRpcStubCacheMgr::Builder()
@@ -365,107 +359,27 @@ bool RpcStubCacheMgr::EnableScWorkerWorkerDirectPort()
 
 void RpcStubCacheMgr::InitCreators()
 {
-    if (FLAGS_use_brpc) {
-        // brpc path: each creator makes a brpc::Channel and a _BrpcGenericStub
-        auto makeBrpcCreator = [](StubType stubType) -> RpcStubCacheCreateFunc {
-            return [stubType](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-                return BrpcCreatorTemplate(
-                    [&hostPort](std::shared_ptr<brpc::Channel> &brpcChannel) {
-                        return CreateBrpcChannel(hostPort, brpcChannel);
-                    },
-                    stubType, rpcStub);
-            };
+    // brpc path: each creator makes a brpc::Channel and a _BrpcGenericStub
+    auto makeBrpcCreator = [](StubType stubType) -> RpcStubCacheCreateFunc {
+        return [stubType](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+            return BrpcCreatorTemplate(
+                [&hostPort](std::shared_ptr<brpc::Channel> &brpcChannel) {
+                    return CreateBrpcChannel(hostPort, brpcChannel);
+                },
+                stubType, rpcStub);
         };
-        creators_.emplace(StubType::WORKER_WORKER_OC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_OC_SVC));
-        creators_.emplace(StubType::WORKER_MASTER_OC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_OC_SVC));
-        creators_.emplace(StubType::WORKER_WORKER_SC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_SC_SVC));
-        creators_.emplace(StubType::WORKER_MASTER_SC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_SC_SVC));
-        creators_.emplace(StubType::MASTER_WORKER_OC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_OC_SVC));
-        creators_.emplace(StubType::MASTER_WORKER_SC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_SC_SVC));
-        creators_.emplace(StubType::MASTER_MASTER_OC_SVC, makeBrpcCreator(StubType::MASTER_MASTER_OC_SVC));
-        creators_.emplace(StubType::WORKER_WORKER_TRANS_SVC, makeBrpcCreator(StubType::WORKER_WORKER_TRANS_SVC));
-        creators_.emplace(StubType::TO_COORDINATOR_SVC, makeBrpcCreator(StubType::TO_COORDINATOR_SVC));
-        creators_.emplace(StubType::COORDINATOR_WORKER_SVC, makeBrpcCreator(StubType::COORDINATOR_WORKER_SVC));
-        creators_.emplace(StubType::CLIENT_WORKER_SC_SVC, makeBrpcCreator(StubType::CLIENT_WORKER_SC_SVC));
-        return;
-    }
-
-    // ZMQ path (original)
-    creators_.emplace(
-        StubType::WORKER_WORKER_OC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) {
-                    RETURN_IF_NOT_OK(CreateRpcChannel(
-                        hostPort, EnableOcWorkerWorkerDirectPort() ? WorkerWorkerOCService_Stub::FullServiceName() : "",
-                        channel, FLAGS_oc_worker_worker_pool_size));
-                    return Status::OK();
-                },
-                StubType::WORKER_WORKER_OC_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::WORKER_MASTER_OC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
-                StubType::WORKER_MASTER_OC_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::WORKER_WORKER_SC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) {
-                    return CreateRpcChannel(
-                        hostPort, EnableScWorkerWorkerDirectPort() ? WorkerWorkerSCService_Stub::FullServiceName() : "",
-                        channel, FLAGS_sc_worker_worker_pool_size);
-                },
-                StubType::WORKER_WORKER_SC_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::WORKER_MASTER_SC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
-                StubType::WORKER_MASTER_SC_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::MASTER_WORKER_OC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
-                StubType::MASTER_WORKER_OC_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::MASTER_WORKER_SC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
-                StubType::MASTER_WORKER_SC_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::MASTER_MASTER_OC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
-                StubType::MASTER_MASTER_OC_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::WORKER_WORKER_TRANS_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
-                StubType::WORKER_WORKER_TRANS_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::TO_COORDINATOR_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
-                StubType::TO_COORDINATOR_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::COORDINATOR_WORKER_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
-                StubType::COORDINATOR_WORKER_SVC, rpcStub);
-        });
-    creators_.emplace(
-        StubType::CLIENT_WORKER_SC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return CreatorTemplate(
-                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
-                StubType::CLIENT_WORKER_SC_SVC, rpcStub);
-        });
+    };
+    creators_.emplace(StubType::WORKER_WORKER_OC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_OC_SVC));
+    creators_.emplace(StubType::WORKER_MASTER_OC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_OC_SVC));
+    creators_.emplace(StubType::WORKER_WORKER_SC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_SC_SVC));
+    creators_.emplace(StubType::WORKER_MASTER_SC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_SC_SVC));
+    creators_.emplace(StubType::MASTER_WORKER_OC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_OC_SVC));
+    creators_.emplace(StubType::MASTER_WORKER_SC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_SC_SVC));
+    creators_.emplace(StubType::MASTER_MASTER_OC_SVC, makeBrpcCreator(StubType::MASTER_MASTER_OC_SVC));
+    creators_.emplace(StubType::WORKER_WORKER_TRANS_SVC, makeBrpcCreator(StubType::WORKER_WORKER_TRANS_SVC));
+    creators_.emplace(StubType::TO_COORDINATOR_SVC, makeBrpcCreator(StubType::TO_COORDINATOR_SVC));
+    creators_.emplace(StubType::COORDINATOR_WORKER_SVC, makeBrpcCreator(StubType::COORDINATOR_WORKER_SVC));
+    creators_.emplace(StubType::CLIENT_WORKER_SC_SVC, makeBrpcCreator(StubType::CLIENT_WORKER_SC_SVC));
 }
 
 void RpcStubCacheMgr::MaybeEvictStaleBrpcStub(const HostPort &hostPort, StubType type,
@@ -521,9 +435,7 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
             // For brpc mode, verify the cached channel's socket is still alive.
             // After worker restart, the cached Channel may hold a dead Socket
             // while the cache entry still exists, causing E112 "Not connected".
-            if (FLAGS_use_brpc) {
-                MaybeEvictStaleBrpcStub(hostPort, type, rpcStub);
-            }
+            MaybeEvictStaleBrpcStub(hostPort, type, rpcStub);
             if (rpcStub != nullptr) {
                 CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                                          "Get RPC stub deadline exceeded");
@@ -576,10 +488,8 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
     }
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                              "Get RPC stub deadline exceeded");
-    if (FLAGS_use_brpc) {
-        HostPort brpcAddr(hostPort.Host(), hostPort.Port());
-        (void)WaitForBrpcSocketAvailable(brpcAddr, 1, 0);
-    }
+    HostPort brpcAddr(hostPort.Host(), hostPort.Port());
+    (void)WaitForBrpcSocketAvailable(brpcAddr, 1, 0);
     LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs, accessElapsedMs,
                     createElapsedMs, attempts);
     return Status::OK();

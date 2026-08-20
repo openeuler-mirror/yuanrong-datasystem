@@ -33,10 +33,7 @@
 
 #include <bthread/bthread.h>
 
-#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/trace.h"
-
-DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 
@@ -84,9 +81,6 @@ static RequestContext* GetFallbackRequestContext()
 // impossible to express.
 ApiDeadline *GetBthreadApiDeadline()
 {
-    if (!FLAGS_use_brpc) {
-        return nullptr;
-    }
     // Ensure the bthread key is created (with call_once synchronization)
     // before reading g_requestContextKey. See GetBthreadTrace for the
     // TSAN rationale.
@@ -100,16 +94,6 @@ ApiDeadline *GetBthreadApiDeadline()
 
 Trace* GetBthreadTrace()
 {
-    // ZMQ mode (usercode_in_pthread=true): handlers run on plain pthreads, not bthreads.
-    // bthread_setspecific/getspecific on plain pthreads may route through different
-    // keytable pools than the ScopedRequestContext registered on, causing
-    // SetLatencySummary/AddLatencyTick to write to one Trace instance while
-    // access_recorder reads another (data loss). Force thread_local fallback in
-    // ZMQ mode to preserve master's behavior (Trace::Instance is per-pthread,
-    // shared across the entire handler call chain on the same pthread).
-    if (!FLAGS_use_brpc) {
-        return nullptr;
-    }
     // Ensure the bthread key is created before reading it. InitRequestContext
     // is idempotent (std::call_once) and provides the release/acquire pair
     // that synchronizes the key write in the once body with this read.
@@ -150,7 +134,7 @@ void SetRequestContext(RequestContext* ctx)
 
 RequestContext* GetActiveRequestContext()
 {
-    if (!FLAGS_use_brpc || g_requestContextKey == INVALID_BTHREAD_KEY) {
+    if (g_requestContextKey == INVALID_BTHREAD_KEY) {
         return nullptr;
     }
     auto *context = static_cast<RequestContext*>(bthread_getspecific(g_requestContextKey));
@@ -159,9 +143,6 @@ RequestContext* GetActiveRequestContext()
 
 void PublishClientAccessTransportKind(AccessTransportKind kind)
 {
-    if (!FLAGS_use_brpc) {
-        return;
-    }
     InitRequestContext();
     uint8_t index = static_cast<uint8_t>(kind);
     if (index >= K_ACCESS_TRANSPORT_KIND_COUNT) {
@@ -173,7 +154,7 @@ void PublishClientAccessTransportKind(AccessTransportKind kind)
 
 bool TryGetClientAccessTransportKind(AccessTransportKind &kind)
 {
-    if (!FLAGS_use_brpc || g_clientAccessTransportKey == INVALID_BTHREAD_KEY) {
+    if (g_clientAccessTransportKey == INVALID_BTHREAD_KEY) {
         return false;
     }
     auto *slot = static_cast<AccessTransportKind*>(bthread_getspecific(g_clientAccessTransportKey));
@@ -186,7 +167,7 @@ bool TryGetClientAccessTransportKind(AccessTransportKind &kind)
 
 void ClearClientAccessTransportKind()
 {
-    if (!FLAGS_use_brpc || g_clientAccessTransportKey == INVALID_BTHREAD_KEY) {
+    if (g_clientAccessTransportKey == INVALID_BTHREAD_KEY) {
         return;
     }
     AbortOnBthreadKeyError(bthread_setspecific(g_clientAccessTransportKey, nullptr), "bthread_setspecific");
@@ -194,9 +175,6 @@ void ClearClientAccessTransportKind()
 
 ScopedClientRequestContext::ScopedClientRequestContext()
 {
-    if (!FLAGS_use_brpc) {
-        return;
-    }
     InitRequestContext();
     saved_ = static_cast<RequestContext*>(bthread_getspecific(g_requestContextKey));
     if (saved_ != nullptr && !saved_->isFallbackContext) {
@@ -246,13 +224,10 @@ RequestContext* GetRequestContext(const char* file, int line)
         // brpc handler, and rate-limit to avoid log storms: every Trace::Instance() /
         // GetWorkerTimeCost() / AccessTransportTracker call on those threads would
         // otherwise emit one ERROR.
-        if (FLAGS_use_brpc) {
-            VLOG_EVERY_N(1, K_MISSING_CONTEXT_WARN_INTERVAL) << "GetRequestContext(): no active "
-                "ScopedRequestContext on this bthread (called from " << file << ":" << line << "). "
-                "Expected on background/client threads; for brpc handlers, declare "
-                "ScopedRequestContext as the first line of the handler.";
-        }
-        // ZMQ / test: fall through to thread_local fallback (safe under usercode_in_pthread=true).
+        VLOG_EVERY_N(1, K_MISSING_CONTEXT_WARN_INTERVAL) << "GetRequestContext(): no active "
+            "ScopedRequestContext on this bthread (called from " << file << ":" << line << "). "
+            "Expected on background/client threads; for brpc handlers, declare "
+            "ScopedRequestContext as the first line of the handler.";
     }
     // No active ScopedRequestContext on this thread: use per-pthread fallback.
     // ZMQ uses usercode_in_pthread=true, so each handler has a dedicated pthread

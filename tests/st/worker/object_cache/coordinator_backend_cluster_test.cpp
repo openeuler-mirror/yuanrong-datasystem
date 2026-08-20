@@ -262,11 +262,7 @@ protected:
     {
         RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(100));
         auto coordinatorDiscovery = std::make_shared<StaticCoordinatorDiscovery>(serviceAddress);
-        if (FLAGS_use_brpc) {
-            coordinatorProxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(coordinatorDiscovery));
-        } else {
-            coordinatorProxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(coordinatorDiscovery));
-        }
+        coordinatorProxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(coordinatorDiscovery));
         return coordinatorProxy->Init();
     }
 
@@ -885,7 +881,7 @@ public:
         opts.numWorkers = 3;
         opts.disableRocksDB = false;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=64 -ipc_through_shared_memory=false -arena_per_tenant=1 -use_brpc=true"
+            " -shared_memory_size_mb=64 -ipc_through_shared_memory=false -arena_per_tenant=1"
             " -node_timeout_s=" + std::to_string(FAULT_NODE_TIMEOUT_SEC)
             + " -node_dead_timeout_s=30 -client_dead_timeout_s=3"
             " -add_node_wait_time_s=1 -log_async=false -enable_reconciliation=false"
@@ -895,7 +891,7 @@ public:
 #else
         opts.workerGflagParams += " -enable_urma=false";
 #endif
-        opts.coordinatorGflagParams = " -v=1 -use_brpc=true -node_timeout_s=" + std::to_string(FAULT_NODE_TIMEOUT_SEC)
+        opts.coordinatorGflagParams = " -v=1 -node_timeout_s=" + std::to_string(FAULT_NODE_TIMEOUT_SEC)
                                       + " -node_dead_timeout_s=30 -scale_in_collect_window_ms=0";
     }
 
@@ -1220,7 +1216,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         CoordinatorBackendClusterTest::SetClusterSetupOptions(opts);
-        FLAGS_use_brpc = true;
         opts.numCoordinators = 3;
         opts.enableCoordinatorElection = true;
         opts.workerGflagParams =

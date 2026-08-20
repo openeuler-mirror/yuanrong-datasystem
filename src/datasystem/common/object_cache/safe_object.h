@@ -22,7 +22,6 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <thread>
 #include <unistd.h>
 
@@ -34,7 +33,6 @@
 #include <bthread/mutex.h>
 #include <bthread/rwlock.h>
 
-#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/latency_phase_types.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
@@ -44,7 +42,6 @@
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 
-DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 
@@ -144,9 +141,8 @@ public:
 
     /**
      * @brief Acquires a write lock with a deadline. If the lock is not acquired within timeoutUs,
-     * returns K_RPC_DEADLINE_EXCEEDED. Brpc mode uses bthread_rwlock_timedwrlock (yields the
-     * worker thread while waiting); ZMQ mode falls back to blocking (shared_mutex has no timed API,
-     * but InitTimeoutsFromDispatch already deducted queue wait at dispatch).
+     * returns K_RPC_DEADLINE_EXCEEDED. Uses bthread_rwlock_timedwrlock (yields the worker thread
+     * while waiting); InitTimeoutsFromDispatch already deducted queue wait at dispatch.
      * @param[in] nullable Whether allow null after get write lock.
      * @param[in] timeoutUs Maximum wait in microseconds; <=0 means immediate fail.
      * @return Status of the call.
@@ -284,8 +280,7 @@ public:
     SafeObject &operator=(SafeObject &&other) noexcept = delete;
 
 private:
-    std::shared_mutex mutex_;              // The lock for the object metadata and data (ZMQ mode).
-    bthread_rwlock_t bthread_mutex_;      // The lock for the object metadata and data (brpc mode).
+    bthread_rwlock_t bthread_mutex_;      // The lock for the object metadata and data.
     bthread::Mutex gRefLock_;              // Bthread-friendly lock for object global reference state.
     std::unique_ptr<ObjType> realObject_;  // The actual object stored in a unique_ptr.
     std::atomic<bool> deleted_;            // Flag for checking the deleted state.
@@ -314,20 +309,12 @@ template <typename ObjType>
 Status SafeObject<ObjType>::WLock(bool nullable)
 {
     Timer timer;
-    if (FLAGS_use_brpc) {
-        bthread_rwlock_wrlock(&bthread_mutex_);
-    } else {
-        mutex_.lock();
-    }
+    bthread_rwlock_wrlock(&bthread_mutex_);
     auto* reqCtx = GetRequestContext();
     reqCtx->workerTimeCost.Append("worker SafeObject WLock", timer.ElapsedMilliSecond());
     reqCtx->masterTimeCost.Append("master SafeObject WLock", timer.ElapsedMilliSecond());
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_unlock(&bthread_mutex_);
-        } else {
-            mutex_.unlock();
-        }
+        bthread_rwlock_unlock(&bthread_mutex_);
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     lastWriteThread_ = syscall(__NR_gettid);
@@ -343,30 +330,22 @@ Status SafeObject<ObjType>::WLock(bool nullable, int64_t timeoutUs)
         RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED, "WLock deadline exhausted");
     }
     Timer timer;
-    if (FLAGS_use_brpc) {
-        struct timeval tv;
-        gettimeofday(&tv, nullptr);
-        int64_t deadlineUs = static_cast<int64_t>(tv.tv_sec) * 1000000L + tv.tv_usec + timeoutUs;
-        struct timespec abstime;
-        abstime.tv_sec = deadlineUs / 1000000L;
-        abstime.tv_nsec = (deadlineUs % 1000000L) * static_cast<int64_t>(NS_PER_US);
-        int rc = bthread_rwlock_timedwrlock(&bthread_mutex_, &abstime);
-        if (rc != 0) {
-            RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                          rc == ETIMEDOUT ? "WLock timed out" : "WLock acquire failed");
-        }
-    } else {
-        mutex_.lock();
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    int64_t deadlineUs = static_cast<int64_t>(tv.tv_sec) * 1000000L + tv.tv_usec + timeoutUs;
+    struct timespec abstime;
+    abstime.tv_sec = deadlineUs / 1000000L;
+    abstime.tv_nsec = (deadlineUs % 1000000L) * static_cast<int64_t>(NS_PER_US);
+    int rc = bthread_rwlock_timedwrlock(&bthread_mutex_, &abstime);
+    if (rc != 0) {
+        RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                      rc == ETIMEDOUT ? "WLock timed out" : "WLock acquire failed");
     }
     auto* reqCtx = GetRequestContext();
     reqCtx->workerTimeCost.Append("worker SafeObject WLock", timer.ElapsedMilliSecond());
     reqCtx->masterTimeCost.Append("master SafeObject WLock", timer.ElapsedMilliSecond());
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_unlock(&bthread_mutex_);
-        } else {
-            mutex_.unlock();
-        }
+        bthread_rwlock_unlock(&bthread_mutex_);
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     lastWriteThread_ = syscall(__NR_gettid);
@@ -378,21 +357,12 @@ Status SafeObject<ObjType>::WLock(bool nullable, int64_t timeoutUs)
 template <typename ObjType>
 Status SafeObject<ObjType>::TryWLock(bool nullable)
 {
-    bool locked;
-    if (FLAGS_use_brpc) {
-        locked = (bthread_rwlock_trywrlock(&bthread_mutex_) == 0);
-    } else {
-        locked = mutex_.try_lock();
-    }
+    bool locked = (bthread_rwlock_trywrlock(&bthread_mutex_) == 0);
     if (!locked) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Object is in use.");
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_unlock(&bthread_mutex_);
-        } else {
-            mutex_.unlock();
-        }
+        bthread_rwlock_unlock(&bthread_mutex_);
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     lastWriteThread_ = syscall(__NR_gettid);
@@ -405,39 +375,16 @@ template <typename ObjType>
 void SafeObject<ObjType>::WUnlock()
 {
     if (wLocked_.exchange(false)) {
-#ifdef WITH_TESTS
-        // brpc bthreads can migrate between pthreads across yield points (RPC calls, sleeps),
-        // so the kernel tid at lock time may differ from the tid at unlock time. Skip the check
-        // when running under brpc to avoid false-positive aborts.
-        if (!FLAGS_use_brpc) {
-            auto currentThread = syscall(__NR_gettid);
-            if (currentThread != lastWriteThread_) {
-                std::abort();
-            }
-        }
-#endif
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_unlock(&bthread_mutex_);
-        } else {
-            mutex_.unlock();
-        }
+        bthread_rwlock_unlock(&bthread_mutex_);
     }
 }
 
 template <typename ObjType>
 Status SafeObject<ObjType>::RLock(bool nullable)
 {
-    if (FLAGS_use_brpc) {
-        bthread_rwlock_rdlock(&bthread_mutex_);
-    } else {
-        mutex_.lock_shared();
-    }
+    bthread_rwlock_rdlock(&bthread_mutex_);
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_unlock(&bthread_mutex_);
-        } else {
-            mutex_.unlock_shared();
-        }
+        bthread_rwlock_unlock(&bthread_mutex_);
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     return Status::OK();
@@ -449,27 +396,19 @@ Status SafeObject<ObjType>::RLock(bool nullable, int64_t timeoutUs)
     if (timeoutUs <= 0) {
         RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED, "RLock deadline exhausted");
     }
-    if (FLAGS_use_brpc) {
-        struct timeval tv;
-        gettimeofday(&tv, nullptr);
-        int64_t deadlineUs = static_cast<int64_t>(tv.tv_sec) * 1000000L + tv.tv_usec + timeoutUs;
-        struct timespec abstime;
-        abstime.tv_sec = deadlineUs / 1000000L;
-        abstime.tv_nsec = (deadlineUs % 1000000L) * static_cast<int64_t>(NS_PER_US);
-        int rc = bthread_rwlock_timedrdlock(&bthread_mutex_, &abstime);
-        if (rc != 0) {
-            RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                          rc == ETIMEDOUT ? "RLock timed out" : "RLock acquire failed");
-        }
-    } else {
-        mutex_.lock_shared();
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    int64_t deadlineUs = static_cast<int64_t>(tv.tv_sec) * 1000000L + tv.tv_usec + timeoutUs;
+    struct timespec abstime;
+    abstime.tv_sec = deadlineUs / 1000000L;
+    abstime.tv_nsec = (deadlineUs % 1000000L) * static_cast<int64_t>(NS_PER_US);
+    int rc = bthread_rwlock_timedrdlock(&bthread_mutex_, &abstime);
+    if (rc != 0) {
+        RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                      rc == ETIMEDOUT ? "RLock timed out" : "RLock acquire failed");
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_unlock(&bthread_mutex_);
-        } else {
-            mutex_.unlock_shared();
-        }
+        bthread_rwlock_unlock(&bthread_mutex_);
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     return Status::OK();
@@ -478,21 +417,12 @@ Status SafeObject<ObjType>::RLock(bool nullable, int64_t timeoutUs)
 template <typename ObjType>
 Status SafeObject<ObjType>::TryRLock(bool nullable)
 {
-    bool locked;
-    if (FLAGS_use_brpc) {
-        locked = (bthread_rwlock_tryrdlock(&bthread_mutex_) == 0);
-    } else {
-        locked = mutex_.try_lock_shared();
-    }
+    bool locked = (bthread_rwlock_tryrdlock(&bthread_mutex_) == 0);
     if (!locked) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Object is in use.");
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_unlock(&bthread_mutex_);
-        } else {
-            mutex_.unlock_shared();
-        }
+        bthread_rwlock_unlock(&bthread_mutex_);
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     return Status::OK();
@@ -501,11 +431,7 @@ Status SafeObject<ObjType>::TryRLock(bool nullable)
 template <typename ObjType>
 void SafeObject<ObjType>::RUnlock()
 {
-    if (FLAGS_use_brpc) {
-        bthread_rwlock_unlock(&bthread_mutex_);
-    } else {
-        mutex_.unlock_shared();
-    }
+    bthread_rwlock_unlock(&bthread_mutex_);
 }
 
 template <typename ObjType>
@@ -563,26 +489,23 @@ bool SafeObject<ObjType>::IsWLockedByCurrentThread() const
     if (!wLocked_) {
         return false;
     }
-    if (FLAGS_use_brpc) {
-        // Under brpc, bthreads share pthreads and may migrate across yield points, so a kernel tid
-        // captured at WLock time may not match the tid at check time even for the same bthread. Use the
-        // bthread identity (stable across pthread migration) to verify ownership. When the holder is a
-        // plain pthread (bthread_self()==INVALID_BTHREAD at lock time, e.g. an OcGetThreadPool worker),
-        // fall back to tid comparison since pthreads do not migrate. This restores ownership
-        // verification instead of degrading to "any thread holds the lock", which let SafeTable::Erase
-        // and DeleteObject skip WLock and race realObject_.reset() with a lock-holding reader. See #804/#805.
-        bthread_t holderBt = lastWriteBthread_.load(std::memory_order_acquire);
-        bthread_t curBt = bthread_self();
-        if (holderBt != INVALID_BTHREAD) {
-            // Holder is a bthread: current context must be the same bthread.
-            return curBt != INVALID_BTHREAD && bthread_equal(holderBt, curBt) != 0;
-        }
-        // Holder is a pthread: current context must also be a pthread (bthread_self()==INVALID_BTHREAD)
-        // with the same tid.
-        return curBt == INVALID_BTHREAD
-                   && lastWriteThread_.load(std::memory_order_acquire) == syscall(__NR_gettid);
+    // bthreads share pthreads and may migrate across yield points, so a kernel tid captured at
+    // WLock time may not match the tid at check time even for the same bthread. Use the bthread
+    // identity (stable across pthread migration) to verify ownership. When the holder is a plain
+    // pthread (bthread_self()==INVALID_BTHREAD at lock time, e.g. an OcGetThreadPool worker), fall
+    // back to tid comparison since pthreads do not migrate. This restores ownership verification
+    // instead of degrading to "any thread holds the lock", which let SafeTable::Erase and
+    // DeleteObject skip WLock and race realObject_.reset() with a lock-holding reader. See #804/#805.
+    bthread_t holderBt = lastWriteBthread_.load(std::memory_order_acquire);
+    bthread_t curBt = bthread_self();
+    if (holderBt != INVALID_BTHREAD) {
+        // Holder is a bthread: current context must be the same bthread.
+        return curBt != INVALID_BTHREAD && bthread_equal(holderBt, curBt) != 0;
     }
-    return lastWriteThread_.load(std::memory_order_acquire) == syscall(__NR_gettid);
+    // Holder is a pthread: current context must also be a pthread (bthread_self()==INVALID_BTHREAD)
+    // with the same tid.
+    return curBt == INVALID_BTHREAD
+               && lastWriteThread_.load(std::memory_order_acquire) == syscall(__NR_gettid);
 }
 
 }  // namespace datasystem

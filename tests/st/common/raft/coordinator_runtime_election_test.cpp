@@ -440,9 +440,7 @@ protected:
     void SetUp() override
     {
         CommonTest::SetUp();
-        savedUseBrpc_ = FLAGS_use_brpc;
         savedExitFlag_ = g_exitFlag;
-        FLAGS_use_brpc = true;
         g_exitFlag = 0;
 
         rootDir_ = testCasePath_ + "/coordinator-runtime-election";
@@ -518,7 +516,6 @@ protected:
 
         discovery_.reset();
         TestPortAllocator::Instance().ReleaseAll();
-        FLAGS_use_brpc = savedUseBrpc_;
         g_exitFlag = savedExitFlag_;
         if (!testCasePath_.empty()) {
             std::error_code error;

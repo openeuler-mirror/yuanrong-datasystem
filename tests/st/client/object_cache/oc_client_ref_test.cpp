@@ -2225,9 +2225,7 @@ public:
 
 TEST_F(OCRemoteClientIdDfxTest, MasterTimeout)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; historically flaky/failing under brpc. Tracked separately.";
-    }
     std::shared_ptr<ObjectClient> client1;
     InitTestClient(1, client1, timeoutMs_, requestTimeoutMs_);
 

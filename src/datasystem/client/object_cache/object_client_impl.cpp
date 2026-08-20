@@ -1461,11 +1461,7 @@ Status ObjectClientImpl::PickFallbackWorker(const std::unordered_set<HostPort> &
 
 bool ObjectClientImpl::ShouldExcludeFailedWorker(const Status &rc) const
 {
-    bool shouldExclude = rc.GetCode() == K_RPC_UNAVAILABLE || rc.GetCode() == K_CLIENT_WORKER_DISCONNECT;
-    if (!shouldExclude && !FLAGS_use_brpc && rc.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
-        shouldExclude = true;
-    }
-    return shouldExclude;
+    return rc.GetCode() == K_RPC_UNAVAILABLE || rc.GetCode() == K_CLIENT_WORKER_DISCONNECT;
 }
 
 Status ObjectClientImpl::SelectNextInitWorker(std::unordered_set<HostPort> &failedWorkerAddrs, HostPort &outAddr,

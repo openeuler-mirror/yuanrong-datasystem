@@ -416,8 +416,7 @@ public:
     /**
      * @brief Helper function to create a client stub for worker.
      * @param[in] workerHostPort worker Address.
-     * @param[out] stub creates a client stub (ZMQ ClientWorkerSCService_Stub or brpc
-     *                   ClientWorkerSCService_BrpcGenericStub, selected by FLAGS_use_brpc).
+     * @param[out] stub creates a brpc ClientWorkerSCService_BrpcGenericStub.
      * @return K_OK on success; the error code otherwise.
      */
     Status GetWorkerStub(const HostPort &workerHostPort, std::shared_ptr<RpcStubBase> &stub);

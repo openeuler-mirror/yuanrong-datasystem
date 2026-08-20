@@ -27,10 +27,6 @@
 
 #include <bthread/rwlock.h>
 
-#include "datasystem/common/flags/flags.h"
-
-DS_DECLARE_bool(use_brpc);
-
 namespace datasystem {
 /**
  * @brief Write-preferring RW locks. The writer will block new readers while waiting for lock.
@@ -400,12 +396,9 @@ private:
     bool locked_ = false;
 };
 
-// std::shared_mutex drop-in (std SharedLockable/Lockable) that butex-yields instead of futex-blocking
-// in brpc bthread context; falls back to std::shared_mutex under ZMQ. No timed interface.
-// Invariants: (1) caller must guarantee no bthread holds/waits the lock at destruction (bthread_rwlock_destroy
-// does not check; same constraint as SafeObject). (2) brpc mode is writer-preferred (Go RWMutex model),
-// ZMQ is reader-preferred (glibc) — writer-starvation behavior differs per mode. (3) holds both
-// bthread_rwlock_t and std::shared_mutex (one idle per mode) — mind footprint for lock-dense classes.
+// std::shared_mutex drop-in backed by bthread_rwlock (butex-yields, no futex blocking). No timed interface.
+// Invariant: caller must guarantee no bthread holds/waits the lock at destruction (bthread_rwlock_destroy
+// does not check). Writer-preferred (Go RWMutex model).
 class SharedMutex {
 public:
     SharedMutex()
@@ -421,53 +414,36 @@ public:
 
     void lock()
     {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_wrlock(&btRwlock_);
-        } else {
-            stdMutex_.lock();
-        }
+        bthread_rwlock_wrlock(&btRwlock_);
     }
 
     void unlock()
     {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_unlock(&btRwlock_);
-        } else {
-            stdMutex_.unlock();
-        }
+        bthread_rwlock_unlock(&btRwlock_);
     }
 
     bool try_lock()
     {
-        return FLAGS_use_brpc ? bthread_rwlock_trywrlock(&btRwlock_) == 0 : stdMutex_.try_lock();
+        return bthread_rwlock_trywrlock(&btRwlock_) == 0;
     }
 
     void lock_shared()
     {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_rdlock(&btRwlock_);
-        } else {
-            stdMutex_.lock_shared();
-        }
+        bthread_rwlock_rdlock(&btRwlock_);
     }
 
     void unlock_shared()
     {
-        if (FLAGS_use_brpc) {
-            bthread_rwlock_unlock(&btRwlock_);
-        } else {
-            stdMutex_.unlock_shared();
-        }
+        bthread_rwlock_unlock(&btRwlock_);
     }
 
     bool try_lock_shared()
     {
-        return FLAGS_use_brpc ? bthread_rwlock_tryrdlock(&btRwlock_) == 0 : stdMutex_.try_lock_shared();
+        return bthread_rwlock_tryrdlock(&btRwlock_) == 0;
     }
 
 private:
     bthread_rwlock_t btRwlock_;
-    std::shared_mutex stdMutex_;
 };
 }  // namespace datasystem
 #endif

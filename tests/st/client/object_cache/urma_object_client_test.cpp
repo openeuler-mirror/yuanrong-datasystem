@@ -45,7 +45,6 @@
 #include "zmq_curve_test_common.h"
 
 DS_DECLARE_bool(log_monitor);
-DS_DECLARE_bool(use_brpc);
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {
@@ -504,9 +503,7 @@ TEST_F(UrmaObjectClientTest, TestRepeatedSetOOM)
 
 TEST_F(UrmaObjectClientTest, TestRepeatedForkGet)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     const int sizePerPut = 8 * 1024 * 1024;
     const int numObjects = 10;
     std::vector<std::string> objectKeys;
@@ -737,9 +734,7 @@ TEST_F(UrmaObjectClientTest, TestBatchRemoteGetErrorCode1)
 
 TEST_F(UrmaObjectClientTest, TestBatchRemoteGetErrorCode2)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     // Test the error handling in urma batch get logic.
     // In this case, the worker->worker get is really batched, and error code is injected.
     const int32_t timeout = 1000;
@@ -790,9 +785,7 @@ TEST_F(UrmaObjectClientTest, TestBatchRemoteGetErrorCode2)
 
 TEST_F(UrmaObjectClientTest, TestBatchGetSplitPayload)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::shared_ptr<ObjectClient> client1, client2;
     InitTestClient(0, client1);
     InitTestClient(1, client2);
@@ -1036,9 +1029,7 @@ TEST_F(UrmaObjectClientTest, UrmaGetObjMetaInfoTimeoutReturnsError)
 
 TEST_F(UrmaObjectClientTest, UrmaRemoteGetBig)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::shared_ptr<KVClient> client1;
     std::shared_ptr<KVClient> client2;
     InitTestKVClient(0, client1);
@@ -1267,9 +1258,7 @@ TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmall)
 
 TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetBig)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client1);
@@ -2519,8 +2508,6 @@ class UrmaClientSenderRecoveryTest : public UrmaDisableFallbackTest {
 public:
     void SetUp() override
     {
-        previousUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         DS_ASSERT_OK(inject::Set("ObjectClientImpl.ClientWorkerWarmup.skip", "call()"));
         UrmaDisableFallbackTest::SetUp();
     }
@@ -2536,7 +2523,6 @@ public:
         (void)inject::Clear("UrmaManager.UrmaWriteAfterPost");
         (void)inject::Clear("DataPlaneManager.ProbeUbDataPlane.AfterCompletion");
         UrmaDisableFallbackTest::TearDown();
-        FLAGS_use_brpc = previousUseBrpc_;
     }
 
 private:

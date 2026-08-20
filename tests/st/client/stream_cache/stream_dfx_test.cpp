@@ -358,9 +358,7 @@ TEST_F(StreamDfxTest, TestProducerTimerQueue)
 
 TEST_F(StreamDfxTest, TestMasterSubTimeout)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::shared_ptr<StreamClient> client1;
     std::shared_ptr<StreamClient> client2;
     uint32_t timeoutMs = 3000;
@@ -949,9 +947,7 @@ public:
 
 TEST_F(StreamDfxMasterCrashTest, LEVEL1_TestSameMetadata)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream/worker-restart migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     LOG(INFO) << "TestSameMetadata start!";
     std::shared_ptr<StreamClient> client1;
     std::shared_ptr<StreamClient> client2;
@@ -1097,9 +1093,7 @@ TEST_F(StreamDfxMasterCrashTest, DISABLED_TestMasterAndClientCrash)
 
 TEST_F(StreamDfxMasterCrashTest, LEVEL1_TestCloseProducer)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream/worker-restart migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     LOG(INFO) << "LEVEL1_TestCloseProducer start!";
     std::shared_ptr<StreamClient> client1;
 
@@ -1127,9 +1121,7 @@ TEST_F(StreamDfxMasterCrashTest, LEVEL1_TestCloseProducer)
 
 TEST_F(StreamDfxMasterCrashTest, TestMasterFailRecoverMetaFromRocksDB)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: worker restart brpc E112 on CheckMetadata stream. Tracked separately.";
-    }
 
     LOG(INFO) << "TestMasterFailRecoverMetaFromRocksDB start!";
     std::shared_ptr<StreamClient> client1;
@@ -1166,9 +1158,7 @@ TEST_F(StreamDfxMasterCrashTest, TestMasterFailRecoverMetaFromRocksDB)
 
 TEST_F(StreamDfxMasterCrashTest, LEVEL1_TestMasterAndWorkerLostMetadata)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream/worker-restart migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     std::string streamName = "testMstrWrkrLostMeta";
     LOG(INFO) << "TestMasterAndWorkerLostMetadata start!";
     auto pid = fork();
@@ -1305,9 +1295,7 @@ TEST_F(StreamDfxMasterCrashTest, DISABLED_LEVEL1_TestQueryMetaProducerNotFound)
 
 TEST_F(StreamDfxMasterCrashTest, TestMetadataNodeFault)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: worker restart brpc E112 on metadata recovery. Tracked separately.";
-    }
 
     // After producer P1 and consumer C1 are created, the node where the metadata is located is faulty.
     // Data receiving and sending are not affected.
@@ -1444,9 +1432,7 @@ TEST_F(StreamDfxHeartbeatTest, LEVEL1_TestWorkerCrashTimeout)
 
 TEST_F(StreamDfxHeartbeatTest, LEVEL1_TestMasterAndWorkerCrashNotStartWorker)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream/worker-restart migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     LOG(INFO) << "LEVEL1_TestMasterAndWorkerCrashNotStartWorker start!";
     std::shared_ptr<StreamClient> client1;
     std::shared_ptr<StreamClient> client2;
@@ -1862,9 +1848,7 @@ protected:
 
 TEST_F(StreamDfxDistMasterCrashTest, TestSameMetadata)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc stream meta recovery flaky under brpc. Tracked separately.";
-    }
     LOG(INFO) << "TestSameMetadata start!";
     std::shared_ptr<StreamClient> client1;
     std::shared_ptr<StreamClient> client2;
@@ -1966,9 +1950,7 @@ TEST_F(StreamDfxDistMasterCrashTest, DISABLED_TestMasterAndClientCrash)
 
 TEST_F(StreamDfxDistMasterCrashTest, TestCloseProducer)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: brpc stream data-plane gap (Send OK, Receive 0); brpc channel revive timing on worker restart. Tracked separately.";
-    }
     LOG(INFO) << "TestCloseProducer start!";
     std::shared_ptr<StreamClient> client1;
 
@@ -2064,9 +2046,7 @@ TEST_F(StreamDistDfxTopoTest, DISABLED_LEVEL1_TestWorkerExistsMetaAndStart)
 
 TEST_F(StreamDistDfxTopoTest, TestWorkerRestartRetryCheckMeta)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc: master gref cleanup lags on worker restart under brpc. Tracked separately.";
-    }
 
     std::vector<std::shared_ptr<Producer>> producers;
     std::vector<std::shared_ptr<Consumer>> consumers;

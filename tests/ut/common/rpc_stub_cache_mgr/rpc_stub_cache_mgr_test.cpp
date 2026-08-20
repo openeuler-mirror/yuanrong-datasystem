@@ -182,9 +182,6 @@ TEST_F(RpcStubCacheMgrTest, TestParallelGetStub)
 
 TEST_F(RpcStubCacheMgrTest, TestCoordinatorCreatorsRemainRegisteredWhenBrpcEnabled)
 {
-    Raii raii([]() { FLAGS_use_brpc = false; });
-    FLAGS_use_brpc = true;
-
     constexpr int cacheNum = 10;
     DS_ASSERT_OK(RpcStubCacheMgrForTest::Instance().InitForTest(cacheNum));
     EXPECT_TRUE(RpcStubCacheMgrForTest::Instance().HasCreatorForTest(StubType::TO_COORDINATOR_SVC));

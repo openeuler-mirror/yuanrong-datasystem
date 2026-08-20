@@ -97,9 +97,7 @@ protected:
 
 TEST_F(KVClientEtcdDfxTest, LEVEL1_TestEtcdRestart)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; flaky/failing under brpc. Tracked separately.";
-    }
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1 }));
     DS_ASSERT_OK(externalCluster_->ShutdownEtcds());
     sleep(deadTimeoutS_ + 1);

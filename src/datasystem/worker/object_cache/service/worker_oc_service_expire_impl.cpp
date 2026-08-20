@@ -97,7 +97,7 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     std::vector<std::future<Status>> futures;
     std::string traceID = Trace::Instance().GetTraceID();
     Status rc;
-    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(true);
     std::unique_ptr<ThreadPool> batchExpireThreadPool;
     if (useThreadPoolFanout) {
         size_t threadNum = std::min<size_t>(objKeysGrpByMaster.size(), FLAGS_rpc_thread_num);

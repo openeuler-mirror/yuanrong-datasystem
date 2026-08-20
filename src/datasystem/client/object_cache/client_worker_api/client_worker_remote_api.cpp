@@ -200,48 +200,30 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
     if (clientDeadTimeoutMs_ > 0) {
         connectTimeoutMs = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs));
     }
-    if (FLAGS_use_brpc) {
-        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
-        BrpcChannelConfig cfg;
-        cfg.endpoint = brpcAddr.ToString();
-        cfg.timeout_ms = requestTimeoutMs;
-        cfg.connect_timeout_ms = connectTimeoutMs;
-        // Disable brpc blind retry: this channel carries non-idempotent
-        // object RPCs (Delete, etc.) that must not be re-driven silently.
-        cfg.max_retry = 0;
-        std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
-        if (channel == nullptr) {
-            LOG(ERROR) << "Failed to init brpc channel for WorkerOCService, endpoint=" << brpcAddr.ToString();
-            return Status(StatusCode::K_RPC_UNAVAILABLE,
-                          FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
-        }
-        // Fail Init explicitly when the brpc socket is not reachable instead of
-        // proceeding to RegisterClient and leaving the client in INIT_FAILED.
-        // Concurrent init / slow worker startup can race the socket health check;
-        // returning here gives a clear K_RPC_UNAVAILABLE rather than a deferred
-        // "Not ready" surfaced by IsClientReady() seconds later (issue #785).
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(WaitForBrpcSocketAvailable(brpcAddr), StatusCode::K_RPC_UNAVAILABLE,
-            FormatString("brpc socket not available to %s for WorkerOCService", brpcAddr.ToString()));
-        auto stub = std::make_shared<WorkerOCService_BrpcGenericStub>(channel.get(), requestTimeoutMs);
-        auto session = std::make_shared<BrpcSession>(std::move(stub), std::move(channel));
-        std::atomic_store(&brpcSession_, session);
-    } else {
-        // zmq path: mirror brpc's WaitForBrpcSocketAvailable with a TCP port probe
-        // so a worker killed by SIGKILL fails fast with K_RPC_UNAVAILABLE instead
-        // of waiting for the RPC timeout. The probe timeout is capped by the
-        // caller's connect budget so a host-unreachable probe never exceeds the
-        // Init budget.
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            WaitForTcpPortAvailable(hostPort_, ComputeTcpProbeTimeoutMs(connectTimeoutMs)),
-            StatusCode::K_RPC_UNAVAILABLE,
-            FormatString("zmq tcp port not available to %s for WorkerOCService", hostPort_.ToString()));
-        auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
-        if (IsShmEnableByUDS()) {
-            channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
-                                          GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
-        }
-        zmqStub_ = std::make_unique<WorkerOCService_Stub>(channel, connectTimeoutMs);
+    HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
+    BrpcChannelConfig cfg;
+    cfg.endpoint = brpcAddr.ToString();
+    cfg.timeout_ms = requestTimeoutMs;
+    cfg.connect_timeout_ms = connectTimeoutMs;
+    // Disable brpc blind retry: this channel carries non-idempotent
+    // object RPCs (Delete, etc.) that must not be re-driven silently.
+    cfg.max_retry = 0;
+    std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
+    if (channel == nullptr) {
+        LOG(ERROR) << "Failed to init brpc channel for WorkerOCService, endpoint=" << brpcAddr.ToString();
+        return Status(StatusCode::K_RPC_UNAVAILABLE,
+                      FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
     }
+    // Fail Init explicitly when the brpc socket is not reachable instead of
+    // proceeding to RegisterClient and leaving the client in INIT_FAILED.
+    // Concurrent init / slow worker startup can race the socket health check;
+    // returning here gives a clear K_RPC_UNAVAILABLE rather than a deferred
+    // "Not ready" surfaced by IsClientReady() seconds later (issue #785).
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(WaitForBrpcSocketAvailable(brpcAddr), StatusCode::K_RPC_UNAVAILABLE,
+        FormatString("brpc socket not available to %s for WorkerOCService", brpcAddr.ToString()));
+    auto stub = std::make_shared<WorkerOCService_BrpcGenericStub>(channel.get(), requestTimeoutMs);
+    auto session = std::make_shared<BrpcSession>(std::move(stub), std::move(channel));
+    std::atomic_store(&brpcSession_, session);
     return Status::OK();
 }
 
@@ -314,39 +296,30 @@ void ClientWorkerRemoteApi::RecreateOCStub()
     if (clientDeadTimeoutMs_ > 0) {
         stubTimeout = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs_));
     }
-    if (FLAGS_use_brpc) {
-        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
-        BrpcChannelConfig cfg;
-        cfg.endpoint = brpcAddr.ToString();
-        cfg.timeout_ms = requestTimeoutMs_;
-        cfg.connect_timeout_ms = stubTimeout;
-        // Same as Init(): disable brpc blind retry on this non-idempotent object channel.
-        cfg.max_retry = 0;
-        std::shared_ptr<brpc::Channel> newChannel(BrpcChannelFactory::Create(cfg));
-        if (newChannel == nullptr) {
-            // Old BrpcSession is still valid — log and keep it as fallback.
-            LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
-            return;
-        }
-        // If the brpc socket is not reachable, keep the old session as fallback
-        // rather than swapping in a dead stub (mirrors the nullptr-channel path
-        // above). The caller's reconnect/retry loop will retry later.
-        if (!WaitForBrpcSocketAvailable(brpcAddr)) {
-            LOG(ERROR) << "brpc socket not available for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
-            return;
-        }
-        // Bundle new stub and channel; atomic_store swaps both together.
-        auto newStub = std::make_shared<WorkerOCService_BrpcGenericStub>(newChannel.get(), stubTimeout);
-        auto newSession = std::make_shared<BrpcSession>(std::move(newStub), std::move(newChannel));
-        std::atomic_store(&brpcSession_, newSession);
-    } else {
-        auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
-        if (IsShmEnableByUDS()) {
-            channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
-                                          GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
-        }
-        zmqStub_ = std::make_unique<WorkerOCService_Stub>(channel, stubTimeout);
+    HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
+    BrpcChannelConfig cfg;
+    cfg.endpoint = brpcAddr.ToString();
+    cfg.timeout_ms = requestTimeoutMs_;
+    cfg.connect_timeout_ms = stubTimeout;
+    // Same as Init(): disable brpc blind retry on this non-idempotent object channel.
+    cfg.max_retry = 0;
+    std::shared_ptr<brpc::Channel> newChannel(BrpcChannelFactory::Create(cfg));
+    if (newChannel == nullptr) {
+        // Old BrpcSession is still valid — log and keep it as fallback.
+        LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
+        return;
     }
+    // If the brpc socket is not reachable, keep the old session as fallback
+    // rather than swapping in a dead stub (mirrors the nullptr-channel path
+    // above). The caller's reconnect/retry loop will retry later.
+    if (!WaitForBrpcSocketAvailable(brpcAddr)) {
+        LOG(ERROR) << "brpc socket not available for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
+        return;
+    }
+    // Bundle new stub and channel; atomic_store swaps both together.
+    auto newStub = std::make_shared<WorkerOCService_BrpcGenericStub>(newChannel.get(), stubTimeout);
+    auto newSession = std::make_shared<BrpcSession>(std::move(newStub), std::move(newChannel));
+    std::atomic_store(&brpcSession_, newSession);
 }
 
 Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,

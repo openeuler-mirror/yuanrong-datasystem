@@ -22,7 +22,7 @@
  *   - Set flow: ProcessShmPut, Publish (non-shm), all ExistenceOpts, TTL
  *   - Get flow: single/batch, Buffer/string/ReadOnlyBuffer, not-found, timeout
  *   - MSet flow: multi-create+publish, duplicate keys, transactional, partial failure
- *   - brpc dispatch: FLAGS_use_brpc=true, DS_OC_DISPATCH macro verification
+ *   - brpc dispatch: DS_OC_DISPATCH macro verification
  *   - Error paths: empty keys, null data, size=0, duplicate create, sealed buffer
  *   - Concurrency: concurrent Set, concurrent Get+Set, brpc session swap
  *   - Integration: Create→Set→Get→Delete lifecycle, TTL expiry
@@ -79,14 +79,11 @@ public:
         opts.numEtcd = 1;
         opts.enableDistributedMaster = "false";
         opts.workerGflagParams =
-            "-shared_memory_size_mb=512 -v=2 -use_brpc=true";
+            "-shared_memory_size_mb=512 -v=2";
     }
 
     void SetUp() override
     {
-        restoreUseBrpc_ = std::make_unique<Raii>(
-            [oldUseBrpc = FLAGS_use_brpc]() { FLAGS_use_brpc = oldUseBrpc; });
-        FLAGS_use_brpc = true;
         ExternalClusterTest::SetUp();
     }
 
@@ -94,12 +91,10 @@ public:
     {
         client_.reset();
         ExternalClusterTest::TearDown();
-        restoreUseBrpc_.reset();
     }
 
 protected:
     std::shared_ptr<KVClient> client_;
-    std::unique_ptr<Raii> restoreUseBrpc_;
 
     void InitClient(int32_t timeoutMs = CLIENT_TIMEOUT_MS)
     {
@@ -875,12 +870,6 @@ TEST_F(KVClientBrpcLocalCacheVerifyTest, ConcurrentCreateAndPublish)
 // ============================================================================
 // Category 5: brpc-Specific Tests
 // ============================================================================
-
-// TC-5.1: Verify brpc mode is active (FLAGS_use_brpc=true)
-TEST_F(KVClientBrpcLocalCacheVerifyTest, BrpcModeIsEnabled)
-{
-    ASSERT_TRUE(FLAGS_use_brpc);
-}
 
 // TC-5.3: Verify all key RPC methods work via brpc dispatch
 TEST_F(KVClientBrpcLocalCacheVerifyTest, AllRpcMethodsViaBrpc)

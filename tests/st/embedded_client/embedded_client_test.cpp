@@ -570,9 +570,7 @@ private:
 
 TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterKillScaleDownTest)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; flaky under brpc (kill/scale down + worker restart). Tracked separately.";
-    }
     auto pid0 = fork();
     if (pid0 == 0) {
         DS_ASSERT_OK(StartEmbeddedNode(0));

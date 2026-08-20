@@ -878,13 +878,6 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_CircuitBreaker3sIsolationCap)
     gflags::SetCommandLineOption("circuit_breaker_min_isolation_duration_ms", "3000");
 
     // SDK uses brpc (default) so client->worker is a brpc channel whose CB the fix caps.
-    struct UseBrpcRestore {
-        bool oldVal;
-        UseBrpcRestore() : oldVal(FLAGS_use_brpc) {}
-        ~UseBrpcRestore() { FLAGS_use_brpc = oldVal; }
-    } _useBrpcRestore;
-    FLAGS_use_brpc = true;
-
     // Set 8MB data on worker2 while it is the ONLY live worker (worker0+1 are shut
     // by InitRemoteFallbackClientWithSingleLiveRemote). With only w2 in the hash ring
     // the object primary lands on w2, so the later Get served by w2 is a local read +

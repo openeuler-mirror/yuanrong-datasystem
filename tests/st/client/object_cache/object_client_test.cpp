@@ -2091,9 +2091,7 @@ TEST_F(ObjectClientTest, TestInitPreferredRemoteFallbackUnaffectedByCrossNodeFal
 
 TEST_F(ObjectClientTest, TestFdNotLeakWhenRegisterFailed)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure/flaky under brpc. Tracked separately.";
-    }
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerServiceImpl.RegisterClient.AboveAddClient",
                                            "return(K_RUNTIME_ERROR)"));
     std::shared_ptr<ObjectClient> client;
@@ -2165,9 +2163,7 @@ TEST_F(ObjectClientTest, TestFdReleasedDueToTimeout)
 
 TEST_F(ObjectClientTest, RemoteGetBig)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client1);
@@ -2188,9 +2184,7 @@ TEST_F(ObjectClientTest, RemoteGetBig)
 
 TEST_F(ObjectClientTest, EXCLUSIVE_TestParallelPut)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client1);
@@ -2232,12 +2226,10 @@ TEST_F(ObjectClientTest, EXCLUSIVE_TestParallelPut)
 
 TEST_F(ObjectClientTest, TestTraceDestructorHeapUseAfterFree)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; process-teardown abort (Subprocess aborted after PASSED) "
-                        "in ~ObjectClientImpl -> ~ClientWorkerRemoteCommonApi (unique_ptr<ThreadPool>::reset "
-                        "-> free heap-corruption). Same root cause as TestObjectClientDestructor. "
-                        "Tracked separately for a real fix.";
-    }
+                    "in ~ObjectClientImpl -> ~ClientWorkerRemoteCommonApi (unique_ptr<ThreadPool>::reset "
+                    "-> free heap-corruption). Same root cause as TestObjectClientDestructor. "
+                    "Tracked separately for a real fix.";
     // The main thread's thread-local Trace is destroyed before this process-static client.
     static std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
@@ -2246,9 +2238,7 @@ TEST_F(ObjectClientTest, TestTraceDestructorHeapUseAfterFree)
 
 TEST_F(ObjectClientTest, TestClientWorkerVersionDiff)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; historically flaky/failing under brpc. Tracked separately.";
-    }
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "WorkerServiceImpl.CheckClientVersion.workerVersion", "call(123)"));
     // The order in which objects are destructed is that threadload static precedes static-modified objects.
@@ -2312,11 +2302,9 @@ TEST_F(ObjectClientTest, SetAndCacheInvalidConcurrency)
 
 TEST_F(ObjectClientTest, TestObjectClientDestructor)
 {
-    if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; heap-corruption abort in ~ClientWorkerRemoteCommonApi "
-                        "(unique_ptr<ThreadPool>::reset -> free) during process-teardown static-client destruct. "
-                        "Tracked separately for a real fix.";
-    }
+                    "(unique_ptr<ThreadPool>::reset -> free) during process-teardown static-client destruct. "
+                    "Tracked separately for a real fix.";
     // Force extra logging to ensure we don't log anything on program exit
     const int logLevel = 3;
     FLAGS_v = logLevel;
