@@ -26,6 +26,8 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/lock_helper.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/stream_cache/page_queue/exclusive_page_queue.h"
@@ -64,7 +66,7 @@ Status PageQueueHandler::CreateOrGetLastDataPage(uint64_t timeoutMs, const ShmVi
                                                  std::shared_ptr<StreamDataPage> &lastPage, bool retryOnOOM)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             return sharedPageQueue_->CreateOrGetLastDataPage(timeoutMs, lastView, lastPage, retryOnOOM);
         }
@@ -74,7 +76,7 @@ Status PageQueueHandler::CreateOrGetLastDataPage(uint64_t timeoutMs, const ShmVi
 
 bool PageQueueHandler::ExistsSharedPageQueue() const
 {
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     return sharedPageQueue_ != nullptr;
 }
 
@@ -120,7 +122,7 @@ Status PageQueueHandler::AddCursor(const std::string &id, bool isProducer, std::
         ShmView lastPageRefShmView;
         bool usingSharedPageQueue;
         {
-            std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+            std::shared_lock<SharedMutex> locker(mutex_);
             usingSharedPageQueue = sharedPageQueue_ != nullptr;
         }
         if (usingSharedPageQueue) {
@@ -229,7 +231,7 @@ Status PageQueueHandler::ForceUnlockByCursorImpl(const std::string &cursorId, ui
 void PageQueueHandler::TryUnlockByLockId(uint32_t lockId)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             sharedPageQueue_->TryUnlockByLockId(lockId);
         }
@@ -240,7 +242,7 @@ void PageQueueHandler::TryUnlockByLockId(uint32_t lockId)
 void PageQueueHandler::ForceUnlockMemViemForPages(uint32_t lockId)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             sharedPageQueue_->ForceUnlockMemViemForPages(lockId);
         }
@@ -251,7 +253,7 @@ void PageQueueHandler::ForceUnlockMemViemForPages(uint32_t lockId)
 Status PageQueueHandler::LocatePage(const ShmView &v, std::shared_ptr<StreamDataPage> &out)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             auto rc = sharedPageQueue_->LocatePage(v, out);
             // continue find from exclusive page queue if not exists.
@@ -291,7 +293,7 @@ Status PageQueueHandler::UpdateLocalCursorLastDataPage(const ShmView &shmView)
 Status PageQueueHandler::MoveUpLastPage(const bool updateLocalPubLastPage)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             return sharedPageQueue_->MoveUpLastPage(updateLocalPubLastPage);
         }
@@ -303,7 +305,7 @@ Status PageQueueHandler::AllocMemory(size_t pageSz, bool bigElement, std::shared
                                      bool retryOnOOM)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             return sharedPageQueue_->AllocMemory(pageSz, bigElement, pageUnitInfo, retryOnOOM);
         }
@@ -314,7 +316,7 @@ Status PageQueueHandler::AllocMemory(size_t pageSz, bool bigElement, std::shared
 Status PageQueueHandler::ReclaimAckedChain(uint64_t timeoutMs)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             return sharedPageQueue_->ReclaimAckedChain(timeoutMs);
         }
@@ -325,7 +327,7 @@ Status PageQueueHandler::ReclaimAckedChain(uint64_t timeoutMs)
 Status PageQueueHandler::ReleaseMemory(const ShmView &pageView)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             // the memory alloc from exclusive page queue,
             // but release after switch to share page queue.
@@ -341,7 +343,7 @@ Status PageQueueHandler::ReleaseMemory(const ShmView &pageView)
 void PageQueueHandler::DumpPoolPages(int level) const
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             sharedPageQueue_->DumpPoolPages(level);
             return;
@@ -353,7 +355,7 @@ void PageQueueHandler::DumpPoolPages(int level) const
 size_t PageQueueHandler::GetPageSize() const
 {
     {
-        std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+        std::shared_lock<SharedMutex> locker(mutex_);
         if (sharedPageQueue_ != nullptr) {
             return sharedPageQueue_->GetPageSize();
         }
@@ -363,7 +365,7 @@ size_t PageQueueHandler::GetPageSize() const
 
 std::string PageQueueHandler::GetSharedPageQueueId() const
 {
-    std::shared_lock<std::shared_timed_mutex> locker(mutex_);
+    std::shared_lock<SharedMutex> locker(mutex_);
     if (sharedPageQueue_ != nullptr) {
         return sharedPageQueue_->GetPageQueueId();
     }
@@ -383,21 +385,21 @@ void PageQueueHandler::SetSharedPageQueue(std::shared_ptr<SharedPageQueue> &shar
                          FormatString("%s update last page ref failed.", LogPrefix()));
         }
     }
-    std::lock_guard<std::shared_timed_mutex> locker(mutex_);
+    std::lock_guard<SharedMutex> locker(mutex_);
     sharedPageQueue_ = sharedPageQueue;
 }
 
 Status PageQueueHandler::GetOrCreateShmMeta(const std::string &tenantId, ShmView &view)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> lck(streamMetaShmMux_);
+        std::shared_lock<SharedMutex> lck(streamMetaShmMux_);
         if (shmUnitOfStreamMeta_) {
             view = shmUnitOfStreamMeta_->GetShmView();
             return Status::OK();
         }
     }
     {
-        std::lock_guard<std::shared_timed_mutex> lck(streamMetaShmMux_);
+        std::lock_guard<SharedMutex> lck(streamMetaShmMux_);
         if (shmUnitOfStreamMeta_) {
             view = shmUnitOfStreamMeta_->GetShmView();
             return Status::OK();

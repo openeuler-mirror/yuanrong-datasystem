@@ -25,6 +25,8 @@
 #include "datasystem/common/stream_cache/stream_data_page.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/stream_posix.pb.h"
 #include "datasystem/stream/stream_config.h"
@@ -474,7 +476,7 @@ public:
      */
     inline Status CheckIfStreamActive()
     {
-        std::shared_lock<std::shared_timed_mutex> lock(streamStateMutex_);
+        std::shared_lock<SharedMutex> lock(streamStateMutex_);
         if (streamState_ == StreamState::RESET_IN_PROGRESS || streamState_ == StreamState::RESET_COMPLETE) {
             RETURN_STATUS(K_SC_STREAM_IN_RESET_STATE,
                           FormatString("Reset is invoked on Stream [%s]. Current state: %s. Resume is needed.",
@@ -502,7 +504,7 @@ public:
      */
     inline bool CheckIfStreamInState(StreamState state)
     {
-        std::shared_lock<std::shared_timed_mutex> lock(streamStateMutex_);
+        std::shared_lock<SharedMutex> lock(streamStateMutex_);
         return streamState_ == state;
     }
 
@@ -512,7 +514,7 @@ public:
     Status SetDeleteState(bool ignore = false)
     {
         // lock is used to protect streamState
-        std::unique_lock<std::shared_timed_mutex> lock(streamStateMutex_);
+        std::unique_lock<SharedMutex> lock(streamStateMutex_);
         // If status is already delete then return error
         if (streamState_ == StreamState::DELETE_IN_PROGRESS && ignore) {
             deleteStateRefCount_ += 1;
@@ -538,7 +540,7 @@ public:
     {
         // lock is used to protect streamState
         // only re-set Active if there are no other deletes running
-        std::unique_lock<std::shared_timed_mutex> lock(streamStateMutex_);
+        std::unique_lock<SharedMutex> lock(streamStateMutex_);
         if (streamState_ == StreamState::DELETE_IN_PROGRESS) {
             deleteStateRefCount_ -= 1;
         }
@@ -561,7 +563,7 @@ public:
     inline Status SetNewState(StreamState newState)
     {
         // lock is used to protect streamState
-        std::unique_lock<std::shared_timed_mutex> lock(streamStateMutex_);
+        std::unique_lock<SharedMutex> lock(streamStateMutex_);
         if (streamState_ == StreamState::DELETE_IN_PROGRESS) {
             RETURN_STATUS(K_SC_STREAM_DELETE_IN_PROGRESS,
                           FormatString("Delete is in progress on Stream [%s].", streamName_));
@@ -939,9 +941,9 @@ private:
     RemoteWorkerManager *remoteWorkerManager_;
     // protect pubs_/subs_/remoteSubWorkerDict_/remotePubWorkerDict_/blockOnOOM_
     mutable std::shared_timed_mutex mutex_;
-    mutable std::shared_timed_mutex resetMutex_;
+    mutable SharedMutex resetMutex_;
     // protect streamState_
-    mutable std::shared_timed_mutex streamStateMutex_;
+    mutable SharedMutex streamStateMutex_;
     // deleteStateRefCount_ to protect stream state from being reactivated
     int deleteStateRefCount_ = 0;
 
@@ -949,7 +951,7 @@ private:
     std::unordered_map<std::string, std::shared_ptr<Subscription>> subs_;
     MemAllocRequestList<CreateShmPageRspPb, CreateShmPageReqPb> dataBlockedList_;
     MemAllocRequestList<CreateLobPageRspPb, CreateLobPageReqPb> lobBlockedList_;
-    std::shared_timed_mutex streamManagerBlockedListsMutex_;
+    SharedMutex streamManagerBlockedListsMutex_;
     std::unordered_map<std::string, std::atomic<bool>> blockOnOOM_;  // block at a worker level
 
     // Remote sub workers, consumers. Key: remote sub worker address, Value: remote SubWorkerDesc

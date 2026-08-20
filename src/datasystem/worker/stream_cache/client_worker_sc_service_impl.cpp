@@ -22,6 +22,8 @@
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
@@ -271,7 +273,7 @@ void ClientWorkerSCServiceImpl::CommitCreatedProducer(
     const std::shared_ptr<StreamManagerWithLock> &streamMgrWithLock, CreatePubSubCtrl::Accessor &createLock)
 {
     {
-        std::unique_lock<std::shared_timed_mutex> lock(clearMutex_);
+        std::unique_lock<SharedMutex> lock(clearMutex_);
         (void)clientProducers_[clientId].emplace_back(namespaceUri, producerId);
     }
     streamMgrWithLock->needCleanUp = false;
@@ -430,7 +432,7 @@ Status ClientWorkerSCServiceImpl::CloseProducerInternal(
         CloseProducerRspPb rsp;
         Status rc = CloseProducerImpl(producerId, namespaceUri, true);
         if (rc.IsOk() || rc.GetCode() == StatusCode::K_SC_PRODUCER_NOT_FOUND) {
-            std::unique_lock<std::shared_timed_mutex> lock(clearMutex_);
+            std::unique_lock<SharedMutex> lock(clearMutex_);
             clientProducers_[clientId].remove_if([&namespaceUri, &producerId](const StreamProducer &data) {
                 return (data.streamName_ == namespaceUri && data.producerId_ == producerId);
             });
@@ -872,7 +874,7 @@ Status ClientWorkerSCServiceImpl::SubscribeImpl(const std::string &namespaceUri,
     rsp.set_offset(waView.off);
     rsp.set_size(waView.sz);
     {
-        std::unique_lock<std::shared_timed_mutex> lock(clearMutex_);
+        std::unique_lock<SharedMutex> lock(clearMutex_);
         clientConsumers_[req.client_id()].emplace_back(namespaceUri, subName, consumerId);
     }
     LOG(INFO) << FormatString("[%s, S:%s, C:%s] Subscribe(create consumer) success on master %s", LogPrefix(),
@@ -921,7 +923,7 @@ Status ClientWorkerSCServiceImpl::CloseConsumerInternal(
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         Status rc = CloseConsumerImpl(consumerId, namespaceUri, req.subscription_name(), true, WORKER_LOCK_ID);
         if (rc.IsOk() || rc.GetCode() == StatusCode::K_SC_CONSUMER_NOT_FOUND) {
-            std::unique_lock<std::shared_timed_mutex> lock(clearMutex_);
+            std::unique_lock<SharedMutex> lock(clearMutex_);
             clientConsumers_[clientId].remove_if([&namespaceUri, &consumerId](const SubInfo &data) {
                 return (data.streamName == namespaceUri && data.consumerId == consumerId);
             });
@@ -1476,7 +1478,7 @@ Status ClientWorkerSCServiceImpl::ClosePubSubForClientLost(const std::string &cl
     std::list<SubInfo> consumerList;
     Status returnRc = Status::OK();
     {
-        std::lock_guard<std::shared_timed_mutex> lock(clearMutex_);
+        std::lock_guard<SharedMutex> lock(clearMutex_);
         producerList = std::move(clientProducers_[clientId]);
         consumerList = std::move(clientConsumers_[clientId]);
         (void)clientProducers_.erase(clientId);
@@ -1498,7 +1500,7 @@ Status ClientWorkerSCServiceImpl::ClosePubSubForClientLost(const std::string &cl
         if (rc.IsError()) {
             // Unsuccessful to close at least one of the producers. Add any failed producers back to the client list
             // for this client. Do not quit this function yet.  Continue to try to close amy consumers as well.
-            std::lock_guard<std::shared_timed_mutex> lock(clearMutex_);
+            std::lock_guard<SharedMutex> lock(clearMutex_);
             clientProducers_[clientId] = std::move(producerList);
             returnRc = rc;
         }
@@ -1521,7 +1523,7 @@ Status ClientWorkerSCServiceImpl::ClosePubSubForClientLost(const std::string &cl
 
     if (!failedConsumers.empty()) {
         // Add any consumers that failed to close back to the client tracking
-        std::lock_guard<std::shared_timed_mutex> lock(clearMutex_);
+        std::lock_guard<SharedMutex> lock(clearMutex_);
         clientConsumers_[clientId] = std::move(failedConsumers);
     }
 
@@ -1585,7 +1587,7 @@ void ClientWorkerSCServiceImpl::GetProducerConsumerMetadata(
 
 Status ClientWorkerSCServiceImpl::GetStreamMetadata(const std::string &streamName, GetStreamMetadataRspPb *meta)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(clearMutex_);
+    std::shared_lock<SharedMutex> lock(clearMutex_);
     StreamManagerMap::const_accessor accessor;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GetStreamManager(streamName, accessor), "GetStreamManager failed");
     std::shared_ptr<StreamManager> streamManager = accessor->second;
@@ -2072,7 +2074,7 @@ Status ClientWorkerSCServiceImpl::GetPubSubForClientStream(const std::string &cl
 {
     prodConList.clear();
     bool found = false;
-    std::shared_lock<std::shared_timed_mutex> locker(clearMutex_);
+    std::shared_lock<SharedMutex> locker(clearMutex_);
     // First collect all the producer Ids if there exists any for the given client.
     auto iter = clientProducers_.find(clientId);
     if (iter != clientProducers_.end()) {
@@ -2153,7 +2155,7 @@ Status ClientWorkerSCServiceImpl::HandleBlockedCreateTimeout<CreateLobPageRspPb,
 
 Status ClientWorkerSCServiceImpl::StreamNoToName(uint64_t streamNo, std::string &streamName)
 {
-    std::shared_lock<std::shared_timed_mutex> locker(mappingMutex_);
+    std::shared_lock<SharedMutex> locker(mappingMutex_);
     auto iter = streamNum2StreamName_.find(streamNo);
     CHECK_FAIL_RETURN_STATUS(iter != streamNum2StreamName_.end(), K_SC_STREAM_NOT_FOUND,
                              FormatString("Stream number %zu not found", streamNo));
@@ -2163,7 +2165,7 @@ Status ClientWorkerSCServiceImpl::StreamNoToName(uint64_t streamNo, std::string 
 
 Status ClientWorkerSCServiceImpl::AddStreamNo(uint64_t streamNo, const std::string &streamName)
 {
-    std::lock_guard<std::shared_timed_mutex> locker(mappingMutex_);
+    std::lock_guard<SharedMutex> locker(mappingMutex_);
     bool success = streamNum2StreamName_.emplace(streamNo, streamName).second;
     CHECK_FAIL_RETURN_STATUS(success, K_RUNTIME_ERROR, FormatString("Duplicated stream number %zu", streamNo));
     return Status::OK();
@@ -2171,7 +2173,7 @@ Status ClientWorkerSCServiceImpl::AddStreamNo(uint64_t streamNo, const std::stri
 
 void ClientWorkerSCServiceImpl::RemoveStreamNo(uint64_t streamNo)
 {
-    std::lock_guard<std::shared_timed_mutex> locker(mappingMutex_);
+    std::lock_guard<SharedMutex> locker(mappingMutex_);
     streamNum2StreamName_.erase(streamNo);
 }
 
@@ -2374,7 +2376,7 @@ Status MemAllocRequestList<W, R>::AddBlockedCreateRequest(ClientWorkerSCServiceI
 {
     const auto req = blockedReq->GetCreateRequest();
     const auto &producerId = req.producer_id();
-    std::unique_lock<std::shared_timed_mutex> lock(blockedListMutex_);
+    std::unique_lock<SharedMutex> lock(blockedListMutex_);
     if (out != nullptr) {
         auto it1 = blockedList_.find(producerId);
         if (it1 != blockedList_.end()) {
@@ -2486,7 +2488,7 @@ void MemAllocRequestList<W, R>::HandleBlockedCreateTimeout(const std::string &st
                                                            int64_t subTimeout,
                                                            const std::chrono::steady_clock::time_point &startTime)
 {
-    std::lock_guard<std::shared_timed_mutex> lock(blockedListMutex_);
+    std::lock_guard<SharedMutex> lock(blockedListMutex_);
     auto it = blockedList_.find(producerId);
     if (it == std::end(blockedList_) || !(it->second->HasStartTime(startTime))) {
         // A race between a thread doing free vs this timeout. The other thread won so this is a no-op
@@ -2510,7 +2512,7 @@ template <typename W, typename R>
 Status MemAllocRequestList<W, R>::GetBlockedCreateRequest(std::shared_ptr<BlockedCreateRequest<W, R>> &out)
 {
     INJECT_POINT("GetBlockedCreateRequest.sleep");
-    std::lock_guard<std::shared_timed_mutex> lock(blockedListMutex_);
+    std::lock_guard<SharedMutex> lock(blockedListMutex_);
     CHECK_FAIL_RETURN_STATUS(!queue_.empty(), StatusCode::K_TRY_AGAIN, "No outstanding memory request");
     auto *blockedReq = queue_.top();
     queue_.pop();
@@ -2543,21 +2545,21 @@ Status MemAllocRequestList<W, R>::GetBlockedCreateRequest(std::shared_ptr<Blocke
 template <typename W, typename R>
 bool MemAllocRequestList<W, R>::Empty()
 {
-    std::shared_lock<std::shared_timed_mutex> lock(blockedListMutex_);
+    std::shared_lock<SharedMutex> lock(blockedListMutex_);
     return queue_.empty();
 }
 
 template <typename W, typename R>
 size_t MemAllocRequestList<W, R>::Size()
 {
-    std::shared_lock<std::shared_timed_mutex> lock(blockedListMutex_);
+    std::shared_lock<SharedMutex> lock(blockedListMutex_);
     return queue_.size();
 }
 
 template <typename W, typename R>
 size_t MemAllocRequestList<W, R>::GetNextBlockedRequestSize()
 {
-    std::shared_lock<std::shared_timed_mutex> lock(blockedListMutex_);
+    std::shared_lock<SharedMutex> lock(blockedListMutex_);
     if (queue_.empty()) {
         return 0;
     }
@@ -2567,7 +2569,7 @@ size_t MemAllocRequestList<W, R>::GetNextBlockedRequestSize()
 template <typename W, typename R>
 void MemAllocRequestList<W, R>::ClearBlockedList()
 {
-    std::shared_lock<std::shared_timed_mutex> lock(blockedListMutex_);
+    std::shared_lock<SharedMutex> lock(blockedListMutex_);
     blockedList_.clear();
     queue_ = std::priority_queue<BlockedCreateRequest<W, R> *, std::vector<BlockedCreateRequest<W, R> *>, Compare>();
 }
@@ -2576,7 +2578,7 @@ template <typename W, typename R>
 Status MemAllocRequestList<W, R>::MarkMemAllocFinish(const std::string &streamName, const std::string &producerId,
                                                      std::shared_ptr<BlockedCreateRequest<W, R>> &outblockedReq)
 {
-    std::lock_guard<std::shared_timed_mutex> lock(blockedListMutex_);
+    std::lock_guard<SharedMutex> lock(blockedListMutex_);
     auto it = processingBlockedList_.find(producerId);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         it != processingBlockedList_.end(), K_RUNTIME_ERROR,
@@ -2594,7 +2596,7 @@ Status MemAllocRequestList<W, R>::GetOrCreate(ClientWorkerSCServiceImpl *scSvc,
                                               std::shared_ptr<BlockedCreateRequest<W, R>> &outblockedReq)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> lock(blockedListMutex_);
+        std::shared_lock<SharedMutex> lock(blockedListMutex_);
         const auto &producerId = inblockedReq->req_.producer_id();
         auto it1 = blockedList_.find(producerId);
         if (it1 != blockedList_.end()) {

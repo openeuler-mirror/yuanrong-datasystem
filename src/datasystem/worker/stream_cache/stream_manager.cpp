@@ -25,6 +25,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_unary_client_impl.h"
@@ -232,7 +233,7 @@ Status StreamManager::CloseProducer(const std::string &producerId, bool forceClo
         }
     }
     if (CheckIfStreamInState(StreamState::RESET_IN_PROGRESS)) {
-        std::unique_lock<std::shared_timed_mutex> lock(resetMutex_);
+        std::unique_lock<SharedMutex> lock(resetMutex_);
         std::vector<std::string> prodList(1, producerId);
         (void)RemovePubSubFromResetList(prodList);
     }
@@ -312,7 +313,7 @@ Status StreamManager::CloseConsumer(const std::string &subName, const std::strin
             }
         }
         if (CheckIfStreamInState(StreamState::RESET_IN_PROGRESS)) {
-            std::unique_lock<std::shared_timed_mutex> lock(resetMutex_);
+            std::unique_lock<SharedMutex> lock(resetMutex_);
             std::vector<std::string> conList(1, consumerId);
             (void)RemovePubSubFromResetList(conList);
         }
@@ -411,7 +412,7 @@ Status StreamManager::AllocDataPageInternalReq(uint64_t timeoutMs, const ShmView
     bool hitCache;
     std::shared_ptr<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>> outBlockedReq;
     {
-        std::shared_lock<std::shared_timed_mutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
+        std::shared_lock<SharedMutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
         rlock.lock();
         RETURN_IF_NOT_OK(dataBlockedList_.GetOrCreate(scSvc.get(), inBlockedReq, outBlockedReq));
         hitCache = outBlockedReq != nullptr;
@@ -514,7 +515,7 @@ Status StreamManager::AllocBigShmMemoryInternalReq(uint64_t timeoutMs, size_t sz
     bool hitCache;
     std::shared_ptr<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>> outBlockedReq;
     {
-        std::shared_lock<std::shared_timed_mutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
+        std::shared_lock<SharedMutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
         rlock.lock();
         RETURN_IF_NOT_OK(lobBlockedList_.GetOrCreate(scSvc.get(), inBlockedReq, outBlockedReq));
         hitCache = outBlockedReq != nullptr;
@@ -564,7 +565,7 @@ Status StreamManager::AddBlockedCreateRequest(
     std::shared_ptr<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>> blockedReq, bool lock)
 {
     // Compete with UnblockCreators
-    std::shared_lock<std::shared_timed_mutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
+    std::shared_lock<SharedMutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
     if (lock) {
         INJECT_POINT("StreamManager.AddBlockCreateRequest.sleep");
         rlock.lock();
@@ -577,7 +578,7 @@ Status StreamManager::AddBlockedCreateRequest(
     std::shared_ptr<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>> blockedReq, bool lock)
 {
     // Compete with UnblockCreators
-    std::shared_lock<std::shared_timed_mutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
+    std::shared_lock<SharedMutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
     if (lock) {
         rlock.lock();
     }
@@ -607,7 +608,7 @@ Status StreamManager::UnblockCreators()
         LOG(INFO) << FormatString("[%s] Freed page result in unblocking a waiting AllocBigShmMemory.", LogPrefix());
         std::shared_ptr<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>> blockedReq;
         {
-            std::unique_lock<std::shared_timed_mutex> xlock(streamManagerBlockedListsMutex_);
+            std::unique_lock<SharedMutex> xlock(streamManagerBlockedListsMutex_);
             RETURN_IF_NOT_OK_EXCEPT(lobBlockedList_.GetBlockedCreateRequest(blockedReq), K_TRY_AGAIN);
         }
         if (blockedReq) {
@@ -625,7 +626,7 @@ Status StreamManager::UnblockCreators()
         while (rc.IsOk()) {
             std::shared_ptr<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>> blockedReq;
             {
-                std::unique_lock<std::shared_timed_mutex> xlock(streamManagerBlockedListsMutex_);
+                std::unique_lock<SharedMutex> xlock(streamManagerBlockedListsMutex_);
                 rc = dataBlockedList_.GetBlockedCreateRequest(blockedReq);
             }
             if (rc.IsOk()) {
@@ -644,7 +645,7 @@ Status StreamManager::UnblockCreators()
 std::pair<size_t, bool> StreamManager::GetNextBlockedRequestSize()
 {
     // Block AddBlockedCreateRequest
-    std::unique_lock<std::shared_timed_mutex> xlock(streamManagerBlockedListsMutex_);
+    std::unique_lock<SharedMutex> xlock(streamManagerBlockedListsMutex_);
     // We have two lists, and we will look at the oldest one.
     if (lobBlockedList_.GetNextStartTime() < dataBlockedList_.GetNextStartTime()) {
         return std::make_pair(lobBlockedList_.GetNextBlockedRequestSize(), true);
@@ -1140,7 +1141,7 @@ Status StreamManager::RemovePubSubFromResetList(std::vector<std::string> &prodCo
 Status StreamManager::ResetStreamStart(std::vector<std::string> &prodConList)
 {
     // Stop remote producer pushing more data with the stream status flag.
-    std::unique_lock<std::shared_timed_mutex> lock(resetMutex_);
+    std::unique_lock<SharedMutex> lock(resetMutex_);
     {
         // protect create/close pubs_/subs_
         WriteLockHelper xlock(STREAM_COMMON_LOCK_ARGS(mutex_));
@@ -1668,7 +1669,7 @@ void StreamManager::UpdateStreamMetrics()
 
 void StreamManager::ClearBlockedList()
 {
-    std::unique_lock<std::shared_timed_mutex> xlock(streamManagerBlockedListsMutex_);
+    std::unique_lock<SharedMutex> xlock(streamManagerBlockedListsMutex_);
     dataBlockedList_.ClearBlockedList();
     lobBlockedList_.ClearBlockedList();
 }
