@@ -919,21 +919,27 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_QUERYMETA_START);
     }
-    Status result =
-        QueryMetadataFromMaster(needRemoteGetObjects, subTimeout, queryMetaResult, !request->NoQueryL2Cache());
+    const bool queryEtcdMeta = request == nullptr || !request->NoQueryL2Cache();
+    Status result = QueryMetadataFromMaster(needRemoteGetObjects, subTimeout, queryMetaResult, queryEtcdMeta);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_QUERYMETA_END);
     }
     if (result.IsError()) {
         lastRc = result;
-        // If we query meta from master meets RPC error, do not add these objects to failedIds,
-        // otherwise other concurrent get operations would failed, so we just notify ourselves.
-        if (result.GetCode() == K_TRY_AGAIN || IsRetryableRpcError(result) || IsNonRetryableRpcError(result)) {
+        // Preserve RPC errors in the request when available; callers without a GetRequest need failedIds
+        // so their caller can complete each object with the original error.
+        const bool isRpcError = result.GetCode() == K_TRY_AGAIN || IsRetryableRpcError(result)
+                                || IsNonRetryableRpcError(result);
+        if (isRpcError && request != nullptr) {
             for (const auto &objectKey : needRemoteGetObjects) {
                 LOG_IF_ERROR(request->MarkFailed(objectKey, result), "MarkFailed failed");
             }
         } else {
             failedIds.insert(needRemoteGetObjects.begin(), needRemoteGetObjects.end());
+        }
+        if (isRpcError) {
+            LOG(ERROR) << FormatString("Query from master failed : %s", result.ToString());
+            return result;
         }
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, FormatString("Query from master failed : %s", result.ToString()));
     }
@@ -1860,8 +1866,15 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     // 3. Statistics the metadata results just queried.
     ObjectKeysQueryMetaFailed objectKeysQueryMetaFailed;
     std::map<std::string, uint64_t> deletingObjectsWithVersion;
-    RETURN_IF_NOT_OK(MergeQueryMetadataResults(batchQueryResults, traceEnabled, result, objectKeysQueryMetaFailed,
-                                               deletingObjectsWithVersion));
+    Status mergeRc = MergeQueryMetadataResults(batchQueryResults, traceEnabled, result, objectKeysQueryMetaFailed,
+                                               deletingObjectsWithVersion);
+
+    // A foreground metadata-owner failure is terminal. Do not turn an explicit
+    // dead-peer result into K_NOT_FOUND through the ETCD recovery fallback.
+    if (lastRc.GetCode() == K_RPC_PEER_DEAD) {
+        return lastRc;
+    }
+    RETURN_IF_NOT_OK(mergeRc);
 
     INJECT_POINT("worker.get_no_metadata", [&queryMetas, &result, &objectKeys, &absentObjectKeysWithVersion]() {
         queryMetas.clear();
@@ -1918,6 +1931,11 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     auto dispatchTime = std::chrono::steady_clock::now();
     Status lastRc;
+    auto recordError = [&lastRc](const Status &rc) {
+        if (rc.IsError() && (lastRc.GetCode() != K_RPC_PEER_DEAD || rc.GetCode() == K_RPC_PEER_DEAD)) {
+            lastRc = rc;
+        }
+    };
     size_t idx = 0;
     const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
     for (auto &item : objectKeysByMaster) {
@@ -1940,14 +1958,14 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
         };
         if (!useThreadPoolFanout || idx == objectKeysByMaster.size()) {
             auto rc = query();
-            lastRc = rc.IsError() ? rc : lastRc;
+            recordError(rc);
         } else {
             futures.emplace_back(workerBatchQueryMetaThreadPool_->Submit(std::move(query)));
         }
     }
     for (auto &future : futures) {
         auto rc = future.get();
-        lastRc = rc.IsError() ? rc : lastRc;
+        recordError(rc);
     }
     return lastRc;
 }
@@ -2340,7 +2358,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &read
     SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
     // Assume the client work with only one device id.
     std::shared_ptr<std::string> commId = nullptr;
-    if (IsRemoteH2DEnabled()) {
+    if (IsRemoteH2DEnabled() && request != nullptr) {
         commId = std::make_shared<std::string>(request->GetClientCommUuid());
     }
     ReadObjectKV objectKV(readKey, *entry, commId);

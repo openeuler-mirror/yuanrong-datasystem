@@ -1582,6 +1582,8 @@ TEST_F(KVCacheClientQueryMetaDeadPeerTest, QueryMetaFastFailsAfterMetadataWorker
 
     const std::string key = "query-meta-peer-dead";
     DS_ASSERT_OK(writer->Set(key, "value"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.QueryMetaDataFromEtcd_failure",
+                                           "1*return(K_RUNTIME_ERROR)"));
     DS_ASSERT_OK(cluster_->KillWorker(0));
 
     std::string value;

@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <iterator>
 #include <list>
 #include <memory>
 #include <set>
@@ -43,6 +44,9 @@
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#ifdef USE_NPU
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#endif
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/net_util.h"
@@ -51,6 +55,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
+#include "datasystem/worker/object_cache/service/service_execution_policy.h"
 #define private public
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 #undef private
@@ -1076,6 +1081,139 @@ protected:
     std::shared_ptr<WorkerOcServiceGetImpl> impl_;
     std::shared_ptr<MigrateDataRateController> rateController_;
 };
+
+TEST_F(NotifyRemoteGetMigrationTest, ProcessObjectsNotExistInLocalPreservesRpcErrorWithoutGetRequest)
+{
+    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
+    Raii restoreFlag([oldNeedMetadata]() { FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata; });
+    FLAGS_oc_io_from_l2cache_need_metadata = false;
+
+    const std::string objectKey = "peer-dead-without-get-request";
+    RouteObjectToMaster(objectKey, leavingWorkerAddress_);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(leavingWorkerAddress_, localAddress_);
+    api->queryMeta_ = [](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,
+                         std::vector<RpcMessage> &) { return Status(K_RPC_PEER_DEAD, "metadata owner is dead"); };
+    workerMasterApiManager_->SetDefaultApi(api);
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(1'000);
+    std::unordered_set<std::string> failedIds;
+    std::set<ReadKey> needRetryIds;
+    auto rc = impl_->ProcessObjectsNotExistInLocal({ ReadKey(objectKey) }, 0, failedIds, needRetryIds);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_THAT(failedIds, Contains(objectKey));
+    EXPECT_TRUE(needRetryIds.empty());
+    EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
+}
+
+#ifdef USE_NPU
+TEST_F(NotifyRemoteGetMigrationTest, GetObjectFromAnywhereAllowsNullRequestWithRemoteH2D)
+{
+    const auto oldRemoteH2DDeviceIds = FLAGS_remote_h2d_device_ids;
+    std::string oldL2CacheFallback;
+    ASSERT_TRUE(GetCommandLineOption("enable_l2_cache_fallback", oldL2CacheFallback));
+    Raii restoreFlags([oldRemoteH2DDeviceIds, oldL2CacheFallback]() {
+        FLAGS_remote_h2d_device_ids = oldRemoteH2DDeviceIds;
+        std::string errMsg;
+        (void)SetCommandLineOption("enable_l2_cache_fallback", oldL2CacheFallback, errMsg);
+    });
+    FLAGS_remote_h2d_device_ids = "0";
+    std::string errMsg;
+    ASSERT_TRUE(SetCommandLineOption("enable_l2_cache_fallback", "false", errMsg)) << errMsg;
+
+    const std::string objectKey = "null-request-remote-h2d";
+    auto entry = std::make_shared<SafeObjType>();
+    ASSERT_TRUE(entry->WLock(true).IsOk());
+    Raii unlock([&entry]() { entry->WUnlock(); });
+    auto queryMeta = MakeQueryMeta();
+    queryMeta.mutable_meta()->set_object_key(objectKey);
+    queryMeta.mutable_meta()->mutable_config()->set_data_format(static_cast<uint32_t>(DataFormat::HETERO));
+    queryMeta.set_address("");
+    std::vector<RpcMessage> payloads;
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(1'000);
+    auto rc = impl_->GetObjectFromAnywhereWithLock(ReadKey(objectKey), nullptr, entry, true, queryMeta, payloads);
+
+    EXPECT_TRUE(rc.IsError());
+    EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
+}
+#endif
+
+TEST_F(NotifyRemoteGetMigrationTest, DispatchQueryMetadataGroupsKeepsPeerDeadOverOtherErrors)
+{
+    const bool oldUseBrpc = FLAGS_use_brpc;
+    Raii restoreFlag([oldUseBrpc]() { FLAGS_use_brpc = oldUseBrpc; });
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(1'000);
+
+    auto run = [this](bool useBrpc) {
+        FLAGS_use_brpc = useBrpc;
+        std::unordered_map<HostPort, std::vector<std::string>> groups;
+        groups.emplace(localAddress_, std::vector<std::string>{ "local-owner-key" });
+        groups.emplace(leavingWorkerAddress_, std::vector<std::string>{ "dead-owner-key" });
+        EXPECT_EQ(groups.size(), 2U);
+
+        const auto firstAddress = groups.begin()->first;
+        const auto secondAddress = std::next(groups.begin())->first;
+        const bool firstIsDead = !ShouldUseServiceThreadPoolFanout(useBrpc);
+        auto makeApi = [this](const HostPort &masterAddress, Status status) {
+            auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
+            api->queryMeta_ = [status](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,
+                                       std::vector<RpcMessage> &) { return status; };
+            return api;
+        };
+        workerMasterApiManager_->SetApi(
+            firstAddress, makeApi(firstAddress, firstIsDead ? Status(K_RPC_PEER_DEAD, "metadata owner is dead")
+                                                            : Status(K_RUNTIME_ERROR, "metadata query failed")));
+        workerMasterApiManager_->SetApi(
+            secondAddress, makeApi(secondAddress, firstIsDead ? Status(K_RUNTIME_ERROR, "metadata query failed")
+                                                              : Status(K_RPC_PEER_DEAD, "metadata owner is dead")));
+
+        std::vector<WorkerOcServiceGetImpl::BatchQueryMetaResult> results(groups.size());
+        return impl_->DispatchQueryMetadataGroups(groups, 0, results);
+    };
+
+    EXPECT_EQ(run(true).GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_EQ(run(false).GetCode(), K_RPC_PEER_DEAD);
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataKeepsPeerDeadWhenAnotherOwnerResponseIsInvalid)
+{
+    const bool oldUseBrpc = FLAGS_use_brpc;
+    Raii restoreFlag([oldUseBrpc]() { FLAGS_use_brpc = oldUseBrpc; });
+
+    auto run = [this](bool useBrpc) {
+        FLAGS_use_brpc = useBrpc;
+        const std::string deadKey = useBrpc ? "merge-peer-dead-brpc" : "merge-peer-dead-threadpool";
+        const std::string malformedKey = useBrpc ? "merge-malformed-brpc" : "merge-malformed-threadpool";
+        RouteObjectToMaster(deadKey, leavingWorkerAddress_);
+        RouteObjectToMaster(malformedKey, localAddress_);
+
+        auto deadApi = std::make_shared<MigrateTestWorkerMasterOCApi>(leavingWorkerAddress_, localAddress_);
+        deadApi->queryMeta_ = [](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,
+                                 std::vector<RpcMessage> &) {
+            return Status(K_RPC_PEER_DEAD, "metadata owner is dead");
+        };
+        auto malformedApi = std::make_shared<MigrateTestWorkerMasterOCApi>(localAddress_, localAddress_);
+        malformedApi->queryMeta_ = [](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &rsp,
+                                      std::vector<RpcMessage> &) {
+            rsp.add_not_exist_ids("malformed-response-key");
+            return Status::OK();
+        };
+        workerMasterApiManager_->SetApi(leavingWorkerAddress_, deadApi);
+        workerMasterApiManager_->SetApi(localAddress_, malformedApi);
+
+        ScopedRequestContext requestContext;
+        GetRequestContext()->reqTimeoutDuration.Init(1'000);
+        WorkerOcServiceGetImpl::QueryMetadataFromMasterResult result;
+        return impl_->QueryMetadataFromMaster({ deadKey, malformedKey }, 0, result);
+    };
+
+    EXPECT_EQ(run(true).GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_EQ(run(false).GetCode(), K_RPC_PEER_DEAD);
+}
 
 TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataReturnsErrorWhenEtcdStoreUnavailable)
 {
