@@ -155,6 +155,29 @@ Status UrmaContext::Create(urma_device_t *device, uint32_t eidIndex, std::unique
     return Status::OK();
 }
 
+Status UrmaContext::DisableFailover() const
+{
+#ifdef BONDP_USER_CTL_SET_CTX_CFG
+    CHECK_FAIL_RETURN_STATUS(raw_ != nullptr, K_INVALID, "URMA context is null");
+
+    bondp_set_ctx_cfg_in_t cfg{ .mask = BONDP_CTX_CFG_ENABLE_FAILOVER, .enable_failover = false };
+    urma_user_ctl_in_t in{ .addr = reinterpret_cast<uint64_t>(&cfg),
+                           .len = sizeof(cfg),
+                           .opcode = BONDP_USER_CTL_SET_CTX_CFG };
+    urma_user_ctl_out_t out;
+    (void)memset_s(&out, sizeof(out), 0, sizeof(out));
+
+    const auto ret = ds_urma_user_ctl(raw_, &in, &out);
+    if (ret != URMA_SUCCESS) {
+        RETURN_STATUS(K_URMA_ERROR, FormatString("Failed to disable URMA failover, ret = %d", ret));
+    }
+    LOG(INFO) << "URMA failover is disabled";
+#else
+    LOG(WARNING) << "URMA failover is not disabled";
+#endif
+    return Status::OK();
+}
+
 Status UrmaContext::BondpDisableMSN() const
 {
 #ifdef BONDP_USER_CTL_BONDING
@@ -740,6 +763,7 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
               << ", useDefaultPriority=" << !foundPriority;
 
     RETURN_IF_NOT_OK(UrmaContext::Create(device, eidIndex, context_));
+    RETURN_IF_NOT_OK(context_->DisableFailover());
     if (SupportPipelineRH2D()) {
         RETURN_IF_NOT_OK(context_->BondpDisableMSN());
     }

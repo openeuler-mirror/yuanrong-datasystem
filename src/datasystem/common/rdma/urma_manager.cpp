@@ -100,7 +100,11 @@ enum class UrmaErrorHandlePolicy {
 UrmaErrorHandlePolicy GetUrmaErrorHandlePolicy(int statusCode)
 {
     static std::unordered_map<int, UrmaErrorHandlePolicy> urmaErrorHandlePolicyTable = {
+#ifdef BONDP_USER_CTL_SET_CTX_CFG
+        { 9, UrmaErrorHandlePolicy::DEFAULT },
+#else
         { 9, UrmaErrorHandlePolicy::RECREATE_JETTY },
+#endif
     };
 
     const auto iter = urmaErrorHandlePolicyTable.find(statusCode);

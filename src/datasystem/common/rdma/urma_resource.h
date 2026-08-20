@@ -494,6 +494,12 @@ public:
     static Status Create(urma_device_t *device, uint32_t eidIndex, std::unique_ptr<UrmaContext> &context);
 
     /**
+     * @brief Disable failover for the context.
+     * @return Status of the call.
+     */
+    Status DisableFailover() const;
+
+    /**
      * @brief Switch bonding context to balance aggregation mode.
      * @return Status of the call.
      */
