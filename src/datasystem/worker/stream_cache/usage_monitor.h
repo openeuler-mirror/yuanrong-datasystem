@@ -21,6 +21,8 @@
 
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/thread_pool.h"
 
@@ -223,7 +225,7 @@ private:
     // Backend thread to check memory usage and invoke blocking callbacks
     std::unique_ptr<ThreadPool> producerBlockerThreadPool_;
     // protect for tbbUsageTable usage_;
-    mutable std::shared_timed_mutex usageMutex_;
+    mutable SharedMutex usageMutex_;
     // Stores usage per stream per remote worker
     TbbUsageTable usage_;
     // Stores total size of all elements in the BufferPool
