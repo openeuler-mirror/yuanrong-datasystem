@@ -27,6 +27,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <bthread/mutex.h>
+
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/common/object_cache/node_info.h"
@@ -104,6 +106,7 @@ private:
         const NodeInfo *target = nullptr;
         uint64_t maxBytes = 0;
         uint64_t targetAvailableAfterInFlight = 0;
+        uint64_t effectiveTargetUsed = 0;
         uint32_t usageGapRate = 0;
         uint32_t projectedTargetUsageRate = 0;
     };
@@ -127,11 +130,8 @@ private:
                           master::RebalanceFailureSidePb failureSide = master::REBALANCE_FAILURE_UNKNOWN);
     void MarkTaskDispatchedLocked(RunningTask &runningTask);
     uint64_t GetTargetInflightBytesLocked(const std::string &targetWorker) const;
-    // Release the reporting worker's held in-flight: its own report timestamp proves its
-    // snapshot now reflects post-receive memory, so the held charge can drop (issue #685).
-    void ReleaseReporterHoldsLocked(const std::string &worker, uint64_t reportTimestamp);
     // Release held in-flight for every target whose snapshot timestamp advanced since its
-    // latest completion (swap-lagged backup for non-reporting targets).
+    // latest completion (merge-refreshed snapshot path).
     void ReleaseSnapshotHoldsLocked(const std::unordered_map<std::string, NodeInfo> &snapshot);
     // Decrement the target's total in-flight charge (active + held) and erase the FutureDelta
     // entry once the total reaches zero (heldBytes/holdSinceMs are 0 by then -- held is a subset
@@ -188,11 +188,13 @@ private:
                                      const master::ReportRebalanceResultReqPb &req,
                                      master::ReportRebalanceResultRspPb &rsp);
     uint64_t CalculateTaskBytesLocked(const NodeInfo &source, const NodeInfo &target,
-                                      uint64_t targetInflightBytes) const;
+                                       uint64_t targetInflightBytes, uint64_t heldBytes,
+                                       uint64_t freshUsedMemory) const;
     uint64_t CalculateProjectedTargetUsageRate(const NodeInfo &target, uint64_t targetInflightBytes,
-                                               uint64_t maxBytes) const;
+                                                uint64_t heldBytes, uint64_t freshUsedMemory,
+                                                uint64_t maxBytes) const;
 
-    std::mutex mutex_;
+    bthread::Mutex mutex_;
     // Non-owning read-only topology view. WorkerOCServer destroys ResourceManager before TopologyEngine.
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::unordered_map<std::string, RunningTask> activeTasksBySource_;
@@ -211,6 +213,7 @@ private:
         uint64_t inflightBytes = 0;
         uint64_t heldBytes = 0;
         uint64_t holdSinceMs = 0;
+        uint64_t freshUsedMemory = 0;
     };
     std::unordered_map<std::string, FutureDelta> futureView_;
 

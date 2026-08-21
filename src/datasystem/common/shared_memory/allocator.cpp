@@ -267,6 +267,9 @@ ResourcePool *Allocator::GetPhyResourcePoolByType(CacheType cacheType) const
 
 uint64_t Allocator::GetMemoryAvailToHighWater() const
 {
+    if (objectMemoryStats_ == nullptr || physicalMemoryStats_ == nullptr) {
+        return 0;
+    }
     uint64_t memoryLimit = GetTotalMemoryLimit();
     uint64_t highWater = std::max(static_cast<uint64_t>(memoryLimit * GetEvictionHighWaterFactor()),
                                   memoryLimit > FLAGS_eviction_reserve_mem_threshold_mb * MB_TO_BYTES

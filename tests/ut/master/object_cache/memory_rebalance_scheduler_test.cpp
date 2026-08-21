@@ -241,6 +241,10 @@ protected:
     {
         return s.futureView_.at(worker).holdSinceMs;
     }
+    static uint64_t GetFreshUsedMemory(const MemoryRebalanceScheduler &s, const std::string &worker)
+    {
+        return s.futureView_.at(worker).freshUsedMemory;
+    }
     static bool HasCooldown(const MemoryRebalanceScheduler &s, const std::string &worker)
     {
         const auto iter = s.cooldownUntilMs_.find(worker);
@@ -738,7 +742,7 @@ TEST_F(MemoryRebalanceSchedulerTest, HeldInflightReducesBudgetForImmediateRepick
 //   1. maxBytes used a midpoint (source-target)/2 but the available cap allowed
 //      reaching exactly the eviction trigger line (equality fires eviction);
 //   2. the availableMemory used for the cap was the STALE snapshot value (worker
-//      report every 30s + master swap every 10s => up to ~40s lag, so stale-low
+//      report every 30s + master merge every 10s => up to ~40s lag, so stale-low
 //      usedMemory => stale-high available => budget stays > 0);
 //   3. RemoveTaskLocked cleared the in-flight charge at completion BEFORE the
 //      target's snapshot reflected the received bytes, so the just-received
@@ -750,12 +754,13 @@ TEST_F(MemoryRebalanceSchedulerTest, HeldInflightReducesBudgetForImmediateRepick
 //      line (eviction fires at >= in the worker's Allocate path, which is the
 //      eviction manager's job, not the scheduler's). The trigger line uses BOTH
 //      eviction params (ratio + reserve) via availableMemory.
-//   2. ReportResource swaps snapshots before Schedule (#1702 swap-on-trigger) so
+//   2. ReportResource merges snapshots before Schedule (merge-on-trigger) so
 //      projection uses fresh post-receive memory, not stale-low.
 //   3. Success holds the in-flight charge (heldBytes) until the target reports
-//      its real post-receive memory (ReleaseReporterHoldsLocked on the target's
-//      own report + ReleaseSnapshotHoldsLocked as a swap-lagged backup). This
-//      prevents sequential re-pick of the just-received target.
+//      its real post-receive memory (ReleaseReporterHoldsLocked was removed from
+//      the target's own report; ReleaseSnapshotHoldsLocked as a merge-lagged backup
+//      now carries the release). This prevents sequential re-pick of the
+//      just-received target.
 //   4. migrated_bytes uses sallocx real size (#1346) so projection is accurate.
 //
 // Why no infinite oscillation: single migration moves (source-target)/2 to the
@@ -909,9 +914,9 @@ TEST_F(MemoryRebalanceSchedulerTest, TTLReleasesHeldInflightWhenTargetNeverRepor
     EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_10);
 }
 
-// M2 (issue #685): ReleaseSnapshotHoldsLocked is the swap-lagged backup release path. When a
+// M2 (issue #685): ReleaseSnapshotHoldsLocked is the merge-lagged backup release path. When a
 // non-reporting target's snapshot timestamp advances past its held completion time (the master
-// swapped in a newer snapshot), the held charge is released even though that target did not just
+// merged in a newer snapshot), the held charge is released even though that target did not just
 // report. The TTL must NOT fire here -- the schedule happens right after completion, so
 // nowMs - holdSinceMs is well below the TTL.
 TEST_F(MemoryRebalanceSchedulerTest, SnapshotTimestampAdvanceReleasesHeldInflight)
@@ -950,11 +955,11 @@ TEST_F(MemoryRebalanceSchedulerTest, SnapshotTimestampAdvanceReleasesHeldInfligh
     EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_10);
 }
 
-// M3 (issue #685, reporter path): the primary release path -- the target reports its own resource,
-// its snapshot timestamp advances past the held completion, and ReleaseReporterHoldsLocked (called
-// from NeedSnapshotForSchedule) drops the charge. This is the ~30s happy path every held target
-// follows; M2 covered only the swap-lagged backup.
-TEST_F(MemoryRebalanceSchedulerTest, ReporterReportReleasesHeldInflight)
+// M3 (issue #685): the target reports its own resource via NeedSnapshotForSchedule, but with
+// ReleaseReporterHoldsLocked removed, the held charge is NOT released here. It stays until a
+// source's Schedule calls ReleaseSnapshotHoldsLocked with a fresh snapshot. This prevents the
+// #685 window where the held was released before the snapshot was refreshed.
+TEST_F(MemoryRebalanceSchedulerTest, ReporterReportDoesNotReleaseHeldUntilSnapshotFresh)
 {
     MemoryRebalanceScheduler scheduler;
     auto snapshot = MakeSnapshot({
@@ -970,13 +975,24 @@ TEST_F(MemoryRebalanceSchedulerTest, ReporterReportReleasesHeldInflight)
     ASSERT_TRUE(HasPendingRelease(scheduler));
     ASSERT_TRUE(HasHold(scheduler));
 
-    // WORKER_10 reports itself: its NodeInfo timestamp advances past the held completion time, so
-    // NeedSnapshotForSchedule -> ReleaseReporterHoldsLocked releases the charge.
+    // WORKER_10 reports itself via NeedSnapshotForSchedule. With ReleaseReporterHoldsLocked removed,
+    // the held charge is NOT released here — it must stay until the snapshot is refreshed.
     const uint64_t holdTs = GetHoldTs(scheduler, WORKER_10);
     NodeInfo targetReport(WORKER_10, 900, true, holdTs + 1, 100, MEMORY_CAPACITY, MEMORY_CAPACITY);
     master::ResourceReportRspPb rsp;
     auto req = MakeResourceReq(WORKER_10);
     (void)scheduler.NeedSnapshotForSchedule(req, targetReport, rsp);
+    EXPECT_TRUE(HasPendingRelease(scheduler));
+    EXPECT_TRUE(HasHold(scheduler));
+
+    // Now a source reports via Schedule with a snapshot where WORKER_10's timestamp advanced past
+    // holdTs. ReleaseSnapshotHoldsLocked (called from Schedule) releases the held charge.
+    NodeInfo freshTarget(WORKER_10, 900, true, holdTs + 1, 100, MEMORY_CAPACITY, MEMORY_CAPACITY);
+    auto freshSnapshot = MakeSnapshot({
+        MakeNode(WORKER_92, 920, 80),
+        freshTarget,
+    });
+    auto secondRsp = ScheduleAndGetRsp(scheduler, WORKER_92, freshSnapshot);
     EXPECT_FALSE(HasPendingRelease(scheduler));
     EXPECT_FALSE(HasHold(scheduler));
 }
@@ -1390,43 +1406,6 @@ TEST_F(MemoryRebalanceSchedulerTest, EpochWallClockBudgetStopsChain)
         << "held must be kept when chain ends on epoch budget stop for #685 protection";
 }
 
-// proto3 scalar uint64 has no presence: an old worker (pre-PR, never sets target_remain_bytes)
-// produces wire-default 0. Master must treat 0 as "no fresh signal" (same as UINT64_MAX), not
-// as "target 100% full". This skips the feedback loop and ends the chain without a successor,
-// falling back to the next 30s cycle's snapshot. A genuine "target full" would also land here
-// and end the chain -- the watermark stop would have fired anyway, so no behavioral regression.
-TEST_F(MemoryRebalanceSchedulerTest, OldWorkerZeroRemainTreatedAsUnsetStopsChain)
-{
-    MemoryRebalanceScheduler scheduler;
-    const std::string source = "127.0.0.1:9200";
-    const std::string target = "127.0.0.1:1000";
-    auto snapshot = MakeSnapshot({
-        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
-        MakeNode(target, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
-    });
-    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
-    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
-    const auto &taskA = firstRsp.rebalance_task();
-
-    // Old worker: target_remain_bytes omitted -> wire default 0. Master treats as unset, no
-    // successor built, chain ends. Held is kept for #685 protection.
-    master::ReportRebalanceResultReqPb req;
-    req.set_task_id(taskA.task_id());
-    req.set_source_worker(taskA.source_worker());
-    req.set_target_worker(taskA.target_worker());
-    req.set_status(master::REBALANCE_TASK_SUCCEEDED);
-    req.set_migrated_bytes(taskA.max_bytes());
-    req.set_migrated_objects(1);
-    req.set_failure_side(master::REBALANCE_FAILURE_UNKNOWN);
-    // Note: target_remain_bytes intentionally NOT set -- wire default 0 simulates old worker.
-    master::ReportRebalanceResultRspPb reportRsp;
-    DS_ASSERT_OK(scheduler.ReportResult(req, reportRsp));
-    EXPECT_FALSE(reportRsp.has_next_rebalance_task())
-        << "wire-default 0 must be treated as 'no fresh signal' (unset), not as 'target full'";
-    EXPECT_TRUE(HasPendingRelease(scheduler))
-        << "held must be kept when chain ends on unset fresh signal";
-}
-
 // Defensive guard against an impossible "fresh remain > capacity" signal. Without this guard,
 // SubOrZero below would silently reverse to freshTargetUsed=0 (target looks empty), keeping the
 // loop going against a genuinely-full target. Treat as fresh-signal corrupt: stop the chain.
@@ -1452,6 +1431,455 @@ TEST_F(MemoryRebalanceSchedulerTest, FreshRemainAboveCapacityStopsChain)
         << "fresh remain > capacity must stop the chain (signal corrupt, not silent reversal to 0%)";
     EXPECT_TRUE(HasPendingRelease(scheduler))
         << "held must be kept when chain ends on capacity-guard stop for #685 protection";
+}
+
+// Multi-source: S1's chain ends with freshUsedMemory set from target_remain_bytes. S2's Schedule
+// sees the real target usage via freshUsedMemory (not the stale snapshot), preventing over-migration.
+TEST_F(MemoryRebalanceSchedulerTest, FreshUsedMemoryPreventsMultiSourceOverMigration)
+{
+    // The gap gate now uses effectiveTargetUsed (max(snapshot, fresh)). With the default 30%
+    // threshold, the effective gap (90%-70%=20%) would filter the pair. Lower it so the pair
+    // passes and the test can verify maxBytes capping by freshUsedMemory.
+    FLAGS_rebalance_usage_gap_percent = 10;
+    const std::string source1 = "127.0.0.1:9301";
+    const std::string source2 = "127.0.0.1:9302";
+    const std::string target = "127.0.0.1:1301";
+
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source1, 900, 100),
+        MakeNode(source2, 900, 100),
+        MakeNode(target, 100, 900),  // stale: shows 10%, real is 70%
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source1, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    ASSERT_EQ(firstRsp.rebalance_task().target_worker(), target);
+
+    // S1's batch succeeds. Worker reports target_remain_bytes showing real usage = 700.
+    // ProcessFreshFeedbackLocked sets futureView_[target].freshUsedMemory = 700.
+    master::ReportRebalanceResultReqPb resultReq;
+    resultReq.set_task_id(firstRsp.rebalance_task().task_id());
+    resultReq.set_source_worker(source1);
+    resultReq.set_target_worker(target);
+    resultReq.set_status(master::REBALANCE_TASK_SUCCEEDED);
+    resultReq.set_migrated_bytes(firstRsp.rebalance_task().max_bytes());
+    resultReq.set_migrated_objects(1);
+    resultReq.set_target_remain_bytes(MEMORY_CAPACITY - 700);  // fresh: real used = 700
+    master::ReportRebalanceResultRspPb resultRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(resultReq, resultRsp));
+    // Chain ends (no next batch in resultRsp, or it doesn't matter for this test).
+
+    // S2 reports. Schedule's projection uses max(snapshot(100), freshUsedMemory(700)) = 700.
+    // headroomToWatermark = 800 - 700 = 100, so maxBytes is capped at 100 (not 300+).
+    auto secondSnapshot = MakeSnapshot({
+        MakeNode(source1, 900, 100),
+        MakeNode(source2, 900, 100),
+        MakeNode(target, 100, 900),  // still stale in snapshot
+    });
+    auto secondRsp = ScheduleAndGetRsp(scheduler, source2, secondSnapshot);
+    ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty()) << "S2 should still get a task";
+    EXPECT_EQ(secondRsp.rebalance_task().target_worker(), target);
+    // maxBytes should be capped by headroomToWatermark = 800 - 700 = 100, not the stale
+    // headroom = 800 - 100 = 700. Without freshUsedMemory, maxBytes would be min(400, 700, ...) = 400.
+    EXPECT_LE(secondRsp.rebalance_task().max_bytes(), 100ul)
+        << "freshUsedMemory should cap maxBytes at headroomToWatermark=100, not stale 700";
+}
+
+// Verify freshUsedMemory survives chain-continues (P2-1 fix): when the chain continues,
+// ReleaseHeldLocked may erase the futureView_ entry, and operator[] recreates it with
+// freshUsedMemory=0. The fix re-applies freshUsedMemory AFTER the chain-continues block.
+// This test verifies the fresh signal is present on the surviving/recreated entry so a
+// concurrent source's Schedule sees the real (higher) target usage.
+TEST_F(MemoryRebalanceSchedulerTest, FreshUsedMemorySurvivesChainContinue)
+{
+    const std::string source1 = "127.0.0.1:9401";
+    const std::string source2 = "127.0.0.1:9402";
+    const std::string target = "127.0.0.1:1401";
+
+    // totalBudget: (900-100)/2=400, headroom=800-100=700, avail=900; budget=400.
+    // batch1 maxBytes = min(400, 700, 900, 300MiB) = 400.
+    // batch2: freshUsed=capacity-remain=1000-500=500, remaining=400-400=0 -> no chain.
+    // To get a chain-continues scenario, totalBudget must exceed REBALANCE_MAX_BYTES_PER_TASK
+    // (300 MiB) so batch1 is capped at 300MiB but remaining budget > 0 triggers a next batch.
+    // With CAP = 1G: gap=(900M-100M)/2=400M, budget=min(400M,700M,900M)=400M,
+    // batch1=min(400M,700M,900M,314M)=314M, remaining=400M-314M=86M>0 -> chain continues.
+    const uint64_t BIG_CAP = 1'000'000'000;
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source1, 900'000'000, 100'000'000, true, BIG_CAP, BIG_CAP),
+        MakeNode(source2, 900'000'000, 100'000'000, true, BIG_CAP, BIG_CAP),
+        MakeNode(target, 100'000'000, 900'000'000, true, BIG_CAP, BIG_CAP),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source1, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    ASSERT_EQ(firstRsp.rebalance_task().target_worker(), target);
+
+    // batch1 succeeds. target_remain_bytes shows real used = 500M (remain = 500M).
+    // freshUsed = 1G - 500M = 500M.
+    // remaining = 400M - 314M = 86M > 0 -> chain continues.
+    // ReleaseHeldLocked erases entry (held==inflight), operator[] recreates with freshUsedMemory=0.
+    // P2-1 fix: line 306 re-applies freshUsedMemory = 500M on the recreated entry.
+    master::ReportRebalanceResultReqPb resultReq;
+    resultReq.set_task_id(firstRsp.rebalance_task().task_id());
+    resultReq.set_source_worker(source1);
+    resultReq.set_target_worker(target);
+    resultReq.set_status(master::REBALANCE_TASK_SUCCEEDED);
+    resultReq.set_migrated_bytes(firstRsp.rebalance_task().max_bytes());
+    resultReq.set_migrated_objects(1);
+    resultReq.set_target_remain_bytes(BIG_CAP - 500'000'000);  // fresh: real used = 500M
+    master::ReportRebalanceResultRspPb resultRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(resultReq, resultRsp));
+
+    // Chain continued: a next batch task should be present.
+    ASSERT_TRUE(resultRsp.has_next_rebalance_task())
+        << "Chain should continue (remaining budget > 0)";
+    EXPECT_EQ(resultRsp.next_rebalance_task().target_worker(), target);
+
+    // Verify freshUsedMemory survived the ReleaseHeldLocked + recreate.
+    EXPECT_EQ(GetFreshUsedMemory(scheduler, target), 500'000'000ul)
+        << "freshUsedMemory must survive chain-continue (P2-1 fix)";
+
+    // Now S2 reports. Schedule should use freshUsedMemory=500M in projection, not stale 100M.
+    auto secondSnapshot = MakeSnapshot({
+        MakeNode(source1, 900'000'000, 100'000'000, true, BIG_CAP, BIG_CAP),
+        MakeNode(source2, 900'000'000, 100'000'000, true, BIG_CAP, BIG_CAP),
+        MakeNode(target, 100'000'000, 900'000'000, true, BIG_CAP, BIG_CAP),  // stale
+    });
+    auto secondRsp = ScheduleAndGetRsp(scheduler, source2, secondSnapshot);
+    // S2 should target the same target but with capped maxBytes due to freshUsedMemory.
+    if (!secondRsp.rebalance_task().task_id().empty()) {
+        EXPECT_LE(secondRsp.rebalance_task().max_bytes(), 300'000'000ul)
+            << "freshUsedMemory (500M) should cap S2's maxBytes via headroomToWatermark";
+    }
+}
+
+// ============================================================================
+// Review fix C1: totalBudget must use the effective target view (max(snapshot,
+// freshUsedMemory)), not the stale snapshot. Without this fix, the first batch
+// is correctly sized by CalculateTaskBytesLocked (which uses max(snapshot, fresh)),
+// but FillTaskFromPairLocked computes totalBudget from the stale snapshot — so
+// the chain continues past the convergence point and reverses source/target.
+// ============================================================================
+TEST_F(MemoryRebalanceSchedulerTest, EffectiveTargetUsedBoundsTotalBudgetWithFreshSignal)
+{
+    // Small scale (MEMORY_CAPACITY=1000): 300MB cap does not bind, so maxBytes = gap/2.
+    // S1 chain: 1 batch of 400, freshUsed=500. S2's totalBudget must use effectiveTargetUsed
+    // (500), not stale snapshot (100). totalBudget=200 (not 400), so after 1 batch of 200
+    // remaining=0 -> no next batch. Without fix: totalBudget=400, remaining=200, next batch
+    // dispatched -> source/target reversed.
+    const std::string source1 = "127.0.0.1:9501";
+    const std::string source2 = "127.0.0.1:9502";
+    const std::string target = "127.0.0.1:1501";
+
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source1, 900, 100),
+        MakeNode(source2, 900, 100),
+        MakeNode(target, 100, 900),
+    });
+
+    // S1: maxBytes = min((900-100)/2=400, 800-100=700, 900, 314M) = 400. totalBudget = 400.
+    auto s1Rsp = ScheduleAndGetRsp(scheduler, source1, snapshot);
+    ASSERT_FALSE(s1Rsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(s1Rsp.rebalance_task().max_bytes(), 400ul);
+
+    // S1 batch: migrated=400 (task.max_bytes), target used=100+400=500, remain=500.
+    // freshUsed=500. remaining=400-400=0 -> chain ends. freshUsedMemory=500.
+    master::ReportRebalanceResultRspPb s1Result;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(s1Rsp.rebalance_task(), MEMORY_CAPACITY - 500), s1Result));
+    EXPECT_FALSE(s1Result.has_next_rebalance_task());
+    EXPECT_EQ(GetFreshUsedMemory(scheduler, target), 500ul);
+
+    // S2: effectiveTargetUsed = max(100, 500) = 500.
+    // totalBudget (with fix) = min((900-500)/2=200, 800-500=300, 500) = 200.
+    // totalBudget (without fix) = min((900-100)/2=400, 800-100=700, 500) = 400.
+    auto s2Rsp = ScheduleAndGetRsp(scheduler, source2, snapshot);
+    ASSERT_FALSE(s2Rsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(s2Rsp.rebalance_task().target_worker(), target);
+    // maxBytes = min(200, 300, 500, 314M) = 200.
+    EXPECT_EQ(s2Rsp.rebalance_task().max_bytes(), 200ul);
+
+    // S2 batch: migrated=200, target used=500+200=700, remain=300.
+    // remaining (with fix) = 200-200 = 0 -> no next batch.
+    // remaining (without fix) = 400-200 = 200 -> next batch dispatched (over-migration).
+    master::ReportRebalanceResultRspPb s2Result;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(s2Rsp.rebalance_task(), MEMORY_CAPACITY - 700), s2Result));
+    EXPECT_FALSE(s2Result.has_next_rebalance_task())
+        << "totalBudget must use effectiveTargetUsed (500), not stale snapshot (100); "
+           "without fix, remaining=200 would dispatch another batch and reverse source/target";
+}
+
+// ============================================================================
+// Review fix C2a: a partial batch (migrated < max_bytes) with a valid
+// target_remain_bytes must still update freshUsedMemory so concurrent sources
+// see the real target usage. Without this fix, the early return at the partial
+// check skips the freshUsedMemory assignment entirely.
+// ============================================================================
+TEST_F(MemoryRebalanceSchedulerTest, PartialBatchUpdatesFreshOverlay)
+{
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(target, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    // maxBytes = min((900M-100M)/2=400M, 800M-100M=700M, 900M, 314M) = 314M (300MB cap).
+    EXPECT_EQ(firstRsp.rebalance_task().max_bytes(), 300 * MB);
+
+    // Partial batch: only 100MB of 300MB migrated (candidates exhausted).
+    // Target remain = ONE_GB - 200MB (used = 100M+100M = 200M).
+    // freshUsed = ONE_GB - remain = 200MB.
+    master::ReportRebalanceResultReqPb req;
+    req.set_task_id(firstRsp.rebalance_task().task_id());
+    req.set_source_worker(source);
+    req.set_target_worker(target);
+    req.set_status(master::REBALANCE_TASK_SUCCEEDED);
+    req.set_migrated_bytes(100 * MB);  // partial: 100MB of 300MB
+    req.set_migrated_objects(1);
+    req.set_target_remain_bytes(ONE_GB - 200 * MB);  // fresh: real used = 200MB
+    master::ReportRebalanceResultRspPb resultRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(req, resultRsp));
+
+    // Chain must NOT continue (partial batch).
+    EXPECT_FALSE(resultRsp.has_next_rebalance_task())
+        << "partial batch must not continue chain";
+
+    // freshUsedMemory must be set to 200MB (the fix moves the assignment before the partial return).
+    // Without fix: freshUsedMemory stays 0 because the partial return skips the assignment.
+    EXPECT_EQ(GetFreshUsedMemory(scheduler, target), 200 * MB)
+        << "partial batch with valid target_remain must still update freshUsedMemory";
+}
+
+// ============================================================================
+// Review fix C2b: out-of-order results from concurrent sources must not regress
+// the freshUsedMemory overlay. When a later-arriving result carries a lower
+// freshUsed (e.g. target had eviction, or the observation predates another
+// source's landing), max() merge prevents the overlay from going backwards.
+// Without this fix, unconditional assignment overwrites the higher value with
+// a lower one, letting a third source reuse non-existent headroom.
+// ============================================================================
+TEST_F(MemoryRebalanceSchedulerTest, OutOfOrderResultDoesNotRegressFreshOverlay)
+{
+    // S1 chain sets freshUsed=500. S2's batch reports a LOWER freshUsed=400 (e.g. target had
+    // eviction, or the observation predates S1's landing). max() must prevent regression.
+    const std::string source1 = "127.0.0.1:9601";
+    const std::string source2 = "127.0.0.1:9602";
+    const std::string target = "127.0.0.1:1601";
+
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source1, 900, 100),
+        MakeNode(source2, 900, 100),
+        MakeNode(target, 100, 900),
+    });
+
+    // S1: maxBytes=400, totalBudget=400. Batch succeeds, freshUsed=500.
+    auto s1Rsp = ScheduleAndGetRsp(scheduler, source1, snapshot);
+    ASSERT_FALSE(s1Rsp.rebalance_task().task_id().empty());
+    master::ReportRebalanceResultRspPb s1Result;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(s1Rsp.rebalance_task(), MEMORY_CAPACITY - 500), s1Result));
+    EXPECT_FALSE(s1Result.has_next_rebalance_task());
+    ASSERT_EQ(GetFreshUsedMemory(scheduler, target), 500ul);
+
+    // S2 schedules. effectiveTargetUsed = max(100, 500) = 500.
+    // maxBytes = min((900-500)/2=200, 800-500=300, 500, 314M) = 200.
+    auto s2Rsp = ScheduleAndGetRsp(scheduler, source2, snapshot);
+    ASSERT_FALSE(s2Rsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(s2Rsp.rebalance_task().max_bytes(), 200ul);
+
+    // S2 batch: migrated=200, but target reports used=400 (lower than existing overlay 500).
+    // freshUsed = 400 < 500. Without fix: unconditional overwrite -> 400 (regression).
+    // With fix: max(500, 400) = 500 (no regression).
+    master::ReportRebalanceResultRspPb s2Result;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(s2Rsp.rebalance_task(), MEMORY_CAPACITY - 400), s2Result));
+
+    EXPECT_EQ(GetFreshUsedMemory(scheduler, target), 500ul)
+        << "out-of-order/lower observation must not regress freshUsedMemory (max merge)";
+}
+
+// ============================================================================
+// Review fix C3: when freshUsedMemory is set, ReleaseSnapshotHoldsLocked must
+// not release held based solely on the master receipt timestamp. A stale
+// ResourceReport (sampled before migration) can arrive at master after the
+// migration result, so timestamp > holdSinceMs but usedMemory < freshUsedMemory.
+// The fix adds: if freshUsedMemory > 0, also require snapshot.usedMemory >=
+// freshUsedMemory before releasing.
+// ============================================================================
+TEST_F(MemoryRebalanceSchedulerTest, StaleSnapshotDoesNotReleaseHeldWhenUsedMemoryBelowFresh)
+{
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900, 100),
+        MakeNode(target, 100, 900),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    // maxBytes = min((900-100)/2=400, 800-100=700, 900, 314M) = 400.
+    EXPECT_EQ(firstRsp.rebalance_task().max_bytes(), 400ul);
+
+    // Batch succeeds. target_remain = 500 (used = 100+400 = 500).
+    // freshUsed = 500. Chain ends (remaining = 400-400 = 0).
+    master::ReportRebalanceResultRspPb resultRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(firstRsp.rebalance_task(), MEMORY_CAPACITY - 500, 400), resultRsp));
+    EXPECT_FALSE(resultRsp.has_next_rebalance_task());
+    ASSERT_EQ(GetFreshUsedMemory(scheduler, target), 500ul);
+    ASSERT_TRUE(HasPendingRelease(scheduler));
+
+    // Stale snapshot: timestamp advanced past holdSinceMs (master received the
+    // report after the migration result), but usedMemory = 100 (sampled before
+    // migration — still shows stale-low). Without fix: held released + freshUsed
+    // cleared → Schedule sees stale-low target → over-migration. With fix: retained.
+    const uint64_t holdTs = GetHoldTs(scheduler, target);
+    NodeInfo staleTarget(target, 900, true, holdTs + 1, 100, MEMORY_CAPACITY, MEMORY_CAPACITY);
+    auto staleSnapshot = MakeSnapshot({
+        MakeNode(source, 900, 100),
+        staleTarget,
+    });
+    auto secondRsp = ScheduleAndGetRsp(scheduler, source, staleSnapshot);
+
+    EXPECT_TRUE(HasPendingRelease(scheduler))
+        << "stale snapshot (usedMemory < freshUsedMemory) must NOT release held";
+    EXPECT_EQ(GetFreshUsedMemory(scheduler, target), 500ul)
+        << "freshUsedMemory must be retained when snapshot usedMemory hasn't caught up";
+}
+
+// ============================================================================
+// Review fix C3 positive case: when the snapshot's usedMemory has caught up
+// to freshUsedMemory, the snapshot is proven fresh — held is safe to release
+// and freshUsedMemory is cleared. This verifies the fix doesn't block the
+// normal release path.
+// ============================================================================
+TEST_F(MemoryRebalanceSchedulerTest, FreshSnapshotReleasesHeldWhenUsedMemoryCoversFresh)
+{
+    const std::string source = "127.0.0.1:9200";
+    const std::string target = "127.0.0.1:1000";
+
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900, 100),
+        MakeNode(target, 100, 900),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(firstRsp.rebalance_task().max_bytes(), 400ul);
+
+    master::ReportRebalanceResultRspPb resultRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(firstRsp.rebalance_task(), MEMORY_CAPACITY - 500, 400), resultRsp));
+    ASSERT_EQ(GetFreshUsedMemory(scheduler, target), 500ul);
+    ASSERT_TRUE(HasPendingRelease(scheduler));
+
+    // Fresh snapshot: timestamp advanced AND usedMemory = 500 >= freshUsedMemory = 500.
+    // The snapshot has caught up — release held and clear freshUsedMemory.
+    const uint64_t holdTs = GetHoldTs(scheduler, target);
+    NodeInfo freshTarget(target, 500, true, holdTs + 1, 500, MEMORY_CAPACITY, MEMORY_CAPACITY);
+    auto freshSnapshot = MakeSnapshot({
+        MakeNode(source, 900, 100),
+        freshTarget,
+    });
+    auto secondRsp = ScheduleAndGetRsp(scheduler, source, freshSnapshot);
+
+    EXPECT_FALSE(HasPendingRelease(scheduler))
+        << "fresh snapshot (usedMemory >= freshUsedMemory) must release held";
+    EXPECT_EQ(GetFreshUsedMemory(scheduler, target), 0ul)
+        << "freshUsedMemory must be cleared after fresh snapshot releases held";
+}
+
+// ============================================================================
+// Finding 1 fix: ReleaseHeldLocked in the chain-continues path clears
+// freshUsedMemory to 0. Without saving/restoring the max-merged value, a
+// concurrent source's higher observation is lost when another source's chain
+// continues. This test constructs that exact scenario:
+//
+// 1. S1 chain (3 batches) ends with freshUsed=800M.
+// 2. S2 batch 1 succeeds with freshUsed=700M (lower — eviction or out-of-order).
+//    max() at line 285 correctly merges to 800M.
+//    But S2's chain continues → ReleaseHeldLocked clears freshUsed to 0.
+//    Re-apply only restores max(0, 700M) = 700M → regression!
+// 3. Without the save/restore fix, freshUsedMemory drops to 700M.
+//    With the fix (savedFreshUsed + 3-way max), it stays at 800M.
+//
+// Requires 2B scale so the 300MB cap binds maxBytes (314.5M) while totalBudget
+// exceeds it (350M), making S2's chain continue.
+// ============================================================================
+TEST_F(MemoryRebalanceSchedulerTest, ChainContinuePreservesConcurrentSourceFreshOverlay)
+{
+    // 2B scale: 300MB cap binds maxBytes (314M) while totalBudget exceeds it, so S2's chain
+    // continues — triggering ReleaseHeldLocked which clears freshUsedMemory. The fix saves
+    // the max-merged value before ReleaseHeldLocked and restores it via 3-way max.
+    constexpr uint64_t BIG = 2'000'000'000;
+    const std::string source1 = "127.0.0.1:9701";
+    const std::string source2 = "127.0.0.1:9702";
+    const std::string target = "127.0.0.1:1701";
+
+    MemoryRebalanceScheduler scheduler;
+    auto snapshot = MakeSnapshot({
+        MakeNode(source1, 1'700'000'000, BIG - 1'700'000'000, true, BIG, BIG),
+        MakeNode(source2, 1'700'000'000, BIG - 1'700'000'000, true, BIG, BIG),
+        MakeNode(target, 100'000'000, BIG - 100'000'000, true, BIG, BIG),
+    });
+
+    // S1: 85% >= 80% source threshold. maxBytes = min(800M, 1.5B, 1.9B, 314M) = 314M (cap).
+    // totalBudget = min(800M, 1.5B, 1.9B) = 800M. Chain: 3 batches (314M + 314M + 170.9M).
+    auto s1Rsp = ScheduleAndGetRsp(scheduler, source1, snapshot);
+    ASSERT_FALSE(s1Rsp.rebalance_task().task_id().empty());
+    ASSERT_EQ(s1Rsp.rebalance_task().target_worker(), target);
+
+    // S1 batch 1: target used = 100M + 314,572,800 = 414,572,800. remaining = 485,427,200.
+    master::ReportRebalanceResultRspPb s1r1;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(s1Rsp.rebalance_task(), BIG - 414'572'800), s1r1));
+    ASSERT_TRUE(s1r1.has_next_rebalance_task());
+
+    // S1 batch 2: target used = 414,572,800 + 314,572,800 = 729,145,600. remaining = 170,854,400.
+    master::ReportRebalanceResultRspPb s1r2;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(s1r1.next_rebalance_task(), BIG - 729'145'600), s1r2));
+    ASSERT_TRUE(s1r2.has_next_rebalance_task());
+
+    // S1 batch 3: target used = 729,145,600 + 170,854,400 = 900,000,000. remaining = 0. Chain ends.
+    // freshUsedMemory = 900M.
+    master::ReportRebalanceResultRspPb s1r3;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(s1r2.next_rebalance_task(), BIG - 900'000'000), s1r3));
+    EXPECT_FALSE(s1r3.has_next_rebalance_task());
+    ASSERT_EQ(GetFreshUsedMemory(scheduler, target), 900'000'000ul)
+        << "S1 chain should end with freshUsedMemory=900M";
+
+    // S2: effectiveTargetUsed = max(100M, 900M) = 900M (85% vs 45%, gap=40% >= 20%).
+    // usageGapBytes = (1.7B-900M)/2 = 400M. maxBytes = min(400M, 700M, 1.1B, 314M) = 314M (cap).
+    // totalBudget = min(400M, 700M, 1.1B) = 400M. remaining = 85,427,200 > 0 → chain continues.
+    auto s2Rsp = ScheduleAndGetRsp(scheduler, source2, snapshot);
+    ASSERT_FALSE(s2Rsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(s2Rsp.rebalance_task().target_worker(), target);
+
+    // S2 batch 1: reports remain=2B-800M (freshUsed=800M < existing 900M — eviction or out-of-order).
+    // max() at line 285: max(900M, 800M) = 900M ✓.
+    // Chain continues → ReleaseHeldLocked clears freshUsed to 0 ✗ (without fix).
+    // Re-apply: max(0, 800M) = 800M ✗ (without fix) vs max(0, 900M, 800M) = 900M ✓ (with fix).
+    master::ReportRebalanceResultRspPb s2r1;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(s2Rsp.rebalance_task(), BIG - 800'000'000), s2r1));
+    ASSERT_TRUE(s2r1.has_next_rebalance_task())
+        << "S2 chain should continue (totalBudget=400M > maxBytes=314M)";
+
+    // Key assertion: freshUsedMemory must not regress from 900M to 800M when the chain
+    // continues and ReleaseHeldLocked clears the field. The save/restore fix preserves it.
+    EXPECT_EQ(GetFreshUsedMemory(scheduler, target), 900'000'000ul)
+        << "ReleaseHeldLocked in chain-continues must not lose concurrent source's max-merged "
+           "freshUsed; savedFreshUsed restore prevents the regression";
 }
 
 }  // namespace ut

@@ -3973,6 +3973,7 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
     // - enable_data_replication=true, non-spill: keep existing behavior (stale objects released).
     ReportUnattemptedObjects(req, attemptedObjectKeys, rsp);
     UpdateNotifyRemoteGetRateLimit(req.addr(), migratedBytes, rsp);
+    rsp.set_remain_bytes(memory::Allocator::Instance()->GetMemoryAvailToHighWater());
     return lastRc;
 }
 
