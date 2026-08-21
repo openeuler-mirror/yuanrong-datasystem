@@ -43,7 +43,7 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 17, "urma_write_latency", MetricType::HISTOGRAM, "us" },
     { 18, "urma_wait_latency", MetricType::HISTOGRAM, "us" },
     { 19, "worker_tcp_write_latency", MetricType::HISTOGRAM, "us" },
-    { 20, "worker_to_client_total_bytes", MetricType::COUNTER, "bytes" },
+    { 20, "worker_to_client_get_tcp_total_bytes", MetricType::COUNTER, "bytes" },
     { 21, "worker_object_count", MetricType::GAUGE, "count" },
     { 22, "worker_allocated_memory_size", MetricType::GAUGE, "bytes" },
     // RPC Queue Flow Latency (values via RecordLatencyMetric: ns sampled, histogram stores us)
@@ -92,10 +92,10 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 85, "brpc_server_rsp_queue_latency", MetricType::HISTOGRAM, "us" },
     { 86, "brpc_rpc_e2e_latency", MetricType::HISTOGRAM, "us" },
     { 87, "brpc_rpc_network_residual_latency", MetricType::HISTOGRAM, "us" },
-    { 88, "worker_from_client_shm_total_bytes", MetricType::COUNTER, "bytes" },
-    { 89, "worker_from_client_local_total_bytes", MetricType::COUNTER, "bytes" },
-    { 90, "worker_from_client_tcp_total_bytes", MetricType::COUNTER, "bytes" },
-    { 91, "worker_from_client_urma_total_bytes", MetricType::COUNTER, "bytes" },
+    { 88, "worker_from_client_publish_shm_total_bytes", MetricType::COUNTER, "bytes" },
+    { 89, "worker_from_client_publish_local_total_bytes", MetricType::COUNTER, "bytes" },
+    { 90, "worker_from_client_publish_tcp_total_bytes", MetricType::COUNTER, "bytes" },
+    { 91, "worker_from_client_publish_urma_total_bytes", MetricType::COUNTER, "bytes" },
     { 92, "client_get_shm_read_total_bytes", MetricType::COUNTER, "bytes" },
     { 93, "client_exist_redirect_total", MetricType::COUNTER, "count" },
     { 94, "client_exist_connection_retry_total", MetricType::COUNTER, "count" },
@@ -145,6 +145,8 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 138, "coordinator_watch_notification_inflight_bytes", MetricType::GAUGE, "bytes" },
     { 139, "coordinator_watch_probe_inflight_requests", MetricType::GAUGE, "count" },
     { 140, "coordinator_watch_probe_inflight_bytes", MetricType::GAUGE, "bytes" },
+    { 141, "worker_to_client_get_shm_total_bytes", MetricType::COUNTER, "bytes" },
+    { 142, "worker_to_client_get_urma_total_bytes", MetricType::COUNTER, "bytes" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) <= static_cast<size_t>(KvMetricId::KV_METRIC_END));
 

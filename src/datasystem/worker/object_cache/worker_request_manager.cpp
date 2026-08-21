@@ -488,6 +488,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
         Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_URMA_START);
     }
     Status lastRc;
+    uint64_t shmBytes = 0;
 
     for (size_t objectIndex = 0; objectIndex < rawObjectKeys_.size(); objectIndex++) {
         auto &objectKeyUri = rawObjectKeys_[objectIndex];
@@ -502,7 +503,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
         const auto &params = objectInfo->params;
         totalSize += params->dataSize;
         rc = AddObjectToResponse(objectKeyUri, *objectInfo, objectIndex, shmEnabled, useUbGet, ubWriteOffset, resp,
-                                 payloads);
+                                 payloads, shmBytes);
         if (shmEnabled
             && !(IsRemoteH2DEnabled() && params->shmUnit == nullptr && params->remoteH2DHostInfo
                  && !params->remoteH2DHostInfo->empty())) {
@@ -528,6 +529,9 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
     }
     if (useUbGet && traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_URMA_END);
+    }
+    if (shmBytes > 0) {
+        METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_SHM_TOTAL_BYTES, shmBytes);
     }
 
     VLOG(1) << FormatString("The total size of the currently get is %llu", totalSize);
@@ -561,7 +565,7 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
                                        std::move(lateCompletionContext));
         if (ubRc.IsOk()) {
             ubWriteOffset += readSize;
-            METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);
+            METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES, readSize);
             GetRspPb::PayloadInfoPb *payloadInfo = resp.add_payload_info();
             SetNoShmObjectInfoPb(objectKeyUri, objectIndex, objectInfo, *payloadInfo);
             INJECT_POINT_NO_RETURN("worker.get.urma_write_ok");
@@ -622,7 +626,7 @@ Status TrackWorkerToClientUrmaFallback(ShmGuard &shmGuard, uint64_t readSize, co
 
 Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo &objectInfo, size_t objectIndex,
                                        bool shmEnabled, bool useUbGet, uint64_t &ubWriteOffset, GetRspPb &resp,
-                                       std::vector<RpcMessage> &outPayloads)
+                                       std::vector<RpcMessage> &outPayloads, uint64_t &shmBytes)
 {
     const auto &params = objectInfo.params;
     if (shmEnabled
@@ -630,6 +634,10 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
             && !objectInfo.params->remoteH2DHostInfo->empty())) {
         GetRspPb::ObjectInfoPb *object = resp.add_objects();
         SetShmObjectInfoPb(objectKeyUri, objectIndex, *params, *object);
+        if (!object->has_host_info()) {
+            objectInfo.offsetInfo.AdjustReadSize(params->dataSize);
+            shmBytes += objectInfo.offsetInfo.readSize;
+        }
         return Status::OK();
     }
 
@@ -662,7 +670,7 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
         RETURN_IF_NOT_OK(TrackWorkerToClientUrmaFallback(shmGuard, readSize, ubRc, resp, objectKeyUri));
     }
     RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayloads, readOffset, readSize));
-    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);
+    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_TCP_TOTAL_BYTES, readSize);
     auto lastIndex = outPayloads.size();
     GetRspPb::PayloadInfoPb *payloadInfo = resp.add_payload_info();
     SetNoShmObjectInfoPb(objectKeyUri, objectIndex, objectInfo, *payloadInfo);

@@ -213,7 +213,7 @@ private:
 
     Status AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo &objectInfo, size_t index, bool shmEnable,
                                bool useUbGet, uint64_t &ubWriteOffset, GetRspPb &resp,
-                               std::vector<RpcMessage> &outPayloads);
+                               std::vector<RpcMessage> &outPayloads, uint64_t &shmBytes);
 
     Status UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSize, uint64_t readSize, uint64_t readOffset,
                          std::shared_ptr<ShmUnit> shmUnit, GetObjInfo &objectInfo, size_t objectIndex,

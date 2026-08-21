@@ -105,13 +105,14 @@ private:
     const char *GetTransportName(const QueryAndGetReqPb &request) const;
     Status ValidateRequest(const QueryAndGetReqPb &request) const;
     Status EncodeLocalHits(RequestState &state);
-    Status EncodeLocalHit(RequestState &state, size_t index, const GetObjEntryParams &params, bool &encoded);
+    Status EncodeLocalHit(RequestState &state, size_t index, const GetObjEntryParams &params, bool &encoded,
+                          uint64_t &shmBytes);
     Status EncodeTcp(const GetObjEntryParams &params, QueryAndGetDataResultPb &result,
                      RequestState &state, bool &encoded) const;
     Status EncodeUb(const QueryAndGetUbDataReqPb &request, size_t index, const GetObjEntryParams &params,
                     bool &encoded) const;
     void EncodeShm(const QueryAndGetShmDataReqPb &request, const GetObjEntryParams &params,
-                   QueryAndGetDataResultPb &result, RequestState &state) const;
+                   QueryAndGetDataResultPb &result, RequestState &state, uint64_t &shmBytes) const;
     Status FillMissLocations(RequestState &state) const;
 
     std::shared_ptr<WorkerOcServiceGetImpl> getProc_;

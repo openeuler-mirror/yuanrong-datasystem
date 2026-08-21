@@ -270,6 +270,7 @@ Status WorkerQueryAndGetImpl::ValidateRequest(const QueryAndGetReqPb &request) c
 Status WorkerQueryAndGetImpl::EncodeLocalHits(RequestState &state)
 {
     const auto &request = state.request;
+    uint64_t shmBytes = 0;
     for (int i = 0; i < request.object_keys_size(); ++i) {
         const auto &objectKey = request.object_keys(i);
         if (!request.has_data_request()) {
@@ -285,7 +286,7 @@ Status WorkerQueryAndGetImpl::EncodeLocalHits(RequestState &state)
         const size_t payloadCount = state.payloads.size();
         const uint64_t tcpPayloadSize = state.tcpPayloadSize;
         bool encoded = false;
-        Status rc = EncodeLocalHit(state, static_cast<size_t>(i), *params, encoded);
+        Status rc = EncodeLocalHit(state, static_cast<size_t>(i), *params, encoded, shmBytes);
         if (rc.IsError() || !encoded) {
             state.payloads.resize(payloadCount);
             state.tcpPayloadSize = tcpPayloadSize;
@@ -295,11 +296,14 @@ Status WorkerQueryAndGetImpl::EncodeLocalHits(RequestState &state)
                                      << "] QueryAndGet inline data fallback: " << rc.ToString();
         }
     }
+    if (shmBytes > 0) {
+        METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_SHM_TOTAL_BYTES, shmBytes);
+    }
     return Status::OK();
 }
 
 Status WorkerQueryAndGetImpl::EncodeLocalHit(RequestState &state, size_t index,
-                                             const GetObjEntryParams &params, bool &encoded)
+                                             const GetObjEntryParams &params, bool &encoded, uint64_t &shmBytes)
 {
     INJECT_POINT("worker.QueryAndGet.EncodeLocalHitFailure");
     const auto &request = state.request;
@@ -312,7 +316,7 @@ Status WorkerQueryAndGetImpl::EncodeLocalHit(RequestState &state, size_t index,
             result.mutable_data_result();
         }
     } else {
-        EncodeShm(request.data_request().shm(), params, *result.mutable_data_result(), state);
+        EncodeShm(request.data_request().shm(), params, *result.mutable_data_result(), state, shmBytes);
         encoded = true;
     }
     if (encoded) {
@@ -344,7 +348,7 @@ Status WorkerQueryAndGetImpl::EncodeTcp(const GetObjEntryParams &params, QueryAn
         result.add_payload_indexes(static_cast<uint32_t>(i));
     }
     state.tcpPayloadSize += params.dataSize;
-    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, params.dataSize);
+    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_TCP_TOTAL_BYTES, params.dataSize);
     encoded = true;
     INJECT_POINT_NO_RETURN("worker.QueryAndGet.EncodeTcp");
     return Status::OK();
@@ -385,14 +389,14 @@ Status WorkerQueryAndGetImpl::EncodeUb(const QueryAndGetUbDataReqPb &request, si
                                       failure.cqeStatus);
         return rc;
     }
-    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, params.dataSize);
+    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES, params.dataSize);
     encoded = true;
     INJECT_POINT_NO_RETURN("worker.QueryAndGet.EncodeUb");
     return Status::OK();
 }
 
 void WorkerQueryAndGetImpl::EncodeShm(const QueryAndGetShmDataReqPb &request, const GetObjEntryParams &params,
-                                      QueryAndGetDataResultPb &result, RequestState &state) const
+                                      QueryAndGetDataResultPb &result, RequestState &state, uint64_t &shmBytes) const
 {
     const auto clientId = ClientKey::Intern(request.client_id());
     auto shmUnit = params.shmUnit;
@@ -409,6 +413,7 @@ void WorkerQueryAndGetImpl::EncodeShm(const QueryAndGetShmDataReqPb &request, co
     info->set_is_seal(params.isSealed);
     info->set_write_mode(static_cast<uint32_t>(params.objectMode.GetWriteMode()));
     info->set_consistency_type(static_cast<uint32_t>(params.objectMode.GetConsistencyType()));
+    shmBytes += params.dataSize;
     INJECT_POINT_NO_RETURN("worker.QueryAndGet.EncodeShm");
 }
 
