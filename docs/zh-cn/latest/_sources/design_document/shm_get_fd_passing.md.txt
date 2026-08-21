@@ -176,8 +176,9 @@ RegisterClient 协商 `support_multi_shm_ref_count`：
 TransportAdvisor 不为跨节点返回 SHM candidate，继续使用现有 UB/TCP 路径。本方案不在跨节点建立
 WorkerService fd session。同节点目标 Worker 始终先构造 endpoint-scoped `ShmTransporter`，首次请求再
 通过目标 Worker 的 `GetSocketPath/RegisterClient` 探测并协商 fd-passing；SDK 初始绑定 Worker 的
-`IsShmEnable()` 不参与该目标 Worker 的能力判断。若目标 Worker 未提供 fd-passing endpoint，返回
-`K_NOT_SUPPORTED`，且不在 `ShmTransporter` 内回退到 WorkerWorker Get。
+`IsShmEnable()` 不参与该目标 Worker 的能力判断。若目标 Worker 未提供 fd-passing endpoint，
+`ShmTransporter` 返回 `K_NOT_SUPPORTED`，由上层在同一 Worker 内做 UB/TCP 降级，且不回退到
+WorkerWorker Get。
 
 ### UC10：初始绑定 Worker 与目标 Worker 的 SHM 能力不同
 
@@ -194,9 +195,34 @@ SDK 初始绑定 Worker1 且 Worker1 开启 SHM，对象路由到同节点、关
 
 - routing 的同节点信息只产生 `SHM_CANDIDATE`，不代表目标 Worker 已支持 fd-passing；
 - 首次 Get 必须查询 Worker0 的 `GetSocketPath`，不得复用 Worker1 的 SHM 能力或 fd channel；
-- Worker0 未返回 fd-passing endpoint 时返回 `K_NOT_SUPPORTED`；
+- Worker0 未返回 fd-passing endpoint 时，`ShmTransporter` 返回 `K_NOT_SUPPORTED`，上层按 UB/TCP 降级；
 - 不调用 Worker0 的 `WorkerOCService.Get/RegisterClient/GetClientFd`，也不回退到
   `WorkerWorkerOCService.GetObjectRemote`。
+
+### UC12：主动缩容期间 SHM 注册被拒绝
+
+`enableLocalCache=false` 的 Get 已从 `QueryAndGet` 获得同节点数据 Worker，但该 Worker 在数据读取前进入
+主动缩容。数据尚未迁移完成，而新的 SHM session 会在 `RegisterClient` 被
+`K_NOT_READY: Worker is draining for ScaleIn` 拒绝。
+
+该错误只表示退出 Worker 不再接收新的本地 Client session，不表示 Worker 上的存量数据已经不可读。
+Client 已收到 `PRE_LEAVING/LEAVING` 拓扑状态时，同节点 Worker 不再进入 SHM candidate 集合：URMA
+可用时直接走 UB，否则直接走 TCP。若请求选路后 Worker 才进入 draining，或 Client 尚未收到新拓扑，
+Get 在同一 API deadline 内按以下有界顺序读取同一数据 Worker：
+
+1. SHM candidate；
+2. SHM 因 draining 或目标不支持 fd-passing 失败后，尝试 UB candidate；
+3. UB 建连或数据传输失败后，最终尝试 TCP；
+4. UB/TCP 返回对象级错误时直接返回，不以更换传输方式掩盖 `K_NOT_FOUND` 等业务结果。
+
+未启用 URMA 时保持 `SHM -> TCP`。该方案不重查元数据、不切换数据 Worker，也不新增 Worker 协议；
+`DataPlaneExecutor` 负责 endpoint 内的传输降级，`ReplicaReader` 继续负责副本和元数据位置级重试。
+
+SHM 返回 draining 后，Client 立即将该 Worker 从本地 SHM candidate 集合摘除，使后续 Get 直接复用
+fallback 建立的 UB 连接；即使 UB/TCP fallback 成功，也异步触发一次 `Routing::ForceRefresh()`，缩短旧
+`ACTIVE` 快照的驻留时间。触发前按已发布 transport snapshot 做全局门禁：同一 snapshot 下所有 endpoint
+和并发 Get 最多触发一次；新 snapshot 发布时重建 SHM candidate 并重新放行。该门禁避免重复 Get 持续
+延长 HashRingRefresher 的强制刷新窗口，同时保留其窗口内的合并与有限重试能力。
 
 ## 6. 总体架构
 
@@ -380,6 +406,11 @@ transport 选择、session/FD 建链及 mmap 状态可能从 brpc/bthread 请求
 | maintenance/restart 检查失败 | 可能 | 关闭 session，旧 Buffer deprecated，后续请求重建 |
 | endpoint Teardown | 可能 | shutdown fd、DisconnectClient，禁止新请求 |
 
+已感知主动缩容状态时不再建立 SHM session；拓扑传播竞态由 `SHM -> UB -> TCP`（URMA 可用）或
+`SHM -> TCP`（URMA 不可用）降级兜底。总尝试次数由候选链长度限制，不增加无界重试或退避循环。只有
+SHM capability/draining 和 UB 传输类错误允许切换 transport。对象不存在、鉴权失败、参数错误等
+非传输错误保持原状态码，交给现有副本或外层 metadata retry 策略处理。
+
 关闭 socket 是清理不确定引用的关键机制：Worker 已为 socket-heartbeat client 注册 lost handler，连接断开后
 执行 `RefreshMeta(clientId)` 和引用表清理。
 
@@ -437,6 +468,8 @@ mmap。以上成本均按 session/fd 摊销。
 - ObjectRead context 在 unary/batch/线程调度后保持一致；
 - 现有 TCP/UB、DataPlaneManager、Buffer owner、Set/MSet 回归；
 - 编译覆盖 session、FD provider、mmap 和 Buffer 所有权接口。
+- URMA mock 构建模拟退出 Worker 拒绝 SHM 注册，并让 UB 尝试返回连接失败；断言同一 Get 依次使用
+  SHM、UB、TCP，最终由 TCP 成功，且每个候选只执行一次。
 
 ### 13.2 集成测试
 
@@ -466,9 +499,19 @@ mmap。以上成本均按 session/fd 摊销。
 
 1. 三 Worker 同节点，reader 初始绑定的 Worker1 开启 shared memory，目标 Worker0 关闭 shared memory；
 2. key 明确路由到 Worker0，写入大对象避免 inline；
-3. reader Get 返回 `K_NOT_SUPPORTED`，证明能力来自目标 Worker0 的 bootstrap；
-4. 注入计数断言 WorkerOC Get/RegisterClient/GetClientFd 和
-   GetObjectRemote/BatchGetObjectRemote 均不增加。
+3. reader Get 由目标 Worker0 的 bootstrap 返回 `K_NOT_SUPPORTED` 后，通过 UB/TCP 从同一 Worker 读取成功；
+4. 注入计数断言 WorkerOC Get/RegisterClient/GetClientFd 不增加，证明没有错误复用 Worker1 的 SHM 能力。
+
+保留真实 URMA 环境专项用例 `DrainingTargetUsesUb`：
+
+1. `enableLocalCache=false`，目标 Worker 与 Client 同节点且 SHM、URMA 均启用；
+2. 写入明确位于目标 Worker 的对象，阻塞其主动缩容数据迁移；
+3. 触发主动缩容并等待退出门禁生效，确保对象仍在目标 Worker；
+4. 连续两次 Get 根据拓扑传播时序直接使用 UB，或首次在 SHM draining 后降级到 UB；
+5. 断言两次内容正确、最终 transport 均为 UB，且新增 SHM 注册次数总计不超过一次。
+
+该用例依赖真实 URMA 设备和运行时，只保留在 ST 中供具备硬件的环境显式执行；普通 CI 和 URMA mock
+验证不运行它。
 
 ### 13.3 远端验证
 
@@ -493,7 +536,8 @@ mmap。以上成本均按 session/fd 摊销。
 | G6 | Worker restart/endpoint teardown 验证 |
 | G7 | 原有 UB/TCP level0 回归 |
 | G8 | 指标、注入计数、远端结果文件 |
-| G9 | 两个对称专项 ST：绑定关/目标开时成功 fd-passing；绑定开/目标关时返回 `K_NOT_SUPPORTED` |
+| G9 | 两个对称专项 ST：绑定关/目标开时成功 fd-passing；绑定开/目标关时通过 UB/TCP 读取成功且不建立 SHM session |
+| 主动缩容降级 | URMA mock 验证已感知 draining 时直接 UB/TCP，并验证传播竞态下 `SHM -> UB -> TCP`；真实 URMA ST 验证最终通过 UB 读取 |
 
 ## 15. 实现落点
 
@@ -528,3 +572,6 @@ mmap。以上成本均按 session/fd 摊销。
 变更限定在 routed same-host SHM candidate。回滚时恢复 `ShmTransporter` 原 Get 实现并删除 session 接线即可；
 Worker 协议和服务端无变更。若上线后发现异常，可通过路由/配置不发布 SHM candidate，使跨节点 UB/TCP 和
 绑定 Worker 原 SHM 路径保持不变。
+
+主动缩容降级只改变 Get 的错误恢复顺序。若需回滚，可恢复 `DataPlaneExecutor` 原有单次重建和
+`SHM -> TCP` 行为；公共 API、Worker 协议、数据格式和持久化状态均无需回滚。
