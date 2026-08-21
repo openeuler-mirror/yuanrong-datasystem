@@ -31,6 +31,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread.h"
@@ -542,7 +544,7 @@ private:
     template <typename F1, typename F2>
     Status LoadFromDiskImpl(const std::string &objectKey, size_t readSize, F1 &&readBufferFunc, F2 &&readFileFunc)
     {
-        std::shared_lock<std::shared_timed_mutex> rLock(fileInfoMutex_);
+        std::shared_lock<SharedMutex> rLock(fileInfoMutex_);
         uint64_t size = 0;
         if (buffer_.Exist(objectKey, size)) {
             return readBufferFunc(buffer_);
@@ -560,7 +562,7 @@ private:
             rLock.unlock();
         } else {
             rLock.unlock();
-            std::lock_guard<std::shared_timed_mutex> wLock(fileInfoMutex_);
+            std::lock_guard<SharedMutex> wLock(fileInfoMutex_);
             RETURN_IF_NOT_OK(GetObjectFileLocation(objectKey, loc));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 GetFileInfoAndReopenFile(objectKey, loc.path, fileInfo, isReopen),
@@ -576,7 +578,7 @@ private:
         LOG(INFO) << FormatString("Id: %d, Read object [%s], fd: %d, path: %s, offset: %ld, size: %ld, cost: %fms", id_,
                                   objectKey, file->GetFd(), loc.path, loc.offset, loc.size, timer.ElapsedMilliSecond());
         if (isReopen && FdCountExceedLimit()) {
-            std::lock_guard<std::shared_timed_mutex> wLock(fileInfoMutex_);
+            std::lock_guard<SharedMutex> wLock(fileInfoMutex_);
             Status status = GetFileInfoPtr(objectKey, loc.path, fileInfo);
             if (status.IsOk()) {
                 CloseFileIfExceedLimit(fileInfo);
@@ -600,7 +602,7 @@ private:
     // fallocate task queue, {objectKey, Location}
     std::vector<std::pair<std::string, ObjectLocation>> fallocateQueue_;
     // mutex for fallocateQueue_;
-    std::shared_timed_mutex fallocateQueueMutex_;
+    SharedMutex fallocateQueueMutex_;
 
     // Directories that to save the spilled file.
     // [<fileURL/prefix>, ...]
@@ -609,7 +611,7 @@ private:
     // "/tmp/file/path/spill758b73e5-e3a7-4fd6-9044-77651bf79962"
     std::string spillDir_;
 
-    std::shared_timed_mutex fileInfoMutex_;
+    SharedMutex fileInfoMutex_;
 
     // tenant ID -> file info map
     std::unordered_map<std::string, std::unordered_map<std::string, FileInfo>> tenant2FileInfo_;

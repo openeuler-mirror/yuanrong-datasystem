@@ -621,7 +621,7 @@ void ClientWorkerRemoteCommonApi::SaveStandbyWorker(
     if (!enableCrossNodeConnection_) {
         return;
     }
-    std::lock_guard<std::shared_timed_mutex> l(standbyWorkerMutex_);
+    std::lock_guard<SharedMutex> l(standbyWorkerMutex_);
     standbyWorkerAddrs_.clear();
     for (const auto &addr : availableWorkers) {
         HostPort workerAddr;
@@ -645,7 +645,7 @@ std::vector<HostPort> ClientWorkerRemoteCommonApi::GetStandbyWorkers()
 {
     std::vector<HostPort> workers;
     {
-        std::shared_lock<std::shared_timed_mutex> l(standbyWorkerMutex_);
+        std::shared_lock<SharedMutex> l(standbyWorkerMutex_);
         for (const auto &addr : standbyWorkerAddrs_) {
             workers.emplace_back(addr);
         }

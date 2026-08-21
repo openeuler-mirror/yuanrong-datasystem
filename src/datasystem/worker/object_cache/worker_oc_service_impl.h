@@ -37,6 +37,8 @@
 #include <google/protobuf/repeated_field.h>
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -1470,7 +1472,7 @@ private:
     std::mutex circularQueueMutex_;  // To protect circularQueueManager_
     std::vector<std::shared_ptr<ShmCircularQueue>> circularQueueManager_;
 
-    std::shared_timed_mutex clearIdsMutex_;                     // to protect voluntaryScaleDownClearIds_
+    SharedMutex clearIdsMutex_;                     // to protect voluntaryScaleDownClearIds_
     std::vector<std::string> voluntaryScaleDownClearIds_ = {};  // need clear ids before voluntary scaledown
     // Protects topologyScaleInCleanupByOperation_ and each referenced cleanup state's authorization/application flags.
     std::mutex topologyScaleInCleanupMutex_;
