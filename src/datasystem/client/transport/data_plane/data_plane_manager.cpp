@@ -28,6 +28,7 @@
 #include "datasystem/client/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_connection.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
+#include "datasystem/client/transport/object_read/object_read_types.h"
 #include "datasystem/client/transport/transport_phase_latency_recorder.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
@@ -243,9 +244,45 @@ Status DataPlaneManager::WithDataPlaneLease(
 
 Status DataPlaneManager::GetOrCreateRpcClient(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &out)
 {
+    return GetOrCreateRpcClientImpl(workerAddr, out, true);
+}
+
+Status DataPlaneManager::GetOrCreateRedirectMetadataRpcClient(const HostPort &workerAddr,
+                                                              uint64_t redirectTopologyVersion,
+                                                              std::shared_ptr<WorkerRpcClient> &out)
+{
+    RETURN_IF_NOT_OK(ValidateRedirectMetadataAdmission(workerAddr, redirectTopologyVersion));
+    RETURN_IF_NOT_OK(GetOrCreateRpcClientImpl(workerAddr, out, false));
+    Status rc = ValidateRedirectMetadataAdmission(workerAddr, redirectTopologyVersion);
+    if (rc.IsError()) {
+        out.reset();
+    }
+    return rc;
+}
+
+Status DataPlaneManager::ValidateRedirectMetadataAdmission(const HostPort &workerAddr,
+                                                           uint64_t redirectTopologyVersion) const
+{
+    auto snapshot = std::atomic_load(&redirectAdmissionSnapshot_);
+    CHECK_FAIL_RETURN_STATUS(snapshot != nullptr && snapshot->liveWorkers != nullptr, K_NOT_READY,
+                             STALE_TRANSPORT_SNAPSHOT_MESSAGE);
+    if (snapshot->liveWorkers->find(workerAddr.ToString()) != snapshot->liveWorkers->end()) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(redirectTopologyVersion > snapshot->ringVersion, K_NOT_READY,
+                             std::string(STALE_TRANSPORT_SNAPSHOT_MESSAGE) + ": redirect version "
+                                 + std::to_string(redirectTopologyVersion) + ", snapshot version "
+                                 + std::to_string(snapshot->ringVersion));
+    return Status::OK();
+}
+
+Status DataPlaneManager::GetOrCreateRpcClientImpl(const HostPort &workerAddr,
+                                                  std::shared_ptr<WorkerRpcClient> &out,
+                                                  bool requireSnapshotAdmission)
+{
     out.reset();
     std::shared_ptr<WorkerTransportEntry> entry;
-    RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
+    RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry, requireSnapshotAdmission));
     {
         bthread::RWLockRdGuard lock(entry->mutex);
         CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
@@ -382,11 +419,12 @@ Status DataPlaneManager::EstablishUbProbe(const HostPort &workerAddr, const std:
 }
 
 Status DataPlaneManager::GetOrCreateEntry(const std::string &workerKey,
-                                          std::shared_ptr<WorkerTransportEntry> &entry)
+                                          std::shared_ptr<WorkerTransportEntry> &entry,
+                                          bool requireSnapshotAdmission)
 {
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
-    if (hasWorkerSnapshot_.load(std::memory_order_acquire)) {
+    if (requireSnapshotAdmission && hasWorkerSnapshot_.load(std::memory_order_acquire)) {
         auto live = std::atomic_load(&liveWorkers_);
         if (live == nullptr || live->find(workerKey) == live->end()) {
             return Status(K_NOT_READY, "Worker endpoint is absent from latest transport snapshot: " + workerKey);
@@ -538,6 +576,9 @@ Status DataPlaneManager::UpdateWorkerSnapshot(const WorkerSnapshot &snapshot)
                                  + std::to_string(workerSnapshotVersion_.load()) + " to "
                                  + std::to_string(snapshot.ringVersion));
     auto newLiveWorkers = std::make_shared<const std::unordered_set<std::string>>(std::move(liveWorkers));
+    auto redirectAdmission = std::make_shared<const RedirectAdmissionSnapshot>(
+        RedirectAdmissionSnapshot{ snapshot.ringVersion, newLiveWorkers });
+    std::atomic_store(&redirectAdmissionSnapshot_, std::move(redirectAdmission));
     std::atomic_store(&liveWorkers_, newLiveWorkers);
     {
         std::lock_guard<bthread::Mutex> lock(probeMutex_);

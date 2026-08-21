@@ -86,12 +86,13 @@ private:
 
     Status QueryWithRetry(const HostPort &address, const ObjectMetadataBatch &items, bool allowRedirect,
                           master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
-                          InlineRequestContext &context);
+                          InlineRequestContext &context, std::optional<uint64_t> redirectTopologyVersion);
     Status BuildQueryRequest(const ObjectMetadataBatch &items, bool allowRedirect,
                              const InlineRequestContext &context, master::QueryAndGetReqPb &request) const;
     Status InvokeQueryAndGet(const HostPort &address, master::QueryAndGetReqPb &request,
                              master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
-                             InlineRequestContext &context, bool &rpcDispatched);
+                             InlineRequestContext &context, std::optional<uint64_t> redirectTopologyVersion,
+                             bool &rpcDispatched);
 
     /**
      * @brief Select and initialize the inline transport for one metadata-owner request.

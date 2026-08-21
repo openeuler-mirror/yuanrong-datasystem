@@ -48,6 +48,8 @@
 namespace datasystem {
 namespace client {
 
+class ObjectMetadataClient;
+
 class DataPlaneManager {
 private:
     struct WorkerTransportEntry;
@@ -167,6 +169,13 @@ protected:
     virtual Status EstablishUbProbe(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient);
 
 private:
+    friend class ObjectMetadataClient;
+
+    struct RedirectAdmissionSnapshot {
+        uint64_t ringVersion;
+        std::shared_ptr<const std::unordered_set<std::string>> liveWorkers;
+    };
+
     struct WorkerTransportEntry {
         bool HasAliveTransporter(AccessTransportKind expectedKind) const;
         void ResetDataPlaneLocked();
@@ -187,7 +196,17 @@ private:
         TransportPhaseLatencyRecorder *recorder;
     };
 
-    Status GetOrCreateEntry(const std::string &workerKey, std::shared_ptr<WorkerTransportEntry> &entry);
+    Status GetOrCreateEntry(const std::string &workerKey, std::shared_ptr<WorkerTransportEntry> &entry,
+                            bool requireSnapshotAdmission = true);
+
+    Status GetOrCreateRpcClientImpl(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &out,
+                                    bool requireSnapshotAdmission);
+
+    Status GetOrCreateRedirectMetadataRpcClient(const HostPort &workerAddr, uint64_t redirectTopologyVersion,
+                                                std::shared_ptr<WorkerRpcClient> &out);
+
+    Status ValidateRedirectMetadataAdmission(const HostPort &workerAddr,
+                                             uint64_t redirectTopologyVersion) const;
 
     Status GetOrBuildTransporter(const TransportBuildContext &context,
                                  const std::shared_ptr<WorkerTransportEntry> &entry,
@@ -204,6 +223,7 @@ private:
 
     EntryMap entries_;
     std::shared_ptr<const std::unordered_set<std::string>> liveWorkers_;
+    std::shared_ptr<const RedirectAdmissionSnapshot> redirectAdmissionSnapshot_;
     bthread::Mutex probeMutex_;
     std::vector<std::string> writeProbeWorkers_;
     std::unordered_map<std::string, size_t> writeProbeWorkerIndices_;

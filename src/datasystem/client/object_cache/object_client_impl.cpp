@@ -884,7 +884,8 @@ Status ObjectClientImpl::InitTransportLayer()
     options.readSourceFilter = ubHealthFilter_;
     options.retryAdmissionCheck = [this]() { return CheckBoundWorkerAvailability(); };
     options.metadataFailureHandler = [this](const HostPort &owner, const Status &status) {
-        if (!ShouldRefreshRoutingAfterFailure(status.GetCode())) {
+        if (!ShouldRefreshRoutingAfterFailure(status.GetCode())
+            && !client::IsTransportSnapshotStaleLocation(status)) {
             return;
         }
         auto routing = std::atomic_load(&routing_);
