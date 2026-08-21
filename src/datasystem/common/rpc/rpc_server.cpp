@@ -21,6 +21,7 @@
 
 #include <brpc/server.h>
 #include <brpc/protocol.h>  // for brpc::FLAGS_max_body_size (DECLARE_uint64)
+#include <butil/logging.h>
 // brpc only DEFINEs max_connection_pool_size in socket.cpp (inside namespace
 // brpc, no header DECLARE), so declare it here to override the global cap.
 namespace brpc {
@@ -110,6 +111,13 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port)
     if (!brpcServer_) {
         brpcServer_ = std::make_unique<brpc::Server>();
     }
+    logging::LoggingSettings settings;
+    settings.logging_dest = logging::LOG_TO_NONE;
+    settings.log_file = "";
+    settings.lock_log = logging::DONT_LOCK_LOG_FILE;
+    settings.delete_old = logging::APPEND_TO_OLD_LOG_FILE;
+    logging::InitLogging(settings);
+
     brpc::ServerOptions options;
     options.idle_timeout_sec = -1;
     // Builtin HTTP services (/flags, /pprof, /vars) are off by default to match the
