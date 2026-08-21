@@ -897,8 +897,9 @@ client-lost 清理的半成功 Buffer。</p></li>
 <p>TransportAdvisor 不为跨节点返回 SHM candidate，继续使用现有 UB/TCP 路径。本方案不在跨节点建立
 WorkerService fd session。同节点目标 Worker 始终先构造 endpoint-scoped <code class="docutils literal notranslate"><span class="pre">ShmTransporter</span></code>，首次请求再
 通过目标 Worker 的 <code class="docutils literal notranslate"><span class="pre">GetSocketPath/RegisterClient</span></code> 探测并协商 fd-passing；SDK 初始绑定 Worker 的
-<code class="docutils literal notranslate"><span class="pre">IsShmEnable()</span></code> 不参与该目标 Worker 的能力判断。若目标 Worker 未提供 fd-passing endpoint，返回
-<code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code>，且不在 <code class="docutils literal notranslate"><span class="pre">ShmTransporter</span></code> 内回退到 WorkerWorker Get。</p>
+<code class="docutils literal notranslate"><span class="pre">IsShmEnable()</span></code> 不参与该目标 Worker 的能力判断。若目标 Worker 未提供 fd-passing endpoint，
+<code class="docutils literal notranslate"><span class="pre">ShmTransporter</span></code> 返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code>，由上层在同一 Worker 内做 UB/TCP 降级，且不回退到
+WorkerWorker Get。</p>
 </section>
 <section id="uc10-worker-worker-shm">
 <h3>UC10：初始绑定 Worker 与目标 Worker 的 SHM 能力不同<a class="headerlink" href="#uc10-worker-worker-shm" title="Link to this heading">¶</a></h3>
@@ -916,10 +917,33 @@ WorkerService fd session。同节点目标 Worker 始终先构造 endpoint-scope
 <ul class="simple">
 <li><p>routing 的同节点信息只产生 <code class="docutils literal notranslate"><span class="pre">SHM_CANDIDATE</span></code>，不代表目标 Worker 已支持 fd-passing；</p></li>
 <li><p>首次 Get 必须查询 Worker0 的 <code class="docutils literal notranslate"><span class="pre">GetSocketPath</span></code>，不得复用 Worker1 的 SHM 能力或 fd channel；</p></li>
-<li><p>Worker0 未返回 fd-passing endpoint 时返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code>；</p></li>
+<li><p>Worker0 未返回 fd-passing endpoint 时，<code class="docutils literal notranslate"><span class="pre">ShmTransporter</span></code> 返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code>，上层按 UB/TCP 降级；</p></li>
 <li><p>不调用 Worker0 的 <code class="docutils literal notranslate"><span class="pre">WorkerOCService.Get/RegisterClient/GetClientFd</span></code>，也不回退到
 <code class="docutils literal notranslate"><span class="pre">WorkerWorkerOCService.GetObjectRemote</span></code>。</p></li>
 </ul>
+</section>
+<section id="uc12-shm">
+<h3>UC12：主动缩容期间 SHM 注册被拒绝<a class="headerlink" href="#uc12-shm" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">enableLocalCache=false</span></code> 的 Get 已从 <code class="docutils literal notranslate"><span class="pre">QueryAndGet</span></code> 获得同节点数据 Worker，但该 Worker 在数据读取前进入
+主动缩容。数据尚未迁移完成，而新的 SHM session 会在 <code class="docutils literal notranslate"><span class="pre">RegisterClient</span></code> 被
+<code class="docutils literal notranslate"><span class="pre">K_NOT_READY:</span> <span class="pre">Worker</span> <span class="pre">is</span> <span class="pre">draining</span> <span class="pre">for</span> <span class="pre">ScaleIn</span></code> 拒绝。</p>
+<p>该错误只表示退出 Worker 不再接收新的本地 Client session，不表示 Worker 上的存量数据已经不可读。
+Client 已收到 <code class="docutils literal notranslate"><span class="pre">PRE_LEAVING/LEAVING</span></code> 拓扑状态时，同节点 Worker 不再进入 SHM candidate 集合：URMA
+可用时直接走 UB，否则直接走 TCP。若请求选路后 Worker 才进入 draining，或 Client 尚未收到新拓扑，
+Get 在同一 API deadline 内按以下有界顺序读取同一数据 Worker：</p>
+<ol class="arabic simple">
+<li><p>SHM candidate；</p></li>
+<li><p>SHM 因 draining 或目标不支持 fd-passing 失败后，尝试 UB candidate；</p></li>
+<li><p>UB 建连或数据传输失败后，最终尝试 TCP；</p></li>
+<li><p>UB/TCP 返回对象级错误时直接返回，不以更换传输方式掩盖 <code class="docutils literal notranslate"><span class="pre">K_NOT_FOUND</span></code> 等业务结果。</p></li>
+</ol>
+<p>未启用 URMA 时保持 <code class="docutils literal notranslate"><span class="pre">SHM</span> <span class="pre">-&gt;</span> <span class="pre">TCP</span></code>。该方案不重查元数据、不切换数据 Worker，也不新增 Worker 协议；
+<code class="docutils literal notranslate"><span class="pre">DataPlaneExecutor</span></code> 负责 endpoint 内的传输降级，<code class="docutils literal notranslate"><span class="pre">ReplicaReader</span></code> 继续负责副本和元数据位置级重试。</p>
+<p>SHM 返回 draining 后，Client 立即将该 Worker 从本地 SHM candidate 集合摘除，使后续 Get 直接复用
+fallback 建立的 UB 连接；即使 UB/TCP fallback 成功，也异步触发一次 <code class="docutils literal notranslate"><span class="pre">Routing::ForceRefresh()</span></code>，缩短旧
+<code class="docutils literal notranslate"><span class="pre">ACTIVE</span></code> 快照的驻留时间。触发前按已发布 transport snapshot 做全局门禁：同一 snapshot 下所有 endpoint
+和并发 Get 最多触发一次；新 snapshot 发布时重建 SHM candidate 并重新放行。该门禁避免重复 Get 持续
+延长 HashRingRefresher 的强制刷新窗口，同时保留其窗口内的合并与有限重试能力。</p>
 </section>
 </section>
 <section id="id10">
@@ -1191,6 +1215,10 @@ transport 选择、session/FD 建链及 mmap 状态可能从 brpc/bthread 请求
 </tbody>
 </table>
 </div>
+<p>已感知主动缩容状态时不再建立 SHM session；拓扑传播竞态由 <code class="docutils literal notranslate"><span class="pre">SHM</span> <span class="pre">-&gt;</span> <span class="pre">UB</span> <span class="pre">-&gt;</span> <span class="pre">TCP</span></code>（URMA 可用）或
+<code class="docutils literal notranslate"><span class="pre">SHM</span> <span class="pre">-&gt;</span> <span class="pre">TCP</span></code>（URMA 不可用）降级兜底。总尝试次数由候选链长度限制，不增加无界重试或退避循环。只有
+SHM capability/draining 和 UB 传输类错误允许切换 transport。对象不存在、鉴权失败、参数错误等
+非传输错误保持原状态码，交给现有副本或外层 metadata retry 策略处理。</p>
 <p>关闭 socket 是清理不确定引用的关键机制：Worker 已为 socket-heartbeat client 注册 lost handler，连接断开后
 执行 <code class="docutils literal notranslate"><span class="pre">RefreshMeta(clientId)</span></code> 和引用表清理。</p>
 </section>
@@ -1254,6 +1282,8 @@ mmap。以上成本均按 session/fd 摊销。</p>
 <li><p>ObjectRead context 在 unary/batch/线程调度后保持一致；</p></li>
 <li><p>现有 TCP/UB、DataPlaneManager、Buffer owner、Set/MSet 回归；</p></li>
 <li><p>编译覆盖 session、FD provider、mmap 和 Buffer 所有权接口。</p></li>
+<li><p>URMA mock 构建模拟退出 Worker 拒绝 SHM 注册，并让 UB 尝试返回连接失败；断言同一 Get 依次使用
+SHM、UB、TCP，最终由 TCP 成功，且每个候选只执行一次。</p></li>
 </ul>
 </section>
 <section id="id24">
@@ -1289,10 +1319,19 @@ RegisterClient/GetClientFd 不增加，证明 session 续租后继续复用。</
 <ol class="arabic simple">
 <li><p>三 Worker 同节点，reader 初始绑定的 Worker1 开启 shared memory，目标 Worker0 关闭 shared memory；</p></li>
 <li><p>key 明确路由到 Worker0，写入大对象避免 inline；</p></li>
-<li><p>reader Get 返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code>，证明能力来自目标 Worker0 的 bootstrap；</p></li>
-<li><p>注入计数断言 WorkerOC Get/RegisterClient/GetClientFd 和
-GetObjectRemote/BatchGetObjectRemote 均不增加。</p></li>
+<li><p>reader Get 由目标 Worker0 的 bootstrap 返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code> 后，通过 UB/TCP 从同一 Worker 读取成功；</p></li>
+<li><p>注入计数断言 WorkerOC Get/RegisterClient/GetClientFd 不增加，证明没有错误复用 Worker1 的 SHM 能力。</p></li>
 </ol>
+<p>保留真实 URMA 环境专项用例 <code class="docutils literal notranslate"><span class="pre">DrainingTargetUsesUb</span></code>：</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">enableLocalCache=false</span></code>，目标 Worker 与 Client 同节点且 SHM、URMA 均启用；</p></li>
+<li><p>写入明确位于目标 Worker 的对象，阻塞其主动缩容数据迁移；</p></li>
+<li><p>触发主动缩容并等待退出门禁生效，确保对象仍在目标 Worker；</p></li>
+<li><p>连续两次 Get 根据拓扑传播时序直接使用 UB，或首次在 SHM draining 后降级到 UB；</p></li>
+<li><p>断言两次内容正确、最终 transport 均为 UB，且新增 SHM 注册次数总计不超过一次。</p></li>
+</ol>
+<p>该用例依赖真实 URMA 设备和运行时，只保留在 ST 中供具备硬件的环境显式执行；普通 CI 和 URMA mock
+验证不运行它。</p>
 </section>
 <section id="id25">
 <h3>13.3 远端验证<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
@@ -1341,7 +1380,10 @@ GetObjectRemote/BatchGetObjectRemote 均不增加。</p></li>
 <td><p>指标、注入计数、远端结果文件</p></td>
 </tr>
 <tr class="row-odd"><td><p>G9</p></td>
-<td><p>两个对称专项 ST：绑定关/目标开时成功 fd-passing；绑定开/目标关时返回 <code class="docutils literal notranslate"><span class="pre">K_NOT_SUPPORTED</span></code></p></td>
+<td><p>两个对称专项 ST：绑定关/目标开时成功 fd-passing；绑定开/目标关时通过 UB/TCP 读取成功且不建立 SHM session</p></td>
+</tr>
+<tr class="row-even"><td><p>主动缩容降级</p></td>
+<td><p>URMA mock 验证已感知 draining 时直接 UB/TCP，并验证传播竞态下 <code class="docutils literal notranslate"><span class="pre">SHM</span> <span class="pre">-&gt;</span> <span class="pre">UB</span> <span class="pre">-&gt;</span> <span class="pre">TCP</span></code>；真实 URMA ST 验证最终通过 UB 读取</p></td>
 </tr>
 </tbody>
 </table>
@@ -1429,6 +1471,8 @@ GetObjectRemote/BatchGetObjectRemote 均不增加。</p></li>
 <p>变更限定在 routed same-host SHM candidate。回滚时恢复 <code class="docutils literal notranslate"><span class="pre">ShmTransporter</span></code> 原 Get 实现并删除 session 接线即可；
 Worker 协议和服务端无变更。若上线后发现异常，可通过路由/配置不发布 SHM candidate，使跨节点 UB/TCP 和
 绑定 Worker 原 SHM 路径保持不变。</p>
+<p>主动缩容降级只改变 Get 的错误恢复顺序。若需回滚，可恢复 <code class="docutils literal notranslate"><span class="pre">DataPlaneExecutor</span></code> 原有单次重建和
+<code class="docutils literal notranslate"><span class="pre">SHM</span> <span class="pre">-&gt;</span> <span class="pre">TCP</span></code> 行为；公共 API、Worker 协议、数据格式和持久化状态均无需回滚。</p>
 </section>
 </section>
 
@@ -1513,6 +1557,7 @@ Worker 协议和服务端无变更。若上线后发现异常，可通过路由/
 <li><a class="reference internal" href="#uc9">UC9：跨节点</a></li>
 <li><a class="reference internal" href="#uc10-worker-worker-shm">UC10：初始绑定 Worker 与目标 Worker 的 SHM 能力不同</a></li>
 <li><a class="reference internal" href="#uc11-worker-shm-worker-shm">UC11：绑定 Worker 开启 SHM、目标 Worker 关闭 SHM</a></li>
+<li><a class="reference internal" href="#uc12-shm">UC12：主动缩容期间 SHM 注册被拒绝</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#id10">6. 总体架构</a><ul>
