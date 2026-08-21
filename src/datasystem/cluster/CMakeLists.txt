@@ -63,6 +63,7 @@ target_link_libraries(cluster_topology PUBLIC
         common_ak_sk
         common_buffer
         common_inject
+        common_flags
         common_log
         common_util
         share_memory_protos)

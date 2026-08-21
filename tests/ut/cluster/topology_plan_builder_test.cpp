@@ -11,6 +11,8 @@
 #include <set>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/raii.h"
 #include "gtest/gtest.h"
 #include "ut/common.h"
 
@@ -34,8 +36,11 @@ std::set<std::string> FailureSources(const TopologyPlan &plan)
     return sources;
 }
 
-TEST(TopologyPlanBuilderTest, BootstrapsMultipleInitialMembersInOneVersion)
+TEST(TopologyPlanBuilderTest, BootstrapsMultipleInitialMembersWithConfiguredTokenCount)
 {
+    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
+    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
+    FLAGS_hash_ring_tokens_per_member = 64;
     HashAlgorithm algorithm;
     TopologyPlanBuilder builder(algorithm);
     TopologyState latest;
@@ -49,6 +54,8 @@ TEST(TopologyPlanBuilderTest, BootstrapsMultipleInitialMembersInOneVersion)
     ASSERT_EQ(next.members.size(), 2);
     EXPECT_EQ(next.members[0].state, MemberState::ACTIVE);
     EXPECT_EQ(next.members[1].state, MemberState::ACTIVE);
+    EXPECT_EQ(next.members[0].tokens.size(), 64);
+    EXPECT_EQ(next.members[1].tokens.size(), 64);
 }
 
 TEST(TopologyPlanBuilderTest, StartsAndFinalizesOneMultiMemberScaleOutBatch)
