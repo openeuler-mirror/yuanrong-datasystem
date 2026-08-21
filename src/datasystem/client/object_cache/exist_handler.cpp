@@ -335,12 +335,12 @@ ExistHandler::ExistHandler(IExistRouting *routing, IExistTransport *transport, s
 {
 }
 
-Status ExistHandler::SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
+Status ExistHandler::SelectWorkers(const std::vector<std::string> &keys, client::DataPlacementPolicy policy,
                                    std::unordered_map<HostPort, std::vector<std::string>> &groups,
                                    const std::vector<HostPort> &exclude)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(routing_);
-    return routing_->SelectWorkers(keys, strategy, groups, exclude);
+    return routing_->SelectWorkers(keys, policy, groups, exclude);
 }
 
 void ExistHandler::UpdateRoutingState(const HostPort &addr, StatusCode status)
@@ -373,7 +373,7 @@ Status ExistHandler::RunSelectedWorkers(const ExistHandlerRequest &request,
                                         std::vector<bool> &exists)
 {
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    RETURN_IF_NOT_OK(SelectWorkers(request.keys, client::SelectStrategy::HASH_RING_AFFINITY, groups,
+    RETURN_IF_NOT_OK(SelectWorkers(request.keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups,
                                    excludedWorkers_));
     std::vector<std::pair<HostPort, std::vector<std::string>>> orderedGroups(groups.begin(), groups.end());
     std::sort(orderedGroups.begin(), orderedGroups.end(), [](const auto &lhs, const auto &rhs) {

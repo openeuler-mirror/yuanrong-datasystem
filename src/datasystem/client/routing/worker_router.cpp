@@ -92,14 +92,6 @@ bool WorkerRouter::IsExcluded(const HostPort &addr, const std::vector<HostPort> 
         [&](const HostPort &e) { return e == addr; });
 }
 
-Status WorkerRouter::SelectWorker(const std::string &key, SelectStrategy strategy,
-                                  HostPort &worker, const std::vector<HostPort> &exclude) const
-{
-    auto policy = strategy == SelectStrategy::SAME_NODE_PREFERRED ? DataPlacementPolicy::PREFERRED_SAME_NODE
-                                                                  : DataPlacementPolicy::PREFERRED_META_OWNER;
-    return SelectWorker(key, policy, worker, exclude);
-}
-
 Status WorkerRouter::SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
                                   const std::vector<HostPort> &exclude) const
 {
@@ -158,14 +150,6 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementP
     }
 
     return Status(K_NO_AVAILABLE_WORKER, "All workers filtered or excluded");
-}
-
-Status WorkerRouter::SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
-                                   std::unordered_map<HostPort, std::vector<std::string>> &groups) const
-{
-    auto policy = strategy == SelectStrategy::SAME_NODE_PREFERRED ? DataPlacementPolicy::PREFERRED_SAME_NODE
-                                                                  : DataPlacementPolicy::PREFERRED_META_OWNER;
-    return SelectWorkers(keys, policy, groups);
 }
 
 Status WorkerRouter::SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,

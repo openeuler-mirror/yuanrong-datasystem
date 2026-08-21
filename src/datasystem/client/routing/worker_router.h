@@ -17,7 +17,7 @@
 /**
  * Description: WorkerRouter - core worker selection component.
  * Holds hash ring data (written by Refresher), traverses filter chain,
- * selects worker by strategy. Does NOT do RPC calls, retries, or error handling.
+ * selects worker by data placement policy. Does NOT do RPC calls, retries, or error handling.
  */
 #ifndef DATASYSTEM_CLIENT_ROUTING_WORKER_ROUTER_H
 #define DATASYSTEM_CLIENT_ROUTING_WORKER_ROUTER_H
@@ -29,8 +29,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "datasystem/client/routing/data_placement_policy.h"
 #include "datasystem/client/routing/i_worker_filter.h"
-#include "datasystem/client/routing/select_strategy.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
@@ -38,8 +38,6 @@
 
 namespace datasystem {
 namespace client {
-
-enum class DataPlacementPolicy : uint8_t;
 
 enum class WorkerRingState {
     UNKNOWN,
@@ -60,18 +58,10 @@ public:
     void SetHostId(std::string hostId);
 
     // Single key selection. exclude list avoids specific workers (e.g., LEAVING on write retry).
-    // Legacy compatibility overload. New callers must use DataPlacementPolicy.
-    Status SelectWorker(const std::string &key, SelectStrategy strategy, HostPort &worker,
-                        const std::vector<HostPort> &exclude = {}) const;
-
     Status SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
                         const std::vector<HostPort> &exclude = {}) const;
 
     // Batch selection: group keys by owner, return map<worker, keys>.
-    // Legacy compatibility overload. New callers must use DataPlacementPolicy.
-    Status SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
-                         std::unordered_map<HostPort, std::vector<std::string>> &groups) const;
-
     Status SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups,
                          const std::vector<HostPort> &exclude = {}) const;

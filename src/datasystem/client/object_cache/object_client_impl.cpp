@@ -597,12 +597,12 @@ public:
     explicit RoutingExistAdapter(std::shared_ptr<client::Routing> routing) : routing_(std::move(routing)) {}
     ~RoutingExistAdapter() override = default;
 
-    Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
+    Status SelectWorkers(const std::vector<std::string> &keys, client::DataPlacementPolicy policy,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups,
                          const std::vector<HostPort> &exclude) override
     {
         RETURN_RUNTIME_ERROR_IF_NULL(routing_);
-        return routing_->SelectWorkers(keys, strategy, groups, exclude);
+        return routing_->SelectWorkers(keys, policy, groups, exclude);
     }
 
     void UpdateState(const HostPort &addr, StatusCode status) override

@@ -14,7 +14,7 @@ ds_cc_library(
     deps = [
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/client:transport_exist_types",
-        "//src/datasystem/client/routing:select_strategy",
+        "//src/datasystem/client/routing:data_placement_policy",
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:net_util",
