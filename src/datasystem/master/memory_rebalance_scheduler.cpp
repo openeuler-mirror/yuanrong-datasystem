@@ -137,10 +137,26 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
     futureView_[task.target_worker()].inflightBytes =
         SaturatingAdd(futureView_[task.target_worker()].inflightBytes, task.max_bytes());
 
+    // cycle_planned is a SNAPSHOT-TIME projection (target.usedMemory + inflight + totalBudget).
+    // After the 300MB-per-batch refactor the chain may diverge from this plan: each batch lands a
+    // fresh target_remain_bytes signal and BuildNextBatchTaskLocked recomputes headroom from it;
+    // the next-batch log tracks the actual trajectory. batch is the per-batch (300MB) projection
+    // kept for comparison. Label says "planned" to flag it is a plan, not a live prediction.
+    auto targetNodeIt = snapshot.find(task.target_worker());
+    const uint64_t targetUsed = (targetNodeIt != snapshot.end()) ? targetNodeIt->second.usedMemory : 0;
+    const uint64_t targetLimit =
+        (targetNodeIt != snapshot.end()) ? targetNodeIt->second.memoryLimit : runningTask.targetMemoryLimit;
+    const uint64_t inflightNow = futureView_[task.target_worker()].inflightBytes;
+    const uint64_t currentRate = CalculateUsageRate(targetUsed, targetLimit);
+    const uint64_t batchRate = CalculateUsageRate(SaturatingAdd(targetUsed, inflightNow), targetLimit);
+    const uint64_t cyclePlannedRate = CalculateUsageRate(
+        SaturatingAdd(SaturatingAdd(targetUsed, inflightNow), SubOrZero(runningTask.totalBudget, task.max_bytes())),
+        targetLimit);
     LOG(INFO) << FormatString(
-        "[MemoryRebalance] assign task %s source=%s target=%s max_bytes=%lu timeout_ms=%lu deadline_ms=%lu",
-        task.task_id(), task.source_worker(), task.target_worker(), task.max_bytes(), task.timeout_ms(),
-        task.deadline_ms());
+        "[MemoryRebalance] assign task %s source=%s target=%s max_bytes=%lu total_budget=%lu "
+        "target_usage_rate=%lu%% -> batch %lu%%, cycle_planned %lu%% timeout_ms=%lu deadline_ms=%lu",
+        task.task_id(), task.source_worker(), task.target_worker(), task.max_bytes(), runningTask.totalBudget,
+        currentRate, batchRate, cyclePlannedRate, task.timeout_ms(), task.deadline_ms());
     INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.AssignTask");
 
     auto newTask = activeTasksBySource_.find(reportingWorker);
