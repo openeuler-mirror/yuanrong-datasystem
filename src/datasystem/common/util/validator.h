@@ -435,6 +435,17 @@ public:
     }
 
     /**
+     * @brief Validate a log file base name.
+     * @param[in] value The string to be checked.
+     * @return True if valid.
+     */
+    static bool ValidateLogName(const std::string &value)
+    {
+        static const re2::RE2 re("^[a-zA-Z0-9_]+$");
+        return re2::RE2::FullMatch(value, re);
+    }
+
+    /**
      * @brief Validate the given string contains all legal characters.
      * @param[in] flagName The characters flag.
      * @param[in] value The string to be checked.

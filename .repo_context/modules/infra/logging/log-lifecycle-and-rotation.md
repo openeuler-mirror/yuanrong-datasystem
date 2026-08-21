@@ -52,6 +52,9 @@
   - `Logging::Start()` initializes client-specific config from environment when the explicit process role is
     `LogProcessRole::CLIENT`; worker and coordinator callers pass `LogProcessRole::WORKER` and
     `LogProcessRole::COORDINATOR` respectively.
+  - client log-name configuration keeps explicit `KVClientConfig` presence separate from the resolved `log_filename`;
+    an explicit empty `LogName` or `AccessLogName` suppresses the corresponding environment override and selects the
+    default client log base name.
   - it sets `log_filename`, initializes the provider, starts `LogManager`, initializes `AccessRecorderManager`, and starts
     the operation logger with an explicit `client`, `worker`, or `coordinator` role;
   - when `log_monitor` is enabled, `AccessRecorderManager` initializes exporters according to its construction-time

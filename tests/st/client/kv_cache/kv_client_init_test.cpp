@@ -26,6 +26,7 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
+#include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -37,6 +38,7 @@ DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_uint32(log_async_queue_size);
 DS_DECLARE_int32(v);
 DS_DECLARE_string(monitor_config_file);
+DS_DECLARE_string(log_filename);
 
 namespace datasystem {
 namespace st {
@@ -201,6 +203,35 @@ TEST_F(KVClientInitTest, ConfigAfterDefaultInitDoesNotOverrideProcessConfig)
         if (FLAGS_max_log_size == FIRST_MAX_LOG_SIZE_MB || FLAGS_log_async_queue_size == FIRST_LOG_ASYNC_QUEUE_SIZE
             || FLAGS_zmq_client_io_thread == FIRST_ZMQ_CLIENT_IO_THREAD) {
             LOG(ERROR) << "Config after default Init unexpectedly overrides process-level config.";
+            return 1;
+        }
+        return 0;
+    });
+}
+
+TEST_F(KVClientInitTest, ExplicitEmptyLogNameUsesDefaultAndIgnoresEnv)
+{
+    if (FLAGS_use_brpc) {
+        GTEST_SKIP() << "brpc fork-safety: brpc channel/bthread global state not fork-safe. Tracked separately.";
+    }
+    auto connectOptions = GetConnectOptions();
+    RunInChildProcess([connectOptions]() -> int {
+        setenv("DATASYSTEM_CLIENT_LOG_NAME", "env_client", 1);
+        KVClientConfig config;
+        auto buildStatus = KVClientConfig::Builder().LogName("").LogWithoutPid(true).Build(config);
+        if (buildStatus.IsError()) {
+            LOG(ERROR) << "Build KVClientConfig failed: " << buildStatus.ToString();
+            return 1;
+        }
+        KVClient client(connectOptions);
+        auto initStatus = client.Init(config);
+        if (initStatus.IsError()) {
+            LOG(ERROR) << "Init with explicit empty LogName failed: " << initStatus.ToString();
+            return 1;
+        }
+        if (FLAGS_log_filename != CLIENT_LOG_FILENAME) {
+            LOG(ERROR) << "Unexpected log_filename, expect: " << CLIENT_LOG_FILENAME
+                       << ", actual: " << FLAGS_log_filename;
             return 1;
         }
         return 0;

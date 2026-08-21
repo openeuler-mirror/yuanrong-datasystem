@@ -38,6 +38,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_bool(log_monitor);
@@ -989,7 +990,7 @@ Status AccessRecorderManager::ResetWriteLogger(bool isEmbeddedClient)
 
         // Allow overriding client access log filename via config or environment variable.
         std::string accessLogName = Logging::GetClientAccessLogName();
-        if (Logging::ValidateLogName(accessLogName)) {
+        if (Validator::ValidateLogName(accessLogName)) {
             clientAccessLogName = std::move(accessLogName);
         }
 

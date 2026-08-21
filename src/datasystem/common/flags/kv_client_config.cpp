@@ -18,8 +18,6 @@
 #include <sstream>
 #include <vector>
 
-#include "re2/re2.h"
-
 #include "datasystem/common/util/validator.h"
 
 namespace datasystem {
@@ -95,21 +93,15 @@ bool ValidateNonEmptyArg(const std::unordered_map<std::string, std::string> &arg
     return it == args.end() || !it->second.empty();
 }
 
-bool IsValidNonEmptyLogBaseName(const std::string &value)
+void ValidateLogNameArg(const std::unordered_map<std::string, std::string> &args, const std::string &key,
+                        const std::string &fieldName, std::vector<std::string> &errors)
 {
-    static const re2::RE2 pattern("^[a-zA-Z0-9_]*$");
-    return re2::RE2::FullMatch(value, pattern);
-}
-
-void ValidateAccessLogNameArg(const std::unordered_map<std::string, std::string> &args,
-                              std::vector<std::string> &errors)
-{
-    auto it = args.find("client_access_log_filename");
+    auto it = args.find(key);
     if (it == args.end() || it->second.empty()) {
         return;
     }
-    if (!IsValidNonEmptyLogBaseName(it->second)) {
-        AddError(errors, "AccessLogName", "must contain only a-z, A-Z, 0-9, and underscore");
+    if (!Validator::ValidateLogName(it->second)) {
+        AddError(errors, fieldName, "must contain only a-z, A-Z, 0-9, and underscore");
     }
 }
 
@@ -140,12 +132,8 @@ void ValidateKvClientStringFields(const std::unordered_map<std::string, std::str
                                   std::vector<std::string> &errors)
 {
     ValidateNonEmptyPathArg(args, "log_dir", "LogDir", errors);
-    if (!ValidateNonEmptyArg(args, "log_filename")) {
-        AddError(errors, "LogName", "must not be empty");
-    } else if (!ValidateStringArg(args, "log_filename", &Validator::ValidateEligibleChar)) {
-        AddError(errors, "LogName", "contains unsupported characters");
-    }
-    ValidateAccessLogNameArg(args, errors);
+    ValidateLogNameArg(args, "log_filename", "LogName", errors);
+    ValidateLogNameArg(args, "client_access_log_filename", "AccessLogName", errors);
     ValidatePathArg(args, "monitor_config_file", "MonitorConfigPath", errors, true);
 }
 

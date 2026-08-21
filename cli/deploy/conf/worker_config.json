@@ -441,7 +441,7 @@
     },
     "log_filename": {
         "value": "",
-        "description": "Prefix of log filename, default is program invocation short name. Use standard characters only."
+        "description": "Prefix of log filename. Only letters, digits, and underscores are allowed when non-empty."
     },
     "log_async_queue_size": {
         "value": "65536",

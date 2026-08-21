@@ -188,7 +188,7 @@ global:
     # When enabled, requests whose RPC sub-phases exceed this threshold will include
     # a latencySummary in the access log.
     slowLogRpcSlowerThan: 5000
-    # Prefix of log filename, default is program invocation short name. Use standard characters only.
+    # Prefix of log filename. Only letters, digits, and underscores are allowed when non-empty.
     logFilename: ""
     # Interval between logging stream metrics
     scMetricsLogIntervalS: 60

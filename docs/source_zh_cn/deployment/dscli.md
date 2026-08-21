@@ -1240,7 +1240,7 @@ dscli query route \
 | watch_event_dispatch_thread | int | `4` | 否 | Coordinator 分发 Watch 事件的线程数 |
 | rpc_thread_num | int | `64` | 否 | Coordinator RPC 服务线程数 |
 | log_dir | string | `"./datasystem/logs"` | 否 | Coordinator 日志目录 |
-| log_filename | string | `"datasystem_coordinator"` | 否 | Coordinator 日志文件名前缀 |
+| log_filename | string | `"datasystem_coordinator"` | 否 | Coordinator 日志文件名前缀，非空时仅允许英文字母、数字和下划线 |
 | minloglevel | int | `0` | 是 | 最低日志级别，低于该级别的日志不会被记录 |
 | log_async_queue_size | int | `2048` | 否 | 异步日志消息队列最大容量 |
 | max_log_size | int | `400` | 否 | 单个日志文件最大大小，单位为 MB |
@@ -1389,7 +1389,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | log_async_queue_size | int | `65536` | 否 | 异步日志的消息队列最大容量（消息条数） |
 | log_compress | bool | `false` | 是 | 控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储 |
 | logbufsecs | int | `10` | 否 | 日志消息最多缓冲时长（以秒为单位） |
-| log_filename | string | `""` | 否 | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
+| log_filename | string | `""` | 否 | 日志前缀名，非空时仅允许英文字母、数字和下划线；为空时前缀名为 `datasystem_worker` |
 | log_retention_day | int | `0` | 否 | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
 | max_log_file_num | int | `5` | 是 | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
 | max_log_size | int | `400` | 否 | 单个日志文件最大大小（以MB为单位） |
