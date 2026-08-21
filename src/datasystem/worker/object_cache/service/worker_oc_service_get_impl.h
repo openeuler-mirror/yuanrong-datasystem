@@ -823,6 +823,11 @@ private:
 
     static const std::unordered_set<StatusCode> &GetRemoteGetRetryCodes(bool fastTransportEnabled);
 
+    static bool IsL2BackedWriteMode(WriteMode mode)
+    {
+        return mode != WriteMode::NONE_L2_CACHE && mode != WriteMode::NONE_L2_CACHE_EVICT;
+    }
+
     void DelayReleaseRemoteGetShmUnit(SafeObjType &entry, const Status &reason);
 
     void DelayReleaseBatchRemoteGetShmUnits(const BatchGetObjectRemoteReqPb &reqPb,
