@@ -1460,6 +1460,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | heartbeat_interval_ms | int | `1000` | 是 | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
 | node_timeout_s | int | `60` | 否 | 服务端节点超时最大时间间隔（单位为秒）, node_timeout_s >= 1 |
 | node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `node_timeout_s` |
+| hash_ring_tokens_per_member | uint32 | `4` | 否 | 新建哈希环和扩容时为每个 Worker 分配的 token 数，取值范围为 `1`～`4096`。同一集群中执行 topology 规划的进程（Worker 或 Coordinator）必须使用相同配置；修改不会重分配已有 topology 中已持久化的 token。 |
 | enable_reconciliation | bool | `false` | 否 | 当节点重启时是否启用全局引用计数对账功能；仅使用 KVClient 的场景无需开启，使用 ObjectClient 全局引用计数时需显式设置为 `true` |
 | add_node_wait_time_s | int | `60` | 是 | 新节点加入哈希环的等待超时时间 |
 | auto_del_dead_node | bool | `true` | 是 | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |

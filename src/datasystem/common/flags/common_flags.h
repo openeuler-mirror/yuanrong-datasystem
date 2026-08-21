@@ -25,6 +25,7 @@ DS_DECLARE_int32(io_thread_nice);
 DS_DECLARE_bool(enable_sched_runtime);
 DS_DECLARE_int32(zmq_chunk_sz);
 DS_DECLARE_uint32(node_timeout_s);
+DS_DECLARE_uint32(hash_ring_tokens_per_member);
 DS_DECLARE_uint64(stream_idle_time_s);
 DS_DECLARE_int64(payload_nocopy_threshold);
 DS_DECLARE_bool(enable_multi_stubs);

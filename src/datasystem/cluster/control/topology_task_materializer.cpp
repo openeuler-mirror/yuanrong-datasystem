@@ -14,13 +14,13 @@
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/ak_sk/hasher.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
 namespace {
 constexpr size_t ID_HASH_CHARS = 32;
-constexpr uint32_t DEFAULT_TOKENS_PER_MEMBER = 4;
 constexpr int BITS_PER_BYTE = 8;
 constexpr int U64_MOST_SIGNIFICANT_SHIFT = 56;
 constexpr int U32_MOST_SIGNIFICANT_SHIFT = 24;
@@ -218,7 +218,7 @@ Status RebuildPlan(const TopologySnapshot &latest, const IPlanningAlgorithm &alg
         }
     }
     if (batch->type == TopologyChangeType::SCALE_OUT) {
-        RETURN_IF_NOT_OK(algorithm.PlanScaleOut({ current, selected, DEFAULT_TOKENS_PER_MEMBER }, plan));
+        RETURN_IF_NOT_OK(algorithm.PlanScaleOut({ current, selected, FLAGS_hash_ring_tokens_per_member }, plan));
     } else if (batch->type == TopologyChangeType::SCALE_IN) {
         RETURN_IF_NOT_OK(algorithm.PlanScaleIn({ current, selected }, plan));
     } else {

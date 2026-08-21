@@ -11,12 +11,11 @@
 #include <algorithm>
 #include <unordered_set>
 
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
 namespace {
-constexpr uint32_t DEFAULT_TOKENS_PER_MEMBER = 4;
-
 bool SameIdentity(const Member &member, const MemberIdentity &identity)
 {
     return member.identity == identity;
@@ -83,7 +82,8 @@ Status TopologyPlanBuilder::BuildBootstrap(const TopologyState &latest, const st
                              "bootstrap requires a stable topology without a committed owner");
     RETURN_IF_NOT_OK(ValidateSelected(latest, ready, MemberState::INITIAL));
     TopologyPlan built;
-    RETURN_IF_NOT_OK(algorithm_.BuildInitialPlacement({ TopologyState{}, ready, DEFAULT_TOKENS_PER_MEMBER }, built));
+    RETURN_IF_NOT_OK(
+        algorithm_.BuildInitialPlacement({ TopologyState{}, ready, FLAGS_hash_ring_tokens_per_member }, built));
     std::unordered_set<std::string> readyAddresses;
     for (const auto &identity : ready) {
         readyAddresses.insert(identity.address);
@@ -112,7 +112,7 @@ Status TopologyPlanBuilder::BuildScaleOutStart(const TopologyState &latest, cons
     }
     RemoveMembers(current, selectedAddresses);
     TopologyPlan built;
-    RETURN_IF_NOT_OK(algorithm_.PlanScaleOut({ current, selected, DEFAULT_TOKENS_PER_MEMBER }, built));
+    RETURN_IF_NOT_OK(algorithm_.PlanScaleOut({ current, selected, FLAGS_hash_ring_tokens_per_member }, built));
     AdvanceEpoch(latest, TopologyChangeType::SCALE_OUT, built);
     RETURN_IF_NOT_OK(algorithm_.Validate(built.next));
     plan = std::move(built);
@@ -134,7 +134,7 @@ Status TopologyPlanBuilder::BuildScaleOutReplan(const TopologyState &latest,
     auto joining = MembersInState(retained, MemberState::JOINING);
     TopologyPlan built;
     if (!joining.empty()) {
-        RETURN_IF_NOT_OK(algorithm_.PlanScaleOut({ retained, joining, DEFAULT_TOKENS_PER_MEMBER }, built));
+        RETURN_IF_NOT_OK(algorithm_.PlanScaleOut({ retained, joining, FLAGS_hash_ring_tokens_per_member }, built));
         AdvanceEpoch(latest, TopologyChangeType::SCALE_OUT, built);
     } else {
         built.next = std::move(retained);
