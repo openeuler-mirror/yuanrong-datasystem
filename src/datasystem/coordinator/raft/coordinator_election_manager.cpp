@@ -815,12 +815,7 @@ Status CoordinatorElectionManager::DecideStartPlan(const RaftBootstrapState &loc
             }
             continue;
         }
-        if (peerState.metadataState == RaftMetadataState::VALID) {
-            if (peerState.committedPeers.empty() && firstBlockingObservationError.IsOk()) {
-                firstBlockingObservationError =
-                    Status(K_NOT_READY, "Coordinator bootstrap peer has valid metadata but no committed configuration: "
-                                            + observation.peer);
-            }
+        if (peerState.metadataState == RaftMetadataState::VALID && !peerState.committedPeers.empty()) {
             continue;
         }
         if (!IsSha256Hex(peerState.candidateDigest) || peerState.candidateCount != localState.candidateCount

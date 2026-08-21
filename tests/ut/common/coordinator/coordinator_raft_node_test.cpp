@@ -57,6 +57,7 @@ constexpr int kElectionTimeoutMs = 1'000;
 constexpr int64_t kValidConfigurationIndex = 1;
 constexpr std::chrono::seconds kCoordinationDeadline{ 2 };
 constexpr char kInternalLocalPeer[] = "127.0.0.1:18480:0";
+constexpr char kUnreachablePeer[] = "127.0.0.1:18481";
 constexpr char kNonzeroIndexPeer[] = "127.0.0.1:18480:1";
 constexpr char kMalformedPeerPayload[] = "invalid-peer-private-payload";
 constexpr char kSensitiveExceptionText[] = "injected onError exception detail";
@@ -72,16 +73,6 @@ struct ConfigurationErrorState {
     std::atomic<int> configurationCallbackCount{ 0 };
     std::atomic<int> errorCount{ 0 };
     Status reportedStatus;
-};
-
-struct InitialConfigurationCallbackState {
-    std::mutex mutex;
-    bool observed{ false };
-    Status reentrantStatus;
-    std::vector<std::string> callbackPeers;
-    std::vector<std::string> reentrantPeers;
-    int64_t callbackIndex{ -1 };
-    int64_t reentrantIndex{ -1 };
 };
 
 struct CommittedConfigurationRecord {
@@ -354,46 +345,23 @@ TEST(CoordinatorRaftNodeTest, StartFromConstructedValidatesOptionsWithoutRegistr
     EXPECT_EQ(node.state_, CoordinatorRaftNode::LifecycleState::CONSTRUCTED);
 }
 
-TEST_F(CoordinatorRaftNodeStartTest, BootstrapPublishesInitialConfigurationBeforeStartReturns)
+TEST_F(CoordinatorRaftNodeStartTest, BootstrapDoesNotPublishInitialConfigurationBeforeRaftCommit)
 {
-    auto callbackState = std::make_shared<InitialConfigurationCallbackState>();
-    auto nodeAddress = std::make_shared<CoordinatorRaftNode *>(nullptr);
+    auto callbackCount = std::make_shared<std::atomic<int>>(0);
     CoordinatorRaftEventCallbacks callbacks;
-    callbacks.onConfigurationCommitted = [callbackState, nodeAddress](std::vector<std::string> peers, int64_t index) {
-        if (index != 0) {
-            return;
-        }
-        std::vector<std::string> reentrantPeers;
-        int64_t reentrantIndex = -1;
-        auto reentrantStatus = (*nodeAddress)->GetCommittedConfiguration(reentrantPeers, reentrantIndex);
-        std::lock_guard<std::mutex> lock(callbackState->mutex);
-        callbackState->observed = true;
-        callbackState->reentrantStatus = std::move(reentrantStatus);
-        callbackState->callbackPeers = std::move(peers);
-        callbackState->reentrantPeers = std::move(reentrantPeers);
-        callbackState->callbackIndex = index;
-        callbackState->reentrantIndex = reentrantIndex;
+    callbacks.onConfigurationCommitted = [callbackCount](std::vector<std::string>, int64_t) {
+        callbackCount->fetch_add(1, std::memory_order_relaxed);
     };
 
     const auto dataDir = rootDir_ + "/bootstrap";
     node_ = std::make_unique<CoordinatorRaftNode>(
-        MakeOptions(RaftStartPlan{ BootstrapPlan{ { localPeer_ } } }, dataDir), std::move(callbacks));
-    *nodeAddress = node_.get();
+        MakeOptions(RaftStartPlan{ BootstrapPlan{ { localPeer_, kUnreachablePeer } } }, dataDir), std::move(callbacks));
     DS_ASSERT_OK(node_->Start(RaftMetadataState::ABSENT));
 
     std::vector<std::string> peers;
     int64_t index = -1;
-    DS_ASSERT_OK(node_->GetCommittedConfiguration(peers, index));
-    EXPECT_EQ(peers, std::vector<std::string>{ localPeer_ });
-    EXPECT_EQ(index, 0);
-
-    std::lock_guard<std::mutex> lock(callbackState->mutex);
-    ASSERT_TRUE(callbackState->observed);
-    EXPECT_TRUE(callbackState->reentrantStatus.IsOk()) << callbackState->reentrantStatus.ToString();
-    EXPECT_EQ(callbackState->callbackPeers, peers);
-    EXPECT_EQ(callbackState->reentrantPeers, peers);
-    EXPECT_EQ(callbackState->callbackIndex, 0);
-    EXPECT_EQ(callbackState->reentrantIndex, 0);
+    EXPECT_EQ(node_->GetCommittedConfiguration(peers, index).GetCode(), K_NOT_READY);
+    EXPECT_EQ(callbackCount->load(std::memory_order_relaxed), 0);
 }
 
 TEST_F(CoordinatorRaftNodeStartTest, RecoverAndWaitingDoNotPublishEmptyInitialConfiguration)

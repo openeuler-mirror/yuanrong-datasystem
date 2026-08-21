@@ -26,7 +26,6 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
-#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/coordinator/raft/coordinator_raft_operation.h"
@@ -263,28 +262,10 @@ Status CoordinatorRaftNode::Start(RaftMetadataState metadataState)
         return status;
     }
 
-    const bool publishBootstrapConfiguration = std::holds_alternative<BootstrapPlan>(options_.startPlan);
-    CoordinatorRaftStateMachine *publishedStateMachine = nullptr;
     stateMachine_ = std::move(stateMachine);
     node_ = std::move(node);
     state_ = LifecycleState::STARTED;
-    if (publishBootstrapConfiguration) {
-        publishedStateMachine = stateMachine_.get();
-        std::lock_guard<std::mutex> publishLock(configurationPublishMutex_);
-        configurationPublishInProgress_ = true;
-    }
     lock.unlock();
-
-    if (publishBootstrapConfiguration) {
-        Raii publishComplete([this] {
-            {
-                std::lock_guard<std::mutex> publishLock(configurationPublishMutex_);
-                configurationPublishInProgress_ = false;
-            }
-            configurationPublishCv_.notify_all();
-        });
-        publishedStateMachine->on_configuration_committed(nodeOptions.initial_conf, 0);
-    }
     return Status::OK();
 }
 
@@ -300,10 +281,6 @@ void CoordinatorRaftNode::ShutdownInternal() noexcept
         }
         state_ = LifecycleState::STOPPING;
         lock.unlock();
-        {
-            std::unique_lock<std::mutex> publishLock(configurationPublishMutex_);
-            configurationPublishCv_.wait(publishLock, [this] { return !configurationPublishInProgress_; });
-        }
         lock.lock();
         node = std::move(node_);
         stateMachine = std::move(stateMachine_);
