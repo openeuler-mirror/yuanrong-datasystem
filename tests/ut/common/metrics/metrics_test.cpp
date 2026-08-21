@@ -29,6 +29,8 @@
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/logging.h"
@@ -139,6 +141,78 @@ bool FileContains(const std::string &filePath, const std::string &content)
     std::string data;
     Status rc = ReadFileToString(filePath, data);
     return rc.IsOk() && data.find(content) != std::string::npos;
+}
+
+size_t CountFileOccurrences(const std::string &filePath, const std::string &content)
+{
+    std::string data;
+    Status rc = ReadFileToString(filePath, data);
+    if (rc.IsError() || content.empty()) {
+        return 0;
+    }
+    size_t count = 0;
+    size_t pos = 0;
+    while ((pos = data.find(content, pos)) != std::string::npos) {
+        ++count;
+        pos += content.size();
+    }
+    return count;
+}
+
+std::vector<nlohmann::json> ReadMetricCycle(const std::string &filePath, uint64_t targetCycle)
+{
+    std::string data;
+    if (ReadFileToString(filePath, data).IsError()) {
+        return {};
+    }
+    std::vector<nlohmann::json> records;
+    std::istringstream lines(data);
+    std::string line;
+    while (std::getline(lines, line)) {
+        auto record = nlohmann::json::parse(line, nullptr, false);
+        if (!record.is_discarded() && record.value("cycle", 0UL) == targetCycle) {
+            records.emplace_back(std::move(record));
+        }
+    }
+    return records;
+}
+
+testing::AssertionResult ValidateMetricCycle(const std::string &filePath, uint64_t targetCycle,
+                                             const std::set<std::string> &expectedNames)
+{
+    const auto records = ReadMetricCycle(filePath, targetCycle);
+    if (records.empty()) {
+        return testing::AssertionFailure() << "cycle " << targetCycle << " has no records";
+    }
+    const auto partCount = records.front().value("part_count", 0UL);
+    if (partCount == 0 || records.size() != partCount) {
+        return testing::AssertionFailure() << "cycle " << targetCycle << " record count " << records.size()
+                                           << " does not match part_count " << partCount;
+    }
+    std::set<size_t> partIndexes;
+    std::set<std::string> metricNames;
+    for (const auto &record : records) {
+        if (record.value("cycle", 0UL) != targetCycle || record.value("part_count", 0UL) != partCount) {
+            return testing::AssertionFailure() << "cycle metadata is inconsistent";
+        }
+        partIndexes.emplace(record.value("part_index", 0UL));
+        if (!record.contains("metrics") || !record["metrics"].is_array()) {
+            return testing::AssertionFailure() << "cycle record lacks metrics array";
+        }
+        for (const auto &metric : record["metrics"]) {
+            metricNames.emplace(metric.value("name", std::string()));
+        }
+    }
+    for (size_t index = 1; index <= partCount; ++index) {
+        if (partIndexes.count(index) == 0) {
+            return testing::AssertionFailure() << "cycle " << targetCycle << " misses part " << index;
+        }
+    }
+    if (metricNames != expectedNames) {
+        return testing::AssertionFailure() << "cycle " << targetCycle << " exported " << metricNames.size()
+                                           << " metrics, expected " << expectedNames.size();
+    }
+    return testing::AssertionSuccess();
 }
 
 std::string HistogramMetricJson(const std::string &name, uint64_t totalCount, uint64_t totalAvg, uint64_t totalMax,
@@ -299,6 +373,7 @@ TEST_F(MetricsTest, writer_no_type_unit_field_test)
 
 TEST_F(MetricsTest, print_summary_uses_metrics_trace_id_test)
 {
+    FLAGS_json_log_monitor = false;
     InitMetrics();
     testing::internal::CaptureStderr();
     metrics::PrintSummary();
@@ -318,6 +393,7 @@ TEST_F(MetricsTest, print_summary_uses_metrics_trace_id_test)
 // Same histogram JSON fields including total/delta p50, p90, and p99.
 TEST_F(MetricsTest, print_summary_histogram_json_includes_p99)
 {
+    FLAGS_json_log_monitor = false;
     InitMetrics();
     metrics::GetHistogram(HISTOGRAM_ID).Observe(10);
     metrics::GetHistogram(HISTOGRAM_ID).Observe(30);
@@ -333,11 +409,95 @@ TEST_F(MetricsTest, print_summary_histogram_json_includes_p99)
     EXPECT_NE(err.find("\"p50\":30"), std::string::npos) << err;
 }
 
-TEST_F(MetricsTest, print_summary_splits_large_payload_test)
+TEST_F(MetricsTest, print_summary_omits_info_when_json_exporter_is_active)
 {
+    FLAGS_log_monitor = true;
+    FLAGS_json_log_monitor = true;
+    const std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
+    (void)DeleteFile(filePath);
+    InitMetrics();
+    metrics::GetCounter(COUNTER_ID).Inc(5);
+
+    testing::internal::CaptureStderr();
+    metrics::PrintSummary();
+    auto firstOutput = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(firstOutput.find("{\"event\":\"metrics_summary\""), std::string::npos) << firstOutput;
+
+    testing::internal::CaptureStderr();
+    for (int i = 0; i < 99; ++i) {
+        metrics::PrintSummary();
+    }
+    auto laterOutput = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(laterOutput.find("{\"event\":\"metrics_summary\""), std::string::npos) << laterOutput;
+
+    constexpr int retryTimes = 30;
+    ASSERT_TRUE(Retry([&filePath]() {
+        return CountFileOccurrences(filePath, "\"event\":\"metrics_summary\"") == 100;
+    }, retryTimes, std::chrono::milliseconds(100)));
+    ASSERT_TRUE(Retry([&filePath]() { return FileContains(filePath, "\"cycle\":1"); }, retryTimes,
+                      std::chrono::milliseconds(100)));
+    ASSERT_TRUE(Retry([&filePath]() { return FileContains(filePath, "\"cycle\":100"); }, retryTimes,
+                      std::chrono::milliseconds(100)));
+}
+
+TEST_F(MetricsTest, print_summary_uses_info_when_json_exporter_is_unavailable)
+{
+    FLAGS_log_monitor = true;
+    FLAGS_json_log_monitor = false;
+    InitMetrics();
+    FLAGS_json_log_monitor = true;
+    metrics::GetCounter(COUNTER_ID).Inc(5);
+
+    testing::internal::CaptureStderr();
+    metrics::PrintSummary();
+    auto output = testing::internal::GetCapturedStderr();
+
+    EXPECT_NE(output.find("{\"event\":\"metrics_summary\""), std::string::npos) << output;
+}
+
+TEST_F(MetricsTest, print_summary_writes_all_parts_for_every_split_cycle_without_info)
+{
+    FLAGS_log_monitor = true;
+    FLAGS_json_log_monitor = true;
+    const std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
+    (void)DeleteFile(filePath);
     metrics::ResetForTest();
     std::vector<std::string> names;
     std::vector<metrics::MetricDesc> descs;
+    names.reserve(80);
+    descs.reserve(80);
+    for (uint16_t i = 0; i < 80; ++i) {
+        names.emplace_back("metric_" + std::to_string(i) + "_" + std::string(320, 'x'));
+        descs.push_back({ i, names.back().c_str(), metrics::MetricType::COUNTER, "count" });
+    }
+    DS_ASSERT_OK(metrics::Init(descs.data(), descs.size()));
+    for (uint16_t i = 0; i < 80; ++i) {
+        METRIC_ADD(i, 6);
+    }
+    const std::set<std::string> expectedNames(names.begin(), names.end());
+
+    testing::internal::CaptureStderr();
+    metrics::PrintSummary();
+    metrics::PrintSummary();
+    auto output = testing::internal::GetCapturedStderr();
+
+    EXPECT_EQ(output.find("{\"event\":\"metrics_summary\""), std::string::npos) << output;
+    constexpr int retryTimes = 30;
+    ASSERT_TRUE(Retry([&filePath, &expectedNames]() {
+        return ValidateMetricCycle(filePath, 1, expectedNames) && ValidateMetricCycle(filePath, 2, expectedNames);
+    }, retryTimes, std::chrono::milliseconds(100)));
+    EXPECT_TRUE(ValidateMetricCycle(filePath, 1, expectedNames));
+    EXPECT_TRUE(ValidateMetricCycle(filePath, 2, expectedNames));
+}
+
+TEST_F(MetricsTest, print_summary_splits_large_payload_test)
+{
+    FLAGS_json_log_monitor = false;
+    metrics::ResetForTest();
+    std::vector<std::string> names;
+    std::vector<metrics::MetricDesc> descs;
+    names.reserve(80);
+    descs.reserve(80);
     for (uint16_t i = 0; i < 80; ++i) {
         names.emplace_back("metric_" + std::to_string(i) + "_" + std::string(320, 'x'));
         descs.push_back({ i, names.back().c_str(), metrics::MetricType::COUNTER, "count" });
@@ -359,6 +519,8 @@ TEST_F(MetricsTest, dump_summaries_contains_all_parts_when_split)
     metrics::ResetForTest();
     std::vector<std::string> names;
     std::vector<metrics::MetricDesc> descs;
+    names.reserve(80);
+    descs.reserve(80);
     for (uint16_t i = 0; i < 80; ++i) {
         names.emplace_back("metric_" + std::to_string(i) + "_" + std::string(320, 'x'));
         descs.push_back({ i, names.back().c_str(), metrics::MetricType::COUNTER, "count" });
@@ -1364,18 +1526,41 @@ TEST_F(MetricsTest, kv_metrics_print_summary_test)
 // metrics_summary body, without re-serializing the rest. Labels are JSON-escaped so a pod name
 // containing a quote/backslash still yields valid JSON.
 
-TEST_F(MetricsTest, kv_metrics_print_summary_respects_json_log_monitor_independently)
+TEST_F(MetricsTest, client_metrics_summary_uses_json_log_without_info)
 {
-    FLAGS_log_monitor = false;
+    FLAGS_log_monitor = true;
     FLAGS_json_log_monitor = true;
     const std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
     (void)DeleteFile(filePath);
     InitKvMetricsForTest();
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+
+    testing::internal::CaptureStderr();
     metrics::PrintSummary();
+    auto output = testing::internal::GetCapturedStderr();
+
+    EXPECT_EQ(output.find("{\"event\":\"metrics_summary\""), std::string::npos) << output;
     constexpr int retryTimes = 30;
-    ASSERT_TRUE(Retry([&filePath]() { return FileContains(filePath, "metrics_summary"); }, retryTimes,
-                      std::chrono::milliseconds(100)));
+    ASSERT_TRUE(Retry([&filePath]() {
+        return FileContains(filePath, "\"event\":\"metrics_summary\"") &&
+               FileContains(filePath, "\"name\":\"client_put_request_total\"");
+    }, retryTimes, std::chrono::milliseconds(100)));
+}
+
+TEST_F(MetricsTest, client_metrics_summary_uses_info_when_json_exporter_is_unavailable)
+{
+    FLAGS_log_monitor = true;
+    FLAGS_json_log_monitor = false;
+    InitKvMetricsForTest();
+    FLAGS_json_log_monitor = true;
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+
+    testing::internal::CaptureStderr();
+    metrics::PrintSummary();
+    auto output = testing::internal::GetCapturedStderr();
+
+    EXPECT_NE(output.find("{\"event\":\"metrics_summary\""), std::string::npos) << output;
+    EXPECT_NE(output.find("\"name\":\"client_put_request_total\""), std::string::npos) << output;
 }
 
 TEST_F(MetricsTest, wrap_with_pod_cluster_prepends_labels)

@@ -78,6 +78,8 @@
 - Verified from `json_lines_exporter.*`:
   - `Init(filePath)` creates the file, caches `podName_` (`GetPodIdentifier()`) and `clusterName_` (`FLAGS_cluster_name`), and starts exporter infrastructure.
   - `WriteJsonLine(json)` writes one complete JSON object per line with **no text prefix** (unlike `HardDiskExporter::Send`, it does not call `ConstructLogPrefix`); `Send` exists only as a pure-virtual contract stub and should not be used by new callers.
+  - `metrics::LogSummary` writes every part of a cycle to `kv_metrics.log` when `json_log_monitor` is enabled and the exporter exists. In that state it suppresses the duplicate INFO summary; when the exporter is disabled or unavailable, `log_monitor` retains the INFO fallback.
+  - the output boundary is shared by Worker, Coordinator, and SDK Client callers; role-specific metrics differ, but routing and fallback semantics do not.
   - `PodName()`/`ClusterName()` expose the cached labels (with `[[nodiscard]]`/`noexcept`) for JSON top-level fields.
   - rotation and pruning reuse the hoisted base-class machinery; rotated files use the `.<ts>.log` suffix.
   - `WrapJsonWithPodCluster(body, pod, cluster, time)` is the single shared helper that JSON-escapes time/pod/cluster labels and splices them after the leading `{` of a body; used by both `kv_resource.log` (collector) and `kv_metrics.log` (metrics::LogSummary) so the two outputs share one escaping + prefixing path.
@@ -96,7 +98,7 @@
     - access/performance monitor logs via `AccessRecorderManager`
   - `JsonLinesExporter` is used by:
     - `ResMetricCollector` (kv_resource.log, JSON resource snapshot)
-    - `metrics::LogSummary` (kv_metrics.log, parallel JSON-Lines output for metrics_summary gated by `json_log_monitor`)
+    - `metrics::LogSummary` (`kv_metrics.log`, exclusive JSON-Lines output for each complete `metrics_summary` cycle when the exporter is active; INFO is the fallback otherwise)
 - Review implication:
   - exporter changes are observability-wide changes, not metrics-local tweaks.
 

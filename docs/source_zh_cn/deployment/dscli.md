@@ -1263,8 +1263,8 @@ dscli query route \
 | logbufsecs | int | `0` | 否 | 日志消息最大缓冲时长，单位为秒 |
 | logfile_mode | int | `416` | 否 | 日志文件模式/权限 |
 | log_only_write_info_file | bool | `true` | 否 | 是否只生成 INFO 日志文件；INFO 文件始终包含所有级别的日志 |
-| log_monitor | bool | `true` | 是 | 是否在 Coordinator INFO 日志中周期输出 `metrics_summary` 指标摘要 |
-| json_log_monitor | bool | `true` | 是 | 是否将 Coordinator 指标摘要同时输出到 `kv_metrics.log` JSON-Lines 文件 |
+| log_monitor | bool | `true` | 是 | 是否开启 Coordinator 指标摘要；当 JSON exporter 未启用或未创建时，摘要输出到 Coordinator INFO 作为 fallback |
+| json_log_monitor | bool | `true` | 是 | 是否将 Coordinator 指标摘要输出到 `kv_metrics.log` JSON-Lines 文件。开启且 exporter 创建成功后，每周期完整记录，Coordinator INFO 不再重复输出 `metrics_summary` |
 | log_monitor_interval_ms | int | `10000` | 否 | Coordinator 指标摘要的采集和输出间隔，单位为毫秒 |
 | brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
 | brpc_max_concurrency | int | `128` | 否 | 每个 brpc Server 允许的最大并发 RPC 数；为 `0` 时不限制，且不能小于 `brpc_server_num_threads` |
@@ -1416,7 +1416,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 > 例如 `request=0.5, access=0.3` 时，access实际保留率是 65%（50%采中强制输出 + 50%未采中×30%补采样），远高于 `access_sample_rate=0.3`。
 | log_only_write_info_file | bool | `true` | 否 | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
 | log_monitor | bool | `true` | 是 | 是否开启接口性能与资源观测日志 |
-| json_log_monitor | bool | `true` | 是 | 是否开启 `kv_resource.log` 与 `kv_metrics.log` JSON-Lines 观测日志 |
+| json_log_monitor | bool | `true` | 是 | 是否开启 `kv_resource.log` 与 `kv_metrics.log` JSON-Lines 观测日志。开启后 `kv_metrics.log` 每周期完整记录 `metrics_summary`，主 INFO 不再重复输出 `metrics_summary`；JSON exporter 未启用或未创建时保持 `log_monitor` 控制的 INFO 输出 |
 | monitor_config_file | string | `./datasystem/config/datasystem.config` | 否 | 配置worker监控配置文件的路径 |
 | log_monitor_exporter | string | `"harddisk"` | 否 | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |
 | log_monitor_interval_ms | int | `10000` | 否 | 观测日志收集导出的间隔时间（以毫秒为单位） |

@@ -383,8 +383,8 @@ Failure-sensitive steps:
 
 | Config | Type | Default or source | Effect | Risk if changed |
 | --- | --- | --- | --- | --- |
-| `log_monitor` | gflag | shared observability flag, runtime default in common flags | enables text monitor outputs such as `resource.log` and INFO `metrics_summary` | can disable text monitor output while runtime logic keeps working |
-| `json_log_monitor` | gflag | JSON monitor flag, runtime default in common flags | enables `kv_resource.log` and `kv_metrics.log` JSON-Lines outputs | can disable JSON monitor output independently from `log_monitor` |
+| `log_monitor` | gflag | shared observability flag, runtime default in common flags | enables monitor collection and the INFO `metrics_summary` fallback used when the JSON exporter is disabled or unavailable | can disable text fallback while runtime logic keeps working |
+| `json_log_monitor` | gflag | JSON monitor flag, runtime default in common flags | enables `kv_resource.log` and `kv_metrics.log`; when the metrics JSON exporter is active, each complete summary cycle is written only to `kv_metrics.log` instead of being duplicated in INFO | affects Worker, Coordinator, and SDK Client metrics output because they share `metrics::LogSummary` |
 | `log_monitor_exporter` | gflag | current supported value `"harddisk"` | selects exporter backend | unsupported values fail initialization |
 | `log_monitor_interval_ms` | gflag | defined in `res_metric_collector.cpp`, default `10000` | controls sampling cadence | changes load, freshness, and output volume |
 | `log_dir` | gflag | shared logging config | controls output directory | bad path or permissions break persistence |
