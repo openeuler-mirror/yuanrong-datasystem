@@ -144,7 +144,7 @@ TEST(CoordinatorWatchServiceBrpcTest, DeliversEveryValidatedBatchEventInOrder)
     EXPECT_EQ(delivered[2].type, cluster::CoordinationEventType::RESET);
 }
 
-TEST(CoordinatorWatchServiceBrpcTest, RejectsOversizedBatchBeforeDelivery)
+TEST(CoordinatorWatchServiceBrpcTest, RejectsExcessEventCountButAcceptsLargeSingleEvent)
 {
     size_t delivered = 0;
     coordinator::CoordinatorWatchServiceImpl svc(HostPort("127.0.0.1", 0));
@@ -167,9 +167,10 @@ TEST(CoordinatorWatchServiceBrpcTest, RejectsOversizedBatchBeforeDelivery)
     auto *event = req.add_events();
     event->set_type(coordinator::EventPb::PUT);
     event->mutable_kv()->set_key("/datasystem/c/topology");
-    event->mutable_kv()->set_value(std::string(MAX_WATCH_EVENT_BATCH_BYTES, 'x'));
-    EXPECT_EQ(svc.HandleEvent(req, rsp).GetCode(), K_INVALID);
-    EXPECT_EQ(delivered, 0UL);
+    constexpr size_t LEGACY_BATCH_LIMIT_BYTES = 8 * 1'024 * 1'024;
+    event->mutable_kv()->set_value(std::string(LEGACY_BATCH_LIMIT_BYTES + 1, 'x'));
+    EXPECT_EQ(svc.HandleEvent(req, rsp).GetCode(), K_OK);
+    EXPECT_EQ(delivered, 1UL);
 }
 
 TEST(CoordinatorWatchServiceBrpcTest, PropagatesTemporaryRouteRejection)

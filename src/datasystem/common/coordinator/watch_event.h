@@ -27,7 +27,7 @@
 
 namespace datasystem {
 static constexpr size_t MAX_WATCH_EVENTS_PER_BATCH = 32;
-static constexpr size_t MAX_WATCH_EVENT_BATCH_BYTES = 8 * 1'024 * 1'024;
+static constexpr size_t WATCH_EVENT_BATCH_MERGE_THRESHOLD_BYTES = 256 * 1'024;
 static constexpr size_t WATCH_EVENT_WIRE_OVERHEAD_BYTES = 128;
 
 struct WatchEvent {
