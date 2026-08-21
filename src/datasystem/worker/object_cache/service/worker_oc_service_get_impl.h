@@ -68,6 +68,23 @@ public:
     Status Get(std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> &serverApi);
 
     /**
+     * @brief Acquire a resident local object for a side-effect-free direct read.
+     * @param[in] objectKey Object key to look up.
+     * @param[out] params Resident object snapshot, or null when the object is not locally readable.
+     * @return K_OK on hit or miss; the error code otherwise.
+     */
+    Status TryAcquireLocalObject(const std::string &objectKey, std::unique_ptr<GetObjEntryParams> &params);
+
+    /**
+     * @brief Query metadata-only object locations and resolve Master redirects internally.
+     * @param[in] objectKeys Object keys to query.
+     * @param[out] locations Locations keyed by object key; missing keys are absent.
+     * @return K_OK on success; the original metadata error otherwise.
+     */
+    Status QueryObjectLocations(const std::vector<std::string> &objectKeys,
+                                std::unordered_map<std::string, master::ObjectLocationInfoPb> &locations);
+
+    /**
      * @brief Process get request for these objects not exist in local, query object meta from master, then get
      * object data from remote.
      * @param[in] objectsNeedGetRemote read key info, contain offset, size, objKey.
@@ -527,6 +544,10 @@ private:
 
     Status QueryExistMetadataViaPureQueryMeta(const std::vector<std::string> &objectKeys,
                                               std::vector<master::QueryMetaInfoPb> &queryMetas);
+    Status QueryPureMetadataGroup(const HostPort &masterAddress, const std::vector<std::string> &objectKeys,
+                                  std::vector<master::QueryMetaInfoPb> &queryMetas);
+    Status QueryPureMetadataRedirects(const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &redirects,
+                                      std::vector<master::QueryMetaInfoPb> &queryMetas);
 
     /**
      * @brief Query the metadata of the specified objects in the redirect master.

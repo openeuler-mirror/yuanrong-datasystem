@@ -59,6 +59,29 @@ public:
                && shmConnection_->IsAlive();
     }
 
+    /**
+     * @brief Acquire the endpoint shared-memory session for a routed request.
+     * @param[in] context Request authentication and tenant context.
+     * @param[out] session Acquired endpoint session.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status AcquireSession(const TransportRequestContext &context, std::shared_ptr<ShmSession> &session)
+    {
+        RETURN_RUNTIME_ERROR_IF_NULL(shmConnection_);
+        return shmConnection_->Acquire(context, session);
+    }
+
+    /**
+     * @brief Invalidate a session that returned an unusable shared-memory result.
+     * @param[in] session Session to invalidate.
+     */
+    void InvalidateSession(const std::shared_ptr<ShmSession> &session)
+    {
+        if (shmConnection_ != nullptr) {
+            shmConnection_->Invalidate(session);
+        }
+    }
+
     Status Get(const DataGetRequest &input, DataGetResult &output) override
     {
         RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);

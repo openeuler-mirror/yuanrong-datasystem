@@ -31,6 +31,7 @@
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
 #include "datasystem/client/transport/transport_advisor.h"
 #include "datasystem/protos/master_object.pb.h"
+#include "datasystem/protos/object_posix.pb.h"
 
 namespace datasystem {
 namespace client {
@@ -55,23 +56,28 @@ public:
     virtual ~ObjectMetadataClient() = default;
 
     /**
-     * @brief Query a metadata-owner group and resolve redirects within the API deadline.
+     * @brief Query a metadata-owner Worker for ordered locations and optional inline data.
      * @param[in] address Initial metadata owner.
      * @param[in,out] items Ordered object metadata states belonging to address.
+     * @param[in] readContext Read context required by the shared-memory transport.
      * @return K_OK after every item has an independent result; a group-wide error otherwise.
      */
-    virtual Status QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items);
+    virtual Status QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items,
+                               std::shared_ptr<const TransportReadContext> readContext);
 
     /** @brief Query object locations without requesting inline object data. */
     virtual Status QueryMetadata(const HostPort &address, const ObjectMetadataBatch &items);
 
 private:
-    enum class InlineTransportMode : uint8_t { NONE = 0, TCP = 1, UB = 2 };
+    enum class InlineTransportMode : uint8_t { NONE = 0, TCP = 1, UB = 2, SHM = 3 };
 
     struct InlineRequestContext {
         InlineTransportMode mode = InlineTransportMode::NONE;
         std::unordered_map<ObjectMetadataItem *, UbReceiveBuffer> ubBuffers;
         std::string transportInstanceId;
+        std::shared_ptr<ShmTransporter> shmTransporter;
+        std::shared_ptr<ShmSession> shmSession;
+        std::shared_ptr<const TransportReadContext> readContext;
 
         /** @brief Disable inline transfer and release prepared receive buffers. */
         void DisableInlineData()
@@ -79,20 +85,33 @@ private:
             mode = InlineTransportMode::NONE;
             ubBuffers.clear();
             transportInstanceId.clear();
+            shmTransporter.reset();
+            shmSession.reset();
+            readContext.reset();
         }
     };
 
-    Status Query(const HostPort &address, const ObjectMetadataBatch &items, bool enableInlineData);
+    Status Query(const HostPort &address, const ObjectMetadataBatch &items, bool enableInlineData,
+                 std::shared_ptr<const TransportReadContext> readContext = nullptr);
 
-    Status QueryWithRetry(const HostPort &address, const ObjectMetadataBatch &items, bool allowRedirect,
-                          master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
-                          InlineRequestContext &context, std::optional<uint64_t> redirectTopologyVersion);
-    Status BuildQueryRequest(const ObjectMetadataBatch &items, bool allowRedirect,
-                             const InlineRequestContext &context, master::QueryAndGetReqPb &request) const;
-    Status InvokeQueryAndGet(const HostPort &address, master::QueryAndGetReqPb &request,
-                             master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
-                             InlineRequestContext &context, std::optional<uint64_t> redirectTopologyVersion,
-                             bool &rpcDispatched);
+    Status QueryWithRetry(const HostPort &address, const ObjectMetadataBatch &items,
+                          QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
+                          InlineRequestContext &context);
+    Status BuildQueryRequest(const HostPort &address, const ObjectMetadataBatch &items,
+                             InlineRequestContext &context, QueryAndGetReqPb &request) const;
+    Status InvokeQueryAndGet(const HostPort &address, QueryAndGetReqPb &request,
+                             QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
+                             InlineRequestContext &context, bool &rpcDispatched);
+    Status InvokeInlineQueryAndGet(const HostPort &address, QueryAndGetReqPb &request,
+                                   QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
+                                   InlineRequestContext &context, bool &invoked, bool &rpcDispatched);
+    Status InvokeTcpQueryAndGet(const HostPort &address, QueryAndGetReqPb &request,
+                                QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
+                                bool &rpcDispatched);
+    void SwitchInlineRequestToTcp(QueryAndGetReqPb &request, std::vector<RpcMessage> &payloads,
+                                  InlineRequestContext &context) const;
+    Status PrepareQueryRetry(const HostPort &address, const Status &rc, bool rpcDispatched,
+                             InlineRequestContext &context, int64_t &backoffMs);
 
     /**
      * @brief Select and initialize the inline transport for one metadata-owner request.
@@ -102,7 +121,16 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status InitializeInlineRequest(const HostPort &address, const ObjectMetadataBatch &items,
+                                   std::shared_ptr<const TransportReadContext> readContext,
                                    InlineRequestContext &context) const;
+
+    Status PrepareShmInlineRequest(const HostPort &address,
+                                   std::shared_ptr<const TransportReadContext> readContext,
+                                   InlineRequestContext &context) const;
+
+    /** @brief Replace an unavailable SHM inline request with an available UB or TCP request. */
+    Status PrepareShmInlineFallback(const HostPort &address, const ObjectMetadataBatch &items,
+                                    InlineRequestContext &context) const;
 
     /**
      * @brief Prepare UB inline transfer when the endpoint and client configuration support it.
@@ -130,7 +158,7 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status AddInlineDataRequest(const ObjectMetadataBatch &items, const InlineRequestContext &context,
-                                master::QueryAndGetReqPb &request) const;
+                                QueryAndGetReqPb &request) const;
 
     /**
      * @brief Apply ordered metadata and inline-data results to a metadata batch.
@@ -140,7 +168,7 @@ private:
      * @param[in,out] context Inline-request context.
      * @return K_OK on success; the error code otherwise.
      */
-    Status ApplyResults(const ObjectMetadataBatch &items, const master::QueryAndGetRspPb &response,
+    Status ApplyResults(const ObjectMetadataBatch &items, const QueryAndGetRspPb &response,
                         std::vector<RpcMessage> &payloads, InlineRequestContext &context) const;
 
     /**
@@ -151,7 +179,7 @@ private:
      * @param[in,out] context Inline-request context.
      * @return K_OK on success; the error code otherwise.
      */
-    Status ApplyResult(ObjectMetadataItem &item, const master::QueryAndGetResultPb &result,
+    Status ApplyResult(ObjectMetadataItem &item, const QueryAndGetResultPb &result,
                        std::vector<RpcMessage> &payloads, InlineRequestContext &context) const;
 
     /**
@@ -161,8 +189,11 @@ private:
      * @param[out] data Data-read result.
      * @return K_OK on success; the error code otherwise.
      */
-    Status BuildTcpInlineData(const master::QueryAndGetDataResultPb &dataResult,
+    Status BuildTcpInlineData(const QueryAndGetDataResultPb &dataResult, uint64_t objectSize,
                               std::vector<RpcMessage> &payloads, DataGetResult &data) const;
+
+    Status BuildShmInlineData(ObjectMetadataItem &item, const QueryAndGetShmInfoPb &shmInfo,
+                              InlineRequestContext &context, DataGetResult &data) const;
 
     /**
      * @brief Move ownership of a prepared UB receive buffer into a data-read result.

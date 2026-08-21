@@ -451,6 +451,8 @@ void WorkerOCServiceImpl::InitServiceImpl()
     getProc_ =
         std::make_shared<WorkerOcServiceGetImpl>(param, etcdStore_, memCpyThreadPool_, threadPool_,
                                                  akSkManager_, localAddress_, migrateRateController_, ubAdmission_);
+    queryAndGetProc_ =
+        std::make_shared<WorkerQueryAndGetImpl>(getProc_, memoryRefTable_, akSkManager_, localAddress_, ubAdmission_);
 
     deleteProc_ =
         std::make_shared<WorkerOcServiceDeleteImpl>(param, akSkManager_, localAddress_, getProc_);
@@ -1653,6 +1655,18 @@ Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterR
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     return getProc_->Get(serverApi);
+}
+
+Status WorkerOCServiceImpl::QueryAndGet(
+    std::shared_ptr<ServerUnaryWriterReader<QueryAndGetRspPb, QueryAndGetReqPb>> serverApi)
+{
+    ScopedRequestContext ctx;
+    BthreadReadGuard noRecon;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
+    RETURN_RUNTIME_ERROR_IF_NULL(queryAndGetProc_);
+    return queryAndGetProc_->QueryAndGet(serverApi);
 }
 
 Status WorkerOCServiceImpl::RefreshMeta(const ClientKey &clientId)

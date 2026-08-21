@@ -644,6 +644,69 @@ message GetHashRingRspPb {
   map<string, string> host_id_map = 5;  // workerAddr("host:port") -> hostId, valid when hash_ring_changed=true.
 }
 
+message QueryAndGetTcpDataReqPb {}
+
+message QueryAndGetUbDataReqPb {
+  repeated UrmaRemoteAddrPb buffer_infos = 1;
+  uint64 buffer_size = 2;
+  string urma_instance_id = 3;
+}
+
+message QueryAndGetShmDataReqPb {
+  string client_id = 1;
+}
+
+message QueryAndGetDataReqPb {
+  oneof transport {
+    QueryAndGetTcpDataReqPb tcp = 1;
+    QueryAndGetUbDataReqPb ub = 2;
+    QueryAndGetShmDataReqPb shm = 3;
+  }
+}
+
+message QueryAndGetReqPb {
+  repeated string object_keys = 1;
+  QueryAndGetDataReqPb data_request = 2;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message QueryAndGetLocationInfoPb {
+  string object_key = 1;
+  repeated string object_locations = 2;
+  uint64 object_size = 3;
+}
+
+message QueryAndGetShmInfoPb {
+  int64 store_fd = 1;
+  int64 offset = 2;
+  int64 data_size = 3;
+  int64 metadata_size = 4;
+  int64 mmap_size = 5;
+  string shm_id = 6;
+  bool is_seal = 7;
+  uint32 write_mode = 8;
+  uint32 consistency_type = 9;
+  uint32 cache_type = 10;
+}
+
+message QueryAndGetDataResultPb {
+  repeated uint32 payload_indexes = 1;
+  QueryAndGetShmInfoPb shm_info = 2;
+}
+
+message QueryAndGetResultPb {
+  QueryAndGetLocationInfoPb location = 1;
+  QueryAndGetDataResultPb data_result = 2;
+}
+
+message QueryAndGetRspPb {
+  repeated QueryAndGetResultPb results = 1;
+}
+
 service WorkerOCService {
   rpc HealthCheck (HealthCheckRequestPb) returns (HealthCheckReplyPb) {}
   rpc Create (CreateReqPb) returns (CreateRspPb) {}
@@ -653,6 +716,11 @@ service WorkerOCService {
   rpc Get (GetReqPb) returns (GetRspPb) {
     option (datasystem.unary_socket_option) = true;
     option (datasystem.recv_payload_option) = true;
+  }
+  rpc QueryAndGet(QueryAndGetReqPb) returns (QueryAndGetRspPb) {
+    option (datasystem.unary_socket_option) = true;
+    option (datasystem.recv_payload_option) = true;
+    option (datasystem.urma_enabled_option) = true;
   }
   rpc DecreaseReference(DecreaseReferenceRequest) returns (DecreaseReferenceResponse) {}
   rpc ReconcileShmRef(ReconcileShmRefReqPb) returns (ReconcileShmRefRspPb) {}

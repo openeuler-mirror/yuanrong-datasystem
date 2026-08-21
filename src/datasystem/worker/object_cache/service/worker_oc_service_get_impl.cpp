@@ -874,6 +874,22 @@ Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, Get
     return Status::OK();
 }
 
+Status WorkerOcServiceGetImpl::TryAcquireLocalObject(const std::string &objectKey,
+                                                     std::unique_ptr<GetObjEntryParams> &params)
+{
+    params.reset();
+    GetObjInfo info;
+    std::set<ReadKey> misses;
+    bool validInMemory = true;
+    Status rc = RLockGetObjectFromMem(ReadKey(objectKey), info, misses, validInMemory);
+    if (rc.GetCode() == K_NOT_FOUND || !validInMemory || !misses.empty()) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(rc);
+    params = std::move(info.params);
+    return Status::OK();
+}
+
 Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<ReadKey> &objectsNeedGetRemote,
                                                              int64_t subTimeout,
                                                              std::unordered_set<std::string> &failedIds,
@@ -2997,6 +3013,96 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
     }
     if (result.empty()) {
         return lastRc;
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::QueryObjectLocations(
+    const std::vector<std::string> &objectKeys,
+    std::unordered_map<std::string, master::ObjectLocationInfoPb> &locations)
+{
+    locations.clear();
+    if (objectKeys.empty()) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    auto grouped = metadataRouteResolver_->GroupOwners(objectKeys);
+    if (!grouped.failures.empty()) {
+        return grouped.failures.begin()->second;
+    }
+    std::vector<master::QueryMetaInfoPb> queryMetas;
+    queryMetas.reserve(objectKeys.size());
+    for (const auto &[masterAddress, keys] : grouped.groups) {
+        RETURN_IF_NOT_OK(QueryPureMetadataGroup(masterAddress, keys, queryMetas));
+    }
+    locations.reserve(objectKeys.size());
+    const std::unordered_set<std::string> requestedKeys(objectKeys.begin(), objectKeys.end());
+    for (const auto &queryMeta : queryMetas) {
+        const auto &meta = queryMeta.meta();
+        CHECK_FAIL_RETURN_STATUS(requestedKeys.find(meta.object_key()) != requestedKeys.end(), K_RUNTIME_ERROR,
+                                 "PureQueryMeta returned an unexpected object key");
+        master::ObjectLocationInfoPb location;
+        location.set_object_key(meta.object_key());
+        location.set_object_size(meta.data_size());
+        if (!meta.primary_address().empty()) {
+            location.add_object_locations(meta.primary_address());
+        }
+        if (!queryMeta.address().empty() && queryMeta.address() != meta.primary_address()) {
+            location.add_object_locations(queryMeta.address());
+        }
+        locations[meta.object_key()] = std::move(location);
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::QueryPureMetadataGroup(const HostPort &masterAddress,
+                                                      const std::vector<std::string> &objectKeys,
+                                                      std::vector<master::QueryMetaInfoPb> &queryMetas)
+{
+    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddress);
+    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
+                             "Get master API failed for PureQueryMeta");
+    master::PureQueryMetaReqPb request;
+    request.set_redirect(true);
+    request.set_address(localAddress_.ToString());
+    request.mutable_object_keys()->Add(objectKeys.begin(), objectKeys.end());
+    master::PureQueryMetaRspPb response;
+    std::function<Status(master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)> query =
+        [this, &workerMasterApi](master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) {
+            auto rc = workerMasterApi->PureQueryMeta(req, rsp);
+            ObserveMetadataRpc(workerMasterApi, rc);
+            return rc;
+        };
+    RETURN_IF_NOT_OK(RedirectRetryWhenMetasMoving(request, response, query));
+    queryMetas.insert(queryMetas.end(), response.mutable_query_metas()->begin(),
+                      response.mutable_query_metas()->end());
+    return QueryPureMetadataRedirects(response.info(), queryMetas);
+}
+
+Status WorkerOcServiceGetImpl::QueryPureMetadataRedirects(
+    const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &redirects,
+    std::vector<master::QueryMetaInfoPb> &queryMetas)
+{
+    for (const auto &redirect : redirects) {
+        HostPort masterAddress;
+        RETURN_IF_NOT_OK(masterAddress.ParseString(redirect.redirect_meta_address()));
+        auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddress);
+        CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
+                                 "Get redirect master API failed for PureQueryMeta");
+        master::PureQueryMetaReqPb request;
+        request.set_redirect(false);
+        request.set_address(localAddress_.ToString());
+        request.mutable_object_keys()->Add(redirect.change_meta_ids().begin(), redirect.change_meta_ids().end());
+        master::PureQueryMetaRspPb response;
+        std::function<Status(master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)> query =
+            [this, &workerMasterApi](master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) {
+                auto rc = workerMasterApi->PureQueryMeta(req, rsp);
+                ObserveMetadataRpc(workerMasterApi, rc);
+                return rc;
+            };
+        RETURN_IF_NOT_OK(RedirectRetryWhenMetasMoving(request, response, query));
+        queryMetas.insert(queryMetas.end(), response.mutable_query_metas()->begin(),
+                          response.mutable_query_metas()->end());
     }
     return Status::OK();
 }

@@ -583,8 +583,12 @@
     Client-side dynamic UB activation publishes readiness with release/acquire ordering only after `UrmaManager::Init`
     succeeds; transport selection remains fail-closed during initialization or after failure, without writing the
     process gflag from a heartbeat thread.
-    `MasterOCServiceImpl::QueryAndGet` logs authenticated handler entry at `INFO`, terminal handler failures at `ERROR`,
-    and successful completion through `SLOW_LOG_IF_OR_VLOG` using the configured server process threshold.
+    `QueryAndGet` is a Client-to-Worker RPC. The metadata-owner Worker reads only resident local objects inline and
+    resolves locations for misses through its existing metadata route; it does not pull, subscribe, create placeholders,
+    or load L2 data for this fast path. Same-host requests carry the established SHM session identity, remote UB
+    requests carry one preregistered buffer per input key. If SHM preparation fails while URMA is enabled, the client
+    tries UB before degrading the whole owner group to TCP; when URMA is disabled, it degrades directly to TCP.
+    Results remain positional, and absence of `data_result` means the existing replica-read phase must handle that key.
   - when the existing client latency trace is enabled for a request, transport-layer Get contributes
     `client.process.direct_route`, `client.rpc.direct_query_and_get`, `client.rpc.direct_get_data`, and
     `client.process.direct_materialize` to the request `latencySummary`. The two RPC-class phases are parent-thread wall
@@ -596,8 +600,9 @@
     RPC-client creation, URMA handshake/finalization, transfer, and retry preparation. If any recorded phase exceeds its
     client process or RPC slow threshold, one `[TransportGet] Phase latency` log prints the slow phase names and all
     recorded durations. Untraced requests do not construct the recorder, read the threshold config, or format the log.
-  - `QueryAndGet` returns at most five copy locations per object. The primary address from object metadata is returned
-    first, followed by non-primary locations, so replica retry always starts with the primary copy.
+  - On a Worker-local miss, `QueryAndGet` uses side-effect-free `PureQueryMeta` and converts its result into a
+    primary-first location list, appending the selected valid non-primary replica when one exists. The established
+    `QueryMeta` subscription, payload, and location-update behavior remains unchanged.
   - `tests/st/client/kv_cache/kv_client_transport_get_test.cpp` covers single-key and same-owner multi-key transport
     reads. It disables the local cache, applies the same deterministic hash rule in the SDK and worker processes, and
     resolves the metadata owner through the real SDK `Routing` path before asserting TCP or UB data transport.

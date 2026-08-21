@@ -241,7 +241,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
 }
 
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                                                  std::vector<RpcMessage> &payload, bool isQueryAndGet)
+                                                  std::vector<RpcMessage> &payload)
 {
     // Inherit the SDK traceID from the worker thread's thread_local Trace (set by
     // WorkerEntryImpl's SetTraceContextFromMeta) into the per-request context so
@@ -252,14 +252,10 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     Timer slowLogTimer;
-    if (isQueryAndGet) {
-        RETURN_IF_NOT_OK(CheckConnectionStable(req));
-    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const std::string callerAddress = GetRemoteAddressForLog(req);
     std::vector<uint64_t> eventKeys;
-    RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys, nullptr, nullptr, nullptr,
-                                            nullptr, isQueryAndGet));
+    RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys));
     auto config = GetServerLatencyTraceConfig();
     uint64_t elapsedUs = static_cast<uint64_t>(slowLogTimer.ElapsedMicroSecond());
     SLOW_LOG_IF_OR_VLOG(
@@ -471,7 +467,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
                                                          std::vector<uint64_t> &eventKeys,
                                                          std::shared_ptr<AggregateMemory> batchPtr,
                                                          RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus,
-                                                         BatchRh2dContext *batchRh2dContext, bool isQueryAndGet)
+                                                         BatchRh2dContext *batchRh2dContext)
 {
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_HANDLER);
     const std::string &objectKey = req.object_key();
@@ -485,7 +481,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
         INJECT_POINT("worker.worker_worker_remote_get_failure");
     }
     Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo,
-                                        fallbackStatus, batchRh2dContext, isQueryAndGet);
+                                        fallbackStatus, batchRh2dContext);
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {
         status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, status.GetMsg());
     }
@@ -579,14 +575,14 @@ Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
     const std::string &objectKey, uint64_t offset, uint64_t size, bool blocking, std::vector<uint64_t> &eventKeys,
     const std::shared_ptr<AggregateMemory> &batchPtr, RemoteH2DRootInfoPb *batchRootInfo,
     BatchRh2dContext *batchRh2dContext, Status *fallbackStatus, bool isFastTransportEnabled, bool isUrmaFastTransport,
-    bool isPipelineH2DRequest, PerfPoint &batchImplPoint, bool isQueryAndGet)
+    bool isPipelineH2DRequest, PerfPoint &batchImplPoint)
 {
     PerfPoint loadDataPoint(PerfKey::WORKER_LOAD_OBJECT_DATA);
     PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_READ_KEY);
     ReadObjectKV objKv(ReadKey(objectKey, offset, size), entry);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objKv.CheckReadOffset(), "Read offset verify failed");
     if (entry->IsSpilled() && entry->GetShmUnit() == nullptr) {
-        RETURN_IF_NOT_OK(LoadSpilledObjectData(objectKey, outPayload, objKv, pointImpl, isQueryAndGet));
+        RETURN_IF_NOT_OK(LoadSpilledObjectData(objectKey, outPayload, objKv, pointImpl));
     } else {
         pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_PAYLOAD_SHM_UNIT);
         ShmGuard shmGuard(entry->GetShmUnit(), entry->GetDataSize(), entry->GetMetadataSize());
@@ -616,16 +612,10 @@ Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
                                                    fastTransportName));
             GetWorkerTimeCost().Append("RemoteWriteFastTransport", writeTimer.ElapsedMilliSecond());
         }
-        if (isQueryAndGet && req.has_urma_info()) {
-            CHECK_FAIL_RETURN_STATUS(isUrmaFastTransport, K_NOT_SUPPORTED,
-                                     "QueryAndGet UB transport is unavailable");
-            RETURN_IF_NOT_OK(fastTransportStatus);
-        } else {
-            RETURN_IF_NOT_OK(HandlePayloadFallback(
-                req, rsp, entry, outPayload, shmGuard, shmUnit, fastTransportStatus, fastTransportName, objectKey,
-                isFastTransportEnabled, isUrmaFastTransport, isPipelineH2DRequest, blocking, batchPtr, fallbackStatus,
-                batchRootInfo, batchRh2dContext, objKv, localSegAddress, localSegSize));
-        }
+        RETURN_IF_NOT_OK(HandlePayloadFallback(
+            req, rsp, entry, outPayload, shmGuard, shmUnit, fastTransportStatus, fastTransportName, objectKey,
+            isFastTransportEnabled, isUrmaFastTransport, isPipelineH2DRequest, blocking, batchPtr, fallbackStatus,
+            batchRootInfo, batchRh2dContext, objKv, localSegAddress, localSegSize));
         pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_RESP);
     }
 
@@ -635,12 +625,8 @@ Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
 
 Status WorkerWorkerOCServiceImpl::LoadSpilledObjectData(const std::string &objectKey,
                                                         std::vector<RpcMessage> &outPayload,
-                                                        const ReadObjectKV &objKv, PerfPoint &point,
-                                                        bool isQueryAndGet)
+                                                        const ReadObjectKV &objKv, PerfPoint &point)
 {
-    if (isQueryAndGet) {
-        RETURN_STATUS(K_NOT_SUPPORTED, "QueryAndGet fast path only reads resident data");
-    }
     point.RecordAndReset(PerfKey::WORKER_REMOTE_GET_PAYLOAD_FROM_DISK);
     RETURN_IF_NOT_OK(
         WorkerOcSpill::Instance()->Get(objectKey, outPayload, objKv.GetReadSize(), objKv.GetReadOffset()));
@@ -892,7 +878,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                                       std::vector<uint64_t> &eventKeys,
                                                       std::shared_ptr<AggregateMemory> batchPtr,
                                                       RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus,
-                                                      BatchRh2dContext *batchRh2dContext, bool isQueryAndGet)
+                                                      BatchRh2dContext *batchRh2dContext)
 {
     // Outer scope (BatchGetObjectRemote/GetObjectRemote) already created ScopedRequestContext.
     // No nested scope here: workerTimeCost is a value member not inherited by inner scopes.
@@ -940,7 +926,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
 
     return LoadPayloadAndFillResponse(req, rsp, entry, outPayload, objectKey, offset, size, blocking, eventKeys,
                                       batchPtr, batchRootInfo, batchRh2dContext, fallbackStatus, isFastTransportEnabled,
-                                      isUrmaFastTransport, isPipelineH2DRequest, batchImplPoint, isQueryAndGet);
+                                      isUrmaFastTransport, isPipelineH2DRequest, batchImplPoint);
 }
 
 Status WorkerWorkerOCServiceImpl::CheckCoordinatorState(const CheckCoordinatorStateReqPb &req,

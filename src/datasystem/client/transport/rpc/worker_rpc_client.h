@@ -31,7 +31,6 @@
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/protos/master_object.brpc.stub.pb.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/protos/object_posix.brpc.stub.pb.h"
 #include "datasystem/protos/share_memory.brpc.stub.pb.h"
@@ -61,8 +60,8 @@ public:
     virtual Status InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
                                         std::vector<RpcMessage> &payloads);
 
-    /** @brief Sign and query object locations and optional inline data from the master service at this endpoint. */
-    virtual Status InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
+    /** @brief Sign and query ordered object locations and optional inline data from this Worker. */
+    virtual Status InvokeQueryAndGet(QueryAndGetReqPb &request, QueryAndGetRspPb &response,
                                      std::vector<RpcMessage> &payloads, bool *rpcDispatched = nullptr);
 
     /** @brief Sign and invoke Exist through the cached control connection. */
@@ -128,8 +127,8 @@ protected:
     virtual Status DoInvokeBatchGetObject(const RpcOptions &options, const BatchGetObjectRemoteReqPb &request,
                                           BatchGetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads);
 
-    virtual Status DoInvokeQueryAndGet(const RpcOptions &options, const master::QueryAndGetReqPb &request,
-                                       master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads);
+    virtual Status DoInvokeQueryAndGet(const RpcOptions &options, const QueryAndGetReqPb &request,
+                                       QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads);
 
     virtual Status DoInvokeExist(const RpcOptions &options, const ExistReqPb &request, ExistRspPb &response);
 
@@ -178,7 +177,6 @@ private:
     std::shared_ptr<WorkerOCService_BrpcGenericStub> controlStub_;
     std::shared_ptr<WorkerWorkerTransportService_BrpcGenericStub> transportStub_;
     std::shared_ptr<WorkerWorkerOCService_BrpcGenericStub> dataStub_;
-    std::shared_ptr<master::MasterOCService_BrpcGenericStub> masterStub_;
     std::atomic<bool> alive_{ false };
     uint32_t connectionGeneration_ = 0;
     static std::atomic<uint32_t> nextConnectionGeneration_;

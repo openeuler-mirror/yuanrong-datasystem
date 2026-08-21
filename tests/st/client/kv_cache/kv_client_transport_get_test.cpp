@@ -52,12 +52,17 @@ namespace st {
 namespace {
 constexpr uint32_t META_OWNER_INDEX = 0;
 constexpr uint32_t TRANSPORT_CLIENT_WORKER_INDEX = 1;
+constexpr uint32_t DATA_WORKER_INDEX = 2;
+constexpr uint32_t WORKER_NUM = 3;
 constexpr int32_t CLIENT_TIMEOUT_MS = 3'000;
 constexpr int32_t SHM_LATCH_TIMEOUT_MS = 1'000;
 constexpr size_t VALUE_SIZE = 128 * 1024;
+constexpr size_t MIXED_OVERSIZED_INLINE_VALUE_SIZE = VALUE_SIZE + 1;
 constexpr size_t INLINE_DATA_LIMIT = 512 * 1024;
 constexpr size_t LARGE_VALUE_SIZE = 8 * 1024 * 1024;
 constexpr size_t KEY_SEARCH_LIMIT = 100'000;
+constexpr uint64_t MIXED_TCP_DATA_RPC_COUNT = 1;
+constexpr uint64_t MIXED_UB_DATA_RPC_COUNT = 2;
 constexpr char REAL_ROUTE_KEY_PREFIX[] = "transport_real_route_";
 constexpr char UB_GET_SIZE_ENV[] = "DATASYSTEM_UB_GET_DATA_SIZE_BYTES";
 constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
@@ -70,8 +75,15 @@ constexpr char REGISTER_SHM_CLIENT_INJECT[] = "client.transport.register_shm_cli
 constexpr char GET_CLIENT_FD_INJECT[] = "client.transport.get_client_fd";
 constexpr char SHM_HEARTBEAT_INJECT[] = "client.transport.shm_heartbeat";
 constexpr char DRAIN_BEFORE_SNAPSHOT_INJECT[] = "WorkerOCServiceImpl.DrainTopologyScaleInData.beforeSnapshot";
-constexpr char HASH_RING_REFRESH_BEFORE_WAIT_INJECT[] = "HashRingRefresher.RefreshLoop.beforeWait";
-constexpr char INLINE_READ_FAILURE_INJECT[] = "worker.worker_worker_remote_get_failure";
+constexpr char QUERY_AND_GET_TCP_HIT_INJECT[] = "worker.QueryAndGet.EncodeTcp";
+constexpr char QUERY_AND_GET_UB_HIT_INJECT[] = "worker.QueryAndGet.EncodeUb";
+constexpr char QUERY_AND_GET_SHM_HIT_INJECT[] = "worker.QueryAndGet.EncodeShm";
+constexpr char QUERY_AND_GET_METADATA_MISS_INJECT[] = "worker.QueryAndGet.QueryMissMetadata";
+constexpr char QUERY_AND_GET_INLINE_FAILURE_INJECT[] = "worker.QueryAndGet.EncodeLocalHitFailure";
+constexpr char SHM_SESSION_UNAVAILABLE_BEFORE_BUILD_INJECT[] =
+    "client.transport.query_and_get.shm_session_unavailable_before_build";
+constexpr char SHM_MATERIALIZATION_FAILURE_INJECT[] =
+    "client.transport.query_and_get.shm_materialization_failure";
 constexpr char SHM_LATCH_FAIL_INJECT[] = "worker.ShmGuard.TryRLatch.Fail";
 constexpr char PROVIDER_GET_ENTER_INJECT[] = "worker.GetObjectRemote.afterRead";
 constexpr char PROVIDER_BATCH_GET_ENTER_INJECT[] = "worker.BatchGetObjectRemote.afterRead";
@@ -87,9 +99,8 @@ constexpr char GLOBAL_UNAVAILABLE_APPLIED_INJECT[] = "client.ub_health_filter.gl
 constexpr char GLOBAL_READ_DENIED_INJECT[] = "client.ub_health_filter.global_read_denied";
 constexpr char SHM_HOST_ID_ENV_NAME[] = "transport_get_shm_host_id";
 constexpr char SHM_HOST_ID_VALUE[] = "transport-get-shm-host";
-constexpr uint32_t SCALE_OUT_WORKER_INDEX = 3;
-constexpr uint32_t SCALE_OUT_WORKER_COUNT = 4;
-constexpr size_t SCALE_OUT_KEY_COUNT = 256;
+constexpr char MIXED_HOST_ID_ENV_PREFIX[] = "transport_get_mixed_host_id_";
+constexpr char MIXED_HOST_ID_VALUE_PREFIX[] = "transport-get-mixed-host-";
 
 struct TransportRpcCounts {
     uint64_t queryAndGet = 0;
@@ -101,28 +112,41 @@ struct TransportRpcCounts {
     uint64_t shmHeartbeat = 0;
 };
 
-const char *ExpectedTransport()
+struct WorkerQueryAndGetCounts {
+    uint64_t tcpHits = 0;
+    uint64_t ubHits = 0;
+    uint64_t shmHits = 0;
+    uint64_t metadataMisses = 0;
+};
+
+struct MixedPathCounts {
+    TransportRpcCounts rpc;
+    WorkerQueryAndGetCounts localOwner;
+    WorkerQueryAndGetCounts remoteOwner;
+};
+
+constexpr bool IsUrmaBuild()
 {
 #ifdef USE_URMA
-    return "UB";
+    return true;
 #else
-    return "TCP";
+    return false;
 #endif
 }
 
-std::string SelectMetadataOwner(const ClusterTopologyPb &topology, const std::string &key)
+const char *ExpectedTransport()
 {
-    std::map<uint32_t, std::string> tokenWorkers;
-    for (const auto &worker : topology.members()) {
-        for (const auto token : worker.second.tokens()) {
-            tokenWorkers.emplace(token, worker.first);
-        }
-    }
-    if (tokenWorkers.empty()) {
-        return {};
-    }
-    auto owner = tokenWorkers.upper_bound(MurmurHash3_32(key));
-    return (owner == tokenWorkers.end() ? tokenWorkers.begin() : owner)->second;
+    return IsUrmaBuild() ? "UB" : "TCP";
+}
+
+std::string MixedHostIdEnvName(uint32_t workerIndex)
+{
+    return std::string(MIXED_HOST_ID_ENV_PREFIX) + std::to_string(workerIndex);
+}
+
+std::string MixedHostIdValue(uint32_t workerIndex)
+{
+    return std::string(MIXED_HOST_ID_VALUE_PREFIX) + std::to_string(workerIndex);
 }
 }  // namespace
 
@@ -132,7 +156,7 @@ public:
     {
         FLAGS_v = 1;
         opts.numEtcd = 1;
-        opts.numWorkers = 3;
+        opts.numWorkers = WORKER_NUM;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1";
@@ -142,6 +166,10 @@ public:
         opts.workerGflagParams += " -enable_urma=false";
 #endif
         opts.injectActions = "worker.batch_get_failure_for_keys:call()";
+        opts.injectActions += ";" + std::string(QUERY_AND_GET_TCP_HIT_INJECT) + ":call()";
+        opts.injectActions += ";" + std::string(QUERY_AND_GET_UB_HIT_INJECT) + ":call()";
+        opts.injectActions += ";" + std::string(QUERY_AND_GET_SHM_HIT_INJECT) + ":call()";
+        opts.injectActions += ";" + std::string(QUERY_AND_GET_METADATA_MISS_INJECT) + ":call()";
     }
 
     void SetUp() override
@@ -166,7 +194,7 @@ public:
         ASSERT_NE(etcd_, nullptr);
         InitTestKVClient(META_OWNER_INDEX, writer_, CLIENT_TIMEOUT_MS);
 #ifdef USE_URMA
-        SetUbGetSize(INLINE_DATA_LIMIT);
+        SetUbGetSize(UbInlineBufferSize());
 #endif
         InitTransportClient();
     }
@@ -205,10 +233,21 @@ protected:
     void InitTransportClient()
     {
         ConnectOptions options;
-        InitConnectOpt(TRANSPORT_CLIENT_WORKER_INDEX, options, CLIENT_TIMEOUT_MS);
+        InitConnectOpt(TransportClientWorkerIndex(), options, CLIENT_TIMEOUT_MS);
         options.enableLocalCache = false;
+        options.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
         reader_ = std::make_shared<KVClient>(options);
         DS_ASSERT_OK(reader_->Init());
+    }
+
+    virtual uint32_t TransportClientWorkerIndex() const
+    {
+        return TRANSPORT_CLIENT_WORKER_INDEX;
+    }
+
+    virtual size_t UbInlineBufferSize() const
+    {
+        return INLINE_DATA_LIMIT;
     }
 
     void SetUbGetSize(size_t size)
@@ -268,6 +307,18 @@ protected:
         counts.registerShmClient = inject::GetExecuteCount(REGISTER_SHM_CLIENT_INJECT);
         counts.getClientFd = inject::GetExecuteCount(GET_CLIENT_FD_INJECT);
         counts.shmHeartbeat = inject::GetExecuteCount(SHM_HEARTBEAT_INJECT);
+    }
+
+    void GetWorkerQueryAndGetCounts(uint32_t workerIndex, WorkerQueryAndGetCounts &counts)
+    {
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, workerIndex, QUERY_AND_GET_TCP_HIT_INJECT, counts.tcpHits));
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, workerIndex, QUERY_AND_GET_UB_HIT_INJECT, counts.ubHits));
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, workerIndex, QUERY_AND_GET_SHM_HIT_INJECT, counts.shmHits));
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, workerIndex, QUERY_AND_GET_METADATA_MISS_INJECT, counts.metadataMisses));
     }
 
     // Generate N distinct keys without making placement assumptions.
@@ -550,40 +601,6 @@ private:
     bool setupAttempted_ = false;
 };
 
-class KVClientTransportGetScaleOutRealUrmaTest : public KVClientTransportGetTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        KVClientTransportGetTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -enable_lossless_data_exit_mode=true";
-    }
-
-    void SetUp() override
-    {
-#if !defined(USE_URMA)
-        GTEST_SKIP() << "Real URMA scale-out redirect ST requires USE_URMA.";
-#elif defined(USE_URMA_MOCK)
-        GTEST_SKIP() << "Real URMA scale-out redirect ST does not run with USE_URMA_MOCK.";
-#else
-        if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
-            GTEST_SKIP() << "Real URMA scale-out redirect ST requires DS_URMA_DEV_NAME and a usable URMA device.";
-        }
-        setupAttempted_ = true;
-        KVClientTransportGetTest::SetUp();
-#endif
-    }
-
-    void TearDown() override
-    {
-        if (setupAttempted_) {
-            KVClientTransportGetTest::TearDown();
-        }
-    }
-
-private:
-    bool setupAttempted_ = false;
-};
-
 class KVClientTransportGetWithTargetShmDisabledTest : public KVClientTransportGetTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -709,6 +726,336 @@ protected:
     }
 };
 
+class KVClientTransportGetMixedPathTest : public KVClientTransportGetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientTransportGetTest::SetClusterSetupOptions(opts);
+        constexpr char DISABLED_SHM_OPTION[] = "-ipc_through_shared_memory=false";
+        const auto pos = opts.workerGflagParams.find(DISABLED_SHM_OPTION);
+        ASSERT_NE(pos, std::string::npos);
+        opts.workerGflagParams.replace(pos, sizeof(DISABLED_SHM_OPTION) - 1, "-ipc_through_shared_memory=true");
+        for (uint32_t i = 0; i < WORKER_NUM; ++i) {
+            opts.workerSpecifyGflagParams[i] += " -host_id_env_name=" + MixedHostIdEnvName(i);
+        }
+    }
+
+    void SetUp() override
+    {
+        for (uint32_t i = 0; i < WORKER_NUM; ++i) {
+            ASSERT_EQ(setenv(MixedHostIdEnvName(i).c_str(), MixedHostIdValue(i).c_str(), 1), 0);
+        }
+        KVClientTransportGetTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        KVClientTransportGetTest::TearDown();
+        for (uint32_t i = 0; i < WORKER_NUM; ++i) {
+            (void)unsetenv(MixedHostIdEnvName(i).c_str());
+        }
+    }
+
+protected:
+    uint32_t TransportClientWorkerIndex() const override
+    {
+        return META_OWNER_INDEX;
+    }
+
+    size_t UbInlineBufferSize() const override
+    {
+        return VALUE_SIZE;
+    }
+
+    void AssertMixedPathBuffers(std::vector<Optional<Buffer>> &buffers,
+                                const std::vector<std::string> &values)
+    {
+        ASSERT_EQ(buffers.size(), 4u);
+        ASSERT_FALSE(buffers[0]);
+        for (size_t i = 1; i < buffers.size(); ++i) {
+            ASSERT_TRUE(buffers[i]);
+        }
+        AssertBufferEqual(*buffers[1], values[1]);
+        AssertBufferEqual(*buffers[2], values[2]);
+        AssertBufferEqual(*buffers[3], values[0]);
+    }
+
+    void GetMixedPathCounts(MixedPathCounts &counts)
+    {
+        GetRpcCounts(counts.rpc);
+        GetWorkerQueryAndGetCounts(META_OWNER_INDEX, counts.localOwner);
+        GetWorkerQueryAndGetCounts(TRANSPORT_CLIENT_WORKER_INDEX, counts.remoteOwner);
+    }
+
+    void AssertMixedPathCounts(const MixedPathCounts &before, const MixedPathCounts &after)
+    {
+        ASSERT_EQ(after.rpc.queryAndGet, before.rpc.queryAndGet + 2);
+        const uint64_t expectedDataRpcCount =
+            IsUrmaBuild() ? MIXED_UB_DATA_RPC_COUNT : MIXED_TCP_DATA_RPC_COUNT;
+        ASSERT_EQ(after.rpc.getObjectRemote, before.rpc.getObjectRemote + expectedDataRpcCount);
+        ASSERT_EQ(after.localOwner.shmHits, before.localOwner.shmHits + 1);
+        ASSERT_EQ(after.localOwner.metadataMisses, before.localOwner.metadataMisses + 1);
+        ASSERT_EQ(after.remoteOwner.tcpHits, before.remoteOwner.tcpHits + (IsUrmaBuild() ? 0 : 1));
+        ASSERT_EQ(after.remoteOwner.ubHits, before.remoteOwner.ubHits);
+        ASSERT_EQ(after.remoteOwner.metadataMisses, before.remoteOwner.metadataMisses + 1);
+    }
+};
+
+TEST_F(KVClientTransportGetWithAllWorkersShmTest, SameNodeMetadataOwnerHitUsesShmInline)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 2, keys);
+    ASSERT_EQ(keys.size(), 2u);
+    const std::string value(VALUE_SIZE, 'a');
+    DS_ASSERT_OK(writer_->Set(keys[0], value));
+    DS_ASSERT_OK(writer_->Set(keys[1], value));
+
+    Optional<Buffer> warmup;
+    DS_ASSERT_OK(reader_->Get(keys[0], warmup));
+    ASSERT_TRUE(warmup);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+
+    TransportRpcCounts rpcBefore;
+    WorkerQueryAndGetCounts workerBefore;
+    GetRpcCounts(rpcBefore);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, workerBefore);
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(keys[1], buffer));
+    TransportRpcCounts rpcAfter;
+    WorkerQueryAndGetCounts workerAfter;
+    GetRpcCounts(rpcAfter);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, workerAfter);
+
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    ASSERT_EQ(rpcAfter.queryAndGet, rpcBefore.queryAndGet + 1);
+    ASSERT_EQ(rpcAfter.getObjectRemote, rpcBefore.getObjectRemote);
+    ASSERT_EQ(rpcAfter.workerOcGet, rpcBefore.workerOcGet);
+    ASSERT_EQ(rpcAfter.registerShmClient, rpcBefore.registerShmClient);
+    ASSERT_EQ(rpcAfter.getClientFd, rpcBefore.getClientFd);
+    ASSERT_EQ(workerAfter.tcpHits, workerBefore.tcpHits);
+    ASSERT_EQ(workerAfter.ubHits, workerBefore.ubHits);
+    ASSERT_EQ(workerAfter.shmHits, workerBefore.shmHits + 1);
+    ASSERT_EQ(workerAfter.metadataMisses, workerBefore.metadataMisses);
+}
+
+TEST_F(KVClientTransportGetWithAllWorkersShmTest, UnavailableShmSessionFallsBackBeforeDispatch)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    const std::string value(VALUE_SIZE, 's');
+    DS_ASSERT_OK(writer_->Set(keys.front(), value));
+    const uint64_t injectCount = inject::GetExecuteCount(SHM_SESSION_UNAVAILABLE_BEFORE_BUILD_INJECT);
+    DS_ASSERT_OK(inject::Set(SHM_SESSION_UNAVAILABLE_BEFORE_BUILD_INJECT, "1*call()"));
+    Raii clearInject([] { (void)inject::Clear(SHM_SESSION_UNAVAILABLE_BEFORE_BUILD_INJECT); });
+
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(keys.front(), buffer));
+
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+    ASSERT_EQ(inject::GetExecuteCount(SHM_SESSION_UNAVAILABLE_BEFORE_BUILD_INJECT), injectCount + 1);
+}
+
+TEST_F(KVClientTransportGetWithAllWorkersShmTest, ShmMaterializationFailureFallsBackPerKey)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    const std::string value(VALUE_SIZE, 'm');
+    DS_ASSERT_OK(writer_->Set(keys.front(), value));
+    DS_ASSERT_OK(inject::Set(SHM_MATERIALIZATION_FAILURE_INJECT, "1*return(K_RUNTIME_ERROR)"));
+    Raii clearInject([] { (void)inject::Clear(SHM_MATERIALIZATION_FAILURE_INJECT); });
+
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(keys.front(), buffer));
+
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+}
+
+TEST_F(KVClientTransportGetTest, CrossNodeMetadataOwnerHitUsesUbInline)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "QueryAndGet UB inline ST requires USE_URMA.";
+#else
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string value(VALUE_SIZE, 'b');
+    DS_ASSERT_OK(writer_->Set(keys[0], value));
+    TransportRpcCounts rpcBefore;
+    WorkerQueryAndGetCounts workerBefore;
+    GetRpcCounts(rpcBefore);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, workerBefore);
+
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(keys[0], buffer));
+    TransportRpcCounts rpcAfter;
+    WorkerQueryAndGetCounts workerAfter;
+    GetRpcCounts(rpcAfter);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, workerAfter);
+
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "UB");
+    ASSERT_EQ(rpcAfter.queryAndGet, rpcBefore.queryAndGet + 1);
+    ASSERT_EQ(rpcAfter.getObjectRemote, rpcBefore.getObjectRemote);
+    ASSERT_EQ(rpcAfter.workerOcGet, rpcBefore.workerOcGet);
+    ASSERT_EQ(workerAfter.tcpHits, workerBefore.tcpHits);
+    ASSERT_EQ(workerAfter.ubHits, workerBefore.ubHits + 1);
+    ASSERT_EQ(workerAfter.shmHits, workerBefore.shmHits);
+    ASSERT_EQ(workerAfter.metadataMisses, workerBefore.metadataMisses);
+#endif
+}
+
+TEST_F(KVClientTransportGetTest, CrossNodeMetadataOwnerHitUsesTcpInline)
+{
+#ifdef USE_URMA
+    GTEST_SKIP() << "QueryAndGet TCP-only ST requires a non-URMA build.";
+#else
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string value(VALUE_SIZE, 'c');
+    DS_ASSERT_OK(writer_->Set(keys[0], value));
+    TransportRpcCounts rpcBefore;
+    WorkerQueryAndGetCounts workerBefore;
+    GetRpcCounts(rpcBefore);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, workerBefore);
+
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(keys[0], buffer));
+    TransportRpcCounts rpcAfter;
+    WorkerQueryAndGetCounts workerAfter;
+    GetRpcCounts(rpcAfter);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, workerAfter);
+
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "TCP");
+    ASSERT_EQ(rpcAfter.queryAndGet, rpcBefore.queryAndGet + 1);
+    ASSERT_EQ(rpcAfter.getObjectRemote, rpcBefore.getObjectRemote);
+    ASSERT_EQ(rpcAfter.workerOcGet, rpcBefore.workerOcGet);
+    ASSERT_EQ(workerAfter.tcpHits, workerBefore.tcpHits + 1);
+    ASSERT_EQ(workerAfter.ubHits, workerBefore.ubHits);
+    ASSERT_EQ(workerAfter.shmHits, workerBefore.shmHits);
+    ASSERT_EQ(workerAfter.metadataMisses, workerBefore.metadataMisses);
+#endif
+}
+
+TEST_F(KVClientTransportGetWithAllWorkersShmTest, MetadataMissReadsSameNodeDataWorkerWithShm)
+{
+    std::vector<std::string> ownerKeys;
+    std::vector<std::string> dataWorkerKeys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 2, ownerKeys);
+    GetRealHashKeysToWorker(DATA_WORKER_INDEX, 1, dataWorkerKeys);
+    ASSERT_EQ(ownerKeys.size(), 2u);
+    ASSERT_EQ(dataWorkerKeys.size(), 1u);
+    const std::string value(VALUE_SIZE, 'd');
+    std::shared_ptr<KVClient> dataWriter;
+    InitTestKVClient(DATA_WORKER_INDEX, dataWriter, CLIENT_TIMEOUT_MS);
+    DS_ASSERT_OK(writer_->Set(ownerKeys[0], value));
+    DS_ASSERT_OK(dataWriter->Set(dataWorkerKeys[0], value));
+    DS_ASSERT_OK(dataWriter->Set(ownerKeys[1], value));
+
+    Optional<Buffer> warmup;
+    DS_ASSERT_OK(reader_->Get(ownerKeys[0], warmup));
+    DS_ASSERT_OK(reader_->Get(dataWorkerKeys[0], warmup));
+    TransportRpcCounts rpcBefore;
+    WorkerQueryAndGetCounts ownerBefore;
+    GetRpcCounts(rpcBefore);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, ownerBefore);
+
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(ownerKeys[1], buffer));
+    TransportRpcCounts rpcAfter;
+    WorkerQueryAndGetCounts ownerAfter;
+    GetRpcCounts(rpcAfter);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, ownerAfter);
+
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    ASSERT_EQ(rpcAfter.queryAndGet, rpcBefore.queryAndGet + 1);
+    ASSERT_EQ(rpcAfter.workerOcGet, rpcBefore.workerOcGet + 1);
+    ASSERT_EQ(rpcAfter.getObjectRemote, rpcBefore.getObjectRemote);
+    ASSERT_EQ(ownerAfter.tcpHits, ownerBefore.tcpHits);
+    ASSERT_EQ(ownerAfter.ubHits, ownerBefore.ubHits);
+    ASSERT_EQ(ownerAfter.shmHits, ownerBefore.shmHits);
+    ASSERT_EQ(ownerAfter.metadataMisses, ownerBefore.metadataMisses + 1);
+}
+
+TEST_F(KVClientTransportGetTest, MetadataMissReadsCrossNodeDataWorker)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string value(VALUE_SIZE, 'e');
+    std::shared_ptr<KVClient> dataWriter;
+    InitTestKVClient(DATA_WORKER_INDEX, dataWriter, CLIENT_TIMEOUT_MS);
+    DS_ASSERT_OK(dataWriter->Set(keys[0], value));
+    TransportRpcCounts rpcBefore;
+    WorkerQueryAndGetCounts ownerBefore;
+    GetRpcCounts(rpcBefore);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, ownerBefore);
+
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(keys[0], buffer));
+    TransportRpcCounts rpcAfter;
+    WorkerQueryAndGetCounts ownerAfter;
+    GetRpcCounts(rpcAfter);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, ownerAfter);
+
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+    ASSERT_EQ(rpcAfter.queryAndGet, rpcBefore.queryAndGet + 1);
+    ASSERT_EQ(rpcAfter.getObjectRemote, rpcBefore.getObjectRemote + 1);
+    ASSERT_EQ(rpcAfter.workerOcGet, rpcBefore.workerOcGet);
+    ASSERT_EQ(ownerAfter.tcpHits, ownerBefore.tcpHits);
+    ASSERT_EQ(ownerAfter.ubHits, ownerBefore.ubHits);
+    ASSERT_EQ(ownerAfter.shmHits, ownerBefore.shmHits);
+    ASSERT_EQ(ownerAfter.metadataMisses, ownerBefore.metadataMisses + 1);
+}
+
+TEST_F(KVClientTransportGetMixedPathTest, MultiKeyMixedPathsPreserveOrder)
+{
+    std::vector<std::string> localOwnerKeys;
+    std::vector<std::string> remoteOwnerKeys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 3, localOwnerKeys);
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 2, remoteOwnerKeys);
+    ASSERT_EQ(localOwnerKeys.size(), 3u);
+    ASSERT_EQ(remoteOwnerKeys.size(), 2u);
+    std::shared_ptr<KVClient> remoteOwnerWriter;
+    std::shared_ptr<KVClient> dataWriter;
+    InitTestKVClient(TRANSPORT_CLIENT_WORKER_INDEX, remoteOwnerWriter, CLIENT_TIMEOUT_MS);
+    InitTestKVClient(DATA_WORKER_INDEX, dataWriter, CLIENT_TIMEOUT_MS);
+    const std::vector<std::string> values = { std::string(VALUE_SIZE, 'f'), std::string(VALUE_SIZE, 'g'),
+                                              std::string(MIXED_OVERSIZED_INLINE_VALUE_SIZE, 'h') };
+    DS_ASSERT_OK(writer_->Set(localOwnerKeys[0], values[0]));
+    DS_ASSERT_OK(writer_->Set(localOwnerKeys[1], values[0]));
+    DS_ASSERT_OK(dataWriter->Set(localOwnerKeys[2], values[1]));
+    DS_ASSERT_OK(remoteOwnerWriter->Set(remoteOwnerKeys[0], values[2]));
+    Optional<Buffer> warmup;
+    DS_ASSERT_OK(reader_->Get(localOwnerKeys[0], warmup));
+
+    MixedPathCounts before;
+    GetMixedPathCounts(before);
+    const std::vector<std::string> keys = { remoteOwnerKeys[1], localOwnerKeys[2], remoteOwnerKeys[0],
+                                            localOwnerKeys[1] };
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader_->Get(keys, buffers));
+    MixedPathCounts after;
+    GetMixedPathCounts(after);
+
+    AssertMixedPathBuffers(buffers, values);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+    AssertMixedPathCounts(before, after);
+}
+
 // Regression: when local cache is disabled, dataPlacementPolicy is a write-only setting. Even when
 // its same-node choice differs from the metadata owner, Get must enter the metadata-owner transport flow.
 TEST_F(KVClientTransportGetWithAllWorkersShmTest, GetIgnoresSameNodeWritePlacementPolicy)
@@ -753,8 +1100,8 @@ TEST_F(KVClientTransportGetWithAllWorkersShmTest, GetIgnoresSameNodeWritePlaceme
         ASSERT_EQ(after.queryAndGet, before.queryAndGet + 1);
         ASSERT_EQ(nonOwnerGetAfter, nonOwnerGetBefore)
             << "Get must not probe a same-host non-owner before metadata-owner QueryAndGet";
-        ASSERT_EQ(metaOwnerGetAfter, metaOwnerGetBefore + 1);
-        ASSERT_EQ(after.workerOcGet, before.workerOcGet + 1);
+        ASSERT_EQ(metaOwnerGetAfter, metaOwnerGetBefore);
+        ASSERT_EQ(after.workerOcGet, before.workerOcGet);
         ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
     }
 }
@@ -827,7 +1174,7 @@ TEST_F(KVClientTransportGetWithShmTest, NonBoundSameHostWorkerUsesWorkerOcFdPass
     GetRpcCounts(after);
 
     ASSERT_EQ(after.queryAndGet, before.queryAndGet + CONCURRENT_GET_COUNT);
-    ASSERT_EQ(after.workerOcGet, before.workerOcGet + CONCURRENT_GET_COUNT);
+    ASSERT_EQ(after.workerOcGet, before.workerOcGet);
     ASSERT_EQ(after.getObjectRemote, before.getObjectRemote);
     ASSERT_EQ(after.batchGetObjectRemote, before.batchGetObjectRemote);
     ASSERT_EQ(after.registerShmClient, before.registerShmClient + 1);
@@ -840,7 +1187,7 @@ TEST_F(KVClientTransportGetWithShmTest, NonBoundSameHostWorkerUsesWorkerOcFdPass
     ASSERT_TRUE(reusedBuffer);
     AssertBufferEqual(*reusedBuffer, value);
     ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
-    ASSERT_EQ(reused.workerOcGet, after.workerOcGet + 1);
+    ASSERT_EQ(reused.workerOcGet, after.workerOcGet);
     ASSERT_EQ(reused.registerShmClient, after.registerShmClient);
     ASSERT_EQ(reused.getClientFd, after.getClientFd);
 
@@ -866,7 +1213,7 @@ TEST_F(KVClientTransportGetWithShmTest, NonBoundSameHostWorkerUsesWorkerOcFdPass
         AssertBufferEqual(*batchBuffers[i], batchValues[i]);
     }
     ASSERT_EQ(afterBatch.queryAndGet, beforeBatch.queryAndGet + 1);
-    ASSERT_EQ(afterBatch.workerOcGet, beforeBatch.workerOcGet + 1);
+    ASSERT_EQ(afterBatch.workerOcGet, beforeBatch.workerOcGet);
     ASSERT_EQ(afterBatch.getObjectRemote, beforeBatch.getObjectRemote);
     ASSERT_EQ(afterBatch.batchGetObjectRemote, beforeBatch.batchGetObjectRemote);
     ASSERT_EQ(afterBatch.registerShmClient, beforeBatch.registerShmClient);
@@ -890,7 +1237,7 @@ TEST_F(KVClientTransportGetWithShmTest, NonBoundSameHostWorkerUsesWorkerOcFdPass
     ASSERT_TRUE(postHeartbeatBuffer);
     AssertBufferEqual(*postHeartbeatBuffer, value);
     ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
-    ASSERT_EQ(postHeartbeat.workerOcGet, maintained.workerOcGet + 1);
+    ASSERT_EQ(postHeartbeat.workerOcGet, maintained.workerOcGet);
     ASSERT_EQ(postHeartbeat.registerShmClient, maintained.registerShmClient);
     ASSERT_EQ(postHeartbeat.getClientFd, maintained.getClientFd);
 }
@@ -946,56 +1293,6 @@ TEST_F(KVClientTransportGetDrainingRealUrmaTest, DrainingTargetUsesUb)
     ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 2);
 }
 
-TEST_F(KVClientTransportGetScaleOutRealUrmaTest, RedirectedMetadataOwnerPrecedesClientSnapshot)
-{
-    const auto keys = MakeRandomKeys(SCALE_OUT_KEY_COUNT);
-    const std::string value(VALUE_SIZE, 'u');
-    for (const auto &key : keys) {
-        DS_ASSERT_OK(writer_->Set(key, value));
-    }
-    ClusterTopologyPb initialTopology;
-    GetClusterTopologyPb(initialTopology);
-
-    const uint64_t pauseBaseline = inject::GetExecuteCount(HASH_RING_REFRESH_BEFORE_WAIT_INJECT);
-    DS_ASSERT_OK(inject::Set(HASH_RING_REFRESH_BEFORE_WAIT_INJECT, "1*pause()"));
-    Raii releaseRefresh([] { (void)inject::Clear(HASH_RING_REFRESH_BEFORE_WAIT_INJECT); });
-    const auto pauseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (inject::GetExecuteCount(HASH_RING_REFRESH_BEFORE_WAIT_INJECT) == pauseBaseline
-           && std::chrono::steady_clock::now() < pauseDeadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    ASSERT_GT(inject::GetExecuteCount(HASH_RING_REFRESH_BEFORE_WAIT_INJECT), pauseBaseline);
-
-    HostPort masterAddress;
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(META_OWNER_INDEX, masterAddress));
-    HostPort newWorkerAddress("127.0.0.1", GetFreePort());
-    DS_ASSERT_OK(cluster_->AddNode(masterAddress, newWorkerAddress.ToString(), GetFreePort()));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, SCALE_OUT_WORKER_INDEX, 30));
-    WaitAllMembersJoinClusterTopology(SCALE_OUT_WORKER_COUNT);
-    WaitClusterTopologyChange([](const ClusterTopologyPb &topology) { return !topology.has_active_batch(); });
-
-    ClusterTopologyPb finalTopology;
-    GetClusterTopologyPb(finalTopology);
-    auto redirectedKey = std::find_if(keys.begin(), keys.end(), [&](const std::string &key) {
-        return SelectMetadataOwner(initialTopology, key) != newWorkerAddress.ToString()
-               && SelectMetadataOwner(finalTopology, key) == newWorkerAddress.ToString();
-    });
-    ASSERT_NE(redirectedKey, keys.end());
-
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, SCALE_OUT_WORKER_INDEX, QUERY_AND_GET_INJECT, "call()"));
-    uint64_t redirectedQueryBaseline = 0;
-    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, SCALE_OUT_WORKER_INDEX, QUERY_AND_GET_INJECT,
-                                                       redirectedQueryBaseline));
-    Optional<Buffer> buffer;
-    DS_ASSERT_OK(reader_->Get(*redirectedKey, buffer));
-    ASSERT_TRUE(buffer);
-    AssertBufferEqual(*buffer, value);
-    uint64_t redirectedQueryCount = 0;
-    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, SCALE_OUT_WORKER_INDEX, QUERY_AND_GET_INJECT,
-                                                       redirectedQueryCount));
-    ASSERT_GT(redirectedQueryCount, redirectedQueryBaseline);
-    ASSERT_EQ(AccessTransportTracker::ToString(), "UB");
-}
 
 TEST_F(KVClientTransportGetWithShmTest, PinPendingSingleAndBatchReadOnlyGetUsePageableMemory)
 {
@@ -1204,39 +1501,28 @@ TEST_F(KVClientTransportGetTest, NonLocalMetaOwnerFallsBack)
     ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 1);
 }
 
-class KVClientTransportGetInlineFailureTest : public KVClientTransportGetTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        KVClientTransportGetTest::SetClusterSetupOptions(opts);
-        opts.injectActions += ";" + std::string(INLINE_READ_FAILURE_INJECT) + ":1*return(K_RUNTIME_ERROR)";
-    }
-};
-
-TEST_F(KVClientTransportGetInlineFailureTest, InlineReadFailureFallsBack)
+TEST_F(KVClientTransportGetTest, InlineEncodeFailureFallsBackPerKey)
 {
     std::vector<std::string> keys;
-    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
-    ASSERT_EQ(keys.size(), 1u);
-    const std::string &key = keys.front();
-    const std::string value(VALUE_SIZE, 'f');
-    DS_ASSERT_OK(writer_->Set(key, value));
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 2, keys);
+    const std::vector<std::string> values = { std::string(VALUE_SIZE, 'f'), std::string(VALUE_SIZE, 'g') };
+    DS_ASSERT_OK(writer_->Set(keys[0], values[0]));
+    DS_ASSERT_OK(writer_->Set(keys[1], values[1]));
+    DS_ASSERT_OK(cluster_->SetInjectAction(
+        WORKER, META_OWNER_INDEX, QUERY_AND_GET_INLINE_FAILURE_INJECT, "1*return(K_RUNTIME_ERROR)"));
+    Raii clearInject([this] {
+        (void)cluster_->ClearInjectAction(WORKER, META_OWNER_INDEX, QUERY_AND_GET_INLINE_FAILURE_INJECT);
+    });
 
-    TransportRpcCounts before;
-    GetRpcCounts(before);
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader_->Get(keys, buffers));
 
-    Optional<Buffer> buffer;
-    Status rc = reader_->Get(key, buffer);
-
-    TransportRpcCounts after;
-    GetRpcCounts(after);
-
-    DS_ASSERT_OK(rc);
-    ASSERT_TRUE(buffer);
-    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        ASSERT_TRUE(buffers[i]);
+        AssertBufferEqual(*buffers[i], values[i]);
+    }
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
-    ASSERT_EQ(after.queryAndGet, before.queryAndGet + 1);
-    ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 1);
 }
 
 // One key's data read fails while the others succeed; overall K_OK with the failed slot empty.

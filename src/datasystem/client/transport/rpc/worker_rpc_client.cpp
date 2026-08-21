@@ -76,18 +76,14 @@ Status WorkerRpcClient::Init()
     auto transportStub = std::make_shared<WorkerWorkerTransportService_BrpcGenericStub>(
         channel.get(), channelConfig_.timeout_ms);
     auto dataStub = std::make_shared<WorkerWorkerOCService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
-    auto masterStub =
-        std::make_shared<master::MasterOCService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
     CHECK_FAIL_RETURN_STATUS(workerStub != nullptr && controlStub != nullptr && transportStub != nullptr
-                                 && dataStub != nullptr
-                                 && masterStub != nullptr,
+                                 && dataStub != nullptr,
                              K_RUNTIME_ERROR, "Failed to create routed worker RPC stubs");
     channel_ = std::move(channel);
     workerStub_ = std::move(workerStub);
     controlStub_ = std::move(controlStub);
     transportStub_ = std::move(transportStub);
     dataStub_ = std::move(dataStub);
-    masterStub_ = std::move(masterStub);
     connectionGeneration_ = nextConnectionGeneration_.fetch_add(1, std::memory_order_relaxed);
     alive_.store(true, std::memory_order_release);
     return Status::OK();
@@ -111,10 +107,10 @@ Status WorkerRpcClient::DoInvokeBatchGetObject(const RpcOptions &options, const 
     return dataStub_->BatchGetObjectRemote(options, request, response, payloads);
 }
 
-Status WorkerRpcClient::DoInvokeQueryAndGet(const RpcOptions &options, const master::QueryAndGetReqPb &request,
-                                            master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads)
+Status WorkerRpcClient::DoInvokeQueryAndGet(const RpcOptions &options, const QueryAndGetReqPb &request,
+                                            QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads)
 {
-    return masterStub_->QueryAndGet(options, request, response, payloads);
+    return controlStub_->QueryAndGet(options, request, response, payloads);
 }
 
 Status WorkerRpcClient::DoInvokeExist(const RpcOptions &options, const ExistReqPb &request, ExistRspPb &response)
@@ -234,14 +230,14 @@ Status WorkerRpcClient::InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request,
     return rc.IsError() ? WithRpcDiag(rc, "BatchGetObjectRemote", workerAddress_) : Status::OK();
 }
 
-Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
+Status WorkerRpcClient::InvokeQueryAndGet(QueryAndGetReqPb &request, QueryAndGetRspPb &response,
                                           std::vector<RpcMessage> &payloads, bool *rpcDispatched)
 {
     if (rpcDispatched != nullptr) {
         *rpcDispatched = false;
     }
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
-                             "Routed master RPC client is not initialized");
+                             "Routed worker RPC client is not initialized");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
@@ -503,13 +499,12 @@ bool WorkerRpcClient::IsAlive() const
 {
     return alive_.load(std::memory_order_acquire) && channel_ != nullptr && workerStub_ != nullptr
            && controlStub_ != nullptr
-           && transportStub_ != nullptr && dataStub_ != nullptr && masterStub_ != nullptr;
+           && transportStub_ != nullptr && dataStub_ != nullptr;
 }
 
 void WorkerRpcClient::Close()
 {
     alive_.store(false, std::memory_order_release);
-    masterStub_.reset();
     dataStub_.reset();
     controlStub_.reset();
     workerStub_.reset();
