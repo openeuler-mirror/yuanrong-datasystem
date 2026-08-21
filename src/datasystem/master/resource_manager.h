@@ -72,6 +72,7 @@ public:
      */
     Status ReportRebalanceResult(const master::ReportRebalanceResultReqPb &req,
                                  master::ReportRebalanceResultRspPb &rsp);
+
 protected:
     /**
      * @brief Clear the expired resource in write snapshot.
@@ -82,7 +83,14 @@ protected:
      * @brief Switch the read/write snapshot.
      */
     void SwitchSnapshots();
+
 private:
+    /**
+     * @brief Build a scheduling snapshot from the latest entry in both snapshot buffers.
+     * @param[out] snapshot The merged scheduling snapshot.
+     */
+    void BuildLatestSnapshot(std::unordered_map<std::string, NodeInfo> &snapshot);
+
     /**
      * The worker thread.
      */
@@ -102,6 +110,8 @@ private:
     std::condition_variable taskCv_;
     std::atomic<bool> running_ = true;
 
+    // Keep buffer identities stable while BuildLatestSnapshot copies them under separate data locks.
+    SharedMutex snapshotSwapMutex_;
     std::mutex writeSnapshotMutex_;
     SharedMutex readSnapshotMutex_;
     std::unordered_map<std::string, NodeInfo> readSnapshot_{};
