@@ -814,6 +814,95 @@ TEST_F(MetricsTest, kv_event_metrics_counter_test)
               std::string::npos);
 }
 
+TEST_F(MetricsTest, coordinator_metric_desc_test)
+{
+    size_t count = 0;
+    auto descs = metrics::GetKvMetricDescs(count);
+    ASSERT_NE(descs, nullptr);
+    static const struct {
+        metrics::KvMetricId id;
+        const char *name;
+        metrics::MetricType type;
+        const char *unit;
+    } coordinatorMetrics[] = {
+        { metrics::KvMetricId::COORDINATOR_RPC_PUT_REQUEST_TOTAL, "coordinator_rpc_put_request_total",
+          metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_RANGE_REQUEST_TOTAL, "coordinator_rpc_range_request_total",
+          metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_DELETE_RANGE_REQUEST_TOTAL,
+          "coordinator_rpc_delete_range_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_WATCH_RANGE_REQUEST_TOTAL,
+          "coordinator_rpc_watch_range_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_CANCEL_WATCH_REQUEST_TOTAL,
+          "coordinator_rpc_cancel_watch_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_KEEP_ALIVE_REQUEST_TOTAL,
+          "coordinator_rpc_keep_alive_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_GET_COORDINATOR_ID_REQUEST_TOTAL,
+          "coordinator_rpc_get_coordinator_id_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_REPORT_TOPOLOGY_RECOVERY_CANDIDATE_REQUEST_TOTAL,
+          "coordinator_rpc_report_topology_recovery_candidate_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_GET_CLUSTER_RAW_SNAPSHOT_REQUEST_TOTAL,
+          "coordinator_rpc_get_cluster_raw_snapshot_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_GET_RAFT_BOOTSTRAP_STATE_REQUEST_TOTAL,
+          "coordinator_rpc_get_raft_bootstrap_state_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_ENSURE_LEADER_MEMBERSHIP_REQUEST_TOTAL,
+          "coordinator_rpc_ensure_leader_membership_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_RPC_REPORT_WORKER_LIVENESS_REQUEST_TOTAL,
+          "coordinator_rpc_report_worker_liveness_request_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_SENT_BATCHES_TOTAL,
+          "coordinator_watch_notification_sent_batches_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_SENT_EVENTS_TOTAL,
+          "coordinator_watch_notification_sent_events_total", metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_SENT_BYTES_TOTAL,
+          "coordinator_watch_notification_sent_bytes_total", metrics::MetricType::COUNTER, "bytes" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_RPC_LATENCY, "coordinator_watch_rpc_latency",
+          metrics::MetricType::HISTOGRAM, "us" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_RPC_FAILURE_TOTAL, "coordinator_watch_rpc_failure_total",
+          metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_CHANNELS, "coordinator_watch_channels",
+          metrics::MetricType::GAUGE, "count" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_FAN_OUT_EVENTS_TOTAL, "coordinator_watch_fan_out_events_total",
+          metrics::MetricType::COUNTER, "count" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_INFLIGHT_REQUESTS,
+          "coordinator_watch_notification_inflight_requests", metrics::MetricType::GAUGE, "count" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_INFLIGHT_BYTES,
+          "coordinator_watch_notification_inflight_bytes", metrics::MetricType::GAUGE, "bytes" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_PROBE_INFLIGHT_REQUESTS,
+          "coordinator_watch_probe_inflight_requests", metrics::MetricType::GAUGE, "count" },
+        { metrics::KvMetricId::COORDINATOR_WATCH_PROBE_INFLIGHT_BYTES,
+          "coordinator_watch_probe_inflight_bytes", metrics::MetricType::GAUGE, "bytes" },
+    };
+    for (size_t i = 0; i < sizeof(coordinatorMetrics) / sizeof(coordinatorMetrics[0]); ++i) {
+        const auto id = static_cast<size_t>(coordinatorMetrics[i].id);
+        ASSERT_LT(id, count);
+        EXPECT_EQ(descs[id].id, id);
+        EXPECT_STREQ(descs[id].name, coordinatorMetrics[i].name);
+        EXPECT_EQ(descs[id].type, coordinatorMetrics[i].type);
+        EXPECT_STREQ(descs[id].unit, coordinatorMetrics[i].unit);
+        if (i > 0) {
+            EXPECT_EQ(static_cast<uint16_t>(coordinatorMetrics[i].id),
+                      static_cast<uint16_t>(coordinatorMetrics[i - 1].id) + 1);
+        }
+    }
+}
+
+TEST_F(MetricsTest, coordinator_metric_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_ADD(metrics::KvMetricId::COORDINATOR_RPC_PUT_REQUEST_TOTAL, 2);
+    METRIC_ADD(metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_SENT_EVENTS_TOTAL, 3);
+    METRIC_ADD(metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_SENT_BYTES_TOTAL, 5);
+    METRIC_ADD(metrics::KvMetricId::COORDINATOR_WATCH_FAN_OUT_EVENTS_TOTAL, 7);
+
+    auto summary = metrics::DumpSummaryForTest();
+    EXPECT_NE(summary.find(ScalarMetricJson("coordinator_rpc_put_request_total", 2, 2)), std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("coordinator_watch_notification_sent_events_total", 3, 3)),
+              std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("coordinator_watch_notification_sent_bytes_total", 5, 5)),
+              std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("coordinator_watch_fan_out_events_total", 7, 7)), std::string::npos);
+}
+
 TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
 {
     size_t count = 0;

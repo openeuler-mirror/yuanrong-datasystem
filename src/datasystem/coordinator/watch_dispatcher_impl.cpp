@@ -22,6 +22,7 @@
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/coordinator.stub.rpc.pb.h"
@@ -100,7 +101,14 @@ Status WatchDispatcherImpl::DoNotify(int64_t watchId, const std::string &watcher
             FillEventKv(event->entry, pbEvent->mutable_kv());
         }
     }
-    return SendEventRequest(watcherAddr, req, GetWatchNotifyRpcTimeoutMs());
+    auto rc = SendEventRequest(watcherAddr, req, EventRequestKind::NOTIFICATION, GetWatchNotifyRpcTimeoutMs());
+    if (rc.IsOk()) {
+        METRIC_INC(metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_SENT_BATCHES_TOTAL);
+        METRIC_ADD(metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_SENT_EVENTS_TOTAL, events.size());
+        METRIC_ADD(metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_SENT_BYTES_TOTAL,
+                   static_cast<uint64_t>(req.ByteSizeLong()));
+    }
+    return rc;
 }
 
 WorkerReachabilityProbeResult WatchDispatcherImpl::ProbeWorkerReachable(
@@ -116,12 +124,13 @@ WorkerReachabilityProbeResult WatchDispatcherImpl::ProbeWorkerReachable(
     // without acquiring/delivering the event handler or triggering rewatch.
     req.add_events()->set_type(EventPb::EVENT_TYPE_UNSPECIFIED);
     bool rpcDispatched = false;
-    auto rc = SendEventRequest(watcherAddr, req, GetWatchNotifyRpcTimeoutMs(), absoluteDeadline, &rpcDispatched);
+    auto rc = SendEventRequest(watcherAddr, req, EventRequestKind::PROBE, GetWatchNotifyRpcTimeoutMs(), absoluteDeadline,
+                               &rpcDispatched);
     return { std::move(rc), rpcDispatched };
 }
 
 Status WatchDispatcherImpl::SendEventRequest(const std::string &watcherAddr, const EventReqPb &req,
-                                             int32_t timeoutMs,
+                                             EventRequestKind requestKind, int32_t timeoutMs,
                                              std::chrono::steady_clock::time_point absoluteDeadline,
                                              bool *rpcDispatched)
 {
@@ -149,7 +158,32 @@ Status WatchDispatcherImpl::SendEventRequest(const std::string &watcherAddr, con
     if (rpcDispatched != nullptr) {
         *rpcDispatched = true;
     }
-    return brpcStub->HandleEvent(opts, req, rsp);
+    const auto requestsMetric = requestKind == EventRequestKind::NOTIFICATION
+                                    ? metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_INFLIGHT_REQUESTS
+                                    : metrics::KvMetricId::COORDINATOR_WATCH_PROBE_INFLIGHT_REQUESTS;
+    const auto bytesMetric = requestKind == EventRequestKind::NOTIFICATION
+                                 ? metrics::KvMetricId::COORDINATOR_WATCH_NOTIFICATION_INFLIGHT_BYTES
+                                 : metrics::KvMetricId::COORDINATOR_WATCH_PROBE_INFLIGHT_BYTES;
+    auto inflightRequests = metrics::GetGauge(static_cast<uint16_t>(requestsMetric));
+    auto inflightBytes = metrics::GetGauge(static_cast<uint16_t>(bytesMetric));
+    const auto requestBytes = static_cast<int64_t>(req.ByteSizeLong());
+    inflightRequests.Inc();
+    inflightBytes.Inc(requestBytes);
+    Raii inflightGuard([inflightRequests, inflightBytes, requestBytes]() {
+        inflightRequests.Dec();
+        inflightBytes.Dec(requestBytes);
+    });
+    auto rc = Status::OK();
+    if (requestKind == EventRequestKind::NOTIFICATION) {
+        METRIC_TIMER(metrics::KvMetricId::COORDINATOR_WATCH_RPC_LATENCY);
+        rc = brpcStub->HandleEvent(opts, req, rsp);
+        if (rc.IsError()) {
+            METRIC_INC(metrics::KvMetricId::COORDINATOR_WATCH_RPC_FAILURE_TOTAL);
+        }
+    } else {
+        rc = brpcStub->HandleEvent(opts, req, rsp);
+    }
+    return rc;
 }
 }  // namespace coordinator
 }  // namespace datasystem

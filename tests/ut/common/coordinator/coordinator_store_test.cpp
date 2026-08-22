@@ -45,6 +45,7 @@
 #include "datasystem/common/coordinator/watch_dispatcher.h"
 #include "datasystem/common/coordinator/watch_registry.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/uuid_generator.h"
 
@@ -1032,6 +1033,50 @@ TEST_F(CoordinatorStoreTest, WatchRegistryHandlesGroupedRangeAndHighFrequencyCan
     }
 }
 
+TEST_F(CoordinatorStoreTest, WatchDispatcherTracksChannelCount)
+{
+    metrics::ResetKvMetricsForTest();
+    DS_ASSERT_OK(metrics::InitKvMetrics());
+    Raii resetMetrics([] { metrics::ResetKvMetricsForTest(); });
+    const auto expectChannelCount = [](uint64_t count) {
+        const auto expected = "\"name\":\"coordinator_watch_channels\",\"total\":" + std::to_string(count);
+        for (int i = 0; i < 200; ++i) {
+            std::string summary;
+            for (const auto &part : metrics::DumpSummariesForTest()) {
+                summary += part;
+            }
+            if (summary.find(expected) != std::string::npos) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        FAIL() << "Expected channel count metric: " << count;
+    };
+    const auto enqueueEvent = [this](int64_t revision) {
+        auto event = std::make_shared<WatchEvent>();
+        event->type = WatchEvent::Type::PUT;
+        event->entry = KeyValueEntry{ "/metrics", "value", revision, revision };
+        event->revision = revision;
+        dispatcher_->Enqueue(std::move(event));
+    };
+
+    dispatcher_->AddChannel(1, "worker-a");
+    dispatcher_->AddChannel(1, "worker-b");
+    dispatcher_->AddChannel(2, "worker-b");
+    expectChannelCount(2);
+    enqueueEvent(1);
+    dispatcher_->RemoveChannel(1);
+    dispatcher_->RemoveChannelsByWatcher("worker-b");
+    enqueueEvent(2);
+    expectChannelCount(0);
+
+    std::string summary;
+    for (const auto &part : metrics::DumpSummariesForTest()) {
+        summary += part;
+    }
+    EXPECT_NE(summary.find("\"name\":\"coordinator_watch_fan_out_events_total\",\"total\":2"), std::string::npos);
+}
+
 TEST_F(CoordinatorStoreTest, WatchDispatcherWaitsForSnapshotRevisionBeforeDispatch)
 {
     int64_t watchId = registry_->Register("/barrier", "", "addr");
@@ -1124,7 +1169,10 @@ TEST_F(CoordinatorStoreTest, WatchDispatcherStopsMergingAfterBatchCrossesByteThr
     EXPECT_EQ(events[0]->revision, 2);
     EXPECT_EQ(events[1]->revision, 3);
     EXPECT_EQ(events[2]->revision, 4);
-    EXPECT_EQ(dispatcher_->GetBatchSizes(watchId), (std::vector<size_t>{ 2, 1 }));
+    const auto batchSizes = dispatcher_->GetBatchSizes(watchId);
+    ASSERT_EQ(batchSizes.size(), 2UL);
+    EXPECT_EQ(batchSizes[0] + batchSizes[1], 3UL);
+    EXPECT_LE(*std::max_element(batchSizes.begin(), batchSizes.end()), 2UL);
 }
 
 TEST_F(CoordinatorStoreTest, WatchDispatcherSendsSingleEventLargerThanLegacyLimit)

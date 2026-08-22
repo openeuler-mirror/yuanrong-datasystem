@@ -31,6 +31,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/rpc/bthread_utils.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #define private public
 #include "datasystem/coordinator/coordinator_service_impl.h"
 #include "datasystem/coordinator/topology_control_host.h"
@@ -94,6 +95,8 @@ public:
             HostPort("127.0.0.1", TEST_COORDINATOR_PORT), std::make_shared<FakeCoordinatorDiscovery>(), 2,
             std::move(raftFlags));
         DS_ASSERT_OK(service_->Init(true));
+        metrics::ResetKvMetricsForTest();
+        DS_ASSERT_OK(metrics::InitKvMetrics());
     }
 
     void TearDown() override
@@ -101,6 +104,7 @@ public:
         if (service_ != nullptr) {
             DS_EXPECT_OK(service_->Shutdown());
         }
+        metrics::ResetKvMetricsForTest();
         CommonTest::TearDown();
     }
 
@@ -140,8 +144,85 @@ protected:
     }
 
     std::unique_ptr<coordinator::CoordinatorServiceImpl> service_;
-    bool savedUseBrpc_{ false };
 };
+
+TEST_F(CoordinatorServiceImplTest, ExpiredWatchProbeDoesNotRecordNotificationRpcMetrics)
+{
+    auto result =
+        service_->watchDispatcher_->ProbeWorkerReachable("127.0.0.1:1", std::chrono::steady_clock::now());
+    EXPECT_EQ(result.status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_FALSE(result.rpcDispatched);
+    const auto summaries = metrics::DumpSummariesForTest();
+    ASSERT_EQ(summaries.size(), 1U);
+    EXPECT_NE(summaries.front().find("\"metrics\":[]"), std::string::npos);
+}
+
+TEST_F(CoordinatorServiceImplTest, EveryRpcHandlerIncrementsOnlyItsRequestCounter)
+{
+    const auto expectSingleIncrement = [](const char *name, const auto &call) {
+        call();
+        std::string summary;
+        for (const auto &part : metrics::DumpSummariesForTest()) {
+            summary += part;
+        }
+        const std::string metric = "\"name\":\"" + std::string(name) + "\",\"total\":1,\"delta\":1";
+        EXPECT_NE(summary.find(metric), std::string::npos) << name;
+        size_t changedCounterCount = 0;
+        size_t offset = 0;
+        while ((offset = summary.find("\"delta\":1", offset)) != std::string::npos) {
+            ++changedCounterCount;
+            ++offset;
+        }
+        EXPECT_EQ(changedCounterCount, 1U) << name;
+    };
+
+    coordinator::PutReqPb putReq;
+    coordinator::PutRspPb putRsp;
+    expectSingleIncrement("coordinator_rpc_put_request_total", [&] { (void)service_->Put(putReq, putRsp); });
+    coordinator::RangeReqPb rangeReq;
+    coordinator::RangeRspPb rangeRsp;
+    expectSingleIncrement("coordinator_rpc_range_request_total", [&] { (void)service_->Range(rangeReq, rangeRsp); });
+    coordinator::DeleteRangeReqPb deleteReq;
+    coordinator::DeleteRangeRspPb deleteRsp;
+    expectSingleIncrement("coordinator_rpc_delete_range_request_total",
+                          [&] { (void)service_->DeleteRange(deleteReq, deleteRsp); });
+    coordinator::WatchRangeReqPb watchReq;
+    coordinator::WatchRangeRspPb watchRsp;
+    expectSingleIncrement("coordinator_rpc_watch_range_request_total",
+                          [&] { (void)service_->WatchRange(watchReq, watchRsp); });
+    coordinator::CancelWatchReqPb cancelReq;
+    coordinator::CancelWatchRspPb cancelRsp;
+    expectSingleIncrement("coordinator_rpc_cancel_watch_request_total",
+                          [&] { (void)service_->CancelWatch(cancelReq, cancelRsp); });
+    coordinator::KeepAliveReqPb keepAliveReq;
+    coordinator::KeepAliveRspPb keepAliveRsp;
+    expectSingleIncrement("coordinator_rpc_keep_alive_request_total",
+                          [&] { (void)service_->KeepAlive(keepAliveReq, keepAliveRsp); });
+    coordinator::GetCoordinatorIdReqPb coordinatorIdReq;
+    coordinator::GetCoordinatorIdRspPb coordinatorIdRsp;
+    expectSingleIncrement("coordinator_rpc_get_coordinator_id_request_total",
+                          [&] { (void)service_->GetCoordinatorId(coordinatorIdReq, coordinatorIdRsp); });
+    coordinator::ReportTopologyRecoveryCandidateReqPb recoveryReq;
+    coordinator::ReportTopologyRecoveryCandidateRspPb recoveryRsp;
+    expectSingleIncrement("coordinator_rpc_report_topology_recovery_candidate_request_total",
+                          [&] { (void)service_->ReportTopologyRecoveryCandidate(recoveryReq, recoveryRsp); });
+    coordinator::GetClusterRawSnapshotReqPb snapshotReq;
+    coordinator::GetClusterRawSnapshotRspPb snapshotRsp;
+    expectSingleIncrement("coordinator_rpc_get_cluster_raw_snapshot_request_total",
+                          [&] { (void)service_->GetClusterRawSnapshot(snapshotReq, snapshotRsp); });
+    coordinator::GetRaftBootstrapStateReqPb bootstrapReq;
+    coordinator::GetRaftBootstrapStateRspPb bootstrapRsp;
+    expectSingleIncrement("coordinator_rpc_get_raft_bootstrap_state_request_total",
+                          [&] { (void)service_->GetRaftBootstrapState(bootstrapReq, bootstrapRsp); });
+    coordinator::EnsureLeaderMembershipReqPb ensureReq;
+    coordinator::EnsureLeaderMembershipRspPb ensureRsp;
+    expectSingleIncrement("coordinator_rpc_ensure_leader_membership_request_total",
+                          [&] { (void)service_->EnsureLeaderMembership(ensureReq, ensureRsp); });
+    coordinator::ReportWorkerLivenessReqPb livenessReq;
+    coordinator::ReportWorkerLivenessRspPb livenessRsp;
+    expectSingleIncrement("coordinator_rpc_report_worker_liveness_request_total",
+                          [&] { (void)service_->ReportWorkerLiveness(livenessReq, livenessRsp); });
+}
 
 TEST_F(CoordinatorServiceImplTest, RecoveringLeaderAcceptsOnlyEnsureAndExistingRecoveryReport)
 {

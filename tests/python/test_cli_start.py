@@ -205,6 +205,15 @@ class CliStartTest(unittest.TestCase):
         self.assertIn("--log_dir=/tmp/datasystem/c1/logs", command)
         self.assertNotIn("--service_type=coordinator", command)
 
+    def test_coordinator_config_declares_metrics_monitor_flags(self):
+        self.command._base_dir = str(START_PY.parent / "deploy" / "conf")
+
+        keys = self.command.get_default_config_keys("coordinator_config.json")
+
+        self.assertTrue(
+            {"log_monitor", "json_log_monitor", "log_monitor_interval_ms"}.issubset(keys)
+        )
+
     def test_physcpubind_keeps_long_option_only(self):
         args = self.parse_start_args(
             ["--physcpubind", "0-7", "-w", "--worker_address", "127.0.0.1:31501"]

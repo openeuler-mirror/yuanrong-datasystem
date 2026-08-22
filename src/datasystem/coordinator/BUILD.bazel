@@ -71,6 +71,7 @@ ds_cc_library(
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc:bthread_utils",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
         "//src/datasystem/common/rpc:rpc_channel",
         "//src/datasystem/common/rpc:rpc_server",
@@ -93,6 +94,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/flags:dynamic_flag_config",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
@@ -114,6 +116,7 @@ ds_cc_library(
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/log:operation_logger",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/signal:signal",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
