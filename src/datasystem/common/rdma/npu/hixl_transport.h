@@ -86,7 +86,6 @@ private:
     bool HasRegisteredHostMemoryLocked(int32_t devId, uintptr_t addr, uint64_t size) const;
     void ClearRegisteredDeviceMemory();
     void ClearRegisteredHostMemory();
-    bool IsHixlRoceDirectMode() const;
 
     // Per-device plugin-owned HIXL engines: devId -> opaque engine handle.
     std::map<int32_t, DsHixlEngineHandle> engines_;
@@ -100,6 +99,7 @@ private:
     std::atomic<unsigned int> nextEngineIndex_{ 0 };
     bool initialized_ = false;
     HixlMemoryMode hixlMemoryMode_ = HixlMemoryMode::BUFFER_POOL;
+    bool bufferPoolEnabled_ = false;
     std::unordered_set<std::string> activeEndpoints_;
     std::mutex connMutex_;
     // Serializes HIXL TransferSync and the lifetime of cached HIXL registrations.

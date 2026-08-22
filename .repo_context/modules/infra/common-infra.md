@@ -229,6 +229,11 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     Selecting HCCS without a usable plugin fails RemoteH2D initialization; it does not fall back to ROCE. Worker startup
     propagates this failure before allocator initialization, and client configuration preserves it for the first HCCS
     operation. The plugin boundary does not apply to `transfer_engine`.
+  - `remote_h2d_link_type=HCCS` selects the HIXL transport. HIXL owns its protocol selection: without
+    `HCCL_INTRA_ROCE_ENABLE`, Atlas A2 defaults to RoCE and Atlas A3 defaults to HCCS; setting the variable to `1`
+    forces RoCE. Data system passes `remote_h2d_hccs_buffer_pool` through unchanged and does not adapt it to the
+    selected protocol. The default `0:0` disables the relay pool and makes the Worker register source host memory;
+    a positive `<count>:<size>` value enables the relay pool for either protocol.
   - HCCS RH2D pre-counts each scatter request's descriptors and reserves the active HIXL descriptor vector once so
     it does not grow or relocate while appending. There is no operator-facing descriptor cap: HIXL
     `TransferOpDesc` count is unbounded and HIXL splits the submission across the SQ queue depth internally, so

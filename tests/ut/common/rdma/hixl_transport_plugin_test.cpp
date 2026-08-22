@@ -13,10 +13,16 @@
 
 #include "datasystem/common/rdma/npu/hixl_transport.h"
 
+#include <cstdlib>
 #include <cstdint>
 #include <functional>
+#include <string>
 
 #include <gtest/gtest.h>
+
+#include "datasystem/common/flags/flags.h"
+
+DS_DECLARE_string(remote_h2d_hccs_buffer_pool);
 
 namespace datasystem {
 namespace {
@@ -29,6 +35,7 @@ struct FakeHixlState {
     int connectCalls = 0;
     int disconnectCalls = 0;
     int failInitializeAt = 0;
+    std::string bufferPool;
 };
 
 FakeHixlState g_state;
@@ -56,9 +63,16 @@ DsHixlResult DestroyEngine(DsHixlEngineHandle engine)
     return DS_HIXL_OK;
 }
 
-DsHixlResult InitializeEngine(DsHixlEngineHandle, DsHixlStringView, const DsHixlOption *, uint32_t, uint32_t *)
+DsHixlResult InitializeEngine(DsHixlEngineHandle, DsHixlStringView, const DsHixlOption *options, uint32_t optionCount,
+                              uint32_t *)
 {
     ++g_state.initializeCalls;
+    for (uint32_t i = 0; i < optionCount; ++i) {
+        std::string key(options[i].key.data, options[i].key.size);
+        if (key == "BufferPool") {
+            g_state.bufferPool.assign(options[i].value.data, options[i].value.size);
+        }
+    }
     return g_state.initializeCalls == g_state.failInitializeAt ? DS_HIXL_RUNTIME_ERROR : DS_HIXL_OK;
 }
 
@@ -110,8 +124,39 @@ protected:
     void SetUp() override
     {
         g_state = {};
+        savedBufferPool_ = FLAGS_remote_h2d_hccs_buffer_pool;
+        const char *roceEnabled = std::getenv("HCCL_INTRA_ROCE_ENABLE");
+        hadRoceEnabled_ = roceEnabled != nullptr;
+        if (hadRoceEnabled_) {
+            savedRoceEnabled_ = roceEnabled;
+        }
     }
+
+    void TearDown() override
+    {
+        FLAGS_remote_h2d_hccs_buffer_pool = savedBufferPool_;
+        if (hadRoceEnabled_) {
+            ASSERT_EQ(setenv("HCCL_INTRA_ROCE_ENABLE", savedRoceEnabled_.c_str(), 1), 0);
+        } else {
+            ASSERT_EQ(unsetenv("HCCL_INTRA_ROCE_ENABLE"), 0);
+        }
+    }
+
+    std::string savedBufferPool_;
+    bool hadRoceEnabled_ = false;
+    std::string savedRoceEnabled_;
 };
+
+TEST_F(HixlTransportPluginTest, RoceEnvironmentDoesNotOverrideBufferPool)
+{
+    FLAGS_remote_h2d_hccs_buffer_pool = "4:8";
+    ASSERT_EQ(setenv("HCCL_INTRA_ROCE_ENABLE", "1", 1), 0);
+
+    HixlTransport transport(&FAKE_API, true);
+    transport.SetLocalEndpoint("127.0.0.1");
+    ASSERT_TRUE(transport.Init({ 0 }).IsOk());
+    EXPECT_EQ(g_state.bufferPool, "4:8");
+}
 
 TEST_F(HixlTransportPluginTest, RollsBackAllDevicesWhenInitializationFails)
 {

@@ -68,6 +68,8 @@ namespace datasystem {
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
+constexpr char BATCH_GET_RUNTIME_ERROR_KEY_PREFIX[] = "transport_get_inject_runtime_";
+constexpr char BATCH_GET_NOT_FOUND_KEY_PREFIX[] = "transport_get_inject_not_found_";
 constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
 
 constexpr double US_PER_MS = 1000.0;
@@ -895,9 +897,9 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
 
     Status rc = Status::OK();
     INJECT_POINT("worker.batch_get_failure_for_keys", [&objectKey, &rc]() {
-        if (objectKey == "key2") {
+        if (objectKey == "key2" || objectKey.rfind(BATCH_GET_RUNTIME_ERROR_KEY_PREFIX, 0) == 0) {
             rc = Status(K_RUNTIME_ERROR, "Injected K_RUNTIME_ERROR");
-        } else if (objectKey == "key3") {
+        } else if (objectKey == "key3" || objectKey.rfind(BATCH_GET_NOT_FOUND_KEY_PREFIX, 0) == 0) {
             rc = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "Injected K_WORKER_PULL_OBJECT_NOT_FOUND");
         } else if (objectKey == "key0") {
             rc = Status(K_OUT_OF_MEMORY, "Injected K_OUT_OF_MEMORY");

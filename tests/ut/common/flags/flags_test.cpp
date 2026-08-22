@@ -359,6 +359,23 @@ TEST_F(FlagsTest, HixlCsEnableIsDisabledByDefaultAndCanBeEnabled)
     ASSERT_FALSE(FLAGS_hixl_cs_enable);
 }
 
+TEST_F(FlagsTest, HixlBufferPoolCanBeDisabledOnlyWithZeroZero)
+{
+    ASSERT_EQ(FLAGS_remote_h2d_hccs_buffer_pool, "0:0");
+
+    std::string errMsg;
+    ASSERT_TRUE(SetCommandLineOption("remote_h2d_hccs_buffer_pool", "4:8", errMsg));
+    ASSERT_TRUE(errMsg.empty());
+    ASSERT_EQ(FLAGS_remote_h2d_hccs_buffer_pool, "4:8");
+
+    ASSERT_FALSE(SetCommandLineOption("remote_h2d_hccs_buffer_pool", "0:8", errMsg));
+    ASSERT_FALSE(SetCommandLineOption("remote_h2d_hccs_buffer_pool", "4:0", errMsg));
+    ASSERT_FALSE(SetCommandLineOption("remote_h2d_hccs_buffer_pool", "00:00", errMsg));
+
+    ASSERT_TRUE(SetCommandLineOption("remote_h2d_hccs_buffer_pool", "0:0", errMsg));
+    ASSERT_EQ(FLAGS_remote_h2d_hccs_buffer_pool, "0:0");
+}
+
 TEST_F(FlagsTest, EmbeddedConfigKeepsArgs)
 {
     EmbeddedConfig config;

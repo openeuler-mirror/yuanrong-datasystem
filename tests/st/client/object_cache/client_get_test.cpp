@@ -51,6 +51,8 @@ namespace datasystem {
 namespace st {
 namespace {
 constexpr int64_t SHM_SIZE = 500 * 1024;
+constexpr int64_t RESTART_GET_RETRY_TIMEOUT_MS = 5'000;
+constexpr int64_t RESTART_GET_RETRY_INTERVAL_MS = 100;
 }  // namespace
 class OCClientGetTest : public OCClientCommon {
 public:
@@ -1160,7 +1162,16 @@ TEST_F(OCClientGetTest, LEVEL1_GetRuntimeErrorAfterWorkerStart)
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     std::vector<Optional<Buffer>> buffers;
-    Status rc = cliLocal->Get(objKeys, 1000, buffers);
+    Status rc;
+    Timer timer;
+    do {
+        buffers.clear();
+        rc = cliLocal->Get(objKeys, 1000, buffers);
+        if (rc.GetCode() != K_NOT_READY) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(RESTART_GET_RETRY_INTERVAL_MS));
+    } while (timer.ElapsedMilliSecond() < RESTART_GET_RETRY_TIMEOUT_MS);
     ASSERT_TRUE(rc.GetCode() == K_RUNTIME_ERROR || rc.GetCode() == K_NOT_FOUND)
         << "expected stale-data or converged-metadata result, got: " << rc.ToString();
     LOG(INFO) << rc.ToString();
