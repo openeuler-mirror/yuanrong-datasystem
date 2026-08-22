@@ -45,9 +45,11 @@
   - `LatencyTraceEnabled()` is true only when at least one local/rpc threshold is positive.
   - The same local/rpc thresholds also drive the force condition for request-stage `SLOW_LOG` output; hard-coded
     `*_SLOW_US` constants must not remain the final control surface.
-  - RPC threshold semantics (issue #862 correction, **B-complete + MAX**): `slow_log_rpc_slower_than` gates on
-    **communication time** (network + RPC framework) and the displayed `*_RPC_*` phase value IS comm time (not the
-    full caller-side wall-clock). The full-duration tick pairs for `*_RPC_*` are removed from the tick-pair table, so
+  - RPC threshold semantics (issue #862 correction, **B-complete + MAX**): `slow_log_rpc_slower_than` normally gates on
+    **communication time** (network + RPC framework) and the displayed `*_RPC_*` phase value is comm time. Routed Set
+    is the explicit exception: `client.rpc.create_total` and `client.rpc.publish_total` are caller-observed RPC wall
+    time, including Worker execution, because Worker Create/Publish details are diagnosed independently from Worker
+    access logs. The full-duration tick pairs for the communication-only `*_RPC_*` phases are removed, so
     `worker.rpc.query_meta` / `client.rpc.get` etc. are populated solely from comm computed by the transport layer as
     `comm = e2e - server_processing` (brpc `BrpcPerfTrace` 8-point trace / ZMQ `MetaPb.latency_ticks`), stashed on
     `Trace::SetLastRpcCommUs`. **Aggregation = MAX** (not sum): for the concurrent QueryMeta fan-out to N masters,
@@ -109,9 +111,11 @@
 | `worker.urma.urma_total` | URMA write plus URMA wait operation time. |
 | `worker.process.remote_get` | Remote data worker local RemoteGet execution. |
 | `client.process.set` | Client-side Set/Put local processing outside tracked Create/Publish RPC and memory copy phases. |
-| `client.rpc.create` | Client-to-worker Create RPC duration, used by Create and by Set paths that allocate a buffer first. |
+| `client.rpc.create` | Client-to-worker Create RPC communication time on the legacy client path. |
 | `client.process.memory_copy` | Client local copy into SHM/UB buffer during Set/Put paths when present. |
-| `client.rpc.publish` | Client-to-worker Publish RPC duration during Set/Put or buffer publish. |
+| `client.rpc.publish` | Client-to-worker Publish RPC communication time on the legacy client path. |
+| `client.rpc.create_total` | Routed client caller-observed Create RPC wall time, including Worker execution. |
+| `client.rpc.publish_total` | Routed client caller-observed Publish RPC wall time, including Worker execution. |
 | `client.process.create` | Client-side Create local processing outside the Create RPC. |
 | `client.process.exist` | Client-side Exist local processing outside the Exist RPC. |
 | `client.rpc.exist` | Client-to-worker Exist RPC duration. |
@@ -133,6 +137,12 @@ Example client Set request field:
 
 ```text
 {Object_key:key1,transportType:TCP,latencySummary:{client.process.set:320,client.rpc.create:430,client.process.memory_copy:210,client.rpc.publish:850,worker.process.publish:260,worker.rpc.create_meta:410,master.process.create_meta:180}}
+```
+
+Example routed client Set request field:
+
+```text
+{Object_key:key1,transportType:UB,latencySummary:{client.process.set:320,client.rpc.create_total:430,client.process.memory_copy:210,client.urma.ub_transfer:600,client.rpc.publish_total:850}}
 ```
 
 Example primary worker request field:
@@ -213,6 +223,8 @@ Implementation guidance:
   worker local and outbound RPC/transport phases, but not master/data local execution phases.
 - If master/data workers are enabled but the primary worker is disabled, their compact phases are not merged or forwarded
   upstream in this plan.
+- Routed Set is independent of downstream phase forwarding: its client summary records Create/Publish caller wall time,
+  while Worker Create/Publish details remain in Worker access logs correlated by trace ID.
 - A side that is disabled by `0/0` config should behave like the original request path except for reading cached scalar
   config; it should not call `AddLatencyTick()`.
 
@@ -259,6 +271,9 @@ Client Set/Create/Exist:
 - Planned fields:
   - Create: `client.rpc.create`, `client.process.create`
   - Set/Put: `client.rpc.create`, `client.process.memory_copy`, `client.rpc.publish`, `client.process.set`
+  - Routed Create: `client.rpc.create_total`, `client.process.create`
+  - Routed Set/Put: `client.rpc.create_total`, `client.process.memory_copy`, `client.urma.ub_transfer`,
+    `client.rpc.publish_total`, `client.process.set`
   - Exist: `client.rpc.exist`, `client.process.exist`
 
 Primary Worker Set/Create/Exist:
@@ -427,8 +442,10 @@ Unix Makefiles; thirdparty cached; build cmd `bash build.sh -t build -X off -b c
 `LD_LIBRARY_PATH` set to the `/tmp/2d13d9...` thirdparty lib dirs).
 
 1. `src/datasystem/common/log/latency_phase_types.h`
-   - **Revert** the `WORKER_RPC_COMM_*`/`CLIENT_RPC_COMM_*` enum additions (29-36) and `LATENCY_SUMMARY_PHASE_MAX`
-     back to 28 — B reuses the existing `*_RPC_*` ids; no new comm phases.
+   - **Revert** the `WORKER_RPC_COMM_*`/`CLIENT_RPC_COMM_*` enum additions (29-36); B reuses the existing `*_RPC_*`
+     ids for communication time.
+   - Reserve phase ids 29-30 for routed client Create/Publish total wall time and set
+     `LATENCY_SUMMARY_PHASE_MAX` to 30. These total phases are client-local and are not carried in response protos.
    - `DerivedPhaseMapping.subPhases[5]` → `[12]` to hold added downstream sub-phases.
 2. `src/datasystem/common/log/trace.h` — keep `SetLastRpcCommUs`/`ConsumeLastRpcCommUs` + `lastRpcCommUs_` (unchanged
    from A; reused by B).

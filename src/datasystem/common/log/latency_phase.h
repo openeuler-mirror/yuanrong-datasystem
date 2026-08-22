@@ -77,6 +77,15 @@ inline bool ShouldCollectLatencyTrace(const LatencyTraceConfig &config)
 }
 
 /**
+ * @brief Check whether the current client operation has started latency tracing.
+ * @return true if the current Trace contains operation latency ticks.
+ */
+inline bool IsClientLatencyTraceActive()
+{
+    return Trace::Instance().GetLatencyTickCount() > 0;
+}
+
+/**
  * @brief Merge downstream phase durations from Trace into the current result.
  * Adds each downstream phase entry into result if not already present, otherwise sums durations.
  * @param[out] result Phase durations to merge downstream data into.

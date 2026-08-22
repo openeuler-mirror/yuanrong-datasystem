@@ -33,6 +33,7 @@
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
@@ -881,7 +882,10 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param, 
     // URMA write path: data already in pool buffer via user MemoryCopy.
     Status writeRc(K_URMA_ERROR, "URMA transport is unavailable");
     if (!info.ubDataSentByMemoryCopy && info.ubUrmaDataInfo != nullptr) {
+        const bool traceEnabled = IsClientLatencyTraceActive();
+        AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_UB_TRANSFER_START);
         writeRc = WritePayload(info);
+        AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_UB_TRANSFER_END);
         if (writeRc.IsOk()) {
             info.ubDataSentByMemoryCopy = true;
             METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, info.dataSize);

@@ -4022,7 +4022,10 @@ Status ObjectClientImpl::ProcessTransportPut(
     RETURN_IF_NOT_OK(transportLayer_->Create(routeContext.worker, objectKey, size, createParam, buffer));
 
     failureStage = SetFailureStage::TRANSFER;
+    const bool traceEnabled = IsClientLatencyTraceActive();
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_MEMORY_COPY_START);
     Status copyRc = buffer->MemoryCopy(data, size);
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_MEMORY_COPY_END);
     if (copyRc.IsError()) {
         LOG_IF_ERROR(transportLayer_->Release(*buffer, requestContext),
                      "Release routed Set allocation after MemoryCopy failure failed");

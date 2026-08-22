@@ -1727,6 +1727,66 @@ TEST(WorkerRpcClientTest, SignsCreateAndSetBeforeRpc)
     EXPECT_FALSE(client.invokedDecreaseReferenceRequest.signature().empty());
 }
 
+TEST(WorkerRpcClientTest, RecordsRoutedSetRpcTotalLatency)
+{
+    constexpr uint64_t staleCommUs = std::numeric_limits<uint64_t>::max();
+    Trace::Instance().ClearLatencyTicks();
+    Trace::Instance().SetLastRpcCommUs(0);
+    Raii clearTrace([] {
+        Trace::Instance().ClearLatencyTicks();
+        Trace::Instance().SetLastRpcCommUs(0);
+    });
+    Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_START);
+
+    AuthBoundaryWorkerRpcClient client(MakeSignature());
+    uint32_t workerVersion = 0;
+    CreateReqPb createRequest;
+    CreateRspPb createResponse;
+    createResponse.add_latency_phase_us(static_cast<uint32_t>(LatencySummaryPhase::WORKER_PROCESS_CREATE));
+    createResponse.add_latency_phase_us(1);
+    createResponse.set_latency_tick_dropped_count(1);
+    Trace::Instance().SetLastRpcCommUs(staleCommUs);
+    ASSERT_TRUE(client.InvokeCreate(100, createRequest, createResponse, workerVersion).IsOk());
+
+    PublishReqPb publishRequest;
+    PublishRspPb publishResponse;
+    publishResponse.add_latency_phase_us(static_cast<uint32_t>(LatencySummaryPhase::WORKER_PROCESS_PUBLISH));
+    publishResponse.add_latency_phase_us(1);
+    publishResponse.set_latency_tick_dropped_count(1);
+    std::vector<MemView> payloads;
+    Trace::Instance().SetLastRpcCommUs(staleCommUs);
+    ASSERT_TRUE(client.InvokeSet(100, publishRequest, payloads, publishResponse, workerVersion).IsOk());
+
+    const auto &phases = Trace::Instance().GetDownstreamPhases();
+    ASSERT_EQ(phases.count, 2u);
+    EXPECT_EQ(phases.entries[0].phase, LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL);
+    EXPECT_NE(phases.entries[0].durationUs, staleCommUs);
+    EXPECT_EQ(phases.entries[1].phase, LatencySummaryPhase::CLIENT_RPC_PUBLISH_TOTAL);
+    EXPECT_NE(phases.entries[1].durationUs, staleCommUs);
+    EXPECT_EQ(phases.tickDroppedCount, 0u);
+    EXPECT_EQ(Trace::Instance().ConsumeLastRpcCommUs(), 0u);
+}
+
+TEST(WorkerRpcClientTest, SkipsRoutedRpcLatencyWithoutActiveTrace)
+{
+    constexpr uint64_t staleCommUs = std::numeric_limits<uint64_t>::max();
+    Trace::Instance().ClearLatencyTicks();
+    Trace::Instance().SetLastRpcCommUs(staleCommUs);
+    Raii clearTrace([] {
+        Trace::Instance().ClearLatencyTicks();
+        Trace::Instance().SetLastRpcCommUs(0);
+    });
+
+    AuthBoundaryWorkerRpcClient client(MakeSignature());
+    CreateReqPb request;
+    CreateRspPb response;
+    uint32_t workerVersion = 0;
+    ASSERT_TRUE(client.InvokeCreate(100, request, response, workerVersion).IsOk());
+
+    EXPECT_EQ(Trace::Instance().GetDownstreamPhases().count, 0u);
+    EXPECT_EQ(Trace::Instance().ConsumeLastRpcCommUs(), 0u);
+}
+
 TEST(WorkerRpcClientTest, RetrySealAlreadySealedIsSuccess)
 {
     AuthBoundaryWorkerRpcClient client(MakeSignature());

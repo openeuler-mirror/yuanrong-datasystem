@@ -91,13 +91,15 @@ constexpr DerivedPhaseMapping DERIVED_PHASE_TABLE[] = {
         LatencySummaryPhase::CLIENT_URMA_UB_TRANSFER, LatencySummaryPhase::CLIENT_RPC_PUBLISH,
         LatencySummaryPhase::WORKER_PROCESS_CREATE, LatencySummaryPhase::WORKER_RPC_CREATE_META,
         LatencySummaryPhase::MASTER_PROCESS_CREATE_META, LatencySummaryPhase::WORKER_PROCESS_PUBLISH,
-        LatencySummaryPhase::WORKER_RPC_UPDATE_META, LatencySummaryPhase::MASTER_PROCESS_UPDATE_META },
-      10 },
+        LatencySummaryPhase::WORKER_RPC_UPDATE_META, LatencySummaryPhase::MASTER_PROCESS_UPDATE_META,
+        LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL, LatencySummaryPhase::CLIENT_RPC_PUBLISH_TOTAL },
+      12 },
     { LatencyTickKey::CLIENT_CREATE_START,
       LatencyTickKey::CLIENT_CREATE_END,
       LatencySummaryPhase::CLIENT_PROCESS_CREATE,
-      { LatencySummaryPhase::CLIENT_RPC_CREATE, LatencySummaryPhase::WORKER_PROCESS_CREATE },
-      2 },
+      { LatencySummaryPhase::CLIENT_RPC_CREATE, LatencySummaryPhase::WORKER_PROCESS_CREATE,
+        LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL },
+      3 },
     { LatencyTickKey::CLIENT_EXIST_START,
       LatencyTickKey::CLIENT_EXIST_END,
       LatencySummaryPhase::CLIENT_PROCESS_EXIST,
@@ -182,6 +184,8 @@ constexpr PhaseNameEntry PHASE_NAME_TABLE[] = {
     { LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET, "client.rpc.direct_query_and_get" },
     { LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA, "client.rpc.direct_get_data" },
     { LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE, "client.process.direct_materialize" },
+    { LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL, "client.rpc.create_total" },
+    { LatencySummaryPhase::CLIENT_RPC_PUBLISH_TOTAL, "client.rpc.publish_total" },
 };
 
 constexpr size_t PHASE_NAME_TABLE_SIZE = sizeof(PHASE_NAME_TABLE) / sizeof(PHASE_NAME_TABLE[0]);
@@ -209,10 +213,9 @@ constexpr LatencySummaryPhase PROCESS_PHASES[] = {
 
 constexpr size_t PROCESS_PHASES_SIZE = sizeof(PROCESS_PHASES) / sizeof(PROCESS_PHASES[0]);
 
-// RPC phases used by the slow-log gate. The *_RPC_* phases hold RPC
-// communication time (network + RPC framework, excluding remote business
-// execution and remote queue wait — issue #862), populated by the transport
-// layer's 8-point framework trace and attached via Trace::AddDownstreamPhase.
+// RPC phases used by the slow-log gate. Routed client total phases include remote Worker execution. Other *_RPC_*
+// phases hold communication time (network + RPC framework, excluding remote business execution and remote queue wait
+// — issue #862), populated by the transport layer's 8-point framework trace and attached via Trace::AddDownstreamPhase.
 // For concurrent fan-out (e.g. QueryMeta to N masters), the caller aggregates
 // per-leg comm with MAX so that N fast legs do not sum past the threshold.
 // URMA transfer phases are retained as RPC-side work (pure data transfer,
@@ -230,6 +233,8 @@ constexpr LatencySummaryPhase RPC_PHASES[] = {
     LatencySummaryPhase::WORKER_RPC_UPDATE_META,
     LatencySummaryPhase::CLIENT_URMA_UB_TRANSFER,
     LatencySummaryPhase::WORKER_URMA_URMA_TOTAL,
+    LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL,
+    LatencySummaryPhase::CLIENT_RPC_PUBLISH_TOTAL,
 };
 
 constexpr size_t RPC_PHASES_SIZE = sizeof(RPC_PHASES) / sizeof(RPC_PHASES[0]);
