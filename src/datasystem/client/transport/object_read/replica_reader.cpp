@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <future>
 #include <limits>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -49,6 +50,22 @@ struct RefreshableLocationState {
     Status drainingLocationStatus;
 };
 
+Status MakeStaleTransportSnapshotStatus(const Status &status)
+{
+    return Status(K_NOT_READY, std::string(STALE_TRANSPORT_SNAPSHOT_MESSAGE) + ": " + status.ToString());
+}
+
+bool IsReadSourceUnavailableStatus(const Status &status)
+{
+    if (status.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE) {
+        return true;
+    }
+    if (status.GetCode() == K_URMA_READ_SOURCE_DENIED) {
+        return true;
+    }
+    return IsNonRetryableRpcError(status);
+}
+
 struct ReadState {
     const master::ObjectLocationInfoPb *location = nullptr;
     ObjectReadItemResult *result = nullptr;
@@ -69,6 +86,11 @@ void RecordRefreshableLocation(const Status &status, RefreshableLocationState &s
     if (IsWorkerDrainingForScaleIn(status)) {
         state.hasDrainingLocation = true;
         state.drainingLocationStatus = status;
+        return;
+    }
+    if (IsNonRetryableRpcError(status)) {
+        state.hasStaleLocation = true;
+        state.staleLocationStatus = MakeStaleTransportSnapshotStatus(status);
         return;
     }
     if (IsTransportSnapshotStaleLocation(status)) {
@@ -197,13 +219,11 @@ void AdvanceRetryableReplica(ReadState &state, const Status &itemStatus)
     state.exhausted = true;
 }
 
-// A replica whose UB read source is unavailable: either the worker reported it
-// (K_URMA_DATA_WORKER_UNAVAILABLE) or the client's UB health cache denied it pre-read
-// (K_URMA_READ_SOURCE_DENIED). Both fast-skip to the next replica.
+// Skip the current replica on UB admission denial or a dead RPC peer. UB admission
+// errors surface unchanged if all replicas are exhausted; peer-dead is refreshable.
 bool IsReadSourceUnavailable(const Status &status)
 {
-    return status.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE
-           || status.GetCode() == K_URMA_READ_SOURCE_DENIED || IsNonRetryableRpcError(status);
+    return IsReadSourceUnavailableStatus(status);
 }
 
 bool IsLastUnavailableReplica(const Status &status, int replicaIndex, int replicaCount)
@@ -555,6 +575,7 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                         continue;
                     }
                     if (IsReadSourceUnavailable(itemStatus)) {
+                        RecordRefreshableLocation(itemStatus, state.refreshableLocation);
                         AdvanceUnavailableReplica(state, itemStatus);
                         continue;
                     }

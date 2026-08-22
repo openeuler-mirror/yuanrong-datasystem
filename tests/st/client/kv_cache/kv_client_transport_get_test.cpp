@@ -253,6 +253,15 @@ protected:
         return INLINE_DATA_LIMIT;
     }
 
+    void InitClient(uint32_t workerIndex, bool enableLocalCache, std::shared_ptr<KVClient> &client)
+    {
+        ConnectOptions options;
+        InitConnectOpt(workerIndex, options, CLIENT_TIMEOUT_MS);
+        options.enableLocalCache = enableLocalCache;
+        client = std::make_shared<KVClient>(options);
+        DS_ASSERT_OK(client->Init());
+    }
+
     void SetUbGetSize(size_t size)
     {
         ASSERT_EQ(setenv(UB_GET_SIZE_ENV, std::to_string(size).c_str(), 1), 0);
@@ -382,6 +391,47 @@ protected:
             }
         }
         return keys;
+    }
+
+    void PrepareDeadReplicaScenario(const std::string &key, const std::string &value, std::string &deadReplicaAddress)
+    {
+        DS_ASSERT_OK(writer_->Set(key, value));
+        std::shared_ptr<KVClient> replicaWarmer;
+        InitTestKVClient(TRANSPORT_CLIENT_WORKER_INDEX, replicaWarmer, CLIENT_TIMEOUT_MS);
+        std::string warmedValue;
+        DS_ASSERT_OK(replicaWarmer->Get(key, warmedValue));
+        ASSERT_EQ(warmedValue, value);
+        replicaWarmer.reset();
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        HostPort replicaAddress;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(TRANSPORT_CLIENT_WORKER_INDEX, replicaAddress));
+        DS_ASSERT_OK(cluster_->KillWorker(TRANSPORT_CLIENT_WORKER_INDEX));
+        WaitAllMembersJoinClusterTopology(WORKER_NUM - 1, 20);
+        deadReplicaAddress = replicaAddress.ToString();
+    }
+
+    void ForceSelectLocationOnce(const std::string &address)
+    {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, "master.select_location",
+                                               std::string("1*return(") + address + ")"));
+    }
+
+    void VerifyGetAfterDeadReplica(const std::string &liveKey, const std::string &missingKey,
+                                   const std::string &value, const std::string &deadReplicaAddress,
+                                   bool enableLocalCache)
+    {
+        std::shared_ptr<KVClient> requester;
+        InitClient(DATA_WORKER_INDEX, enableLocalCache, requester);
+        ForceSelectLocationOnce(deadReplicaAddress);
+        Optional<Buffer> liveBuffer;
+        DS_ASSERT_OK(requester->Get(liveKey, liveBuffer));
+        ASSERT_TRUE(liveBuffer);
+        AssertBufferEqual(*liveBuffer, value);
+
+        Optional<Buffer> missingBuffer;
+        ASSERT_EQ(requester->Get(missingKey, missingBuffer).GetCode(), StatusCode::K_NOT_FOUND);
+        ASSERT_FALSE(missingBuffer);
     }
 
 #ifdef USE_URMA
@@ -554,6 +604,16 @@ protected:
     std::shared_ptr<KVClient> reader_;
     bool hadPreviousUbGetSize_ = false;
     std::string previousUbGetSize_;
+};
+
+class KVClientTransportGetPeerDeadTest : public KVClientTransportGetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientTransportGetTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams +=
+            " -heartbeat_interval_ms=500 -node_timeout_s=1 -node_dead_timeout_s=3";
+    }
 };
 
 class KVClientTransportGetWithShmTest : public KVClientTransportGetTest {
@@ -1627,6 +1687,20 @@ TEST_F(KVClientTransportGetTest, ObjectNotFound)
     Optional<Buffer> buffer;
     ASSERT_EQ(reader_->Get(keys.front(), buffer).GetCode(), StatusCode::K_NOT_FOUND);
     ASSERT_FALSE(buffer);
+}
+
+TEST_F(KVClientTransportGetPeerDeadTest, DataReplicaPeerDeadKeepsExistingValueAndNotFoundSemantics)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 2, keys);
+    ASSERT_EQ(keys.size(), 2u);
+    const std::string value(INLINE_DATA_LIMIT + 4096, 'p');
+    std::string deadReplicaAddress;
+    PrepareDeadReplicaScenario(keys[0], value, deadReplicaAddress);
+
+    for (const bool enableLocalCache : { false, true }) {
+        VerifyGetAfterDeadReplica(keys[0], keys[1], value, deadReplicaAddress, enableLocalCache);
+    }
 }
 
 TEST_F(KVClientTransportGetTest, NonLocalMetaOwnerFallsBack)

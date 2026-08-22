@@ -494,21 +494,26 @@
 - Common change risks:
   - `ConnectOptions` can affect multiple language bindings and shared backend initialization at once; `serviceDiscovery` is intentionally typed as `std::shared_ptr<IServiceDiscovery>` so SDK clients do not depend on the ETCD implementation;
   - `ObjectClientImpl` is shared by both KV and Object API families, so “KV-only” changes may regress object behavior;
-  - direct-read metadata and replica retries share the caller's API deadline. The data phase first polls replicas from
-    the fixed metadata location snapshot, but `K_NOT_READY` with `Worker endpoint is absent from latest transport
-    snapshot` are treated as stale topology/location signals. Metadata-owner connection, dispatch-deadline,
-    peer-dead, client-disconnect, and owner-unavailable failures report the failed endpoint and return that stale
-    signal immediately instead of retrying the fixed owner; the outer ObjectClient retry then rebuilds routing from the
-    latest authoritative ring:
-    the reader tries remaining replicas, and
-    `ObjectClientImpl::GetFromTransportLayer` forces the existing hash-ring refresher before it re-routes and re-queries
-    metadata only for affected keys with deadline-bounded backoff. Retry state is allocated only for affected keys;
-    draining and stale-location budgets advance independently and never reset when the observed policy alternates.
-    Concurrent force-refresh requests are coalesced by the refresher's atomic budget, and forced retries retain their
-    250 ms minimum interval instead of letting request traffic wake the refresh loop continuously. The transport round
-    must still apply structured per-item results before deciding which keys are affected, so mixed batches do not turn
-    object-level failures such as `K_NOT_FOUND` into stale-location retries.
-    A dead data replica is advanced within the current fixed-location round and does not trigger a metadata refresh.
+  - direct-read metadata and replica retries share the caller's API deadline. The metadata phase queries the selected
+    metadata-owner Worker first. Metadata-owner connection, dispatch-deadline, peer-dead, client-disconnect, and
+    owner-unavailable failures report the failed endpoint and return a stale topology/location signal immediately
+    instead of retrying that fixed owner. The outer `ObjectClientImpl::GetFromTransportLayer` retry then forces the
+    existing hash-ring refresher before it re-routes and re-queries metadata only for affected keys with deadline-bounded
+    backoff. The data phase polls replicas from one fixed metadata location snapshot: stale-snapshot errors and
+    draining errors try the remaining replicas first, and a data-replica `K_RPC_PEER_DEAD` is treated the same way. If
+    another listed replica succeeds, the current Get returns that value without refreshing metadata. If all listed
+    replicas are exhausted after a stale/draining/dead-replica observation, the reader returns the recorded stale
+    topology/location signal so the outer Get refreshes the hash ring and re-queries authoritative metadata. The stale
+    signal is internal to the retry loop: if the caller deadline expires before the next retry, whether during the read
+    RPC itself or during refresh backoff, the public SDK result is rewritten to `K_RPC_DEADLINE_EXCEEDED`; if the stale
+    refresh budget is exhausted while the API deadline is still alive, the public SDK result is rewritten to
+    `K_RPC_UNAVAILABLE`. Both final statuses append the original
+    stale/dead-replica diagnostic string. Retry state is allocated only for affected keys; draining and stale-location
+    budgets advance independently and never reset when the observed policy alternates. Concurrent force-refresh requests
+    are coalesced by the refresher's atomic budget, and forced retries retain their 250 ms minimum interval instead of
+    letting request traffic wake the refresh loop continuously. The transport round must still apply structured per-item
+    results before deciding which keys are affected, so mixed batches do not turn object-level failures such as
+    `K_NOT_FOUND` into stale-location retries.
   - Python-facing behavior can differ from C++ because pybind wrappers convert statuses into exceptions and sometimes rename methods;
   - context propagation changes can affect tracing and multi-tenant behavior across all client operations.
   - `tools/perf/cpu_spike_capture.sh` is an operator-side event trigger for transient client CPU spikes. It samples
