@@ -180,7 +180,7 @@ private:
     std::shared_ptr<WorkerWorkerOCService_BrpcGenericStub> dataStub_;
     std::shared_ptr<master::MasterOCService_BrpcGenericStub> masterStub_;
     std::atomic<bool> alive_{ false };
-    uint32_t connectionGeneration_ = 0;
+    std::atomic<uint32_t> connectionGeneration_{ 0 };
     static std::atomic<uint32_t> nextConnectionGeneration_;
 };
 

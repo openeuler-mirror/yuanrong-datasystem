@@ -33,6 +33,8 @@ public:
 
     void ShutDown() override;
 
+    void SubmitDestroyTask();
+
     /**
      * @brief Init hccl communicator. Special implementation based on this communication domain class.
      * @param[in] rootInfo The root info.

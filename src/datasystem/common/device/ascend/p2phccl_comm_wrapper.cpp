@@ -33,24 +33,45 @@ P2PHcclCommWrapper::~P2PHcclCommWrapper()
 
 void P2PHcclCommWrapper::ShutDown()
 {
-    if ((commState_ != CommState::DESTROY)) {
-        commState_ = CommState::DESTROY;
-        if (pool_) {
-            try {
-                pool_->Execute([this, resource = resource_]() {
-                    LOG_IF_ERROR(
-                        deviceImpl_->SynchronizeStreamWithTimeout(resource->PrimaryStream(),
-                                                                  SYNC_STREAM_WAIT_TIMEOUT_MS),
-                        "Timed out waiting for all tasks in Stream to complete, check that HcclRecv is not called");
-                    resource->Release();
-                    deviceImpl_->P2PCommDestroy(GetRef());
-                    LOG(INFO) << "Destroy HcclComm ok";
-                });
-            } catch (const std::exception &e) {
-                LOG(ERROR) << e.what();
-            }
+    if (commState_ == CommState::DESTROY) {
+        return;
+    }
+    commState_ = CommState::DESTROY;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (hasShutDown_) {
+        return;
+    }
+    if (pool_) {
+        SubmitDestroyTask();
+    }
+    (void)commThreadControl_->RemoveThreadPoolCommRecord(bindThreadId_, commId_);
+    hasShutDown_ = true;
+    pool_.reset();
+    commThreadControl_.reset();
+}
+
+void P2PHcclCommWrapper::SubmitDestroyTask()
+{
+    try {
+        // Hold a shared_ptr so the async task can safely access members after the caller releases its
+        // reference (DestroyComm erases the comm from the table right after ShutDown returns).
+        // If lock() returns nullptr (object already being destroyed), skip async task but still
+        // clean up thread-pool bookkeeping below.
+        std::shared_ptr<CommWrapperBase> self = weak_from_this().lock();
+        if (self == nullptr) {
+            return;
         }
-        (void)commThreadControl_->RemoveThreadPoolCommRecord(bindThreadId_, commId_);
+        pool_->Execute([self, this, resource = resource_]() {
+            LOG_IF_ERROR(
+                deviceImpl_->SynchronizeStreamWithTimeout(resource->PrimaryStream(),
+                                                          SYNC_STREAM_WAIT_TIMEOUT_MS),
+                "Timed out waiting for all tasks in Stream to complete, check that HcclRecv is not called");
+            resource->Release();
+            deviceImpl_->P2PCommDestroy(GetRef());
+            LOG(INFO) << "Destroy HcclComm ok";
+        });
+    } catch (const std::exception &e) {
+        LOG(ERROR) << e.what();
     }
 }
 

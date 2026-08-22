@@ -36,7 +36,13 @@ void CommWrapper::ShutDown()
         }
         if (pool_) {
             auto traceId = Trace::Instance().GetTraceID();
-            pool_->Submit([this, resource = resource_, traceId]() {
+            // Hold a shared_ptr so the async task can safely access members after the caller releases its
+            // reference (DestroyComm erases the comm from the table right after ShutDown returns).
+            // If lock() returns nullptr (object already being destroyed), skip async task but still
+            // clean up thread-pool bookkeeping below.
+            std::shared_ptr<CommWrapperBase> self = weak_from_this().lock();
+            if (self != nullptr) {
+                pool_->Submit([self, this, resource = resource_, traceId]() {
                 TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
                 LOG_IF_ERROR(
                     deviceImpl_->SynchronizeStreamWithTimeout(resource->PrimaryStream(), SYNC_STREAM_WAIT_TIMEOUT_MS),
@@ -45,6 +51,7 @@ void CommWrapper::ShutDown()
                 deviceImpl_->CommDestroy(GetRef());
                 LOG(INFO) << "Destroy Comm ok, commId: " << commId_;
             });
+            }
         }
         (void)commThreadControl_->RemoveThreadPoolCommRecord(bindThreadId_, commId_);
         hasShutDown_ = true;
