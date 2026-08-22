@@ -35,3 +35,29 @@ def test_base_triage_skill_routes_instead_of_duplicating_specialist_workflows():
     assert "ds-trace-numa-analysis" in triage
     assert triage.count("python3 scripts/ds_trace_bottleneck.py") <= 1
     assert "python3 scripts/ds_trace_numa_analysis.py" not in triage
+
+
+def test_bottleneck_skill_routes_multi_run_suite_without_reparsing_raw_logs():
+    bottleneck = (ROOT / ".skills/ds-trace-bottleneck-analysis/SKILL.md").read_text(encoding="utf-8")
+
+    assert "scripts/ds_trace_bottleneck_suite.py" in bottleneck
+    assert "Multi-run control variable analysis" in bottleneck
+    assert "每个 Run" in bottleneck or "every configured run" in bottleneck
+    assert "must never merge Trace rows across runs" in bottleneck
+    assert "capped anomaly samples" in bottleneck
+    assert "not an occurrence rate" in bottleneck
+    assert "implementation" in bottleneck
+    assert "object size" in bottleneck
+
+
+def test_repository_context_registers_trace_analysis_workflows():
+    registry = (ROOT / ".repo_context/modules/overview/repository-skills.md").read_text(encoding="utf-8")
+    routing = (ROOT / ".repo_context/playbooks/upkeep/skill-trigger-routing.md").read_text(encoding="utf-8")
+
+    for skill in (
+        "ds-trace-triage",
+        "ds-trace-bottleneck-analysis",
+        "ds-trace-numa-analysis",
+    ):
+        assert f"`{skill}`" in registry
+        assert f"`{skill}`" in routing

@@ -716,7 +716,7 @@ def test_query_and_get_has_time_worker_analysis_and_unclosed_failure_boundary(ru
                 "host_ip": "",
                 "text": (
                     f"{timestamp} [BRPC_RPC_FRAMEWORK_SLOW] "
-                    "method=datasystem.WorkerOCService.QueryAndGet "
+                    "method=datasystem.master.MasterOCService.QueryAndGet "
                     "e2e_us=20150 remote_processing_us=20150 server_req_queue_us=0 "
                     "server_exec_us=0 network_residual_us=0 cntl_error_code=1008 "
                     "cntl_failed=1 resp_attachment_bytes=0"
@@ -732,7 +732,7 @@ def test_query_and_get_has_time_worker_analysis_and_unclosed_failure_boundary(ru
                         "line": 3,
                         "worker": f"client-node-{index}",
                         "host_ip": "",
-                        "text": f"{timestamp} BrpcChannel created: 10.0.0.8:31501 timeout=20ms connect_timeout=1000ms",
+                        "text": f"{timestamp} BrpcChannel created: 192.0.2.10:31501 timeout=20ms connect_timeout=1000ms",
                     },
                     {
                         "source": "client.log",
@@ -740,7 +740,7 @@ def test_query_and_get_has_time_worker_analysis_and_unclosed_failure_boundary(ru
                         "line": 4,
                         "worker": f"client-node-{index}",
                         "host_ip": "",
-                        "text": f"{timestamp} [TransportGet][Metadata] meta owner: 10.0.0.8:31501, status: RPC deadline exceeded",
+                        "text": f"{timestamp} [TransportGet][Metadata] meta owner: 192.0.2.10:31501, status: RPC deadline exceeded",
                     },
                 ]
             )
@@ -762,7 +762,7 @@ def test_query_and_get_has_time_worker_analysis_and_unclosed_failure_boundary(ru
     assert second["failed_count"] == 2
     assert {item["initiator"] for item in query["initiators"]} >= {"client-node-1", "client-node-2"}
     assert query["meta_target_coverage"] == "present"
-    assert query["meta_targets"] == [{"target": "10.0.0.8:31501", "trace_count": 1}]
+    assert query["meta_targets"] == [{"target": "192.0.2.10:31501", "trace_count": 1}]
     assert "server trailer" in query["root_cause_boundary"]
     timeout_flow = query["timeout_flow"]
     assert timeout_flow["timeout_count"] >= 2
@@ -778,7 +778,7 @@ def test_query_and_get_has_time_worker_analysis_and_unclosed_failure_boundary(ru
     assert "ObjectReadFlow::Resolve" in timeout_flow["confirmed_flow"]
     assert "不能确认" in timeout_flow["root_cause_status"]
     query_events = [event for event in correlation["events"] if event["kind"] == "query_meta"]
-    assert any(event["method"].endswith("WorkerOCService.QueryAndGet") for event in query_events)
+    assert any(event["method"].endswith("MasterOCService.QueryAndGet") for event in query_events)
     assert all(event["component_scope"] == "Client发起QueryMeta；Meta Owner目标未观测" for event in query_events)
 
     html_text = mod.render_html(analysis, "QueryMeta analysis")
@@ -816,6 +816,146 @@ def test_build_analysis_selects_topn_and_bounds_exclusive_stages(run_dir: Path):
         assert all(value >= 0 for value in row["attribution_ms"].values())
 
 
+def test_focus_breakdown_separates_connect_communication_business_sched_network_and_framework():
+    mod = load_module()
+    row = {
+        "attribution_ms": {
+            "RPC网络": 1.0,
+            "RPC排队": 0.2,
+            "QueryMeta": 5.0,
+            "URMA超时等待": 0.0,
+            "URMA": 4.0,
+            "远端供数处理": 2.0,
+            "数据访问父窗口/未细分": 3.0,
+            "未解释残差": 4.8,
+        },
+        "evidence": [
+            "[TransportGet] phasesUs={urma_connect_info_exchange:2000,"
+            "urma_connection_finalize:500,connection_write_lock_wait:300}",
+            "[BRPC_RPC_FRAMEWORK_SLOW] method=WorkerWorkerExchangeUrmaConnectInfo "
+            "e2e_us=2000 server_req_queue_us=100 server_exec_us=800 network_residual_us=500",
+            "[BRPC_RPC_FRAMEWORK_SLOW] method=WorkerOCService.QueryAndGet "
+            "e2e_us=5000 server_req_queue_us=200 server_exec_us=3000 network_residual_us=1000",
+            "[BRPC_RPC_FRAMEWORK_SLOW] method=WorkerWorkerOCService.GetObjectRemote "
+            "e2e_us=3000 server_req_queue_us=100 server_exec_us=1500 network_residual_us=700",
+        ],
+        "urma_requests": [
+            {
+                "wake_sched_latency_ms": 0.4,
+                "thread_sched_ms": 0.3,
+                "notify_to_awake_ms": 0.2,
+            }
+        ],
+        "error_family": None,
+    }
+
+    mod._apply_focus_breakdown(row)
+
+    assert row["focus_breakdown_ms"] == pytest.approx(
+        {
+            "URMA建链": 1.3,
+            "URMA通信": 3.6,
+            "QueryAndGet其他业务": 4.2,
+            "Get其他业务": 1.4,
+            "调度/线程等待": 1.1,
+            "RPC网络相关": 1.5,
+            "RPC框架": 2.1,
+            "未解释残差": 4.8,
+        }
+    )
+    assert sum(row["focus_breakdown_ms"].values()) == pytest.approx(20.0)
+    assert row["focus_primary_stage"] == "未解释残差"
+
+
+def test_focus_breakdown_separates_outer_and_nested_rpc_framework_windows():
+    mod = load_module()
+    row = {
+        "attribution_ms": {
+            "RPC网络": 1.5,
+            "RPC排队": 0.2,
+            "QueryMeta": 0.0,
+            "URMA超时等待": 0.0,
+            "URMA": 0.0,
+            "远端供数处理": 2.0,
+            "数据访问父窗口/未细分": 4.0,
+            "未解释残差": 3.0,
+        },
+        "evidence": [
+            "[BRPC_RPC_FRAMEWORK_SLOW] method=datasystem.WorkerOCService.Get "
+            "e2e_us=10000 server_req_queue_us=200 server_exec_us=8000 "
+            "network_residual_us=1000 cntl_error_code=0 cntl_failed=0",
+            "[BRPC_RPC_FRAMEWORK_SLOW] method=datasystem.WorkerWorkerOCService.GetObjectRemote "
+            "e2e_us=3000 server_req_queue_us=100 server_exec_us=2000 "
+            "network_residual_us=500 cntl_error_code=0 cntl_failed=0",
+        ],
+        "urma_requests": [],
+        "error_family": None,
+    }
+
+    mod._apply_focus_breakdown(row)
+
+    assert row["focus_breakdown_ms"]["RPC框架"] == pytest.approx(1.2)
+    assert row["focus_breakdown_ms"]["调度/线程等待"] == pytest.approx(0.3)
+    assert row["focus_breakdown_ms"]["Get其他业务"] == pytest.approx(5.5)
+    assert row["focus_breakdown_ms"]["未解释残差"] == pytest.approx(2.2)
+    assert sum(row["focus_breakdown_ms"].values()) == pytest.approx(10.7)
+
+
+def test_focus_breakdown_keeps_failed_rpc_without_server_trailer_unexplained():
+    mod = load_module()
+    row = {
+        "attribution_ms": {
+            "RPC网络": 0.0,
+            "RPC排队": 0.0,
+            "QueryMeta": 0.0,
+            "URMA超时等待": 0.0,
+            "URMA": 0.0,
+            "远端供数处理": 0.0,
+            "数据访问父窗口/未细分": 0.0,
+            "未解释残差": 20.0,
+        },
+        "evidence": [
+            "[BRPC_RPC_FRAMEWORK_SLOW] method=WorkerOCService.QueryAndGet "
+            "e2e_us=20000 server_req_queue_us=0 server_exec_us=0 "
+            "network_residual_us=0 cntl_error_code=1008 cntl_failed=1"
+        ],
+        "urma_requests": [],
+        "error_family": "RPC截止超时",
+    }
+
+    mod._apply_focus_breakdown(row)
+
+    assert row["focus_breakdown_ms"]["RPC框架"] == 0.0
+    assert row["focus_breakdown_ms"]["未解释残差"] == 20.0
+
+
+def test_focus_breakdown_does_not_infer_framework_without_complete_rpc_timing():
+    mod = load_module()
+    row = {
+        "attribution_ms": {
+            "RPC网络": 1.0,
+            "RPC排队": 0.0,
+            "QueryMeta": 0.0,
+            "URMA超时等待": 0.0,
+            "URMA": 0.0,
+            "远端供数处理": 0.0,
+            "数据访问父窗口/未细分": 0.0,
+            "未解释残差": 9.0,
+        },
+        "evidence": [
+            "[BRPC_RPC_FRAMEWORK_SLOW] method=datasystem.WorkerOCService.Get "
+            "e2e_us=10000 network_residual_us=1000 cntl_error_code=0 cntl_failed=0"
+        ],
+        "urma_requests": [],
+        "error_family": None,
+    }
+
+    mod._apply_focus_breakdown(row)
+
+    assert row["focus_breakdown_ms"]["RPC框架"] == 0.0
+    assert row["focus_breakdown_ms"]["未解释残差"] == 9.0
+
+
 def test_latency_segments_follow_report_reference_bands_and_exclude_sub_5ms():
     mod = load_module()
     latencies = [4.9, 5.0, 5.999, 6.0, 6.999, 7.0, 9.999, 10.0, 20.0, 20.001, 35.0]
@@ -825,10 +965,15 @@ def test_latency_segments_follow_report_reference_bands_and_exclude_sub_5ms():
             "timestamp": f"2026-08-15T10:00:00.{index:06d}",
             "failed": index % 17 == 0,
             "client_ms": latency,
-            "primary_problem": mod.STAGE_NAMES[index % len(mod.STAGE_NAMES)],
+            "primary_problem": (
+                "URMA超时"
+                if mod.STAGE_NAMES[index % len(mod.STAGE_NAMES)] == "URMA超时等待"
+                else mod.STAGE_NAMES[index % len(mod.STAGE_NAMES)]
+            ),
         }
         for index, latency in enumerate(latencies)
     ]
+    rows[1]["focus_primary_problem"] = "RPC框架"
 
     segments = mod._build_latency_segments(rows)
 
@@ -839,6 +984,8 @@ def test_latency_segments_follow_report_reference_bands_and_exclude_sub_5ms():
     assert "trace-0008" in segments[3]["trace_ids"]
     assert "trace-0009" in segments[4]["trace_ids"]
     assert all(sum(segment["problem_counts"].values()) == segment["trace_count"] for segment in segments)
+    assert segments[0]["dominant_problem"] == "RPC框架"
+    assert segments[0]["problem_counts"]["RPC框架"] == 1
 
 
 def test_nested_batch_network_is_counted_once_and_attribution_closes(run_dir: Path):
@@ -1244,6 +1391,147 @@ def test_chunked_urma_write_uses_wall_clock_span_not_sum_of_wr_latency(run_dir: 
     assert "逻辑Write墙钟" in html_text
 
 
+def test_worker_query_and_get_inline_urma_is_removed_from_query_parent(run_dir: Path):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    item = trace(
+        "worker-inline-query-urma",
+        6,
+        0,
+        timestamp="2026-08-24T10:46:58.312841",
+        query_meta_ms=5.7,
+        worker="data-worker-8",
+    )
+    item["latency_summary_us"] = {"client.rpc.direct_query_and_get": 5_700}
+    item["ub_events"] = [
+        chunked_urma_event(
+            "2026-08-24T10:46:58.315630",
+            "data-worker-8",
+            2.417,
+            "154032",
+            1,
+            2,
+            post_us=130862131031,
+            observed_us=130862133454,
+        ),
+        chunked_urma_event(
+            "2026-08-24T10:46:58.318453",
+            "data-worker-8",
+            5.213,
+            "154034",
+            2,
+            2,
+            post_us=130862131054,
+            observed_us=130862136273,
+        ),
+    ]
+    item["urma_elapsed_ms"] = {"total": metric(5.213) | {"count": 2}}
+    item["evidence_coverage"]["urma"] = "present"
+    item["evidence"].append(
+        {
+            "source": "fixture.log",
+            "member": "worker-inline-query-urma",
+            "line": 2,
+            "worker": "data-worker-8",
+            "host_ip": "",
+            "text": (
+                "2026-08-24T10:46:58.318620 | [SLOW LOG] QueryAndGet done, "
+                "keyCount: 1, inlineHits: 1, misses: 0, transport: UB, "
+                "preprocess: 0.003ms, localRead: 5.338ms, metadata: 0.000ms, "
+                "delivery: 0.027ms, total: 5.368ms, status: code: [OK]"
+            ),
+        }
+    )
+    item["evidence"].append(
+        {
+            "source": "fixture.log",
+            "member": "worker-inline-query-urma",
+            "line": 3,
+            "worker": "client-a",
+            "host_ip": "",
+            "text": (
+                "[BRPC_RPC_FRAMEWORK_SLOW] "
+                "method=datasystem.WorkerOCService.QueryAndGet e2e_us=5600 "
+                "server_req_queue_us=8 server_exec_us=5320 network_residual_us=250 "
+                "cntl_error_code=0 cntl_failed=0"
+            ),
+        }
+    )
+    summary["traces"]["worker-inline-query-urma"] = item
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    row = next(
+        value
+        for value in load_module().build_analysis(run_dir, top_n=100, deadline_ms=None)["traces"]
+        if value["trace_id"] == "worker-inline-query-urma"
+    )
+
+    assert row["inline_query_urma_ms"] == pytest.approx(5.242)
+    assert row["query_and_get_parent_ms"] == pytest.approx(5.7)
+    assert row["query_and_get_exclusive_ms"] == pytest.approx(0.458)
+    assert row["attribution_ms"]["URMA"] == pytest.approx(5.242)
+    assert row["query_and_get_exclusive_ms"] == pytest.approx(0.458)
+    assert row["attribution_ms"]["RPC网络"] == pytest.approx(0.250)
+    assert row["attribution_ms"]["RPC排队"] == pytest.approx(0.008)
+    assert row["attribution_ms"]["QueryMeta"] == pytest.approx(0.200)
+    assert row["data_access_scope"] == "QueryAndGet inline URMA"
+    assert "同 Worker/同 attempt 唯一匹配" in row["data_access_evidence"]
+    assert sum(row["attribution_ms"].values()) == pytest.approx(row["client_ms"])
+    html = load_module().render_html(
+        load_module().build_analysis(run_dir, top_n=100, deadline_ms=None), "Inline URMA"
+    )
+    assert "PR2165 inline 互斥归因" in html
+    assert "QueryAndGet其他" in html
+    assert "URMA建链" in html
+    assert "URMA通信" in html
+    assert "调度/线程等待" in html
+    assert "RPC网络相关" in html
+    assert "RPC框架" in html
+    assert "QueryAndGet父窗口（原始）" in html
+    assert "已剝离 inline URMA" in html
+
+
+def test_worker_query_and_get_inline_urma_requires_same_worker(run_dir: Path):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    item = trace(
+        "worker-inline-query-other-worker",
+        6,
+        0,
+        timestamp="2026-08-24T10:46:58.312841",
+        query_meta_ms=5.7,
+        urma_ms=5.2,
+        worker="urma-worker",
+    )
+    item["latency_summary_us"] = {"client.rpc.direct_query_and_get": 5_700}
+    item["evidence"].append(
+        {
+            "source": "fixture.log",
+            "member": "worker-inline-query-other-worker",
+            "line": 2,
+            "worker": "query-worker",
+            "host_ip": "",
+            "text": (
+                "2026-08-24T10:46:58.318620 | QueryAndGet done, keyCount: 1, "
+                "inlineHits: 1, misses: 0, transport: UB, total: 5.368ms"
+            ),
+        }
+    )
+    summary["traces"]["worker-inline-query-other-worker"] = item
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    row = next(
+        value
+        for value in load_module().build_analysis(run_dir, top_n=100, deadline_ms=None)["traces"]
+        if value["trace_id"] == "worker-inline-query-other-worker"
+    )
+
+    assert row["inline_query_urma_ms"] is None
+    assert row["attribution_ms"]["QueryMeta"] == pytest.approx(5.7)
+
+
 def test_access_location_uses_each_client_trace_actual_transport(run_dir: Path):
     summary_path = run_dir / "summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -1288,6 +1576,7 @@ def test_access_location_uses_each_client_trace_actual_transport(run_dir: Path):
     assert "仅覆盖当前 TopN 输入" in html_text
     assert "直连 Data Worker" not in html_text
     assert ".chart-title{text-align:center}" in html_text
+    assert ".hero h1{overflow-wrap:anywhere;word-break:break-word}" in html_text
     assert "classList.add('chart-title')" in html_text
     assert 'id="time-segment-controls"' in html_text
     assert 'id="time-segment-scope"' in html_text
@@ -1426,11 +1715,170 @@ def test_failed_urma_wait_timeout_is_an_error_family_not_unsegmented_parent(
     assert "已观测到 URMA_WAIT_TIMEOUT；失败 WR 没有完成态时不伪造 URMA 耗时" in html_text
 
 
+def test_get_1004_receive_buffer_oom_is_not_reported_as_urma_completion_timeout(run_dir: Path):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    failed = trace(
+        "get-client-arena-oom",
+        2.755,
+        0,
+        timestamp="2026-08-26T09:01:05.960575",
+        status=1004,
+    )
+    failed["evidence"].append(
+        {
+            "source": "fixture.log",
+            "member": "get-client-arena-oom",
+            "line": 2,
+            "worker": "client-a",
+            "host_ip": "",
+            "text": (
+                "[TransportGet][UB] Receive buffer preparation failed, "
+                "causeStatus=code: [Out of memory], msg: [UnknownType no space in arena: 3, "
+                "reason=fresh_extent_unavailable]"
+            ),
+        }
+    )
+    summary["traces"]["get-client-arena-oom"] = failed
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    mod = load_module()
+    analysis = mod.build_analysis(run_dir, top_n=100, deadline_ms=20)
+    row = next(item for item in analysis["traces"] if item["trace_id"] == "get-client-arena-oom")
+
+    assert row["error_family"] == "Client UB接收缓冲分配失败"
+    assert row["error_subcategory"] == "Client arena fresh extent不足"
+    assert row["error_chain_category"] == "Client接收缓冲分配失败→1004"
+    assert row["primary_problem"] == "未解释残差"
+    assert row["non_transport_analysis"]["deep_category"] == "Client UB接收缓冲分配失败"
+    assert "不是已完成 WR 变慢" in row["non_transport_analysis"]["conclusion"]
+    assert next(
+        item
+        for item in analysis["aggregate"]["non_transport_analysis"]["categories"]
+        if item["category"] == "Client UB接收缓冲分配失败"
+    )["trace_count"] == 1
+
+
+def test_query_and_get_breakdown_extracts_uniquely_nested_urma_timeout(run_dir: Path):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    trace_id = "query-and-get-inline-timeout"
+    item = trace(
+        trace_id,
+        20.398,
+        0,
+        timestamp="2026-08-25T22:35:24.459500",
+        query_meta_ms=15.828,
+        status=1001,
+    )
+    item["latency_summary_us"] = {
+        "client.process.direct_route": 6,
+        "client.rpc.direct_query_and_get": 15_828,
+        "client.rpc.direct_get_data": 4_537,
+        "client.process.direct_materialize": 2,
+        "client.process.get": 16,
+    }
+    item["errors"]["URMA_WAIT_TIMEOUT"] = 1
+    item["evidence"].extend(
+        [
+            {
+                "source": "worker.log",
+                "member": trace_id,
+                "line": 2,
+                "worker": "worker-13",
+                "host_ip": "",
+                "text": (
+                    "2026-08-25T22:35:24.475183 | [URMA_WAIT_TIMEOUT] "
+                    "[urma_request_id:15267] timedout waiting, elapsedMs=15.506000, op=WRITE"
+                ),
+            },
+            {
+                "source": "worker.log",
+                "member": trace_id,
+                "line": 3,
+                "worker": "worker-13",
+                "host_ip": "",
+                "text": (
+                    "2026-08-25T22:35:24.475281 | [SLOW LOG] QueryAndGet done, "
+                    "keyCount: 1, inlineHits: 0, misses: 1, transport: UB, "
+                    "preprocess: 0.003ms, localRead: 15.578ms, metadata: 0.032ms, "
+                    "delivery: 0.027ms, total: 15.640ms, status: code: [OK]"
+                ),
+            },
+            {
+                "source": "client.log",
+                "member": trace_id,
+                "line": 4,
+                "worker": "client-4",
+                "host_ip": "",
+                "text": (
+                    "2026-08-25T22:35:24.475314 | [BRPC_RPC_FRAMEWORK_SLOW] "
+                    "method=datasystem.WorkerOCService.QueryAndGet e2e_us=15776 "
+                    "server_req_queue_us=12 server_exec_us=15612 network_residual_us=141 "
+                    "cntl_error_code=0 cntl_failed=0"
+                ),
+            },
+        ]
+    )
+    summary["traces"][trace_id] = item
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    mod = load_module()
+    analysis = mod.build_analysis(run_dir, top_n=100, deadline_ms=20)
+    row = next(value for value in analysis["traces"] if value["trace_id"] == trace_id)
+
+    assert row["query_urma_timeout_ms"] == pytest.approx(15.506)
+    assert row["query_urma_timeout_basis"] == "同Worker QueryAndGet父窗口内唯一URMA_WAIT_TIMEOUT"
+    assert row["attribution_ms"]["URMA超时等待"] == pytest.approx(15.506)
+    assert row["attribution_ms"]["QueryMeta"] == pytest.approx(0.169)
+    assert row["primary_stage"] == "URMA超时等待"
+    assert row["primary_problem"] == "URMA超时"
+    assert sum(row["attribution_ms"].values()) == pytest.approx(row["client_ms"])
+
+    html_text = mod.render_html(analysis, "QueryAndGet timeout breakdown")
+    assert "URMA超时等待窗口" in html_text
+
+
+def test_query_and_get_breakdown_keeps_parent_when_any_attempt_is_ambiguous():
+    row = {
+        "urma_timeout_observed": True,
+        "attribution_ms": {stage: 0.0 for stage in load_module().STAGE_NAMES},
+        "evidence_records": [],
+        "primary_problem": "QueryMeta",
+    }
+    row["attribution_ms"]["QueryMeta"] = 20.0
+    for line, text in enumerate(
+        (
+            "2026-08-25T22:35:24.015000 | [URMA_WAIT_TIMEOUT] "
+            "[urma_request_id:1] elapsedMs=9.000",
+            "2026-08-25T22:35:24.020000 | QueryAndGet done, localRead: 9.5ms, total: 10ms",
+            "2026-08-25T22:35:25.014000 | [URMA_WAIT_TIMEOUT] "
+            "[urma_request_id:2] elapsedMs=8.000",
+            "2026-08-25T22:35:25.015000 | [URMA_WAIT_TIMEOUT] "
+            "[urma_request_id:3] elapsedMs=8.500",
+            "2026-08-25T22:35:25.020000 | QueryAndGet done, localRead: 9.5ms, total: 10ms",
+        ),
+        start=1,
+    ):
+        row["evidence_records"].append(
+            {"source": "worker.log", "line": line, "worker": "worker-13", "text": text}
+        )
+
+    mod = load_module()
+    mod._apply_query_urma_timeout_attribution(row)
+
+    assert row["query_urma_timeout_ms"] is None
+    assert row["attribution_ms"]["QueryMeta"] == 20.0
+    assert row["attribution_ms"]["URMA超时等待"] == 0.0
+
+
 @pytest.mark.parametrize(
     "method, expected_subcategory, expected_chain, expected_scope",
     [
         (
-            "datasystem.WorkerOCService.QueryAndGet",
+            "datasystem.master.MasterOCService.QueryAndGet",
             "QueryMeta RPC deadline",
             "QueryMeta RPC超时→TransportGet失败→1001",
             "Client等待Meta Owner QueryAndGet超时",
@@ -1518,7 +1966,7 @@ def test_successful_query_and_get_does_not_mask_later_data_rpc_deadline(run_dir:
                 "host_ip": "",
                 "text": (
                     "[BRPC_RPC_FRAMEWORK_SLOW] "
-                    "method=datasystem.WorkerOCService.QueryAndGet e2e_us=18400 "
+                    "method=datasystem.master.MasterOCService.QueryAndGet e2e_us=18400 "
                     "server_exec_us=8 network_residual_us=18390 cntl_error_code=0 cntl_failed=0"
                 ),
             },
@@ -1566,7 +2014,7 @@ def test_successful_query_and_get_does_not_mask_later_urma_connect_deadline(run_
                 "host_ip": "",
                 "text": (
                     "[BRPC_RPC_FRAMEWORK_SLOW] "
-                    "method=datasystem.WorkerOCService.QueryAndGet e2e_us=19400 "
+                    "method=datasystem.master.MasterOCService.QueryAndGet e2e_us=19400 "
                     "server_exec_us=8 network_residual_us=19390 cntl_error_code=0 cntl_failed=0"
                 ),
             },
@@ -1636,7 +2084,7 @@ def test_query_meta_detail_separates_retry_rpc_residual_and_inline_urma(
             "host_ip": "",
             "text": (
                 "[BRPC_RPC_FRAMEWORK_SLOW] "
-                "method=datasystem.WorkerOCService.QueryAndGet "
+                "method=datasystem.master.MasterOCService.QueryAndGet "
                 f"e2e_us={int(rpc_e2e_ms * 1000)} server_exec_us=5 "
                 f"network_residual_us={int(rpc_network_ms * 1000)} "
                 "cntl_error_code=0 cntl_failed=0"
@@ -1666,6 +2114,101 @@ def test_query_meta_detail_separates_retry_rpc_residual_and_inline_urma(
     assert row["query_meta_detail"]["category"] == expected_category
     assert row["query_meta_detail"]["try_get_urma_observed"] is True
     assert row["query_meta_detail"]["slow_urma"] is expected_slow_urma
+
+
+def test_query_meta_detail_accepts_worker_service_query_and_get(run_dir: Path):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    trace_id = "worker-service-query-and-get"
+    item = trace(
+        trace_id,
+        5.4,
+        0.3,
+        timestamp="2026-08-24T10:49:15.000001",
+        query_meta_ms=5.354,
+    )
+    item["latency_summary_us"] = {"client.rpc.direct_query_and_get": 5354}
+    item["evidence"].append(
+        {
+            "source": "fixture.log",
+            "member": trace_id,
+            "line": 2,
+            "worker": "client-a",
+            "host_ip": "",
+            "text": (
+                "[BRPC_RPC_FRAMEWORK_SLOW] "
+                "method=datasystem.WorkerOCService.QueryAndGet e2e_us=5292 "
+                "server_req_queue_us=7 server_exec_us=254 network_residual_us=5019 "
+                "cntl_error_code=0 cntl_failed=0"
+            ),
+        }
+    )
+    summary["traces"][trace_id] = item
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    analysis = load_module().build_analysis(run_dir, top_n=100, deadline_ms=None)
+    row = next(value for value in analysis["traces"] if value["trace_id"] == trace_id)
+
+    assert row["query_meta_detail"]["category"] == "QueryAndGet成功·RPC residual主导"
+    assert row["query_meta_detail"]["rpc_e2e_ms"] == 5.292
+    assert row["query_meta_detail"]["rpc_network_residual_ms"] == 5.019
+    assert row["attribution_ms"]["RPC网络"] == 5.019
+    assert row["attribution_ms"]["RPC排队"] == 0.007
+    assert row["attribution_ms"]["QueryMeta"] == pytest.approx(0.328)
+    assert row["primary_problem"] == "RPC网络"
+
+
+@pytest.mark.parametrize(
+    "with_worker_done,expected_category",
+    [
+        (True, "QueryAndGet localRead慢·URMA未观测"),
+        (False, "QueryAndGet父窗口·服务端未观测"),
+    ],
+)
+def test_query_meta_detail_separates_local_read_from_unobserved_server(
+    run_dir: Path, with_worker_done: bool, expected_category: str
+):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    trace_id = f"query-coverage-{with_worker_done}"
+    item = trace(
+        trace_id,
+        5.2,
+        0.0,
+        timestamp="2026-08-24T08:00:13.868017",
+        query_meta_ms=5.1,
+    )
+    item["latency_summary_us"] = {"client.rpc.direct_query_and_get": 5_100}
+    if with_worker_done:
+        item["evidence"].append(
+            {
+                "source": "fixture.log",
+                "member": trace_id,
+                "line": 2,
+                "worker": "data-worker",
+                "host_ip": "",
+                "text": (
+                    "2026-08-24T08:00:13.867900 | QueryAndGet done, keyCount: 1, "
+                    "inlineHits: 1, misses: 0, transport: UB, preprocess: 0.003ms, "
+                    "localRead: 4.915ms, metadata: 0.001ms, delivery: 0.021ms, "
+                    "total: 4.942ms, status: code: [OK]"
+                ),
+            }
+        )
+    summary["traces"][trace_id] = item
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    row = next(
+        value
+        for value in load_module().build_analysis(run_dir, top_n=100, deadline_ms=None)["traces"]
+        if value["trace_id"] == trace_id
+    )
+
+    assert row["query_meta_detail"]["category"] == expected_category
+    assert row["query_meta_detail"]["worker_query_done_observed"] is with_worker_done
+    assert row["query_meta_detail"]["local_read_ms"] == (4.915 if with_worker_done else None)
 
 
 @pytest.mark.parametrize(
@@ -1806,11 +2349,48 @@ def test_worker_only_trace_is_excluded_from_client_topn(run_dir: Path):
     assert any("lack a Client latency window" in item for item in analysis["limitations"])
 
 
-def test_non_get_trace_is_excluded_from_read_stage_model(run_dir: Path):
+def test_write_trace_has_separate_create_publish_breakdown(run_dir: Path):
     summary_path = run_dir / "summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    write_trace = trace("set-trace", 30, 20, timestamp="2026-08-15T10:00:08.000001", local_ms=20)
+    write_trace = trace("set-trace", 12, 0, timestamp="2026-08-15T10:00:08.000001")
     write_trace["flows"] = {"DS_KV_CLIENT_SET": 1, "DS_POSIX_SET": 1}
+    write_trace["latency_summary_us"] = {
+        "client.rpc.create": 2_000,
+        "client.rpc.create_total": 2_000,
+        "client.process.memory_copy": 3_000,
+        "client.rpc.publish": 6_000,
+        "client.rpc.publish_total": 6_000,
+        "worker.process.publish": 1_000,
+        "worker.rpc.create_meta": 2_000,
+    }
+    write_trace["evidence"].extend(
+        [
+            {
+                "source": "fixture.log",
+                "member": "set-trace",
+                "line": 2,
+                "worker": "client-a",
+                "host_ip": "",
+                "text": (
+                    "[BRPC_RPC_FRAMEWORK_SLOW] method=datasystem.WorkerOCService.Create "
+                    "e2e_us=2000 server_req_queue_us=100 server_exec_us=1500 "
+                    "network_residual_us=200 cntl_error_code=0 cntl_failed=0"
+                ),
+            },
+            {
+                "source": "fixture.log",
+                "member": "set-trace",
+                "line": 3,
+                "worker": "client-a",
+                "host_ip": "",
+                "text": (
+                    "[BRPC_RPC_FRAMEWORK_SLOW] method=datasystem.WorkerOCService.Publish "
+                    "e2e_us=6000 server_req_queue_us=200 server_exec_us=5000 "
+                    "network_residual_us=500 cntl_error_code=0 cntl_failed=0"
+                ),
+            },
+        ]
+    )
     summary["traces"]["set-trace"] = write_trace
     summary["trace_count"] += 1
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
@@ -1818,9 +2398,92 @@ def test_non_get_trace_is_excluded_from_read_stage_model(run_dir: Path):
     mod = load_module()
     analysis = mod.build_analysis(run_dir, top_n=100, deadline_ms=20)
 
+    assert analysis["write_trace_count"] == 1
     assert analysis["excluded_non_get"] == 1
     assert all(row["trace_id"] != "set-trace" for row in analysis["traces"])
-    assert any("GET-specific" in item for item in analysis["limitations"])
+    row = analysis["write_traces"][0]
+    assert row["write_breakdown_ms"] == pytest.approx(
+        {
+            "Create RPC其他": 1.5,
+            "写入MemoryCopy": 3.0,
+            "写入URMA通信": 0.0,
+            "Publish RPC其他": 2.0,
+            "Worker Publish/元数据": 3.0,
+            "调度/线程等待": 0.3,
+            "RPC网络相关": 0.7,
+            "RPC框架": 0.5,
+            "未解释残差": 1.0,
+        }
+    )
+    assert sum(row["write_breakdown_ms"].values()) == pytest.approx(row["client_ms"])
+    assert row["create_rpc_ms"] == 2.0
+    assert row["publish_rpc_ms"] == 6.0
+    assert row["write_data_basis"] == "client.process.memory_copy"
+    assert analysis["write_aggregate"]["trace_count"] == 1
+    html = mod.render_html(analysis, "Read/write fixture")
+    assert "写入瓶颈分析" in html
+    assert "Create RPC其他" in html
+    assert "Publish RPC其他" in html
+    assert "set-trace" in html
+    assert 'href="#write-analysis"' in html
+    assert "__WRITE_ROWS__" not in html
+    assert "__WRITE_AGG__" not in html
+
+
+def test_write_urma_is_split_from_enclosing_memory_copy_window(run_dir: Path):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    write_trace = trace(
+        "ub-set-trace",
+        10,
+        0,
+        timestamp="2026-08-15T10:00:09.000001",
+        urma_ms=4,
+    )
+    write_trace["flows"] = {"DS_KV_CLIENT_SET": 1}
+    write_trace["latency_summary_us"] = {
+        "client.rpc.create": 1_000,
+        "client.process.memory_copy": 5_000,
+        "client.urma.ub_transfer": 4_000,
+        "client.rpc.publish": 3_000,
+    }
+    write_trace["ub_events"][0]["wake_sched_latency_us"] = 500
+    summary["traces"]["ub-set-trace"] = write_trace
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    row = load_module().build_analysis(run_dir, top_n=100, deadline_ms=20)["write_traces"][0]
+
+    assert row["write_data_ms"] == 5.0
+    assert row["write_breakdown_ms"]["写入MemoryCopy"] == 1.0
+    assert row["write_breakdown_ms"]["写入URMA通信"] == 3.5
+    assert row["write_breakdown_ms"]["调度/线程等待"] == 0.5
+    assert sum(row["write_breakdown_ms"].values()) == pytest.approx(row["client_ms"])
+
+
+def test_failed_write_rpc_does_not_prove_network_or_framework_split():
+    mod = load_module()
+
+    split = mod._write_rpc_split(
+        20.0,
+        [
+            {
+                "e2e": 20_000,
+                "server_req_queue": 100,
+                "server_exec": 15_000,
+                "network_residual": 3_000,
+                "cntl_error_code": 1008,
+                "cntl_failed": 1,
+            }
+        ],
+    )
+
+    assert split == {
+        "other": 20.0,
+        "queue": 0.0,
+        "network": 0.0,
+        "framework": 0.0,
+    }
 
 
 def test_required_run_files_fail_clearly(tmp_path: Path):

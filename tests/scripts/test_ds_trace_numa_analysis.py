@@ -236,6 +236,52 @@ def test_error_chain_reports_missing_timeout_as_unclosed():
     assert result["missing"] == ["URMA等待超时", "UB响应形态异常"]
 
 
+def test_error_chain_separates_client_ub_receive_buffer_oom_from_urma_timeout():
+    module = load_module()
+    record = {
+        "trace_id": "getBuffer-client-arena-oom",
+        "operation": "GET",
+        "status": 1004,
+        "evidence": [
+            "[TransportGet][UB] Receive buffer preparation failed, "
+            "causeStatus=code: [Out of memory], msg: [UnknownType no space in arena: 3, "
+            "reason=fresh_extent_unavailable]"
+        ],
+    }
+
+    result = module.classify_error_chain(record)
+
+    assert result["family"] == "GET UB接收缓冲分配失败1004"
+    assert result["closed"] is True
+    assert result["signals"] == ["Client UB接收缓冲准备失败", "Client arena内存不足", "Client状态1004"]
+    assert result["missing"] == []
+
+
+def test_insights_report_observed_get_1004_families_instead_of_assuming_timeout_band():
+    module = load_module()
+    records = [
+        {
+            "status": 1004,
+            "chip_mode": "未观测",
+            "timeout_elapsed_ms": None,
+            "error_chain": {"family": "GET UB接收缓冲分配失败1004"},
+        },
+        {
+            "status": 1004,
+            "chip_mode": "未观测",
+            "timeout_elapsed_ms": 15.5,
+            "error_chain": {"family": "GET URMA超时后上浮1004"},
+        },
+    ]
+
+    insight = module.build_insights(records, [], [])[2]
+
+    assert insight["title"] == "GET 1004错误链"
+    assert "UB接收缓冲分配失败1004=1" in insight["text"]
+    assert "URMA超时后上浮1004=1" in insight["text"]
+    assert "10–20ms" not in insight["title"]
+
+
 def test_error_chain_normalizes_urma_wait_timeout_marker_variants():
     module = load_module()
     for marker in (
@@ -399,6 +445,26 @@ def test_renderer_uses_runtime_pr_metadata_and_keeps_wide_tables_responsive(tmp_
     assert "PR 2081" not in html
     assert 'class="table-wrap"' in html
     assert ".table-wrap{width:100%;overflow-x:auto}" in html
+
+
+def test_renderer_uses_generic_source_label_when_pr_is_not_supplied(tmp_path: Path):
+    module = load_module()
+    run_dir, bottleneck_path, archive = write_run_contract(tmp_path)
+    analysis = module.build_analysis(
+        run_dir,
+        bottleneck_path,
+        archive,
+        {"head": "head-ref", "base": "head-ref", "pr": 0},
+    )
+
+    html = module.render_html(
+        analysis, "window.echarts={init(){return {setOption(){},resize(){},dispose(){}}}};"
+    )
+
+    assert "PR 0" not in html
+    assert "PR0" not in html
+    assert "当前源码链" in html
+    assert "源码基线" in html
 
 
 def test_runtime_config_keeps_missing_values_unconfigured(tmp_path: Path):

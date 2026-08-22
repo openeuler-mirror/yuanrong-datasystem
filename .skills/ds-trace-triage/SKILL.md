@@ -336,6 +336,25 @@ subfields, `URMA_ELAPSED_TOTAL/POLL_JFC/NOTIFY/THREAD_SHED`, and classification
 counts. When DataSystem log wording changes, update the fixture and tests in the
 same patch as parser logic.
 
+Trace ID extraction must follow the current source contract instead of a fixed
+operation-name allowlist. Prefer the sixth field of the standard log prefix
+(`... | pid:tid | traceId | az | ...`), validate it with the same character set
+and 49-character runtime limit as `Trace`, and only then use constrained
+fallbacks for unstructured input. Preserve all of these forms:
+
+- canonical UUIDs;
+- `Context::SetTraceId` prefixes followed by `;` and the 12-character UUID tail;
+- historical kvtest `<operation>-<pid>-<counter>` and current
+  `<operation>-<instanceId>-<pid>-<counter>` prefixes, for every pipeline
+  operation; the counter has a minimum display width of eight, not a maximum;
+- IDs installed directly through `Trace::SetTraceNewID`, including prefixed or
+  length-truncated UUIDs, when they occupy the structured trace field.
+
+If a structured line has an empty trace field, do not promote unrelated UUIDs
+such as `remoteInstanceId` from the message body into a request Trace. An
+explicit `traceId=` marker may still be used as a fallback. Keep focused tests
+for every newly observed ID form and for this negative boundary.
+
 For small log-format extensions, keep the analyzer stable by registering new
 markers instead of rewriting the parse loop:
 

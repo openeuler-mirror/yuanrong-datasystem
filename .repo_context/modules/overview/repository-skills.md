@@ -34,13 +34,20 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-network-latency-analysis/SKILL.md`
   - `.skills/ds-network-latency-analysis/scripts/network_latency_analysis.py`
   - `.skills/ds-network-latency-analysis/scripts/test_network_latency_analysis.py`
+  - `.skills/ds-trace-triage/SKILL.md`
+  - `.skills/ds-trace-bottleneck-analysis/SKILL.md`
+  - `.skills/ds-trace-numa-analysis/SKILL.md`
+  - `scripts/ds_trace_triage.py`
+  - `scripts/ds_trace_bottleneck.py`
+  - `scripts/ds_trace_bottleneck_suite.py`
+  - `scripts/ds_trace_numa_analysis.py`
   - `.skills/rdma-ucx-perf-debug/SKILL.md`
   - `.skills/ds-design/SKILL.md`
   - `.skills/ds-design/scripts/self_check.py`
   - `.skills/ds-design/scripts/mermaid_lint.py`
   - `.skills/ds-design/scripts/scope_check.py`
 - Last verified against source:
-  - `2026-08-27`
+  - `2026-09-02`
 
 ## Purpose
 
@@ -66,6 +73,9 @@ when a natural-language request should invoke one of them.
 | `ds-refresh-docs` | rebuild and publish online Chinese docs from the latest upstream `master` into `doc_pages`, then automatically open the GitCode PR | “更新在线文档”, “刷新在线文档”, “发布在线文档”, “refresh online docs”, “update zh-cn latest docs” | mentions of online docs, docs publishing, or `doc_pages` without clearly asking to refresh or publish |
 | `ds-log-analysis` | analyze KVCache access/resource logs and generate HTML reports | “日志分析”, “access log 分析”, “resource log 报告”, “QPS/延迟/错误率趋势”, “KVCache report” | asking what the log format means without requesting report generation |
 | `ds-network-latency-analysis` | analyze K8s-collected client, worker, BPF, scheduling, irqoff, NIC, and bthread logs to localize BRPC network or scheduling latency and generate HTML/JSON/raw reports | “网络时延分析”, “network_residual_us 定位”, “RPC segment latency”, “调度问题定位”, “网卡收发耗时”, “软中断抢占分析” | asking only about the supported log format, report schema, or script internals without requesting an analysis |
+| `ds-trace-triage` | parse DataSystem trace packages once into normalized per-Run evidence, JSON, and an offline triage report | “用 ds-trace-triage 分析 traces”, “解析 trace 包”, “生成 trace triage 报告” | asking only what one trace field or log line means |
+| `ds-trace-bottleneck-analysis` | build separate read and write TopN bottleneck pages plus isolated multi-Run control-variable suites from ds-trace-triage outputs; write reports split Create RPC, MemoryCopy/URMA, Publish RPC, Worker Publish/metadata, scheduling, RPC communication residual, and RPC framework | “TopN 关键瓶颈分析”, “读写瓶颈分析”, “多 Runs 控制变量分析”, “分档 traces 对比”, “生成 bottleneck suite” | asking only about the report schema, chart style, or script internals without requesting analysis |
+| `ds-trace-numa-analysis` | analyze WR, chip/NUMA distribution, inflight accumulation, and receiver-side NUMA evidence from triage and bottleneck outputs | “NUMA trace 分析”, “WR 分布分析”, “多 chip 接收带宽分析”, “inflight WR 累积分析” | asking only what one NUMA or WR field means |
 | `rdma-ucx-perf-debug` | diagnose RDMA/UCX throughput, latency, flush, submit, batch get, or resource lifetime problems | “RDMA 性能”, “UCX 延迟”, “UCP flush”, “BatchGet 远端拉取慢”, “P2P/RDMA crash” | generic mention of RDMA code ownership without a performance/debugging task |
 | `ds-design` | author, revise, or review overview design (概要设计) and detailed design (子模块详细设计) documents for features, refactors, or submodules in yuanrong-datasystem, including requirement clarification when the entry point is vague, source-backed current-state investigation via subagent, chapter-by-chapter writing with per-section human gate, and structural self-check plus Mermaid lint and scope check | “写设计”, “设计文档”, “概要设计”, “详细设计”, “子模块设计”, “做个设计”, “改设计”, “修订设计文档”, “design doc” | discussion of design philosophy without asking to produce a design doc; already inside ds-infra-engineering coding flow |
 

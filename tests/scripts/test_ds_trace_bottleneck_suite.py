@@ -105,12 +105,15 @@ def manifest(tmp_path: Path) -> dict:
 
 
 def test_build_suite_keeps_runs_isolated_and_builds_control_groups(tmp_path: Path):
-    suite = load_module().build_suite(manifest(tmp_path))
+    value = manifest(tmp_path)
+    value["overview"] = [{"title": "证据结论", "text": "两个 Run 独立解析"}]
+    suite = load_module().build_suite(value)
 
     assert [item["id"] for item in suite["runs"]] == [
         "true-315", "same-315", "meta-315", "meta-3x105", "meta-105-1kb", "meta-105-8mb"
     ]
     assert [item["trace_count"] for item in suite["runs"]] == [1, 1, 1, 1, 1, 1]
+    assert suite["overview"] == [{"title": "证据结论", "text": "两个 Run 独立解析"}]
     assert suite["runs"][1]["read_path"] == "legacy-worker-pull"
     families = {group["family"] for group in suite["control_groups"]}
     assert {"implementation", "client_shape", "object_size"}.issubset(families)
@@ -181,6 +184,19 @@ def test_renderer_is_self_contained_and_links_every_run(tmp_path: Path):
         assert item["triage_report"] in html
         assert item["bottleneck_report"] in html
         assert item["numa_report"] in html
+
+
+def test_renderer_escapes_manifest_overview_before_inserting_html(tmp_path: Path):
+    value = manifest(tmp_path)
+    value["overview"] = [{"title": "<img onerror=alert(1)>", "text": "<script>alert(1)</script>"}]
+    module = load_module()
+    html = module.render_suite_html(
+        module.build_suite(value),
+        "window.echarts={init(){return {setOption(){},resize(){}}}};",
+    )
+
+    assert "esc(x.title)" in html
+    assert "esc(x.text)" in html
 
 
 def test_companion_skill_contract_and_base_parser_is_not_imported():
