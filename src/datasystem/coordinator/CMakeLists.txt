@@ -32,6 +32,7 @@ target_link_libraries(coordinator_service_impl PUBLIC
     common_rpc_zmq
     common_flags
     common_log
+    common_metrics
     ds_flags
     rpc_stub_cache_mgr
     coordinator_watch_dispatcher_impl
@@ -47,7 +48,7 @@ add_dependencies(coordinator_service_impl coordinator_protos)
 add_library(coordinator_watch_dispatcher_impl STATIC watch_dispatcher_impl.cpp)
 target_include_directories(coordinator_watch_dispatcher_impl PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
 target_link_libraries(coordinator_watch_dispatcher_impl
-  PUBLIC coordinator_protos common_coordinator_store common_util common_flags rpc_stub_cache_mgr)
+  PUBLIC coordinator_protos common_coordinator_store common_util common_flags common_metrics rpc_stub_cache_mgr)
 add_dependencies(coordinator_watch_dispatcher_impl coordinator_protos)
 
 set_source_files_properties(coordinator_runtime.cpp PROPERTIES
@@ -63,6 +64,7 @@ target_link_libraries(coordinator_runtime PUBLIC
 target_link_libraries(coordinator_runtime PRIVATE
     common_flags
     common_log
+    common_metrics
     common_util
     common_signal
     ds_flags

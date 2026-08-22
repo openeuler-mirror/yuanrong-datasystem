@@ -73,8 +73,10 @@ protected:
                     std::vector<std::shared_ptr<WatchEvent>> &events) override;
 
 private:
+    enum class EventRequestKind { NOTIFICATION, PROBE };
+
     Status SendEventRequest(
-        const std::string &watcherAddr, const EventReqPb &req, int32_t timeoutMs,
+        const std::string &watcherAddr, const EventReqPb &req, EventRequestKind requestKind, int32_t timeoutMs,
         std::chrono::steady_clock::time_point absoluteDeadline = std::chrono::steady_clock::time_point::max(),
         bool *rpcDispatched = nullptr);
 

@@ -29,6 +29,7 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/rpc/bthread_utils.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -1062,6 +1063,7 @@ Status CoordinatorServiceImpl::ShutdownInternal(std::unique_lock<std::mutex> &li
 
 Status CoordinatorServiceImpl::Put(const PutReqPb &req, PutRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_PUT_REQUEST_TOTAL);
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
     RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
@@ -1108,6 +1110,7 @@ Status CoordinatorServiceImpl::PrepareTopologyMembershipPut(const std::string &k
 
 Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_RANGE_REQUEST_TOTAL);
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
     RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
@@ -1128,6 +1131,7 @@ Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
 
 Status CoordinatorServiceImpl::DeleteRange(const DeleteRangeReqPb &req, DeleteRangeRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_DELETE_RANGE_REQUEST_TOTAL);
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     ParsedTopologyCoordinationKey parsed;
     const bool isMembershipRollback = servingState_.load(std::memory_order_acquire) == ServingState::LEADER_RECOVERING
@@ -1165,6 +1169,7 @@ Status CoordinatorServiceImpl::DeleteRange(const DeleteRangeReqPb &req, DeleteRa
 
 Status CoordinatorServiceImpl::WatchRange(const WatchRangeReqPb &req, WatchRangeRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_WATCH_RANGE_REQUEST_TOTAL);
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
     RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
@@ -1208,6 +1213,7 @@ Status CoordinatorServiceImpl::CheckWatcherMembership(const WatchRangeReqPb &req
 
 Status CoordinatorServiceImpl::CancelWatch(const CancelWatchReqPb &req, CancelWatchRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_CANCEL_WATCH_REQUEST_TOTAL);
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
     RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
@@ -1223,6 +1229,7 @@ Status CoordinatorServiceImpl::CancelWatch(const CancelWatchReqPb &req, CancelWa
 
 Status CoordinatorServiceImpl::KeepAlive(const KeepAliveReqPb &req, KeepAliveRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_KEEP_ALIVE_REQUEST_TOTAL);
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
     RETURN_IF_NOT_OK(PrepareRpcResponse(true, rsp.mutable_header(), businessAllowed));
@@ -1286,6 +1293,7 @@ Status CoordinatorServiceImpl::KeepAlive(const KeepAliveReqPb &req, KeepAliveRsp
 
 Status CoordinatorServiceImpl::GetCoordinatorId(const GetCoordinatorIdReqPb &req, GetCoordinatorIdRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_GET_COORDINATOR_ID_REQUEST_TOTAL);
     (void)req;
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
@@ -1298,6 +1306,7 @@ Status CoordinatorServiceImpl::GetCoordinatorId(const GetCoordinatorIdReqPb &req
 Status CoordinatorServiceImpl::GetRaftBootstrapState(const GetRaftBootstrapStateReqPb &req,
                                                      GetRaftBootstrapStateRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_GET_RAFT_BOOTSTRAP_STATE_REQUEST_TOTAL);
     CHECK_FAIL_RETURN_STATUS(req.group_id() == kCoordinatorRaftGroupId, K_INVALID,
                              "Coordinator bootstrap request has the wrong Raft group id");
 #ifdef WITH_TESTS
@@ -1343,6 +1352,7 @@ Status CoordinatorServiceImpl::GetRaftBootstrapState(const GetRaftBootstrapState
 Status CoordinatorServiceImpl::ReportTopologyRecoveryCandidate(const ReportTopologyRecoveryCandidateReqPb &req,
                                                                ReportTopologyRecoveryCandidateRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_REPORT_TOPOLOGY_RECOVERY_CANDIDATE_REQUEST_TOTAL);
     // Reject oversized wire payloads before identity and leadership handling so every request path is bounded.
     CHECK_FAIL_RETURN_STATUS(req.canonical_topology().size() <= MAX_TOPOLOGY_RECOVERY_PAYLOAD_BYTES, K_INVALID,
                              "candidate topology payload exceeds limit");
@@ -1379,6 +1389,7 @@ Status CoordinatorServiceImpl::ReportTopologyRecoveryCandidate(const ReportTopol
 Status CoordinatorServiceImpl::EnsureLeaderMembership(const EnsureLeaderMembershipReqPb &req,
                                                       EnsureLeaderMembershipRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_ENSURE_LEADER_MEMBERSHIP_REQUEST_TOTAL);
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     FillResponseHeader(rsp.mutable_header());
     if (RequireRecoveryLeader(req.leader_term(), req.coordinator_id()).IsError()) {
@@ -1424,6 +1435,7 @@ Status CoordinatorServiceImpl::EnsureLeaderMembership(const EnsureLeaderMembersh
 Status CoordinatorServiceImpl::ReportWorkerLiveness(const ReportWorkerLivenessReqPb &req,
                                                     ReportWorkerLivenessRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_REPORT_WORKER_LIVENESS_REQUEST_TOTAL);
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
     RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));
@@ -1468,6 +1480,7 @@ Status CoordinatorServiceImpl::ReportWorkerLiveness(const ReportWorkerLivenessRe
 Status CoordinatorServiceImpl::GetClusterRawSnapshot(const GetClusterRawSnapshotReqPb &req,
                                                      GetClusterRawSnapshotRspPb &rsp)
 {
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_GET_CLUSTER_RAW_SNAPSHOT_REQUEST_TOTAL);
     std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
     bool businessAllowed = false;
     RETURN_IF_NOT_OK(PrepareRpcResponse(false, rsp.mutable_header(), businessAllowed));

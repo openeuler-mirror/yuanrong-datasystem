@@ -11,6 +11,7 @@
   - `src/datasystem/common/metrics/hard_disk_exporter/*`
   - `src/datasystem/common/metrics/metrics_vector/*`
   - `src/datasystem/worker/worker_oc_server.cpp`
+  - `src/datasystem/coordinator/*`
 - Primary source-of-truth files:
   - `src/datasystem/common/metrics/CMakeLists.txt`
   - `src/datasystem/common/metrics/BUILD.bazel`
@@ -27,13 +28,16 @@
   - `src/datasystem/common/metrics/metrics_description.def`
   - `src/datasystem/common/metrics/res_metric_name.h`
   - `src/datasystem/worker/worker_oc_server.cpp`
+  - `src/datasystem/coordinator/coordinator_runtime.cpp`
+  - `src/datasystem/coordinator/coordinator_service_impl.cpp`
+  - `src/datasystem/coordinator/watch_dispatcher_impl.cpp`
   - `tests/ut/common/log/BUILD.bazel`
   - `tests/ut/worker/BUILD.bazel`
   - `tests/st/client/kv_cache/BUILD.bazel`
   - `tests/st/client/stream_cache/BUILD.bazel`
   - `bazel/ds_deps.bzl`
 - Last verified against source:
-  - `2026-04-16`
+  - `2026-08-10`
 - Related context docs:
   - `.repo_context/modules/infra/metrics/README.md`
   - `.repo_context/modules/infra/metrics/resource-collector.md`
@@ -48,9 +52,9 @@
 - Why this design document exists:
   - provide a source-backed architecture reference for adding, reviewing, or refactoring resource-monitor metrics and exporter behavior.
 - What problem this module solves:
-  - collect periodic resource and health-style metrics from runtime components, buffer them asynchronously, and persist them into monitor-style log files.
+  - collect periodic resource/health metrics and lightweight typed runtime counters/histograms, then emit them through the repository's monitor-log paths without synchronous request-path I/O.
 - Who or what depends on this module:
-  - worker and master runtime registration points, monitor-log consumers, and logging-side access records that reuse `HardDiskExporter`.
+  - worker, master, and Coordinator runtime registration points, monitor-log consumers, and logging-side access records that reuse `HardDiskExporter`.
 
 ## Business And Scenario Overview
 
@@ -83,6 +87,7 @@
 ## Goals
 
 - provide one shared collector abstraction for periodic resource metrics;
+- provide a fixed-descriptor typed API for low-overhead request, event, byte, gauge, and latency metrics;
 - keep metric definition, registration, collection, and persistence responsibilities separated;
 - keep metric emission asynchronous and bounded rather than synchronous on producer paths;
 - reuse exporter infrastructure across resource metrics and logging-side access-monitor outputs;
@@ -102,7 +107,9 @@
   - `HardDiskExporter` file persistence and rotation logic;
   - `ResMetricCollector` singleton lifecycle and periodic sampling;
   - metric family definitions in `res_metrics.def` and descriptions in `metrics_description.def`;
-  - major runtime registration points currently centered in `worker_oc_server.cpp`.
+  - major resource-handler registration points currently centered in `worker_oc_server.cpp`;
+  - typed metric ID/descriptor registration and periodic summary emission;
+  - worker, client, and Coordinator lifecycle points that initialize, tick, and finally print typed metrics.
 - Out of scope:
   - alerting, dashboard rendering, or external backend integration;
   - feature-specific business logic that only contributes one metric handler;
@@ -129,10 +136,12 @@
 - Current implementation or baseline behavior:
   - metrics are collected as string payloads, not typed numeric objects, and persisted through a single concrete exporter backend named `"harddisk"`.
   - `metrics.h/.cpp` also provide a release-scoped lightweight typed API with fixed-descriptor `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and one JSON `LOG(INFO)` summary emission per monitor interval.
+  - counter summaries expose cumulative `total`, per-monitor-cycle `delta`, and top-level `interval_ms`; throughput/TPS is derived as `delta * 1000 / interval_ms`.
   - oversized typed-metrics summaries are split into multiple one-line JSON log records rather than truncating a single record.
   - `DumpSummaryForTest()` returns an unsplit JSON snapshot for typed-metrics tests; compatibility-oriented tests that still prefer flat-string parsing should build that view locally from the JSON dump instead of relying on a production-only legacy formatter.
   - the lightweight typed metrics API does not own a background thread; worker main and client runtime code drive periodic `Tick()`/`PrintSummary()` calls, mirroring the `PerfManager` ownership style.
   - worker object-cache batch remote get now exposes `worker_inflight_remote_get_request` as a typed `Gauge` around the outbound `BatchGetObjectRemote` logical retry flow.
+  - Coordinator initializes and ticks the same typed registry from `coordinator_runtime.cpp`. Every dispatched `CoordinatorService` RPC entrypoint increments its own request counter before handler-level validation or serving gates, so handler-rejected and redirected requests remain visible. Requests dropped by RPC framework admission before service dispatch are outside these per-method counters and remain covered by framework-level metrics. Successful business watch notifications increment sent-batch, sent-event, and serialized-`EventReqPb` byte counters in `WatchDispatcherImpl::DoNotify`; the byte counter excludes transport framing and worker reachability probes use a separate path, so probes are excluded from all three counters. `SendEventRequest` records `HandleEvent` latency and failures, while channel-map mutations publish the lock-consistent live channel count.
   - request-path latency for `set/get` style APIs is mostly surfaced through the logging/access-recorder path rather than through typed metrics families.
 - Relevant constraints from current release or deployment:
   - collector startup is gated by `log_monitor` and exporter initialization, and each resource-write loop re-checks runtime `log_monitor`;
@@ -232,7 +241,8 @@
   - exporter flush thread named `MetricsFlush`;
   - runtime registration callbacks expressed as `std::function<std::string()>`.
 - Cross-module integration points:
-  - `worker_oc_server.cpp` is the major current registration point;
+  - `worker_oc_server.cpp` is the major resource-metric registration point;
+  - `coordinator_runtime.cpp` initializes and periodically ticks typed metrics, while Coordinator service and watch-dispatch code own their request/event counter updates;
   - `HardDiskExporter` is shared with `logging/access_recorder`;
   - exporter flush threads restore trace context with `Trace::SetTraceNewID(...)`.
 - Upstream and downstream dependencies:

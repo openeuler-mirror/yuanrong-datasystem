@@ -30,6 +30,7 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -158,6 +159,7 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
         callbackState_ = LifecycleCallbackState::READY;
 
         OperationLogger::Instance().LogConfigInit(runtimeFlags_->GetAllFlagsStr());
+        RETURN_IF_NOT_OK_APPEND_MSG(metrics::InitKvMetrics(), "\nCoordinator metrics initialization failed.");
 
         auto raftFlags = GetRaftFlags();
         HostPort localAddress;
@@ -192,6 +194,8 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
     DisableConfigUpdates();
     PreserveFirstError(firstError, InvokeOnStop(), "Coordinator lifecycle onStop");
     PreserveFirstError(firstError, ShutdownService(), "Coordinator service shutdown");
+    // Snapshot only after RPC ingress and watch dispatch are stopped, so the final delta includes drained work.
+    metrics::PrintSummary();
     return firstError;
 }
 
@@ -332,6 +336,12 @@ void CoordinatorRuntime::RunEventLoop()
     while (!stopRequested_ && !IsTermSignalReceived()) {
         stopCv_.wait_for(lock, std::chrono::milliseconds(kStopPollIntervalMs),
                          [this] { return stopRequested_ || IsTermSignalReceived(); });
+        if (stopRequested_ || IsTermSignalReceived()) {
+            break;
+        }
+        lock.unlock();
+        metrics::Tick();
+        lock.lock();
     }
     DisableConfigUpdates();
     lock.unlock();

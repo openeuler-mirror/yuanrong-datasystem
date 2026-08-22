@@ -27,6 +27,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/uuid_generator.h"
 
 DS_DEFINE_int32(watch_event_dispatch_thread, 4, "Number of coordinator watch event dispatch threads");
@@ -44,6 +45,7 @@ constexpr size_t MAX_READY_CHANNEL_GROUPS = 8;
 constexpr size_t ACTIVE_FAN_OUT_BACKLOG = 1024;
 constexpr size_t MAX_WATCH_EVENTS_PER_FAN_OUT = 4096;
 constexpr uint64_t ACTIVE_FAN_OUT_COALESCE_US = 50;
+constexpr std::chrono::seconds FAN_OUT_IDLE_WAIT(1);
 
 /**
  * @brief Build the payload-free lifecycle event used to rebuild an overflowed watch.
@@ -283,7 +285,8 @@ void WatchDispatcher::FanOutLoop()
         std::deque<std::shared_ptr<WatchEvent>> batch;
         {
             std::unique_lock<std::mutex> lock(pendingMutex_);
-            pendingEmptyCv_.wait(lock, [this] { return !pendingQueue_.empty() || !running_.load(); });
+            pendingEmptyCv_.wait_for(lock, FAN_OUT_IDLE_WAIT,
+                                     [this] { return !pendingQueue_.empty() || !running_.load(); });
             if (!running_.load() && pendingQueue_.empty()) {
                 break;
             }
@@ -298,6 +301,14 @@ void WatchDispatcher::FanOutLoop()
                 pendingQueue_.pop_front();
             }
         }
+        METRIC_ADD(metrics::KvMetricId::COORDINATOR_WATCH_FAN_OUT_EVENTS_TOTAL, batch.size());
+
+        size_t channelCount;
+        {
+            std::shared_lock<std::shared_mutex> lock(channelsMutex_);
+            channelCount = channels_.size();
+        }
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::COORDINATOR_WATCH_CHANNELS)).Set(channelCount);
 
         if (pendingOverflow_.exchange(false, std::memory_order_acq_rel)) {
             ScheduleAllChannelsForRewatch();

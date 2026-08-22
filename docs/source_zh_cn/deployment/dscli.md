@@ -1251,6 +1251,9 @@ dscli query route \
 | logbufsecs | int | `0` | 否 | 日志消息最大缓冲时长，单位为秒 |
 | logfile_mode | int | `416` | 否 | 日志文件模式/权限 |
 | log_only_write_info_file | bool | `true` | 否 | 是否只生成 INFO 日志文件；INFO 文件始终包含所有级别的日志 |
+| log_monitor | bool | `true` | 是 | 是否在 Coordinator INFO 日志中周期输出 `metrics_summary` 指标摘要 |
+| json_log_monitor | bool | `true` | 是 | 是否将 Coordinator 指标摘要同时输出到 `kv_metrics.log` JSON-Lines 文件 |
+| log_monitor_interval_ms | int | `10000` | 否 | Coordinator 指标摘要的采集和输出间隔，单位为毫秒 |
 | use_brpc | bool | `true` | 否 | 是否使用 brpc 进行 RPC 通信；配置文件中的显式值或环境变量 `DATASYSTEM_USE_BRPC` 可覆盖默认值；参数化入口启用选举时必须为`true` |
 | brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
 | brpc_max_concurrency | int | `128` | 否 | 每个 brpc Server 允许的最大并发 RPC 数；为 `0` 时不限制，且不能小于 `brpc_server_num_threads` |

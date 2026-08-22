@@ -18,6 +18,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/cluster:cluster_membership_codec",
         "//src/datasystem/common/rpc:bthread_utils",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/coordinator:coordinator_service_impl",
         "//tests/ut:ut_common",
     ],
