@@ -131,6 +131,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             maxBatchSize_[watchId] = std::max(maxBatchSize_[watchId], events.size());
+            batchSizes_[watchId].push_back(events.size());
             auto &target = events_[watchId];
             target.insert(target.end(), events.begin(), events.end());
         }
@@ -157,11 +158,18 @@ public:
         return maxBatchSize_[watchId];
     }
 
+    std::vector<size_t> GetBatchSizes(int64_t watchId)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return batchSizes_[watchId];
+    }
+
 private:
     std::mutex mutex_;
     std::condition_variable cv_;
     std::unordered_map<int64_t, std::vector<std::shared_ptr<WatchEvent>>> events_;
     std::unordered_map<int64_t, size_t> maxBatchSize_;
+    std::unordered_map<int64_t, std::vector<size_t>> batchSizes_;
 };
 
 class FailingWatchDispatcher : public MockWatchDispatcher {
@@ -1094,26 +1102,49 @@ TEST_F(CoordinatorStoreTest, WatchDispatcherLimitsDoNotifyBatchSize)
     ASSERT_LE(dispatcher_->GetMaxBatchSize(watchId), MAX_BATCH_SIZE);
 }
 
-TEST_F(CoordinatorStoreTest, WatchDispatcherSplitsLargeEventsWithoutLosingOrder)
+TEST_F(CoordinatorStoreTest, WatchDispatcherStopsMergingAfterBatchCrossesByteThreshold)
 {
     int64_t watchId = registry_->Register("/large", "", "addr");
     dispatcher_->AddChannel(watchId, "addr");
-    dispatcher_->SetSnapshotRevision(watchId, 1);
-    const std::string value(MAX_WATCH_EVENT_BATCH_BYTES / 2, 'x');
-    for (int64_t revision = 2; revision <= 3; ++revision) {
+    constexpr size_t FIRST_EVENT_BYTES = 200 * 1'024;
+    constexpr size_t SECOND_EVENT_BYTES = 100 * 1'024;
+    const std::vector<size_t> valueSizes{ FIRST_EVENT_BYTES, SECOND_EVENT_BYTES, 1 };
+    for (int64_t revision = 2; revision <= 4; ++revision) {
         auto event = std::make_shared<WatchEvent>();
         event->type = WatchEvent::Type::PUT;
-        event->entry = KeyValueEntry{ "/large", value, revision - 1, revision };
+        event->entry = KeyValueEntry{ "/large", std::string(valueSizes[revision - 2], 'x'), revision - 1, revision };
         event->revision = revision;
         dispatcher_->Enqueue(std::move(event));
     }
+    dispatcher_->SetSnapshotRevision(watchId, 1);
 
-    ASSERT_TRUE(dispatcher_->WaitEventCount(watchId, 2));
+    ASSERT_TRUE(dispatcher_->WaitEventCount(watchId, 3));
     const auto events = dispatcher_->GetEvents(watchId);
-    ASSERT_EQ(events.size(), 2UL);
+    ASSERT_EQ(events.size(), 3UL);
     EXPECT_EQ(events[0]->revision, 2);
     EXPECT_EQ(events[1]->revision, 3);
-    EXPECT_EQ(dispatcher_->GetMaxBatchSize(watchId), 1UL);
+    EXPECT_EQ(events[2]->revision, 4);
+    EXPECT_EQ(dispatcher_->GetBatchSizes(watchId), (std::vector<size_t>{ 2, 1 }));
+}
+
+TEST_F(CoordinatorStoreTest, WatchDispatcherSendsSingleEventLargerThanLegacyLimit)
+{
+    int64_t watchId = registry_->Register("/oversized", "", "addr");
+    dispatcher_->AddChannel(watchId, "addr");
+    constexpr size_t LEGACY_BATCH_LIMIT_BYTES = 8 * 1'024 * 1'024;
+    auto event = std::make_shared<WatchEvent>();
+    event->type = WatchEvent::Type::PUT;
+    event->entry = KeyValueEntry{ "/oversized", std::string(LEGACY_BATCH_LIMIT_BYTES + 1, 'x'), 1, 2 };
+    event->revision = 2;
+    dispatcher_->Enqueue(std::move(event));
+    dispatcher_->SetSnapshotRevision(watchId, 1);
+
+    ASSERT_TRUE(dispatcher_->WaitEventCount(watchId, 1));
+    const auto events = dispatcher_->GetEvents(watchId);
+    ASSERT_EQ(events.size(), 1UL);
+    EXPECT_EQ(events.front()->type, WatchEvent::Type::PUT);
+    EXPECT_EQ(events.front()->entry.value.size(), LEGACY_BATCH_LIMIT_BYTES + 1);
+    EXPECT_EQ(dispatcher_->GetBatchSizes(watchId), (std::vector<size_t>{ 1 }));
 }
 
 TEST_F(CoordinatorStoreTest, WatchDispatcherRetriesFailedNotify)

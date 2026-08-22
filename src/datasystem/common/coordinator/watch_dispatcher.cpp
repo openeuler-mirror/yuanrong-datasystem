@@ -499,23 +499,14 @@ bool WatchDispatcher::PrepareChannelEvents(const std::shared_ptr<WatcherChannel>
                                   + ((*it)->type == WatchEvent::Type::REWATCH
                                          ? 0
                                          : (*it)->entry.key.size() + (*it)->entry.value.size());
-        if (eventBytes > MAX_WATCH_EVENT_BATCH_BYTES) {
-            auto rewatchEvent = MakeRewatchEvent(*it);
-            channel->queue.clear();
-            channel->queue.push_back(rewatchEvent);
-            channel->needReWatch = true;
-            events.push_back(std::move(rewatchEvent));
-            needReWatch = true;
-            return false;
-        }
-        if (!events.empty() && eventBytes > MAX_WATCH_EVENT_BATCH_BYTES - batchBytes) {
-            break;
-        }
         VLOG(1) << "PrepareChannelEvents, event revision: " << (*it)->revision << " watchId: " << channel->watchId
                 << ", watcherAddr: " << channel->watcherAddr;
         events.push_back(*it);
         batchBytes += eventBytes;
         maxEventRevision = std::max(maxEventRevision, (*it)->revision);
+        if (batchBytes > WATCH_EVENT_BATCH_MERGE_THRESHOLD_BYTES) {
+            break;
+        }
     }
     return false;
 }

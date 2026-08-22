@@ -98,6 +98,7 @@ constexpr char MEMBER_A[] = "127.0.0.1:12001";
 constexpr auto TEST_DEADLINE = std::chrono::seconds(2);
 constexpr auto TEST_RECONCILE_INTERVAL = std::chrono::milliseconds(10);
 constexpr auto TEST_DISCOVERY_WINDOW = std::chrono::milliseconds(10);
+constexpr auto TEST_BURST_COLLECT_WINDOW = std::chrono::milliseconds(500);
 constexpr auto TEST_PURE_CONTROL_BUDGET = std::chrono::seconds(3);
 constexpr auto TEST_LARGE_BATCH_DEADLINE = std::chrono::seconds(5);
 constexpr size_t TEST_CLUSTER_LIMIT = 2;
@@ -1039,7 +1040,7 @@ TEST_F(TopologyControlHostTest, Burst500MembershipsReachOneMaterializedScaleOutW
     options.controller.now = [] { return std::chrono::steady_clock::now(); };
     // The controller collection policy has dedicated clock-driven tests. Keep this host/store performance test focused
     // on the materialization path instead of charging the default three-second policy window to its control budget.
-    options.controller.scaleOutCollectWindow = TEST_RECONCILE_INTERVAL;
+    options.controller.scaleOutCollectWindow = TEST_BURST_COLLECT_WINDOW;
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     DS_ASSERT_OK(host_->Start());
     CommitMembership("burst");

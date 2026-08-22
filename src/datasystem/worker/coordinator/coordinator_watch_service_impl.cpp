@@ -117,9 +117,8 @@ Status CoordinatorWatchServiceImpl::HandleEvent(const EventReqPb &req, EventRspP
     (void)rsp;
     CHECK_FAIL_RETURN_STATUS(req.coordinator_id().size() == UUID_SIZE && req.watch_id() > 0 && !req.events().empty(),
                              K_INVALID, "invalid coordinator watch batch identity");
-    CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(req.events_size()) <= MAX_WATCH_EVENTS_PER_BATCH
-                                 && req.ByteSizeLong() <= MAX_WATCH_EVENT_BATCH_BYTES,
-                             K_INVALID, "coordinator watch batch exceeds protocol limit");
+    CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(req.events_size()) <= MAX_WATCH_EVENTS_PER_BATCH, K_INVALID,
+                             "coordinator watch batch exceeds event count limit");
     for (const auto &pbEvent : req.events()) {
         cluster::CoordinationEventType type;
         RETURN_IF_NOT_OK(ConvertEventType(pbEvent.type(), type));
