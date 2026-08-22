@@ -11,25 +11,14 @@ OUTPUT := output
 
 package:
 	@if [ ! -f build/kvtest ]; then echo "ERROR: build/kvtest not found. Run build.sh first."; exit 1; fi
-	@mkdir -p $(OUTPUT)/config
+	@mkdir -p $(OUTPUT)/lib $(OUTPUT)/config
 	@cp build/kvtest $(OUTPUT)/
-# Rewrite RPATH to $ORIGIN/lib so the packaged binary can find .so in ./lib/
-# if present. In container SDK mode, LD_LIBRARY_PATH (set by deploy_client.py
-# to the container SDK path) takes precedence over RPATH. patchelf is
-# optional — if unavailable, the binary still runs via LD_LIBRARY_PATH.
-	@if command -v patchelf >/dev/null 2>&1; then \
-		patchelf --set-rpath '$$ORIGIN/lib' $(OUTPUT)/kvtest; \
-		echo "Rewrote kvtest RPATH to \$$ORIGIN/lib (via patchelf)"; \
-	else \
-		echo "  (patchelf not found — RPATH left as build-time paths; LD_LIBRARY_PATH will be used at runtime)"; \
-	fi
-	@cp deploy_client.py tools/procmon.py VERSION $(OUTPUT)/
-	@cp deploy_jf.py $(OUTPUT)/ 2>/dev/null || true
-	@cp src/mock_jf_server.py $(OUTPUT)/ 2>/dev/null || true
-	@cp tests/test_deploy.sh $(OUTPUT)/
-	@cp tests/test_standalone_mode.sh $(OUTPUT)/ 2>/dev/null || true
 	@cp build/coordinator_test $(OUTPUT)/ 2>/dev/null || echo "WARNING: coordinator_test not found"
 	@cp build/worker_test $(OUTPUT)/ 2>/dev/null || echo "WARNING: worker_test not found"
+	@if [ -d build/lib ]; then cp -fL build/lib/*.so* $(OUTPUT)/lib/ 2>/dev/null || true; fi
+	@cp deploy_client.py deploy_jf.py tools/procmon.py VERSION $(OUTPUT)/
+	@cp src/mock_jf_server.py $(OUTPUT)/ 2>/dev/null || true
+	@cp tests/test_deploy.sh tests/test_standalone_mode.sh $(OUTPUT)/ 2>/dev/null || true
 	@cp config/config.json.example $(OUTPUT)/config/
 	@cp config/deploy.json.example $(OUTPUT)/config/
 	@echo "Packaged to $(OUTPUT)/:"

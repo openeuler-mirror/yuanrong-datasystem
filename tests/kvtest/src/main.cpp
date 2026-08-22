@@ -391,13 +391,13 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath)
 
 static int RunServerMode(const Config &cfg)
 {
-    std::cerr << "kvtest v" BUILD_VERSION << " (commit: " << BUILD_COMMIT << ")" << std::endl;
-    std::cerr << "Output directory: " << cfg.outputDir << std::endl;
+    SLOG_INFO("kvtest v" << BUILD_VERSION << " (commit: " << BUILD_COMMIT << ")");
+    SLOG_INFO("Output directory: " << cfg.outputDir);
 
     // Apply CPU/NUMA affinity before creating any threads
     ApplyAffinityFromConfig(cfg.cpuAffinity, cfg.numaNode, cfg.randomNumaNode);
 
-    std::cerr << "Initializing ServiceDiscovery..." << std::endl;
+    SLOG_INFO("Initializing ServiceDiscovery...");
 
     std::shared_ptr<IServiceDiscovery> sd;
     if (!cfg.jfAddress.empty()) {
@@ -423,11 +423,11 @@ static int RunServerMode(const Config &cfg)
     }
     Status rc = sd->Init();
     if (!rc.IsOk()) {
-        std::cerr << "ServiceDiscovery init failed: " << rc.GetMsg() << std::endl;
+        SLOG_ERROR("ServiceDiscovery init failed: " << rc.GetMsg());
         return 1;
     }
-    std::cerr << "ServiceDiscovery initialized: etcd=" << cfg.etcdAddress << ", coordinator=" << cfg.coordinatorAddress
-              << ", jf=" << cfg.jfAddress << std::endl;
+    SLOG_INFO("ServiceDiscovery initialized: etcd=" << cfg.etcdAddress << ", coordinator=" << cfg.coordinatorAddress
+                                                    << ", jf=" << cfg.jfAddress);
 
     ConnectOptions connOpts;
     connOpts.serviceDiscovery = sd;
@@ -441,10 +441,10 @@ static int RunServerMode(const Config &cfg)
     auto client = std::make_shared<KVClient>(connOpts);
     rc = client->Init();
     if (!rc.IsOk()) {
-        std::cerr << "KVClient init failed: " << rc.GetMsg() << std::endl;
+        SLOG_ERROR("KVClient init failed: " << rc.GetMsg());
         return 1;
     }
-    std::cerr << "KVClient initialized" << std::endl;
+    SLOG_INFO("KVClient initialized");
 
     bool cacheMode = cfg.keyPoolSize > 0;
     MetricsCollector metrics(cfg.instanceId, cfg.metricsIntervalMs, cfg.outputDir, cacheMode, cfg.metricsFile);
@@ -477,7 +477,7 @@ static int RunServerMode(const Config &cfg)
         worker = std::make_unique<KVWorker>(cfg, client, metrics);
         worker->Start();
     } else {
-        std::cerr << "Reader mode: waiting for notifications..." << std::endl;
+        SLOG_INFO("Reader mode: waiting for notifications...");
     }
 
     std::vector<uint64_t> prevCounts;
@@ -535,13 +535,13 @@ static int RunServerMode(const Config &cfg)
         }
     }
 
-    std::cerr << "Shutting down..." << std::endl;
+    SLOG_INFO("Shutting down...");
 
     // Wait for in-flight set/get/exist operations to complete before stopping
     constexpr int kShutdownDelaySeconds = 5;
-    std::cerr << "Waiting " << kShutdownDelaySeconds << "s for in-flight operations to complete..." << std::endl;
+    SLOG_INFO("Waiting " << kShutdownDelaySeconds << "s for in-flight operations to complete...");
     std::this_thread::sleep_for(std::chrono::seconds(kShutdownDelaySeconds));
-    std::cerr << "Shutdown delay complete" << std::endl;
+    SLOG_INFO("Shutdown delay complete");
 
     if (cacheReader)
         cacheReader->Stop();
@@ -550,7 +550,7 @@ static int RunServerMode(const Config &cfg)
     server.Stop();
     metrics.Stop();
 
-    std::cerr << "Shutdown complete" << std::endl;
+    SLOG_INFO("Shutdown complete");
     return 0;
 }
 

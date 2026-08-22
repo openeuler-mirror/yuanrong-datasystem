@@ -170,9 +170,9 @@ Reader 每次读取后等待指定毫秒数，模拟推理计算间隔。
 
 校验失败时日志形如：
 ```
-[WARN] cacheGetOrFill content mismatch on hit: key=cache_pool_0_42 level=2 senderId=0
+2026-08-19 03:11:23.451 [WARN] cacheGetOrFill content mismatch on hit: key=cache_pool_0_42 level=2 senderId=0
 ```
-对应 `stats` JSON 的 `verify_fail` 字段会递增。完整参数说明见 [user-guide.md 公共参数表](user-guide.md)。
+对应 `stats` JSON 的 `verify_fail` 字段会递增。SLOG 行格式为 `<YYYY-MM-DD HH:MM:SS.mmm> [INFO|WARN|ERROR] <msg>`，时间戳为本地时间。完整参数说明见 [user-guide.md 公共参数表](user-guide.md)。
 
 ---
 

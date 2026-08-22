@@ -424,6 +424,16 @@ class Deployer:
                 self.scp_to(node, self.binary_path, remote_binary)
                 if remote_sdk:
                     print(f'{tag} using container SDK: {remote_sdk}')
+                else:
+                    local_lib_dir = os.path.join(self.base_dir, 'output', 'lib')
+                    if os.path.isdir(local_lib_dir):
+                        import glob as _glob
+                        so_files = _glob.glob(os.path.join(local_lib_dir, '*.so*'))
+                        if so_files:
+                            remote_lib = f'{self.remote_work_dir}/lib'
+                            print(f'{tag} uploading lib ({len(so_files)} .so files)')
+                            self.scp_to(node, local_lib_dir, remote_lib)
+                            remote_sdk = remote_lib
 
             # Step 4: Upload config
             remote_config = f'{self.remote_work_dir}/config_{instance_id}.json'
@@ -474,6 +484,10 @@ class Deployer:
                 env_assignments = [f'{k}={shlex.quote(str(v))}' for k, v in custom_env.items()]
                 env_prefix += ' '.join(env_assignments) + ' '
 
+            # Time only the actual launch (Step 7: nohup start_cmd). Verify
+            # (pgrep) and procmon attach are intentionally excluded — stricter
+            # than worker's start_service timing, which also bundles verify
+            # and procmon into the same stopwatch.
             start_cmd = (
                 f"cd {self.remote_work_dir} && "
                 f"{env_prefix}"
@@ -483,7 +497,13 @@ class Deployer:
             print(f'{tag} starting kvclient (role={role})...')
             # allow_timeout: SSH nohup may not return in nested SSH environments,
             # but the remote process still starts. Verify with pgrep below.
-            self.run_on(node, start_cmd, check=False, timeout=10, allow_timeout=True)
+            t_start = time.monotonic()
+            try:
+                self.run_on(node, start_cmd, check=False, timeout=10, allow_timeout=True)
+                start_elapsed = time.monotonic() - t_start
+            except Exception as e:
+                print(f'  {target} -> FAILED: {e}')
+                return False, time.monotonic() - t_start
 
             # Step 8: Verify process started
             time.sleep(1)
@@ -519,10 +539,10 @@ class Deployer:
                     print(f'{tag} WARNING: procmon start may have failed')
 
             print(f'  {target} -> OK')
-            return True
+            return True, start_elapsed
         except Exception as e:
             print(f'  {target} -> FAILED: {e}')
-            return False
+            return False, 0.0
         finally:
             os.unlink(tmp_config)
 
@@ -538,14 +558,13 @@ class Deployer:
 
         def _deploy_with_timing(node):
             target = self._exec_target(node)
-            t0 = time.monotonic()
-            ok = False
             try:
-                ok = self.deploy_node(node)
-                return ok
-            finally:
-                elapsed = time.monotonic() - t0
-                timings.append((target, elapsed, bool(ok)))
+                ok, start_elapsed = self.deploy_node(node)
+            except Exception as e:
+                print(f'  {target} -> FAILED: {e}')
+                ok, start_elapsed = False, 0.0
+            timings.append((target, start_elapsed, bool(ok)))
+            return ok
 
         results = []
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
@@ -1047,9 +1066,9 @@ def cmd_gen_config(args):
     }
     # Service discovery address: --jf takes priority (JF discovery),
     # then --coordinator-address (direct), otherwise default to etcd_address.
-    if args.jf_address:
-        cfg['jf_address'] = args.jf_address
-        cfg['jf_service'] = args.jf_service or 'kvcache_coordinator'
+    if args.jf:
+        cfg['jf_address'] = args.jf
+        cfg['jf_service'] = args.service or 'kvcache_coordinator'
     elif args.coordinator_address:
         cfg['coordinator_address'] = args.coordinator_address
     else:
@@ -1167,10 +1186,10 @@ def _add_gen_config_args(p):
                    help='Use coordinator-backed service discovery instead of etcd: '
                         'sets coordinator_address in config.json and suppresses '
                         'etcd_address. Takes priority over --etcd-address.')
-    p.add_argument('--jf-address',
+    p.add_argument('--jf',
                    help='Use JF service discovery: sets jf_address in config.json. '
                         'Takes priority over --coordinator-address and --etcd-address.')
-    p.add_argument('--jf-service', default='kvcache_coordinator',
+    p.add_argument('--service', default='kvcache_coordinator',
                    help='JF service name (default: kvcache_coordinator)')
     p.add_argument('-c', '--cluster-name',
                    help='Set cluster_name in generated config.json')

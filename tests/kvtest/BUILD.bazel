@@ -174,7 +174,6 @@ cc_library(
     strip_include_prefix = "src",
     deps = [
         "//include/datasystem:headers",
-        "//src/datasystem/common/coordinator:coordinator_leader_router",
     ],
 )
 
@@ -184,6 +183,7 @@ cc_binary(
     srcs = ["src/coordinator_main.cpp"],
     deps = [
         ":jf_lib",
+        ":build_info_gen",
         "//src/datasystem/coordinator:coordinator_server",
         "//include/datasystem:headers",
         "//src/datasystem/common/flags:dynamic_flag_config",
@@ -198,6 +198,7 @@ cc_binary(
     srcs = ["src/data_worker_main.cpp"],
     deps = [
         ":jf_lib",
+        ":build_info_gen",
         "//src/datasystem/worker:worker",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//include/datasystem:headers",

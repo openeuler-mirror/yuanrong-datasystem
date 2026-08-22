@@ -359,12 +359,19 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
         cmd = f'dscli start {config_flag} {remote_config}'
         if numactl_opts and not is_coordinator:
             cmd += f' {numactl_opts}'
-        kubectl_exec(pod_name, namespace, cmd, timeout=timeout)
+        # Time only the actual launch (dscli start). Config upload, pid
+        # verify, and procmon attach are excluded — caller reads
+        # pod['_start_elapsed'] to record the start stopwatch.
+        import time
+        t_start = time.monotonic()
+        try:
+            kubectl_exec(pod_name, namespace, cmd, timeout=timeout)
+        finally:
+            pod['_start_elapsed'] = time.monotonic() - t_start
         print(f'  {pod_name} ({pod_ip}) -> started')
 
         if enable_procmon:
             if upload_procmon(pod, namespace, procmon_remote_dir, timeout):
-                import time
                 time.sleep(1)
                 pid = find_pid_by_port(pod, namespace, port, process_name, timeout)
                 if pid:
@@ -394,7 +401,11 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
 
 def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
                           remote_config_dir=None, timeout=DEFAULT_TIMEOUT):
-    """Collect log files from a single pod."""
+    """Collect log files from a single pod.
+
+    Also collects stdout.log from remote_config_dir if it exists
+    (standalone mode writes binary output to {remote_config_dir}/stdout.log).
+    """
     pod_name = pod['name']
     pod_ip = pod['ip']
     local_pod_dir = os.path.join(local_dir, f'{pod_name}')
@@ -455,6 +466,21 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
                 content = base64.b64decode(result.stdout)
                 local_path = os.path.join(local_pod_dir,
                                            'resource_monitor.log')
+                with open(local_path, 'wb') as f:
+                    f.write(content)
+            except Exception:
+                pass
+
+        # Collect stdout.log from remote_config_dir (standalone mode writes
+        # binary output to {remote_config_dir}/stdout.log). Silently skip if
+        # not found — only exists when start_service_standalone was used.
+        if remote_config_dir:
+            stdout_path = f'{remote_config_dir}/stdout.log'
+            try:
+                result = kubectl_exec(pod_name, namespace,
+                    f'base64 {stdout_path}', check=True, timeout=timeout)
+                content = base64.b64decode(result.stdout)
+                local_path = os.path.join(local_pod_dir, 'stdout.log')
                 with open(local_path, 'wb') as f:
                     f.write(content)
             except Exception:
@@ -701,14 +727,16 @@ def kubectl_exec_raw(pod, namespace, cmd, timeout=DEFAULT_TIMEOUT):
         return ''
 
 
-def install_binary(pod, namespace, local_binary, remote_dir,
-                    timeout=DEFAULT_TIMEOUT):
-    """Copy a standalone binary to a pod (no lib directory needed -- the whl
-    package provides all .so files via pip3 install).
+import tarfile
 
-    Caller must ensure whl is already installed (via install_whl) before
-    calling this; the standalone binary's LD_LIBRARY_PATH is set to the
-    whl-installed lib directory at start time.
+
+def install_binary(pod, namespace, local_binary, local_lib_dir, remote_dir,
+                    timeout=DEFAULT_TIMEOUT):
+    """Copy a standalone binary + .so deps to a pod.
+
+    ``local_lib_dir`` is a local directory containing .so files. It is tar'd
+    and extracted into ``remote_dir/lib/`` on the pod, preserving all .so
+    variants (symlinks resolved to real files via realpath).
     """
     if not os.path.exists(local_binary):
         print(f'ERROR: binary not found: {local_binary}', file=sys.stderr)
@@ -720,33 +748,25 @@ def install_binary(pod, namespace, local_binary, remote_dir,
                     timeout=timeout)
     subprocess.run(['kubectl', 'exec', '-n', namespace, name, '--', 'chmod', '+x',
                      f'{remote_dir}/{os.path.basename(local_binary)}'], timeout=timeout)
+    # Copy .so files via tar (preserves all .so.N variants; realpath follows symlinks)
+    if local_lib_dir and os.path.isdir(local_lib_dir):
+        so_files = glob.glob(os.path.join(local_lib_dir, '*.so*'))
+        if so_files:
+            with tempfile.NamedTemporaryFile(suffix='.tar', delete=False) as tf:
+                tar_path = tf.name
+            try:
+                with tarfile.open(tar_path, 'w') as tar:
+                    for so in so_files:
+                        tar.add(os.path.realpath(so), arcname=os.path.basename(so))
+                kubectl_cp_to(name, namespace, tar_path,
+                              f'/tmp/lib_{name}.tar', timeout=timeout)
+                kubectl_exec_raw({'name': name}, namespace,
+                    f'mkdir -p {remote_dir}/lib && '
+                    f'tar xf /tmp/lib_{name}.tar -C {remote_dir}/lib/ && '
+                    f'rm /tmp/lib_{name}.tar', timeout=timeout)
+            finally:
+                os.unlink(tar_path)
     return True
-
-
-def find_whl_lib_dir(pod, namespace, timeout=DEFAULT_TIMEOUT):
-    """Find the lib directory inside the pip-installed datasystem package.
-
-    The whl installs .so files under yr/datasystem/lib/ inside the Python
-    site-packages directory. Returns the path (e.g.
-    /usr/local/lib64/python3.11/site-packages/yr/datasystem/lib) or '' if not
-    found.
-    """
-    # Primary: use Python introspection to locate the package directory
-    cmd = ('python3 -c "import yr.datasystem, os; '
-           'print(os.path.join(os.path.dirname(yr.datasystem.__file__), \'lib\'))" 2>/dev/null')
-    result = kubectl_exec_raw(pod, namespace, cmd, timeout=timeout)
-    if result and result.strip() and os.path.basename(result.strip()) == 'lib':
-        return result.strip()
-    # Fallback: find via pip show -- works even if yr.datasystem can't be
-    # imported (e.g. broken .pyc, missing __init__.py, wrong python version)
-    cmd2 = 'pip3 show -f openyuanrong-datasystem 2>/dev/null | grep "yr/datasystem/lib$" | head -1'
-    rel_path = kubectl_exec_raw(pod, namespace, cmd2, timeout=timeout)
-    if rel_path and rel_path.strip():
-        cmd3 = 'python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null'
-        sp = kubectl_exec_raw(pod, namespace, cmd3, timeout=timeout)
-        if sp and sp.strip():
-            return f'{sp.strip()}/{rel_path.strip()}'
-    return ''
 
 
 def start_service_standalone(pod, namespace, binary_name, remote_dir, config_path,
@@ -764,8 +784,6 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
     """
     name = pod['name']
     pod_ip = pod['ip']
-    # Find the whl-installed lib directory for LD_LIBRARY_PATH
-    whl_lib_dir = find_whl_lib_dir(pod, namespace, timeout)
     if config is not None:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json',
                                          prefix=f'standalone_{name}_',
@@ -776,23 +794,27 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
             kubectl_cp_to(name, namespace, tmp_cfg, config_path, timeout=timeout)
         finally:
             os.unlink(tmp_cfg)
-    # nohup + </dev/null detaches stdin; echo $! makes shell print PID and exit.
-    # LD_LIBRARY_PATH points at the whl-installed lib dir so the standalone
-    # binary finds libdatasystem_worker.so / libdatasystem_coordinator.so etc.
-    ld_path = whl_lib_dir or f'{remote_dir}/lib'
+    # LD_LIBRARY_PATH points at the locally-installed lib dir (from install_binary)
+    ld_path = f'{remote_dir}/lib'
     cmd = (f'cd {remote_dir} && '
            f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH nohup ./{binary_name} '
            f'--config {config_path} --jf {jf_addr} --service {service_name} {extra_args} '
            f'> {remote_dir}/stdout.log 2>&1 </dev/null & '
            f'echo $!')
-    try:
-        subprocess.run(
-            ['kubectl', 'exec', '-n', namespace, name, '--', 'sh', '-c', cmd],
-            capture_output=True, text=True, timeout=10)
-    except subprocess.TimeoutExpired:
-        pass
-    # Verify process started (mirrors deploy_client.py pgrep check)
+    # Time only the actual launch (nohup). Config upload, pid verify, and
+    # procmon attach are excluded — caller reads pod['_start_elapsed'].
     import time
+    t_start = time.monotonic()
+    try:
+        try:
+            subprocess.run(
+                ['kubectl', 'exec', '-n', namespace, name, '--', 'sh', '-c', cmd],
+                capture_output=True, text=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    finally:
+        pod['_start_elapsed'] = time.monotonic() - t_start
+    # Verify process started (mirrors deploy_client.py pgrep check)
     time.sleep(1)
     pid = None
     if port and process_name:
@@ -883,19 +905,19 @@ def cmd_kill_shared(args, pods, process_name_standalone, label,
 
 def cmd_install_shared(args, pods, process_name_standalone, label,
                         script_dir, timeout=DEFAULT_TIMEOUT):
-    """Install whl first (both modes need .so deps), then optionally copy
-    standalone binary on top."""
-    whl_rc = cmd_install_impl(pods, args.namespace, args.whl, timeout)
-    if whl_rc != 0:
-        return whl_rc
+    """Install: standalone mode copies binary + .so (no whl);
+    non-standalone mode installs whl only."""
     if getattr(args, 'standalone', False):
         binary = args.binary or os.path.join(
             script_dir, 'output', process_name_standalone)
+        lib_dir = getattr(args, 'lib_dir', None) or os.path.join(
+            script_dir, 'output', 'lib')
         def do_op(pod):
-            return install_binary(pod, args.namespace, binary,
+            return install_binary(pod, args.namespace, binary, lib_dir,
                                   args.remote_dir, timeout)
-        return do_for_all_pods(pods, do_op, f'Installing {label} binary (standalone)')
-    return 0
+        return do_for_all_pods(pods, do_op, f'Installing {label} (standalone)')
+    else:
+        return cmd_install_impl(pods, args.namespace, args.whl, timeout)
 
 
 def cmd_stop_shared(args, pods, process_name_standalone, label,
@@ -940,3 +962,75 @@ def cmd_stop_shared(args, pods, process_name_standalone, label,
 
     return cmd_stop_impl(pods, args.namespace, args.remote_config,
                          label, timeout, service_type=service_type)
+
+
+# ============================================================================
+# Pod creation helpers (shared by deploy_jf, deploy_coordinator, deploy_worker)
+# ============================================================================
+
+from types import SimpleNamespace
+import deploy_pods
+
+
+def distribute_instances(num_instances, nodes):
+    """Spread N instances across M nodes evenly.
+
+    Returns {ip: count}. First N % M nodes get one extra.
+    """
+    if num_instances <= 0:
+        raise ValueError(f'instances must be a positive integer, got {num_instances}')
+    if not nodes:
+        raise ValueError('no cluster nodes discovered; cannot spread instances')
+    m = len(nodes)
+    base = num_instances // m
+    remainder = num_instances % m
+    distribution = {}
+    for i, node in enumerate(nodes):
+        count = base + (1 if i < remainder else 0)
+        if count > 0:
+            distribution[node['ip']] = count
+    return distribution
+
+
+def create_pods(prefix, namespace, image, instances,
+                yaml='config/pod_config.yaml.example',
+                cpu='8', memory='16Gi',
+                requests_cpu=None, requests_memory=None,
+                force=False, dry_run=False, timeout=DEFAULT_TIMEOUT):
+    """Create pods via deploy_pods.py. Returns pod list or None on failure."""
+    nodes = discover_nodes(timeout=timeout)
+    try:
+        distribution = distribute_instances(instances, nodes)
+    except ValueError as e:
+        print(f'ERROR: {e}', file=sys.stderr)
+        return None
+    replicas_str = ','.join(f'{ip}:{count}' for ip, count in distribution.items())
+
+    pod_count = sum(distribution.values())
+    print(f'Creating {pod_count} pod(s) across {len(distribution)} node(s):')
+    for ip, count in distribution.items():
+        print(f'  {ip}: {count}')
+
+    deploy_args = SimpleNamespace(
+        namespace=namespace,
+        prefix=prefix,
+        image=image,
+        cpu=cpu,
+        memory=memory,
+        requests_cpu=requests_cpu or cpu,
+        requests_memory=requests_memory or memory,
+        replicas=replicas_str,
+        pods_per_node=None,
+        yaml=yaml,
+        dry_run=dry_run,
+        force=force,
+        wait=True,
+        timeout=timeout,
+    )
+    rc = deploy_pods.cmd_deploy(deploy_args)
+    if rc != 0:
+        print('ERROR: deploy_pods failed', file=sys.stderr)
+        return None
+    if dry_run:
+        return []
+    return get_pods(namespace, [prefix])

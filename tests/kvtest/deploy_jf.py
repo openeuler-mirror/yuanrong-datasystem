@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Quick deploy/stop for the JF mock service discovery server.
 
-Manages mock_jf_server.py lifecycle in a K8s pod: start, stop, check, clean.
+Manages mock_jf_server.py lifecycle in a K8s pod: deploy, start, stop, check, clean.
 Reuses deploy_common.py kubectl transport primitives.
 
 Usage:
-    python3 deploy_jf.py start --port 9999 --ttl-default 30
+    python3 deploy_jf.py deploy -p jf [--image xxx] --port 9999 --ttl-default 30
+    python3 deploy_jf.py start -p jf --port 9999 --ttl-default 30
     python3 deploy_jf.py stop
     python3 deploy_jf.py check
     python3 deploy_jf.py clean
@@ -18,7 +19,7 @@ import sys
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-from deploy_common import DEFAULT_TIMEOUT, get_pods
+from deploy_common import DEFAULT_TIMEOUT, get_pods, create_pods
 
 PROCESS_NAME = 'mock_jf_server.py'
 MOCK_SCRIPT = 'mock_jf_server.py'
@@ -45,15 +46,9 @@ def _wait_port_ready(namespace, pod_name, port, timeout=30):
     return False
 
 
-def cmd_start(args, pods):
-    if not pods:
-        print(f'No pods matching prefix {args.prefixes}', file=sys.stderr)
-        return 1
-    pod = pods[0]
+def _start_jf_mock(pod, ns, port, ttl_default, remote_dir, timeout):
+    """Copy script + start mock server on a single pod."""
     name = pod['name']
-    ns = args.namespace
-
-    remote_dir = args.remote_dir
     _kubectl_exec(ns, name, f'mkdir -p {remote_dir}')
 
     local_script = os.path.join(SCRIPT_DIR, 'src', MOCK_SCRIPT)
@@ -61,33 +56,67 @@ def cmd_start(args, pods):
         local_script = os.path.join(SCRIPT_DIR, MOCK_SCRIPT)
     if not os.path.exists(local_script):
         print(f'ERROR: {MOCK_SCRIPT} not found', file=sys.stderr)
-        return 1
+        return False
 
     subprocess.run(['kubectl', 'cp', '-n', ns, local_script, f'{name}:{remote_dir}/{MOCK_SCRIPT}'],
                     timeout=DEFAULT_TIMEOUT)
     _kubectl_exec(ns, name, f'chmod +x {remote_dir}/{MOCK_SCRIPT}')
 
-    # nohup + </dev/null detaches stdin; echo $! makes shell print PID and exit.
-    # kubectl exec may still hang on PTY cleanup, so use short timeout +
-    # allow_timeout (mirrors deploy_client.py pattern): fire-and-forget, then
-    # verify via port check below.
     cmd = (f'cd {remote_dir} && nohup python3 {MOCK_SCRIPT} '
-           f'--port {args.port} --ttl-default {args.ttl_default} '
+           f'--port {port} --ttl-default {ttl_default} '
            f'> {remote_dir}/jf_mock.log 2>&1 </dev/null & '
            f'echo $!')
     try:
         _kubectl_exec(ns, name, cmd, timeout=10)
     except Exception:
-        pass  # fire-and-forget; verify via port check below
+        pass
 
-    if _wait_port_ready(ns, name, args.port, timeout=args.timeout):
-        jf_addr = f"{pod['ip']}:{args.port}"
+    if _wait_port_ready(ns, name, port, timeout=timeout):
+        jf_addr = f"{pod['ip']}:{port}"
         print(f'JF mock ready: {jf_addr}')
-        return 0
+        return True
     else:
-        print(f'ERROR: JF mock did not become ready within {args.timeout}s', file=sys.stderr)
+        print(f'ERROR: JF mock did not become ready within {timeout}s', file=sys.stderr)
         _kubectl_exec(ns, name, f'cat {remote_dir}/jf_mock.log')
+        return False
+
+
+def cmd_deploy(args):
+    """Deploy: [optional create pod] + copy + start JF mock."""
+    prefix = args.prefixes[0]
+    ns = args.namespace
+
+    if args.image:
+        pods = create_pods(prefix=prefix, namespace=ns, image=args.image, instances=1,
+                           yaml=args.yaml, cpu=args.cpu, memory=args.memory,
+                           requests_cpu=args.requests_cpu, requests_memory=args.requests_memory,
+                           force=args.force, dry_run=getattr(args, 'dry_run', False),
+                           timeout=args.timeout)
+        if pods is None:
+            return 1
+        if getattr(args, 'dry_run', False):
+            print('Dry run: skipped copy and start')
+            return 0
+    else:
+        pods = get_pods(ns, args.prefixes)
+        if not pods:
+            print(f'No pods found matching {args.prefixes} in {ns}', file=sys.stderr)
+            return 1
+
+    pod = pods[0]
+    if _start_jf_mock(pod, ns, args.port, args.ttl_default, args.remote_dir, args.timeout):
+        return 0
+    return 1
+
+
+def cmd_start(args, pods):
+    if not pods:
+        print(f'No pods matching prefix {args.prefixes}', file=sys.stderr)
         return 1
+    pod = pods[0]
+    if _start_jf_mock(pod, args.namespace, args.port, args.ttl_default, args.remote_dir, args.timeout):
+        return 0
+    return 1
 
 
 def cmd_stop(args, pods):
@@ -131,6 +160,21 @@ def main():
     parent.add_argument('--timeout', type=int, default=30)
     parent.add_argument('--remote-dir', default='/tmp/jf_mock')
 
+    # deploy: optional pod creation + copy + start
+    p_deploy = sub.add_parser('deploy', parents=[parent],
+                              help='[optional create pod] + copy + start JF mock')
+    p_deploy.add_argument('--image', default=None,
+                           help='Container image (if set, create pod first)')
+    p_deploy.add_argument('--yaml', default='config/pod_config.yaml.example')
+    p_deploy.add_argument('--cpu', default='1')
+    p_deploy.add_argument('--memory', default='1Gi')
+    p_deploy.add_argument('--requests-cpu', default=None)
+    p_deploy.add_argument('--requests-memory', default=None)
+    p_deploy.add_argument('--force', '-f', action='store_true', default=False)
+    p_deploy.add_argument('--dry-run', action='store_true', default=False)
+    p_deploy.add_argument('--port', type=int, default=DEFAULT_PORT)
+    p_deploy.add_argument('--ttl-default', type=int, default=30)
+
     p_start = sub.add_parser('start', parents=[parent])
     p_start.add_argument('--port', type=int, default=DEFAULT_PORT)
     p_start.add_argument('--ttl-default', type=int, default=30)
@@ -143,6 +187,9 @@ def main():
     if not args.action:
         parser.print_help()
         return 1
+
+    if args.action == 'deploy':
+        return cmd_deploy(args)
 
     pods = get_pods(args.namespace, args.prefixes)
     if not pods and args.action != 'stop':
