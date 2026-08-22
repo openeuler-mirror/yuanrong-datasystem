@@ -4,10 +4,32 @@
 #include <cstdlib>
 #include <string>
 
-#include "datasystem/common/flags/flags.h"
-#include "datasystem/common/util/version.h"
+#if __has_include("build_info.h")
+#include "build_info.h"
+#endif
+#ifndef BUILD_VERSION
+#define BUILD_VERSION "unknown"
+#endif
+#ifndef BUILD_COMMIT
+#define BUILD_COMMIT "unknown"
+#endif
+
 #include "datasystem/data_worker.h"
 #include "datasystem/utils/status.h"
+
+// Forward declarations for internal symbols exported by
+// libdatasystem_worker.so. These are declared in internal headers
+// (src/datasystem/common/flags/flags.h) not shipped in the SDK;
+// forward-declaring avoids the internal header dependency so the
+// file compiles in CMake mode (SDK-only headers).
+namespace datasystem {
+void SetVersionString(const std::string &version);
+void ParseCommandLineFlags(int argc, char **argv);
+}  // namespace datasystem
+
+#ifndef DATASYSTEM_VERSION
+#define DATASYSTEM_VERSION "unknown"
+#endif
 
 using namespace datasystem;
 
@@ -21,6 +43,10 @@ static bool ParseArgs(int argc, char **argv, Args &args)
 {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
+        if (arg == "--version" || arg == "-v") {
+            printf("worker_test %s (commit: %s)\n", BUILD_VERSION, BUILD_COMMIT);
+            return false;
+        }
         auto next = [&]() -> std::string {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Missing value for %s\n", arg.c_str());

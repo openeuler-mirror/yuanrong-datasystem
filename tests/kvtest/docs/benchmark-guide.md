@@ -330,6 +330,9 @@ Round N:
 日志仍写入 `DATASYSTEM_CLIENT_LOG_DIR`；每个 benchmark 子进程通过 exec 独立初始化 SDK，因此
 `ds_client_<pid>.INFO.log` 会正常记录该子进程的 SDK 运行日志。
 
+SLOG 行（`[INFO]/[WARN]/[ERROR]` 前缀）自带 `<YYYY-MM-DD HH:MM:SS.mmm>` 本地时间戳，
+便于跨线程/跨节点对齐事件顺序。
+
 ### 运行时长控制
 
 Benchmark 模式**不使用 `target_qps` 限速**——每轮全速执行，测量的是最大吞吐和延迟。通过以下参数控制何时停止：

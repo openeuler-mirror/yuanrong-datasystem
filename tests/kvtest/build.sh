@@ -132,8 +132,8 @@ if [[ "$BUILD_SYSTEM" == "cmake" ]]; then
     echo "SDK:          $SDK_DIR"
 
     if [[ $CLEAN -eq 1 ]]; then
-        echo "Cleaning build directory..."
-        rm -rf "$BUILD_DIR"
+        echo "Cleaning build and output directories..."
+        rm -rf "$BUILD_DIR" "$SCRIPT_DIR/output"
     fi
 
     mkdir -p "$BUILD_DIR"
@@ -152,6 +152,10 @@ if [[ "$BUILD_SYSTEM" == "cmake" ]]; then
     cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" "${cmake_opts[@]}"
     cmake --build "$BUILD_DIR" -j"$JOBS"
 
+    # Copy all .so from SDK to build/lib/ (KVCache .so + third-party .so + URMA .so)
+    mkdir -p "$BUILD_DIR/lib"
+    cp -fL "$SDK_DIR/lib"/*.so* "$BUILD_DIR/lib/" 2>/dev/null || true
+
     echo "Build OK: $BUILD_DIR/kvtest + $BUILD_DIR/coordinator_test + $BUILD_DIR/worker_test"
     echo ""
     echo "Packaging..."
@@ -169,6 +173,7 @@ else  # bazel
     if [[ $CLEAN -eq 1 ]]; then
         echo "Running bazel clean..."
         (cd "$REPO_ROOT" && bazel clean)
+        rm -rf "$SCRIPT_DIR/output"
     fi
 
     ba_args=()
@@ -226,6 +231,36 @@ else  # bazel
             echo "WARNING: $bin_name not found in bazel output"
         fi
     done
+
+    # Copy URMA .so (Bazel in-tree: binaries are self-contained except URMA)
+    if [[ "$BUILD_WITH_URMA" == "on" ]]; then
+        (cd "$REPO_ROOT" && bazel build @local_urma//:urma_libs "${ba_args[@]}")
+        # @local_urma is a local=True repo; its files are under external/ in the execroot,
+        # not under bazel-bin. Use bazel info execution_root to locate them.
+        execroot="$(cd "$REPO_ROOT" && bazel info execution_root 2>/dev/null)"
+        urma_src="$execroot/external/local_urma/yr/datasystem/lib"
+        mkdir -p "$BUILD_DIR/lib"
+        if [[ -d "$urma_src" ]]; then
+            cp -fL "$urma_src"/lib*.so* "$BUILD_DIR/lib/" 2>/dev/null || true
+            so_count=$(ls -1 "$BUILD_DIR/lib"/*.so* 2>/dev/null | wc -l)
+            echo "Copied $so_count URMA .so files to $BUILD_DIR/lib/"
+        else
+            # Fallback: search bazel-bin _solib dirs for URMA .so
+            bazel_bin="$(cd "$REPO_ROOT" && bazel info bazel-bin 2>/dev/null)"
+            urma_found=$(find "$bazel_bin" -name "liburma.so" -o -name "liburma.so.0" 2>/dev/null | head -1)
+            if [[ -n "$urma_found" ]]; then
+                urma_dir=$(dirname "$urma_found")
+                cp -fL "$urma_dir"/lib*.so* "$BUILD_DIR/lib/" 2>/dev/null || true
+                so_count=$(ls -1 "$BUILD_DIR/lib"/*.so* 2>/dev/null | wc -l)
+                echo "Copied $so_count URMA .so files to $BUILD_DIR/lib/ (from $urma_dir)"
+            else
+                echo "WARNING: URMA .so not found in execroot or bazel-bin"
+                echo "  Checked: $urma_src"
+                echo "  URMA_PKG_URL is set, but @local_urma repo may not have materialized."
+                echo "  Try: cd $REPO_ROOT && bazel build @local_urma//:urma_libs --config=urma"
+            fi
+        fi
+    fi
 
     echo ""
     echo "Build OK: $BUILD_DIR/kvtest + $BUILD_DIR/coordinator_test + $BUILD_DIR/worker_test"

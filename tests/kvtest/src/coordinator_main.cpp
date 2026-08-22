@@ -9,6 +9,16 @@
 #include <string>
 #include <thread>
 
+#if __has_include("build_info.h")
+#include "build_info.h"
+#endif
+#ifndef BUILD_VERSION
+#define BUILD_VERSION "unknown"
+#endif
+#ifndef BUILD_COMMIT
+#define BUILD_COMMIT "unknown"
+#endif
+
 #include "datasystem/coordinator_server.h"
 #include "datasystem/utils/status.h"
 
@@ -35,6 +45,10 @@ static bool ParseArgs(int argc, char **argv, Args &args)
 {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
+        if (arg == "--version" || arg == "-v") {
+            printf("coordinator_test %s (commit: %s)\n", BUILD_VERSION, BUILD_COMMIT);
+            return false;
+        }
         auto next = [&]() -> std::string {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Missing value for %s\n", arg.c_str());

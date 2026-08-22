@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <map>
@@ -11,7 +10,6 @@
 #include <thread>
 #include <vector>
 
-#include "datasystem/common/coordinator/coordinator_leader_router.h"
 #include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/status.h"
 
@@ -215,7 +213,7 @@ private:
     std::map<std::string, std::thread> heartbeatThreads_;
 };
 
-class UserCoordinatorDiscovery : public datasystem::IDeadlineAwareCoordinatorDiscovery {
+class UserCoordinatorDiscovery : public datasystem::ICoordinatorDiscovery {
 public:
     UserCoordinatorDiscovery(std::shared_ptr<JfClient> jfClient, std::string serviceName)
         : jfClient_(std::move(jfClient)), serviceName_(std::move(serviceName))
@@ -225,13 +223,6 @@ public:
     datasystem::Status GetCoordinators(std::vector<std::string> &serviceList) override
     {
         return jfClient_->GetInstance(serviceName_, serviceList);
-    }
-
-    datasystem::Status GetCoordinators(std::chrono::steady_clock::time_point deadline,
-                                       std::vector<std::string> &addresses) override
-    {
-        (void)deadline;
-        return jfClient_->GetInstance(serviceName_, addresses);
     }
 
 private:

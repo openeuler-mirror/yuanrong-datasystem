@@ -96,9 +96,6 @@ Status CoordinatorServiceProxyBase::Init()
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS(coordinatorDiscovery_ != nullptr, StatusCode::K_INVALID, "Coordinator Discovery is null");
-    CHECK_FAIL_RETURN_STATUS(dynamic_cast<IDeadlineAwareCoordinatorDiscovery *>(coordinatorDiscovery_.get()) != nullptr,
-                             StatusCode::K_INVALID,
-                             "Coordinator Discovery must support routing deadlines");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(COORDINATOR_PROXY_RPC_STUB_CACHE_SIZE));
 
     std::vector<std::string> candidates;

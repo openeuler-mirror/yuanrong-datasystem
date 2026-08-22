@@ -14,7 +14,6 @@ import json
 import os
 import re
 import sys
-import time
 
 from deploy_common import (
     DEFAULT_TIMEOUT,
@@ -85,7 +84,6 @@ def cmd_start(args, pods):
             numactl_opts = f'-N {args.numa_nodes}'
         if args.cpu_bind:
             numactl_opts = f'--physcpubind {args.cpu_bind}'
-        t0 = time.monotonic()
         ok = False
         try:
             ok = start_worker(pod, args.namespace, cfg, args.port,
@@ -96,12 +94,41 @@ def cmd_start(args, pods):
                               timeout=args.timeout)
             return ok
         finally:
-            elapsed = time.monotonic() - t0
-            timings.append((pod['name'], elapsed, bool(ok)))
+            # start_worker records only the actual launch duration on the
+            # pod dict (config upload / pid verify / procmon excluded).
+            start_elapsed = pod.pop('_start_elapsed', 0.0)
+            timings.append((pod['name'], start_elapsed, bool(ok)))
 
     rc = do_for_all_pods(pods, do_op, 'Starting workers')
     _print_timings('start', timings)
     return rc
+
+
+def cmd_deploy(args, pods):
+    """Deploy: install + start workers in one command."""
+    if getattr(args, 'standalone', False):
+        if not getattr(args, 'jf', None):
+            print('ERROR: --jf is required in standalone mode', file=sys.stderr)
+            return 1
+        # Standalone: install binary + .so, then start
+        print('\n--- Step 1/2: installing binary + .so (standalone) ---')
+        install_rc = cmd_install_shared(args, pods, PROCESS_NAME_STANDALONE, 'worker',
+                                     os.path.dirname(os.path.abspath(__file__)),
+                                     args.timeout)
+        if install_rc != 0:
+            print('ERROR: install failed', file=sys.stderr)
+            return install_rc
+        print('\n--- Step 2/2: starting workers (standalone) ---')
+        return cmd_start_standalone(args, pods)
+    else:
+        # Non-standalone: install whl, then dscli start
+        print('\n--- Step 1/2: installing whl ---')
+        whl_rc = cmd_install_impl(pods, args.namespace, args.whl, args.timeout)
+        if whl_rc != 0:
+            print('ERROR: whl install failed', file=sys.stderr)
+            return whl_rc
+        print('\n--- Step 2/2: starting workers ---')
+        return cmd_start(args, pods)
 
 
 def cmd_start_standalone(args, pods):
@@ -118,7 +145,6 @@ def cmd_start_standalone(args, pods):
     def do_op(pod):
         cfg = json.loads(json.dumps(config_template))
         cfg[ADDRESS_KEY] = {'value': f'{pod["ip"]}:{args.port}'}
-        t0 = time.monotonic()
         ok = False
         try:
             ok = start_service_standalone(
@@ -132,8 +158,11 @@ def cmd_start_standalone(args, pods):
                 timeout=args.timeout)
             return ok
         finally:
-            elapsed = time.monotonic() - t0
-            timings.append((pod['name'], elapsed, bool(ok)))
+            # start_service_standalone records only the actual launch
+            # duration on the pod dict (config upload / pid verify /
+            # procmon excluded).
+            start_elapsed = pod.pop('_start_elapsed', 0.0)
+            timings.append((pod['name'], start_elapsed, bool(ok)))
 
     rc = do_for_all_pods(pods, do_op, 'Starting workers (standalone)')
     _print_timings('start', timings)
@@ -363,13 +392,56 @@ def main():
     parser_install = subparsers.add_parser('install', parents=[parent_parser],
                                            help='Install worker binary or whl')
     parser_install.add_argument('-S', '--standalone', action='store_true', default=False,
-                                help='Install standalone binary + .so (default: install whl)')
+                                help='Install standalone binary + .so (no whl)')
     parser_install.add_argument('--whl', default=default_whl,
-                                help='Path to worker whl package (dscli mode)')
+                                help='Path to worker whl package (non-standalone mode)')
     parser_install.add_argument('--binary', default=None,
                                 help='Local path to worker_test binary (standalone mode)')
+    parser_install.add_argument('--lib-dir', default=None,
+                                help='Local directory with .so files (default: output/lib/)')
     parser_install.add_argument('--remote-dir', default='/tmp/ds_worker',
                                 help='Remote directory for standalone binary (default: /tmp/ds_worker)')
+
+    # Deploy subcommand: install + start (both standalone and non-standalone)
+    parser_deploy = subparsers.add_parser('deploy', parents=[parent_parser],
+                                         help='Install + start workers in one command')
+    parser_deploy.add_argument('-c', '--config', required=True,
+                              help='Path to worker.config template')
+    parser_deploy.add_argument('--port', type=int, default=31501,
+                              help='Worker port (default: 31501)')
+    parser_deploy.add_argument('--remote-config', default='/tmp/worker.config',
+                              help='Config path inside pod (default: /tmp/worker.config)')
+    parser_deploy.add_argument('--remote-dir', default='/tmp/ds_worker',
+                              help='Remote directory for standalone binary (default: /tmp/ds_worker)')
+    # Standalone mode
+    parser_deploy.add_argument('-S', '--standalone', action='store_true', default=False,
+                              help='Standalone mode: install binary + .so, start worker_test')
+    parser_deploy.add_argument('--jf', default=None,
+                              help='JF mock address (standalone mode)')
+    parser_deploy.add_argument('--service', default='kvcache_coordinator',
+                              help='JF service name (standalone mode)')
+    parser_deploy.add_argument('--binary', default=None,
+                              help='Local path to worker_test binary (standalone mode)')
+    parser_deploy.add_argument('--lib-dir', default=None,
+                              help='Local directory with .so files (default: output/lib/)')
+    # Non-standalone mode
+    parser_deploy.add_argument('--whl', default=default_whl,
+                              help='Path to worker whl package (non-standalone mode)')
+    parser_deploy.add_argument('--set', '-s', action='append', default=[],
+                              help='Add/override config values (format: key=value)')
+    parser_deploy.add_argument('-N', '--numa-nodes', default=None,
+                              help='NUMA node(s) to bind worker to (non-standalone mode)')
+    parser_deploy.add_argument('-C', '--cpu-bind', default=None,
+                              help='CPU core(s) to bind worker to (non-standalone mode)')
+    # Common
+    parser_deploy.add_argument('--enable-procmon', action='store_true', default=False,
+                                dest='enable_procmon',
+                                help='Start procmon.py for worker monitoring (default: disabled)')
+    parser_deploy.add_argument('--no-procmon', action='store_false',
+                                dest='enable_procmon',
+                                help='Disable procmon.py monitoring (default)')
+    parser_deploy.add_argument('--procmon-dir', default=None,
+                              help='Remote directory for procmon files')
 
     args = parser.parse_args()
 
@@ -417,7 +489,9 @@ def main():
         print(f'  {p["name"]} ({p["ip"]})')
 
     # Dispatch
-    if args.action == 'start':
+    if args.action == 'deploy':
+        return cmd_deploy(args, pods)
+    elif args.action == 'start':
         return cmd_start(args, pods)
     elif args.action == 'stop':
         return cmd_stop(args, pods)
