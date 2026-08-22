@@ -19,9 +19,11 @@
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
@@ -44,6 +46,17 @@ Status GetRpcTimeout(int64_t maxRpcTimeoutMs, int32_t &rpcTimeoutMs)
     rpcTimeoutMs = static_cast<int32_t>(
         std::min({ remainingMs, maxRpcTimeoutMs, static_cast<int64_t>(MAX_RPC_TIMEOUT_MS) }));
     return Status::OK();
+}
+
+void RecordRpcTotalLatency(LatencySummaryPhase phase, bool traceEnabled,
+                           const std::chrono::steady_clock::time_point &start)
+{
+    (void)Trace::Instance().ConsumeLastRpcCommUs();
+    if (traceEnabled) {
+        const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        Trace::Instance().AddDownstreamPhase(phase, static_cast<uint64_t>(elapsedUs));
+    }
 }
 
 }  // namespace
@@ -353,7 +366,10 @@ Status WorkerRpcClient::InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request,
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_CREATE_OBJECT);
+    const bool traceEnabled = IsClientLatencyTraceActive();
+    const auto rpcStart = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     Status rc = DoInvokeCreate(options, request, response);
+    RecordRpcTotalLatency(LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL, traceEnabled, rpcStart);
     if (rc.IsError()) {
         return WithRpcDiag(rc, "Create", workerAddress_);
     }
@@ -375,7 +391,10 @@ Status WorkerRpcClient::InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
     options.SetTimeout(rpcTimeout);
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUBLISH_OBJECT);
     INJECT_POINT("WorkerRpcClient.InvokeSet.beforeRpc");
+    const bool traceEnabled = IsClientLatencyTraceActive();
+    const auto rpcStart = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     Status rc = DoInvokeSet(options, request, response, payloads);
+    RecordRpcTotalLatency(LatencySummaryPhase::CLIENT_RPC_PUBLISH_TOTAL, traceEnabled, rpcStart);
     if (rc.IsError()) {
         if (request.is_retry() && request.is_seal() && rc.GetCode() == K_OC_ALREADY_SEALED) {
             workerVersion = connectionGeneration_;

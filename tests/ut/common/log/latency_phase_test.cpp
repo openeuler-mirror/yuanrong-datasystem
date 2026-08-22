@@ -186,6 +186,11 @@ TEST_F(LatencyPhaseTest, RpcCommPhaseDrivesRpcThresholdGate)
     EXPECT_TRUE(IsRpcPhase(LatencySummaryPhase::WORKER_RPC_QUERY_META));
     EXPECT_TRUE(CheckPhaseGate(workerResult, config));
 
+    PhaseDurationResult routedTotalResult;
+    routedTotalResult.Add(LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL, 5000u);
+    EXPECT_TRUE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL));
+    EXPECT_TRUE(CheckPhaseGate(routedTotalResult, config));
+
     // Server-side execution is a process phase, not an rpc phase.
     PhaseDurationResult serverExecResult;
     serverExecResult.Add(LatencySummaryPhase::MASTER_PROCESS_QUERY_META, 5000u);
@@ -445,6 +450,26 @@ TEST_F(LatencyPhaseTest, DerivedPhaseUnderflowClampToZero)
     EXPECT_EQ(localSet->durationUs, 0u);
 }
 
+TEST_F(LatencyPhaseTest, RoutedSetTotalRpcPhasesProduceAdditiveBreakdown)
+{
+    LatencyTick ticks[] = {
+        { LatencyTickKey::CLIENT_SET_START, 100000u },
+        { LatencyTickKey::CLIENT_MEMORY_COPY_START, 200000u },
+        { LatencyTickKey::CLIENT_MEMORY_COPY_END, 300000u },
+        { LatencyTickKey::CLIENT_UB_TRANSFER_START, 400000u },
+        { LatencyTickKey::CLIENT_UB_TRANSFER_END, 600000u },
+        { LatencyTickKey::CLIENT_SET_END, 1100000u },
+    };
+    PhaseDurationResult result = ComputeTickPhases(ticks, 6, 0);
+    result.Add(LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL, 150u);
+    result.Add(LatencySummaryPhase::CLIENT_RPC_PUBLISH_TOTAL, 250u);
+    ComputeDerivedPhases(ticks, 6, result);
+
+    const auto *localSet = result.Find(LatencySummaryPhase::CLIENT_PROCESS_SET);
+    ASSERT_NE(localSet, nullptr);
+    EXPECT_EQ(localSet->durationUs, 300u);
+}
+
 TEST_F(LatencyPhaseTest, FormatLatencySummarySplitDroppedDisplay)
 {
     LatencyTick ticks[] = {
@@ -588,6 +613,8 @@ TEST_F(LatencyPhaseTest, FormatLatencySummaryManyPhasesWithLargeValues)
         LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET,
         LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA,
         LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE,
+        LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL,
+        LatencySummaryPhase::CLIENT_RPC_PUBLISH_TOTAL,
     };
     for (auto phase : phases) {
         result.Add(phase, std::numeric_limits<uint64_t>::max());

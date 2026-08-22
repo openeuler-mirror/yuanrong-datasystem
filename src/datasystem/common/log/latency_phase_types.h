@@ -61,16 +61,19 @@ enum class LatencySummaryPhase : uint32_t {
     CLIENT_RPC_DIRECT_GET_DATA = 27,
     CLIENT_PROCESS_DIRECT_MATERIALIZE = 28,
 
-    // The *_RPC_* phases above (CLIENT_RPC_GET, WORKER_RPC_QUERY_META, etc.) hold
-    // RPC communication time (network + RPC framework), excluding remote business
-    // execution and remote queue wait (issue #862). They are populated by the
+    CLIENT_RPC_CREATE_TOTAL = 29,
+    CLIENT_RPC_PUBLISH_TOTAL = 30,
+
+    // The routed client total phases include remote Worker execution. All other *_RPC_* phases hold RPC
+    // communication time (network + RPC framework), excluding remote business execution and remote queue wait
+    // (issue #862). Communication phases are populated by the
     // transport layer's 8-point framework trace and attached to the caller's Trace
     // via Trace::AddDownstreamPhase; gated by slow_log_rpc_slower_than. For
     // concurrent fan-out (e.g. QueryMeta to N masters), the caller aggregates
     // per-leg comm with MAX to avoid false "slow RPC" reports from summed fast legs.
 };
 
-constexpr uint16_t LATENCY_SUMMARY_PHASE_MAX = 28;
+constexpr uint16_t LATENCY_SUMMARY_PHASE_MAX = 30;
 
 constexpr uint64_t NS_PER_US = 1000UL;
 constexpr size_t PHASE_PAIR_SIZE = 2;
