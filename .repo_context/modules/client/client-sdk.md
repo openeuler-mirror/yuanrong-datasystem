@@ -321,7 +321,8 @@
     `enableCrossNodeConnection`.
   - local-cache routing toggle; `enableLocalCache=false` routes Set according to
     `ConnectOptions::dataPlacementPolicy`
-    and supports single- and multi-key full-object `Get`, with per-key partial results and without L2 loading or RH2D
+    and supports single- and multi-key full-object `Get`, with per-key partial results and without RH2D (L2 loading
+    follows the `Get` `queryL2Cache` parameter, default true)
   - remote H2D toggle
   - optional `IServiceDiscovery`; the public implementations are ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`
   - fast transport shared-memory size
@@ -500,8 +501,9 @@
     that worker incarnation. Re-registering the same client ID would be rejected by the worker client table. Object/KV
     recovery stage transitions are serialized by the bthread-friendly `shmRecoveryMutex_`; this lock is used only by
     background recovery and timeout callbacks, never by the foreground request hot path.
-  - direct-read mode does not dynamically update AK/SK and does not load missing objects from L2; callers must recreate
-    the client to change credentials for that mode.
+  - direct-read mode does not dynamically update AK/SK; callers must recreate
+    the client to change credentials for that mode. L2 loading in direct-read mode follows the `Get` `queryL2Cache`
+    parameter (default true, honored since the ShmSession fd-passing Get change).
   - direct-read endpoint entries use a TBB concurrent map under a lifecycle shared mutex, while each entry has its own
     mutex; different endpoints can initialize connections concurrently and the same endpoint is initialized once.
     After the first `WorkerSnapshot` is published, endpoints absent from the latest snapshot are rejected before cache

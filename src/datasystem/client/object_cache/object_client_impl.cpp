@@ -5257,12 +5257,17 @@ Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys
             // shm buffer has a metadata-header lock or not (oc_metadata_header=false
             // → DisabledLock → no latch needed for safe reads).
             RETURN_IF_NOT_OK(buffer->CopyDataWithRLatch([&] {
-                vals.emplace_back(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
+                const void *data = buffer->ImmutableData();
+                if (data == nullptr || buffer->GetSize() == 0) {
+                    vals.emplace_back();
+                    return Status::OK();
+                }
+                vals.emplace_back(reinterpret_cast<const char *>(data), buffer->GetSize());
                 dataSize += buffer->GetSize();
                 return Status::OK();
             }));
         } else {
-            vals.emplace_back(nullptr, 0);
+            vals.emplace_back();
         }
     }
     return rc;
@@ -6373,7 +6378,8 @@ Status ObjectClientImpl::SetOffsetReadObjectBuffer(const std::string &objectKey,
 
     std::shared_ptr<client::IMmapTableEntry> mmapEntry;
     uint8_t *pointer;
-    MmapShmUnit(info.store_fd(), info.mmap_size(), info.offset(), mmapEntry, pointer);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(MmapShmUnit(info.store_fd(), info.mmap_size(), info.offset(), mmapEntry, pointer),
+                                     "MmapShmUnit failed for offset read.");
     FullParam param;
     param.writeMode = WriteMode(info.write_mode());
     param.consistencyType = ConsistencyType(info.consistency_type());

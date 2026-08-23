@@ -36,7 +36,7 @@ enum class CommState { UNCREATE, CREATING, VALID, INVALID, DESTROY };
 enum class CommDirection { SEND, RECV };
 constexpr int WARM_UP_DATA_COUNT = 1;
 
-class CommWrapperBase : public DevicePointerWrapper {
+class CommWrapperBase : public DevicePointerWrapper, public std::enable_shared_from_this<CommWrapperBase> {
 public:
     explicit CommWrapperBase(const std::string &commId, int localDeviceId, int remoteDeviceId,
                              std::shared_ptr<HcclCommMagr> &threadControl, DeviceResourceManager *resourceMgr);

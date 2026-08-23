@@ -202,8 +202,9 @@ Status ClientDeviceObjectManager::GetDevBufferWithHost(const std::vector<std::st
         std::shared_ptr<client::IMmapTableEntry> mmapEntry;
         uint8_t *pointer;
         auto &shmInfo = rsp.shm_info();
-        (void)objClientImpl_->MmapShmUnit(shmInfo.store_fd(), shmInfo.mmap_size(), shmInfo.offset(), mmapEntry,
-                                          pointer);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            objClientImpl_->MmapShmUnit(shmInfo.store_fd(), shmInfo.mmap_size(), shmInfo.offset(), mmapEntry, pointer),
+            "MmapShmUnit failed for device buffer.");
         // copy to device buffer
         auto &bufferInfo = dstDevBuffer.bufferInfo_;
         bufferInfo->shmId = shmInfo.shm_id();
