@@ -618,6 +618,13 @@ Status WorkerOcServiceMigrateImpl::FillObjectsLocked(
         const auto &metaIt = metas.find(objectKey);
         if (metaIt == metas.end()) {
             LOG(INFO) << FormatString("[Migrate Data] %s has been deleted, not need to be process.", objectKey);
+            // The object is gone from master. If BatchLock just inserted a placeholder here, it has no
+            // metaTable entry (so TTL never targets it) and was never added to the eviction list, so it
+            // would leak. Erase the placeholder now; entries that already existed keep their own lifecycle.
+            auto &entry = lockedIt->second.first;
+            if (entry != nullptr && entry->Get() != nullptr && IsNewCreatedObject(entry)) {
+                (void)objectTable_->Erase(objectKey, *entry);
+            }
             if (failedIds.find(objectKey) == failedIds.end()) {
                 (void)skippedIds.emplace(objectKey);
             }
@@ -664,6 +671,12 @@ void WorkerOcServiceMigrateImpl::FillMetaToObjectEntries(LockedEntryMap &lockedE
         const auto &metaIt = metas.find(objectKey);
         if (metaIt == metas.end()) {
             LOG(INFO) << FormatString("[Migrate Data] %s has been deleted, not need to be process.", objectKey);
+            // Same leak as FillObjectsLocked: a BatchLock-inserted placeholder has no master meta entry and
+            // is not on the eviction list, so neither TTL nor evict can reclaim it. Erase it here.
+            auto &entry = it.first;
+            if (entry != nullptr && entry->Get() != nullptr && IsNewCreatedObject(entry)) {
+                (void)objectTable_->Erase(objectKey, *entry);
+            }
             if (failedIds.find(objectKey) == failedIds.end()) {
                 (void)skippedIds.emplace(objectKey);
             }

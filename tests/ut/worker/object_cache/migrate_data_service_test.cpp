@@ -716,6 +716,41 @@ TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjects)
     ASSERT_EQ(failedIds.size(), lockFailCount);
 }
 
+// Regression: when master has no meta for an object (deleted between BatchLock and QueryMasterMetadata),
+// FillMetaToObjectEntries used to treat the BatchLock-inserted placeholder as skipped and leave it in
+// objectTable_ forever (no metaTable entry -> TTL never targets it; not on eviction list -> evict never
+// picks it). The placeholder must be erased. See worker_oc_service_migrate_impl.cpp FillMetaToObjectEntries.
+TEST_F(MigrateDataServiceTest, DeletedByMasterClearsBatchLockPlaceholder)
+{
+    const uint64_t newCreateCount = 40;
+    MigrateDataReqPb req;
+    CreateObjects("New_Created_", 1, newCreateCount, 1, false, false, req);
+
+    LockedEntryMap lockedEntries;
+    LockedEntryMap needModifyPrimary;
+    std::unordered_set<std::string> successIds;
+    std::unordered_set<std::string> failedIds;
+    impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
+    ASSERT_EQ(lockedEntries.size(), newCreateCount);
+    for (const auto &kv : lockedEntries) {
+        ASSERT_TRUE(objectTable_->Contains(kv.first).IsOk());
+    }
+
+    // Empty metas: master reports every object as deleted.
+    QueryMetaMap metas;
+    std::unordered_set<std::string> failedAfter;
+    std::unordered_set<std::string> skippedIds;
+    ObjectInfoMap needReadDataIds;
+    impl_->FillMetaToObjectEntries(lockedEntries, metas, successIds, failedAfter, needReadDataIds, skippedIds);
+
+    ASSERT_EQ(skippedIds.size(), newCreateCount);
+    ASSERT_TRUE(needReadDataIds.empty());
+    // Placeholders must be reclaimed, not leaked.
+    for (const auto &kv : lockedEntries) {
+        ASSERT_FALSE(objectTable_->Contains(kv.first).IsOk()) << "placeholder leaked: " << kv.first;
+    }
+}
+
 TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjectsFailed)
 {
     DS_ASSERT_OK(inject::Set("SafeTable.ReserveGetAndLock.return", "1*call()"));
