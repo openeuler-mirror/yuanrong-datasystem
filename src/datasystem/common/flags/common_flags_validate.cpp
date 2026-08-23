@@ -76,6 +76,17 @@ bool ValidateUbNumaRrType(const char *flagName, uint32_t value)
     return true;
 }
 
+bool ValidateUbNumaSrcChipPolicy(const char *flagName, uint32_t value)
+{
+    constexpr auto kMaxPolicy = datasystem::UbNumaSrcChipPolicy::ROUND_ROBIN_WITH_AFFINITY;
+    if (value > static_cast<uint32_t>(kMaxPolicy)) {
+        LOG(ERROR) << FormatString("The %s flag is %u, which must be between 0 and %u.", flagName, value,
+                                   static_cast<uint32_t>(kMaxPolicy));
+        return false;
+    }
+    return true;
+}
+
 bool ValidateDataPlacementPolicy(const char *flagName, const std::string &value)
 {
     const std::string normalized = StringToUpper(Trim(value));
@@ -247,6 +258,7 @@ DS_DEFINE_validator(spill_high_watermark_ratio, &Validator::ValidateWatermarkHig
 DS_DEFINE_validator(spill_low_watermark_ratio, &Validator::ValidateWatermarkLowRatio);
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
 DS_DEFINE_validator(ub_numa_rr_type, &ValidateUbNumaRrType);
+DS_DEFINE_validator(ub_numa_src_chip_policy, &ValidateUbNumaSrcChipPolicy);
 DS_DEFINE_validator(urma_max_write_size_mb, &ValidateUrmaMaxWriteSize);
 DS_DEFINE_validator(urma_send_jetty_lane_pool_size, &Validator::ValidateUint32);
 DS_DEFINE_validator(urma_send_jetty_lane_refill_extra_size, &Validator::ValidateUint32);

@@ -130,12 +130,19 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     `bonding*` device and failed startup when it was unavailable.
   - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
     to `4` MB and is validated in the range `[1, 2048]` MB.
-  - With UB NUMA affinity enabled, source-chip selection keeps the existing per-logical-write/per-post RR candidate but
-    uses the existing per-chip `UrmaEvent` inflight-WR counters as relaxed feedback. If the absolute chip-1/chip-2
-    difference is strictly greater than `ub_numa_inflight_wr_diff_threshold` (default `15`), the lower-depth chip
-    overrides the RR candidate; `0` disables feedback. No lock or reservation is added, so short concurrent overshoot
-    is accepted. Workers publish the threshold in `RegisterClientRspPb`; a Client freezes affinity, RR type, and the
-    threshold from the first successful Worker registration and warns on later mismatches.
+  - With UB NUMA affinity enabled, `ub_numa_src_chip_policy` selects the source-chip policy: `0` keeps round-robin
+    behavior for ablation/rollback, while the default `1` keeps round-robin as the baseline and overrides a remote
+    candidate only when the memory-affinity chip can absorb the estimated WR count for the logical write without
+    becoming busier than that candidate. `ub_numa_rr_type` controls whether the decision is made per logical write or
+    per post. A per-logical-write Gather advances the round-robin candidate once, then re-evaluates each WR's affinity
+    from the byte-dominant source Chip across that WR's SGEs. Both policies use the existing per-chip `UrmaEvent`
+    inflight-WR counters as relaxed feedback. If the absolute chip-1/chip-2 difference is strictly greater than
+    `ub_numa_inflight_wr_diff_threshold` (default `15`), the
+    lower-depth chip overrides all other decisions; `0` disables both depth correction and opportunistic affinity,
+    preserving pure round-robin. No lock or reservation is added, so short concurrent overshoot is accepted.
+    Workers publish the policy and threshold in `RegisterClientRspPb`; a Client freezes affinity, selection granularity,
+    policy, and threshold from the first successful Worker registration and warns on later mismatches. A missing policy
+    field from an old Worker has proto value `0`, preserving its round-robin behavior.
   - URMA Jetty modify/flush/delete work runs on the lazy `RetireJfs` thread pool with an internal concurrency of `4`.
     Resource shutdown drains and joins this non-droppable pool before releasing the Jetty registry and provider
     dependencies.

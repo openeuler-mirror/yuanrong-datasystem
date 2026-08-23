@@ -239,11 +239,11 @@ public:
                                     bool enablePipelineH2D = false);
 
     /**
-     * @brief Set the client process UB NUMA-affinity, source-chip round-robin, and inflight feedback policy.
+     * @brief Set the client process UB NUMA-affinity, source-chip candidate, and inflight feedback policy.
      * The first worker fixes the policy; later conflicts are logged and ignored.
      */
-    static void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, uint32_t inflightWrDiffThreshold,
-                                      const std::string &configSource);
+    static void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, uint32_t srcChipPolicy,
+                                      uint32_t inflightWrDiffThreshold, const std::string &configSource);
 
     /**
      * @brief Get client id for current process; non-empty when set by SetClientUrmaConfig (client mode).
@@ -596,6 +596,19 @@ private:
         std::atomic<int> value{ 0 };
     };
 
+    struct SrcChipSelectionDecision {
+        uint8_t candidate;
+        uint8_t selected;
+        uint32_t policy;
+        uint32_t threshold;
+        uint64_t estimatedWrCount;
+        int chip1Inflight{ 0 };
+        int chip2Inflight{ 0 };
+        uint64_t difference{ 0 };
+        bool depthOverride{ false };
+        bool affinityOverride{ false };
+    };
+
     UrmaManager();
 
     /**
@@ -811,12 +824,14 @@ private:
         std::vector<uint64_t> createdEventKeys;
         std::vector<uint64_t> submittedEventKeys;
         uint8_t logicalWriteChipId = INVALID_CHIP_ID;
+        uint8_t logicalWriteCandidateChipId = INVALID_CHIP_ID;
         uint32_t totalWriteSize = 0;
     };
 
     struct UrmaNumaPostConfig {
         bool enabled = false;
         uint8_t srcChipId = INVALID_CHIP_ID;
+        uint8_t candidateChipId = INVALID_CHIP_ID;
         std::atomic<int> *inflightCounter = nullptr;
     };
 
@@ -884,14 +899,30 @@ private:
 
     Status InitLocalUrmaInfo(const HostPort &hostport);
     Status RemoveRemoteResources(const std::string &connectionKey);
-    uint8_t GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity);
+    uint8_t GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity, uint64_t logicalWriteWrCount,
+                                 uint8_t *candidateChipId = nullptr);
+    SrcChipSelectionDecision BuildSrcChipSelectionDecision(uint8_t transmittedChipId, uint64_t logicalWriteWrCount);
+    SrcChipSelectionDecision BuildSrcChipSelectionDecisionWithCandidate(uint8_t transmittedChipId,
+                                                                        uint64_t logicalWriteWrCount,
+                                                                        uint8_t candidateChipId);
+    static void ApplySrcChipDepthFeedback(uint8_t transmittedChipId, SrcChipSelectionDecision &decision);
+    static bool ShouldLogSrcChipSelection(const SrcChipSelectionDecision &decision);
+    static void ObserveSrcChipSelection(const SrcChipSelectionDecision &decision);
+    static uint8_t FinalizeSrcChipSelection(const SrcChipSelectionDecision &decision);
+    static uint8_t SelectDominantGatherSrcChipId(const std::vector<LocalSgeInfo> &objInfos, size_t begin, size_t end);
     uint8_t GetAffinitySrcChipIdForPost(uint8_t transmittedChipId, bool useNumaAffinity, bool firstPost,
-                                        uint8_t logicalWriteChipId);
+                                        uint8_t logicalWriteChipId, uint64_t logicalWriteWrCount = 1,
+                                        uint8_t *candidateChipId = nullptr);
+    uint8_t GetAffinitySrcChipIdWithCandidate(uint8_t transmittedChipId, bool useNumaAffinity,
+                                              uint64_t logicalWriteWrCount, uint8_t candidateChipId);
     UrmaNumaPostConfig ResolveNumaPostConfig(uint8_t transmittedSrcChipId, uint8_t dstChipId, bool firstPost,
-                                             uint8_t logicalWriteChipId);
+                                             uint8_t logicalWriteChipId, uint64_t logicalWriteWrCount,
+                                             uint8_t candidateChipId = INVALID_CHIP_ID);
 
     /** @brief Normalize a worker-provided UB NUMA round-robin type to the supported range. */
     static uint32_t NormalizeUbNumaRrType(uint32_t rrType, const std::string &configSource);
+    /** @brief Normalize a worker-provided UB NUMA source-chip policy to the supported range. */
+    static uint32_t NormalizeUbNumaSrcChipPolicy(uint32_t srcChipPolicy, const std::string &configSource);
     std::atomic<int> *GetSrcChipInflightWrCounter(uint8_t chipId);
     const char *GetSrcChipInflightWrCountsString() const;
     void RecordNumaWriteChipCounts(uint8_t srcChipId, uint8_t dstChipId);

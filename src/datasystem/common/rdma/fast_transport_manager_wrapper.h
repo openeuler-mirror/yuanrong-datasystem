@@ -78,9 +78,10 @@ void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t tr
                                 bool enablePipelineH2D = false);
 
 /**
- * @brief Set the client process UB NUMA-affinity, source-chip round-robin, and inflight feedback policy.
+ * @brief Set the client process UB NUMA-affinity, source-chip candidate, and inflight feedback policy.
  */
-void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, uint32_t inflightWrDiffThreshold,
+void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, uint32_t srcChipPolicy,
+                           uint32_t inflightWrDiffThreshold,
                            const std::string &configSource);
 
 /**

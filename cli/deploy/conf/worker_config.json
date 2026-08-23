@@ -609,7 +609,15 @@
     },
     "ub_numa_rr_type": {
         "value": "1",
-        "description": "UB NUMA source-chip round-robin type: 0=disabled, 1=one chip per logical write, 2=one chip per post."
+        "description": "UB NUMA source-chip selection granularity: 0=disabled, 1=one chip per logical write, 2=one chip per post."
+    },
+    "ub_numa_src_chip_policy": {
+        "value": "1",
+        "description": "UB NUMA source-chip policy: 0=round-robin, 1=round-robin with opportunistic memory affinity."
+    },
+    "ub_numa_inflight_wr_diff_threshold": {
+        "value": "15",
+        "description": "Maximum allowed source-chip inflight WR difference before selecting the less busy chip. Zero disables all inflight feedback and preserves pure round-robin selection."
     },
     "shared_memory_distribution_policy": {
         "value": "none",

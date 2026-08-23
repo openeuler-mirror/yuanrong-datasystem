@@ -1068,7 +1068,7 @@ void ClientWorkerRemoteCommonApi::ApplyClientUbRegistrationConfig(const Register
     if (!rsp.ub_runtime_enabled()) {
         return;
     }
-    SetClientUbNumaConfig(rsp.ub_numa_affinity_enabled(), rsp.ub_numa_rr_type(),
+    SetClientUbNumaConfig(rsp.ub_numa_affinity_enabled(), rsp.ub_numa_rr_type(), rsp.ub_numa_src_chip_policy(),
                           rsp.ub_numa_inflight_wr_diff_threshold(), hostPort_.ToString());
     // Do this before ObjectClientImpl can initialize its transport arena. Affinity must already be visible when
     // Arena::Init decides whether to build the NUMA range table. Pure SHM clients do not request UB runtime.

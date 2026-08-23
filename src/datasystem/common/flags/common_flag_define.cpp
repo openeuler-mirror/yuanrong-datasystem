@@ -75,11 +75,13 @@ DS_DEFINE_uint32(ub_transport_arena_num, 4,
 DS_DEFINE_bool(enable_ub_numa_affinity, false,
                "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled.");
 DS_DEFINE_uint32(ub_numa_rr_type, 1,
-                 "UB NUMA source-chip round-robin type: 0=disabled, 1=one chip per logical write, "
+                 "UB NUMA source-chip selection granularity: 0=disabled, 1=one chip per logical write, "
                  "2=one chip per post.");
+DS_DEFINE_uint32(ub_numa_src_chip_policy, 1,
+                 "UB NUMA source-chip policy: 0=round-robin, 1=round-robin with opportunistic memory affinity.");
 DS_DEFINE_uint32(ub_numa_inflight_wr_diff_threshold, 15,
                  "Maximum allowed difference between source-chip inflight WR counts before selecting the less busy "
-                 "chip. Set to 0 to preserve pure round-robin selection.");
+                 "chip. Set to 0 to disable inflight feedback and preserve pure round-robin selection.");
 DS_DEFINE_string(shared_memory_distribution_policy, "none",
                  "Shared memory NUMA distribution policy. Optional values: "
                  "'none', 'interleave_all_numa', 'interleave_affinity_numa'.");

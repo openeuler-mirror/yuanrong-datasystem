@@ -186,10 +186,27 @@ public:
         (void)inject::Clear(CLIENT_WARMUP_SET_DONE);
         (void)inject::Clear(CLIENT_WARMUP_GET_DONE);
         (void)inject::Clear(CLIENT_WARMUP_DELETE_DONE);
+        (void)inject::Clear("UrmaManager.ForceNumaAffinityForMock");
         ExternalClusterTest::TearDown();
 #ifdef USE_URMA_MOCK
         (void)unsetenv("URMA_MOCK_UDS_BASE_DIR");
 #endif
+    }
+
+    static Status SetWhenWorkerReady(KVClient &client, const std::string &key, const std::string &value)
+    {
+        constexpr auto timeout = std::chrono::seconds(30);
+        constexpr auto retryInterval = std::chrono::milliseconds(200);
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        Status rc;
+        do {
+            rc = client.Set(key, value);
+            if (rc.IsOk() || rc.GetCode() != K_NOT_READY) {
+                return rc;
+            }
+            std::this_thread::sleep_for(retryInterval);
+        } while (std::chrono::steady_clock::now() < deadline);
+        return rc;
     }
 
     static pid_t ForkForTest(std::function<void()> func)
@@ -555,7 +572,7 @@ TEST_F(UrmaObjectClientTest, TestBatchRemoteGet1)
     }
 
     for (size_t i = 0; i < keys.size(); i++) {
-        DS_ASSERT_OK(client2->Set(keys[i], values[i]));
+        DS_ASSERT_OK(SetWhenWorkerReady(*client2, keys[i], values[i]));
     }
 
     std::vector<std::string> valuesGet;
@@ -2006,6 +2023,11 @@ TEST_F(UrmaNumaAffinityTest, ClientAndWorkerUseAffinity)
     DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteNumaAffinity", "call()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
+#ifdef USE_URMA_MOCK
+    DS_ASSERT_OK(inject::Set("UrmaManager.ForceNumaAffinityForMock", "call(1)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.ForceNumaAffinityForMock", "call(1)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.ForceNumaAffinityForMock", "call(1)"));
+#endif
 
     const int numKV = 32;
     const int dataSize = 8 * 1024 * 1024;
@@ -2063,9 +2085,10 @@ TEST_F(UrmaNumaAffinityDisabledTest, ClientAndWorkerSkipAffinity)
     DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteNumaAffinity", "call()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.Create.begin", "1*return(K_NOT_READY)"));
 
     const std::string value(8 * 1024 * 1024, 'a');
-    DS_ASSERT_OK(client2->Set("affinity-disabled-key", value));
+    DS_ASSERT_OK(SetWhenWorkerReady(*client2, "affinity-disabled-key", value));
     std::string getValue;
     DS_ASSERT_OK(client1->Get("affinity-disabled-key", getValue));
     ASSERT_EQ(value, getValue);
@@ -2077,9 +2100,12 @@ TEST_F(UrmaNumaAffinityDisabledTest, ClientAndWorkerSkipAffinity)
     uint64_t executeCountWorker2 = 0;
     DS_ASSERT_OK(
         cluster_->GetInjectActionExecuteCount(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker2));
+    uint64_t createNotReadyCount = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 1, "worker.Create.begin", createNotReadyCount));
     ASSERT_EQ(executeCountClient, 0);
     ASSERT_EQ(executeCountWorker1, 0);
     ASSERT_EQ(executeCountWorker2, 0);
+    ASSERT_EQ(createNotReadyCount, 1);
 }
 
 class UrmaFallbackTest : public UrmaObjectClientTest {

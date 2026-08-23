@@ -346,6 +346,19 @@ ds_cc_test(
 ds_cc_test(
     name = "urma_numa_inflight_balance_test",
     srcs = ["urma_numa_inflight_balance_test.cpp"],
+    defines = ["URMA_NUMA_SRC_CHIP_POLICY_TEST_VALUE=1"],
+    tags = ["manual", "urma_mock"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_numa_inflight_balance_round_robin_test",
+    srcs = ["urma_numa_inflight_balance_test.cpp"],
+    defines = ["URMA_NUMA_SRC_CHIP_POLICY_TEST_VALUE=0"],
     tags = ["manual", "urma_mock"],
     deps = OC_CLIENT_COMMON_DEPS + [
         "//src/datasystem/common/immutable_string:immutable_string",

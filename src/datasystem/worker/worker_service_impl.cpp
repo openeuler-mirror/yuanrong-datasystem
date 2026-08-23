@@ -378,6 +378,7 @@ void WorkerServiceImpl::PopulateRegisterClientResponse(
         rsp.set_ub_numa_affinity_enabled(IsUbNumaAffinityEnabled());
         rsp.set_ub_numa_rr_type(FLAGS_ub_numa_rr_type);
         rsp.set_ub_numa_inflight_wr_diff_threshold(FLAGS_ub_numa_inflight_wr_diff_threshold);
+        rsp.set_ub_numa_src_chip_policy(FLAGS_ub_numa_src_chip_policy);
         // fast_transport_mode describes this endpoint only. Keep it as SHM for a same-host client, even though
         // ub_runtime_enabled above advertises process-wide UB capability for connections to other workers.
         if (!shmEnabled) {
