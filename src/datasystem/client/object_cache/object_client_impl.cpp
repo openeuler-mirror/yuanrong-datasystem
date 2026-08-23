@@ -168,6 +168,10 @@ const std::string CLIENT_PARALLEL_THREAD_MAX_NUM_ENV = "CLIENT_PARALLEL_THREAD_M
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM";
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY";
 const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
+const std::string DATASYSTEM_SET_MEMCOPY_THREAD_NUM_ENV = "DATASYSTEM_SET_MEMCOPY_THREAD_NUM";
+const std::string DATASYSTEM_SET_MEMCOPY_PARALLEL_THRESHOLD_ENV = "DATASYSTEM_SET_MEMCOPY_PARALLEL_THRESHOLD";
+static constexpr int SET_MEMCOPY_MAX_THREAD_NUM = 4;
+static constexpr uint64_t SET_MEMCOPY_PARALLEL_THRESHOLD = 4 * datasystem::MB_TO_BYTES;
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
 
 
@@ -1594,6 +1598,26 @@ void ObjectClientImpl::InitParallelFor()
         memoryCopyThreadPool_ = std::make_shared<ThreadPool>(threadNum);
     }
     memcpyParallelThreshold_ = getEnvInt(CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV, MEMCOPY_PARALLEL_THRESHOLD);
+
+    int setMemoryCopyThreadNum = getEnvInt(DATASYSTEM_SET_MEMCOPY_THREAD_NUM_ENV, SET_MEMCOPY_MAX_THREAD_NUM);
+    if (setMemoryCopyThreadNum < 0) {
+        LOG(WARNING) << FormatString("Invalid %s value: %d, using default %d", DATASYSTEM_SET_MEMCOPY_THREAD_NUM_ENV,
+                                     setMemoryCopyThreadNum, SET_MEMCOPY_MAX_THREAD_NUM);
+        setMemoryCopyThreadNum = SET_MEMCOPY_MAX_THREAD_NUM;
+    }
+    if (setMemoryCopyThreadNum > SET_MEMCOPY_MAX_THREAD_NUM) {
+        LOG(WARNING) << FormatString("%s is %d, clamped to %d", DATASYSTEM_SET_MEMCOPY_THREAD_NUM_ENV,
+                                     setMemoryCopyThreadNum, SET_MEMCOPY_MAX_THREAD_NUM);
+        setMemoryCopyThreadNum = SET_MEMCOPY_MAX_THREAD_NUM;
+    }
+    if (setMemoryCopyThreadNum > 1) {
+        setMemoryCopyThreadPool_ =
+            std::make_shared<ThreadPool>(0, setMemoryCopyThreadNum, "set_memcopy");
+    }
+    setMemcpyParallelThreshold_ =
+        getEnvInt(DATASYSTEM_SET_MEMCOPY_PARALLEL_THRESHOLD_ENV, SET_MEMCOPY_PARALLEL_THRESHOLD);
+    LOG(INFO) << FormatString("Init Set memory copy with threadNum: %d, parallelThreshold: %lu",
+                              setMemoryCopyThreadNum, setMemcpyParallelThreshold_);
 
     parallismNum_ = getEnvInt(CLIENT_MEMORY_COPY_THREAD_NUM_ENV, defaultThreadNum);
     int minThreadNum = getEnvInt(CLIENT_PARALLEL_THREAD_MIN_NUM_ENV, defaultThreadNum);
@@ -4024,7 +4048,11 @@ Status ObjectClientImpl::ProcessTransportPut(
     failureStage = SetFailureStage::TRANSFER;
     const bool traceEnabled = IsClientLatencyTraceActive();
     AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_MEMORY_COPY_START);
-    Status copyRc = buffer->MemoryCopy(data, size);
+    auto *dst = static_cast<uint8_t *>(buffer->MutableData());
+    Status copyRc = size == 0 || setMemoryCopyThreadPool_ == nullptr || size <= setMemcpyParallelThreshold_
+                        ? HugeMemoryCopy(dst, buffer->GetSize(), data, size)
+                        : ::datasystem::MemoryCopy(dst, buffer->GetSize(), data, size, setMemoryCopyThreadPool_,
+                                                   setMemcpyParallelThreshold_);
     AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_MEMORY_COPY_END);
     if (copyRc.IsError()) {
         LOG_IF_ERROR(transportLayer_->Release(*buffer, requestContext),
