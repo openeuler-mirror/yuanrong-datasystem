@@ -134,7 +134,7 @@ public:
      * @param[in] flags ZMQ recv flag.
      * @return Status of call.
      */
-    Status ZmqRecvMsg(ZmqMessage &msg, ZmqRecvFlags flags = ZmqRecvFlags::NONE);
+    Status ZmqRecvMsg(RpcMessage &msg, ZmqRecvFlags flags = ZmqRecvFlags::NONE);
     /**
      * @brief A wrapper to receive into a protobuf.
      * @tparam T Pb Type.
@@ -146,11 +146,11 @@ public:
     Status ZmqRecvProtobuf(T &pb, ZmqRecvFlags flags = ZmqRecvFlags::NONE)
     {
         PerfPoint point(PerfKey::ZMQ_SOCKET_RECV_PB);
-        ZmqMessage msg;
+        RpcMessage msg;
         PerfPoint point2(PerfKey::ZMQ_SOCKET_RECV_PB_MSG);
         RETURN_IF_NOT_OK(ZmqRecvMsg(msg, flags));
         point2.Record();
-        return ParseFromZmqMessage(msg, pb);
+        return ParseFromRpcMessage(msg, pb);
     }
 
     /**
@@ -159,7 +159,7 @@ public:
      * @param[in] flags ZMQ send flag.
      * @return Status object.
      */
-    Status ZmqSendMsg(ZmqMessage &msg, ZmqSendFlags flags = ZmqSendFlags::NONE);
+    Status ZmqSendMsg(RpcMessage &msg, ZmqSendFlags flags = ZmqSendFlags::NONE);
 
     /**
      * @brief A wrapper to send protobuf.
@@ -171,8 +171,8 @@ public:
     Status ZmqSendProtobuf(const T &pb, ZmqSendFlags flags = ZmqSendFlags::NONE)
     {
         PerfPoint point(PerfKey::ZMQ_SOCKET_SEND_PB);
-        ZmqMessage msg;
-        RETURN_IF_NOT_OK(SerializeToZmqMessage<T>(pb, &msg));
+        RpcMessage msg;
+        RETURN_IF_NOT_OK(SerializeToRpcMessage<T>(pb, &msg));
         return ZmqSendMsg(msg, flags);
     }
 
@@ -185,7 +185,7 @@ public:
     Status ZmqSendStatus(const Status &rc, ZmqSendFlags flags = ZmqSendFlags::NONE)
     {
         PerfPoint point(PerfKey::ZMQ_SOCKET_SEND_STATUS);
-        ZmqMessage msg = StatusToZmqMessage(rc);
+        RpcMessage msg = StatusToRpcMessage(rc);
         return ZmqSendMsg(msg, flags);
     }
 
@@ -197,11 +197,11 @@ public:
     Status ZmqRecvStatus(ZmqRecvFlags flags = ZmqRecvFlags::NONE)
     {
         PerfPoint point(PerfKey::ZMQ_SOCKET_RECV_STATUS);
-        ZmqMessage errMsg;
+        RpcMessage errMsg;
         PerfPoint point2(PerfKey::ZMQ_SOCKET_RECV_STATUS_MSG);
         RETURN_IF_NOT_OK(ZmqRecvMsg(errMsg, flags));
         point2.Record();
-        return ZmqMessageToStatus(errMsg);
+        return RpcMessageToStatus(errMsg);
     }
 
     /**
@@ -213,7 +213,7 @@ public:
     Status ZmqSendString(const std::string &str, ZmqSendFlags flags = ZmqSendFlags::NONE)
     {
         PerfPoint point(PerfKey::ZMQ_SOCKET_SEND_STRING);
-        ZmqMessage msg;
+        RpcMessage msg;
         RETURN_IF_NOT_OK(msg.CopyBuffer(str.data(), str.size()));
         return ZmqSendMsg(msg, flags);
     }

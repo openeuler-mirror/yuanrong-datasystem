@@ -28,6 +28,7 @@
 #include "datasystem/common/stream_cache/consumer_meta.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/master/stream_cache/master_worker_sc_api.h"
 #include "datasystem/master/stream_cache/rpc_session_manager.h"

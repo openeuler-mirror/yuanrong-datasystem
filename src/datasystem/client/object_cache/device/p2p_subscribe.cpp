@@ -202,7 +202,8 @@ void P2PSubscribe::ProcessP2PSend(
                     acl::P2PSendTask sendTask{ .srcBuffers = putRequest->GetBlobsStorage(),
                                                .totalSize = putRequest->GetTotalSize(),
                                                .comm = comm,
-                                               .event = putRequest->GetEvent() };
+                                               .event = putRequest->GetEvent(),
+                                               .transBuffer = Blob{} };
                     auto rc = comm->SubmitPipelineTask(std::move(sendTask));
                     if (rc.IsError()) {
                         LOG(ERROR) << FormatString(
@@ -439,7 +440,8 @@ void P2PSubscribe::ProcessP2PRecv(
                     acl::P2PRecvTask recvTask{ .destBuffers = blobStorage,
                                                .totalSize = p2pGetRequest->GetTotalSize(),
                                                .comm = comm,
-                                               .event = p2pGetRequest->GetEvent() };
+                                               .event = p2pGetRequest->GetEvent(),
+                                               .transBuffer = Blob{} };
                     auto rc = comm->SubmitPipelineTask(std::move(recvTask));
                     if (rc.IsError()) {
                         LOG(ERROR) << FormatString(

@@ -233,10 +233,9 @@ private:
     // The HostPort of the remote worker node.
     HostPort hostPort_;
     // The HostPort of the local worker node.
+    std::shared_ptr<WorkerWorkerOCService_BrpcGenericStub> brpcSession_{ nullptr };
     HostPort localHostPort_;
     // session to the worker rpc service.
-    std::shared_ptr<WorkerWorkerOCService_Stub> rpcSession_{ nullptr };
-    std::shared_ptr<WorkerWorkerOCService_BrpcGenericStub> brpcSession_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
     // Drop the cached WORKER_WORKER_OC_SVC stub and re-Init so the next RPC uses a fresh
@@ -248,7 +247,6 @@ private:
     // K_RPC_PEER_DEAD (by contract), so on peer-dead/blip we drop the stale stub, rebuild a
     // fresh channel, and retry until the deadline. This restores the restart-tolerance the
     // legacy UNAVAILABLE mapping provided, without weakening the per-attempt fast-fail.
-    // `func` must read `this->brpcSession_` (not a copy) so a rebuilt stub is picked up.
     Status RetryWithStubRebuild(int64_t timeoutMs, const std::function<Status(int32_t)> &func,
                                 const std::unordered_set<StatusCode> &retryOn, const char *diagName);
 };

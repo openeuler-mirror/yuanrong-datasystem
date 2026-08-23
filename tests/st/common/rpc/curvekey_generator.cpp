@@ -23,7 +23,6 @@
 #include <cerrno>
 
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/rpc/zmq/zmq_common.h"
 #include "datasystem/common/util/file_util.h"
 
 static void PrintHelp()

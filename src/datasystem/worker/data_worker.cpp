@@ -63,7 +63,6 @@ DS_DECLARE_string(bind_address);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(coordinator_address);
 DS_DECLARE_uint64(shared_memory_size_mb);
-DS_DECLARE_bool(enable_curve_zmq);
 DS_DECLARE_string(log_filename);
 DS_DECLARE_string(monitor_config_file);
 DS_DECLARE_bool(enable_thp);

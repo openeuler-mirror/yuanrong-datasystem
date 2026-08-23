@@ -24,6 +24,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"

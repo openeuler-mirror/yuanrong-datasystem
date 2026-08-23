@@ -37,6 +37,7 @@ ds_cc_library(
         "//src/datasystem/common/immutable_string",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
         "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:rpc_util",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_worker_oc_api",
         "//src/datasystem/worker/object_cache/data_migrator/basic:base_data_unit",

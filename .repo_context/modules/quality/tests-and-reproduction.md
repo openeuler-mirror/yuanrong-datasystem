@@ -47,7 +47,7 @@
 | --- | --- | --- |
 | `tests/ut` | C++ unit and component tests | `tests/ut/CMakeLists.txt` builds the main UT binaries and filters stream/object/slot/flags tests into separate targets. |
 | `tests/st` | C++ system tests | `tests/st/CMakeLists.txt` builds cache-specific ST binaries, embedded-client tests, device LLT, cluster helpers, the standalone braft election test, and post-build runtime assets. |
-| `tests/perf` | Performance helper binaries | `tests/perf/CMakeLists.txt` adds `zmq`; `tests/perf/zmq/CMakeLists.txt` builds ZMQ perf client/server/agent binaries. |
+| `tests/perf` | Performance helper binaries | `tests/perf/CMakeLists.txt` adds `client`; `tests/perf/client/CMakeLists.txt` builds `peer_ub_admission_timeout_bench`. |
 | `tests/common` | Shared test support | `tests/common/CMakeLists.txt` adds `binmock`; `tests/common/binmock` provides function-stub/binmock support and has its own spec test. |
 | `tests/python` | Python unittest suites | `scripts/build_cmake.sh` runs `python3 -m unittest` from this directory after packaging and starting services. |
 | `tests/benchmark` | Python benchmark script area | Contains standalone benchmark scripts, not part of CTest registration. |
@@ -231,10 +231,8 @@ bazel test --config=release --config=test \
   '--test_filter=*.ThreeNodesElectOneLeader'
 ```
 
-- Verified from `tests/perf/zmq/CMakeLists.txt`:
-  - `zmq_perf_client`
-  - `zmq_perf_server`
-  - `zmq_perf_agent`
+- Verified from `tests/perf/client/CMakeLists.txt`:
+  - `peer_ub_admission_timeout_bench`
 - Verified from `tests/common/binmock/CMakeLists.txt`:
   - `binmock`
   - `binmock_spec`
@@ -413,7 +411,7 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
 - Device or hetero behavior:
   - start with `ds_device_llt`, `tests/st/device`, and Python device tests under `tests/python`.
 - Transport or RPC behavior:
-  - start with `tests/ut/common/rpc`, `tests/st/common/rpc`, and `tests/perf/zmq` for performance-specific checks.
+  - start with `tests/ut/common/rpc` and `tests/st/common/rpc` for RPC-specific checks.
   - `//tests/ut/common/rpc:fanout_collector_test` covers the deadline-bound fanout collector used by brpc
     `AsyncRead(DONTWAIT)` migrations: partial completion, first-error aggregation, timeout cleanup, cleanup retry, late
     completion, and concurrent completion.

@@ -65,8 +65,8 @@ struct ZmqCurveUserId {
     std::unique_ptr<char[]> userId_ = nullptr;
 };
 
-typedef std::deque<ZmqMessage> ZmqMsgFrames;
-typedef std::deque<ZmqMessage> &ZmqMsgFramesRef;
+typedef std::deque<RpcMessage> ZmqMsgFrames;
+typedef std::deque<RpcMessage> &ZmqMsgFramesRef;
 typedef std::pair<MetaPb, ZmqMsgFrames> ZmqMetaMsgFrames;
 typedef std::pair<MetaPb, ZmqMsgFrames> &ZmqMetaMsgFramesRef;
 
@@ -78,7 +78,7 @@ typedef std::pair<MetaPb, ZmqMsgFrames> &ZmqMetaMsgFramesRef;
  * @return Status of call.
  */
 template <typename T>
-inline Status ParseFromZmqMessage(const ZmqMessage &msg, T &pb)
+inline Status ParseFromRpcMessage(const RpcMessage &msg, T &pb)
 {
     PerfPoint point(PerfKey::ZMQ_COM_PARSE_FROM_ZMQ_MESSAGE);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(msg.Size()), K_INVALID, "Parse out of range.");
@@ -91,35 +91,13 @@ inline Status ParseFromZmqMessage(const ZmqMessage &msg, T &pb)
     RETURN_OK_IF_TRUE(rc);
     const google::protobuf::Descriptor *descriptor = pb.GetDescriptor();
     LOG(WARNING) << "Parse from message " << msg << " into protobuf " << descriptor->full_name() << " unsuccessful.";
-    RETURN_STATUS(StatusCode::K_INVALID, "ParseFromZmqMessage failed.");
+    RETURN_STATUS(StatusCode::K_INVALID, "ParseFromRpcMessage failed.");
 }
 
-/**
- * @brief This inline convert a protobuf into a ZMQ message.
- * @tparam T ReqPb Type.
- * @param[in] pb Source of the protobuf.
- * @param[out] dest Destination in the form of ZmqMessage.
- * @return Status of the call.
- */
-template <typename T>
-inline Status SerializeToZmqMessage(const T &pb, ZmqMessage &dest)
-{
-    PerfPoint point(PerfKey::ZMQ_COM_SERIAL_TO_ZMQ_MESSAGE);
-    auto sz = pb.ByteSizeLong();
-    RETURN_IF_NOT_OK(dest.AllocMem(sz));
-    auto *p = dest.Data();
-    bool rc = false;
-    {
-        METRIC_TIMER(metrics::KvMetricId::ZMQ_RPC_SERIALIZE_LATENCY);
-        rc = pb.SerializeToArray(p, sz);
-    }
-    CHECK_FAIL_RETURN_STATUS(rc, K_RUNTIME_ERROR, "Serialization error");
-    point.Record();
-    return Status::OK();
-}
+// SerializeToRpcMessage is provided by rpc_message.h.
 
 /**
- * @brief Push proto buffer to the back of ZmqMessage frames.
+ * @brief Push proto buffer to the back of RpcMessage frames.
  * @tparam T Type of protobuffer.
  * @param[in] pb Reference to proto buffer.
  * @param[out] frames Frames to push to.
@@ -129,8 +107,8 @@ inline Status SerializeToZmqMessage(const T &pb, ZmqMessage &dest)
 template <typename T>
 inline Status PushBackProtobufToFrames(const T &pb, ZmqMsgFrames &frames)
 {
-    ZmqMessage msg;
-    RETURN_IF_NOT_OK(SerializeToZmqMessage(pb, msg));
+    RpcMessage msg;
+    RETURN_IF_NOT_OK(SerializeToRpcMessage(pb, msg));
     frames.push_back(std::move(msg));
     return Status::OK();
 }
@@ -143,7 +121,7 @@ inline Status PushBackStringToFrames(const std::string &str, ZmqMsgFrames &frame
 }
 
 /**
- * @brief Push proto buffer to the front of ZmqMessage frames.
+ * @brief Push proto buffer to the front of RpcMessage frames.
  * @tparam T Type of protobuffer.
  * @param[in] pb Reference to proto buffer.
  * @param[out] frames Frames to push to.
@@ -153,8 +131,8 @@ inline Status PushBackStringToFrames(const std::string &str, ZmqMsgFrames &frame
 template <typename T>
 inline Status PushFrontProtobufToFrames(const T &pb, ZmqMsgFrames &frames)
 {
-    ZmqMessage msg;
-    RETURN_IF_NOT_OK(SerializeToZmqMessage(pb, msg));
+    RpcMessage msg;
+    RETURN_IF_NOT_OK(SerializeToRpcMessage(pb, msg));
     frames.push_front(std::move(msg));
     return Status::OK();
 }
@@ -166,24 +144,7 @@ inline Status PushFrontStringToFrames(const std::string &str, ZmqMsgFrames &fram
     return ele.CopyString(str);
 }
 
-/**
- * @brief Convert a Status object into ZMQ message.
- * @param[in] rc Status code.
- * @return ZMQ message.
- */
-inline ZmqMessage StatusToZmqMessage(const Status &rc)
-{
-    PerfPoint point(PerfKey::ZMQ_COM_STATUS_TO_ZMQ_MESSAGE);
-    ZmqMessage errorMsg;
-    ErrorInfoPb err;
-    err.set_error_code(rc.GetCode());
-    err.set_error_msg(rc.GetMsg());
-    Status tmpRc = SerializeToZmqMessage<ErrorInfoPb>(err, errorMsg);
-    if (tmpRc.IsError()) {
-        LOG(ERROR) << "SerializeToZmqMessage Fail";
-    }
-    return errorMsg;
-}
+// StatusToRpcMessage is provided by rpc_message.h.
 
 /**
  * @brief Convert a ZMQ message into a Status object.
@@ -191,11 +152,11 @@ inline ZmqMessage StatusToZmqMessage(const Status &rc)
  * @param[in] errMsg Error message buffer.
  * @return Status object.
  */
-inline Status ZmqMessageToStatus(const ZmqMessage &errMsg)
+inline Status RpcMessageToStatus(const RpcMessage &errMsg)
 {
     PerfPoint point(PerfKey::ZMQ_COM_ZMQ_MESSAGE_TO_STATUS);
     ErrorInfoPb err;
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(errMsg, err));
+    RETURN_IF_NOT_OK(ParseFromRpcMessage(errMsg, err));
     Status rc(static_cast<StatusCode>(err.error_code()), err.error_msg());
     point.Record();
     return rc;
@@ -206,7 +167,7 @@ inline Status ZmqMessageToStatus(const ZmqMessage &errMsg)
  * @param[in] msg Zmq message buffer.
  * @return The content of a ZMQ message as string.
  */
-inline std::string ZmqMessageToString(const ZmqMessage &msg)
+inline std::string RpcMessageToString(const RpcMessage &msg)
 {
     PerfPoint point(PerfKey::ZMQ_COM_ZMQ_MESSAGE_TO_STRING);
     std::string s(reinterpret_cast<const char *>(msg.Data()), msg.Size());
@@ -220,7 +181,7 @@ inline std::string ZmqMessageToString(const ZmqMessage &msg)
  * @param[out] val Parsed int64.
  * @return Status of call.
  */
-inline Status ZmqMessageToInt64(const ZmqMessage &msg, int64_t &val)
+inline Status RpcMessageToInt64(const RpcMessage &msg, int64_t &val)
 {
     PerfPoint point(PerfKey::ZMQ_COM_ZMQ_MESSAGE_TO_INT64);
     CHECK_FAIL_RETURN_STATUS(msg.Size() == sizeof(int64_t), StatusCode::K_INVALID, "Not a 64-bit integer");
@@ -238,7 +199,7 @@ inline Status ZmqMessageToInt64(const ZmqMessage &msg, int64_t &val)
  * @param val int64.
  * @return Serialized zmq buffer from int64 val.
  */
-inline ZmqMessage ZmqInt64ToMessage(int64_t val)
+inline RpcMessage ZmqInt64ToMessage(int64_t val)
 {
     PerfPoint point(PerfKey::ZMQ_COM_ZMQ_INT64_TO_MESSAGE);
     static constexpr int32_t workAreaSz = sizeof(int64_t);
@@ -248,22 +209,13 @@ inline ZmqMessage ZmqInt64ToMessage(int64_t val)
         google::protobuf::io::CodedOutputStream output(&osWrapper);
         output.WriteLittleEndian64(val);
     }
-    ZmqMessage bodyLenMsg;
+    RpcMessage bodyLenMsg;
     Status tmpRc = bodyLenMsg.CopyBuffer(bodyLen, workAreaSz);
     if (tmpRc.IsError()) {
         LOG(ERROR) << "ZmqInt64ToMessage Fail";
     }
     point.Record();
     return bodyLenMsg;
-}
-
-/**
- * @brief Check if rc is a rpc error.
- * @param[in] status Status object.
- */
-inline bool IsRpcError(const Status &status)
-{
-    return IsRetryableRpcError(status) || IsNonRetryableRpcError(status);
 }
 
 /**
@@ -285,7 +237,7 @@ Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, EventType type
  * @param[out] reply Reply message buffer.
  * @return Status object.
  */
-Status AckRequest(ZmqMsgFrames &frames, ZmqMessage &reply);
+Status AckRequest(ZmqMsgFrames &frames, RpcMessage &reply);
 
 /**
  * @brief Encode a binary data into a z85-encoded message. See ZMQ RFC 32 for more details.
@@ -293,7 +245,7 @@ Status AckRequest(ZmqMsgFrames &frames, ZmqMessage &reply);
  * @param[out] outMsg Pointer where the encoded message will be saved.
  * @return Status of call.
  */
-inline Status Z85Encode(ZmqMessage inMsg, ZmqMessage *outMsg)
+inline Status Z85Encode(RpcMessage inMsg, RpcMessage *outMsg)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(outMsg);
     CHECK_FAIL_RETURN_STATUS(

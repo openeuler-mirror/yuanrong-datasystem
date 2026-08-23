@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 
+#include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/object_base.h"

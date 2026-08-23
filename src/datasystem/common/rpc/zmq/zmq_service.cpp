@@ -412,7 +412,7 @@ Status ZmqService::SendAll(ZmqMsgFramesRef &frames, const MetaPb &meta,
 Status ZmqService::SendStatus(ZmqMsgFramesRef &frames, const MetaPb &meta, const Status &rc,
                               const std::function<Status(ZmqMetaMsgFramesRef)> &f)
 {
-    ZmqMessage rcMsg = StatusToZmqMessage(rc);
+    RpcMessage rcMsg = StatusToRpcMessage(rc);
     frames.push_front(std::move(rcMsg));
     return SendAll(frames, meta, f);
 }
@@ -526,7 +526,7 @@ Status ZmqService::WorkerCB::ProcessStreamRpcRq(const MetaPb &meta, ZmqMsgFrames
     auto *svc = impl_;
     MetaPb m;
     CHECK_FAIL_RETURN_STATUS(!inMsg.empty(), StatusCode::K_INVALID, "Invalid stream.");
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(inMsg.front(), m));
+    RETURN_IF_NOT_OK(ParseFromRpcMessage(inMsg.front(), m));
     inMsg.pop_front();
     // Sanity check
     auto methodIndex = m.method_index();
@@ -555,11 +555,11 @@ Status ZmqService::WorkerCB::ProcessHandshakeRq(const MetaPb &meta, ZmqMsgFrames
     const int expectedSize = 3;
     CHECK_FAIL_RETURN_STATUS(inMsg.size() == expectedSize, StatusCode::K_INVALID, "Invalid handshake request.");
     HandshakePb rq;
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(inMsg.front(), rq));
+    RETURN_IF_NOT_OK(ParseFromRpcMessage(inMsg.front(), rq));
     inMsg.pop_front();
     // Next one is the original MetaPb
     MetaPb m;
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(inMsg.front(), m));
+    RETURN_IF_NOT_OK(ParseFromRpcMessage(inMsg.front(), m));
     inMsg.pop_front();
     m.set_gateway_id(meta.gateway_id());
     m.set_route_fd(meta.route_fd());
@@ -578,7 +578,7 @@ Status ZmqService::WorkerCB::ProcessPayloadRq(const MetaPb &meta, ZmqMsgFrames &
     (void)replyMsg;
     PayloadDirectGetRspPb rq;
     CHECK_FAIL_RETURN_STATUS(!inMsg.empty(), StatusCode::K_INVALID, "Invalid stream.");
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(inMsg.front(), rq));
+    RETURN_IF_NOT_OK(ParseFromRpcMessage(inMsg.front(), rq));
     inMsg.pop_front();
     // imMsg should be empty.
     CHECK_FAIL_RETURN_STATUS(inMsg.empty(), StatusCode::K_INVALID, "Invalid stream.");
@@ -606,7 +606,7 @@ Status ZmqService::WorkerCB::ProcessPayloadRq(const MetaPb &meta, ZmqMsgFrames &
         RETURN_IF_NOT_OK(ZmqPayload::AddPayloadFrames(entry->recvBuf, origInMsg, bufSz, false));
         VLOG(RPC_LOG_LEVEL) << FormatString("Worker %s started for service '%s' Method %d serving %s", GetWorkerId(),
                                             origMetaPb.svc_name(), origMetaPb.method_index(), origMetaPb.client_id());
-        RETURN_IF_NOT_OK(impl_->CallMethod(worker_, origMetaPb, std::move(origInMsg), 0));
+        RETURN_IF_NOT_OK(impl_->CallMethod(origMetaPb, std::move(origInMsg), 0));
     }
     return Status::OK();
 }
@@ -669,7 +669,7 @@ Status ZmqService::WorkerCB::WorkerEntryImpl(MetaPb &meta, ZmqMsgFrames &inMsg, 
         // There is one more protobuf after, but we can't parse it (yet) and leave
         // it to the lower level to decode. Also note if the client side is streaming,
         // it will be handled by StreamWorkEntry.
-        return impl_->CallMethod(worker_, meta, std::move(inMsg), 0);
+        return impl_->CallMethod(meta, std::move(inMsg), 0);
     }
     // The rest are internal services with negative method indexes.
     RETURN_IF_NOT_OK(HandleInternalRq(fd, meta, inMsg, replyMsg));
@@ -808,7 +808,7 @@ Status ZmqService::WorkerCB::StreamWorkerEntryImpl()
     streamWA_.lastAccessTime_ = std::chrono::steady_clock::now();
     // Now pass the control down.
     MetaPb &meta = streamWA_.meta_;
-    rc = impl_->CallMethod(worker_, meta, ZmqMsgFrames(), streamWA_.nextSeqNo_);
+    rc = impl_->CallMethod(meta, ZmqMsgFrames(), streamWA_.nextSeqNo_);
     VLOG(RPC_LOG_LEVEL) << FormatString("[%s] Service '%s' Method %d rc %s. Current state %d", workerId,
                                         impl_->StreamGetSvcName(), meta.method_index(), rc.ToString(),
                                         static_cast<int>(streamWA_.state_));
@@ -866,9 +866,9 @@ Status ZmqService::ParseWorkerId(const std::string &workerId, ZmqService *&svc, 
 Status ZmqService::ProcessPayloadGetRq(MetaPb &meta, ZmqMsgFrames &inMsg, ZmqMsgFrames &replyMsg)
 {
     PayloadDirectGetReqPb rq;
-    ZmqMessage msg = std::move(inMsg.front());
+    RpcMessage msg = std::move(inMsg.front());
     inMsg.pop_front();
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(msg, rq));
+    RETURN_IF_NOT_OK(ParseFromRpcMessage(msg, rq));
     // Get the return code from the receiver. It may get OOM and in that case
     // we only need to clean up our parked payload
     Status rc(static_cast<StatusCode>(rq.error_code()), rq.error_msg());
@@ -881,7 +881,7 @@ Status ZmqService::ProcessPayloadGetRq(MetaPb &meta, ZmqMsgFrames &inMsg, ZmqMsg
         reply.set_sz(rq.sz());
         RETURN_IF_NOT_OK(PushFrontProtobufToFrames(reply, replyMsg));
         // Need to tag this special message for V2MTP
-        replyMsg.front().SetType(ZmqMessage::ZmqMsgType::DECODER);
+        replyMsg.front().SetType(RpcMessage::MsgType::DECODER);
         // If it is coming from the ZMQ proxy, force to use the V2MTP
         if (meta.event_type() == EventType::ZMQ) {
             int fd = std::get<ZmqPayloadBank::COL::K_FD>(entry);
@@ -916,8 +916,8 @@ Status ZmqService::ParkPayloadIfNeeded(ZmqMetaMsgFrames &p, ZmqMsgFrames &payloa
     int64_t sz = 0;
     auto it = p.second.begin();
     while (it != p.second.end()) {
-        if (it->GetType() == ZmqMessage::ZmqMsgType::PAYLOAD_SZ) {
-            RETURN_IF_NOT_OK(ZmqMessageToInt64(*it, sz));
+        if (it->GetType() == RpcMessage::MsgType::PAYLOAD_SZ) {
+            RETURN_IF_NOT_OK(RpcMessageToInt64(*it, sz));
             break;
         }
         ++it;
@@ -962,7 +962,7 @@ Status ZmqService::ParkPayloadIfNeeded(ZmqMetaMsgFrames &p, ZmqMsgFrames &payloa
 
     // If the size of the payload is too small, it is not worth to park it here.
     if (sz <= FLAGS_payload_nocopy_threshold) {
-        it->SetType(ZmqMessage::ZmqMsgType::NONE);
+        it->SetType(RpcMessage::MsgType::NONE);
         meta.set_payload_index(ZMQ_OFFLINE_PAYLOAD_INX);
     } else {
         // Park the payload and update the MetaPb
@@ -1037,7 +1037,7 @@ void ZmqService::RejectAndReplyDeadlineExceeded(const MetaPb &meta, int64_t rema
     ApiDeadline::Instance().Reset();
     ZmqMetaMsgFrames reply;
     reply.first = meta;
-    reply.second.push_front(StatusToZmqMessage(
+    reply.second.push_front(StatusToRpcMessage(
         Status(K_RPC_DEADLINE_EXCEEDED, FormatString("RPC deadline exceeded, remaining %ld us.", remainingUs))));
     LOG_IF_ERROR(ServiceToClient(reply), "Failed to send deadline-exceeded reply to client");
 }
@@ -1248,7 +1248,7 @@ Status ZmqService::DirectExecInternalMethod(ZmqMetaMsgFrames &inFrames, ZmqMetaM
                 serverRemainingUs, elapsedUs);
             ApiDeadline::Instance().Reset();
             outFrames.first = meta;
-            outFrames.second.push_front(StatusToZmqMessage(
+            outFrames.second.push_front(StatusToRpcMessage(
                 Status(K_RPC_DEADLINE_EXCEEDED,
                        FormatString("RPC deadline exceeded, remaining %ld us.", serverRemainingUs))));
             return Status::OK();

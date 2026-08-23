@@ -40,6 +40,7 @@ ds_cc_library(
     deps = [
         ":common_util_impl",
         "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/rpc:rpc_message",
         "@com_github_apache_brpc//:brpc",
     ],
 )
@@ -75,6 +76,7 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/rpc:scoped_bthread_local",
         "//src/datasystem/common/rpc:timeout_duration",
         "//src/datasystem/common/rpc/zmq:zmq_message",

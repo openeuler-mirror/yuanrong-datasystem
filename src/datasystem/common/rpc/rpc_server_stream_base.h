@@ -23,21 +23,14 @@
 #ifndef DATASYSTEM_COMMON_RPC_SERVER_STREAM_BASE_H
 #define DATASYSTEM_COMMON_RPC_SERVER_STREAM_BASE_H
 
-#include <variant>
+#include <future>
 
 #include "datasystem/common/rpc/brpc_server_stream_impl.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/server_writer_reader_base.h"
-#include "datasystem/common/rpc/zmq/zmq_server_stream_base.h"
 #include "datasystem/common/log/log_helper.h"
 
 namespace datasystem {
-template <class... Ts>
-struct overloaded : Ts... {
-    using Ts::operator()...;
-};
-template <class... Ts>
-overloaded(Ts...) -> overloaded<Ts...>;
 /**
  * Only server side is streaming.
  * @tparam W Stream RPC mode, WritePb type.
@@ -45,10 +38,6 @@ overloaded(Ts...) -> overloaded<Ts...>;
 template <typename W>
 class ServerWriter {
 public:
-    explicit ServerWriter(std::unique_ptr<ServerWriterImpl<W>> &&impl) : pimpl_(std::move(impl))
-    {
-    }
-
     explicit ServerWriter(std::unique_ptr<BrpcServerWriterImpl<W>> &&impl) : pimpl_(std::move(impl))
     {
     }
@@ -57,48 +46,42 @@ public:
 
     Status SendStatus(const Status &rc)
     {
-        return std::visit([&rc](auto &pimpl) { return pimpl->SendStatus(rc); }, pimpl_);
+        return pimpl_->SendStatus(rc);
     }
 
     template <typename R>
     Status ReadPb(R &pb)
     {
-        return std::visit(
-            overloaded{
-                [&pb](std::unique_ptr<ServerWriterImpl<W>> &pimpl) { return pimpl->ReadPb(pb); },
-                [&pb](std::unique_ptr<BrpcServerWriterImpl<W>> &pimpl) { return pimpl->ReadPb(pb); },
-            },
-            pimpl_);
+        return pimpl_->ReadPb(pb);
     }
 
     Status Write(const W &pb)
     {
-        return std::visit([&pb](auto &pimpl) { return pimpl->Write(pb); }, pimpl_);
+        return pimpl_->Write(pb);
     }
 
     Status Finish()
     {
-        return std::visit([](auto &pimpl) { return pimpl->Finish(); }, pimpl_);
+        return pimpl_->Finish();
     }
 
     Status SendPayload(std::vector<RpcMessage> &buffer)
     {
-        return std::visit([&buffer](auto &pimpl) { return pimpl->SendPayload(buffer); }, pimpl_);
+        return pimpl_->SendPayload(buffer);
     }
 
     Status SendPayload(const std::vector<MemView> &payload)
     {
-        return std::visit([&payload](auto &pimpl) { return pimpl->SendPayload(payload); }, pimpl_);
+        return pimpl_->SendPayload(payload);
     }
 
     Status ReceivePayload(std::vector<RpcMessage> &payload)
     {
-        return std::visit([&payload](auto &pimpl) { return pimpl->ReceivePayload(payload); }, pimpl_);
+        return pimpl_->ReceivePayload(payload);
     }
 
 private:
-    std::variant<std::unique_ptr<ServerWriterImpl<W>>,
-                 std::unique_ptr<BrpcServerWriterImpl<W>>> pimpl_;
+    std::unique_ptr<BrpcServerWriterImpl<W>> pimpl_;
 };
 
 /**
@@ -107,75 +90,57 @@ private:
 template <typename R>
 class ServerReader {
 public:
-    explicit ServerReader(std::unique_ptr<ServerReaderImpl<R>> &&impl) : pimpl_(std::move(impl))
-    {
-    }
-
     explicit ServerReader(std::shared_ptr<BrpcServerReaderImpl<R>> &&impl) : pimpl_(std::move(impl))
     {
     }
 
     // Trigger non-blocking Close() so the brpc handler fires on_closed and its
-    // self-keepalive can release (ZMQ Close() is a no-op).
+    // self-keepalive can release.
     ~ServerReader()
     {
-        std::visit([](auto &pimpl) { if (pimpl) { pimpl->Close(); } }, pimpl_);
+        if (pimpl_) {
+            pimpl_->Close();
+        }
     }
 
     Status SendStatus(const Status &rc)
     {
-        return std::visit(
-            overloaded{
-                [&rc](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->SendStatus(rc); },
-                [&rc](std::shared_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->SendStatus(rc); },
-            },
-            pimpl_);
+        return pimpl_->SendStatus(rc);
     }
 
     Status Read(R &pb)
     {
-        return std::visit([&pb](auto &pimpl) { return pimpl->Read(pb); }, pimpl_);
+        return pimpl_->Read(pb);
     }
 
     Status ReceivePayload(std::vector<RpcMessage> &payload)
     {
-        return std::visit([&payload](auto &pimpl) { return pimpl->ReceivePayload(payload); }, pimpl_);
+        return pimpl_->ReceivePayload(payload);
     }
 
     template <typename W>
     Status WritePb(const W &pb)
     {
-        return std::visit(
-            overloaded{
-                [&pb](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->WritePb(pb); },
-                [&pb](std::shared_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->WritePb(pb); },
-            },
-            pimpl_);
+        return pimpl_->WritePb(pb);
     }
 
     Status SendPayload(std::vector<RpcMessage> &buffer)
     {
-        return std::visit(
-            overloaded{
-                [&buffer](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->SendPayload(buffer); },
-                [&buffer](std::shared_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->SendPayload(buffer); },
-            },
-            pimpl_);
+        return pimpl_->SendPayload(buffer);
     }
 
     Status SendPayload(const std::vector<MemView> &payload)
     {
-        return std::visit([&payload](auto &pimpl) { return pimpl->SendPayload(payload); }, pimpl_);
+        return pimpl_->SendPayload(payload);
     }
 
     Status Finish()
     {
-        return std::visit([](auto &pimpl) { return pimpl->Finish(); }, pimpl_);
+        return pimpl_->Finish();
     }
 
 private:
-    std::variant<std::unique_ptr<ServerReaderImpl<R>>,
-                 std::shared_ptr<BrpcServerReaderImpl<R>>> pimpl_;
+    std::shared_ptr<BrpcServerReaderImpl<R>> pimpl_;
 };
 
 /**
@@ -235,91 +200,39 @@ private:
 template <typename W, typename R>
 class ServerUnaryWriterReader {
 public:
-    explicit ServerUnaryWriterReader(std::unique_ptr<ServerUnaryWriterReaderImpl<W, R>> &&impl)
-        : pimpl_(std::move(impl))
-    {
-    }
-
     virtual ~ServerUnaryWriterReader() = default;
 
-    virtual Status SendStatus(const Status &rc)
-    {
-        return std::visit([&rc](auto &pimpl) { return pimpl->SendStatus(rc); }, pimpl_);
-    }
+    virtual Status SendStatus(const Status &rc) = 0;
 
-    virtual Status Read(R &pb)
-    {
-        return std::visit([&pb](auto &pimpl) { return pimpl->Read(pb); }, pimpl_);
-    }
+    virtual Status Read(R &pb) = 0;
 
-    virtual Status Write(const W &pb)
-    {
-        return std::visit([&pb](auto &pimpl) { return pimpl->Write(pb); }, pimpl_);
-    }
+    virtual Status Write(const W &pb) = 0;
 
-    virtual Status Finish()
-    {
-        return std::visit([](auto &pimpl) { return pimpl->Finish(); }, pimpl_);
-    }
+    virtual Status Finish() = 0;
 
-    virtual Status ReceivePayload(std::vector<RpcMessage> &payload)
-    {
-        return std::visit([&payload](auto &pimpl) { return pimpl->ReceivePayload(payload); }, pimpl_);
-    }
+    virtual Status ReceivePayload(std::vector<RpcMessage> &payload) = 0;
 
-    virtual Status SendAndTagPayload(std::vector<datasystem::RpcMessage> &buffer, bool tagPayloadFrame)
-    {
-        return std::visit(
-            [&buffer, &tagPayloadFrame](auto &pimpl) { return pimpl->SendAndTagPayload(buffer, tagPayloadFrame); },
-            pimpl_);
-    }
+    virtual Status SendAndTagPayload(std::vector<datasystem::RpcMessage> &buffer, bool tagPayloadFrame) = 0;
 
-    virtual Status SendPayload(std::vector<datasystem::RpcMessage> &buffer)
-    {
-        return std::visit([&buffer](auto &pimpl) { return pimpl->SendPayload(buffer); }, pimpl_);
-    }
+    virtual Status SendPayload(std::vector<datasystem::RpcMessage> &buffer) = 0;
 
-    virtual Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame)
-    {
-        return std::visit(
-            [&payload, &tagPayloadFrame](auto &pimpl) { return pimpl->SendAndTagPayload(payload, tagPayloadFrame); },
-            pimpl_);
-    }
+    virtual Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame) = 0;
 
-    virtual Status SendPayload(const std::vector<MemView> &payload)
-    {
-        return std::visit([&payload](auto &pimpl) { return pimpl->SendPayload(payload); }, pimpl_);
-    }
+    virtual Status SendPayload(const std::vector<MemView> &payload) = 0;
 
-    virtual Status GetOutMsg(ZmqMsgFrames &outMsg)
-    {
-        return std::visit([&outMsg](auto &pimpl) { return pimpl->GetOutMsg(outMsg); }, pimpl_);
-    }
+    virtual Status GetOutMsg(RpcMsgFrames &outMsg) = 0;
 
-    virtual bool EnableMsgQ()
-    {
-        return std::visit([](auto &pimpl) { return pimpl->EnableMsgQ(); }, pimpl_);
-    }
+    virtual bool EnableMsgQ() = 0;
 
-    virtual void SetRequestInProgress()
-    {
-        return std::visit([](auto &pimpl) { return pimpl->SetRequestInProgress(); }, pimpl_);
-    }
+    virtual void SetRequestInProgress() = 0;
 
-    virtual void SetRequestComplete()
-    {
-        return std::visit([](auto &pimpl) { return pimpl->SetRequestComplete(); }, pimpl_);
-    }
-
-private:
-    std::variant<std::unique_ptr<ServerUnaryWriterReaderImpl<W, R>>> pimpl_;
+    virtual void SetRequestComplete() = 0;
 };
 
 template <typename W, typename R>
 class LocalServerUnaryWriterReader : public ServerUnaryWriterReader<W, R> {
 public:
     explicit LocalServerUnaryWriterReader(R &pb, std::promise<std::pair<W, Status>> promise)
-        : ServerUnaryWriterReader<W, R>(std::unique_ptr<ServerUnaryWriterReaderImpl<W, R>>(nullptr))
     {
         pb_ = std::move(pb);
         promise_ = std::move(promise);
@@ -384,7 +297,7 @@ public:
         return Status::OK();
     }
 
-    Status SendAndTagPayload(std::vector<datasystem::RpcMessage> &buffer, bool tagPayloadFrame)
+    Status SendAndTagPayload(std::vector<datasystem::RpcMessage> &buffer, bool tagPayloadFrame) override
     {
         (void)buffer;
         (void)tagPayloadFrame;
@@ -397,7 +310,7 @@ public:
         return Status::OK();
     }
 
-    Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame)
+    Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame) override
     {
         (void)payload;
         (void)tagPayloadFrame;
@@ -410,7 +323,7 @@ public:
         return {StatusCode::K_INVALID, "LocalServerUnaryWriterReader doesn't support SendPayload()!"};
     }
 
-    Status ReceivePayload(std::vector<RpcMessage> &payload)
+    Status ReceivePayload(std::vector<RpcMessage> &payload) override
     {
         payload = std::move(payloads_);
         return Status::OK();
@@ -434,6 +347,12 @@ public:
     bool EnableMsgQ() override
     {
         return false;
+    }
+
+    Status GetOutMsg(RpcMsgFrames &outMsg) override
+    {
+        (void)outMsg;
+        return Status::OK();
     }
 
 private:

@@ -18,6 +18,7 @@
 #define DATASYSTEM_WORKER_OC_WORKER_SERVICE_IMPL_H
 
 #include <functional>
+#include "datasystem/common/perf/perf_manager.h"
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/peer_ub_admission.h"

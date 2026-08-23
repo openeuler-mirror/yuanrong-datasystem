@@ -21,9 +21,9 @@
  * thread_local variables unsafe. RequestContext provides per-bthread
  * storage via bthread_key_t.
  *
- * Under ZMQ (usercode_in_pthread=true), GetRequestContext() falls back
- * to a per-pthread static thread_local instance, so the same API works
- * for both transports without caller-side branching.
+ * Utility code that runs outside a brpc handler falls back to a per-pthread
+ * static thread_local instance, so the same API works without caller-side
+ * branching.
  *
  * Usage:
  *   // Server init (once)
@@ -52,6 +52,7 @@
 #include "datasystem/common/log/time_cost.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/rpc_message.h"
 
 namespace datasystem {
 
@@ -82,12 +83,9 @@ struct RequestContext {
     TimeoutDuration scTimeoutDuration;
     TimeoutDuration timeoutDuration;
 
-    // Per-request auth context (replaces ScopedBthreadLocal<ZmqMessage/string/uint64_t>).
-    // Set at request entry (ZMQ: zmq_server_stream_base.h ReadPb; client SDK:
-    // signature.h GenerateSignature) and consumed by authenticate.cpp /
-    // ak_sk_manager.h before any yield. Moving it here eliminates cross-tenant
-    // auth leakage under M:N scheduling.
-    ZmqMessage serializedMessage;
+    // Per-request auth context. Set at client SDK signature generation and consumed
+    // by authenticate.cpp / ak_sk_manager.h before any yield.
+    RpcMessage serializedMessage;
     std::string tenantId;
     std::string reqAk;
     std::string reqSignature;
@@ -166,7 +164,7 @@ public:
         // timeouts to defaults. Without this, a handler creating an inner scope
         // would read default-constructed timeouts — a regression vs the old
         // globals which were independent of ScopedRequestContext.
-        // Note: serializedMessage (ZmqMessage) has deleted copy semantics, and
+        // Note: serializedMessage (RpcMessage) has deleted copy semantics, and
         // the auth strings are consumed (std::move'd out) before business
         // handlers create nested scopes, so they are intentionally NOT inherited.
         if (saved_ != nullptr) {
@@ -179,7 +177,7 @@ public:
             ctx_.reqTimeoutDuration = saved_->reqTimeoutDuration;
             ctx_.scTimeoutDuration = saved_->scTimeoutDuration;
             ctx_.timeoutDuration = saved_->timeoutDuration;
-            // serializedMessage: not inherited (ZmqMessage copy is deleted;
+            // serializedMessage: not inherited (RpcMessage copy is deleted;
             // consumed before nested scope creation)
             ctx_.tenantId = saved_->tenantId;
             ctx_.reqAk = saved_->reqAk;

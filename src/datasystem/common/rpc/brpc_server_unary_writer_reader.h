@@ -86,8 +86,7 @@ public:
     BrpcServerUnaryWriterReader(brpc::Controller *cntl, const google::protobuf::Message *request,
                                 google::protobuf::Message *response, google::protobuf::Closure *done,
                                 std::string methodName)
-        : ServerUnaryWriterReader<W, R>(std::unique_ptr<ServerUnaryWriterReaderImpl<W, R>>(nullptr)),
-          cntl_(cntl),
+        : cntl_(cntl),
           request_(nullptr),
           response_(nullptr),
           done_(done),
@@ -344,7 +343,7 @@ public:
         return Status::OK();
     }
 
-    Status GetOutMsg(ZmqMsgFrames &outMsg) override
+    Status GetOutMsg(RpcMsgFrames &outMsg) override
     {
         (void)outMsg;
         // Not applicable to brpc. Return OK to avoid breaking generated code paths.

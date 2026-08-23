@@ -82,6 +82,7 @@ void RpcGenerator::GenerateBrpcStubPrologue(io::Printer &printer,
         "#include \"datasystem/common/rpc/trace_attachment.h\"\n"
         "#include \"datasystem/common/rpc/rpc_message.h\"\n"
         "#include \"datasystem/common/rpc/rpc_options.h\"\n"
+        "#include \"datasystem/common/rpc/rpc_stub.h\"\n"
         "#include \"datasystem/common/rpc/rpc_stub_base.h\"\n"
         "#include \"datasystem/common/rpc/rpc_unary_client_impl.h\"\n"
         "#include \"datasystem/utils/status.h\"\n";
@@ -159,11 +160,11 @@ void RpcGenerator::GenerateBrpcGenericStubClass(io::Printer &printer,
     vars["stub"] = svcName + "_BrpcGenericStub";
 
     const std::string constructor =
-        "class $stub$ : public RpcStubBase {\n"
+        "class $stub$ : public ::datasystem::RpcStubBase {\n"
         "public:\n"
         "    explicit $stub$(brpc::Channel *channel, int32_t timeoutMs = -1);\n"
         "    ~$stub$() = default;\n"
-        "    Status GetInitStatus() override;\n";
+        "    ::datasystem::Status GetInitStatus() override;\n";
     printer.Print(vars, constructor.c_str());
 
     GenerateSvcName(printer, svcName, indent, false);
@@ -288,7 +289,7 @@ void RpcGenerator::ImplementBrpcGenericStubOtherFuncDef(io::Printer &printer, co
         "    // brpc channels are persistent, no-op\n"
         "}\n";
     const std::string getInitStatus =
-        "Status $stub$::GetInitStatus() {\n"
+        "::datasystem::Status $stub$::GetInitStatus() {\n"
         "    return stub_->GetInitStatus();\n"
         "}\n";
     printer.Print(vars, forgetRequest.c_str());

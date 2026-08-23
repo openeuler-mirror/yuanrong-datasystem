@@ -141,6 +141,7 @@ protected:
     explicit WorkerMasterSCApi(const HostPort &localWorkerAddress, std::shared_ptr<AkSkManager> akSkManager);
 
     HostPort localWorkerAddress_;  // The HostPort of the local worker node
+        std::shared_ptr<master::MasterSCService_BrpcGenericStub> brpcSession_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 };
 
@@ -179,8 +180,6 @@ public:
 
 private:
     HostPort masterAddress_;                                       // The HostPort of the master node
-    std::shared_ptr<MasterSCService_Stub> rpcSession_{ nullptr };  // Session to the master rpc service
-    std::shared_ptr<master::MasterSCService_BrpcGenericStub> brpcSession_{ nullptr };
 };
 
 /**

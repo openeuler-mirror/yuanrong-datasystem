@@ -175,11 +175,6 @@ Status CoordinatorServiceProxyBase::CallRawAt(const HostPort &address, RpcOption
         }
         return rc;
     };
-    if (GetTransport() == Transport::ZMQ) {
-        std::shared_ptr<coordinator::CoordinatorService_Stub> stub;
-        RETURN_IF_NOT_OK(reportCoordinatorFailure(GetCoordinatorStub(address, stub)));
-        return reportCoordinatorFailure(call(*stub, options, req, rsp));
-    }
     std::shared_ptr<coordinator::CoordinatorService_BrpcGenericStub> stub;
     RETURN_IF_NOT_OK(reportCoordinatorFailure(GetCoordinatorStub(address, stub)));
     return reportCoordinatorFailure(call(*stub, options, req, rsp));

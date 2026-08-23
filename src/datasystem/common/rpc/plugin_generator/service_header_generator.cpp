@@ -52,7 +52,7 @@ void RpcGenerator::GenerateServiceClass(io::Printer &printer, const google::prot
     const std::string impl =
         // Now the main body.
         "class $svc_name$_Stub;\n"
-        "class $svc_name$ : public ::datasystem::ZmqService {\n"
+        "class $svc_name$ : public ::datasystem::RpcServiceBase {\n"
         "public:\n"
         "    typedef $svc_name$_Stub Stub;\n"
         // ZMQ version of Constructor, common to both code paths.
@@ -109,8 +109,8 @@ void RpcGenerator::GenerateServicePrologue(io::Printer &printer, const google::p
         "#include \"datasystem/common/rpc/rpc_server_stream_base.h\"\n"
         "#include \"datasystem/common/rpc/rpc_message.h\"\n"
         "#include \"datasystem/common/rpc/rpc_server.h\"\n"
-        "#include \"datasystem/common/rpc/zmq/zmq_stub.h\"\n"
-        "#include \"datasystem/common/rpc/zmq/zmq_service.h\"\n"
+        "#include \"datasystem/common/rpc/rpc_service_base.h\"\n"
+        "#include \"datasystem/common/rpc/zmq/rpc_service_method.h\"\n"
         "#include \"datasystem/common/util/net_util.h\"\n"
         "#include \"datasystem/utils/status.h\"\n";
     printer.Print(vars, impl.c_str());
@@ -199,11 +199,11 @@ void RpcGenerator::ListVirtualFunctions(io::Printer &printer, const google::prot
 void RpcGenerator::ImplementZmqCallMethodDecl(io::Printer &printer)
 {
     printer.PrintRaw(
-        "    ::datasystem::Status CallMethod(std::shared_ptr<::datasystem::ZmqServerMsgQueRef> sock, "
-        "::datasystem::MetaPb meta, std::deque<::datasystem::ZmqMessage> &&inMsg, int64_t seqNo) override;\n");
+        "    ::datasystem::Status CallMethod(::datasystem::MetaPb meta, std::deque<::datasystem::RpcMessage> &&inMsg,"
+        " int64_t seqNo) override;\n");
     printer.PrintRaw(
         "    ::datasystem::Status DirectCallMethod(::datasystem::MetaPb meta,"
-        " std::deque<::datasystem::ZmqMessage> &&inMsg, int64_t seqNo,"
-        " std::deque<::datasystem::ZmqMessage> &outMsg) override;\n");
+        " std::deque<::datasystem::RpcMessage> &&inMsg, int64_t seqNo,"
+        " std::deque<::datasystem::RpcMessage> &outMsg) override;\n");
 }
 }  // namespace datasystem

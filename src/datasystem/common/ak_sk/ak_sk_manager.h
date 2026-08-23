@@ -112,7 +112,7 @@ public:
             auto signature = std::move(ctx->reqSignature);
             auto accessKey = std::move(ctx->reqAk);
             auto timestamp = ctx->reqTimestamp;
-            ZmqMessage serializedStr = std::move(ctx->serializedMessage);
+            RpcMessage serializedStr = std::move(ctx->serializedMessage);
             return VerifySignatureAndTimestamp(signature, timestamp, accessKey,
                                                static_cast<const char *>(serializedStr.Data()), serializedStr.Size());
         }

@@ -55,12 +55,12 @@ Status ServerStreamBase::SendStatus(const Status &rc)
     VLOG(RPC_LOG_LEVEL) << FormatString("Stream worker %s sending rc %d back to client %s", meta_.worker_id(), rc,
                                         meta_.client_id());
     // Map TRY_AGAIN to RPC_CANCELLED.
-    ZmqMessage rcMsg;
+    RpcMessage rcMsg;
     if (rc.GetCode() != K_TRY_AGAIN) {
-        rcMsg = StatusToZmqMessage(rc);
+        rcMsg = StatusToRpcMessage(rc);
     } else {
         auto msg = rc.GetMsg();
-        rcMsg = StatusToZmqMessage(Status(StatusCode::K_RPC_CANCELLED, msg));
+        rcMsg = StatusToRpcMessage(Status(StatusCode::K_RPC_CANCELLED, msg));
     }
     outMsg_.push_back(std::move(rcMsg));
     return SendAll(ZmqSendFlags::NONE);
@@ -87,9 +87,9 @@ Status ServerStreamBase::ReadAll(ZmqRecvFlags flags)
                                  FormatString("Draining stale %d messages", frames.size()));
         // Next is the sequence number. -1 marks the end of stream.
         CHECK_FAIL_RETURN_STATUS(!frames.empty(), StatusCode::K_INVALID, "Invalid stream.");
-        ZmqMessage seqNoMsg = std::move(frames.front());
+        RpcMessage seqNoMsg = std::move(frames.front());
         frames.pop_front();
-        RETURN_IF_NOT_OK(ZmqMessageToInt64(seqNoMsg, seqNo));
+        RETURN_IF_NOT_OK(RpcMessageToInt64(seqNoMsg, seqNo));
         CHECK_FAIL_RETURN_STATUS(seqNo != ZMQ_END_SEQNO, StatusCode::K_RPC_STREAM_END, "The stream end.");
         return Status::OK();
     };

@@ -302,25 +302,10 @@ protected:
      */
     static bool EnableScWorkerWorkerDirectPort();
 
-    static Status CreateRpcStub(StubType type, const std::shared_ptr<RpcChannel> &channel,
-                                std::shared_ptr<RpcStubBase> &stub);
-
-    static Status CreateRpcChannel(const HostPort &hostPort, const std::string &serviceName,
-                                   std::shared_ptr<RpcChannel> &channel, size_t poolSize = 0);
-
     static Status CreateBrpcStub(StubType type, const std::shared_ptr<brpc::Channel> &brpcChannel,
                                  std::shared_ptr<RpcStubBase> &stub);
 
     static Status CreateBrpcChannel(const HostPort &hostPort, std::shared_ptr<brpc::Channel> &brpcChannel);
-
-    template <typename CreateRpcChannelFunc>
-    static Status CreatorTemplate(CreateRpcChannelFunc &&createRpcChannelFunc, StubType stubType,
-                                  std::shared_ptr<RpcStubBase> &rpcStub)
-    {
-        std::shared_ptr<RpcChannel> channel;
-        RETURN_IF_NOT_OK(createRpcChannelFunc(channel));
-        return CreateRpcStub(stubType, channel, rpcStub);
-    }
 
     /**
      * @brief Brpc version of CreatorTemplate that creates a brpc::Channel and _BrpcGenericStub.

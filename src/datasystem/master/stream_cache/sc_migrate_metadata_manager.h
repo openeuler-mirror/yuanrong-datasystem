@@ -72,7 +72,7 @@ private:
     HostPort destHostPort_;   // The HostPort of the destination node
     HostPort localHostPort_;  // The HostPort of the local node
     std::shared_ptr<AkSkManager> akSkManager_;
-    std::unique_ptr<master::MasterSCService_Stub> rpcSession_{ nullptr };  // session to the master rpc service
+    std::unique_ptr<master::MasterSCService_Stub> rpcSession_{ nullptr };
 };
 
 using TbbFutureThreadTable = tbb::concurrent_hash_map<std::pair<std::string, std::string>,

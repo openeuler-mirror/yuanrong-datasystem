@@ -86,7 +86,7 @@ Status ZmqStubImpl::GetStreamPeer(const std::string &svcName, int32_t methodInde
     // but each rpc is very short about just 1200ms.
     int retryTimeout = opts.GetTimeout();
     auto func = [this, &svcName, &methodIndex](std::shared_ptr<ZmqMsgQueRef> &sock, const RpcOptions &opts,
-                                               ZmqMessage &reply) {
+                                               RpcMessage &reply) {
         RETURN_IF_NOT_OK(CreateMsgQ(sock, svcName, opts));
         // We do not need to start the clock for this inner MetaPb.
         MetaPb rq = CreateMetaData(svcName, methodIndex, ZMQ_INVALID_PAYLOAD_INX, sock->GetId());
@@ -107,7 +107,7 @@ Status ZmqStubImpl::GetStreamPeer(const std::string &svcName, int32_t methodInde
     };
     Status rc;
     std::shared_ptr<ZmqMsgQueRef> sock;
-    ZmqMessage reply;
+    RpcMessage reply;
     RpcOptions options(opts);
     options.SetTimeout(STUB_INTERNAL_TIMEOUT);
     auto startTick = std::chrono::steady_clock::now();
@@ -132,7 +132,7 @@ Status ZmqStubImpl::GetStreamPeer(const std::string &svcName, int32_t methodInde
         }
     } while (doRetry);
     RETURN_IF_NOT_OK(rc);
-    workerId = ZmqMessageToString(reply);
+    workerId = RpcMessageToString(reply);
     VLOG(RPC_LOG_LEVEL) << "Serving worker: " << workerId;
     // InvokeInternalSvc will change timeout, reset it.
     sock->UpdateOpts(opts);
@@ -198,7 +198,7 @@ Status ZmqStubImpl::PayloadTick(const std::string &svcName, MetaPb &perfRun, con
     PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
     RecordTick(reply.first, TICK_CLIENT_END);
     RecordRpcLatencyMetrics(reply.first);
-    ZmqMessage replyMsg;
+    RpcMessage replyMsg;
     RETURN_IF_NOT_OK(AckRequest(reply.second, replyMsg));
     perfRun = reply.first;
     return Status::OK();

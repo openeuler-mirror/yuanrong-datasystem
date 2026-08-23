@@ -32,7 +32,7 @@ namespace datasystem {
 #define ZmqSendFlags RpcSendFlags
 class ZmqMessage {
 public:
-    enum class ZmqMsgType : uint16_t { NONE = 0, PAYLOAD_SZ, DECODER };
+    enum class MsgType : uint16_t { NONE = 0, PAYLOAD_SZ, DECODER };
     ZmqMessage();
     ~ZmqMessage();
     // Disable copy constructors
@@ -178,18 +178,18 @@ public:
         return !(*this == other);
     }
 
-    void SetType(ZmqMsgType type)
+    void SetType(MsgType type)
     {
         flag_ = type;
     }
 
-    ZmqMsgType GetType() const
+    MsgType GetType() const
     {
         return flag_;
     }
 
 private:
-    ZmqMsgType flag_;
+    MsgType flag_;
     zmq_msg_t msg_{};
     Status Close();
     std::string DebugString() const;

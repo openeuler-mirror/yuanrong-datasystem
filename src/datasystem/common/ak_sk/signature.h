@@ -38,7 +38,6 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/common/rpc/zmq/zmq_message.h"
 #include "datasystem/utils/sensitive_value.h"
 
 namespace datasystem {
@@ -115,8 +114,7 @@ public:
         GetRequestContext()->reqAk = clientKey_.accessKey;
         GetRequestContext()->reqSignature = std::move(serializedSignature);
         GetRequestContext()->reqTimestamp = req.timestamp();
-        ZmqMessage emptyMsg;
-        GetRequestContext()->serializedMessage = std::move(emptyMsg);
+        GetRequestContext()->serializedMessage.Clear();
         return Status::OK();
     }
 

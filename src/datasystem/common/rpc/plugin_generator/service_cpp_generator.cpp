@@ -55,281 +55,43 @@ void RpcGenerator::GenerateServiceCppPrologue(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void RpcGenerator::ImplementCallMethodNoStream(io::Printer &printer,
-                                               const google::protobuf::MethodDescriptor &method, int methodIndex,
-                                               const std::string &indent, bool enableMsgQ)
-{
-    (void)indent;
-    std::map<std::string, std::string> vars;
-    vars["methodIndex"] = std::to_string(methodIndex);
-    vars["methodName"] = method.name();
-    vars["inputTypeName"] = method.input_type()->name();
-    vars["outputTypeName"] = method.output_type()->name();
-    vars["optSendPayload1"] = HasPayloadSendOption(method) ? ", std::move(payload)" : "";
-    vars["optRecvPayload1"] = HasPayloadRecvOption(method) ? ", outPayload" : "";
-    std::string impl;
-    std::string sockArg = (enableMsgQ) ? "sock" : "nullptr";
-    impl +=
-        "            auto &methodObj = methodMap_.find($methodIndex$)->second;\n"
-        "            $inputTypeName$ rq;\n"
-        "            $outputTypeName$ reply;\n"
-        "            auto serverApi =\n"
-        "                std::make_unique<::datasystem::ServerUnaryWriterReaderImpl<$outputTypeName$, "
-        "$inputTypeName$>>(\n"
-        "                    " + sockArg + ", meta, std::move(inMsg), methodObj->HasPayloadSendOption(),\n"
-        "                    methodObj->HasPayloadRecvOption());\n"
-        "            rc = serverApi->Read(rq);\n"
-        "            if (rc.IsError()) { break; }\n";
-
-    if (HasPayloadSendOption(method)) {
-        impl +=
-            "            std::vector<::datasystem::RpcMessage> payload;\n"
-            "            serverApi->ReceivePayload(payload);\n"
-            "            if (rc.IsError()) { break; }\n";
-    }
-    if (HasPayloadRecvOption(method)) {
-        impl += "            std::vector<::datasystem::RpcMessage> outPayload;\n";
-    }
-    impl +=
-        "            rc = $methodName$(rq, reply$optSendPayload1$$optRecvPayload1$);\n";
-    if (enableMsgQ) {
-        impl +=
-            "            if (rc.IsError()) { rc = serverApi->SendStatus(rc); break; }\n"
-            "            rc = serverApi->Write(reply);\n"
-            "            if (rc.IsError()) { break; }\n";
-    } else {
-        impl +=
-            "            if (rc.IsError()) { outMsg.push_back(std::move(StatusToZmqMessage(rc))); break; }\n"
-            "            rc = serverApi->ConstructWriteMsg(reply, outMsg);\n";
-    }
-    if (HasPayloadRecvOption(method)) {
-        impl +=
-            "            rc = serverApi->SendPayload(outPayload);\n"
-            "            if (rc.IsError()) { break; }\n";
-    }
-    printer.Print(vars, impl.c_str());
-}
-
-void RpcGenerator::ImplementCallMethodClientStream(io::Printer &printer,
-                                                   const google::protobuf::MethodDescriptor &method, int methodIndex,
-                                                   const std::string &indent)
-{
-    (void)indent;
-    std::map<std::string, std::string> vars;
-    vars["methodIndex"] = std::to_string(methodIndex);
-    vars["methodName"] = method.name();
-    vars["inputTypeName"] = method.input_type()->name();
-    vars["outputTypeName"] = method.output_type()->name();
-    vars["optRecvPayload1"] = HasPayloadRecvOption(method) ? ", out" : "";
-    std::string impl =
-        "            auto &methodObj = methodMap_.find($methodIndex$)->second;\n"
-        "            auto pimpl = std::make_unique<::datasystem::ServerReaderImpl<$inputTypeName$>>(\n"
-        "                sock, meta, methodObj->HasPayloadSendOption(), methodObj->HasPayloadRecvOption(),\n"
-        "                seqNo);\n"
-        "            auto reader = std::make_shared<::datasystem::ServerReader<$inputTypeName$>>(std::move(pimpl));\n"
-        "            $outputTypeName$ reply;\n";
-    if (HasPayloadRecvOption(method)) {
-        impl += "            std::vector<::datasystem::RpcMessage> out;\n";
-    }
-    impl +=
-        "            rc = $methodName$(reader, reply$optRecvPayload1$);\n"
-        "            if (rc.IsError()) { rc = reader->SendStatus(rc); break; }\n"
-        "            rc = reader->WritePb(reply);\n"
-        "            if (rc.IsError()) { break; }\n";
-    if (HasPayloadRecvOption(method)) {
-        impl +=
-            "            rc = reader->SendPayload(out);\n"
-            "            if (rc.IsError()) { break; }\n";
-    }
-    printer.Print(vars, impl.c_str());
-}
-
-void RpcGenerator::ImplementCallMethodServerStream(io::Printer &printer,
-                                                   const google::protobuf::MethodDescriptor &method, int methodIndex,
-                                                   const std::string &indent)
-{
-    (void)indent;
-    std::map<std::string, std::string> vars;
-    vars["methodIndex"] = std::to_string(methodIndex);
-    vars["methodName"] = method.name();
-    vars["inputTypeName"] = method.input_type()->name();
-    vars["outputTypeName"] = method.output_type()->name();
-    vars["optSendPayload1"] = HasPayloadSendOption(method) ? ", std::move(pl)" : "";
-    std::string impl =
-        "            auto &methodObj = methodMap_.find($methodIndex$)->second;\n"
-        "            $inputTypeName$ rq;\n";
-    if (HasPayloadSendOption(method)) {
-        impl += "            std::vector<::datasystem::RpcMessage> pl;\n";
-    }
-    impl +=
-        "            auto pimpl = std::make_unique<::datasystem::ServerWriterImpl<$outputTypeName$>>(\n"
-        "                sock, meta, methodObj->HasPayloadSendOption(), methodObj->HasPayloadRecvOption(),\n"
-        "                seqNo);\n"
-        "            auto writer = std::make_shared<::datasystem::ServerWriter<$outputTypeName$>>(std::move(pimpl));\n"
-        "            rc = writer->ReadPb(rq);\n"
-        "            if (rc.IsError()) { break; }\n";
-    if (HasPayloadSendOption(method)) {
-        impl +=
-            "            rc = writer->ReceivePayload(pl);\n"
-            "            if (rc.IsError()) { break; }\n";
-    }
-    impl +=
-        "            rc = $methodName$(writer, rq$optSendPayload1$);\n"
-        "            if (rc.IsError()) { rc = writer->SendStatus(rc); break; }\n";
-    printer.Print(vars, impl.c_str());
-}
-
-void RpcGenerator::ImplementCallMethodStream(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                             int methodIndex, const std::string &indent)
-{
-    (void)indent;
-    std::map<std::string, std::string> vars;
-    vars["methodIndex"] = std::to_string(methodIndex);
-    vars["methodName"] = method.name();
-    vars["inputTypeName"] = method.input_type()->name();
-    vars["outputTypeName"] = method.output_type()->name();
-    std::string impl =
-        "            auto &methodObj = methodMap_.find($methodIndex$)->second;\n"
-        "            auto pimpl =\n"
-        "                std::make_unique<::datasystem::ServerWriterReaderImpl<$outputTypeName$, $inputTypeName$>>(\n"
-        "                    sock, meta, methodObj->HasPayloadSendOption(), methodObj->HasPayloadRecvOption(),\n"
-        "                    seqNo);\n"
-        "            auto stream =\n"
-        "                std::make_shared<::datasystem::ServerWriterReader<$outputTypeName$, "
-        "$inputTypeName$>>(std::move(pimpl));\n"
-        "            rc = $methodName$(stream);\n"
-        "            if (rc.IsError()) { rc = stream->SendStatus(rc); break; }\n";
-    printer.Print(vars, impl.c_str());
-}
-
-void RpcGenerator::ImplementCallMethodUnarySocket(io::Printer &printer,
-                                                  const google::protobuf::MethodDescriptor &method, int methodIndex,
-                                                  const std::string &indent, bool enableMsgQ)
-{
-    (void)indent;
-    std::map<std::string, std::string> vars;
-    vars["methodIndex"] = std::to_string(methodIndex);
-    vars["methodName"] = method.name();
-    vars["inputTypeName"] = method.input_type()->name();
-    vars["outputTypeName"] = method.output_type()->name();
-    std::string impl;
-    std::string sockArg = (enableMsgQ) ? "sock" : "nullptr";
-    impl +=
-        "            auto &methodObj = methodMap_.find($methodIndex$)->second;\n"
-        "            auto pimpl =\n"
-        "                std::make_unique<::datasystem::ServerUnaryWriterReaderImpl<$outputTypeName$, "
-        "$inputTypeName$>>(\n"
-        "                    " + sockArg + ", meta, std::move(inMsg), methodObj->HasPayloadSendOption(),\n"
-        "                    methodObj->HasPayloadRecvOption());\n"
-        "            auto serverApi = std::make_shared<::datasystem::ServerUnaryWriterReader<$outputTypeName$, "
-        "$inputTypeName$>>(std::move(pimpl));\n"
-        "            rc = $methodName$(serverApi);\n"
-        "            if (rc.IsError()) { rc = serverApi->SendStatus(rc); break; }\n";
-    if (!enableMsgQ && method.name() == "Get") {
-        impl +=
-            "            rc = serverApi->GetOutMsg(outMsg);"
-            "            if (rc.IsError()) { rc = serverApi->SendStatus(rc); break; }\n";
-    }
-    printer.Print(vars, impl.c_str());
-}
 
 void RpcGenerator::ImplementZmqCallMethodDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
                                              const std::string &indent, const std::string &svcName)
 {
-    const std::string &level1Indent = indent;
-    const std::string level2Indent = level1Indent + indent;
-    const std::string level3Indent = level2Indent + indent;
+    (void)svc;
+    (void)indent;
     std::map<std::string, std::string> vars;
     vars["svcName"] = svcName;
-    std::string startFunction =
-        "::datasystem::Status $svcName$::CallMethod(std::shared_ptr<::datasystem::ZmqServerMsgQueRef> sock,\n"
-        "                                           ::datasystem::MetaPb meta,\n"
-        "                                           std::deque<::datasystem::ZmqMessage> &&inMsg, int64_t seqNo) {\n"
-        "    datasystem::Status rc;\n"
+    // brpc dispatches via the generated BrpcAdapter; the zmq CallMethod entry is dead
+    // under brpc-only transport. Keep the override defined (RpcServiceBase requires it)
+    // but with no zmq dispatch body so generated code does not reference zmq types.
+    printer.Print(vars,
+        "::datasystem::Status $svcName$::CallMethod(::datasystem::MetaPb meta,\n"
+        "                                           std::deque<::datasystem::RpcMessage> &&inMsg, int64_t seqNo) {\n"
+        "    (void)meta;\n"
+        "    (void)inMsg;\n"
         "    (void)seqNo;\n"
-        "    switch(meta.method_index()) {\n";
-    printer.Print(vars, startFunction.c_str());
-    for (auto j = 0; j < svc.method_count(); ++j) {
-        if (svc.method(j) == nullptr) {
-            continue;
-        }
-        auto &method = *(svc.method(j));
-        vars["methodName"] = method.name();
-        vars["methodIndex"] = std::to_string(j);
-        printer.Print(vars, "        case $methodIndex$: { // $methodName$\n");
-        if (!method.client_streaming() && !method.server_streaming()) {
-            if (UnarySocketNeeded(method)) {
-                ImplementCallMethodUnarySocket(printer, method, j, level3Indent);
-            } else {
-                ImplementCallMethodNoStream(printer, method, j, level3Indent);
-            }
-        } else if (method.client_streaming() && !method.server_streaming()) {
-            ImplementCallMethodClientStream(printer, method, j, level3Indent);
-        } else if (!method.client_streaming() && method.server_streaming()) {
-            ImplementCallMethodServerStream(printer, method, j, level3Indent);
-        } else {
-            ImplementCallMethodStream(printer, method, j, level3Indent);
-        }
-        printer.PrintRaw(
-            "            break;\n"
-            "        }  // case\n");
-    }
-    std::string endFunction =
-        "        default: {\n"
-        "            rc = datasystem::Status(datasystem::StatusCode::K_UNKNOWN_ERROR, __LINE__, __FILE__,\n"
-        "                                    \"Unknown method\");\n"
-        "            break;\n"
-        "        }\n"
-        "    } // switch\n"
-        "    return rc;\n"
-        "}\n";
-    printer.PrintRaw(endFunction);
+        "    return datasystem::Status::OK();\n"
+        "}\n");
 }
 
 void RpcGenerator::ImplementZmqDirectCallMethodDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
                                                    const std::string &indent, const std::string &svcName)
 {
-    const std::string &level1Indent = indent;
-    const std::string level2Indent = level1Indent + indent;
-    const std::string level3Indent = level2Indent + indent;
+    (void)svc;
+    (void)indent;
     std::map<std::string, std::string> vars;
     vars["svcName"] = svcName;
-    std::string startFunction =
+    printer.Print(vars,
         "::datasystem::Status $svcName$::DirectCallMethod(::datasystem::MetaPb meta,\n"
-        "                                           std::deque<::datasystem::ZmqMessage> &&inMsg, int64_t seqNo,\n"
-        "                                           std::deque<::datasystem::ZmqMessage> &outMsg) {\n"
-        "    datasystem::Status rc;\n"
+        "                                           std::deque<::datasystem::RpcMessage> &&inMsg, int64_t seqNo,\n"
+        "                                           std::deque<::datasystem::RpcMessage> &outMsg) {\n"
+        "    (void)meta;\n"
+        "    (void)inMsg;\n"
         "    (void)seqNo;\n"
-        "    switch(meta.method_index()) {\n";
-
-    printer.Print(vars, startFunction.c_str());
-    for (auto j = 0; j < svc.method_count(); ++j) {
-        if (svc.method(j) == nullptr) {
-            continue;
-        }
-        auto &method = *(svc.method(j));
-        vars["methodName"] = method.name();
-        vars["methodIndex"] = std::to_string(j);
-        printer.Print(vars, "        case $methodIndex$: { // $methodName$\n");
-        if (!method.client_streaming() && !method.server_streaming()) {
-            if (UnarySocketNeeded(method)) {
-                ImplementCallMethodUnarySocket(printer, method, j, level3Indent, false);
-            } else {
-                ImplementCallMethodNoStream(printer, method, j, level3Indent, false);
-            }
-        }
-        printer.PrintRaw("            break;\n"
-                         "        }  // case\n");
-    }
-    std::string endFunction =
-        "        default: {\n"
-        "            rc = datasystem::Status(datasystem::StatusCode::K_UNKNOWN_ERROR, __LINE__, __FILE__,\n"
-        "                                    \"Unknown method\");\n"
-        "            break;\n"
-        "        }\n"
-        "    } // switch\n"
-        "    return rc;\n"
-        "}\n";
-    printer.PrintRaw(endFunction);
+        "    (void)outMsg;\n"
+        "    return datasystem::Status::OK();\n"
+        "}\n");
 }
 }  // namespace datasystem

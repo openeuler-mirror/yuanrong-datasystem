@@ -18,6 +18,7 @@
  * Description: Code to manage device object directory.
  */
 #include "datasystem/master/object_cache/device/master_dev_oc_directory.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <memory>
 #include <vector>

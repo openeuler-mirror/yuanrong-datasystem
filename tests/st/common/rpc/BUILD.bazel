@@ -9,7 +9,6 @@ cc_binary(
     deps = [
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
-        "//src/datasystem/common/rpc/zmq:zmq_common",
         "//src/datasystem/common/util:file_util",
     ],
 )

@@ -21,6 +21,7 @@
 #define DATASYSTEM_COMMON_RPC_RPC_SERVER_H
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -42,8 +43,8 @@ class Service;
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_helper.h"
 #include "datasystem/common/rpc/rpc_options.h"
+#include "datasystem/common/rpc/rpc_service_base.h"
 #include "datasystem/common/rpc/rpc_service_cfg.h"
-#include "datasystem/common/rpc/zmq/zmq_auth.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 
@@ -51,8 +52,6 @@ DS_DECLARE_int32(rpc_thread_num);
 DS_DECLARE_int32(v);
 
 namespace datasystem {
-class ZmqServerImpl;
-class ZmqService;
 
 class RpcServer final : public Interruptible {
 public:
@@ -77,27 +76,14 @@ public:
         }
 
         /**
-         * @brief Add ZMQ end point
-         * @param[in] v Endpoint string.
-         * @return Reference to this builder.
-         */
-        Builder &AddEndPoint(std::string v)
-        {
-            endPts_.push_back(std::move(v));
-            return *this;
-        }
-
-        /**
-         * @brief Add ZMQ service.
-         * @param[in] svc ZMQ service.
+         * @brief Add RPC service.
+         * @param[in] svc Generated RPC service (RpcServiceBase subclass).
          * @param[in] svcEle Configuration about number of rpc threads.
          * @return Reference to this builder.
          */
-        template <typename T>
-        Builder &AddService(T *svc, const RpcServiceCfg &svcEle)
+        Builder &AddService(RpcServiceBase *svc, const RpcServiceCfg &svcEle)
         {
-            auto *service = static_cast<ZmqService *>(svc);
-            svcList_.emplace_back(service, svcEle);
+            svcList_.emplace_back(svc, svcEle);
             return *this;
         }
 
@@ -184,8 +170,7 @@ public:
 #endif
 
     private:
-        std::vector<std::string> endPts_;
-        std::vector<std::pair<std::variant<ZmqService *>, RpcServiceCfg>> svcList_;
+        std::vector<std::pair<RpcServiceBase *, RpcServiceCfg>> svcList_;
         RpcCredential cred_;
         std::function<Status()> preStartCallback_{};
         bool useBrpc_ = false;
@@ -224,14 +209,20 @@ public:
     Status Init();
 
     /**
-     * @brief Bring up the server.
-     */
-    Status Run();
-
-    /**
      * @brief Shutdown a server.
      */
     void Shutdown();
+
+    /**
+     * @brief Post an interrupt signal (no-op; brpc server lifecycle is externally driven).
+     */
+    void Interrupt() override;
+
+    /**
+     * @brief Check if the server is being interrupted.
+     * @return Whether it is interrupted.
+     */
+    bool IsInterrupted() const override;
 
     /**
      * @brief Register a brpc protobuf service.
@@ -265,17 +256,6 @@ public:
     void StopBrpcServer();
 
     /**
-     * @brief Post an interrupt signal.
-     */
-    void Interrupt() override;
-
-    /**
-     * @brief Check if the server is being interrupted.
-     * @return Whether it is interrupted.
-     */
-    bool IsInterrupted() const override;
-
-    /**
      * @brief Check if brpc mode is enabled.
      * @return True if brpc mode is enabled.
      */
@@ -288,7 +268,6 @@ public:
      * @brief Query what ports the server is listening.
      * @return Listening port strings.
      */
-    std::vector<std::string> GetListeningPorts() const;
 
     /**
      * @brief Obtains the threadpool usage of RpcService (interval-based, resets counters).
@@ -310,20 +289,14 @@ private:
     /**
      * @brief Register a Service
      * @note Caller owns the service object pointer and must ensure it is not deallocated when the server is
-     running.
+     * running.
      * @param[in] svc Service to be registered.
      * @param[in] svcEle Configuration about number of rpc threads.
      * @return Status of the call.
      */
-    Status RegisterService(ZmqService *svc, const RpcServiceCfg &cfg);
+    Status RegisterService(RpcServiceBase *svc, const RpcServiceCfg &cfg);
 
-    /**
-     * @brief Initialize an authentication handler for this server to enable authentication.
-     * @return Status of the call.
-     */
-    Status InitAuthHandler();
-
-    std::variant<std::unique_ptr<ZmqServerImpl>> pimpl_;
+    std::map<std::string, RpcServiceBase *> svcMap_;
     std::unique_ptr<brpc::Server> brpcServer_;
     bool useBrpc_ = false;
     std::mutex brpcStopMtx_;  ///< Serializes StopBrpcServer() concurrent calls.

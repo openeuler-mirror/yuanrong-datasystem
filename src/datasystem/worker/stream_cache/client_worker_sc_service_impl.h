@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/stream_cache/stream_fields.h"

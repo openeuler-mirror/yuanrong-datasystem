@@ -18,6 +18,7 @@
  * Description: Code to manage device object.
  */
 #include "datasystem/master/object_cache/device/master_dev_oc_manager.h"
+#include "datasystem/common/perf/perf_manager.h"
 
 #include <algorithm>
 #include <memory>

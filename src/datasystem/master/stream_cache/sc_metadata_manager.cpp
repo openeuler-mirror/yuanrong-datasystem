@@ -15,6 +15,7 @@
  * Description: Module responsible for managing the stream cache metadata on the master.
  */
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <chrono>
 #include <cstdint>

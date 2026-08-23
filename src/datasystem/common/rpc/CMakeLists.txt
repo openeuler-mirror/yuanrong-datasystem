@@ -37,7 +37,6 @@ set(COMMON_RPC_ZMQ_SRCS
         network_latency_estimator.cpp
         rpc_auth_key_manager.cpp
         rpc_channel.cpp
-        rpc_message.cpp
         rpc_credential.cpp
         rpc_options.cpp
         rpc_server.cpp

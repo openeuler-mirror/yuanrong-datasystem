@@ -17,6 +17,7 @@
 /** Description: Implements fixed-location replica polling for object reads. */
 
 #include "datasystem/client/transport/object_read/replica_reader.h"
+#include "datasystem/common/util/rpc_util.h"
 
 #include <chrono>
 #include <cstddef>

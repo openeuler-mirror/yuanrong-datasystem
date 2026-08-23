@@ -15,6 +15,7 @@
  * Description: Code to manage device object.
  */
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <memory>
 

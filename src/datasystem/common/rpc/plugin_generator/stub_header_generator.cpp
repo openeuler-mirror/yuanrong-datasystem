@@ -50,11 +50,11 @@ void RpcGenerator::GenerateGenericStubClass(io::Printer &printer, const google::
     vars["stub"] = svcName + "_Stub";
     vars["multi_session"] = std::to_string(MultiSessionEnabled(svc));
     const std::string constructor =
-        "class $stub$ : public RpcStubBase {\n"
+        "class $stub$ : public ::datasystem::RpcStubBase {\n"
         "public:\n"
         "    explicit $stub$(std::shared_ptr<::datasystem::RpcChannel> channel, int32_t timeoutMs = -1);\n"
         "    ~$stub$() = default;\n"
-        "    Status GetInitStatus() override;\n";
+        "    ::datasystem::Status GetInitStatus() override;\n";
     printer.Print(vars, constructor.c_str());
 
     // Implement the override function ServiceName.
@@ -122,11 +122,11 @@ void RpcGenerator::GenerateStubPrologue(io::Printer &printer, const google::prot
         impl += "#include \"$file_name$.pb.h\"\n";
     }
     impl +=
+        "#include \"datasystem/common/rpc/rpc_stub_base.h\"\n"
         "#include \"datasystem/common/rpc/zmq/zmq_stub.h\"\n"
         "#include \"datasystem/common/rpc/zmq/zmq_message.h\"\n"
         "#include \"datasystem/common/util/net_util.h\"\n"
-        "#include \"datasystem/utils/status.h\"\n"
-        "#include \"datasystem/common/rpc/rpc_stub_base.h\"\n";
+        "#include \"datasystem/utils/status.h\"\n";
     printer.Print(vars, impl.c_str());
     for (auto k = 0; k < file.dependency_count(); ++k) {
         auto depend = file.dependency(k)->name();

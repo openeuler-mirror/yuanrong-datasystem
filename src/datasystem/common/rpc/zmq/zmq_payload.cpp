@@ -44,12 +44,12 @@ Status ZmqPayload::AddPayloadFrames(std::vector<RpcMessage> &buffer, ZmqMsgFrame
     frames.push_back(ZmqInt64ToMessage(bufSz));
 
     if (tagPayloadFrame) {
-        frames.back().SetType(ZmqMessage::ZmqMsgType::PAYLOAD_SZ);
+        frames.back().SetType(RpcMessage::MsgType::PAYLOAD_SZ);
     }
     size_t length = frames.size();
     frames.resize(length + buffer.size());
     for (size_t i = 0; i < buffer.size(); i++) {
-        buffer[i].MoveToMsg(frames[length + i]);
+        frames[length + i] = std::move(buffer[i]);
     }
     return Status::OK();
 }
@@ -83,10 +83,10 @@ Status ZmqPayload::AddPayloadFrames(const std::vector<MemView> &payload, ZmqMsgF
 Status ZmqPayload::ProcessEmbeddedPayload(ZmqMsgFrames &frames, std::unique_ptr<ZmqPayloadEntry> &out)
 {
     CHECK_FAIL_RETURN_STATUS(!frames.empty(), StatusCode::K_INVALID, "Expect a 64 bit integer");
-    ZmqMessage lengthMsg = std::move(frames.front());
+    RpcMessage lengthMsg = std::move(frames.front());
     frames.pop_front();
     int64_t sz = 0;
-    RETURN_IF_NOT_OK(ZmqMessageToInt64(lengthMsg, sz));
+    RETURN_IF_NOT_OK(RpcMessageToInt64(lengthMsg, sz));
     auto entry = std::make_unique<ZmqPayloadEntry>();
     entry->len = sz;
     int64_t remainingSz = sz;
@@ -94,7 +94,7 @@ Status ZmqPayload::ProcessEmbeddedPayload(ZmqMsgFrames &frames, std::unique_ptr<
     // Client can send the buffer in multipart buffers. So keep on receiving until we got them all.
     while (remainingSz > 0) {
         CHECK_FAIL_RETURN_STATUS(!frames.empty(), StatusCode::K_INVALID, "Not enough payload frames");
-        ZmqMessage msg = std::move(frames.front());
+        RpcMessage msg = std::move(frames.front());
         frames.pop_front();
         size_t n = msg.Size();
         remainingSz -= n;
@@ -187,7 +187,7 @@ Status SendPacket(const std::shared_ptr<ZmqMsgQueRef> &mQue, const std::string &
     ZmqMsgFrames frames;
     RETURN_IF_NOT_OK(PushBackProtobufToFrames(rq, frames));
     // Need to tag this special message for V2MTP
-    frames.front().SetType(ZmqMessage::ZmqMsgType::DECODER);
+    frames.front().SetType(RpcMessage::MsgType::DECODER);
     size_t bufSz = 0;
     while (!bufList.empty()) {
         auto &ele = bufList.front();
@@ -246,10 +246,10 @@ Status ZmqPayload::SendAsync(const std::shared_ptr<ZmqMsgQueRef> &mQue, const Me
     // Wait for ack and get the token back.
     ZmqMetaMsgFrames rsp;
     RETURN_IF_NOT_OK(mQue->ReceiveMsg(rsp));
-    ZmqMessage reply;
+    RpcMessage reply;
     RETURN_IF_NOT_OK(AckRequest(rsp.second, reply));
     HandshakeTokenPb token;
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(reply, token));
+    RETURN_IF_NOT_OK(ParseFromRpcMessage(reply, token));
     /**
      * Now we split the cursor buffer into smaller packets and each one can be
      * sent in parallel (if we use a thread pool). Regardless, the packets will

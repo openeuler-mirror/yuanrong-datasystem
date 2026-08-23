@@ -100,8 +100,7 @@ Status WorkerRemoteMasterSCApi::CreateProducer(master::CreateProducerReqPb &req,
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CreateProducer(opts, req, rsp)
-                                  : rpcSession_->CreateProducer(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_->CreateProducer(opts, req, rsp));
     INJECT_POINT("worker.CreateProducer.afterSendToMaster");
 
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Add new pub node on master success", LogPrefix(),
@@ -119,8 +118,7 @@ Status WorkerRemoteMasterSCApi::CloseProducer(master::CloseProducerReqPb &req, m
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CloseProducer(opts, req, rsp)
-                                  : rpcSession_->CloseProducer(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_->CloseProducer(opts, req, rsp));
     INJECT_POINT("worker.CloseProducer.afterSendToMaster");
 
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s] Closing %d producers on master success", LogPrefix(),
@@ -146,8 +144,7 @@ Status WorkerRemoteMasterSCApi::Subscribe(master::SubscribeReqPb &req, master::S
         return Status::OK();
     });
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->Subscribe(opts, req, rsp)
-                                  : rpcSession_->Subscribe(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_->Subscribe(opts, req, rsp));
     INJECT_POINT("worker.Subscribe.afterSendToMaster");
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, C:%s] Add new consumer on master succeeded", LogPrefix(),
                                               req.consumer_meta().stream_name(), req.consumer_meta().consumer_id());
@@ -164,8 +161,7 @@ Status WorkerRemoteMasterSCApi::CloseConsumer(master::CloseConsumerReqPb &req, m
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CloseConsumer(opts, req, rsp)
-                                  : rpcSession_->CloseConsumer(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_->CloseConsumer(opts, req, rsp));
     INJECT_POINT("worker.CloseConsumer.afterSendToMaster");
 
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, C:%s] Delete consumer on master succeeded", LogPrefix(),
@@ -178,8 +174,7 @@ Status WorkerRemoteMasterSCApi::DeleteStream(master::DeleteStreamReqPb &req, mas
     RpcOptions opts;
     CHECK_AND_SET_TIMEOUT(&GetRequestContext()->scTimeoutDuration, req, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->DeleteStream(opts, req, rsp)
-                                  : rpcSession_->DeleteStream(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_->DeleteStream(opts, req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Delete stream succeeded.", LogPrefix(), req.stream_name());
     return Status::OK();
 }
@@ -190,8 +185,7 @@ Status WorkerRemoteMasterSCApi::QueryGlobalProducersNum(master::QueryGlobalNumRe
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return brpcSession_ ? brpcSession_->QueryGlobalProducersNum(opts, req, rsp)
-                        : rpcSession_->QueryGlobalProducersNum(opts, req, rsp);
+    return brpcSession_->QueryGlobalProducersNum(opts, req, rsp);
 }
 
 Status WorkerRemoteMasterSCApi::QueryGlobalConsumersNum(master::QueryGlobalNumReqPb &req,
@@ -200,8 +194,7 @@ Status WorkerRemoteMasterSCApi::QueryGlobalConsumersNum(master::QueryGlobalNumRe
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return brpcSession_ ? brpcSession_->QueryGlobalConsumersNum(opts, req, rsp)
-                        : rpcSession_->QueryGlobalConsumersNum(opts, req, rsp);
+    return brpcSession_->QueryGlobalConsumersNum(opts, req, rsp);
 }
 
 std::string WorkerRemoteMasterSCApi::LogPrefix() const

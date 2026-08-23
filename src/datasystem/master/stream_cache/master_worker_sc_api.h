@@ -233,6 +233,7 @@ public:
     Status ForgetClearAllRemotePubAsyncTag(int64_t tagId);
 
 private:
+        std::shared_ptr<MasterWorkerSCService_BrpcGenericStub> brpcSession_{ nullptr };
     /**
      * @brief Get log prefix
      * @return The log prefix
@@ -240,8 +241,6 @@ private:
     [[nodiscard]] std::string LogPrefix() const override;
 
     HostPort workerAddress_;
-    std::shared_ptr<MasterWorkerSCService_Stub> rpcSession_{ nullptr };  // Session to the worker rpc service.
-    std::shared_ptr<MasterWorkerSCService_BrpcGenericStub> brpcSession_{ nullptr };
 };
 
 /**
@@ -279,6 +278,7 @@ public:
     Status UpdateTopoNotification(UpdateTopoNotificationReq &req) override;
 
 private:
+        std::shared_ptr<MasterWorkerSCService_BrpcGenericStub> brpcSession_{ nullptr };
     /**
      * @brief Get log prefix
      * @return The log prefix

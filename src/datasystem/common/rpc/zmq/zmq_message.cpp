@@ -27,7 +27,7 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-ZmqMessage::ZmqMessage() : flag_(ZmqMsgType::NONE)
+ZmqMessage::ZmqMessage() : flag_(MsgType::NONE)
 {
     // zmq_msg_init() always return 0 according to ZMQ manual
     (void)zmq_msg_init(&msg_);

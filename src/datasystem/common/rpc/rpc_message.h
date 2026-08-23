@@ -15,32 +15,42 @@
  */
 
 /**
- * Description: Message classes encapsulating the ZmqMessage/AddPayloadFrames.
+ * Description: Transport-neutral RPC message buffer.
  */
 #ifndef DATASYSTEM_COMMON_RPC_RPC_MESSAGE_H
 #define DATASYSTEM_COMMON_RPC_RPC_MESSAGE_H
 
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <ostream>
 #include <string>
 #include <utility>
-#include <memory>
 
-#include "datasystem/common/rpc/zmq/zmq_message.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/protos/utils.pb.h"
 
 namespace datasystem {
-enum class RpcSendFlags : int { NONE = 0, DONTWAIT = ZMQ_DONTWAIT, SNDMORE = ZMQ_SNDMORE };
-enum class RpcRecvFlags : int { NONE = 0, DONTWAIT = ZMQ_DONTWAIT };
+// Values mirror the fixed libzmq wire flags (zmq.h: ZMQ_DONTWAIT=1, ZMQ_SNDMORE=2)
+// so zmq_msg_send/recv keep working without including <zmq.h> here.
+enum class RpcSendFlags : int { NONE = 0, DONTWAIT = 1, SNDMORE = 2 };
+enum class RpcRecvFlags : int { NONE = 0, DONTWAIT = 1 };
 typedef void(MsgFreeFn)(void *data, void *hint);
+class RpcMessage;
+using RpcMsgFrames = std::deque<RpcMessage>;
+using RpcMsgFramesRef = std::deque<RpcMessage> &;
 
 class RpcMessage {
 public:
-    /**
-     * @brief The most basic form of constructor, sets everything to empty.
-     */
+    enum class MsgType : uint16_t { NONE = 0, PAYLOAD_SZ, DECODER };
+
     RpcMessage() = default;
 
+    RpcMessage(const RpcMessage &) = delete;
+    RpcMessage &operator=(const RpcMessage &) = delete;
     RpcMessage(RpcMessage &&msg) noexcept;
+
     RpcMessage &operator=(RpcMessage &&msg) noexcept;
 
     virtual ~RpcMessage();
@@ -48,11 +58,6 @@ public:
     void *Data() const;
 
     size_t Size() const;
-
-    // helper functions for zmq lower layer or FC purposes
-    explicit RpcMessage(ZmqMessage msg);
-
-    void MoveToMsg(ZmqMessage &msg);
 
     bool operator==(const RpcMessage &other) const;
 
@@ -64,8 +69,32 @@ public:
 
     void Clear();
 
+    // Frame metadata used by the zmq wire protocol (payload-size / decoder markers
+    // and multi-frame continuation); kept until the zmq transport is removed.
+    void SetType(MsgType type)
+    {
+        type_ = type;
+    }
+
+    MsgType GetType() const
+    {
+        return type_;
+    }
+
+    void SetMore(bool more)
+    {
+        more_ = more;
+    }
+
+    bool More() const
+    {
+        return more_;
+    }
+
     Status Resize(size_t len);
 
+    // Takes ownership of data: ffn(data, hint) is called on destruction (ffn may be null
+    // for a caller-owned buffer that is only referenced).
     Status TransferOwnership(void *data, size_t size, MsgFreeFn *ffn, void *hint = nullptr);
 
     Status CopyString(const std::string &str);
@@ -87,7 +116,7 @@ public:
     Status ZeroCopyBuffer(void *data, size_t size);
 
     /**
-     * @brief Copy a buffer into ZmqMessage
+     * @brief Copy a buffer into this message
      * @param[in] data Source of the buffer
      * @param[in] size Size of the buffer
      * @return Status object
@@ -95,9 +124,47 @@ public:
     Status CopyBuffer(const void *data, size_t size);
 
 protected:
-    ZmqMessage &GetMsg();
+    void FreeBuffer();
 
-    ZmqMessage msg_;
+    uint8_t *data_ = nullptr;
+    size_t size_ = 0;
+    // Owning free function; null means the buffer is referenced (caller-owned) or malloc'ed
+    // via AllocMem/CopyBuffer (freed with free()).
+    MsgFreeFn *freeFn_ = nullptr;
+    void *hint_ = nullptr;
+    bool owned_ = false;
+    MsgType type_ = MsgType::NONE;
+    bool more_ = false;
 };
+
+template <typename T>
+inline Status SerializeToRpcMessage(const T &pb, RpcMessage &dest)
+{
+    auto sz = pb.ByteSizeLong();
+    RETURN_IF_NOT_OK(dest.AllocMem(sz));
+    bool rc = pb.SerializeToArray(dest.Data(), sz);
+    CHECK_FAIL_RETURN_STATUS(rc, K_RUNTIME_ERROR, "Serialization error");
+    return Status::OK();
+}
+
+inline RpcMessage StatusToRpcMessage(const Status &st)
+{
+    RpcMessage errorMsg;
+    ErrorInfoPb err;
+    err.set_error_code(st.GetCode());
+    err.set_error_msg(st.GetMsg());
+    Status tmpRc = SerializeToRpcMessage<ErrorInfoPb>(err, errorMsg);
+    if (tmpRc.IsError()) {
+        LOG(ERROR) << "SerializeToRpcMessage Fail, status: " << tmpRc.ToString();
+    }
+    return errorMsg;
+}
+
+inline std::ostream &operator<<(std::ostream &out, const RpcMessage &msg)
+{
+    (void)msg;
+    out << "***";
+    return out;
+}
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_RPC_MESSAGE_H

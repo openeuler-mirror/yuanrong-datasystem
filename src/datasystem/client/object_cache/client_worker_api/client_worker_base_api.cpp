@@ -18,6 +18,7 @@
  * Description: Defines the worker client base class to communicate with the worker service.
  */
 #include "datasystem/client/object_cache/client_worker_api/client_worker_base_api.h"
+#include "datasystem/common/util/validator.h"
 
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/api_deadline.h"

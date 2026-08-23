@@ -153,13 +153,12 @@ Status WorkerRemoteWorkerTransApi::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &r
     int64_t maxTimeoutMs = 60000;
     remainingTime = std::min(remainingTime, maxTimeoutMs);
     opts.SetTimeout(remainingTime);
-    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    CHECK_FAIL_RETURN_STATUS(brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
 
     UrmaHandshakeReqPb req;
     std::string senderAddStr = hostPort_.ToString();
     RETURN_IF_NOT_OK(ConstructHandshakePb(senderAddStr, req, firstClientEntityId_));
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->WorkerWorkerExchangeUrmaConnectInfo(opts, req, rsp)
-                                  : rpcSession_->WorkerWorkerExchangeUrmaConnectInfo(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_->WorkerWorkerExchangeUrmaConnectInfo(opts, req, rsp));
     RETURN_IF_NOT_OK(FinalizeOutboundConnection(rsp));
     return Status::OK();
 }

@@ -90,7 +90,7 @@ private:
                                             meta_.client_id(), meta_.svc_name(), meta_.method_index(), seqNo_);
         outMsg_.clear();
         // But we will tag a sequence number. -1 will mark the end to write stream.
-        ZmqMessage seqMsg = ZmqInt64ToMessage(seqNo_++);
+        RpcMessage seqMsg = ZmqInt64ToMessage(seqNo_++);
         outMsg_.push_back(std::move(seqMsg));
         SetMetaAuthInfo();
         RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg_));
@@ -106,9 +106,9 @@ private:
     {
         VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " reading" << std::endl;
         RETURN_IF_NOT_OK(ReadAll(ZmqRecvFlags::NONE));
-        ZmqMessage msg;
+        RpcMessage msg;
         RETURN_IF_NOT_OK(AckRequest(inMsg_, msg));
-        RETURN_IF_NOT_OK(ParseFromZmqMessage(msg, pb));
+        RETURN_IF_NOT_OK(ParseFromRpcMessage(msg, pb));
         return Status::OK();
     }
 

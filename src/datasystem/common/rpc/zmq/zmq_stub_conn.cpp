@@ -237,14 +237,14 @@ Status ZmqFrontend::ZmqSocketToBackend()
     ZmqMsgFrames frames;
     RETURN_IF_NOT_OK(frontend_->GetAllFrames(frames, ZmqRecvFlags::DONTWAIT));
     ResetLiveness();
-    std::string receiver = ZmqMessageToString(frames.front());
+    std::string receiver = RpcMessageToString(frames.front());
     frames.pop_front();
     // Next one is the original MetaPb.
     CHECK_FAIL_RETURN_STATUS(!frames.empty(), K_RUNTIME_ERROR, "Incomplete frame");
-    ZmqMessage metaHdr = std::move(frames.front());
+    RpcMessage metaHdr = std::move(frames.front());
     frames.pop_front();
     MetaPb meta;
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(metaHdr, meta));
+    RETURN_IF_NOT_OK(ParseFromRpcMessage(metaHdr, meta));
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     if (receiver != heartBeatID_) {
         INJECT_POINT("ZmqFrontend.CorruptMetaPb", [&meta]() {
@@ -584,9 +584,9 @@ Status ZmqSockConnHelper::GetEndPoint(const ReconnectInfo &cInfo, std::string &p
     PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
     RecordTick(reply.first, TICK_CLIENT_END);
     RecordRpcLatencyMetrics(reply.first);
-    ZmqMessage replyMsg;
+    RpcMessage replyMsg;
     RETURN_IF_NOT_OK(AckRequest(reply.second, replyMsg));
-    auto curPath = ZmqMessageToString(replyMsg);
+    auto curPath = RpcMessageToString(replyMsg);
     CHECK_FAIL_RETURN_STATUS(!curPath.empty(), K_NOT_FOUND,
                              FormatString("Channel %s service '%s' doesn't support uds/tcp direct",
                                           info->channel_->GetZmqEndPoint(), connInfo->svcName_));
@@ -855,7 +855,7 @@ Status ZmqBaseStubConn::ReportErrorToClient(const std::string &qID, const MetaPb
 {
     ZmqMsgFrames reply;
     Status t = Status(code, msg);
-    reply.push_back(StatusToZmqMessage(t));
+    reply.push_back(StatusToRpcMessage(t));
     auto p = std::make_pair(meta, std::move(reply));
     RETURN_IF_NOT_OK(backendMgr->SendMsg(qID, p, QUE_NO_TIMEOUT));
     return Status::OK();
@@ -1515,13 +1515,13 @@ Status SockConnEntry::FrontendToBackend(int fd, std::shared_ptr<SockConnEntry::F
     const size_t msgFrameMinSize = 2;
     CHECK_FAIL_RETURN_STATUS(frames.size() >= msgFrameMinSize, StatusCode::K_INVALID,
                              "Invalid msg: frames.size() = " + std::to_string(frames.size()));
-    std::string receiver = ZmqMessageToString(frames.front());
+    std::string receiver = RpcMessageToString(frames.front());
     frames.pop_front();
     // Next one is the original MetaPb.
-    ZmqMessage metaHdr = std::move(frames.front());
+    RpcMessage metaHdr = std::move(frames.front());
     frames.pop_front();
     MetaPb meta;
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(metaHdr, meta));
+    RETURN_IF_NOT_OK(ParseFromRpcMessage(metaHdr, meta));
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_UDS, GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
     RecordTick(meta, TICK_CLIENT_RECV);

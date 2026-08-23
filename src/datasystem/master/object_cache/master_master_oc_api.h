@@ -118,9 +118,8 @@ public:
 private:
     HostPort destHostPort_;   // The HostPort of the destination node
     HostPort localHostPort_;  // The HostPort of the local node
-    std::shared_ptr<AkSkManager> akSkManager_;
-    std::shared_ptr<master::MasterOCService_Stub> rpcSession_{ nullptr };  // session to the master rpc service
     std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession_{ nullptr };
+    std::shared_ptr<AkSkManager> akSkManager_;
 };
 }  // namespace master
 }  // namespace datasystem

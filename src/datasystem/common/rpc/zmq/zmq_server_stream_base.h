@@ -121,7 +121,7 @@ public:
     {
         VLOG(RPC_LOG_LEVEL) << "Stream worker " << meta_.worker_id() << " sending rc " << Status::OK() << " message "
                             << LogHelper::IgnoreSensitive(pb) << " back to client " << meta_.client_id() << std::endl;
-        ZmqMessage rcMsg = StatusToZmqMessage(Status::OK());
+        RpcMessage rcMsg = StatusToRpcMessage(Status::OK());
         outMsg_.push_back(std::move(rcMsg));
         RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg_));
         RETURN_OK_IF_TRUE(HasRecvPayloadOp());
@@ -152,9 +152,9 @@ public:
         VLOG(RPC_LOG_LEVEL) << "Stream worker " << meta_.worker_id() << " reading" << std::endl;
         RETURN_IF_NOT_OK(ReadAll(ZmqRecvFlags::NONE));
         CHECK_FAIL_RETURN_STATUS(!inMsg_.empty(), StatusCode::K_INVALID, "Invalid stream.");
-        ZmqMessage protoMsg = std::move(inMsg_.front());
+        RpcMessage protoMsg = std::move(inMsg_.front());
         inMsg_.pop_front();
-        RETURN_IF_NOT_OK(ParseFromZmqMessage(protoMsg, pb));
+        RETURN_IF_NOT_OK(ParseFromRpcMessage(protoMsg, pb));
         GetRequestContext()->serializedMessage = std::move(protoMsg);
         GetRequestContext()->reqAk = meta_.access_key();
         GetRequestContext()->reqSignature = meta_.signature();
@@ -318,7 +318,7 @@ public:
         if (writeOnce_.compare_exchange_strong(expected, true)) {
             VLOG(RPC_LOG_LEVEL) << FormatString("Server uses unary socket sending rc %d back to client %s", rc,
                                                 meta_.client_id());
-            ZmqMessage rcMsg = StatusToZmqMessage(rc);
+            RpcMessage rcMsg = StatusToRpcMessage(rc);
             outMsg_.push_back(std::move(rcMsg));
             if (enableMsgQ_) {
                 return SendAll(ZmqSendFlags::NONE);
@@ -396,7 +396,7 @@ public:
                                 << LogHelper::IgnoreSensitive(pb) << " back to client " << meta_.client_id()
                                 << std::endl;
             PerfPoint point(PerfKey::ZMQ_RESPONSE_PROTO_TO_MSG);
-            ZmqMessage rcMsg = StatusToZmqMessage(Status::OK());
+            RpcMessage rcMsg = StatusToRpcMessage(Status::OK());
             outMsg_.push_back(std::move(rcMsg));
             RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg_));
             point.Record();
@@ -420,7 +420,7 @@ public:
             VLOG(RPC_LOG_LEVEL) << "Server uses unary socket sending rc " << Status::OK() << " message "
                                 << LogHelper::IgnoreSensitive(pb) << " back to client " << meta_.client_id()
                                 << std::endl;
-            ZmqMessage rcMsg = StatusToZmqMessage(Status::OK());
+            RpcMessage rcMsg = StatusToRpcMessage(Status::OK());
             outMsg.push_back(std::move(rcMsg));
             RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg));
             RETURN_OK_IF_TRUE(HasRecvPayloadOp());
@@ -506,10 +506,10 @@ public:
         bool expected = false;
         if (readOnce_.compare_exchange_strong(expected, true)) {
             VLOG(RPC_LOG_LEVEL) << "Server uses unary socket reading";
-            ZmqMessage protoMsg = std::move(inMsg_.front());
+            RpcMessage protoMsg = std::move(inMsg_.front());
             inMsg_.pop_front();
             PerfPoint point(PerfKey::ZMQ_REQUEST_MSG_TO_PROTO);
-            RETURN_IF_NOT_OK(ParseFromZmqMessage(protoMsg, pb));
+            RETURN_IF_NOT_OK(ParseFromRpcMessage(protoMsg, pb));
             point.Record();
             PerfPoint::RecordElapsed(PerfKey::ZMQ_REQUEST_SIZE_BEFORE_DESERIALIZE, protoMsg.Size());
             GetRequestContext()->serializedMessage = std::move(protoMsg);

@@ -17,8 +17,6 @@ ds_cc_test(
     deps = [
         "//src/datasystem/common/rpc:rpc_server",
         "//src/datasystem/common/rpc/brpc:hello_cc_proto",
-        "//src/datasystem/common/rpc/zmq:zmq_payload",
-        "//src/datasystem/common/rpc/zmq:zmq_stub_impl",
         "@com_github_apache_brpc//:brpc",
     ],
 )
