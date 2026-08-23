@@ -1976,6 +1976,7 @@ private:
     std::shared_ptr<datasystem::client::EmbeddedClientWorkerApi> embeddedClientWorkerApi_{ nullptr };
     void *worker_;
     std::shared_ptr<ThreadPool> memoryCopyThreadPool_;
+    std::shared_ptr<ThreadPool> setMemoryCopyThreadPool_;
     std::shared_ptr<ThreadPool> asyncSetRPCPool_;
     std::shared_ptr<ThreadPool> asyncGetRPCPool_;
     std::shared_ptr<ThreadPool> asyncPipelineRH2DPool_;
@@ -2030,6 +2031,7 @@ private:
     bool clientEnableP2Ptransfer_ = false;
     int parallismNum_ = 0;
     uint64_t memcpyParallelThreshold_ = 0;
+    uint64_t setMemcpyParallelThreshold_ = 4 * 1024 * 1024;
 
     std::shared_ptr<IServiceDiscovery> serviceDiscovery_ = nullptr;
 };

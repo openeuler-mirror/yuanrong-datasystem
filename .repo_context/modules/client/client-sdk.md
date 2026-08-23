@@ -326,6 +326,10 @@
   - remote H2D toggle
   - optional `IServiceDiscovery`; the public implementations are ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`
   - fast transport shared-memory size
+  - routed single-key `Set(StringView)` copy tuning: `DATASYSTEM_SET_MEMCOPY_THREAD_NUM` selects 0 to 4 copy
+    workers (default 4; 0 or 1 keeps serial copy), and `DATASYSTEM_SET_MEMCOPY_PARALLEL_THRESHOLD` sets the
+    byte threshold for parallel copy (default 4 MiB). Each `ObjectClientImpl` owns a lazy 0-to-N pool; this tuning
+    is limited to `ProcessTransportPut` and does not alter SHM Set, `Set(Buffer)`, MSet, or Get copy paths.
 - Verified in `ObjectClientImpl` constructor:
   - when relevant fields are empty, some connection and auth options are loaded from environment variables such as:
     - `DATASYSTEM_HOST`
