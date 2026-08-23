@@ -20,6 +20,7 @@
 #include "datasystem/common/rdma/urma_manager.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cerrno>
 #include <cstdio>
@@ -1382,7 +1383,14 @@ UrmaManager::SrcChipSelectionDecision UrmaManager::BuildSrcChipSelectionDecision
                                                                                  uint64_t logicalWriteWrCount)
 {
     const uint64_t sequence = affinitySrcChipIdSequence_.fetch_add(1, std::memory_order_relaxed);
-    uint8_t candidate = static_cast<uint8_t>(URMA_AFFINITY_SRC_CHIP_MIN + sequence % URMA_AFFINITY_SRC_CHIP_COUNT);
+    const uint8_t candidate =
+        static_cast<uint8_t>(URMA_AFFINITY_SRC_CHIP_MIN + sequence % URMA_AFFINITY_SRC_CHIP_COUNT);
+    return BuildSrcChipSelectionDecisionWithCandidate(transmittedChipId, logicalWriteWrCount, candidate);
+}
+
+UrmaManager::SrcChipSelectionDecision UrmaManager::BuildSrcChipSelectionDecisionWithCandidate(
+    uint8_t transmittedChipId, uint64_t logicalWriteWrCount, uint8_t candidateChipId)
+{
     const uint32_t srcChipPolicy = FLAGS_ub_numa_src_chip_policy;
     if (srcChipPolicy == static_cast<uint32_t>(UbNumaSrcChipPolicy::ROUND_ROBIN)) {
 #ifdef WITH_TESTS
@@ -1394,7 +1402,7 @@ UrmaManager::SrcChipSelectionDecision UrmaManager::BuildSrcChipSelectionDecision
 #endif
     }
     const uint32_t threshold = FLAGS_ub_numa_inflight_wr_diff_threshold;
-    SrcChipSelectionDecision decision{ candidate, candidate, srcChipPolicy, threshold,
+    SrcChipSelectionDecision decision{ candidateChipId, candidateChipId, srcChipPolicy, threshold,
                                        std::max<uint64_t>(logicalWriteWrCount, 1) };
     if (threshold == 0) {
         return decision;
@@ -1450,9 +1458,14 @@ void UrmaManager::ApplySrcChipDepthFeedback(uint8_t transmittedChipId, SrcChipSe
     }
 }
 
+bool UrmaManager::ShouldLogSrcChipSelection(const SrcChipSelectionDecision &decision)
+{
+    return decision.depthOverride;
+}
+
 void UrmaManager::ObserveSrcChipSelection(const SrcChipSelectionDecision &decision)
 {
-    if (decision.depthOverride) {
+    if (ShouldLogSrcChipSelection(decision)) {
         LOG_FIRST_AND_EVERY_N(INFO, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_SRC_CHIP_BALANCE] override policy candidate " << static_cast<uint32_t>(decision.candidate)
             << " with chip " << static_cast<uint32_t>(decision.selected) << ", policy=" << decision.policy
@@ -1461,27 +1474,20 @@ void UrmaManager::ObserveSrcChipSelection(const SrcChipSelectionDecision &decisi
 #ifdef WITH_TESTS
         INJECT_POINT_NO_RETURN("UrmaManager.SrcChipInflightBalanceOverride");
 #endif
-    } else if (decision.affinityOverride) {
-        LOG_FIRST_AND_EVERY_N(INFO, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_SRC_CHIP_AFFINITY] override RR candidate " << static_cast<uint32_t>(decision.candidate)
-            << " with memory-affinity chip " << static_cast<uint32_t>(decision.selected)
-            << ", logicalWriteWrCount=" << decision.estimatedWrCount << ", chip1Inflight=" << decision.chip1Inflight
-            << ", chip2Inflight=" << decision.chip2Inflight;
-#ifdef WITH_TESTS
-        INJECT_POINT_NO_RETURN("UrmaManager.SrcChipAffinityOverride");
-#endif
+        return;
     }
+#ifdef WITH_TESTS
+    if (decision.affinityOverride) {
+        INJECT_POINT_NO_RETURN("UrmaManager.SrcChipAffinityOverride");
+    }
+#endif
 }
 
-uint8_t UrmaManager::GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity, uint64_t logicalWriteWrCount)
+uint8_t UrmaManager::FinalizeSrcChipSelection(const SrcChipSelectionDecision &decision)
 {
-    if (!useNumaAffinity || FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::DISABLED)) {
-        return transmittedChipId;
-    }
-    const auto decision = BuildSrcChipSelectionDecision(transmittedChipId, logicalWriteWrCount);
     ObserveSrcChipSelection(decision);
 #ifdef WITH_TESTS
-    if (decision.selected == 1) {
+    if (decision.selected == URMA_AFFINITY_SRC_CHIP_MIN) {
         INJECT_POINT_NO_RETURN("UrmaManager.SrcChipSelected.1");
     } else {
         INJECT_POINT_NO_RETURN("UrmaManager.SrcChipSelected.2");
@@ -1490,23 +1496,52 @@ uint8_t UrmaManager::GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNum
     return decision.selected;
 }
 
-uint8_t UrmaManager::GetAffinitySrcChipIdForPost(uint8_t transmittedChipId, bool useNumaAffinity, bool firstPost,
-                                                 uint8_t logicalWriteChipId, uint64_t logicalWriteWrCount)
+uint8_t UrmaManager::GetAffinitySrcChipId(uint8_t transmittedChipId, bool useNumaAffinity, uint64_t logicalWriteWrCount,
+                                          uint8_t *candidateChipId)
 {
     if (!useNumaAffinity || FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::DISABLED)) {
+        return transmittedChipId;
+    }
+    const auto decision = BuildSrcChipSelectionDecision(transmittedChipId, logicalWriteWrCount);
+    if (candidateChipId != nullptr) {
+        *candidateChipId = decision.candidate;
+    }
+    return FinalizeSrcChipSelection(decision);
+}
+
+uint8_t UrmaManager::GetAffinitySrcChipIdForPost(uint8_t transmittedChipId, bool useNumaAffinity, bool firstPost,
+                                                 uint8_t logicalWriteChipId, uint64_t logicalWriteWrCount,
+                                                 uint8_t *candidateChipId)
+{
+    if (!useNumaAffinity || FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::DISABLED)) {
+        if (candidateChipId != nullptr) {
+            *candidateChipId = transmittedChipId;
+        }
         return transmittedChipId;
     }
     if (FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::PER_POST) || firstPost) {
         const uint64_t selectionWrCount =
             FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::PER_POST) ? 1 : logicalWriteWrCount;
-        return GetAffinitySrcChipId(transmittedChipId, true, selectionWrCount);
+        return GetAffinitySrcChipId(transmittedChipId, true, selectionWrCount, candidateChipId);
     }
     return logicalWriteChipId;
 }
 
+uint8_t UrmaManager::GetAffinitySrcChipIdWithCandidate(uint8_t transmittedChipId, bool useNumaAffinity,
+                                                       uint64_t logicalWriteWrCount, uint8_t candidateChipId)
+{
+    if (!useNumaAffinity || FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::DISABLED)) {
+        return transmittedChipId;
+    }
+    const auto decision =
+        BuildSrcChipSelectionDecisionWithCandidate(transmittedChipId, logicalWriteWrCount, candidateChipId);
+    return FinalizeSrcChipSelection(decision);
+}
+
 UrmaManager::UrmaNumaPostConfig UrmaManager::ResolveNumaPostConfig(uint8_t transmittedSrcChipId, uint8_t dstChipId,
                                                                    bool firstPost, uint8_t logicalWriteChipId,
-                                                                   uint64_t logicalWriteWrCount)
+                                                                   uint64_t logicalWriteWrCount,
+                                                                   uint8_t candidateChipId)
 {
     bool enabled = IsUbNumaAffinityEnabled() && transmittedSrcChipId != INVALID_CHIP_ID
                    && dstChipId != INVALID_CHIP_ID;
@@ -1518,13 +1553,23 @@ UrmaManager::UrmaNumaPostConfig UrmaManager::ResolveNumaPostConfig(uint8_t trans
                            [&enabled, &transmittedSrcChipId](bool forceEnabled) {
         if (forceEnabled) {
             enabled = true;
-            transmittedSrcChipId = URMA_AFFINITY_SRC_CHIP_MIN;
+            if (transmittedSrcChipId < URMA_AFFINITY_SRC_CHIP_MIN
+                || transmittedSrcChipId > URMA_AFFINITY_SRC_CHIP_MAX) {
+                transmittedSrcChipId = URMA_AFFINITY_SRC_CHIP_MIN;
+            }
         }
     });
 #endif
+    uint8_t resolvedCandidateChipId = candidateChipId;
+    const bool reuseLogicalWriteCandidate =
+        candidateChipId >= URMA_AFFINITY_SRC_CHIP_MIN && candidateChipId <= URMA_AFFINITY_SRC_CHIP_MAX
+        && FLAGS_ub_numa_rr_type == static_cast<uint32_t>(UbNumaRrType::PER_LOGICAL_WRITE);
     const auto srcChipId =
-        GetAffinitySrcChipIdForPost(transmittedSrcChipId, enabled, firstPost, logicalWriteChipId, logicalWriteWrCount);
-    return { enabled, srcChipId, GetSrcChipInflightWrCounter(srcChipId) };
+        reuseLogicalWriteCandidate
+            ? GetAffinitySrcChipIdWithCandidate(transmittedSrcChipId, enabled, logicalWriteWrCount, candidateChipId)
+            : GetAffinitySrcChipIdForPost(transmittedSrcChipId, enabled, firstPost, logicalWriteChipId,
+                                          logicalWriteWrCount, &resolvedCandidateChipId);
+    return { enabled, srcChipId, resolvedCandidateChipId, GetSrcChipInflightWrCounter(srcChipId) };
 }
 
 void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
@@ -2703,6 +2748,35 @@ Status UrmaManager::InitGatherWriteContext(const RemoteSegInfo &remoteInfo, size
     return Status::OK();
 }
 
+uint8_t UrmaManager::SelectDominantGatherSrcChipId(const std::vector<LocalSgeInfo> &objInfos, size_t begin, size_t end)
+{
+    if (begin >= end || end > objInfos.size()) {
+        return INVALID_CHIP_ID;
+    }
+    std::array<uint64_t, URMA_AFFINITY_SRC_CHIP_MAX + 1> bytesByChip{};
+    uint8_t dominantChipId = INVALID_CHIP_ID;
+    uint64_t dominantBytes = 0;
+    for (size_t i = begin; i < end; ++i) {
+        const auto chipId = objInfos[i].srcChipId;
+        if (chipId < URMA_AFFINITY_SRC_CHIP_MIN || chipId > URMA_AFFINITY_SRC_CHIP_MAX) {
+            continue;
+        }
+        bytesByChip[chipId] += objInfos[i].writeSize;
+        if (bytesByChip[chipId] > dominantBytes) {
+            dominantChipId = chipId;
+            dominantBytes = bytesByChip[chipId];
+        }
+    }
+#ifdef WITH_TESTS
+    INJECT_POINT_NO_RETURN("UrmaManager.OverrideGatherDominantSrcChip", [&dominantChipId](int chipId) {
+        if (chipId >= URMA_AFFINITY_SRC_CHIP_MIN && chipId <= URMA_AFFINITY_SRC_CHIP_MAX) {
+            dominantChipId = static_cast<uint8_t>(chipId);
+        }
+    });
+#endif
+    return dominantChipId;
+}
+
 Status UrmaManager::AppendGatherWriteRequest(
     const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos, size_t dstSgeIdx, size_t &srcSgeIdx,
     const std::optional<UrmaLateCompletionContext> &lateCompletionContext, UrmaGatherWriteContext &context)
@@ -2736,8 +2810,9 @@ Status UrmaManager::AppendGatherWriteRequest(
                                       .user_tseg = nullptr };
     context.totalWriteSize += singleDstWriteSize;
     urma_sg_t dstSg = { .sge = &context.dstSgeList[dstSgeIdx], .num_sge = 1 };
-    return CreateGatherWriteEvent(dstSgeIdx, singleDstWriteSize, objInfos[srcSgeStart].srcChipId,
-                                  remoteInfo.dstChipId, srcSg, dstSg, lateCompletionContext, context);
+    const auto dominantSrcChipId = SelectDominantGatherSrcChipId(objInfos, srcSgeStart, srcSgeIdx);
+    return CreateGatherWriteEvent(dstSgeIdx, singleDstWriteSize, dominantSrcChipId, remoteInfo.dstChipId, srcSg, dstSg,
+                                  lateCompletionContext, context);
 }
 
 Status UrmaManager::CreateGatherWriteEvent(
@@ -2747,9 +2822,15 @@ Status UrmaManager::CreateGatherWriteEvent(
 {
     urma_jfs_wr_flag_t flag = { .value = 0 };
     flag.bs.complete_enable = 1;
-    const auto numaConfig = ResolveNumaPostConfig(transmittedSrcChipId, dstChipId, dstSgeIdx == 0,
-                                                  context.logicalWriteChipId, context.wrList.size());
+    const bool firstPost = dstSgeIdx == 0;
+    const uint64_t selectionWrCount = firstPost ? context.wrList.size() : 1;
+    const auto numaConfig =
+        ResolveNumaPostConfig(transmittedSrcChipId, dstChipId, firstPost, context.logicalWriteChipId, selectionWrCount,
+                              firstPost ? INVALID_CHIP_ID : context.logicalWriteCandidateChipId);
     context.logicalWriteChipId = numaConfig.srcChipId;
+    if (firstPost) {
+        context.logicalWriteCandidateChipId = numaConfig.candidateChipId;
+    }
     flag.bs.has_drv_ext = numaConfig.enabled ? 1 : 0;
     urma_rw_wr_t rw = { .src = srcSg, .dst = dstSg, .target_hint = 0, .notify_data = 0 };
     const uint64_t requestId = GenerateReqId();

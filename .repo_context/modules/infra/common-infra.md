@@ -134,8 +134,10 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     behavior for ablation/rollback, while the default `1` keeps round-robin as the baseline and overrides a remote
     candidate only when the memory-affinity chip can absorb the estimated WR count for the logical write without
     becoming busier than that candidate. `ub_numa_rr_type` controls whether the decision is made per logical write or
-    per post. Both policies use the existing per-chip `UrmaEvent` inflight-WR counters as relaxed feedback. If the
-    absolute chip-1/chip-2 difference is strictly greater than `ub_numa_inflight_wr_diff_threshold` (default `15`), the
+    per post. A per-logical-write Gather advances the round-robin candidate once, then re-evaluates each WR's affinity
+    from the byte-dominant source Chip across that WR's SGEs. Both policies use the existing per-chip `UrmaEvent`
+    inflight-WR counters as relaxed feedback. If the absolute chip-1/chip-2 difference is strictly greater than
+    `ub_numa_inflight_wr_diff_threshold` (default `15`), the
     lower-depth chip overrides all other decisions; `0` disables both depth correction and opportunistic affinity,
     preserving pure round-robin. No lock or reservation is added, so short concurrent overshoot is accepted.
     Workers publish the policy and threshold in `RegisterClientRspPb`; a Client freezes affinity, selection granularity,

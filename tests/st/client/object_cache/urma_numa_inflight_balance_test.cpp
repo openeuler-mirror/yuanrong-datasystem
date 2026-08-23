@@ -46,6 +46,7 @@ constexpr char ROUND_ROBIN_POLICY_INJECT[] = "UrmaManager.SrcChipPolicy.RoundRob
 constexpr char ROUND_ROBIN_WITH_AFFINITY_POLICY_INJECT[] = "UrmaManager.SrcChipPolicy.RoundRobinWithAffinity";
 constexpr char AFFINITY_OVERRIDE_INJECT[] = "UrmaManager.SrcChipAffinityOverride";
 constexpr char POLICY_DECISION_INJECT[] = "UrmaManager.OverrideSrcChipPolicyDecision";
+constexpr char GATHER_DOMINANT_CHIP_INJECT[] = "UrmaManager.OverrideGatherDominantSrcChip";
 constexpr char GATHER_CHIP_1_SELECTED_INJECT[] = "UrmaManager.GatherSrcChipSelected.1";
 constexpr char GATHER_CHIP_2_SELECTED_INJECT[] = "UrmaManager.GatherSrcChipSelected.2";
 constexpr char GATHER_INFLIGHT_DRAINED_INJECT[] = "UrmaManager.GatherInflightCountersDrained";
@@ -69,7 +70,7 @@ constexpr uint32_t ROUND_ROBIN_WITH_AFFINITY_POLICY = 1;
 static_assert(URMA_NUMA_SRC_CHIP_POLICY_TEST_VALUE == ROUND_ROBIN_POLICY
               || URMA_NUMA_SRC_CHIP_POLICY_TEST_VALUE == ROUND_ROBIN_WITH_AFFINITY_POLICY);
 
-class UrmaNumaInflightBalanceTest : public OCClientCommon {
+class LEVEL1_UrmaNumaInflightBalanceTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
@@ -84,9 +85,8 @@ public:
             " -shared_memory_size_mb=5120 -payload_nocopy_threshold=1000000"
             " -arena_per_tenant=1 -enable_urma=true -ipc_through_shared_memory=false"
             " -enable_transport_fallback=false -enable_ub_numa_affinity=true"
-            " -ub_numa_rr_type=2 -ub_numa_inflight_wr_diff_threshold=15 -ub_numa_src_chip_policy="
-            + std::to_string(sourceChipPolicy_)
-            + " -enable_worker_worker_batch_get=true";
+            " -ub_numa_rr_type=1 -ub_numa_inflight_wr_diff_threshold=15 -ub_numa_src_chip_policy="
+            + std::to_string(sourceChipPolicy_) + " -enable_worker_worker_batch_get=true";
     }
 
     void SetUp() override
@@ -118,6 +118,7 @@ public:
         (void)inject::Clear(ROUND_ROBIN_WITH_AFFINITY_POLICY_INJECT);
         (void)inject::Clear(AFFINITY_OVERRIDE_INJECT);
         (void)inject::Clear(POLICY_DECISION_INJECT);
+        (void)inject::Clear(GATHER_DOMINANT_CHIP_INJECT);
         (void)inject::Clear(GATHER_CHIP_1_SELECTED_INJECT);
         (void)inject::Clear(GATHER_CHIP_2_SELECTED_INJECT);
         (void)inject::Clear(GATHER_INFLIGHT_DRAINED_INJECT);
@@ -143,13 +144,19 @@ protected:
 
     void ExpectAnyWorkerExecuted(const std::string &name, uint64_t minimumCount = 1)
     {
+        const uint64_t totalCount = GetWorkerExecuteCount(name);
+        EXPECT_GE(totalCount, minimumCount) << "insufficient worker executions for " << name;
+    }
+
+    uint64_t GetWorkerExecuteCount(const std::string &name)
+    {
         uint64_t totalCount = 0;
         for (size_t workerIndex = 0; workerIndex < WORKER_COUNT; ++workerIndex) {
             uint64_t count = 0;
             DS_EXPECT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, name, count));
             totalCount += count;
         }
-        EXPECT_GE(totalCount, minimumCount) << "insufficient worker executions for " << name;
+        return totalCount;
     }
 
     void ExpectNoWorkerExecuted(const std::string &name)
@@ -167,7 +174,7 @@ private:
     const uint32_t sourceChipPolicy_ = URMA_NUMA_SRC_CHIP_POLICY_TEST_VALUE;
 };
 
-void UrmaNumaInflightBalanceTest::RunMultiClientOneWriteTenConcurrentReadsBalanceBothSourceChips()
+void LEVEL1_UrmaNumaInflightBalanceTest::RunMultiClientOneWriteTenConcurrentReadsBalanceBothSourceChips()
 {
 #ifdef USE_URMA_MOCK
     DS_ASSERT_OK(inject::Set(BALANCE_OVERRIDE_INJECT, "call()"));
@@ -283,6 +290,13 @@ void UrmaNumaInflightBalanceTest::RunMultiClientOneWriteTenConcurrentReadsBalanc
     // The production aggregate path currently admits small objects by default. Exercise a batch larger than the
     // worker parallel threshold so the same end-to-end run proves that gather WRs carry chip affinity and retire
     // their inflight counters. The 8 MiB workload above remains the representative one-write/ten-read scenario.
+    for (size_t workerIndex = 0; workerIndex < WORKER_COUNT; ++workerIndex) {
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, POLICY_DECISION_INJECT));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, POLICY_DECISION_INJECT, "call(1, 2, 0, 0)"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, GATHER_DOMINANT_CHIP_INJECT,
+                                               "1*call(1)->1*call(2)->1*call(1)->1*call(2)->1*call(1)->"
+                                               "1*call(2)->1*call(1)->1*call(2)->1*call(1)->1*call(2)"));
+    }
     std::vector<std::string> gatherKeys;
     std::vector<std::string> gatherValues;
     gatherKeys.reserve(GATHER_KEY_COUNT);
@@ -302,10 +316,11 @@ void UrmaNumaInflightBalanceTest::RunMultiClientOneWriteTenConcurrentReadsBalanc
     ExpectEveryWorkerExecuted(BALANCE_OVERRIDE_INJECT);
     ExpectEveryWorkerExecuted(CHIP_1_SELECTED_INJECT);
     ExpectEveryWorkerExecuted(CHIP_2_SELECTED_INJECT);
-    ExpectAnyWorkerExecuted(GATHER_CHIP_1_SELECTED_INJECT);
     if (sourceChipPolicy_ == ROUND_ROBIN_POLICY) {
-        ExpectAnyWorkerExecuted(GATHER_CHIP_2_SELECTED_INJECT);
-        ExpectAnyWorkerExecuted(GATHER_INFLIGHT_DRAINED_INJECT, 2);
+        const auto gatherChip1Count = GetWorkerExecuteCount(GATHER_CHIP_1_SELECTED_INJECT);
+        const auto gatherChip2Count = GetWorkerExecuteCount(GATHER_CHIP_2_SELECTED_INJECT);
+        EXPECT_TRUE((gatherChip1Count == 0) != (gatherChip2Count == 0));
+        ExpectAnyWorkerExecuted(GATHER_INFLIGHT_DRAINED_INJECT);
         EXPECT_GT(inject::GetExecuteCount(ROUND_ROBIN_POLICY_INJECT), 0u);
         EXPECT_EQ(inject::GetExecuteCount(ROUND_ROBIN_WITH_AFFINITY_POLICY_INJECT), 0u);
         ExpectEveryWorkerExecuted(ROUND_ROBIN_POLICY_INJECT);
@@ -313,6 +328,7 @@ void UrmaNumaInflightBalanceTest::RunMultiClientOneWriteTenConcurrentReadsBalanc
         EXPECT_EQ(inject::GetExecuteCount(AFFINITY_OVERRIDE_INJECT), 0u);
         ExpectNoWorkerExecuted(AFFINITY_OVERRIDE_INJECT);
     } else {
+        ExpectAnyWorkerExecuted(GATHER_CHIP_1_SELECTED_INJECT);
         ExpectAnyWorkerExecuted(GATHER_CHIP_2_SELECTED_INJECT);
         ExpectAnyWorkerExecuted(GATHER_INFLIGHT_DRAINED_INJECT, 2);
         EXPECT_GT(inject::GetExecuteCount(ROUND_ROBIN_WITH_AFFINITY_POLICY_INJECT), 0u);
@@ -325,7 +341,7 @@ void UrmaNumaInflightBalanceTest::RunMultiClientOneWriteTenConcurrentReadsBalanc
 #endif
 }
 
-TEST_F(UrmaNumaInflightBalanceTest, MultiClientOneWriteTenConcurrentReadsBalanceBothSourceChips)
+TEST_F(LEVEL1_UrmaNumaInflightBalanceTest, MultiClientOneWriteTenConcurrentReadsBalanceBothSourceChips)
 {
     RunMultiClientOneWriteTenConcurrentReadsBalanceBothSourceChips();
 }

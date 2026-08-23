@@ -270,6 +270,74 @@ TEST(UrmaChipInflightTest, UsesAffinityOnlyWhenTheLogicalWriteFitsWithoutIncreas
     FLAGS_ub_numa_inflight_wr_diff_threshold = oldInflightDiffThreshold;
 }
 
+TEST(UrmaChipInflightTest, ReusesLogicalWriteRoundRobinCandidateWhenGatherAffinityChanges)
+{
+    auto &manager = UrmaManager::Instance();
+    const uint32_t oldSrcChipPolicy = FLAGS_ub_numa_src_chip_policy;
+    const uint32_t oldInflightDiffThreshold = FLAGS_ub_numa_inflight_wr_diff_threshold;
+    FLAGS_ub_numa_src_chip_policy = static_cast<uint32_t>(UbNumaSrcChipPolicy::ROUND_ROBIN_WITH_AFFINITY);
+    FLAGS_ub_numa_inflight_wr_diff_threshold = 15;
+    manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
+    manager.srcChipInflightWrCounts_.at(1).value.store(6, std::memory_order_relaxed);
+    manager.srcChipInflightWrCounts_.at(2).value.store(3, std::memory_order_relaxed);
+
+    const auto firstDecision = manager.BuildSrcChipSelectionDecision(1, 2);
+    const auto secondDecision = manager.BuildSrcChipSelectionDecisionWithCandidate(2, 1, firstDecision.candidate);
+
+    EXPECT_EQ(firstDecision.candidate, 1);
+    EXPECT_EQ(firstDecision.selected, 1);
+    EXPECT_EQ(secondDecision.candidate, 1);
+    EXPECT_EQ(secondDecision.selected, 2);
+    EXPECT_EQ(manager.affinitySrcChipIdSequence_.load(std::memory_order_relaxed), 1);
+
+    manager.srcChipInflightWrCounts_.at(1).value.store(0, std::memory_order_relaxed);
+    manager.srcChipInflightWrCounts_.at(2).value.store(0, std::memory_order_relaxed);
+    FLAGS_ub_numa_src_chip_policy = oldSrcChipPolicy;
+    FLAGS_ub_numa_inflight_wr_diff_threshold = oldInflightDiffThreshold;
+}
+
+TEST(UrmaChipInflightTest, SelectsDominantGatherSourceChipByBytes)
+{
+    constexpr uint64_t smallWriteSize = 4;
+    constexpr uint64_t largeWriteSize = 12;
+    const std::vector<LocalSgeInfo> objInfos{
+        LocalSgeInfo{ .segAddr = 0,
+                      .segSize = 0,
+                      .sgeAddr = 0,
+                      .readOffset = 0,
+                      .writeSize = smallWriteSize,
+                      .metaDataSize = 0,
+                      .srcChipId = 1 },
+        LocalSgeInfo{ .segAddr = 0,
+                      .segSize = 0,
+                      .sgeAddr = 0,
+                      .readOffset = 0,
+                      .writeSize = largeWriteSize,
+                      .metaDataSize = 0,
+                      .srcChipId = 2 },
+        LocalSgeInfo{ .segAddr = 0,
+                      .segSize = 0,
+                      .sgeAddr = 0,
+                      .readOffset = 0,
+                      .writeSize = largeWriteSize,
+                      .metaDataSize = 0,
+                      .srcChipId = INVALID_CHIP_ID },
+    };
+
+    EXPECT_EQ(UrmaManager::SelectDominantGatherSrcChipId(objInfos, 0, objInfos.size()), 2);
+    EXPECT_EQ(UrmaManager::SelectDominantGatherSrcChipId(objInfos, 0, 1), 1);
+}
+
+TEST(UrmaChipInflightTest, LogsOnlyDepthOverridesOnTheSelectionHotPath)
+{
+    UrmaManager::SrcChipSelectionDecision decision{ 1, 2, 1, 15, 1 };
+    decision.affinityOverride = true;
+    EXPECT_FALSE(UrmaManager::ShouldLogSrcChipSelection(decision));
+
+    decision.depthOverride = true;
+    EXPECT_TRUE(UrmaManager::ShouldLogSrcChipSelection(decision));
+}
+
 TEST(UrmaChipInflightTest, NormalizesWorkerRoundRobinType)
 {
     EXPECT_EQ(UrmaManager::NormalizeUbNumaRrType(0, "test-worker"), 0u);
