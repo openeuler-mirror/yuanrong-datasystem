@@ -68,6 +68,8 @@ public:
           trace_(Trace::Instance().GetTraceID(), std::move(methodName))
     {
         trace_.MarkServerRecv();
+        VLOG(1) << FormatString("yyl2 ServerRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ServerRecvTs(), gettid(),
+                                sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
         // P3: Store scTimeoutDuration per-adapter so it survives bthread M:N migration.
         if (cntl_ != nullptr) {
             int64_t deadlineUs = cntl_->deadline_us();
@@ -206,6 +208,9 @@ private:
         if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
             // Stream RPC tracing is one summary sample per stream, not one sample per message.
             trace_.MarkServerSend();
+            VLOG(1) << FormatString("yyl1 ServerSend ts %llu tid %d cpu %d bid %llu\n", trace_.ServerSendTs(),
+                                    gettid(), sched_getcpu(),
+                                    static_cast<unsigned long long>(bthread_self()));
             // StreamWrite responses cannot carry the unary trace trailer.
             RecordBrpcRpcTrace(trace_);
         }
@@ -231,6 +236,8 @@ public:
           trace_(Trace::Instance().GetTraceID(), std::move(methodName))
     {
         trace_.MarkServerRecv();
+        VLOG(1) << FormatString("yyl1 ServerRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ServerRecvTs(), gettid(),
+                                sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
         // P3: Store scTimeoutDuration per-adapter so it survives bthread M:N migration.
         if (cntl_ != nullptr) {
             int64_t deadlineUs = cntl_->deadline_us();
@@ -465,6 +472,8 @@ private:
     {
         if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
             // Stream RPC tracing is one summary sample per stream, not one sample per message.
+            VLOG(1) << FormatString("yyl2 ServerSend ts %llu tid %d cpu %d bid %llu\n", BrpcTraceNowNs(), gettid(),
+                                    sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
             trace_.MarkServerSend();
             // The client-streaming adapter has no trailer merge path yet.
             RecordBrpcRpcTrace(trace_);

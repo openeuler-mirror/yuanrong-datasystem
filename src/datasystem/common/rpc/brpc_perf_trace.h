@@ -24,8 +24,10 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <sched.h>
 #include <string>
 
+#include <bthread/bthread.h>
 #include <butil/iobuf.h>
 
 #include "datasystem/common/log/log.h"
@@ -378,7 +380,10 @@ inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
                     << " cntl_deadline_us=" << trace.CntlDeadlineUs()
                     << " cntl_error_code=" << trace.CntlErrorCode()
                     << " cntl_failed=" << (trace.CntlFailed() ? 1 : 0)
-                    << " resp_attachment_bytes=" << trace.RespAttachmentSize();
+                    << " resp_attachment_bytes=" << trace.RespAttachmentSize()
+                    << " ClientSend=" << trace.ClientSendTs() << " ClientRecv=" << trace.ClientRecvTs()
+                    << " ServerSend=" << trace.ServerSendTs() << " ServerRecv=" << trace.ServerRecvTs()
+                    << " tid=" << gettid();
 }
 
 }  // namespace datasystem
