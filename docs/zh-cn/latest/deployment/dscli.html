@@ -2082,7 +2082,7 @@ Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Wo
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;datasystem_coordinator&quot;</span></code></p></td>
 <td><p>否</p></td>
-<td><p>Coordinator 日志文件名前缀</p></td>
+<td><p>Coordinator 日志文件名前缀，非空时仅允许英文字母、数字和下划线</p></td>
 </tr>
 <tr class="row-odd"><td><p>minloglevel</p></td>
 <td><p>int</p></td>
@@ -2144,37 +2144,55 @@ Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Wo
 <td><p>否</p></td>
 <td><p>是否只生成 INFO 日志文件；INFO 文件始终包含所有级别的日志</p></td>
 </tr>
-<tr class="row-odd"><td><p>use_brpc</p></td>
+<tr class="row-odd"><td><p>log_monitor</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是</p></td>
+<td><p>是否在 Coordinator INFO 日志中周期输出 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 指标摘要</p></td>
+</tr>
+<tr class="row-even"><td><p>json_log_monitor</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是</p></td>
+<td><p>是否将 Coordinator 指标摘要同时输出到 <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> JSON-Lines 文件</p></td>
+</tr>
+<tr class="row-odd"><td><p>log_monitor_interval_ms</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">10000</span></code></p></td>
+<td><p>否</p></td>
+<td><p>Coordinator 指标摘要的采集和输出间隔，单位为毫秒</p></td>
+</tr>
+<tr class="row-even"><td><p>use_brpc</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>否</p></td>
 <td><p>是否使用 brpc 进行 RPC 通信；配置文件中的显式值或环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_USE_BRPC</span></code> 可覆盖默认值；参数化入口启用选举时必须为<code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>brpc_server_num_threads</p></td>
+<tr class="row-odd"><td><p>brpc_server_num_threads</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>否</p></td>
 <td><p>brpc Server 工作线程数</p></td>
 </tr>
-<tr class="row-odd"><td><p>brpc_max_concurrency</p></td>
+<tr class="row-even"><td><p>brpc_max_concurrency</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
 <td><p>否</p></td>
 <td><p>每个 brpc Server 允许的最大并发 RPC 数；为 <code class="docutils literal notranslate"><span class="pre">0</span></code> 时不限制，且不能小于 <code class="docutils literal notranslate"><span class="pre">brpc_server_num_threads</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>request_sample_rate</p></td>
+<tr class="row-odd"><td><p>request_sample_rate</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
 <td><p>是</p></td>
 <td><p>请求日志主采样率，取值范围为 <code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>access_sample_rate</p></td>
+<tr class="row-even"><td><p>access_sample_rate</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
 <td><p>是</p></td>
 <td><p>Access 日志补采样率，取值范围为 <code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>diagnostic_sample_rate</p></td>
+<tr class="row-odd"><td><p>diagnostic_sample_rate</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
 <td><p>是</p></td>
@@ -2739,7 +2757,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>否</p></td>
-<td><p>日志前缀名，当值为空时前缀名为 <code class="docutils literal notranslate"><span class="pre">datasystem_worker</span></code></p></td>
+<td><p>日志前缀名，非空时仅允许英文字母、数字和下划线；为空时前缀名为 <code class="docutils literal notranslate"><span class="pre">datasystem_worker</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>log_retention_day</p></td>
 <td><p>int</p></td>
@@ -3030,25 +3048,31 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p>是</p></td>
 <td><p>服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 <code class="docutils literal notranslate"><span class="pre">node_timeout_s</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>enable_reconciliation</p></td>
+<tr class="row-odd"><td><p>hash_ring_tokens_per_member</p></td>
+<td><p>uint32</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
+<td><p>否</p></td>
+<td><p>新建哈希环和扩容时为每个 Worker 分配的 token 数，取值范围为 <code class="docutils literal notranslate"><span class="pre">1</span></code>～<code class="docutils literal notranslate"><span class="pre">4096</span></code>。同一集群中执行 topology 规划的进程（Worker 或 Coordinator）必须使用相同配置；修改不会重分配已有 topology 中已持久化的 token。</p></td>
+</tr>
+<tr class="row-even"><td><p>enable_reconciliation</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>否</p></td>
 <td><p>当节点重启时是否启用全局引用计数对账功能；仅使用 KVClient 的场景无需开启，使用 ObjectClient 全局引用计数时需显式设置为 <code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>add_node_wait_time_s</p></td>
+<tr class="row-odd"><td><p>add_node_wait_time_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
 <td><p>是</p></td>
 <td><p>新节点加入哈希环的等待超时时间</p></td>
 </tr>
-<tr class="row-odd"><td><p>auto_del_dead_node</p></td>
+<tr class="row-even"><td><p>auto_del_dead_node</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是</p></td>
 <td><p>是否启用死亡节点自动清理功能，当该值为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时，会将死亡节点剔除出集群管理，并触发被动缩容</p></td>
 </tr>
-<tr class="row-even"><td><p>enable_distributed_master</p></td>
+<tr class="row-odd"><td><p>enable_distributed_master</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>否</p></td>
@@ -3174,79 +3198,84 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <tr class="row-even"><td><p>ub_numa_rr_type</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
-<td><p>UB NUMA 源芯片轮询粒度。<code class="docutils literal notranslate"><span class="pre">0</span></code> 表示关闭源芯片轮询，<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示每次逻辑写选择一次，<code class="docutils literal notranslate"><span class="pre">2</span></code> 表示每个 WR Post 选择一次。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。</p></td>
+<td><p>UB NUMA 源芯片选择粒度。<code class="docutils literal notranslate"><span class="pre">0</span></code> 表示关闭源芯片选择，保持发送内存所在芯片；<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示每次逻辑写选择一次，<code class="docutils literal notranslate"><span class="pre">2</span></code> 表示每个 WR Post 选择一次。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。</p></td>
 </tr>
-<tr class="row-odd"><td><p>ub_numa_inflight_wr_diff_threshold</p></td>
+<tr class="row-odd"><td><p>ub_numa_src_chip_policy</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td><p>UB NUMA 源芯片策略。<code class="docutils literal notranslate"><span class="pre">0</span></code> 表示轮询；<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示以轮询为基线，仅当发送内存的亲和芯片接收本次逻辑写的预计 WR 后仍不比轮询候选更忙时，才覆盖轮询结果。配置 <code class="docutils literal notranslate"><span class="pre">0</span></code> 可用于消融实验和快速回滚。旧 worker 未返回该字段时，新 client 按 <code class="docutils literal notranslate"><span class="pre">0</span></code> 兼容。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。</p></td>
+</tr>
+<tr class="row-even"><td><p>ub_numa_inflight_wr_diff_threshold</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">15</span></code></p></td>
-<td><p>两个源芯片 inflight WR 数量的最大允许差值。差值严格大于该值时，后续 WR 改用 inflight 较低的芯片；<code class="docutils literal notranslate"><span class="pre">0</span></code> 表示关闭深度反馈并保留纯轮询。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。</p></td>
+<td><p>两个源芯片 inflight WR 数量的最大允许差值。差值严格大于该值时，后续逻辑写改用 inflight 较低的芯片；<code class="docutils literal notranslate"><span class="pre">0</span></code> 表示关闭深度纠偏和机会式亲和覆盖，保留纯轮询。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。</p></td>
 </tr>
-<tr class="row-even"><td><p>shared_memory_distribution_policy</p></td>
+<tr class="row-odd"><td><p>shared_memory_distribution_policy</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">none</span></code></p></td>
 <td><p>共享内存在 NUMA 上的分布策略。可选值：<code class="docutils literal notranslate"><span class="pre">none</span></code>、<code class="docutils literal notranslate"><span class="pre">interleave_all_numa</span></code>、<code class="docutils literal notranslate"><span class="pre">interleave_affinity_numa</span></code>。仅在 <code class="docutils literal notranslate"><span class="pre">enable_urma=true</span></code> 且 <code class="docutils literal notranslate"><span class="pre">urma_register_whole_arena=true</span></code> 时生效。</p></td>
 </tr>
-<tr class="row-odd"><td><p>urma_connection_size</p></td>
+<tr class="row-even"><td><p>urma_connection_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>[已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建</p></td>
 </tr>
-<tr class="row-even"><td><p>urma_event_mode</p></td>
+<tr class="row-odd"><td><p>urma_event_mode</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否使用中断模式轮询完成事件</p></td>
 </tr>
-<tr class="row-odd"><td><p>urma_poll_size</p></td>
+<tr class="row-even"><td><p>urma_poll_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>一次可轮询的完整记录数量，该设备最多可轮询16条记录</p></td>
 </tr>
-<tr class="row-even"><td><p>urma_max_write_size_mb</p></td>
+<tr class="row-odd"><td><p>urma_max_write_size_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
 <td><p>URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048]</p></td>
 </tr>
-<tr class="row-odd"><td><p>urma_register_whole_arena</p></td>
+<tr class="row-even"><td><p>urma_register_whole_arena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-even"><td><p>enable_rdma</p></td>
+<tr class="row-odd"><td><p>enable_rdma</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启RDMA以实现对象worker之间的数据传输</p></td>
 </tr>
-<tr class="row-odd"><td><p>rdma_register_whole_arena</p></td>
+<tr class="row-even"><td><p>rdma_register_whole_arena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在RDMA初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-even"><td><p>oc_shm_transfer_threshold_kb</p></td>
+<tr class="row-odd"><td><p>oc_shm_transfer_threshold_kb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">500</span></code></p></td>
 <td><p>在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB</p></td>
 </tr>
-<tr class="row-odd"><td><p>shared_disk_arena_per_tenant</p></td>
+<tr class="row-even"><td><p>shared_disk_arena_per_tenant</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32]</p></td>
 </tr>
-<tr class="row-even"><td><p>shared_disk_directory</p></td>
+<tr class="row-odd"><td><p>shared_disk_directory</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-odd"><td><p>shared_disk_size_mb</p></td>
+<tr class="row-even"><td><p>shared_disk_size_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_alignment</p></td>
+<tr class="row-odd"><td><p>memory_alignment</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。</p></td>
 </tr>
-<tr class="row-odd"><td><p>oc_metadata_header</p></td>
+<tr class="row-even"><td><p>oc_metadata_header</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否为对象缓存共享内存分配元数据头，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>则关闭此功能（此时shm latch/可见性将不可用）</p></td>

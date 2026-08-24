@@ -1240,7 +1240,7 @@ dscli query route \
 | watch_event_dispatch_thread | int | `4` | 否 | Coordinator 分发 Watch 事件的线程数 |
 | rpc_thread_num | int | `64` | 否 | Coordinator RPC 服务线程数 |
 | log_dir | string | `"./datasystem/logs"` | 否 | Coordinator 日志目录 |
-| log_filename | string | `"datasystem_coordinator"` | 否 | Coordinator 日志文件名前缀 |
+| log_filename | string | `"datasystem_coordinator"` | 否 | Coordinator 日志文件名前缀，非空时仅允许英文字母、数字和下划线 |
 | minloglevel | int | `0` | 是 | 最低日志级别，低于该级别的日志不会被记录 |
 | log_async_queue_size | int | `2048` | 否 | 异步日志消息队列最大容量 |
 | max_log_size | int | `400` | 否 | 单个日志文件最大大小，单位为 MB |
@@ -1251,6 +1251,9 @@ dscli query route \
 | logbufsecs | int | `0` | 否 | 日志消息最大缓冲时长，单位为秒 |
 | logfile_mode | int | `416` | 否 | 日志文件模式/权限 |
 | log_only_write_info_file | bool | `true` | 否 | 是否只生成 INFO 日志文件；INFO 文件始终包含所有级别的日志 |
+| log_monitor | bool | `true` | 是 | 是否在 Coordinator INFO 日志中周期输出 `metrics_summary` 指标摘要 |
+| json_log_monitor | bool | `true` | 是 | 是否将 Coordinator 指标摘要同时输出到 `kv_metrics.log` JSON-Lines 文件 |
+| log_monitor_interval_ms | int | `10000` | 否 | Coordinator 指标摘要的采集和输出间隔，单位为毫秒 |
 | use_brpc | bool | `true` | 否 | 是否使用 brpc 进行 RPC 通信；配置文件中的显式值或环境变量 `DATASYSTEM_USE_BRPC` 可覆盖默认值；参数化入口启用选举时必须为`true` |
 | brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
 | brpc_max_concurrency | int | `128` | 否 | 每个 brpc Server 允许的最大并发 RPC 数；为 `0` 时不限制，且不能小于 `brpc_server_num_threads` |
@@ -1389,7 +1392,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | log_async_queue_size | int | `65536` | 否 | 异步日志的消息队列最大容量（消息条数） |
 | log_compress | bool | `false` | 是 | 控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储 |
 | logbufsecs | int | `10` | 否 | 日志消息最多缓冲时长（以秒为单位） |
-| log_filename | string | `""` | 否 | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
+| log_filename | string | `""` | 否 | 日志前缀名，非空时仅允许英文字母、数字和下划线；为空时前缀名为 `datasystem_worker` |
 | log_retention_day | int | `0` | 否 | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
 | max_log_file_num | int | `5` | 是 | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
 | max_log_size | int | `400` | 否 | 单个日志文件最大大小（以MB为单位） |
@@ -1460,6 +1463,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | heartbeat_interval_ms | int | `1000` | 是 | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
 | node_timeout_s | int | `60` | 否 | 服务端节点超时最大时间间隔（单位为秒）, node_timeout_s >= 1 |
 | node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `node_timeout_s` |
+| hash_ring_tokens_per_member | uint32 | `4` | 否 | 新建哈希环和扩容时为每个 Worker 分配的 token 数，取值范围为 `1`～`4096`。同一集群中执行 topology 规划的进程（Worker 或 Coordinator）必须使用相同配置；修改不会重分配已有 topology 中已持久化的 token。 |
 | enable_reconciliation | bool | `false` | 否 | 当节点重启时是否启用全局引用计数对账功能；仅使用 KVClient 的场景无需开启，使用 ObjectClient 全局引用计数时需显式设置为 `true` |
 | add_node_wait_time_s | int | `60` | 是 | 新节点加入哈希环的等待超时时间 |
 | auto_del_dead_node | bool | `true` | 是 | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
@@ -1490,8 +1494,9 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
 | enable_ub_numa_affinity | bool | `false` | 是否开启 UB NUMA 亲和优化。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。Worker 集群必须保持一致；client 从首个返回 UB 配置的 worker 固化该值，后续不一致仅记录 WARNING，不会修改 client 进程配置。 |
 | ub_transport_arena_num | int | `4` | UB 传输内存池拆分的等大 Arena 数量，取值范围为 `[1, 32]`。开启 UB NUMA 亲和时，优先在不同芯片间轮询分配 Arena，再复用同一芯片内的 NUMA 节点。使用多个 Arena 时，任一 NUMA 绑定失败都会导致 client 初始化失败。 |
-| ub_numa_rr_type | int | `1` | UB NUMA 源芯片轮询粒度。`0` 表示关闭源芯片轮询，`1` 表示每次逻辑写选择一次，`2` 表示每个 WR Post 选择一次。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
-| ub_numa_inflight_wr_diff_threshold | int | `15` | 两个源芯片 inflight WR 数量的最大允许差值。差值严格大于该值时，后续 WR 改用 inflight 较低的芯片；`0` 表示关闭深度反馈并保留纯轮询。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
+| ub_numa_rr_type | int | `1` | UB NUMA 源芯片选择粒度。`0` 表示关闭源芯片选择，保持发送内存所在芯片；`1` 表示每次逻辑写选择一次，`2` 表示每个 WR Post 选择一次。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
+| ub_numa_src_chip_policy | int | `1` | UB NUMA 源芯片策略。`0` 表示轮询；`1` 表示以轮询为基线，仅当发送内存的亲和芯片接收本次逻辑写的预计 WR 后仍不比轮询候选更忙时，才覆盖轮询结果。配置 `0` 可用于消融实验和快速回滚。旧 worker 未返回该字段时，新 client 按 `0` 兼容。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
+| ub_numa_inflight_wr_diff_threshold | int | `15` | 两个源芯片 inflight WR 数量的最大允许差值。差值严格大于该值时，后续逻辑写改用 inflight 较低的芯片；`0` 表示关闭深度纠偏和机会式亲和覆盖，保留纯轮询。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
 | shared_memory_distribution_policy | string | `none` | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
 | urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |

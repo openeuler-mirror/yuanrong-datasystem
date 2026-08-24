@@ -691,7 +691,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <dt class="sig sig-object cpp" id="_CPPv4N14KVClientConfig7Builder7LogNameERKNSt6stringE">
 <span id="_CPPv3N14KVClientConfig7Builder7LogNameERKNSt6stringE"></span><span id="_CPPv2N14KVClientConfig7Builder7LogNameERKNSt6stringE"></span><span id="KVClientConfig::Builder::LogName__ssCR"></span><a class="reference internal" href="#_CPPv4N14KVClientConfig7BuilderE" title="KVClientConfig::Builder"><span class="n"><span class="pre">Builder</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">LogName</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">name</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14KVClientConfig7Builder7LogNameERKNSt6stringE" title="Link to this definition">¶</a><br /></dt>
 <dd><p>设置客户端日志文件名（不含目录和扩展名）。对应内部配置项 <code class="docutils literal notranslate"><span class="pre">log_filename</span></code>。
-不允许为空；允许字符为英文字母、数字及路径字符集中的符号。默认值为 <code class="docutils literal notranslate"><span class="pre">ds_client</span></code>。</p>
+非空时仅允许英文字母、数字和下划线；为空时忽略环境变量
+<code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_NAME</span></code> 并使用默认基名 <code class="docutils literal notranslate"><span class="pre">ds_client</span></code>。默认情况下实际基名为
+<code class="docutils literal notranslate"><span class="pre">ds_client_&lt;pid&gt;</span></code>，启用 <code class="docutils literal notranslate"><span class="pre">LogWithoutPid</span></code> 后为 <code class="docutils literal notranslate"><span class="pre">ds_client</span></code>。</p>
 </dd></dl>
 
 <dl class="cpp function">
@@ -699,14 +701,15 @@ document.addEventListener('DOMContentLoaded', function() {
 <span id="_CPPv3N14KVClientConfig7Builder13LogWithoutPidEb"></span><span id="_CPPv2N14KVClientConfig7Builder13LogWithoutPidEb"></span><span id="KVClientConfig::Builder::LogWithoutPid__b"></span><a class="reference internal" href="#_CPPv4N14KVClientConfig7BuilderE" title="KVClientConfig::Builder"><span class="n"><span class="pre">Builder</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">LogWithoutPid</span></span></span><span class="sig-paren">(</span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">enable</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14KVClientConfig7Builder13LogWithoutPidEb" title="Link to this definition">¶</a><br /></dt>
 <dd><p>设置客户端日志文件名是否不带 pid。对应环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code>。
 为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时输出为 <code class="docutils literal notranslate"><span class="pre">ds_client.log</span></code>、<code class="docutils literal notranslate"><span class="pre">ds_client_access.log</span></code>；为 <code class="docutils literal notranslate"><span class="pre">false</span></code> 时恢复带
-<code class="docutils literal notranslate"><span class="pre">&lt;pid&gt;</span></code> 后缀的命名，适合多 client 进程同时运行且不希望覆盖日志的场景。默认值为 <code class="docutils literal notranslate"><span class="pre">true</span></code>。</p>
+<code class="docutils literal notranslate"><span class="pre">&lt;pid&gt;</span></code> 后缀的命名，适合多 client 进程同时运行且不希望覆盖日志的场景。默认值为 <code class="docutils literal notranslate"><span class="pre">false</span></code>。</p>
 </dd></dl>
 
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N14KVClientConfig7Builder13AccessLogNameERKNSt6stringE">
 <span id="_CPPv3N14KVClientConfig7Builder13AccessLogNameERKNSt6stringE"></span><span id="_CPPv2N14KVClientConfig7Builder13AccessLogNameERKNSt6stringE"></span><span id="KVClientConfig::Builder::AccessLogName__ssCR"></span><a class="reference internal" href="#_CPPv4N14KVClientConfig7BuilderE" title="KVClientConfig::Builder"><span class="n"><span class="pre">Builder</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">AccessLogName</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">name</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14KVClientConfig7Builder13AccessLogNameERKNSt6stringE" title="Link to this definition">¶</a><br /></dt>
 <dd><p>设置客户端访问日志文件名（不含目录和扩展名）。非空时仅允许英文字母、数字和下划线。
-默认值为 <code class="docutils literal notranslate"><span class="pre">ds_client_access</span></code>。</p>
+为空时忽略环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_ACCESS_LOG_NAME</span></code> 并使用默认基名
+<code class="docutils literal notranslate"><span class="pre">ds_client_access</span></code>。</p>
 </dd></dl>
 
 <dl class="cpp function">
