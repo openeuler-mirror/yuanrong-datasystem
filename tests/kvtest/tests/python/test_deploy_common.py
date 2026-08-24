@@ -29,8 +29,11 @@ from deploy_common import (
     read_remote_log_dir,
     resolve_procmon_dir,
     start_service,
+    start_service_standalone,
+    upload_launcher,
     upload_procmon,
 )
+from deploy_common import _extract_ready_check_path
 
 
 class TestParseConfigOverride(unittest.TestCase):
@@ -137,6 +140,199 @@ class TestUploadProcmon(unittest.TestCase):
         pod = {'name': 'test-pod', 'ip': '10.0.0.1'}
         result = upload_procmon(pod, 'default', '/tmp')
         self.assertFalse(result)
+
+
+class TestUploadLauncher(unittest.TestCase):
+    """upload_launcher mirrors upload_procmon but returns the remote path
+    (so callers know where to invoke python3) or None on failure."""
+
+    @patch('deploy_common.kubectl_cp_to')
+    @patch('deploy_common.kubectl_exec')
+    @patch('os.path.exists', return_value=True)
+    def test_success_returns_remote_path(self, mock_exists, mock_exec,
+                                          mock_cp):
+        mock_exec.return_value = MagicMock(returncode=0)
+        mock_cp.return_value = None
+        pod = {'name': 'test-pod', 'ip': '10.0.0.1'}
+        result = upload_launcher(pod, 'default', '/tmp')
+        self.assertEqual(result, '/tmp/standalone_launcher.py')
+        # Must create the target dir before copying.
+        mock_exec.assert_called_once_with('test-pod', 'default',
+                                          'mkdir -p /tmp', check=False,
+                                          timeout=300)
+
+    @patch('os.path.exists', return_value=False)
+    def test_no_launcher_file_returns_none(self, mock_exists):
+        pod = {'name': 'test-pod', 'ip': '10.0.0.1'}
+        result = upload_launcher(pod, 'default', '/tmp')
+        self.assertIsNone(result)
+
+    @patch('deploy_common.kubectl_cp_to', side_effect=Exception('cp boom'))
+    @patch('deploy_common.kubectl_exec')
+    @patch('os.path.exists', return_value=True)
+    def test_cp_failure_returns_none(self, mock_exists, mock_exec, mock_cp):
+        mock_exec.return_value = MagicMock(returncode=0)
+        pod = {'name': 'test-pod', 'ip': '10.0.0.1'}
+        result = upload_launcher(pod, 'default', '/tmp')
+        self.assertIsNone(result)
+
+
+class TestStartServiceStandaloneTiming(unittest.TestCase):
+    """start_service_standalone must set pod['_start_elapsed'] covering the
+    actual launch + readiness wait (mirrors dscli semantics), regardless of
+    whether the launcher path or the legacy nohup fallback was used."""
+
+    def _pod(self):
+        return {'name': 'p1', 'ip': '10.0.0.1'}
+
+    @patch('deploy_common.upload_launcher')
+    @patch('deploy_common.subprocess.run')
+    def test_launcher_path_records_elapsed_and_invokes_python(self, mock_run,
+                                                               mock_upload):
+        # upload_launcher succeeds; launcher prints PID 1234 on stdout.
+        mock_upload.return_value = '/tmp/standalone_launcher.py'
+        mock_run.return_value = MagicMock(returncode=0, stdout='1234\n',
+                                           stderr='')
+        pod = self._pod()
+        ok = start_service_standalone(
+            pod, 'default', 'worker_test', '/tmp/ds', '/tmp/cfg.json',
+            'jf:9999', 'predictor', '', config=None,
+            enable_procmon=False, port=31501, process_name='worker_test',
+            timeout=10)
+        self.assertTrue(ok)
+        # Timing recorded as a non-negative float (mocked subprocess returns
+        # instantly so the value may be 0.0; we only assert the field is set
+        # and is numeric).
+        self.assertIn('_start_elapsed', pod)
+        self.assertIsInstance(pod['_start_elapsed'], (int, float))
+        self.assertGreaterEqual(pod['_start_elapsed'], 0)
+        # Launcher invoked via subprocess.run; command must include python3
+        # and the launcher script path. NOT the nohup sh -c path.
+        self.assertGreaterEqual(mock_run.call_count, 1)
+        called_cmd = mock_run.call_args[0][0]
+        self.assertIn('python3', called_cmd)
+        self.assertIn('/tmp/standalone_launcher.py', called_cmd)
+        self.assertNotIn('nohup', ' '.join(called_cmd))
+
+    @patch('deploy_common.upload_launcher')
+    @patch('deploy_common.subprocess.run')
+    def test_launcher_passes_ready_file_when_config_has_ready_check_path(
+            self, mock_run, mock_upload):
+        # When the worker config has ready_check_path, the launcher command
+        # must include --ready-file <path> so the launcher polls for the
+        # authoritative readiness file (worker_oc_server.cpp:2911-2933)
+        # instead of falling back to TCP port polling.
+        mock_upload.return_value = '/tmp/standalone_launcher.py'
+        mock_run.return_value = MagicMock(returncode=0, stdout='1234\n',
+                                           stderr='')
+        pod = self._pod()
+        config = {
+            'worker_address': {'value': '10.0.0.1:31501'},
+            'ready_check_path': {'value': '/tmp/ds/probe/ready'},
+        }
+        ok = start_service_standalone(
+            pod, 'default', 'worker_test', '/tmp/ds', '/tmp/cfg.json',
+            'jf:9999', 'predictor', '', config=config,
+            enable_procmon=False, port=31501, process_name='worker_test',
+            timeout=10)
+        self.assertTrue(ok)
+        called_cmd = mock_run.call_args[0][0]
+        self.assertIn('--ready-file', called_cmd)
+        self.assertIn('/tmp/ds/probe/ready', called_cmd)
+
+    @patch('deploy_common.upload_launcher')
+    @patch('deploy_common.subprocess.run')
+    def test_launcher_omits_ready_file_when_config_has_no_ready_check_path(
+            self, mock_run, mock_upload):
+        # When the worker config has no ready_check_path (coordinator or
+        # worker with the flag unset), the launcher command must NOT
+        # include --ready-file; it falls back to --port polling.
+        mock_upload.return_value = '/tmp/standalone_launcher.py'
+        mock_run.return_value = MagicMock(returncode=0, stdout='1234\n',
+                                           stderr='')
+        pod = self._pod()
+        config = {'coordinator_address': {'value': '10.0.0.1:31511'}}
+        ok = start_service_standalone(
+            pod, 'default', 'coordinator_test', '/tmp/ds', '/tmp/cfg.json',
+            'jf:9999', 'kvcache_coordinator', '', config=config,
+            enable_procmon=False, port=31511,
+            process_name='coordinator_test', timeout=10)
+        self.assertTrue(ok)
+        called_cmd = mock_run.call_args[0][0]
+        self.assertNotIn('--ready-file', called_cmd)
+        # Still uses --port for coordinator readiness.
+        self.assertIn('--port', called_cmd)
+
+    @patch('deploy_common.upload_launcher')
+    @patch('deploy_common.subprocess.run')
+    @patch('deploy_common.kubectl_exec_raw')
+    def test_fallback_path_when_upload_fails_uses_nohup(self, mock_raw,
+                                                         mock_run,
+                                                         mock_upload):
+        # Launcher upload fails -> fall back to nohup path. subprocess.run
+        # is the kubectl exec sh -c (no PID returned). kubectl_exec_raw is
+        # the pgrep fallback that returns a PID.
+        mock_upload.return_value = None
+        mock_run.return_value = MagicMock(returncode=0, stdout='',
+                                           stderr='')
+        mock_raw.return_value = '1234\n'
+        pod = self._pod()
+        ok = start_service_standalone(
+            pod, 'default', 'worker_test', '/tmp/ds', '/tmp/cfg.json',
+            'jf:9999', 'predictor', '', config=None,
+            enable_procmon=False, port=None, process_name='worker_test',
+            timeout=10)
+        self.assertTrue(ok)
+        # Timing recorded as a non-negative float (mocked subprocess returns
+        # instantly so the value may be 0.0; we only assert the field is set).
+        self.assertIn('_start_elapsed', pod)
+        self.assertIsInstance(pod['_start_elapsed'], (int, float))
+        self.assertGreaterEqual(pod['_start_elapsed'], 0)
+        # Nohup path used: sh -c with nohup appears in the run call.
+        self.assertGreaterEqual(mock_run.call_count, 1)
+        called_cmd = ' '.join(mock_run.call_args[0][0])
+        self.assertIn('nohup', called_cmd)
+        self.assertIn('worker_test', called_cmd)
+
+
+class TestExtractReadyCheckPath(unittest.TestCase):
+    """_extract_ready_check_path must pull ready_check_path out of a
+    dscli-style worker config ({"value": "/path"} dict) or plain string,
+    and return None when absent / empty / not a config."""
+
+    def test_dict_value(self):
+        cfg = {'ready_check_path': {'value': '/tmp/probe/ready',
+                                     'description': '...'}}
+        self.assertEqual(_extract_ready_check_path(cfg), '/tmp/probe/ready')
+
+    def test_plain_string_value(self):
+        cfg = {'ready_check_path': '/tmp/probe/ready'}
+        self.assertEqual(_extract_ready_check_path(cfg), '/tmp/probe/ready')
+
+    def test_relative_path_preserved(self):
+        # Relative paths are kept as-is; the launcher resolves them against
+        # the binary's --cwd (which mirrors the binary's FLAGS_ready_check_path
+        # resolution semantics).
+        cfg = {'ready_check_path': {'value': './probe/ready'}}
+        self.assertEqual(_extract_ready_check_path(cfg), './probe/ready')
+
+    def test_empty_dict_value_returns_none(self):
+        cfg = {'ready_check_path': {'value': ''}}
+        self.assertIsNone(_extract_ready_check_path(cfg))
+
+    def test_missing_key_returns_none(self):
+        cfg = {'worker_address': {'value': '10.0.0.1:31501'}}
+        self.assertIsNone(_extract_ready_check_path(cfg))
+
+    def test_none_config_returns_none(self):
+        self.assertIsNone(_extract_ready_check_path(None))
+
+    def test_empty_config_returns_none(self):
+        self.assertIsNone(_extract_ready_check_path({}))
+
+    def test_non_string_non_dict_value_returns_none(self):
+        cfg = {'ready_check_path': 12345}
+        self.assertIsNone(_extract_ready_check_path(cfg))
 
 
 class TestCheckProcess(unittest.TestCase):

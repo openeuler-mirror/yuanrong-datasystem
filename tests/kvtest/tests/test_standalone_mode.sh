@@ -87,7 +87,6 @@ cat > "$ROOT_DIR/coordinator_config.json" << EOF
     "coordinator_raft_election_timeout_ms": {"value": "3000"},
     "log_dir": {"value": "$ROOT_DIR/coord/log"},
     "log_async": {"value": "false"},
-    "use_brpc": {"value": "true"},
     "node_dead_timeout_s": {"value": "6"}
 }
 EOF
@@ -105,8 +104,7 @@ cat > "$ROOT_DIR/worker_config.json" << EOF
     "node_dead_timeout_s": {"value": "6"},
     "add_node_wait_time_s": {"value": "1"},
     "log_async": {"value": "false"},
-    "enable_distributed_master": {"value": "true"},
-    "use_brpc": {"value": "true"}
+    "enable_distributed_master": {"value": "true"}
 }
 EOF
 
@@ -304,7 +302,7 @@ for i in 1 2 3; do
 "coordinator_raft_election_timeout_ms":{"value":"3000"},
 "coordinator_raft_initial_peers":{"value":"$CA1,$CA2,$CA3"},
 "log_dir":{"value":"$ROOT_DIR/c$i/log"},
-"log_async":{"value":"false"},"use_brpc":{"value":"true"},
+"log_async":{"value":"false"},
 "node_dead_timeout_s":{"value":"6"}}
 EOF
 done
@@ -421,7 +419,7 @@ cat > "$ROOT_DIR/c4.json" << EOF
 "coordinator_raft_heartbeat_interval_ms":{"value":"500"},
 "coordinator_raft_election_timeout_ms":{"value":"3000"},
 "log_dir":{"value":"$ROOT_DIR/c4/log"},
-"log_async":{"value":"false"},"use_brpc":{"value":"true"},
+"log_async":{"value":"false"},
 "node_dead_timeout_s":{"value":"6"}}
 EOF
 
@@ -493,8 +491,7 @@ cat > "$ROOT_DIR/worker_config2.json" << EOF
 "node_dead_timeout_s":{"value":"6"},
 "add_node_wait_time_s":{"value":"1"},
 "log_async":{"value":"false"},
-"enable_distributed_master":{"value":"true"},
-"use_brpc":{"value":"true"}}
+"enable_distributed_master":{"value":"true"}}
 EOF
 
 "$BUILD_DIR/worker_test" --config "$ROOT_DIR/worker_config2.json" \

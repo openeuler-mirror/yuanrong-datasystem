@@ -451,6 +451,27 @@ class Deployer:
                     procmon_src = os.path.join(script_dir, 'tools', 'procmon.py')
                 self.scp_to(node, procmon_src, f'{self.remote_work_dir}/procmon.py')
 
+            # Step 6b: Upload standalone_launcher.py (fork+setsid via Python
+            # syscall, not the `setsid` binary which may be missing on minimal
+            # images). Used below to launch kvtest detached from the caller's
+            # session so kubectl exec / ssh returns promptly instead of
+            # hanging for the full subprocess timeout on a nohup-backgrounded
+            # process. If upload fails, the legacy nohup path is used.
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            launcher_src = os.path.join(script_dir, 'standalone_launcher.py')
+            if not os.path.exists(launcher_src):
+                launcher_src = os.path.join(script_dir, 'tools',
+                                            'standalone_launcher.py')
+            launcher_uploaded = False
+            if os.path.exists(launcher_src):
+                try:
+                    self.scp_to(node, launcher_src,
+                                f'{self.remote_work_dir}/standalone_launcher.py')
+                    launcher_uploaded = True
+                except Exception as e:
+                    print(f'{tag} WARNING: launcher upload failed: {e}; '
+                          f'will fall back to nohup path')
+
             # Step 7: Start process
             # Third-party libs are statically linked into the binary.
             # libdatasystem.so is provided by the container SDK (remote_sdk).
@@ -458,7 +479,6 @@ class Deployer:
                 ld_path = remote_sdk
             else:
                 ld_path = ''
-            env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''
 
             # Add custom environment variables from config
             custom_env = {k: v for k, v in config.get('env', {}).items() if k}
@@ -480,49 +500,93 @@ class Deployer:
                         f'(node {node.get("host", "?")}) has no status.hostIP; '
                         f'cannot inject a valid node IP — check k8s node status')
                 custom_env[host_id_env] = host_ip
-            if custom_env:
-                env_assignments = [f'{k}={shlex.quote(str(v))}' for k, v in custom_env.items()]
-                env_prefix += ' '.join(env_assignments) + ' '
 
-            # Time only the actual launch (Step 7: nohup start_cmd). Verify
-            # (pgrep) and procmon attach are intentionally excluded — stricter
-            # than worker's start_service timing, which also bundles verify
-            # and procmon into the same stopwatch.
-            start_cmd = (
-                f"cd {self.remote_work_dir} && "
-                f"{env_prefix}"
-                f"nohup ./kvtest config_{instance_id}.json "
-                f"> run.log 2>&1 </dev/null & "
-                f"echo $!")
+            # Time only the actual launch. Verify (pgrep) and procmon attach
+            # are intentionally excluded — caller reads start_elapsed.
             print(f'{tag} starting kvclient (role={role})...')
-            # allow_timeout: SSH nohup may not return in nested SSH environments,
-            # but the remote process still starts. Verify with pgrep below.
             t_start = time.monotonic()
             try:
-                self.run_on(node, start_cmd, check=False, timeout=10, allow_timeout=True)
+                pid = None
+                if launcher_uploaded:
+                    # Launcher path: fork+setsid via Python syscall. Custom
+                    # env vars (HOST_IP etc.) are set in the shell prefix so
+                    # the launcher inherits them via os.environ; LD_LIBRARY_PATH
+                    # is handled by the launcher's --lib-path arg. No --port:
+                    # kvtest client doesn't listen, launcher prints PID
+                    # immediately after fork.
+                    env_prefix = ''
+                    if custom_env:
+                        env_prefix = ' '.join(
+                            f'{k}={shlex.quote(str(v))}'
+                            for k, v in custom_env.items()) + ' '
+                    launcher_parts = [
+                        f'cd {self.remote_work_dir} &&',
+                        env_prefix,
+                        'python3', shlex.quote(f'{self.remote_work_dir}/standalone_launcher.py'),
+                        '--binary', shlex.quote(f'{self.remote_work_dir}/kvtest'),
+                        '--cwd', shlex.quote(self.remote_work_dir),
+                        '--log', shlex.quote(f'{self.remote_work_dir}/run.log'),
+                    ]
+                    if ld_path:
+                        launcher_parts.extend(['--lib-path', shlex.quote(ld_path)])
+                    launcher_parts.extend(['--', f'config_{instance_id}.json'])
+                    start_cmd = ' '.join(launcher_parts)
+                    result = self.run_on(node, start_cmd, check=False,
+                                         timeout=20, allow_timeout=True)
+                    if result and result.stdout:
+                        out = result.stdout.strip()
+                        if out:
+                            last_line = out.splitlines()[-1].strip()
+                            if last_line.isdigit():
+                                pid = last_line
+                else:
+                    # Fallback: legacy nohup-and-timeout path (used when
+                    # launcher upload failed). Kubectl exec / ssh may hang
+                    # for the full subprocess timeout because the binary
+                    # holds the SPDY pipe; allow_timeout swallows it.
+                    env_prefix = (f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH '
+                                  if ld_path else '')
+                    if custom_env:
+                        env_prefix += ' '.join(
+                            f'{k}={shlex.quote(str(v))}'
+                            for k, v in custom_env.items()) + ' '
+                    start_cmd = (
+                        f"cd {self.remote_work_dir} && "
+                        f"{env_prefix}"
+                        f"nohup ./kvtest config_{instance_id}.json "
+                        f"> run.log 2>&1 </dev/null & "
+                        f"echo $!")
+                    self.run_on(node, start_cmd, check=False,
+                                timeout=10, allow_timeout=True)
                 start_elapsed = time.monotonic() - t_start
             except Exception as e:
                 print(f'  {target} -> FAILED: {e}')
                 return False, time.monotonic() - t_start
 
-            # Step 8: Verify process started
-            time.sleep(1)
-            pid = None
-            verify = self.run_on(
-                node, f'pgrep -x kvtest',
-                check=False)
-            if verify.returncode == 0 and verify.stdout.strip():
-                pid = verify.stdout.strip().split('\n')[0]
+            # Step 8: Verify/report process started
+            # Launcher path: PID was already printed to stdout by the
+            # launcher (fork + exec; PID survives exec). Report it directly.
+            # Fallback path (launcher upload failed or returned no PID):
+            # use pgrep to verify and report.
+            if pid:
                 print(f'{tag} process started (pid={pid})')
             else:
-                print(f'{tag} WARNING: process not found after start, checking log...')
-                log = self.run_on(
-                    node, f'cat {self.remote_work_dir}/run.log 2>/dev/null',
+                time.sleep(1)
+                verify = self.run_on(
+                    node, f'pgrep -x kvtest',
                     check=False)
-                if log.stdout.strip():
-                    print(f'{tag} stdout: {log.stdout.strip()[:500]}')
+                if verify.returncode == 0 and verify.stdout.strip():
+                    pid = verify.stdout.strip().split('\n')[0]
+                    print(f'{tag} process started (pid={pid})')
                 else:
-                    print(f'{tag} stdout empty — binary may have crashed before any output')
+                    print(f'{tag} WARNING: process not found after start, checking log...')
+                    log = self.run_on(
+                        node, f'cat {self.remote_work_dir}/run.log 2>/dev/null',
+                        check=False)
+                    if log.stdout.strip():
+                        print(f'{tag} stdout: {log.stdout.strip()[:500]}')
+                    else:
+                        print(f'{tag} stdout empty — binary may have crashed before any output')
 
             # Step 9: Start procmon (--background: parent prints PID and exits,
             # kubectl exec / ssh returns immediately without timeout hack)
@@ -1080,6 +1144,9 @@ def cmd_gen_config(args):
     cfg['random_numa_node'] = bool(args.random_numa_node)
     if args.numa_node is not None:
         cfg['numa_node'] = args.numa_node
+        # Specific NUMA node binding takes priority over random selection;
+        # clear the random flag so the binary sees one unambiguous signal.
+        cfg['random_numa_node'] = False
 
     # Data verification (pipeline/cache get paths). Only emit the verify block
     # when at least one option differs from the default, to keep generated
@@ -1135,14 +1202,6 @@ def cmd_gen_config(args):
                 cfg['warmup_timeout_seconds'] = args.warmup_timeout
             if args.inference_delay > 0:
                 cfg['inference_delay_ms'] = args.inference_delay
-
-    # Runtime environment variables (applied to ./kvtest launch via the env block).
-    # Only emit when non-empty to keep generated configs minimal.
-    env = {}
-    if args.use_brpc:
-        env['DATASYSTEM_USE_BRPC'] = 'true'
-    if env:
-        cfg['env'] = env
 
     # --- Write files ---
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1269,12 +1328,8 @@ def _add_gen_config_args(p):
                         'Pass false to make Get/MGet query metadata owners through the Transport layer.')
     p.add_argument('--data-placement-policy',
                    choices=['PREFERRED_SAME_NODE', 'REQUIRED_SAME_NODE', 'PREFERRED_META_OWNER'],
-                   default='PREFERRED_SAME_NODE', dest='data_placement_policy',
-                   help='Set/MSet data placement policy (default: PREFERRED_SAME_NODE).')
-    # Runtime environment (applies to all modes)
-    p.add_argument('--use-brpc', action='store_true', dest='use_brpc',
-                   help='Use brpc RPC backend: sets DATASYSTEM_USE_BRPC=true env var '
-                        'when running kvtest (default: off, ZMQ backend)')
+                    default='PREFERRED_SAME_NODE', dest='data_placement_policy',
+                    help='Set/MSet data placement policy (default: PREFERRED_SAME_NODE).')
     # CPU / NUMA affinity
     p.add_argument('--cpu-affinity', default='',
                    help='CPU affinity, e.g. "0-7" or "0,2,4,6" (default: auto-detect)')
@@ -1282,10 +1337,17 @@ def _add_gen_config_args(p):
     numa_group.add_argument('--numa-node', type=int, default=None,
                             help='NUMA node to bind (default: disabled); requires libnuma. '
                                  'Mutually exclusive with --random-numa-node.')
-    numa_group.add_argument('--random-numa-node', action='store_true',
+    numa_group.add_argument('--random-numa-node', action='store_true', default=True,
                             dest='random_numa_node',
                             help='Let kvtest pick a NUMA node at random at startup. '
-                                 'Mutually exclusive with --numa-node. Default: off.')
+                                 'Mutually exclusive with --numa-node. Default: on.')
+    # Separate (not in the mutually exclusive group) so it can be combined
+    # with --numa-node for an explicit "specific node, no randomness" intent,
+    # though --numa-node alone already clears random_numa_node in config.
+    p.add_argument('--no-random-numa-node', action='store_false',
+                   dest='random_numa_node',
+                   help='Disable random NUMA node selection (default: on; use this '
+                        'to turn it off when you want no NUMA binding at all).')
     # Data verification (pipeline/cache get paths)
     p.add_argument('--verify-level',
                    choices=['off', 'size', 'sample', 'full'], default='size',

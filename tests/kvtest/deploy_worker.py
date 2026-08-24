@@ -22,6 +22,7 @@ from deploy_common import (
     cmd_clean_shared,
     cmd_collect_shared,
     cmd_exec_shared,
+    cmd_install_impl,
     cmd_install_shared,
     cmd_kill_shared,
     cmd_stop_shared,
@@ -133,6 +134,9 @@ def cmd_deploy(args, pods):
 
 def cmd_start_standalone(args, pods):
     """Start worker_test binary in standalone mode."""
+    if not getattr(args, 'jf', None):
+        print('ERROR: --jf is required in standalone mode', file=sys.stderr)
+        return 1
     with open(args.config) as f:
         config_template = json.load(f)
 
