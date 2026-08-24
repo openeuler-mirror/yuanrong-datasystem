@@ -208,15 +208,31 @@ bool WorkerOcServiceCrudCommonApi::IsMetadataRpcFailureReported(
     return target.ParseString(workerMasterApi->GetHostPort()).IsOk() && metadataRpcFailureReported_(target);
 }
 
+Status WorkerOcServiceCrudCommonApi::TranslateMetadataOwnerRpcFailure(
+    const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi, const Status &status, bool rpcDispatched) const
+{
+    if (!rpcDispatched) {
+        return status;
+    }
+    const auto code = status.GetCode();
+    const bool connectionFailure = code == K_RPC_PEER_DEAD ||
+                                   code == K_RPC_UNAVAILABLE ||
+                                   code == K_CLIENT_WORKER_DISCONNECT;
+    const bool qualifiedDeadline = code == K_RPC_DEADLINE_EXCEEDED && IsMetadataRpcFailureReported(workerMasterApi);
+    if (connectionFailure || qualifiedDeadline) {
+        return Status(K_METADATA_OWNER_UNAVAILABLE,
+                      FormatString("Metadata owner RPC failure. detail: %s", status.ToString()));
+    }
+    return status;
+}
+
 Status WorkerOcServiceCrudCommonApi::TranslateQualifiedMetadataDeadline(
     const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi, const Status &status, bool rpcDispatched) const
 {
-    if (!rpcDispatched || status.GetCode() != K_RPC_DEADLINE_EXCEEDED
-        || !IsMetadataRpcFailureReported(workerMasterApi)) {
+    if (status.GetCode() != K_RPC_DEADLINE_EXCEEDED) {
         return status;
     }
-    return Status(K_METADATA_OWNER_UNAVAILABLE,
-                  FormatString("Metadata owner RPC failure qualified. detail: %s", status.ToString()));
+    return TranslateMetadataOwnerRpcFailure(workerMasterApi, status, rpcDispatched);
 }
 
 Status WorkerOcServiceCrudCommonApi::PartitionMultiCopyMetaRequest(

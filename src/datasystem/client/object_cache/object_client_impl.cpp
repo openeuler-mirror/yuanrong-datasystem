@@ -886,7 +886,6 @@ Status ObjectClientImpl::InitTransportLayer()
     // local client cannot initialize UB; a non-SHM endpoint retains the existing fail-fast behavior.
     options.allowUbRuntimeFailure = workerApi_[currentNode_]->IsShmEnable();
     options.readSourceFilter = ubHealthFilter_;
-    options.retryAdmissionCheck = [this]() { return CheckBoundWorkerAvailability(); };
     options.metadataFailureHandler = [this](const HostPort &owner, const Status &status) {
         if (!ShouldRefreshRoutingAfterFailure(status.GetCode())
             && !client::IsTransportSnapshotStaleLocation(status)) {
@@ -1118,7 +1117,7 @@ bool ObjectClientImpl::SubmitUrmaDataPlaneSwitch(WorkerNode node,
 
 bool ObjectClientImpl::SubmitUnavailableWorkerSwitch(const std::shared_ptr<IClientWorkerApi> &workerApi)
 {
-    if (!enableCrossNodeConnection_ || workerApi == nullptr) {
+    if (!enableLocalCache_ || !enableCrossNodeConnection_ || workerApi == nullptr) {
         return false;
     }
     WorkerNode node;
@@ -1189,7 +1188,7 @@ void ObjectClientImpl::HandleDirectGetFailure(const std::shared_ptr<IClientWorke
 
 void ObjectClientImpl::MaybeSwitchWorkerRemovedFromRing(const ::datasystem::ClusterTopologyPb &ring)
 {
-    if (std::atomic_load(&routing_) == nullptr) {
+    if (!enableLocalCache_ || std::atomic_load(&routing_) == nullptr) {
         return;
     }
     std::shared_ptr<IClientWorkerApi> workerApi;
@@ -3122,35 +3121,6 @@ Status ObjectClientImpl::CheckConnection(const std::shared_ptr<client::ListenWor
              FormatString("Client connection to bound worker %s is broken.", workerApi->hostPort_.ToString()) };
 }
 
-Status ObjectClientImpl::CheckBoundWorkerAvailability()
-{
-    if (enableLocalCache_ || embeddedClientWorkerApi_ != nullptr) {
-        return Status::OK();
-    }
-    HostPort boundWorker;
-    {
-        std::lock_guard<std::mutex> lock(switchNodeMutex_);
-        const auto node = currentNode_.load();
-        if (node >= workerApi_.size() || workerApi_[node] == nullptr) {
-            return Status::OK();
-        }
-        boundWorker = workerApi_[node]->hostPort_;
-    }
-    // This runs for routed retry admission and for routed Exist, which can otherwise complete
-    // without touching the bound worker. A short active port confirmation avoids relying on
-    // brpc's socket state, which can report a dead endpoint as connectable during recovery.
-    if (ProbeTcpPort(boundWorker, BOUND_WORKER_PROBE_TIMEOUT_MS) == TcpPortProbeResult::PEER_DEAD) {
-        auto routing = std::atomic_load(&routing_);
-        if (routing != nullptr && routing->ForceRefresh()) {
-            LOG(INFO) << "[Routing] Force hash ring refresh after bound worker probe failure, worker: "
-                      << boundWorker.ToString();
-        }
-        return { K_RPC_PEER_DEAD,
-                 FormatString("Client connection to bound worker %s is broken.", boundWorker.ToString()) };
-    }
-    return Status::OK();
-}
-
 bool ObjectClientImpl::IsScaleDown(WorkerNode id)
 {
     if (listenWorker_.size() <= id || listenWorker_[id] == nullptr) {
@@ -4004,7 +3974,9 @@ Status ObjectClientImpl::BuildSetRouteContext(const HostPort &worker, SetRouteCo
         selected.invokeGuard =
             std::make_unique<Raii>([api = selected.clientApi]() { api->DecreaseInvokeCount(); });
     }
-    RETURN_IF_NOT_OK(CheckConnection(listenWorker, selected.clientApi));
+    if (enableLocalCache_) {
+        RETURN_IF_NOT_OK(CheckConnection(listenWorker, selected.clientApi));
+    }
     if (selected.worker == selected.clientApi->hostPort_) {
         selected.directWorkerApi = selected.clientApi;
     }
@@ -4197,9 +4169,6 @@ Status ObjectClientImpl::ExecuteSetFlow(
         }
         rc = ProcessTransportPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence,
                                  routeContext, failureStage, transportResult, requestTimeoutMs);
-        if (rc.IsError()) {
-            RETURN_IF_NOT_OK(CheckBoundWorkerAvailability());
-        }
         if (rc.IsOk()
             || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers,
                                       transportResult.writeTargetQuarantined
@@ -8191,14 +8160,12 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_RPC_START);
     }
-    // Routed Exist can complete without touching the client's bound worker. Confirm that endpoint
-    // before dispatch so a kill that races the async listener cannot be hidden by a successful
-    // request to another worker. This is a no-op for the local-cache path.
-    RETURN_IF_NOT_OK(CheckBoundWorkerAvailability());
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_RUNTIME_ERROR, "No available worker API for Exist");
+    if (enableLocalCache_) {
+        RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+        CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_RUNTIME_ERROR, "No available worker API for Exist");
+    }
     const auto tokenPtr = std::atomic_load(&transportToken_);
     SensitiveValue token = (tokenPtr != nullptr) ? *tokenPtr : SensitiveValue();
     Status rc =
@@ -8211,12 +8178,6 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
     const auto &firstKey = keys.empty() ? "" : keys[0];
-    if (rc.IsError()) {
-        Status boundWorkerStatus = CheckBoundWorkerAvailability();
-        if (boundWorkerStatus.IsError()) {
-            rc = std::move(boundWorkerStatus);
-        }
-    }
     SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && elapsedUs >= config.rpcSlowerThanUs, 1,
         FormatString("Finished check exist from worker, first object_key: %s, cost: %.3fms, rc: %s",
                      firstKey, elapsedMs, rc.ToString()));
@@ -8240,6 +8201,7 @@ Status ObjectClientImpl::RunExist(std::shared_ptr<client::Routing> routing,
         ExistHandler flow(&existRouting, &existTransport, asyncGetRPCPool_);
         return flow.Run(request, exists);
     }
+    CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_RUNTIME_ERROR, "No available worker API for Exist");
     return workerApi->Exist(keys, exists, queryL2Cache, isLocal);
 }
 

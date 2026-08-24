@@ -3547,6 +3547,7 @@ TEST(ObjectClientTransportTest, ShutdownWaitsForAsyncWorkerSwitchTasks)
     object_cache::ObjectClientImpl client(options);
     client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch_shutdown_test");
     client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
+    client.enableLocalCache_ = true;
     client.enableCrossNodeConnection_ = true;
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
     workerApi->clientId_ = "switch-shutdown-test-client";
@@ -3660,22 +3661,27 @@ TEST(ObjectClientTransportTest, SetCreatePeerDeadForcesRingRefreshAndKeepsSafeRe
     EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
 }
 
-TEST(ObjectClientTransportTest, DeadBoundWorkerForcesRingRefreshBeforeRoutedRetryReturns)
+TEST(ObjectClientTransportTest, RoutedClientPeerDeadRefreshesRingWithoutBoundWorkerSwitch)
 {
     ConnectOptions options;
     options.host = "127.0.0.1";
     options.port = 31501;
     object_cache::ObjectClientImpl client(options);
     client.enableLocalCache_ = false;
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(1), RpcCredential{});
+    client.enableCrossNodeConnection_ = true;
+    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "routed_peer_dead_no_switch_test");
+    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
     client.workerApi_.emplace_back(workerApi);
     auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
     std::atomic_store(&client.routing_, routing);
 
-    const auto status = client.CheckBoundWorkerAvailability();
+    client.HandleDirectGetFailure(workerApi, Status(K_RPC_PEER_DEAD, "routed worker down"));
 
-    EXPECT_EQ(status.GetCode(), K_RPC_PEER_DEAD);
     EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
+    EXPECT_FALSE(client.SubmitUnavailableWorkerSwitch(workerApi));
+    std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
+    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
 }
 
 TEST(ObjectClientTransportTest, AuthoritativeRingRemovalQueuesBoundWorkerSwitchOnlyAfterRoutingInit)
@@ -3684,6 +3690,7 @@ TEST(ObjectClientTransportTest, AuthoritativeRingRemovalQueuesBoundWorkerSwitchO
     options.host = "127.0.0.1";
     options.port = 31501;
     object_cache::ObjectClientImpl client(options);
+    client.enableLocalCache_ = true;
     client.enableCrossNodeConnection_ = true;
     client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "ring_removal_switch_test");
     client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
@@ -3726,12 +3733,66 @@ TEST(ObjectClientTransportTest, AuthoritativeRingRemovalQueuesBoundWorkerSwitchO
     EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
 }
 
+TEST(ObjectClientTransportTest, AuthoritativeRingRemovalDoesNotSwitchRoutedClient)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    client.enableLocalCache_ = false;
+    client.enableCrossNodeConnection_ = true;
+    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "routed_ring_no_switch_test");
+    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    client.workerApi_.emplace_back(workerApi);
+    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(MakeAddress(31502)));
+    ::datasystem::ClusterTopologyPb ring;
+    (*ring.mutable_members())[MakeAddress(31501).ToString()].set_state(::datasystem::MembershipPb::FAILED);
+
+    client.MaybeSwitchWorkerRemovedFromRing(ring);
+    EXPECT_FALSE(client.SubmitUnavailableWorkerSwitch(workerApi));
+
+    std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
+    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
+}
+
+TEST(ObjectClientTransportTest, RoutedExistIgnoresBoundWorkerFailFastState)
+{
+    const auto owner = MakeAddress(31502);
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "routed-exist-client";
+    client.workerApi_.emplace_back(workerApi);
+    client.enableLocalCache_ = false;
+    client.enableCrossNodeConnection_ = true;
+    client.workerSwitchState_ = object_cache::ObjectClientImpl::WorkerSwitchState::NO_SWITCHABLE_WORKER;
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(owner));
+    bool initNeedsCompletion = false;
+    ASSERT_TRUE(client.clientStateManager_->ProcessInit(initNeedsCompletion).IsOk());
+    client.clientStateManager_->CompleteHandler(false, initNeedsCompletion);
+    std::vector<bool> exists;
+
+    ASSERT_TRUE(client.Exist({ "key" }, exists, false, false).IsOk());
+
+    ASSERT_EQ(exists, std::vector<bool>({ true }));
+    ASSERT_NE(manager->lastRpcClient, nullptr);
+    EXPECT_EQ(manager->lastRpcClient->WorkerAddress(), owner);
+    EXPECT_EQ(manager->lastRpcClient->existInvokeCount, 1);
+    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
+}
+
 TEST(ObjectClientTransportTest, ActiveBoundWorkerDoesNotQueueAuthoritativeRingSwitch)
 {
     ConnectOptions options;
     options.host = "127.0.0.1";
     options.port = 31501;
     object_cache::ObjectClientImpl client(options);
+    client.enableLocalCache_ = true;
     client.enableCrossNodeConnection_ = true;
     client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "active_ring_switch_test");
     client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
@@ -3753,6 +3814,7 @@ TEST(ObjectClientTransportTest, NonActiveBoundWorkerQueuesAuthoritativeRingSwitc
     options.host = "127.0.0.1";
     options.port = 31501;
     object_cache::ObjectClientImpl client(options);
+    client.enableLocalCache_ = true;
     client.enableCrossNodeConnection_ = true;
     client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "non_active_ring_switch_test");
     client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
