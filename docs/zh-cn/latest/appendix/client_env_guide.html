@@ -757,8 +757,18 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-even"><td><p>28</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
-<td><p>是否让客户端日志文件名不带进程号。默认<code class="docutils literal notranslate"><span class="pre">true</span></code>时输出为<code class="docutils literal notranslate"><span class="pre">ds_client.log</span></code>、<code class="docutils literal notranslate"><span class="pre">ds_client_access.log</span></code>；设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>时恢复为带<code class="docutils literal notranslate"><span class="pre">&lt;pid&gt;</span></code>后缀的命名，适合多client进程同时运行且不希望覆盖日志的场景。</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否让客户端日志文件名不带进程号。默认<code class="docutils literal notranslate"><span class="pre">false</span></code>时输出带<code class="docutils literal notranslate"><span class="pre">&lt;pid&gt;</span></code>后缀的日志名；设置为<code class="docutils literal notranslate"><span class="pre">true</span></code>时输出为<code class="docutils literal notranslate"><span class="pre">ds_client.log</span></code>、<code class="docutils literal notranslate"><span class="pre">ds_client_access.log</span></code>。</p></td>
+</tr>
+<tr class="row-odd"><td><p>33</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_NAME</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>客户端运行日志基名，非空时仅允许英文字母、数字和下划线。仅当 <code class="docutils literal notranslate"><span class="pre">KVClientConfig::LogName</span></code> 未显式配置时读取。</p></td>
+</tr>
+<tr class="row-even"><td><p>34</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_ACCESS_LOG_NAME</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>客户端访问日志基名，非空时仅允许英文字母、数字和下划线。仅当 <code class="docutils literal notranslate"><span class="pre">KVClientConfig::AccessLogName</span></code> 未显式配置时读取。</p></td>
 </tr>
 </tbody>
 </table>
