@@ -20,6 +20,7 @@
 #include "datasystem/master/object_cache/device/master_dev_npu_events.h"
 #include <shared_mutex>
 
+#include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/util/request_context.h"
 
 namespace datasystem {

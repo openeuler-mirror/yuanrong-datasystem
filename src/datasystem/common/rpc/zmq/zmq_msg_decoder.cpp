@@ -169,11 +169,11 @@ Status ZmqMsgDecoder::V1Client(MsgState &state)
                                         pSockFd_->GetFd());
     for (auto i = 0; i < hdr_.msg_size_size(); ++i) {
         size_t msgReadSoFar = 0;
-        ZmqMessage msg;
+        RpcMessage msg;
         auto sz = hdr_.msg_size(i);
         RETURN_IF_NOT_OK(msg.AllocMem(sz));
         RETURN_IF_NOT_OK(TransferFromWA(msg.Data(), sz, msgReadSoFar));
-        // For the rest we will simply read directly into the ZmqMessage.
+        // For the rest we will simply read directly into the RpcMessage.
         if (msgReadSoFar < sz) {
             // We will block ourselves until we get all the data.
             RETURN_IF_NOT_OK(
@@ -190,7 +190,7 @@ Status ZmqMsgDecoder::V1Client(MsgState &state)
 Status ZmqMsgDecoder::DecodeFlag(MsgState &state)
 {
     CHECK_FAIL_RETURN_STATUS(state == MsgState::FLAGS_READY, K_RUNTIME_ERROR, "Wrong state");
-    inProcess_ = ZmqMessage();
+    inProcess_ = RpcMessage();
     msgSize_ = 0;
     // Check if we have at least one byte
     if (Empty()) {
@@ -310,9 +310,9 @@ Status ZmqMsgDecoder::ReadMessage(MsgState &state, void *dest, size_t sz)
 
     size_t msgReadSoFar = 0;
     // We may have read part of the message in the work area already. If so,
-    // copy it to the ZmqMessage
+    // copy it to the RpcMessage
     RETURN_IF_NOT_OK(TransferFromWA(inProcess_.Data(), msgSize_, msgReadSoFar));
-    // For the rest or large payload, we will simply read directly into the ZmqMessage.
+    // For the rest or large payload, we will simply read directly into the RpcMessage.
     if (msgReadSoFar < msgSize_) {
         // We will block ourselves until we get all the data.
         RETURN_IF_NOT_OK(pSockFd_->Recv(reinterpret_cast<uint8_t *>(inProcess_.Data()) + msgReadSoFar,
@@ -351,7 +351,7 @@ Status ZmqMsgDecoder::Decode(void *dest, size_t sz)
     return Status::OK();
 }
 
-Status ZmqMsgDecoder::GetMessage(ZmqMessage &outMsg, bool &more)
+Status ZmqMsgDecoder::GetMessage(RpcMessage &outMsg, bool &more)
 {
     Status rc;
     more = false;
@@ -370,7 +370,7 @@ Status ZmqMsgDecoder::GetMessage(ZmqMessage &outMsg, bool &more)
         more = (flag_ & MTP_MORE) != 0;
         outMsg = std::move(inProcess_);
         if (flag_ & MTP_PROTOCOL::MTP_DECODER) {
-            outMsg.SetType(ZmqMessage::ZmqMsgType::DECODER);
+            outMsg.SetType(RpcMessage::MsgType::DECODER);
         }
     } while (rc.GetCode() == K_TRY_AGAIN);
     return rc;
@@ -384,7 +384,7 @@ Status ZmqMsgDecoder::ReceiveMsgFramesV1(ZmqMsgFrames &frames)
     VLOG(RPC_LOG_LEVEL) << FormatString("Prepare to receive %d frames from fd %d using V1 format", numMsg,
                                         pSockFd_->GetFd());
     for (int i = 0; i < numMsg; ++i) {
-        ZmqMessage msg;
+        RpcMessage msg;
         RETURN_IF_NOT_OK(msg.AllocMem(hdr.msg_size(i)));
         RETURN_IF_NOT_OK(pSockFd_->Recv(msg.Data(), msg.Size(), true));
         VLOG(RPC_LOG_LEVEL) << "Frame (" << i << ") received. Size " << msg.Size() << " ... " << msg;
@@ -414,24 +414,24 @@ Status ZmqMsgDecoder::ReceiveMsgFramesV2(ZmqMsgFrames &frames)
     Status rc;
     curFrame_ = 0;
     do {
-        ZmqMessage msg;
+        RpcMessage msg;
         RETURN_IF_NOT_OK(GetMessage(msg, more));
         // If we detect downlevel client using V1, underlying logic has already got all the
         // parts, and we break out from the loop.
         if (!newFormat_) {
             while (!v1Frames_.empty()) {
-                ZmqMessage v1Msg = std::move(v1Frames_.front());
+                RpcMessage v1Msg = std::move(v1Frames_.front());
                 v1Frames_.pop_front();
                 frames.push_back(std::move(v1Msg));
             }
             break;
         }
         VLOG(RPC_LOG_LEVEL) << "Frame (" << curFrame_ << ") received. Size " << msg.Size() << " ... " << msg;
-        if (msg.GetType() == ZmqMessage::ZmqMsgType::DECODER) {
+        if (msg.GetType() == RpcMessage::MsgType::DECODER) {
             // A decoder frame is for us only. It contains the address where we should write the
             // subsequent payload to.
             PayloadDirectGetRspPb pb;
-            RETURN_IF_NOT_OK(ParseFromZmqMessage(msg, pb));
+            RETURN_IF_NOT_OK(ParseFromRpcMessage(msg, pb));
             RETURN_IF_NOT_OK(ReceivePayloadIntoMemory(reinterpret_cast<void *>(pb.addr()), pb.sz()));
             // We should have exhausted all the frames.
             CHECK_FAIL_RETURN_STATUS(msgState_ == MsgState::HDR_LEN_READY, K_RUNTIME_ERROR,
@@ -497,7 +497,7 @@ ZmqMsgDecoder::~ZmqMsgDecoder()
 {
 }
 
-Status ZmqMsgEncoder::SendMessage(const ZmqMessage &msg, bool more) const
+Status ZmqMsgEncoder::SendMessage(const RpcMessage &msg, bool more) const
 {
     struct {
         uint8_t flag_;
@@ -517,7 +517,7 @@ Status ZmqMsgEncoder::SendMessage(const ZmqMessage &msg, bool more) const
     // In order to support write directly into receiver's shared memory, we need to
     // tag certain frames for the receiving side.
     auto type = msg.GetType();
-    if (type == ZmqMessage::ZmqMsgType::DECODER) {
+    if (type == RpcMessage::MsgType::DECODER) {
         hdr.flag_ |= MTP_DECODER;
     }
     const int SHORT_LENGTH = 2;

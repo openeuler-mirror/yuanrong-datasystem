@@ -943,7 +943,7 @@ private:
 
 /**
  * On the client side the outbound message queue is the pair {MetaPb, std::deque<zmq:message_t>}
- * and inbound queue is std::deque<ZmqMessage>.
+ * and inbound queue is std::deque<RpcMessage>.
  */
 typedef MsgQue<ZmqMetaMsgFrames, ZmqMsgFrames> ZmqMsgQue;
 typedef MsgQueMgr<ZmqMetaMsgFrames, ZmqMetaMsgFrames> ZmqMsgMgr;

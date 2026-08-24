@@ -76,7 +76,7 @@
 | Top-level test tree | Routes CMake into UT, ST, perf, and shared helpers | `tests/CMakeLists.txt` | Adds `ut`, `st`, `perf`, and `common`. |
 | UT CMake | Builds unit/component gtest binaries | `tests/ut/CMakeLists.txt` | Splits stream, object, slot-store, and flags tests out of the default `ds_ut` bucket. |
 | ST CMake | Builds system-test binaries and runtime helpers | `tests/st/CMakeLists.txt` | Splits stream, object, KV, embedded-client, device, and standalone tests; `ds_st_coordinator_backend_manual` is built for explicit execution but is not registered with CTest. |
-| Perf CMake | Builds ZMQ performance helpers | `tests/perf/zmq/CMakeLists.txt` | Produces client, server, and agent binaries. |
+| Perf CMake | Builds performance helper binaries | `tests/perf/client/CMakeLists.txt` | Builds `peer_ub_admission_timeout_bench`. |
 | Common helpers | Provides binmock support | `tests/common/binmock` | Builds `binmock` and `binmock_spec`. |
 | Test registration function | Converts gtest binaries into CTest cases | `cmake/util.cmake` | `ADD_DATASYSTEM_TEST` writes include files and invokes `GoogleTestToCTest.cmake`; optional `TIMEOUT` sets a CTest hard timeout on every discovered case. |
 | GTest-to-CTest script | Derives CTest names, labels, disabled state, serial state, and optional timeout | `cmake/scripts/GoogleTestToCTest.cmake` | Runs each binary with `--gtest_list_tests`; omitting `TIMEOUT` preserves the existing generated properties. |

@@ -24,6 +24,7 @@
 #include <zmq.h>
 
 #include "datasystem/common/rpc/rpc_message.h"
+#include "datasystem/common/rpc/zmq/zmq_message.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
@@ -143,6 +144,9 @@ public:
     Status Connect(const std::string &endPoint, bool isIPv6 = false);
     Status RecvMsg(ZmqMessage &msg, ZmqRecvFlags flags);
     Status SendMsg(ZmqMessage &msg, ZmqSendFlags flags);
+    // RpcMessage overloads: copy across the zmq I/O boundary.
+    Status RecvMsg(RpcMessage &msg, ZmqRecvFlags flags);
+    Status SendMsg(RpcMessage &msg, ZmqSendFlags flags);
 
     static Status ZmqErrnoToStatus(int rc, const std::string &msg, StatusCode defaultRc = K_RUNTIME_ERROR);
 

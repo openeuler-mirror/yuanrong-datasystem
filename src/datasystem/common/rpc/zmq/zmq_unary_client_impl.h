@@ -120,7 +120,7 @@ public:
             auto &frames = reply.second;
             auto rcMsg = std::move(frames.front());
             frames.pop_front();
-            RETURN_IF_NOT_OK(ZmqMessageToStatus(rcMsg));
+            RETURN_IF_NOT_OK(RpcMessageToStatus(rcMsg));
         } else if (payloadId_ == ZMQ_OFFLINE_PAYLOAD_INX) {
             RETURN_IF_NOT_OK(RecvConnReply(reply, ZmqRecvFlags::NONE, true));
         }
@@ -169,10 +169,10 @@ public:
         RETURN_IF_NOT_OK(RecvConnReply(reply, ZmqRecvFlags::NONE, true));
         // Verify the response
         auto &frames = reply.second;
-        ZmqMessage msg;
+        RpcMessage msg;
         RETURN_IF_NOT_OK(AckRequest(frames, msg));
         PayloadDirectGetRspPb rsp;
-        RETURN_IF_NOT_OK(ParseFromZmqMessage(msg, rsp));
+        RETURN_IF_NOT_OK(ParseFromRpcMessage(msg, rsp));
         CHECK_FAIL_RETURN_STATUS(
             rq.sz() == rsp.sz() && rq.addr() == rsp.addr(), K_RUNTIME_ERROR,
             FormatString("Request and reply do not match. %d %d %d %d", rq.sz(), rq.addr(), rsp.sz(), rsp.addr()));
@@ -294,10 +294,10 @@ private:
         if (readOnce_.compare_exchange_strong(expected, true)) {
             VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " unary socket reading" << std::endl;
             RETURN_IF_NOT_OK(ReadAll(ZmqRecvFlags::NONE));
-            ZmqMessage msg;
+            RpcMessage msg;
             RETURN_IF_NOT_OK(AckRequest(inMsg_, msg));
             PerfPoint point(PerfKey::ZMQ_RESPONSE_MSG_TO_PROTO);
-            RETURN_IF_NOT_OK(ParseFromZmqMessage(msg, pb));
+            RETURN_IF_NOT_OK(ParseFromRpcMessage(msg, pb));
             point.Record();
             PerfPoint::RecordElapsed(PerfKey::ZMQ_RESPONSE_SIZE_BEFORE_DESERIALIZE, msg.Size());
             VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " got message\n"
@@ -307,7 +307,7 @@ private:
                 CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(inMsg_.size() == 1, StatusCode::K_INVALID,
                                                      "Expect a payload size frame only");
                 int64_t sz = 0;
-                RETURN_IF_NOT_OK(ZmqMessageToInt64(inMsg_.front(), sz));
+                RETURN_IF_NOT_OK(RpcMessageToInt64(inMsg_.front(), sz));
                 payloadSz_ = static_cast<size_t>(sz);
                 // We will leave the payload size frame in the queue. No need to pop it.
                 VLOG(RPC_KEY_LOG_LEVEL) << FormatString("Banked payload frame detected with id %d sz %zu", payloadId_,

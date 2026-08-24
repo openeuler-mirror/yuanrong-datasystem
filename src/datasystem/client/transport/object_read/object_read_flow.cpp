@@ -17,6 +17,7 @@
 /** Description: Implements grouped metadata lookup and batched replica reads. */
 
 #include "datasystem/client/transport/object_read/object_read_flow.h"
+#include "datasystem/common/util/rpc_util.h"
 
 #include <algorithm>
 #include <chrono>

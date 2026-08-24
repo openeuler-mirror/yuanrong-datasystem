@@ -18,6 +18,7 @@
  * Description: Client access token request
  */
 #include "datasystem/common/token/client_access_token.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 
 namespace datasystem {
 ClientAccessToken::ClientAccessToken(SensitiveValue token) : token_(std::move(token))

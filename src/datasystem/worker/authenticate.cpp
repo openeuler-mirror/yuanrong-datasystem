@@ -36,7 +36,7 @@ Status AuthenticateMessageInternal(std::shared_ptr<AkSkManager> akSkManager, con
     auto signature = std::move(ctx->reqSignature);
     auto accessKey = std::move(ctx->reqAk);
     auto timestamp = ctx->reqTimestamp;
-    ZmqMessage serializedStr = std::move(ctx->serializedMessage);
+    RpcMessage serializedStr = std::move(ctx->serializedMessage);
     if (tenantAuthEnabled) {
         if (!token.empty()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(TenantAuthManager::Instance()->TenantTokenAuth(token, tenantId),

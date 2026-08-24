@@ -308,5 +308,10 @@ Status RetryUntil(Worker &&worker, Breaker &&breaker)
     LOG(INFO) << "Execute success";
     return status;
 }
+
+inline bool IsRpcError(const Status &status)
+{
+    return IsRetryableRpcError(status) || IsNonRetryableRpcError(status);
+}
 }  // namespace datasystem
 #endif  // DATASYSTEM_RPC_UTIL_H

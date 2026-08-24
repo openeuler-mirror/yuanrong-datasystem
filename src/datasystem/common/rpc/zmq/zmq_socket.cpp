@@ -66,7 +66,7 @@ Status ZmqSocket::UpdateOptions(const RpcOptions &opt)
     return Status::OK();
 }
 
-Status ZmqSocket::ZmqRecvMsg(ZmqMessage &msg, ZmqRecvFlags flags)
+Status ZmqSocket::ZmqRecvMsg(RpcMessage &msg, ZmqRecvFlags flags)
 {
     PerfPoint point(PerfKey::ZMQ_SOCKET_RECV_MSG);
     bool blocking = (flags == ZmqRecvFlags::NONE);
@@ -84,7 +84,7 @@ Status ZmqSocket::ZmqRecvMsg(ZmqMessage &msg, ZmqRecvFlags flags)
     return status;
 }
 
-Status ZmqSocket::ZmqSendMsg(ZmqMessage &msg, ZmqSendFlags flags)
+Status ZmqSocket::ZmqSendMsg(RpcMessage &msg, ZmqSendFlags flags)
 {
     PerfPoint point(PerfKey::ZMQ_SOCKET_SEND_MSG);
     return sock_.SendMsg(msg, flags);
@@ -126,7 +126,7 @@ Status ZmqSocket::GetAllFrames(ZmqMsgFrames &queue, ZmqRecvFlags flags)
     PerfPoint point(PerfKey::ZMQ_SOCKET_GET_ALL_MSG);
     bool more = false;
     do {
-        ZmqMessage msg;
+        RpcMessage msg;
         RETURN_IF_NOT_OK(ZmqRecvMsg(msg, flags));
         point.Record();
         more = msg.More();
@@ -139,7 +139,7 @@ Status ZmqSocket::SendAllFrames(ZmqMsgFrames &frames, ZmqSendFlags flags)
 {
     bool more = !frames.empty();
     while (more) {
-        ZmqMessage msg = std::move(frames.front());
+        RpcMessage msg = std::move(frames.front());
         frames.pop_front();
         more = !frames.empty();
         auto flg =

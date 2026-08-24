@@ -135,6 +135,7 @@ ds_cc_library(
     hdrs = [
         "brpc_expired_request_interceptor.h",
         "rpc_server.h",
+        "rpc_service_base.h",
     ],
     deps = [
         ":brpc_status_util",
@@ -224,10 +225,10 @@ ds_cc_library(
     ],
     deps = [
         ":mem_view",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/perf:common_perf",
-        "//src/datasystem/common/rpc/zmq:zmq_message",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:utils_cc_proto",
+        "@securec",
+        "@zmq",
     ],
 )
 

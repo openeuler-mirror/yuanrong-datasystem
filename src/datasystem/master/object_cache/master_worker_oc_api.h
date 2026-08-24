@@ -189,6 +189,7 @@ protected:
     explicit MasterWorkerOCApi(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager);
 
     HostPort masterHostPort_;  // The HostPort of the master node.
+    std::shared_ptr<MasterWorkerOCService_BrpcGenericStub> brpcSession_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_;
 };
 
@@ -228,8 +229,6 @@ public:
 
 private:
     HostPort workerHostPort_;                                            // The HostPort of the worker node.
-    std::shared_ptr<MasterWorkerOCService_Stub> rpcSession_{ nullptr };  // Session to the worker rpc service.
-    std::shared_ptr<MasterWorkerOCService_BrpcGenericStub> brpcSession_{ nullptr };
 };
 }  // namespace master
 }  // namespace datasystem

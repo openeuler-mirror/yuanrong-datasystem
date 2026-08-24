@@ -33,8 +33,7 @@ DECLARE_int32(max_connection_pool_size);
 
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/rpc/brpc_expired_request_interceptor.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/rpc/zmq/zmq_server_impl.h"
+#include "datasystem/common/rpc/rpc_service_base.h"
 #include "datasystem/common/util/thread_pool.h"
 
 namespace datasystem {
@@ -42,8 +41,7 @@ namespace datasystem {
 RpcServer::RpcServer(Token key, const RpcCredential &cred) : useBrpc_(false)
 {
     (void)key;
-    auto passkey = ZmqServerImpl::Token();
-    pimpl_ = std::make_unique<ZmqServerImpl>(passkey, cred);
+    (void)cred;
 }
 RpcServer::~RpcServer() noexcept
 {
@@ -54,12 +52,7 @@ RpcServer::~RpcServer() noexcept
 
 Status RpcServer::Init()
 {
-    return std::visit([](auto &pimpl) { return pimpl->Init(); }, pimpl_);
-}
-
-Status RpcServer::Run()
-{
-    return std::visit([](auto &pimpl) { return pimpl->Run(); }, pimpl_);
+    return Status::OK();
 }
 
 void RpcServer::Shutdown()
@@ -67,22 +60,26 @@ void RpcServer::Shutdown()
     if (useBrpc_) {
         StopBrpcServer();
     }
-    std::visit([](auto &pimpl) { pimpl->Shutdown(); }, pimpl_);
 }
 
-Status RpcServer::Bind(const std::string &endpoint)
+void RpcServer::Interrupt()
 {
-    return std::visit([&endpoint](auto &pimpl) { return pimpl->Bind(endpoint); }, pimpl_);
 }
 
-Status RpcServer::RegisterService(ZmqService *svc, const RpcServiceCfg &cfg)
+bool RpcServer::IsInterrupted() const
 {
-    return std::get<std::unique_ptr<ZmqServerImpl>>(pimpl_)->RegisterService(ZmqServerImpl::Token(), svc, cfg);
+    return false;
 }
 
-Status RpcServer::InitAuthHandler()
+Status RpcServer::RegisterService(RpcServiceBase *svc, const RpcServiceCfg &cfg)
 {
-    return std::visit([](auto &pimpl) { return pimpl->InitAuthHandler(); }, pimpl_);
+    RETURN_RUNTIME_ERROR_IF_NULL(svc);
+    RETURN_IF_NOT_OK(svc->Init(cfg));
+    auto it = svcMap_.emplace(svc->ServiceName(), svc);
+    if (!it.second) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "Service already registered. Not replacing");
+    }
+    return Status::OK();
 }
 
 Status RpcServer::AddBrpcService(google::protobuf::Service *service)
@@ -189,48 +186,23 @@ void RpcServer::StopBrpcServer()
     }
 }
 
-void RpcServer::Interrupt()
-{
-    std::visit([](auto &pimpl) { pimpl->Interrupt(); }, pimpl_);
-}
-
-bool RpcServer::IsInterrupted() const
-{
-    return std::visit([](auto &pimpl) { return pimpl->IsInterrupted(); }, pimpl_);
-}
-
-std::vector<std::string> RpcServer::GetListeningPorts() const
-{
-    return std::visit([](auto &pimpl) { return pimpl->GetListeningPorts(); }, pimpl_);
-}
-
 ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesUsage(const std::string &serviceName) const
 {
-    return std::visit([&serviceName](auto &pimpl) { return pimpl->GetRpcServicesUsage(serviceName); }, pimpl_);
+    auto it = svcMap_.find(serviceName);
+    return it != svcMap_.end() ? it->second->GetThreadPoolUsage() : ThreadPool::ThreadPoolUsage();
 }
 
 ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesSnapshot(const std::string &serviceName) const
 {
-    return std::visit([&serviceName](auto &pimpl) { return pimpl->GetRpcServicesSnapshot(serviceName); }, pimpl_);
+    auto it = svcMap_.find(serviceName);
+    return it != svcMap_.end() ? it->second->GetThreadPoolSnapshot() : ThreadPool::ThreadPoolUsage();
 }
 
 Status RpcServer::Builder::Init(std::unique_ptr<RpcServer> &server) const
 {
     auto key = Token();
     server = std::make_unique<RpcServer>(key, cred_);
-    // In brpc mode, also init ZMQ for client registration/UDS/SHM.
-    // brpc handles RPC calls; ZMQ handles client management.
     RETURN_IF_NOT_OK(server->Init());
-    if (RpcAuthKeyManager::Instance().HasAuthHandler()) {
-        RETURN_IF_NOT_OK(server->InitAuthHandler());
-    }
-    // brpc owns the TCP port in brpc mode (same port as ZMQ); ZMQ must skip Bind.
-    // Mirrors the !useBrpc_ guard on Run() in BuildAndStart. UDS/SHM use Init(), not this loop.
-    if (!useBrpc_) {
-        for (const auto &v : endPts_) {
-            RETURN_IF_NOT_OK(server->Bind(v));
-        }
-    }
     if (useBrpc_) {
         server->useBrpc_ = true;
     }
@@ -240,24 +212,11 @@ Status RpcServer::Builder::Init(std::unique_ptr<RpcServer> &server) const
 Status RpcServer::Builder::BuildAndStart(std::unique_ptr<RpcServer> &server) const
 {
     try {
-        // Register ZMQ services and start ZMQ server if any services were registered to ZMQ.
-        // In brpc mode, all RPC services go to brpc and svcList_ may be empty.
         for (auto &ele : svcList_) {
-            auto &svcEle = ele.second;
-            auto func = [&server, &svcEle](auto *svc) {
-                RETURN_RUNTIME_ERROR_IF_NULL(svc);
-                RETURN_IF_NOT_OK(server->RegisterService(svc, svcEle));
-                return Status::OK();
-            };
-            RETURN_IF_NOT_OK(std::visit([&func](auto *svc) { return func(svc); }, ele.first));
+            RETURN_IF_NOT_OK(server->RegisterService(ele.first, ele.second));
         }
         if (preStartCallback_) {
             RETURN_IF_NOT_OK(preStartCallback_());
-        }
-        // Start ZMQ server only in ZMQ mode. In brpc mode (useBrpc_=true), the port is
-        // used exclusively by brpc (same port as ZMQ would), so ZMQ must not bind the same port.
-        if (!useBrpc_ && !svcList_.empty()) {
-            RETURN_IF_NOT_OK(server->Run());
         }
         // IMPORTANT: brpc server start is NOT done here. BuildAndStart() is
         // called from CommonServer::Init() which runs before CreateAllServices().

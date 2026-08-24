@@ -175,8 +175,8 @@ void ZmqMonitor::OnEventUnknown(const Event &t, const std::string &addr, const s
 
 Status ZmqMonitor::CheckEvent(void *handle, Event &t, std::string &addr)
 {
-    ZmqMessage eventMsg;
-    ZmqMessage addrMsg;
+    RpcMessage eventMsg;
+    RpcMessage addrMsg;
     ZmqSocketRef sock(handle);
     RETURN_IF_NOT_OK(sock.RecvMsg(eventMsg, ZmqRecvFlags::NONE));
     RETURN_IF_NOT_OK(sock.RecvMsg(addrMsg, ZmqRecvFlags::NONE));

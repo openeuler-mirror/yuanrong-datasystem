@@ -44,7 +44,7 @@ Status ClientStreamBase::SendAll(ZmqSendFlags flags)
 Status ClientStreamBase::Finish()
 {
     VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " sending Finish now.\n";
-    ZmqMessage seqMsg = ZmqInt64ToMessage(ZMQ_END_SEQNO);
+    RpcMessage seqMsg = ZmqInt64ToMessage(ZMQ_END_SEQNO);
     outMsg_.push_back(std::move(seqMsg));
     return SendAll(ZmqSendFlags::NONE);
 }

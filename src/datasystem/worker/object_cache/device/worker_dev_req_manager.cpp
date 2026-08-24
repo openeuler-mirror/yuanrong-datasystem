@@ -18,6 +18,7 @@
  * Description: Defines the class to manager device get request.
  */
 #include "datasystem/worker/object_cache/device/worker_dev_req_manager.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <memory>
 #include <vector>

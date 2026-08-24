@@ -15,6 +15,7 @@
  */
 
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
+#include "datasystem/common/perf/perf_manager.h"
 
 #include <memory>
 #include "datasystem/common/object_cache/safe_table.h"

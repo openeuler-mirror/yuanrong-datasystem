@@ -41,7 +41,6 @@
 #include "datasystem/common/rpc/scoped_bthread_local.h"
 #include "datasystem/common/log/time_cost.h"
 #include "datasystem/common/rpc/timeout_duration.h"
-#include "datasystem/common/rpc/zmq/zmq_message.h"
 
 namespace datasystem {
 

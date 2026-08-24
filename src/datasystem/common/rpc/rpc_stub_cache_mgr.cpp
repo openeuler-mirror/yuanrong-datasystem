@@ -32,10 +32,10 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/protos/coordinator.stub.rpc.pb.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
@@ -151,49 +151,6 @@ Status RpcStubCacheMgr::Init(uint64_t maxStubCount, const HostPort &localAddress
     return Status::OK();
 }
 
-Status RpcStubCacheMgr::CreateRpcStub(StubType type, const std::shared_ptr<RpcChannel> &channel,
-                                      std::shared_ptr<RpcStubBase> &stub)
-{
-    switch (type) {
-        case StubType::WORKER_WORKER_OC_SVC:
-            stub = std::make_shared<WorkerWorkerOCService_Stub>(channel);
-            break;
-        case StubType::WORKER_MASTER_OC_SVC:
-            stub = std::make_shared<master::MasterOCService_Stub>(channel, FLAGS_node_timeout_s * TO_MILLISECOND);
-            break;
-        case StubType::WORKER_WORKER_SC_SVC:
-            stub = std::make_shared<WorkerWorkerSCService_Stub>(channel);
-            break;
-        case StubType::WORKER_MASTER_SC_SVC:
-            stub = std::make_shared<master::MasterSCService_Stub>(channel);
-            break;
-        case StubType::MASTER_WORKER_OC_SVC:
-            stub = std::make_shared<MasterWorkerOCService_Stub>(channel);
-            break;
-        case StubType::MASTER_WORKER_SC_SVC:
-            stub = std::make_shared<MasterWorkerSCService_Stub>(channel);
-            break;
-        case StubType::MASTER_MASTER_OC_SVC:
-            stub = std::make_shared<master::MasterOCService_Stub>(channel);
-            break;
-        case StubType::WORKER_WORKER_TRANS_SVC:
-            stub = std::make_shared<WorkerWorkerTransportService_Stub>(channel);
-            break;
-        case StubType::TO_COORDINATOR_SVC:
-            stub = std::make_shared<coordinator::CoordinatorService_Stub>(channel);
-            break;
-        case StubType::COORDINATOR_WORKER_SVC:
-            stub = std::make_shared<coordinator::CoordinatorWatchService_Stub>(channel);
-            break;
-        case StubType::CLIENT_WORKER_SC_SVC:
-            stub = std::make_shared<ClientWorkerSCService_Stub>(channel);
-            break;
-        default:
-            RETURN_STATUS(K_RUNTIME_ERROR, "Unsupport type: " + std::to_string(static_cast<int>(type)));
-    }
-    return stub->GetInitStatus();
-}
-
 Status RpcStubCacheMgr::CreateBrpcStub(StubType type, const std::shared_ptr<brpc::Channel> &brpcChannel,
                                        std::shared_ptr<RpcStubBase> &stub)
 {
@@ -236,23 +193,6 @@ Status RpcStubCacheMgr::CreateBrpcStub(StubType type, const std::shared_ptr<brpc
             RETURN_STATUS(K_RUNTIME_ERROR, "Unsupport type: " + std::to_string(static_cast<int>(type)));
     }
     return stub->GetInitStatus();
-}
-
-Status RpcStubCacheMgr::CreateRpcChannel(const HostPort &hostPort, const std::string &serviceName,
-                                         std::shared_ptr<RpcChannel> &channel, size_t poolSize)
-{
-    CHECK_FAIL_RETURN_STATUS(channel == nullptr, K_RUNTIME_ERROR, "channel is not nullptr");
-    RpcCredential cred;
-    RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateCredentials(WORKER_SERVER_NAME, cred));
-    channel = std::make_shared<RpcChannel>(hostPort, cred);
-    RETURN_RUNTIME_ERROR_IF_NULL(channel);
-    if (!serviceName.empty()) {
-        channel->SetServiceTcpDirect(serviceName);
-    }
-    if (poolSize > 0) {
-        channel->SetServiceConnectPoolSize(serviceName, poolSize);
-    }
-    return Status::OK();
 }
 
 bool WaitForBrpcSocketAvailable(const HostPort &brpcAddr, int maxRetries, int intervalUs)

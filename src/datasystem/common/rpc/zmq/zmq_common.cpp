@@ -22,20 +22,20 @@
 #include <utility>
 
 namespace datasystem {
-Status AckRequest(ZmqMsgFrames &frames, ZmqMessage &reply)
+Status AckRequest(ZmqMsgFrames &frames, RpcMessage &reply)
 {
     CHECK_FAIL_RETURN_STATUS(!frames.empty(), K_RUNTIME_ERROR, "Empty frames");
     /**
      * The first message is always the Status object.
      */
-    ZmqMessage first = std::move(frames.front());
+    RpcMessage first = std::move(frames.front());
     frames.pop_front();
 
     /**
      * We can do an early exit if there is any error. Server will
      * not send any message body.
      */
-    RETURN_IF_NOT_OK(ZmqMessageToStatus(first));
+    RETURN_IF_NOT_OK(RpcMessageToStatus(first));
 
     if (!frames.empty()) {
         reply = std::move(frames.front());

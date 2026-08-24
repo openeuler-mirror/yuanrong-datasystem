@@ -19,6 +19,7 @@
  */
 
 #include "datasystem/worker/stream_cache/page_queue/exclusive_page_queue.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"

@@ -79,7 +79,7 @@ public:
     /**
      * @brief A helper function for the server to prepare payload frames to be sent to the client.
      * @details This function will append (a) the size of the payload, (b) clock start time, (c) a vector of
-     * ZmqMessage which are the real payloads to the zmq frames.
+     * RpcMessage which are the real payloads to the zmq frames.
      * @note Currently this function is only used on the server side, client side will call SendDirect() instead.
      * @param[in] playload Payload reference.
      * @param[in] frames Zmq message frames.

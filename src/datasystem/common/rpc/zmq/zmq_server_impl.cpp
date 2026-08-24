@@ -129,15 +129,17 @@ Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventTyp
     // Next is the metadata.
     CHECK_FAIL_RETURN_STATUS(!frames.empty(), StatusCode::K_INVALID, "Expect a gateway id");
     // Get the client id which we can be sure it exists. It is an internal ZMQ thing.
-    ZmqMessage gatewayId = std::move(frames.front());
+    RpcMessage gatewayId = std::move(frames.front());
     frames.pop_front();
     CHECK_FAIL_RETURN_STATUS(!frames.empty(), StatusCode::K_INVALID, "Expect a header");
-    ZmqMessage metaHdr = std::move(frames.front());
+    RpcMessage metaHdr = std::move(frames.front());
     frames.pop_front();
     if (userId.checkUserId_) {
-        RETURN_IF_NOT_OK(RpcAuthKeyManager::CopyCurveAuthKey(metaHdr.GetMetaProperty("User-Id"), userId.userId_));
+        // ZMQ CURVE User-Id metadata is gone with ZmqMessage; the CURVE auth path is
+        // dead under brpc-only transport.
+        RETURN_IF_NOT_OK(RpcAuthKeyManager::CopyCurveAuthKey(nullptr, userId.userId_));
     }
-    if (ParseFromZmqMessage(metaHdr, meta).IsError() || meta.ticks_size() == 0) {
+    if (ParseFromRpcMessage(metaHdr, meta).IsError() || meta.ticks_size() == 0) {
         // Since stub client will probe us (using an empty string), we will not put
         // that into log file and return a different rc (to avoid flooding the
         // log file).
@@ -153,7 +155,7 @@ Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventTyp
     PerfPoint::RecordElapsed(transferPerfKey, lapTime);
     RecordTick(meta, TICK_SERVER_RECV);
     // Set up the return address.
-    meta.set_gateway_id(ZmqMessageToString(gatewayId));
+    meta.set_gateway_id(RpcMessageToString(gatewayId));
     meta.set_route_fd(fd);
     meta.set_event_type(type);
     return Status::OK();
@@ -172,7 +174,7 @@ Status ZmqServerImpl::ServiceToClient(const MetaPb &meta, ZmqMsgFrames &&frames)
 Status ZmqServerImpl::SendErrorToClient(const MetaPb &meta, const Status &status)
 {
     ZmqMsgFrames reply;
-    reply.push_back(StatusToZmqMessage(status));
+    reply.push_back(StatusToRpcMessage(status));
     return ServiceToClient(meta, std::move(reply));
 }
 

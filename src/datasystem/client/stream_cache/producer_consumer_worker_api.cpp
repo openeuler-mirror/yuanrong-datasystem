@@ -20,8 +20,8 @@
 
 #include "datasystem/client/stream_cache/producer_consumer_worker_api.h"
 #include <memory>
-#include "datasystem/client/stream_cache/client_worker_api.h"
 
+#include "datasystem/client/stream_cache/client_worker_api.h"
 #include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/rpc_options.h"

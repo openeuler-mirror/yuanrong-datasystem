@@ -34,6 +34,7 @@
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 
 DS_DECLARE_string(spill_directory);

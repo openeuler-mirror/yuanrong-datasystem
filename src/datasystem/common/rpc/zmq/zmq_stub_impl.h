@@ -156,13 +156,13 @@ public:
         RETURN_IF_NOT_OK(rc);
         // Take out the tag from the map.
         Remove(tagId);
-        ZmqMessage replyMsg;
+        RpcMessage replyMsg;
         PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(rsp.first, "ZMQ_STUB_FRONT_TO_BACK"));
         RecordTick(rsp.first, TICK_CLIENT_END);
         RecordRpcLatencyMetrics(rsp.first);
         rc = AckRequest(rsp.second, replyMsg);
         RETURN_IF_NOT_OK(rc);
-        RETURN_IF_NOT_OK(ParseFromZmqMessage<T>(replyMsg, reply));
+        RETURN_IF_NOT_OK(ParseFromRpcMessage<T>(replyMsg, reply));
         VLOG(RPC_LOG_LEVEL) << "Client " << clientId << " received reply "
                             << "from Service " << svcName << " Method " << method->MethodName() << ", msg:\n"
                             << LogHelper::IgnoreSensitive(reply) << std::endl;

@@ -18,6 +18,7 @@
  * Description: Implement stream cache producer.
  */
 #include "datasystem/client/stream_cache/producer_impl.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <utility>
 

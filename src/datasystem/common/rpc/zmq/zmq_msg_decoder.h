@@ -27,7 +27,7 @@
 #include "datasystem/common/util/locks.h"
 
 /**
- * Encoder/Decoder class to receive ZmqMessages from a socket
+ * Encoder/Decoder class to receive RpcMessages from a socket
  * The current version is V2 is based on a simplified version of https://rfc.zeromq.org/spec/15/
  * with customization. V2 is backward compatible with V1.
  * UDS connection will remain using V1 protocol for old level client.
@@ -50,7 +50,7 @@ enum MTP_PROTOCOL : uint8_t { MTP_NONE = 0x00, MTP_MORE = 0x01, MTP_LONG = 0x02,
 
 class ZmqMsgDecoder {
 public:
-    // State of receiving a ZmqMessage.
+    // State of receiving a RpcMessage.
     enum class MsgState : int {
         HDR_LEN_READY = 0,
         HDR_BODY_READY,
@@ -78,7 +78,7 @@ public:
     ~ZmqMsgDecoder();
 
     /**
-     * Version 1 protocol of receiving ZmqMessages
+     * Version 1 protocol of receiving RpcMessages
      * @param frames
      * @return
      * @note Doesn't support write into user provided buffers
@@ -86,7 +86,7 @@ public:
     Status ReceiveMsgFramesV1(ZmqMsgFrames &frames);
 
     /**
-     * Version 2 protocol of receiving ZmqMessages
+     * Version 2 protocol of receiving RpcMessages
      * @param frames
      * @return
      * @note Based on ZMTP draft 15
@@ -153,7 +153,7 @@ private:
     size_t msgSize_;
     uint32_t rpcHdrSz_;
     MultiMsgHdrPb hdr_;
-    ZmqMessage inProcess_;
+    RpcMessage inProcess_;
     ZmqMsgFrames v1Frames_;
     bool newFormat_;
     static std::mutex allocMux_;
@@ -170,13 +170,13 @@ private:
     Status DecodeOneByteLength(MsgState &state);
     Status DecodeEightByteLength(MsgState &state);
     Status ReadMessage(MsgState &state, void *, size_t sz);
-    Status GetMessage(ZmqMessage &outMsg, bool &more);
+    Status GetMessage(RpcMessage &outMsg, bool &more);
     Status Decode(void *dest = nullptr, size_t sz = 0);
     Status TransferFromWA(void *dest, size_t sz, size_t &bytesReceived);
 };
 
 /**
- * Encoder class to send ZmqMessages on a socket
+ * Encoder class to send RpcMessages on a socket
  */
 class ZmqMsgEncoder {
 public:
@@ -201,7 +201,7 @@ public:
     ~ZmqMsgEncoder() = default;
 
     /**
-     * Sending ZmqMessages
+     * Sending RpcMessages
      */
     Status SendMsgFrames(EventType type, ZmqMsgFrames &frames);
 
@@ -210,7 +210,7 @@ private:
     UnixSockFd *pSockFd_;
 
     /**
-     * Version 1 protocol of sending ZmqMessages
+     * Version 1 protocol of sending RpcMessages
      * @param frames
      * @return
      * @note Doesn't support write into user provided buffers
@@ -218,13 +218,13 @@ private:
     Status SendMsgFramesV1(ZmqMsgFrames &que);
 
     /**
-     * Version 2 protocol of sending ZmqMessages
+     * Version 2 protocol of sending RpcMessages
      * @param que
      * @return
      */
     Status SendMsgFramesV2(ZmqMsgFrames &que);
 
-    Status SendMessage(const ZmqMessage &msg, bool more) const;
+    Status SendMessage(const RpcMessage &msg, bool more) const;
 };
 }  // namespace datasystem
 

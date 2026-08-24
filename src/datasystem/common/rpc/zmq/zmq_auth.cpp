@@ -39,20 +39,20 @@ Status ZmqAuthRequest::Reply(const std::shared_ptr<ZmqSocket> &sock, const std::
     ZmqMsgFrames frames;
     frames.push_back(std::move(version_));
     frames.push_back(std::move(sequence_));
-    ZmqMessage statusCodeMsg;
+    RpcMessage statusCodeMsg;
     RETURN_IF_NOT_OK(statusCodeMsg.CopyString(statusCode));
     frames.push_back(std::move(statusCodeMsg));
-    ZmqMessage statusTextMsg;
+    RpcMessage statusTextMsg;
     RETURN_IF_NOT_OK(statusTextMsg.CopyString(statusText));
     frames.push_back(std::move(statusTextMsg));
-    ZmqMessage userId;
-    std::string mechanism = ZmqMessageToString(mechanism_);
+    RpcMessage userId;
+    std::string mechanism = RpcMessageToString(mechanism_);
     if (mechanism == CURVE) {
         userId = std::move(clientKey_);
     }
     VLOG(RPC_LOG_LEVEL) << "ZmqAuthHandler reply:\n" << statusCode << "\n" << statusText;
     frames.push_back(std::move(userId));
-    ZmqMessage metaData;
+    RpcMessage metaData;
     frames.push_back(std::move(metaData));
     return sock->SendAllFrames(frames, ZmqSendFlags::NONE);
 }
@@ -97,11 +97,11 @@ Status ZmqAuthHandler::ParseAuthRequest(ZmqMsgFrames &frames, ZmqAuthRequest &ou
     rq->mechanism_ = std::move(frames.front());
     frames.pop_front();
 
-    std::string version = ZmqMessageToString(rq->version_);
+    std::string version = RpcMessageToString(rq->version_);
     CHECK_FAIL_RETURN_STATUS(version == "1.0", StatusCode::K_INVALID, "Expect libzmq version 1.0, got " + version);
 
     // Parse mechanism-specific frames.
-    std::string mechanism = ZmqMessageToString(rq->mechanism_);
+    std::string mechanism = RpcMessageToString(rq->mechanism_);
     if (mechanism == CURVE) {
         CHECK_FAIL_RETURN_STATUS(!frames.empty(), StatusCode::K_INVALID, "Unexpected frames!");
         RETURN_IF_NOT_OK(Z85Encode(std::move(frames.front()), &rq->clientKey_));
@@ -121,7 +121,7 @@ void ZmqAuthHandler::Auth(ZmqAuthRequest &zmqAuthRequest)
     auto rq = &zmqAuthRequest;
 
     // Mechanism-specific checks.
-    std::string mechanism = ZmqMessageToString(rq->mechanism_);
+    std::string mechanism = RpcMessageToString(rq->mechanism_);
     if (mechanism == CURVE) {
         std::string tmpKey(reinterpret_cast<const char*>(rq->clientKey_.Data()), rq->clientKey_.Size());
         if (clientKeys_.find(tmpKey.c_str()) != clientKeys_.end()) {

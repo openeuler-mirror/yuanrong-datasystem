@@ -37,6 +37,7 @@
 #include <memory>
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/util/net_util.h"

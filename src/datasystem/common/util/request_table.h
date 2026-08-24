@@ -21,6 +21,7 @@
 #define DATASYSTEM_UTILS_REQUEST_TABLE_H
 
 #include <tbb/concurrent_hash_map.h>
+#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <cstdint>
 

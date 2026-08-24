@@ -35,7 +35,8 @@ void RpcGenerator::CreateStubCpp(const google::protobuf::FileDescriptor &file,
         "#include \"$fileName$.stub.rpc.pb.h\"\n"
         "#include \"datasystem/common/rpc/rpc_unary_client_impl.h\"\n"
         "#include \"datasystem/common/rpc/zmq/zmq_client_stream_base.h\"\n"
-        "#include \"datasystem/common/rpc/zmq/zmq_stub_impl.h\"\n";
+        "#include \"datasystem/common/rpc/zmq/zmq_stub_impl.h\"\n"
+        "#include \"datasystem/common/rpc/rpc_stub_base.h\"\n";
     printer.Print(vars, impl.c_str());
     InstantiateTemplate(printer, file);
     printer.PrintRaw(namespaceBegin);
@@ -143,7 +144,7 @@ void RpcGenerator::ImplementGenericStubOtherFuncDef(io::Printer &printer, const 
         "    stub_->CacheSession(cache);\n"
         "}\n";
     const std::string getInitStatus =
-        "Status $stub$::GetInitStatus() {\n"
+        "::datasystem::Status $stub$::GetInitStatus() {\n"
         "    return stub_->GetInitStatus();\n"
         "}\n";
     printer.Print(vars, forgetRequest.c_str());

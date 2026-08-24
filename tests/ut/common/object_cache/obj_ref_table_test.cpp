@@ -27,6 +27,7 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/timer.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "../common/binmock/binmock.h"
 

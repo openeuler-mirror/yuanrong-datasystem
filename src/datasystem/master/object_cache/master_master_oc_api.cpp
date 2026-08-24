@@ -57,7 +57,7 @@ Status MasterMasterOCApi::MigrateMetadata(MigrateMetadataReqPb &req, MigrateMeta
     INJECT_POINT("BatchMigrateMetadata.streamSendData", []() {
         return Status(K_RPC_UNAVAILABLE, "mock networker error");
     });
-    auto rc = brpcSession_ ? brpcSession_->MigrateMetadata(opts, req, rsp) : rpcSession_->MigrateMetadata(opts, req, rsp);
+    auto rc = brpcSession_->MigrateMetadata(opts, req, rsp);
     return WithRpcDiag(rc, "MigrateMetadata", localHostPort_, destHostPort_);
 }
 
@@ -71,8 +71,7 @@ Status MasterMasterOCApi::GIncreaseMasterAppRef(const GIncreaseReqPb &req, GIncr
     }
     RpcOptions opts;
     opts.SetTimeout(remainingTime);
-    auto rc = brpcSession_ ? brpcSession_->GIncreaseMasterAppRef(opts, req, rsp)
-                           : rpcSession_->GIncreaseMasterAppRef(opts, req, rsp);
+    auto rc = brpcSession_->GIncreaseMasterAppRef(opts, req, rsp);
     return WithRpcDiag(rc, "GIncreaseMasterAppRef", localHostPort_, destHostPort_);
 }
 
@@ -86,8 +85,7 @@ Status MasterMasterOCApi::ReleaseGRefsOfRemoteClientId(const ReleaseGRefsReqPb &
     }
     RpcOptions opts;
     opts.SetTimeout(remainingTime);
-    auto rc = brpcSession_ ? brpcSession_->ReleaseGRefsOfRemoteClientId(opts, req, rsp)
-                           : rpcSession_->ReleaseGRefsOfRemoteClientId(opts, req, rsp);
+    auto rc = brpcSession_->ReleaseGRefsOfRemoteClientId(opts, req, rsp);
     return WithRpcDiag(rc, "ReleaseGRefsOfRemoteClientId", localHostPort_, destHostPort_);
 }
 
@@ -98,7 +96,7 @@ Status MasterMasterOCApi::RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRspPb
                              FormatString("Request timeout (%lld ms).", -remainingTime));
     RpcOptions opts;
     opts.SetTimeout(remainingTime);
-    auto rc = brpcSession_ ? brpcSession_->RemoveMeta(opts, req, rsp) : rpcSession_->RemoveMeta(opts, req, rsp);
+    auto rc = brpcSession_->RemoveMeta(opts, req, rsp);
     return WithRpcDiag(rc, "RemoveMeta", localHostPort_, destHostPort_);
 }
 
@@ -114,8 +112,7 @@ Status MasterMasterOCApi::DeleteAllCopyMeta(DeleteAllCopyMetaReqPb &request, Del
             opts.SetTimeout(remainingTime);
             request.set_timeout(remainingTime);
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
-            return brpcSession_ ? brpcSession_->DeleteAllCopyMeta(opts, request, response)
-                                : rpcSession_->DeleteAllCopyMeta(opts, request, response);
+            return brpcSession_->DeleteAllCopyMeta(opts, request, response);
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,

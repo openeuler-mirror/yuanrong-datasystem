@@ -12,6 +12,7 @@
  */
 
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <cstdint>
 #include <functional>

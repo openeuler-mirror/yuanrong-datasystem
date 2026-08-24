@@ -20,6 +20,7 @@ set(UTIL_SRCS
         deadlock_util.cpp
         hash_algorithm.cpp
         ../rpc/zmq/zmq_message.cpp
+        ../rpc/rpc_message.cpp
         thread_local.cpp
         sensitive_value.cpp
         ssl_authorization.cpp

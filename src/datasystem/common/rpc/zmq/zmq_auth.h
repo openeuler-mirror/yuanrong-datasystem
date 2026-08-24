@@ -51,13 +51,13 @@ public:
 
 private:
     friend class ZmqAuthHandler;
-    ZmqMessage version_;    // Version number, must be "1.0".
-    ZmqMessage sequence_;   // Sequence number of request.
-    ZmqMessage domain_;     // Server socket domain.
-    ZmqMessage address_;    // Client IP address.
-    ZmqMessage identity_;   // Server socket identity.
-    ZmqMessage mechanism_;  // Security mechanism.
-    ZmqMessage clientKey_;  // CURVE client public key.
+    RpcMessage version_;    // Version number, must be "1.0".
+    RpcMessage sequence_;   // Sequence number of request.
+    RpcMessage domain_;     // Server socket domain.
+    RpcMessage address_;    // Client IP address.
+    RpcMessage identity_;   // Server socket identity.
+    RpcMessage mechanism_;  // Security mechanism.
+    RpcMessage clientKey_;  // CURVE client public key.
 };
 
 /**

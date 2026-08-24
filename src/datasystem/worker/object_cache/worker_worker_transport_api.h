@@ -66,6 +66,7 @@ protected:
 #endif
 
 private:
+        std::shared_ptr<WorkerWorkerTransportService_BrpcGenericStub> brpcSession_{ nullptr };
     struct ExchangeState;
     std::unique_ptr<ExchangeState> exchangeState_;
 };
@@ -81,9 +82,8 @@ public:
     Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &rsp) override;
 
 private:
+        std::shared_ptr<WorkerWorkerTransportService_BrpcGenericStub> brpcSession_{ nullptr };
     HostPort hostPort_;
-    std::shared_ptr<WorkerWorkerTransportService_Stub> rpcSession_{ nullptr };
-    std::shared_ptr<WorkerWorkerTransportService_BrpcGenericStub> brpcSession_{ nullptr };
     std::string firstClientEntityId_;
 };
 }  // namespace object_cache

@@ -71,7 +71,7 @@ public:
      * @param[in] inMsg In frame.
      * @return Status of call.
      */
-    virtual Status CallMethod(std::shared_ptr<ZmqServerMsgQueRef> sock, MetaPb meta, ZmqMsgFrames &&inMsg,
+    virtual Status CallMethod(MetaPb meta, ZmqMsgFrames &&inMsg,
                               int64_t seqNo) = 0;
     virtual Status DirectCallMethod(MetaPb meta, ZmqMsgFrames &&inMsg, int64_t seqNo, ZmqMsgFrames &outMsg) = 0;
 

@@ -215,4 +215,20 @@ Status ZmqSocketRef::SendMsg(ZmqMessage &msg, ZmqSendFlags flags)
                                          FormatString("Expect to send out %d bytes but only got %d", msgSize, rc));
     return Status::OK();
 }
+
+Status ZmqSocketRef::RecvMsg(RpcMessage &msg, ZmqRecvFlags flags)
+{
+    ZmqMessage zmqMsg;
+    RETURN_IF_NOT_OK(RecvMsg(zmqMsg, flags));
+    RETURN_IF_NOT_OK(msg.CopyBuffer(zmqMsg.Data(), zmqMsg.Size()));
+    msg.SetMore(zmqMsg.More());
+    return Status::OK();
+}
+
+Status ZmqSocketRef::SendMsg(RpcMessage &msg, ZmqSendFlags flags)
+{
+    ZmqMessage zmqMsg;
+    RETURN_IF_NOT_OK(zmqMsg.CopyBuffer(msg.Data(), msg.Size()));
+    return SendMsg(zmqMsg, flags);
+}
 }  // namespace datasystem
