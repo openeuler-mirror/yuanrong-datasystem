@@ -467,7 +467,7 @@ Status SpillFileManager::SpillToFile(const std::string &objectKey, const std::st
     if (rc.IsError()) {
         return rc;
     }
-    LOG(INFO) << FormatString(
+    VLOG(1) << FormatString(
         "Id: %d, Spill object [%s], fd: %d, path: %s, offset: %ld, size: %ld, wait: %fms, write: %fms, syncfs: %fms",
         id_, context.objectKey, context.file->GetFd(), context.location.path, context.location.offset,
         context.location.size, context.waitLockElapsed, context.writeElapsed, context.syncElapsed);

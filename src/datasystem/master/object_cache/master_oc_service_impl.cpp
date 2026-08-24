@@ -924,7 +924,7 @@ Status MasterOCServiceImpl::PureQueryMeta(const PureQueryMetaReqPb &req, PureQue
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    LOG(INFO) << "Master received PureQueryMeta request, object size: " << req.object_keys_size();
+    VLOG(1) << "Master received PureQueryMeta request, object size: " << req.object_keys_size();
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
