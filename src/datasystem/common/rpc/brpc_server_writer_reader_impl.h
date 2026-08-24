@@ -87,6 +87,8 @@ public:
           trace_(Trace::Instance().GetTraceID(), std::move(methodName))
     {
         trace_.MarkServerRecv();
+        VLOG(1) << FormatString("yyl4 ServerRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ServerRecvTs(), gettid(),
+                                sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
         request_ = dynamic_cast<const R *>(request);
 
         // Accept the stream that the client created with StreamCreate.
@@ -293,6 +295,9 @@ private:
         if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
             // Stream RPC tracing is one summary sample per stream, not one sample per message.
             trace_.MarkServerSend();
+            VLOG(1) << FormatString("yyl5 ServerSend ts %llu tid %d cpu %d bid %llu\n", trace_.ServerSendTs(),
+                                    gettid(), sched_getcpu(),
+                                    static_cast<unsigned long long>(bthread_self()));
             // Bidi stream responses use StreamWrite and cannot return a unary trailer.
             RecordBrpcRpcTrace(trace_);
         }

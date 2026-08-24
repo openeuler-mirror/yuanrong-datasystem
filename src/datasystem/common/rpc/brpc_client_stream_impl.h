@@ -142,11 +142,17 @@ public:
             AttachTraceIDToAttachment(cntl_->request_attachment());
             trace_.MarkClientStart();
             trace_.MarkClientSend();
+            VLOG(1) << FormatString("yyl1 ClientSend ts %llu tid %d cpu %d bid %llu\n", trace_.ClientSendTs(),
+                                    gettid(), sched_getcpu(),
+                                    static_cast<unsigned long long>(bthread_self()));
             channel_->CallMethod(method_, cntl_.get(),
                                  static_cast<const google::protobuf::Message *>(&pb),
                                  response_.get(), nullptr);
             if (cntl_->Failed()) {
                 trace_.MarkClientRecv();
+                VLOG(1) << FormatString("yyl1 ClientRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ClientRecvTs(),
+                                        gettid(), sched_getcpu(),
+                                        static_cast<unsigned long long>(bthread_self()));
                 RecordTraceOnce();
                 auto errText = cntl_->ErrorText();
                 // Wrap with RETURN_STATUS to retain this adapter's call-site
@@ -190,6 +196,8 @@ public:
         // Wait for the RPC to complete
         brpc::Join(cntl_->call_id());
         trace_.MarkClientRecv();
+        VLOG(1) << FormatString("yyl2 ClientRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ClientRecvTs(), gettid(),
+                                sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
 
         if (cntl_->Failed()) {
             RecordTraceOnce();
@@ -324,6 +332,9 @@ public:
         }
         if (firstResponseTs_.exchange(BrpcTraceNowNs(), std::memory_order_acq_rel) == 0) {
             trace_.MarkClientRecv(firstResponseTs_.load(std::memory_order_relaxed));
+            VLOG(1) << FormatString("yyl3 ClientRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ClientRecvTs(),
+                                    gettid(), sched_getcpu(),
+                                    static_cast<unsigned long long>(bthread_self()));
         }
         std::lock_guard<bthread::Mutex> lock(readMtx_);
         for (size_t i = 0; i < size; ++i) {
@@ -420,9 +431,14 @@ public:
         AttachTraceIDToAttachment(cntl_->request_attachment());
         trace_.MarkClientStart();
         trace_.MarkClientSend();
+        VLOG(1) << FormatString("yyl2 ClientSend ts %llu tid %d cpu %d bid %llu\n", trace_.ClientSendTs(), gettid(),
+                                sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
         channel_->CallMethod(method_, cntl_.get(), &pb, &dummyResponse, nullptr);
         if (cntl_->Failed()) {
             trace_.MarkClientRecv();
+            VLOG(1) << FormatString("yyl4 ClientRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ClientRecvTs(),
+                                    gettid(), sched_getcpu(),
+                                    static_cast<unsigned long long>(bthread_self()));
             Status embedded = TryExtractStatusFromResponse(dummyResponse);
             if (embedded.IsError()) {
                 RecordTraceOnce();

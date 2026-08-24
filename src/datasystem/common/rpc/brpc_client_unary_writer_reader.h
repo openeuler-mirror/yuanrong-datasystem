@@ -181,8 +181,12 @@ private:
             payloadBuf_.clear();
         }
         trace.MarkClientSend();
+        VLOG(1) << FormatString("yyl4 ClientSend ts %llu tid %d cpu %d bid %llu\n", trace.ClientSendTs(), gettid(),
+                                sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
         channel_->CallMethod(method_, &cntl, &request_, &response_, nullptr);
         trace.MarkClientRecv();
+        VLOG(1) << FormatString("yyl7 ClientRecv ts %llu tid %d cpu %d bid %llu\n", trace.ClientRecvTs(), gettid(),
+                                sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
         if (cntl.Failed()) {
             return HandleReadFailure(cntl, trace);
         }
