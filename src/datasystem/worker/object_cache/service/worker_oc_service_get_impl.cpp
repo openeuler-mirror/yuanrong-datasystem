@@ -95,6 +95,7 @@ namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
+static constexpr RemoveMetaReqPb::Cause GET_LOCATION_CLEANUP_CAUSE = RemoveMetaReqPb::NORMAL;
 static const char *const EXIST_REDIRECTS_FIELD = "exist_redirects";
 static const char *const EXIST_REDIRECT_ADDRESS_FIELD = "address";
 static const char *const EXIST_REDIRECT_KEYS_FIELD = "keys";
@@ -729,7 +730,7 @@ void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
             retry++;
             continue;
         }
-        GroupAndRemoveMeta(objKeys, RemoveMetaReqPb_Cause_EVICTION, localAddress_.ToString(), deleteKeyVersions,
+        GroupAndRemoveMeta(objKeys, GET_LOCATION_CLEANUP_CAUSE, localAddress_.ToString(), deleteKeyVersions,
                            failedIds, needMigrateIds, needWaitIds, noUseNeedL2DataIds);
         objKeys.clear();
         if (!failedIds.empty() || !needMigrateIds.empty() || !needWaitIds.empty()) {
@@ -2817,7 +2818,7 @@ Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint
     RemoveMetaRspPb rsp;
     req.add_ids(objectKey);
     req.set_address(localAddress_.ToString());
-    req.set_cause(master::RemoveMetaReqPb::EVICTION);
+    req.set_cause(GET_LOCATION_CLEANUP_CAUSE);
     req.set_version(version);
     req.set_redirect(true);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api->RemoveMeta(req, rsp),

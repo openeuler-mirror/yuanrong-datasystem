@@ -70,6 +70,17 @@ public:
         accessor->second.locations[TARGET_ADDRESS] = AckState::ACK;
     }
 
+    void InsertNoneL2PrimaryWithCopy(OCMetadataManager &manager, const std::string &objectKey)
+    {
+        InsertPrimaryWithCopy(manager, objectKey);
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.meta.mutable_config()->set_write_mode(
+            static_cast<uint32_t>(WriteMode::NONE_L2_CACHE_EVICT));
+    }
+
     std::string oldWriteMode_;
     std::shared_ptr<RocksStore> rocksStore_;
     std::shared_ptr<AkSkManager> akSkManager_;
@@ -142,6 +153,87 @@ TEST_F(OCMetadataManagerTopologyTest, RestartBatchRemovesAllAffectedLocationsInO
     EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), 0U);
     EXPECT_EQ(accessor->second.locations.count(TARGET_ADDRESS), 0U);
     EXPECT_EQ(accessor->second.locations.count(SURVIVOR_ADDRESS), 1U);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, NormalLocationCleanupKeepsNoneL2MetaWithRemainingCopy)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "normal_cleanup_with_remaining_copy";
+    InsertNoneL2PrimaryWithCopy(manager, objectKey);
+
+    RemoveMetaReqPb request;
+    request.add_ids(objectKey);
+    request.set_address(LOCAL_ADDRESS);
+    request.set_cause(RemoveMetaReqPb::NORMAL);
+    request.set_version(UINT64_MAX);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMetaLocation(request, LOCAL_ADDRESS, response));
+
+    TbbMetaTable::const_accessor accessor;
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    bthread::RWLockRdGuard lock(shard.mutex);
+    ASSERT_TRUE(shard.table.find(accessor, objectKey));
+    EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), 0U);
+    EXPECT_EQ(accessor->second.locations.count(TARGET_ADDRESS), 1U);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, EvictionRemovesNoneL2MetaWithRemainingCopy)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "eviction_with_remaining_copy";
+    InsertNoneL2PrimaryWithCopy(manager, objectKey);
+
+    RemoveMetaReqPb request;
+    request.add_ids(objectKey);
+    request.set_address(LOCAL_ADDRESS);
+    request.set_cause(RemoveMetaReqPb::EVICTION);
+    request.set_version(UINT64_MAX);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMetaLocation(request, LOCAL_ADDRESS, response));
+
+    TbbMetaTable::const_accessor accessor;
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    bthread::RWLockRdGuard lock(shard.mutex);
+    EXPECT_FALSE(shard.table.find(accessor, objectKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, NormalLocationCleanupRemovesNoneL2MetaWithoutCopies)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "normal_cleanup_without_copies";
+    InsertNoneL2PrimaryWithCopy(manager, objectKey);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.locations.erase(TARGET_ADDRESS);
+    }
+
+    RemoveMetaReqPb request;
+    request.add_ids(objectKey);
+    request.set_address(LOCAL_ADDRESS);
+    request.set_cause(RemoveMetaReqPb::NORMAL);
+    request.set_version(UINT64_MAX);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMetaLocation(request, LOCAL_ADDRESS, response));
+
+    TbbMetaTable::const_accessor accessor;
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    bthread::RWLockRdGuard lock(shard.mutex);
+    EXPECT_FALSE(shard.table.find(accessor, objectKey));
 }
 
 TEST_F(OCMetadataManagerTopologyTest, NestedMigrationPersistenceFailureIsReturnedToCaller)

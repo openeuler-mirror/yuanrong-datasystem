@@ -108,6 +108,15 @@ static constexpr int64_t CLIENT_ID_REF_RETRY_JITTER_MAX_MS = 50;
 static constexpr int64_t CLIENT_ID_REF_RETRY_JITTER_BOUND_MS = CLIENT_ID_REF_RETRY_JITTER_MAX_MS + 1;
 static constexpr size_t TOPOLOGY_OPERATION_DIAGNOSTIC_PREFIX_SIZE = 12;
 
+static bool ShouldRemoveNoneL2Meta(const ObjectMeta &objectMeta, RemoveMetaReqPb::Cause cause)
+{
+    if (!objectMeta.IsNoneL2CacheEvict()) {
+        return false;
+    }
+    // EVICTION means the data is gone; NORMAL only removes one location.
+    return cause == RemoveMetaReqPb::EVICTION || objectMeta.locations.empty();
+}
+
 static std::string TopologyOperationPrefix(const std::string &operationId)
 {
     return operationId.substr(0, TOPOLOGY_OPERATION_DIAGNOSTIC_PREFIX_SIZE);
@@ -1703,11 +1712,7 @@ Status OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, con
             }
             (void)accessor->second.locations.erase(address);
             (void)objectStore_->RemoveObjectLocation(objectKey, address);
-            // For NONE_L2_CACHE_EVICT objects, evict means the data is gone and the
-            // meta is no longer reliable. Drop the whole ObjectMeta unconditionally
-            // (not only when locations is empty), otherwise migration-inflight
-            // locations keep the entry alive forever and the meta table leaks.
-            if (accessor->second.IsNoneL2CacheEvict()) {
+            if (ShouldRemoveNoneL2Meta(accessor->second, request.cause())) {
                 (void)objectStore_->RemoveMeta(objectKey, false);
                 (void)metaShards_[shardIdx].table.erase(accessor);
             }

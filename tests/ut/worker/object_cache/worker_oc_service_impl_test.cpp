@@ -216,6 +216,13 @@ public:
         return GetObjectLocations(request, response);
     }
 
+    Status RemoveMeta(master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        removeMetaRequests_.emplace_back(request);
+        return Status::OK();
+    }
+
     void SetResponse(const master::GIncreaseRspPb &response)
     {
         response_ = response;
@@ -302,6 +309,12 @@ public:
         return getObjectLocationsCallCount_;
     }
 
+    std::vector<master::RemoveMetaReqPb> RemoveMetaRequests() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return removeMetaRequests_;
+    }
+
 private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -319,6 +332,7 @@ private:
     int decreaseCallCount_{ 0 };
     std::function<Status(master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &)> createMultiMetaHandler_;
     std::vector<master::CreateMultiMetaReqPb> createMultiMetaRequests_;
+    std::vector<master::RemoveMetaReqPb> removeMetaRequests_;
     int queryMetaCallCount_{ 0 };
     int getObjectLocationsCallCount_{ 0 };
 };
@@ -1520,6 +1534,23 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcFailure
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(api->QueryMetaCallCount(), 1);
     EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_RPC_DEADLINE_EXCEEDED)));
+}
+
+TEST_F(WorkerOcServiceImplTest, GetLocationCleanupUsesNormalCause)
+{
+    const std::string objectKey = "object";
+    placement_.SetOwner(objectKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    DS_ASSERT_OK(getImpl.RemoveLocation(objectKey, UINT64_MAX));
+
+    auto requests = api->RemoveMetaRequests();
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_EQ(requests.front().cause(), master::RemoveMetaReqPb::NORMAL);
 }
 
 TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcSuccess)
