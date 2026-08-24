@@ -126,6 +126,9 @@ def cmd_start(args, pods):
 
 def cmd_start_standalone(args, pods):
     """Start coordinator_test binary in standalone mode."""
+    if not getattr(args, 'jf', None):
+        print('ERROR: --jf is required in standalone mode', file=sys.stderr)
+        return 1
     with open(args.config) as f:
         config_template = json.load(f)
 
@@ -145,10 +148,6 @@ def cmd_start_standalone(args, pods):
             return True
         cfg = json.loads(json.dumps(config_template))
         cfg[ADDRESS_KEY] = {'value': f'{pod["ip"]}:{args.port}'}
-        # When using JF for service discovery, peers are discovered
-        # dynamically from JF; no need to inject static peers.
-        if not args.jf:
-            _inject_raft_initial_peers(cfg, pods, args.port)
         pod_extra = extra.replace('{pod_ip}', pod['ip'])
         return start_service_standalone(
             pod, args.namespace, binary_name, remote_dir, args.remote_config,
@@ -259,6 +258,9 @@ def cmd_deploy(args, pods=None):
         if args.dry_run:
             print('Dry run: skipped install and start')
             return 0
+        if not pods:
+            print('ERROR: no running pods found after bringup', file=sys.stderr)
+            return 1
     else:
         if pods is None:
             pods = get_pods(args.namespace, args.prefixes)

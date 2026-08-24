@@ -139,6 +139,33 @@ def upload_procmon(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
         return False
 
 
+def upload_launcher(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
+    """Upload standalone_launcher.py to pod.
+
+    Returns the remote path on success (so callers know where to invoke it),
+    or ``None`` on failure. Mirrors ``upload_procmon``: same script
+    discovery, same upload mechanism. Kept separate from procmon because
+    the launcher's responsibility (start a binary detached + readiness poll)
+    is distinct from procmon's (resource monitoring).
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    launcher_src = os.path.join(script_dir, 'standalone_launcher.py')
+    if not os.path.exists(launcher_src):
+        launcher_src = os.path.join(script_dir, 'tools',
+                                    'standalone_launcher.py')
+    if not os.path.exists(launcher_src):
+        return None
+    remote_path = f'{remote_dir}/standalone_launcher.py'
+    try:
+        kubectl_exec(pod['name'], namespace, f'mkdir -p {remote_dir}',
+                     check=False, timeout=timeout)
+        kubectl_cp_to(pod['name'], namespace, launcher_src,
+                      remote_path, timeout=timeout)
+        return remote_path
+    except Exception:
+        return None
+
+
 def start_procmon(pod, namespace, target_pid, remote_dir='/tmp',
                   interval=1, timeout=30):
     """Start procmon monitoring for a service process.
@@ -777,10 +804,28 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
                               timeout=DEFAULT_TIMEOUT):
     """Start a standalone test binary in a pod.
 
-    ``config`` is the per-pod config dict built by the caller. It is written
-    to ``config_path`` inside the pod via ``kubectl cp`` before launch.
-    ``port`` and ``process_name`` are used for procmon PID lookup (same logic
-    as ``start_service`` dscli path).
+    Uses ``standalone_launcher.py`` (uploaded alongside procmon) to fork +
+    ``setsid`` the binary in a new session and poll for readiness before
+    returning. This mirrors ``dscli start`` (``cli/start.py``): the launcher
+    parent prints the PID and exits when the binary is ready, so
+    ``kubectl exec`` returns promptly instead of hanging on the SPDY pipe
+    held by a ``nohup``-backgrounded binary.
+
+    Readiness check priority (matches dscli split):
+      * ``ready_check_path`` in config -> poll for that file's existence
+        (worker; authoritative — written after WaitForServiceReady +
+        WaitForTopologyReady in worker_oc_server.cpp:2911-2933)
+      * else ``port`` given          -> poll TCP connect on ``pod_ip:port``
+        (coordinator; mirrors dscli's start_coordinator is_tcp_ready)
+      * else                         -> launcher prints PID immediately;
+        caller does its own pgrep verify (client-style binaries)
+
+    ``pod['_start_elapsed']`` records the actual launch + readiness wait
+    (same semantics as ``start_service``'s dscli path). The post-launch
+    pgrep fallback is excluded from the timing.
+
+    If launcher upload fails, falls back to the legacy ``nohup ... &`` path
+    (slow but works without the launcher script).
     """
     name = pod['name']
     pod_ip = pod['ip']
@@ -794,36 +839,59 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
             kubectl_cp_to(name, namespace, tmp_cfg, config_path, timeout=timeout)
         finally:
             os.unlink(tmp_cfg)
-    # LD_LIBRARY_PATH points at the locally-installed lib dir (from install_binary)
-    ld_path = f'{remote_dir}/lib'
-    cmd = (f'cd {remote_dir} && '
-           f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH nohup ./{binary_name} '
-           f'--config {config_path} --jf {jf_addr} --service {service_name} {extra_args} '
-           f'> {remote_dir}/stdout.log 2>&1 </dev/null & '
-           f'echo $!')
-    # Time only the actual launch (nohup). Config upload, pid verify, and
-    # procmon attach are excluded — caller reads pod['_start_elapsed'].
+
+    binary_path = f'{remote_dir}/{binary_name}'
+    log_path = f'{remote_dir}/stdout.log'
+    lib_path = f'{remote_dir}/lib'
+    import shlex
+    binary_argv = (['--config', config_path,
+                    '--jf', jf_addr,
+                    '--service', service_name]
+                   + (shlex.split(extra_args) if extra_args else []))
+
+    # Extract ready_check_path from the worker config (if set). The worker
+    # binary writes this file only after WaitForServiceReady() +
+    # WaitForTopologyReady() complete (worker_oc_server.cpp:2911-2933), so
+    # it's a strictly stronger readiness signal than TCP port listening.
+    # Coordinators have no ready_check_path; they fall through to --port.
+    ready_file = _extract_ready_check_path(config)
+
+    launcher_remote = upload_launcher({'name': name}, namespace,
+                                      procmon_remote_dir, timeout=timeout)
     import time
     t_start = time.monotonic()
     try:
-        try:
-            subprocess.run(
-                ['kubectl', 'exec', '-n', namespace, name, '--', 'sh', '-c', cmd],
-                capture_output=True, text=True, timeout=10)
-        except subprocess.TimeoutExpired:
-            pass
+        if launcher_remote:
+            pid = _launch_via_launcher(
+                name, namespace, launcher_remote,
+                binary_path, remote_dir, log_path, lib_path, binary_argv,
+                port=port, host=pod_ip,
+                ready_file=ready_file,
+                ready_timeout=min(timeout, 60),
+                subprocess_timeout=timeout)
+        else:
+            print(f'  {name} ({pod_ip}) -> launcher upload failed, '
+                  f'falling back to nohup path', file=sys.stderr)
+            pid = _launch_via_nohup(
+                name, namespace, binary_name, remote_dir, log_path,
+                lib_path, config_path, jf_addr, service_name, extra_args,
+                pod, port, process_name, timeout)
     finally:
         pod['_start_elapsed'] = time.monotonic() - t_start
-    # Verify process started (mirrors deploy_client.py pgrep check)
-    time.sleep(1)
-    pid = None
-    if port and process_name:
-        pid = find_pid_by_port(pod, namespace, port, process_name, timeout)
-    else:
-        verify = kubectl_exec_raw({'name': name}, namespace,
-                                  f'pgrep -f {binary_name}', timeout=10)
-        if verify and verify.strip():
-            pid = verify.strip().split('\n')[0]
+
+    # Launcher / nohup path returned no PID (timeout, error, or fallback).
+    # Fall back to pgrep / find_pid_by_port as a sanity check before
+    # declaring failure. Excluded from _start_elapsed to match dscli timing
+    # semantics (launch + readiness only).
+    if not pid:
+        time.sleep(1)
+        if port and process_name:
+            pid = find_pid_by_port(pod, namespace, port, process_name, timeout)
+        else:
+            verify = kubectl_exec_raw({'name': name}, namespace,
+                                       f'pgrep -f {binary_name}', timeout=10)
+            if verify and verify.strip():
+                pid = verify.strip().split('\n')[0]
     if not pid:
         print(f'  {name} ({pod_ip}) -> FAILED: process not found')
         return False
@@ -840,6 +908,103 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
         else:
             print(f'  {name} ({pod_ip}) -> procmon skipped: upload failed')
     return True
+
+
+def _launch_via_launcher(name, namespace, launcher_remote, binary_path,
+                         cwd, log_path, lib_path, binary_argv,
+                         port=None, host='127.0.0.1',
+                         ready_file=None,
+                         ready_timeout=30, subprocess_timeout=DEFAULT_TIMEOUT):
+    """Invoke standalone_launcher.py via kubectl exec; return parsed PID.
+
+    Returns the PID string if the launcher printed one, or ``None`` if the
+    launcher timed out, exited non-zero, or did not print a parseable PID.
+
+    Readiness signal priority (matches dscli): ``ready_file`` (authoritative,
+    e.g. worker ``ready_check_path``) > ``port`` (TCP connect, e.g.
+    coordinator) > none (print PID immediately).
+    """
+    cmd = ['kubectl', 'exec', '-n', namespace, name, '--',
+           'python3', launcher_remote,
+           '--binary', binary_path,
+           '--cwd', cwd,
+           '--log', log_path,
+           '--lib-path', lib_path,
+           '--ready-timeout', str(ready_timeout)]
+    if ready_file:
+        cmd.extend(['--ready-file', ready_file])
+    if port:
+        cmd.extend(['--port', str(port), '--host', host])
+    cmd.append('--')
+    cmd.extend(binary_argv)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                 timeout=subprocess_timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if result.returncode != 0:
+        stderr = (result.stderr or '').strip()
+        if stderr:
+            print(stderr, file=sys.stderr)
+        return None
+    out = (result.stdout or '').strip()
+    if not out:
+        return None
+    # Launcher prints only the PID to stdout; pick the last line in case
+    # kubectl adds any prefix noise.
+    pid_line = out.splitlines()[-1].strip()
+    return pid_line if pid_line.isdigit() else None
+
+
+def _extract_ready_check_path(config):
+    """Extract ready_check_path from a dscli-style worker config.
+
+    The config field may be a ``{"value": "/path"}`` dict (dscli config
+    style, as emitted by deploy_worker / helm_chart/worker.config) or a
+    plain string. Returns ``None`` if not set or empty.
+
+    Source: src/datasystem/worker/worker_oc_server.cpp:133 defines
+    ``FLAGS_ready_check_path``; ``ReadinessProbe()`` writes the file only
+    after ``WaitForServiceReady()`` + ``WaitForTopologyReady()`` complete
+    (worker_oc_server.cpp:2911-2933), so file existence is a strictly
+    stronger readiness signal than TCP port listening.
+    """
+    if not config:
+        return None
+    rcp = config.get('ready_check_path')
+    if rcp is None:
+        return None
+    if isinstance(rcp, dict):
+        path = rcp.get('value')
+    elif isinstance(rcp, str):
+        path = rcp
+    else:
+        return None
+    return path if path else None
+
+
+def _launch_via_nohup(name, namespace, binary_name, remote_dir, log_path,
+                      lib_path, config_path, jf_addr, service_name,
+                      extra_args, pod, port, process_name, timeout):
+    """Legacy nohup-and-timeout launch path (fallback when launcher upload fails).
+
+    Mirrors the pre-launcher implementation: kubectl exec with the
+    nohup+echo-$! shell pattern, swallowing the 10s subprocess timeout
+    (kubectl hangs because the binary holds the SPDY pipe). Slow but works
+    without the launcher script.
+    """
+    cmd = (f'cd {remote_dir} && '
+           f'LD_LIBRARY_PATH={lib_path}:$LD_LIBRARY_PATH nohup ./{binary_name} '
+           f'--config {config_path} --jf {jf_addr} --service {service_name} {extra_args} '
+           f'> {log_path} 2>&1 </dev/null & '
+           f'echo $!')
+    try:
+        subprocess.run(
+            ['kubectl', 'exec', '-n', namespace, name, '--', 'sh', '-c', cmd],
+            capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+    return None
 
 
 def stop_service_standalone(pod, namespace, process_name, timeout=DEFAULT_TIMEOUT):

@@ -486,26 +486,6 @@ class TestGenConfig(unittest.TestCase):
         with self.assertRaises(SystemExit):
             parser.parse_args(['--data-placement-policy', 'INVALID'])
 
-    # --- Runtime environment: --use-brpc ---
-
-    def test_use_brpc_default_no_env(self):
-        """Without --use-brpc, config must NOT contain an env block."""
-        deploy, config = self._run_gen_config([
-            '--nodes', '127.0.0.1:9000',
-        ])
-        self.assertIsNotNone(config)
-        self.assertNotIn('env', config)
-
-    def test_use_brpc_emits_env(self):
-        """--use-brpc should emit env.DATASYSTEM_USE_BRPC=true in config."""
-        deploy, config = self._run_gen_config([
-            '--nodes', '127.0.0.1:9000',
-            '--use-brpc',
-        ])
-        self.assertIsNotNone(config)
-        self.assertIn('env', config)
-        self.assertEqual(config['env'].get('DATASYSTEM_USE_BRPC'), 'true')
-
     # --- Service discovery address: --coordinator-address vs --etcd-address ---
 
     def test_default_etcd_address(self):

@@ -15,13 +15,13 @@
   - `src/datasystem/master`
   - `src/datasystem/protos`
 - Last verified against source:
-  - `2026-07-26`
+  - `2026-08-24`
 
 ## Architecture Summary
 
 brpc is a transport backend for control-plane and metadata RPCs. It is not the primary large-object data plane.
 
-The repository uses brpc as the **default** RPC backend (`FLAGS_use_brpc` / `DATASYSTEM_USE_BRPC` defaults to `true`). ZMQ remains available as a fallback (`DATASYSTEM_USE_BRPC=false`). Both backends share the same configured worker/master port (`kBrpcPortOffset = 0`); only one backend binds the endpoint in a process.
+The repository uses brpc as the **sole runtime** RPC backend. As of commit `6f107626` (Stage 1 ZMQ removal), all `if(FLAGS_use_brpc)` runtime branches were collapsed to the brpc-only path; ZMQ transport code is dead in brpc mode. The `FLAGS_use_brpc` flag definition itself is retained (default `true`, reads `DATASYSTEM_USE_BRPC` env) only because config files / K8s / env still reference it — deleting the flag would trigger `unknown command line flag` at worker startup. Setting `DATASYSTEM_USE_BRPC=false` is now a no-op: the ZMQ listener bind and dispatch paths are folded, so brpc remains the only bound endpoint regardless of the flag value. `kBrpcPortOffset = 0` still holds; only brpc binds the configured worker/master port in a process. Subsequent cleanup stages (collapsing remaining `rpc/zmq/` sources, `meta_zmq.proto`, zmq_proto generators, and removing the flag definition) are tracked separately.
 
 The worker process may host both worker-side and master-side services. When worker and master addresses resolve to the same local process, worker-master and master-worker APIs can bypass RPC and call local service objects directly.
 

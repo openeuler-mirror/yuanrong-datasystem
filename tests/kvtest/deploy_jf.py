@@ -47,7 +47,19 @@ def _wait_port_ready(namespace, pod_name, port, timeout=30):
 
 
 def _start_jf_mock(pod, ns, port, ttl_default, remote_dir, timeout):
-    """Copy script + start mock server on a single pod."""
+    """Copy script + start mock server on a single pod.
+
+    Uses ``mock_jf_server.py --background``: the script forks internally
+    (``os.fork + os.setsid``, same pattern as ``tools/procmon.py``), parent
+    prints child PID to stdout and exits. The script binds the port BEFORE
+    forking, so when ``kubectl exec`` returns (parent exited) the port is
+    already listening — no separate ``_wait_port_ready`` poll needed.
+
+    This avoids both the ``nohup`` hang (kubectl exec waits on the SPDY
+    pipe held by the backgrounded binary) and the need for an external
+    ``standalone_launcher.py`` (the script is itself Python and can
+    daemonize itself).
+    """
     name = pod['name']
     _kubectl_exec(ns, name, f'mkdir -p {remote_dir}')
 
@@ -62,23 +74,39 @@ def _start_jf_mock(pod, ns, port, ttl_default, remote_dir, timeout):
                     timeout=DEFAULT_TIMEOUT)
     _kubectl_exec(ns, name, f'chmod +x {remote_dir}/{MOCK_SCRIPT}')
 
-    cmd = (f'cd {remote_dir} && nohup python3 {MOCK_SCRIPT} '
+    log_path = f'{remote_dir}/jf_mock.log'
+    script_path = f'{remote_dir}/{MOCK_SCRIPT}'
+    # --background: script binds port, forks, parent prints PID + exits.
+    # kubectl exec returns immediately; port is already listening.
+    cmd = (f'cd {remote_dir} && python3 {script_path} '
            f'--port {port} --ttl-default {ttl_default} '
-           f'> {remote_dir}/jf_mock.log 2>&1 </dev/null & '
-           f'echo $!')
-    try:
-        _kubectl_exec(ns, name, cmd, timeout=10)
-    except Exception:
-        pass
+           f'--background --log {log_path}')
+    result = _kubectl_exec(ns, name, cmd, timeout=timeout)
+    if not result or result.returncode != 0:
+        stderr = (result.stderr if result else '').strip()
+        print(f'ERROR: JF mock failed to start: {stderr}', file=sys.stderr)
+        _kubectl_exec(ns, name, f'cat {log_path}')
+        return False
 
+    # Script printed PID after port bind → port is ready. Verify the PID
+    # was actually printed (defensive; if the script's --background path
+    # has a regression, fall back to the explicit port poll).
+    stdout = (result.stdout or '').strip()
+    if stdout and stdout.splitlines()[-1].isdigit():
+        jf_addr = f"{pod['ip']}:{port}"
+        print(f'JF mock ready: {jf_addr}')
+        return True
+
+    # Fallback: no PID on stdout (older script without --background, or
+    # fork failed before printing). Poll the port explicitly.
+    print(f'JF mock: no PID on stdout, falling back to port poll')
     if _wait_port_ready(ns, name, port, timeout=timeout):
         jf_addr = f"{pod['ip']}:{port}"
         print(f'JF mock ready: {jf_addr}')
         return True
-    else:
-        print(f'ERROR: JF mock did not become ready within {timeout}s', file=sys.stderr)
-        _kubectl_exec(ns, name, f'cat {remote_dir}/jf_mock.log')
-        return False
+    print(f'ERROR: JF mock did not become ready within {timeout}s', file=sys.stderr)
+    _kubectl_exec(ns, name, f'cat {log_path}')
+    return False
 
 
 def cmd_deploy(args):

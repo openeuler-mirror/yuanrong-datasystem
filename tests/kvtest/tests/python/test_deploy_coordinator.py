@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from deploy_coordinator import (
     ADDRESS_KEY,
     PROCESS_NAME,
+    PROCESS_NAME_STANDALONE,
     cmd_clean,
     cmd_deploy,
     cmd_kill,
@@ -326,34 +327,35 @@ class TestCmdStart(unittest.TestCase):
 
 
 class TestCmdWiring(unittest.TestCase):
-    """Verify stop/kill/clean pass the coordinator process name and labels."""
+    """Verify stop/kill/clean delegate to the cmd_*_shared helpers with the
+    coordinator role's process name and labels."""
 
     def _pod(self):
         return {'name': 'p1', 'ip': '10.0.0.1'}
 
-    @patch('deploy_coordinator.cmd_stop_impl', return_value=0)
-    def test_cmd_stop(self, mock_impl):
+    @patch('deploy_coordinator.cmd_stop_shared', return_value=0)
+    def test_cmd_stop(self, mock_shared):
         args = SimpleNamespace(namespace='default',
                                remote_config='/tmp/coordinator.config',
                                timeout=10)
         rc = cmd_stop(args, [self._pod()])
         self.assertEqual(rc, 0)
-        mock_impl.assert_called_once_with(
-            [self._pod()], 'default', '/tmp/coordinator.config',
-            'coordinators', 10)
+        mock_shared.assert_called_once_with(
+            args, [self._pod()], PROCESS_NAME_STANDALONE, 'coordinators',
+            service_type='coordinator', timeout=10)
 
-    @patch('deploy_coordinator.cmd_kill_impl', return_value=0)
-    def test_cmd_kill_passes_process_name(self, mock_impl):
+    @patch('deploy_coordinator.cmd_kill_shared', return_value=0)
+    def test_cmd_kill_passes_process_name(self, mock_shared):
         args = SimpleNamespace(namespace='default',
                                process=PROCESS_NAME, timeout=10)
         rc = cmd_kill(args, [self._pod()])
         self.assertEqual(rc, 0)
-        mock_impl.assert_called_once_with(
-            [self._pod()], 'default', PROCESS_NAME,
-            'coordinators', 10)
+        mock_shared.assert_called_once_with(
+            args, [self._pod()], PROCESS_NAME_STANDALONE, 'coordinators',
+            timeout=10)
 
-    @patch('deploy_coordinator.cmd_clean_impl', return_value=0)
-    def test_cmd_clean_uses_coordinator_process(self, mock_impl):
+    @patch('deploy_coordinator.cmd_clean_shared', return_value=0)
+    def test_cmd_clean_uses_coordinator_process(self, mock_shared):
         # clean has no --process flag; it is hardcoded to the role's
         # PROCESS_NAME so a coordinator clean never kills datasystem_worker
         # by mistake.
@@ -362,9 +364,8 @@ class TestCmdWiring(unittest.TestCase):
                                timeout=10)
         rc = cmd_clean(args, [self._pod()])
         self.assertEqual(rc, 0)
-        mock_impl.assert_called_once_with(
-            [self._pod()], 'default', '/tmp/coordinator.config',
-            PROCESS_NAME, 'coordinator logs', 10)
+        mock_shared.assert_called_once_with(
+            args, [self._pod()], PROCESS_NAME, 'coordinator logs', 10)
 
 
 class TestCmdDeploy(unittest.TestCase):
@@ -411,8 +412,8 @@ class TestCmdDeploy(unittest.TestCase):
 
     @patch('deploy_coordinator.start_coordinator', return_value=True)
     @patch('deploy_coordinator.cmd_install_impl', return_value=0)
-    @patch('deploy_coordinator.get_pods')
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.get_pods')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_full_lifecycle_installs_whl_and_starts_with_peers(
             self, mock_deploy_pods, mock_discover, mock_get_pods,
@@ -457,8 +458,8 @@ class TestCmdDeploy(unittest.TestCase):
 
     @patch('deploy_coordinator.start_coordinator', return_value=True)
     @patch('deploy_coordinator.cmd_install_impl', return_value=0)
-    @patch('deploy_coordinator.get_pods')
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.get_pods')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_single_instance_leaves_peers_untouched(
             self, mock_deploy_pods, mock_discover, mock_get_pods,
@@ -480,7 +481,7 @@ class TestCmdDeploy(unittest.TestCase):
         finally:
             os.unlink(cfg_path)
 
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_instances_spread_round_robin_across_nodes(
             self, mock_deploy_pods, mock_discover):
@@ -493,7 +494,7 @@ class TestCmdDeploy(unittest.TestCase):
         self.assertEqual(deploy_ns.replicas,
                          '10.0.0.1:2,10.0.0.2:2,10.0.0.3:1')
 
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_more_instances_than_nodes_spreads_evenly(
             self, mock_deploy_pods, mock_discover):
@@ -505,7 +506,7 @@ class TestCmdDeploy(unittest.TestCase):
         deploy_ns = mock_deploy_pods.call_args[0][0]
         self.assertEqual(deploy_ns.replicas, '10.0.0.1:4,10.0.0.2:3')
 
-    @patch('deploy_coordinator.discover_nodes', return_value=[])
+    @patch('deploy_common.discover_nodes', return_value=[])
     @patch('deploy_pods.cmd_deploy')
     def test_no_nodes_discovered_errors(self, mock_deploy_pods, mock_discover):
         args = self._args(instances=3)
@@ -514,8 +515,8 @@ class TestCmdDeploy(unittest.TestCase):
         mock_deploy_pods.assert_not_called()
 
     @patch('deploy_coordinator.cmd_install_impl')
-    @patch('deploy_coordinator.get_pods', return_value=[])
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.get_pods', return_value=[])
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_no_pods_after_bringup_aborts_before_whl(
             self, mock_deploy_pods, mock_discover, mock_get_pods,
@@ -528,8 +529,8 @@ class TestCmdDeploy(unittest.TestCase):
 
     @patch('deploy_coordinator.start_coordinator')
     @patch('deploy_coordinator.cmd_install_impl')
-    @patch('deploy_coordinator.get_pods')
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.get_pods')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=1)
     def test_deploy_pods_failure_aborts_before_whl_and_start(
             self, mock_deploy_pods, mock_discover, mock_get_pods,
@@ -543,8 +544,8 @@ class TestCmdDeploy(unittest.TestCase):
 
     @patch('deploy_coordinator.start_coordinator')
     @patch('deploy_coordinator.cmd_install_impl', return_value=1)
-    @patch('deploy_coordinator.get_pods')
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.get_pods')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_whl_install_failure_aborts_before_start(
             self, mock_deploy_pods, mock_discover, mock_get_pods,
@@ -562,7 +563,7 @@ class TestCmdDeploy(unittest.TestCase):
         finally:
             os.unlink(cfg_path)
 
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy')
     def test_requires_exactly_one_prefix(self, mock_deploy_pods, mock_discover):
         mock_discover.return_value = self._nodes(1)
@@ -572,7 +573,7 @@ class TestCmdDeploy(unittest.TestCase):
         self.assertEqual(rc, 1)
         mock_deploy_pods.assert_not_called()
 
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy')
     def test_zero_prefixes_errors(self, mock_deploy_pods, mock_discover):
         mock_discover.return_value = self._nodes(1)
@@ -581,7 +582,7 @@ class TestCmdDeploy(unittest.TestCase):
         self.assertEqual(rc, 1)
         mock_deploy_pods.assert_not_called()
 
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_dry_run_skips_whl_and_start(self, mock_deploy_pods, mock_discover):
         mock_discover.return_value = self._nodes(1)
@@ -591,7 +592,7 @@ class TestCmdDeploy(unittest.TestCase):
         deploy_ns = mock_deploy_pods.call_args[0][0]
         self.assertTrue(deploy_ns.dry_run)
 
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_force_forwarded_and_wait_always_on(
             self, mock_deploy_pods, mock_discover):
@@ -606,7 +607,7 @@ class TestCmdDeploy(unittest.TestCase):
         self.assertTrue(deploy_ns.force)
         self.assertTrue(deploy_ns.wait)
 
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_resource_overrides_forwarded_to_deploy_pods(
             self, mock_deploy_pods, mock_discover):
@@ -622,7 +623,7 @@ class TestCmdDeploy(unittest.TestCase):
         self.assertEqual(deploy_ns.requests_cpu, '8')
         self.assertEqual(deploy_ns.requests_memory, '16Gi')
 
-    @patch('deploy_coordinator.discover_nodes')
+    @patch('deploy_common.discover_nodes')
     @patch('deploy_pods.cmd_deploy', return_value=0)
     def test_requests_default_to_limits_when_unset(
             self, mock_deploy_pods, mock_discover):

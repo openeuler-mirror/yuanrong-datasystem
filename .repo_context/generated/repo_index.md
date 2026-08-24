@@ -413,6 +413,7 @@ tests/
     - benchmark-guide.md
     - cache-guide.md
     - design.md
+    - jf-integration-design.md
     - mixed-modes-design.md
     - pipeline-guide.md
     - user-guide.md

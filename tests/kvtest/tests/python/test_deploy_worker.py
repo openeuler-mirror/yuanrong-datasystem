@@ -15,13 +15,14 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, ANY
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from deploy_worker import (
     ADDRESS_KEY,
     PROCESS_NAME,
+    PROCESS_NAME_STANDALONE,
     cmd_install,
     cmd_start,
     start_worker,
@@ -183,18 +184,19 @@ class TestCmdStart(unittest.TestCase):
 
 
 class TestCmdInstall(unittest.TestCase):
-    """cmd_install delegates to deploy_common.cmd_install_impl with the
-    whl path and timeout from args."""
+    """cmd_install delegates to deploy_common.cmd_install_shared with the
+    worker_test standalone binary name, 'worker' label, script dir, and
+    timeout from args."""
 
-    @patch('deploy_worker.cmd_install_impl', return_value=0)
-    def test_delegates_with_whl(self, mock_impl):
+    @patch('deploy_worker.cmd_install_shared', return_value=0)
+    def test_delegates_with_whl(self, mock_shared):
         args = SimpleNamespace(namespace='default',
                                whl='/path/to/pkg.whl', timeout=10)
         pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
         rc = cmd_install(args, pods)
         self.assertEqual(rc, 0)
-        mock_impl.assert_called_once_with(
-            pods, 'default', '/path/to/pkg.whl', 10)
+        mock_shared.assert_called_once_with(
+            args, pods, PROCESS_NAME_STANDALONE, 'worker', ANY, 10)
 
 
 if __name__ == '__main__':

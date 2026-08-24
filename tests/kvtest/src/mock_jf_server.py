@@ -17,6 +17,9 @@ HTTP API:
 """
 import argparse
 import json
+import os
+import signal
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -241,20 +244,94 @@ class Handler(BaseHTTPRequestHandler):
         pass  # suppress default logging
 
 
+def _daemonize(log_path=None):
+    """Fork into background. Parent prints child PID to stdout and exits.
+
+    Child creates a new session (``os.setsid``) and redirects stdin/stdout/stderr
+    to ``log_path`` (or /dev/null) so it does not hold the caller's pipe open.
+    This lets ``kubectl exec`` / ssh return immediately instead of hanging
+    until timeout — same pattern as ``tools/procmon.py:_daemonize``.
+
+    Must be called AFTER binding the listening port: the parent prints the
+    PID only after the port is bound, so when ``kubectl exec`` returns the
+    server is already accepting connections (no separate port-ready poll
+    needed by the caller).
+    """
+    devnull = os.open('/dev/null', os.O_RDONLY)
+    os.dup2(devnull, 0)
+
+    try:
+        pid = os.fork()
+    except OSError as e:
+        os.close(devnull)
+        print(f'mock_jf_server: fork failed: {e}', file=sys.stderr, flush=True)
+        sys.exit(1)
+
+    if pid > 0:
+        # Parent: print PID and exit so kubectl exec returns immediately.
+        print(pid, flush=True)
+        os._exit(0)
+
+    # Child: new session, detach from controlling terminal.
+    os.setsid()
+
+    # Redirect stdout/stderr to log file (or /dev/null if no log given).
+    if log_path:
+        log_fd = os.open(log_path,
+                         os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    else:
+        log_fd = devnull
+    os.dup2(log_fd, 1)
+    os.dup2(log_fd, 2)
+    if log_path:
+        os.close(log_fd)
+    os.close(devnull)
+
+
 def main():
     global registry
     parser = argparse.ArgumentParser(description="Mock JF service discovery server")
     parser.add_argument("--port", type=int, default=9999)
     parser.add_argument("--ttl-default", type=int, default=30)
+    parser.add_argument("--background", action="store_true",
+                        help="Daemonize: fork into background, print child PID to "
+                             "stdout, parent exits. Lets kubectl exec / ssh return "
+                             "immediately instead of hanging. Must be combined with "
+                             "port binding in the parent so the printed PID implies "
+                             "port-ready (caller does not need a separate poll).")
+    parser.add_argument("--log",
+                        help="File to redirect stdout+stderr when --background is "
+                             "used (default: /dev/null). Pass the same path the "
+                             "caller would cat on failure so startup errors are "
+                             "captured.")
     args = parser.parse_args()
 
     registry = JFRegistry(ttl_default=args.ttl_default)
 
+    # Bind the port BEFORE forking. If bind fails, the parent exits with a
+    # visible error (kubectl exec sees non-zero rc + stderr); no daemonization
+    # happens. If bind succeeds and --background is set, the parent prints the
+    # PID and exits — at that point the port is already listening, so the
+    # caller knows the server is ready (no separate port-ready poll needed).
+    try:
+        server = HTTPServer(("0.0.0.0", args.port), Handler)
+    except OSError as e:
+        print(f"mock_jf_server: failed to bind port {args.port}: {e}",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+
+    if args.background:
+        _daemonize(args.log)
+        # Child continues here; parent has already printed PID and exited.
+
+    # Start sweeper thread. In --background mode this runs in the child
+    # (after fork); only the calling thread survives fork, so the sweeper
+    # must be started here, not before _daemonize().
     sweeper = threading.Thread(target=registry.ttl_sweeper_loop, daemon=True)
     sweeper.start()
 
-    server = HTTPServer(("0.0.0.0", args.port), Handler)
-    print(f"JF mock server listening on 0.0.0.0:{args.port} (ttl_default={args.ttl_default})")
+    print(f"JF mock server listening on 0.0.0.0:{args.port} "
+          f"(ttl_default={args.ttl_default})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

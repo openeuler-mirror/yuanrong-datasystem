@@ -343,7 +343,7 @@ graph TB
 
 | 通道 | 协议 | 方向 | 数据 |
 |------|------|------|------|
-| kvtest → ds-worker | SDK RPC (ZMQ) | 客户端 → Worker | Set/Get/Exist 等 KV 操作 |
+| kvtest → ds-worker | SDK RPC (brpc) | 客户端 → Worker | Set/Get/Exist 等 KV 操作 |
 | kvtest → etcd | HTTP | 客户端 → etcd | ServiceDiscovery 查询 Worker 地址 |
 | Writer → Reader | brpc Notify（bazel）/ HTTP POST（cmake） | 进程间 | notify 载荷: action + keys + sender + size |
 | 部署工具 → 节点 | SSH / kubectl | 运维 → 远程 | SCP 二进制、启动/停止命令 |

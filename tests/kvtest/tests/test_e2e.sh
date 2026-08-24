@@ -385,7 +385,7 @@ for m in A B; do
     ERRORS=$(echo "$ERRORS" | tr -d '\r\n')
     ERRORS=${ERRORS:-0}
     # Filter known benign patterns
-    BENIGN=$(run_on "$m" "grep -ic 'connection refused\|ZMQ.*retry\|Timeout waiting for notify' ${REMOTE_DIR}/stdout_${local_iid}.log 2>/dev/null || echo 0" 2>/dev/null || echo "0")
+    BENIGN=$(run_on "$m" "grep -ic 'connection refused\|Timeout waiting for notify' ${REMOTE_DIR}/stdout_${local_iid}.log 2>/dev/null || echo 0" 2>/dev/null || echo "0")
     BENIGN=$(echo "$BENIGN" | tr -d '\r\n')
     BENIGN=${BENIGN:-0}
     UNEXPECTED=$((ERRORS - BENIGN))
