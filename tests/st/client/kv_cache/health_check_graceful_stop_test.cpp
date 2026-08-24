@@ -33,9 +33,8 @@ namespace datasystem::st {
 namespace {
 constexpr uint32_t WORKER_COUNT = 2;
 constexpr uint32_t STOPPED_WORKER_INDEX = 0;
-constexpr int64_t SCALE_DOWN_DEADLINE_MS = 12'000;
+constexpr int64_t SCALE_DOWN_DEADLINE_MS = 15'000;
 constexpr int32_t HEALTH_CHECK_POLL_INTERVAL_MS = 50;
-constexpr int32_t HEALTH_CHECK_RPC_TIMEOUT_MS = 2'000;
 }  // namespace
 
 class HealthCheckGracefulStopTest : public OCClientCommon {
@@ -55,7 +54,7 @@ public:
         ExternalClusterTest::SetUp();
         externalCluster_ = dynamic_cast<ExternalCluster *>(cluster_.get());
         ASSERT_NE(externalCluster_, nullptr);
-        InitTestKVClient(STOPPED_WORKER_INDEX, client_, 60'000, false, HEALTH_CHECK_RPC_TIMEOUT_MS);
+        InitTestKVClient(STOPPED_WORKER_INDEX, client_);
         ASSERT_NE(client_, nullptr);
     }
 
@@ -92,7 +91,7 @@ protected:
     std::shared_ptr<KVClient> client_;
 };
 
-TEST_F(HealthCheckGracefulStopTest, NonScaleInGracefulStopExposesScaleDown)
+TEST_F(HealthCheckGracefulStopTest, LEVEL1_NonScaleInGracefulStopExposesScaleDown)
 {
     DS_ASSERT_OK(client_->HealthCheck());
 

@@ -567,7 +567,8 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     }
     (void)resp;
-    if (exitRequested_ != nullptr && exitRequested_->load()) {
+    const bool exitRequested = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire);
+    if (exitRequested || shutdownRequested_.load(std::memory_order_acquire)) {
         constexpr int logInterval = 60;
         LOG_EVERY_T(INFO, logInterval) << "[HealthCheck] Worker is exiting now";
         RETURN_STATUS(StatusCode::K_SCALE_DOWN, "Worker is exiting now");
