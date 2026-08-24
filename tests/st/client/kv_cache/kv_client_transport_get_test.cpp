@@ -64,6 +64,9 @@ constexpr size_t KEY_SEARCH_LIMIT = 100'000;
 constexpr uint64_t MIXED_TCP_DATA_RPC_COUNT = 1;
 constexpr uint64_t MIXED_UB_DATA_RPC_COUNT = 2;
 constexpr char REAL_ROUTE_KEY_PREFIX[] = "transport_real_route_";
+constexpr char SUCCESS_KEY_PREFIX[] = "transport_get_success_";
+constexpr char INJECT_RUNTIME_ERROR_KEY_PREFIX[] = "transport_get_inject_runtime_";
+constexpr char INJECT_NOT_FOUND_KEY_PREFIX[] = "transport_get_inject_not_found_";
 constexpr char UB_GET_SIZE_ENV[] = "DATASYSTEM_UB_GET_DATA_SIZE_BYTES";
 constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
 constexpr char QUERY_AND_GET_INJECT[] = "client.transport.query_and_get";
@@ -266,6 +269,12 @@ protected:
 
     void GetRealHashKeysToWorker(uint32_t workerIndex, size_t keyCount, std::vector<std::string> &keys)
     {
+        GetRealHashKeysToWorker(workerIndex, keyCount, REAL_ROUTE_KEY_PREFIX, keys);
+    }
+
+    void GetRealHashKeysToWorker(uint32_t workerIndex, size_t keyCount, const std::string &keyPrefix,
+                                 std::vector<std::string> &keys)
+    {
         ASSERT_NE(etcd_, nullptr);
         std::string value;
         DS_ASSERT_OK(etcd_->Get(GetTopologyTableName(), "", value));
@@ -285,8 +294,7 @@ protected:
 
         keys.clear();
         for (size_t candidateIndex = 0; candidateIndex < KEY_SEARCH_LIMIT && keys.size() < keyCount; ++candidateIndex) {
-            std::string candidate =
-                REAL_ROUTE_KEY_PREFIX + std::to_string(workerIndex) + "_" + std::to_string(candidateIndex);
+            std::string candidate = keyPrefix + std::to_string(workerIndex) + "_" + std::to_string(candidateIndex);
             auto owner = tokenWorkers.upper_bound(MurmurHash3_32(candidate));
             if (owner == tokenWorkers.end()) {
                 owner = tokenWorkers.begin();
@@ -1528,8 +1536,11 @@ TEST_F(KVClientTransportGetTest, InlineEncodeFailureFallsBackPerKey)
 // One key's data read fails while the others succeed; overall K_OK with the failed slot empty.
 TEST_F(KVClientTransportGetTest, PartialDataFailure)
 {
-    const std::vector<std::string> keys = { "transport_get_ok0_" + GetStringUuid(), "key2",
-                                            "transport_get_ok1_" + GetStringUuid() };
+    std::vector<std::string> successKeys;
+    std::vector<std::string> failedKeys;
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 2, SUCCESS_KEY_PREFIX, successKeys);
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 1, INJECT_RUNTIME_ERROR_KEY_PREFIX, failedKeys);
+    const std::vector<std::string> keys = { successKeys[0], failedKeys[0], successKeys[1] };
     const std::vector<std::string> values = { std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE, 'b'),
                                               std::string(VALUE_SIZE, 'c') };
     for (size_t i = 0; i < keys.size(); ++i) {
@@ -1542,7 +1553,7 @@ TEST_F(KVClientTransportGetTest, PartialDataFailure)
     ASSERT_EQ(buffers.size(), keys.size());
     ASSERT_TRUE(buffers[0]);
     AssertBufferEqual(*buffers[0], values[0]);
-    ASSERT_FALSE(buffers[1]); // "key2" failed and no replica to recover
+    ASSERT_FALSE(buffers[1]);
     ASSERT_TRUE(buffers[2]);
     AssertBufferEqual(*buffers[2], values[2]);
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
@@ -1550,7 +1561,11 @@ TEST_F(KVClientTransportGetTest, PartialDataFailure)
 
 TEST_F(KVClientTransportGetTest, AllKeysFailReturnFirstError)
 {
-    const std::vector<std::string> keys = { "key2", "key3" };
+    std::vector<std::string> runtimeErrorKeys;
+    std::vector<std::string> notFoundKeys;
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 1, INJECT_RUNTIME_ERROR_KEY_PREFIX, runtimeErrorKeys);
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 1, INJECT_NOT_FOUND_KEY_PREFIX, notFoundKeys);
+    const std::vector<std::string> keys = { runtimeErrorKeys[0], notFoundKeys[0] };
     const std::vector<std::string> values = { std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE, 'b') };
     for (size_t i = 0; i < keys.size(); ++i) {
         DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
@@ -1745,7 +1760,11 @@ TEST_F(KVClientTransportGetTest, DirectBatchGetAllMissingReturnsNotFound)
 
 TEST_F(KVClientTransportGetTest, DirectBatchGetAllUnavailableReturnsFirstInputError)
 {
-    const std::vector<std::string> keys = { "key3", "key2" };
+    std::vector<std::string> notFoundKeys;
+    std::vector<std::string> runtimeErrorKeys;
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 1, INJECT_NOT_FOUND_KEY_PREFIX, notFoundKeys);
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 1, INJECT_RUNTIME_ERROR_KEY_PREFIX, runtimeErrorKeys);
+    const std::vector<std::string> keys = { notFoundKeys[0], runtimeErrorKeys[0] };
     DS_ASSERT_OK(writer_->Set(keys[0], std::string(VALUE_SIZE, 'n')));
     DS_ASSERT_OK(writer_->Set(keys[1], std::string(VALUE_SIZE, 'r')));
     std::vector<Optional<Buffer>> buffers;

@@ -776,8 +776,8 @@
         "description": "Link type for Remote H2D: ROCE or HCCS. Default is ROCE."
     },
     "remote_h2d_hccs_buffer_pool": {
-        "value": "4:8",
-        "description": "HIXL buffer-pool spec for HCCS RH2D, format \"<count>:<size>\" (both positive). Only used when remote_h2d_link_type=HCCS."
+        "value": "0:0",
+        "description": "HIXL buffer-pool spec for RH2D, format \"<count>:<size>\" (both positive), or \"0:0\" to disable the buffer pool. Only used when remote_h2d_link_type=HCCS."
     },
     "urma_failover_success_rate_ratio": {
         "value": "0.5",

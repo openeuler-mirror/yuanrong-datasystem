@@ -133,11 +133,14 @@ bool ValidateRemoteH2DHccsBufferPool(const char *flagName, const std::string &va
     char trailing = 0;
     std::istringstream iss(value);
     iss >> count >> colon >> size;
-    if (!iss.fail() && colon == ':' && !(iss >> trailing) && count > 0 && size > 0) {
+    const bool enabledConfig = count > 0 && size > 0;
+    const bool disabledConfig = value == "0:0";
+    if (!iss.fail() && colon == ':' && !(iss >> trailing) && (enabledConfig || disabledConfig)) {
         return true;
     }
-    LOG(ERROR) << FormatString("Invalid %s: '%s'. Expected \"<count>:<size>\" with both values positive.", flagName,
-                               value);
+    LOG(ERROR) << FormatString(
+        "Invalid %s: '%s'. Expected \"<count>:<size>\" with both values positive, or \"0:0\" to disable it.",
+        flagName, value);
     return false;
 }
 

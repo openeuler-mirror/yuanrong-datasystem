@@ -90,8 +90,9 @@ DS_DEFINE_bool(enable_urma_perf, false, "Enable performance logging for URMA ope
 DS_DEFINE_bool(enable_worker_worker_batch_get, false, "Enable worker->worker OC batch get, default false.");
 DS_DEFINE_bool(enable_remote_h2d, false, "Option to turn on Remote H2D, default false.");
 DS_DEFINE_string(remote_h2d_link_type, "ROCE", "Link type for Remote H2D: ROCE or HCCS.");
-DS_DEFINE_string(remote_h2d_hccs_buffer_pool, "4:8",
-                 "HIXL buffer-pool spec for HCCS RH2D, format \"<count>:<size>\" (both positive). "
+DS_DEFINE_string(remote_h2d_hccs_buffer_pool, "0:0",
+                 "HIXL buffer-pool spec for RH2D, format \"<count>:<size>\" (both positive), or \"0:0\" to "
+                 "disable the buffer pool. "
                  "Only consumed when remote_h2d_link_type=HCCS.");
 DS_DEFINE_bool(hixl_cs_enable, false, "Enable HIXL CS with LocalCommRes version 1.3 for Remote H2D.");
 DS_DEFINE_string(urma_mode, "UB", "[DEPRECATED] This flag is no longer used and will be removed in a future version.");

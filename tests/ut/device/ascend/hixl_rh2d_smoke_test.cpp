@@ -19,7 +19,7 @@
  *
  * Confirms cann_hixl is linked correctly and the environment can pull a host buffer on a "server" into device memory on
  * a "client" via HIXL's public API directly (i.e. no datasystem RemoteH2DManager/AclDeviceManager paths are exercised).
- * HIXL_RH2D_MODE selects RoCE or HCCS with HIXL buffer-pool relay.
+ * HIXL_RH2D_MODE selects HCCS or RoCE independently from the HIXL buffer-pool option.
  */
 
 #include <gtest/gtest.h>
@@ -65,6 +65,7 @@ constexpr const char *kRelayBufferPoolConfig = "4:8";
 
 enum class Rh2dMode {
     ROCE,
+    ROCE_BUFFERPOOL,
     HCCS_BUFFERPOOL,
 };
 
@@ -213,6 +214,9 @@ Rh2dMode ParseRh2dMode()
     if (value == "roce") {
         return Rh2dMode::ROCE;
     }
+    if (value == "roce-bufferpool" || value == "roce_bufferpool") {
+        return Rh2dMode::ROCE_BUFFERPOOL;
+    }
     if (value != "hccs-bufferpool" && value != "hccs_bufferpool" && value != "hccs") {
         LOG(WARNING) << "Invalid " << kRh2dModeEnv << "=" << value << ", using roce mode.";
         return Rh2dMode::ROCE;
@@ -225,6 +229,8 @@ const char *Rh2dModeName(Rh2dMode mode)
     switch (mode) {
         case Rh2dMode::ROCE:
             return "roce";
+        case Rh2dMode::ROCE_BUFFERPOOL:
+            return "roce-bufferpool";
         case Rh2dMode::HCCS_BUFFERPOOL:
             return "hccs-bufferpool";
         default:
@@ -234,7 +240,7 @@ const char *Rh2dModeName(Rh2dMode mode)
 
 bool UseBufferPool(Rh2dMode mode)
 {
-    return mode == Rh2dMode::HCCS_BUFFERPOOL;
+    return mode == Rh2dMode::HCCS_BUFFERPOOL || mode == Rh2dMode::ROCE_BUFFERPOOL;
 }
 
 const char *BufferPoolOptionValue(Rh2dMode mode)
@@ -270,7 +276,7 @@ void RestoreEnv(const char *name, const EnvSnapshot &snapshot)
 
 void ConfigureLinkEnv(Rh2dMode mode)
 {
-    if (mode == Rh2dMode::ROCE) {
+    if (mode == Rh2dMode::ROCE || mode == Rh2dMode::ROCE_BUFFERPOOL) {
         (void)setenv(kRoceForceEnv, "1", 1);
         return;
     }

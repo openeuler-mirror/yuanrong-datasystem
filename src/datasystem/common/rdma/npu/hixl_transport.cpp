@@ -57,7 +57,6 @@ constexpr int32_t K_HIXL_CONNECT_TIMEOUT_MS = 30 * 1000;
 constexpr int32_t K_HIXL_DISCONNECT_TIMEOUT_MS = 1000;
 constexpr int32_t K_HIXL_TRANSFER_TIMEOUT_MS = 10 * 1000;
 const std::string K_HCCL_INTRA_ROCE_ENABLE = "HCCL_INTRA_ROCE_ENABLE";
-const std::string K_HIXL_DIRECT_ROCE_BUFFER_POOL = "0:0";
 const std::string K_HIXL_OPTION_BUFFER_POOL = "BufferPool";
 const std::string K_HIXL_OPTION_LOCAL_COMM_RES = "LocalCommRes";
 const std::string K_HIXL_CS_LOCAL_COMM_RES = R"({"version":"1.3"})";
@@ -175,11 +174,6 @@ void HixlTransport::SetLocalEndpoint(const std::string &ep, bool isClient)
     isClient_ = isClient;
 }
 
-bool HixlTransport::IsHixlRoceDirectMode() const
-{
-    return hixlMemoryMode_ == HixlMemoryMode::ROCE_DIRECT;
-}
-
 void HixlTransport::DestroyEngine(DsHixlEngineHandle engine) const
 {
     if (api_ == nullptr || engine == nullptr) {
@@ -273,8 +267,8 @@ Status HixlTransport::Init(const std::vector<int32_t> &deviceIds)
     }
 
     hixlMemoryMode_ = DetermineHixlMemoryMode();
-    const std::string bufferPool =
-        IsHixlRoceDirectMode() ? K_HIXL_DIRECT_ROCE_BUFFER_POOL : FLAGS_remote_h2d_hccs_buffer_pool;
+    const std::string &bufferPool = FLAGS_remote_h2d_hccs_buffer_pool;
+    bufferPoolEnabled_ = bufferPool != "0:0";
     std::map<int32_t, DsHixlEngineHandle> pendingEngines;
     std::map<int32_t, std::string> pendingEndpoints;
     std::vector<DsHixlEngineHandle> pendingOrder;
@@ -305,6 +299,7 @@ Status HixlTransport::Init(const std::vector<int32_t> &deviceIds)
     needRollback = false;
     LOG(INFO) << "[HCCS] Initialized with " << engines_.size() << " engine(s) on IP " << localIp_
               << " with hixl memory mode: " << HixlMemoryModeName(hixlMemoryMode_)
+              << ", buffer pool enabled: " << bufferPoolEnabled_
               << ", buffer pool config: " << bufferPool;
     return Status::OK();
 }
@@ -422,6 +417,7 @@ Status HixlTransport::DisconnectAll()
     engines_.clear();
     localEndpointById_.clear();
     hixlMemoryMode_ = HixlMemoryMode::BUFFER_POOL;
+    bufferPoolEnabled_ = false;
     initialized_ = false;
     return Status::OK();
 }
@@ -433,10 +429,10 @@ Status HixlTransport::RegisterMemory(void *addr, uint64_t size, P2pSegmentInfo *
         CHECK_FAIL_RETURN_STATUS(ret == EOK, StatusCode::K_RUNTIME_ERROR, "Failed to clear HCCS segment info");
     }
 
-    // HCCS buffer-pool RH2D intentionally does not register the remote source host buffer. The source address
-    // is carried inline by P2pScatterEntry::ddrBuf at transfer time; HIXL routes it through its internal
-    // buffer-pool relay. HIXL ROCE direct mode requires the worker host buffer to be registered before Connect.
-    RETURN_OK_IF_TRUE(!IsHixlRoceDirectMode());
+    // HIXL buffer-pool RH2D intentionally does not register the remote source host buffer, regardless of whether HIXL
+    // selects HCCS or RoCE as its link protocol. The source address is carried inline by P2pScatterEntry::ddrBuf and
+    // routed through the internal relay. Disabling the pool with 0:0 requires the worker host buffer to be registered.
+    RETURN_OK_IF_TRUE(bufferPoolEnabled_);
     RETURN_OK_IF_TRUE(isClient_);
     CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "HixlTransport not initialized");
     CHECK_FAIL_RETURN_STATUS(addr != nullptr, StatusCode::K_INVALID, "HCCS host memory address cannot be null");
