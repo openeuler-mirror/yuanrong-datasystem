@@ -282,10 +282,6 @@ if (WITH_TESTS)
             SOURCE ${GENERIC_SERVICE_SRCS}
             DEPEND zmq_proto_lib_depend)
 
-    GENERATE_ZMQ_CPP(zmq_proto_lib_depend ZMQ_TEST_ZMQ_SRCS ZMQ_TEST_ZMQ_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/zmq_test.proto)
-    add_library(common_rpc_zmq_demo STATIC ${ZMQ_TEST_ZMQ_SRCS})
-    add_dependencies(common_rpc_zmq_demo zmq_proto_lib_depend)
-    set_target_properties(common_rpc_zmq_demo PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")
     GENERATE_ZMQ_CPP(zmq_proto_lib_depend UNIT_TEST_SRCS UNIT_TEST_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/ut_object.proto)
     add_library(ut_object_protos STATIC ${UNIT_TEST_SRCS})
     add_dependencies(ut_object_protos zmq_proto_lib_depend)

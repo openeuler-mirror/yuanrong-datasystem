@@ -6,7 +6,6 @@ set(PROJECT_DIR "${PROJECT_SOURCE_DIR}/../..")
 set(DS_ST_DEPEND_LIBS
         cluster
         common_rocksdb
-        common_rpc_zmq_demo
         common_rpc_zmq
         common_log
         common_util

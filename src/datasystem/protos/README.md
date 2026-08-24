@@ -34,7 +34,6 @@
 | layer | type              | protos files                  |
 | ----- | ----------------- |-------------------------------|
 | 0     | utils proto files | rpc_options.proto、utils.proto |
-| 1     | unittest   | fd_test.proto, zmq_test.proto |
 
 ### 1.2.4 Zmq perf proto files
 
