@@ -99,7 +99,8 @@ public:
           trace_(Trace::Instance().GetTraceID(), std::move(methodName))
     {
         trace_.MarkServerRecv();
-        VLOG(1) << FormatString("yyl3 ServerRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ServerRecvTs(), gettid(),
+        VLOG(1) << FormatString("yyl3 ServerRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ServerRecvTs(),
+                                BrpcTraceGetTid(),
                                 sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
         // Cast the generic Message pointers to typed pointers.
         // The brpc adapter generator guarantees the types match.
@@ -201,7 +202,7 @@ public:
             if (!recvPayloadOp_) {
                 trace_.MarkServerSend();
                 VLOG(1) << FormatString("yyl3 ServerSend ts %llu tid %d cpu %d bid %llu\n", trace_.ServerSendTs(),
-                                        gettid(), sched_getcpu(),
+                                        BrpcTraceGetTid(), sched_getcpu(),
                                         static_cast<unsigned long long>(bthread_self()));
                 RecordTraceOnce();
                 doneConsumed_.store(true, std::memory_order_release);
@@ -236,7 +237,7 @@ public:
             // the destructor fires done->Run() + spurious LOG(ERROR).
             trace_.MarkServerSend();
             VLOG(1) << FormatString("yyl4 ServerSend ts %llu tid %d cpu %d bid %llu\n", trace_.ServerSendTs(),
-                                    gettid(), sched_getcpu(),
+                                    BrpcTraceGetTid(), sched_getcpu(),
                                     static_cast<unsigned long long>(bthread_self()));
             RecordTraceOnce();
             doneConsumed_.store(true, std::memory_order_release);
@@ -449,7 +450,7 @@ private:
         if (doneConsumed_.compare_exchange_strong(expected, true) && done_ != nullptr) {
             trace_.MarkServerSend();
             VLOG(1) << FormatString("yyl10 ServerSend ts %llu tid %d cpu %d bid %llu\n", trace_.ServerSendTs(),
-                                    gettid(), sched_getcpu(),
+                                    BrpcTraceGetTid(), sched_getcpu(),
                                     static_cast<unsigned long long>(bthread_self()));
             RecordTraceOnce();
             done_->Run();

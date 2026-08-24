@@ -107,7 +107,7 @@ public:
         if (firstResponseTs_.exchange(BrpcTraceNowNs()) == 0) {
             trace_.MarkClientRecv(firstResponseTs_.load());
             VLOG(1) << FormatString("yyl6 ClientRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ClientRecvTs(),
-                                    gettid(), sched_getcpu(),
+                                    BrpcTraceGetTid(), sched_getcpu(),
                                     static_cast<unsigned long long>(bthread_self()));
         }
         std::lock_guard<bthread::Mutex> lock(readMtx_);
@@ -201,13 +201,14 @@ public:
         R dummyResponse;
         trace_.MarkClientStart();
         trace_.MarkClientSend();
-        VLOG(1) << FormatString("yyl3 ClientSend ts %llu tid %d cpu %d bid %llu\n", trace_.ClientSendTs(), gettid(),
+        VLOG(1) << FormatString("yyl3 ClientSend ts %llu tid %d cpu %d bid %llu\n", trace_.ClientSendTs(),
+                                BrpcTraceGetTid(),
                                 sched_getcpu(), static_cast<unsigned long long>(bthread_self()));
         channel_->CallMethod(method_, stream_cntl_.get(), &pb, &dummyResponse, nullptr);
         if (stream_cntl_->Failed()) {
             trace_.MarkClientRecv();
             VLOG(1) << FormatString("yyl5 ClientRecv ts %llu tid %d cpu %d bid %llu\n", trace_.ClientRecvTs(),
-                                    gettid(), sched_getcpu(),
+                                    BrpcTraceGetTid(), sched_getcpu(),
                                     static_cast<unsigned long long>(bthread_self()));
             RecordTraceOnce();
             // The server refused the stream (or RPC failed). Close the stream
