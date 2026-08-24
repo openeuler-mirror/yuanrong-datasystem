@@ -15,6 +15,7 @@
  * Description: Defines the worker service processing publish process.
  */
 
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_migrate_impl.h"
 
 #include <algorithm>
@@ -53,7 +54,7 @@
 
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 
-using worker::WorkerMasterOCApi;
+using datasystem::worker::WorkerMasterOCApi;
 
 constexpr double MIGRATE_SCALE_DOWN_HIGH_WATER_FACTOR = 0.95;
 
@@ -452,7 +453,7 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
                                                      needModifyPrimary, needReadDataIds, skippedIds));
 
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_DATA);
-    DirectReadOutcome readOutcome{ req, needReadDataIds, {}, failedIds };
+    DirectReadOutcome readOutcome{ req, needReadDataIds, {}, failedIds, {}, {} };
     Status status = FillDataToObjectEntries(readOutcome);
     if (readOutcome.failureDetail.has_value()) {
         rsp.mutable_provider_ub_failure_detail()->CopyFrom(*readOutcome.failureDetail);
@@ -811,7 +812,7 @@ Status WorkerOcServiceMigrateImpl::ProcessRemoteReadForObject(const MigrateDataD
     }
 
     tasks.push_back(ReadTask{ objectKey, dataSize, std::move(eventKeys), std::move(shmUnit), needReadIt->second.first,
-                              needReadIt->second.second });
+                              needReadIt->second.second, {} });
     return Status::OK();
 }
 

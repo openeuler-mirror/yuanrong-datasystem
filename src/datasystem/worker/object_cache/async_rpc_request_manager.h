@@ -207,12 +207,6 @@ public:
     using Callback = std::function<Status(RemoteAsyncRpcRequest &)>;
     using RegisterRpcFunc = std::function<Status(RemoteAsyncRpcRequest &, int64_t, RespPb &, RpcRecvFlags)>;
 
-    RemoteAsyncRpcRequest(std::shared_ptr<master::MasterOCService_Stub> rpcSession, uint32_t timeoutMs)
-        : AsyncRpcRequest(timeoutMs)
-    {
-        rpcSession_ = rpcSession;
-    }
-
     RemoteAsyncRpcRequest(std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession, uint32_t timeoutMs)
         : AsyncRpcRequest(timeoutMs)
     {
@@ -317,11 +311,6 @@ public:
      * @brief Get remote master stub api.
      * @return BaseApiPtr is rpc stub.
      */
-    std::shared_ptr<master::MasterOCService_Stub> GetServerApi()
-    {
-        return rpcSession_;
-    }
-
     std::shared_ptr<master::MasterOCService_BrpcGenericStub> GetBrpcServerApi()
     {
         return brpcSession_;
@@ -352,7 +341,6 @@ private:
     Callback timeoutCallback_;
     RegisterRpcFunc rpcRespFunc_;
 
-    std::shared_ptr<master::MasterOCService_Stub> rpcSession_{ nullptr };
     std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession_{ nullptr };
     Status replyStatus_;
     bool replyTag_ = false;

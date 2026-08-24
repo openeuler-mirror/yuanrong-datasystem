@@ -130,7 +130,7 @@ void RpcGenerator::GenerateBrpcStubClass(io::Printer &printer, const google::pro
         "    }\n";
     printer.Print(vars, constructor.c_str());
 
-    // Implement stub api declarations (same signatures as ZMQ path).
+    // Method declarations (transport-neutral, shared with brpc path).
     ImplementStubApiDecl(printer, svc, indent);
 
     // Add ForgetRequest so GenericStub can delegate to it.
@@ -169,8 +169,8 @@ void RpcGenerator::GenerateBrpcGenericStubClass(io::Printer &printer,
 
     GenerateSvcName(printer, svcName, indent, false);
 
+    // Method declarations (transport-neutral, shared with brpc path).
     ImplementStubApiDecl(printer, svc, indent);
-
     ImplementGenericStubOtherFuncDecl(printer);
 
     const std::string impl =
@@ -387,11 +387,9 @@ std::string RpcGenerator::BuildCallMethodAndDiagnosticsSnippet()
         "        svcDesc_->method($methodIndex$)->full_name());\n"
         "    rpcTrace.MarkClientStart();\n"
         "    rpcTrace.MarkClientSend();\n"
-        "    VLOG(1) << FormatString(\"yyl9 ClientSend ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ClientSendTs(), BrpcTraceGetTid(), sched_getcpu(), static_cast<unsigned long long>(bthread_self()));\n"
         "    channel_->CallMethod(svcDesc_->method($methodIndex$),\n"
         "                         &cntl, &rq, &reply, nullptr);\n"
         "    rpcTrace.MarkClientRecv();\n"
-        "    VLOG(1) << FormatString(\"yyl9 ClientRecv ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ClientRecvTs(), BrpcTraceGetTid(), sched_getcpu(), static_cast<unsigned long long>(bthread_self()));\n"
         "    // Capture brpc controller diagnostics immediately after CallMethod returns so\n"
         "    // the framework-slow log can show whether timeout_ms/deadline were actually set\n"
         "    // and whether the RPC returned timed-out vs OK (issue: 20ms timeout not honored\n"

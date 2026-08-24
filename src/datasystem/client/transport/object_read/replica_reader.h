@@ -34,7 +34,7 @@ namespace client {
 struct ReplicaReadRequest {
     const master::ObjectLocationInfoPb *location = nullptr;
     ObjectReadItemResult *result = nullptr;
-    std::shared_ptr<const TransportReadContext> context;
+    std::shared_ptr<const TransportReadContext> context{};
 };
 
 using ReplicaReadBatch = std::vector<ReplicaReadRequest>;

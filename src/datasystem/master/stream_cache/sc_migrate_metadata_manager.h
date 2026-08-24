@@ -31,6 +31,8 @@
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
+#include "datasystem/protos/master_stream.brpc.stub.pb.h"
+#include "datasystem/common/rpc/brpc_factory.h"
 
 namespace datasystem {
 #ifdef WITH_TESTS
@@ -72,7 +74,8 @@ private:
     HostPort destHostPort_;   // The HostPort of the destination node
     HostPort localHostPort_;  // The HostPort of the local node
     std::shared_ptr<AkSkManager> akSkManager_;
-    std::unique_ptr<master::MasterSCService_Stub> rpcSession_{ nullptr };
+    std::shared_ptr<brpc::Channel> channel_;
+    std::shared_ptr<master::MasterSCService_BrpcGenericStub> rpcSession_{ nullptr };
 };
 
 using TbbFutureThreadTable = tbb::concurrent_hash_map<std::pair<std::string, std::string>,

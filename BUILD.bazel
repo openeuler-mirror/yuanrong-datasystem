@@ -278,7 +278,6 @@ cc_shared_library(
         "@com_google_absl//absl/log:initialize",
         # internal targets also needed
         "//src/datasystem/common/inject:common_inject",
-        "//src/datasystem/common/rpc/zmq:zmq_message",
         "//src/datasystem/common/util:common_util_impl",
         "//src/datasystem/common/util:strings_util",
     ],

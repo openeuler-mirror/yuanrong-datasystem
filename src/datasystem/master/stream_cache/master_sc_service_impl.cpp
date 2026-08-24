@@ -14,6 +14,7 @@
 /**
  * Description: Implement the stream cache services on the master.
  */
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 
 #include <chrono>

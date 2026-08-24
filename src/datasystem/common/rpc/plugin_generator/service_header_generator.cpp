@@ -46,9 +46,6 @@ void RpcGenerator::GenerateServiceClass(io::Printer &printer, const google::prot
     std::map<std::string, std::string> vars;
     vars["svc_name"] = svcName;
 
-    // Go through all the methods to create the MethodServiceClass.
-    GenerateMethodClass(printer, svc);
-
     const std::string impl =
         // Now the main body.
         "class $svc_name$_Stub;\n"
@@ -56,16 +53,11 @@ void RpcGenerator::GenerateServiceClass(io::Printer &printer, const google::prot
         "public:\n"
         "    typedef $svc_name$_Stub Stub;\n"
         // ZMQ version of Constructor, common to both code paths.
-        "    $svc_name$() { InitMethodMap(); serviceName_ = \"$svc_name$\"; }\n"
+        "    $svc_name$() { serviceName_ = \"$svc_name$\"; }\n"
         "    explicit $svc_name$(datasystem::HostPort localAddress)\n"
-        "    : localAddress_(std::move(localAddress)) { InitMethodMap(); serviceName_ = \"$svc_name$\"; }\n";
+        "    : localAddress_(std::move(localAddress)) { serviceName_ = \"$svc_name$\"; }\n";
     printer.Print(vars, impl.c_str());
 
-    // Go through all the methods to create the MethodServiceClass.
-    GenerateMethodClass(printer, svc);
-
-    // Create the InitMethodMap.
-    GenerateInitMethodMapDecl(printer);
     // Implement the override function CallMethod.
     ImplementZmqCallMethodDecl(printer);
     // Implement the override function ServiceName.
@@ -110,7 +102,6 @@ void RpcGenerator::GenerateServicePrologue(io::Printer &printer, const google::p
         "#include \"datasystem/common/rpc/rpc_message.h\"\n"
         "#include \"datasystem/common/rpc/rpc_server.h\"\n"
         "#include \"datasystem/common/rpc/rpc_service_base.h\"\n"
-        "#include \"datasystem/common/rpc/zmq/rpc_service_method.h\"\n"
         "#include \"datasystem/common/util/net_util.h\"\n"
         "#include \"datasystem/utils/status.h\"\n";
     printer.Print(vars, impl.c_str());
@@ -126,35 +117,6 @@ void RpcGenerator::GenerateServicePrologue(io::Printer &printer, const google::p
     printer.PrintRaw("#include <string>\n");
 }
 
-void RpcGenerator::GenerateMethodClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc)
-{
-    for (auto j = 0; j < svc.method_count(); ++j) {
-        if (svc.method(j) == nullptr) {
-            continue;
-        }
-        auto &method = *(svc.method(j));
-        printer.PrintRaw("class " + MethodSvcClassName(method.name())
-                         + " final : public ::datasystem::RpcServiceMethod {\n");
-        printer.PrintRaw("    std::string MethodName() const override { return \"" + method.name() + "\"; }\n");
-        printer.PrintRaw("    int32_t MethodIndex() const override { return " + std::to_string(j) + "; }\n");
-        if (HasPayloadSendOption(method)) {
-            printer.PrintRaw("    bool HasPayloadSendOption() const override { return true; }\n");
-        }
-        if (HasPayloadRecvOption(method)) {
-            printer.PrintRaw("    bool HasPayloadRecvOption() const override { return true; }\n");
-        }
-        if (method.client_streaming()) {
-            printer.PrintRaw("    virtual bool ClientStreaming() const override { return true; }\n");
-        }
-        if (method.server_streaming()) {
-            printer.PrintRaw("    virtual bool ServerStreaming() const override { return true; }\n");
-        }
-        if (UnarySocketNeeded(method)) {
-            printer.PrintRaw("    bool HasUnarySocketOption() const override { return true; }\n");
-        }
-        printer.PrintRaw("};\n");
-    }
-}
 
 void RpcGenerator::ListVirtualFunctions(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc)
 {

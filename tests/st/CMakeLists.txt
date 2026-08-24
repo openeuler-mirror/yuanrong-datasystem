@@ -216,7 +216,7 @@ add_custom_command(
         ${CMAKE_BINARY_DIR}/tests/st/data)
 
 add_executable(curve_keygen common/rpc/curvekey_generator.cpp)
-target_link_libraries(curve_keygen PRIVATE common_util common_rpc_zmq)
+target_link_libraries(curve_keygen PRIVATE common_util common_rpc_zmq ${ZeroMQ_LIBRARY})
 
 add_dependencies(ds_st curve_keygen)
 

@@ -14,7 +14,6 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/encrypt:common_encrypt",
         "//src/datasystem/common/log:common_log_header",
-        "//src/datasystem/common/rpc/zmq:zmq_message",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:raii",

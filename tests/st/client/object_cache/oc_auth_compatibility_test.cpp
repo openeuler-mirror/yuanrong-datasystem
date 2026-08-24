@@ -28,9 +28,10 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/protos/ut_object.stub.rpc.pb.h"
+#include "datasystem/protos/ut_object.brpc.stub.pb.h"
 #include "datasystem/utils/status.h"
 #include "oc_client_common.h"
 
@@ -68,12 +69,12 @@ public:
         DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr0));
         RpcCredential cred;
         RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred);
-        auto channel = std::make_shared<RpcChannel>(workerAddr0, cred);
-        stub_ = std::make_unique<UtOCService_Stub>(channel);
+        BrpcChannelConfig cfg; cfg.endpoint = workerAddr0.ToString(); cfg.timeout_ms = 5000; auto channel = std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(cfg));
+        stub_ = std::make_shared<UtOCService_BrpcGenericStub>(channel.get(), 5000);
     }
 
 protected:
-    std::shared_ptr<UtOCService_Stub> stub_;
+    std::shared_ptr<UtOCService_BrpcGenericStub> stub_;
     std::shared_ptr<AkSkManager> akSkManager_;
     RpcAuthKeys authKeys_;
 

@@ -18,6 +18,7 @@
  * Description: SharedPageQueue
  */
 
+#include "datasystem/common/util/validator.h"
 #include "datasystem/worker/stream_cache/page_queue/shared_page_queue.h"
 
 #include "datasystem/common/constants.h"

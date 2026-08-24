@@ -51,7 +51,6 @@ public:
 
     /**
      * @brief This method implement the abstract method to parse the Service descriptor and generates two
-     * files. See datasystem/common/rpc/zmq/demo/README.md for details.
      * @param[in] file Pb FileDescriptor.
      * @param[in] parameter Pb parameter.
      * @param[in] generatorCtx Pb compiler context.
@@ -127,7 +126,6 @@ private:
      * @param[in] svc Pb Service Descriptor.
      * @param[in] indent Indent chars.
      */
-    static void GenerateMethodClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc);
 
     /**
      * @brief Generate the method used in the constructor of both Service and Stub classes.
@@ -135,9 +133,6 @@ private:
      * @param[in] svc Pb Service Descriptor.
      * @param[in] indent Indent chars.
      */
-    static void GenerateInitMethodMapDecl(io::Printer &printer);
-    static void GenerateInitMethodMapDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                         const std::string &indent, const std::string &stub);
 
     /**
      * @brief It lists all the virtual functions that the Impl class must provide.
@@ -176,10 +171,6 @@ private:
      * @param[in] methodIndex Method index.
      * @param[in] indent Indent chars.
      */
-    static void ImplementStubStreamingDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                           const std::string &indent);
-    static void ImplementStubStreamingDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                          int methodIndex, const std::string &indent, const std::string &stub);
 
     /**
      * @brief Implement stub api for client streaming. Server side isn't streaming.
@@ -188,10 +179,6 @@ private:
      * @param[in] methodIndex Method index.
      * @param[in] indent Indent chars.
      */
-    static void ImplementStubClientStreamingDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                 const std::string &indent);
-    static void ImplementStubClientStreamingDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                int methodIndex, const std::string &indent, const std::string &stub);
 
     /**
      * @brief Implement the stub api for only server side is streaming. Client side isn't streaming.
@@ -200,10 +187,6 @@ private:
      * @param[in] methodIndex Method index.
      * @param[in] indent Indent chars.
      */
-    static void ImplementStubServerStreamingDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                 const std::string &indent);
-    static void ImplementStubServerStreamingDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                int methodIndex, const std::string &indent, const std::string &stub);
 
     /**
      * @brief Implement the stub async write api. No side is streaming.
@@ -212,10 +195,6 @@ private:
      * @param[in] methodIndex Method index.
      * @param[in] indent Indent chars.
      */
-    static void ImplementStubAsyncWriteDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                            const std::string &indent);
-    static void ImplementStubAsyncWriteDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                           int methodIndex, const std::string &indent, const std::string &stub);
 
     /**
      * @brief Implement the stub api for async read. No side is streaming.
@@ -224,11 +203,6 @@ private:
      * @param[in] methodIndex Method index.
      * @param[in] indent Indent chars.
      */
-    static void ImplementStubAsyncReadDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                           const std::string &indent);
-
-    static void ImplementStubAsyncReadDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                          int methodIndex, const std::string &indent, const std::string &stub);
 
     /**
      * @brief Implement the stub api for sync write/read. No side is streaming.
@@ -237,19 +211,6 @@ private:
      * @param[in] methodIndex Method index.
      * @param[in] indent Indent chars.
      */
-    static void ImplementStubNoStreamDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                          const std::string &indent);
-    static void ImplementStubNoStreamDecl2(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                           const std::string &indent);
-    static void ImplementStubNoStreamDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                         int methodIndex, const std::string &indent, const std::string &stub);
-    static void ImplementStubNoStreamDefHelper(std::string &impl, const google::protobuf::MethodDescriptor &method);
-    static void ImplementStubNoStreamDef2(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                          int methodIndex, const std::string &indent, const std::string &stub);
-    static void ImplStubNoStreamShortDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                          const std::string &indent);
-    static void ImplStubNoStreamShortDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                         int methodIndex, const std::string &indent, const std::string &stub);
 
     /**
      * @brief Implement all the Stub API.
@@ -257,39 +218,8 @@ private:
      * @param[in] svc Pb Service Descriptor.
      * @param[in] indent Indent chars.
      */
-    static void ImplementStubApiDecl(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                     const std::string &indent);
-
-    static void ImplementGenericStubApiDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                           const std::string &indent);
-
-    static void ImplementStubApiDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                    const std::string &indent);
-    static void ImplementGenericStubConstructor(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                                const std::string &indent);
-    static void ImplementGenericStubOtherFuncDecl(io::Printer &printer);
-    static void ImplementGenericStubOtherFuncDef(io::Printer &printer, const std::string &stub);
 
     static void GetSessionHelper(const google::protobuf::MethodDescriptor &method, std::string &impl);
-    static void ImplementGenericStubNoStreamDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                const std::string &indent, const std::string &stub);
-    static void ImplementGenericStubNoStreamDef2(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                 const std::string &indent, const std::string &stub);
-    static void ImplGenericStubNoStreamShortDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                const std::string &indent, const std::string &stub);
-    static void ImplementGenericStubAsyncWriteDef(io::Printer &printer,
-                                                  const google::protobuf::MethodDescriptor &method,
-                                                  const std::string &indent, const std::string &stub);
-    static void ImplementGenericStubAsyncReadDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                 const std::string &indent, const std::string &stub);
-    static void ImplementGenericStubStreamingDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                 const std::string &indent, const std::string &stub);
-    static void ImplementGenericStubClientStreamingDef(io::Printer &printer,
-                                                       const google::protobuf::MethodDescriptor &method,
-                                                       const std::string &indent, const std::string &stub);
-    static void ImplementGenericStubServerStreamingDef(io::Printer &printer,
-                                                       const google::protobuf::MethodDescriptor &method,
-                                                       const std::string &indent, const std::string &stub);
     /**
      * @brief Generate prolog and include.
      * @param[out] output Code output stream.
@@ -323,8 +253,6 @@ private:
      * @param[in] svc Pb Service Descriptor.
      * @param[in] indent Indent chars.
      */
-    void GenerateGenericStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                  const std::string &indent) const;
 
     /**
      * @brief Generate the Stub class.
@@ -332,8 +260,6 @@ private:
      * @param[in] svc Pb Service Descriptor.
      * @param[in] indent Indent chars.
      */
-    void GenerateStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                           const std::string &indent) const;
 
     /**
      * @brief Error checking. Some options can't mix together.
@@ -530,13 +456,41 @@ private:
      * @brief Instantiate template classes
      * @param[in] file Pb FileDescriptor.
      */
-    void InstantiateTemplate(io::Printer &printer, const google::protobuf::FileDescriptor &file) const;
-    void InstantiateService(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc) const;
 
     static std::string OptionalPayload(const google::protobuf::MethodDescriptor &method, const std::string &prefix,
                                        const std::string &pauloadSend, const std::string &payloadRecv,
                                        const std::string &suffix);
 
+    static void ImplementStubStreamingDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                           const std::string &indent);
+
+    static void ImplementStubClientStreamingDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                                 const std::string &indent);
+
+    static void ImplementStubServerStreamingDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                                 const std::string &indent);
+
+    static void ImplementStubAsyncWriteDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                            const std::string &indent);
+
+    static void ImplementStubAsyncReadDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                           const std::string &indent);
+
+    static void ImplementStubNoStreamDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                          const std::string &indent);
+
+    static void ImplementStubApiDecl(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                     const std::string &indent);
+
+    static void ImplementGenericStubOtherFuncDecl(io::Printer &printer);
+
+    static void ImplementStubNoStreamDecl2(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                           const std::string &indent);
+    static void ImplStubNoStreamShortDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                          const std::string &indent);
+
+    void InstantiateService(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc) const;
+    void InstantiateTemplate(io::Printer &printer, const google::protobuf::FileDescriptor &file) const;
     static const std::string PREFIX;
     static const std::string ENDIF;
     mutable std::string namespaceBegin;

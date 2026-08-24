@@ -140,8 +140,10 @@ Status InitializeItems(const ObjectReadRequest &request, std::vector<ReadItem> &
         CHECK_FAIL_RETURN_STATUS(!input.metaOwner.Empty(), K_INVALID, "Metadata owner is empty");
         CHECK_FAIL_RETURN_STATUS(requestIndexes.insert(input.requestIndex).second, K_INVALID,
                                  "Object read request index is duplicated");
-        items.push_back({ input.metaOwner, { input.objectKey },
-                          { input.requestIndex, input.objectKey } });
+        items.push_back({ input.metaOwner,
+                          ObjectMetadataItem{ .objectKey = input.objectKey, .location = {}, .inlineData = {} },
+                          ObjectReadItemResult{ .requestIndex = input.requestIndex, .objectKey = input.objectKey,
+                                                 .data = {} } });
     }
     return Status::OK();
 }

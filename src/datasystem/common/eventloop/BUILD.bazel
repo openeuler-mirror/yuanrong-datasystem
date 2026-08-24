@@ -4,6 +4,15 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
+    name = "timer_queue_hdrs",
+    hdrs = [
+        "timer_queue.h",
+        "event_loop.h",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+ds_cc_library(
     name = "common_event_loop",
     srcs = glob(["*.cpp"]),
     hdrs = glob(["*.h"]),

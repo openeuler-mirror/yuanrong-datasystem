@@ -41,6 +41,7 @@ ds_cc_library(
         ":common_util_impl",
         "//src/datasystem/common/log:log_base",
         "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/eventloop:timer_queue_hdrs",
         "@com_github_apache_brpc//:brpc",
     ],
 )
@@ -77,9 +78,9 @@ ds_cc_library(
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rpc:api_deadline",
         "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/eventloop:timer_queue_hdrs",
         "//src/datasystem/common/rpc:scoped_bthread_local",
         "//src/datasystem/common/rpc:timeout_duration",
-        "//src/datasystem/common/rpc/zmq:zmq_message",
         "@boringssl//:ssl",
         "@com_google_protobuf//:protobuf",
         "@re2",

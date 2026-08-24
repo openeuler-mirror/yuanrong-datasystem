@@ -11,8 +11,8 @@
  * limitations under the License.
  */
 
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
-#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <cstdint>
 #include <functional>

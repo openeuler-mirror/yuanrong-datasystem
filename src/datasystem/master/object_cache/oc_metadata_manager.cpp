@@ -15,7 +15,6 @@
  * Description: Module responsible for managing the object cache metadata on the master.
  */
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
-#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <algorithm>
 #include <chrono>

@@ -78,25 +78,6 @@ public:
     virtual Status GetMasterGRefTable(const GRefTableReqPb &req, GRefTableRspPb &rsp) = 0;
     virtual Status GetCmNodeTable(const CmNodeTableReqPb &req, CmNodeTableRspPb &rsp) = 0;
 };
-class ZmqUtOCStub : public IUtOCStub {
-public:
-    explicit ZmqUtOCStub(std::shared_ptr<RpcChannel> channel) : stub_(std::move(channel)) {}
-    Status GetWorkerGRefTable(const GRefTableReqPb &req, GRefTableRspPb &rsp) override
-    {
-        return stub_.GetWorkerGRefTable(req, rsp);
-    }
-    Status GetMasterGRefTable(const GRefTableReqPb &req, GRefTableRspPb &rsp) override
-    {
-        return stub_.GetMasterGRefTable(req, rsp);
-    }
-    Status GetCmNodeTable(const CmNodeTableReqPb &req, CmNodeTableRspPb &rsp) override
-    {
-        return stub_.GetCmNodeTable(req, rsp);
-    }
-
-private:
-    UtOCService_Stub stub_;
-};
 class BrpcUtOCStub : public IUtOCStub {
 public:
     explicit BrpcUtOCStub(std::shared_ptr<brpc::Channel> channel, int32_t timeoutMs)

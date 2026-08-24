@@ -35,6 +35,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/timer.h"

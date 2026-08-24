@@ -21,9 +21,11 @@
 
 #include <sys/stat.h>
 #include <cerrno>
+#include <fstream>
 
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/util/file_util.h"
+#include <zmq.h>
 
 static void PrintHelp()
 {
@@ -38,7 +40,7 @@ static void PrintHelp()
  * @param[in] fileName The file name.
  * @param[in] fileContent The file content.
  */
-static void SaveFile(const std::string &fileName, const char *fileContent)
+[[maybe_unused]] static void SaveFile(const std::string &fileName, const char *fileContent)
 {
     std::cout << "Saving file: " << fileName << std::endl;
     std::ofstream public_file(fileName);
@@ -82,8 +84,8 @@ static int ProcessKeyFiles(const std::string &fileName, const std::string &outpu
         }
     }
     std::string outputFile = (outputDir.empty() ? outputDir : outputDir + "/") + fileName;
-    char publicKey[datasystem::ZMQ_ENCODE_KEY_SIZE_NUL_TERM];
-    char secretKey[datasystem::ZMQ_ENCODE_KEY_SIZE_NUL_TERM];
+    char publicKey[41];
+    char secretKey[41];
     errno = 0;
     int result = zmq_curve_keypair(publicKey, secretKey);
     if (result != 0) {

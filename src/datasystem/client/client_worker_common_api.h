@@ -627,7 +627,6 @@ protected:
     HostPort masterAddress_;
     std::string workerStartId_;  // To judge whether the worker is restarted.
 
-    std::unique_ptr<WorkerService_Stub> commonWorkerSession_{ nullptr };
     std::unique_ptr<WorkerService_BrpcGenericStub> brpcCommonStub_{ nullptr };
     std::unique_ptr<brpc::Channel> brpcChannel_{ nullptr };
 

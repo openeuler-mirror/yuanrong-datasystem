@@ -26,9 +26,9 @@
 #include "datasystem/common/util/version.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/rpc/rpc_channel.h"
+#include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/protos/share_memory.pb.h"
-#include "datasystem/protos/share_memory.stub.rpc.pb.h"
+#include "datasystem/protos/share_memory.brpc.stub.pb.h"
 
 namespace datasystem {
 namespace st {
@@ -51,17 +51,17 @@ public:
 
         DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr_));
 
-        RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_);
-        channel_ = std::make_shared<RpcChannel>(workerAddr_, cred_);
-        stub_ = std::make_unique<WorkerService_Stub>(channel_);
+        BrpcChannelConfig cfg; cfg.endpoint = workerAddr_.ToString(); cfg.timeout_ms = 5000;
+        channel_ = std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(cfg));
+        stub_ = std::make_unique<WorkerService_BrpcGenericStub>(channel_.get(), 5000);
     }
 
 protected:
     RpcAuthKeys authKeys_;
     HostPort workerAddr_;
     RpcCredential cred_;
-    std::shared_ptr<RpcChannel> channel_;
-    std::unique_ptr<WorkerService_Stub> stub_;
+    std::shared_ptr<brpc::Channel> channel_;
+    std::unique_ptr<WorkerService_BrpcGenericStub> stub_;
 };
 
 TEST_F(RegisterClientNonShmRspTest, RegisterClientReturnsNonShmFields)

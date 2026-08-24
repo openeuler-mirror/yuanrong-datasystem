@@ -30,8 +30,8 @@
 #define DATASYSTEM_COMMON_FAST_TRANSPORT_BASE_H
 namespace datasystem {
 struct UrmaWriteFailure {
-    std::optional<int> providerStatus;
-    std::optional<int> cqeStatus;
+    std::optional<int> providerStatus{};
+    std::optional<int> cqeStatus{};
 };
 
 static constexpr int URMA_PORT_UNAVAILABLE_STATUS = 4;

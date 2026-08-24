@@ -18,6 +18,10 @@
  * Description: Helper functions to load curve public/private key pair.
  */
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/rpc/rpc_constants.h"
+#include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/log/log.h"
 
 #include <nlohmann/json.hpp>
 #include <securec.h>
@@ -72,5 +76,6 @@ Status RpcAuthKeyManager::CopyCurveAuthKey(const char *src, std::unique_ptr<char
     CHECK_FAIL_RETURN_STATUS(ret == EOK, StatusCode::K_RUNTIME_ERROR,
                              FormatString("Copy key failed, the strcpy_s return: %d", ret));
     return Status::OK();
-}
 }  // namespace datasystem
+
+}

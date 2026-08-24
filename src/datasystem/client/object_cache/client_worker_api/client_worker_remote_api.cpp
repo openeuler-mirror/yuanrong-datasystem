@@ -17,6 +17,7 @@
 /**
  * Description: Defines the worker client remote class to communicate with the worker service.
  */
+#include "datasystem/common/util/validator.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 
 #include <brpc/channel.h>
@@ -51,16 +52,12 @@
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
 
-// Dispatch helper for dual-mode brpc/ZMQ stubs. Both brpcSession_->stub and
-// zmqStub_ derive from RpcStubBase but are distinct concrete types. Use
-// std::atomic_load on the shared_ptr bundle so RecreateOCStub cannot race
-// with hot-path reads (F08 fix: C++ UB on unique_ptr assignment → atomic).
+// Dispatch helper over the brpc stub. std::atomic_load on the shared_ptr
+// bundle so RecreateOCStub cannot race with hot-path reads (F08 fix:
+// C++ UB on unique_ptr assignment → atomic). Returns the call result by
+// evaluating the expression directly (no return statement in the macro body).
 #define DS_OC_DISPATCH(method, ...)                                         \
-    ([&]() {                                                                \
-        auto ds_oc_session = std::atomic_load(&brpcSession_);               \
-        return ds_oc_session ? ds_oc_session->stub->method(__VA_ARGS__)     \
-                             : zmqStub_->method(__VA_ARGS__);               \
-    }())
+    (std::atomic_load(&brpcSession_)->stub->method(__VA_ARGS__))
 
 namespace datasystem {
 namespace object_cache {

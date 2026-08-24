@@ -484,7 +484,6 @@ public:
 
 private:
     HostPort hostPort_;                                                    // The HostPort of the master node
-    std::shared_ptr<master::MasterOCService_Stub> rpcSession_{ nullptr };  // session to the master rpc service
     std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession_{ nullptr };
 
     // Drop the cached WORKER_MASTER_OC_SVC stub and re-Init so the next RPC uses a fresh

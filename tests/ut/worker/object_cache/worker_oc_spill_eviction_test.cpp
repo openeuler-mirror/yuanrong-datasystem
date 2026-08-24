@@ -18,6 +18,7 @@
  * Description: Test SpillFileManager and eviction manager.
  */
 
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/object/object_enum.h"

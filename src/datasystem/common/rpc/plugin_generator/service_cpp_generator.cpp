@@ -33,7 +33,6 @@ void RpcGenerator::CreateServiceCpp(const google::protobuf::FileDescriptor &file
     for (auto i = 0; i < file.service_count(); ++i) {
         auto *svc = file.service(i);
         const std::string &svcName = svc->name();
-        GenerateInitMethodMapDef(printer, *svc, PREFIX, svcName);
         ImplementZmqCallMethodDef(printer, *svc, PREFIX, svcName);
         ImplementZmqDirectCallMethodDef(printer, *svc, PREFIX, svcName);
     }

@@ -33,76 +33,11 @@ void RpcGenerator::CreateStubHeader(const google::protobuf::FileDescriptor &file
 
     for (auto i = 0; i < file.service_count(); ++i) {
         auto *svc = file.service(i);
-        GenerateStubClass(printer, *svc, PREFIX);
-        GenerateGenericStubClass(printer, *svc, PREFIX);
+        (void)svc;
     }
 
     printer.PrintRaw(namespaceEnd);
     printer.PrintRaw(ENDIF);
-}
-
-void RpcGenerator::GenerateGenericStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                            const std::string &indent) const
-{
-    const std::string &svcName = svc.name();
-    std::map<std::string, std::string> vars;
-    vars["svc_name"] = svcName;
-    vars["stub"] = svcName + "_Stub";
-    vars["multi_session"] = std::to_string(MultiSessionEnabled(svc));
-    const std::string constructor =
-        "class $stub$ : public ::datasystem::RpcStubBase {\n"
-        "public:\n"
-        "    explicit $stub$(std::shared_ptr<::datasystem::RpcChannel> channel, int32_t timeoutMs = -1);\n"
-        "    ~$stub$() = default;\n"
-        "    ::datasystem::Status GetInitStatus() override;\n";
-    printer.Print(vars, constructor.c_str());
-
-    // Implement the override function ServiceName.
-    GenerateSvcName(printer, svcName, indent, false);
-
-    // Implement stub api.
-    ImplementStubApiDecl(printer, svc, indent);
-
-    // Implement adapter for some other api in stub
-    ImplementGenericStubOtherFuncDecl(printer);
-
-    const std::string impl =
-        "private:\n"
-        "    std::unique_ptr<$svc_name$_ZmqStub> stub_;\n"
-        "};\n";
-    printer.Print(vars, impl.c_str());
-}
-
-void RpcGenerator::GenerateStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                     const std::string &indent) const
-{
-    const std::string &svcName = svc.name();
-    std::map<std::string, std::string> vars;
-    vars["svc_name_string"] = "\"" + svcName + "\"";
-    vars["stub"] = svcName + "_ZmqStub";
-    vars["channel_number"] = std::to_string(HasChannelOption(svc));
-    const std::string constructor =
-        "class $stub$ final : public ::datasystem::ZmqStub {\n"
-        "public:\n"
-        "    explicit $stub$ (std::shared_ptr<::datasystem::RpcChannel> channel, int32_t timeoutMs = -1)\n"
-        "    : ::datasystem::ZmqStub(std::move(channel), timeoutMs) \n"
-        "    { InitMethodMap(); serviceName_ = $svc_name_string$; \n"
-        "      channelNo_ = $channel_number$; \n"
-        "      this->InitConn(); }\n"
-        "    ~$stub$() override = default;\n";
-    printer.Print(vars, constructor.c_str());
-
-    // Create the InitMethodMap.
-    GenerateInitMethodMapDecl(printer);
-
-    // Implement the override function ServiceName.
-    GenerateSvcName(printer, svcName, indent);
-
-    // Implement stub api.
-    ImplementStubApiDecl(printer, svc, indent);
-
-    printer.PrintRaw("private:\n");
-    printer.PrintRaw("};\n");
 }
 
 void RpcGenerator::GenerateStubPrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const
@@ -123,8 +58,6 @@ void RpcGenerator::GenerateStubPrologue(io::Printer &printer, const google::prot
     }
     impl +=
         "#include \"datasystem/common/rpc/rpc_stub_base.h\"\n"
-        "#include \"datasystem/common/rpc/zmq/zmq_stub.h\"\n"
-        "#include \"datasystem/common/rpc/zmq/zmq_message.h\"\n"
         "#include \"datasystem/common/util/net_util.h\"\n"
         "#include \"datasystem/utils/status.h\"\n";
     printer.Print(vars, impl.c_str());

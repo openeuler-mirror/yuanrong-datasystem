@@ -19,17 +19,21 @@
  */
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <securec.h>
 
 #include "datasystem/common/encrypt/secret_manager.h"
+#include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
-#include "datasystem/common/util/validator.h"
-#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/uuid_generator.h"
-
+#include "datasystem/common/util/validator.h"
 DS_DECLARE_bool(enable_curve_zmq);
 DS_DECLARE_string(curve_key_dir);
 
@@ -172,57 +176,14 @@ Status RpcAuthKeyManager::ServerLoadKeys(const std::string &serverName, RpcCrede
     cred.SetAuthCurveServer(authKeys.GetClientPrivateKey());
 
     // Load public keys for all authorized clients from file
-    // and allow clients with these public keys to connect.
-    // And also load the service name to public key mapping for whitelisting.
-    auto authHandler = std::make_unique<ZmqAuthHandler>();
+    // and also load the service name to public key mapping for whitelisting.
     std::vector<std::unique_ptr<char[]>> authorizedClients;
     SvcToKeyMapping svcMapping;
     RETURN_IF_NOT_OK(LoadAuthorizedKeys(serverName, authorizedClients, svcMapping));
-    for (const auto &clientPublicKey : authorizedClients) {
-        authHandler->ConfigCurve(clientPublicKey.get());
-    }
-    RpcAuthKeyManager::Instance().SetAuthHandler(authHandler);
     RpcAuthKeyManager::Instance().SetSvcMapping(svcMapping);
     RpcAuthKeyManager::Instance().SetAuthorizedClients(authorizedClients);
     FLAGS_curve_key_dir.clear();
     return Status::OK();
-}
-
-void RpcAuthKeyManager::SetAuthHandler(std::unique_ptr<datasystem::ZmqAuthHandler> &authHandler)
-{
-    authHandler_ = std::move(authHandler);
-}
-
-bool RpcAuthKeyManager::HasAuthHandler()
-{
-    return authHandler_ != nullptr;
-}
-
-Status RpcAuthKeyManager::InitAuthHandler(const std::shared_ptr<datasystem::ZmqContext> &ctx)
-{
-    return authHandler_->Init(ctx);
-}
-
-Status RpcAuthKeyManager::StartAuthHandler()
-{
-    RETURN_IF_EXCEPTION_OCCURS(thrdPool_ = std::make_unique<ThreadPool>(1, 0, "RpcAuth"));
-    auto func = [this] {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("AuthHandler;" + GetStringUuid(), true);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authHandler_->WorkerEntry(), "ZmqAuthHandler WorkerEntry failed");
-        return Status::OK();
-    };
-    authHandlerThrd_ = std::make_unique<std::future<Status>>(thrdPool_->Submit(func));
-    return Status::OK();
-}
-
-void RpcAuthKeyManager::StopAuthHandler()
-{
-    authHandler_->Stop();
-    if (authHandlerThrd_) {
-        authHandlerThrd_->wait();
-        authHandlerThrd_.reset();
-    }
-    authHandler_.reset();
 }
 
 void RpcAuthKeyManager::SetSvcMapping(SvcToKeyMapping &svcMapping)

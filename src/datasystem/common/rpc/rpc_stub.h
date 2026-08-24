@@ -20,7 +20,8 @@
 #ifndef DATASYSTEM_COMMON_RPC_STUB_H
 #define DATASYSTEM_COMMON_RPC_STUB_H
 
-#include <variant>
+#include <memory>
+#include <vector>
 
 #include "datasystem/common/rpc/brpc_client_stream_impl.h"
 #include "datasystem/common/rpc/client_writer_reader_base.h"
@@ -32,17 +33,6 @@
 namespace datasystem {
 
 template <typename W, typename R>
-class ClientUnaryWriterReaderImpl;
-template <typename W, typename R>
-class ClientUnaryWriterReader;
-template <typename W, typename R>
-class ClientWriterReaderImpl;
-template <typename W>
-class ClientWriterImpl;
-template <typename R>
-class ClientReaderImpl;
-
-template <typename W, typename R>
 class ClientWriterReader {
 public:
     explicit ClientWriterReader(std::shared_ptr<ClientWriterReaderBase<W, R>> &&impl)
@@ -50,9 +40,6 @@ public:
     {
     }
 
-    // Trigger non-blocking Close() so the brpc handler fires on_closed and its
-    // self-keepalive can release (ZMQ Close() is a no-op). shared_ptr so the brpc
-    // handler can hold a self-keepalive keeping itself alive past this drop.
     ~ClientWriterReader()
     {
         if (pimpl_) {
@@ -70,32 +57,16 @@ public:
         return pimpl_->Read(pb);
     }
 
-    /**
-     * @brief Done sending sequence of protobuf to the server.
-     * @return Status of call.
-     */
     Status Finish()
     {
         return pimpl_->Finish();
     }
 
-    /**
-     * @brief Send a payload after sending the request protobuf.
-     * @note The option send_payload_option must be set in the proto. Must be called after Write().
-     * @param[in] payload Sending payload buffers.
-     * @return Status of call.
-     */
     Status SendPayload(const std::vector<MemView> &payload)
     {
         return pimpl_->SendPayload(payload);
     }
 
-    /**
-     * @brief Receive a payload after receiving response protobuf.
-     * @note The option recv_payload_option must be set in the proto. Must be called after Read().
-     * @param[out] recvBuffer receiving payload buffers.
-     * @return Status of call.
-     */
     Status ReceivePayload(std::vector<RpcMessage> &recvBuffer)
     {
         return pimpl_->ReceivePayload(recvBuffer);
@@ -108,86 +79,86 @@ private:
 template <typename W>
 class ClientWriter {
 public:
-    explicit ClientWriter(std::unique_ptr<ClientWriterImpl<W>> &&impl);
+    explicit ClientWriter(std::unique_ptr<BrpcClientWriterImpl<W>> &&impl)
+        : pimpl_(std::move(impl))
+    {
+    }
 
-    explicit ClientWriter(std::unique_ptr<BrpcClientWriterImpl<W>> &&impl);
+    ~ClientWriter() = default;
 
-    ~ClientWriter();
-
-    Status Write(const W &pb);
+    Status Write(const W &pb)
+    {
+        return pimpl_->Write(pb);
+    }
 
     template <typename R>
-    Status Read(R &pb);
+    Status Read(R &pb)
+    {
+        return pimpl_->Read(pb);
+    }
 
-    /**
-     * @brief Done sending sequence of protobuf to the server.
-     * @return Status of call.
-     */
-    Status Finish();
+    Status Finish()
+    {
+        return pimpl_->Finish();
+    }
 
-    /**
-     * @brief Send a payload after sending the request protobuf.
-     * @note The option send_payload_option must be set in the proto. Must be called after Write().
-     * @param[in] payload Sending payload buffers.
-     * @return Status of call.
-     */
-    Status SendPayload(const std::vector<MemView> &payload);
+    Status SendPayload(const std::vector<MemView> &payload)
+    {
+        return pimpl_->SendPayload(payload);
+    }
 
-    /**
-     * @brief Receive a payload after receiving response protobuf.
-     * @note The option recv_payload_option must be set in the proto. Must be called after Read().
-     * @param[out] recvBuffer receiving payload buffers.
-     * @return Status of call.
-     */
-    Status ReceivePayload(std::vector<RpcMessage> &recvBuffer);
+    Status ReceivePayload(std::vector<RpcMessage> &recvBuffer)
+    {
+        return pimpl_->ReceivePayload(recvBuffer);
+    }
 
 private:
-    std::variant<std::unique_ptr<ClientWriterImpl<W>>,
-                 std::unique_ptr<BrpcClientWriterImpl<W>>> pimpl_;
+    std::unique_ptr<BrpcClientWriterImpl<W>> pimpl_;
 };
 
 template <typename R>
 class ClientReader {
 public:
-    explicit ClientReader(std::unique_ptr<ClientReaderImpl<R>> &&impl);
+    explicit ClientReader(std::shared_ptr<BrpcClientReaderImpl<R>> &&impl)
+        : pimpl_(std::move(impl))
+    {
+    }
 
-    explicit ClientReader(std::shared_ptr<BrpcClientReaderImpl<R>> &&impl);
+    ~ClientReader()
+    {
+        if (pimpl_) {
+            pimpl_->Close();
+        }
+    }
 
-    ~ClientReader();
-
-    Status Read(R &pb);
+    Status Read(R &pb)
+    {
+        return pimpl_->Read(pb);
+    }
 
     template <typename W>
-    Status Write(const W &pb);
+    Status Write(const W &pb)
+    {
+        return pimpl_->Write(pb);
+    }
 
-    /**
-     * @brief Done sending sequence of protobuf to the server.
-     * @return Status of call.
-     */
-    Status Finish();
+    Status Finish()
+    {
+        return pimpl_->Finish();
+    }
 
-    /**
-     * @brief Send a payload after sending the request protobuf.
-     * @note The option send_payload_option must be set in the proto. Must be called after Write().
-     * @param[in] payload Sending payload buffers.
-     * @return Status of call.
-     */
-    Status SendPayload(const std::vector<MemView> &payload);
+    Status SendPayload(const std::vector<MemView> &payload)
+    {
+        return pimpl_->SendPayload(payload);
+    }
 
-    /**
-     * @brief Receive a payload after receiving response protobuf.
-     * @note The option recv_payload_option must be set in the proto. Must be called after Read().
-     * @param[out] recvBuffer receiving payload buffers.
-     * @return Status of call.
-     */
-    Status ReceivePayload(std::vector<RpcMessage> &recvBuffer);
+    Status ReceivePayload(std::vector<RpcMessage> &recvBuffer)
+    {
+        return pimpl_->ReceivePayload(recvBuffer);
+    }
 
 private:
-    // Brpc branch is shared_ptr: the brpc handler keeps itself alive via a
-    // self-keepalive until on_closed fires (see BrpcClientReaderImpl), so its
-    // lifetime must be shared, not uniquely owned. ZMQ stays unique_ptr.
-    std::variant<std::unique_ptr<ClientReaderImpl<R>>,
-                 std::shared_ptr<BrpcClientReaderImpl<R>>> pimpl_;
+    std::shared_ptr<BrpcClientReaderImpl<R>> pimpl_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_STUB_H

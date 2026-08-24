@@ -62,10 +62,6 @@ private:
     int hwm_;  // RPC high-watermark
 
     // ZMQ specific options
-    friend class ZmqSocket;
-    friend class ZmqContext;
-    friend class ZmqStubConn;
-    friend class ZmqStub;
     template <typename W, typename R>
     friend class MsgQue;
     /*

@@ -17,6 +17,7 @@
 /**
  * Description: State client exist tests.
  */
+#include "datasystem/common/util/uuid_generator.h"
 #include <unistd.h>
 #include <algorithm>
 #include <array>

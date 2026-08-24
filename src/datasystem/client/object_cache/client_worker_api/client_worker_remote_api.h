@@ -258,7 +258,6 @@ private:
         std::shared_ptr<brpc::Channel> channel;
     };
     std::shared_ptr<BrpcSession> brpcSession_;
-    std::unique_ptr<WorkerOCService_Stub> zmqStub_;
     std::atomic<uint64_t> urmaFallbackTcpPendingBytes_{ 0 };
 
     // for pipeline rh2d receive queue

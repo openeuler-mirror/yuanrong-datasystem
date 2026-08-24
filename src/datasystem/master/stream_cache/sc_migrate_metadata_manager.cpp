@@ -58,10 +58,15 @@ MasterMasterSCApi::MasterMasterSCApi(const HostPort &hostPort, const HostPort &l
 
 Status MasterMasterSCApi::Init()
 {
-    RpcCredential cred;
-    RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateCredentials(WORKER_SERVER_NAME, cred));
-    auto channel = std::make_shared<RpcChannel>(destHostPort_, cred);
-    rpcSession_ = std::make_unique<master::MasterSCService_Stub>(channel);
+    constexpr int32_t scMigrateTimeoutMs = 5000;
+    BrpcChannelConfig cfg;
+    cfg.endpoint = destHostPort_.ToString();
+    cfg.timeout_ms = scMigrateTimeoutMs;
+    cfg.connect_timeout_ms = scMigrateTimeoutMs;
+    channel_ = std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(cfg));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel_ != nullptr, K_RPC_UNAVAILABLE,
+                                         FormatString("Failed to init brpc channel to %s", destHostPort_.ToString()));
+    rpcSession_ = std::make_shared<master::MasterSCService_BrpcGenericStub>(channel_.get(), scMigrateTimeoutMs);
     LOG(INFO) << FormatString("start stream meta client: %s", destHostPort_.ToString());
     return Status::OK();
 }

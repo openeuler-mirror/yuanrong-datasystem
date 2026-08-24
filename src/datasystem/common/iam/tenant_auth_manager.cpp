@@ -18,7 +18,6 @@
  * Description: TenantAuthManager is used to cache tokens and manage token reference counting.
  */
 #include "datasystem/common/iam/tenant_auth_manager.h"
-#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <cstring>
 #include <string_view>
