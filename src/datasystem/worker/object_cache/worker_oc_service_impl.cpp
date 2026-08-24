@@ -3162,6 +3162,7 @@ Status WorkerOCServiceImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb 
 Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_EXIST_LATENCY);
     BthreadReadGuard noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
