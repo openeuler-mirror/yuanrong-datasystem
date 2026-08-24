@@ -311,7 +311,7 @@ public:
         static const re2::RE2 re(
             "^(((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[0-9]{1,2})(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[0-9]{1,2})){3})|("
             "localhost))(:((6553[0-5])|(655[0-2][0-9])|(65[0-4][0-9]{2})|"
-            "(6[0-4][0-9]{3})|([1-5][0-9]{4})|([0-5]{1,5})|([0-9]{1,4})))$");
+            "(6[0-4][0-9]{3})|([1-5][0-9]{4})|([1-5][0-5]{0,4})|([1-9][0-9]{0,3})))$");
 
         // Allow value size 0 due to certain circumstances that indicates default or function disabled.
         if (re2::RE2::FullMatch(value, re) || value.empty()) {
@@ -759,8 +759,8 @@ public:
     {
         // Regex to match port from 0 to 65535.
         static const re2::RE2 re(
-            "^((6553[0-5])|(655[0-2][0-9])|(65[0-4][0-9]{2})|(6[0-4][0-9]{3})|([1-5][0-9]{4})|([0-5]{1,5})|([0-9]{1,4})"
-            ")$");
+            "^((6553[0-5])|(655[0-2][0-9])|(65[0-4][0-9]{2})|(6[0-4][0-9]{3})|"
+            "([1-5][0-9]{4})|([1-5][0-5]{0,4})|([1-9][0-9]{0,3}))$");
         // Allow value size 0 due to certain circumstances that indicates default or function disabled.
         if (allowEmpty == false && value.empty()) {
             LOG_IF(ERROR, printLog) << value << " empty is not a valid port.";

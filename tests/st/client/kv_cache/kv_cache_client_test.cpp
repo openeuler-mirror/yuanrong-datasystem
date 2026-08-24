@@ -581,6 +581,17 @@ TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvSuccess)
     DS_ASSERT_OK(client->Init());
 }
 
+TEST_F(KVCacheClientTest, TestKVCacheClientInitWithPortZero)
+{
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);
+    int replace = 1;
+    (void)setenv("DATASYSTEM_HOST", connectOptions.host.c_str(), replace);
+    (void)setenv("DATASYSTEM_PORT", "0", replace);
+    std::shared_ptr<KVClient> client = std::make_shared<KVClient>();
+    ASSERT_EQ(client->Init().GetCode(), K_INVALID);
+}
+
 TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvFailedWithNotEnoughParam)
 {
     int replace = 1;
