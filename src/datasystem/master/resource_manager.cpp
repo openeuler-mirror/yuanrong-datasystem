@@ -85,48 +85,35 @@ Status ResourceManager::ReportResource(const master::ResourceReportReqPb &req, m
 
     bool needScheduleSnapshot = rebalanceScheduler_.NeedSnapshotForSchedule(req, newInfo, rsp);
     if (needScheduleSnapshot) {
-        // Rebalance is about to schedule on this report. Promote writeSnapshot_ (latest per-worker
-        // reports) into readSnapshot_ now so the snapshot Schedule consumes -- and the projection
-        // it makes the dispatch decision on -- reflects fresh data instead of up to ~10s-stale data
-        // left over from the last background swap. Without this, a target that just received a
-        // migration and reported its real (higher) usage would still look stale-low in readSnapshot_
-        // until the next 10s background swap, exposing it to a second migration decision made on the
-        // stale-low value (issue #685 steady-state residual). The background WorkerThread swap stays
-        // as the safety net for FillWorkerStat freshness when no rebalance scheduling happens.
-        // Schedule reads readSnapshot_ under shared_lock immediately after; a racing background
-        // swap could theoretically revert it in the nanosecond window before the lock is acquired,
-        // but the fallback is the pre-fix behavior (stale snapshot), which the next report corrects.
-        SwitchSnapshots();
+        std::unordered_map<std::string, NodeInfo> snapshot;
+        BuildLatestSnapshot(snapshot);
+        auto reportingWorker = snapshot.find(address);
+        if (reportingWorker == snapshot.end() || reportingWorker->second.timestamp < newInfo.timestamp) {
+            snapshot.insert_or_assign(address, newInfo);
+        }
+        auto *stats = rsp.mutable_stats();
+        for (const auto &[worker, nodeInfo] : snapshot) {
+            (void)worker;
+            FillWorkerStat(nodeInfo, *stats->Add());
+        }
+        return rebalanceScheduler_.Schedule(req, snapshot, rsp);
     }
-    std::unordered_map<std::string, NodeInfo> snapshot;
     auto *stats = rsp.mutable_stats();
     {
         std::shared_lock<SharedMutex> lock(readSnapshotMutex_);
-        if (needScheduleSnapshot) {
-            snapshot.reserve(readSnapshot_.size() + 1);
-        }
         bool hasReportingWorker = false;
         for (const auto &[worker, nodeInfoInSnapshot] : readSnapshot_) {
             const NodeInfo &nodeInfo = worker == address ? newInfo : nodeInfoInSnapshot;
             hasReportingWorker = hasReportingWorker || worker == address;
-            if (needScheduleSnapshot) {
-                snapshot.emplace(worker, nodeInfo);
-            }
             auto *stat = stats->Add();
             FillWorkerStat(nodeInfo, *stat);
         }
         if (!hasReportingWorker) {
-            if (needScheduleSnapshot) {
-                snapshot.emplace(address, newInfo);
-            }
             auto *stat = stats->Add();
             FillWorkerStat(newInfo, *stat);
         }
     }
-    if (!needScheduleSnapshot) {
-        return Status::OK();
-    }
-    return rebalanceScheduler_.Schedule(req, snapshot, rsp);
+    return Status::OK();
 }
 
 Status ResourceManager::ReportRebalanceResult(const master::ReportRebalanceResultReqPb &req,
@@ -142,9 +129,7 @@ void ResourceManager::WorkerThread()
     int64_t intervalMs = WORKER_THREAD_INTERVAL_MS;
     INJECT_POINT_NO_RETURN("ResourceManager.setInterval", [&intervalMs](int64_t interval) { intervalMs = interval; });
     while (running_) {
-        // Testability hook: when set, this iteration skips both Clear and Swap so a UT can drive
-        // the read/write snapshot state purely through ReportResource + swap-on-trigger without any
-        // background mutation racing the assertions. Mirrors the setInterval inject above.
+        // Testability hook: skip background mutation so a UT can place reports in each buffer deterministically.
         bool skipBackgroundSwap = false;
         INJECT_POINT_NO_RETURN("ResourceManager.skipBackgroundSwap",
                                [&skipBackgroundSwap]() { skipBackgroundSwap = true; });
@@ -178,9 +163,43 @@ void ResourceManager::ClearWriteSnapshot()
 
 void ResourceManager::SwitchSnapshots()
 {
+    std::unique_lock<SharedMutex> swapLock(snapshotSwapMutex_);
     std::lock_guard<std::mutex> lock(writeSnapshotMutex_);
     std::unique_lock<SharedMutex> lockRead(readSnapshotMutex_);
     std::swap(readSnapshot_, writeSnapshot_);
+}
+
+void ResourceManager::BuildLatestSnapshot(std::unordered_map<std::string, NodeInfo> &snapshot)
+{
+    std::shared_lock<SharedMutex> swapLock(snapshotSwapMutex_);
+    size_t readSnapshotSize;
+    {
+        std::shared_lock<SharedMutex> readLock(readSnapshotMutex_);
+        readSnapshotSize = readSnapshot_.size();
+    }
+    size_t writeSnapshotSize;
+    {
+        std::lock_guard<std::mutex> writeLock(writeSnapshotMutex_);
+        writeSnapshotSize = writeSnapshot_.size();
+    }
+    snapshot.reserve(readSnapshotSize + writeSnapshotSize);
+    auto merge = [&snapshot](const std::unordered_map<std::string, NodeInfo> &source) {
+        for (const auto &[worker, nodeInfo] : source) {
+            auto iter = snapshot.find(worker);
+            if (iter == snapshot.end() || iter->second.timestamp <= nodeInfo.timestamp) {
+                snapshot.insert_or_assign(worker, nodeInfo);
+            }
+        }
+    };
+    {
+        std::shared_lock<SharedMutex> readLock(readSnapshotMutex_);
+        INJECT_POINT_NO_RETURN("ResourceManager.BuildLatestSnapshot.beforeReadMerge");
+        merge(readSnapshot_);
+    }
+    {
+        std::lock_guard<std::mutex> writeLock(writeSnapshotMutex_);
+        merge(writeSnapshot_);
+    }
 }
 } // namespace master
 } // namespace datasystem

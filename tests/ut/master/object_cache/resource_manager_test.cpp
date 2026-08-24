@@ -15,12 +15,15 @@
  */
 
 /**
- * Description: Test ResourceManager swap-on-trigger (issue #685 steady-state residual).
+ * Description: Test ResourceManager scheduling snapshots.
  */
 
+#include <algorithm>
+#include <chrono>
+#include <future>
 #include <memory>
 #include <string>
-#include <algorithm>
+#include <thread>
 
 #include <gtest/gtest.h>
 
@@ -44,10 +47,8 @@ namespace datasystem {
 namespace ut {
 namespace {
 constexpr uint64_t MEMORY_LIMIT = 1'000;
-// Huge interval + skip flag disable every background WorkerThread swap so the only snapshot
-// promotion during a test is the swap-on-trigger inside ReportResource. This is what makes the
-// regression assertion deterministic: without skip, a racing background swap could freshen
-// readSnapshot_ before the source reports and mask the bug the test must catch.
+// Huge interval + skip flag disable every background WorkerThread swap so tests can control
+// read/write snapshot placement deterministically.
 constexpr int64_t DISABLE_BG_INTERVAL_MS = 60 * 60 * 1'000;  // 1h
 
 master::ResourceReportReqPb MakeResourceReq(const std::string &worker, uint64_t usedMemory,
@@ -93,6 +94,11 @@ uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
 }
 }  // namespace
 
+class TestResourceManager : public ResourceManager {
+public:
+    using ResourceManager::SwitchSnapshots;
+};
+
 class ResourceManagerTest : public CommonTest {
 public:
     void SetUp() override
@@ -118,11 +124,12 @@ public:
         // iteration already sees the injects (no first-swap race).
         DS_ASSERT_OK(inject::Set("ResourceManager.skipBackgroundSwap", "call()"));
         DS_ASSERT_OK(inject::Set("ResourceManager.setInterval", FormatString("call(%ld)", DISABLE_BG_INTERVAL_MS)));
-        rm_ = std::make_unique<ResourceManager>();
+        rm_ = std::make_unique<TestResourceManager>();
     }
 
     void TearDown() override
     {
+        (void)inject::Clear("ResourceManager.BuildLatestSnapshot.beforeReadMerge");
         rm_.reset();  // join WorkerThread before clearing injects it might still read
         (void)inject::Clear("ResourceManager.skipBackgroundSwap");
         (void)inject::Clear("ResourceManager.setInterval");
@@ -149,7 +156,7 @@ public:
     }
 
 protected:
-    std::unique_ptr<ResourceManager> rm_;
+    std::unique_ptr<TestResourceManager> rm_;
 
 private:
     bool oldEnable_ = false;
@@ -160,17 +167,15 @@ private:
     uint32_t oldNodeDeadS_ = 0;
 };
 
-// Regression for the steady-state residual of issue #685 (swap-on-trigger fix).
+// Regression for the steady-state residual of issue #685.
 //
-// Without swap-on-trigger, the hold is released when the target reports its post-receive memory
+// Without merging both buffers, the hold is released when the target reports its post-receive memory
 // (write-side fresh), but Schedule still reads the lagged readSnapshot_ which shows the target
 // stale-low. The next source then re-picks the just-received target on the stale-low projection
 // and over-migrates it.
 //
-// With swap-on-trigger, the source's report promotes writeSnapshot_ into readSnapshot_ BEFORE
-// Schedule builds its projection, so the target is seen at its real (higher) post-receive usage
-// and the midpoint budget is correct (smaller), keeping projected usage below the eviction
-// trigger line.
+// Merging the two buffers by timestamp lets Schedule see the target's real (higher) post-receive
+// usage, so the midpoint budget is correct and stays below the eviction trigger line.
 //
 // Timeline (MEMORY_LIMIT = 1000, source threshold = source_pct, gap = 20%):
 //   T1 initial  used=100  (10%)  -- pickable low target
@@ -179,35 +184,37 @@ private:
 //   S2 / S3      used=920  (92%)  -- high sources
 //
 //   1. Report T1@100   -> writeSnapshot_[T1]=100 (stale-low)
-//   2. Report S2@920   -> swap-on-trigger -> readSnapshot_ fresh -> Schedule assigns S2->T1
+//   2. Report S2@920   -> merged snapshot is fresh -> Schedule assigns S2->T1
 //                         (max_bytes=(920-100)/2=410, projected 100+0+410=510 < triggerLine ok)
+//      SwitchSnapshots -> readSnapshot_[T1]=100, writeSnapshot_ becomes the previous empty read buffer
 //   3. ReportResult(S2->T1, SUCCEEDED) -> hold T1 (inflight[T1]=410 held)
 //   4. Report T1@700   -> writeSnapshot_[T1]=700 fresh; T1 reports, releases its own hold
 //                         (inflight->0); T1 is 70% < source threshold so NOT a source -> NO swap; readSnapshot_[T1]
 //                         stays stale-low (100). THIS is the exposure window.
-//   5. Report S3@920   -> swap-on-trigger -> readSnapshot_[T1]=700 fresh -> Schedule: S3->T1
+//   5. Report S3@920   -> merged snapshot uses T1@700 fresh -> Schedule: S3->T1
 //                         midpoint=(920-700)/2=110, headroomToWatermark=watermark-700=100 (binds, < midpoint),
 //                         targetAvail=300-0=300; max_bytes=100, projected=700+100=800=watermark (not past it).
 //
 // Assertion: S3 gets a rebalance task targeting T1 with max_bytes=100. The target watermark ceiling
 // binds because headroomToWatermark=100 < midpoint=110 — this keeps the #685 target-ceiling coverage
 // that would be lost if T1 sat at 600 (headroom=200 > midpoint=160, midpoint would bind instead).
-// Without swap-on-trigger, readSnapshot_[T1]=100 stale -> max_bytes=(920-100)/2=410 -> T1 (really 700)
+// Without the merge, readSnapshot_[T1]=100 stale -> max_bytes=(920-100)/2=410 -> T1 (really 700)
 // pushed to 1110 > triggerLine(1000) -> over-migration.)
-TEST_F(ResourceManagerTest, SwapOnTriggerGivesFreshProjectionAndCorrectBudget)
+TEST_F(ResourceManagerTest, MergedSnapshotGivesFreshProjectionAndCorrectBudget)
 {
     const std::string t1 = "127.0.0.1:1010";
     const std::string s2 = "127.0.0.1:9201";
     const std::string s3 = "127.0.0.1:9202";
 
-    // 1. T1 reports low -> only lands in writeSnapshot_ (no source, no swap-on-trigger).
+    // 1. T1 reports low -> only lands in writeSnapshot_.
     (void)Report(*rm_, t1, 100, 900);
 
-    // 2. S2 reports high -> swap-on-trigger promotes T1+S2 into readSnapshot_ -> S2->T1 assigned.
+    // 2. S2 reports high -> merged snapshot contains T1+S2 -> S2->T1 assigned.
     auto s2Rsp = Report(*rm_, s2, 920, 80);
     ASSERT_TRUE(HasRebalanceTask(s2Rsp)) << "S2 should get a rebalance task targeting T1";
     ASSERT_EQ(s2Rsp.rebalance_task().target_worker(), t1);
     ASSERT_EQ(s2Rsp.rebalance_task().max_bytes(), 410ul);
+    rm_->SwitchSnapshots();
 
     // 3. S2's executor reports success -> hold T1 (held charge stays until T1 reports fresh).
     DS_ASSERT_OK(ReportRebalanceSuccess(*rm_, s2Rsp.rebalance_task()));
@@ -218,16 +225,15 @@ TEST_F(ResourceManagerTest, SwapOnTriggerGivesFreshProjectionAndCorrectBudget)
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
 
     // 4. T1 reports its real post-receive usage (700, 70%). It is not a source (70% < source threshold) so
-    //    NO swap-on-trigger fires here -- readSnapshot_[T1] stays stale-low (100) and the held
-    //    charge is released (write-side report advances past hold time).
+    //    The read buffer stays stale-low (100), while the write buffer advances past the hold time.
     (void)Report(*rm_, t1, 700, 300);
 
-    // 5. S3 reports high -> swap-on-trigger promotes writeSnapshot_ (T1 now 700 fresh) into
-    //    readSnapshot_ BEFORE Schedule. Schedule's projection for S3->T1: the rebalance goal is
+    // 5. S3 reports high -> the merged snapshot selects writeSnapshot_'s T1@700. Schedule's
+    //    projection for S3->T1: the rebalance goal is
     //    the midpoint gap (920-700)/2=110, but the target watermark ceiling caps the batch at
     //    headroomToWatermark = watermark-700 = 100 (< midpoint=110), so T1 reaches the watermark
-    //    (not past it). The available clamp (300-0=300 > headroom) does not bind. Without
-    //    swap-on-trigger, readSnapshot_[T1] would still be stale-low (100) and the watermark cap
+    //    (not past it). The available clamp (300-0=300 > headroom) does not bind. Without the
+    //    merge, readSnapshot_[T1] would still be stale-low (100) and the watermark cap
     //    would be watermark-100 = 700 (looser, > midpoint=410), so the midpoint would bind instead
     //    and over-migrate T1 — the fresh snapshot is what makes the watermark ceiling bind tightly.
     auto s3Rsp = Report(*rm_, s3, 920, 80);
@@ -235,6 +241,65 @@ TEST_F(ResourceManagerTest, SwapOnTriggerGivesFreshProjectionAndCorrectBudget)
     EXPECT_EQ(s3Rsp.rebalance_task().target_worker(), t1);
     EXPECT_EQ(s3Rsp.rebalance_task().max_bytes(),
               std::min({ 110ul, SubOrZero(WatermarkBytes(), 700), 300ul }));
+}
+
+TEST_F(ResourceManagerTest, HighUsageReportDoesNotLoseTargetsSplitAcrossBuffers)
+{
+    const std::string source = "127.0.0.1:9200";
+    const std::string target1 = "127.0.0.1:1010";
+    const std::string target2 = "127.0.0.1:1020";
+    const std::string target3 = "127.0.0.1:1030";
+
+    (void)Report(*rm_, source, 100, 900);
+    (void)Report(*rm_, target1, 100, 900);
+    (void)Report(*rm_, target2, 100, 900);
+    (void)Report(*rm_, target3, 100, 900);
+    rm_->SwitchSnapshots();
+
+    auto rsp = Report(*rm_, source, 900, 100);
+
+    ASSERT_TRUE(HasRebalanceTask(rsp));
+    EXPECT_EQ(rsp.rebalance_task().source_worker(), source);
+    EXPECT_NE(rsp.rebalance_task().target_worker(), source);
+    EXPECT_EQ(rsp.stats_size(), 4);
+}
+
+TEST_F(ResourceManagerTest, SnapshotBuildDoesNotBlockConcurrentReportWhileReadingOldSnapshot)
+{
+    constexpr char source[] = "127.0.0.1:9200";
+    constexpr char target[] = "127.0.0.1:1010";
+    constexpr char concurrentWorker[] = "127.0.0.1:1020";
+    constexpr char injectPoint[] = "ResourceManager.BuildLatestSnapshot.beforeReadMerge";
+
+    (void)Report(*rm_, source, 100, 900);
+    (void)Report(*rm_, target, 100, 900);
+    rm_->SwitchSnapshots();
+
+    DS_ASSERT_OK(inject::Set(injectPoint, "1*pause()"));
+    auto highUsageReport = std::async(std::launch::async, [&] {
+        master::ResourceReportRspPb rsp;
+        return rm_->ReportResource(MakeResourceReq(source, 900, 100), rsp);
+    });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (inject::GetExecuteCount(injectPoint) == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (inject::GetExecuteCount(injectPoint) == 0) {
+        DS_EXPECT_OK(inject::Clear(injectPoint));
+        DS_EXPECT_OK(highUsageReport.get());
+        FAIL() << "Snapshot build did not reach the read-snapshot merge";
+    }
+
+    auto concurrentReport = std::async(std::launch::async, [&] {
+        master::ResourceReportRspPb rsp;
+        return rm_->ReportResource(MakeResourceReq(concurrentWorker, 100, 900), rsp);
+    });
+    const bool reportCompleted = concurrentReport.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    DS_EXPECT_OK(inject::Clear(injectPoint));
+    DS_EXPECT_OK(highUsageReport.get());
+    DS_EXPECT_OK(concurrentReport.get());
+    EXPECT_TRUE(reportCompleted) << "Snapshot build held the write snapshot lock while copying the read snapshot";
 }
 }  // namespace ut
 }  // namespace datasystem
