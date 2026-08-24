@@ -53,6 +53,8 @@ namespace {
 constexpr uint32_t WORKER_NUM = 2;
 constexpr uint32_t READER_WORKER_INDEX = 0;
 constexpr uint32_t ROUTED_CLIENT_WORKER_INDEX = 1;
+constexpr uint32_t REMOTE_TRANSPORT_WORKER_NUM = 3;
+constexpr uint32_t REMOTE_TRANSPORT_CLIENT_WORKER_INDEX = 2;
 constexpr size_t VALUE_SIZE = 128 * 1024;
 constexpr size_t KEY_SEARCH_LIMIT = 100'000;
 constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
@@ -60,8 +62,29 @@ constexpr char CREATE_INJECT[] = "TransportLayer.Create.beforeTransport";
 constexpr char PUBLISH_INJECT[] = "WorkerRpcClient.InvokeSet.beforeRpc";
 constexpr char MULTI_CREATE_INJECT[] = "TransportLayer.MCreate.beforeTransport";
 constexpr char MULTI_PUBLISH_INJECT[] = "WorkerRpcClient.InvokeMultiSet.beforeRpc";
+constexpr char MULTI_PUBLISH_METADATA_INJECT[] = "worker.before_CreateMultiMetaToMaster";
 constexpr char HOST_ID_ENV_NAME[] = "routing_transport_set_host_id";
 constexpr char HOST_ID_VALUE[] = "routing-transport-set-host";
+constexpr char REMOTE_HOST_ID_ENV_PREFIX[] = "routing_transport_set_remote_host_id_";
+constexpr char REMOTE_HOST_ID_VALUE_PREFIX[] = "routing-transport-set-remote-host-";
+
+bool IsRemoteTransportSetCase()
+{
+    std::string suiteName;
+    std::string caseName;
+    GetCurTestName(suiteName, caseName);
+    return caseName == "MSetMetaOwnerGroupsUseCompiledRemoteTransport";
+}
+
+std::string RemoteHostIdEnvName(uint32_t workerIndex)
+{
+    return std::string(REMOTE_HOST_ID_ENV_PREFIX) + std::to_string(workerIndex);
+}
+
+std::string RemoteHostIdValue(uint32_t workerIndex)
+{
+    return std::string(REMOTE_HOST_ID_VALUE_PREFIX) + std::to_string(workerIndex);
+}
 
 bool IsCoordinatorTransportSetCase()
 {
@@ -97,11 +120,16 @@ public:
         FLAGS_v = 1;
         opts.numEtcd = IsCoordinatorTransportSetCase() ? 0 : 1;
         opts.numCoordinators = IsCoordinatorTransportSetCase() ? 1 : 0;
-        opts.numWorkers = WORKER_NUM;
+        opts.numWorkers = IsRemoteTransportSetCase() ? REMOTE_TRANSPORT_WORKER_NUM : WORKER_NUM;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1";
         opts.workerGflagParams += " -host_id_env_name=" + std::string(HOST_ID_ENV_NAME);
+        if (IsRemoteTransportSetCase()) {
+            for (uint32_t i = 0; i < REMOTE_TRANSPORT_WORKER_NUM; ++i) {
+                opts.workerSpecifyGflagParams[i] += " -host_id_env_name=" + RemoteHostIdEnvName(i);
+            }
+        }
 #ifdef USE_URMA
         opts.workerGflagParams += " -enable_urma=true -enable_transport_fallback=false";
 #else
@@ -112,6 +140,11 @@ public:
     void SetUp() override
     {
         ASSERT_EQ(setenv(HOST_ID_ENV_NAME, HOST_ID_VALUE, 1), 0);
+        if (IsRemoteTransportSetCase()) {
+            for (uint32_t i = 0; i < REMOTE_TRANSPORT_WORKER_NUM; ++i) {
+                ASSERT_EQ(setenv(RemoteHostIdEnvName(i).c_str(), RemoteHostIdValue(i).c_str(), 1), 0);
+            }
+        }
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
         ExternalClusterTest::SetUp();
 
@@ -140,13 +173,18 @@ public:
         (void)inject::Clear(SKIP_WARMUP_INJECT);
         ExternalClusterTest::TearDown();
         (void)unsetenv(HOST_ID_ENV_NAME);
+        for (uint32_t i = 0; i < REMOTE_TRANSPORT_WORKER_NUM; ++i) {
+            (void)unsetenv(RemoteHostIdEnvName(i).c_str());
+        }
     }
 
 protected:
     virtual void InitRoutedClient()
     {
         ConnectOptions options;
-        InitConnectOpt(ROUTED_CLIENT_WORKER_INDEX, options);
+        const uint32_t workerIndex =
+            IsRemoteTransportSetCase() ? REMOTE_TRANSPORT_CLIENT_WORKER_INDEX : ROUTED_CLIENT_WORKER_INDEX;
+        InitConnectOpt(workerIndex, options);
         options.enableLocalCache = false;
         options.dataPlacementPolicy = routedDataPlacementPolicy_;
         routedClient_ = std::make_shared<KVClient>(options);
@@ -304,6 +342,54 @@ protected:
             }
         }
         return Status(K_NOT_FOUND, "Unable to find a key whose same-node worker differs from its metadata owner");
+    }
+
+    Status FindSameNodeRouteKeyToWorker(uint32_t workerIndex, const std::string &prefix,
+                                        bool requireDifferentOwner, std::string &key, HostPort &metaOwner)
+    {
+        ClusterTopologyPb ring;
+        if (etcd_ == nullptr) {
+            RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
+        } else {
+            std::string value;
+            RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
+            CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
+        }
+        HostPort targetWorker;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
+        std::vector<HostPort> sameNodeWorkers;
+        std::map<uint32_t, std::string> tokenWorkers;
+        for (const auto &worker : ring.members()) {
+            if (worker.second.state() != MembershipPb::ACTIVE) {
+                continue;
+            }
+            HostPort address;
+            RETURN_IF_NOT_OK(address.ParseString(worker.first));
+            sameNodeWorkers.emplace_back(std::move(address));
+            for (const auto token : worker.second.tokens()) {
+                tokenWorkers.emplace(token, worker.first);
+            }
+        }
+        CHECK_FAIL_RETURN_STATUS(!sameNodeWorkers.empty(), K_NOT_FOUND, "No same-node worker is available");
+        CHECK_FAIL_RETURN_STATUS(!tokenWorkers.empty(), K_NOT_FOUND, "Hash ring has no worker tokens");
+        std::sort(sameNodeWorkers.begin(), sameNodeWorkers.end());
+        const auto target = std::find(sameNodeWorkers.begin(), sameNodeWorkers.end(), targetWorker);
+        CHECK_FAIL_RETURN_STATUS(target != sameNodeWorkers.end(), K_NOT_FOUND,
+                                 "Target worker is absent from same-node workers");
+        const size_t targetOffset = static_cast<size_t>(target - sameNodeWorkers.begin());
+        for (size_t i = 0; i < KEY_SEARCH_LIMIT; ++i) {
+            std::string candidate = prefix + std::to_string(i);
+            const uint32_t keyHash = MurmurHash3_32(candidate);
+            auto owner = tokenWorkers.lower_bound(keyHash);
+            owner = owner == tokenWorkers.end() ? tokenWorkers.begin() : owner;
+            RETURN_IF_NOT_OK(metaOwner.ParseString(owner->second));
+            if (keyHash % sameNodeWorkers.size() == targetOffset
+                && (!requireDifferentOwner || metaOwner != targetWorker)) {
+                key = std::move(candidate);
+                return Status::OK();
+            }
+        }
+        return Status(K_NOT_FOUND, "Unable to find a key for the requested same-node worker");
     }
 
     Status FindWorkerIndex(const HostPort &worker, uint32_t &workerIndex)
@@ -543,6 +629,42 @@ TEST_F(KVClientTransportSetTest, RoutedMSetGroupsObjectsByMetadataOwner)
     AssertValue(keys[1], values[1]);
     AssertPrimaryWorker(keys[0], READER_WORKER_INDEX);
     AssertPrimaryWorker(keys[1], ROUTED_CLIENT_WORKER_INDEX);
+}
+
+TEST_F(KVClientTransportSetTest, MSetMetaOwnerGroupsUseCompiledRemoteTransport)
+{
+    std::vector<std::string> worker0Keys;
+    std::vector<std::string> worker1Keys;
+    for (size_t i = 0; i < 2; ++i) {
+        std::string worker0Key;
+        std::string worker1Key;
+        DS_ASSERT_OK(FindRouteKeyToWorker(
+            READER_WORKER_INDEX, "transport_mset_meta_worker0_" + std::to_string(i) + "_", worker0Key));
+        DS_ASSERT_OK(FindRouteKeyToWorker(
+            ROUTED_CLIENT_WORKER_INDEX, "transport_mset_meta_worker1_" + std::to_string(i) + "_", worker1Key));
+        worker0Keys.emplace_back(std::move(worker0Key));
+        worker1Keys.emplace_back(std::move(worker1Key));
+    }
+    const std::vector<std::string> keys{ worker0Keys[0], worker1Keys[0], worker0Keys[1], worker1Keys[1] };
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE + 1, 'b'),
+                                           std::string(VALUE_SIZE + 2, 'c'), std::string(VALUE_SIZE + 3, 'd') };
+    const std::vector<StringView> valueViews{ values[0], values[1], values[2], values[3] };
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(inject::Set(MULTI_CREATE_INJECT, "call()"));
+    DS_ASSERT_OK(inject::Set(MULTI_PUBLISH_INJECT, "call()"));
+    const uint64_t createBefore = inject::GetExecuteCount(MULTI_CREATE_INJECT);
+    const uint64_t publishBefore = inject::GetExecuteCount(MULTI_PUBLISH_INJECT);
+
+    DS_ASSERT_OK(routedClient_->MSet(keys, valueViews, failedKeys));
+
+    ASSERT_TRUE(failedKeys.empty());
+    ASSERT_EQ(inject::GetExecuteCount(MULTI_CREATE_INJECT), createBefore + 2);
+    ASSERT_EQ(inject::GetExecuteCount(MULTI_PUBLISH_INJECT), publishBefore + 2);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        AssertValue(keys[i], values[i]);
+        AssertPrimaryWorker(keys[i], i % 2 == 0 ? READER_WORKER_INDEX : ROUTED_CLIENT_WORKER_INDEX);
+    }
 }
 
 // Two-step batch write (MCreate + MSet(vector<Buffer>)) must route each key to its hash-ring
@@ -838,6 +960,38 @@ TEST_F(KVClientTransportSetTest, MetadataOwnerFailureRefreshesRingWithoutEvictin
     AssertPrimaryWorker(localRetryKey, ROUTED_CLIENT_WORKER_INDEX);
 }
 
+TEST_F(KVClientTransportSetTest, MSetPartialGroupFailureReportsExactFailedKeys)
+{
+    std::string successKey;
+    std::string failedKey0;
+    std::string failedKey1;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_partial_success_", successKey));
+    DS_ASSERT_OK(FindRouteKeyToWorker(ROUTED_CLIENT_WORKER_INDEX, "transport_mset_partial_failed0_", failedKey0));
+    DS_ASSERT_OK(FindRouteKeyToWorker(ROUTED_CLIENT_WORKER_INDEX, "transport_mset_partial_failed1_", failedKey1));
+    const std::vector<std::string> keys{ failedKey0, successKey, failedKey1 };
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'f'), std::string(VALUE_SIZE, 's'),
+                                           std::string(VALUE_SIZE, 'g') };
+    const std::vector<StringView> valueViews{ values[0], values[1], values[2] };
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, ROUTED_CLIENT_WORKER_INDEX,
+                                           MULTI_PUBLISH_METADATA_INJECT, "1*return(K_RUNTIME_ERROR)"));
+    Raii clearInject([this] {
+        (void)cluster_->ClearInjectAction(WORKER, ROUTED_CLIENT_WORKER_INDEX,
+                                          MULTI_PUBLISH_METADATA_INJECT);
+    });
+    DS_ASSERT_OK(inject::Set(MULTI_PUBLISH_INJECT, "call()"));
+    const uint64_t publishBefore = inject::GetExecuteCount(MULTI_PUBLISH_INJECT);
+    std::vector<std::string> failedKeys;
+
+    DS_ASSERT_OK(routedClient_->MSet(keys, valueViews, failedKeys));
+
+    ASSERT_EQ(inject::GetExecuteCount(MULTI_PUBLISH_INJECT), publishBefore + 2);
+    ASSERT_EQ(failedKeys, (std::vector<std::string>{ failedKey0, failedKey1 }));
+    AssertValue(successKey, values[1]);
+    std::string value;
+    ASSERT_EQ(readerClient_->Get(failedKey0, value).GetCode(), K_NOT_FOUND);
+    ASSERT_EQ(readerClient_->Get(failedKey1, value).GetCode(), K_NOT_FOUND);
+}
+
 class KVClientTransportSetWithShmTest : public KVClientTransportSetTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -850,6 +1004,50 @@ public:
         opts.workerGflagParams.replace(pos, sizeof(DISABLED_SHM_OPTION) - 1, "-ipc_through_shared_memory=true");
     }
 };
+
+TEST_F(KVClientTransportSetWithShmTest, MSetPreferredSameNodeGroupsUseShm)
+{
+    ReinitRoutedClient(DataPlacementPolicy::PREFERRED_SAME_NODE);
+    std::vector<std::string> worker0Keys;
+    std::vector<std::string> worker1Keys;
+    HostPort worker0MetaOwner;
+    HostPort worker1MetaOwner;
+    for (size_t i = 0; i < 2; ++i) {
+        std::string worker0Key;
+        std::string worker1Key;
+        DS_ASSERT_OK(FindSameNodeRouteKeyToWorker(
+            READER_WORKER_INDEX, "transport_mset_shm_worker0_" + std::to_string(i) + "_", true,
+            worker0Key, worker0MetaOwner));
+        DS_ASSERT_OK(FindSameNodeRouteKeyToWorker(
+            ROUTED_CLIENT_WORKER_INDEX, "transport_mset_shm_worker1_" + std::to_string(i) + "_", false,
+            worker1Key, worker1MetaOwner));
+        worker0Keys.emplace_back(std::move(worker0Key));
+        worker1Keys.emplace_back(std::move(worker1Key));
+    }
+    HostPort worker0;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(READER_WORKER_INDEX, worker0));
+    ASSERT_NE(worker0MetaOwner, worker0);
+    const std::vector<std::string> keys{ worker0Keys[0], worker1Keys[0], worker0Keys[1], worker1Keys[1] };
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'w'), std::string(VALUE_SIZE + 1, 'x'),
+                                           std::string(VALUE_SIZE + 2, 'y'), std::string(VALUE_SIZE + 3, 'z') };
+    const std::vector<StringView> valueViews{ values[0], values[1], values[2], values[3] };
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(inject::Set(MULTI_CREATE_INJECT, "call()"));
+    DS_ASSERT_OK(inject::Set(MULTI_PUBLISH_INJECT, "call()"));
+    const uint64_t createBefore = inject::GetExecuteCount(MULTI_CREATE_INJECT);
+    const uint64_t publishBefore = inject::GetExecuteCount(MULTI_PUBLISH_INJECT);
+
+    DS_ASSERT_OK(routedClient_->MSet(keys, valueViews, failedKeys));
+
+    ASSERT_TRUE(failedKeys.empty());
+    ASSERT_EQ(inject::GetExecuteCount(MULTI_CREATE_INJECT), createBefore + 2);
+    ASSERT_EQ(inject::GetExecuteCount(MULTI_PUBLISH_INJECT), publishBefore + 2);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    for (size_t i = 0; i < keys.size(); ++i) {
+        AssertPrimaryWorker(keys[i], i % 2 == 0 ? READER_WORKER_INDEX : ROUTED_CLIENT_WORKER_INDEX);
+        AssertValue(keys[i], values[i]);
+    }
+}
 
 // A routed Set whose target is a same-host SHM-enabled worker must take the SHM zero-copy path
 // (worker allocates the region, passes the fd worker->client, client mmaps and writes), recording

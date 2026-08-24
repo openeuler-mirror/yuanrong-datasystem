@@ -329,6 +329,16 @@ protected:
             WORKER, workerIndex, QUERY_AND_GET_METADATA_MISS_INJECT, counts.metadataMisses));
     }
 
+    void InitDirectClient(uint32_t workerIndex, DataPlacementPolicy policy, std::shared_ptr<KVClient> &client)
+    {
+        ConnectOptions options;
+        InitConnectOpt(workerIndex, options, CLIENT_TIMEOUT_MS);
+        options.enableLocalCache = false;
+        options.dataPlacementPolicy = policy;
+        client = std::make_shared<KVClient>(options);
+        DS_ASSERT_OK(client->Init());
+    }
+
     // Generate N distinct keys without making placement assumptions.
     std::vector<std::string> MakeRandomKeys(size_t count)
     {
@@ -807,6 +817,27 @@ protected:
         ASSERT_EQ(after.remoteOwner.ubHits, before.remoteOwner.ubHits);
         ASSERT_EQ(after.remoteOwner.metadataMisses, before.remoteOwner.metadataMisses + 1);
     }
+
+    void AssertStringMixedPathGet(const std::vector<std::string> &keys,
+                                  const std::vector<std::string> &expectedValues)
+    {
+        MixedPathCounts before;
+        GetMixedPathCounts(before);
+        std::vector<std::string> actualValues;
+        DS_ASSERT_OK(reader_->Get(keys, actualValues));
+        MixedPathCounts after;
+        GetMixedPathCounts(after);
+
+        ASSERT_EQ(actualValues, expectedValues);
+        ASSERT_EQ(after.rpc.queryAndGet, before.rpc.queryAndGet + 3);
+        ASSERT_EQ(after.rpc.workerOcGet, before.rpc.workerOcGet + 1);
+        ASSERT_EQ(after.rpc.getObjectRemote, before.rpc.getObjectRemote + 1);
+        ASSERT_EQ(after.localOwner.shmHits, before.localOwner.shmHits + 1);
+        ASSERT_EQ(after.remoteOwner.tcpHits, before.remoteOwner.tcpHits + (IsUrmaBuild() ? 0 : 1));
+        ASSERT_EQ(after.remoteOwner.ubHits, before.remoteOwner.ubHits + (IsUrmaBuild() ? 1 : 0));
+        ASSERT_EQ(after.remoteOwner.metadataMisses, before.remoteOwner.metadataMisses + 1);
+        ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+    }
 };
 
 TEST_F(KVClientTransportGetWithAllWorkersShmTest, SameNodeMetadataOwnerHitUsesShmInline)
@@ -1062,6 +1093,119 @@ TEST_F(KVClientTransportGetMixedPathTest, MultiKeyMixedPathsPreserveOrder)
     AssertMixedPathBuffers(buffers, values);
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
     AssertMixedPathCounts(before, after);
+}
+
+TEST_F(KVClientTransportGetMixedPathTest, MSetMetaOwnerThenStringMultiGetCompletesInline)
+{
+    std::vector<std::string> localOwnerKeys;
+    std::vector<std::string> remoteOwnerKeys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 2, localOwnerKeys);
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 2, remoteOwnerKeys);
+    const std::vector<std::string> keys{ localOwnerKeys[0], remoteOwnerKeys[0],
+                                         localOwnerKeys[1], remoteOwnerKeys[1] };
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE - 1, 'b'),
+                                           std::string(VALUE_SIZE - 2, 'c'), std::string(VALUE_SIZE - 3, 'd') };
+    const std::vector<StringView> valueViews{ values[0], values[1], values[2], values[3] };
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(reader_->MSet(keys, valueViews, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+    TransportRpcCounts rpcBefore;
+    WorkerQueryAndGetCounts localBefore;
+    WorkerQueryAndGetCounts remoteBefore;
+    GetRpcCounts(rpcBefore);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, localBefore);
+    GetWorkerQueryAndGetCounts(TRANSPORT_CLIENT_WORKER_INDEX, remoteBefore);
+
+    std::vector<std::string> actualValues;
+    DS_ASSERT_OK(reader_->Get(keys, actualValues));
+
+    TransportRpcCounts rpcAfter;
+    WorkerQueryAndGetCounts localAfter;
+    WorkerQueryAndGetCounts remoteAfter;
+    GetRpcCounts(rpcAfter);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, localAfter);
+    GetWorkerQueryAndGetCounts(TRANSPORT_CLIENT_WORKER_INDEX, remoteAfter);
+    ASSERT_EQ(actualValues, values);
+    ASSERT_EQ(rpcAfter.queryAndGet, rpcBefore.queryAndGet + 2);
+    ASSERT_EQ(rpcAfter.getObjectRemote, rpcBefore.getObjectRemote);
+    ASSERT_EQ(rpcAfter.workerOcGet, rpcBefore.workerOcGet);
+    ASSERT_EQ(localAfter.shmHits, localBefore.shmHits + 2);
+    ASSERT_EQ(localAfter.metadataMisses, localBefore.metadataMisses);
+    ASSERT_EQ(remoteAfter.tcpHits, remoteBefore.tcpHits + (IsUrmaBuild() ? 0 : 2));
+    ASSERT_EQ(remoteAfter.ubHits, remoteBefore.ubHits + (IsUrmaBuild() ? 2 : 0));
+    ASSERT_EQ(remoteAfter.metadataMisses, remoteBefore.metadataMisses);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
+TEST_F(KVClientTransportGetMixedPathTest, MSetSameNodeThenStringMultiGetReadsDataWorkers)
+{
+    std::vector<std::string> ownerKeys;
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 4, ownerKeys);
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE, 'b'),
+                                           std::string(VALUE_SIZE, 'c'), std::string(VALUE_SIZE, 'd') };
+    std::shared_ptr<KVClient> localWriter;
+    std::shared_ptr<KVClient> remoteWriter;
+    InitDirectClient(META_OWNER_INDEX, DataPlacementPolicy::PREFERRED_SAME_NODE, localWriter);
+    InitDirectClient(DATA_WORKER_INDEX, DataPlacementPolicy::PREFERRED_SAME_NODE, remoteWriter);
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(localWriter->MSet({ ownerKeys[0], ownerKeys[2] },
+                                   { StringView(values[0]), StringView(values[2]) }, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+    DS_ASSERT_OK(remoteWriter->MSet({ ownerKeys[1], ownerKeys[3] },
+                                    { StringView(values[1]), StringView(values[3]) }, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+
+    for (size_t round = 0; round < 2; ++round) {
+        TransportRpcCounts rpcBefore;
+        WorkerQueryAndGetCounts ownerBefore;
+        GetRpcCounts(rpcBefore);
+        GetWorkerQueryAndGetCounts(TRANSPORT_CLIENT_WORKER_INDEX, ownerBefore);
+        std::vector<std::string> actualValues;
+
+        DS_ASSERT_OK(reader_->Get(ownerKeys, actualValues));
+
+        TransportRpcCounts rpcAfter;
+        WorkerQueryAndGetCounts ownerAfter;
+        GetRpcCounts(rpcAfter);
+        GetWorkerQueryAndGetCounts(TRANSPORT_CLIENT_WORKER_INDEX, ownerAfter);
+        ASSERT_EQ(actualValues, values);
+        ASSERT_EQ(rpcAfter.queryAndGet, rpcBefore.queryAndGet + 1);
+        ASSERT_EQ(rpcAfter.workerOcGet, rpcBefore.workerOcGet + 1);
+        ASSERT_EQ(rpcAfter.getObjectRemote, rpcBefore.getObjectRemote);
+        ASSERT_EQ(rpcAfter.batchGetObjectRemote, rpcBefore.batchGetObjectRemote + 1);
+        ASSERT_EQ(ownerAfter.tcpHits, ownerBefore.tcpHits);
+        ASSERT_EQ(ownerAfter.ubHits, ownerBefore.ubHits);
+        ASSERT_EQ(ownerAfter.shmHits, ownerBefore.shmHits);
+        ASSERT_EQ(ownerAfter.metadataMisses, ownerBefore.metadataMisses + 1);
+        ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+    }
+}
+
+TEST_F(KVClientTransportGetMixedPathTest, StringMultiGetMixedPathsPreserveOrder)
+{
+    std::vector<std::string> localOwnerKeys;
+    std::vector<std::string> remoteOwnerKeys;
+    std::vector<std::string> missingOwnerKeys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, localOwnerKeys);
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 3, remoteOwnerKeys);
+    GetRealHashKeysToWorker(DATA_WORKER_INDEX, 1, missingOwnerKeys);
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, '0'), std::string(VALUE_SIZE - 1, '1'),
+                                           std::string(VALUE_SIZE - 2, '2'), std::string(VALUE_SIZE - 3, '3') };
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(reader_->MSet({ localOwnerKeys[0], remoteOwnerKeys[0] },
+                               { StringView(values[0]), StringView(values[1]) }, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+    std::shared_ptr<KVClient> localWriter;
+    std::shared_ptr<KVClient> remoteWriter;
+    InitDirectClient(META_OWNER_INDEX, DataPlacementPolicy::PREFERRED_SAME_NODE, localWriter);
+    InitDirectClient(DATA_WORKER_INDEX, DataPlacementPolicy::PREFERRED_SAME_NODE, remoteWriter);
+    DS_ASSERT_OK(localWriter->MSet({ remoteOwnerKeys[1] }, { StringView(values[2]) }, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+    DS_ASSERT_OK(remoteWriter->MSet({ remoteOwnerKeys[2] }, { StringView(values[3]) }, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+    const std::vector<std::string> keys{ localOwnerKeys[0], remoteOwnerKeys[0], remoteOwnerKeys[1],
+                                         remoteOwnerKeys[2], missingOwnerKeys[0] };
+    AssertStringMixedPathGet(keys, { values[0], values[1], values[2], values[3], "" });
 }
 
 // Regression: when local cache is disabled, dataPlacementPolicy is a write-only setting. Even when
@@ -1533,6 +1677,43 @@ TEST_F(KVClientTransportGetTest, InlineEncodeFailureFallsBackPerKey)
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
 }
 
+TEST_F(KVClientTransportGetTest, StringMultiGetInlineFailureFallsBackPerKey)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 2, keys);
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'i'), std::string(VALUE_SIZE, 'j') };
+    const std::vector<StringView> valueViews{ values[0], values[1] };
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(reader_->MSet(keys, valueViews, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+    DS_ASSERT_OK(cluster_->SetInjectAction(
+        WORKER, META_OWNER_INDEX, QUERY_AND_GET_INLINE_FAILURE_INJECT, "1*return(K_RUNTIME_ERROR)"));
+    Raii clearInject([this] {
+        (void)cluster_->ClearInjectAction(WORKER, META_OWNER_INDEX, QUERY_AND_GET_INLINE_FAILURE_INJECT);
+    });
+    TransportRpcCounts rpcBefore;
+    WorkerQueryAndGetCounts workerBefore;
+    GetRpcCounts(rpcBefore);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, workerBefore);
+
+    std::vector<std::string> actualValues;
+    DS_ASSERT_OK(reader_->Get(keys, actualValues));
+
+    TransportRpcCounts rpcAfter;
+    WorkerQueryAndGetCounts workerAfter;
+    GetRpcCounts(rpcAfter);
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, workerAfter);
+    ASSERT_EQ(actualValues, values);
+    ASSERT_EQ(rpcAfter.queryAndGet, rpcBefore.queryAndGet + 1);
+    ASSERT_EQ(rpcAfter.getObjectRemote, rpcBefore.getObjectRemote + 1);
+    ASSERT_EQ(rpcAfter.workerOcGet, rpcBefore.workerOcGet);
+    ASSERT_EQ(workerAfter.tcpHits, workerBefore.tcpHits + (IsUrmaBuild() ? 0 : 1));
+    ASSERT_EQ(workerAfter.ubHits, workerBefore.ubHits + (IsUrmaBuild() ? 1 : 0));
+    ASSERT_EQ(workerAfter.shmHits, workerBefore.shmHits);
+    ASSERT_EQ(workerAfter.metadataMisses, workerBefore.metadataMisses + 1);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
 // One key's data read fails while the others succeed; overall K_OK with the failed slot empty.
 TEST_F(KVClientTransportGetTest, PartialDataFailure)
 {
@@ -1744,6 +1925,37 @@ TEST_F(KVClientTransportGetTest, DirectBatchGetReturnsExistingValuesWithMissingS
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
 }
 
+TEST_F(KVClientTransportGetTest, StringMultiGetReturnsExistingValuesWithMissingSlots)
+{
+    const auto existingKeys = MakeKeysAcrossMetaOwners(1);
+    ASSERT_EQ(existingKeys.size(), cluster_->GetWorkerNum());
+    const std::vector<std::string> values = { std::string(VALUE_SIZE, 'x'), std::string(VALUE_SIZE - 1, 'y'),
+                                              std::string(VALUE_SIZE - 2, 'z') };
+    const std::vector<StringView> valueViews{ values[0], values[1], values[2] };
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(reader_->MSet(existingKeys, valueViews, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+    std::vector<std::string> missingOwner0;
+    std::vector<std::string> missingOwner1;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, "transport_string_missing_owner0_", missingOwner0);
+    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 1, "transport_string_missing_owner1_", missingOwner1);
+    const std::vector<std::string> keys{ existingKeys[0], missingOwner0[0], existingKeys[1],
+                                         missingOwner1[0], existingKeys[2] };
+    TransportRpcCounts before;
+    GetRpcCounts(before);
+
+    std::vector<std::string> actualValues;
+    DS_ASSERT_OK(reader_->Get(keys, actualValues));
+
+    TransportRpcCounts after;
+    GetRpcCounts(after);
+    ASSERT_EQ(actualValues, (std::vector<std::string>{ values[0], "", values[1], "", values[2] }));
+    ASSERT_EQ(after.queryAndGet, before.queryAndGet + cluster_->GetWorkerNum());
+    ASSERT_EQ(after.getObjectRemote, before.getObjectRemote);
+    ASSERT_EQ(after.workerOcGet, before.workerOcGet);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
 TEST_F(KVClientTransportGetTest, DirectBatchGetAllMissingReturnsNotFound)
 {
     const std::vector<std::string> keys = { "missing_first_" + GetStringUuid(),
@@ -1756,6 +1968,29 @@ TEST_F(KVClientTransportGetTest, DirectBatchGetAllMissingReturnsNotFound)
     for (const auto &buffer : buffers) {
         ASSERT_FALSE(buffer);
     }
+}
+
+TEST_F(KVClientTransportGetTest, StringMultiGetAllMissingReturnsNotFound)
+{
+    std::vector<std::string> keys;
+    for (uint32_t workerIndex = 0; workerIndex < WORKER_NUM; ++workerIndex) {
+        std::vector<std::string> ownerKeys;
+        GetRealHashKeysToWorker(workerIndex, 1, "transport_string_all_missing_", ownerKeys);
+        keys.emplace_back(std::move(ownerKeys[0]));
+    }
+    TransportRpcCounts before;
+    GetRpcCounts(before);
+    std::vector<std::string> values;
+
+    ASSERT_EQ(reader_->Get(keys, values).GetCode(), K_NOT_FOUND);
+
+    TransportRpcCounts after;
+    GetRpcCounts(after);
+    ASSERT_EQ(values.size(), keys.size());
+    ASSERT_TRUE(std::all_of(values.begin(), values.end(), [](const std::string &value) { return value.empty(); }));
+    ASSERT_EQ(after.queryAndGet, before.queryAndGet + WORKER_NUM);
+    ASSERT_EQ(after.getObjectRemote, before.getObjectRemote);
+    ASSERT_EQ(after.workerOcGet, before.workerOcGet);
 }
 
 TEST_F(KVClientTransportGetTest, DirectBatchGetAllUnavailableReturnsFirstInputError)
