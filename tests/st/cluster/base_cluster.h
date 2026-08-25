@@ -165,9 +165,8 @@ public:
     // Pick the GenericService stub matching the active transport so the test
     // control-plane RPCs (SetInjectAction / ClearInjectAction /
     // GetInjectActionExecuteCount / GcovFlush) reach a handler the server
-    void InitRpcSession(const RpcCredential &cred = RpcCredential())
+    void InitRpcSession()
     {
-        (void)cred;
         BrpcChannelConfig cfg;
         cfg.endpoint = HostPort(addr_.Host(), addr_.Port()).ToString();
         cfg.timeout_ms = 500;

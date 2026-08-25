@@ -176,13 +176,13 @@ bool HasUrmaTcpFallbackPayload(const GetRspPb &rsp)
 #endif
 }  // namespace
 
-ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
+ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, HeartbeatType heartbeatType,
                                              SensitiveValue token, Signature *signature, std::string tenantId,
                                              bool enableCrossNodeConnection,
                                              std::string deviceId)
     : client::IClientWorkerCommonApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
       ClientWorkerBaseApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
-      ClientWorkerRemoteCommonApi(hostPort, cred, heartbeatType, std::move(token), signature, std::move(tenantId),
+      ClientWorkerRemoteCommonApi(hostPort, heartbeatType, std::move(token), signature, std::move(tenantId),
                                   enableCrossNodeConnection, std::move(deviceId))
 {
 }

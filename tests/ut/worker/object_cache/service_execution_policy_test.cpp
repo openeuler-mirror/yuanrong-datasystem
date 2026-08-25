@@ -31,8 +31,7 @@ constexpr int FAILED_TASK_INDEX = 1;
 
 TEST(ServiceExecutionPolicyTest, BrpcModeDisablesFutureFanout)
 {
-    EXPECT_FALSE(ShouldUseServiceThreadPoolFanout(true));
-    EXPECT_TRUE(ShouldUseServiceThreadPoolFanout(false));
+    EXPECT_FALSE(ShouldUseServiceThreadPoolFanout());
 }
 
 TEST(ServiceExecutionPolicyTest, SerialFanoutRunsAllTasksBeforeReturningFirstError)

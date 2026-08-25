@@ -23,46 +23,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/log/log.h"
 
-#include <nlohmann/json.hpp>
-#include <securec.h>
-
-DS_DEFINE_bool(enable_curve_zmq, false,
-            "Whether to enable Curve ZMQ for authentication and authorization between components.");
-
 namespace datasystem {
-static Status CreateCredentialsHelper(const RpcAuthKeys &keys, const std::string &serverName, RpcCredential &cred)
-{
-    const char *serverPublicKey = nullptr;
-    RETURN_IF_NOT_OK(keys.GetServerKey(serverName, serverPublicKey));
-    CHECK_FAIL_RETURN_STATUS(keys.GetClientPublicKey() != nullptr, K_RUNTIME_ERROR,
-                             "Client public key should not be null");
-    CHECK_FAIL_RETURN_STATUS(keys.GetClientPrivateKey() != nullptr, K_RUNTIME_ERROR,
-                             "Client private key should not be null");
-    CHECK_FAIL_RETURN_STATUS(serverPublicKey != nullptr, K_RUNTIME_ERROR, "Server key should not be null");
-    cred.SetAuthCurveClient(keys.GetClientPublicKey(), keys.GetClientPrivateKey(), serverPublicKey);
-    return Status::OK();
-}
-
-Status RpcAuthKeyManager::CreateCredentials(const std::string &serverName, RpcCredential &cred)
-{
-    if (!FLAGS_enable_curve_zmq) {
-        return Status::OK();
-    }
-    const RpcAuthKeys &authKeys = RpcAuthKeyManager::Instance().GetKeys();
-    RETURN_IF_NOT_OK(CreateCredentialsHelper(authKeys, serverName, cred));
-    return Status::OK();
-}
-
-Status RpcAuthKeyManager::CreateClientCredentials(const RpcAuthKeys &authKeys, const std::string &serverName,
-                                                  RpcCredential &cred)
-{
-    if (authKeys.GetClientPublicKey() && authKeys.GetClientPrivateKey()) {
-        VLOG(RPC_LOG_LEVEL) << "ZMQ CURVE authentication identity is provided";
-        RETURN_IF_NOT_OK(CreateCredentialsHelper(authKeys, serverName, cred));
-    }
-    return Status::OK();
-}
-
 Status RpcAuthKeyManager::CopyCurveAuthKey(const char *src, std::unique_ptr<char[]> &dest)
 {
     CHECK_FAIL_RETURN_STATUS(src != nullptr, K_INVALID, "Source pointer should not be null");
@@ -76,6 +37,5 @@ Status RpcAuthKeyManager::CopyCurveAuthKey(const char *src, std::unique_ptr<char
     CHECK_FAIL_RETURN_STATUS(ret == EOK, StatusCode::K_RUNTIME_ERROR,
                              FormatString("Copy key failed, the strcpy_s return: %d", ret));
     return Status::OK();
-}  // namespace datasystem
-
 }
+}  // namespace datasystem

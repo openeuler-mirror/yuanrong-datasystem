@@ -21,7 +21,6 @@
 
 DS_DECLARE_int32(io_thread_nice);
 DS_DECLARE_bool(enable_sched_runtime);
-DS_DECLARE_int32(zmq_chunk_sz);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(hash_ring_tokens_per_member);
 DS_DECLARE_uint64(stream_idle_time_s);
@@ -62,7 +61,6 @@ DS_DECLARE_string(log_dir);
 DS_DECLARE_string(monitor_config_file);
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(log_filename);
-DS_DECLARE_string(curve_key_dir);
 DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_string(encrypt_kit);
 DS_DECLARE_string(cluster_name);

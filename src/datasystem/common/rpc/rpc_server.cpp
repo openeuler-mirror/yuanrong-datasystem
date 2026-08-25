@@ -38,10 +38,9 @@ DECLARE_int32(max_connection_pool_size);
 
 namespace datasystem {
 
-RpcServer::RpcServer(Token key, const RpcCredential &cred) : useBrpc_(false)
+RpcServer::RpcServer(Token key) : useBrpc_(false)
 {
     (void)key;
-    (void)cred;
 }
 RpcServer::~RpcServer() noexcept
 {
@@ -201,7 +200,7 @@ ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesSnapshot(const std::string 
 Status RpcServer::Builder::Init(std::unique_ptr<RpcServer> &server) const
 {
     auto key = Token();
-    server = std::make_unique<RpcServer>(key, cred_);
+    server = std::make_unique<RpcServer>(key);
     RETURN_IF_NOT_OK(server->Init());
     if (useBrpc_) {
         server->useBrpc_ = true;

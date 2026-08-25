@@ -24,7 +24,6 @@
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "oc_client_common.h"
-#include "zmq_curve_test_common.h"
 
 namespace datasystem {
 namespace st {

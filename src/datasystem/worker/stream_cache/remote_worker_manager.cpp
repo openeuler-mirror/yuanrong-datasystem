@@ -50,6 +50,8 @@ DS_DEFINE_validator(remote_send_thread_num, &Validator::ValidateThreadNum);
 namespace datasystem {
 namespace worker {
 namespace stream_cache {
+// Parallel payload split chunk size (bytes). Batches stream push payloads up to this size.
+constexpr size_t STREAM_PUSH_CHUNK_SIZE = 1'048'576;
 
 std::string SendElementView::StreamName() const
 {
@@ -801,8 +803,8 @@ Status RemoteWorker::FillExclusivePushReqHelper(const std::string &streamName, c
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(it->first->traceId_);
     pushReqPb.set_trace_id(Trace::Instance().GetTraceID());
     size_t chunkSz = 0;
-    const size_t zmqChunkSz = static_cast<size_t>(FLAGS_zmq_chunk_sz);
-    // Only batch up to FLAGS_zmq_chunk_sz. Make sure we send at least one PV
+    const size_t zmqChunkSz = STREAM_PUSH_CHUNK_SIZE;
+    // Only batch up to STREAM_PUSH_CHUNK_SIZE. Make sure we send at least one PV
     do {
         auto seqNo = it->second;
         auto streamElementView = std::static_pointer_cast<StreamElementView>(it->first);
@@ -849,8 +851,8 @@ Status RemoteWorker::FillSharedPushReqHelper(const std::string &producerId, std:
     pushReqPb.set_trace_id(Trace::Instance().GetTraceID());
     bool requestReady = false;
     size_t chunkSz = 0;
-    const size_t zmqChunkSz = static_cast<size_t>(FLAGS_zmq_chunk_sz);
-    // Only batch up to FLAGS_zmq_chunk_sz. Make sure we send at least one PV
+    const size_t zmqChunkSz = STREAM_PUSH_CHUNK_SIZE;
+    // Only batch up to STREAM_PUSH_CHUNK_SIZE. Make sure we send at least one PV
     do {
         // Fixme: actually deal with list of element views.
         auto sharedPageElementView = std::static_pointer_cast<SharedPageElementView>(it->first);

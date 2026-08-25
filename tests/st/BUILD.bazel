@@ -46,7 +46,6 @@ ds_cc_test_library(
         "common_distributed_ext.h",
         "kill_timer.h",
         "st_oc_service_impl.h",
-        "zmq_curve_test_common.h",
     ],
     copts = [
         '-DLLT_BIN_PATH=\\"/tmp/ds_llt\\"',

@@ -23,14 +23,14 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-RpcChannel::RpcChannel(std::string zmqEndPoint, const RpcCredential &cred)
-    : endPoint_(std::move(zmqEndPoint)), cred_(cred)
+RpcChannel::RpcChannel(std::string zmqEndPoint)
+    : endPoint_(std::move(zmqEndPoint))
 {
     isIPv6_ = IsTcpipEndPointIPv6(zmqEndPoint);
 }
 
-RpcChannel::RpcChannel(const HostPort &destAddr, const RpcCredential &cred)
-    : endPoint_(TcpipEndPoint(destAddr)), cred_(cred), destAddr_(destAddr), isIPv6_(destAddr.IsIPv6())
+RpcChannel::RpcChannel(const HostPort &destAddr)
+    : endPoint_(TcpipEndPoint(destAddr)), destAddr_(destAddr), isIPv6_(destAddr.IsIPv6())
 {
 }
 

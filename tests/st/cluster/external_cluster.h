@@ -33,8 +33,6 @@
 #include "cluster/base_cluster.h"
 #include "cluster/subprocess.h"
 
-DS_DECLARE_bool(enable_curve_zmq);
-
 namespace datasystem {
 namespace st {
 struct ExternalClusterOptions : public BaseClusterOptions {

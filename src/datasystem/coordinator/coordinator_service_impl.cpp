@@ -30,7 +30,6 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/metrics/kv_metrics.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/raii.h"
@@ -521,9 +520,6 @@ Status CoordinatorServiceImpl::InitInternal()
     coordinatorId_ = GetBytesUuid();
     LOG(INFO) << "CLUSTER_COORDINATOR_ID role=coordinator id="
               << BytesUuidToString(coordinatorId_).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE) << " state=created";
-    RpcCredential cred;
-    RETURN_IF_NOT_OK(RpcAuthKeyManager::ServerLoadKeys(WORKER_SERVER_NAME, cred));
-    builder_.SetCredential(cred);
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_coordinator_rpc_stub_cache_size, coordinatorAddr_));
     RETURN_IF_NOT_OK(BuildComponentTree());
     try {

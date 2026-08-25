@@ -112,7 +112,7 @@ protected:
             return nullptr;
         }
         auto api = std::make_shared<ClientWorkerRemoteApi>(
-            workerAddr, RpcCredential(), HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
+            workerAddr, HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
         rc = api->Init(kRpcBudgetMs, kRpcBudgetMs);
         if (rc.IsError()) {
             ADD_FAILURE() << rc.ToString();

@@ -66,7 +66,6 @@
 #include "datasystem/common/object_cache/buffer_composer.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_sampler.h"
@@ -1024,7 +1023,7 @@ Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPo
     workerApi_.resize(STANDBY2_WORKER + 1);
     if (!initWithWorker) {
         workerApi_[node] =
-            std::make_shared<ClientWorkerRemoteApi>(address, cred_, heartbeatType, token_, signature_.get(), tenantId_,
+            std::make_shared<ClientWorkerRemoteApi>(address, heartbeatType, token_, signature_.get(), tenantId_,
                                                     enableCrossNodeConnection_, deviceId_);
     } else {
         workerApi_[node] = std::make_shared<ClientWorkerLocalApi>(address, embeddedClientWorkerApi_, worker_,
@@ -1411,7 +1410,6 @@ Status ObjectClientImpl::InitWorkerClientAtCurrentAddress(bool enableHeartbeat, 
         FormatString("Invalid IP address/port. Host %s, port: %d", ipAddress_.Host(), ipAddress_.Port()));
 
     LOG(INFO) << "Start to init worker client at address: " << hostPortStr;
-    RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
 
     Status rc;
     if (!isSameNode && serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()) {
@@ -2061,7 +2059,7 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
     const HostPort &standbyWorker)
 {
     auto candidateWorkerApi =
-        currentApi->CloneWith(standbyWorker, cred_, currentApi->heartbeatType_, token_, signature_.get(), tenantId_,
+        currentApi->CloneWith(standbyWorker, currentApi->heartbeatType_, token_, signature_.get(), tenantId_,
                               enableCrossNodeConnection_, embeddedClientWorkerApi_, worker_);
     candidateWorkerApi->SetMayAccessNonBoundWorker(
         ClientMayAccessNonBoundWorker(enableLocalCache_, enableCrossNodeConnection_));
@@ -2272,7 +2270,7 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
                                                      std::shared_ptr<client::ListenWorker> &localListenWorker)
 {
     localWorkerApi =
-        std::make_shared<ClientWorkerRemoteApi>(localAddress, cred_, heartbeatType, token_, signature_.get(), tenantId_,
+        std::make_shared<ClientWorkerRemoteApi>(localAddress, heartbeatType, token_, signature_.get(), tenantId_,
                                                 enableCrossNodeConnection_, deviceId_);
     localWorkerApi->SetMayAccessNonBoundWorker(
         ClientMayAccessNonBoundWorker(enableLocalCache_, enableCrossNodeConnection_));

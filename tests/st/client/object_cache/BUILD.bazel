@@ -227,17 +227,6 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "oc_client_plaintext_zmq_curve_test",
-    srcs = ["oc_client_plaintext_zmq_curve_test.cpp"],
-    tags = ["manual"],
-    deps = OC_CLIENT_COMMON_DEPS + [
-        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
-        "//src/datasystem/common/encrypt:common_encrypt",
-        "//src/datasystem/common/rpc:rpc_auth_key_manager",
-    ],
-)
-
-ds_cc_test(
     name = "oc_client_publish_test",
     srcs = ["oc_client_publish_test.cpp"],
     tags = ["manual"],

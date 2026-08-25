@@ -53,14 +53,13 @@ public:
     /**
      * @brief Construct ClientWorkerApi.
      * @param[in] hostPort The address of the worker node.
-     * @param[in] cred The authentication credentials.
      * @param[in] heartbeatType The type of heartbeat.
      * @param[in] signature Used to do AK/SK authenticate.
      * @param[in] tenantId The tenant id.
      * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
      * @param[in] deviceId pipeline h2d device id
      */
-    explicit ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred,
+    explicit ClientWorkerRemoteApi(HostPort hostPort,
                                    HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
                                    SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
                                    bool enableCrossNodeConnection = false,
@@ -79,7 +78,7 @@ public:
                 int32_t initAttemptTimeoutMs = -1) override;
 
     std::shared_ptr<IClientWorkerApi> CloneWith(
-        HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
+        HostPort hostPort, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
         SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
         bool enableCrossNodeConnection = false,
         std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api = nullptr,
@@ -87,7 +86,7 @@ public:
     {
         (void)api;
         (void)worker;
-        return std::make_shared<ClientWorkerRemoteApi>(std::move(hostPort), cred, heartbeatType, std::move(token),
+        return std::make_shared<ClientWorkerRemoteApi>(std::move(hostPort), heartbeatType, std::move(token),
                                                        signature, tenantId, enableCrossNodeConnection);
     };
 

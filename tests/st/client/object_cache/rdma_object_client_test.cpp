@@ -30,7 +30,6 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "oc_client_common.h"
-#include "zmq_curve_test_common.h"
 
 namespace datasystem {
 namespace st {

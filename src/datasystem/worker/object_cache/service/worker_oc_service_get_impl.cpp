@@ -44,7 +44,6 @@
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/parallel/parallel_for.h"
-#include "datasystem/common/parallel/service_parallel_policy.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/object/object_enum.h"
@@ -546,42 +545,9 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
         }
         return status;
     };
-    const size_t parallelLimit = 128;
-    const size_t objectKeyCount = uniqueObjectMap.size();
-    if (!Parallel::ShouldUseServiceParallelFor(objectKeyCount, parallelLimit, true)) {
-        for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
-            auto rc = func(objectKey, objectInfo, remoteObjectKeys, needEvictKeys);
-            lastRc = rc.IsError() ? rc : lastRc;
-        }
-    } else {
-        const int parallism = 4;
-        std::vector<std::pair<const std::string *, GetObjInfo *>> parallelTaskList;
-        parallelTaskList.reserve(objectKeyCount);
-        for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
-            parallelTaskList.emplace_back(std::make_pair(&objectKey, &objectInfo));
-        }
-        // protect remoteObjectKeys and lastRc
-        std::mutex mutex;
-        auto batchHandler = [&parallelTaskList, &func, &remoteObjectKeys, &mutex, &lastRc, &needEvictKeys](size_t start,
-                                                                                                           size_t end) {
-            Status status;
-            std::set<ReadKey> remoteKeys;
-            std::vector<std::string> evictKeys;
-            for (size_t i = start; i < end; i++) {
-                const auto &objectKey = *parallelTaskList[i].first;
-                auto &objectInfo = *parallelTaskList[i].second;
-                auto rc = func(objectKey, objectInfo, remoteKeys, evictKeys);
-                status = rc.IsError() ? rc : status;
-            }
-            {
-                std::lock_guard<std::mutex> locker(mutex);
-                remoteObjectKeys.insert(remoteKeys.begin(), remoteKeys.end());
-                needEvictKeys.insert(needEvictKeys.end(), evictKeys.begin(), evictKeys.end());
-                lastRc = status.IsError() ? status : lastRc;
-            }
-        };
-        LOG_IF_ERROR(Parallel::ParallelFor<size_t>(0, objectKeyCount, batchHandler, 0, parallism),
-                     "ParallelFor local get failed");
+    for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
+        auto rc = func(objectKey, objectInfo, remoteObjectKeys, needEvictKeys);
+        lastRc = rc.IsError() ? rc : lastRc;
     }
     if (lastRc.IsError()) {
         static std::set<StatusCode> bypassCode{ K_OUT_OF_MEMORY, K_OUT_OF_RANGE };
@@ -1955,7 +1921,7 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
         }
     };
     size_t idx = 0;
-    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(true);
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout();
     for (auto &item : objectKeysByMaster) {
         BatchQueryMetaResult &result = batchQueryResults[idx++];
         auto *itemPtr = &item;
@@ -2171,7 +2137,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
                                                                 std::set<ReadKey> &needRetryIds)
 {
     const size_t kMinParallelRequests = 2;
-    if (queryMetas.size() < kMinParallelRequests || !ShouldUseServiceThreadPoolFanout(true)) {
+    if (queryMetas.size() < kMinParallelRequests || !ShouldUseServiceThreadPoolFanout()) {
         return GetObjectsFromAnywhereSerially(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     }
     Status lastRc = Status::OK();
@@ -3805,7 +3771,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(NotifyRemoteGe
             }
             return lastRc;
         };
-        if (!ShouldUseServiceThreadPoolFanout(true) || index + 1 == context.groups.size()) {
+        if (!ShouldUseServiceThreadPoolFanout() || index + 1 == context.groups.size()) {
             auto rc = func();
             RecordBatchGetObjectError(std::move(rc), lastRc);
         } else {

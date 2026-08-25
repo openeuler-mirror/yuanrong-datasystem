@@ -62,7 +62,6 @@
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 #include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_helper.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
@@ -1933,7 +1932,6 @@ private:
 
     HostPort ipAddress_;
     RpcAuthKeys authKeys_;
-    RpcCredential cred_;
     int32_t requestTimeoutMs_;
     int32_t connectTimeoutMs_;
     uint64_t fastTransportMemSize_;

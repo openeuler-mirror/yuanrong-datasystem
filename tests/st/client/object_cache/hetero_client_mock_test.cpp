@@ -56,7 +56,7 @@ public:
     {
         HostPort workerAddress;
         cluster_->GetWorkerAddr(workerNum, workerAddress);
-        auto workerApi = std::make_shared<ClientWorkerRemoteApi>(workerAddress, RpcCredential(),
+        auto workerApi = std::make_shared<ClientWorkerRemoteApi>(workerAddress,
                                                                  HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
         workerApi->Init(CLIENT_RPC_TIMEOUT, CLIENT_RPC_TIMEOUT);
         return workerApi;

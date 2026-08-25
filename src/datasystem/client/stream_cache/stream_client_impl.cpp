@@ -120,10 +120,7 @@ Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &need
     CHECK_FAIL_RETURN_STATUS(Validator::ValidateHostPortString("StreamClient", hostPort.ToString()), K_INVALID,
                              FormatString("Invalid host or port: %s : %d", ip, port));
 
-    RpcCredential cred;
-    RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred));
-
-    clientWorkerApi_ = std::make_shared<ClientWorkerApi>(hostPort, cred, token_, signature_.get(), tenantId_);
+    clientWorkerApi_ = std::make_shared<ClientWorkerApi>(hostPort, token_, signature_.get(), tenantId_);
     RETURN_IF_NOT_OK(clientWorkerApi_->Init(requestTimeoutMs_, connectTimeoutMs_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "clientWorkerApi_ init success";
     mmapManager_ = std::make_unique<datasystem::client::MmapManager>(

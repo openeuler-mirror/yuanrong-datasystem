@@ -65,7 +65,6 @@ list(FILTER DS_ST_KV_CACHE_SRCS EXCLUDE REGEX .*kv_client_brpc_remote_get_test\\
 file(GLOB_RECURSE DS_ST_EMBEDDED_CLIENT_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/embedded_client/*.cpp")
 
-list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*curvekey_generator.cpp)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*encrypt_util.cpp)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*hashring_parser.cpp)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/device/.*)
@@ -214,12 +213,6 @@ add_custom_command(
         ${CMAKE_CURRENT_SOURCE_DIR}/data
         ${CMAKE_BINARY_DIR}/tests/st/data)
 
-add_executable(curve_keygen common/rpc/curvekey_generator.cpp)
-target_link_libraries(curve_keygen PRIVATE common_util common_rpc_zmq ${ZeroMQ_LIBRARY})
-
-add_dependencies(ds_st curve_keygen)
-
-
 if (BUILD_OBSERVABILITY)
     set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:${gflags_LIB_PATH}:${brpc_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}")
 else()
@@ -230,120 +223,7 @@ string(REPLACE "LD_LIBRARY_PATH=" "LD_LIBRARY_PATH=${BRAFT_LIB_DIR}:" TEST_ENVIR
 add_custom_command(
         TARGET ds_st POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/encrypt_test/key_component_dir
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/input_dir
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/key_component_dir
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/encrypt_dir
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_INSTALL_PREFIX}/tools
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/curve_keygen
-        ${CMAKE_INSTALL_PREFIX}/tools/curve_keygen)
-set(CURVE_COMMAND ${CMAKE_COMMAND} -E env ${TEST_ENVIRONMENT} ${CMAKE_BINARY_DIR}/tests/st/curve_keygen)
-add_custom_command(
-        TARGET ds_st POST_BUILD
-        COMMAND ${CURVE_COMMAND} -n worker
-        COMMAND ${CURVE_COMMAND} -n client
-        COMMAND ${CURVE_COMMAND} -n invalid_client
-        COMMAND ${CURVE_COMMAND} -n invalid_service_client
-        COMMAND ${CMAKE_COMMAND}  -E copy_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/input_dir/
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/encrypt_dir/
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/input_dir)
-
-add_custom_command(
-        TARGET ds_st POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/encrypt_dir/worker_authorized_clients
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/encrypt_dir/client.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/encrypt_dir/worker_authorized_clients/client.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/encrypt_dir/invalid_service_client.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/encrypt_dir/worker_authorized_clients/invalid_service_client.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_service.mapping
-        ${CMAKE_BINARY_DIR}/tests/st/data/zmq_curve_test/encrypt_dir/worker_authorized_clients/service.mapping)
-
-add_custom_command(
-        TARGET ds_st POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/input_dir
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/key_component_dir
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir)
-
-add_custom_command(
-        TARGET ds_st POST_BUILD
-        COMMAND ${CURVE_COMMAND} -n worker
-        COMMAND ${CURVE_COMMAND} -n master
-        COMMAND ${CURVE_COMMAND} -n client
-        COMMAND ${CURVE_COMMAND} -n admin
-        COMMAND ${CURVE_COMMAND} -n invalid_client
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/input_dir)
-
-add_custom_command(
-        TARGET ds_st POST_BUILD
-        COMMAND ${CMAKE_COMMAND}  -E copy_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/input_dir/
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/worker_authorized_clients
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/master_authorized_clients
-
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/client.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/worker_authorized_clients/client.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/client.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/master_authorized_clients/client.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/admin.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/worker_authorized_clients/admin.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/admin.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/master_authorized_clients/admin.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/master.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/worker_authorized_clients/master.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/worker.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/worker_authorized_clients/worker.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/worker.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/master_authorized_clients/worker.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/master_service.mapping
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/encrypt_dir/master_authorized_clients/service.mapping
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/tests/st/data/client_zmq_curve_test/input_dir)
-
-add_custom_command(
-        TARGET ds_st POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test/worker_authorized_clients)
-
-add_custom_command(
-        TARGET ds_st POST_BUILD
-        COMMAND ${CURVE_COMMAND} -n worker
-        COMMAND ${CURVE_COMMAND} -n client
-        COMMAND ${CURVE_COMMAND} -n invalid_client
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test)
-
-add_custom_command(
-        TARGET ds_st POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test/client.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test/worker_authorized_clients/client.key
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test/worker.key
-        ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test/worker_authorized_clients/worker.key)
+        ${CMAKE_BINARY_DIR}/tests/st/data/encrypt_test/key_component_dir)
 
 if (BUILD_WITH_RDMA)
         string(REPLACE "LD_LIBRARY_PATH=" "LD_LIBRARY_PATH=${UCX_LIB_PATH}:" TEST_ENVIRONMENT "${TEST_ENVIRONMENT}")

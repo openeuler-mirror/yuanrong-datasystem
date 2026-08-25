@@ -59,7 +59,6 @@ public:
 protected:
     RpcAuthKeys authKeys_;
     HostPort workerAddr_;
-    RpcCredential cred_;
     std::shared_ptr<brpc::Channel> channel_;
     std::unique_ptr<WorkerService_BrpcGenericStub> stub_;
 };
@@ -95,7 +94,7 @@ TEST_F(RegisterClientNonShmRspTest, RegisterClientReturnsNonShmFields)
     ASSERT_EQ(rsp.memory_alignment(), 4096u);
 
     auto clientApi = std::make_shared<client::ClientWorkerRemoteCommonApi>(
-        workerAddr_, cred_, HeartbeatType::NO_HEARTBEAT, SensitiveValue(""), &signature);
+        workerAddr_, HeartbeatType::NO_HEARTBEAT, SensitiveValue(""), &signature);
     DS_ASSERT_OK(clientApi->Init(60'000, 60'000));
     EXPECT_EQ(clientApi->GetMemoryAlignment(), 4096u);
 }

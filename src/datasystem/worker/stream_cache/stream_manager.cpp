@@ -51,6 +51,8 @@ DS_DECLARE_string(sc_encrypt_secret_key);
 namespace datasystem {
 namespace worker {
 namespace stream_cache {
+// Parallel payload split chunk size (bytes). Reserved for stream consumer local cache.
+constexpr size_t STREAM_PUSH_CHUNK_SIZE = 1'048'576;
 template Status StreamManager::HandleBlockedRequestImpl(
     std::shared_ptr<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>> &&blockedReq, bool lock);
 template Status StreamManager::HandleBlockedRequestImpl(
@@ -989,11 +991,11 @@ Status StreamManager::CreateSubscriptionIfMiss(const SubscriptionConfig &config,
     auto lastAppendCursor = GetLastAppendCursor();
     WriteLockHelper xlock(STREAM_COMMON_LOCK_ARGS(mutex_));
     if (subs_.empty()) {
-        // Reserve local cache memory for stream consumer using the batch size FLAGS_zmq_chunk_sz,
+        // Reserve local cache memory for stream consumer using the batch chunk size,
         // fail the request if memory is not available.
         auto scSvc = scSvc_.lock();
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
-        RETURN_IF_NOT_OK(scSvc->ReserveMemoryFromUsageMonitor(GetStreamName(), FLAGS_zmq_chunk_sz));
+        RETURN_IF_NOT_OK(scSvc->ReserveMemoryFromUsageMonitor(GetStreamName(), STREAM_PUSH_CHUNK_SIZE));
     }
     lastAckCursor = UpdateLastAckCursorUnlocked(lastAppendCursor);
     auto iter = subs_.find(config.subscriptionName);
