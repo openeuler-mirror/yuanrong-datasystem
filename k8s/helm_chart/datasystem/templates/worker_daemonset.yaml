@@ -230,7 +230,9 @@ spec:
         - -ipc_through_shared_memory={{ $.Values.global.ipc.ipcThroughSharedMemory }}
         - -shared_memory_worker_port={{ $.Values.global.ipc.sharedMemoryWorkerPort }}
         - -curve_key_dir=$(CURVE_KEY_DIR)
+        {{- if not $.Values.global.rpc.brpc.useBrpc }}
         - -zmq_server_io_context={{ $.Values.global.rpc.zmqServerIoContext }}
+        {{- end }}
         - -zmq_client_io_context={{ $.Values.global.rpc.zmqClientIoContext }}
         - -zmq_client_io_thread={{ $.Values.global.rpc.zmqClientIoThread }}
         - -io_thread_nice={{ $.Values.global.rpc.ioThreadNice }}
