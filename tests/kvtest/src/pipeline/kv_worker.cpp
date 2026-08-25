@@ -220,7 +220,7 @@ void KVWorker::PipelineLoop(int threadId) {
         ctx.metrics = &metrics_;
 
         bool allOk = ExecutePipeline(pipelineOps_, ctx, metrics_,
-                                     metrics_.VerifyFailCounter());
+                                     metrics_.VerifyFailCounter(), cfg_.instanceId);
 
         if (allOk) {
             NotifyPeers(ctx.batchKeys, size);

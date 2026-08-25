@@ -69,6 +69,6 @@ void NotifyDispatcher::DispatchNotify(const std::string &action, int sender,
                                           cfg_.verifySampleStepBytes, cfg_.verifyFailOp);
 
         ExecutePipeline(notifyOps_, ctx, metrics_,
-                        metrics_.VerifyFailCounter());
+                        metrics_.VerifyFailCounter(), cfg_.instanceId);
     });
 }

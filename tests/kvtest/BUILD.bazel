@@ -61,6 +61,15 @@ genrule(
           "printf '#define BUILD_COMMIT \"%s\"\\n' \"$$C\"; } > $@",
 )
 
+# Wraps :build_info_gen so cc_binary targets (coordinator_test, worker_test)
+# can depend on it for the build_info.h include path. genrule outputs cannot
+# be listed directly in cc_binary deps because they lack CcInfo.
+cc_library(
+    name = "build_info",
+    hdrs = [":build_info_gen"],
+    strip_include_prefix = "src",
+)
+
 # kvtest sources compiled as a library so the generated build_info.h (listed in
 # hdrs like //src/datasystem/common/util:common_util_impl lists :git_version_def)
 # is on the include path for the #include in main.cpp. alwayslink ensures every
@@ -97,6 +106,7 @@ cc_library(
         "src/common/thread_pool.h",
         "src/common/cpu_affinity.h",
         "src/metrics/metrics.h",
+        "src/vendor/TDigest.h",
         "src/pipeline/pipeline.h",
         "src/pipeline/kv_worker.h",
         "src/pipeline/cache_reader.h",
@@ -183,7 +193,7 @@ cc_binary(
     srcs = ["src/coordinator_main.cpp"],
     deps = [
         ":jf_lib",
-        ":build_info_gen",
+        ":build_info",
         "//src/datasystem/coordinator:coordinator_server",
         "//include/datasystem:headers",
         "//src/datasystem/common/flags:dynamic_flag_config",
@@ -198,7 +208,7 @@ cc_binary(
     srcs = ["src/data_worker_main.cpp"],
     deps = [
         ":jf_lib",
-        ":build_info_gen",
+        ":build_info",
         "//src/datasystem/worker:worker",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//include/datasystem:headers",

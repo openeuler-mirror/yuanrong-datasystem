@@ -14,6 +14,8 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from deploy_common import log_error, log_info, setup_logging
+
 
 def _print_timings(action, timings):
     """Print per-pod duration stats for an action.
@@ -24,16 +26,16 @@ def _print_timings(action, timings):
     """
     if not timings:
         return
-    print(f'\n{action} per-pod timings:')
+    log_info(f'\n{action} per-pod timings:')
     for target, elapsed, ok in sorted(timings, key=lambda x: x[0]):
-        print(f'  {target:<40} {elapsed:7.2f}s  {"OK" if ok else "FAIL"}')
+        log_info(f'  {target:<40} {elapsed:7.2f}s  {"OK" if ok else "FAIL"}')
     elapsed_all = [t for _, t, _ in timings]
     ok_count = sum(1 for _, _, ok in timings if ok)
     fail_count = len(timings) - ok_count
-    print(f'  min={min(elapsed_all):.2f}s  max={max(elapsed_all):.2f}s  '
-          f'avg={sum(elapsed_all) / len(elapsed_all):.2f}s  '
-          f'total={sum(elapsed_all):.2f}s  '
-          f'(succeeded={ok_count}, failed={fail_count})')
+    log_info(f'  min={min(elapsed_all):.2f}s  max={max(elapsed_all):.2f}s  '
+             f'avg={sum(elapsed_all) / len(elapsed_all):.2f}s  '
+             f'total={sum(elapsed_all):.2f}s  '
+             f'(succeeded={ok_count}, failed={fail_count})')
 
 
 class Deployer:
@@ -131,13 +133,13 @@ class Deployer:
         elif transport == 'kubectl':
             ns = self._namespace(node)
             kubectl_cmd = ['kubectl', 'exec', target, '-n', ns, '--', 'sh', '-c', cmd]
-            print(f'  $ {" ".join(kubectl_cmd)}')
+            log_info(f'  $ {" ".join(kubectl_cmd)}')
             return _run(kubectl_cmd,
                         check=check, capture_output=True, text=True, timeout=timeout)
         else:
             user = self._user_for(node)
             ssh_cmd = self._build_ssh_cmd(node) + [f'{user}@{target}', cmd]
-            print(f'  $ {" ".join(ssh_cmd)}')
+            log_info(f'  $ {" ".join(ssh_cmd)}')
             return _run(ssh_cmd,
                         check=check, capture_output=True, text=True, timeout=timeout)
 
@@ -234,10 +236,10 @@ class Deployer:
         os.makedirs(local_dir, exist_ok=True)
 
         if not files:
-            print(f'  {target} -> no {file_label}')
+            log_info(f'  {target} -> no {file_label}')
             return
 
-        print(f'  {target} -> {len(files)} {file_label}')
+        log_info(f'  {target} -> {len(files)} {file_label}')
 
         if transport == 'kubectl':
             # kubectl cp requires tar inside container; use cat instead
@@ -251,7 +253,7 @@ class Deployer:
                 except Exception as e:
                     # Use the full remote_path (not basename) so failures of
                     # same-named files in different dirs are distinguishable.
-                    print(f'    {remote_path} -> {local_path} FAILED: {e}')
+                    log_info(f'    {remote_path} -> {local_path} FAILED: {e}')
         elif transport == 'localhost':
             for remote_path in files:
                 local_path = self._local_path_for(remote_path, local_dir, remote_dir)
@@ -265,15 +267,15 @@ class Deployer:
             self.run_on(node, f'rm -f {tar_remote}', check=False)
             if remote_dir and tar_pattern:
                 self.run_on(node,
-                    f'cd {remote_dir} && '
-                    f'tar czf {tar_remote} {tar_pattern} 2>/dev/null',
-                    check=False)
+                            f'cd {remote_dir} && '
+                            f'tar czf {tar_remote} {tar_pattern} 2>/dev/null',
+                            check=False)
             else:
                 # If no remote_dir and tar_pattern, use individual files
                 file_list = ' '.join(shlex.quote(f) for f in files)
                 self.run_on(node,
-                    f'tar czf {tar_remote} {file_list} 2>/dev/null',
-                    check=False)
+                            f'tar czf {tar_remote} {file_list} 2>/dev/null',
+                            check=False)
             check = self.run_on(node, f'test -f {tar_remote}', check=False)
             if check.returncode == 0:
                 try:
@@ -295,20 +297,20 @@ class Deployer:
 
         # Collect from metrics_* output directories + top-level logs
         ls = self.run_on(node,
-            f'ls -d {self.remote_work_dir}/metrics_* 2>/dev/null',
-            check=False)
+                         f'ls -d {self.remote_work_dir}/metrics_* 2>/dev/null',
+                         check=False)
         metrics_dirs = [d.strip() for d in (ls.stdout or '').splitlines() if d.strip()]
 
         files = []
         for mdir in metrics_dirs:
             fls = self.run_on(node,
-                f'ls {mdir}/*.csv {mdir}/*.txt {mdir}/*.log 2>/dev/null',
-                check=False)
+                              f'ls {mdir}/*.csv {mdir}/*.txt {mdir}/*.log 2>/dev/null',
+                              check=False)
             files.extend(f.strip() for f in (fls.stdout or '').splitlines() if f.strip())
         # Also collect top-level run.log and resource_monitor.log
         run_log = self.run_on(node,
-            f'ls {self.remote_work_dir}/run.log {self.remote_work_dir}/resource_monitor.log 2>/dev/null',
-            check=False)
+                              f'ls {self.remote_work_dir}/run.log {self.remote_work_dir}/resource_monitor.log 2>/dev/null',
+                              check=False)
         files.extend(f.strip() for f in (run_log.stdout or '').splitlines() if f.strip())
 
         self._collect_remote_files(
@@ -324,15 +326,15 @@ class Deployer:
 
         # Collect all log files from SDK log directory
         ls = self.run_on(node,
-            f'ls -d {sdk_log_dir} 2>/dev/null',
-            check=False)
+                         f'ls -d {sdk_log_dir} 2>/dev/null',
+                         check=False)
         if ls.returncode != 0:
-            print(f'  {target} -> SDK log dir {sdk_log_dir} does not exist')
+            log_info(f'  {target} -> SDK log dir {sdk_log_dir} does not exist')
             return
 
         fls = self.run_on(node,
-            f'ls {sdk_log_dir}/*.log {sdk_log_dir}/*.log.gz {sdk_log_dir}/*.txt 2>/dev/null',
-            check=False)
+                          f'ls {sdk_log_dir}/*.log {sdk_log_dir}/*.log.gz {sdk_log_dir}/*.txt 2>/dev/null',
+                          check=False)
         files = [f.strip() for f in (fls.stdout or '').splitlines() if f.strip()]
 
         self._collect_remote_files(
@@ -399,7 +401,7 @@ class Deployer:
         transport = self._transport(node)
         tag = f'  [{target}:{instance_id}]'
 
-        print(f'Deploying to {target} (instance_id={instance_id}, transport={transport})...')
+        log_info(f'Deploying to {target} (instance_id={instance_id}, transport={transport})...')
 
         config = self.generate_config(node)
         role = config.get('role', 'writer')
@@ -413,17 +415,17 @@ class Deployer:
 
         try:
             # Step 1: Create remote directory
-            print(f'{tag} mkdir {self.remote_work_dir}')
+            log_info(f'{tag} mkdir {self.remote_work_dir}')
             self.run_on(node, f'mkdir -p {self.remote_work_dir}')
 
             # Step 2: Upload binary (under host lock to avoid concurrent races)
             remote_binary = f'{self.remote_work_dir}/kvtest'
             remote_sdk = node.get('remote_sdk_dir', self.deploy.get('remote_sdk_dir', ''))
             with self._get_host_lock(node):
-                print(f'{tag} uploading binary ({os.path.getsize(self.binary_path) // 1024}KB)')
+                log_info(f'{tag} uploading binary ({os.path.getsize(self.binary_path) // 1024}KB)')
                 self.scp_to(node, self.binary_path, remote_binary)
                 if remote_sdk:
-                    print(f'{tag} using container SDK: {remote_sdk}')
+                    log_info(f'{tag} using container SDK: {remote_sdk}')
                 else:
                     local_lib_dir = os.path.join(self.base_dir, 'output', 'lib')
                     if os.path.isdir(local_lib_dir):
@@ -431,13 +433,13 @@ class Deployer:
                         so_files = _glob.glob(os.path.join(local_lib_dir, '*.so*'))
                         if so_files:
                             remote_lib = f'{self.remote_work_dir}/lib'
-                            print(f'{tag} uploading lib ({len(so_files)} .so files)')
+                            log_info(f'{tag} uploading lib ({len(so_files)} .so files)')
                             self.scp_to(node, local_lib_dir, remote_lib)
                             remote_sdk = remote_lib
 
             # Step 4: Upload config
             remote_config = f'{self.remote_work_dir}/config_{instance_id}.json'
-            print(f'{tag} uploading config (role={role}, peers={len(config.get("peers", []))})')
+            log_info(f'{tag} uploading config (role={role}, peers={len(config.get("peers", []))})')
             self.scp_to(node, tmp_config, remote_config)
 
             # Step 5: chmod
@@ -469,8 +471,8 @@ class Deployer:
                                 f'{self.remote_work_dir}/standalone_launcher.py')
                     launcher_uploaded = True
                 except Exception as e:
-                    print(f'{tag} WARNING: launcher upload failed: {e}; '
-                          f'will fall back to nohup path')
+                    log_info(f'{tag} WARNING: launcher upload failed: {e}; '
+                             f'will fall back to nohup path')
 
             # Step 7: Start process
             # Third-party libs are statically linked into the binary.
@@ -503,7 +505,7 @@ class Deployer:
 
             # Time only the actual launch. Verify (pgrep) and procmon attach
             # are intentionally excluded — caller reads start_elapsed.
-            print(f'{tag} starting kvclient (role={role})...')
+            log_info(f'{tag} starting kvclient (role={role})...')
             t_start = time.monotonic()
             try:
                 pid = None
@@ -560,7 +562,7 @@ class Deployer:
                                 timeout=10, allow_timeout=True)
                 start_elapsed = time.monotonic() - t_start
             except Exception as e:
-                print(f'  {target} -> FAILED: {e}')
+                log_info(f'  {target} -> FAILED: {e}')
                 return False, time.monotonic() - t_start
 
             # Step 8: Verify/report process started
@@ -569,7 +571,7 @@ class Deployer:
             # Fallback path (launcher upload failed or returned no PID):
             # use pgrep to verify and report.
             if pid:
-                print(f'{tag} process started (pid={pid})')
+                log_info(f'{tag} process started (pid={pid})')
             else:
                 time.sleep(1)
                 verify = self.run_on(
@@ -577,16 +579,16 @@ class Deployer:
                     check=False)
                 if verify.returncode == 0 and verify.stdout.strip():
                     pid = verify.stdout.strip().split('\n')[0]
-                    print(f'{tag} process started (pid={pid})')
+                    log_info(f'{tag} process started (pid={pid})')
                 else:
-                    print(f'{tag} WARNING: process not found after start, checking log...')
+                    log_info(f'{tag} WARNING: process not found after start, checking log...')
                     log = self.run_on(
                         node, f'cat {self.remote_work_dir}/run.log 2>/dev/null',
                         check=False)
                     if log.stdout.strip():
-                        print(f'{tag} stdout: {log.stdout.strip()[:500]}')
+                        log_info(f'{tag} stdout: {log.stdout.strip()[:500]}')
                     else:
-                        print(f'{tag} stdout empty — binary may have crashed before any output')
+                        log_info(f'{tag} stdout empty — binary may have crashed before any output')
 
             # Step 9: Start procmon (--background: parent prints PID and exits,
             # kubectl exec / ssh returns immediately without timeout hack)
@@ -598,25 +600,25 @@ class Deployer:
                 procmon_result = self.run_on(node, procmon_cmd, check=False, timeout=10)
                 procmon_pid = procmon_result.stdout.strip() if procmon_result.returncode == 0 else ''
                 if procmon_pid.isdigit():
-                    print(f'{tag} procmon started (pid={procmon_pid})')
+                    log_info(f'{tag} procmon started (pid={procmon_pid})')
                 else:
-                    print(f'{tag} WARNING: procmon start may have failed')
+                    log_info(f'{tag} WARNING: procmon start may have failed')
 
-            print(f'  {target} -> OK')
+            log_info(f'  {target} -> OK')
             return True, start_elapsed
         except Exception as e:
-            print(f'  {target} -> FAILED: {e}')
+            log_info(f'  {target} -> FAILED: {e}')
             return False, 0.0
         finally:
             os.unlink(tmp_config)
 
     def do_deploy(self):
         if not os.path.isfile(self.binary_path):
-            print(f'ERROR: binary not found: {self.binary_path}')
-            print('  Run "build.sh" first to compile and package.')
+            log_info(f'ERROR: binary not found: {self.binary_path}')
+            log_info('  Run "build.sh" first to compile and package.')
             sys.exit(1)
 
-        print(f'Version: {self.version}')
+        log_info(f'Version: {self.version}')
 
         timings = []
 
@@ -625,7 +627,7 @@ class Deployer:
             try:
                 ok, start_elapsed = self.deploy_node(node)
             except Exception as e:
-                print(f'  {target} -> FAILED: {e}')
+                log_info(f'  {target} -> FAILED: {e}')
                 ok, start_elapsed = False, 0.0
             timings.append((target, start_elapsed, bool(ok)))
             return ok
@@ -638,15 +640,15 @@ class Deployer:
 
         ok = sum(1 for r in results if r)
         total = len(results)
-        print(f'\nDeploy result: {ok}/{total} succeeded')
+        log_info(f'\nDeploy result: {ok}/{total} succeeded')
         _print_timings('start', timings)
 
     def do_stop(self):
         if not self.nodes:
-            print('No nodes in deploy config')
+            log_info('No nodes in deploy config')
             return
 
-        print(f'Stopping {len(self.nodes)} instances...')
+        log_info(f'Stopping {len(self.nodes)} instances...')
         timings = []
 
         def http_stop(node):
@@ -664,11 +666,11 @@ class Deployer:
                 return True
             # Try python3
             r = self.run_on(node,
-                f'python3 -c "'
-                f'from urllib.request import urlopen,Request;'
-                f'r=Request(\'http://localhost:{port}/stop\',data=b\'\',method=\'POST\');'
-                f'urlopen(r,timeout=3);print(\'ok\')"',
-                check=False, timeout=5)
+                            f'python3 -c "'
+                            f'from urllib.request import urlopen,Request;'
+                            f'r=Request(\'http://localhost:{port}/stop\',data=b\'\',method=\'POST\');'
+                            f'urlopen(r,timeout=3);print(\'ok\')"',
+                            check=False, timeout=5)
             if r.returncode == 0 and 'ok' in (r.stdout or ''):
                 return True
             return False
@@ -681,10 +683,10 @@ class Deployer:
             try:
                 r = self.run_on(node, 'pgrep -x kvtest', check=False, timeout=10)
             except subprocess.TimeoutExpired:
-                print(f'  {target} -> pgrep timed out, assuming process alive')
+                log_info(f'  {target} -> pgrep timed out, assuming process alive')
                 r = None
             if r is not None and (r.returncode != 0 or not r.stdout.strip()):
-                print(f'  {target} -> no kvtest process, skipped')
+                log_info(f'  {target} -> no kvtest process, skipped')
                 return (target, None)
             t0 = time.monotonic()
             ok = http_stop(node)
@@ -700,18 +702,18 @@ class Deployer:
                 try:
                     target, result = future.result()
                 except Exception as e:
-                    print(f'  ERROR during stop: {e}')
+                    log_info(f'  ERROR during stop: {e}')
                     continue
                 if result is None:
                     pass
                 elif result is True:
                     ok += 1
-                    print(f'  {target} -> OK (graceful)')
+                    log_info(f'  {target} -> OK (graceful)')
                 else:
-                    print(f'  {target} -> HTTP stop failed')
+                    log_info(f'  {target} -> HTTP stop failed')
 
         # Phase 2: wait for graceful shutdown (summary file generation, etc.)
-        print('Waiting 5s for graceful shutdown...')
+        log_info('Waiting 5s for graceful shutdown...')
         time.sleep(5)
 
         # Phase 3: SIGTERM remaining processes
@@ -726,8 +728,8 @@ class Deployer:
 
         def check_alive(node):
             r = self.run_on(node,
-                'pgrep -x kvtest 2>/dev/null',
-                check=False)
+                            'pgrep -x kvtest 2>/dev/null',
+                            check=False)
             return r.returncode == 0
 
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
@@ -746,14 +748,14 @@ class Deployer:
                     alive.append(check_futures[f])
 
         if alive:
-            print(f'Force killing {len(alive)} remaining processes...')
+            log_info(f'Force killing {len(alive)} remaining processes...')
             with ThreadPoolExecutor(max_workers=len(alive)) as pool:
                 kill9_futures = [pool.submit(kill_remaining, n, '-9') for n in alive]
                 for f in as_completed(kill9_futures):
                     pass
 
-        print(f'Stop result: {ok}/{len(self.nodes)} graceful, '
-              f'{len(alive)} force killed')
+        log_info(f'Stop result: {ok}/{len(self.nodes)} graceful, '
+                 f'{len(alive)} force killed')
         _print_timings('stop', timings)
 
     def do_clean(self):
@@ -761,41 +763,41 @@ class Deployer:
 
         def clean_node(node):
             target = self._exec_target(node)
-            print(f'Cleaning {target}...')
+            log_info(f'Cleaning {target}...')
             try:
                 # Step 1: Kill processes
                 self.run_on(node,
-                    "for p in $(pgrep -x kvtest 2>/dev/null); do "
-                    "kill $p 2>/dev/null; done; "
-                    "for p in $(pgrep -x procmon.py 2>/dev/null); do "
-                    "kill $p 2>/dev/null; done",
-                    check=False, timeout=15)
+                            "for p in $(pgrep -x kvtest 2>/dev/null); do "
+                            "kill $p 2>/dev/null; done; "
+                            "for p in $(pgrep -x procmon.py 2>/dev/null); do "
+                            "kill $p 2>/dev/null; done",
+                            check=False, timeout=15)
                 time.sleep(1)
 
                 # Step 2: Force kill remaining
                 self.run_on(node,
-                    "for p in $(pgrep -x kvtest 2>/dev/null); do "
-                    "kill -9 $p 2>/dev/null; done; "
-                    "for p in $(pgrep -x procmon.py 2>/dev/null); do "
-                    "kill -9 $p 2>/dev/null; done",
-                    check=False, timeout=15)
+                            "for p in $(pgrep -x kvtest 2>/dev/null); do "
+                            "kill -9 $p 2>/dev/null; done; "
+                            "for p in $(pgrep -x procmon.py 2>/dev/null); do "
+                            "kill -9 $p 2>/dev/null; done",
+                            check=False, timeout=15)
                 time.sleep(1)
 
                 # Step 3: Remove directories
                 self.run_on(node, f'rm -rf {self.remote_work_dir} /root/.datasystem/logs/',
-                           check=False, timeout=15)
+                            check=False, timeout=15)
 
                 # Verify cleanup
                 verify = self.run_on(
                     node, f'ls {self.remote_work_dir} 2>/dev/null',
                     check=False)
                 if verify.returncode == 0:
-                    print(f'  {target} -> WARNING: dir still exists after clean')
+                    log_info(f'  {target} -> WARNING: dir still exists after clean')
                 else:
-                    print(f'  {target} -> OK')
+                    log_info(f'  {target} -> OK')
                 return True
             except Exception as e:
-                print(f'  {target} -> FAILED ({e})')
+                log_info(f'  {target} -> FAILED ({e})')
                 return False
 
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
@@ -804,14 +806,15 @@ class Deployer:
                 results.append(future.result())
 
         ok = sum(1 for r in results if r)
-        print(f'\nClean result: {ok}/{len(results)}')
+        log_info(f'\nClean result: {ok}/{len(results)}')
 
     def do_collect(self, sdk_log_dir='/root/.datasystem/logs', output_dir='collected'):
         collect_dir = output_dir
         results = []
 
         # Phase 1: trigger summary generation on running instances
-        print('Triggering summary generation...')
+        log_info('Triggering summary generation...')
+
         def trigger_summary(node):
             port = node.get('port', self.listen_port)
             url = f'http://localhost:{port}/summary'
@@ -844,7 +847,7 @@ class Deployer:
             instance_id = node['instance_id']
             target = self._exec_target(node)
             local_dir = os.path.join(collect_dir, f'{target}_{instance_id}')
-            print(f'Collecting {file_label} from {target} (instance_id={instance_id})...')
+            log_info(f'Collecting {file_label} from {target} (instance_id={instance_id})...')
             try:
                 collect_fn(node, local_dir)
                 if not os.path.isdir(local_dir):
@@ -853,12 +856,12 @@ class Deployer:
                 # so walk recursively instead of only counting top-level files.
                 count = sum(len(files) for _, _, files in os.walk(local_dir))
                 if count == 0:
-                    print(f'  {target} -> 0 {file_label}')
+                    log_info(f'  {target} -> 0 {file_label}')
                     return 'empty'
-                print(f'  {target} -> {count} {file_label} collected to {local_dir}/')
+                log_info(f'  {target} -> {count} {file_label} collected to {local_dir}/')
                 return 'ok'
             except Exception as e:
-                print(f'  {target} -> FAILED ({e})')
+                log_info(f'  {target} -> FAILED ({e})')
                 return 'fail'
 
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
@@ -870,7 +873,7 @@ class Deployer:
         empty = sum(1 for r in results if r == 'empty')
         fail = sum(1 for r in results if r == 'fail')
         total = len(results)
-        print(f'\n{result_label}: {ok} collected, {empty} empty, {fail} failed / {total} total -> {collect_dir}/')
+        log_info(f'\n{result_label}: {ok} collected, {empty} empty, {fail} failed / {total} total -> {collect_dir}/')
 
     def do_run(self, duration):
         """Wait duration then auto stop + collect."""
@@ -881,7 +884,7 @@ class Deployer:
                 return f'{secs // 60}m {secs % 60}s'
             return f'{secs}s'
 
-        print(f'\nRunning for {fmt_duration(duration)}, auto stop + collect after...')
+        log_info(f'\nRunning for {fmt_duration(duration)}, auto stop + collect after...')
         start = time.time()
         try:
             remaining = duration
@@ -890,13 +893,13 @@ class Deployer:
                 elapsed = int(time.time() - start)
                 remaining = duration - elapsed
                 if remaining > 0:
-                    print(f'  [{elapsed}/{duration}s elapsed, {remaining}s remaining]')
+                    log_info(f'  [{elapsed}/{duration}s elapsed, {remaining}s remaining]')
         except KeyboardInterrupt:
             elapsed = int(time.time() - start)
-            print(f'\n  Interrupted after {elapsed}s, stopping early...')
+            log_info(f'\n  Interrupted after {elapsed}s, stopping early...')
 
         elapsed = int(time.time() - start)
-        print(f'\n--- Run finished ({elapsed}s elapsed) ---')
+        log_info(f'\n--- Run finished ({elapsed}s elapsed) ---')
         self.do_stop()
         self.do_collect()
 
@@ -930,10 +933,10 @@ def _get_pods(namespace, prefixes):
              '--field-selector=status.phase=Running'],
             text=True, timeout=30)
     except FileNotFoundError:
-        print('ERROR: kubectl not found', file=sys.stderr)
+        log_error('ERROR: kubectl not found')
         sys.exit(1)
     except subprocess.CalledProcessError as e:
-        print(f'ERROR: kubectl failed: {e.stderr}', file=sys.stderr)
+        log_error(f'ERROR: kubectl failed: {e.stderr}')
         sys.exit(1)
 
     prefixes = list(prefixes or [])
@@ -961,7 +964,7 @@ def _get_pods(namespace, prefixes):
     pods.sort(key=lambda p: p['name'])
     for p in prefixes:
         if not any(pod['name'].startswith(p) for pod in pods):
-            print(f'WARNING: prefix "{p}" matched 0 pods', file=sys.stderr)
+            log_error(f'WARNING: prefix "{p}" matched 0 pods')
     return pods
 
 
@@ -983,7 +986,7 @@ def _parse_manual_nodes(nodes_str):
             try:
                 port = int(port)
             except ValueError:
-                print(f'ERROR: invalid port in --nodes entry: {entry}', file=sys.stderr)
+                log_error(f'ERROR: invalid port in --nodes entry: {entry}')
                 sys.exit(1)
         else:
             host = entry
@@ -1009,20 +1012,144 @@ def _parse_bool(value):
     raise argparse.ArgumentTypeError(f"invalid boolean value: '{value}' (expected true/false)")
 
 
+def _build_deploy_config(args, transport, nodes):
+    """Assemble the deploy.json payload."""
+    deploy = {
+        'remote_work_dir': args.remote_work_dir,
+        'transport': transport,
+        'enable_procmon': False,
+        'nodes': nodes,
+    }
+    if args.remote_sdk_dir:
+        deploy['remote_sdk_dir'] = args.remote_sdk_dir
+    return deploy
+
+
+def _build_config(mode, args):
+    """Assemble the config.json payload for the given run mode."""
+    cfg = {
+        'mode': mode,
+        'cluster_name': args.cluster_name or '',
+        'num_threads': args.num_threads,
+        'data_sizes': [s.strip() for s in args.data_sizes.split(',')],
+        'connect_options': {
+            'connect_timeout_ms': 1000,
+            'request_timeout_ms': 20,
+            'enable_cross_node_connection': True,
+            'enable_local_cache': args.enable_local_cache,
+            'data_placement_policy': args.data_placement_policy,
+            'fast_transport_mem_size': '512MB',
+        },
+    }
+    # Multi-stage QPS: when --stage-target-qps is provided, emit target_qps as
+    # an array and stage_duration_seconds so the kvtest binary schedules stage
+    # transitions. Otherwise keep the legacy single-int target_qps. Validation
+    # of (stage_duration_seconds > 0 when stages set) is done by the binary.
+    stage_qps_raw = getattr(args, 'stage_target_qps', '') or ''
+    if stage_qps_raw:
+        try:
+            stage_qps_list = [int(x.strip()) for x in stage_qps_raw.split(',') if x.strip()]
+        except ValueError:
+            log_error(f'ERROR: --stage-target-qps must be a comma-separated list of integers: {stage_qps_raw}')
+            sys.exit(1)
+        if not stage_qps_list:
+            log_error('ERROR: --stage-target-qps is empty after parsing')
+            sys.exit(1)
+        cfg['target_qps'] = stage_qps_list
+        if args.stage_duration_seconds > 0:
+            cfg['stage_duration_seconds'] = args.stage_duration_seconds
+    else:
+        cfg['target_qps'] = args.target_qps
+    # Service discovery address: --jf takes priority (JF discovery),
+    # then --coordinator-address (direct), otherwise default to etcd_address.
+    if args.jf:
+        cfg['jf_address'] = args.jf
+        cfg['jf_service'] = args.service or 'kvcache_coordinator'
+    elif args.coordinator_address:
+        cfg['coordinator_address'] = args.coordinator_address
+    else:
+        cfg['etcd_address'] = args.etcd_address or '127.0.0.1:2379'
+
+    # CPU / NUMA affinity (all modes)
+    if args.cpu_affinity:
+        cfg['cpu_affinity'] = args.cpu_affinity
+    cfg['random_numa_node'] = bool(args.random_numa_node)
+    if args.numa_node is not None:
+        cfg['numa_node'] = args.numa_node
+        # Specific NUMA node binding takes priority over random selection;
+        # clear the random flag so the binary sees one unambiguous signal.
+        cfg['random_numa_node'] = False
+
+    # Data verification (pipeline/cache get paths). Only emit the verify block
+    # when at least one option differs from the default, to keep generated
+    # configs minimal and to preserve the legacy "size, no fail_op" baseline
+    # when the user passes no verify flags.
+    verify = {}
+    if args.verify_level != 'size':
+        verify['level'] = args.verify_level
+    if args.verify_sample_bytes != '4KB':
+        verify['sample_bytes'] = args.verify_sample_bytes
+    if args.verify_sample_step != '1MB':
+        verify['sample_step'] = args.verify_sample_step
+    if args.verify_fail_op:
+        verify['fail_op'] = True
+    if verify:
+        cfg['verify'] = verify
+
+    if mode == 'benchmark':
+        cfg['test_mode'] = args.test_mode
+        cfg['worker_memory_mb'] = args.worker_memory_mb
+        cfg['set_api'] = args.set_api
+        cfg['cleanup_method'] = args.cleanup_method
+        if args.total_rounds > 0:
+            cfg['total_rounds'] = args.total_rounds
+        if args.duration > 0:
+            cfg['duration_seconds'] = args.duration
+        if args.ttl > 0:
+            cfg['set_param'] = {'ttl_second': args.ttl}
+        cfg['set_ratio'] = args.set_ratio
+        cfg['mixed_key_strategy'] = args.mixed_key_strategy
+        cfg['mset_batch_size'] = args.mset_batch_size
+        cfg['mget_batch_size'] = args.mget_batch_size
+    else:
+        # Pipeline / Cache
+        writer_pipeline = _parse_pipeline(args.pipeline)
+        notify_pipeline = _parse_pipeline(args.notify_pipeline)
+        cfg['listen_port'] = 9000
+        cfg['role'] = 'writer'
+        cfg['pipeline'] = writer_pipeline
+        cfg['notify_pipeline'] = notify_pipeline
+        cfg['notify_count'] = args.notify_count
+        if args.batch_keys_count > 1:
+            cfg['batch_keys_count'] = args.batch_keys_count
+        if args.ttl > 0:
+            cfg['set_param'] = {'ttl_second': args.ttl}
+        if mode == 'cache':
+            cfg['key_pool_size'] = args.key_pool_size
+            if args.target_hit_rate > 0:
+                cfg['target_hit_rate'] = args.target_hit_rate
+            if args.warmup_timeout != 60:
+                cfg['warmup_timeout_seconds'] = args.warmup_timeout
+            if args.inference_delay > 0:
+                cfg['inference_delay_ms'] = args.inference_delay
+
+    return cfg
+
+
 def cmd_gen_config(args):
     mode = args.mode
 
     # --- Validation ---
     if mode == 'benchmark':
         if not args.test_mode:
-            print('ERROR: --test-mode is required for benchmark mode', file=sys.stderr)
+            log_error('ERROR: --test-mode is required for benchmark mode')
             sys.exit(1)
         if args.worker_memory_mb <= 0:
-            print('ERROR: --worker-memory-mb is required for benchmark mode', file=sys.stderr)
+            log_error('ERROR: --worker-memory-mb is required for benchmark mode')
             sys.exit(1)
     if mode == 'cache':
         if args.key_pool_size <= 0:
-            print('ERROR: --key-pool-size is required for cache mode', file=sys.stderr)
+            log_error('ERROR: --key-pool-size is required for cache mode')
             sys.exit(1)
 
     # --- Node discovery ---
@@ -1030,12 +1157,11 @@ def cmd_gen_config(args):
         # Pod discovery via kubectl (all modes)
         pods = _get_pods(args.namespace, args.prefixes)
         if not pods:
-            print(f'No running pods found matching prefixes {args.prefixes} '
-                  f'in namespace "{args.namespace}"', file=sys.stderr)
+            log_error(f'No running pods found matching prefixes {args.prefixes} '
+                      f'in namespace "{args.namespace}"')
             sys.exit(1)
         if mode != 'benchmark' and (args.writer_count < 0 or args.writer_count > len(pods)):
-            print(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(pods)}',
-                  file=sys.stderr)
+            log_error(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(pods)}')
             sys.exit(1)
 
         node_pods = {}
@@ -1087,8 +1213,7 @@ def cmd_gen_config(args):
         writer_indices = set()
         if mode != 'benchmark':
             if args.writer_count < 0 or args.writer_count > len(nodes):
-                print(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(nodes)}',
-                      file=sys.stderr)
+                log_error(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(nodes)}')
                 sys.exit(1)
             for i in range(min(args.writer_count, len(nodes))):
                 writer_indices.add(i)
@@ -1103,105 +1228,8 @@ def cmd_gen_config(args):
                 if args.batch_keys_count > 1:
                     node['batch_keys_count'] = args.batch_keys_count
 
-    # --- Build deploy.json ---
-    deploy = {
-        'remote_work_dir': args.remote_work_dir,
-        'transport': transport,
-        'enable_procmon': False,
-        'nodes': nodes,
-    }
-    if args.remote_sdk_dir:
-        deploy['remote_sdk_dir'] = args.remote_sdk_dir
-
-    # --- Build config.json ---
-    cfg = {
-        'mode': mode,
-        'cluster_name': args.cluster_name or '',
-        'num_threads': args.num_threads,
-        'data_sizes': [s.strip() for s in args.data_sizes.split(',')],
-        'connect_options': {
-            'connect_timeout_ms': 1000,
-            'request_timeout_ms': 20,
-            'enable_cross_node_connection': True,
-            'enable_local_cache': args.enable_local_cache,
-            'data_placement_policy': args.data_placement_policy,
-            'fast_transport_mem_size': '512MB',
-        },
-    }
-    # Service discovery address: --jf takes priority (JF discovery),
-    # then --coordinator-address (direct), otherwise default to etcd_address.
-    if args.jf:
-        cfg['jf_address'] = args.jf
-        cfg['jf_service'] = args.service or 'kvcache_coordinator'
-    elif args.coordinator_address:
-        cfg['coordinator_address'] = args.coordinator_address
-    else:
-        cfg['etcd_address'] = args.etcd_address or '127.0.0.1:2379'
-
-    # CPU / NUMA affinity (all modes)
-    if args.cpu_affinity:
-        cfg['cpu_affinity'] = args.cpu_affinity
-    cfg['random_numa_node'] = bool(args.random_numa_node)
-    if args.numa_node is not None:
-        cfg['numa_node'] = args.numa_node
-        # Specific NUMA node binding takes priority over random selection;
-        # clear the random flag so the binary sees one unambiguous signal.
-        cfg['random_numa_node'] = False
-
-    # Data verification (pipeline/cache get paths). Only emit the verify block
-    # when at least one option differs from the default, to keep generated
-    # configs minimal and to preserve the legacy "size, no fail_op" baseline
-    # when the user passes no verify flags.
-    verify = {}
-    if args.verify_level != 'size':
-        verify['level'] = args.verify_level
-    if args.verify_sample_bytes != '4KB':
-        verify['sample_bytes'] = args.verify_sample_bytes
-    if args.verify_sample_step != '1MB':
-        verify['sample_step'] = args.verify_sample_step
-    if args.verify_fail_op:
-        verify['fail_op'] = True
-    if verify:
-        cfg['verify'] = verify
-
-    # Mode-specific config fields
-    if mode == 'benchmark':
-        cfg['test_mode'] = args.test_mode
-        cfg['worker_memory_mb'] = args.worker_memory_mb
-        cfg['set_api'] = args.set_api
-        cfg['cleanup_method'] = args.cleanup_method
-        if args.total_rounds > 0:
-            cfg['total_rounds'] = args.total_rounds
-        if args.duration > 0:
-            cfg['duration_seconds'] = args.duration
-        if args.ttl > 0:
-            cfg['set_param'] = {'ttl_second': args.ttl}
-        cfg['set_ratio'] = args.set_ratio
-        cfg['mixed_key_strategy'] = args.mixed_key_strategy
-        cfg['mset_batch_size'] = args.mset_batch_size
-        cfg['mget_batch_size'] = args.mget_batch_size
-    else:
-        # Pipeline / Cache
-        writer_pipeline = _parse_pipeline(args.pipeline)
-        notify_pipeline = _parse_pipeline(args.notify_pipeline)
-        cfg['listen_port'] = 9000
-        cfg['role'] = 'writer'
-        cfg['pipeline'] = writer_pipeline
-        cfg['notify_pipeline'] = notify_pipeline
-        cfg['target_qps'] = args.target_qps
-        cfg['notify_count'] = args.notify_count
-        if args.batch_keys_count > 1:
-            cfg['batch_keys_count'] = args.batch_keys_count
-        if args.ttl > 0:
-            cfg['set_param'] = {'ttl_second': args.ttl}
-        if mode == 'cache':
-            cfg['key_pool_size'] = args.key_pool_size
-            if args.target_hit_rate > 0:
-                cfg['target_hit_rate'] = args.target_hit_rate
-            if args.warmup_timeout != 60:
-                cfg['warmup_timeout_seconds'] = args.warmup_timeout
-            if args.inference_delay > 0:
-                cfg['inference_delay_ms'] = args.inference_delay
+    deploy = _build_deploy_config(args, transport, nodes)
+    cfg = _build_config(mode, args)
 
     # --- Write files ---
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1210,24 +1238,24 @@ def cmd_gen_config(args):
     with open(deploy_path, 'w') as f:
         json.dump(deploy, f, indent=2)
         f.write('\n')
-    print(f'Generated {deploy_path} ({len(nodes)} nodes, transport={transport})')
+    log_info(f'Generated {deploy_path} ({len(nodes)} nodes, transport={transport})')
 
     cfg_path = os.path.join(args.output_dir, 'config.json')
     with open(cfg_path, 'w') as f:
         json.dump(cfg, f, indent=2)
         f.write('\n')
-    print(f'Generated {cfg_path} (mode={mode})')
+    log_info(f'Generated {cfg_path} (mode={mode})')
 
     for node in nodes:
         target = node.get('pod_name', node.get('host', '?'))
-        print(f'  {target} -> instance_id={node["instance_id"]}, role={node.get("role", "writer")}')
+        log_info(f'  {target} -> instance_id={node["instance_id"]}, role={node.get("role", "writer")}')
 
 
 def _add_gen_config_args(p):
     """Add gen-config arguments to an argparse subparser."""
     p.add_argument('-p', '--prefix', action='append', default=None,
-                    dest='prefixes', metavar='PREFIX',
-                    help='Pod name prefix to match (repeatable: -p worker-a '
+                   dest='prefixes', metavar='PREFIX',
+                   help='Pod name prefix to match (repeatable: -p worker-a '
                          '-p worker-b; kubectl discovery). A pod is selected '
                          'if it matches ANY prefix. Omit to use --nodes '
                          'manual mode instead.')
@@ -1271,7 +1299,17 @@ def _add_gen_config_args(p):
     p.add_argument('--batch-keys-count', type=int, default=1,
                    help='batch_keys_count for batch ops (default: 1)')
     p.add_argument('--target-qps', type=int, default=100,
-                   help='Target QPS, 0=unlimited (default: 100)')
+                   help='Target QPS, 0=unlimited (default: 100). Use --stage-target-qps '
+                        'for multi-stage QPS instead of this single value.')
+    p.add_argument('--stage-target-qps', type=str, default='',
+                   help='Comma-separated list of target QPS for multi-stage runs, e.g. '
+                        '"60,90,120". When set, config.json target_qps is emitted as an array '
+                        'and --stage-duration-seconds must be > 0. Takes precedence over '
+                        '--target-qps.')
+    p.add_argument('--stage-duration-seconds', type=int, default=0,
+                   help='Per-stage duration in seconds (default: 0 = disabled). Required '
+                        'when --stage-target-qps is set. The kvtest binary schedules stage '
+                        'transitions; deploy_client only writes the value to config.json.')
     p.add_argument('--notify-count', type=int, default=10,
                    help='Number of peers to notify per write (default: 10)')
     p.add_argument('--data-sizes', default='1MB',
@@ -1328,8 +1366,8 @@ def _add_gen_config_args(p):
                         'Pass false to make Get/MGet query metadata owners through the Transport layer.')
     p.add_argument('--data-placement-policy',
                    choices=['PREFERRED_SAME_NODE', 'REQUIRED_SAME_NODE', 'PREFERRED_META_OWNER'],
-                    default='PREFERRED_SAME_NODE', dest='data_placement_policy',
-                    help='Set/MSet data placement policy (default: PREFERRED_SAME_NODE).')
+                   default='PREFERRED_SAME_NODE', dest='data_placement_policy',
+                   help='Set/MSet data placement policy (default: PREFERRED_SAME_NODE).')
     # CPU / NUMA affinity
     p.add_argument('--cpu-affinity', default='',
                    help='CPU affinity, e.g. "0-7" or "0,2,4,6" (default: auto-detect)')
@@ -1410,6 +1448,7 @@ def main():
     if not args.command:
         parser.print_help()
         sys.exit(1)
+    setup_logging()
 
     if args.command == 'gen-config':
         cmd_gen_config(args)
@@ -1419,7 +1458,8 @@ def main():
 
     # Resolve binary path: CLI --kvtest-binary-path > deploy.json "kvtest_binary_path" > output/kvtest
     default_binary = os.path.join(deployer.base_dir, 'output', 'kvtest')
-    deployer.binary_path = getattr(args, 'kvtest_binary_path', None) or deployer.deploy.get('kvtest_binary_path') or default_binary
+    deployer.binary_path = getattr(args, 'kvtest_binary_path', None) or deployer.deploy.get(
+        'kvtest_binary_path') or default_binary
 
     if args.command == 'deploy':
         deployer.do_deploy()

@@ -20,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 
-from deploy_common import discover_nodes
+from deploy_common import discover_nodes, log_error, log_info, setup_logging
 
 MAX_PARALLEL_KUBECTL = 32
 
@@ -40,12 +40,12 @@ def run_kubectl(args, check=True, timeout=60):
         # Re-raise so callers cannot silently swallow a hung kubectl. A
         # timeout is an unexpected operational failure, not a normal
         # kubectl non-zero exit that 'check=False' intends to tolerate.
-        print(f'ERROR: kubectl timeout for: {" ".join(args)}', file=sys.stderr)
+        log_error(f'ERROR: kubectl timeout for: {" ".join(args)}')
         raise
     except subprocess.CalledProcessError as e:
-        print(f'ERROR: kubectl failed for: {" ".join(args)}', file=sys.stderr)
+        log_error(f'ERROR: kubectl failed for: {" ".join(args)}')
         if e.stderr:
-            print(f'  stderr: {e.stderr}', file=sys.stderr)
+            log_error(f'  stderr: {e.stderr}')
         return None
 
 
@@ -64,7 +64,7 @@ def delete_pods_parallel(pod_names, namespace, timeout=60):
             result = run_kubectl(['delete', 'pod', pod, '-n', namespace],
                                  check=False, timeout=timeout)
         except (subprocess.TimeoutExpired, OSError) as e:
-            print(f'ERROR: delete {pod} failed: {e}', file=sys.stderr)
+            log_error(f'ERROR: delete {pod} failed: {e}')
             return pod, False
         ok = result is not None and result.returncode == 0
         return pod, ok
@@ -77,7 +77,7 @@ def delete_pods_parallel(pod_names, namespace, timeout=60):
             pod, ok = future.result()
             if not ok:
                 failed.append(pod)
-    print(f'  Deleted {len(pod_names) - len(failed)}/{len(pod_names)} pod(s)')
+    log_info(f'  Deleted {len(pod_names) - len(failed)}/{len(pod_names)} pod(s)')
     if failed:
         raise RuntimeError(
             f'Failed to delete {len(failed)} pod(s): {", ".join(failed)}')
@@ -124,12 +124,12 @@ def parse_replicas(replicas_str):
             try:
                 count_int = int(count)
             except ValueError:
-                print(f'ERROR: invalid replica count "{count}" for ip "{ip}" '
-                      f'in --replicas (expected an integer)', file=sys.stderr)
+                log_error(f'ERROR: invalid replica count "{count}" for ip "{ip}" '
+                          f'in --replicas (expected an integer)')
                 sys.exit(1)
             if count_int < 0:
-                print(f'ERROR: negative replica count {count_int} for ip "{ip}" '
-                      f'in --replicas', file=sys.stderr)
+                log_error(f'ERROR: negative replica count {count_int} for ip "{ip}" '
+                          f'in --replicas')
                 sys.exit(1)
             result[ip] = count_int
         else:
@@ -156,33 +156,33 @@ def parse_replicas_pct(spec):
         if not item:
             continue
         if ':' not in item:
-            print(f'ERROR: invalid --replicas-pct entry "{item}": expected '
-                  f'"PCT:COUNT" (e.g. "30:0")', file=sys.stderr)
+            log_error(f'ERROR: invalid --replicas-pct entry "{item}": expected '
+                      f'"PCT:COUNT" (e.g. "30:0")')
             sys.exit(1)
         pct_str, count_str = item.rsplit(':', 1)
         try:
             pct = float(pct_str.strip())
         except ValueError:
-            print(f'ERROR: invalid percentage "{pct_str}" in --replicas-pct '
-                  f'entry "{item}"', file=sys.stderr)
+            log_error(f'ERROR: invalid percentage "{pct_str}" in --replicas-pct '
+                      f'entry "{item}"')
             sys.exit(1)
         try:
             count = int(count_str.strip())
         except ValueError:
-            print(f'ERROR: invalid count "{count_str}" in --replicas-pct '
-                  f'entry "{item}"', file=sys.stderr)
+            log_error(f'ERROR: invalid count "{count_str}" in --replicas-pct '
+                      f'entry "{item}"')
             sys.exit(1)
         if pct < 0:
-            print(f'ERROR: negative percentage {pct} in --replicas-pct '
-                  f'entry "{item}"', file=sys.stderr)
+            log_error(f'ERROR: negative percentage {pct} in --replicas-pct '
+                      f'entry "{item}"')
             sys.exit(1)
         if count < 0:
-            print(f'ERROR: negative count {count} in --replicas-pct entry '
-                  f'"{item}"', file=sys.stderr)
+            log_error(f'ERROR: negative count {count} in --replicas-pct entry '
+                      f'"{item}"')
             sys.exit(1)
         if pct == 0:
-            print(f'WARNING: --replicas-pct entry "{item}" has 0%, which '
-                  f'has no effect', file=sys.stderr)
+            log_error(f'WARNING: --replicas-pct entry "{item}" has 0%, which '
+                      f'has no effect')
         buckets.append((pct, count))
     return buckets
 
@@ -264,8 +264,7 @@ def apply_yaml(yaml_content, namespace='default', timeout=60):
         try:
             os.unlink(tmp_path)
         except OSError as e:
-            print(f'WARNING: failed to remove temp manifest {tmp_path}: {e}',
-                  file=sys.stderr)
+            log_error(f'WARNING: failed to remove temp manifest {tmp_path}: {e}')
 
 
 def generate_pod_manifest(config, template_content, target_replicas,
@@ -385,8 +384,7 @@ def wait_for_pods(name_prefix, namespace, timeout=300):
             ], check=False, timeout=timeout)
         except subprocess.TimeoutExpired:
             elapsed = int(time.time() - start_time)
-            print(f'  [{elapsed}s] kubectl get pods timed out, retrying...',
-                  file=sys.stderr)
+            log_error(f'  [{elapsed}s] kubectl get pods timed out, retrying...')
             time.sleep(5)
             continue
 
@@ -411,22 +409,22 @@ def wait_for_pods(name_prefix, namespace, timeout=300):
                             failed += 1
 
         elapsed = int(time.time() - start_time)
-        print(f'  [{elapsed}s] Running: {running}, Pending: {pending}, Failed: {failed}')
+        log_info(f'  [{elapsed}s] Running: {running}, Pending: {pending}, Failed: {failed}')
 
         # Only declare success once we have actually observed matching pods;
         # an empty first poll (pods not yet scheduled) must not short-circuit
         # to a spurious success.
         if seen_any and pending == 0 and failed == 0:
-            print(f'\nAll {running} pods are running!')
+            log_info(f'\nAll {running} pods are running!')
             return True
 
         if failed > 0:
-            print(f'\nERROR: {failed} pods failed')
+            log_info(f'\nERROR: {failed} pods failed')
             return False
 
         time.sleep(5)
 
-    print(f'\nTIMEOUT after {timeout}s: {running} running, {pending} pending')
+    log_info(f'\nTIMEOUT after {timeout}s: {running} running, {pending} pending')
     return False
 
 
@@ -479,9 +477,9 @@ def cmd_deploy(args):
         if nodes:
             unknown = [ip for ip in pod_replicas if ip not in ip_to_node]
             if unknown:
-                print('ERROR: Unknown node IP(s) in --replicas not found in '
-                      f'cluster: {", ".join(unknown)}. Known node IPs: '
-                      f'{", ".join(sorted(ip_to_node))}', file=sys.stderr)
+                log_error('ERROR: Unknown node IP(s) in --replicas not found in '
+                          f'cluster: {", ".join(unknown)}. Known node IPs: '
+                          f'{", ".join(sorted(ip_to_node))}')
                 return 1
         target_replicas = pod_replicas
         dist_label = f'--replicas (explicit): {pod_replicas}'
@@ -490,11 +488,11 @@ def cmd_deploy(args):
             target_replicas, bucket_summary = distribute_nodes_by_percentage(
                 nodes, pct_spec)
         except ValueError as e:
-            print(f'ERROR: {e}', file=sys.stderr)
+            log_error(f'ERROR: {e}')
             return 1
         dist_label = (f'--replicas-pct "{replicas_pct_str}": '
                       + ', '.join(f'{pct:g}% x{count} -> {assigned} node(s)'
-                                   for pct, count, assigned in bucket_summary))
+                                  for pct, count, assigned in bucket_summary))
     elif pods_per_node > 0:
         target_replicas = {node['ip']: pods_per_node for node in nodes}
         dist_label = f'--pods-per-node {pods_per_node}'
@@ -504,30 +502,30 @@ def cmd_deploy(args):
 
     total_pods = sum(c for c in target_replicas.values() if c > 0)
 
-    print('Deployment config:')
-    print(f'  name_prefix: {name_prefix}')
-    print(f'  image: {image}')
-    print(f'  cpu: {cpu} (limits)')
-    print(f'  memory: {memory} (limits)')
-    print(f'  requests_cpu: {requests_cpu}')
-    print(f'  requests_memory: {requests_memory}')
-    print(f'  distribution: {dist_label}')
-    print(f'  discovered nodes: {len(nodes)}')
+    log_info('Deployment config:')
+    log_info(f'  name_prefix: {name_prefix}')
+    log_info(f'  image: {image}')
+    log_info(f'  cpu: {cpu} (limits)')
+    log_info(f'  memory: {memory} (limits)')
+    log_info(f'  requests_cpu: {requests_cpu}')
+    log_info(f'  requests_memory: {requests_memory}')
+    log_info(f'  distribution: {dist_label}')
+    log_info(f'  discovered nodes: {len(nodes)}')
     if nodes:
         for node in nodes:
             c = target_replicas.get(node['ip'], 0)
-            print(f'    {node["name"]} ({node["ip"]}): {c} pod(s)')
-    print(f'  total pods to deploy: {total_pods}')
+            log_info(f'    {node["name"]} ({node["ip"]}): {c} pod(s)')
+    log_info(f'  total pods to deploy: {total_pods}')
 
     # Load YAML template
     if not os.path.exists(yaml_path):
-        print(f'ERROR: YAML template not found: {yaml_path}', file=sys.stderr)
+        log_error(f'ERROR: YAML template not found: {yaml_path}')
         return 1
 
     with open(yaml_path) as f:
         template_content = f.read()
 
-    print(f'\nLoaded template from: {yaml_path}')
+    log_info(f'\nLoaded template from: {yaml_path}')
 
     # Build config (distribution is already resolved into target_replicas;
     # generate_pod_manifest only renders).
@@ -546,20 +544,20 @@ def cmd_deploy(args):
         manifest = generate_pod_manifest(config, template_content,
                                          target_replicas, ip_to_node)
     except ValueError as e:
-        print(f'ERROR: {e}', file=sys.stderr)
+        log_error(f'ERROR: {e}')
         return 1
 
     if not manifest.strip():
-        print('No pods to deploy (all replica counts are 0)')
+        log_info('No pods to deploy (all replica counts are 0)')
         return 0
 
     # Count pods
     pod_count = len([d for d in manifest.split('---\n') if d.strip()])
-    print(f'\nGenerated manifest for {pod_count} pod(s)')
+    log_info(f'\nGenerated manifest for {pod_count} pod(s)')
 
     if args.dry_run:
-        print('\n--- Dry run, manifest not applied ---')
-        print(manifest)
+        log_info('\n--- Dry run, manifest not applied ---')
+        log_info(manifest)
         return 0
 
     # Clean up existing pods with same prefix before applying
@@ -567,37 +565,35 @@ def cmd_deploy(args):
         existing_pods = get_pods_by_prefix(namespace, name_prefix)
         if existing_pods:
             existing_names = [p['name'] for p in existing_pods]
-            print(f'\nCleaning up {len(existing_names)} existing pod(s)...')
+            log_info(f'\nCleaning up {len(existing_names)} existing pod(s)...')
             try:
                 delete_pods_parallel(existing_names, namespace, args.timeout)
             except (RuntimeError, subprocess.TimeoutExpired) as e:
-                print(f'ERROR: Failed to clean up existing pods: {e}', file=sys.stderr)
+                log_error(f'ERROR: Failed to clean up existing pods: {e}')
                 return 1
             import time
             time.sleep(2)  # Wait for cleanup to take effect
 
     # Apply manifest
-    print('\nApplying manifest...')
+    log_info('\nApplying manifest...')
     try:
         applied = apply_yaml(manifest, namespace, args.timeout)
     except subprocess.TimeoutExpired:
-        print('ERROR: timed out applying manifest (kubectl apply)',
-              file=sys.stderr)
+        log_error('ERROR: timed out applying manifest (kubectl apply)')
         return 1
     if not applied:
-        print('ERROR: Failed to apply manifest', file=sys.stderr)
+        log_error('ERROR: Failed to apply manifest')
         return 1
 
-    print('Manifest applied successfully')
+    log_info('Manifest applied successfully')
 
     # Wait for pods
     if args.wait:
-        print(f'\nWaiting for pods (timeout: {args.timeout}s)...')
+        log_info(f'\nWaiting for pods (timeout: {args.timeout}s)...')
         try:
             ok = wait_for_pods(name_prefix, namespace, args.timeout)
         except subprocess.TimeoutExpired:
-            print('ERROR: timed out while waiting for pods (kubectl get pods)',
-                  file=sys.stderr)
+            log_error('ERROR: timed out while waiting for pods (kubectl get pods)')
             return 1
         if not ok:
             return 1
@@ -610,7 +606,7 @@ def cmd_delete(args):
     namespace = args.namespace or 'default'
     name_prefix = args.prefix
 
-    print(f'Deleting pods with prefix "{name_prefix}" in namespace "{namespace}"...')
+    log_info(f'Deleting pods with prefix "{name_prefix}" in namespace "{namespace}"...')
 
     result = run_kubectl([
         'get', 'pods', '-n', namespace,
@@ -618,38 +614,38 @@ def cmd_delete(args):
     ], check=False, timeout=args.timeout)
 
     if not result or result.returncode != 0:
-        print('ERROR: Failed to get pods', file=sys.stderr)
+        log_error('ERROR: Failed to get pods')
         return 1
 
     pods = [p for p in result.stdout.strip().split('\n') if p.startswith(name_prefix)]
 
     if not pods:
-        print('No matching pods found')
+        log_info('No matching pods found')
         return 0
 
-    print(f'Found {len(pods)} pods:')
+    log_info(f'Found {len(pods)} pods:')
     for pod in pods[:10]:
-        print(f'  - {pod}')
+        log_info(f'  - {pod}')
     if len(pods) > 10:
-        print(f'  ... and {len(pods) - 10} more')
+        log_info(f'  ... and {len(pods) - 10} more')
 
     if args.dry_run:
-        print('\n--- Dry run, pods not deleted ---')
+        log_info('\n--- Dry run, pods not deleted ---')
         return 0
 
     if not args.force:
         confirm = input('\nConfirm deletion (y/N): ')
         if confirm.lower() != 'y':
-            print('Cancelled')
+            log_info('Cancelled')
             return 0
 
     try:
         delete_pods_parallel(pods, namespace, args.timeout)
     except (RuntimeError, subprocess.TimeoutExpired) as e:
-        print(f'ERROR: {e}', file=sys.stderr)
+        log_error(f'ERROR: {e}')
         return 1
 
-    print(f'Deleted {len(pods)} pods')
+    log_info(f'Deleted {len(pods)} pods')
     return 0
 
 
@@ -664,12 +660,12 @@ def cmd_status(args):
     ], check=False)
 
     if not result or result.returncode != 0:
-        print('ERROR: Failed to get pods', file=sys.stderr)
+        log_error('ERROR: Failed to get pods')
         return 1
 
-    print(f'Pods with prefix "{name_prefix}" in namespace "{namespace}":')
-    print(f'{"NAME":<45} {"STATUS":<12} {"IP":<18} {"NODE"}')
-    print('-' * 100)
+    log_info(f'Pods with prefix "{name_prefix}" in namespace "{namespace}":')
+    log_info(f'{"NAME":<45} {"STATUS":<12} {"IP":<18} {"NODE"}')
+    log_info('-' * 100)
 
     count = 0
     for line in result.stdout.strip().split('\n'):
@@ -682,9 +678,9 @@ def cmd_status(args):
             status = parts[2] if len(parts) > 2 else '-'
             ip = parts[5] if len(parts) > 5 else '-'
             node = parts[6] if len(parts) > 6 else '-'
-            print(f'{name:<45} {status:<12} {ip:<18} {node}')
+            log_info(f'{name:<45} {status:<12} {ip:<18} {node}')
 
-    print(f'\nTotal: {count} pods')
+    log_info(f'\nTotal: {count} pods')
     return 0
 
 
@@ -807,6 +803,7 @@ Examples:
     if not args.command:
         parser.print_help()
         return 1
+    setup_logging()
 
     if args.command == 'deploy':
         return cmd_deploy(args)

@@ -179,11 +179,11 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     // Step 1: Get
     Optional<Buffer> optBuf;
     double getLatency = 0;
-    bool hit = Measure([&]() {
+    Status hitRc = Measure([&]() {
         return client_->Get(key, optBuf);
     }, getLatency);
 
-    if (hit && optBuf) {
+    if (hitRc.IsOk() && optBuf) {
         // Verify the cached payload. A corrupted hit still counts as a cache
         // hit (key was present); failOp governs op success only.
         VerifyFailReason reason = VerifyFailReason::NONE;
@@ -202,7 +202,7 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
             }
             metrics_.RecordVerifyFail();
         }
-        metrics_.Record(kOpCacheGetOrFillHit, getLatency, true, size);
+        metrics_.Record(kOpCacheGetOrFillHit, getLatency, hitRc.GetCode(), size);
         metrics_.RecordCacheHit();
         if (!vok && verifyCfg_.failOp) return false;
         return true;
@@ -211,10 +211,10 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     // Step 2: Miss -> Exist
     double existLatency = 0;
     std::vector<bool> exists;
-    bool existOk = Measure([&]() {
+    Status existRc = Measure([&]() {
         return client_->Exist({key}, exists);
     }, existLatency);
-    metrics_.Record(kOpCacheExist, existLatency, existOk, 0);
+    metrics_.Record(kOpCacheExist, existLatency, existRc.GetCode(), 0);
 
     // Step 3: Simulate inference (not counted in latency). Same primitive
     // selection as the reader loop — yields the bthread in brpc mode.
@@ -225,13 +225,13 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
     param.ttlSecond = cfg_.ttlSeconds;
     double setLatency = 0;
-    bool setOk = Measure([&]() {
+    Status setRc = Measure([&]() {
         return client_->Set(key, StringView(data), param);
     }, setLatency);
-    metrics_.Record(kOpCacheSetFill, setLatency, setOk, size);
+    metrics_.Record(kOpCacheSetFill, setLatency, setRc.GetCode(), size);
 
     double missLatency = getLatency + existLatency + setLatency;
-    metrics_.Record(kOpCacheGetOrFillMiss, missLatency, setOk, size);
+    metrics_.Record(kOpCacheGetOrFillMiss, missLatency, setRc.GetCode(), size);
     metrics_.RecordCacheMiss();
-    return setOk;
+    return setRc.IsOk();
 }

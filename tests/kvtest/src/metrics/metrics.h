@@ -6,15 +6,23 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <unordered_map>
+#include "vendor/TDigest.h"
+
+// t-digest compression/buffer threshold. Larger means higher tail-percentile
+// accuracy at the cost of more memory; the value matches the legacy ring
+// buffer capacity so observed behavior stays comparable.
+inline constexpr size_t kTDigestCompression = 100000;
 
 struct OpMetrics {
     std::string opName;
     std::atomic<uint64_t> totalCount{0};
     std::atomic<uint64_t> successCount{0};
     std::atomic<uint64_t> failCount{0};
+    std::atomic<uint64_t> notFindFailCount{0};
     std::atomic<uint64_t> totalBytes{0};
 
     std::mutex windowMutex;
@@ -22,9 +30,12 @@ struct OpMetrics {
     uint64_t windowBytes = 0;
 
     std::mutex globalMutex;
-    std::vector<double> globalRing;  // fixed-size ring buffer
-    size_t globalHead = 0;
-    size_t globalCount = 0;
+    std::unique_ptr<tdigest::TDigest> gDigest;
+    double minV = std::numeric_limits<double>::max();
+    double maxV = std::numeric_limits<double>::lowest();
+    double sumLatency = 0;  // sum of all samples; used with totalCount for Avg.
+
+    OpMetrics() : gDigest(std::make_unique<tdigest::TDigest>(kTDigestCompression)) {}
 };
 
 class MetricsCollector {
@@ -37,7 +48,7 @@ public:
         stageDurationSec_ = durationSec;
     }
 
-    void Record(const std::string &op, double latencyMs, bool success, uint64_t bytes = 0);
+    void Record(const std::string &op, double latencyMs, uint32_t code, uint64_t bytes = 0);
     void RecordVerifyFail();
 
     std::atomic<uint64_t> &VerifyFailCounter() { return verifyFailCount_; }

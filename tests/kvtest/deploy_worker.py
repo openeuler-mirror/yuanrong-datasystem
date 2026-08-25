@@ -30,7 +30,10 @@ from deploy_common import (
     find_default_whl,
     get_pods,
     kubectl_exec,
+    log_error,
+    log_info,
     resolve_procmon_dir,
+    setup_logging,
     start_service,
     start_service_standalone,
     stop_service,
@@ -73,7 +76,7 @@ def cmd_start(args, pods):
     if args.set:
         apply_config_overrides(config_template, args.set)
     else:
-        print('\nNo config overrides specified')
+        log_info('\nNo config overrides specified')
 
     timings = []
 
@@ -109,33 +112,33 @@ def cmd_deploy(args, pods):
     """Deploy: install + start workers in one command."""
     if getattr(args, 'standalone', False):
         if not getattr(args, 'jf', None):
-            print('ERROR: --jf is required in standalone mode', file=sys.stderr)
+            log_error('ERROR: --jf is required in standalone mode')
             return 1
         # Standalone: install binary + .so, then start
-        print('\n--- Step 1/2: installing binary + .so (standalone) ---')
+        log_info('\n--- Step 1/2: installing binary + .so (standalone) ---')
         install_rc = cmd_install_shared(args, pods, PROCESS_NAME_STANDALONE, 'worker',
-                                     os.path.dirname(os.path.abspath(__file__)),
-                                     args.timeout)
+                                        os.path.dirname(os.path.abspath(__file__)),
+                                        args.timeout)
         if install_rc != 0:
-            print('ERROR: install failed', file=sys.stderr)
+            log_error('ERROR: install failed')
             return install_rc
-        print('\n--- Step 2/2: starting workers (standalone) ---')
+        log_info('\n--- Step 2/2: starting workers (standalone) ---')
         return cmd_start_standalone(args, pods)
     else:
         # Non-standalone: install whl, then dscli start
-        print('\n--- Step 1/2: installing whl ---')
+        log_info('\n--- Step 1/2: installing whl ---')
         whl_rc = cmd_install_impl(pods, args.namespace, args.whl, args.timeout)
         if whl_rc != 0:
-            print('ERROR: whl install failed', file=sys.stderr)
+            log_error('ERROR: whl install failed')
             return whl_rc
-        print('\n--- Step 2/2: starting workers ---')
+        log_info('\n--- Step 2/2: starting workers ---')
         return cmd_start(args, pods)
 
 
 def cmd_start_standalone(args, pods):
     """Start worker_test binary in standalone mode."""
     if not getattr(args, 'jf', None):
-        print('ERROR: --jf is required in standalone mode', file=sys.stderr)
+        log_error('ERROR: --jf is required in standalone mode')
         return 1
     with open(args.config) as f:
         config_template = json.load(f)
@@ -219,43 +222,43 @@ def cmd_check_commit(args, pods):
             result = kubectl_exec(pod_name, namespace=args.namespace,
                                   cmd=cmd, check=False, timeout=args.timeout)
         except Exception as e:
-            print(f'  {pod_name} ({pod_ip}) -> ERROR: {e}')
+            log_info(f'  {pod_name} ({pod_ip}) -> ERROR: {e}')
             failures.append((pod_name, pod_ip, str(e)))
             return False
         if result.returncode != 0:
-            print(f'  {pod_name} ({pod_ip}) -> FAILED rc={result.returncode}')
+            log_info(f'  {pod_name} ({pod_ip}) -> FAILED rc={result.returncode}')
             failures.append((pod_name, pod_ip,
-                              result.stderr.strip() or 'rc!=0'))
+                             result.stderr.strip() or 'rc!=0'))
             return False
         m = re.search(r'commit:\s*([0-9a-f]+)', result.stdout)
         if not m:
-            print(f'  {pod_name} ({pod_ip}) -> commit not found in stdout')
+            log_info(f'  {pod_name} ({pod_ip}) -> commit not found in stdout')
             failures.append((pod_name, pod_ip, 'commit not found'))
             return False
         actual = m.group(1).lower()
         ok = actual == expected or actual.startswith(expected) or expected.startswith(actual)
         if ok:
             matches.append((pod_name, pod_ip, actual))
-            print(f'  {pod_name} ({pod_ip}) -> OK commit={actual[:12]}')
+            log_info(f'  {pod_name} ({pod_ip}) -> OK commit={actual[:12]}')
         else:
             mismatches.append((pod_name, pod_ip, actual))
-            print(f'  {pod_name} ({pod_ip}) -> MISMATCH expected={expected[:12]} actual={actual[:12]}')
+            log_info(f'  {pod_name} ({pod_ip}) -> MISMATCH expected={expected[:12]} actual={actual[:12]}')
         return True
 
     rc = do_for_all_pods(pods, do_op, f'Checking dscli version (expected: {expected[:12]})')
 
-    print(f'\nVersion check summary:')
-    print(f'  matched: {len(matches)}')
-    print(f'  mismatched: {len(mismatches)}')
-    print(f'  failed: {len(failures)}')
+    log_info(f'\nVersion check summary:')
+    log_info(f'  matched: {len(matches)}')
+    log_info(f'  mismatched: {len(mismatches)}')
+    log_info(f'  failed: {len(failures)}')
     if mismatches:
-        print(f'\nPods with mismatched commit (expected {expected[:12]}):')
+        log_info(f'\nPods with mismatched commit (expected {expected[:12]}):')
         for name, ip, actual in mismatches:
-            print(f'  {name} ({ip}) actual={actual[:12]}')
+            log_info(f'  {name} ({ip}) actual={actual[:12]}')
     if failures:
-        print(f'\nPods where dscli --version failed:')
+        log_info(f'\nPods where dscli --version failed:')
         for name, ip, err in failures:
-            print(f'  {name} ({ip}) {err}')
+            log_info(f'  {name} ({ip}) {err}')
     return 0
 
 
@@ -322,26 +325,26 @@ def main():
                               help='Add/override config values (format: key=value). '
                                    'Example: --set ttl_seconds=3600')
     parser_start.add_argument('--enable-procmon', action='store_true', default=False,
-                               dest='enable_procmon',
-                               help='Start procmon.py for worker monitoring (default: disabled)')
+                              dest='enable_procmon',
+                              help='Start procmon.py for worker monitoring (default: disabled)')
     parser_start.add_argument('--no-procmon', action='store_false',
-                               dest='enable_procmon',
-                               help='Disable procmon.py monitoring (default)')
+                              dest='enable_procmon',
+                              help='Disable procmon.py monitoring (default)')
     parser_start.add_argument('--procmon-dir', default=None,
                               help='Remote directory for procmon files (default: same as --remote-config dir)')
     parser_start.add_argument('-N', '--numa-nodes', default=None,
                               help='NUMA node(s) to bind worker to, passed to dscli start -N (e.g. "0" or "0,1")')
     parser_start.add_argument('-C', '--cpu-bind', default=None,
-                               help='CPU core(s) to bind worker to (dscli mode only)')
+                              help='CPU core(s) to bind worker to (dscli mode only)')
     # Standalone mode
     parser_start.add_argument('-S', '--standalone', action='store_true', default=False,
-                               help='Use worker_test binary instead of dscli')
+                              help='Use worker_test binary instead of dscli')
     parser_start.add_argument('--jf', default=None,
-                               help='JF mock address for service discovery (standalone mode)')
+                              help='JF mock address for service discovery (standalone mode)')
     parser_start.add_argument('--service', default='kvcache_coordinator',
-                               help='JF service name (standalone mode, default: kvcache_coordinator)')
+                              help='JF service name (standalone mode, default: kvcache_coordinator)')
     parser_start.add_argument('--remote-dir', default='/tmp/ds_worker',
-                               help='Remote directory with standalone binary (must match install --remote-dir)')
+                              help='Remote directory with standalone binary (must match install --remote-dir)')
 
     # Stop subcommand
     parser_stop = subparsers.add_parser('stop', parents=[parent_parser],
@@ -368,7 +371,7 @@ def main():
     parser_exec = subparsers.add_parser('exec', parents=[parent_parser],
                                         help='Execute command in pods')
     parser_exec.add_argument('--cmd', '-c', required=True,
-                              help='Command to execute (required)')
+                             help='Command to execute (required)')
 
     # Check-commit subcommand
     parser_check_commit = subparsers.add_parser('check-commit', parents=[parent_parser],
@@ -408,89 +411,87 @@ def main():
 
     # Deploy subcommand: install + start (both standalone and non-standalone)
     parser_deploy = subparsers.add_parser('deploy', parents=[parent_parser],
-                                         help='Install + start workers in one command')
+                                          help='Install + start workers in one command')
     parser_deploy.add_argument('-c', '--config', required=True,
-                              help='Path to worker.config template')
+                               help='Path to worker.config template')
     parser_deploy.add_argument('--port', type=int, default=31501,
-                              help='Worker port (default: 31501)')
+                               help='Worker port (default: 31501)')
     parser_deploy.add_argument('--remote-config', default='/tmp/worker.config',
-                              help='Config path inside pod (default: /tmp/worker.config)')
+                               help='Config path inside pod (default: /tmp/worker.config)')
     parser_deploy.add_argument('--remote-dir', default='/tmp/ds_worker',
-                              help='Remote directory for standalone binary (default: /tmp/ds_worker)')
+                               help='Remote directory for standalone binary (default: /tmp/ds_worker)')
     # Standalone mode
     parser_deploy.add_argument('-S', '--standalone', action='store_true', default=False,
-                              help='Standalone mode: install binary + .so, start worker_test')
+                               help='Standalone mode: install binary + .so, start worker_test')
     parser_deploy.add_argument('--jf', default=None,
-                              help='JF mock address (standalone mode)')
+                               help='JF mock address (standalone mode)')
     parser_deploy.add_argument('--service', default='kvcache_coordinator',
-                              help='JF service name (standalone mode)')
+                               help='JF service name (standalone mode)')
     parser_deploy.add_argument('--binary', default=None,
-                              help='Local path to worker_test binary (standalone mode)')
+                               help='Local path to worker_test binary (standalone mode)')
     parser_deploy.add_argument('--lib-dir', default=None,
-                              help='Local directory with .so files (default: output/lib/)')
+                               help='Local directory with .so files (default: output/lib/)')
     # Non-standalone mode
     parser_deploy.add_argument('--whl', default=default_whl,
-                              help='Path to worker whl package (non-standalone mode)')
+                               help='Path to worker whl package (non-standalone mode)')
     parser_deploy.add_argument('--set', '-s', action='append', default=[],
-                              help='Add/override config values (format: key=value)')
+                               help='Add/override config values (format: key=value)')
     parser_deploy.add_argument('-N', '--numa-nodes', default=None,
-                              help='NUMA node(s) to bind worker to (non-standalone mode)')
+                               help='NUMA node(s) to bind worker to (non-standalone mode)')
     parser_deploy.add_argument('-C', '--cpu-bind', default=None,
-                              help='CPU core(s) to bind worker to (non-standalone mode)')
+                               help='CPU core(s) to bind worker to (non-standalone mode)')
     # Common
     parser_deploy.add_argument('--enable-procmon', action='store_true', default=False,
-                                dest='enable_procmon',
-                                help='Start procmon.py for worker monitoring (default: disabled)')
+                               dest='enable_procmon',
+                               help='Start procmon.py for worker monitoring (default: disabled)')
     parser_deploy.add_argument('--no-procmon', action='store_false',
-                                dest='enable_procmon',
-                                help='Disable procmon.py monitoring (default)')
+                               dest='enable_procmon',
+                               help='Disable procmon.py monitoring (default)')
     parser_deploy.add_argument('--procmon-dir', default=None,
-                              help='Remote directory for procmon files')
+                               help='Remote directory for procmon files')
 
     args = parser.parse_args()
 
     if not args.action:
         parser.print_help()
         return 1
+    setup_logging()
 
     # argparse with action='append' default=None won't enforce presence, so
     # validate explicitly here with a clear message.
     if not args.prefixes:
-        print('ERROR: at least one --prefix is required '
-              '(e.g. -p worker-a [-p worker-b])', file=sys.stderr)
+        log_error('ERROR: at least one --prefix is required '
+                  '(e.g. -p worker-a [-p worker-b])')
         return 1
 
     # Get pods
     pods = get_pods(args.namespace, args.prefixes)
     if not pods:
-        print(f'No running pods found matching prefixes {args.prefixes} '
-              f'in namespace "{args.namespace}"')
+        log_info(f'No running pods found matching prefixes {args.prefixes} '
+                 f'in namespace "{args.namespace}"')
         return 1
 
     if args.count is not None:
         if args.count <= 0:
-            print(f'ERROR: --count must be a positive integer, got {args.count}',
-                  file=sys.stderr)
+            log_error(f'ERROR: --count must be a positive integer, got {args.count}')
             return 1
         if args.offset < 0:
-            print(f'ERROR: --offset must be >= 0, got {args.offset}',
-                  file=sys.stderr)
+            log_error(f'ERROR: --offset must be >= 0, got {args.offset}')
             return 1
         if args.offset >= len(pods):
-            print(f'ERROR: --offset {args.offset} reaches end of the '
-                  f'{len(pods)} pods matching prefixes {args.prefixes}',
-                  file=sys.stderr)
+            log_error(f'ERROR: --offset {args.offset} reaches end of the '
+                      f'{len(pods)} pods matching prefixes {args.prefixes}')
             return 1
         if args.offset + args.count > len(pods):
-            print(f'ERROR: --offset {args.offset} + --count {args.count} '
-                  f'exceeds the {len(pods)} pods matching prefixes '
-                  f'{args.prefixes}', file=sys.stderr)
+            log_error(f'ERROR: --offset {args.offset} + --count {args.count} '
+                      f'exceeds the {len(pods)} pods matching prefixes '
+                      f'{args.prefixes}')
             return 1
         pods = pods[args.offset:args.offset + args.count]
 
-    print(f'Found {len(pods)} pods:')
+    log_info(f'Found {len(pods)} pods:')
     for p in pods:
-        print(f'  {p["name"]} ({p["ip"]})')
+        log_info(f'  {p["name"]} ({p["ip"]})')
 
     # Dispatch
     if args.action == 'deploy':

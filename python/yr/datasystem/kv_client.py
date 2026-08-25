@@ -53,6 +53,24 @@ class ExistenceOpt(Enum):
     NX = ds.ExistenceOpt.NX
 
 
+class DataPlacementPolicy(Enum):
+    """
+    Features: Wrapping the DataPlacementPolicy for Set/MSet placement when local cache is disabled.
+
+    ===================================  ==================================================================
+    Definition                            Description
+    ===================================  ==================================================================
+    `DataPlacementPolicy.PREFERRED_SAME_NODE`  Prefer placing Set/MSet payloads on the same node as the bound worker.
+    `DataPlacementPolicy.REQUIRED_SAME_NODE`   Require placing Set/MSet payloads on the same node as the bound worker.
+    `DataPlacementPolicy.PREFERRED_META_OWNER` Route Set/MSet payloads to the metadata owner directly.
+    ===================================  ==================================================================
+    """
+
+    PREFERRED_SAME_NODE = ds.DataPlacementPolicy.PREFERRED_SAME_NODE
+    REQUIRED_SAME_NODE = ds.DataPlacementPolicy.REQUIRED_SAME_NODE
+    PREFERRED_META_OWNER = ds.DataPlacementPolicy.PREFERRED_META_OWNER
+
+
 class SetParam:
     """
     The set property of key
@@ -165,7 +183,9 @@ class KVClient:
         enable_cross_node_connection=False,
         req_timeout_ms=0,
         fast_transport_mem_size=DEFAULT_FAST_TRANSPORT_MEM_SIZE,
-        service_discovery=None
+        service_discovery=None,
+        enable_local_cache=True,
+        data_placement_policy=DataPlacementPolicy.PREFERRED_SAME_NODE
     ):
         """Constructor of the KVClient class
 
@@ -191,6 +211,12 @@ class KVClient:
             addresses instead of using the provided host and port. Call service_discovery.init() before creating
             KVClient. To allow an initialized client to switch to another discovered worker after the connected worker
             fails, set enable_cross_node_connection to True.
+            enable_local_cache(bool): Indicates whether to enable the local client cache. Default is True. When False,
+            Get/MGet query metadata owners through the transport layer instead of using the bound worker path.
+            data_placement_policy(DataPlacementPolicy): Set/MSet data placement policy. Only takes effect when
+            enable_local_cache is False. Default is DataPlacementPolicy.PREFERRED_SAME_NODE, matching the C++
+            ConnectOptions default. Independent of enable_local_cache: callers may set
+            DataPlacementPolicy.PREFERRED_META_OWNER to route Set/MSet to the metadata owner.
 
         Raises:
             RuntimeError: Raise a runtime error if the client fails to connect to the worker.
@@ -205,7 +231,9 @@ class KVClient:
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
             ["enable_cross_node_connection", enable_cross_node_connection, bool],
-            ["fast_transport_mem_size", fast_transport_mem_size, int]
+            ["fast_transport_mem_size", fast_transport_mem_size, int],
+            ["enable_local_cache", enable_local_cache, bool],
+            ["data_placement_policy", data_placement_policy, type(DataPlacementPolicy.PREFERRED_SAME_NODE)],
         ]
 
         if service_discovery is not None:
@@ -238,6 +266,11 @@ class KVClient:
                     stacklevel=2,
                 )
 
+        # Positional order matches the pybind KVClient constructors: the
+        # service_discovery (std::shared_ptr<IServiceDiscovery>) slot sits
+        # before enable_local_cache/data_placement_policy in the with-discovery
+        # overload. Build the list with the matching tail order so positional
+        # dispatch picks the correct overload.
         client_args = [
             host,
             port,
@@ -251,10 +284,12 @@ class KVClient:
             tenant_id,
             enable_cross_node_connection,
             req_timeout_ms,
-            fast_transport_mem_size
+            fast_transport_mem_size,
         ]
         if service_discovery is not None:
             client_args.append(service_discovery.native_discovery)
+        client_args.append(enable_local_cache)
+        client_args.append(data_placement_policy.value)
         self._client = ds.KVClient(*client_args)
 
     def init(self):
@@ -397,7 +432,7 @@ class KVClient:
         Args:
             buffers(StateValueBuffer):  A list of buffer objects previously returned by `mcreate`,
             each containing data ready to be stored.
-            
+
         Raises:
             RuntimeError: Raise a runtime error if one of the keys set fail.
             TypeError: Raise a type error if the input parameter is invalid.
@@ -418,7 +453,7 @@ class KVClient:
             ttl_second(uint32): controls the expire time of the data:
                 If the value is greater than 0, the data will be deleted automatically after expired.
                 If set to 0, the data need to be manually deleted.
-        
+
         Raises:
             RuntimeError: Raise a runtime error if fails to get the value of all keys.
             TypeError: Raise a type error if the input parameter is invalid.
@@ -721,7 +756,7 @@ class KVClient:
 
         Returns:
             Status: health status of the datasystem worker.
-        
+
         Examples:
             >>> from yr.datasystem.kv_client import KVClient
             >>> client = KVClient('127.0.0.1', 18482)
