@@ -20,7 +20,6 @@
 #include <string>
 
 #include "common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/version.h"

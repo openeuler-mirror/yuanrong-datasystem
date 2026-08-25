@@ -22,7 +22,7 @@
 #include <memory>
 #include <string>
 
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/trace.h"

@@ -28,10 +28,6 @@ namespace datasystem::coordinator {
 
 Status RegisterCoordinatorRaftServices(RpcServer &rpcServer, const std::string &localAddress)
 {
-    if (!rpcServer.IsBrpc()) {
-        return Status(K_INVALID, "Coordinator raft services require an RpcServer configured for brpc");
-    }
-
     braft::PeerId localPeer;
     RETURN_IF_NOT_OK(ParseCoordinatorRaftPeer(localAddress, localPeer));
     const auto endpoint = localPeer.addr;

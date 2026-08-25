@@ -23,7 +23,6 @@
 #include "client/stream_cache/pub_sub_utils.h"
 #include "common/stream_cache/element_generator.h"
 #include "common/stream_cache/stream_common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/util/random_data.h"
 
 using namespace datasystem::client::stream_cache;

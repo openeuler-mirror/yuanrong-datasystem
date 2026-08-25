@@ -337,13 +337,10 @@ global:
     # Only non-zero values call setpriority; negative values usually require appropriate privileges.
     ioThreadNice: 0
 
-    # brpc is an alternative RPC transport to ZMQ. When useBrpc is true, brpc owns the
-    # worker TCP port exclusively (the same port as worker_address, no port offset) and
-    # the ZMQ TCP endpoint is skipped. Per-service thread pools (rpcThreadNum, ocThreadNum,
-    # scThreadNum, etc.) still apply.
+    # brpc is the only RPC transport (ZMQ RPC deleted). brpc owns the worker TCP port
+    # exclusively (the same port as worker_address, no port offset). Per-service thread
+    # pools (rpcThreadNum, ocThreadNum, scThreadNum, etc.) still apply.
     brpc:
-      # Whether to use brpc instead of ZMQ for RPC communication. Set to false to fall back to ZMQ.
-      useBrpc: true
       # Number of process-wide brpc event dispatchers. 0 keeps the brpc default (1).
       # Values greater than 1 shard socket I/O by fd; they do not parallelize a single listening fd.
       eventDispatcherNum: 0

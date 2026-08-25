@@ -68,9 +68,6 @@ class BenchTestCase:
                 self.bench_args.args.log_monitor_enable
             ).lower(),
         }
-        use_brpc = os.environ.get("DATASYSTEM_USE_BRPC")
-        if use_brpc is not None:
-            env["DATASYSTEM_USE_BRPC"] = use_brpc
         return env
 
     def run(self):

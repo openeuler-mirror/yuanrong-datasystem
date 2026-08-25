@@ -507,10 +507,6 @@
         "value": "true",
         "description": "Enable selected worker threads to set the Linux scheduler runtime. Default is true. Set false to retain the inherited scheduler runtime."
     },
-    "use_brpc": {
-        "value": "true",
-        "description": "Use brpc instead of ZMQ for RPC communication. When enabled, brpc owns the worker TCP port exclusively (same port as worker_address, no offset) and the ZMQ TCP endpoint is skipped. Per-service thread pools (rpc_thread_num, oc_thread_num, etc.) still apply. Default is true (also reads the DATASYSTEM_USE_BRPC env var)."
-    },
     "brpc_event_dispatcher_num": {
         "value": "0",
         "description": "Number of brpc event dispatchers. 0 preserves the brpc default (1). Values greater than 1 shard socket I/O events by fd and can reduce first-read scheduling delay when many connections become active together. A single listening fd is not parallelized. This process-wide setting takes effect only before the first brpc initialization."

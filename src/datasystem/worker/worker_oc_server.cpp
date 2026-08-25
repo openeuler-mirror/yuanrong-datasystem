@@ -2043,7 +2043,7 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeRemoteH2DManager(), "Remote H2D transport init failed");
 
     int brpcPort = bindHostPort_.Port();
-    builder_.SetUseBrpc(true).SetBrpcAddr(bindHostPort_.Host(), brpcPort);
+    builder_.SetBrpcAddr(bindHostPort_.Host(), brpcPort);
     LOG(INFO) << "brpc listening on " << bindHostPort_.Host() << ":" << brpcPort;
     // Pre-warm brpc::GlobalInitializeOrDie on this main thread before ConstructTopologyRuntime
     // triggers it lazily inside a multi-threaded context (TSAN: bthread worker pool spawn races

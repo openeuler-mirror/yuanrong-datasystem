@@ -18,7 +18,7 @@
  * Description: hetero d2h test.
  */
 #include "device/dev_test_helper.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/raii.h"
 
 namespace datasystem {

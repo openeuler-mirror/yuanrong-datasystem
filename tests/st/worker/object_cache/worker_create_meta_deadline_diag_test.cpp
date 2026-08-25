@@ -39,7 +39,6 @@
 
 #include "common.h"
 #include "client/object_cache/oc_client_common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
@@ -83,8 +82,6 @@ public:
         warmupClient.reset();
 
         // Client on worker 1, request budget 20ms (mirrors production config).
-        // FLAGS_use_brpc was set true in SetClusterSetupOptions (called by Init),
-        // so the KVClient picks up brpc transport.
         InitTestKVClient(1, client_, 60000, false, 20);
         WaitWorkerMasterRpcReady();
     }

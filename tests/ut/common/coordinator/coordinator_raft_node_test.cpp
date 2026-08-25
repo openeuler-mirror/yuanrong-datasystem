@@ -146,7 +146,7 @@ protected:
         ASSERT_TRUE(reserveStatus.IsOk()) << reserveStatus.ToString();
         localPeer_ = "127.0.0.1:" + std::to_string(portLease_.Port());
 
-        auto status = RpcServer::Builder().SetUseBrpc(true).Init(rpcServer_);
+        auto status = RpcServer::Builder().Init(rpcServer_);
         ASSERT_TRUE(status.IsOk()) << status.ToString();
         status = RegisterCoordinatorRaftServices(*rpcServer_, localPeer_);
         ASSERT_TRUE(status.IsOk()) << status.ToString();
@@ -397,15 +397,6 @@ TEST_F(CoordinatorRaftNodeStartTest, RecoverAndWaitingDoNotPublishEmptyInitialCo
     EXPECT_EQ(waitingState->configurationCallbackCount.load(std::memory_order_relaxed), 0);
     EXPECT_EQ(waitingState->errorCount.load(std::memory_order_relaxed), 0);
 }
-
-TEST(CoordinatorRaftServiceTest, RegistrationRequiresBrpcRpcServer)
-{
-    std::unique_ptr<RpcServer> server;
-    DS_ASSERT_OK(RpcServer::Builder().Init(server));
-
-    EXPECT_EQ(RegisterCoordinatorRaftServices(*server, kLocalPeer).GetCode(), K_INVALID);
-}
-
 
 TEST(CoordinatorRaftNodeTest, InvalidCommittedConfigurationLogsStandardOnErrorExceptionDetails)
 {

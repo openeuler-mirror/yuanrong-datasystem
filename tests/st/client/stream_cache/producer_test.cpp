@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/stream/producer.h"
 #include <gtest/gtest.h>
 
