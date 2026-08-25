@@ -92,6 +92,11 @@ function _bazel_build_configs() {
     echo "--config=perf"
   fi
 
+  # Jemalloc process profiling
+  if is_on "${SUPPORT_JEPROF}"; then
+    echo "--config=jeprof"
+  fi
+
   # URMA
   if is_on "${BUILD_WITH_URMA}"; then
     echo "--config=urma"
@@ -166,9 +171,6 @@ function build_datasystem_bazel() {
   if is_on "${DOWNLOAD_UB}"; then
     echo -e "-- [INFO] bazel mode: ignoring -D (download UB) option."
   fi
-  if is_on "${SUPPORT_JEPROF}"; then
-    echo -e "-- [INFO] bazel mode: -x (jemalloc profiling) not yet supported."
-  fi
   if is_on "${PACKAGE_JAVA}"; then
     echo -e "-- [INFO] bazel mode: -J (Java API) not yet supported."
   fi
@@ -194,6 +196,7 @@ function build_datasystem_bazel() {
   local -a targets=(
     "//bazel:datasystem_sdk"                           # SDK tar (headers + cmake + stripped lib)
     "//src/datasystem/worker:datasystem_worker_shared"  # worker shared library
+    "//:libjemalloc_shared_file"                       # worker global allocator runtime
   )
   if is_on "${PACKAGE_PYTHON}"; then
     targets+=("//bazel:datasystem_wheel")
@@ -304,6 +307,16 @@ function _bazel_install_outputs() {
   local hixl_plugin="${bazel_bin}/src/datasystem/common/rdma/npu/plugin/libds_hixl_plugin.so"
   if [[ -f "${hixl_plugin}" ]]; then
     cp -f "${hixl_plugin}" "${DS_DIR}/service/lib/libds_hixl_plugin.so"
+  fi
+
+  # The worker uses the selected unprefixed shared jemalloc as its process-wide allocator.
+  local jemalloc_shared_lib="${bazel_bin}/yr/datasystem/lib/libjemalloc.so.2"
+  if [[ ! -f "${jemalloc_shared_lib}" ]]; then
+    go_die "-- Bazel worker jemalloc runtime is missing: ${jemalloc_shared_lib}"
+  fi
+  cp -f "${jemalloc_shared_lib}" "${DS_DIR}/service/lib/"
+  if ! readelf -d "${DS_DIR}/service/datasystem_worker" | grep 'libjemalloc.so.2' >/dev/null; then
+    go_die "-- Bazel worker is not linked to the jemalloc runtime"
   fi
 
   # Coordinator binary (stripped if available)

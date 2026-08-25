@@ -48,6 +48,12 @@ config_setting(
 )
 
 config_setting(
+    name = "enable_jemalloc_prof",
+    define_values = {"enable_jemalloc_prof": "true"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
     name = "with_tests",
     define_values = {"with_tests": "true"},
     visibility = ["//visibility:public"],
@@ -358,6 +364,15 @@ copy_file(
     visibility = [
         "//bazel:__pkg__",
     ],
+)
+
+copy_file(
+    name = "libjemalloc_shared_file",
+    src = select({
+        ":enable_jemalloc_prof": "@jemalloc_kvc//:prof/libjemalloc.so.2",
+        "//conditions:default": "@jemalloc_kvc//:shared/libjemalloc.so.2",
+    }),
+    out = "yr/datasystem/lib/libjemalloc.so.2",
 )
 
 copy_file(

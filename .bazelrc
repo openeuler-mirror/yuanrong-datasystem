@@ -29,6 +29,7 @@ build:release --linkopt=-Wl,-z,noexecstack
 build:release --cxxopt=-D_FORTIFY_SOURCE=2
 build:release --cxxopt=-DNDEBUG
 build:release --linkopt=-Wl,--build-id=none
+build:jeprof --define=enable_jemalloc_prof=true
 build:urma --define=enable_urma=true
 build:urma --copt=-DUSE_URMA
 build:urma --copt=-DURMA_OVER_UB

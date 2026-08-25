@@ -170,10 +170,14 @@ TSan 对线程调度更敏感，建议只给已确认稳定的测试添加 `tsan
 | `-n` (Ninja) | 忽略，Bazel 有自己的调度器 |
 | `-i` (增量) | 忽略，Bazel 默认增量编译 |
 | `-D` (下载 UB) | 忽略 |
-| `-x` (jemalloc profiling) | 暂不支持 |
+| `-x` (jemalloc profiling) | 支持；Worker 始终使用 jemalloc 作为默认进程内存分配器，`-x on` 选择启用 profiling 能力的 jemalloc 共享库 |
 | `-J` (Java API) | 暂不支持 |
 | `-G` (Go SDK) | 暂不支持 |
 | `-A` (RDMA/UCX) | 暂不支持 |
+
+`-x on` 只编译 jemalloc profiling 能力，不会默认启动采样。需要采集 heap profile 时，再在启动 Worker
+前通过 `MALLOC_CONF` 配置 `prof:true` 等运行时选项；未使用 `-x on` 的普通构建仍由 jemalloc 接管
+Worker 进程分配，但不包含 profiling 能力。
 
 ## 三、bazel build 高级用法
 

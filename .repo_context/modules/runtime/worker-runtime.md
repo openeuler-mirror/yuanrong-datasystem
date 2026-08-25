@@ -81,6 +81,11 @@
   - `worker_stream_cache`
   - `worker_client_manager`
   - `topology`
+- Both CMake and Bazel link the Worker executable to an unprefixed shared jemalloc, so ordinary process-heap
+  `malloc`/`free` and C++ allocation use jemalloc by default. DataSystem shared-memory arenas separately retain the
+  `datasystem_`-prefixed static jemalloc. The shared runtime is packaged beside the Worker under `service/lib`.
+  Profiling remains opt-in: CMake and Bazel `-x on` build the process allocator with jemalloc profiling support while
+  preserving the same Worker link and package layout.
 
 ## Runtime Entry Points
 

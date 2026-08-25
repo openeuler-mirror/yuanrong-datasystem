@@ -1,0 +1,29 @@
+package(default_visibility = ["//visibility:public"])
+
+sh_test(
+    name = "worker_jemalloc_link_test",
+    srcs = ["worker_jemalloc_link_test.sh"],
+    args = [
+        "$(location //src/datasystem/worker:datasystem_worker)",
+        "$(location //:libjemalloc_shared_file)",
+    ],
+    data = [
+        "//:libjemalloc_shared_file",
+        "//src/datasystem/worker:datasystem_worker",
+    ],
+    tags = ["manual"],
+)
+
+cc_test(
+    name = "jemalloc_profile_config_test",
+    srcs = ["jemalloc_profile_config_test.cpp"],
+    local_defines = select({
+        "//:enable_jemalloc_prof": ["EXPECT_JEMALLOC_PROF"],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    deps = select({
+        "//:enable_jemalloc_prof": ["@jemalloc_kvc//:jemalloc_prof_shared"],
+        "//conditions:default": ["@jemalloc_kvc//:jemalloc_shared"],
+    }),
+)

@@ -237,6 +237,11 @@ Backed by `bazel/BUILD.bazel` and `bazel/datasystem_sdk.bzl`:
 - the SDK directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and the client, worker, and coordinator shared libraries under `cpp/lib/`;
 - `//bazel:datasystem_wheel` includes `yr/datasystem/datasystem_worker`, `yr/datasystem/datasystem_coordinator`, root worker/cluster/coordinator configs, the Python package, CLI assets, and `yr/datasystem/lib/` shared libraries;
 - `scripts/build_bazel.sh` stages the coordinator executable, config, and shared library under `datasystem/service` before creating the deployment tar, matching the CMake service package layout.
+- Bazel Worker builds always link and package an unprefixed shared jemalloc as the process allocator. `build.sh -x on`
+  selects `.bazelrc`'s `jeprof` configuration, which swaps in an ABI-compatible shared jemalloc built with
+  `--enable-prof`; the default build uses the non-profiling variant. Both variants are packaged as
+  `service/lib/libjemalloc.so.2`, matching CMake's Worker runtime layout. The profiling build only adds allocator
+  capability; runtime sampling remains disabled unless jemalloc receives an explicit `MALLOC_CONF` profiling policy.
 
 Backed by `.bazelrc`, `bazel/workspace_status.sh`, `bazel/git_version.bzl`, and `src/datasystem/common/util/BUILD.bazel`:
 
