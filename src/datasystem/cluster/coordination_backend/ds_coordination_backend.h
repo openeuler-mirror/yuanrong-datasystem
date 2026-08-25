@@ -466,6 +466,7 @@ private:
      * @param[in] status Completed backend RPC status.
      */
     void RefreshWatchIdentity(const Status &status);
+    std::chrono::milliseconds GetIdentityProbeBackoffLimit(std::chrono::steady_clock::time_point now);
 
     /**
      * @brief Deliver one already fenced watch doorbell to the installed consumer.
@@ -495,10 +496,13 @@ private:
     bool rewatchRequired_{ false };
     bool watchStopping_{ false };
     static constexpr std::chrono::milliseconds INITIAL_IDENTITY_PROBE_BACKOFF{ 100 };
+    static constexpr std::chrono::milliseconds INITIAL_IDENTITY_PROBE_BACKOFF_LIMIT{ 1'000 };
+    static constexpr std::chrono::seconds IDENTITY_PROBE_BACKOFF_GROWTH_WINDOW{ 10 };
     static constexpr std::chrono::milliseconds MAX_IDENTITY_PROBE_BACKOFF{ 5'000 };
     static constexpr int IDENTITY_PROBE_BACKOFF_MULTIPLIER = 2;
     std::chrono::milliseconds identityProbeBackoff_{ INITIAL_IDENTITY_PROBE_BACKOFF };
     std::chrono::steady_clock::time_point nextIdentityProbeAt_;
+    std::chrono::steady_clock::time_point identityProbeFailureStartedAt_;
 
     // Protects event handlers, store-state callback, last membership identity and active callback copies.
     std::mutex eventHandlerMutex_;

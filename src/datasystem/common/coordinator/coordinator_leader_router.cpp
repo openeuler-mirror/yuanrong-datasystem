@@ -37,6 +37,7 @@ CoordinatorLeaderRouter::LeaderSubscription::~LeaderSubscription()
 
 namespace {
 constexpr int32_t ROUTER_TOTAL_TIMEOUT_MS = 3'000;
+constexpr int32_t ROUTER_MIN_ATTEMPT_TIMEOUT_MS = 5;
 constexpr std::array<int32_t, 4> ROUTER_RETRY_INTERVALS_MS{ 1, 5, 50, 200 };
 bool AddAddress(const std::string &value, std::unordered_set<std::string> &seen, std::vector<HostPort> &addresses)
 {
@@ -46,6 +47,17 @@ bool AddAddress(const std::string &value, std::unordered_set<std::string> &seen,
     }
     addresses.emplace_back(std::move(address));
     return true;
+}
+
+size_t CountUnattemptedCandidates(const std::vector<HostPort> &candidates, size_t begin,
+                                  const std::unordered_set<std::string> &attempted)
+{
+    auto seen = attempted;
+    size_t count = 0;
+    for (size_t index = begin; index < candidates.size(); ++index) {
+        count += seen.emplace(candidates[index].ToString()).second;
+    }
+    return count;
 }
 }  // namespace
 
@@ -111,8 +123,12 @@ Status CoordinatorLeaderRouter::Execute(const AttemptFn &attempt, bool recoveryC
         const auto refreshStatus = RefreshCandidates(deadline, candidates);
         if (refreshStatus.IsOk()) {
             cached = CoordinatorLeaderIdentity();
+            attempted.clear();
         } else if (!hasCoordinatorResponse && attempted.empty() && lastStatus.GetCode() == K_NOT_READY) {
             lastStatus = refreshStatus;
+        }
+        if (clock_() >= deadline) {
+            return lastStatus;
         }
         refreshImmediately = false;
     }
@@ -156,6 +172,7 @@ CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandid
         if (!attempted.emplace(address.ToString()).second) {
             continue;
         }
+        const auto unattemptedCount = 1 + CountUnattemptedCandidates(batch, index + 1, attempted);
         const auto now = clock_();
         if (now >= deadline) {
             if (!hasCoordinatorResponse) {
@@ -163,11 +180,13 @@ CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandid
             }
             return CandidateRoundResult::DEADLINE_EXCEEDED;
         }
-        const auto remaining = static_cast<int32_t>(
+        const auto remainingMs = static_cast<int32_t>(
             std::max<int64_t>(1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count()));
+        const auto attemptTimeoutMs =
+            std::max(ROUTER_MIN_ATTEMPT_TIMEOUT_MS, remainingMs / static_cast<int32_t>(unattemptedCount));
         coordinator::ResponseHeader header;
         bool hasHeader = false;
-        const auto status = attempt(address, remaining, header, hasHeader);
+        const auto status = attempt(address, attemptTimeoutMs, header, hasHeader);
         const bool coordinatorResponded = hasHeader && IsUsableHeader(header);
         if (coordinatorResponded) {
             const bool currentTerm = ObserveHeader(address, header);

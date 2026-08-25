@@ -331,6 +331,21 @@ Status DsCoordinationBackend::RewatchIfNeeded()
     return RegisterWatchPlan(plan);
 }
 
+std::chrono::milliseconds DsCoordinationBackend::GetIdentityProbeBackoffLimit(
+    std::chrono::steady_clock::time_point now)
+{
+    if (identityProbeFailureStartedAt_ == std::chrono::steady_clock::time_point()) {
+        identityProbeFailureStartedAt_ = now;
+    }
+    const auto failureDuration = now - identityProbeFailureStartedAt_;
+    const auto growthWindows = failureDuration / IDENTITY_PROBE_BACKOFF_GROWTH_WINDOW;
+    auto limit = INITIAL_IDENTITY_PROBE_BACKOFF_LIMIT;
+    for (int64_t index = 0; index < std::min<int64_t>(growthWindows, 3); ++index) {
+        limit = std::min(limit * IDENTITY_PROBE_BACKOFF_MULTIPLIER, MAX_IDENTITY_PROBE_BACKOFF);
+    }
+    return limit;
+}
+
 void DsCoordinationBackend::RefreshWatchIdentity(const Status &status)
 {
     std::string coordinatorId;
@@ -347,11 +362,14 @@ void DsCoordinationBackend::RefreshWatchIdentity(const Status &status)
             if (watchStopping_ || watchPlan_.empty() || now < nextIdentityProbeAt_) {
                 return;
             }
-            nextIdentityProbeAt_ = now + identityProbeBackoff_;
-            identityProbeBackoff_ =
-                std::min(identityProbeBackoff_ * IDENTITY_PROBE_BACKOFF_MULTIPLIER, MAX_IDENTITY_PROBE_BACKOFF);
         }
         if (proxy_->GetCoordinatorId(coordinatorId).IsError()) {
+            std::lock_guard<std::mutex> lock(watchMutex_);
+            const auto probeCompletedAt = std::chrono::steady_clock::now();
+            nextIdentityProbeAt_ = probeCompletedAt + identityProbeBackoff_;
+            identityProbeBackoff_ =
+                std::min(identityProbeBackoff_ * IDENTITY_PROBE_BACKOFF_MULTIPLIER,
+                         GetIdentityProbeBackoffLimit(probeCompletedAt));
             return;
         }
     } else {
@@ -364,6 +382,7 @@ void DsCoordinationBackend::RefreshWatchIdentity(const Status &status)
         if (probe) {
             identityProbeBackoff_ = INITIAL_IDENTITY_PROBE_BACKOFF;
             nextIdentityProbeAt_ = {};
+            identityProbeFailureStartedAt_ = {};
         }
         if (!coordinatorId.empty() && !watchPlan_.empty() && registeredCoordinatorId_ != coordinatorId) {
             rewatchRequired_ = true;
