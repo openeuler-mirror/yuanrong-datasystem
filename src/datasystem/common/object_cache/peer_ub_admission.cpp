@@ -19,6 +19,7 @@
 #include "datasystem/common/object_cache/peer_ub_admission.h"
 
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <iterator>
 #include <utility>
@@ -29,6 +30,81 @@
 #include "datasystem/common/util/timer.h"
 
 namespace datasystem {
+namespace {
+
+constexpr size_t UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH = 12;
+
+enum class GlobalSummaryTransition {
+    QUARANTINE_APPLIED,
+    QUARANTINE_UPDATED,
+    RECOVERY_APPLIED,
+    INCARNATION_REPLACED,
+    SUMMARY_REMOVED
+};
+
+struct GlobalSummaryChange {
+    GlobalSummaryTransition transition;
+    HostPort worker;
+    std::array<char, UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH + 1> incarnationPrefix;
+    uint64_t epoch;
+    bool writable;
+    UbAdmissionState state;
+    UbFailureClass reason;
+    StatusCode lastStatusCode;
+};
+
+struct GlobalSummarySyncStats {
+    size_t input = 0;
+    size_t effective = 0;
+    size_t invalidIdentity = 0;
+    size_t nonMember = 0;
+    size_t replay = 0;
+    size_t retiredIncarnation = 0;
+    size_t staleEpoch = 0;
+    size_t duplicate = 0;
+};
+
+const char *GlobalSummaryTransitionName(GlobalSummaryTransition transition)
+{
+    switch (transition) {
+        case GlobalSummaryTransition::QUARANTINE_APPLIED:
+            return "quarantine_applied";
+        case GlobalSummaryTransition::QUARANTINE_UPDATED:
+            return "quarantine_updated";
+        case GlobalSummaryTransition::RECOVERY_APPLIED:
+            return "recovery_applied";
+        case GlobalSummaryTransition::INCARNATION_REPLACED:
+            return "incarnation_replaced";
+        case GlobalSummaryTransition::SUMMARY_REMOVED:
+            return "summary_removed";
+    }
+    return "unknown";
+}
+
+bool IsSameGlobalSummary(const UbHealthSummary &lhs, const UbHealthSummary &rhs)
+{
+    return lhs.incarnation == rhs.incarnation && lhs.writable == rhs.writable && lhs.state == rhs.state
+           && lhs.reason == rhs.reason && lhs.lastStatusCode == rhs.lastStatusCode && lhs.epoch == rhs.epoch
+           && lhs.backoffLevel == rhs.backoffLevel && lhs.backoffDeadlineMs == rhs.backoffDeadlineMs;
+}
+
+bool IsHardUnavailableFailure(UbFailureClass failureClass)
+{
+    return failureClass == UbFailureClass::PORT_UNAVAILABLE_ERROR4
+           || failureClass == UbFailureClass::REMOTE_UNAVAILABLE_ERROR9;
+}
+
+GlobalSummaryChange CaptureGlobalSummaryChange(GlobalSummaryTransition transition, const UbHealthSummary &summary)
+{
+    std::array<char, UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH + 1> incarnationPrefix{};
+    std::copy_n(summary.incarnation.begin(),
+                std::min(summary.incarnation.size(), UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH),
+                incarnationPrefix.begin());
+    return GlobalSummaryChange{ transition, summary.worker, incarnationPrefix, summary.epoch, summary.writable,
+                                summary.state, summary.reason, summary.lastStatusCode };
+}
+
+}  // namespace
 
 Status PeerUbAdmission::CheckWriteTarget(const HostPort &peer, UbOperationKind op) const
 {
@@ -107,54 +183,114 @@ void PeerUbAdmission::ReportOutcomeImpl(const UbOpOutcome &outcome, std::optiona
 void PeerUbAdmission::ReplaceGlobalSummaries(const std::vector<UbHealthSummary> &summaries)
 {
     constexpr size_t MAX_RETIRED_INCARNATIONS_PER_WORKER = 8;
-    std::lock_guard<std::shared_mutex> lock(mutex_);
-    const auto nowMs = GetSteadyClockTimeStampMs();
-    std::unordered_map<HostPort, UbHealthSummary> replacement;
-    replacement.reserve(summaries.size());
-    for (const auto &summary : summaries) {
-        if (summary.worker.Empty() || summary.incarnation.empty()) {
-            continue;
+    std::vector<GlobalSummaryChange> changes;
+    GlobalSummarySyncStats stats;
+    stats.input = summaries.size();
+    const HostPort receiver = self_;
+    {
+        std::lock_guard<std::shared_mutex> lock(mutex_);
+        const auto nowMs = GetSteadyClockTimeStampMs();
+        std::unordered_map<HostPort, UbHealthSummary> replacement;
+        replacement.reserve(summaries.size());
+        for (const auto &summary : summaries) {
+            if (summary.worker.Empty() || summary.incarnation.empty()) {
+                ++stats.invalidIdentity;
+                continue;
+            }
+            if (topologyInitialized_ && topologyWorkers_.count(summary.worker) == 0) {
+                ++stats.nonMember;
+                continue;
+            }
+            if (IsReplayLocked(summary.worker, summary.incarnation)) {
+                ++stats.replay;
+                continue;
+            }
+            auto latest = latestGlobalIncarnations_.find(summary.worker);
+            if (latest == latestGlobalIncarnations_.end()) {
+                latestGlobalIncarnations_.emplace(summary.worker, summary.incarnation);
+            } else if (latest->second != summary.incarnation) {
+                auto &retired = retiredGlobalIncarnations_[summary.worker];
+                if (retired.count(summary.incarnation) != 0) {
+                    ++stats.retiredIncarnation;
+                    auto current = globalSummaries_.find(summary.worker);
+                    if (current != globalSummaries_.end()) {
+                        replacement.emplace(summary.worker, current->second);
+                    }
+                    continue;
+                }
+                retired.emplace(latest->second);
+                if (retired.size() > MAX_RETIRED_INCARNATIONS_PER_WORKER) {
+                    retired.erase(retired.begin());
+                }
+                latest->second = summary.incarnation;
+                // A trusted new incarnation supersedes process-local evidence learned from the old worker instance.
+                states_.erase(summary.worker);
+                AdvancePeerCompletionGenerationLocked(summary.worker);
+            }
+
+            auto candidate = summary;
+            auto current = globalSummaries_.find(summary.worker);
+            if (current != globalSummaries_.end() && current->second.incarnation == summary.incarnation
+                && summary.epoch < current->second.epoch) {
+                ++stats.staleEpoch;
+                candidate = current->second;
+            }
+            auto [iter, inserted] = replacement.emplace(summary.worker, candidate);
+            if (!inserted) {
+                ++stats.duplicate;
+                if (iter->second.incarnation == candidate.incarnation && candidate.epoch > iter->second.epoch) {
+                    iter->second = candidate;
+                }
+            }
+            ApplyGlobalRecoveryTransitionLocked(iter->second, nowMs);
         }
-        if ((topologyInitialized_ && topologyWorkers_.count(summary.worker) == 0)
-            || IsReplayLocked(summary.worker, summary.incarnation)) {
-            continue;
-        }
-        auto latest = latestGlobalIncarnations_.find(summary.worker);
-        if (latest == latestGlobalIncarnations_.end()) {
-            latestGlobalIncarnations_.emplace(summary.worker, summary.incarnation);
-        } else if (latest->second != summary.incarnation) {
-            auto &retired = retiredGlobalIncarnations_[summary.worker];
-            if (retired.count(summary.incarnation) != 0) {
-                auto current = globalSummaries_.find(summary.worker);
-                if (current != globalSummaries_.end()) {
-                    replacement.emplace(summary.worker, current->second);
+
+        for (const auto &[worker, summary] : replacement) {
+            auto current = globalSummaries_.find(worker);
+            if (current == globalSummaries_.end()) {
+                if (!summary.writable) {
+                    changes.emplace_back(
+                        CaptureGlobalSummaryChange(GlobalSummaryTransition::QUARANTINE_APPLIED, summary));
                 }
                 continue;
             }
-            retired.emplace(latest->second);
-            if (retired.size() > MAX_RETIRED_INCARNATIONS_PER_WORKER) {
-                retired.erase(retired.begin());
+            if (current->second.incarnation != summary.incarnation) {
+                changes.emplace_back(
+                    CaptureGlobalSummaryChange(GlobalSummaryTransition::INCARNATION_REPLACED, summary));
+            } else if (current->second.writable && !summary.writable) {
+                changes.emplace_back(
+                    CaptureGlobalSummaryChange(GlobalSummaryTransition::QUARANTINE_APPLIED, summary));
+            } else if (!current->second.writable && summary.writable) {
+                changes.emplace_back(CaptureGlobalSummaryChange(GlobalSummaryTransition::RECOVERY_APPLIED, summary));
+            } else if (!summary.writable && !IsSameGlobalSummary(current->second, summary)) {
+                changes.emplace_back(CaptureGlobalSummaryChange(GlobalSummaryTransition::QUARANTINE_UPDATED, summary));
             }
-            latest->second = summary.incarnation;
-            // A trusted new incarnation supersedes process-local evidence learned from the old worker instance.
-            states_.erase(summary.worker);
-            AdvancePeerCompletionGenerationLocked(summary.worker);
         }
-
-        auto candidate = summary;
-        auto current = globalSummaries_.find(summary.worker);
-        if (current != globalSummaries_.end() && current->second.incarnation == summary.incarnation
-            && summary.epoch < current->second.epoch) {
-            candidate = current->second;
+        for (const auto &[worker, summary] : globalSummaries_) {
+            if (!summary.writable && replacement.count(worker) == 0) {
+                changes.emplace_back(CaptureGlobalSummaryChange(GlobalSummaryTransition::SUMMARY_REMOVED, summary));
+            }
         }
-        auto [iter, inserted] = replacement.emplace(summary.worker, candidate);
-        if (!inserted && iter->second.incarnation == candidate.incarnation && candidate.epoch > iter->second.epoch) {
-            iter->second = candidate;
-        }
-        ApplyGlobalRecoveryTransitionLocked(iter->second, nowMs);
+        globalSummaries_ = std::move(replacement);
+        stats.effective = globalSummaries_.size();
+        INJECT_POINT_NO_RETURN("PeerUbAdmission.ReplaceGlobalSummaries.afterCommit");
     }
-    globalSummaries_ = std::move(replacement);
-    INJECT_POINT_NO_RETURN("PeerUbAdmission.ReplaceGlobalSummaries.afterCommit");
+
+    const auto receiverForLog = receiver.Empty() ? std::string("unknown") : receiver.ToString();
+    for (const auto &change : changes) {
+        LOG(INFO) << "UB_HEALTH_SUMMARY action=global_summary_applied receiver=" << receiverForLog
+                  << " target=" << change.worker
+                  << " transition=" << GlobalSummaryTransitionName(change.transition)
+                  << " incarnation_prefix=" << change.incarnationPrefix.data() << " epoch=" << change.epoch
+                  << " writable=" << change.writable << " state_code=" << static_cast<int>(change.state)
+                  << " reason_code=" << static_cast<int>(change.reason)
+                  << " status_name=" << Status::StatusCodeName(change.lastStatusCode);
+    }
+    VLOG(1) << "UB health summary snapshot synchronized, receiver=" << receiverForLog << ", input=" << stats.input
+            << ", effective=" << stats.effective << ", changes=" << changes.size()
+            << ", invalidIdentity=" << stats.invalidIdentity << ", nonMember=" << stats.nonMember
+            << ", replay=" << stats.replay << ", retiredIncarnation=" << stats.retiredIncarnation
+            << ", staleEpoch=" << stats.staleEpoch << ", duplicate=" << stats.duplicate;
 }
 
 void PeerUbAdmission::InitializeVerification(const HostPort &peer, uint64_t nowMs)
@@ -221,42 +357,59 @@ bool PeerUbAdmission::CancelProbe(const UbProbeToken &token, uint64_t nowMs)
 bool PeerUbAdmission::CompleteProbe(const UbProbeToken &token, const Status &status, uint64_t nowMs,
                                     bool requireGlobalAvailable)
 {
-    std::lock_guard<std::shared_mutex> lock(mutex_);
-    auto iter = states_.find(token.peer);
-    if (iter == states_.end()
-        || (iter->second.state != UbAdmissionState::PROBING
-            && iter->second.state != UbAdmissionState::SUSPECT)
-        || !iter->second.probeInFlight
-        || iter->second.epoch != token.epoch) {
-        return false;
-    }
-    auto &state = iter->second;
-    if (status.IsOk() && (!requireGlobalAvailable || IsGlobalWritableLocked(token.peer))) {
-        state.state = UbAdmissionState::AVAILABLE;
-        state.lastStatus = Status::OK();
-        state.lastFailureClass = UbFailureClass::SUCCESS;
-        state.backoffLevel = 0;
-        state.backoffDeadlineMs = 0;
-        state.probeInFlight = false;
-        state.providerStatus.reset();
-        state.cqeStatus.reset();
-        ++state.epoch;
-        if (token.peer == self_) {
-            lateCompletionGeneration_.fetch_add(1, std::memory_order_acq_rel);
+    bool recoveredFromHardUnavailable = false;
+    StatusCode previousStatusCode = K_OK;
+    UbFailureClass previousFailureClass = UbFailureClass::SUCCESS;
+    {
+        std::lock_guard<std::shared_mutex> lock(mutex_);
+        auto iter = states_.find(token.peer);
+        if (iter == states_.end()
+            || (iter->second.state != UbAdmissionState::PROBING
+                && iter->second.state != UbAdmissionState::SUSPECT)
+            || !iter->second.probeInFlight
+            || iter->second.epoch != token.epoch) {
+            return false;
         }
-        AdvancePeerCompletionGenerationLocked(token.peer);
-        INJECT_POINT_NO_RETURN("PeerUbAdmission.CompleteProbe.success");
-        return true;
+        auto &state = iter->second;
+        if (status.IsOk() && (!requireGlobalAvailable || IsGlobalWritableLocked(token.peer))) {
+            recoveredFromHardUnavailable = IsHardUnavailableFailure(state.lastFailureClass);
+            if (recoveredFromHardUnavailable) {
+                previousStatusCode = state.lastStatus.GetCode();
+                previousFailureClass = state.lastFailureClass;
+            }
+            state.state = UbAdmissionState::AVAILABLE;
+            state.lastStatus = Status::OK();
+            state.lastFailureClass = UbFailureClass::SUCCESS;
+            state.backoffLevel = 0;
+            state.backoffDeadlineMs = 0;
+            state.probeInFlight = false;
+            state.providerStatus.reset();
+            state.cqeStatus.reset();
+            ++state.epoch;
+            if (token.peer == self_) {
+                lateCompletionGeneration_.fetch_add(1, std::memory_order_acq_rel);
+            }
+            AdvancePeerCompletionGenerationLocked(token.peer);
+            INJECT_POINT_NO_RETURN("PeerUbAdmission.CompleteProbe.success");
+        } else {
+            const bool softVerification = state.state == UbAdmissionState::SUSPECT;
+            state.state = softVerification ? UbAdmissionState::SUSPECT : UbAdmissionState::UNAVAILABLE;
+            state.probeInFlight = false;
+            state.lastStatus = status.IsOk() ? Status(K_NOT_READY, "Global UB health still denies recovery") : status;
+            state.backoffLevel = std::min(state.backoffLevel + 1, MAX_PROBE_BACKOFF_LEVEL);
+            state.backoffDeadlineMs = nowMs + ProbeBackoffMs(state.backoffLevel);
+            ++state.epoch;
+            INJECT_POINT_NO_RETURN("PeerUbAdmission.CompleteProbe.failure");
+            return false;
+        }
     }
-    const bool softVerification = state.state == UbAdmissionState::SUSPECT;
-    state.state = softVerification ? UbAdmissionState::SUSPECT : UbAdmissionState::UNAVAILABLE;
-    state.probeInFlight = false;
-    state.lastStatus = status.IsOk() ? Status(K_NOT_READY, "Global UB health still denies recovery") : status;
-    state.backoffLevel = std::min(state.backoffLevel + 1, MAX_PROBE_BACKOFF_LEVEL);
-    state.backoffDeadlineMs = nowMs + ProbeBackoffMs(state.backoffLevel);
-    ++state.epoch;
-    INJECT_POINT_NO_RETURN("PeerUbAdmission.CompleteProbe.failure");
-    return false;
+    if (recoveredFromHardUnavailable) {
+        LOG(INFO) << "UB admission marked peer AVAILABLE, peer=" << token.peer
+                  << ", statusCode=" << status.GetCode() << ", recoveredFrom=UNAVAILABLE"
+                  << ", previousStatusCode=" << previousStatusCode
+                  << ", previousFailureClass=" << static_cast<int>(previousFailureClass);
+    }
+    return true;
 }
 
 std::optional<HostPort> PeerUbAdmission::NextProbeCandidate(uint64_t nowMs) const

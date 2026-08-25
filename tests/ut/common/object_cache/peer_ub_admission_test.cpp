@@ -23,13 +23,42 @@
 #include <thread>
 #include <vector>
 
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/object_cache/peer_ub_admission.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/timer.h"
+
+DS_DECLARE_bool(alsologtostderr);
 
 namespace datasystem {
 namespace {
 
 const HostPort PEER("127.0.0.1", 31501);
+const HostPort SELF("127.0.0.1", 31502);
+constexpr char GLOBAL_SUMMARY_LOG_MARKER[] = "UB_HEALTH_SUMMARY action=global_summary_applied";
+constexpr char ADMISSION_AVAILABLE_LOG_MARKER[] = "UB admission marked peer AVAILABLE";
+
+struct CapturedProbeCompletion {
+    bool recovered;
+    std::string logs;
+};
+
+std::string CaptureGlobalSummaryReplace(PeerUbAdmission &admission,
+                                        const std::vector<UbHealthSummary> &summaries)
+{
+    testing::internal::CaptureStderr();
+    admission.ReplaceGlobalSummaries(summaries);
+    return testing::internal::GetCapturedStderr();
+}
+
+CapturedProbeCompletion CaptureProbeCompletion(PeerUbAdmission &admission, const UbProbeToken &token,
+                                               const Status &status, uint64_t nowMs,
+                                               bool requireGlobalAvailable)
+{
+    testing::internal::CaptureStderr();
+    const bool recovered = admission.CompleteProbe(token, status, nowMs, requireGlobalAvailable);
+    return { recovered, testing::internal::GetCapturedStderr() };
+}
 
 TEST(PeerUbAdmissionTest, ExplicitError4BlocksProviderReadSource)
 {
@@ -273,6 +302,119 @@ TEST(PeerUbAdmissionTest, HardFailureProbeStillBlocksAndRemainsUnavailableOnFail
               K_URMA_WORKER_UNAVAILABLE);
 }
 
+TEST(PeerUbAdmissionTest, HardUnavailableRecoveryLogsAvailableAfterCommit)
+{
+    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
+    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
+    FLAGS_alsologtostderr = true;
+
+    struct HardFailureCase {
+        int cqeStatus;
+        UbFailureClass failureClass;
+    };
+    for (const auto &testCase : { HardFailureCase{ URMA_PORT_UNAVAILABLE_STATUS,
+                                                   UbFailureClass::PORT_UNAVAILABLE_ERROR4 },
+                                  HardFailureCase{ URMA_REMOTE_ACK_TIMEOUT_STATUS,
+                                                   UbFailureClass::REMOTE_UNAVAILABLE_ERROR9 } }) {
+        PeerUbAdmission admission;
+        UbOpOutcome outcome(PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                            Status(K_URMA_ERROR, "hard UB failure"));
+        outcome.cqeStatus = testCase.cqeStatus;
+        admission.ReportOutcome(outcome);
+        const auto unavailable = admission.GetState(PEER);
+        ASSERT_TRUE(unavailable.has_value());
+        ASSERT_EQ(unavailable->state, UbAdmissionState::UNAVAILABLE);
+
+        auto token = admission.TryBeginProbe(PEER, unavailable->backoffDeadlineMs);
+        ASSERT_TRUE(token.has_value());
+        const auto completion = CaptureProbeCompletion(
+            admission, *token, Status::OK(), unavailable->backoffDeadlineMs, false);
+
+        EXPECT_TRUE(completion.recovered);
+        ASSERT_TRUE(admission.GetState(PEER).has_value());
+        EXPECT_EQ(admission.GetState(PEER)->state, UbAdmissionState::AVAILABLE);
+        const auto marker = completion.logs.find(ADMISSION_AVAILABLE_LOG_MARKER);
+        ASSERT_NE(marker, std::string::npos) << completion.logs;
+        EXPECT_EQ(completion.logs.find(ADMISSION_AVAILABLE_LOG_MARKER, marker + 1), std::string::npos)
+            << completion.logs;
+        EXPECT_NE(completion.logs.find("peer=" + PEER.ToString()), std::string::npos) << completion.logs;
+        EXPECT_NE(completion.logs.find("statusCode=" + std::to_string(static_cast<int>(K_OK))), std::string::npos)
+            << completion.logs;
+        EXPECT_NE(completion.logs.find("recoveredFrom=UNAVAILABLE"), std::string::npos) << completion.logs;
+        EXPECT_NE(completion.logs.find(
+                      "previousStatusCode=" + std::to_string(static_cast<int>(K_URMA_ERROR))),
+                  std::string::npos)
+            << completion.logs;
+        EXPECT_NE(completion.logs.find("previousFailureClass="
+                                       + std::to_string(static_cast<int>(testCase.failureClass))),
+                  std::string::npos)
+            << completion.logs;
+    }
+}
+
+TEST(PeerUbAdmissionTest, AvailableRecoveryLogExcludesSoftAndRejectedProbes)
+{
+    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
+    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
+    FLAGS_alsologtostderr = true;
+
+    PeerUbAdmission softAdmission;
+    UbOpOutcome softFailure(PEER, UbOperationKind::MIGRATION_WRITE,
+                            Status(K_RPC_DEADLINE_EXCEEDED, "soft UB failure"));
+    softAdmission.ReportOutcome(softFailure);
+    auto softState = softAdmission.GetState(PEER);
+    ASSERT_TRUE(softState.has_value());
+    auto softToken = softAdmission.TryBeginProbe(PEER, softState->backoffDeadlineMs);
+    ASSERT_TRUE(softToken.has_value());
+    auto completion = CaptureProbeCompletion(
+        softAdmission, *softToken, Status::OK(), softState->backoffDeadlineMs, false);
+    EXPECT_TRUE(completion.recovered);
+    EXPECT_EQ(completion.logs.find(ADMISSION_AVAILABLE_LOG_MARKER), std::string::npos) << completion.logs;
+
+    PeerUbAdmission failedAdmission;
+    UbOpOutcome hardFailure(PEER, UbOperationKind::MIGRATION_WRITE, Status(K_URMA_ERROR, "hard UB failure"));
+    hardFailure.cqeStatus = URMA_PORT_UNAVAILABLE_STATUS;
+    failedAdmission.ReportOutcome(hardFailure);
+    auto failedState = failedAdmission.GetState(PEER);
+    ASSERT_TRUE(failedState.has_value());
+    auto failedToken = failedAdmission.TryBeginProbe(PEER, failedState->backoffDeadlineMs);
+    ASSERT_TRUE(failedToken.has_value());
+    completion = CaptureProbeCompletion(failedAdmission, *failedToken,
+                                        Status(K_RPC_DEADLINE_EXCEEDED, "recovery probe failed"),
+                                        failedState->backoffDeadlineMs, false);
+    EXPECT_FALSE(completion.recovered);
+    EXPECT_EQ(completion.logs.find(ADMISSION_AVAILABLE_LOG_MARKER), std::string::npos) << completion.logs;
+
+    PeerUbAdmission globallyDeniedAdmission;
+    globallyDeniedAdmission.ReportOutcome(hardFailure);
+    UbHealthSummary unavailableSummary;
+    unavailableSummary.worker = PEER;
+    unavailableSummary.incarnation = "worker-incarnation";
+    unavailableSummary.writable = false;
+    globallyDeniedAdmission.ReplaceGlobalSummaries({ unavailableSummary });
+    auto globallyDeniedState = globallyDeniedAdmission.GetState(PEER);
+    ASSERT_TRUE(globallyDeniedState.has_value());
+    auto globallyDeniedToken = globallyDeniedAdmission.TryBeginProbe(
+        PEER, globallyDeniedState->backoffDeadlineMs);
+    ASSERT_TRUE(globallyDeniedToken.has_value());
+    completion = CaptureProbeCompletion(globallyDeniedAdmission, *globallyDeniedToken, Status::OK(),
+                                        globallyDeniedState->backoffDeadlineMs, true);
+    EXPECT_FALSE(completion.recovered);
+    EXPECT_EQ(completion.logs.find(ADMISSION_AVAILABLE_LOG_MARKER), std::string::npos) << completion.logs;
+
+    PeerUbAdmission staleAdmission;
+    staleAdmission.ReportOutcome(hardFailure);
+    auto staleState = staleAdmission.GetState(PEER);
+    ASSERT_TRUE(staleState.has_value());
+    auto staleToken = staleAdmission.TryBeginProbe(PEER, staleState->backoffDeadlineMs);
+    ASSERT_TRUE(staleToken.has_value());
+    staleAdmission.ReportOutcome(hardFailure);
+    completion = CaptureProbeCompletion(staleAdmission, *staleToken, Status::OK(),
+                                        staleState->backoffDeadlineMs, false);
+    EXPECT_FALSE(completion.recovered);
+    EXPECT_EQ(completion.logs.find(ADMISSION_AVAILABLE_LOG_MARKER), std::string::npos) << completion.logs;
+}
+
 TEST(PeerUbAdmissionTest, CancelProbeRestoresFailureWithoutQuarantiningProbeSubject)
 {
     PeerUbAdmission admission;
@@ -387,6 +529,103 @@ TEST(PeerUbAdmissionTest, GlobalSummaryUsesEpochAndIncarnationFencingAndExpiresI
 
     admission.ReplaceGlobalSummaries({});
     EXPECT_TRUE(admission.CheckReadSource(PEER).IsOk());
+}
+
+TEST(PeerUbAdmissionTest, GlobalSummaryLogsOnlyEffectiveOperationalTransitions)
+{
+    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
+    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
+    FLAGS_alsologtostderr = true;
+
+    PeerUbAdmission admission;
+    admission.SetSelfWorker(SELF);
+    UbHealthSummary unavailable;
+    unavailable.worker = PEER;
+    unavailable.incarnation = "worker-incarnation-old";
+    unavailable.writable = false;
+    unavailable.state = UbAdmissionState::UNAVAILABLE;
+    unavailable.reason = UbFailureClass::PORT_UNAVAILABLE_ERROR4;
+    unavailable.lastStatusCode = K_URMA_ERROR;
+    unavailable.epoch = 8;
+
+    auto logs = CaptureGlobalSummaryReplace(admission, { unavailable });
+    EXPECT_NE(logs.find(GLOBAL_SUMMARY_LOG_MARKER), std::string::npos) << logs;
+    EXPECT_NE(logs.find("receiver=" + SELF.ToString()), std::string::npos) << logs;
+    EXPECT_NE(logs.find("target=" + PEER.ToString()), std::string::npos) << logs;
+    EXPECT_NE(logs.find("transition=quarantine_applied"), std::string::npos) << logs;
+    EXPECT_NE(logs.find("incarnation_prefix=worker-incar"), std::string::npos) << logs;
+    EXPECT_NE(logs.find("epoch=8"), std::string::npos) << logs;
+
+    logs = CaptureGlobalSummaryReplace(admission, { unavailable });
+    EXPECT_EQ(logs.find(GLOBAL_SUMMARY_LOG_MARKER), std::string::npos) << logs;
+
+    auto updated = unavailable;
+    updated.epoch = 9;
+    logs = CaptureGlobalSummaryReplace(admission, { updated });
+    EXPECT_NE(logs.find("transition=quarantine_updated"), std::string::npos) << logs;
+
+    auto recovered = updated;
+    recovered.writable = true;
+    recovered.state = UbAdmissionState::AVAILABLE;
+    recovered.reason = UbFailureClass::SUCCESS;
+    recovered.lastStatusCode = K_OK;
+    recovered.epoch = 10;
+    logs = CaptureGlobalSummaryReplace(admission, { recovered });
+    EXPECT_NE(logs.find("transition=recovery_applied"), std::string::npos) << logs;
+
+    auto restarted = recovered;
+    restarted.incarnation = "worker-incarnation-new";
+    restarted.epoch = 1;
+    logs = CaptureGlobalSummaryReplace(admission, { restarted });
+    EXPECT_NE(logs.find("transition=incarnation_replaced"), std::string::npos) << logs;
+
+    auto restartedUnavailable = restarted;
+    restartedUnavailable.writable = false;
+    restartedUnavailable.state = UbAdmissionState::UNAVAILABLE;
+    restartedUnavailable.reason = UbFailureClass::PORT_UNAVAILABLE_ERROR4;
+    restartedUnavailable.lastStatusCode = K_URMA_ERROR;
+    restartedUnavailable.epoch = 2;
+    CaptureGlobalSummaryReplace(admission, { restartedUnavailable });
+    logs = CaptureGlobalSummaryReplace(admission, {});
+    EXPECT_NE(logs.find("transition=summary_removed"), std::string::npos) << logs;
+}
+
+TEST(PeerUbAdmissionTest, RejectedGlobalSummariesDoNotLogAppliedMarker)
+{
+    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
+    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
+    FLAGS_alsologtostderr = true;
+
+    PeerUbAdmission admission;
+    admission.SetSelfWorker(SELF);
+    admission.ReconcileTopologyWorkers({ PEER }, 10, 100);
+    UbHealthSummary nonMember;
+    nonMember.worker = HostPort("127.0.0.1", 31503);
+    nonMember.incarnation = "non-member";
+    nonMember.writable = false;
+    EXPECT_EQ(CaptureGlobalSummaryReplace(admission, { nonMember }).find(GLOBAL_SUMMARY_LOG_MARKER),
+              std::string::npos);
+
+    UbHealthSummary unavailable;
+    unavailable.worker = PEER;
+    unavailable.incarnation = "worker-old";
+    unavailable.writable = false;
+    unavailable.epoch = 8;
+    CaptureGlobalSummaryReplace(admission, { unavailable });
+
+    auto staleRecovery = unavailable;
+    staleRecovery.writable = true;
+    staleRecovery.epoch = 7;
+    EXPECT_EQ(CaptureGlobalSummaryReplace(admission, { staleRecovery }).find(GLOBAL_SUMMARY_LOG_MARKER),
+              std::string::npos);
+
+    auto restarted = staleRecovery;
+    restarted.incarnation = "worker-new";
+    restarted.epoch = 1;
+    CaptureGlobalSummaryReplace(admission, { restarted });
+    unavailable.epoch = 9;
+    EXPECT_EQ(CaptureGlobalSummaryReplace(admission, { unavailable }).find(GLOBAL_SUMMARY_LOG_MARKER),
+              std::string::npos);
 }
 
 TEST(UbHealthSummaryCacheTest, RejectsWrongIncarnationStaleEpochAndRetiredReplay)

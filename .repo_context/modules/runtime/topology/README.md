@@ -305,6 +305,16 @@
   Missing leased records clear global quarantine, malformed live records preserve the last accepted quarantine, and
   neither path erases process-local failure evidence. Topology membership and Failure
   planning remain the only authoritative ownership inputs.
+  `PeerUbAdmission` emits an INFO `UB_HEALTH_SUMMARY action=global_summary_applied` record only after a summary snapshot
+  passes membership/incarnation/epoch fencing and changes the effective admission view. The record identifies the
+  receiving Worker, target Worker, truncated incarnation, epoch, writable state, failure fields, and one of
+  `quarantine_applied`, `quarantine_updated`, `recovery_applied`, `incarnation_replaced`, or `summary_removed`.
+  Identical periodic snapshots do not repeat the INFO record; their aggregate accepted/rejected counts are VLOG(1).
+  Operators can confirm propagation on each receiving Worker with
+  `grep 'UB_HEALTH_SUMMARY action=global_summary_applied.*target=<worker-address>' kvcache.INFO*.log*`.
+  A successful recovery probe that commits a hard-isolated peer from error 4 or error 9 back to local admission
+  `AVAILABLE` emits `UB admission marked peer AVAILABLE` after releasing the admission mutex. SUSPECT/startup
+  verification, rejected probes, stale tokens, and global-health-denied probes do not emit this recovery marker.
   - The Bazel `cluster_topology` target depends on the lightweight
     `//src/datasystem/common/object_cache:ub_health` target. Keep this boundary free of the full `common_object_cache`
     dependency so the coordinator does not inherit shared-memory and data-plane link requirements.
