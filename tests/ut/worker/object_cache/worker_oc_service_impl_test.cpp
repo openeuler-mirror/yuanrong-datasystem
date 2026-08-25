@@ -2326,6 +2326,28 @@ TEST_F(WorkerOcServiceImplTest, ExitIntentRejectsClientHealthBeforeTopologyDrain
     EXPECT_FALSE(impl_->MigrateDataStarted());
 }
 
+TEST_F(WorkerOcServiceImplTest, ShutdownRequestRejectsClientHealthWithoutTopologyExitIntent)
+{
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    Raii restoreHealth([] {
+        SetTopologyServingAdmission(true);
+        SetUnhealthy();
+    });
+    SetTopologyServingAdmission(true);
+    DS_ASSERT_OK(SetHealthProbe());
+    ASSERT_TRUE(IsHealthy());
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+
+    impl_->RequestShutdown();
+
+    EXPECT_FALSE(exitRequested_.load(std::memory_order_acquire));
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    HealthCheckRequestPb req;
+    HealthCheckReplyPb rsp;
+    EXPECT_EQ(impl_->HealthCheck(req, rsp).GetCode(), K_SCALE_DOWN);
+}
+
 TEST_F(WorkerOcServiceImplTest, IncomingMigrationGateClosureDoesNotImpersonateTopologyScaleInDrain)
 {
     ASSERT_NE(impl_->gMigrateProc_, nullptr);

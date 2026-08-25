@@ -3082,6 +3082,9 @@ Status WorkerOCServer::PreShutDown()
 {
     RETURN_OK_IF_TRUE(topologyEngine_ == nullptr);
     INJECT_POINT("worker.PreShutDown.skip");
+    if (objCacheClientWorkerSvc_ != nullptr) {
+        objCacheClientWorkerSvc_->RequestShutdown();
+    }
     bool scaleIn = IsScaleIn();
     auto traceId = Trace::Instance().GetTraceID();
     RETURN_IF_NOT_OK(StartPreShutdownWorkers(scaleIn, traceId));

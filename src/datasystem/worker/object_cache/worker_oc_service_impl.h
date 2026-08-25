@@ -198,6 +198,11 @@ public:
      */
     Status HealthCheck(const HealthCheckRequestPb &req, HealthCheckReplyPb &resp) override;
 
+    void RequestShutdown()
+    {
+        shutdownRequested_.store(true, std::memory_order_release);
+    }
+
     /**
      * @brief Create a new object, allocate memory and return the pointer. for shm use only.
      * @param[in] req The rpc request protobuf
@@ -1432,6 +1437,7 @@ private:
     const cluster::MembershipEndpointView &membership_;
     ObjectEndpointPolicy endpointPolicy_;
     const std::atomic<bool> *exitRequested_{ nullptr };
+    std::atomic<bool> shutdownRequested_{ false };
 
     // Closing incoming migration admission is also used by failure/rejoin cleanup. Keep the irreversible topology
     // ScaleIn drain state separate so ordinary client writes are not permanently fenced after a successful rejoin.

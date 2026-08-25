@@ -275,6 +275,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "health_check_graceful_stop_test",
+    srcs = ["health_check_graceful_stop_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
     name = "kv_client_dist_master_test",
     srcs = ["kv_client_dist_master_test.cpp"],
     tags = ["manual"],
