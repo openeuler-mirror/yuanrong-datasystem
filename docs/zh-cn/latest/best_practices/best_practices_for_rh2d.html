@@ -596,7 +596,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <section class="tex2jax_ignore mathjax_ignore" id="rh2d">
 <h1>RH2D最佳实践<a class="headerlink" href="#rh2d" title="Link to this heading">¶</a></h1>
 <p>远端主机到设备数据传输（Remote Host to Device，RH2D）是一种基于昇腾（Ascend）NPU（Neural Processing Unit）的，支持从远端节点主机侧共享内存到设备侧 HBM 内存的跨节点数据传输机制。通过 NPU 驱动及 CANN 工具包的支持，RH2D 提供了一个高效的数据传输通道，支持异构计算单元间的高效协同，支持大规模的并行计算、AI 训练等高性能计算任务。</p>
-<p>openYuanrong datasystem 支持 RH2D over P2P-Transfer RoCE（RDMA over Converged Ethernet）和 RH2D over HIXL HCCS。P2P-Transfer RoCE 是默认链路，适用于配置了 RoCE 网络的跨节点场景；HIXL HCCS 适用于 HCCS 可达的 Atlas A3 环境。两种链路对上层 MGetH2D/MSetD2H API 透明，均由 Client 主动将远端 Worker 共享内存中的数据读取到本地 NPU HBM。</p>
+<p>openYuanrong datasystem 支持 RH2D over P2P-Transfer RoCE（RDMA over Converged Ethernet）和 RH2D over HIXL。P2P-Transfer RoCE 是默认链路，适用于配置了 RoCE 网络的跨节点场景；HIXL 未配置协议环境变量时在 Atlas A2 上默认使用 RoCE、在 Atlas A3 上默认使用 HCCS，也可通过环境变量强制使用 RoCE。两种链路对上层 MGetH2D/MSetD2H API 透明，均由 Client 主动将远端 Worker 共享内存中的数据读取到本地 NPU HBM。</p>
 <section id="id1">
 <h2>链路选择与约束<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
@@ -604,13 +604,13 @@ document.addEventListener('DOMContentLoaded', function() {
 <thead>
 <tr class="row-odd"><th class="head"><p>项目</p></th>
 <th class="head"><p>RH2D over P2P-Transfer RoCE</p></th>
-<th class="head"><p>RH2D over HIXL HCCS</p></th>
+<th class="head"><p>RH2D over HIXL</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>适用环境</p></td>
 <td><p>配置并打通 RoCE 网络的 Ascend 节点</p></td>
-<td><p>HCCS 可达的 Atlas A3 环境</p></td>
+<td><p>HIXL 可用且 HCCS 或 RoCE 可达的 Atlas A2/A3 环境</p></td>
 </tr>
 <tr class="row-odd"><td><p>Worker链路参数</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">--remote_h2d_link_type</span> <span class="pre">&quot;ROCE&quot;</span></code>，默认值</p></td>
@@ -622,23 +622,23 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-odd"><td><p>Worker Host内存</p></td>
 <td><p>注册到 NPU，需要锁页</p></td>
-<td><p>HIXL buffer-pool relay，不注册、不锁页</p></td>
+<td><p>启用 HIXL buffer pool 时不注册、不锁页；配置为 <code class="docutils literal notranslate"><span class="pre">0:0</span></code> 时注册</p></td>
 </tr>
 <tr class="row-even"><td><p>传输后端及依赖</p></td>
 <td><p>P2P-Transfer及RoCE运行环境</p></td>
-<td><p>HIXL及HCCS运行环境；需要CANN HIXL头文件、<code class="docutils literal notranslate"><span class="pre">libcann_hixl.so</span></code>、<code class="docutils literal notranslate"><span class="pre">libmetadef.so</span></code></p></td>
+<td><p>HIXL及HCCS/RoCE运行环境；需要CANN HIXL头文件、<code class="docutils literal notranslate"><span class="pre">libcann_hixl.so</span></code>、<code class="docutils literal notranslate"><span class="pre">libmetadef.so</span></code></p></td>
 </tr>
 </tbody>
 </table>
 </div>
 <p>使用时需满足以下约束：</p>
 <ol class="arabic simple">
-<li><p>同一个 RH2D 通信链路两端必须使用相同的 <code class="docutils literal notranslate"><span class="pre">remote_h2d_link_type</span></code>；HCCS 场景的 buffer-pool 参数也应保持一致。</p></li>
+<li><p>同一个 RH2D 通信链路两端必须使用相同的 <code class="docutils literal notranslate"><span class="pre">remote_h2d_link_type</span></code>；HIXL 场景的 buffer-pool 参数和 <code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE</span></code> 也应保持一致。</p></li>
 <li><p>链路类型是进程级配置，必须在 Worker 启动前或 Client 第一次 RH2D 操作前设置，运行期间不能动态切换。</p></li>
 <li><p>Client 进程仅使用一个 NPU device id。Worker 可以配置多个 device id，并按 Client 连接轮询分配。</p></li>
 <li><p>HCCS 场景要求构建产物包含 HIXL 支持，且使用的 <code class="docutils literal notranslate"><span class="pre">cann_hixl</span></code> 需支持 <code class="docutils literal notranslate"><span class="pre">comm_resource_config.listen_port</span></code>。构建时未发现 HIXL 头文件、<code class="docutils literal notranslate"><span class="pre">libcann_hixl.so</span></code> 或 <code class="docutils literal notranslate"><span class="pre">libmetadef.so</span></code>，将无法使用 <code class="docutils literal notranslate"><span class="pre">HCCS</span></code> 链路。</p></li>
 <li><p>HCCS 使用 Worker 地址以及 Client 所连接本地 Worker 的地址作为 HIXL endpoint IP。请配置 HCCS 环境中可达的实际 IP，避免使用 <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> 或 <code class="docutils literal notranslate"><span class="pre">0.0.0.0</span></code>。</p></li>
-<li><p>HIXL HCCS 在未设置 <code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE</span></code> 时使用 buffer-pool relay。如需启用 HIXL RoCE 直连模式，Worker 和 Client 进程均需在启动前设置 <code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE=1</span></code>，并确保 RoCE 网络可达。</p></li>
+<li><p>HIXL 在未设置 <code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE</span></code> 时由平台选择默认协议：Atlas A2 使用 RoCE，Atlas A3 使用 HCCS；设置为 <code class="docutils literal notranslate"><span class="pre">1</span></code> 时 HIXL 使用 RoCE。数据系统不适配或改写该协议选择，且始终将 buffer-pool 配置原样传给 HIXL；<code class="docutils literal notranslate"><span class="pre">remote_h2d_hccs_buffer_pool</span></code>/<code class="docutils literal notranslate"><span class="pre">DS_RH2D_HCCS_BUFFER_POOL</span></code> 为正数配置时启用 buffer pool，只有配置为 <code class="docutils literal notranslate"><span class="pre">0:0</span></code> 时才关闭。</p></li>
 <li><p>HCCS 当前在单个进程内串行执行 HIXL <code class="docutils literal notranslate"><span class="pre">TransferSync()</span></code>；需要提高并发度时，建议使用多个 Client 进程。</p></li>
 </ol>
 </section>
@@ -892,8 +892,8 @@ dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</sp
 <td><p>支持 <code class="docutils literal notranslate"><span class="pre">ROCE</span></code>、<code class="docutils literal notranslate"><span class="pre">HCCS</span></code>，区分大小写</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">remote_h2d_hccs_buffer_pool</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">4:8</span></code></p></td>
-<td><p>HIXL buffer-pool 参数，仅 HCCS 使用，格式为两个正整数 <code class="docutils literal notranslate"><span class="pre">&lt;count&gt;:&lt;size&gt;</span></code>；无明确调优需求时保持默认值</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0:0</span></code></p></td>
+<td><p>HIXL buffer-pool 参数，格式为两个正整数 <code class="docutils literal notranslate"><span class="pre">&lt;count&gt;:&lt;size&gt;</span></code>；默认关闭，配置正数值（例如 <code class="docutils literal notranslate"><span class="pre">4:8</span></code>）时启用</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">hixl_cs_enable</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">False</span></code></p></td>
@@ -913,7 +913,7 @@ dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</sp
 <span class="nb">export</span><span class="w"> </span><span class="nv">DS_HIXL_CS_ENABLE</span><span class="o">=</span><span class="m">0</span>
 </pre></div>
 </div>
-<p>如果使用 HIXL RoCE 直连模式，请在 Worker 和 Client 进程启动前都设置 <code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE=1</span></code>。该模式不使用 HIXL buffer-pool relay，<code class="docutils literal notranslate"><span class="pre">DS_RH2D_HCCS_BUFFER_POOL</span></code>/<code class="docutils literal notranslate"><span class="pre">remote_h2d_hccs_buffer_pool</span></code> 不生效，要求两端 RoCE 网络已正确配置并可达。</p>
+<p>如果使用 HIXL RoCE，请在 Worker 和 Client 进程启动前都设置 <code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE=1</span></code>，并要求两端 RoCE 网络已正确配置且可达。该环境变量只选择 HIXL 链路协议，不关闭 buffer pool；buffer pool 仍使用 <code class="docutils literal notranslate"><span class="pre">DS_RH2D_HCCS_BUFFER_POOL</span></code>/<code class="docutils literal notranslate"><span class="pre">remote_h2d_hccs_buffer_pool</span></code> 的配置，只有 <code class="docutils literal notranslate"><span class="pre">0:0</span></code> 才关闭。</p>
 <p>如果使用 HIXL CS RoCE，请在 Worker 设置 <code class="docutils literal notranslate"><span class="pre">--hixl_cs_enable=true</span></code>，并在 Client 设置 <code class="docutils literal notranslate"><span class="pre">DS_HIXL_CS_ENABLE=1</span></code>，同时保持两端 <code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE=1</span></code>。HIXL 会根据各进程本地配置选择通信 Engine，因此 Worker 和 Client 的 CS 配置必须一致。CS RoCE 除了支持普通同节点通信无法覆盖的“跨进程、同 NPU 卡”场景，还针对小数据传输进行了专项优化，可降低通信时延。</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
@@ -933,8 +933,8 @@ dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</sp
 <td><p>Client 链路类型，支持 <code class="docutils literal notranslate"><span class="pre">ROCE</span></code>、<code class="docutils literal notranslate"><span class="pre">HCCS</span></code>，必须与 Worker 一致</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_RH2D_HCCS_BUFFER_POOL</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">4:8</span></code></p></td>
-<td><p>Client HIXL buffer-pool 参数，仅 HCCS buffer-pool 模式使用，应与 Worker 一致</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0:0</span></code></p></td>
+<td><p>Client HIXL buffer-pool 参数，应与 Worker 一致；默认 <code class="docutils literal notranslate"><span class="pre">0:0</span></code> 关闭，配置正数值时启用</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_HIXL_CS_ENABLE</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
@@ -942,7 +942,7 @@ dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</sp
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">HCCL_INTRA_ROCE_ENABLE</span></code></p></td>
 <td><p>未设置</p></td>
-<td><p>HIXL HCCS 的 RoCE 直连模式开关。设置为 <code class="docutils literal notranslate"><span class="pre">1</span></code> 时启用 RoCE direct，Worker 和 Client 必须一致</p></td>
+<td><p>HIXL 链路协议开关。未设置时 A2 默认使用 RoCE、A3 默认使用 HCCS，设置为 <code class="docutils literal notranslate"><span class="pre">1</span></code> 时使用 RoCE；数据系统不感知该协议选择，也不会据此改写 buffer-pool 配置，Worker 和 Client 必须一致</p></td>
 </tr>
 </tbody>
 </table>
