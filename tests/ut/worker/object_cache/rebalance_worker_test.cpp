@@ -18,8 +18,11 @@
  * Description: Test worker-side memory rebalance components.
  */
 
-#include <chrono>
+#include <algorithm>
+#include <atomic>
 #include <condition_variable>
+#include <chrono>
+#include <future>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -32,6 +35,8 @@
 #include <gtest/gtest.h>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/flags/eviction_heat.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -39,12 +44,14 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/rebalance_candidate_provider.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
+#include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/rebalance_executor.h"
 #include "eviction_manager_common.h"
 #include "ut/common.h"
-#include "tests/ut/worker/object_cache/test_metadata_route.h"
+#include "test_metadata_route.h"
 
 using namespace datasystem::object_cache;
 using namespace datasystem::worker;
@@ -72,9 +79,156 @@ master::RebalanceTaskPb MakeTask(const std::string &taskId, uint64_t maxBytes)
     task.set_create_time_ms(nowMs);
     task.set_timeout_ms(TASK_TIMEOUT_MS);
     task.set_deadline_ms(nowMs + TASK_TIMEOUT_MS);
+    task.set_source_eviction_policy(master::EVICTION_POLICY_CLOCK);
+    task.set_source_eviction_policy_epoch(0);
+    task.set_target_eviction_policy(master::EVICTION_POLICY_CLOCK);
+    task.set_target_eviction_policy_epoch(0);
+    task.set_has_eviction_policy_fence(true);
     return task;
 }
+
+Status SelectCandidates(RebalanceCandidateProvider &provider, uint64_t targetBytes, size_t maxObjectCount,
+                        std::unordered_map<std::string, uint64_t> &candidates,
+                        RebalanceCandidateProvider::ObjectHeatMap &objectHeats)
+{
+    RebalanceCandidateSession session;
+    return provider.Select(session, targetBytes, maxObjectCount, candidates, objectHeats);
+}
+
+Status SelectCandidates(RebalanceCandidateProvider &provider, uint64_t targetBytes, size_t maxObjectCount,
+                        std::unordered_map<std::string, uint64_t> &candidates)
+{
+    RebalanceCandidateProvider::ObjectHeatMap ignoredHeats;
+    return SelectCandidates(provider, targetBytes, maxObjectCount, candidates, ignoredHeats);
+}
 }  // namespace
+
+TEST(WorkerOcSpillLifecycleTest, RepeatedInitIsIdempotent)
+{
+    Raii reset([]() { WorkerOcSpill::Instance()->ResetForTest(); });
+    constexpr size_t threadCount = 16;
+    std::atomic<size_t> failures{ 0 };
+    std::vector<std::thread> threads;
+    threads.reserve(threadCount);
+    for (size_t i = 0; i < threadCount; ++i) {
+        threads.emplace_back([&failures]() {
+            if (WorkerOcSpill::Instance()->Init().IsError()) {
+                failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    EXPECT_EQ(failures.load(std::memory_order_relaxed), size_t(0));
+    DS_ASSERT_OK(WorkerOcSpill::Instance()->Init());
+}
+
+TEST(NodeSelectorMaintenanceTest, PreReportHookHonorsMinimumIntervalDuringFastRetries)
+{
+    auto &selector = NodeSelector::Instance();
+    selector.UnregisterPreReportHooks();
+    Raii cleanup([&selector]() { selector.UnregisterPreReportHooks(); });
+    std::atomic<uint64_t> runs{ 0 };
+    selector.RegisterPreReportHook([&runs]() { runs.fetch_add(1, std::memory_order_relaxed); }, 1'000);
+
+    selector.RunPreReportHooksForTest(100);
+    selector.RunPreReportHooksForTest(600);
+    EXPECT_EQ(runs.load(std::memory_order_relaxed), 1u);
+    selector.RunPreReportHooksForTest(1'100);
+    EXPECT_EQ(runs.load(std::memory_order_relaxed), 2u);
+}
+
+TEST(NodeSelectorMaintenanceTest, ObjectCopyWatermarkFormatsRatiosAndZeroDenominators)
+{
+    ObjectCopyWatermark empty;
+    EXPECT_EQ(empty.ToMetricsString(),
+              "0/0/0/0.000000000/0.000000000/0.000000000/0/0/0/0.000000000/0.000000000");
+
+    auto &selector = NodeSelector::Instance();
+    selector.SetObjectCopyWatermark(30, 45, 2, 8, 25, 100, 200);
+    selector.SetHotPrimaryReport(9, 9, 900, 900, 1'000);
+    const auto snapshot = selector.GetObjectCopyWatermark();
+    const auto heatReport = selector.GetHotPrimaryReportForTest();
+    EXPECT_TRUE(snapshot.valid);
+    EXPECT_EQ(snapshot.hotPrimaryCopyCount, 2u);
+    EXPECT_EQ(snapshot.totalPrimaryCopyCount, 8u);
+    EXPECT_EQ(snapshot.coldPrimaryCopyBytes, 30u);
+    EXPECT_EQ(snapshot.warmPrimaryCopyBytes, 45u);
+    EXPECT_EQ(snapshot.ToMetricsString(),
+              "25/100/200/0.125000000/0.500000000/0.250000000/1/30/45/0.300000000/0.450000000");
+    EXPECT_EQ(heatReport.hotPrimaryCopyCount, 9u);
+    EXPECT_EQ(heatReport.totalPrimaryCopyCount, 9u);
+    EXPECT_EQ(heatReport.hotPrimaryCopyBytes, 900u);
+    EXPECT_EQ(heatReport.totalPrimaryCopyBytes, 900u);
+    EXPECT_EQ(heatReport.memoryCapacity, 1'000u);
+}
+
+TEST(NodeSelectorMaintenanceTest, ControlStateSupportsConcurrentUpdatesAndSnapshots)
+{
+    auto &selector = NodeSelector::Instance();
+    selector.UnregisterPreReportHooks();
+    selector.SetObjectCopyWatermark(0, 0, 0, 0, 0, 0, 0);
+    selector.SetHotPrimaryReport(0, 0, 0, 0, 0);
+    Raii cleanup([&selector]() {
+        selector.UnregisterPreReportHooks();
+        selector.SetEvictionPolicyReport(master::EVICTION_POLICY_CLOCK, 0, master::EVICTION_POLICY_STABLE);
+        selector.SetEvictionPolicyControlReport(master::EVICTION_POLICY_WORKER_NONE, 0, 0, 0);
+        selector.SetObjectCopyWatermark(0, 0, 0, 0, 0, 0, 0);
+        selector.SetHotPrimaryReport(0, 0, 0, 0, 0);
+    });
+    std::atomic<bool> start{ false };
+    std::atomic<uint64_t> inconsistentSnapshots{ 0 };
+    std::atomic<uint64_t> hookRuns{ 0 };
+
+    auto waitForStart = [&start]() {
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+    };
+    std::thread watermarkWriter([&]() {
+        waitForStart();
+        for (uint64_t value = 1; value <= 2'000; ++value) {
+            selector.SetObjectCopyWatermark(value, value, value, value, value, value, value);
+            selector.SetHotPrimaryReport(value, value, value, value, value);
+        }
+    });
+    std::thread policyWriter([&]() {
+        waitForStart();
+        for (uint64_t epoch = 1; epoch <= 2'000; ++epoch) {
+            selector.SetEvictionPolicyReport(master::EVICTION_POLICY_HEAT, epoch, master::EVICTION_POLICY_STABLE);
+            selector.SetEvictionPolicyControlReport(master::EVICTION_POLICY_WORKER_ACTIVE, epoch, epoch, epoch);
+        }
+    });
+    std::thread hookWriter([&]() {
+        waitForStart();
+        for (uint64_t i = 0; i < 200; ++i) {
+            selector.RegisterPreReportHook(
+                [&hookRuns]() { hookRuns.fetch_add(1, std::memory_order_relaxed); });
+            selector.RunPreReportHooksForTest(i);
+            selector.UnregisterPreReportHooks();
+        }
+    });
+    std::thread reader([&]() {
+        waitForStart();
+        for (uint64_t i = 0; i < 2'000; ++i) {
+            const auto snapshot = selector.GetObjectCopyWatermark();
+            if (snapshot.hotPrimaryCopyCount != snapshot.totalPrimaryCopyCount
+                || snapshot.hotPrimaryCopyCount != snapshot.hotPrimaryCopyBytes
+                || snapshot.hotPrimaryCopyCount != snapshot.totalPrimaryCopyBytes
+                || snapshot.hotPrimaryCopyCount != snapshot.memoryCapacity) {
+                inconsistentSnapshots.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    });
+    start.store(true, std::memory_order_release);
+    watermarkWriter.join();
+    policyWriter.join();
+    hookWriter.join();
+    reader.join();
+    EXPECT_EQ(inconsistentSnapshots.load(std::memory_order_relaxed), 0u);
+    EXPECT_GT(hookRuns.load(std::memory_order_relaxed), 0u);
+}
 
 class RebalanceCandidateProviderTest : public CommonTest, public EvictionManagerCommon {
 public:
@@ -97,6 +251,8 @@ public:
         globalRefTable_.reset();
         akSkManager_.reset();
         objectTable_.reset();
+        allocator->ResetForTest();
+        allocator = nullptr;
         CommonTest::TearDown();
     }
 
@@ -112,17 +268,17 @@ protected:
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
 };
 
-// Verifies that the candidate provider scans from the oldest eviction-list entry and stops once the selected bytes
-// reach the requested target. This protects the LRU-style rebalance candidate order and batch-size boundary.
+// Verifies that the candidate provider scans from the oldest eviction-list entry and keeps the selected bytes within
+// the requested target. This protects the LRU-style rebalance candidate order and the hard batch-size boundary.
 TEST_F(RebalanceCandidateProviderTest, SelectCandidatesFromOldestUntilTargetBytes)
 {
     CreateAndAdd("oldest", 10 * MB);
     CreateAndAdd("middle", 20 * MB);
     CreateAndAdd("newest", 30 * MB);
 
-    RebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    MemoryRebalanceCandidateProvider provider(evictionManager_, objectTable_);
     std::unordered_map<std::string, uint64_t> candidates;
-    DS_ASSERT_OK(provider.Select(25 * MB, 10, candidates));
+    DS_ASSERT_OK(SelectCandidates(provider, 40 * MB, 10, candidates));
 
     ASSERT_EQ(candidates.size(), size_t(2));
     // Candidate sizing uses sallocx real size (>= dataSize), so assert >= rather than == dataSize exactly.
@@ -143,15 +299,121 @@ TEST_F(RebalanceCandidateProviderTest, SkipNonPrimaryAndAlreadyRebalancingObject
     CreateAndAdd("candidate", 30 * MB);
     ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("already_rebalancing"));
 
-    RebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    MemoryRebalanceCandidateProvider provider(evictionManager_, objectTable_);
     std::unordered_map<std::string, uint64_t> candidates;
-    DS_ASSERT_OK(provider.Select(10 * MB, 10, candidates));
+    DS_ASSERT_OK(SelectCandidates(provider, 40 * MB, 10, candidates));
 
     ASSERT_EQ(candidates.size(), size_t(1));
     EXPECT_GE(candidates["candidate"], 30 * MB);
     EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("non_primary"));
     EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("already_rebalancing"));
     EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("candidate"));
+}
+
+TEST_F(RebalanceCandidateProviderTest, BusyObjectDoesNotBlockCandidateSelection)
+{
+    CreateAndAdd("busy", 10 * MB);
+    CreateAndAdd("available", 10 * MB);
+    std::shared_ptr<SafeObjType> busyEntry;
+    DS_ASSERT_OK(objectTable_->Get("busy", busyEntry));
+    DS_ASSERT_OK(busyEntry->WLock(true));
+    Raii unlock([&busyEntry]() { busyEntry->WUnlock(); });
+
+    MemoryRebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    std::unordered_map<std::string, uint64_t> candidates;
+    auto selection = std::async(
+        std::launch::async, [&provider, &candidates]() { return SelectCandidates(provider, 20 * MB, 10, candidates); });
+
+    EXPECT_EQ(selection.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    DS_ASSERT_OK(selection.get());
+    EXPECT_EQ(candidates.count("busy"), size_t(0));
+    EXPECT_EQ(candidates.count("available"), size_t(1));
+    EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("busy"));
+    EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("available"));
+}
+
+TEST_F(RebalanceCandidateProviderTest, ConcurrentMarkHasSingleWinnerPerObject)
+{
+    constexpr size_t threadCount = 32;
+    std::atomic<bool> start{ false };
+    std::atomic<size_t> winners{ 0 };
+    std::vector<std::thread> threads;
+    threads.reserve(threadCount);
+    for (size_t i = 0; i < threadCount; ++i) {
+        threads.emplace_back([this, &start, &winners]() {
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            if (evictionManager_->TryMarkRebalancingObject("same_object")) {
+                winners.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    start.store(true, std::memory_order_release);
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    EXPECT_EQ(winners.load(std::memory_order_relaxed), 1u);
+    EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("same_object"));
+    evictionManager_->UnmarkRebalancingObject("same_object");
+    EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("same_object"));
+}
+
+TEST_F(RebalanceCandidateProviderTest, ConcurrentDifferentKeyMarkQueryAndUnmark)
+{
+    constexpr size_t threadCount = 16;
+    constexpr size_t keysPerThread = 64;
+    std::atomic<bool> start{ false };
+    std::atomic<size_t> failures{ 0 };
+    std::vector<std::thread> threads;
+    threads.reserve(threadCount);
+    for (size_t threadId = 0; threadId < threadCount; ++threadId) {
+        threads.emplace_back([this, threadId, &start, &failures]() {
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            std::vector<std::string> keys;
+            keys.reserve(keysPerThread);
+            for (size_t keyId = 0; keyId < keysPerThread; ++keyId) {
+                keys.emplace_back("rebalance_" + std::to_string(threadId) + "_" + std::to_string(keyId));
+                if (!evictionManager_->TryMarkRebalancingObject(keys.back())
+                    || !evictionManager_->IsObjectBeingRebalanced(keys.back())) {
+                    failures.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            for (const auto &key : keys) {
+                evictionManager_->UnmarkRebalancingObject(key);
+            }
+            for (const auto &key : keys) {
+                if (evictionManager_->IsObjectBeingRebalanced(key)) {
+                    failures.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    start.store(true, std::memory_order_release);
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    EXPECT_EQ(failures.load(std::memory_order_relaxed), 0u);
+}
+
+// Verifies an object larger than the remaining byte budget is skipped and unmarked, while a later fitting object can
+// still be selected. The provider must never over-reserve the target's capacity/inflight budget.
+TEST_F(RebalanceCandidateProviderTest, MemoryProviderSkipsObjectLargerThanRoundBudget)
+{
+    CreateAndAdd("oversized", 20 * MB);
+    CreateAndAdd("fits", 5 * MB);
+
+    MemoryRebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    std::unordered_map<std::string, uint64_t> candidates;
+    DS_ASSERT_OK(SelectCandidates(provider, 10 * MB, 10, candidates));
+
+    ASSERT_EQ(candidates.size(), size_t(1));
+    EXPECT_EQ(candidates.count("oversized"), size_t(0));
+    EXPECT_EQ(candidates.count("fits"), size_t(1));
+    EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("oversized"));
+    EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("fits"));
 }
 
 // Verifies the eviction/rebalance exclusion path. When eviction sees an object already owned by rebalance, it should
@@ -182,9 +444,10 @@ TEST_F(RebalanceCandidateProviderTest, TryGetObjectSizeUsesRealSizeNotPayload)
 {
     CreateAndAdd("real_size_obj", 1 * MB);
 
-    RebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    MemoryRebalanceCandidateProvider provider(evictionManager_, objectTable_);
     std::unordered_map<std::string, uint64_t> candidates;
-    DS_ASSERT_OK(provider.Select(2 * MB, 10, candidates));
+    RebalanceCandidateProvider::ObjectHeatMap objectHeats;
+    DS_ASSERT_OK(SelectCandidates(provider, 2 * MB, 10, candidates, objectHeats));
 
     ASSERT_EQ(candidates.count("real_size_obj"), size_t(1));
     // sallocx rounds the allocation up beyond the payload, so the accounting size must be greater than dataSize.
@@ -222,6 +485,226 @@ TEST_F(RebalanceCandidateProviderTest, GetMigratableSizeDistinguishesStandaloneA
     EXPECT_EQ(slice.GetMigratableSize(), sliceSize);  // aggregated branch returns the distributed slice size
 }
 
+// Heat-eviction variant of the provider fixture: sets the heat flags BEFORE Init so the manager builds the
+// heat strategy (strategy is fixed at worker startup), then CreateAndAdd seeds heat nodes instead of clock
+// counter nodes. Required because the rebalance_strategy flag selection happens in the factory, not Init.
+class HeatProviderTest : public CommonTest, public EvictionManagerCommon {
+public:
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        objectTable_ = std::make_shared<ObjectTable>();
+        allocator = memory::Allocator::Instance();
+        allocator->Init(maxMemorySize);
+        akSkManager_ = std::make_shared<AkSkManager>(0);
+
+        FLAGS_eviction_strategy = "heat";
+        FLAGS_eviction_heat_threshold = 2.0;
+        FLAGS_eviction_heat_initial_counter = 2.0;
+        FLAGS_eviction_heat_max_counter = 32;
+        FLAGS_rebalance_keep_local_copy = true;
+        RefreshHeatFactors();
+
+        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR,
+                                                                     GetTestMetadataRoute());
+        globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
+        DS_ASSERT_OK(evictionManager_->Init(globalRefTable_, akSkManager_));
+        std::weak_ptr<WorkerOcEvictionManager> weakManager = evictionManager_;
+        AsyncResourceReleaser::Instance().Init(objectTable_, [weakManager](const ImmutableString &objectKey) {
+            auto manager = weakManager.lock();
+            if (manager != nullptr) {
+                manager->Erase(objectKey);
+            }
+        });
+    }
+
+    void TearDown() override
+    {
+        AsyncResourceReleaser::Instance().Shutdown();
+        evictionManager_.reset();
+        globalRefTable_.reset();
+        akSkManager_.reset();
+        objectTable_.reset();
+        FLAGS_eviction_strategy = "clock";
+        FLAGS_rebalance_keep_local_copy = true;
+        RefreshHeatFactors();
+        allocator->ResetForTest();
+        allocator = nullptr;
+        CommonTest::TearDown();
+    }
+
+protected:
+    void CreateAndAdd(const std::string &objectKey, uint64_t dataSize, bool primaryCopy = true)
+    {
+        DS_ASSERT_OK(CreateObject(objectKey, dataSize, WriteMode::NONE_L2_CACHE, primaryCopy));
+        evictionManager_->Add(objectKey);
+    }
+
+    bool EvictionNodeExists(const std::string &objectKey)
+    {
+        std::vector<EvictionList::Node> nodes;
+        EvictionList::Node oldest;
+        if (evictionManager_->GetAllObjectsInfo(nodes, oldest).IsError()) {
+            return false;
+        }
+        return std::any_of(nodes.begin(), nodes.end(), [&objectKey](const EvictionList::Node &node) {
+            return node.objectKey == objectKey;
+        });
+    }
+
+    std::shared_ptr<AkSkManager> akSkManager_;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
+    std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
+};
+
+// Under memory pressure, the Heat provider selects stable primaries from lowest to highest heat.
+// Source nodes are removed transactionally when AsyncResourceReleaser erases the exact migrated object version.
+TEST_F(HeatProviderTest, HeatProviderSelectsLowestHeatPrimariesAndReleaseErasesNodes)
+{
+    CreateAndAdd("cold", 10 * MB);  // heat=2 (initial), not hot
+    CreateAndAdd("warm", 10 * MB);  // 2 + 3 hits = 5 (hot)
+    CreateAndAdd("hot", 10 * MB);   // 2 + 6 hits = 8 (hot)
+    for (int i = 0; i < 3; ++i) {
+        evictionManager_->OnCacheHit("warm");
+    }
+    for (int i = 0; i < 6; ++i) {
+        evictionManager_->OnCacheHit("hot");
+    }
+
+    HeatRebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    std::unordered_map<std::string, uint64_t> candidates;
+    RebalanceCandidateProvider::ObjectHeatMap objectHeats;
+    DS_ASSERT_OK(SelectCandidates(provider, 100 * MB, 10, candidates, objectHeats));
+    ASSERT_EQ(candidates.size(), size_t(3));
+    EXPECT_EQ(candidates.count("warm"), size_t(1));
+    EXPECT_EQ(candidates.count("hot"), size_t(1));
+    EXPECT_EQ(candidates.count("cold"), size_t(1));
+    EXPECT_DOUBLE_EQ(objectHeats.at("cold"), 2.0);
+    EXPECT_DOUBLE_EQ(objectHeats.at("warm"), 5.0);
+    EXPECT_DOUBLE_EQ(objectHeats.at("hot"), 8.0);
+    EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("warm"));
+    EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("hot"));
+
+    // Simulate the real SPILL flow. The releaser removes the eviction node before objectTable erase while holding the
+    // exact old object write lock.
+    const std::vector<std::string> migrated{ "cold", "warm", "hot" };
+    for (const auto &key : migrated) {
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(key, entry));
+        DS_ASSERT_OK(AsyncResourceReleaser::Instance().Release(key, (*entry)->GetCreateTime()));
+    }
+    std::vector<EvictionList::Node> res;
+    EvictionList::Node oldest;
+    DS_ASSERT_OK(evictionManager_->GetAllObjectsInfo(res, oldest));
+    EXPECT_TRUE(res.empty());
+}
+
+TEST_F(HeatProviderTest, HeatProviderSkipsObjectLargerThanRoundBudget)
+{
+    CreateAndAdd("oversized", 20 * MB);
+    CreateAndAdd("fits", 5 * MB);
+    for (int i = 0; i < 3; ++i) {
+        evictionManager_->OnCacheHit("oversized");  // heat=5, considered before fits
+    }
+    for (int i = 0; i < 4; ++i) {
+        evictionManager_->OnCacheHit("fits");  // heat=6
+    }
+
+    HeatRebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    std::unordered_map<std::string, uint64_t> candidates;
+    DS_ASSERT_OK(SelectCandidates(provider, 10 * MB, 10, candidates));
+
+    ASSERT_EQ(candidates.size(), size_t(1));
+    EXPECT_EQ(candidates.count("oversized"), size_t(0));
+    EXPECT_GE(candidates["fits"], 5 * MB);
+    EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("oversized"));
+    EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("fits"));
+}
+
+TEST_F(HeatProviderTest, TaskSessionContinuesCandidateWindowAcrossBatches)
+{
+    CreateAndAdd("cold", 5 * MB);
+    CreateAndAdd("warm", 5 * MB);
+    CreateAndAdd("hot", 5 * MB);
+    evictionManager_->OnCacheHit("warm");
+    evictionManager_->OnCacheHit("hot");
+    evictionManager_->OnCacheHit("hot");
+
+    HeatRebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    RebalanceCandidateSession session;
+    std::unordered_map<std::string, uint64_t> firstBatch;
+    RebalanceCandidateProvider::ObjectHeatMap firstHeats;
+    DS_ASSERT_OK(provider.Select(session, 6 * MB, 1, firstBatch, firstHeats));
+    ASSERT_EQ(firstBatch.size(), size_t(1));
+    const auto firstKey = firstBatch.begin()->first;
+    evictionManager_->UnmarkRebalancingObject(firstKey);
+
+    std::unordered_map<std::string, uint64_t> secondBatch;
+    RebalanceCandidateProvider::ObjectHeatMap secondHeats;
+    DS_ASSERT_OK(provider.Select(session, 6 * MB, 1, secondBatch, secondHeats));
+    ASSERT_EQ(secondBatch.size(), size_t(1));
+    EXPECT_NE(secondBatch.begin()->first, firstKey);
+}
+
+TEST_F(HeatProviderTest, AsyncReleaseRetryEventuallyRemovesEvictionNode)
+{
+    CreateAndAdd("warm", 10 * MB);
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get("warm", entry));
+    const auto version = (*entry)->GetCreateTime();
+    DS_ASSERT_OK(entry->WLock());
+    ASSERT_EQ(AsyncResourceReleaser::Instance().Release("warm", version).GetCode(), K_TRY_AGAIN);
+    AsyncResourceReleaser::Instance().AddTask("warm", version);
+    entry->WUnlock();
+
+    constexpr int maxWaitCount = 100;
+    constexpr int waitIntervalMs = 20;
+    int waitCount = 0;
+    while ((objectTable_->Contains("warm").IsOk() || EvictionNodeExists("warm"))
+           && waitCount++ < maxWaitCount) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(waitIntervalMs));
+    }
+    EXPECT_TRUE(objectTable_->Contains("warm").IsError());
+    EXPECT_FALSE(EvictionNodeExists("warm"));
+}
+
+TEST_F(HeatProviderTest, RecreateAfterReleaseKeepsNewEvictionNode)
+{
+    CreateAndAdd("same_key", 10 * MB);
+    std::shared_ptr<SafeObjType> oldEntry;
+    DS_ASSERT_OK(objectTable_->Get("same_key", oldEntry));
+    DS_ASSERT_OK(AsyncResourceReleaser::Instance().Release("same_key", (*oldEntry)->GetCreateTime()));
+
+    CreateAndAdd("same_key", 10 * MB);
+    EXPECT_TRUE(objectTable_->Contains("same_key").IsOk());
+    EXPECT_TRUE(EvictionNodeExists("same_key"));
+}
+
+// Under rebalance_keep_local_copy, selection must not erase eviction-list nodes because the source keeps its
+// objectTable entry and is demoted to non-primary after migration. The nodes remain available for normal eviction.
+TEST_F(HeatProviderTest, SelectionKeepsNodesWhenKeepLocalCopyEnabled)
+{
+    FLAGS_rebalance_keep_local_copy = true;
+    CreateAndAdd("warm", 10 * MB);  // 2 + 3 hits = 5 (hot)
+    CreateAndAdd("hot", 10 * MB);   // 2 + 6 hits = 8 (hot)
+    for (int i = 0; i < 3; ++i) {
+        evictionManager_->OnCacheHit("warm");
+    }
+    for (int i = 0; i < 6; ++i) {
+        evictionManager_->OnCacheHit("hot");
+    }
+
+    HeatRebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    std::unordered_map<std::string, uint64_t> candidates;
+    DS_ASSERT_OK(SelectCandidates(provider, 100 * MB, 10, candidates));
+    ASSERT_EQ(candidates.size(), size_t(2));
+
+    std::vector<EvictionList::Node> res;
+    EvictionList::Node oldest;
+    DS_ASSERT_OK(evictionManager_->GetAllObjectsInfo(res, oldest));
+    ASSERT_EQ(res.size(), size_t(2));  // both nodes still present — not erased
+}
+
 // Integration guard for issue #864: after a SPILL migration completes (Release), the migrated object must not be
 // re-selected as a rebalance candidate. This reproduces the original failure (stale eviction-list entry re-scanned
 // every batch, logging "Key not found") and asserts the root-cause fix at the migration source keeps the eviction
@@ -230,7 +713,13 @@ TEST_F(RebalanceCandidateProviderTest, SelectDoesNotSeeStaleEntryAfterRelease)
 {
     // Order-independent: guarantee clean singleton state before Init (a prior test suite may have left it running).
     AsyncResourceReleaser::Instance().Shutdown();
-    AsyncResourceReleaser::Instance().Init(objectTable_, evictionManager_);
+    std::weak_ptr<WorkerOcEvictionManager> weakManager = evictionManager_;
+    AsyncResourceReleaser::Instance().Init(objectTable_, [weakManager](const ImmutableString &objectKey) {
+        auto manager = weakManager.lock();
+        if (manager != nullptr) {
+            manager->Erase(objectKey);
+        }
+    });
     Raii releaserShutdown([]() { AsyncResourceReleaser::Instance().Shutdown(); });
 
     CreateAndAdd("migrated", 10 * MB);
@@ -241,9 +730,9 @@ TEST_F(RebalanceCandidateProviderTest, SelectDoesNotSeeStaleEntryAfterRelease)
     DS_ASSERT_OK(AsyncResourceReleaser::Instance().Release("migrated", 1));
     DS_ASSERT_NOT_OK(objectTable_->Contains("migrated"));
 
-    RebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    MemoryRebalanceCandidateProvider provider(evictionManager_, objectTable_);
     std::unordered_map<std::string, uint64_t> candidates;
-    DS_ASSERT_OK(provider.Select(30 * MB, 10, candidates));
+    DS_ASSERT_OK(SelectCandidates(provider, 30 * MB, 10, candidates));
 
     EXPECT_EQ(candidates.count("migrated"), size_t(0));
     EXPECT_GE(candidates["alive"], 20 * MB);
@@ -298,14 +787,17 @@ protected:
         selectIndex_ = 0;
         migrateIndex_ = 0;
         reportCount_ = 0;
+        reportStatus_ = Status::OK();
         reports_.clear();
         reportThreadIds_.clear();
         reportTraceIds_.clear();
         nextTaskForReport_.Clear();
         executor_->SetTestHooks(
             [this](uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates,
+                   RebalanceExecutor::ObjectHeatMap &objectHeats,
                    const std::unordered_set<std::string> &skipKeys) {
                 (void)maxBytes;
+                objectHeats.clear();
                 if (selectIndex_ >= batches_.size()) {
                     return Status(K_NOT_FOUND, "no more test candidates");
                 }
@@ -323,7 +815,8 @@ protected:
                 candidates = std::move(batch);
                 return Status::OK();
             },
-            [this](const master::RebalanceTaskPb &, const HostPort &, const std::vector<std::string> &objectKeys) {
+            [this](const master::RebalanceTaskPb &, const HostPort &, const std::vector<std::string> &objectKeys,
+                   const RebalanceExecutor::ObjectHeatMap &) {
                 migratedObjectKeys_.push_back(objectKeys);
                 if (migrateIndex_ >= results_.size()) {
                     RebalanceExecutor::MigrateResult result;
@@ -350,6 +843,7 @@ protected:
                 }
                 ++reportCount_;
                 cv_.notify_all();
+                return reportStatus_;
             });
     }
 
@@ -469,6 +963,7 @@ protected:
     std::mutex mutex_;
     std::condition_variable cv_;
     size_t reportCount_ = 0;
+    Status reportStatus_;
     std::vector<ReportRecord> reports_;
     std::vector<std::thread::id> reportThreadIds_;
     // When set (non-empty task_id), the reportHook copies this task into the response's
@@ -595,6 +1090,101 @@ TEST_F(RebalanceExecutorTest, SubmitReportsSucceededAndClearsRunningState)
     EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("obj2"));
     ASSERT_EQ(migratedObjectKeys_.size(), size_t(1));
     EXPECT_EQ(migratedObjectKeys_[0].size(), size_t(2));
+}
+
+TEST_F(RebalanceExecutorTest, RejectsTaskWhenSourcePolicyEpochIsStale)
+{
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+    auto task = MakeTask("stale-policy-task", 10);
+    task.set_source_eviction_policy_epoch(1);
+
+    executor_->Submit(task, MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_FAILED);
+    EXPECT_NE(reports_[0].failedReason.find("fence is stale"), std::string::npos);
+    EXPECT_EQ(migrateIndex_, size_t(0));
+}
+
+TEST_F(RebalanceExecutorTest, NonBlockingPauseReturnsTryAgainWhileTaskDrains)
+{
+    std::mutex migrationMutex;
+    std::condition_variable migrationCv;
+    bool migrationEntered = false;
+    bool releaseMigration = false;
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "unused" }) });
+    executor_->SetTestHooks(
+        [this](uint64_t, std::unordered_map<std::string, uint64_t> &candidates,
+               RebalanceExecutor::ObjectHeatMap &objectHeats,
+               const std::unordered_set<std::string> & /* skipKeys */) {
+            objectHeats.clear();
+            if (selectIndex_ >= batches_.size()) {
+                return Status(K_NOT_FOUND, "no more test candidates");
+            }
+            candidates = batches_[selectIndex_++];
+            return Status::OK();
+        },
+        [this, &migrationMutex, &migrationCv, &migrationEntered, &releaseMigration](
+            const master::RebalanceTaskPb &, const HostPort &, const std::vector<std::string> &objectKeys,
+            const RebalanceExecutor::ObjectHeatMap &) {
+            std::unique_lock<std::mutex> lock(migrationMutex);
+            migrationEntered = true;
+            migrationCv.notify_all();
+            migrationCv.wait(lock, [&releaseMigration] { return releaseMigration; });
+            return MakeMigrateResult(objectKeys);
+        },
+        [this](const master::ReportRebalanceResultReqPb &req, master::ReportRebalanceResultRspPb &) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            reports_.push_back({ req.status(), req.migrated_bytes(), req.migrated_objects(), req.failed_objects(),
+                                 req.failure_side(), req.failed_reason() });
+            ++reportCount_;
+            cv_.notify_all();
+            return Status::OK();
+        });
+
+    executor_->Submit(MakeTask("nonblocking-pause", 10), MASTER_ADDR.ToString());
+    {
+        std::unique_lock<std::mutex> lock(migrationMutex);
+        ASSERT_TRUE(migrationCv.wait_for(lock, std::chrono::seconds(2), [&migrationEntered] {
+            return migrationEntered;
+        }));
+    }
+    Timer timer;
+    EXPECT_EQ(executor_->PauseAndCheckDrained().GetCode(), K_TRY_AGAIN);
+    EXPECT_LT(timer.ElapsedMilliSecond(), 100u);
+
+    {
+        std::lock_guard<std::mutex> lock(migrationMutex);
+        releaseMigration = true;
+    }
+    migrationCv.notify_all();
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    DS_ASSERT_OK(executor_->PauseAndCheckDrained());
+    executor_->Resume();
+}
+
+TEST_F(RebalanceExecutorTest, FailedTerminalReportReplayOnlyResendsCachedResult)
+{
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+    reportStatus_ = Status(K_RPC_UNAVAILABLE, "injected report failure");
+    auto task = MakeTask("replayed-task", 10);
+
+    executor_->Submit(task, MASTER_ADDR.ToString());
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(migrateIndex_, size_t(1));
+
+    DS_ASSERT_OK(executor_->PauseAndCheckDrained());
+    executor_->Submit(task, MASTER_ADDR.ToString());
+    ASSERT_TRUE(WaitReports(2));
+    executor_->Resume();
+    EXPECT_EQ(migrateIndex_, size_t(1));
+    ASSERT_EQ(reports_.size(), size_t(2));
+    EXPECT_EQ(reports_[1].status, master::REBALANCE_TASK_SUCCEEDED);
+    EXPECT_EQ(reports_[1].migratedBytes, uint64_t(10));
 }
 
 // Verifies that Submit propagates the caller's traceId into the single-task executor pool, so worker-side
@@ -810,6 +1400,58 @@ TEST_F(RebalanceExecutorTest, BusySourceReportsFailedWithoutReplacingRunningTask
     EXPECT_NE(reportThreadIds_[0], submitThreadId);
     EXPECT_TRUE(executor_->IsRunningForTest());
     EXPECT_EQ(executor_->GetRunningTaskIdForTest(), "running-task");
+}
+
+TEST_F(RebalanceExecutorTest, BusySuccessorReplaysCachedPredecessorTerminalResult)
+{
+    InstallHooks({}, {});
+    auto predecessor = MakeTask("completed-predecessor", 10);
+    executor_->CacheTerminalResultForTest(predecessor);
+    executor_->SetRunningForTest(true, "running-successor");
+
+    executor_->Submit(predecessor, MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_SUCCEEDED);
+    EXPECT_EQ(reports_[0].failedReason.find("busy"), std::string::npos);
+    EXPECT_TRUE(executor_->IsRunningForTest());
+    EXPECT_EQ(executor_->GetRunningTaskIdForTest(), "running-successor");
+}
+
+TEST_F(RebalanceExecutorTest, LegacyTaskWithoutPolicyFenceRemainsAccepted)
+{
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+    auto task = MakeTask("legacy-no-fence", 10);
+    task.clear_has_eviction_policy_fence();
+    task.clear_source_eviction_policy();
+    task.clear_target_eviction_policy();
+
+    executor_->Submit(task, MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_SUCCEEDED);
+
+    const auto fence = RebalanceExecutor::BuildRebalancePolicyFenceForTest(task);
+    EXPECT_FALSE(fence.enabled);
+    EXPECT_EQ(fence.targetPolicy, 0u);
+    EXPECT_EQ(fence.targetEpoch, 0u);
+    EXPECT_TRUE(fence.taskId.empty());
+}
+
+TEST_F(RebalanceExecutorTest, PolicyFenceIsForwardedToTargetMigration)
+{
+    auto task = MakeTask("policy-fence", 10);
+    task.set_target_eviction_policy(master::EVICTION_POLICY_HEAT);
+    task.set_target_eviction_policy_epoch(42);
+
+    const auto fence = RebalanceExecutor::BuildRebalancePolicyFenceForTest(task);
+    EXPECT_TRUE(fence.enabled);
+    EXPECT_EQ(fence.targetPolicy, static_cast<uint32_t>(master::EVICTION_POLICY_HEAT));
+    EXPECT_EQ(fence.targetEpoch, 42u);
+    EXPECT_EQ(fence.taskId, "policy-fence");
 }
 
 // Verifies that SubmitBusyResult propagates the caller's traceId to the executor pool, mirroring Submit's propagation.

@@ -28,6 +28,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -107,6 +108,9 @@ public:
      * @return K_OK after the drain; K_RPC_DEADLINE_EXCEEDED if admitted requests remain.
      */
     Status CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline);
+    /** Pause new migrations and return K_TRY_AGAIN instead of waiting while admitted requests drain. */
+    Status PauseIncomingMigrationAdmissionAndCheckDrained();
+    void ResumeIncomingMigrationAdmission();
 
     /**
      * @brief Whether the admission gate has been closed by CloseIncomingMigrationAdmissionAndWait.
@@ -146,6 +150,12 @@ public:
 #else
 private:
 #endif
+    struct PrimarySwitchOutcome {
+        std::unordered_set<std::string> confirmedIds;
+        std::unordered_set<std::string> expiredIds;
+        std::unordered_set<std::string> failedIds;
+    };
+
     Status PrepareMigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
                               std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units);
 
@@ -182,6 +192,10 @@ private:
     void BatchLock(const std::map<std::string, uint64_t> &toLockIds, LockedEntryMap &lockedEntries,
                    std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &failedIds,
                    LockedEntryMap &needModifyPrimary);
+    void HandleExistingLockedEntry(const std::string &objectKey, uint64_t version,
+                                   std::shared_ptr<SafeObjType> entry, LockedEntryMap &lockedEntries,
+                                   std::unordered_set<std::string> &successIds,
+                                   std::unordered_set<std::string> &failedIds, LockedEntryMap &needModifyPrimary);
 
     /**
      * @brief Batch unlock objects.
@@ -336,13 +350,33 @@ private:
      * @param[in] originAddr Original primary worker address.
      * @param[in] needSendMasterIds Need replace primary copy objects.
      * @param[in] type Migrate type.
-     * @param[out] successIds Success object key list.
-     * @param[out] failedIds Failed object key list.
+     * @param[out] outcome Per-object primary switch outcome.
      * @return K_OK on success, the error otherwise.
      */
     Status ReplacePrimaryImpl(const std::string &originAddr, const ObjectInfoMap &needSendMasterIds,
-                              const MigrateType &type, std::unordered_set<std::string> &successIds,
-                              std::unordered_set<std::string> &failedIds);
+                              const MigrateType &type, PrimarySwitchOutcome &outcome);
+    Status ReplacePrimaryForMaster(const std::string &originAddr, const HostPort &masterAddr,
+                                   const std::vector<std::string> &ids, const ObjectInfoMap &needSendMasterIds,
+                                   const MigrateType &type, PrimarySwitchOutcome &outcome,
+                                   RedirectMap &needRedirectIds);
+
+    /**
+     * @brief Commit confirmed primary switches locally and rollback uncommitted staged objects.
+     * @param[in] needSendMasterIds All objects sent to master for primary replacement.
+     * @param[in] stagedObjectInfos Objects whose data was staged by this migrate request.
+     * @param[in] outcome Per-object primary switch outcome.
+     * @param[in,out] successIds Success object key list returned to the source worker.
+     * @param[in,out] failedIds Failed object key list returned to the source worker.
+     */
+    void FinalizePrimarySwitch(const ObjectInfoMap &needSendMasterIds, const ObjectInfoMap &stagedObjectInfos,
+                               const PrimarySwitchOutcome &outcome, std::unordered_set<std::string> &successIds,
+                               std::unordered_set<std::string> &failedIds);
+
+    /**
+     * @brief Apply source heat only for primary switches confirmed by master.
+     */
+    void ApplyConfirmedMigratedHeats(const MigrateDataReqPb &req, const ObjectInfoMap &needSendMasterIds,
+                                     const ObjectInfoMap &stagedObjectInfos, const PrimarySwitchOutcome &outcome);
 
     /**
      * @brief Calculate remain bytes according to migrate type.
@@ -355,11 +389,13 @@ private:
      * @brief Fill migrate data response.
      * @param[in] req Migrate data request.
      * @param[in] successIds Success object key list.
+     * @param[in] expiredIds Expired source object key list.
      * @param[in] failedIds Failed object key list.
      * @param[in] oom Indicate is OOM or not.
      * @param[out] rsp Migrate data response.
      */
     void FillMigrateDataResponse(const MigrateDataReqPb &req, const std::unordered_set<std::string> &successIds,
+                                 const std::unordered_set<std::string> &expiredIds,
                                  const std::unordered_set<std::string> &failedIds, bool oom, MigrateDataRspPb &rsp,
                                  const std::unordered_set<std::string> &skipIds = {});
 
@@ -428,7 +464,7 @@ private:
      */
     Status AllocateAndAssignData(const std::string &objectKey, std::shared_ptr<SafeObjType> &entry,
                                  const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size,
-                                 std::shared_ptr<ShmUnit> unit);
+                                 std::shared_ptr<ShmUnit> unit, bool retryOnOOM = false);
 
     Status BatchAllocateObjectGroupBySlot(const MigrateDataReqPb &req,
                                           std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units);
@@ -457,27 +493,24 @@ private:
      * @brief Process via replace primary response.
      * @param[in] rsp Replace primary response.
      * @param[in] needSendMasterIds Need replace primary copy objects.
-     * @param[out] successIds Success object key list.
-     * @param[out] failedIds Failed object key list.
+     * @param[in,out] outcome Per-object primary switch outcome.
      * @param[out] needRedirectIds Need redirect objects.
      */
     void ProcessReplacePrimaryRsp(master::ReplacePrimaryRspPb &rsp, const ObjectInfoMap &needSendMasterIds,
-                                  std::unordered_set<std::string> &successIds,
-                                  std::unordered_set<std::string> &failedIds, RedirectMap &needRedirectIds);
+                                  PrimarySwitchOutcome &outcome, RedirectMap &needRedirectIds);
 
     /**
      * @brief Replace objects primary copy to redirect master.
      * @param[in] originAddr Original primary worker address.
      * @param[in] needRedirectIds Need redirect objects.
      * @param[in] needSendMasterIds Need replace primary copy objects.
-     * @param[out] successIds Success object key list.
-     * @param[out] failedIds Failed object key list.
+     * @param[in] type Migrate type.
+     * @param[in,out] outcome Per-object primary switch outcome.
      * @return K_OK on success, the error otherwise.
      */
     Status ReplacePrimaryToRedirectMaster(const std::string &originAddr, const RedirectMap &needRedirectIds,
-                                          const ObjectInfoMap &needSendMasterIds,
-                                          std::unordered_set<std::string> &successIds,
-                                          std::unordered_set<std::string> &failedIds);
+                                          const ObjectInfoMap &needSendMasterIds, const MigrateType &type,
+                                          PrimarySwitchOutcome &outcome);
 
     /**
      * @brief Rollback the objects.
@@ -583,6 +616,12 @@ private:
      */
     Status MigrateDataImpl(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
                            std::vector<RpcMessage> payloads);
+    ObjectInfoMap BuildPrimarySwitchInputs(const ObjectInfoMap &stagedObjectInfos,
+                                           const LockedEntryMap &needModifyPrimary, const QueryMetaMap &metas,
+                                           const std::unordered_set<std::string> &needQueryIds,
+                                           const std::unordered_set<std::string> &failedIds,
+                                           std::unordered_set<std::string> &successIds,
+                                           std::unordered_set<std::string> &skippedIds) const;
 
     /**
      * @brief Get migrate data objects.
@@ -631,7 +670,6 @@ private:
     /**
      * @brief Prepare locked entries and metadata for migrate data direct.
      * @param[in] req Migrate data direct request.
-     * @param[out] rsp Migrate data direct response.
      * @param[in,out] point Performance point recorder.
      * @param[out] lockedEntries Locked object list.
      * @param[out] successIds Success object key list.
@@ -640,11 +678,12 @@ private:
      * @param[out] needReadDataIds Need read data object keys.
      * @return Status of the call.
      */
-    Status PrepareMigrateDataDirectEntries(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp,
-                                           PerfPoint &point, LockedEntryMap &lockedEntries,
+    Status PrepareMigrateDataDirectEntries(const MigrateDataDirectReqPb &req, PerfPoint &point,
+                                           LockedEntryMap &lockedEntries,
                                            std::unordered_set<std::string> &successIds,
                                            std::unordered_set<std::string> &failedIds,
                                            LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds,
+                                           const QueryMetaMap &metas,
                                            std::unordered_set<std::string> &skippedIds);
 
     /**
@@ -687,10 +726,12 @@ private:
     std::shared_ptr<MigrateDataRateController> rateController_;
     PeerUbAdmission *ubAdmission_{ nullptr };
 
-    // Protects incomingMigrationAdmissionClosed_ and incomingMigrationCount_.
+    // Protects incomingMigrationAdmissionPaused_ and incomingMigrationCount_. Closed remains atomic for lock-free
+    // processing checks after admission.
     std::mutex incomingMigrationMutex_;
     std::condition_variable incomingMigrationCv_;
     std::atomic<bool> incomingMigrationAdmissionClosed_{ false };
+    bool incomingMigrationAdmissionPaused_{ false };
     std::atomic<bool> incomingMigrationDrainTimedOut_{ false };
     uint64_t incomingMigrationCount_{ 0 };
 

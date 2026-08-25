@@ -13,7 +13,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -305,6 +304,87 @@ TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailin
     EXPECT_TRUE(response.meta_is_moving());
     EXPECT_EQ(response.failed_ids_size(), 0);
     EXPECT_EQ(response.success_ids_size(), 0);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, StaleEvictionRemoveMetaDoesNotErasePromotedPrimary)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "stale_eviction_after_primary_promotion";
+    constexpr uint64_t version = 123;
+    InsertPrimaryWithCopy(manager, objectKey);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.meta.set_version(version);
+    }
+
+    RemoveMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.set_cause(RemoveMetaReqPb::EVICTION);
+    request.set_version(UINT64_MAX);
+    request.add_ids(objectKey);
+    auto *objectVersion = request.add_id_with_version();
+    objectVersion->set_id(objectKey);
+    objectVersion->set_version(version);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMetaLocation(request, LOCAL_ADDRESS, response));
+
+    ASSERT_EQ(response.success_ids_size(), 1);
+    EXPECT_EQ(response.success_ids(0), objectKey);
+    EXPECT_EQ(response.failed_ids_size(), 0);
+    TbbMetaTable::const_accessor accessor;
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    bthread::RWLockRdGuard lock(shard.mutex);
+    ASSERT_TRUE(shard.table.find(accessor, objectKey));
+    EXPECT_EQ(accessor->second.meta.primary_address(), LOCAL_ADDRESS);
+    EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), 1U);
+    EXPECT_EQ(accessor->second.locations.count(TARGET_ADDRESS), 1U);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, EvictionRemoveMetaStillErasesNonPrimaryLocation)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "evicted_non_primary_location";
+    constexpr uint64_t version = 456;
+    InsertPrimaryWithCopy(manager, objectKey);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.meta.set_version(version);
+    }
+
+    RemoveMetaReqPb request;
+    request.set_address(TARGET_ADDRESS);
+    request.set_cause(RemoveMetaReqPb::EVICTION);
+    request.set_version(UINT64_MAX);
+    request.add_ids(objectKey);
+    auto *objectVersion = request.add_id_with_version();
+    objectVersion->set_id(objectKey);
+    objectVersion->set_version(version);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMetaLocation(request, TARGET_ADDRESS, response));
+
+    ASSERT_EQ(response.success_ids_size(), 1);
+    EXPECT_EQ(response.success_ids(0), objectKey);
+    TbbMetaTable::const_accessor accessor;
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    bthread::RWLockRdGuard lock(shard.mutex);
+    ASSERT_TRUE(shard.table.find(accessor, objectKey));
+    EXPECT_EQ(accessor->second.meta.primary_address(), LOCAL_ADDRESS);
+    EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), 1U);
+    EXPECT_EQ(accessor->second.locations.count(TARGET_ADDRESS), 0U);
 }
 
 TEST_F(OCMetadataManagerTopologyTest, CreateMultiMetaRedirectsAbsentKeyDuringScaleOutWait)

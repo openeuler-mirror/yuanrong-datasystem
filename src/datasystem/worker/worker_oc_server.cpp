@@ -221,6 +221,11 @@ constexpr int32_t RECOVERED_EXIT_PUBLISH_TIMEOUT_MS = 1'000;
 constexpr int RECOVERED_EXIT_PUBLISH_LOG_INTERVAL = 30;
 constexpr int64_t TOPOLOGY_READY_WAIT_TIMEOUT_S = 60;
 constexpr auto TOPOLOGY_STOP_GRACE = std::chrono::seconds(10);
+constexpr uint64_t HEAT_MAINTENANCE_INTERVAL_MS = 30'000;
+constexpr mode_t EVICTION_POLICY_STATE_DIR_MODE = 0700;
+constexpr int EVICTION_WATERMARK_LOG_LEVEL = 2;
+constexpr char EVICTION_POLICY_ROLLOUT_KEY[] = "eviction-policy-rollout";
+constexpr auto EVICTION_POLICY_BARRIER_TIMEOUT = std::chrono::seconds(30);
 #ifdef WITH_TESTS
 constexpr auto LOSSLESS_EXIT_GRACE = std::chrono::seconds(10);
 #else
@@ -237,6 +242,15 @@ std::string BuildUbHealthSidecarTable(const std::string &membershipTable)
 }
 
 namespace {
+std::string EvictionPolicyControlTable()
+{
+    std::string table = COORDINATION_MASTER_ADDRESS_TABLE;
+    if (!FLAGS_cluster_name.empty()) {
+        table.append("/").append(FLAGS_cluster_name);
+    }
+    table.append("/control");
+    return table;
+}
 constexpr size_t WORKER_PROBE_THREAD_COUNT = 3;
 constexpr size_t MAX_PENDING_WORKER_PROBES = 2'500;
 constexpr auto WORKER_PROBE_TIMEOUT = std::chrono::seconds(2);
@@ -1047,7 +1061,77 @@ void WorkerOCServer::CreateMasterServices()
     }
 }
 
-void WorkerOCServer::CreateWorkerServices()
+namespace {
+Status LoadEvictionPolicyState(const std::string &statePath, const std::string &clusterName,
+                               object_cache::WorkerOcEvictionManager::PersistedPolicyState &state, bool &found)
+{
+    found = false;
+    if (!FileExist(statePath)) {
+        return Status::OK();
+    }
+    std::string serialized;
+    RETURN_IF_NOT_OK(ReadFileToString(statePath, serialized));
+    master::EvictionPolicyWorkerStatePb statePb;
+    CHECK_FAIL_RETURN_STATUS(statePb.ParseFromString(serialized), K_INVALID,
+                             "Failed to parse persisted eviction policy worker state");
+    if (statePb.cluster_name() != clusterName) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(statePb.active_policy() == master::EVICTION_POLICY_CLOCK
+                                 || statePb.active_policy() == master::EVICTION_POLICY_HEAT,
+                             K_INVALID, "Persisted active eviction policy is invalid");
+    CHECK_FAIL_RETURN_STATUS(statePb.target_policy() == master::EVICTION_POLICY_CLOCK
+                                 || statePb.target_policy() == master::EVICTION_POLICY_HEAT,
+                             K_INVALID, "Persisted target eviction policy is invalid");
+    state.activePolicy = statePb.active_policy() == master::EVICTION_POLICY_HEAT ? object_cache::EvictionPolicy::HEAT
+                                                                                : object_cache::EvictionPolicy::CLOCK;
+    state.activeEpoch = statePb.active_epoch();
+    state.hasTransitionIntent = statePb.has_transition_intent();
+    state.targetPolicy = statePb.target_policy() == master::EVICTION_POLICY_HEAT ? object_cache::EvictionPolicy::HEAT
+                                                                                : object_cache::EvictionPolicy::CLOCK;
+    state.transitionEpoch = statePb.transition_epoch();
+    found = true;
+    return Status::OK();
+}
+
+Status StoreEvictionPolicyState(const std::string &statePath, const std::string &clusterName,
+                                const object_cache::WorkerOcEvictionManager::PersistedPolicyState &state)
+{
+    master::EvictionPolicyWorkerStatePb statePb;
+    statePb.set_active_policy(state.activePolicy == object_cache::EvictionPolicy::HEAT
+                                  ? master::EVICTION_POLICY_HEAT
+                                  : master::EVICTION_POLICY_CLOCK);
+    statePb.set_active_epoch(state.activeEpoch);
+    statePb.set_has_transition_intent(state.hasTransitionIntent);
+    statePb.set_target_policy(state.targetPolicy == object_cache::EvictionPolicy::HEAT
+                                  ? master::EVICTION_POLICY_HEAT
+                                  : master::EVICTION_POLICY_CLOCK);
+    statePb.set_transition_epoch(state.transitionEpoch);
+    statePb.set_cluster_name(clusterName);
+    std::string serialized;
+    CHECK_FAIL_RETURN_STATUS(statePb.SerializeToString(&serialized), K_RUNTIME_ERROR,
+                             "Failed to serialize eviction policy worker state");
+    return AtomicWriteTextFile(statePath, serialized);
+}
+}  // namespace
+
+Status WorkerOCServer::InitEvictionPolicyWorkerStateStore(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
+{
+    const auto stateDir = JoinPath(FLAGS_rocksdb_store_dir, "eviction_policy");
+    const auto statePath = JoinPath(stateDir, "worker-state.pb");
+    RETURN_IF_NOT_OK(CreateDir(stateDir, true, EVICTION_POLICY_STATE_DIR_MODE));
+    const auto clusterName = FLAGS_cluster_name;
+    auto loader = [statePath, clusterName](auto &state, bool &found) {
+        return LoadEvictionPolicyState(statePath, clusterName, state, found);
+    };
+    auto storer = [statePath, clusterName](const auto &state) {
+        return StoreEvictionPolicyState(statePath, clusterName, state);
+    };
+    return evictionManager->InitPolicyStateStore(std::move(loader), std::move(storer));
+}
+
+Status WorkerOCServer::CreateWorkerServices()
 {
     using ObjectTable = SafeTable<ImmutableString, ObjectInterface>;
     LOG(INFO) << "Start create worker services";
@@ -1060,6 +1144,7 @@ void WorkerOCServer::CreateWorkerServices()
     auto evictionManager = std::make_shared<object_cache::WorkerOcEvictionManager>(
         objectTable, hostPort_, masterAddr_, *metadataRouteResolver_, objCacheMasterSvc_.get());
     if (EnableOCService()) {
+        RETURN_IF_NOT_OK(InitEvictionPolicyWorkerStateStore(evictionManager));
         CreateObjectCacheWorkerServices(objectTable, evictionManager);
     }
     if (EnableSCService()) {
@@ -1075,6 +1160,7 @@ void WorkerOCServer::CreateWorkerServices()
         streamCacheWorkerWorkerSvc_ =
             std::make_unique<stream_cache::WorkerWorkerSCServiceImpl>(streamCacheClientWorkerSvc_.get(), akSkManager_);
     }
+    return Status::OK();
 }
 
 void WorkerOCServer::CreateObjectCacheWorkerServices(
@@ -1141,6 +1227,283 @@ void WorkerOCServer::CreateRebalanceExecutor(
                                              evictionManager,
                                              objCacheClientWorkerSvc_->GetWorkerMasterApiManager() };
     rebalanceExecutor_ = std::make_unique<RebalanceExecutor>(std::move(rebalanceConfig));
+    RegisterEvictionPolicyUpdateHandler(evictionManager);
+    RegisterEvictionPolicyReportHook(evictionManager);
+    ConfigureEvictionTelemetry(evictionManager);
+    RegisterRebalanceTaskHandler();
+}
+
+void WorkerOCServer::RegisterEvictionPolicyUpdateHandler(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
+{
+    object_cache::NodeSelector::Instance().RegisterEvictionPolicyUpdateHandler(
+        [this, evictionManager](const master::EvictionPolicyUpdatePb &update) {
+            HandleEvictionPolicyUpdate(evictionManager, update);
+        });
+}
+
+void WorkerOCServer::HandleEvictionPolicyUpdate(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+    const master::EvictionPolicyUpdatePb &update)
+{
+    const bool validTarget = update.target_policy() == master::EVICTION_POLICY_CLOCK
+                             || update.target_policy() == master::EVICTION_POLICY_HEAT;
+    const bool validCommand = update.command() == master::EVICTION_POLICY_PRECHECK
+                              || update.command() == master::EVICTION_POLICY_COMMIT_CONVERT;
+    if (!validTarget || !validCommand) {
+        const Status rc(K_INVALID, "Unsupported eviction policy update enum");
+        object_cache::NodeSelector::Instance().SetEvictionPolicyControlReport(
+            master::EVICTION_POLICY_WORKER_FAILED, update.epoch(), 0, 0, rc);
+        LOG_IF_ERROR(rc, "Reject invalid eviction policy update");
+        return;
+    }
+    const auto target = update.target_policy() == master::EVICTION_POLICY_HEAT
+                            ? object_cache::EvictionPolicy::HEAT
+                            : object_cache::EvictionPolicy::CLOCK;
+    uint64_t totalObjects = 0;
+    if (HandleEvictionPolicyPrecheck(evictionManager, target, update, totalObjects)) {
+        return;
+    }
+    if (!PrepareEvictionPolicyCommit(evictionManager, target, update, totalObjects)) {
+        return;
+    }
+    AdvanceEvictionPolicyUpdate(evictionManager, target, update, totalObjects);
+}
+
+bool WorkerOCServer::HandleEvictionPolicyPrecheck(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+    object_cache::EvictionPolicy target, const master::EvictionPolicyUpdatePb &update, uint64_t &totalObjects)
+{
+    if (update.command() != master::EVICTION_POLICY_PRECHECK) {
+        return false;
+    }
+    auto rc = evictionManager->PrecheckPolicyUpdate(
+        target, update.epoch(), update.migration_batch_size(), update.minimum_available_memory_bytes(),
+        update.maximum_source_objects(), update.deadline_unix_ms(), totalObjects);
+    object_cache::NodeSelector::Instance().SetEvictionPolicyControlReport(
+        rc.IsOk() ? master::EVICTION_POLICY_WORKER_READY : master::EVICTION_POLICY_WORKER_FAILED, update.epoch(),
+        totalObjects, 0, rc);
+    LOG_IF_ERROR(rc, "Eviction policy PRECHECK failed");
+    return true;
+}
+
+bool WorkerOCServer::PrepareEvictionPolicyCommit(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+    object_cache::EvictionPolicy target, const master::EvictionPolicyUpdatePb &update, uint64_t &totalObjects)
+{
+    const auto state = evictionManager->GetPolicyStateSnapshot();
+    if (state.phase == object_cache::WorkerOcEvictionManager::PolicyUpdatePhase::STABLE
+        && state.epoch < update.epoch()) {
+        auto rc = evictionManager->PrecheckPolicyUpdate(
+            target, update.epoch(), update.migration_batch_size(), update.minimum_available_memory_bytes(),
+            update.maximum_source_objects(), update.deadline_unix_ms(), totalObjects);
+        if (rc.IsError()) {
+            object_cache::NodeSelector::Instance().SetEvictionPolicyControlReport(
+                master::EVICTION_POLICY_WORKER_FAILED, update.epoch(), totalObjects, 0, rc);
+            LOG_IF_ERROR(rc, "Eviction policy COMMIT precheck failed");
+            return false;
+        }
+    }
+    Status rc = EnsureEvictionPolicyBarrier(update.epoch());
+    if (rc.GetCode() == K_TRY_AGAIN) {
+        object_cache::NodeSelector::Instance().SetEvictionPolicyControlReport(
+            master::EVICTION_POLICY_WORKER_CONVERTING, update.epoch(), totalObjects, 0);
+        return false;
+    }
+    if (rc.IsError()) {
+        object_cache::NodeSelector::Instance().SetEvictionPolicyControlReport(
+            master::EVICTION_POLICY_WORKER_FAILED, update.epoch(), totalObjects, 0, rc);
+        LOG_IF_ERROR(rc, "Failed to isolate rebalance before eviction policy update");
+        return false;
+    }
+    return true;
+}
+
+Status WorkerOCServer::EnsureEvictionPolicyBarrier(uint64_t epoch)
+{
+    if (evictionPolicyBarrierActive_) {
+        CHECK_FAIL_RETURN_STATUS(evictionPolicyBarrierEpoch_ == epoch, K_NOT_READY,
+                                 "Another eviction policy epoch owns the rebalance barrier");
+        return Status::OK();
+    }
+    if (evictionPolicyBarrierEpoch_ != 0 && evictionPolicyBarrierEpoch_ != epoch) {
+        ReleaseEvictionPolicyBarrier();
+    }
+    if (evictionPolicyBarrierEpoch_ == 0) {
+        evictionPolicyBarrierEpoch_ = epoch;
+        evictionPolicyBarrierDeadline_ = std::chrono::steady_clock::now() + EVICTION_POLICY_BARRIER_TIMEOUT;
+    }
+    if (std::chrono::steady_clock::now() >= evictionPolicyBarrierDeadline_) {
+        ReleaseEvictionPolicyBarrier();
+        RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Timed out waiting for rebalance isolation barrier");
+    }
+    Status rc;
+    {
+        std::lock_guard<std::mutex> executorLock(rebalanceExecutorMutex_);
+        if (rebalanceExecutor_ != nullptr) {
+            rc = rebalanceExecutor_->PauseAndCheckDrained();
+        }
+    }
+    if (rc.IsOk()) {
+        rc = objCacheClientWorkerSvc_->PauseIncomingMigrationAdmissionAndCheckDrained();
+    }
+    if (rc.GetCode() == K_TRY_AGAIN) {
+        return rc;
+    }
+    if (rc.IsError()) {
+        ReleaseEvictionPolicyBarrier();
+        return rc;
+    }
+    evictionPolicyBarrierActive_ = true;
+    return Status::OK();
+}
+
+void WorkerOCServer::ReleaseEvictionPolicyBarrier()
+{
+    objCacheClientWorkerSvc_->ResumeIncomingMigrationAdmission();
+    {
+        std::lock_guard<std::mutex> executorLock(rebalanceExecutorMutex_);
+        if (rebalanceExecutor_ != nullptr) {
+            rebalanceExecutor_->Resume();
+        }
+    }
+    evictionPolicyBarrierActive_ = false;
+    evictionPolicyBarrierEpoch_ = 0;
+    evictionPolicyBarrierDeadline_ = {};
+}
+
+void WorkerOCServer::AdvanceEvictionPolicyUpdate(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+    object_cache::EvictionPolicy target, const master::EvictionPolicyUpdatePb &update, uint64_t totalObjects)
+{
+    uint64_t migratedObjects = 0;
+    evictionManager->GetPolicyUpdateProgress(totalObjects, migratedObjects);
+    object_cache::NodeSelector::Instance().SetEvictionPolicyControlReport(
+        master::EVICTION_POLICY_WORKER_CONVERTING, update.epoch(), totalObjects, migratedObjects);
+    bool complete = false;
+    Status rc = evictionManager->HandlePolicyUpdate(target, update.epoch(), update.migration_batch_size(), complete);
+    evictionManager->GetPolicyUpdateProgress(totalObjects, migratedObjects);
+    object_cache::NodeSelector::Instance().SetEvictionPolicyControlReport(
+        rc.IsError() ? master::EVICTION_POLICY_WORKER_FAILED
+                     : (complete ? master::EVICTION_POLICY_WORKER_ACTIVE
+                                 : master::EVICTION_POLICY_WORKER_CONVERTING),
+        update.epoch(), totalObjects, migratedObjects, rc);
+    LOG_IF_ERROR(rc, "Failed to advance eviction policy update");
+    const bool stableFailure = rc.IsError()
+                               && evictionManager->GetPolicyStateSnapshot().phase
+                                      == object_cache::WorkerOcEvictionManager::PolicyUpdatePhase::STABLE;
+    if (complete || stableFailure) {
+        ReleaseEvictionPolicyBarrier();
+    }
+}
+
+void WorkerOCServer::RegisterEvictionPolicyReportHook(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
+{
+    object_cache::NodeSelector::Instance().RegisterPreReportHook([evictionManager]() {
+        const auto state = evictionManager->GetPolicyStateSnapshot();
+        const auto policy = state.activePolicy == object_cache::EvictionPolicy::HEAT ? master::EVICTION_POLICY_HEAT
+                                                                                     : master::EVICTION_POLICY_CLOCK;
+        const auto phase = static_cast<master::EvictionPolicyUpdatePhasePb>(static_cast<uint8_t>(state.phase));
+        object_cache::NodeSelector::Instance().SetEvictionPolicyReport(policy, state.epoch, phase);
+    });
+}
+
+void WorkerOCServer::ConfigureEvictionTelemetry(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
+{
+    // Heat maintenance has its own minimum cadence. Resource-report retries can run every 500 ms while master is
+    // unavailable, but they must not amplify the O(N) maintenance work at the retry rate. Workload telemetry uses a
+    // separate read-only pre-report snapshot and must not shorten this decay/report cadence.
+    uint64_t maintenanceIntervalMs = HEAT_MAINTENANCE_INTERVAL_MS;
+    uint64_t copyWatermarkTelemetryIntervalMs = 0;
+    INJECT_POINT_NO_RETURN("WorkerOCServer.heatMaintenanceIntervalMs", [&maintenanceIntervalMs](int64_t intervalMs) {
+        if (intervalMs > 0) {
+            maintenanceIntervalMs = static_cast<uint64_t>(intervalMs);
+        }
+    });
+    INJECT_POINT_NO_RETURN("WorkerOCServer.copyWatermarkTelemetryIntervalMs",
+                           [&copyWatermarkTelemetryIntervalMs](int intervalMs) {
+                               if (intervalMs > 0) {
+                                   copyWatermarkTelemetryIntervalMs = static_cast<uint64_t>(intervalMs);
+                               }
+                           });
+    RegisterEvictionWatermarkObservers(evictionManager, copyWatermarkTelemetryIntervalMs > 0);
+    RegisterHeatMaintenanceHook(evictionManager, copyWatermarkTelemetryIntervalMs, maintenanceIntervalMs);
+}
+
+void WorkerOCServer::RegisterEvictionWatermarkObservers(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+    bool enableEvictionCopyWatermarkTelemetry)
+{
+    evictionManager->SetHotPrimaryReportObserver(
+        [](const object_cache::WorkerOcEvictionManager::CopyWatermarkStats &stats) {
+            auto *allocator = memory::Allocator::Instance();
+            const uint64_t memoryCapacity =
+                allocator->GetTotalRealMemoryUsage() + allocator->GetMemoryAvailToHighWater();
+            object_cache::NodeSelector::Instance().SetHotPrimaryReport(
+                stats.hotPrimaryCopyCount, stats.totalPrimaryCopyCount, stats.hotPrimaryCopyBytes,
+                stats.totalPrimaryCopyBytes, memoryCapacity);
+        });
+    if (enableEvictionCopyWatermarkTelemetry) {
+        evictionManager->SetCopyWatermarkObserver(
+            [](const object_cache::WorkerOcEvictionManager::CopyWatermarkStats &stats) {
+                auto *allocator = memory::Allocator::Instance();
+                const uint64_t memoryCapacity =
+                    allocator->GetTotalRealMemoryUsage() + allocator->GetMemoryAvailToHighWater();
+                object_cache::NodeSelector::Instance().SetObjectCopyWatermark(
+                    stats.coldPrimaryCopyBytes, stats.warmPrimaryCopyBytes, stats.hotPrimaryCopyCount,
+                    stats.totalPrimaryCopyCount, stats.hotPrimaryCopyBytes, stats.totalPrimaryCopyBytes,
+                    memoryCapacity);
+                VLOG(EVICTION_WATERMARK_LOG_LEVEL) << FormatString(
+                    "[PreReportCopyWatermark] policy=%s cold/warm/hot_primary_bytes=%lu/%lu/%lu primary_bytes=%lu "
+                    "counter_p50=%.6f counter_p90=%.6f counter_p99=%.6f capped_primary=%lu",
+                    stats.policy == object_cache::EvictionPolicy::HEAT ? "heat" : "clock",
+                    stats.coldPrimaryCopyBytes, stats.warmPrimaryCopyBytes, stats.hotPrimaryCopyBytes,
+                    stats.totalPrimaryCopyBytes, stats.counterP50, stats.counterP90, stats.counterP99,
+                    stats.cappedPrimaryCopyCount);
+            });
+    }
+}
+
+void WorkerOCServer::RegisterHeatMaintenanceHook(
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+    uint64_t copyWatermarkTelemetryIntervalMs, uint64_t maintenanceIntervalMs)
+{
+    object_cache::NodeSelector::Instance().RegisterPreReportHook(
+        [evictionManager, copyWatermarkTelemetryIntervalMs]() {
+            auto *allocator = memory::Allocator::Instance();
+            const uint64_t memoryCapacity =
+                allocator->GetTotalRealMemoryUsage() + allocator->GetMemoryAvailToHighWater();
+            if (evictionManager->GetActiveEvictionPolicy() == object_cache::EvictionPolicy::HEAT) {
+                object_cache::WorkerOcEvictionManager::CopyWatermarkStats stats;
+                // Decay and post-decay hot-primary accounting share one eviction-list snapshot and one object lookup.
+                (void)evictionManager->MaintainHeatAndCollectHotPrimaryStats(stats);
+                object_cache::NodeSelector::Instance().SetHotPrimaryReport(
+                    stats.hotPrimaryCopyCount, stats.totalPrimaryCopyCount, stats.hotPrimaryCopyBytes,
+                    stats.totalPrimaryCopyBytes, memoryCapacity);
+                if (copyWatermarkTelemetryIntervalMs == 0) {
+                    object_cache::NodeSelector::Instance().SetObjectCopyWatermark(
+                        stats.coldPrimaryCopyBytes, stats.warmPrimaryCopyBytes, stats.hotPrimaryCopyCount,
+                        stats.totalPrimaryCopyCount, stats.hotPrimaryCopyBytes, stats.totalPrimaryCopyBytes,
+                        memoryCapacity);
+                }
+                return;
+            }
+            object_cache::NodeSelector::Instance().SetHotPrimaryReport(0, 0, 0, 0, memoryCapacity);
+        },
+        maintenanceIntervalMs);
+    if (copyWatermarkTelemetryIntervalMs > 0) {
+        // Register after heat maintenance so a report where both hooks are due exposes the post-decay policy state.
+        // On faster report-only ticks this remains a read-only snapshot for both Clock and Heat.
+        object_cache::NodeSelector::Instance().RegisterPreReportHook(
+            [evictionManager]() { evictionManager->RefreshCopyWatermarkSnapshot(); },
+            copyWatermarkTelemetryIntervalMs);
+    }
+}
+
+void WorkerOCServer::RegisterRebalanceTaskHandler()
+{
     object_cache::NodeSelector::Instance().RegisterRebalanceTaskHandler(
         [this](const master::RebalanceTaskPb &task, const std::string &assignedMasterAddress) {
             std::lock_guard<std::mutex> lock(rebalanceExecutorMutex_);
@@ -1150,20 +1513,21 @@ void WorkerOCServer::CreateRebalanceExecutor(
         });
 }
 
-void WorkerOCServer::CreateAllServices()
+Status WorkerOCServer::CreateAllServices()
 {
     // In case of centralized master, create either master or worker services
     if (IsLocalMetadataMaster()) {
         CreateMasterServices();
-        CreateWorkerServices();
+        RETURN_IF_NOT_OK(CreateWorkerServices());
     } else {
-        CreateWorkerServices();
+        RETURN_IF_NOT_OK(CreateWorkerServices());
     }
 #ifdef WITH_TESTS
     // create StOCServiceImpl
     utSvc_ = std::make_unique<st::StOCServiceImpl>(objCacheClientWorkerSvc_.get(), &topologyEngine_->Membership(),
                                                    metadataManagerHolder_.get(), akSkManager_);
 #endif
+    return Status::OK();
 }
 
 Status WorkerOCServer::InitializeMasterServices()
@@ -1267,6 +1631,40 @@ Status WorkerOCServer::InitCoordinationBackend()
     RETURN_IF_NOT_OK_EXCEPT(
         etcdStore_->CreateTable(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_TABLE), K_DUPLICATED);
     return Status::OK();
+}
+
+Status WorkerOCServer::InitEvictionPolicyRolloutStore()
+{
+    CHECK_FAIL_RETURN_STATUS(resourceManager_ != nullptr, K_NOT_READY, "Resource manager is not initialized");
+    const std::string table = EvictionPolicyControlTable();
+    if (coordinatorServiceProxy_ == nullptr) {
+        CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_NOT_READY, "ETCD Store is not initialized");
+        RETURN_IF_NOT_OK_EXCEPT(etcdStore_->CreateTableWithExactPrefix(table, table), K_DUPLICATED);
+        auto loader = [this, table](std::string &value) {
+            return etcdStore_->Get(table, EVICTION_POLICY_ROLLOUT_KEY, value);
+        };
+        auto cas = [this, table](const master::ResourceManager::StoreProcessFunction &process) {
+            return etcdStore_->CAS(table, EVICTION_POLICY_ROLLOUT_KEY, process);
+        };
+        return resourceManager_->InitEvictionPolicyRolloutStore(std::move(loader), std::move(cas));
+    }
+
+    const std::string physicalKey = table + "/" + EVICTION_POLICY_ROLLOUT_KEY;
+    auto loader = [this, physicalKey](std::string &value) -> Status {
+        std::vector<KeyValueEntry> entries;
+        int64_t revision = 0;
+        RETURN_IF_NOT_OK(coordinatorServiceProxy_->Range(physicalKey, "", entries, revision));
+        CHECK_FAIL_RETURN_STATUS(entries.size() <= 1, K_KVSTORE_ERROR, "Eviction policy rollout key is not unique");
+        CHECK_FAIL_RETURN_STATUS(!entries.empty(), K_NOT_FOUND, "Eviction policy rollout does not exist");
+        value = std::move(entries.front().value);
+        return Status::OK();
+    };
+    auto cas = [this, physicalKey](const master::ResourceManager::StoreProcessFunction &process) {
+        int64_t version = 0;
+        int64_t revision = 0;
+        return coordinatorServiceProxy_->CAS(physicalKey, process, version, revision);
+    };
+    return resourceManager_->InitEvictionPolicyRolloutStore(std::move(loader), std::move(cas));
 }
 
 void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot)
@@ -2090,8 +2488,11 @@ Status WorkerOCServer::InitClusterRuntimeAndServices()
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ResolveLocalMetadataAddress(), "Resolve local metadata address failed");
     RETURN_IF_NOT_OK(ConstructTopologyRuntime());
+    if (IsLocalMetadataMaster() && EnableOCService()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitEvictionPolicyRolloutStore(), "Init eviction policy rollout store failed");
+    }
 
-    CreateAllServices();
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateAllServices(), "Create worker services failed");
 
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitMetadataManagerHolder(), "metadata manager holder init failed");
 
@@ -2219,6 +2620,9 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
         });
         instance.RegisterCollectHandler(ResMetricName::OC_HIT_NUM,
                                         [this] { return objCacheClientWorkerSvc_->GetHitInfo(); });
+        instance.RegisterCollectHandler(ResMetricName::OBJECT_COPY_WATERMARK, [] {
+            return object_cache::NodeSelector::Instance().GetObjectCopyWatermark().ToMetricsString();
+        });
     }
 
     if (EnableSCService()) {
@@ -3221,6 +3625,8 @@ void WorkerOCServer::StopLivenessCheck()
 void WorkerOCServer::StopRebalanceExecutor()
 {
     object_cache::NodeSelector::Instance().UnregisterRebalanceTaskHandler();
+    object_cache::NodeSelector::Instance().UnregisterEvictionPolicyUpdateHandler();
+    object_cache::NodeSelector::Instance().UnregisterPreReportHooks();
     std::lock_guard<std::mutex> lock(rebalanceExecutorMutex_);
     rebalanceExecutor_.reset();
 }
@@ -3231,6 +3637,9 @@ Status WorkerOCServer::Shutdown()
     LOG(INFO) << "Worker process executing a shutdown.";
     StopConnectionWarmup();
     StopWorkerMasterRpcWarmup();
+    // Join the resource-report thread before destroying callbacks and the executor they borrow. Unregistering a
+    // callback only clears the stored function; an in-flight CollectClusterInfo may already hold its own copy.
+    object_cache::NodeSelector::Instance().Shutdown();
     StopRebalanceExecutor();
     StopLivenessCheck();
     // Stop the background resource collector to prevent the background resource collector from invoking the background

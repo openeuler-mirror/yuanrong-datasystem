@@ -62,7 +62,8 @@ const std::string WORKER_10 = "127.0.0.1:1000";
 NodeInfo MakeNode(const std::string &worker, uint64_t usedMemory, uint64_t availableMemory, bool isReady = true,
                   uint64_t memoryCapacity = MEMORY_CAPACITY, uint64_t memoryLimit = MEMORY_CAPACITY)
 {
-    return NodeInfo(worker, availableMemory, isReady, 0, usedMemory, memoryCapacity, memoryLimit);
+    return NodeInfo(worker, availableMemory, isReady, 0, usedMemory, memoryCapacity, memoryLimit, 0, 0, 0,
+                    master::EVICTION_POLICY_CLOCK, 0);
 }
 
 // Rebalance watermark in bytes == source trigger threshold (the flag is dual-role:
@@ -243,7 +244,8 @@ protected:
     }
     static uint64_t GetFreshUsedMemory(const MemoryRebalanceScheduler &s, const std::string &worker)
     {
-        return s.futureView_.at(worker).freshUsedMemory;
+        const auto iter = s.futureView_.find(worker);
+        return iter == s.futureView_.end() ? 0 : iter->second.minimumObservedUsedMemory;
     }
     static bool HasCooldown(const MemoryRebalanceScheduler &s, const std::string &worker)
     {
@@ -308,6 +310,10 @@ TEST_F(MemoryRebalanceSchedulerTest, SelectBestSourceTargetPairFromFourWorkers)
     EXPECT_EQ(rsp.rebalance_task().source_worker(), WORKER_92);
     EXPECT_EQ(rsp.rebalance_task().target_worker(), WORKER_10);
     EXPECT_EQ(rsp.rebalance_task().max_bytes(), 410ul);
+    EXPECT_EQ(rsp.rebalance_task().source_eviction_policy(), master::EVICTION_POLICY_CLOCK);
+    EXPECT_EQ(rsp.rebalance_task().source_eviction_policy_epoch(), 0u);
+    EXPECT_EQ(rsp.rebalance_task().target_eviction_policy(), master::EVICTION_POLICY_CLOCK);
+    EXPECT_EQ(rsp.rebalance_task().target_eviction_policy_epoch(), 0u);
 }
 
 TEST_F(MemoryRebalanceSchedulerTest, DoesNotPickLeavingWorkerAsTarget)
@@ -393,6 +399,18 @@ TEST_F(MemoryRebalanceSchedulerTest, UsageGapThresholdControlsWhetherTaskIsCreat
     verify(boundary + 10, false);  // gap = threshold - 1 below boundary
     verify(boundary, true);         // gap == boundary (exactly meets)
     verify(boundary - 10, true);    // gap above boundary
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, DoesNotPairWorkersAcrossEvictionPolicies)
+{
+    MemoryRebalanceScheduler scheduler;
+    auto source = MakeNode(WORKER_92, 920, 80);
+    auto target = MakeNode(WORKER_10, 100, 900);
+    target.evictionPolicy = master::EVICTION_POLICY_HEAT;
+
+    auto rsp = ScheduleAndGetRsp(scheduler, WORKER_92, MakeSnapshot({ source, target }));
+
+    EXPECT_TRUE(rsp.rebalance_task().task_id().empty());
 }
 
 TEST_F(MemoryRebalanceSchedulerTest, UsageRateUsesMemoryLimitInsteadOfHighWaterCapacity)
@@ -938,7 +956,8 @@ TEST_F(MemoryRebalanceSchedulerTest, SnapshotTimestampAdvanceReleasesHeldInfligh
     // now reflects post-receive memory. ReleaseSnapshotHoldsLocked (called at the start of
     // Schedule) releases the hold. The TTL must NOT fire here.
     const uint64_t holdTs = GetHoldTs(scheduler, WORKER_10);
-    NodeInfo target(WORKER_10, 900, true, holdTs + 1, 100, MEMORY_CAPACITY, MEMORY_CAPACITY);
+    auto target = MakeNode(WORKER_10, 100, 900);
+    target.timestamp = holdTs + 1;
     auto advancedSnapshot = MakeSnapshot({
         MakeNode(WORKER_92, 920, 80),
         target,
@@ -978,7 +997,8 @@ TEST_F(MemoryRebalanceSchedulerTest, ReporterReportDoesNotReleaseHeldUntilSnapsh
     // WORKER_10 reports itself via NeedSnapshotForSchedule. With ReleaseReporterHoldsLocked removed,
     // the held charge is NOT released here — it must stay until the snapshot is refreshed.
     const uint64_t holdTs = GetHoldTs(scheduler, WORKER_10);
-    NodeInfo targetReport(WORKER_10, 900, true, holdTs + 1, 100, MEMORY_CAPACITY, MEMORY_CAPACITY);
+    auto targetReport = MakeNode(WORKER_10, 100, 900);
+    targetReport.timestamp = holdTs + 1;
     master::ResourceReportRspPb rsp;
     auto req = MakeResourceReq(WORKER_10);
     (void)scheduler.NeedSnapshotForSchedule(req, targetReport, rsp);

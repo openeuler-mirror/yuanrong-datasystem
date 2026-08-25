@@ -23,11 +23,32 @@
 
 namespace datasystem {
 namespace object_cache {
+namespace {
+void FillObjectInfo(const BaseDataUnit &data, const MigrateTransport::Request &req,
+                    MigrateDataReqPb::ObjectInfoPb &objectInfo)
+{
+    objectInfo.set_object_key(data.Id());
+    objectInfo.set_version(data.Version());
+    objectInfo.set_data_size(data.Size());
+    objectInfo.set_cache_type(static_cast<uint32_t>(data.GetCacheType()));
+    if (req.objectHeats == nullptr) {
+        return;
+    }
+    const std::string objectKey = data.Id();
+    auto heatIt = req.objectHeats->find(objectKey);
+    if (heatIt != req.objectHeats->end()) {
+        objectInfo.set_heat(heatIt->second);
+        objectInfo.set_has_heat(true);
+    }
+}
+
+}  // namespace
 
 void TcpMigrateTransport::ProcessMigrateRsp(const MigrateDataRspPb &rspPb, const Request &req, Response &rsp)
 {
     rsp.remainBytes = rspPb.remain_bytes();
     rsp.successKeys.insert(rspPb.success_ids().begin(), rspPb.success_ids().end());
+    rsp.expiredKeys.insert(rspPb.expired_ids().begin(), rspPb.expired_ids().end());
     rsp.failedKeys.insert(rspPb.fail_ids().begin(), rspPb.fail_ids().end());
     rsp.skipKeys.insert(rspPb.skipped_object_keys().begin(), rspPb.skipped_object_keys().end());
     for (auto it = rsp.successKeys.begin(); it != rsp.successKeys.end();) {
@@ -39,7 +60,7 @@ void TcpMigrateTransport::ProcessMigrateRsp(const MigrateDataRspPb &rspPb, const
     }
     rsp.limitRate = rspPb.limit_rate();
     if (req.progress != nullptr) {
-        req.progress->Deal(rspPb.success_ids().size());
+        req.progress->Deal(rspPb.success_ids().size() + rspPb.expired_ids().size());
     }
     LOG_IF(WARNING, !rspPb.fail_ids().empty()) << FormatString(
         "[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed", req.datas->size(),
@@ -56,6 +77,12 @@ Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rs
     reqPb.set_is_slot_migration(req.isSlotMigration);
     reqPb.set_is_retry(req.isRetry);
     reqPb.set_slot_id(req.slotId);
+    if (req.rebalancePolicyFence != nullptr) {
+        reqPb.set_has_rebalance_policy_fence(true);
+        reqPb.set_target_eviction_policy(req.rebalancePolicyFence->targetPolicy);
+        reqPb.set_target_eviction_policy_epoch(req.rebalancePolicyFence->targetEpoch);
+        reqPb.set_rebalance_task_id(req.rebalancePolicyFence->taskId);
+    }
     std::vector<MemView> payloads;
     uint32_t currPartIndex = 0;
     for (const auto &data : *req.datas) {
@@ -68,10 +95,7 @@ Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rs
         }
 
         auto *objInfo = reqPb.add_objects();
-        objInfo->set_object_key(data->Id());
-        objInfo->set_version(data->Version());
-        objInfo->set_data_size(data->Size());
-        objInfo->set_cache_type(static_cast<uint32_t>(data->GetCacheType()));
+        FillObjectInfo(*data, req, *objInfo);
         auto memViews = data->GetMemViews();
         for (uint32_t i = currPartIndex; i < currPartIndex + memViews.size(); ++i) {
             objInfo->add_part_index(i);

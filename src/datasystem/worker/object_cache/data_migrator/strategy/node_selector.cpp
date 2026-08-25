@@ -13,6 +13,7 @@
 
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 
+#include <algorithm>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -23,6 +24,7 @@
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -30,18 +32,54 @@
 
 namespace datasystem {
 namespace object_cache {
+namespace {
+template <typename State, typename Mutator>
+void UpdateImmutableSnapshot(std::shared_ptr<const State> &slot, Mutator &&mutator)
+{
+    auto current = std::atomic_load_explicit(&slot, std::memory_order_acquire);
+    bool updated = false;
+    do {
+        auto next = std::make_shared<State>(current == nullptr ? State{} : *current);
+        mutator(*next);
+        std::shared_ptr<const State> desired = std::move(next);
+        updated = std::atomic_compare_exchange_weak_explicit(&slot, &current, std::move(desired),
+                                                             std::memory_order_acq_rel, std::memory_order_acquire);
+    } while (!updated);
+}
+}  // namespace
 static const std::string RESOURCE_MONITOR_MASTER = "RESOURCE_MONITOR";
 static const int64_t REPORT_RESOURCE_INTERVAL_TIME_MS = 30 * 1000;
 static const int64_t REPORT_RESOURCE_INTERVAL_TIME_MS_IF_FAILED = 500;
 static constexpr int RESOURCE_MONITOR_MASTER_ADDRESS_LOG_LEVEL = 1;
 static constexpr int RESOURCE_MONITOR_MASTER_ADDRESS_LOG_EVERY_N = 2;
+
+std::string ObjectCopyWatermark::ToMetricsString() const
+{
+    const auto ratio = [](uint64_t numerator, uint64_t denominator) {
+        return denominator == 0 ? 0.0 : static_cast<double>(numerator) / static_cast<double>(denominator);
+    };
+    return std::to_string(hotPrimaryCopyBytes) + "/" + std::to_string(totalPrimaryCopyBytes) + "/"
+           + std::to_string(memoryCapacity) + "/"
+           + FormatString("%.9f/%.9f/%.9f/%d", ratio(hotPrimaryCopyBytes, memoryCapacity),
+                          ratio(totalPrimaryCopyBytes, memoryCapacity),
+                          ratio(hotPrimaryCopyBytes, totalPrimaryCopyBytes), valid ? 1 : 0)
+           + "/" + std::to_string(coldPrimaryCopyBytes) + "/" + std::to_string(warmPrimaryCopyBytes) + "/"
+           + FormatString("%.9f/%.9f", ratio(coldPrimaryCopyBytes, totalPrimaryCopyBytes),
+                          ratio(warmPrimaryCopyBytes, totalPrimaryCopyBytes));
+}
+
 NodeSelector &NodeSelector::Instance()
 {
     static NodeSelector instance;
     return instance;
 }
 
-NodeSelector::NodeSelector() : running_(false), token_(new Token())
+NodeSelector::NodeSelector()
+    : nodeInfos_(std::make_shared<const NodeInfoSnapshot>()),
+      running_(false),
+      resourceReportState_(std::make_shared<const ResourceReportState>()),
+      copyWatermark_(std::make_shared<const ObjectCopyWatermark>()),
+      token_(new Token())
 {
 }
 
@@ -83,7 +121,7 @@ void NodeSelector::Shutdown()
         std::lock_guard<std::mutex> lock(taskMutex_);
         running_.store(false);
     }
-    token_->alive.store(false);
+    token_->alive.store(false, std::memory_order_release);
     taskCv_.notify_all();
     subReadyPost_.Set();
 
@@ -98,15 +136,108 @@ void NodeSelector::Shutdown()
 
 void NodeSelector::RegisterRebalanceTaskHandler(RebalanceTaskHandler handler)
 {
-    std::lock_guard<std::mutex> lock(rebalanceTaskHandlerMutex_);
-    rebalanceTaskHandler_ = std::move(handler);
+    auto snapshot = handler ? std::make_shared<const RebalanceTaskHandler>(std::move(handler)) : nullptr;
+    std::atomic_store_explicit(&rebalanceTaskHandler_, std::move(snapshot), std::memory_order_release);
 }
 
 void NodeSelector::UnregisterRebalanceTaskHandler()
 {
-    std::lock_guard<std::mutex> lock(rebalanceTaskHandlerMutex_);
-    rebalanceTaskHandler_ = nullptr;
+    std::atomic_store_explicit(&rebalanceTaskHandler_, std::shared_ptr<const RebalanceTaskHandler>{},
+                               std::memory_order_release);
 }
+
+void NodeSelector::RegisterEvictionPolicyUpdateHandler(EvictionPolicyUpdateHandler handler)
+{
+    auto snapshot = handler ? std::make_shared<const EvictionPolicyUpdateHandler>(std::move(handler)) : nullptr;
+    std::atomic_store_explicit(&evictionPolicyUpdateHandler_, std::move(snapshot), std::memory_order_release);
+}
+
+void NodeSelector::UnregisterEvictionPolicyUpdateHandler()
+{
+    std::atomic_store_explicit(&evictionPolicyUpdateHandler_, std::shared_ptr<const EvictionPolicyUpdateHandler>{},
+                               std::memory_order_release);
+}
+
+void NodeSelector::SetEvictionPolicyReport(master::EvictionPolicyPb policy, uint64_t epoch,
+                                           master::EvictionPolicyUpdatePhasePb phase)
+{
+    UpdateImmutableSnapshot(resourceReportState_, [policy, epoch, phase](ResourceReportState &state) {
+        state.evictionPolicy = policy;
+        state.evictionPolicyEpoch = epoch;
+        state.evictionPolicyPhase = phase;
+    });
+}
+
+void NodeSelector::SetEvictionPolicyControlReport(master::EvictionPolicyWorkerStatusPb status, uint64_t epoch,
+                                                  uint64_t totalObjects, uint64_t migratedObjects,
+                                                  const Status &failure)
+{
+    static constexpr size_t MAX_FAILURE_REASON_SIZE = 512;
+    Status normalizedFailure = Status::OK();
+    if (failure.IsError()) {
+        auto reason = failure.GetMsg();
+        if (reason.size() > MAX_FAILURE_REASON_SIZE) {
+            reason.resize(MAX_FAILURE_REASON_SIZE);
+        }
+        normalizedFailure = Status(failure.GetCode(), std::move(reason));
+    }
+    UpdateImmutableSnapshot(resourceReportState_,
+                            [status, epoch, totalObjects, migratedObjects,
+                             failure = std::move(normalizedFailure)](ResourceReportState &state) {
+                                state.evictionPolicyWorkerStatus = status;
+                                state.evictionPolicyControlEpoch = epoch;
+                                state.evictionPolicyTotalObjects = totalObjects;
+                                state.evictionPolicyMigratedObjects = std::min(totalObjects, migratedObjects);
+                                state.evictionPolicyFailure = failure;
+                            });
+}
+
+void NodeSelector::RegisterPreReportHook(std::function<void()> hook, uint64_t minIntervalMs)
+{
+    std::lock_guard<std::mutex> lock(preReportHooksMutex_);
+    preReportHooks_.push_back({ std::move(hook), minIntervalMs, 0, false });
+}
+
+void NodeSelector::UnregisterPreReportHooks()
+{
+    std::lock_guard<std::mutex> lock(preReportHooksMutex_);
+    preReportHooks_.clear();
+}
+
+void NodeSelector::SetHotPrimaryReport(uint64_t hotPrimaryCopyCount, uint64_t totalPrimaryCopyCount,
+                                       uint64_t hotPrimaryCopyBytes, uint64_t totalPrimaryCopyBytes,
+                                       uint64_t memoryCapacity)
+{
+    UpdateImmutableSnapshot(resourceReportState_, [=](ResourceReportState &state) {
+        state.hotPrimaryReport = { 0, 0, hotPrimaryCopyCount, totalPrimaryCopyCount, hotPrimaryCopyBytes,
+                                   totalPrimaryCopyBytes, memoryCapacity, true };
+    });
+}
+
+void NodeSelector::SetObjectCopyWatermark(uint64_t coldPrimaryCopyBytes, uint64_t warmPrimaryCopyBytes,
+                                          uint64_t hotPrimaryCopyCount, uint64_t totalPrimaryCopyCount,
+                                          uint64_t hotPrimaryCopyBytes, uint64_t totalPrimaryCopyBytes,
+                                          uint64_t memoryCapacity)
+{
+    auto snapshot = std::make_shared<const ObjectCopyWatermark>(ObjectCopyWatermark{
+        coldPrimaryCopyBytes, warmPrimaryCopyBytes, hotPrimaryCopyCount, totalPrimaryCopyCount, hotPrimaryCopyBytes,
+        totalPrimaryCopyBytes, memoryCapacity, true });
+    std::atomic_store_explicit(&copyWatermark_, std::move(snapshot), std::memory_order_release);
+}
+
+ObjectCopyWatermark NodeSelector::GetObjectCopyWatermark() const
+{
+    auto snapshot = std::atomic_load_explicit(&copyWatermark_, std::memory_order_acquire);
+    return snapshot == nullptr ? ObjectCopyWatermark{} : *snapshot;
+}
+
+#ifdef WITH_TESTS
+ObjectCopyWatermark NodeSelector::GetHotPrimaryReportForTest() const
+{
+    auto snapshot = std::atomic_load_explicit(&resourceReportState_, std::memory_order_acquire);
+    return snapshot == nullptr ? ObjectCopyWatermark{} : snapshot->hotPrimaryReport;
+}
+#endif
 
 Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNodes, const std::string &preferNode,
                                 size_t needSize, std::string &outNode)
@@ -117,17 +248,18 @@ Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNo
     // 4. Randomly select the top n (5) nodes with available capacity > needSize, excluding nodes in excludedNodes;
     // 5. The isReady flag indicates whether the node is in active scaling-down state;
     //   do not select nodes that are not ready.
-    std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
-    if (rankList_.empty()) {
+    auto nodeInfos = std::atomic_load_explicit(&nodeInfos_, std::memory_order_acquire);
+    if (nodeInfos == nullptr || nodeInfos->rankList.empty()) {
         return GetLocalStandbyWorker(excludeNodes, outNode);
     }
-    auto maxLeftMemory = rankList_[0].availableMemory;
+    const auto &rankList = nodeInfos->rankList;
+    auto maxLeftMemory = rankList[0].availableMemory;
     CHECK_FAIL_RETURN_STATUS(maxLeftMemory > 1 * MB_TO_BYTES,
                              K_NO_SPACE, "The max available memory in not enough");
 
-    auto it = std::find_if(rankList_.begin(), rankList_.end(),
+    auto it = std::find_if(rankList.begin(), rankList.end(),
                            [&preferNode](NodeInfo info) { return info.nodeId == preferNode; });
-    if (it != rankList_.end() && it->isReady && it->availableMemory > needSize) {
+    if (it != rankList.end() && it->isReady && it->availableMemory > needSize) {
         outNode = preferNode;
         return Status::OK();
     }
@@ -136,7 +268,7 @@ Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNo
     std::vector<NodeInfo> maxNNodes;
     maxNNodes.reserve(maxN);
     std::string backupNode;
-    for (const auto &nodeInfo : rankList_) {
+    for (const auto &nodeInfo : rankList) {
         auto it = excludeNodes.find(nodeInfo.nodeId);
         if (it != excludeNodes.end()) {
             continue;
@@ -217,15 +349,16 @@ Status NodeSelector::TryGetAvailableMemoryFromSnapshot(const std::string &addres
                                                        bool &hasSnapshot) const
 {
     availableMemory = 0;
-    std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
-    hasSnapshot = !rankList_.empty();
+    auto nodeInfos = std::atomic_load_explicit(&nodeInfos_, std::memory_order_acquire);
+    hasSnapshot = nodeInfos != nullptr && !nodeInfos->rankList.empty();
     if (!hasSnapshot) {
         RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
                                                 localAddress_));
     }
-    auto it = std::find_if(rankList_.begin(), rankList_.end(),
+    const auto &rankList = nodeInfos->rankList;
+    auto it = std::find_if(rankList.begin(), rankList.end(),
                            [&address](const NodeInfo &info) { return info.nodeId == address; });
-    if (it == rankList_.end()) {
+    if (it == rankList.end()) {
         RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
                                                 localAddress_));
     }
@@ -239,8 +372,8 @@ Status NodeSelector::TryGetAvailableMemoryFromSnapshot(const std::string &addres
 
 bool NodeSelector::HasEnoughAvailableMemory(size_t needMemory)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
-    return totalSize_ > needMemory;
+    auto nodeInfos = std::atomic_load_explicit(&nodeInfos_, std::memory_order_acquire);
+    return nodeInfos != nullptr && nodeInfos->totalSize > needMemory;
 }
 
 void NodeSelector::WorkerThread()
@@ -252,7 +385,7 @@ void NodeSelector::WorkerThread()
         SetRequestContext(nullptr);
         ScopedRequestContext ctx("NodeSelector;" + GetStringUuid());
         auto rc = CollectClusterInfo();
-        if (!token_->alive) {
+        if (!token_->alive.load(std::memory_order_acquire)) {
             break;
         }
         if (rc.IsError()) {
@@ -265,11 +398,13 @@ void NodeSelector::WorkerThread()
         if (!running_.load()) {
             break;
         }
-        (void)taskCv_.wait_for(
-            lock,
-            std::chrono::milliseconds((subSuccess_ && !rankList_.empty()) ? intervalMs
-                                                                          : REPORT_RESOURCE_INTERVAL_TIME_MS_IF_FAILED),
-            [this]() { return !running_.load(); });
+        auto nodeInfos = std::atomic_load_explicit(&nodeInfos_, std::memory_order_acquire);
+        const bool hasSnapshot = nodeInfos != nullptr && !nodeInfos->rankList.empty();
+        (void)taskCv_.wait_for(lock,
+                               std::chrono::milliseconds((subSuccess_ && hasSnapshot)
+                                                             ? intervalMs
+                                                             : REPORT_RESOURCE_INTERVAL_TIME_MS_IF_FAILED),
+                               [this]() { return !running_.load(); });
     }
 }
 
@@ -303,23 +438,40 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
     stat->set_memory_capacity(usedMemory + availableMemory);
     const bool exitRequested = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed);
     stat->set_is_ready(!exitRequested);
-    {
-        std::lock_guard<std::mutex> lck(token_->mutex_);
-        if (!token_->alive) {
-            return Status::OK();
+    // Heat-rebalance reporting is zero under clock eviction and populated under Heat by periodic maintenance.
+    auto report = std::atomic_load_explicit(&resourceReportState_, std::memory_order_acquire);
+    if (report != nullptr) {
+        stat->set_hot_primary_copy_count(report->hotPrimaryReport.hotPrimaryCopyCount);
+        stat->set_total_primary_copy_count(report->hotPrimaryReport.totalPrimaryCopyCount);
+        stat->set_hot_primary_copy_bytes(report->hotPrimaryReport.hotPrimaryCopyBytes);
+        stat->set_eviction_policy(report->evictionPolicy);
+        stat->set_eviction_policy_epoch(report->evictionPolicyEpoch);
+        stat->set_eviction_policy_update_phase(report->evictionPolicyPhase);
+        stat->set_eviction_policy_worker_status(report->evictionPolicyWorkerStatus);
+        stat->set_eviction_policy_control_epoch(report->evictionPolicyControlEpoch);
+        stat->set_eviction_policy_total_objects(report->evictionPolicyTotalObjects);
+        stat->set_eviction_policy_migrated_objects(report->evictionPolicyMigratedObjects);
+        if (report->evictionPolicyFailure.IsError()) {
+            stat->set_eviction_policy_failure_code(static_cast<int32_t>(report->evictionPolicyFailure.GetCode()));
+            stat->set_eviction_policy_failure_reason(report->evictionPolicyFailure.GetMsg());
         }
-        token_->working = true;
+        if (report->evictionPolicyPhase != master::EVICTION_POLICY_STABLE) {
+            // Conversion disables eviction, so remove this worker from both source
+            // and target rebalance selection until target-only activation completes.
+            stat->set_is_ready(false);
+        }
     }
+    RETURN_OK_IF_TRUE(!token_->alive.load(std::memory_order_acquire));
     auto rc = workerMasterApi->ReportResource(req, rsp);
-    {
-        std::lock_guard<std::mutex> lck(token_->mutex_);
-        token_->working = false;
-    }
     return rc;
 }
 
 Status NodeSelector::CollectClusterInfo()
 {
+    // Run pre-report hooks (e.g. heat-counter periodic decay) before reporting, so the
+    // reported state and any rebalance decision reflect post-decay heat. Copy under the
+    // lock, run outside it so a slow hook does not block registration.
+    RunPreReportHooks(static_cast<uint64_t>(GetSteadyClockTimeStampMs()));
     std::shared_ptr<worker::WorkerMasterOCApi> workerMasterApi;
     RETURN_IF_NOT_OK(GetWorkerMasterApi(workerMasterApi));
     // Skip the report when the resolved master is already marked UNREACHABLE by the
@@ -339,39 +491,67 @@ Status NodeSelector::CollectClusterInfo()
     master::ResourceReportReqPb req;
     master::ResourceReportRspPb rsp;
     RETURN_IF_NOT_OK(ReportResource(workerMasterApi, req, rsp));
-    {
-        std::lock_guard<std::mutex> lck(token_->mutex_);
-        if (!token_->alive) {
-            return Status::OK();
-        }
-        token_->working = false;
+    if (!token_->alive.load(std::memory_order_acquire)) {
+        return Status::OK();
     }
     if (!rsp.rebalance_task().task_id().empty()) {
-        RebalanceTaskHandler handler;
-        {
-            std::lock_guard<std::mutex> lock(rebalanceTaskHandlerMutex_);
-            handler = rebalanceTaskHandler_;
-        }
-        if (handler != nullptr) {
+        auto handler = std::atomic_load_explicit(&rebalanceTaskHandler_, std::memory_order_acquire);
+        if (handler != nullptr && *handler != nullptr) {
             // Preserve the exact master that returned the task. Resolving the owner again in the executor can race
             // with failover and incorrectly bind an old task to the new master.
-            handler(rsp.rebalance_task(), workerMasterApi->GetHostPort());
+            (*handler)(rsp.rebalance_task(), workerMasterApi->GetHostPort());
         }
     }
-    // update the rankList_
-    std::unique_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
-    rankList_.clear();
-    rankList_.reserve(rsp.stats().size());
-    totalSize_ = 0;
+    if (rsp.has_eviction_policy_update() && rsp.eviction_policy_update().epoch() != 0) {
+        auto handler = std::atomic_load_explicit(&evictionPolicyUpdateHandler_, std::memory_order_acquire);
+        if (handler != nullptr && *handler != nullptr) {
+            (*handler)(rsp.eviction_policy_update());
+        }
+    }
+    auto nextNodeInfos = std::make_shared<NodeInfoSnapshot>();
+    nextNodeInfos->rankList.reserve(rsp.stats().size());
     for (const auto &info : rsp.stats()) {
-        rankList_.emplace_back(info.address(), info.available_memory(), info.is_ready(), 0, info.used_memory(),
-                               info.memory_capacity(), info.memory_limit());
+        nextNodeInfos->rankList.emplace_back(info.address(), info.available_memory(), info.is_ready(), 0,
+                                             info.used_memory(), info.memory_capacity(), info.memory_limit(),
+                                             info.hot_primary_copy_count(), info.total_primary_copy_count(),
+                                             info.hot_primary_copy_bytes());
         if (info.is_ready()) {
-            totalSize_ += info.available_memory();
+            nextNodeInfos->totalSize += info.available_memory();
         }
     }
-    std::sort(rankList_.begin(), rankList_.end(), [](const NodeInfo &a, const NodeInfo &b) { return b < a; });
+    std::sort(nextNodeInfos->rankList.begin(), nextNodeInfos->rankList.end(),
+              [](const NodeInfo &a, const NodeInfo &b) { return b < a; });
+    std::atomic_store_explicit(&nodeInfos_, std::shared_ptr<const NodeInfoSnapshot>(std::move(nextNodeInfos)),
+                               std::memory_order_release);
     return Status::OK();
+}
+
+void NodeSelector::RunPreReportHooks(uint64_t nowMs)
+{
+    std::vector<std::function<void()>> hooks;
+    {
+        std::lock_guard<std::mutex> lock(preReportHooksMutex_);
+        hooks.reserve(preReportHooks_.size());
+        for (auto &hook : preReportHooks_) {
+            const bool due = !hook.hasRun || hook.minIntervalMs == 0 || nowMs - hook.lastRunMs >= hook.minIntervalMs;
+            if (due) {
+                hook.hasRun = true;
+                hook.lastRunMs = nowMs;
+                hooks.emplace_back(hook.callback);
+            }
+        }
+    }
+    for (const auto &hook : hooks) {
+        if (hook != nullptr) {
+            try {
+                hook();
+            } catch (const std::exception &e) {
+                LOG(WARNING) << "PreReportHook threw, ignoring: " << e.what();
+            } catch (...) {
+                LOG(WARNING) << "PreReportHook threw non-std exception, ignoring.";
+            }
+        }
+    }
 }
 }  // namespace object_cache
 }  // namespace datasystem

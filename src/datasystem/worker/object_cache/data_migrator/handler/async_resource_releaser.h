@@ -22,9 +22,11 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
+#include <list>
 #include <memory>
 #include <mutex>
-#include <queue>
+#include <unordered_set>
 
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/util/thread.h"
@@ -33,52 +35,66 @@
 namespace datasystem {
 namespace object_cache {
 
-class WorkerOcEvictionManager;
-
 class AsyncResourceReleaser {
 public:
-    /**
-     * @brief Get the singleton instance.
-     * @return The singleton instance.
-     */
+    // Runs only after the exact object version has been removed from ObjectTable. Implementations clean derived
+    // side-table state and must not assume that the object is still reachable. A failure cannot create a live object
+    // that is absent from a side table; stale derived state is tolerated and repaired by normal candidate lookup.
+    using PostReleaseCleanup = std::function<void(const ImmutableString &)>;
+
+    class PreparedTask {
+    public:
+        PreparedTask() = default;
+        ~PreparedTask() = default;
+        PreparedTask(PreparedTask &&) = default;
+        PreparedTask &operator=(PreparedTask &&) = default;
+        PreparedTask(const PreparedTask &) = delete;
+        PreparedTask &operator=(const PreparedTask &) = delete;
+
+    private:
+        friend class AsyncResourceReleaser;
+        struct ReleaseTask {
+            ImmutableString objectKey;
+            uint64_t version;
+            bool trackedPending{ false };
+
+            ReleaseTask(const ImmutableString &key, uint64_t ver) : objectKey(key), version(ver) {}
+
+            bool operator==(const ReleaseTask &other) const
+            {
+                return objectKey == other.objectKey && version == other.version;
+            }
+        };
+
+        std::list<ReleaseTask> tasks_;
+    };
+
     static AsyncResourceReleaser &Instance();
-
-    /**
-     * @brief Initialize the releaser with object table and eviction manager.
-     * @param[in] objectTable The object table.
-     * @param[in] evictionManager The eviction manager used to keep the eviction list consistent with the object
-     *            table when a SPILL-migrated object is released. Optional (nullptr for tests that do not exercise
-     *            eviction cleanup); when null, eviction-list cleanup is skipped.
-     */
-    void Init(std::shared_ptr<ObjectTable> objectTable,
-              std::shared_ptr<WorkerOcEvictionManager> evictionManager = nullptr);
-
-    /**
-     * @brief Shutdown the releaser and cleanup resources.
-     */
+    void Init(std::shared_ptr<ObjectTable> objectTable, PostReleaseCleanup postReleaseCleanup = nullptr);
     void Shutdown();
 
-    /**
-     * @brief Add a failed release task to the queue.
-     * @param[in] objectKey The object key.
-     * @param[in] version The object version (create time).
-     */
-    void AddTask(const ImmutableString &objectKey, uint64_t version);
+    /** Prepare queue-node ownership before an irreversible remote primary switch. */
+    Status PrepareTask(const ImmutableString &objectKey, uint64_t version, PreparedTask &task);
 
-    /**
-     * @brief Release the resource for the given object key and expected version.
-     * @param[in] objectKey The object key.
-     * @param[in] expectedVersion The expected version (create time).
-     * @return Status of the release operation.
-     */
+    /** Transfer a prepared cleanup task without allocating. */
+    Status AddTask(PreparedTask &&task);
+
+    /** Convenience path for callers that do not cross an irreversible commit boundary. */
+    Status AddTask(const ImmutableString &objectKey, uint64_t version);
+
     Status Release(const ImmutableString &objectKey, uint64_t expectedVersion);
 
 private:
-    struct ReleaseTask {
-        ImmutableString objectKey;
-        uint64_t version;
+    enum class AddResult : uint8_t { ADDED, STOPPED, DUPLICATE };
+    using ReleaseTask = PreparedTask::ReleaseTask;
 
-        ReleaseTask(const ImmutableString &key, uint64_t ver) : objectKey(key), version(ver) {}
+    struct ReleaseTaskHash {
+        size_t operator()(const ReleaseTask &task) const
+        {
+            const size_t keyHash = std::hash<ImmutableString>{}(task.objectKey);
+            const size_t versionHash = std::hash<uint64_t>{}(task.version);
+            return keyHash ^ (versionHash + 0x9e3779b9 + (keyHash << 6U) + (keyHash >> 2U));
+        }
     };
 
     AsyncResourceReleaser();
@@ -93,15 +109,26 @@ private:
      * @brief Background worker thread function.
      */
     void WorkerThread();
+    bool TakeBatch(std::list<ReleaseTask> &tasks, std::chrono::milliseconds interval);
+    void ProcessBatch(std::list<ReleaseTask> &tasks);
+    void RequeueBatch(std::list<ReleaseTask> &tasks);
+    void ApplyInjectedDelay();
+    void RunPostReleaseCleanup(const ImmutableString &objectKey) noexcept;
+    AddResult EnqueueTaskLocked(PreparedTask &task, size_t &pendingTasks) noexcept;
 
     std::shared_ptr<ObjectTable> objectTable_;
-    std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
+    PostReleaseCleanup postReleaseCleanup_;
     std::atomic<bool> running_;
     Thread workerThread_;
 
     mutable std::mutex taskMutex_;
     std::condition_variable taskCv_;
-    std::queue<ReleaseTask> taskQueue_;
+    // std::list lets the worker transfer task ownership with splice. Once a cleanup debt is accepted, batching and
+    // retrying it never allocate and therefore cannot orphan it under memory pressure.
+    std::list<ReleaseTask> taskQueue_;
+    // Best-effort dedupe for queued and currently processed tasks. If this set cannot grow, the already-prepared list
+    // node is still admitted, so correctness never depends on a fresh allocation after the remote commit.
+    std::unordered_set<ReleaseTask, ReleaseTaskHash> pendingTasks_;
 
     static constexpr int WORKER_SLEEP_MS = 5000;    // 5 s
     static constexpr int WORKER_INTERVAL_MS = 100;  // 100 ms

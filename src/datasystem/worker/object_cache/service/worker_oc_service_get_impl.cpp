@@ -369,7 +369,10 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhere(const ReadKey &readKey, con
             LOG(INFO) << FormatString("[ObjectKey %s] Exist on disk", objectKey);
             RETURN_IF_NOT_OK(LoadSpilledObjectToMemory(objectKV, evictionManager_));
         } else {
-            evictionManager_->Add(objectKey);
+            const auto &shmUnit = (*entry)->GetShmUnit();
+            if (!evictionManager_->TryOnCacheHitWithoutSize(objectKey)) {
+                evictionManager_->OnCacheHit(objectKey, shmUnit == nullptr ? 0 : shmUnit->GetMigratableSize());
+            }
         }
         return UpdateRequestForSuccess(objectKV, nullptr);
     }
@@ -520,9 +523,10 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
     Status lastRc;
     auto &uniqueObjectMap = request->GetObjects();
     PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_BATCH);
-    std::vector<std::string> needEvictKeys;
+    std::vector<EvictionTouch> needEvictKeys;
     auto func = [this, &request](const std::string &objectKey, GetObjInfo &objectInfo,
-                                 std::set<ReadKey> &remoteObjectKeys, std::vector<std::string> &needEvictKeys) {
+                                 std::set<ReadKey> &remoteObjectKeys,
+                                 std::vector<EvictionTouch> &needEvictKeys) {
         Status status;
         if (objectInfo.isRollBack) {
             objectInfo.rc = Status(K_NOT_FOUND, FormatString("ObjectKey %s in rollback", objectKey));
@@ -534,7 +538,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
                 LOG(ERROR) << "PreProcessGetObject failed:" << status.GetMsg();
             }
             if (objectInfo.params != nullptr) {
-                needEvictKeys.emplace_back(objectKey);
+                needEvictKeys.emplace_back(objectKey, objectInfo.params->version);
                 // submit local pipeline rh2d step2
                 if (remoteObjectKeys.find(readKey) == remoteObjectKeys.end()) {
                     RETURN_IF_NOT_OK(OsXprtPipln::TriggerLocalPipelineRH2D(
@@ -558,25 +562,52 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
     return request->UpdateAfterLocalGet(std::move(lastRc), remoteObjectKeys.size());
 }
 
-void WorkerOcServiceGetImpl::SubmitAsyncAddEvictTask(std::vector<std::string> objectIds)
+void WorkerOcServiceGetImpl::SubmitAsyncAddEvictTask(std::vector<EvictionTouch> objects, bool isRefill)
 {
-    if (objectIds.empty()) {
+    if (objects.empty()) {
         return;
     }
     PerfPoint point(PerfKey::ASYNC_EVICT_TASK_ADD);
     static const size_t isAsyncThreshold = 64;
-    if (objectIds.size() > isAsyncThreshold) {
+    if (objects.size() > isAsyncThreshold) {
         auto traceContext = Trace::Instance().GetContext();
-        threadPool_->Execute([ids = std::move(objectIds), traceContext, this]() {
+        threadPool_->Execute([objects = std::move(objects), traceContext, isRefill, this]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
-            for (const auto &id : ids) {
-                evictionManager_->Add(id);
+            for (const auto &touch : objects) {
+                ApplyEvictionTouch(touch, isRefill);
             }
         });
     } else {
-        for (const auto &id : objectIds) {
-            evictionManager_->Add(id);
+        for (const auto &touch : objects) {
+            ApplyEvictionTouch(touch, isRefill);
         }
+    }
+}
+
+void WorkerOcServiceGetImpl::ApplyEvictionTouch(const EvictionTouch &touch, bool isRefill)
+{
+    const auto &[objectKey, expectedVersion] = touch;
+    const bool appliedClock = isRefill ? evictionManager_->TryOnRefillWithoutSize(objectKey)
+                                       : evictionManager_->TryOnCacheHitWithoutSize(objectKey);
+    if (appliedClock) {
+        return;
+    }
+
+    std::shared_ptr<SafeObjType> entry;
+    if (objectTable_->Get(objectKey, entry).IsError() || entry == nullptr || entry->TryRLock(true).IsError()) {
+        return;
+    }
+    Raii unlock([&entry]() { entry->RUnlock(); });
+    const auto *object = entry->Get();
+    if (object == nullptr || object->GetCreateTime() != expectedVersion) {
+        return;
+    }
+    const auto &shmUnit = object->GetShmUnit();
+    const uint64_t migratableSize = shmUnit == nullptr ? 0 : shmUnit->GetMigratableSize();
+    if (isRefill) {
+        evictionManager_->OnRefill(objectKey, migratableSize);
+    } else {
+        evictionManager_->OnCacheHit(objectKey, migratableSize);
     }
 }
 
@@ -1148,7 +1179,10 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerWithoutDump(const std::s
         status = PullObjectDataFromRemoteWorker(primaryAddress, dataSize, objectKV);
     }
     RETURN_IF_NOT_OK(status);
-    evictionManager_->Add(objectKV.GetObjKey());
+    const auto &shmUnit = objectKV.GetObjEntry()->GetShmUnit();
+    if (!evictionManager_->TryOnRefillWithoutSize(objectKV.GetObjKey())) {
+        evictionManager_->OnRefill(objectKV.GetObjKey(), shmUnit == nullptr ? 0 : shmUnit->GetMigratableSize());
+    }
     objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
     return Status::OK();
 }
@@ -2509,7 +2543,10 @@ Status WorkerOcServiceGetImpl::GetObjectFromPersistenceAndDumpWithoutCopyMeta(Ob
     auto &ele = payloads.back();
     RETURN_IF_NOT_OK(ele.ZeroCopyBuffer((void *)bufferStr.data(), bufferStr.size()));
     RETURN_IF_NOT_OK(SaveBinaryObjectToMemory(objectKV, payloads, evictionManager_, memCpyThreadPool_));
-    evictionManager_->Add(objectKey);
+    const auto &shmUnit = entry->GetShmUnit();
+    if (!evictionManager_->TryOnRefillWithoutSize(objectKey)) {
+        evictionManager_->OnRefill(objectKey, shmUnit == nullptr ? 0 : shmUnit->GetMigratableSize());
+    }
     entry->stateInfo.SetNeedToDelete(needDelete);
     saveLocal.Record();
     return Status::OK();
@@ -2549,7 +2586,10 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
                                       Trace::Instance().GetTraceID() };
         UpdateLocationTask task = UpdateLocationTask(param);
         RETURN_IF_NOT_OK(asyncUpdateLocationManager_->AddTask(std::move(task)));
-        evictionManager_->Add(objectKey);
+        const auto &shmUnit = objectKV.GetObjEntry()->GetShmUnit();
+        if (!evictionManager_->TryOnRefillWithoutSize(objectKey)) {
+            evictionManager_->OnRefill(objectKey, shmUnit == nullptr ? 0 : shmUnit->GetMigratableSize());
+        }
     } else {
         objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
     }
@@ -3403,7 +3443,10 @@ Status WorkerOcServiceGetImpl::KeepObjectDataInMemory(ReadObjectKV &objectKV)
     const auto &objectKey = objectKV.GetObjKey();
     auto &entry = objectKV.GetObjEntry();
     if (entry->IsShmUnitExistsAndComplete()) {
-        evictionManager_->Add(objectKey);
+        const auto &shmUnit = entry->GetShmUnit();
+        if (!evictionManager_->TryOnCacheHitWithoutSize(objectKey)) {
+            evictionManager_->OnCacheHit(objectKey, shmUnit == nullptr ? 0 : shmUnit->GetMigratableSize());
+        }
         CacheHitInfo::Instance().IncMemHit(1);
     } else if (entry->IsSpilled()) {
         RETURN_IF_NOT_OK(LoadSpilledObjectToMemory(objectKV, evictionManager_));

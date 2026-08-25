@@ -18,9 +18,12 @@
  * Description: Parsing-layer tests for evict/spill watermark gflags pair validation.
  */
 #include <cstdio>
+#include <limits>
 #include <string>
 
+#include "datasystem/common/flags/eviction_heat.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/utils/embedded_config.h"
 #include "datasystem/worker/worker_update_flag_check.h"
 #include "ut/common.h"
@@ -29,6 +32,17 @@ DS_DECLARE_double(eviction_high_watermark_ratio);
 DS_DECLARE_double(eviction_low_watermark_ratio);
 DS_DECLARE_double(spill_high_watermark_ratio);
 DS_DECLARE_double(spill_low_watermark_ratio);
+DS_DECLARE_string(eviction_strategy);
+DS_DECLARE_double(eviction_heat_half_life_primary_s);
+DS_DECLARE_double(eviction_heat_half_life_local_s);
+DS_DECLARE_double(eviction_heat_threshold);
+DS_DECLARE_uint32(eviction_heat_max_counter);
+DS_DECLARE_double(eviction_heat_initial_counter);
+DS_DECLARE_string(rebalance_strategy);
+DS_DECLARE_double(rebalance_heat_hot_counter_threshold);
+DS_DECLARE_uint32(rebalance_heat_source_usage_percent);
+DS_DECLARE_uint32(rebalance_heat_source_usage_percent_low);
+DS_DECLARE_uint32(rebalance_heat_source_hot_ratio_percent);
 
 namespace datasystem {
 namespace ut {
@@ -179,6 +193,117 @@ TEST_F(WatermarkFlagParseTest, EmbeddedConfigEvictionBelowDefaultPairValid)
     EXPECT_DOUBLE_EQ(FLAGS_eviction_high_watermark_ratio, 0.75);
     EXPECT_DOUBLE_EQ(FLAGS_eviction_low_watermark_ratio, 0.70);
     EXPECT_TRUE(ValidateWatermarkFlags());
+}
+
+TEST_F(WatermarkFlagParseTest, HeatValidationRejectsNonFiniteAndInvalidBounds)
+{
+    const auto oldStrategy = FLAGS_eviction_strategy;
+    const auto oldPrimary = FLAGS_eviction_heat_half_life_primary_s;
+    const auto oldLocal = FLAGS_eviction_heat_half_life_local_s;
+    const auto oldThreshold = FLAGS_eviction_heat_threshold;
+    const auto oldMax = FLAGS_eviction_heat_max_counter;
+    const auto oldInitial = FLAGS_eviction_heat_initial_counter;
+    Raii restore([=]() {
+        FLAGS_eviction_strategy = oldStrategy;
+        FLAGS_eviction_heat_half_life_primary_s = oldPrimary;
+        FLAGS_eviction_heat_half_life_local_s = oldLocal;
+        FLAGS_eviction_heat_threshold = oldThreshold;
+        FLAGS_eviction_heat_max_counter = oldMax;
+        FLAGS_eviction_heat_initial_counter = oldInitial;
+    });
+
+    FLAGS_eviction_strategy = "heat";
+    FLAGS_eviction_heat_half_life_primary_s = 120.0;
+    FLAGS_eviction_heat_half_life_local_s = 30.0;
+    FLAGS_eviction_heat_threshold = 2.0;
+    FLAGS_eviction_heat_max_counter = 32;
+    FLAGS_eviction_heat_initial_counter = 1.0;
+    EXPECT_FALSE(ValidateHeatFlags());
+
+    FLAGS_eviction_heat_initial_counter = 2.0;
+    EXPECT_TRUE(ValidateHeatFlags());
+
+    FLAGS_eviction_heat_initial_counter = 3.0;
+    EXPECT_TRUE(ValidateHeatFlags());
+
+    FLAGS_eviction_heat_initial_counter = 33.0;
+    EXPECT_FALSE(ValidateHeatFlags());
+
+    FLAGS_eviction_heat_initial_counter = -1.0;
+    EXPECT_FALSE(ValidateHeatFlags());
+    FLAGS_eviction_heat_initial_counter = 2.0;
+    FLAGS_eviction_heat_threshold = 33.0;
+    EXPECT_FALSE(ValidateHeatFlags());
+    FLAGS_eviction_heat_threshold = 2.0;
+    FLAGS_eviction_heat_half_life_primary_s = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_FALSE(ValidateHeatFlags());
+    FLAGS_eviction_heat_half_life_primary_s = 120.0;
+    FLAGS_eviction_heat_half_life_local_s = std::numeric_limits<double>::infinity();
+    EXPECT_FALSE(ValidateHeatFlags());
+}
+
+TEST_F(WatermarkFlagParseTest, HeatHalfLifeProductionDefaultsAreCalibrated)
+{
+    EXPECT_DOUBLE_EQ(FLAGS_eviction_heat_half_life_primary_s, 600.0);
+    EXPECT_DOUBLE_EQ(FLAGS_eviction_heat_half_life_local_s, 300.0);
+    EXPECT_TRUE(ValidateHeatFlags());
+    RefreshHeatFactors();
+    EXPECT_DOUBLE_EQ(GetEvictionHeatConfig().halfLifePrimaryS, 600.0);
+    EXPECT_DOUBLE_EQ(GetEvictionHeatConfig().halfLifeLocalS, 300.0);
+}
+
+TEST_F(WatermarkFlagParseTest, RebalanceHeatValidationRejectsUnreachableHotThreshold)
+{
+    const auto oldEvictionStrategy = FLAGS_eviction_strategy;
+    const auto oldRebalanceStrategy = FLAGS_rebalance_strategy;
+    const auto oldMax = FLAGS_eviction_heat_max_counter;
+    const auto oldInitial = FLAGS_eviction_heat_initial_counter;
+    const auto oldHotThreshold = FLAGS_rebalance_heat_hot_counter_threshold;
+    Raii restore([=]() {
+        FLAGS_eviction_strategy = oldEvictionStrategy;
+        FLAGS_rebalance_strategy = oldRebalanceStrategy;
+        FLAGS_eviction_heat_max_counter = oldMax;
+        FLAGS_eviction_heat_initial_counter = oldInitial;
+        FLAGS_rebalance_heat_hot_counter_threshold = oldHotThreshold;
+    });
+
+    FLAGS_eviction_strategy = "heat";
+    FLAGS_rebalance_strategy = "heat";
+    FLAGS_eviction_heat_initial_counter = 2.0;
+    FLAGS_eviction_heat_max_counter = 32;
+    FLAGS_rebalance_heat_hot_counter_threshold = 4.0;
+    EXPECT_TRUE(ValidateRebalanceHeatFlags());
+
+    FLAGS_rebalance_heat_hot_counter_threshold = 32.0;
+    EXPECT_FALSE(ValidateRebalanceHeatFlags());
+    FLAGS_rebalance_heat_hot_counter_threshold = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_FALSE(ValidateRebalanceHeatFlags());
+}
+
+TEST_F(WatermarkFlagParseTest, RebalanceHeatValidationRequiresDistinctSourceUsageThresholds)
+{
+    const auto oldEvictionStrategy = FLAGS_eviction_strategy;
+    const auto oldRebalanceStrategy = FLAGS_rebalance_strategy;
+    const auto oldUsage = FLAGS_rebalance_heat_source_usage_percent;
+    const auto oldUsageLow = FLAGS_rebalance_heat_source_usage_percent_low;
+    const auto oldHot = FLAGS_rebalance_heat_source_hot_ratio_percent;
+    Raii restore([=]() {
+        FLAGS_eviction_strategy = oldEvictionStrategy;
+        FLAGS_rebalance_strategy = oldRebalanceStrategy;
+        FLAGS_rebalance_heat_source_usage_percent = oldUsage;
+        FLAGS_rebalance_heat_source_usage_percent_low = oldUsageLow;
+        FLAGS_rebalance_heat_source_hot_ratio_percent = oldHot;
+    });
+
+    FLAGS_eviction_strategy = "heat";
+    FLAGS_rebalance_strategy = "heat";
+    FLAGS_rebalance_heat_source_usage_percent = 60;
+    FLAGS_rebalance_heat_source_usage_percent_low = 50;
+    FLAGS_rebalance_heat_source_hot_ratio_percent = 40;
+    EXPECT_TRUE(ValidateRebalanceHeatFlags());
+
+    FLAGS_rebalance_heat_source_usage_percent_low = 60;
+    EXPECT_FALSE(ValidateRebalanceHeatFlags());
 }
 }  // namespace ut
 }  // namespace datasystem

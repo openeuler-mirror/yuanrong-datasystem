@@ -33,6 +33,20 @@ void AdjustNodeTimeoutFlags();
 bool ValidateWatermarkFlags();
 
 /**
+ * @brief Validate the heat-based eviction strategy flags (strategy name, half-lives,
+ *        threshold, max counter). Returns false (and logs) on any invalid value.
+ */
+bool ValidateHeatFlags();
+
+/**
+ * @brief Validate the heat-driven rebalance strategy flags (strategy name, hot threshold,
+ *        and source/target usage and hot-ratio percents). Enforces heat rebalance ⟹
+ *        heat eviction, fresh-insert-not-hot, and low source thresholds < high thresholds.
+ *        Returns false (and logs) on any invalid value.
+ */
+bool ValidateRebalanceHeatFlags();
+
+/**
  * @brief Check whether the value of node_dead_timeout_s is valid.
  * @param[in] value Change node_dead_timeout_s to this value.
  */

@@ -16,9 +16,11 @@
 #include "datasystem/worker/worker_update_flag_check.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/flags/eviction_heat.h"
 #include "datasystem/common/flags/eviction_watermark.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/validator.h"
@@ -27,6 +29,19 @@ DS_DECLARE_int32(heartbeat_interval_ms);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
+DS_DECLARE_string(eviction_strategy);
+DS_DECLARE_double(eviction_heat_half_life_primary_s);
+DS_DECLARE_double(eviction_heat_half_life_local_s);
+DS_DECLARE_double(eviction_heat_threshold);
+DS_DECLARE_uint32(eviction_heat_max_counter);
+DS_DECLARE_double(eviction_heat_initial_counter);
+DS_DECLARE_string(rebalance_strategy);
+DS_DECLARE_double(rebalance_heat_hot_counter_threshold);
+DS_DECLARE_uint32(rebalance_heat_source_usage_percent);
+DS_DECLARE_uint32(rebalance_heat_source_hot_ratio_percent);
+DS_DECLARE_uint32(rebalance_heat_source_usage_percent_low);
+DS_DECLARE_uint32(rebalance_heat_target_usage_percent);
+DS_DECLARE_uint32(rebalance_heat_target_hot_ratio_percent);
 DS_DECLARE_uint32(scale_in_collect_window_ms);
 
 namespace {
@@ -110,6 +125,114 @@ void AdjustNodeTimeoutFlags()
     }
 }
 
+namespace {
+bool ValidateFiniteHeatFlag(const char *flagName, double value, bool allowZero)
+{
+    if (std::isfinite(value) && (allowZero ? value >= 0.0 : value > 0.0)) {
+        return true;
+    }
+    LOG(ERROR) << FormatString("%s must be finite and %s 0, got: %g.", flagName, allowZero ? ">=" : ">", value);
+    return false;
+}
+
+bool ValidateEvictionHeatValueRanges()
+{
+    return ValidateFiniteHeatFlag("eviction_heat_half_life_primary_s", FLAGS_eviction_heat_half_life_primary_s, false)
+           && ValidateFiniteHeatFlag("eviction_heat_half_life_local_s", FLAGS_eviction_heat_half_life_local_s, false)
+           && ValidateFiniteHeatFlag("eviction_heat_threshold", FLAGS_eviction_heat_threshold, true)
+           && ValidateFiniteHeatFlag("eviction_heat_initial_counter", FLAGS_eviction_heat_initial_counter, true)
+           && Validator::ValidateUint32("eviction_heat_max_counter", FLAGS_eviction_heat_max_counter);
+}
+
+bool ValidateEvictionHeatRelationships()
+{
+    if (FLAGS_eviction_heat_half_life_local_s > FLAGS_eviction_heat_half_life_primary_s) {
+        LOG(ERROR) << "eviction_heat_half_life_local_s (" << FLAGS_eviction_heat_half_life_local_s
+                   << ") must be <= eviction_heat_half_life_primary_s (" << FLAGS_eviction_heat_half_life_primary_s
+                   << ") so local copies are evicted sooner.";
+        return false;
+    }
+    if (FLAGS_eviction_heat_initial_counter < FLAGS_eviction_heat_threshold) {
+        LOG(ERROR) << "eviction_heat_initial_counter (" << FLAGS_eviction_heat_initial_counter
+                   << ") must be >= eviction_heat_threshold (" << FLAGS_eviction_heat_threshold
+                   << ") so fresh inserts are not first-round eviction candidates.";
+        return false;
+    }
+    if (static_cast<double>(FLAGS_eviction_heat_threshold) > static_cast<double>(FLAGS_eviction_heat_max_counter)) {
+        LOG(ERROR) << "eviction_heat_threshold (" << FLAGS_eviction_heat_threshold
+                   << ") must be <= eviction_heat_max_counter (" << FLAGS_eviction_heat_max_counter << ").";
+        return false;
+    }
+    if (FLAGS_eviction_heat_initial_counter > static_cast<double>(FLAGS_eviction_heat_max_counter)) {
+        LOG(ERROR) << "eviction_heat_initial_counter (" << FLAGS_eviction_heat_initial_counter
+                   << ") must be <= eviction_heat_max_counter (" << FLAGS_eviction_heat_max_counter << ").";
+        return false;
+    }
+    return true;
+}
+
+bool ValidateRebalanceHeatCounterRelationships()
+{
+    if (FLAGS_rebalance_strategy == "heat" && FLAGS_eviction_strategy != "heat") {
+        LOG(ERROR) << "rebalance_strategy=heat requires eviction_strategy=heat (heat counters are only maintained "
+                      "by the heat eviction strategy).";
+        return false;
+    }
+    if (!ValidateFiniteHeatFlag("rebalance_heat_hot_counter_threshold", FLAGS_rebalance_heat_hot_counter_threshold,
+                                true)) {
+        return false;
+    }
+    if (FLAGS_rebalance_strategy == "heat"
+        && FLAGS_eviction_heat_initial_counter >= FLAGS_rebalance_heat_hot_counter_threshold) {
+        LOG(ERROR) << "eviction_heat_initial_counter (" << FLAGS_eviction_heat_initial_counter
+                   << ") must be < rebalance_heat_hot_counter_threshold ("
+                   << FLAGS_rebalance_heat_hot_counter_threshold
+                   << ") so fresh inserts are not counted as hot data for heat rebalance.";
+        return false;
+    }
+    if (FLAGS_rebalance_strategy == "heat"
+        && FLAGS_rebalance_heat_hot_counter_threshold >= static_cast<double>(FLAGS_eviction_heat_max_counter)) {
+        LOG(ERROR) << "rebalance_heat_hot_counter_threshold (" << FLAGS_rebalance_heat_hot_counter_threshold
+                   << ") must be < eviction_heat_max_counter (" << FLAGS_eviction_heat_max_counter
+                   << ") so objects can become hot via cache hits.";
+        return false;
+    }
+    return true;
+}
+
+bool ValidateRebalanceHeatSourceThresholds()
+{
+    if (FLAGS_rebalance_strategy == "heat"
+        && FLAGS_rebalance_heat_source_usage_percent_low >= FLAGS_rebalance_heat_source_usage_percent) {
+        LOG(ERROR) << "rebalance_heat_source_usage_percent_low (" << FLAGS_rebalance_heat_source_usage_percent_low
+                   << ") must be < rebalance_heat_source_usage_percent ("
+                   << FLAGS_rebalance_heat_source_usage_percent
+                   << ") so the two crossed source-trigger paths remain distinct.";
+        return false;
+    }
+    return true;
+}
+}  // namespace
+
+bool ValidateHeatFlags()
+{
+    if (FLAGS_eviction_strategy != "clock" && FLAGS_eviction_strategy != "heat") {
+        LOG(ERROR) << "eviction_strategy must be \"clock\" or \"heat\", got: \"" << FLAGS_eviction_strategy << "\".";
+        return false;
+    }
+    return ValidateEvictionHeatValueRanges() && ValidateEvictionHeatRelationships();
+}
+
+bool ValidateRebalanceHeatFlags()
+{
+    if (FLAGS_rebalance_strategy != "memory" && FLAGS_rebalance_strategy != "heat") {
+        LOG(ERROR) << "rebalance_strategy must be \"memory\" or \"heat\", got: \"" << FLAGS_rebalance_strategy
+                   << "\".";
+        return false;
+    }
+    return ValidateRebalanceHeatCounterRelationships() && ValidateRebalanceHeatSourceThresholds();
+}
+
 bool ValidateWatermarkFlags()
 {
     if (!Validator::ValidateEvictionWatermarkRatioPair()) {
@@ -119,6 +242,14 @@ bool ValidateWatermarkFlags()
         return false;
     }
     RefreshWatermarkFactors();
+    if (!ValidateHeatFlags()) {
+        return false;
+    }
+    RefreshHeatFactors();
+    if (!ValidateRebalanceHeatFlags()) {
+        return false;
+    }
+    RefreshRebalanceHeatFactors();
     return true;
 }
 

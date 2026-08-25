@@ -387,7 +387,7 @@ private:
     /**
      * @brief Create all services above.
      */
-    void CreateAllServices();
+    Status CreateAllServices();
 
     /**
      * @brief Create all services related to master.
@@ -397,7 +397,13 @@ private:
     /**
      * @brief Create all services related to worker.
      */
-    void CreateWorkerServices();
+    Status CreateWorkerServices();
+
+    /**
+     * @brief Restore and configure the crash-safe local eviction-policy state.
+     */
+    Status InitEvictionPolicyWorkerStateStore(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
 
     /**
      * @brief Create object cache worker services.
@@ -415,6 +421,33 @@ private:
      */
     void CreateRebalanceExecutor(const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
                                  const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
+    void RegisterEvictionPolicyUpdateHandler(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
+    void HandleEvictionPolicyUpdate(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+        const master::EvictionPolicyUpdatePb &update);
+    bool HandleEvictionPolicyPrecheck(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+        object_cache::EvictionPolicy target, const master::EvictionPolicyUpdatePb &update, uint64_t &totalObjects);
+    bool PrepareEvictionPolicyCommit(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+        object_cache::EvictionPolicy target, const master::EvictionPolicyUpdatePb &update, uint64_t &totalObjects);
+    Status EnsureEvictionPolicyBarrier(uint64_t epoch);
+    void ReleaseEvictionPolicyBarrier();
+    void AdvanceEvictionPolicyUpdate(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+        object_cache::EvictionPolicy target, const master::EvictionPolicyUpdatePb &update, uint64_t totalObjects);
+    void ConfigureEvictionTelemetry(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
+    void RegisterEvictionPolicyReportHook(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
+    void RegisterEvictionWatermarkObservers(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+        bool enableEvictionCopyWatermarkTelemetry);
+    void RegisterHeatMaintenanceHook(
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
+        uint64_t copyWatermarkTelemetryIntervalMs, uint64_t maintenanceIntervalMs);
+    void RegisterRebalanceTaskHandler();
 
     /**
      * @brief Initialize all services above.
@@ -655,6 +688,11 @@ private:
     Status InitCoordinationBackend();
 
     /**
+     * @brief Bind the Master eviction-policy rollout state to the configured shared coordination backend.
+     */
+    Status InitEvictionPolicyRolloutStore();
+
+    /**
      * @brief Construct worker-owned topology runtime components.
      * @return Status of this call.
      */
@@ -866,6 +904,11 @@ private:
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> objCacheClientWorkerSvc_{ nullptr };
     std::mutex rebalanceExecutorMutex_;
     std::unique_ptr<RebalanceExecutor> rebalanceExecutor_{ nullptr };
+    // Owned by NodeSelector's single worker thread. Keep Ensure/Release calls on that synchronous handler path;
+    // rebalanceExecutor_ itself remains protected by rebalanceExecutorMutex_.
+    bool evictionPolicyBarrierActive_{ false };
+    uint64_t evictionPolicyBarrierEpoch_{ 0 };
+    std::chrono::steady_clock::time_point evictionPolicyBarrierDeadline_{};
     std::unique_ptr<WorkerOCServiceBrpcAdapter> brpcOcAdapter_{ nullptr };
     std::unique_ptr<master::MasterServiceBrpcAdapter> brpcMasterAdapter_{ nullptr };
     std::unique_ptr<WorkerServiceBrpcAdapter> brpcWorkerAdapter_{ nullptr };

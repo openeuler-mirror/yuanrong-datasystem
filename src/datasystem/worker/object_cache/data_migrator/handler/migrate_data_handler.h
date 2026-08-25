@@ -26,11 +26,13 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/worker/object_cache/data_migrator/basic/base_data_unit.h"
+#include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/data_migrator/basic/migrate_progress.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/selection_strategy.h"
@@ -62,8 +64,10 @@ public:
     MigrateDataHandler(MigrateType type, const std::string &localAddr,
                        const std::vector<ImmutableString> &needMigrateDataIds, std::shared_ptr<ObjectTable> objectTable,
                        std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi, std::shared_ptr<SelectionStrategy> strategy,
-                       std::atomic<bool> *stoppingPtr,
-                       std::shared_ptr<MigrateProgress> progress = nullptr, bool isRetry = false, uint32_t slotId = 0);
+                       const std::atomic<bool> *stoppingPtr,
+                       std::shared_ptr<MigrateProgress> progress = nullptr, bool isRetry = false, uint32_t slotId = 0,
+                       std::unordered_map<std::string, double> objectHeats = {},
+                       RebalancePolicyFence rebalancePolicyFence = {});
 
     ~MigrateDataHandler() = default;
 
@@ -140,9 +144,10 @@ private:
 
     /**
      * @brief Indicate the remote node is lack of resources or not.
+     * @param[in] cacheType The cache type being migrated.
      * @return True if remote node is lack of resources.
      */
-    bool IsRemoteLackResources() const;
+    bool IsRemoteLackResources(CacheType cacheType) const;
 
     /**
      * @brief Add object data into migrate data list.
@@ -156,8 +161,10 @@ private:
      * @param[in] isSlotMigration Whether this is a slot migration.
      */
     void SendDataToRemote(bool isSlotMigration = false);
+    bool PrepareTransportSend();
     bool CheckSendAdmission();
     Status EnsureRateForBatch();
+    Status PrepareReleaseTasks();
     void HandleMigrationTransportResponse(const Status &status, MigrateTransport::Response &response);
 
     /**
@@ -245,12 +252,24 @@ private:
      * @return True if fast transport should be used.
      */
     bool ShouldUseFastTransport() const;
+    void ApplyRebalancePolicyFence(MigrateDataReqPb &req) const;
 
     /**
-     * @brief Release resources for successfully migrated objects.
+     * @brief Finalize source resources for confirmed and expired migration results.
+     * @param[in] successIds Confirmed migrated object ids.
+     * @param[in] expiredIds Stale object ids that must be released.
+     */
+    void ReleaseResources(const std::unordered_set<ImmutableString> &successIds,
+                          const std::unordered_set<ImmutableString> &expiredIds);
+
+    /**
+     * @brief Demote the source's primary copies to non-primary (local/replica) without erasing data.
+     * Called under REBALANCE_KEEP_LOCAL: the objectTable entry is kept; only the PRIMARY_COPY flag is
+     * cleared. The master already knows the target is the new primary (via ReplacePrimary with
+     * remove_location=false), so the source's local copy becomes a cacheable replica.
      * @param[in] successIds Successfully migrated object ids.
      */
-    void ReleaseResources(const std::unordered_set<ImmutableString> &successIds);
+    void DemotePrimaryCopies(const std::unordered_set<ImmutableString> &successIds);
 
     MigrateType type_;
     std::string localAddr_;
@@ -268,15 +287,19 @@ private:
     std::shared_ptr<MigrateTransport> transport_;
     bool isRetry_{ false };
     uint32_t slotId_{ 0 };
+    // Non-empty only for heat rebalance. The transport reads this immutable batch metadata while sending.
+    std::unordered_map<std::string, double> objectHeats_;
+    RebalancePolicyFence rebalancePolicyFence_;
 
     bool selfHealAttempted_{ false };
     Status lastHealStatus_;
-    std::atomic<bool> *stoppingPtr_{ nullptr };
+    const std::atomic<bool> *stoppingPtr_{ nullptr };
 
     std::unordered_set<ImmutableString> successIds_;
     std::unordered_set<ImmutableString> failedIds_;
     std::unordered_set<ImmutableString> skipIds_;
     std::vector<std::unique_ptr<BaseDataUnit>> datas_;
+    std::vector<AsyncResourceReleaser::PreparedTask> preparedReleaseTasks_;
     std::optional<ProviderUbFailureDetailPb> ubFailureDetail_;
     std::function<Status()> sendAdmission_;
     // Last target remain_bytes received from a real batch send (updated in

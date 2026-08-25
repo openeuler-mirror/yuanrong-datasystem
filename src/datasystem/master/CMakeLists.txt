@@ -21,8 +21,11 @@ set(MASTER_SRCS
         node_descriptor.cpp
         worker_manager.cpp
         metadata_manager_holder.cpp
+        rebalance_scheduler.cpp
         memory_rebalance_scheduler.cpp
-        resource_manager.cpp)
+        heat_rebalance_scheduler.cpp
+        resource_manager.cpp
+        metadata_redirect_helper.cpp)
 
 set(MASTER_DEPEND_LIBS
         common_ak_sk

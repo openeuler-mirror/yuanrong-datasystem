@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <linux/futex.h>
 #include <functional>
 #include <future>
@@ -127,11 +128,7 @@ DS_DECLARE_string(l2_cache_type);
 DS_DEFINE_bool(oc_metadata_header, true,
                "Whether to allocate metadata header for object cache shared memory. Set to false (0) to disable the "
                "metadata header, which also disables shm-based latch/visibility.");
-DS_DEFINE_uint32(data_migrate_rate_limit_mb, 40, "Data migrate rate limit for every node when scale down happen");
-DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_t value) {
-    (void)flagName;
-    return value > 0;
-});
+DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DEFINE_string(data_migrate_urma_transport_mode, "write",
                  "URMA transport mode for background data migration, valid values are read and write.");
 DS_DEFINE_validator(data_migrate_urma_transport_mode, [](const char *flagName, const std::string &value) {
@@ -162,6 +159,7 @@ bool IsTopologyPending(const Status &status)
 {
     return status.GetCode() == K_NOT_READY || status.GetCode() == K_NOT_FOUND;
 }
+
 
 Status ToTopologyChangeTypePb(cluster::TopologyChangeType type, ::datasystem::TypePb &typePb)
 {
@@ -532,7 +530,15 @@ Status WorkerOCServiceImpl::InitRecoveryServices()
         std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, std::move(clusterAccess),
                                                   workerMasterApiManager_, metadataRoute_, metadataSize_,
                                                   evictionManager_, memCpyThreadPool_);
-    AsyncResourceReleaser::Instance().Init(objectTable_, evictionManager_);
+    std::weak_ptr<WorkerOcEvictionManager> weakEvictionManager = evictionManager_;
+    AsyncResourceReleaser::PostReleaseCleanup postReleaseCleanup = [weakEvictionManager](
+                                                                        const ImmutableString &objectKey) {
+        auto manager = weakEvictionManager.lock();
+        if (manager != nullptr) {
+            manager->Erase(objectKey);
+        }
+    };
+    AsyncResourceReleaser::Instance().Init(objectTable_, std::move(postReleaseCleanup));
     InitServiceImpl();
     NodeSelector::Instance().Init(localAddress_.ToString(), membership_, exitRequested_, workerMasterApiManager_);
     getProc_->Init();
@@ -1066,6 +1072,19 @@ Status WorkerOCServiceImpl::CloseIncomingMigrationAdmissionAndWait(std::chrono::
 {
     RETURN_OK_IF_TRUE(gMigrateProc_ == nullptr);
     return gMigrateProc_->CloseIncomingMigrationAdmissionAndWait(deadline);
+}
+
+Status WorkerOCServiceImpl::PauseIncomingMigrationAdmissionAndCheckDrained()
+{
+    RETURN_OK_IF_TRUE(gMigrateProc_ == nullptr);
+    return gMigrateProc_->PauseIncomingMigrationAdmissionAndCheckDrained();
+}
+
+void WorkerOCServiceImpl::ResumeIncomingMigrationAdmission()
+{
+    if (gMigrateProc_ != nullptr) {
+        gMigrateProc_->ResumeIncomingMigrationAdmission();
+    }
 }
 
 Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId)

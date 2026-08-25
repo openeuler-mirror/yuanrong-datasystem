@@ -92,22 +92,7 @@ ds_cc_test(
         "//src/datasystem/worker/object_cache/data_migrator/handler:async_resource_releaser",
         "//tests/ut:ut_common",
         "//tests/ut/worker:eviction_manager_common",
-    ],
-)
-
-# 节点选择器测试
-ds_cc_test(
-    name = "node_selector_test",
-    srcs = ["object_cache/node_selector_test.cpp"],
-    deps = [
-        "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/cluster:cluster_topology",
-        "//src/datasystem/worker:add_miss_libs_fixme",
-        "//src/datasystem/worker/object_cache:worker_master_oc_api",
-        "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",
-        "//tests/common/binmock",
-        "//tests/ut:ut_common",
-        "//tests/ut/worker:eviction_manager_common",
+        "//tests/ut/worker:test_metadata_route",
     ],
 )
 
@@ -121,6 +106,7 @@ ds_cc_test(
         "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//tests/common/binmock",
         "//tests/ut:ut_common",
         "//tests/ut/worker:test_metadata_route",
         "//tests/ut/worker:eviction_manager_common",
@@ -132,8 +118,10 @@ ds_cc_test(
     srcs = ["object_cache/migrate_transport_test.cpp"],
     deps = [
         "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache/data_migrator/transport:fast_migrate_transport",
         "//src/datasystem/worker/object_cache/data_migrator/transport:fast_migrate_transport2",
+        "//src/datasystem/worker/object_cache/data_migrator/transport:tcp_migrate_transport",
         "//tests/ut:ut_common",
     ],
 )
@@ -282,6 +270,7 @@ ds_cc_test(
     name = "migrate_data_handler_test",
     srcs = ["object_cache/migrate_data_handler_test.cpp"],
     deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
         "//src/datasystem/common/rpc:mem_view",
@@ -300,6 +289,16 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "data_limiter_test",
+    srcs = ["object_cache/data_limiter_test.cpp"],
+    deps = [
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/worker/object_cache/limiter:data_limiter",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # 迁移数据服务测试
 ds_cc_test(
     name = "migrate_data_service_test",
@@ -308,6 +307,8 @@ ds_cc_test(
         "object_cache/test_placement_facade.h",
     ],
     deps = [
+        ":eviction_manager_common",
+        "//src/datasystem/common/flags:eviction_heat",
         "//src/datasystem/common/object_cache:shm_guard",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/shared_memory:common_shared_memory",
@@ -316,6 +317,7 @@ ds_cc_test(
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_get_impl",
@@ -365,6 +367,24 @@ ds_cc_test(
         "//src/datasystem/common/util:file_util",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:eviction_manager_common",
+        "//tests/ut/worker:test_metadata_route",
+    ],
+)
+
+# Worker OC 热度淘汰策略测试
+ds_cc_test(
+    name = "worker_oc_heat_eviction_test",
+    srcs = ["object_cache/worker_oc_heat_eviction_test.cpp"],
+    deps = [
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/object_cache:eviction_policy_common",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
@@ -620,8 +640,8 @@ test_suite(
         "migrate_data_direct_test",
         "migrate_data_handler_test",
         "migrate_data_service_test",
+        "data_limiter_test",
         "migrate_transport_test",
-        "node_selector_test",
         "object_endpoint_policy_test",
         "rebalance_worker_test",
         "shared_page_queue_group_test",
@@ -634,6 +654,7 @@ test_suite(
         "worker_leaving_intercept_test",
         "worker_leader_reconciler_test",
         "worker_oc_eviction_test",
+        "worker_oc_heat_eviction_test",
         "worker_oc_service_impl_header_test",
         "worker_oc_service_impl_test",
         "worker_oc_service_get_ub_admission_test",

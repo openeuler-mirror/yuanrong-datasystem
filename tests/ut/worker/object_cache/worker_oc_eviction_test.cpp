@@ -44,6 +44,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "eviction_manager_common.h"
@@ -762,6 +763,29 @@ TEST_F(EvictionManagerTest, PrimaryEndLifeSourceTimeoutKeepsThreeAttemptForceDel
     TestPrimaryEndLifeSourceTimeoutKeepsThreeAttemptForceDeletePolicy();
 }
 
+TEST_F(EvictionManagerTest, PrimaryEndLifeReacquireRejectsObjectClaimedByRebalance)
+{
+    std::unique_ptr<WorkerOcEvictionManager> manager;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+    InitEvictionManager(manager, globalRefs);
+    const std::string objectKey = "primary-end-life-rebalance-window";
+    auto object = std::make_unique<object_cache::ObjCacheShmUnit>();
+    object->SetCreateTime(1);
+    object->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    object->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE_EVICT);
+    object->modeInfo.SetCacheType(CacheType::MEMORY);
+    DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(object)));
+    manager->Add(objectKey);
+    ASSERT_TRUE(manager->TryMarkRebalancingObject(objectKey));
+
+    std::shared_ptr<SafeObjType> lockedEntry;
+    auto rc = manager->ReacquirePrimaryEndLifeForTest(objectKey, 1, lockedEntry);
+    EXPECT_EQ(rc.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(lockedEntry, nullptr);
+    EXPECT_TRUE(objectTable_->Contains(objectKey).IsOk());
+    manager->UnmarkRebalancingObject(objectKey);
+}
+
 TEST_F(EvictionManagerTest, NoneL2FallbackRedirectForwardsOnce)
 {
     TestNoneL2FallbackRedirectForwardsOnce();
@@ -832,8 +856,28 @@ public:
         LOG(INFO) << "Init ScEvictionObjectTest";
     }
 
+    void TearDown() override
+    {
+        scAllocateManager_.reset();
+        evictionManager_.reset();
+        objectTable_.reset();
+        WorkerOcSpill::Instance()->ResetForTest();
+        if (allocator != nullptr) {
+            allocator->ResetForTest();
+            allocator = nullptr;
+        }
+        CommonTest::TearDown();
+    }
+
     void InitTest()
     {
+        scAllocateManager_.reset();
+        evictionManager_.reset();
+        objectTable_.reset();
+        WorkerOcSpill::Instance()->ResetForTest();
+        if (allocator != nullptr) {
+            allocator->ResetForTest();
+        }
         objectTable_ = std::make_shared<ObjectTable>();
         allocator = datasystem::memory::Allocator::Instance();
         akSkManager_ = std::make_shared<AkSkManager>(0);

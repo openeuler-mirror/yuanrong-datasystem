@@ -21,6 +21,9 @@
 #define DATASYSTEM_MIGRATE_DATA_MIGRATE_TRANSPORT_H
 
 #include <cstdint>
+#include <string>
+#include <unordered_map>
+
 #include <optional>
 #include "datasystem/worker/object_cache/data_migrator/basic/base_data_unit.h"
 #include "datasystem/worker/object_cache/data_migrator/basic/migrate_progress.h"
@@ -29,6 +32,13 @@
 
 namespace datasystem {
 namespace object_cache {
+struct RebalancePolicyFence {
+    bool enabled{ false };
+    uint32_t targetPolicy{ 0 };
+    uint64_t targetEpoch{ 0 };
+    std::string taskId;
+};
+
 class MigrateTransport {
 public:
     MigrateTransport() = default;
@@ -45,11 +55,14 @@ public:
         bool isSlotMigration{false};
         bool isRetry{false};
         uint32_t slotId{0};
+        const std::unordered_map<std::string, double> *objectHeats{nullptr};
+        const RebalancePolicyFence *rebalancePolicyFence{nullptr};
     };
 
     struct Response {
         uint64_t remainBytes{ UINT64_MAX };  // UINT64_MAX means the field is not set.
         std::unordered_set<ImmutableString> successKeys;
+        std::unordered_set<ImmutableString> expiredKeys;
         std::unordered_set<ImmutableString> failedKeys;
         std::unordered_set<ImmutableString> skipKeys;
         uint64_t limitRate{ 0 };

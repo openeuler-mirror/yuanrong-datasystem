@@ -23,6 +23,8 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -32,14 +34,20 @@
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/thread.h"
+#include "datasystem/master/heat_rebalance_scheduler.h"
 #include "datasystem/master/memory_rebalance_scheduler.h"
+#include "datasystem/master/rebalance_scheduler.h"
+#include "datasystem/common/util/thread.h"
 #include "datasystem/protos/master_object.pb.h"
 
 namespace datasystem {
 namespace master {
 class ResourceManager {
 public:
+    using StoreProcessFunction = std::function<Status(const std::string &, std::unique_ptr<std::string> &, bool &)>;
+    using RolloutLoader = std::function<Status(std::string &)>;
+    using RolloutCas = std::function<Status(const StoreProcessFunction &)>;
+
     /**
      * @brief Construct the resource manager.
      */
@@ -73,6 +81,31 @@ public:
     Status ReportRebalanceResult(const master::ReportRebalanceResultReqPb &req,
                                  master::ReportRebalanceResultRspPb &rsp);
 
+    /**
+     * @brief Persist a complete PRECHECK or COMMIT rollout command.
+     */
+    Status SetEvictionPolicyUpdate(const master::EvictionPolicyUpdatePb &update, uint32_t cohortPercent);
+
+    /**
+     * @brief Return the latest worker acknowledgements observed for one rollout.
+     */
+    Status GetEvictionPolicyUpdateProgress(uint64_t epoch, master::GetEvictionPolicyUpdateProgressRspPb &rsp);
+
+    /**
+     * @brief Bind the shared rollout store and recover the last committed intent before serving requests.
+     * @param[in] loader Exact-read callback for the rollout key.
+     * @param[in] cas Callback-form CAS for the rollout key.
+     * @return K_OK when the store is bound and any durable intent is recovered.
+     */
+    Status InitEvictionPolicyRolloutStore(RolloutLoader loader, RolloutCas cas);
+
+#ifdef WITH_TESTS
+    Status RefreshEvictionPolicyRolloutForTest()
+    {
+        return RefreshEvictionPolicyRollout();
+    }
+#endif
+
 protected:
     /**
      * @brief Clear the expired resource in write snapshot.
@@ -97,6 +130,20 @@ private:
     void WorkerThread();
 
     /**
+     * @brief Refresh the local intent from the shared store for multi-Master convergence.
+     * @return Store read, decode, or validation status.
+     */
+    Status RefreshEvictionPolicyRollout();
+
+    /**
+     * @brief Validate one rollout and publish it when it is not older than local state.
+     */
+    Status ApplyEvictionPolicyRollout(const master::EvictionPolicyRolloutPb &rollout);
+
+    void ApplyEvictionPolicyRolloutToReport(const master::ResourceReportReqPb &req, NodeInfo &nodeInfo,
+                                            master::ResourceReportRspPb &rsp);
+
+    /**
      * @brief Get current read snapshot.
      */
     const std::unordered_map<std::string, NodeInfo> &GetReadSnapshot() const
@@ -116,8 +163,19 @@ private:
     SharedMutex readSnapshotMutex_;
     std::unordered_map<std::string, NodeInfo> readSnapshot_{};
     std::unordered_map<std::string, NodeInfo> writeSnapshot_{};
-    MemoryRebalanceScheduler rebalanceScheduler_;
+    std::unique_ptr<RebalanceScheduler> rebalanceScheduler_;
+    // Protects the rollout, its per-worker progress, and the immutable store callback snapshots. Store callbacks are
+    // copied while holding this mutex and always invoked after releasing it.
+    std::mutex evictionPolicyMutex_;
+    // Resource reports atomically read this immutable snapshot. The mutex still protects publishing a new epoch
+    // together with clearing/updating the per-worker progress map.
+    std::shared_ptr<const master::EvictionPolicyRolloutPb> evictionPolicyRollout_;
+    RolloutLoader evictionPolicyRolloutLoader_;
+    RolloutCas evictionPolicyRolloutCas_;
+    // Progress belongs to the active rollout epoch and is protected by evictionPolicyMutex_ so publishing a
+    // new epoch and clearing stale worker observations is one atomic state transition.
+    std::unordered_map<std::string, master::EvictionPolicyWorkerProgressPb> evictionPolicyWorkerProgress_;
 };
-} // namespace master
-} // namespace datasystem
+}  // namespace master
+}  // namespace datasystem
 #endif

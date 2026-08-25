@@ -145,5 +145,26 @@ TEST_F(ResourceJsonSchemaTest, DeferredCleanupQueueSizeGroup)
     EXPECT_EQ(desc.fieldNames[0], std::string("queue_size"));
     EXPECT_TRUE(desc.recordGroup);
 }
+
+TEST_F(ResourceJsonSchemaTest, ObjectCopyWatermarkFields)
+{
+    const auto &desc = GetResourceFieldDesc(ResMetricName::OBJECT_COPY_WATERMARK);
+    EXPECT_EQ(desc.groupName, std::string("object_copy_watermark"));
+    ASSERT_EQ(desc.fieldNames.size(), static_cast<size_t>(11));
+    EXPECT_EQ(desc.fieldNames[0], std::string("hot_primary_bytes"));
+    EXPECT_EQ(desc.fieldNames[1], std::string("primary_bytes"));
+    EXPECT_EQ(desc.fieldNames[2], std::string("copy_capacity"));
+    EXPECT_EQ(desc.fieldNames[5], std::string("hot_within_primary_ratio"));
+    EXPECT_EQ(desc.fieldNames[6], std::string("copy_watermark_valid"));
+    EXPECT_EQ(desc.fieldNames[7], std::string("cold_primary_bytes"));
+    EXPECT_EQ(desc.fieldNames[8], std::string("warm_primary_bytes"));
+    EXPECT_EQ(desc.fieldNames[9], std::string("cold_within_primary_ratio"));
+    EXPECT_EQ(desc.fieldNames[10], std::string("warm_within_primary_ratio"));
+    ASSERT_EQ(desc.recordMask.size(), desc.fieldNames.size());
+    for (bool recorded : desc.recordMask) {
+        EXPECT_TRUE(recorded);
+    }
+    EXPECT_TRUE(desc.recordGroup);
+}
 }  // namespace ut
 }  // namespace datasystem

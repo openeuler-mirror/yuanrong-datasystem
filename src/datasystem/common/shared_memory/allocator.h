@@ -81,6 +81,16 @@ public:
      */
     void Shutdown();
 
+#ifdef WITH_TESTS
+    /**
+     * @brief Recreate allocator-owned process state between tests.
+     *
+     * The production allocator is initialized once and shut down once. Tests that exercise different memory limits in
+     * the same binary need an explicit reset after all fixture-owned ShmUnits have been released.
+     */
+    void ResetForTest();
+#endif
+
     /**
      * @brief Create an new arena group to allocate/deallocate shared memory.
      * @param[in] maxSize Shared memory max size in bytes.

@@ -679,6 +679,14 @@ public:
      */
     Status Init();
 
+#ifdef WITH_TESTS
+    /**
+     * @brief Stop and clear the process-wide spill state between test fixtures.
+     * @warning Call only after all users and spill operations from the current fixture have stopped.
+     */
+    void ResetForTest();
+#endif
+
     /**
      * @brief Check whether spill is enabled.
      * @return True if spill is enabled.
@@ -841,6 +849,11 @@ private:
     WaitPost waitPost_;
     // compaction thread
     Thread spillCompactionThread_;
+
+    // WorkerOcSpill is process-wide while more than one service/test fixture may request initialization.
+    // Serialize those requests and make initialization idempotent without rebuilding live spill state.
+    std::mutex initMutex_;
+    bool initialized_ = false;
 
     SpillIoCounters spillIoCounters_;
 

@@ -11,6 +11,8 @@ set(WORKER_OC_SRCS
         worker_worker_transport_service_impl.cpp
         master_worker_oc_service_impl.cpp
         worker_oc_eviction_manager.cpp
+        worker_oc_eviction_policy.cpp
+        eviction_strategy.cpp
         worker_oc_spill.cpp
         obj_cache_hashmap.cpp
         obj_cache_shm_unit.cpp
@@ -120,6 +122,7 @@ set(WORKER_OC_HEAVY_FILES
     service/worker_query_and_get_impl.cpp
     service/worker_oc_service_migrate_impl.cpp
     worker_oc_eviction_manager.cpp
+    worker_oc_eviction_policy.cpp
 )
 set_source_files_properties(${WORKER_OC_HEAVY_FILES}
     PROPERTIES COMPILE_FLAGS "-O1")

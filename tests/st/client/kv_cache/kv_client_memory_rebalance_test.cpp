@@ -202,9 +202,10 @@ public:
                                          ? " -eviction_high_watermark_ratio=0.8"
                                            " -eviction_low_watermark_ratio=0.7"
                                          : "";
-       opts.workerGflagParams =
-           "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
-           "-rebalance_usage_gap_percent=" + usageGapPercent + " -rebalance_source_usage_percent=" +
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
+            "-rebalance_keep_local_copy=false "
+            "-rebalance_usage_gap_percent=" + usageGapPercent + " -rebalance_source_usage_percent=" +
            sourceUsagePercent + " "
             "-rebalance_task_report_grace_ms=500 "
             "-data_migrate_rate_limit_mb=1024" +
@@ -732,8 +733,8 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceConvergesToMidpointWithRealS
     AssertReadable(client2_, pressureBatch);
 }
 
-// Regression for rate=20 migration failure (5afc55ff regression): data_migrate_rate_limit_mb=20
-// makes maxBandwidth=20MB/s and maxBatchSize=20MB. The first full 20MB batch saturates the
+// Regression for low-rate migration failure (5afc55ff regression): data_migrate_rate_limit_mb=10
+// makes maxBandwidth=10MB/s and maxBatchSize=10MB. The first full batch saturates the
 // remote sliding window, so the remote reports limit_rate=0 and the source enters
 // SelfHealBusyRate. Before the prune-on-read fix, the sliding window only expired entries
 // inside SlidingWindowUpdateRate (write path), but 5afc55ff's `bytes_send > 0` guard made
@@ -838,7 +839,7 @@ public:
             "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
             "-rebalance_usage_gap_percent=30 -rebalance_source_usage_percent=80 "
             "-rebalance_task_report_grace_ms=500 "
-            "-data_migrate_rate_limit_mb=20";
+            "-data_migrate_rate_limit_mb=10";
         opts.injectActions = BuildRebalanceInjectActions();
     }
 };
@@ -855,7 +856,7 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceLowRateTest, LowRateMigrateSucceedsAfterBus
     // A 5MB payload occupies a 6MB jemalloc size class. The 80% threshold keeps 8 objects
     // below the trigger (48MB/64MB=75%) and triggers only after all 9 objects are present.
     // This guarantees the task selects enough data to exercise a second migration batch.
-    // With rate=20, maxBatchSize=20MB; the first full 20MB batch saturates the 20MB/s sliding
+    // With rate=10, maxBatchSize=10MB; the first full batch saturates the 10MB/s sliding
     // window and forces the self-heal path on the next batch.
     auto sourceBatch = WriteObjects(client0_, "rebalance_low_rate_source", 9, 'l');
 

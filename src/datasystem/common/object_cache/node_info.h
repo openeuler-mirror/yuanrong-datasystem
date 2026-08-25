@@ -32,6 +32,13 @@ struct NodeInfo {
     uint64_t usedMemory = 0;
     uint64_t memoryCapacity = 0;
     uint64_t memoryLimit = 0;
+    // Heat-rebalance reporting fields: populated by workers running the heat eviction strategy so the
+    // master can decide source/target eligibility by hot primary copy ratio. Zero under clock eviction.
+    uint64_t hotPrimaryCopyCount = 0;
+    uint64_t totalPrimaryCopyCount = 0;
+    uint64_t hotPrimaryCopyBytes = 0;
+    uint32_t evictionPolicy = 0;
+    uint64_t evictionPolicyEpoch = 0;
 
     NodeInfo() = default;
 
@@ -42,20 +49,53 @@ struct NodeInfo {
           timestamp(currentTime),
           usedMemory(0),
           memoryCapacity(0),
-          memoryLimit(0)
+          memoryLimit(0),
+          hotPrimaryCopyCount(0),
+          totalPrimaryCopyCount(0),
+          hotPrimaryCopyBytes(0),
+          evictionPolicy(0),
+          evictionPolicyEpoch(0)
     {
     }
 
     NodeInfo(const std::string& id, int64_t memory, bool ready, int64_t currentTime, uint64_t used,
-             uint64_t capacity, uint64_t limit)
+             uint64_t capacity, uint64_t limit, uint64_t hotPrimaryCpyCount = 0,
+             uint64_t totalPrimaryCpyCount = 0, uint64_t hotPrimaryCpyBytes = 0, uint32_t policy = 0,
+             uint64_t policyEpoch = 0)
         : nodeId(id),
           availableMemory(memory),
           isReady(ready),
           timestamp(currentTime),
           usedMemory(used),
           memoryCapacity(capacity),
-          memoryLimit(limit)
+          memoryLimit(limit),
+          hotPrimaryCopyCount(hotPrimaryCpyCount),
+          totalPrimaryCopyCount(totalPrimaryCpyCount),
+          hotPrimaryCopyBytes(hotPrimaryCpyBytes),
+          evictionPolicy(policy),
+          evictionPolicyEpoch(policyEpoch)
     {
+    }
+
+    uint32_t GetUsagePercent() const
+    {
+        constexpr uint64_t percentBase = 100;
+        if (memoryCapacity == 0) {
+            return 0;
+        }
+        return static_cast<uint32_t>(std::min<uint64_t>(percentBase, usedMemory * percentBase / memoryCapacity));
+    }
+
+    // Hot primary copy bytes as a percent of memory capacity ([0,100]).
+    // Used by the heat rebalance source/target triggers: "hot data as a percent of total memory".
+    uint32_t GetHotPrimaryBytesRatioPercent() const
+    {
+        constexpr uint64_t percentBase = 100;
+        if (memoryCapacity == 0) {
+            return 0;
+        }
+        return static_cast<uint32_t>(
+            std::min<uint64_t>(percentBase, hotPrimaryCopyBytes * percentBase / memoryCapacity));
     }
 
     bool operator<(const NodeInfo& other) const

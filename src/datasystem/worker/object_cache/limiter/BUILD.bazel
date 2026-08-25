@@ -14,5 +14,6 @@ ds_cc_library(
         "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/inject:common_inject",
+        "@tbb",
     ]
 )

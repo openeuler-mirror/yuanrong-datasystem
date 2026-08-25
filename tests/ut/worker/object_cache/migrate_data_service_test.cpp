@@ -39,11 +39,13 @@
 #include "securec.h"
 
 #include "ut/common.h"
+#include "eviction_manager_common.h"
 #include "../../../common/binmock/binmock.h"
 #include "cluster/test_port_allocator.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/flags/eviction_heat.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #ifdef USE_NPU
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
@@ -51,6 +53,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/utils/status.h"
@@ -69,6 +72,9 @@ DS_DECLARE_uint64(spill_size_limit);
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DECLARE_uint32(max_client_num);
+DS_DECLARE_string(eviction_strategy);
+DS_DECLARE_double(eviction_heat_initial_counter);
+DS_DECLARE_uint32(eviction_heat_max_counter);
 DS_DECLARE_int64(batch_get_threshold_mb);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_string(l2_cache_type);
@@ -264,7 +270,19 @@ private:
     std::unordered_map<std::string, std::shared_ptr<worker::WorkerMasterOCApi>> apiByAddr_;
 };
 
-class MigrateDataServiceTest : public CommonTest {
+using PrimarySwitchOutcome = WorkerOcServiceMigrateImpl::PrimarySwitchOutcome;
+
+class TestWorkerOcServiceMigrateImpl : public WorkerOcServiceMigrateImpl {
+public:
+    using WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl;
+
+    void SetEvictionManager(std::shared_ptr<WorkerOcEvictionManager> manager)
+    {
+        evictionManager_ = std::move(manager);
+    }
+};
+
+class MigrateDataServiceTest : public CommonTest, public EvictionManagerCommon {
 public:
     void SetUp() override
     {
@@ -281,10 +299,18 @@ public:
 
     void TearDown() override
     {
-        if (allocator_ != nullptr) {
-            allocator_->Shutdown();
-            allocator_ = nullptr;
-        }
+        RELEASE_STUBS
+        impl_.reset();
+        threadPool_.reset();
+        rateController_.reset();
+        evictionManager_.reset();
+        workerMasterApiManager_.reset();
+        objectTable_.reset();
+        WorkerOcSpill::Instance()->ResetForTest();
+        allocator_->ResetForTest();
+        allocator_ = nullptr;
+        FLAGS_eviction_strategy = "clock";
+        RefreshHeatFactors();
         CommonTest::TearDown();
     }
 
@@ -313,8 +339,8 @@ public:
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-        impl_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, threadPool_, nullptr, "127.0.0.1:18888",
-                                                             rateController_);
+        impl_ = std::make_shared<TestWorkerOcServiceMigrateImpl>(param, threadPool_, nullptr, "127.0.0.1:18888",
+                                                                 rateController_);
         TimerQueue::GetInstance()->Initialize();
     }
 
@@ -324,7 +350,8 @@ public:
         return WorkerOcServiceCrudCommonApi::CanTransferByShm(dataSize) ? defaultMetaSize : 0;
     }
 
-    Status CreateObject(const std::string &objectKey, uint64_t dataSize)
+    Status CreateObject(const std::string &objectKey, uint64_t dataSize,
+                        WriteMode writeMode = WriteMode::NONE_L2_CACHE, bool primaryCopy = true)
     {
         CHECK_FAIL_RETURN_STATUS(!objectTable_->Contains(objectKey), StatusCode::K_DUPLICATED, "object exist");
         const uint64_t metaSize = GetMetaSize(dataSize);
@@ -346,10 +373,10 @@ public:
         ptr->SetCreateTime(1);
         ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
 
-        ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
+        ptr->modeInfo.SetWriteMode(writeMode);
         ptr->modeInfo.SetCacheType(CacheType::MEMORY);
         ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
-        ptr->stateInfo.SetPrimaryCopy(true);
+        ptr->stateInfo.SetPrimaryCopy(primaryCopy);
         ptr->stateInfo.SetSpillState(false);
 
         objectTable_->Insert(objectKey, std::move(ptr));
@@ -403,6 +430,34 @@ public:
     void SetDiskAvailable(bool available)
     {
         BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::IsDiskAvailable, (_)).WillRepeatedly(Return(available));
+    }
+
+    void MockQueryMasterMetadataHit(const std::string &objectKey)
+    {
+        BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::QueryMasterMetadata, (_, _, _))
+            .Times(1)
+            .WillOnce(Invoke([objectKey](const std::unordered_set<std::string> &keys, QueryMetaMap &metas,
+                                         std::unordered_set<std::string> &failedIds) {
+                EXPECT_THAT(keys, Contains(objectKey));
+                master::QueryMetaInfoPb queryMeta;
+                queryMeta.mutable_meta()->set_object_key(objectKey);
+                queryMeta.mutable_meta()->set_version(1);
+                queryMeta.mutable_meta()->set_data_size(1);
+                metas.emplace(objectKey, std::move(queryMeta));
+                (void)failedIds;
+                return Status::OK();
+            }));
+    }
+
+    void EnableHeatEviction()
+    {
+        FLAGS_eviction_strategy = "heat";
+        FLAGS_eviction_heat_initial_counter = 2.0;
+        FLAGS_eviction_heat_max_counter = 32;
+        RefreshHeatFactors();
+        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(
+            objectTable_, HostPort("127.0.0.1:18888"), HostPort("127.0.0.1:18889"), metadataRoute_);
+        impl_->SetEvictionManager(evictionManager_);
     }
 
     void CreateObjects(const std::string &prefix, uint64_t dataSize, uint32_t count, uint64_t version, bool needCreate,
@@ -532,7 +587,7 @@ protected:
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<MigrateTestWorkerMasterApiManager> workerMasterApiManager_;
     std::shared_ptr<ThreadPool> threadPool_;
-    std::shared_ptr<WorkerOcServiceMigrateImpl> impl_;
+    std::shared_ptr<TestWorkerOcServiceMigrateImpl> impl_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     WorkerRequestManager requestManager_;
     std::shared_ptr<MigrateDataRateController> rateController_;
@@ -637,10 +692,37 @@ TEST_F(MigrateDataServiceTest, RejectsIncomingMigrationAfterLocalScaleInStarts)
     EXPECT_THAT(directRsp.failed_object_keys(), ElementsAre("late-direct-object"));
 }
 
-TEST_F(MigrateDataServiceTest, ExitIntentDoesNotCloseIncomingMigrationAdmission)
+TEST_F(MigrateDataServiceTest, RebalanceTargetRejectsStalePolicyFence)
 {
-    localExiting_.store(true);
+    EnableHeatEviction();
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::REBALANCE_KEEP_LOCAL);
+    req.set_has_rebalance_policy_fence(true);
+    req.set_target_eviction_policy(master::EVICTION_POLICY_CLOCK);
+    req.set_target_eviction_policy_epoch(0);
+    req.set_rebalance_task_id("stale-target-task");
+    req.add_objects()->set_object_key("fenced-object");
+    MigrateDataRspPb rsp;
 
+    EXPECT_EQ(impl_->CheckMigrateDataAdmission(req, rsp).GetCode(), StatusCode::K_NOT_READY);
+    EXPECT_THAT(rsp.fail_ids(), ElementsAre("fenced-object"));
+
+    req.set_target_eviction_policy(master::EVICTION_POLICY_HEAT);
+    DS_ASSERT_OK(impl_->CheckMigrateDataAdmission(req, rsp));
+    impl_->ReleaseIncomingMigrationAdmission();
+}
+
+TEST_F(MigrateDataServiceTest, NonBlockingMigrationPauseReturnsTryAgainUntilDrained)
+{
+    DS_ASSERT_OK(impl_->AcquireIncomingMigrationAdmission());
+    Timer timer;
+    EXPECT_EQ(impl_->PauseIncomingMigrationAdmissionAndCheckDrained().GetCode(), StatusCode::K_TRY_AGAIN);
+    EXPECT_LT(timer.ElapsedMilliSecond(), 100u);
+    EXPECT_EQ(impl_->AcquireIncomingMigrationAdmission().GetCode(), StatusCode::K_NOT_READY);
+
+    impl_->ReleaseIncomingMigrationAdmission();
+    DS_ASSERT_OK(impl_->PauseIncomingMigrationAdmissionAndCheckDrained());
+    impl_->ResumeIncomingMigrationAdmission();
     DS_ASSERT_OK(impl_->AcquireIncomingMigrationAdmission());
     impl_->ReleaseIncomingMigrationAdmission();
 }
@@ -720,8 +802,9 @@ TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjects)
     std::unordered_set<std::string> failedIds;
     impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
     ASSERT_EQ(lockedEntries.size(), newCreateCount + existCount);
-    ASSERT_EQ(successIds.size(), expireCount);
+    ASSERT_TRUE(successIds.empty());
     ASSERT_EQ(failedIds.size(), lockFailCount);
+    ASSERT_EQ(needModifyPrimary.size(), expireCount);
 }
 
 // Regression: when master has no meta for an object (deleted between BatchLock and QueryMasterMetadata),
@@ -783,6 +866,182 @@ TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjectsFailed)
     impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
 }
 
+TEST_F(MigrateDataServiceTest, ExistingReplicaBecomesPrimaryOnlyAfterMasterConfirmation)
+{
+    EnableHeatEviction();
+    const std::string objectKey = "tcp-existing-replica-success";
+    DS_ASSERT_OK(CreateObject(objectKey, 1, WriteMode::NONE_L2_CACHE, false));
+    evictionManager_->Add(objectKey);
+    SetMemoryAvailable(true);
+    MockQueryMasterMetadataHit(objectKey);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _))
+        .Times(1)
+        .WillOnce(Invoke([objectKey](const std::string &, const ObjectInfoMap &needSendMasterIds,
+                                    const MigrateType &, PrimarySwitchOutcome &outcome) {
+            const auto &entry = needSendMasterIds.at(objectKey).first;
+            EXPECT_FALSE((*entry)->stateInfo.IsPrimaryCopy());
+            EXPECT_TRUE(entry->IsWLockedByCurrentThread());
+            Status contenderStatus;
+            std::thread contender([&entry, &contenderStatus]() {
+                contenderStatus = entry->TryWLock();
+                if (contenderStatus.IsOk()) {
+                    entry->WUnlock();
+                }
+            });
+            contender.join();
+            EXPECT_TRUE(contenderStatus.IsError());
+            outcome.confirmedIds.insert(objectKey);
+            return Status::OK();
+        }));
+
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::SPILL);
+    req.set_worker_addr("127.0.0.1:18889");
+    auto *info = req.add_objects();
+    info->set_object_key(objectKey);
+    info->set_version(1);
+    info->set_data_size(1);
+    info->set_heat(9.0);
+    info->set_has_heat(true);
+
+    MigrateDataRspPb rsp;
+    DS_ASSERT_OK(impl_->MigrateData(req, rsp, {}));
+    ASSERT_EQ(rsp.success_ids_size(), 1);
+    EXPECT_EQ(rsp.success_ids(0), objectKey);
+    EXPECT_TRUE(rsp.fail_ids().empty());
+
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+    EXPECT_TRUE((*entry)->stateInfo.IsPrimaryCopy());
+    EvictionList::Node node;
+    DS_ASSERT_OK(evictionManager_->GetObjectInfo(objectKey, node));
+    EXPECT_DOUBLE_EQ(node.heat, 9.0);
+}
+
+TEST_F(MigrateDataServiceTest, QueryMasterMetadataDoesNotHoldTargetObjectWriteLock)
+{
+    const std::string objectKey = "tcp-query-without-target-lock";
+    DS_ASSERT_OK(CreateObject(objectKey, 1, WriteMode::NONE_L2_CACHE, false));
+    SetMemoryAvailable(true);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::QueryMasterMetadata, (_, _, _))
+        .Times(1)
+        .WillOnce(Invoke([this, objectKey](const auto &, auto &, auto &) {
+            std::shared_ptr<SafeObjType> entry;
+            DS_EXPECT_OK(objectTable_->Get(objectKey, entry));
+            auto lockRc = entry->TryWLock();
+            EXPECT_TRUE(lockRc.IsOk()) << lockRc.ToString();
+            if (lockRc.IsOk()) {
+                entry->WUnlock();
+            }
+            return Status(K_RUNTIME_ERROR, "stop after lock-scope assertion");
+        }));
+
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::SPILL);
+    auto *info = req.add_objects();
+    info->set_object_key(objectKey);
+    info->set_version(1);
+    info->set_data_size(1);
+
+    MigrateDataRspPb rsp;
+    EXPECT_TRUE(impl_->MigrateData(req, rsp, {}).IsError());
+}
+
+TEST_F(MigrateDataServiceTest, MissingMasterMetadataDoesNotCreateTargetEntry)
+{
+    const std::string objectKey = "tcp-deleted-before-target-lock";
+    SetMemoryAvailable(true);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::QueryMasterMetadata, (_, _, _))
+        .Times(1)
+        .WillOnce(Return(Status::OK()));
+
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::SPILL);
+    auto *info = req.add_objects();
+    info->set_object_key(objectKey);
+    info->set_version(1);
+    info->set_data_size(1);
+
+    MigrateDataRspPb rsp;
+    DS_ASSERT_OK(impl_->MigrateData(req, rsp, {}));
+    EXPECT_TRUE(rsp.success_ids().empty());
+    EXPECT_THAT(rsp.skipped_object_keys(), ElementsAre(objectKey));
+    std::shared_ptr<SafeObjType> entry;
+    EXPECT_EQ(objectTable_->Get(objectKey, entry).GetCode(), K_NOT_FOUND);
+}
+
+TEST_F(MigrateDataServiceTest, ExpiredPrimarySwitchIsReportedSeparatelyFromConfirmedSuccess)
+{
+    const std::string objectKey = "tcp-existing-replica-expired";
+    DS_ASSERT_OK(CreateObject(objectKey, 1, WriteMode::NONE_L2_CACHE, false));
+    SetMemoryAvailable(true);
+    MockQueryMasterMetadataHit(objectKey);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _))
+        .Times(1)
+        .WillOnce(Invoke([objectKey](const std::string &, const ObjectInfoMap &, const MigrateType &,
+                                    PrimarySwitchOutcome &outcome) {
+            outcome.expiredIds.insert(objectKey);
+            return Status::OK();
+        }));
+
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::REBALANCE_KEEP_LOCAL);
+    req.set_worker_addr("127.0.0.1:18889");
+    auto *info = req.add_objects();
+    info->set_object_key(objectKey);
+    info->set_version(1);
+    info->set_data_size(1);
+
+    MigrateDataRspPb rsp;
+    DS_ASSERT_OK(impl_->MigrateData(req, rsp, {}));
+    EXPECT_TRUE(rsp.success_ids().empty());
+    ASSERT_EQ(rsp.expired_ids_size(), 1);
+    EXPECT_EQ(rsp.expired_ids(0), objectKey);
+    EXPECT_TRUE(rsp.fail_ids().empty());
+}
+
+TEST_F(MigrateDataServiceTest, ExistingReplicaStaysNonPrimaryWhenMasterRejectsSwitch)
+{
+    EnableHeatEviction();
+    const std::string objectKey = "tcp-existing-replica-failed";
+    DS_ASSERT_OK(CreateObject(objectKey, 1, WriteMode::NONE_L2_CACHE, false));
+    evictionManager_->Add(objectKey);
+    SetMemoryAvailable(true);
+    MockQueryMasterMetadataHit(objectKey);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _))
+        .Times(1)
+        .WillOnce(Invoke([objectKey](const std::string &, const ObjectInfoMap &needSendMasterIds,
+                                    const MigrateType &, PrimarySwitchOutcome &outcome) {
+            EXPECT_FALSE((*needSendMasterIds.at(objectKey).first)->stateInfo.IsPrimaryCopy());
+            outcome.failedIds.insert(objectKey);
+            return Status::OK();
+        }));
+
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::SPILL);
+    req.set_worker_addr("127.0.0.1:18889");
+    auto *info = req.add_objects();
+    info->set_object_key(objectKey);
+    info->set_version(1);
+    info->set_data_size(1);
+    info->set_heat(9.0);
+    info->set_has_heat(true);
+
+    MigrateDataRspPb rsp;
+    DS_ASSERT_OK(impl_->MigrateData(req, rsp, {}));
+    EXPECT_TRUE(rsp.success_ids().empty());
+    ASSERT_EQ(rsp.fail_ids_size(), 1);
+    EXPECT_EQ(rsp.fail_ids(0), objectKey);
+
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+    EXPECT_FALSE((*entry)->stateInfo.IsPrimaryCopy());
+    EXPECT_NE((*entry)->GetShmUnit(), nullptr);
+    EvictionList::Node node;
+    DS_ASSERT_OK(evictionManager_->GetObjectInfo(objectKey, node));
+    EXPECT_DOUBLE_EQ(node.heat, 2.0);
+}
+
 TEST_F(MigrateDataServiceTest, ReplacePrimaryRetryFailed)
 {
     Status status(StatusCode::K_RPC_UNAVAILABLE, "");
@@ -795,6 +1054,33 @@ TEST_F(MigrateDataServiceTest, ReplacePrimaryRetryFailed)
     master::ReplacePrimaryReqPb req;
     master::ReplacePrimaryRspPb rsp;
     DS_ASSERT_NOT_OK(impl_->ReplacePrimaryRetry(remoteApi, req, rsp));
+}
+
+TEST_F(MigrateDataServiceTest, RedirectedSpillPrimarySwitchStillRemovesSourceLocation)
+{
+    const HostPort redirectMaster("127.0.0.1", 18481);
+    const std::string objectKey = "redirected-spill";
+    auto remoteApi = std::make_shared<MigrateTestWorkerMasterOCApi>(redirectMaster, localAddress_);
+    remoteApi->replacePrimary_ = [&objectKey](master::ReplacePrimaryReqPb &req,
+                                              master::ReplacePrimaryRspPb &rsp) {
+        EXPECT_TRUE(req.remove_location());
+        EXPECT_EQ(req.object_infos_size(), 1);
+        EXPECT_EQ(req.object_infos(0).object_key(), objectKey);
+        rsp.add_success_ids(objectKey);
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetApi(redirectMaster, remoteApi);
+
+    RedirectMap redirects;
+    auto *info = redirects[redirectMaster.ToString()].Add();
+    info->set_object_key(objectKey);
+    info->set_version(1);
+    ObjectInfoMap objects;
+    PrimarySwitchOutcome outcome;
+
+    DS_ASSERT_OK(impl_->ReplacePrimaryToRedirectMaster("127.0.0.1:18889", redirects, objects,
+                                                       MigrateType::SPILL, outcome));
+    EXPECT_THAT(outcome.confirmedIds, Contains(objectKey));
 }
 
 TEST_F(MigrateDataServiceTest, PureQueryMetaMovingWithoutRedirectInfoRetries)
@@ -847,6 +1133,7 @@ TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterMeetsRPCError)
     ASSERT_EQ(impl_->MigrateData(req, rsp, std::move(payloads)).GetCode(), StatusCode::K_RPC_UNAVAILABLE);
     ASSERT_EQ(rsp.fail_ids_size(), newCreateCount);
     ASSERT_EQ(rsp.success_ids_size(), expireCount);
+    ASSERT_EQ(rsp.expired_ids_size(), 0);
 }
 
 size_t gCount = 9000;
@@ -982,9 +1269,9 @@ TEST_F(MigrateDataServiceTest, TestMemoryAvailableForSpill)
     EXPECT_EQ(rsp.fail_ids_size(), 0);
 }
 
-TEST_F(MigrateDataServiceTest, TestOOMForSpill)
+TEST_F(MigrateDataServiceTest, SpillAdmissionDefersHighWaterDecisionToEvictionAwareAllocation)
 {
-    LOG(INFO) << "Test CheckResource for SPILL type when oom";
+    LOG(INFO) << "Test CheckResource for SPILL type above high water";
     SetMemoryAvailable(false);
 
     constexpr uint32_t objectCount = 10;
@@ -999,9 +1286,9 @@ TEST_F(MigrateDataServiceTest, TestOOMForSpill)
 
     MigrateDataRspPb rsp;
     Status status = impl_->CheckResource(req, rsp);
-    EXPECT_EQ(status.GetCode(), StatusCode::K_OUT_OF_MEMORY);
+    EXPECT_TRUE(status.IsOk());
     EXPECT_EQ(rsp.success_ids_size(), 0);
-    EXPECT_EQ(rsp.fail_ids_size(), objectCount);
+    EXPECT_EQ(rsp.fail_ids_size(), 0);
 }
 
 TEST_F(MigrateDataServiceTest, TestInvalidMigrateType)
@@ -1017,21 +1304,19 @@ TEST_F(MigrateDataServiceTest, TestInvalidMigrateType)
 
 TEST_F(MigrateDataServiceTest, TestSaveDataWithSpillType)
 {
-    BINEXPECT_CALL(&WorkerOcEvictionManager::Add, (_)).Times(1).WillRepeatedly(Return());
+    EnableHeatEviction();
+    SetMemoryAvailable(false);
     std::shared_ptr<SafeObjType> entry =
         std::make_shared<SafeObjType>(std::make_unique<object_cache::ObjCacheShmUnit>());
     MigrateDataReqPb::ObjectInfoPb info;
     info.set_object_key("object1");
-    constexpr uint64_t dataSize = 30 * 1024 * 1024;  // 30 MB is larger than memory high water for spill type
+    constexpr uint64_t dataSize = 1024;
     info.set_data_size(dataSize);
     info.add_part_index(0);
     std::vector<RpcMessage> payloads(1);
-    std::string data = "1";
+    std::string data(dataSize, '1');
     payloads[0].CopyString(data);
-    // Will oom, don't spill to disk
-    ASSERT_EQ(impl_->SaveDataWithObjectLocked(entry, info, payloads, MigrateType::SPILL, nullptr).GetCode(),
-              StatusCode::K_OUT_OF_MEMORY);
-    info.set_data_size(1);
+    // The admission probe reports high water, but the eviction-aware allocator still has room and must be attempted.
     DS_ASSERT_OK(impl_->SaveDataWithObjectLocked(entry, info, payloads, MigrateType::SPILL, nullptr));
 }
 

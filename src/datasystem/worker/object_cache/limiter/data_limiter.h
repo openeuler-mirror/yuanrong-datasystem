@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_MIGRATE_DATA_MIGRATE_LIMITER_H
 #define DATASYSTEM_MIGRATE_DATA_MIGRATE_LIMITER_H
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <ctime>
@@ -28,7 +29,8 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
-#include <unordered_map>
+
+#include <tbb/concurrent_hash_map.h>
 
 namespace datasystem {
 namespace object_cache {
@@ -43,6 +45,14 @@ public:
      * @param[in] requiredSize Required size.
      */
     void WaitAllow(uint64_t requiredSize);
+
+    /**
+     * @brief Wait for tokens while allowing a caller-owned operation to cancel.
+     * @param[in] requiredSize Required size.
+     * @param[in] cancelled Optional cancellation flag that outlives this call.
+     * @return False if cancelled before tokens are consumed; true otherwise.
+     */
+    bool WaitAllow(uint64_t requiredSize, const std::atomic<bool> *cancelled);
 
     /**
      * @brief Estimate how long the required tokens need to become available.
@@ -124,9 +134,8 @@ public:
      * @brief Get max bandwidth.
      * @return Max bandwidth of this node.
      */
-    uint64_t GetMaxBandwidth()
+    uint64_t GetMaxBandwidth() const
     {
-        std::lock_guard<std::shared_timed_mutex> l(mutex_);
         return maxBandwidth;
     }
 
@@ -197,10 +206,14 @@ public:
 private:
     void ClearExpiredRate(const std::string &workerAddr, uint64_t expireMs, uint64_t lastUpdateTimeMs);
 
+    struct RateRecord {
+        uint64_t rate{ 0 };
+        uint64_t timestampMs{ 0 };
+    };
+    using RateTable = tbb::concurrent_hash_map<std::string, RateRecord>;
+
     static constexpr uint32_t RATE_RECORD_EXPIRE_MS = 60'000;
-    mutable std::shared_timed_mutex mutex_;
-    std::unordered_map<std::string, uint64_t> rateMap_;
-    std::unordered_map<std::string, uint64_t> rateTimeStampMap_;
+    RateTable rateTable_;
     MigrateDataRateLimiter rateLimiter_;
 };
 

@@ -89,6 +89,23 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "rebalance_scheduler",
+    srcs = [
+        "rebalance_scheduler.cpp",
+    ],
+    hdrs = [
+        "rebalance_scheduler.h",
+    ],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/object_cache:node_info",
+        "//src/datasystem/common/util:math_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:master_object_cc_proto",
+    ],
+)
+
+ds_cc_library(
     name = "memory_rebalance_scheduler",
     srcs = [
         "memory_rebalance_scheduler.cpp",
@@ -97,6 +114,29 @@ ds_cc_library(
         "memory_rebalance_scheduler.h",
     ],
     deps = [
+        ":rebalance_scheduler",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:node_info",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:math_util",
+        "//src/datasystem/common/flags:dynamic_flag_config",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_library(
+    name = "heat_rebalance_scheduler",
+    srcs = [
+        "heat_rebalance_scheduler.cpp",
+    ],
+    hdrs = [
+        "heat_rebalance_scheduler.h",
+    ],
+    deps = [
+        ":rebalance_scheduler",
+        "//src/datasystem/common/flags:eviction_heat",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:node_info",
@@ -117,6 +157,9 @@ ds_cc_library(
     ],
     deps = [
         ":memory_rebalance_scheduler",
+        ":heat_rebalance_scheduler",
+        ":rebalance_scheduler",
+        "//src/datasystem/common/flags:eviction_heat",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",

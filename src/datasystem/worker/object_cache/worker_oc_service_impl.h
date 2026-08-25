@@ -297,6 +297,8 @@ public:
      * @return K_OK after the drain; K_RPC_DEADLINE_EXCEEDED if admitted requests remain.
      */
     Status CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline);
+    Status PauseIncomingMigrationAdmissionAndCheckDrained();
+    void ResumeIncomingMigrationAdmission();
 
     /**
      * @brief Migrate data when voluntary scale down happen.
