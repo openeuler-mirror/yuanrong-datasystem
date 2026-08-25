@@ -2078,8 +2078,8 @@ Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &re
                                          static_cast<StatusCode>(resp.error().error_code()),
                                          "Decrease reference failed");
     GetWorkerTimeCost().Append("DecreaseReference", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("[Ref] DecreaseReference finish. The operations of worker DecreaseReference %s",
-                              GetWorkerTimeCost().GetInfo());
+    VLOG(1) << FormatString("[Ref] DecreaseReference finish. The operations of worker DecreaseReference %s",
+                            GetWorkerTimeCost().GetInfo());
     return Status::OK();
 }
 

@@ -918,7 +918,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
     auto &entry = *safeEntry;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!entry->stateInfo.IsCacheInvalid() && !entry->IsInvalid(), K_INVALID,
                                          FormatString("[ObjectKey %s] is invalid", objectKey));
-    LOG_IF(WARNING, entry->GetCreateTime() != version) << FormatString(
+    LOG_IF(WARNING, version != 0 && entry->GetCreateTime() != version) << FormatString(
         "[ObjectKey %s] Version: %ld, require version: %ld", objectKey, entry->GetCreateTime(), version);
 
     const bool isUrmaFastTransport = IsUrmaEnabled() && req.has_urma_info();
