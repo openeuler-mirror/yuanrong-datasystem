@@ -2172,20 +2172,10 @@ static urma_status_t PostJettyRw(const std::shared_ptr<UrmaJetty> &jetty, urma_o
         return static_cast<urma_status_t>(EAGAIN);
     }
     urma_sge_t localSge{
-        .addr = localAddress,
-        .len = static_cast<uint32_t>(length),
-        .lkey = 0,
-        .rkey = 0,
-        .tseg = localSeg,
-        .user_tseg = nullptr,
+        .addr = localAddress, .len = static_cast<uint32_t>(length), .tseg = localSeg, .user_tseg = nullptr
     };
     urma_sge_t remoteSge{
-        .addr = remoteAddress,
-        .len = static_cast<uint32_t>(length),
-        .lkey = 0,
-        .rkey = 0,
-        .tseg = remoteSeg,
-        .user_tseg = nullptr,
+        .addr = remoteAddress, .len = static_cast<uint32_t>(length), .tseg = remoteSeg, .user_tseg = nullptr
     };
 
     urma_sg_t src{};
@@ -2803,7 +2793,7 @@ Status UrmaManager::AppendGatherWriteRequest(
         context.srcSgeList[srcSgeIdx] = urma_sge_t{
             .addr = element.sgeAddr + element.metaDataSize + element.readOffset,
             .len = static_cast<uint32_t>(element.writeSize),
-            .lkey = 0, .rkey = 0, .tseg = localSegAccessor->second->Raw(),
+            .tseg = localSegAccessor->second->Raw(),
             .user_tseg = nullptr,
         };
         singleDstWriteSize += context.srcSgeList[srcSgeIdx].len;
@@ -2816,7 +2806,7 @@ Status UrmaManager::AppendGatherWriteRequest(
                         .num_sge = static_cast<uint32_t>(srcSgeIdx - srcSgeStart) };
     context.dstSgeList[dstSgeIdx] = { .addr = remoteInfo.segAddr + remoteInfo.segOffset + context.totalWriteSize,
                                       .len = static_cast<uint32_t>(singleDstWriteSize),
-                                      .lkey = 0, .rkey = 0, .tseg = context.remoteSegAccessor->second->Raw(),
+                                      .tseg = context.remoteSegAccessor->second->Raw(),
                                       .user_tseg = nullptr };
     context.totalWriteSize += singleDstWriteSize;
     urma_sg_t dstSg = { .sge = &context.dstSgeList[dstSgeIdx], .num_sge = 1 };
