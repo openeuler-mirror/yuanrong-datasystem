@@ -17,6 +17,7 @@
 /**
  * Description: Test interface to HashRingHealthCheck
  */
+#include "datasystem/common/util/uuid_generator.h"
 #include <atomic>
 #include <cstdint>
 #include <cstring>

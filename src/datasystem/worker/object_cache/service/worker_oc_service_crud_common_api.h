@@ -100,16 +100,16 @@ struct WorkerOcServiceCrudParam {
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager;
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager;
     std::shared_ptr<AsyncSendManager> asyncSendManager;
-    std::shared_ptr<KvEventPublisher> kvEventPublisher;
+    std::shared_ptr<KvEventPublisher> kvEventPublisher{ nullptr };
     size_t metadataSize;
     std::shared_ptr<PersistenceApi> persistenceApi;
     const worker::MetadataRouteResolver *metadataRouteResolver;
     const ObjectEndpointPolicy *endpointPolicy;
     const std::atomic<bool> *exitRequested;
     PeerUbAdmission *ubAdmission{ nullptr };
-    std::function<void(const HostPort &, const Status &)> metadataRpcObserver;
+    std::function<void(const HostPort &, const Status &)> metadataRpcObserver{};
     bool allowDirectoryLag;
-    std::function<bool(const HostPort &)> metadataRpcFailureReported;
+    std::function<bool(const HostPort &)> metadataRpcFailureReported{};
 };
 
 class WorkerOcServiceCrudCommonApi {

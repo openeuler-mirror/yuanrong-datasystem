@@ -27,6 +27,8 @@
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/perf_posix.stub.rpc.pb.h"
+#include "datasystem/protos/perf_posix.brpc.stub.pb.h"
+#include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
@@ -63,7 +65,8 @@ private:
     std::unique_ptr<Signature> signature_{ nullptr };
     RpcAuthKeys authKeys_;
 
-    std::unique_ptr<PerfService_Stub> rpcSession_{ nullptr };
+    std::shared_ptr<PerfService_BrpcGenericStub> rpcSession_{ nullptr };
+    std::shared_ptr<brpc::Channel> channelHolder_;
 };
 }  // namespace datasystem
 

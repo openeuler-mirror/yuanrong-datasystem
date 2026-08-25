@@ -14,6 +14,7 @@
 /**
  * Description: Defines the worker service processing multi-publish process.
  */
+#include "datasystem/common/util/validator.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
 
 #include <algorithm>

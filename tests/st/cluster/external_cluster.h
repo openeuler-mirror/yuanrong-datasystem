@@ -21,6 +21,7 @@
 #include <mutex>
 #include <vector>
 #include <string>
+#include <csignal>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rpc/rpc_channel.h"

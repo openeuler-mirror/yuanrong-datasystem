@@ -21,19 +21,21 @@
 #include <utility>
 
 #include "datasystem/common/constants.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
 #include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/stream/stream_config.h"
@@ -976,7 +978,7 @@ Status RemoteWorker::ParsePendingFlushList(const PendingFlushList &pendingFlushL
 // flush thread indefinitely (the previous implicit 60s via RpcOptions()).
 static constexpr int32_t kStreamPagePushRpcTimeoutMs = 10'000;
 
-int RemoteWorker::BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_Stub> &stub,
+int RemoteWorker::BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
                                        std::vector<PushReq> &requests, std::vector<std::vector<MemView>> &payloads)
 {
     RpcOptions opts;
@@ -1008,7 +1010,7 @@ int RemoteWorker::BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCServi
     return numReqSent;
 }
 
-void RemoteWorker::BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCService_Stub> &stub,
+void RemoteWorker::BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
                                        PendingFlushList &pendingFlushList, std::vector<PushReq> &requests,
                                        std::unordered_map<std::string, StreamRaii> &raii)
 {
@@ -1021,72 +1023,6 @@ void RemoteWorker::BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCServi
         }
         const auto visitor = [&](auto &&pushReq) {
             // TraceID of StreamProducerKey is stored inside request, set in ParseProducerPendingFlushList
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(pushReq.trace_id());
-            PushRspPb pushRspPb;
-            PerfPoint point(PerfKey::REMOTE_WORKER_MAIN_RECV);
-            INJECT_POINT("RemoteWorker.SleepBeforeAsyncRead", [](uint64_t timeoutMs) -> void {
-                std::this_thread::sleep_for(std::chrono::milliseconds(timeoutMs));
-                return;
-            });
-            if constexpr (std::is_same_v<std::decay_t<decltype(pushReq)>, PushReqPb>) {
-                status = stub->PushElementsCursorsAsyncRead(requests.at(i).tag_, pushRspPb, RpcRecvFlags::NONE);
-            } else {
-                status = stub->PushSharedPageCursorsAsyncRead(requests.at(i).tag_, pushRspPb, RpcRecvFlags::NONE);
-            }
-            point.Record();
-            INJECT_POINT_NO_RETURN("RemoteWorker.BatchFlushAsyncRead.rpc.timeout", [&status]() {
-                status = { K_RPC_UNAVAILABLE, "Fake worker not responding" };
-            });
-            VLOG(SC_DEBUG_LOG_LEVEL) << FormatString("PushElementsCursorsAsyncRead rc for stream %s: %s",
-                                                     requests.at(i).keyName_, status.ToString());
-            PostRecvCleanup(requests.at(i).keyName_, status, pendingFlushList, pushReq, pushRspPb, raii);
-        };
-        std::visit(visitor, requests.at(i).req_);
-    }
-}
-
-int RemoteWorker::BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
-                                       std::vector<PushReq> &requests, std::vector<std::vector<MemView>> &payloads)
-{
-    RpcOptions opts;
-    opts.SetTimeout(kStreamPagePushRpcTimeoutMs);
-    int numReqSent = 0;
-    for (size_t i = 0; i < requests.size(); ++i) {
-        Status &status = requests.at(i).rc_;
-        auto &pushReq = requests.at(i).req_;
-        const auto visitor = [&](auto &&pushReqPb) {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(pushReqPb.trace_id());
-            if constexpr (std::is_same_v<std::decay_t<decltype(pushReqPb)>, PushReqPb>) {
-                VLOG(SC_DEBUG_LOG_LEVEL) << FormatString("Calling PushElementsCursorsAsyncWrite for %s with %zu PV",
-                                                         pushReqPb.stream_name(), pushReqPb.element_meta_size());
-                status = stub->PushElementsCursorsAsyncWrite(opts, pushReqPb, requests.at(i).tag_, payloads.at(i));
-            } else {
-                VLOG(SC_DEBUG_LOG_LEVEL) << FormatString(
-                    "Calling PushSharedPageCursorsAsyncWrite for shared page with %zu PV", pushReqPb.metas_size());
-                status = stub->PushSharedPageCursorsAsyncWrite(opts, pushReqPb, requests.at(i).tag_, payloads.at(i));
-            }
-        };
-
-        PerfPoint point(PerfKey::REMOTE_WORKER_SEND_ONE_STREAM);
-        std::visit(visitor, pushReq);
-        numReqSent++;
-    }
-    VLOG(SC_DEBUG_LOG_LEVEL) << FormatString("Number of outstanding PushElementsCursorsAsyncWrite request %d",
-                                             numReqSent);
-    return numReqSent;
-}
-
-void RemoteWorker::BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
-                                       PendingFlushList &pendingFlushList, std::vector<PushReq> &requests,
-                                       std::unordered_map<std::string, StreamRaii> &raii)
-{
-    size_t numAsync = requests.size();
-    for (size_t i = 0; i < numAsync; ++i) {
-        Status &status = requests.at(i).rc_;
-        if (status.IsError()) {
-            continue;
-        }
-        const auto visitor = [&](auto &&pushReq) {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(pushReq.trace_id());
             PushRspPb pushRspPb;
             PerfPoint point(PerfKey::REMOTE_WORKER_MAIN_RECV);

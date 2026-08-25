@@ -18,7 +18,6 @@
  * Description: Defines the class to  manage hccl rootinfo, established in destination npus.
  */
 #include "datasystem/master/object_cache/device/master_dev_hccl_rootinfo.h"
-#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <memory>
 #include <vector>

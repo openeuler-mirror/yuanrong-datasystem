@@ -15,6 +15,7 @@
  * Description: Implement the object cache remote services on the master.
  */
 
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
 
 #include <chrono>

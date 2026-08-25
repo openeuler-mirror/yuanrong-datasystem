@@ -15,6 +15,7 @@
  * Description: Defines the worker service processing global reference process.
  */
 
+#include "datasystem/common/util/validator.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_global_reference_impl.h"
 
 #include <iterator>

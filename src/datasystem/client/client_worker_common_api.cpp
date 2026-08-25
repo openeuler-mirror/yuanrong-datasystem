@@ -877,7 +877,7 @@ void ClientWorkerRemoteCommonApi::SetUrmaDataPlaneFailureCallback(std::function<
 Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
 {
     (void)isDestruct;
-    CHECK_FAIL_RETURN_STATUS(commonWorkerSession_ != nullptr || brpcCommonStub_ != nullptr, StatusCode::K_OK,
+    CHECK_FAIL_RETURN_STATUS(brpcCommonStub_ != nullptr, StatusCode::K_OK,
                              "No active connection. Do not send disconnect notice.");
     LOG(INFO) << FormatString("Client %s sends exit notice to worker.", clientId_);
     DisconnectClientReqPb req;

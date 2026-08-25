@@ -91,7 +91,6 @@ public:
     void SetAuthCurveClient(const char *publicKey, const char *secretKey, const char *serverKey);
 
 private:
-    friend class ZmqSocket;
     RPC_AUTH_TYPE mechanism_;
     union {
         struct CurveCred {

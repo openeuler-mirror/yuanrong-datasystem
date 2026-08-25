@@ -14,6 +14,7 @@
 /**
  * Description: Defines the worker service processing create buffer process.
  */
+#include "datasystem/common/util/validator.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_create_impl.h"
 
 #include "datasystem/common/flags/flags.h"

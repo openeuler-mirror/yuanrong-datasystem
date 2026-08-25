@@ -23,10 +23,17 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
-#include "datasystem/common/util/thread_pool.h"
-#include "datasystem/common/rpc/zmq/zmq_auth.h"
+
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace datasystem {
+using AuthKeySet = std::set<std::string>;
+using RawSvcToKeyMapping = std::unordered_map<std::string, std::unordered_set<std::string>>;
+using SvcToKeyMapping = std::unordered_map<std::string, AuthKeySet>;
+
 const std::string PUBLIC_KEY_EXT = ".key";
 const std::string PRIVATE_KEY_EXT = ".key_secret";
 const std::string AUTHORIZED_DIR_SUFFIX = "_authorized_clients";
@@ -119,36 +126,6 @@ public:
     static Status CopyCurveAuthKey(const char *src, std::unique_ptr<char[]> &dest);
 
     /**
-     * @brief Set the Auth Handler object.
-     * @param[in] authHandler Zmq authentication handler.
-     */
-    void SetAuthHandler(std::unique_ptr<datasystem::ZmqAuthHandler> &authHandler);
-    /**
-     * @brief Check if Auth Handler is set.
-     * @return true if there is a Zmq authentication handler.
-     */
-    bool HasAuthHandler();
-
-    /**
-     * @brief Initialize authentication handler for this server to enable authentication.
-     * @param ctx The ZmqContext.
-     * @return Status of the call.
-     */
-    Status InitAuthHandler(const std::shared_ptr<datasystem::ZmqContext> &ctx);
-
-    /**
-     * @brief Start the Zmq authentication handler.
-     * @param ctx The ZmqContext.
-     * @return Status of the call.
-     */
-    Status StartAuthHandler();
-
-    /**
-     * @brief Stop the Zmq authentication handler.
-     */
-    void StopAuthHandler();
-
-    /**
      * @brief Set the Svc Mapping object.
      * @param svcMapping The service name to public key mapping.
      */
@@ -165,9 +142,6 @@ private:
 
     RpcAuthKeys authKeys_;
     std::vector<std::unique_ptr<char[]>> authorizedClients_;
-    std::unique_ptr<ThreadPool> thrdPool_;
-    std::unique_ptr<std::future<Status>> authHandlerThrd_{ nullptr };
-    std::unique_ptr<datasystem::ZmqAuthHandler> authHandler_{ nullptr };
     SvcToKeyMapping svcMapping_;
 };
 }  // namespace datasystem

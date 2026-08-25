@@ -18,8 +18,9 @@
  * Description: Implement api of admin generic service.
  */
 
-#include "datasystem/client/perf_client/perf_client_worker_api.h"
+#include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/client/perf_client/perf_client_worker_api.h"
 
 namespace datasystem {
 PerfClientWorkerApi::PerfClientWorkerApi(const ConnectOptions &connectOptions)
@@ -34,10 +35,16 @@ PerfClientWorkerApi::PerfClientWorkerApi(const ConnectOptions &connectOptions)
 
 Status PerfClientWorkerApi::Init()
 {
-    RpcCredential cred;
-    RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred));
-    std::shared_ptr<RpcChannel> channel = std::make_shared<RpcChannel>(hostPort_, cred);
-    rpcSession_ = std::make_unique<PerfService_Stub>(std::move(channel));
+    BrpcChannelConfig cfg;
+    cfg.endpoint = hostPort_.ToString();
+    constexpr int32_t rpcTimeoutMs = 5000;
+    cfg.timeout_ms = rpcTimeoutMs;
+    cfg.connect_timeout_ms = rpcTimeoutMs;
+    std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel != nullptr, K_RPC_UNAVAILABLE,
+                                         FormatString("Failed to init brpc channel to %s", hostPort_.ToString()));
+    rpcSession_ = std::make_shared<PerfService_BrpcGenericStub>(channel.get(), rpcTimeoutMs);
+    channelHolder_ = std::move(channel);
     return Status::OK();
 }
 

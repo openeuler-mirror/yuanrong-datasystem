@@ -14,8 +14,8 @@
 /**
  * Description: Defines the worker service Get process.
  */
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
-#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <algorithm>
 #include <cstdint>

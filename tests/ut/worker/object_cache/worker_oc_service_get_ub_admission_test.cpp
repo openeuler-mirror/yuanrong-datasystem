@@ -50,13 +50,15 @@ WorkerOcServiceCrudParam BuildGetParam(WorkerRequestManager &requestManager, std
         .workerDevOcManager = nullptr,
         .asyncPersistenceDelManager = nullptr,
         .asyncSendManager = nullptr,
+        .kvEventPublisher = {},
         .metadataSize = 0,
         .persistenceApi = nullptr,
         .metadataRouteResolver = nullptr,
         .endpointPolicy = nullptr,
         .exitRequested = nullptr,
+        .metadataRpcObserver = {},
         .allowDirectoryLag = false,
-    };
+        .metadataRpcFailureReported = {} };
 }
 }  // namespace
 

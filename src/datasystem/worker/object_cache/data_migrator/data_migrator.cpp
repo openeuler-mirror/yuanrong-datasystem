@@ -14,6 +14,8 @@
 /**
  * Description: Migrate data.
  */
+#include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 
 #include <algorithm>

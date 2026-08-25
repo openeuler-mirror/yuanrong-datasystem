@@ -178,36 +178,6 @@ std::string RpcGenerator::MethodSvcClassName(const std::string &methodName)
     return methodName + methodSuffix;
 }
 
-void RpcGenerator::GenerateInitMethodMapDecl(io::Printer &printer)
-{
-    printer.PrintRaw("    void InitMethodMap();\n");
-}
-
-void RpcGenerator::GenerateInitMethodMapDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                            const std::string &indent, const std::string &stub)
-{
-    std::map<std::string, std::string> vars;
-    vars["indent1"] = indent;
-    vars["stub"] = stub;
-    printer.Print(vars, "void $stub$::InitMethodMap() {\n");
-    for (auto j = 0; j < svc.method_count(); ++j) {
-        if (svc.method(j) == nullptr) {
-            continue;
-        }
-        auto &method = *(svc.method(j));
-        std::string methodObj = "methodObj" + std::to_string(j);
-        vars["methodObj"] = methodObj;
-        vars["className"] = MethodSvcClassName(method.name());
-        vars["methodIndex"] = std::to_string(j);
-        std::string impl =
-            "$indent1$std::shared_ptr<::datasystem::RpcServiceMethod> $methodObj$ = std::make_shared<$className$>();\n"
-            "$indent1$$methodObj$->Init();\n"
-            "$indent1$methodMap_.insert({$methodIndex$, std::move($methodObj$)});\n";
-        printer.Print(vars, impl.c_str());
-    }
-    printer.PrintRaw("}\n");
-}
-
 bool RpcGenerator::HasPayloadRecvOption(const google::protobuf::MethodDescriptor &method)
 {
     auto &options = method.options();

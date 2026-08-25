@@ -20,20 +20,14 @@
 #ifndef DATASYSTEM_COMMON_RPC_UNARY_CLIENT_IMPL_H
 #define DATASYSTEM_COMMON_RPC_UNARY_CLIENT_IMPL_H
 
-#include <variant>
+#include <memory>
 
 #include "datasystem/common/rpc/brpc_client_unary_writer_reader.h"
-#include "datasystem/common/rpc/zmq/zmq_unary_client_impl.h"
 
 namespace datasystem {
 template <typename W, typename R>
 class ClientUnaryWriterReader {
 public:
-    explicit ClientUnaryWriterReader(std::unique_ptr<ClientUnaryWriterReaderImpl<W, R>> &&impl)
-        : pimpl_(std::move(impl))
-    {
-    }
-
     explicit ClientUnaryWriterReader(std::unique_ptr<BrpcClientUnaryWriterReader<W, R>> &&impl)
         : pimpl_(std::move(impl))
     {
@@ -43,7 +37,7 @@ public:
 
     Status Write(const W &pb)
     {
-        return std::visit([&pb](auto &pimpl) { return pimpl->Write(pb); }, pimpl_);
+        return pimpl_->Write(pb);
     }
 
     /**
@@ -54,7 +48,7 @@ public:
      */
     Status SendPayload(const std::vector<MemView> &payload)
     {
-        return std::visit([&payload](auto &pimpl) { return pimpl->SendPayload(payload); }, pimpl_);
+        return pimpl_->SendPayload(payload);
     }
 
     /**
@@ -64,12 +58,12 @@ public:
      */
     Status AsyncSendPayload(const std::vector<MemView> &payload)
     {
-        return std::visit([&payload](auto &pimpl) { return pimpl->AsyncSendPayload(payload); }, pimpl_);
+        return pimpl_->AsyncSendPayload(payload);
     }
 
     Status Read(R &pb)
     {
-        return std::visit([&pb](auto &pimpl) { return pimpl->Read(pb); }, pimpl_);
+        return pimpl_->Read(pb);
     }
 
     /**
@@ -80,7 +74,7 @@ public:
      */
     Status ReceivePayload(std::vector<RpcMessage> &recvBuffer)
     {
-        return std::visit([&recvBuffer](auto &pimpl) { return pimpl->ReceivePayload(recvBuffer); }, pimpl_);
+        return pimpl_->ReceivePayload(recvBuffer);
     }
 
     /**
@@ -92,22 +86,21 @@ public:
      */
     Status ReceivePayload(void *dest, size_t sz)
     {
-        return std::visit([&dest, &sz](auto &pimpl) { return pimpl->ReceivePayload(dest, sz); }, pimpl_);
+        return pimpl_->ReceivePayload(dest, sz);
     }
 
     void CleanupOnError(const Status &rc)
     {
-        std::visit([&rc](auto &pimpl) { pimpl->CleanupOnError(rc); }, pimpl_);
+        pimpl_->CleanupOnError(rc);
     }
 
     bool IsV2Client() const
     {
-        return std::visit([](auto &pimpl) { return pimpl->IsV2Client(); }, pimpl_);
+        return pimpl_->IsV2Client();
     }
 
 private:
-    std::variant<std::unique_ptr<ClientUnaryWriterReaderImpl<W, R>>,
-                 std::unique_ptr<BrpcClientUnaryWriterReader<W, R>>> pimpl_;
+    std::unique_ptr<BrpcClientUnaryWriterReader<W, R>> pimpl_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_UNARY_CLIENT_IMPL_H

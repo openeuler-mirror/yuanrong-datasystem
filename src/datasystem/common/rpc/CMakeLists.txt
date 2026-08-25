@@ -45,30 +45,28 @@ set(COMMON_RPC_ZMQ_SRCS
         mem_view.cpp
         unix_sock_fd.cpp
         brpc_stream_close_helper.cpp
-        zmq/zmq_auth.cpp
-        zmq/zmq_common.cpp
-        zmq/zmq_context.cpp
-        zmq/zmq_epoll.cpp
-        zmq/zmq_msg_decoder.cpp
-        zmq/zmq_monitor.cpp
-        zmq/zmq_payload.cpp
-        zmq/zmq_server_impl.cpp
-        zmq/zmq_service.cpp
-        zmq/zmq_socket_ref.cpp
-        zmq/zmq_socket.cpp
-        zmq/zmq_stub.cpp
-        zmq/zmq_stub_impl.cpp
-        zmq/zmq_stub_conn.cpp
-        zmq/zmq_unary_client_impl.h
-        zmq/zmq_server_stream_base.cpp
-        zmq/zmq_client_stream_base.cpp
-        zmq/zmq_stream_base.cpp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         rpc_auth_key_manager_server.cpp)
 
 set(COMMON_RPC_ZMQ_DEPENDS_LIBS
         protobuf::libprotobuf
         nlohmann_json::nlohmann_json
-        ${ZeroMQ_LIBRARY}
         ${SECUREC_LIBRARY}
         ${BRPC_LIBRARIES}
         common_log
@@ -84,7 +82,6 @@ set(COMMON_RPC_ZMQ_DEPENDS_LIBS
 set(COMMON_RPC_ZMQ_CLIENT_DEPENDS_LIBS
         protobuf::libprotobuf
         nlohmann_json::nlohmann_json
-        ${ZeroMQ_LIBRARY}
         ${SECUREC_LIBRARY}
         ${BRPC_LIBRARIES}
         common_log

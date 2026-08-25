@@ -400,13 +400,8 @@ private:
         }
     }
 
-    int BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_Stub> &stub, std::vector<PushReq> &requests,
-                             std::vector<std::vector<MemView>> &payloads);
     int BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
                              std::vector<PushReq> &requests, std::vector<std::vector<MemView>> &payloads);
-    void BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCService_Stub> &stub,
-                             PendingFlushList &pendingFlushList, std::vector<PushReq> &requests,
-                             std::unordered_map<std::string, StreamRaii> &raii);
     void BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
                              PendingFlushList &pendingFlushList, std::vector<PushReq> &requests,
                              std::unordered_map<std::string, StreamRaii> &raii);

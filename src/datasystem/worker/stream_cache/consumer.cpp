@@ -15,7 +15,6 @@
  */
 
 #include "datasystem/worker/stream_cache/consumer.h"
-#include "datasystem/common/eventloop/timer_queue.h"
 
 #include <chrono>
 #include <utility>

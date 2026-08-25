@@ -13,8 +13,10 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
         "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:brpc_factory",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/protos:perf_posix_zmq_cc_proto",
+        "//src/datasystem/protos:perf_posix_brpc",
     ],
     alwayslink = True,
 )

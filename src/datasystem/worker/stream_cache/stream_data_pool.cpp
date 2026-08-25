@@ -26,6 +26,7 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/request_counter.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/consumer.h"
 #include "datasystem/worker/stream_cache/stream_data_pool.h"

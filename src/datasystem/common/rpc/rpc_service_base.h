@@ -20,14 +20,12 @@
 #ifndef DATASYSTEM_COMMON_RPC_RPC_SERVICE_BASE_H
 #define DATASYSTEM_COMMON_RPC_RPC_SERVICE_BASE_H
 
-#include <map>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/rpc_service_cfg.h"
-#include "datasystem/common/rpc/zmq/rpc_service_method.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/protos/meta_zmq.pb.h"
@@ -85,8 +83,6 @@ public:
         return thrdPool_ != nullptr ? thrdPool_->GetAndResetIntervalStats() : empty;
     }
 
-    virtual void InitMethodMap() {}
-
 protected:
     Status InitThreadPool()
     {
@@ -103,7 +99,6 @@ protected:
     RpcServiceCfg cfg_{};
     std::unique_ptr<ThreadPool> thrdPool_{ nullptr };
     std::string serviceName_;
-    std::map<int32_t, std::shared_ptr<RpcServiceMethod>> methodMap_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_RPC_SERVICE_BASE_H

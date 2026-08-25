@@ -17,6 +17,7 @@
 /**
  * Description: Fast migrate transport implementation.
  */
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport.h"
 
 #include <algorithm>

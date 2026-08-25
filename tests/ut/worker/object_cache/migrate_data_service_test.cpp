@@ -15,6 +15,7 @@
  * Description: Test interface to HashRingHealthCheck
  */
 
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_migrate_impl.h"
 
 #include <atomic>
@@ -295,13 +296,15 @@ public:
             .workerDevOcManager = nullptr,
             .asyncPersistenceDelManager = nullptr,
             .asyncSendManager = nullptr,
+            .kvEventPublisher = {},
             .metadataSize = 0,
             .persistenceApi = nullptr,
             .metadataRouteResolver = &metadataRoute_,
             .endpointPolicy = nullptr,
             .exitRequested = &localExiting_,
+            .metadataRpcObserver = {},
             .allowDirectoryLag = false,
-        };
+            .metadataRpcFailureReported = {} };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
@@ -1069,13 +1072,15 @@ public:
             .workerDevOcManager = nullptr,
             .asyncPersistenceDelManager = nullptr,
             .asyncSendManager = nullptr,
+            .kvEventPublisher = {},
             .metadataSize = 0,
             .persistenceApi = nullptr,
             .metadataRouteResolver = &metadataRoute_,
             .endpointPolicy = endpointPolicy_.get(),
             .exitRequested = nullptr,
+            .metadataRpcObserver = {},
             .allowDirectoryLag = false,
-        };
+            .metadataRpcFailureReported = {} };
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
         impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr,

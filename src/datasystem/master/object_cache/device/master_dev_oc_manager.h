@@ -23,7 +23,6 @@
 #include <future>
 #include <tbb/concurrent_hash_map.h>
 
-#include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"

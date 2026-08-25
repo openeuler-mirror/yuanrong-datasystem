@@ -157,7 +157,7 @@ private:
 
     // Shared_ptr so call sites can hold a local copy to keep the stub alive across concurrent
     // ClientWorkerApi teardown. See docs/4w-shutdown-debug-2026-06-12.md (Phase C fix).
-    std::shared_ptr<ClientWorkerSCService_Stub> rpcSession_;
+    std::shared_ptr<ClientWorkerSCService_BrpcGenericStub> rpcSession_;
     std::shared_ptr<ClientWorkerSCService_BrpcGenericStub> brpcRpcSession_;
     std::unique_ptr<brpc::Channel> brpcChannel_;
 };

@@ -17,6 +17,7 @@
 /**
  * Description: Transport-neutral RPC message buffer.
  */
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
 
 #include <securec.h>

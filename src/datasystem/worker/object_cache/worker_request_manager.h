@@ -29,7 +29,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
