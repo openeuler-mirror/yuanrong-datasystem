@@ -15,9 +15,9 @@
  */
 
 /**
- * Description: Unit tests for the 10 worker SHM-release-accounting metrics
- *   (worker_allocator_{alloc,free}_bytes_total, worker_shm_{fresh,reusable}_extent_oom_total,
- *    worker_shm_unit_{created,destroyed}_total,
+ * Description: Unit tests for the 10 SHM-release-accounting metrics
+ *   (allocator_{alloc,free}_bytes_total, shm_{fresh,reusable}_extent_oom_total,
+ *    shm_unit_{created,destroyed}_total,
  *    worker_shm_ref_{add,remove}_total, worker_shm_ref_table_{size,bytes}).
  */
 
@@ -43,12 +43,12 @@ class ShmLeakMetricsTest : public ShmLeakMetricsTestBase {};
 TEST_F(ShmLeakMetricsTest, all_metrics_registered_and_zero)
 {
     auto s = DumpSummaryJson();
-    EXPECT_EQ(Scalar(s, "worker_allocator_alloc_bytes_total", "total"), 0);
-    EXPECT_EQ(Scalar(s, "worker_allocator_free_bytes_total", "total"), 0);
-    EXPECT_EQ(Scalar(s, "worker_shm_fresh_extent_oom_total", "total"), 0);
-    EXPECT_EQ(Scalar(s, "worker_shm_reusable_extent_oom_total", "total"), 0);
-    EXPECT_EQ(Scalar(s, "worker_shm_unit_created_total", "total"), 0);
-    EXPECT_EQ(Scalar(s, "worker_shm_unit_destroyed_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "allocator_alloc_bytes_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "allocator_free_bytes_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "shm_fresh_extent_oom_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "shm_reusable_extent_oom_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "shm_unit_created_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "shm_unit_destroyed_total", "total"), 0);
     EXPECT_EQ(Scalar(s, "worker_shm_ref_add_total", "total"), 0);
     EXPECT_EQ(Scalar(s, "worker_shm_ref_remove_total", "total"), 0);
     EXPECT_EQ(Scalar(s, "worker_shm_ref_table_size", "total"), 0);
@@ -67,24 +67,24 @@ TEST_F(ShmLeakMetricsTest, metric_descs_count_includes_phase1)
 TEST_F(ShmLeakMetricsTest, metric_names_present_in_summary)
 {
     // Bump each new counter once so that even total=0 metrics show up under "Compare with"
-    Cnt(metrics::KvMetricId::WORKER_ALLOCATOR_ALLOC_BYTES_TOTAL).Inc(8 * 1024 * 1024);
-    Cnt(metrics::KvMetricId::WORKER_ALLOCATOR_FREE_BYTES_TOTAL).Inc(8 * 1024 * 1024);
-    Cnt(metrics::KvMetricId::WORKER_SHM_FRESH_EXTENT_OOM_TOTAL).Inc();
-    Cnt(metrics::KvMetricId::WORKER_SHM_REUSABLE_EXTENT_OOM_TOTAL).Inc();
-    Cnt(metrics::KvMetricId::WORKER_SHM_UNIT_CREATED_TOTAL).Inc();
-    Cnt(metrics::KvMetricId::WORKER_SHM_UNIT_DESTROYED_TOTAL).Inc();
+    Cnt(metrics::KvMetricId::ALLOCATOR_ALLOC_BYTES_TOTAL).Inc(8 * 1024 * 1024);
+    Cnt(metrics::KvMetricId::ALLOCATOR_FREE_BYTES_TOTAL).Inc(8 * 1024 * 1024);
+    Cnt(metrics::KvMetricId::SHM_FRESH_EXTENT_OOM_TOTAL).Inc();
+    Cnt(metrics::KvMetricId::SHM_REUSABLE_EXTENT_OOM_TOTAL).Inc();
+    Cnt(metrics::KvMetricId::SHM_UNIT_CREATED_TOTAL).Inc();
+    Cnt(metrics::KvMetricId::SHM_UNIT_DESTROYED_TOTAL).Inc();
     Cnt(metrics::KvMetricId::WORKER_SHM_REF_ADD_TOTAL).Inc();
     Cnt(metrics::KvMetricId::WORKER_SHM_REF_REMOVE_TOTAL).Inc();
     Gge(metrics::KvMetricId::WORKER_SHM_REF_TABLE_SIZE).Set(1);
     Gge(metrics::KvMetricId::WORKER_SHM_REF_TABLE_BYTES).Set(1);
 
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("worker_allocator_alloc_bytes_total"), std::string::npos);
-    EXPECT_NE(s.find("worker_allocator_free_bytes_total"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_fresh_extent_oom_total"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_reusable_extent_oom_total"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_unit_created_total"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_unit_destroyed_total"), std::string::npos);
+    EXPECT_NE(s.find("allocator_alloc_bytes_total"), std::string::npos);
+    EXPECT_NE(s.find("allocator_free_bytes_total"), std::string::npos);
+    EXPECT_NE(s.find("shm_fresh_extent_oom_total"), std::string::npos);
+    EXPECT_NE(s.find("shm_reusable_extent_oom_total"), std::string::npos);
+    EXPECT_NE(s.find("shm_unit_created_total"), std::string::npos);
+    EXPECT_NE(s.find("shm_unit_destroyed_total"), std::string::npos);
     EXPECT_NE(s.find("worker_shm_ref_add_total"), std::string::npos);
     EXPECT_NE(s.find("worker_shm_ref_remove_total"), std::string::npos);
     EXPECT_NE(s.find("worker_shm_ref_table_size"), std::string::npos);
@@ -95,27 +95,27 @@ TEST_F(ShmLeakMetricsTest, metric_names_present_in_summary)
 TEST_F(ShmLeakMetricsTest, allocator_alloc_free_counter_delta)
 {
     constexpr uint64_t kSize = 8 * 1024 * 1024;
-    Cnt(metrics::KvMetricId::WORKER_ALLOCATOR_ALLOC_BYTES_TOTAL).Inc(kSize);
-    Cnt(metrics::KvMetricId::WORKER_ALLOCATOR_ALLOC_BYTES_TOTAL).Inc(kSize);
-    Cnt(metrics::KvMetricId::WORKER_ALLOCATOR_FREE_BYTES_TOTAL).Inc(kSize);
+    Cnt(metrics::KvMetricId::ALLOCATOR_ALLOC_BYTES_TOTAL).Inc(kSize);
+    Cnt(metrics::KvMetricId::ALLOCATOR_ALLOC_BYTES_TOTAL).Inc(kSize);
+    Cnt(metrics::KvMetricId::ALLOCATOR_FREE_BYTES_TOTAL).Inc(kSize);
 
     auto s = DumpSummaryJson();
-    EXPECT_EQ(Scalar(s, "worker_allocator_alloc_bytes_total", "total"), 2 * kSize);
-    EXPECT_EQ(Scalar(s, "worker_allocator_free_bytes_total", "total"), kSize);
-    EXPECT_EQ(Scalar(s, "worker_allocator_alloc_bytes_total", "delta"), 2 * kSize);
-    EXPECT_EQ(Scalar(s, "worker_allocator_free_bytes_total", "delta"), kSize);
+    EXPECT_EQ(Scalar(s, "allocator_alloc_bytes_total", "total"), 2 * kSize);
+    EXPECT_EQ(Scalar(s, "allocator_free_bytes_total", "total"), kSize);
+    EXPECT_EQ(Scalar(s, "allocator_alloc_bytes_total", "delta"), 2 * kSize);
+    EXPECT_EQ(Scalar(s, "allocator_free_bytes_total", "delta"), kSize);
 }
 
 TEST_F(ShmLeakMetricsTest, allocator_extent_oom_counter_delta)
 {
-    Cnt(metrics::KvMetricId::WORKER_SHM_FRESH_EXTENT_OOM_TOTAL).Inc(2);
-    Cnt(metrics::KvMetricId::WORKER_SHM_REUSABLE_EXTENT_OOM_TOTAL).Inc();
+    Cnt(metrics::KvMetricId::SHM_FRESH_EXTENT_OOM_TOTAL).Inc(2);
+    Cnt(metrics::KvMetricId::SHM_REUSABLE_EXTENT_OOM_TOTAL).Inc();
 
     auto s = DumpSummaryJson();
-    EXPECT_EQ(Scalar(s, "worker_shm_fresh_extent_oom_total", "total"), 2);
-    EXPECT_EQ(Scalar(s, "worker_shm_fresh_extent_oom_total", "delta"), 2);
-    EXPECT_EQ(Scalar(s, "worker_shm_reusable_extent_oom_total", "total"), 1);
-    EXPECT_EQ(Scalar(s, "worker_shm_reusable_extent_oom_total", "delta"), 1);
+    EXPECT_EQ(Scalar(s, "shm_fresh_extent_oom_total", "total"), 2);
+    EXPECT_EQ(Scalar(s, "shm_fresh_extent_oom_total", "delta"), 2);
+    EXPECT_EQ(Scalar(s, "shm_reusable_extent_oom_total", "total"), 1);
+    EXPECT_EQ(Scalar(s, "shm_reusable_extent_oom_total", "delta"), 1);
 }
 
 // ── [SHMUNIT] ctor/dtor counter symmetry pattern ─────────────────────────────
@@ -123,14 +123,14 @@ TEST_F(ShmLeakMetricsTest, shm_unit_ctor_dtor_symmetry)
 {
     constexpr int kN = 100;
     for (int i = 0; i < kN; ++i) {
-        Cnt(metrics::KvMetricId::WORKER_SHM_UNIT_CREATED_TOTAL).Inc();
+        Cnt(metrics::KvMetricId::SHM_UNIT_CREATED_TOTAL).Inc();
     }
     for (int i = 0; i < kN; ++i) {
-        Cnt(metrics::KvMetricId::WORKER_SHM_UNIT_DESTROYED_TOTAL).Inc();
+        Cnt(metrics::KvMetricId::SHM_UNIT_DESTROYED_TOTAL).Inc();
     }
     auto s = DumpSummaryJson();
-    EXPECT_EQ(Scalar(s, "worker_shm_unit_created_total", "total"), kN);
-    EXPECT_EQ(Scalar(s, "worker_shm_unit_destroyed_total", "total"), kN);
+    EXPECT_EQ(Scalar(s, "shm_unit_created_total", "total"), kN);
+    EXPECT_EQ(Scalar(s, "shm_unit_destroyed_total", "total"), kN);
 }
 
 // ── [REF] simulate AddShmUnit + RemoveShmUnit pattern: counters + bytes Gauge ─

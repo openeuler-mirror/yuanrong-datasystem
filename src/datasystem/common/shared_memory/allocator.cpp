@@ -340,7 +340,7 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
     // Counter uses requested size (needSize), aligned with IncrementMemoryUsage/SubUsage on this path.
     // Real footprint is tracked separately via stats->AddRealUsageNoCheck(realSize); do not use alloc counter
     // as a proxy for physical bytes (page alignment overhead is in RealUsage).
-    METRIC_ADD(metrics::KvMetricId::WORKER_ALLOCATOR_ALLOC_BYTES_TOTAL, needSize);
+    METRIC_ADD(metrics::KvMetricId::ALLOCATOR_ALLOC_BYTES_TOTAL, needSize);
     return Status::OK();
 }
 
@@ -399,7 +399,7 @@ Status Allocator::FreeMemory(const std::string &tenantId, void *&pointer, Servic
     stats->SubUsage(bytesFree);
     stats->SubRealUsage(bytesRealFree);
     // Pairs with alloc counter: logical release size from arena (symmetric to needSize on allocate).
-    METRIC_ADD(metrics::KvMetricId::WORKER_ALLOCATOR_FREE_BYTES_TOTAL, bytesFree);
+    METRIC_ADD(metrics::KvMetricId::ALLOCATOR_FREE_BYTES_TOTAL, bytesFree);
     return Status::OK();
 }
 

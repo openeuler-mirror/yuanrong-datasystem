@@ -73,10 +73,10 @@ enum class KvMetricId : uint16_t {
     ZMQ_RPC_E2E_LATENCY,
     ZMQ_RPC_NETWORK_LATENCY,
     // Memory Allocator Metrics
-    WORKER_ALLOCATOR_ALLOC_BYTES_TOTAL,
-    WORKER_ALLOCATOR_FREE_BYTES_TOTAL,
-    WORKER_SHM_UNIT_CREATED_TOTAL,
-    WORKER_SHM_UNIT_DESTROYED_TOTAL,
+    ALLOCATOR_ALLOC_BYTES_TOTAL,
+    ALLOCATOR_FREE_BYTES_TOTAL,
+    SHM_UNIT_CREATED_TOTAL,
+    SHM_UNIT_DESTROYED_TOTAL,
     WORKER_SHM_REF_ADD_TOTAL,
     WORKER_SHM_REF_REMOVE_TOTAL,
     WORKER_SHM_REF_TABLE_SIZE,
@@ -149,8 +149,8 @@ enum class KvMetricId : uint16_t {
     // Shared-memory OOMs classified by extent-hook outcome:
     // FRESH includes mmap allocation or extent commit failure; it does not prove a new contiguous extent is absent.
     // REUSABLE means jemalloc OOM without observing either failure in this allocation attempt.
-    WORKER_SHM_FRESH_EXTENT_OOM_TOTAL,
-    WORKER_SHM_REUSABLE_EXTENT_OOM_TOTAL,
+    SHM_FRESH_EXTENT_OOM_TOTAL,
+    SHM_REUSABLE_EXTENT_OOM_TOTAL,
     // SHM transporter observability — appended at the end to preserve existing numeric IDs (review 181252307).
     CLIENT_SHM_MMAP_SUCCESS_TOTAL,
     CLIENT_SHM_MMAP_FALLBACK_TOTAL,

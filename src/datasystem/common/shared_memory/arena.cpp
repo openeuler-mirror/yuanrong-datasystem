@@ -183,8 +183,8 @@ Status ArenaGroup::BuildExtentOomStatus(uint32_t arenaId, bool freshExtentUnavai
 {
     // "reusable" means no extent-provision failure was observed, not a jemalloc free-list inspection.
     auto reason = freshExtentUnavailable ? "fresh_extent_unavailable" : "reusable_extent_unavailable";
-    METRIC_INC(freshExtentUnavailable ? metrics::KvMetricId::WORKER_SHM_FRESH_EXTENT_OOM_TOTAL
-                                      : metrics::KvMetricId::WORKER_SHM_REUSABLE_EXTENT_OOM_TOTAL);
+    METRIC_INC(freshExtentUnavailable ? metrics::KvMetricId::SHM_FRESH_EXTENT_OOM_TOTAL
+                                      : metrics::KvMetricId::SHM_REUSABLE_EXTENT_OOM_TOTAL);
     auto it = CACHE_TYPE_STR.find(cacheType_);
     auto errHint = it == CACHE_TYPE_STR.end() ? "UnknownType" : it->second;
     return Status(StatusCode::K_OUT_OF_MEMORY,

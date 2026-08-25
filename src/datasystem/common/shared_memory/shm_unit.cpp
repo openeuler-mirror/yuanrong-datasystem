@@ -38,17 +38,17 @@ namespace datasystem {
 
 ShmUnit::ShmUnit() : ShmUnitInfo()
 {
-    METRIC_INC(metrics::KvMetricId::WORKER_SHM_UNIT_CREATED_TOTAL);
+    METRIC_INC(metrics::KvMetricId::SHM_UNIT_CREATED_TOTAL);
 }
 
 ShmUnit::ShmUnit(int fd, uint64_t mmapSz) : ShmUnitInfo(fd, mmapSz)
 {
-    METRIC_INC(metrics::KvMetricId::WORKER_SHM_UNIT_CREATED_TOTAL);
+    METRIC_INC(metrics::KvMetricId::SHM_UNIT_CREATED_TOTAL);
 }
 
 ShmUnit::ShmUnit(ShmKey id, ShmView shmView, void *pointer) : ShmUnitInfo(std::move(id), shmView, pointer)
 {
-    METRIC_INC(metrics::KvMetricId::WORKER_SHM_UNIT_CREATED_TOTAL);
+    METRIC_INC(metrics::KvMetricId::SHM_UNIT_CREATED_TOTAL);
 }
 
 ShmUnit::~ShmUnit()
@@ -58,7 +58,7 @@ ShmUnit::~ShmUnit()
     if (rc.IsError()) {
         LOG(WARNING) << "Destructor for a ShmUnit failed to free memory.";
     }
-    METRIC_INC(metrics::KvMetricId::WORKER_SHM_UNIT_DESTROYED_TOTAL);
+    METRIC_INC(metrics::KvMetricId::SHM_UNIT_DESTROYED_TOTAL);
 }
 
 std::string ShmUnit::GetTenantId()
