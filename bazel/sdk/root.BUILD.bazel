@@ -16,6 +16,11 @@ config_setting(
 )
 
 config_setting(
+    name = "enable_jemalloc_prof",
+    define_values = {"enable_jemalloc_prof": "true"},
+)
+
+config_setting(
     name = "with_tests",
     define_values = {"with_tests": "true"},
 )

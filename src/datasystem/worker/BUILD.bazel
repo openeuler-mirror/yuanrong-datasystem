@@ -408,6 +408,10 @@ ds_cc_library(
     srcs = [
         "data_worker.cpp",
     ],
+    local_defines = select({
+        "//:enable_jemalloc_prof": ["SUPPORT_JEPROF"],
+        "//conditions:default": [],
+    }),
     deps = [
         "//include/datasystem:headers",
         "//include/datasystem/utils:utils_headers",
@@ -522,6 +526,13 @@ cc_binary(
         "//tools/tsan:default_suppressions",
         "//src/datasystem/common/util:request_context",
     ] + select({
+        "//:enable_jemalloc_prof": [
+            "@jemalloc_kvc//:jemalloc_prof_shared",
+        ],
+        "//conditions:default": [
+            "@jemalloc_kvc//:jemalloc_shared",
+        ],
+    }) + select({
         "//:enable_pipeline_h2d": [
             "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline",
         ],

@@ -199,6 +199,7 @@ py_wheel(
         "//:dsbench_file",
         "//:helm_chart_files",
         "//:hixl_plugin_file",
+        "//:libjemalloc_shared_file",
         "//:readme_file",
         "//:version_file",
         "//:worker_config_file",
