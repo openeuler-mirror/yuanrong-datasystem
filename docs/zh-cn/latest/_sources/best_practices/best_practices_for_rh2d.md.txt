@@ -2,26 +2,26 @@
 
 远端主机到设备数据传输（Remote Host to Device，RH2D）是一种基于昇腾（Ascend）NPU（Neural Processing Unit）的，支持从远端节点主机侧共享内存到设备侧 HBM 内存的跨节点数据传输机制。通过 NPU 驱动及 CANN 工具包的支持，RH2D 提供了一个高效的数据传输通道，支持异构计算单元间的高效协同，支持大规模的并行计算、AI 训练等高性能计算任务。
 
-openYuanrong datasystem 支持 RH2D over P2P-Transfer RoCE（RDMA over Converged Ethernet）和 RH2D over HIXL HCCS。P2P-Transfer RoCE 是默认链路，适用于配置了 RoCE 网络的跨节点场景；HIXL HCCS 适用于 HCCS 可达的 Atlas A3 环境。两种链路对上层 MGetH2D/MSetD2H API 透明，均由 Client 主动将远端 Worker 共享内存中的数据读取到本地 NPU HBM。
+openYuanrong datasystem 支持 RH2D over P2P-Transfer RoCE（RDMA over Converged Ethernet）和 RH2D over HIXL。P2P-Transfer RoCE 是默认链路，适用于配置了 RoCE 网络的跨节点场景；HIXL 未配置协议环境变量时在 Atlas A2 上默认使用 RoCE、在 Atlas A3 上默认使用 HCCS，也可通过环境变量强制使用 RoCE。两种链路对上层 MGetH2D/MSetD2H API 透明，均由 Client 主动将远端 Worker 共享内存中的数据读取到本地 NPU HBM。
 
 ## 链路选择与约束
 
-| 项目 | RH2D over P2P-Transfer RoCE | RH2D over HIXL HCCS |
+| 项目 | RH2D over P2P-Transfer RoCE | RH2D over HIXL |
 | --- | --- | --- |
-| 适用环境 | 配置并打通 RoCE 网络的 Ascend 节点 | HCCS 可达的 Atlas A3 环境 |
+| 适用环境 | 配置并打通 RoCE 网络的 Ascend 节点 | HIXL 可用且 HCCS 或 RoCE 可达的 Atlas A2/A3 环境 |
 | Worker链路参数 | `--remote_h2d_link_type "ROCE"`，默认值 | `--remote_h2d_link_type "HCCS"` |
 | Client链路参数 | `DS_RH2D_LINK_TYPE=ROCE`，默认值 | `DS_RH2D_LINK_TYPE=HCCS` |
-| Worker Host内存 | 注册到 NPU，需要锁页 | HIXL buffer-pool relay，不注册、不锁页 |
-| 传输后端及依赖 | P2P-Transfer及RoCE运行环境 | HIXL及HCCS运行环境；需要CANN HIXL头文件、`libcann_hixl.so`、`libmetadef.so` |
+| Worker Host内存 | 注册到 NPU，需要锁页 | 启用 HIXL buffer pool 时不注册、不锁页；配置为 `0:0` 时注册 |
+| 传输后端及依赖 | P2P-Transfer及RoCE运行环境 | HIXL及HCCS/RoCE运行环境；需要CANN HIXL头文件、`libcann_hixl.so`、`libmetadef.so` |
 
 使用时需满足以下约束：
 
-1. 同一个 RH2D 通信链路两端必须使用相同的 `remote_h2d_link_type`；HCCS 场景的 buffer-pool 参数也应保持一致。
+1. 同一个 RH2D 通信链路两端必须使用相同的 `remote_h2d_link_type`；HIXL 场景的 buffer-pool 参数和 `HCCL_INTRA_ROCE_ENABLE` 也应保持一致。
 2. 链路类型是进程级配置，必须在 Worker 启动前或 Client 第一次 RH2D 操作前设置，运行期间不能动态切换。
 3. Client 进程仅使用一个 NPU device id。Worker 可以配置多个 device id，并按 Client 连接轮询分配。
 4. HCCS 场景要求构建产物包含 HIXL 支持，且使用的 `cann_hixl` 需支持 `comm_resource_config.listen_port`。构建时未发现 HIXL 头文件、`libcann_hixl.so` 或 `libmetadef.so`，将无法使用 `HCCS` 链路。
 5. HCCS 使用 Worker 地址以及 Client 所连接本地 Worker 的地址作为 HIXL endpoint IP。请配置 HCCS 环境中可达的实际 IP，避免使用 `127.0.0.1` 或 `0.0.0.0`。
-6. HIXL HCCS 在未设置 `HCCL_INTRA_ROCE_ENABLE` 时使用 buffer-pool relay。如需启用 HIXL RoCE 直连模式，Worker 和 Client 进程均需在启动前设置 `HCCL_INTRA_ROCE_ENABLE=1`，并确保 RoCE 网络可达。
+6. HIXL 在未设置 `HCCL_INTRA_ROCE_ENABLE` 时由平台选择默认协议：Atlas A2 使用 RoCE，Atlas A3 使用 HCCS；设置为 `1` 时 HIXL 使用 RoCE。数据系统不适配或改写该协议选择，且始终将 buffer-pool 配置原样传给 HIXL；`remote_h2d_hccs_buffer_pool`/`DS_RH2D_HCCS_BUFFER_POOL` 为正数配置时启用 buffer pool，只有配置为 `0:0` 时才关闭。
 7. HCCS 当前在单个进程内串行执行 HIXL `TransferSync()`；需要提高并发度时，建议使用多个 Client 进程。
 
 ## Client 无本地 Worker 的 Pipeline H2D
@@ -214,7 +214,7 @@ Worker 参数说明：
 | `shared_memory_size_mb` | `1024` | Worker 可用于缓存数据的共享内存上限，单位为 MB；RH2D 场景推荐值为 `51200`，普通场景可使用默认值 |
 | `remote_h2d_device_ids` | 空 | 非空时启用 Worker RH2D；多个 device id 使用逗号分隔，例如：`0,1,2,3,4,5,6,7` |
 | `remote_h2d_link_type` | `ROCE` | 支持 `ROCE`、`HCCS`，区分大小写 |
-| `remote_h2d_hccs_buffer_pool` | `4:8` | HIXL buffer-pool 参数，仅 HCCS 使用，格式为两个正整数 `<count>:<size>`；无明确调优需求时保持默认值 |
+| `remote_h2d_hccs_buffer_pool` | `0:0` | HIXL buffer-pool 参数，格式为两个正整数 `<count>:<size>`；默认关闭，配置正数值（例如 `4:8`）时启用 |
 | `hixl_cs_enable` | `False` | 是否由 Worker 通过 HIXL `LocalCommRes` version 1.3 启用 HIXL CS；仅 HCCS 链路使用。启用后支持同节点跨进程、同 NPU 卡建链，并利用 CS 针对小数据传输的专项优化降低通信时延 |
 
 
@@ -234,7 +234,7 @@ export DS_RH2D_HCCS_BUFFER_POOL=4:8
 export DS_HIXL_CS_ENABLE=0
 ```
 
-如果使用 HIXL RoCE 直连模式，请在 Worker 和 Client 进程启动前都设置 `HCCL_INTRA_ROCE_ENABLE=1`。该模式不使用 HIXL buffer-pool relay，`DS_RH2D_HCCS_BUFFER_POOL`/`remote_h2d_hccs_buffer_pool` 不生效，要求两端 RoCE 网络已正确配置并可达。
+如果使用 HIXL RoCE，请在 Worker 和 Client 进程启动前都设置 `HCCL_INTRA_ROCE_ENABLE=1`，并要求两端 RoCE 网络已正确配置且可达。该环境变量只选择 HIXL 链路协议，不关闭 buffer pool；buffer pool 仍使用 `DS_RH2D_HCCS_BUFFER_POOL`/`remote_h2d_hccs_buffer_pool` 的配置，只有 `0:0` 才关闭。
 
 如果使用 HIXL CS RoCE，请在 Worker 设置 `--hixl_cs_enable=true`，并在 Client 设置 `DS_HIXL_CS_ENABLE=1`，同时保持两端 `HCCL_INTRA_ROCE_ENABLE=1`。HIXL 会根据各进程本地配置选择通信 Engine，因此 Worker 和 Client 的 CS 配置必须一致。CS RoCE 除了支持普通同节点通信无法覆盖的“跨进程、同 NPU 卡”场景，还针对小数据传输进行了专项优化，可降低通信时延。
 
@@ -242,9 +242,9 @@ export DS_HIXL_CS_ENABLE=0
 | --- | --- | --- |
 | `enable_remote_h2d` | `False` | Client API 的 RH2D 开关 |
 | `DS_RH2D_LINK_TYPE` | `ROCE` | Client 链路类型，支持 `ROCE`、`HCCS`，必须与 Worker 一致 |
-| `DS_RH2D_HCCS_BUFFER_POOL` | `4:8` | Client HIXL buffer-pool 参数，仅 HCCS buffer-pool 模式使用，应与 Worker 一致 |
+| `DS_RH2D_HCCS_BUFFER_POOL` | `0:0` | Client HIXL buffer-pool 参数，应与 Worker 一致；默认 `0:0` 关闭，配置正数值时启用 |
 | `DS_HIXL_CS_ENABLE` | `0` | 是否通过 HIXL `LocalCommRes` version 1.3 启用 HIXL CS，必须与 Worker 的 `hixl_cs_enable` 一致 |
-| `HCCL_INTRA_ROCE_ENABLE` | 未设置 | HIXL HCCS 的 RoCE 直连模式开关。设置为 `1` 时启用 RoCE direct，Worker 和 Client 必须一致 |
+| `HCCL_INTRA_ROCE_ENABLE` | 未设置 | HIXL 链路协议开关。未设置时 A2 默认使用 RoCE、A3 默认使用 HCCS，设置为 `1` 时使用 RoCE；数据系统不感知该协议选择，也不会据此改写 buffer-pool 配置，Worker 和 Client 必须一致 |
 
 ## 快速验证
 
