@@ -19,32 +19,25 @@ Hetero cache client benchmark interface Test.
 import logging
 import multiprocessing as mp
 import os
+import queue
 import random
 import threading
 import time
+import traceback
 import argparse
 import json
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 import acl
 import numpy as np
 
-from yr.datasystem.hetero_client import (
-    HeteroClient,
-    Blob,
-    DeviceBlobList,
-)
-
-try:
-    from yr.datasystem import PerfClient
-except ImportError:
-    PerfClient = None
-
 # log config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 BARRIER_WAIT_TIMEOUT = 60
+RESULT_QUEUE_POLL_TIMEOUT = 1
 DEFAULT_WORKER_IP = "127.0.0.1"
 DEFAULT_WORKER_PORT = 31699
 
@@ -128,7 +121,9 @@ config_map = {
 
     # Tensor query benchmark cases
     'tq_medium': {'num_processes': 1, 'key_num': 8192, 'blob_nums': [1], 'blob_sizes': [128 * 1024],
-                  'iterations': 8, 'thread_number': 1}
+                  'iterations': 8, 'thread_number': 1},
+    'glm5.2': {'num_processes': 1, 'key_num': 40, 'blob_nums': [237], 'blob_sizes': [131 * 1024],
+               'iterations': 50, 'thread_number': 1}
 }
 
 mode = "all"
@@ -137,6 +132,9 @@ current_test = ""
 
 def init_test_hetero_client():
     """Initialize hetero client"""
+    # Import in the forked worker so datasystem logging is initialized with the worker PID.
+    from yr.datasystem.hetero_client import HeteroClient
+
     client = HeteroClient(args.ip, args.port, enable_remote_h2d=True)
     client.init()
     return client
@@ -144,7 +142,9 @@ def init_test_hetero_client():
 
 def init_test_perf_client():
     """Initialize perf client."""
-    if PerfClient is None:
+    try:
+        from yr.datasystem import PerfClient
+    except ImportError:
         return None
     client = PerfClient(args.ip, args.port)
     client.init()
@@ -217,6 +217,16 @@ def should_pre_register_device_memory() -> bool:
     return args.pre_register_device_memory and mode in ["get", "all"]
 
 
+def prepare_multi_buffer_lists(all_data_blob_lists):
+    """Extract address and size arrays for mget_h2d_from_multi_buffers."""
+    prepared = []
+    for thread_blob_lists in all_data_blob_lists:
+        addrs = [[blob.dev_ptr for blob in blob_list.blob_list] for blob_list in thread_blob_lists]
+        sizes = [[blob.size for blob in blob_list.blob_list] for blob_list in thread_blob_lists]
+        prepared.append((addrs, sizes))
+    return prepared
+
+
 def acl_malloc_device(size: int) -> int:
     """Allocate device memory and fail fast when ACL returns an error."""
     dev_ptr, ret = acl.rt.malloc(size, 0)
@@ -238,14 +248,18 @@ def mset_thread(client, device_id: int, key_num: int, iterations: int, thread_id
 
 
 def mget_thread(client, device_id: int, key_num: int, iterations: int, thread_id: int, list_random_suffix: list,
-                all_out_data_blob_list: list, time_list: list):
+                all_out_multi_buffers: list, time_list: list):
     """Thread for mget_h2d"""
+    ret = acl.rt.set_device(device_id)
+    if ret != 0:
+        raise RuntimeError(f"acl.rt.set_device failed, device_id={device_id}, ret={ret}")
+    addrs, sizes = all_out_multi_buffers[thread_id]
     for _ in range(args.get_multiplier):
         logging.info(f"[Dev {device_id}] Start get by thread_id {thread_id}")
         for i in range(iterations):
             keys = [f"dev{device_id}_key{i}_{j}_{list_random_suffix[thread_id]}" for j in range(key_num)]
             start = time.perf_counter()
-            client.mget_h2d(keys, all_out_data_blob_list[thread_id], 60000)
+            client.mget_h2d_from_multi_buffers(keys, addrs, sizes, 60000)
             mget_time = (time.perf_counter() - start) * 1000  # ms
             time_list.append(mget_time)
 
@@ -253,6 +267,9 @@ def mget_thread(client, device_id: int, key_num: int, iterations: int, thread_id
 def prepare_hbm_data(test_value, thread_number, key_num, blob_nums_per_key, blob_size, device_id, client,
                      all_in_data_blob_list, all_out_data_blob_list, pre_registered_get_buffers):
     """prepare HBM data for set and get"""
+    # Keep datasystem extension loading on the worker side of the multiprocessing fork boundary.
+    from yr.datasystem.hetero_client import Blob, DeviceBlobList
+
     logging.info(f"[Dev {device_id}]Start prepare data")
     for _ in range(thread_number):
         in_data_blob_list = []
@@ -338,24 +355,26 @@ def collect_perf_before_cleanup(
 
 def operate_thread(op_name, client, device_id, key_num, iterations, suffix, blob_list, shared_matrix):
     """worker threads : execute benchmark by op_name and wait each thread result"""
-    threads_list = []
+    thread_target = {
+        "mget_thread": mget_thread,
+        "mset_thread": mset_thread,
+    }.get(op_name)
+    if thread_target is None:
+        raise ValueError(f"Unsupported thread operation: {op_name}")
+
     thread_size = len(shared_matrix)
-    for i in range(thread_size):
-        if op_name == "mget_thread":
-            thread = threading.Thread(target=mget_thread, args=(
-                client, device_id, key_num, iterations, i, suffix, blob_list, shared_matrix[i]))
-            thread.start()
-            threads_list.append(thread)
-        elif op_name == "mset_thread":
-            thread = threading.Thread(target=mset_thread, args=(
-                client, device_id, key_num, iterations, i, suffix, blob_list, shared_matrix[i]))
-            thread.start()
-            threads_list.append(thread)
-    for t in threads_list:
-        t.join()
+    with ThreadPoolExecutor(max_workers=thread_size) as executor:
+        futures = [
+            executor.submit(
+                thread_target, client, device_id, key_num, iterations, i, suffix, blob_list, shared_matrix[i]
+            )
+            for i in range(thread_size)
+        ]
+        for future in futures:
+            future.result()
 
 
-def worker_process(
+def run_worker_benchmark(
         device_id: int,
         process_index: int,
         key_num: int,
@@ -363,14 +382,12 @@ def worker_process(
         blob_sizes: List[int],
         iterations: int,
         thread_number: int,
-        result_queue: mp.Queue,
         barrier: mp.Barrier,
         lock: mp.Lock
 ):
     """worker process : execute benchmark and collect result"""
 
     logging.info(f"[Dev {device_id}]Start performance test")
-    acl.init()
     acl.rt.set_device(device_id)
     client = init_test_hetero_client()
     perf_client = init_test_perf_client()
@@ -400,9 +417,10 @@ def worker_process(
         logging.info(
             f"[Dev {device_id}]Prepared {len(pre_registered_get_buffers)} pre-registered get buffer(s), "
             f"total size={metrics_data['pre_registered_get_memory_bytes']}")
+    out_multi_buffers = prepare_multi_buffer_lists(all_out_data_blob_list)
 
     # warm up
-    warmup(client, device_id, key_num, all_in_data_blob_list, all_out_data_blob_list)
+    warmup(client, device_id, key_num, all_in_data_blob_list, out_multi_buffers)
     reset_perf_after_warmup(perf_client, barrier, device_id, process_index)
 
     list_random_suffix = []
@@ -440,7 +458,7 @@ def worker_process(
 
         shared_matrix = [[] for _ in range(thread_number)]
         operate_thread("mget_thread", client, device_id, key_num, iterations, list_random_suffix,
-                       all_out_data_blob_list, shared_matrix)
+                       out_multi_buffers, shared_matrix)
 
         for sublist in shared_matrix:
             metrics_data["mget_times"].extend(sublist)
@@ -466,20 +484,54 @@ def worker_process(
     for i, blob_num in enumerate(blob_nums_per_key):
         metrics_data["total_data_bytes"] += key_num * blob_num * blob_sizes[i] * iterations * thread_number
 
-    result_queue.put(metrics_data)
-
     logging.info(f"[Dev {device_id}]Success test performance")
-    acl.finalize()
+    return metrics_data
+
+
+def worker_process(
+        device_id: int,
+        process_index: int,
+        key_num: int,
+        blob_nums_per_key: List[int],
+        blob_sizes: List[int],
+        iterations: int,
+        thread_number: int,
+        result_queue: mp.Queue,
+        barrier: mp.Barrier,
+        lock: mp.Lock
+):
+    """Run one benchmark process and always report success or failure to the parent."""
+    try:
+        acl.init()
+        try:
+            metrics_data = run_worker_benchmark(
+                device_id, process_index, key_num, blob_nums_per_key, blob_sizes, iterations, thread_number,
+                barrier, lock
+            )
+        finally:
+            acl.finalize()
+    except Exception:
+        result_queue.put({
+            "process_index": process_index,
+            "error": traceback.format_exc(),
+        })
+    else:
+        result_queue.put({
+            "process_index": process_index,
+            "metrics": metrics_data,
+        })
     time.sleep(1)
 
 
-def warmup(client: HeteroClient, dev_id: int, key_num: int, all_in_data_blob_list: list, all_out_data_blob_list: list):
+def warmup(client: "HeteroClient", dev_id: int, key_num: int, all_in_data_blob_list: list,
+           all_out_multi_buffers: list):
     """Run a warmup before executing benchmark"""
     if not args.no_warmup:
         keys_list = [f"dev{dev_id}_key{i}" for i in range(key_num)]
 
         client.mset_d2h(keys_list, all_in_data_blob_list[0])
-        client.mget_h2d(keys_list, all_out_data_blob_list[0], 60000)
+        addrs, sizes = all_out_multi_buffers[0]
+        client.mget_h2d_from_multi_buffers(keys_list, addrs, sizes, 60000)
         client.delete(keys_list)
 
 
@@ -552,6 +604,51 @@ def format_metrics(metrics: Dict[str, float]) -> str:
             f"tps: {metrics['tps']:.2f}")
 
 
+def collect_worker_results(result_queue, processes):
+    """Collect one result per worker while detecting workers that exit without reporting."""
+    results = {}
+    while len(results) < len(processes):
+        try:
+            report = result_queue.get(timeout=RESULT_QUEUE_POLL_TIMEOUT)
+        except queue.Empty:
+            failed_processes = [
+                (index, process.exitcode)
+                for index, process in enumerate(processes)
+                if process.exitcode not in (None, 0)
+            ]
+            if failed_processes:
+                details = ", ".join(
+                    f"process_index={index}, exitcode={exitcode}" for index, exitcode in failed_processes
+                )
+                raise RuntimeError(f"Worker process exited before reporting a result: {details}")
+            if all(process.exitcode is not None for process in processes):
+                missing = sorted(set(range(len(processes))) - set(results))
+                raise RuntimeError(f"Worker processes exited without reporting results: {missing}")
+            continue
+
+        process_index = report.get("process_index")
+        if process_index not in range(len(processes)):
+            raise RuntimeError(f"Received an invalid worker process index: {process_index}")
+        if process_index in results:
+            raise RuntimeError(f"Received duplicate result from worker process {process_index}")
+        if "error" in report:
+            raise RuntimeError(f"Worker process {process_index} failed:\n{report['error']}")
+        if "metrics" not in report:
+            raise RuntimeError(f"Worker process {process_index} returned no metrics")
+        results[process_index] = report["metrics"]
+
+    return [results[index] for index in range(len(processes))]
+
+
+def terminate_worker_processes(processes):
+    """Terminate live workers and reap every child process."""
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+    for process in processes:
+        process.join()
+
+
 def run_benchmark(
         num_processes: int,
         key_num: int,
@@ -590,23 +687,31 @@ def run_benchmark(
         p.start()
         processes.append(p)
 
-    # Collect results before join so worker processes do not block while flushing multiprocessing.Queue.
-    results = [result_queue.get() for _ in range(num_processes)]
+    workers_completed = False
+    try:
+        # Collect results before join so worker processes do not block while flushing multiprocessing.Queue.
+        results = collect_worker_results(result_queue, processes)
 
-    for p in processes:
-        p.join(timeout=30)
-        if p.is_alive():
-            logging.warning(f"Process {p.pid} did not exit after result collection, terminate it")
-            p.terminate()
-            p.join()
+        for process in processes:
+            process.join(timeout=30)
+            if process.is_alive():
+                raise RuntimeError(f"Worker process {process.pid} did not exit after reporting its result")
+            if process.exitcode != 0:
+                raise RuntimeError(
+                    f"Worker process {process.pid} exited with code {process.exitcode} after reporting its result"
+                )
+        workers_completed = True
+    finally:
+        if not workers_completed:
+            terminate_worker_processes(processes)
 
     # Calculate individual request size for metrics
-    request_size = 0
+    request_size_mb = 0
     for i, blob_num in enumerate(blob_nums):
-        request_size += (key_num * blob_num * blob_sizes[i] * thread_number) / (1024 * 1024)
+        request_size_mb += (key_num * blob_num * blob_sizes[i] * thread_number) / 1_000_000
 
     # Processing data
-    handle_metrics(results, iterations, key_num, num_processes, request_size)
+    handle_metrics(results, iterations, key_num, num_processes, request_size_mb)
     for index, result in enumerate(results):
         write_perf_log_records(
             current_test, "worker", f"{args.ip}:{args.port}", result.get("worker_perf_logs", {}), args.perf_path
@@ -617,20 +722,20 @@ def run_benchmark(
 
 
 def print_performance_result(operate, ops_times, metrics, stats):
-    total_byte, duration, throughput, latency_per_req, request_size = stats
+    total_byte, duration, throughput_mb_s, latency_per_req, request_size_mb = stats
     """Print and save perfomance result"""
     logging.info(f"\n{operate} data:")
     logging.info(f"Total number of operations: {ops_times}")
-    total_data_mb = f"{total_byte / (1024 * 1024):.2f}"
+    total_data_mb = f"{total_byte / 1_000_000:.2f}"
     logging.info(f"Total data transfer volume: {total_data_mb} MB")
-    logging.info(f"Individual request size: {request_size} MB")
+    logging.info(f"Individual request size: {request_size_mb} MB")
     logging.info(f"Transmission duration: {duration:.2f}s")
     logging.info(f"Latency per request: {latency_per_req:.5f}s")
-    logging.info(f"Throughput: {throughput:.2f} MB/s")
+    logging.info(f"Throughput: {throughput_mb_s:.2f} MB/s")
 
     logging.info(format_metrics(metrics))
-    record_data = (f"{operate},{ops_times},{total_data_mb},{request_size},{duration:.2f},{latency_per_req:.5f},"
-                   f"{throughput:.2f},{metrics['min']:.2f},{metrics['max']:.2f},{metrics['mean']:.2f},"
+    record_data = (f"{operate},{ops_times},{total_data_mb},{request_size_mb},{duration:.2f},{latency_per_req:.5f},"
+                   f"{throughput_mb_s:.2f},{metrics['min']:.2f},{metrics['max']:.2f},{metrics['mean']:.2f},"
                    f"{metrics['p90']:.2f},{metrics['p95']:.2f},{metrics['p99']:.2f},{metrics['tps']:.2f}")
 
     write_data(record_data, RESULT_FILENAME)
@@ -644,7 +749,7 @@ def collect_results(result_queue):
     return results
 
 
-def handle_metrics(results, iterations, key_num, num_processes, request_size):
+def handle_metrics(results, iterations, key_num, num_processes, request_size_mb):
     """Process time point into performance information"""
     # Calculate overall performance metrics
     all_mset_times = []
@@ -694,23 +799,23 @@ def handle_metrics(results, iterations, key_num, num_processes, request_size):
     mset_duration = mset_end - mset_start
     mget_duration = mget_end - mget_start
 
-    # Calculate throughput(MB/s) and average latency per request
+    # Calculate throughput (MB/s) and average latency per request.
     if mode in ["set", "all"]:
         mset_per_req = ((sum(all_mset_times) - (all_mset_times[0] if len(all_mset_times) > 1 else 0)) \
                        / (len(all_mset_times) - (1 if len(all_mset_times) > 1 else 0))) / 1000
-        mset_throughput = (request_size / mset_per_req) * num_processes
+        mset_throughput_mb_s = (request_size_mb / mset_per_req) * num_processes
     if mode in ["get", "all"]:
         mget_per_req = ((sum(all_mget_times) - (all_mget_times[0] if len(all_mget_times) > 1 else 0)) \
                        / (len(all_mget_times) - (1 if len(all_mget_times) > 1 else 0))) / 1000
-        mget_throughput = (request_size / mget_per_req) * num_processes
+        mget_throughput_mb_s = (request_size_mb / mget_per_req) * num_processes
 
     # Print summary information
     logging.info(f"\n{'>' * 50}\nTest finish! ")
     if mode in ["set", "all"]:
-        stats = (mset_total_bytes, mset_duration, mset_throughput, mset_per_req, request_size)
+        stats = (mset_total_bytes, mset_duration, mset_throughput_mb_s, mset_per_req, request_size_mb)
         print_performance_result("mset_d2h", mset_ops, calculate_metrics(all_mset_times, mset_duration), stats)
     if mode in ["get", "all"]:
-        stats = (mget_total_bytes, mget_duration, mget_throughput, mget_per_req, request_size)
+        stats = (mget_total_bytes, mget_duration, mget_throughput_mb_s, mget_per_req, request_size_mb)
         print_performance_result("mget_h2d", mget_ops, calculate_metrics(all_mget_times, mget_duration), stats)
 
 
@@ -774,7 +879,7 @@ if __name__ == "__main__":
             total_size = 0
             for i in range(len(CONFIG["blob_nums"])):
                 total_size += CONFIG['num_processes'] * CONFIG['key_num'] * CONFIG['blob_nums'][i] *\
-                              CONFIG['blob_sizes'][i] * CONFIG['iterations'] * CONFIG['thread_number'] / (1024 * 1024)
+                              CONFIG['blob_sizes'][i] * CONFIG['iterations'] * CONFIG['thread_number'] / 1_000_000
             if mode in ["get", "all"]:
                 total_size *= args.get_multiplier
             logging.info(
