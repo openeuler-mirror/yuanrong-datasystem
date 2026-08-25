@@ -242,8 +242,7 @@ public:
           stderrThreshold_(FLAGS_stderrthreshold),
           logAsync_(FLAGS_log_async),
           logAsyncQueueSize_(FLAGS_log_async_queue_size),
-          logOnlyWriteInfoFile_(FLAGS_log_only_write_info_file),
-          zmqClientIoThread_(FLAGS_zmq_client_io_thread)
+          logOnlyWriteInfoFile_(FLAGS_log_only_write_info_file)
     {
     }
 
@@ -261,7 +260,6 @@ public:
         FLAGS_log_async = logAsync_;
         FLAGS_log_async_queue_size = logAsyncQueueSize_;
         FLAGS_log_only_write_info_file = logOnlyWriteInfoFile_;
-        FLAGS_zmq_client_io_thread = zmqClientIoThread_;
     }
 
 private:
@@ -277,7 +275,6 @@ private:
     bool logAsync_;
     uint32_t logAsyncQueueSize_;
     bool logOnlyWriteInfoFile_;
-    int32_t zmqClientIoThread_;
 };
 
 void ApplyKvClientLogConfigFromConfig(const KVClientConfig &clientConfig)
@@ -462,7 +459,6 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
                         .LogAsyncEnable(true)
                         .LogAsyncQueueSize(DEFAULT_LOG_ASYNC_QUEUE_SIZE)
                         .LogOnlyWriteInfoFile(true)
-                        .ZmqClientIoThread(1)
                         .Build(config);
     ASSERT_EQ(status, Status::OK());
     std::string errMsg;
@@ -483,7 +479,6 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
     EXPECT_TRUE(FLAGS_log_async);
     EXPECT_EQ(FLAGS_log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE);
     EXPECT_TRUE(FLAGS_log_only_write_info_file);
-    EXPECT_EQ(FLAGS_zmq_client_io_thread, 1);
 }
 
 TEST_F(ClientLogConfigPriorityTest, ExplicitClientAccessLogNameIsNotOverriddenByEnv)
@@ -633,8 +628,6 @@ TEST_F(FlagsTest, KVClientConfigBuilderStoresExplicitValues)
                         .LogAsyncQueueSize(4096)
                         .LogMonitorEnable(false)
                         .MonitorConfigPath("/tmp/ds.config")
-                        .ZmqClientIoContext(8)
-                        .ZmqClientIoThread(2)
                         .Build(config);
     ASSERT_EQ(status, Status::OK());
     ASSERT_EQ(config.GetArgs().at("log_dir"), "/tmp/ds_logs");
@@ -655,8 +648,6 @@ TEST_F(FlagsTest, KVClientConfigBuilderStoresExplicitValues)
     ASSERT_EQ(config.GetArgs().at("log_async_queue_size"), "4096");
     ASSERT_EQ(config.GetArgs().at("log_monitor"), "false");
     ASSERT_EQ(config.GetArgs().at("monitor_config_file"), "/tmp/ds.config");
-    ASSERT_EQ(config.GetArgs().at("zmq_client_io_context"), "8");
-    ASSERT_EQ(config.GetArgs().at("zmq_client_io_thread"), "2");
 }
 
 TEST_F(FlagsTest, KVClientConfigBuilderAggregatesInvalidValues)
@@ -667,14 +658,12 @@ TEST_F(FlagsTest, KVClientConfigBuilderAggregatesInvalidValues)
                         .MinLogLevel(4)
                         .MaxLogSize(0)
                         .LogAsyncQueueSize(255)
-                        .ZmqClientIoThread(0)
                         .Build(config);
     ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogName"));
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("MinLogLevel"));
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("MaxLogSize"));
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogAsyncQueueSize"));
-    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("ZmqClientIoThread"));
     EXPECT_TRUE(config.GetArgs().empty());
 }
 

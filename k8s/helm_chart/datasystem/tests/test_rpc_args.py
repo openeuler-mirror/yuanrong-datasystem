@@ -42,11 +42,11 @@ class WorkerRpcArgsTest(unittest.TestCase):
             timeout=30,
         ).stdout
 
-    def test_brpc_omits_zmq_server_io_context(self):
+    def test_zmq_server_io_context_removed(self):
+        # The ZMQ RPC transport flag zmq_server_io_context was removed (ZMQ RPC
+        # transport deleted). It must not appear in either brpc or legacy mode.
         self.assertNotIn("-zmq_server_io_context=", self.render(use_brpc=True))
-
-    def test_zmq_keeps_zmq_server_io_context(self):
-        self.assertIn("-zmq_server_io_context=", self.render(use_brpc=False))
+        self.assertNotIn("-zmq_server_io_context=", self.render(use_brpc=False))
 
 
 if __name__ == "__main__":

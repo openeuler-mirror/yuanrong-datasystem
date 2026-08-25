@@ -47,16 +47,13 @@ constexpr uint32_t FIRST_MAX_LOG_SIZE_MB = 123;
 constexpr uint32_t SECOND_MAX_LOG_SIZE_MB = 321;
 constexpr uint32_t FIRST_LOG_ASYNC_QUEUE_SIZE = 4096;
 constexpr uint32_t SECOND_LOG_ASYNC_QUEUE_SIZE = 8192;
-constexpr int32_t FIRST_ZMQ_CLIENT_IO_THREAD = 2;
-constexpr int32_t SECOND_ZMQ_CLIENT_IO_THREAD = 3;
 
-KVClientConfig BuildClientConfig(uint32_t maxLogSize, uint32_t asyncQueueSize, int32_t zmqClientIoThread)
+KVClientConfig BuildClientConfig(uint32_t maxLogSize, uint32_t asyncQueueSize)
 {
     KVClientConfig config;
     auto status = KVClientConfig::Builder()
                       .MaxLogSize(maxLogSize)
                       .LogAsyncQueueSize(asyncQueueSize)
-                      .ZmqClientIoThread(zmqClientIoThread)
                       .Build(config);
     if (status.IsError()) {
         LOG(ERROR) << "Build KVClientConfig failed: " << status.ToString();
@@ -64,7 +61,7 @@ KVClientConfig BuildClientConfig(uint32_t maxLogSize, uint32_t asyncQueueSize, i
     return config;
 }
 
-bool CheckClientConfig(uint32_t maxLogSize, uint32_t asyncQueueSize, int32_t zmqClientIoThread)
+bool CheckClientConfig(uint32_t maxLogSize, uint32_t asyncQueueSize)
 {
     if (FLAGS_max_log_size != maxLogSize) {
         LOG(ERROR) << "Unexpected max_log_size, expect: " << maxLogSize << ", actual: " << FLAGS_max_log_size;
@@ -73,11 +70,6 @@ bool CheckClientConfig(uint32_t maxLogSize, uint32_t asyncQueueSize, int32_t zmq
     if (FLAGS_log_async_queue_size != asyncQueueSize) {
         LOG(ERROR) << "Unexpected log_async_queue_size, expect: " << asyncQueueSize
                    << ", actual: " << FLAGS_log_async_queue_size;
-        return false;
-    }
-    if (FLAGS_zmq_client_io_thread != zmqClientIoThread) {
-        LOG(ERROR) << "Unexpected zmq_client_io_thread, expect: " << zmqClientIoThread
-                   << ", actual: " << FLAGS_zmq_client_io_thread;
         return false;
     }
     return true;
@@ -148,15 +140,15 @@ TEST_F(KVClientInitTest, SameKVClientConfigKeepsProcessConfig)
         GTEST_SKIP() << "brpc fork-safety: brpc channel/bthread global state not fork-safe. Tracked separately.";
     auto connectOptions = GetConnectOptions();
     RunInChildProcess([connectOptions]() -> int {
-        auto config = BuildClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD);
+        auto config = BuildClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE);
         KVClient firstClient(connectOptions);
-        if (firstClient.Init(config).IsError() || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE,
-                                                                     FIRST_ZMQ_CLIENT_IO_THREAD)) {
+        if (firstClient.Init(config).IsError()
+            || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE)) {
             return 1;
         }
         KVClient secondClient(connectOptions);
-        if (secondClient.Init(config).IsError() || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE,
-                                                                      FIRST_ZMQ_CLIENT_IO_THREAD)) {
+        if (secondClient.Init(config).IsError()
+            || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE)) {
             return 1;
         }
         return 0;
@@ -169,17 +161,17 @@ TEST_F(KVClientInitTest, DifferentKVClientConfigDoesNotOverrideProcessConfig)
     auto connectOptions = GetConnectOptions();
     RunInChildProcess([connectOptions]() -> int {
         auto firstConfig =
-            BuildClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD);
+            BuildClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE);
         KVClient firstClient(connectOptions);
         if (firstClient.Init(firstConfig).IsError()
-            || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD)) {
+            || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE)) {
             return 1;
         }
         auto secondConfig =
-            BuildClientConfig(SECOND_MAX_LOG_SIZE_MB, SECOND_LOG_ASYNC_QUEUE_SIZE, SECOND_ZMQ_CLIENT_IO_THREAD);
+            BuildClientConfig(SECOND_MAX_LOG_SIZE_MB, SECOND_LOG_ASYNC_QUEUE_SIZE);
         KVClient secondClient(connectOptions);
         if (secondClient.Init(secondConfig).IsError()
-            || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD)) {
+            || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE)) {
             return 1;
         }
         return 0;
@@ -195,13 +187,13 @@ TEST_F(KVClientInitTest, ConfigAfterDefaultInitDoesNotOverrideProcessConfig)
         if (defaultClient.Init().IsError()) {
             return 1;
         }
-        auto config = BuildClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD);
+        auto config = BuildClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE);
         KVClient configuredClient(connectOptions);
         if (configuredClient.Init(config).IsError()) {
             return 1;
         }
         if (FLAGS_max_log_size == FIRST_MAX_LOG_SIZE_MB || FLAGS_log_async_queue_size == FIRST_LOG_ASYNC_QUEUE_SIZE
-            || FLAGS_zmq_client_io_thread == FIRST_ZMQ_CLIENT_IO_THREAD) {
+) {
             LOG(ERROR) << "Config after default Init unexpectedly overrides process-level config.";
             return 1;
         }

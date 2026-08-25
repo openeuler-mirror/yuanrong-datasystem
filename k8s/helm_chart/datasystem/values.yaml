@@ -310,23 +310,6 @@ global:
     enableDataReplication: "true"
 
   rpc:
-    # Whether to enable the authentication function between components(worker, master)
-    enableCurveZmq: false
-    # The directory to find ZMQ curve key files.
-    # This path must be specified when zmq authentication is enabled.
-    curveKeyDir: /home/yuanrong/datasystem/curve_key_dir
-    curveZmqKey:
-      # Control whether try to get data from other cluster's worker firstly, if false then get data from L2 cache directly.
-      # The service mapping, public key and private key are configured with base64 to avoid the special characters problem when restore to files.
-      # These keys must be replaced.
-      # The format example: workerPublicKey: V11lTG59ZC5wYX0lTkNrMmlrUFZXJkBTRz5LVHtpMjhBWVhaTlA5Kw==
-      # Worker's public key in the curve encryption environment.
-      workerPublicKey: ""
-      # Worker's private key in the curve encryption environment.
-      workerSecretKey: ""
-      # Client's public key in the curve encryption environment.
-      clientPublicKey: ""
-
     # A direct TCP/IP port for worker-to-worker scenarios to improve latency.
     # Acceptable value:0, or some positive integer. 0 means disabled.
     ocWorkerWorkerDirectPort: 0
@@ -349,16 +332,7 @@ global:
     rpcThreadNum: 128
     # The number of worker service for object cache.
     ocThreadNum: 64
-    # Optimize the performance of the customer. Default server is 5.
-    # The higher the throughput, the higher the value, but should be in range [1, 32]
-    zmqServerIoContext: 5
-    # Optimize the performance of the client stub. Default value is 5.
-    # The higher the throughput, the higher the value, but should be in range [1, 32]
-    zmqClientIoContext: 5
-    # Optimize the performance of the client stub io thread. Default value 1.
-    # The higher the throughput, the higher the value, but should be in range [1, 32]
-    zmqClientIoThread: 1
-    # Nice value for selected IO threads. Valid range: [-20, 19].
+    # Nice value for selected IO threads. Valid range is [-20, 19].
     # 0 skips nice adjustment and preserves the thread's inherited nice value.
     # Only non-zero values call setpriority; negative values usually require appropriate privileges.
     ioThreadNice: 0
