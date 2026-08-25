@@ -86,6 +86,10 @@
   `datasystem_`-prefixed static jemalloc. The shared runtime is packaged beside the Worker under `service/lib`.
   Profiling remains opt-in: CMake and Bazel `-x on` build the process allocator with jemalloc profiling support while
   preserving the same Worker link and package layout.
+- `dscli start --jemalloc_prof_conf` configures profiling only in the Worker child environment. A build-generated Python
+  marker rejects this option before launch when the package was not built with `-x on`. Missing `prof:true` and
+  `prof_prefix` entries are derived by dscli; the default prefix is under the resolved Worker `log_dir` at
+  `jemalloc/datasystem_worker`. `dscli up` forwards the option and each remote package checks its own marker.
 
 ## Runtime Entry Points
 

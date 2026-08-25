@@ -16,7 +16,7 @@
 import json
 import os
 import shlex
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yr.datasystem.cli.common.util as util
 from yr.datasystem.cli.command import BaseCommand
@@ -88,6 +88,15 @@ class Command(BaseCommand, ParallelMixin):
             default=False,
             help=(
                 "Enable UMS, if enabled, the RPC messages between datasystem workers will be transmitted through ub (default: False)"
+            ),
+        )
+
+        parser.add_argument(
+            "--jemalloc_prof_conf",
+            metavar="CONF",
+            help=(
+                "jemalloc profiling MALLOC_CONF forwarded to each worker. This option "
+                "requires remote builds created with 'build.sh -x on'"
             ),
         )
 
@@ -188,6 +197,7 @@ class Command(BaseCommand, ParallelMixin):
                     use_ums=args.enable_ums,
                     use_numactl=use_numactl,
                     numactl_opts=numactl_opts,
+                    jemalloc_prof_conf=args.jemalloc_prof_conf,
                 )
 
                 # Get worker nodes excluding head node
@@ -199,6 +209,7 @@ class Command(BaseCommand, ParallelMixin):
                         use_ums=args.enable_ums,
                         use_numactl=use_numactl,
                         numactl_opts=numactl_opts,
+                        jemalloc_prof_conf=args.jemalloc_prof_conf,
                     )
             else:
                 # Using etcd mode, start all nodes in parallel
@@ -207,6 +218,7 @@ class Command(BaseCommand, ParallelMixin):
                     use_ums=args.enable_ums,
                     use_numactl=use_numactl,
                     numactl_opts=numactl_opts,
+                    jemalloc_prof_conf=args.jemalloc_prof_conf,
                 )
         except Exception as e:
             self.logger.error(f"Up cluster failed: {e}")
@@ -276,6 +288,7 @@ class Command(BaseCommand, ParallelMixin):
         use_numactl = kwargs.get("use_numactl", False)
         numactl_opts = kwargs.get("numactl_opts") or {}
         use_ums = kwargs.get("use_ums", False)
+        jemalloc_prof_conf = kwargs.get("jemalloc_prof_conf")
 
         self._hidden_config_path = util.validate_no_injection(self._hidden_config_path)
         util.ssh_execute(
@@ -327,7 +340,11 @@ class Command(BaseCommand, ParallelMixin):
             self.logger.info(f"Setting start_metastore_service={start_metastore_service} for node: {node}")
 
         remote_cmd = self.build_remote_start_cmd(
-            self._hidden_config_path, use_ums, use_numactl, numactl_opts
+            self._hidden_config_path,
+            use_ums,
+            use_numactl,
+            numactl_opts,
+            jemalloc_prof_conf,
         )
         if use_numactl:
             self.logger.info(f"Starting with numactl command: {remote_cmd}")
@@ -340,14 +357,18 @@ class Command(BaseCommand, ParallelMixin):
         use_ums: bool,
         use_numactl: bool,
         numactl_opts: Dict[str, Any],
+        jemalloc_prof_conf: Optional[str] = None,
     ) -> str:
         """
         Update the remote cmd command to execute.
         """
+        start_cmd = ["dscli", "start", "-t", str(self._timeout)]
         if use_ums:
-            base_cmd = f"dscli start -t {self._timeout} --enable_ums -f {shlex.quote(config_path)}"
-        else:
-            base_cmd = f"dscli start -t {self._timeout} -f {shlex.quote(config_path)}"
+            start_cmd.append("--enable_ums")
+        if jemalloc_prof_conf is not None:
+            start_cmd.extend(["--jemalloc_prof_conf", jemalloc_prof_conf])
+        start_cmd.extend(["-f", config_path])
+        base_cmd = shlex.join(start_cmd)
 
         if not use_numactl:
             return base_cmd

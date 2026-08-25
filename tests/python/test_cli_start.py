@@ -16,6 +16,7 @@
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -28,6 +29,9 @@ def install_cli_import_stubs_if_needed():
     try:
         import yr.datasystem.cli.common.util  # noqa: F401
         from yr.datasystem.cli.command import BaseCommand  # noqa: F401
+        from yr.datasystem.jemalloc_build_config import (  # noqa: F401
+            JEMALLOC_PROF_ENABLED,
+        )
         return
     except ModuleNotFoundError:
         pass
@@ -61,12 +65,16 @@ def install_cli_import_stubs_if_needed():
     common = types.ModuleType("yr.datasystem.cli.common")
     util = types.ModuleType("yr.datasystem.cli.common.util")
     command = types.ModuleType("yr.datasystem.cli.command")
+    jemalloc_build_config = types.ModuleType(
+        "yr.datasystem.jemalloc_build_config"
+    )
     util.valid_safe_path = lambda path: path
     util.compare_and_process_config = lambda home_dir, config, default_config: {}
     util.get_timestamped_path = lambda path: path
     util.is_valid_address_port = lambda address: None
     util.validate_no_injection = validate_no_injection
     command.BaseCommand = BaseCommand
+    jemalloc_build_config.JEMALLOC_PROF_ENABLED = False
 
     yr.datasystem = datasystem
     datasystem.cli = cli
@@ -79,6 +87,9 @@ def install_cli_import_stubs_if_needed():
     sys.modules.setdefault("yr.datasystem.cli.common", common)
     sys.modules.setdefault("yr.datasystem.cli.common.util", util)
     sys.modules.setdefault("yr.datasystem.cli.command", command)
+    sys.modules.setdefault(
+        "yr.datasystem.jemalloc_build_config", jemalloc_build_config
+    )
 
 
 install_cli_import_stubs_if_needed()
@@ -179,6 +190,120 @@ class CliStartTest(unittest.TestCase):
                 args = self.parse_start_args([option, "worker_config.json"])
                 self.assertEqual(args.worker_config_path, "worker_config.json")
                 self.assertIsNone(args.coordinator_config_path)
+
+    def test_jemalloc_prof_conf_is_parsed_as_dscli_option(self):
+        args = self.parse_start_args(
+            [
+                "--jemalloc_prof_conf",
+                "prof_final:true,lg_prof_sample:20",
+                "-W",
+                "worker_config.json",
+            ]
+        )
+
+        self.assertEqual(
+            args.jemalloc_prof_conf, "prof_final:true,lg_prof_sample:20"
+        )
+
+    def test_jemalloc_prof_conf_rejects_non_profiling_build_before_launch(self):
+        command = self.make_start_command()
+        params = self.worker_params()
+
+        with mock.patch.object(start, "JEMALLOC_PROF_ENABLED", False), \
+            mock.patch.object(start.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(
+                ValueError, "Please rebuild datasystem with 'build.sh -x on'"
+            ):
+                command.start_worker(
+                    params,
+                    use_ums=False,
+                    jemalloc_prof_conf="prof_final:true",
+                )
+
+        popen.assert_not_called()
+
+    def test_jemalloc_prof_conf_uses_default_log_prefix(self):
+        with tempfile.TemporaryDirectory() as log_dir, \
+            mock.patch.object(start, "JEMALLOC_PROF_ENABLED", True):
+            env = {}
+            start.Command.prepare_jemalloc_prof_env(
+                env, "prof_final:true,lg_prof_sample:20", log_dir
+            )
+
+            expected_prefix = os.path.join(
+                log_dir, "jemalloc", "datasystem_worker"
+            )
+            self.assertEqual(
+                env["MALLOC_CONF"],
+                "prof_final:true,lg_prof_sample:20,prof:true,"
+                f"prof_prefix:{expected_prefix}",
+            )
+            self.assertTrue(os.path.isdir(os.path.dirname(expected_prefix)))
+
+    def test_jemalloc_prof_conf_preserves_explicit_prefix(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+            mock.patch.object(start, "JEMALLOC_PROF_ENABLED", True):
+            prefix = os.path.join(temp_dir, "custom", "worker")
+            env = {}
+            start.Command.prepare_jemalloc_prof_env(
+                env, f"prof_final:true,prof_prefix:{prefix}", "/unused/log"
+            )
+
+            self.assertEqual(
+                env["MALLOC_CONF"],
+                f"prof_final:true,prof_prefix:{prefix},prof:true",
+            )
+            self.assertTrue(os.path.isdir(os.path.dirname(prefix)))
+            self.assertNotIn("/unused/log", env["MALLOC_CONF"])
+
+    def test_jemalloc_prof_conf_reports_unwritable_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+            mock.patch.object(start, "JEMALLOC_PROF_ENABLED", True), \
+            mock.patch.object(start.os, "access", return_value=False):
+            prefix = os.path.join(temp_dir, "heap", "worker")
+            env = {}
+
+            with self.assertRaisesRegex(
+                ValueError, f"prof_prefix.*{os.path.dirname(prefix)}"
+            ):
+                start.Command.prepare_jemalloc_prof_env(
+                    env, f"prof_prefix:{prefix}", "/unused/log"
+                )
+
+            self.assertNotIn("MALLOC_CONF", env)
+
+    def test_jemalloc_prof_conf_reports_parent_path_that_is_a_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+            mock.patch.object(start, "JEMALLOC_PROF_ENABLED", True):
+            parent = os.path.join(temp_dir, "not-a-directory")
+            Path(parent).touch()
+            env = {}
+
+            with self.assertRaisesRegex(
+                ValueError, f"prof_prefix.*{parent}"
+            ):
+                start.Command.prepare_jemalloc_prof_env(
+                    env, f"prof_prefix:{parent}/worker", "/unused/log"
+                )
+
+            self.assertNotIn("MALLOC_CONF", env)
+
+    def test_jemalloc_prof_conf_rejects_invalid_options(self):
+        invalid_configs = (
+            "",
+            "prof_final",
+            "prof_final:",
+            "prof_final:true,",
+            "prof_final:true,prof_final:false",
+            "prof:false",
+            "prof:invalid",
+            "prof_prefix:worker",
+        )
+
+        for conf in invalid_configs:
+            with self.subTest(conf=conf):
+                with self.assertRaises(ValueError):
+                    start.Command.normalize_jemalloc_prof_conf(conf, "/tmp/log")
 
     def test_coordinator_config_uses_uppercase_c(self):
         args = self.parse_start_args(["-C", "coordinator_config.json"])
@@ -386,6 +511,34 @@ class CliStartTest(unittest.TestCase):
             command.start_worker(params, use_ums=False)
 
         self.assertEqual(popen.call_count, 2)
+
+    def test_start_worker_preserves_inherited_malloc_conf_without_prof_option(self):
+        command = self.make_start_command()
+        params = self.worker_params()
+        inherited_conf = "background_thread:true"
+
+        with mock.patch.object(command, "is_tcp_ready", return_value=False), \
+            mock.patch.object(
+                command, "build_command", return_value=["datasystem_worker"]
+            ), \
+            mock.patch.object(
+                command, "is_worker_store_lock_unavailable", return_value=False
+            ), \
+            mock.patch.object(start.os.path, "exists", side_effect=[False, True]), \
+            mock.patch.object(
+                start.os.environ,
+                "copy",
+                return_value={"MALLOC_CONF": inherited_conf},
+            ), \
+            mock.patch.object(
+                start.subprocess, "Popen", return_value=RunningWorker()
+            ) as popen, \
+            mock.patch.object(start.time, "monotonic", side_effect=[0, 0, 0]):
+            command.start_worker(params, use_ums=False)
+
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["MALLOC_CONF"], inherited_conf
+        )
 
 
 if __name__ == "__main__":

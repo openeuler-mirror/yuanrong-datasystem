@@ -27,6 +27,13 @@ from typing import Any, Dict, Optional
 import yr.datasystem.cli.common.util as util
 from yr.datasystem.cli.command import BaseCommand
 
+try:
+    from yr.datasystem.jemalloc_build_config import JEMALLOC_PROF_ENABLED
+except ModuleNotFoundError as import_error:
+    if import_error.name != "yr.datasystem.jemalloc_build_config":
+        raise
+    JEMALLOC_PROF_ENABLED = False
+
 
 class WorkerResourceConflictError(RuntimeError):
     """Worker startup failed because a local resource is already in use."""
@@ -165,6 +172,15 @@ class Command(BaseCommand):
             ),
         )
 
+        parser.add_argument(
+            "--jemalloc_prof_conf",
+            metavar="CONF",
+            help=(
+                "jemalloc profiling MALLOC_CONF for the worker. This option requires "
+                "a build created with 'build.sh -x on'"
+            ),
+        )
+
         ng = parser.add_argument_group(
             "numactl options (optional, passed straight to numactl)"
         )
@@ -231,6 +247,12 @@ class Command(BaseCommand):
         use_numactl = any(v is not None for v in numactl_opts.values())
         try:
             self.reject_numactl_options_after_service_args(args)
+            if args.jemalloc_prof_conf is not None and (
+                args.coordinator_config_path or args.coordinator_args
+            ):
+                raise ValueError(
+                    "jemalloc_prof_conf can only be used when starting a worker"
+                )
             if args.datasystem_home_dir:
                 home_dir = os.path.abspath(os.path.expanduser(args.datasystem_home_dir))
                 self._home_dir = util.valid_safe_path(home_dir)
@@ -239,7 +261,13 @@ class Command(BaseCommand):
             if args.worker_config_path:
                 params = self.load_config(args.worker_config_path, self._WORKER_SERVICE)
                 params.setdefault("worker_address", self._DEFAULT_WORKER_ADDRESS)
-                self.start_worker(params, args.enable_ums, use_numactl, numactl_opts)
+                self.start_worker(
+                    params,
+                    args.enable_ums,
+                    use_numactl,
+                    numactl_opts,
+                    jemalloc_prof_conf=args.jemalloc_prof_conf,
+                )
             elif args.coordinator_config_path:
                 params = self.load_config(args.coordinator_config_path, self._COORDINATOR_SERVICE)
                 self.start_coordinator(params)
@@ -258,7 +286,11 @@ class Command(BaseCommand):
                 coordinator_pid = self.start_coordinator(coordinator_params)
                 try:
                     self.start_worker(
-                        worker_params, args.enable_ums, use_numactl, numactl_opts
+                        worker_params,
+                        args.enable_ums,
+                        use_numactl,
+                        numactl_opts,
+                        jemalloc_prof_conf=args.jemalloc_prof_conf,
                     )
                 except Exception:
                     self.kill_started_process(coordinator_pid)
@@ -266,7 +298,13 @@ class Command(BaseCommand):
             elif args.worker_args:
                 params = self.parse_cli_args(args.worker_args)
                 params.setdefault("worker_address", self._DEFAULT_WORKER_ADDRESS)
-                self.start_worker(params, args.enable_ums, use_numactl, numactl_opts)
+                self.start_worker(
+                    params,
+                    args.enable_ums,
+                    use_numactl,
+                    numactl_opts,
+                    jemalloc_prof_conf=args.jemalloc_prof_conf,
+                )
         except Exception as e:
             self.logger.error(f"Start failed: {e}")
             return self.FAILURE
@@ -496,6 +534,106 @@ class Command(BaseCommand):
             raise ValueError("Only one coordination backend can be specified")
 
     @staticmethod
+    def normalize_jemalloc_prof_conf(conf: str, log_dir: str):
+        """Validate jemalloc profiling options and derive the profile prefix directory."""
+        if not conf.strip():
+            raise ValueError("jemalloc_prof_conf cannot be empty")
+
+        entries = []
+        values = {}
+        for position, item in enumerate(conf.split(","), start=1):
+            item = item.strip()
+            if not item:
+                raise ValueError(
+                    f"jemalloc_prof_conf option {position} cannot be empty"
+                )
+            if ":" not in item:
+                raise ValueError(
+                    f"Invalid jemalloc_prof_conf option {position}: expected key:value"
+                )
+            key, value = (part.strip() for part in item.split(":", 1))
+            if not key or not value:
+                raise ValueError(
+                    f"Invalid jemalloc_prof_conf option {position}: key and value are required"
+                )
+            if key in values:
+                raise ValueError(f"Duplicate jemalloc_prof_conf option: {key}")
+            values[key] = value
+            entries.append((key, value))
+
+        if "prof" in values:
+            if values["prof"].lower() != "true":
+                raise ValueError(
+                    "jemalloc_prof_conf requires prof:true; remove prof or set it to true"
+                )
+            entries = [
+                (key, "true" if key == "prof" else value)
+                for key, value in entries
+            ]
+        else:
+            entries.append(("prof", "true"))
+
+        prof_prefix = values.get("prof_prefix")
+        prefix_source = "prof_prefix"
+        if prof_prefix is None:
+            if not log_dir:
+                raise ValueError(
+                    "log_dir is required when jemalloc_prof_conf does not specify prof_prefix"
+                )
+            prof_prefix = os.path.join(
+                log_dir, "jemalloc", "datasystem_worker"
+            )
+            prefix_source = "log_dir"
+            entries.append(("prof_prefix", prof_prefix))
+
+        prefix_parent = os.path.dirname(prof_prefix)
+        if not prefix_parent:
+            raise ValueError(
+                "prof_prefix must include a directory, for example /path/to/heap/worker"
+            )
+        prefix_parent = os.path.realpath(prefix_parent)
+        prefix_parent = util.valid_safe_path(prefix_parent)
+        return (
+            ",".join(f"{key}:{value}" for key, value in entries),
+            prefix_parent,
+            prefix_source,
+        )
+
+    @staticmethod
+    def ensure_jemalloc_prof_enabled():
+        """Reject profiling configuration when the packaged Worker lacks support."""
+        if not JEMALLOC_PROF_ENABLED:
+            raise ValueError(
+                "Jemalloc profiling is not enabled in the current build. "
+                "Please rebuild datasystem with 'build.sh -x on' and redeploy."
+            )
+
+    @classmethod
+    def prepare_jemalloc_prof_env(
+        cls, env: Dict[str, str], conf: str, log_dir: str
+    ):
+        """Set Worker-only jemalloc profiling environment after preparing its output path."""
+        cls.ensure_jemalloc_prof_enabled()
+        normalized_conf, prefix_parent, prefix_source = (
+            cls.normalize_jemalloc_prof_conf(conf, log_dir)
+        )
+        try:
+            os.makedirs(prefix_parent, mode=0o750, exist_ok=True)
+        except OSError as err:
+            raise ValueError(
+                f"Failed to prepare jemalloc profile directory from {prefix_source}: "
+                f"{prefix_parent} ({err.strerror})"
+            ) from err
+        if not os.path.isdir(prefix_parent) or not os.access(
+            prefix_parent, os.W_OK | os.X_OK
+        ):
+            raise ValueError(
+                f"The jemalloc profile directory from {prefix_source} is not writable: "
+                f"{prefix_parent}"
+            )
+        env["MALLOC_CONF"] = normalized_conf
+
+    @staticmethod
     def is_retryable_worker_store_lock_error(output: str) -> bool:
         """Return true when the local metadata store lock is temporarily unavailable."""
         normalized = output.lower()
@@ -635,6 +773,7 @@ class Command(BaseCommand):
         use_ums: bool,
         use_numactl: bool = False,
         numactl_opts: Optional[Dict[str, Any]] = None,
+        jemalloc_prof_conf: Optional[str] = None,
     ):
         """
         Start the datasystem worker service with specified parameters.
@@ -647,6 +786,8 @@ class Command(BaseCommand):
             ValueError: If required parameters are missing.
             RuntimeError: If the worker service fails to start or exits abnormally.
         """
+        if jemalloc_prof_conf is not None:
+            self.ensure_jemalloc_prof_enabled()
         self.validate_worker_backend_params(params)
         worker_address = params.get("worker_address")
         if not worker_address:
@@ -662,6 +803,10 @@ class Command(BaseCommand):
         lib_dir = os.path.join(self._base_dir, "lib")
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = f"{lib_dir}:{env.get('LD_LIBRARY_PATH', '')}"
+        if jemalloc_prof_conf is not None:
+            self.prepare_jemalloc_prof_env(
+                env, jemalloc_prof_conf, params.get("log_dir", "")
+            )
         try:
             ready_check_path = params.get("ready_check_path")
             if not ready_check_path:
