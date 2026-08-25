@@ -184,8 +184,8 @@ TEST_F(EvictPrimaryRedirectScaleTest, LEVEL1_PrimaryEndLifeConvergesDuringActive
             break;
         }
     }
-    ASSERT_TRUE(
-        WaitWorkerLogContains(1, { "PRIMARY_END_LIFE_DIAG stage=redirect_forward" }, std::chrono::seconds(15)));
+    ASSERT_TRUE(WaitWorkerLogContains(
+        1, { "PRIMARY_END_LIFE_DIAG stage=rpc_attempt", "attempt_kind=redirect" }, std::chrono::seconds(15)));
     EXPECT_FALSE(WorkerLogContains(1, { "Force deleting primary END_LIFE" }));
 
     WaitAllMembersJoinClusterTopology(2);

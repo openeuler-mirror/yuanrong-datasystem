@@ -23,7 +23,7 @@
   - `oc_metadata_manager.cpp`
   - `master_object.proto`
 - Last verified against source:
-  - `2026-07-26`
+  - `2026-08-20`
 - Related context docs:
   - `.repo_context/modules/runtime/object-cache-eviction/README.md`
   - `.repo_context/modules/runtime/worker-runtime.md`
@@ -118,7 +118,8 @@
   - `EvictSpilledObjects` 和 `SpillImpl` no-space fallback 仍同步调用 `DeleteNoneL2CacheEvictableObject`；该路径构造 `DeleteAllCopyMetaReqPb` 时使用 `object_keys`、本地 worker address 和 `redirect=true`。
   - `eviction_thread_num` 已删除，且 dscli 默认配置、k8s deployment、k8s daemonset Helm values/template、中文部署文档和示例需要同步清理该参数。
   - 当前正式方案将 memory eviction 主 loop 的所有 `Action::END_LIFE` 投递到
-    `primaryEndLifeThreadPool_`；`PRIMARY_END_LIFE_THREAD_NUM=4` 个 drain 线程同步发送 RPC，请求
+    `primaryEndLifeThreadPool_`；`PRIMARY_END_LIFE_THREAD_NUM=4` 个常驻 drain 线程同步发送 RPC，
+    Worker 内全局 owner lane 保证同一地址最多一个请求在途；请求
     `async_delete=true` 时 Master 入队后快速返回，`EvictSpilledObjects` 和 `SpillImpl` no-space fallback
     保持同步。
   - 热度衰减和 rebalance 候选扫描对 `SafeObjType` 使用单次 `TryRLock`；对象正被前台写入时跳过本轮，
@@ -153,6 +154,7 @@
   - primary end-life lane 不在对象写锁内等待 `DeleteAllCopyMeta`；同步 fallback 仍会阻塞同 key 并发操作。
   - 单任务门闩让单纯增加 `MemEvictionThread` 数量在当前主流程中基本没有吞吐收益，因此不再暴露 `eviction_thread_num`。
   - primary end-life lane 入队成功只表示任务已接管，不表示内存已经释放；实际释放仍发生在 lane 成功 erase 本地对象之后。
+  - primary end-life pending 仍按 key 数而不是待释放 real bytes 计账；owner-aware P0 不修复该容量预算缺口。
 
 ## Architecture Overview
 
@@ -302,7 +304,7 @@ Failure-sensitive steps:
 | remote spill enabled and peer memory enough | `MIGRATE` | batch 远端迁移 |
 | local spill enabled and spill not too full | `SPILL` | 异步本地 spill |
 | local spill enabled, spill nearly full, object has L2 | `DELETE` | 删除本地 copy |
-| no spill and write-back-l2-cache-evict | `END_LIFE` | memory eviction 主 loop 投递 primary lane；lane 在 Master 接受或连续三次 RPC 通信失败后执行本地删除，成功后移除 async send |
+| no spill and write-back-l2-cache-evict | `END_LIFE` | memory eviction 主 loop 投递 primary lane；lane 在 Master 接受或同路由身份的三个延迟调度轮次通信失败后执行本地删除，成功后移除 async send |
 | no spill and has L2 | `DELETE` | 删除本地 copy |
 | no spill and `NONE_L2_CACHE_EVICT` | `END_LIFE` | memory eviction 主 loop 投递 primary lane |
 | otherwise | `RETAIN` | 保留 |
@@ -314,8 +316,8 @@ Key files:
 
 Failure-sensitive steps:
 
-- `NONE_L2_CACHE_EVICT` 的 primary copy 正常路径不能直接本地 erase；可用性优先策略仅在同一 batch
-  连续三次 `DeleteAllCopyMeta` RPC 通信失败后允许强制释放，并记录 ERROR。
+- `NONE_L2_CACHE_EVICT` 的 primary copy 正常路径不能直接本地 erase；可用性优先策略仅在相同
+  `(owner, topologyVersion)` 的三个调度轮次连续发生可重试通信失败后允许强制释放，并记录 ERROR。
 - L2 已存在的判断对 write-back 依赖 `stateInfo.IsWriteBackDone()`。
 
 ### Synchronous `NONE_L2_CACHE_EVICT` Fallback Path
@@ -433,7 +435,8 @@ Failure-sensitive steps:
   - spill eviction runs on one `SpillEvictionThread` task at a time。
   - object mutation requires `SafeObjType` write lock；spill read path uses read lock plus shm latch。
   - primary end-life lane 使用源码内固定的 4 线程池；不增加独立 RPC 线程，不复用
-    `MasterTaskThread`，也不增加用户可见线程数配置。
+    `MasterTaskThread`，也不增加用户可见线程数配置。4 个 drain 常驻等待 ready/delayed queue；同一 owner
+    通过全局 lane 单飞，不同 owner 可并发执行。
 - Ordering requirements or invariants:
   - 先决定 action，再做 local/master/spill effects。
   - `SPILL` 必须先持有 shm guard 并写成功，再释放 shm 和设置 spill state。
@@ -498,7 +501,7 @@ Failure-sensitive steps:
   - 本地 spill 目录对 `SPILL` 是同步 I/O 依赖。
 - Failure domains and blast-radius limits:
   - `DELETE` metadata cleanup 失败影响 master copy metadata 收敛，不应恢复本地已删对象。
-  - `END_LIFE` 路由或 Master 业务失败时重加；同一 batch 连续三次 RPC 通信失败后强制删除本地对象。
+  - `END_LIFE` 路由失败清理 pending 并重加 eviction list，Master 业务失败时同样重加；相同路由身份的三轮可重试通信失败后强制删除本地对象。
 - Capacity reservation or headroom assumptions:
   - object 高水位 0.9，低水位 0.8。
   - spill 高/低水位由 `WorkerOcSpill` factor 控制；active spill size 低水位用于删除 spill 文件。
@@ -518,12 +521,12 @@ Failure-sensitive steps:
   - none-L2-evict 对象生命周期结束必须通过 master 全局删除语义。
 - Retry, idempotency, deduplication, or exactly-once assumptions:
   - `RemoveMetaFromMasterForEviction` 在 `AsyncMasterTask` 内最多重试 3 次。
-  - eviction metadata cleanup 的单次 pass 最多执行初始 owner 请求和每个首跳 redirect target 的一次转发；
-    转发请求禁用 redirect，目标再次返回 redirect 时将该组对象留待下一次 pass，禁止递归形成 A/B 循环。
-  - primary end-life 的初始 owner transport timeout 保留三次调用和最终强制本地删除策略；redirect target
-    timeout、API 初始化失败或业务错误只回填该 target group，不能升级为源 owner 强制删除。
-  - primary end-life 的同一 logical attempt 只初始化一次 1s request deadline，源 owner 和所有首跳 target
-    顺序共享剩余预算；不会为每个 target 重新获得完整 1s。
+  - primary end-life 每个 owner lease 只执行一次 source 请求；可重试通信失败延迟 100 ms 后重新读取
+    placement。owner、topology version 变化或 source 成功 redirect 会重置 source 失败预算。
+  - source redirect 在释放 source owner lane 后进入统一调度；target 请求禁用 redirect，目标再次返回
+    redirect 时将该组对象保守重试，禁止递归形成 A/B 循环。
+  - primary end-life 的同一 logical attempt 只初始化一次 1s request deadline，独立首跳 target 只使用
+    source 剩余预算；不会为 target 重新获得完整 1s。
   - master `AsyncDeleteByExpired` 对已删除中的对象把 `K_TRY_AGAIN` 视为成功。
   - lock/version 失败的 spill task 会回滚或重试。
 - What must remain true after failure:
@@ -541,9 +544,9 @@ Failure-sensitive steps:
   - `DELETE` metadata cleanup batch size 300 或 10 ms flush。
   - remote migrate batch threshold 512。
 - Timeout, circuit-breaker, and backpressure strategy:
-  - source-visible timeout mainly在 RPC layer；primary end-life lane 使用固定 pending 上限，每次
-    logical attempt 的源 `DeleteAllCopyMeta` 与全部首跳转发共享 1s API 总预算。只有初始 owner 的 RPC
-    通信错误最多调用三轮；redirect target 的错误按 key 回填，但没有新增用户可见队列超时或熔断 flag。
+  - source-visible timeout mainly在 RPC layer；primary end-life lane 使用固定 pending 上限，每轮 source
+    `DeleteAllCopyMeta` 使用 1s API 预算，首跳转发消费剩余预算。只有相同 source 路由身份的可重试通信错误
+    累计三轮；redirect target 的错误不计入强制删除预算，也没有新增用户可见队列超时或熔断 flag。
 - Dependency failure handling:
   - master metadata cleanup失败日志记录并对部分路径重试；
   - spill no-space 对 none-L2-evict 可降级为 end-life delete；
@@ -650,7 +653,7 @@ Failure-sensitive steps:
   - 将 memory eviction 主 loop 中所有 `Action::END_LIFE` 任务移到固定 4 线程的
     `primaryEndLifeThreadPool_`。
   - 入队成功从 `memEvictionList_` 移除并记录 `objectKey -> entry->GetCreateTime()` pending；pending 上限使用源码内固定常量，不新增用户可见配置。
-  - lane 使用内部 queue/drain 模型而不是 per-key lambda 直接 RPC；同一个 master 的 key 聚合为 batch `DeleteAllCopyMeta`，不同 master 拆开请求。
+  - lane 使用 ready/delayed queue 和常驻 drain，而不是 per-key lambda 直接 RPC；同一个 master 的 key 聚合为 batch `DeleteAllCopyMeta`，不同 master 拆开请求。同一 owner 全局单飞，一个 drain 每轮最多执行一个 owner batch。
   - pending 上限只约束 key 数，不约束对象字节数；lane 在发送 `DeleteAllCopyMeta` 前使用触发本次
     eviction 的 `needSize` 复查 low watermark，并按对象大小控制 batch 预计释放量；若当前已达低水位或
     batch 预算不足，则跳过本次 end-life、清 pending 并用 `READD_COUNTER` 回补 eviction list。
@@ -666,16 +669,17 @@ Failure-sensitive steps:
   - low watermark 复查应发生在获取 master 地址或至少发送 `DeleteAllCopyMeta` 前，且必须包含本次前台分配的
     `needSize`；已达低水位时不得 erase 本地对象，也不主动调用 `Evict()`。
   - `DeleteAllCopyMeta` batch 使用 repeated `ids_with_version` 并设置 `async_delete=true`；Master 入队成功
-    即表示接受。同一 batch 只对 RPC 通信错误立即重试，最多调用三次；第三次仍失败时强制本地删除。
-    该三次策略仅适用于初始 metadata owner；`failed_object_keys`、`meta_is_moving`、Master 业务错误和
-    redirect target 错误保持保守失败，不触发强制删除。初始 owner 的 redirect info 按 target 聚合后在
-    同一 logical attempt 内转发一次，转发保留原 worker address、每 key version 和 `async_delete=true`，
+    即表示接受。每轮 source 只调用一次；可重试通信失败进入 100 ms delayed queue，并在重新路由后按
+    `(owner, topologyVersion)` 计数，第三轮同路由身份失败时强制本地删除。
+    该三次策略仅适用于 source metadata owner；`failed_object_keys`、`meta_is_moving`、Master 业务错误和
+    redirect target 错误保持保守失败，不触发强制删除。source owner 的 redirect info 按 target 聚合，释放
+    source owner lane 后在统一调度器中执行一次，转发保留原 worker address、每 key version 和 `async_delete=true`，
     同时设置 `redirect=false`；目标再次 redirect 的 key 留待下一轮。
   - Master 侧只增加与该语义直接相关的保护：`PENDING` 必须标记为失败，已失败 key 和初次 no-meta 后回生
     的 metadata 都不得继续 cleanup；不增加版本下界判断或新的逐 key response。
-  - `GetMetaAddress()` 已知 master 不可达或路由不可解析时快速跳过，不发 RPC；`K_RPC_UNAVAILABLE` 归类为 master/connection unavailable，`K_NOT_FOUND` 归类为 route/meta-address unavailable。
-  - remote master 每个 logical attempt 由 1s API 总预算约束，源请求和首跳 target 共享该预算；源通信
-    失败最多进行三轮调用。local-bypass master 通过 request timeout 和 master-side `timeoutDuration`
+  - `GetMetaAddress()` 已知 master 不可达或路由不可解析时快速跳过，不发 RPC；路由失败必须清理 pending、回补 eviction list，并使用聚合限频日志，避免失效路由永久占满 pending 槽位。`K_RPC_UNAVAILABLE` 归类为 master/connection unavailable，`K_NOT_FOUND` 归类为 route/meta-address unavailable。
+  - remote master 每个 source 调度轮次由 1s API 预算约束，首跳 target 只消费 source 剩余预算；source 通信
+    失败最多进行三个延迟轮次。local-bypass master 通过 request timeout 和 master-side `timeoutDuration`
     传递预算，但不是传输层强制中断。
   - primary end-life 的 `DeleteAllCopyMetaReqPb` 设置 `async_delete=true`；Master 使用请求中的 version
     将 key 加入 `ExpiredObjectManager`，入队成功即回复，后台继续做引用检查、通知和 metadata cleanup。

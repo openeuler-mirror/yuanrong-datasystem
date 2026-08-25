@@ -178,6 +178,7 @@ TEST_F(MetadataRouteResolverTest, CentralizedModeDoesNotRequirePlacement)
     EXPECT_EQ(owner, options.masterAddress);
     auto groups = resolver.GroupOwners({ "a", "b" });
     ASSERT_EQ(groups.groups.size(), 1U);
+    EXPECT_EQ(groups.topologyVersion, 0U);
     EXPECT_EQ(groups.groups.at(options.masterAddress), (std::vector<std::string>{ "a", "b" }));
 }
 
@@ -218,6 +219,7 @@ TEST_F(MetadataRouteResolverTest, BatchUsesOneSnapshotVersion)
     auto groups = resolver.GroupOwners({ "a", "b" });
 
     EXPECT_TRUE(groups.failures.empty());
+    EXPECT_EQ(groups.topologyVersion, 1U);
     EXPECT_EQ(algorithm_.Versions(), (std::vector<uint64_t>{ 1, 1 }));
     EXPECT_EQ(groups.groups.at(HostPort("127.0.0.1", 18482)).size(), 2U);
 }
@@ -249,6 +251,7 @@ TEST_F(MetadataRouteResolverTest, ConcurrentPublishDoesNotMixGroupedOwnerSnapsho
 
     ASSERT_TRUE(routingPaused);
     EXPECT_TRUE(groups.failures.empty());
+    EXPECT_EQ(groups.topologyVersion, 1U);
     EXPECT_EQ(algorithm_.Versions(), (std::vector<uint64_t>{ 1, 1, 1 }));
     EXPECT_EQ(groups.groups.at(HostPort("127.0.0.1", 18482)).size(), 3U);
 }
@@ -262,6 +265,7 @@ TEST_F(MetadataRouteResolverTest, IndexedBatchBuildsOnlyIndexedProjection)
     auto groups = resolver.GroupIndexedOwners({ "a", "b" });
 
     ASSERT_TRUE(groups.failures.empty());
+    EXPECT_EQ(groups.topologyVersion, 1U);
     EXPECT_EQ(groups.groups.at(HostPort("127.0.0.1", 18482)),
               (std::vector<std::pair<std::string, size_t>>{ { "a", 0 }, { "b", 1 } }));
 }

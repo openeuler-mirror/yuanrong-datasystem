@@ -130,6 +130,7 @@ MetaOwnerRouteGroups MetadataRouteResolver::GroupOwners(const std::vector<std::s
         RecordFailures(keys, rc, result);
         return result;
     }
+    result.topologyVersion = decision.topologyVersion;
     std::unordered_map<std::string_view, HostPort> parsedOwners;
     for (size_t index = 0; index < keys.size(); ++index) {
         if (index >= decision.items.size()) {
@@ -177,6 +178,7 @@ IndexedMetaOwnerRouteGroups MetadataRouteResolver::GroupIndexedOwners(const std:
         RecordFailures(keys, rc, result);
         return result;
     }
+    result.topologyVersion = decision.topologyVersion;
     std::unordered_map<std::string_view, HostPort> parsedOwners;
     for (size_t index = 0; index < keys.size(); ++index) {
         if (index >= decision.items.size()) {

@@ -18,7 +18,13 @@
  * Description: Test EvictionManager.
  */
 #include <fcntl.h>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <functional>
+#include <future>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -35,6 +41,9 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/queue/queue.h"
+#include "datasystem/cluster/algorithm/topology_algorithm.h"
+#include "datasystem/cluster/routing/placement_facade.h"
+#include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
@@ -61,6 +70,34 @@ DS_DECLARE_string(etcd_address);
 
 namespace datasystem {
 namespace ut {
+
+class PrimaryEndLifeRoutingAlgorithm final : public cluster::IRoutingAlgorithm {
+public:
+    cluster::TopologyAlgorithmId GetId() const override
+    {
+        return "primary-end-life-test";
+    }
+
+    uint32_t Hash(std::string_view key) const noexcept override
+    {
+        return key.find("owner-b") == std::string_view::npos ? 1 : 2;
+    }
+
+    Status LocateOwner(const cluster::TopologySnapshot &snapshot, uint32_t token,
+                       const cluster::Member *&owner) const override
+    {
+        const auto &activeMembers = snapshot.ActiveMembers();
+        CHECK_FAIL_RETURN_STATUS(!activeMembers.empty(), K_NOT_FOUND, "No active metadata owner.");
+        owner = token == 2 ? activeMembers.back() : activeMembers.front();
+        return Status::OK();
+    }
+
+    Status LocateProspectiveOwner(const cluster::TopologySnapshot &snapshot, uint32_t token,
+                                  const cluster::Member *&owner) const override
+    {
+        return LocateOwner(snapshot, token, owner);
+    }
+};
 
 class FakeEvictionMasterApi final : public worker::WorkerLocalMasterOCApi {
 public:
@@ -162,6 +199,196 @@ public:
         object->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE_EVICT);
         object->modeInfo.SetCacheType(CacheType::MEMORY);
         DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(object)));
+    }
+
+    Status PublishPrimaryEndLifeTopology(cluster::TopologySnapshotState &snapshots, uint64_t version,
+                                         cluster::MemberState ownerAState)
+    {
+        cluster::TopologyState topology;
+        topology.clusterHasInit = true;
+        topology.version = version;
+        topology.members = {
+            cluster::Member{ { std::string(16, 'a'), "127.0.0.1:31502" }, ownerAState, { 1 } },
+            cluster::Member{ { std::string(16, 'b'), "127.0.0.1:31503" }, cluster::MemberState::ACTIVE, { 2 } }
+        };
+        if (ownerAState == cluster::MemberState::FAILED) {
+            topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::FAILURE, version };
+        }
+        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+        RETURN_IF_NOT_OK(cluster::TopologySnapshot::Create(topology, static_cast<int64_t>(version),
+                                                            std::string(64, static_cast<char>('a' + version)),
+                                                            snapshot));
+        cluster::SnapshotUpdateOutcome outcome;
+        return snapshots.Publish(std::move(snapshot), outcome);
+    }
+
+    Status SubmitPrimaryEndLifeTaskForTest(WorkerOcEvictionManager &manager, const std::string &objectKey)
+    {
+        std::shared_ptr<SafeObjType> entry;
+        RETURN_IF_NOT_OK(objectTable_->Get(objectKey, entry));
+        WorkerOcEvictionManager::PrimaryEndLifeTask task{ objectKey, (*entry)->GetCreateTime(), CacheType::MEMORY,
+                                                          maxMemorySize };
+        task.queuedAtMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+        bool accepted = false;
+        RETURN_IF_NOT_OK(manager.ReservePrimaryEndLifeTask(task, accepted));
+        CHECK_FAIL_RETURN_STATUS(accepted, K_RUNTIME_ERROR, "Primary end-life test task was not accepted.");
+        return manager.EnqueuePrimaryEndLifeTask(task);
+    }
+
+    void StartPrimaryEndLifeWorkersForTest(WorkerOcEvictionManager &manager)
+    {
+        manager.akSkManager_ = akSkManager_;
+        DS_ASSERT_OK(manager.StartPrimaryEndLifeWorkers());
+    }
+
+    void MarkPrimaryEndLifeMetadataDeletedForTest(WorkerOcEvictionManager &manager, const std::string &objectKey)
+    {
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+        std::lock_guard<std::mutex> lock(manager.primaryEndLifeMutex_);
+        manager.metaDeletedPrimaryEndLifeObjects_[objectKey] = (*entry)->GetCreateTime();
+    }
+
+    void VerifyPrimaryEndLifeRedirectResetsSourceRetryState()
+    {
+        const HostPort sourceOwner("127.0.0.1", 31502);
+        const HostPort redirectOwner("127.0.0.1", 31503);
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501), sourceOwner,
+                                        GetTestMetadataRoute());
+        WorkerOcEvictionManager::PrimaryEndLifeTask task{ "redirect-retry-reset", 1, CacheType::MEMORY };
+        task.lastAttemptOwner = sourceOwner;
+        task.lastAttemptTopologyVersion = 7;
+        task.retryableFailureCount = 2;
+        WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup redirectGroup;
+        redirectGroup.masterAddress = redirectOwner;
+        redirectGroup.topologyVersion = 8;
+        redirectGroup.candidates.emplace_back(WorkerOcEvictionManager::PrimaryEndLifeCandidate{ task, nullptr });
+        {
+            std::lock_guard<std::mutex> lock(manager.primaryEndLifeMutex_);
+            manager.primaryEndLifeStopping_ = false;
+        }
+        std::unordered_set<std::string> redirectKeys;
+        manager.SchedulePrimaryEndLifeRedirects({ redirectGroup }, redirectKeys);
+
+        WorkerOcEvictionManager::PrimaryEndLifeTask redirectedTask;
+        {
+            std::lock_guard<std::mutex> lock(manager.primaryEndLifeMutex_);
+            ASSERT_EQ(manager.primaryEndLifeReadyQueue_.size(), 1U);
+            redirectedTask = manager.primaryEndLifeReadyQueue_.front();
+            manager.primaryEndLifeReadyQueue_.pop_front();
+            manager.primaryEndLifeStopping_ = true;
+        }
+        EXPECT_TRUE(redirectedTask.lastAttemptOwner.Empty());
+        EXPECT_EQ(redirectedTask.lastAttemptTopologyVersion, 0U);
+        EXPECT_EQ(redirectedTask.retryableFailureCount, 0U);
+
+        WorkerOcEvictionManager::PrimaryEndLifeOwnerBatch redirectBatch{ redirectOwner, 8, true,
+                                                                          { redirectedTask } };
+        WorkerOcEvictionManager::PrimaryEndLifeCandidate redirectCandidate{ redirectedTask, nullptr };
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> delayedTasks;
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> readdTasks;
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> forceDeleteCandidates;
+        Status timeout(K_RPC_DEADLINE_EXCEEDED, "redirect timeout");
+        manager.ClassifyPrimaryEndLifeRpcFailure(redirectBatch, redirectCandidate, timeout, delayedTasks, readdTasks,
+                                                 forceDeleteCandidates);
+        ASSERT_EQ(delayedTasks.size(), 1U);
+        EXPECT_EQ(delayedTasks.front().retryableFailureCount, 0U);
+
+        WorkerOcEvictionManager::PrimaryEndLifeOwnerBatch sourceBatch{ sourceOwner, 7, false,
+                                                                        { delayedTasks.front() } };
+        WorkerOcEvictionManager::PrimaryEndLifeCandidate sourceCandidate{ delayedTasks.front(), nullptr };
+        delayedTasks.clear();
+        manager.ClassifyPrimaryEndLifeRpcFailure(sourceBatch, sourceCandidate, timeout, delayedTasks, readdTasks,
+                                                 forceDeleteCandidates);
+        ASSERT_EQ(delayedTasks.size(), 1U);
+        EXPECT_EQ(delayedTasks.front().retryableFailureCount, 1U);
+        EXPECT_TRUE(forceDeleteCandidates.empty());
+    }
+
+    void VerifyPrimaryEndLifeRouteFailureReleasesPendingSlot()
+    {
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501),
+                                        HostPort("127.0.0.1", 31502), GetTestMetadataRoute());
+        WorkerOcEvictionManager::PrimaryEndLifeTask failedTask{ "route-failed", 1, CacheType::MEMORY };
+        bool accepted = false;
+        DS_ASSERT_OK(manager.ReservePrimaryEndLifeTask(failedTask, accepted));
+        ASSERT_TRUE(accepted);
+        worker::MetaOwnerRouteGroups grouped;
+        grouped.failures.emplace(failedTask.objectKey, Status(K_NOT_FOUND, "route unavailable"));
+        WorkerOcEvictionManager::PrimaryEndLifeTaskMap taskByKey{ { failedTask.objectKey, failedTask } };
+        manager.ReaddPrimaryEndLifeRouteFailures(grouped, taskByKey);
+
+        {
+            std::lock_guard<std::mutex> lock(manager.primaryEndLifeMutex_);
+            EXPECT_TRUE(manager.pendingPrimaryEndLifeObjects_.empty());
+            EXPECT_TRUE(manager.delayedPrimaryEndLifeQueue_.empty());
+        }
+        EXPECT_TRUE(manager.memEvictionList_.Exist(failedTask.objectKey));
+
+        WorkerOcEvictionManager::PrimaryEndLifeTask healthyTask{ "healthy-route", 2, CacheType::MEMORY };
+        accepted = false;
+        DS_ASSERT_OK(manager.ReservePrimaryEndLifeTask(healthyTask, accepted));
+        EXPECT_TRUE(accepted);
+        manager.ClearPrimaryEndLifePending(healthyTask);
+    }
+
+    void VerifyPrimaryEndLifeOwnerReleaseIsNoThrow()
+    {
+        static_assert(noexcept(std::declval<WorkerOcEvictionManager &>().ReleasePrimaryEndLifeOwner(nullptr)));
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501),
+                                        HostPort("127.0.0.1", 31502), GetTestMetadataRoute());
+        WorkerOcEvictionManager::PrimaryEndLifeOwnerLane *lane = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(manager.primaryEndLifeMutex_);
+            auto [iter, inserted] = manager.primaryEndLifeOwnerLanes_.try_emplace(HostPort("127.0.0.1", 31502));
+            ASSERT_TRUE(inserted);
+            iter->second.inFlight = true;
+            iter->second.waitingTasks.emplace_back(
+                WorkerOcEvictionManager::PrimaryEndLifeTask{ "waiting-a", 1, CacheType::MEMORY });
+            iter->second.waitingTasks.emplace_back(
+                WorkerOcEvictionManager::PrimaryEndLifeTask{ "waiting-b", 2, CacheType::MEMORY });
+            lane = &iter->second;
+        }
+        manager.ReleasePrimaryEndLifeOwner(lane);
+        std::lock_guard<std::mutex> lock(manager.primaryEndLifeMutex_);
+        EXPECT_TRUE(manager.primaryEndLifeOwnerLanes_.empty());
+        EXPECT_EQ(manager.primaryEndLifeReadyQueue_.size(), 2U);
+    }
+
+    void VerifyPrimaryEndLifeAcquireRollbackBeforeCommit()
+    {
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501),
+                                        HostPort("127.0.0.1", 31502), GetTestMetadataRoute());
+        WorkerOcEvictionManager::PrimaryEndLifeOwnerBatchMap batches;
+        const HostPort ownerA("127.0.0.1", 31502);
+        const HostPort ownerB("127.0.0.1", 31503);
+        batches.emplace(std::make_pair(ownerA, false),
+                        WorkerOcEvictionManager::PrimaryEndLifeOwnerBatch{
+                            ownerA, 1, false,
+                            { WorkerOcEvictionManager::PrimaryEndLifeTask{ "owner-a", 1, CacheType::MEMORY } } });
+        batches.emplace(std::make_pair(ownerB, false),
+                        WorkerOcEvictionManager::PrimaryEndLifeOwnerBatch{
+                            ownerB, 1, false,
+                            { WorkerOcEvictionManager::PrimaryEndLifeTask{ "owner-b", 2, CacheType::MEMORY } } });
+        DS_ASSERT_OK(inject::Set("WorkerOcEvictionManager.AcquirePrimaryOwnerBatch.beforeCommit", "call()"));
+        EXPECT_THROW(manager.AcquirePrimaryOwnerBatch(batches), std::bad_alloc);
+        DS_ASSERT_OK(inject::Clear("WorkerOcEvictionManager.AcquirePrimaryOwnerBatch.beforeCommit"));
+
+        std::lock_guard<std::mutex> lock(manager.primaryEndLifeMutex_);
+        EXPECT_TRUE(manager.primaryEndLifeOwnerLanes_.empty());
+        EXPECT_TRUE(manager.primaryEndLifeReadyQueue_.empty());
+    }
+
+    bool WaitUntil(const std::function<bool()> &condition, std::chrono::milliseconds timeout)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (condition()) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return condition();
     }
 
     void TestEvictionRemoveMetaRequestRespectsRedirectPolicy()
@@ -302,13 +529,19 @@ public:
             { { objectKey, objectVersion, CacheType::MEMORY }, nullptr }
         };
         std::unordered_set<std::string> failedKeys;
-        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup> redirectGroups;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, true, 0, 1000, failedKeys,
+                                                         redirectGroups);
         RELEASE_STUBS
 
         DS_ASSERT_OK(rc);
         EXPECT_EQ(sourceCalls, 1U);
-        EXPECT_EQ(targetCalls, 1U);
+        EXPECT_EQ(targetCalls, 0U);
         EXPECT_TRUE(failedKeys.empty());
+        ASSERT_EQ(redirectGroups.size(), 1U);
+        EXPECT_EQ(redirectGroups.front().masterAddress, targetMaster);
+        ASSERT_EQ(redirectGroups.front().candidates.size(), 1U);
+        EXPECT_EQ(redirectGroups.front().candidates.front().task.objectKey, objectKey);
     }
 
     void TestPrimaryEndLifeSecondRedirectStopsAtTarget()
@@ -351,13 +584,21 @@ public:
             { { objectKey, 102, CacheType::MEMORY }, nullptr }
         };
         std::unordered_set<std::string> failedKeys;
-        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup> redirectGroups;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, true, 0, 1000, failedKeys,
+                                                         redirectGroups);
+        ASSERT_TRUE(rc.IsOk());
+        ASSERT_EQ(redirectGroups.size(), 1U);
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup> unexpectedRedirects;
+        rc = manager.DeletePrimaryEndLifeMetadata(targetMaster, redirectGroups.front().candidates, false, 0, 1000,
+                                                  failedKeys, unexpectedRedirects);
         RELEASE_STUBS
 
         DS_ASSERT_OK(rc);
         EXPECT_EQ(sourceCalls, 1U);
         EXPECT_EQ(targetCalls, 1U);
         EXPECT_EQ(failedKeys, std::unordered_set<std::string>{ objectKey });
+        EXPECT_TRUE(unexpectedRedirects.empty());
     }
 
     void TestPrimaryEndLifeMixedRedirectResultOnlyReaddsFailedKeys()
@@ -417,7 +658,16 @@ public:
             { { targetFailedKey, 104, CacheType::MEMORY }, nullptr }
         };
         std::unordered_set<std::string> failedKeys;
-        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup> redirectGroups;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, true, 0, 1000, failedKeys,
+                                                         redirectGroups);
+        ASSERT_TRUE(rc.IsOk());
+        ASSERT_EQ(redirectGroups.size(), 1U);
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup> unexpectedRedirects;
+        std::unordered_set<std::string> targetFailedKeys;
+        rc = manager.DeletePrimaryEndLifeMetadata(targetMaster, redirectGroups.front().candidates, false, 0, 1000,
+                                                  targetFailedKeys, unexpectedRedirects);
+        failedKeys.insert(targetFailedKeys.begin(), targetFailedKeys.end());
         RELEASE_STUBS
 
         DS_ASSERT_OK(rc);
@@ -463,13 +713,20 @@ public:
             { { objectKey, 105, CacheType::MEMORY }, nullptr }
         };
         std::unordered_set<std::string> failedKeys;
-        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup> redirectGroups;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, true, 0, 1000, failedKeys,
+                                                         redirectGroups);
+        ASSERT_TRUE(rc.IsOk());
+        ASSERT_EQ(redirectGroups.size(), 1U);
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup> unexpectedRedirects;
+        rc = manager.DeletePrimaryEndLifeMetadata(targetMaster, redirectGroups.front().candidates, false, 0, 1000,
+                                                  failedKeys, unexpectedRedirects);
         RELEASE_STUBS
 
-        DS_ASSERT_OK(rc);
+        EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
         EXPECT_EQ(sourceCalls, 1U);
         EXPECT_EQ(targetCalls, 1U);
-        EXPECT_EQ(failedKeys, std::unordered_set<std::string>{ objectKey });
+        EXPECT_TRUE(failedKeys.empty());
     }
 
     void TestPrimaryEndLifeMalformedRedirectFailsClosed()
@@ -494,7 +751,9 @@ public:
             { { objectKey, 106, CacheType::MEMORY }, nullptr }
         };
         std::unordered_set<std::string> failedKeys;
-        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup> redirectGroups;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, true, 0, 1000, failedKeys,
+                                                         redirectGroups);
         RELEASE_STUBS
 
         DS_ASSERT_OK(rc);
@@ -502,7 +761,7 @@ public:
         EXPECT_EQ(failedKeys, std::unordered_set<std::string>{ objectKey });
     }
 
-    void TestPrimaryEndLifeSourceTimeoutKeepsThreeAttemptForceDeletePolicy()
+    void TestPrimaryEndLifeSourceTimeoutUsesOneRpcPerCall()
     {
         const HostPort sourceMaster("127.0.0.1", 31502);
         const HostPort workerAddress("127.0.0.1", 31501);
@@ -523,11 +782,13 @@ public:
             { { objectKey, 106, CacheType::MEMORY }, nullptr }
         };
         std::unordered_set<std::string> failedKeys;
-        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeRedirectGroup> redirectGroups;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, true, 0, 1000, failedKeys,
+                                                         redirectGroups);
         RELEASE_STUBS
 
-        DS_ASSERT_OK(rc);
-        EXPECT_EQ(sourceCalls, 3U);
+        EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+        EXPECT_EQ(sourceCalls, 1U);
         EXPECT_TRUE(failedKeys.empty());
     }
 
@@ -758,9 +1019,216 @@ TEST_F(EvictionManagerTest, PrimaryEndLifeMalformedRedirectFailsClosed)
     TestPrimaryEndLifeMalformedRedirectFailsClosed();
 }
 
-TEST_F(EvictionManagerTest, PrimaryEndLifeSourceTimeoutKeepsThreeAttemptForceDeletePolicy)
+TEST_F(EvictionManagerTest, PrimaryEndLifeSourceTimeoutUsesOneRpcPerCall)
 {
-    TestPrimaryEndLifeSourceTimeoutKeepsThreeAttemptForceDeletePolicy();
+    TestPrimaryEndLifeSourceTimeoutUsesOneRpcPerCall();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeRedirectResetsSourceRetryState)
+{
+    VerifyPrimaryEndLifeRedirectResetsSourceRetryState();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeRouteFailureReleasesPendingSlot)
+{
+    VerifyPrimaryEndLifeRouteFailureReleasesPendingSlot();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeOwnerReleaseIsNoThrow)
+{
+    VerifyPrimaryEndLifeOwnerReleaseIsNoThrow();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeAcquireRollbackBeforeCommit)
+{
+    VerifyPrimaryEndLifeAcquireRollbackBeforeCommit();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeSameOwnerSingleFlightDoesNotBlockHealthyOwner)
+{
+    const HostPort ownerA("127.0.0.1", 31502);
+    const HostPort ownerB("127.0.0.1", 31503);
+    std::atomic<size_t> ownerACalls{ 0 };
+    std::atomic<size_t> ownerBCalls{ 0 };
+    std::promise<void> ownerAStarted;
+    auto ownerAStartedFuture = ownerAStarted.get_future();
+    std::promise<void> releaseOwnerA;
+    auto releaseOwnerAFuture = releaseOwnerA.get_future().share();
+    std::atomic<bool> ownerAStartSignaled{ false };
+    std::atomic<bool> ownerAReleased{ false };
+    std::promise<void> ownerBCompleted;
+    auto ownerBCompletedFuture = ownerBCompleted.get_future();
+    std::atomic<bool> ownerBCompletionSignaled{ false };
+    auto ownerAApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+        ownerA, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &) {
+            ++ownerACalls;
+            if (!ownerAStartSignaled.exchange(true)) {
+                ownerAStarted.set_value();
+                releaseOwnerAFuture.wait();
+            }
+            return Status::OK();
+        });
+    auto ownerBApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+        ownerB, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &) {
+            ++ownerBCalls;
+            if (!ownerBCompletionSignaled.exchange(true)) {
+                ownerBCompleted.set_value();
+            }
+            return Status::OK();
+        });
+    BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                   (testing::_, testing::_, testing::_, testing::_))
+        .WillRepeatedly(testing::Invoke(
+            [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
+                return masterAddress == ownerB ? ownerBApi : ownerAApi;
+            }));
+
+    cluster::TopologySnapshotState snapshots;
+    DS_ASSERT_OK(PublishPrimaryEndLifeTopology(snapshots, 1, cluster::MemberState::ACTIVE));
+    PrimaryEndLifeRoutingAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, "127.0.0.1:31501");
+    worker::MetadataRouteResolver route(&placement, worker::MetadataRouteOptions{});
+    {
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501), ownerA, route);
+        Raii releaseBlockedOwner([&] {
+            if (!ownerAReleased.exchange(true)) {
+                releaseOwnerA.set_value();
+            }
+        });
+        StartPrimaryEndLifeWorkersForTest(manager);
+        DS_ASSERT_OK(CreateObject("owner-a-first", TEST_DATA_SIZE, WriteMode::NONE_L2_CACHE_EVICT));
+        DS_ASSERT_OK(CreateObject("owner-a-second", TEST_DATA_SIZE, WriteMode::NONE_L2_CACHE_EVICT));
+        DS_ASSERT_OK(CreateObject("owner-b-healthy", TEST_DATA_SIZE, WriteMode::NONE_L2_CACHE_EVICT));
+        DS_ASSERT_OK(SubmitPrimaryEndLifeTaskForTest(manager, "owner-a-first"));
+        ASSERT_EQ(ownerAStartedFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        DS_ASSERT_OK(SubmitPrimaryEndLifeTaskForTest(manager, "owner-a-second"));
+        DS_ASSERT_OK(SubmitPrimaryEndLifeTaskForTest(manager, "owner-b-healthy"));
+
+        EXPECT_EQ(ownerBCompletedFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        EXPECT_EQ(ownerACalls.load(), 1U);
+        if (!ownerAReleased.exchange(true)) {
+            releaseOwnerA.set_value();
+        }
+        EXPECT_TRUE(WaitUntil(
+            [&] {
+                return ownerACalls.load() == 2 && ownerBCalls.load() == 1
+                       && !objectTable_->Contains("owner-a-first") && !objectTable_->Contains("owner-a-second")
+                       && !objectTable_->Contains("owner-b-healthy");
+            },
+            std::chrono::seconds(2)));
+    }
+    RELEASE_STUBS
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeRetryIsDeferredAcrossDrainRounds)
+{
+    const HostPort owner("127.0.0.1", 31500);
+    std::atomic<size_t> rpcCalls{ 0 };
+    std::mutex attemptMutex;
+    std::vector<std::chrono::steady_clock::time_point> attemptTimes;
+    auto ownerApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+        owner, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &) {
+            ++rpcCalls;
+            {
+                std::lock_guard<std::mutex> lock(attemptMutex);
+                attemptTimes.emplace_back(std::chrono::steady_clock::now());
+            }
+            return Status(K_RPC_DEADLINE_EXCEEDED, "source timeout");
+        });
+    BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                   (testing::_, testing::_, testing::_, testing::_))
+        .WillRepeatedly(testing::Return(ownerApi));
+
+    {
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501), owner,
+                                        GetTestMetadataRoute());
+        StartPrimaryEndLifeWorkersForTest(manager);
+        DS_ASSERT_OK(CreateObject("deferred-source-retry", TEST_DATA_SIZE, WriteMode::NONE_L2_CACHE_EVICT));
+        DS_ASSERT_OK(CreateObject("metadata-already-deleted", TEST_DATA_SIZE, WriteMode::NONE_L2_CACHE_EVICT));
+        MarkPrimaryEndLifeMetadataDeletedForTest(manager, "metadata-already-deleted");
+        DS_ASSERT_OK(SubmitPrimaryEndLifeTaskForTest(manager, "deferred-source-retry"));
+        DS_ASSERT_OK(SubmitPrimaryEndLifeTaskForTest(manager, "metadata-already-deleted"));
+        ASSERT_TRUE(WaitUntil([&] { return rpcCalls.load() >= 1; }, std::chrono::seconds(2)));
+        EXPECT_TRUE(WaitUntil([&] { return !objectTable_->Contains("metadata-already-deleted"); },
+                              std::chrono::seconds(2)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        EXPECT_EQ(rpcCalls.load(), 1U);
+        EXPECT_TRUE(WaitUntil(
+            [&] { return rpcCalls.load() == 3 && !objectTable_->Contains("deferred-source-retry"); },
+            std::chrono::seconds(2)));
+        EXPECT_EQ(rpcCalls.load(), 3U);
+    }
+    RELEASE_STUBS
+
+    std::lock_guard<std::mutex> lock(attemptMutex);
+    ASSERT_EQ(attemptTimes.size(), 3U);
+    EXPECT_GE(attemptTimes[1] - attemptTimes[0], std::chrono::milliseconds(80));
+    EXPECT_GE(attemptTimes[2] - attemptTimes[1], std::chrono::milliseconds(80));
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeReroutesAfterFailedOwnerIsIsolated)
+{
+    const HostPort failedOwner("127.0.0.1", 31502);
+    const HostPort recoveryOwner("127.0.0.1", 31503);
+    std::atomic<size_t> failedOwnerCalls{ 0 };
+    std::atomic<size_t> recoveryOwnerCalls{ 0 };
+    std::promise<void> failedOwnerStarted;
+    auto failedOwnerStartedFuture = failedOwnerStarted.get_future();
+    std::promise<void> releaseFailedOwner;
+    auto releaseFailedOwnerFuture = releaseFailedOwner.get_future().share();
+    std::atomic<bool> failedOwnerStartSignaled{ false };
+    std::atomic<bool> failedOwnerReleased{ false };
+    auto failedOwnerApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+        failedOwner, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &) {
+            ++failedOwnerCalls;
+            if (!failedOwnerStartSignaled.exchange(true)) {
+                failedOwnerStarted.set_value();
+            }
+            releaseFailedOwnerFuture.wait();
+            return Status(K_RPC_DEADLINE_EXCEEDED, "old owner timeout");
+        });
+    auto recoveryOwnerApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+        recoveryOwner, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &) {
+            ++recoveryOwnerCalls;
+            return Status::OK();
+        });
+    BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                   (testing::_, testing::_, testing::_, testing::_))
+        .WillRepeatedly(testing::Invoke(
+            [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
+                return masterAddress == recoveryOwner ? recoveryOwnerApi : failedOwnerApi;
+            }));
+
+    cluster::TopologySnapshotState snapshots;
+    DS_ASSERT_OK(PublishPrimaryEndLifeTopology(snapshots, 1, cluster::MemberState::ACTIVE));
+    PrimaryEndLifeRoutingAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, "127.0.0.1:31501");
+    worker::MetadataRouteResolver route(&placement, worker::MetadataRouteOptions{});
+    {
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501), failedOwner, route);
+        Raii releaseBlockedOwner([&] {
+            if (!failedOwnerReleased.exchange(true)) {
+                releaseFailedOwner.set_value();
+            }
+        });
+        StartPrimaryEndLifeWorkersForTest(manager);
+        DS_ASSERT_OK(CreateObject("owner-a-reroute", TEST_DATA_SIZE, WriteMode::NONE_L2_CACHE_EVICT));
+        DS_ASSERT_OK(SubmitPrimaryEndLifeTaskForTest(manager, "owner-a-reroute"));
+        ASSERT_EQ(failedOwnerStartedFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        DS_ASSERT_OK(PublishPrimaryEndLifeTopology(snapshots, 2, cluster::MemberState::FAILED));
+        if (!failedOwnerReleased.exchange(true)) {
+            releaseFailedOwner.set_value();
+        }
+
+        EXPECT_TRUE(WaitUntil(
+            [&] { return recoveryOwnerCalls.load() == 1 && !objectTable_->Contains("owner-a-reroute"); },
+            std::chrono::seconds(2)));
+        EXPECT_EQ(failedOwnerCalls.load(), 1U);
+        EXPECT_EQ(recoveryOwnerCalls.load(), 1U);
+    }
+    RELEASE_STUBS
 }
 
 TEST_F(EvictionManagerTest, PrimaryEndLifeReacquireRejectsObjectClaimedByRebalance)

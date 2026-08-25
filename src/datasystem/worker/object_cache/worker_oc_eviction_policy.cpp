@@ -200,8 +200,9 @@ Status WorkerOcEvictionManager::DrainPolicyUpdateActivity()
         std::unique_lock<std::mutex> lock(primaryEndLifeMutex_);
         if (!primaryEndLifeDrainedCv_.wait_for(
             lock, std::chrono::seconds(POLICY_UPDATE_EVICTION_DRAIN_TIMEOUT_S), [this]() {
-                return primaryEndLifeQueue_.empty() && activeDrainWorkers_ == 0
-                       && pendingPrimaryEndLifeObjects_.empty();
+                const bool queuesDrained = primaryEndLifeReadyQueue_.empty() && delayedPrimaryEndLifeQueue_.empty();
+                const bool ownersDrained = primaryEndLifeOwnerLanes_.empty() && activeDrainWorkers_ == 0;
+                return queuesDrained && ownersDrained && pendingPrimaryEndLifeObjects_.empty();
             })) {
             RETURN_STATUS(K_TRY_AGAIN, "Timed out waiting for primary end-life tasks to drain");
         }
