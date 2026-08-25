@@ -41,10 +41,13 @@
     meta-owner objects. The sequence remains serial because startup experiments found no tail-latency benefit from
     16-way warmup. Warmup shares one fixed 500 ms budget and passes its remaining time into Create, Publish, and Get, so
     a 20 ms business `requestTimeoutMs` cannot abort the initialization warmup. Runtime calls keep their original
-    timeout because the override defaults to zero. Warmup follows URMA runtime enablement and is independent of the
-    `enableCrossNodeConnection` failover option. The existing placement-policy split covers both
-    `enableLocalCache=true` and `false`, and the meta-owner phase exercises the normal worker outbound path without a
-    separate probe protocol.
+    timeout because the override defaults to zero. Warmup runs for every transport mode and is independent of both
+    URMA runtime enablement and the `enableCrossNodeConnection` failover option. The existing placement-policy split
+    covers both `enableLocalCache=true` and `false`, and the meta-owner phase exercises the normal worker outbound path
+    without a separate probe protocol. The same-node phase retains its 256 KiB data-plane probes when URMA is enabled;
+    other transports use the one-byte connection probe so enabling their warmup does not reserve allocator arenas in
+    low-capacity workers. Successfully created warmup objects are batch-deleted before initialization returns; their
+    five-second TTL remains a cleanup fallback if that best-effort deletion fails.
   - `datasystem` shared library is built from `src/datasystem/client/*` and is the main user-facing client library.
   - `DsClient` is only a convenience aggregator. It constructs `KVClient`, `HeteroClient`, and `ObjectClient`, then initializes and shuts them down in order.
   - `ConnectOptions` is the common connection/auth/config carrier for C++ clients.
@@ -127,6 +130,8 @@
     Buffer-owned pageable memory while registration is pending; `Set`/`MSet` copy it back into the already allocated
     Worker SHM with a CPU copy before publishing, without waiting for registration. Plain `Get(..., Optional<Buffer>)`
     keeps its existing zero-copy behavior. Mmap-table shutdown drains pin work before entries can unpin and unmap.
+  - Embedded mmap entries resolve allocator-owned worker fds to the allocator's existing address and borrow those fds;
+    they do not close them. Non-embedded mmap entries instead own the SCM_RIGHTS fd copies received from the worker.
   - `client::TransportLayer` also provides internal same-worker `MCreate`/`MSet` primitives. TCP MCreate allocates local
     buffers and MSet sends one positional MultiPublish payload; UB MCreate uses one MultiCreate RPC, MSet pipelines
     non-blocking per-object URMA writes in bounded groups, and failed writes use bounded TCP payload fallback in the
