@@ -491,7 +491,7 @@ Status ExpiredObjectManager::CheckObjectInAsyncDelete(const ExpiredShard &shard,
                                                       StatusCode code)
 {
     if (shard.readyExpiredObjects.count(objectKey) > 0) {
-        RETURN_STATUS(code, FormatString("[ObjectKey]: %s is being deleted, please try again.", objectKey));
+        RETURN_STATUS(code, FormatString("[ObjectKey]: %s %s", objectKey, kBeingDeletedMark));
     }
     return Status::OK();
 }

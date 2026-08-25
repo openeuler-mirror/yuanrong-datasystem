@@ -891,5 +891,46 @@ TEST_F(OCMetadataManagerTopologyTest, SuccessfulTtlRetryClearsFailedState)
         EXPECT_EQ(retryShard.failedObjects.count(objectKey), 0U);
     }
 }
+
+TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteByExpiredTreatsBeingDeletedAsSuccess)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                             false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
+    DS_ASSERT_OK(inject::Set("master.ExpiredObjectManager.Run", "call()"));
+    manager.expiredObjectManager_->Init();
+    manager.notifyWorkerManager_ = std::make_unique<OCNotifyWorkerManager>(
+        manager.objectStore_, true, manager.akSkManager_, &manager);
+    DS_ASSERT_OK(manager.notifyWorkerManager_->Init());
+    manager.globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
+        manager.objectStore_, nullptr, true, LOCAL_ADDRESS, manager.akSkManager_);
+
+    const std::string objectKey = "test_key1";
+
+    DS_ASSERT_OK(manager.expiredObjectManager_->InsertObject(objectKey, 0, 1));
+    auto expired = manager.expiredObjectManager_->GetExpiredObject();
+    ASSERT_FALSE(expired.empty());
+    ASSERT_EQ(expired.begin()->first, objectKey);
+
+    std::unordered_map<std::string, bool> reqObjKeyMap = { { objectKey, true } };
+    DeleteObjectMediator mediator(LOCAL_ADDRESS, reqObjKeyMap);
+
+    manager.AsyncDeleteByExpired(mediator);
+
+    EXPECT_TRUE(mediator.GetSuccessDelIds().count(objectKey) > 0);
+    EXPECT_TRUE(mediator.GetFailedObjs().count(objectKey) == 0);
+    EXPECT_TRUE(mediator.GetStatus().IsOk());
+
+    const std::string newKey = "test_key2";
+    std::unordered_map<std::string, bool> reqMap2 = { { newKey, true } };
+    DeleteObjectMediator mediator2(LOCAL_ADDRESS, reqMap2);
+    manager.AsyncDeleteByExpired(mediator2);
+    EXPECT_TRUE(mediator2.GetSuccessDelIds().count(newKey) > 0);
+    EXPECT_TRUE(mediator2.GetStatus().IsOk());
+
+    manager.Shutdown();
+    (void)inject::Clear("master.ExpiredObjectManager.Run");
+}
 }  // namespace
 }  // namespace datasystem::master

@@ -93,6 +93,11 @@ private:
 class ExpiredObjectManager {
 public:
     /**
+     * The object is in readyExpiredObjects (background asynchronous deletion in progress)
+     */
+    static constexpr const char *kBeingDeletedMark = "is being deleted, please try again.";
+
+    /**
      * @brief The ExpiredObjectManager is used to delete expired object.
      * @param[in] masterAddress The master ip address.
      */
