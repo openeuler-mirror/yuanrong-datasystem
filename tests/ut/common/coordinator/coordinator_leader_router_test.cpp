@@ -145,8 +145,8 @@ TEST(CoordinatorLeaderRouterTest, PreservesFollowerRouteStatusWhenRedirectLeader
     });
 
     EXPECT_EQ(status.GetCode(), K_NOT_READY);
-    EXPECT_EQ(attempted,
-              (std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003" }));
+    EXPECT_EQ(attempted, (std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003",
+                                                   "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003" }));
 }
 
 TEST(CoordinatorLeaderRouterTest, PreservesCoordinatorStatusWhenDeadlineExpiresBeforeRedirectDispatch)
@@ -279,6 +279,42 @@ TEST(CoordinatorLeaderRouterTest, PrefersCachedLeaderBeforeDiscoveryCandidates)
     EXPECT_EQ(attempts.front(), "127.0.0.1:30002");
 }
 
+TEST(CoordinatorLeaderRouterTest, ReservesDeadlineForAlternativesWhenCachedLeaderIsDead)
+{
+    auto now = std::chrono::steady_clock::time_point{};
+    auto discovery =
+        std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002" });
+    CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001"), Address("127.0.0.1:30002") },
+                                   [&now] { return now; }, {}, std::chrono::milliseconds(3'000));
+    ASSERT_TRUE(router.Execute([](const HostPort &address, int32_t, coordinator::ResponseHeader &header,
+                                  bool &hasHeader) {
+        hasHeader = true;
+        header = LeaderHeader(4, address.ToString() == "127.0.0.1:30002"
+                                     ? coordinator::ResponseHeader::LEADER_SERVING
+                                     : coordinator::ResponseHeader::FOLLOWER_SERVING);
+        header.set_is_leader(address.ToString() == "127.0.0.1:30002");
+        return Status::OK();
+    }).IsOk());
+
+    std::vector<std::string> attempts;
+    const auto status = router.Execute([&](const HostPort &address, int32_t timeoutMs,
+                                          coordinator::ResponseHeader &header, bool &hasHeader) {
+        attempts.emplace_back(address.ToString());
+        if (address.ToString() == "127.0.0.1:30002") {
+            now += std::chrono::milliseconds(timeoutMs);
+            hasHeader = false;
+            return Status(K_RPC_PEER_DEAD, "injected dead cached leader");
+        }
+        hasHeader = true;
+        header = LeaderHeader(5, coordinator::ResponseHeader::LEADER_SERVING);
+        return Status::OK();
+    });
+
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(attempts, (std::vector<std::string>{ "127.0.0.1:30002", "127.0.0.1:30001" }));
+    EXPECT_LT(now.time_since_epoch(), std::chrono::milliseconds(3'000));
+}
+
 TEST(CoordinatorLeaderRouterTest, UsesOneDiscoveryRefreshAfterCandidateAttemptsFail)
 {
     auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30002" });
@@ -319,7 +355,7 @@ TEST(CoordinatorLeaderRouterTest, PreservesLastFailureWhenRefreshHasNoNewCandida
     });
 
     EXPECT_EQ(status.GetCode(), K_RPC_UNAVAILABLE);
-    EXPECT_EQ(calls, 1UL);
+    EXPECT_EQ(calls, 2UL);
     EXPECT_EQ(discovery->DeadlineAwareCalls(), 1UL);
 }
 
@@ -368,8 +404,31 @@ TEST(CoordinatorLeaderRouterTest, RefreshesUntilDiscoveryReturnsANewLeaderBefore
 
     EXPECT_TRUE(status.IsOk());
     EXPECT_EQ(discovery->DeadlineAwareCalls(), 2UL);
-    ASSERT_EQ(attempts.size(), 2UL);
-    EXPECT_EQ(attempts[1], "127.0.0.1:30002");
+    ASSERT_EQ(attempts.size(), 3UL);
+    EXPECT_EQ(attempts[2], "127.0.0.1:30002");
+}
+
+TEST(CoordinatorLeaderRouterTest, RetriesSameCandidateAfterDiscoveryRefresh)
+{
+    auto now = std::chrono::steady_clock::time_point{};
+    auto discovery = std::make_shared<RouterDiscovery>(std::vector<std::string>{ "127.0.0.1:30001" });
+    CoordinatorLeaderRouter router(discovery, { Address("127.0.0.1:30001") }, [&now] { return now; },
+                                   [&now](std::chrono::milliseconds delay) { now += delay; });
+    size_t attempts = 0;
+
+    const auto status = router.Execute([&attempts](const HostPort &, int32_t, coordinator::ResponseHeader &header,
+                                                  bool &hasHeader) {
+        ++attempts;
+        hasHeader = true;
+        header = LeaderHeader(2, attempts == 1 ? coordinator::ResponseHeader::FOLLOWER_SERVING
+                                               : coordinator::ResponseHeader::LEADER_SERVING);
+        header.set_is_leader(attempts > 1);
+        return Status::OK();
+    });
+
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(attempts, 2UL);
+    EXPECT_EQ(discovery->DeadlineAwareCalls(), 1UL);
 }
 
 TEST(CoordinatorLeaderRouterTest, ReturnsNotReadyImmediatelyForBusinessRpcToRecoveringLeader)

@@ -25,7 +25,11 @@
   Worker Leader reconciliation serializes payload capture, its bounded Ensure RPC, and revision installation with
   ordinary membership mutations. This prevents an in-flight recovery payload from overwriting EXITING; the local
   cleanup gate remains outside that serialization boundary. Installation stays outside the Reconciler state mutex
-  because it synchronously publishes membership readiness, then Router identity is rechecked before reporting.
+  because it synchronously publishes membership readiness, then Router identity is rechecked before reporting. Failed
+  identity probes schedule exponential backoff from probe completion rather than probe start, so a slow probe cannot
+  consume its own throttle interval and immediately amplify concurrent failure signals to the maximum backoff. The
+  backoff cap is 1 second for the first 10 seconds of an outage, then grows every 10 seconds through 2, 4, and 5 seconds;
+  a successful identity probe resets both the outage window and backoff.
   Coordinator-side membership loss only re-ensures the current Worker payload and does not publish `RESTARTING` or run
   the local rejoin cleanup. Only `TopologyEngine` confirmation that the local Worker must rejoin uses the explicit
   destructive rejoin path. This keeps a new Coordinator lifetime from being mistaken for a new Worker incarnation.
