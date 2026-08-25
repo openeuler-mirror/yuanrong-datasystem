@@ -33,6 +33,8 @@
   - `EvictionList` 使用带计数的 clock/second-chance 队列选择候选对象，不是严格 LRU。
   - `GetObjectNextAction` 根据 primary copy、cache type、spill 状态、L2 是否可用、远端迁移能力和本地 spill 能力选择 `DELETE`、`FREE_MEMORY`、`SPILL`、`MIGRATE`、`END_LIFE` 或 `RETAIN`。
   - `DELETE` 路径本地擦除 object table 后异步批量 `RemoveMeta`。
+  - eviction manager 删除本地副本时使用 `RemoveMetaReqPb::EVICTION`；Get 失败后的 requester location 清理使用
+    `RemoveMetaReqPb::NORMAL`，两者不能互换。
   - `DeleteNoneL2CacheEvictableObject` 仍同步调用 master `DeleteAllCopyMeta`，该路径仅保留给
     `EvictSpilledObjects` 和 `SpillImpl` no-space fallback；初始 owner 可重定向一次，转发请求设置
     `redirect=false`，目标再次重定向或失败时保留本地对象并重试。
@@ -173,6 +175,8 @@
   - `IsObjectEvictable` 必须确认对象仍在 eviction list 且 binary 对象仍有 shm。
   - `SPILL` 成功后才释放内存并标记 spill state；重加锁失败时需要回滚 spill 文件。
   - spill eviction 只删除 write-through、write-back 且 writeback done、或 `NONE_L2_CACHE_EVICT` 对象。
+  - 对 `NONE_L2_CACHE_EVICT`，真实 `EVICTION` 表示本地数据已经消失，即使还有 migration-inflight location
+    也删除整条 metadata；`NORMAL` 只删除请求中的 location，仅当最后一个 location 消失时删除整条 metadata。
   - master metadata 或路由失败的对象回到 eviction list；仅初始 owner 的 `DeleteAllCopyMeta` 连续三次
     返回 RPC 通信错误时，打印 force-delete ERROR 日志并强制释放本地对象。redirect target 的 RPC
     错误只回填该 target group。
