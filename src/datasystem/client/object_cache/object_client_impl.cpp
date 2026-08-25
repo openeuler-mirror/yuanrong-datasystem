@@ -3197,7 +3197,13 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
         std::shared_ptr<IClientWorkerApi> workerApi;
         std::unique_ptr<Raii> raii;
         RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-        RETURN_IF_NOT_OK(CreateShmBuffer(objectKey, dataSize, param, workerApi, config, traceEnabled, newBuffer));
+        // Route cross-host bound workers through the transport layer (UB/TCP) instead of the SHM
+        // bound-worker path
+        if (transportLayer_ != nullptr && !transportLayer_->IsSameHostWorker(workerApi->hostPort_)) {
+            RETURN_IF_NOT_OK(CreateRoutedBuffer(objectKey, dataSize, param, newBuffer));
+        } else {
+            RETURN_IF_NOT_OK(CreateShmBuffer(objectKey, dataSize, param, workerApi, config, traceEnabled, newBuffer));
+        }
     }
     buffer = std::move(newBuffer);
     if (traceEnabled) {
