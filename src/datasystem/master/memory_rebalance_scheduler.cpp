@@ -72,7 +72,7 @@ uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
 
 void MemoryRebalanceScheduler::SetTopologyMembership(const cluster::MembershipEndpointView *topologyMembership)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     topologyMembership_ = topologyMembership;
 }
 
@@ -115,7 +115,7 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
 
     auto topologySnapshot = GetTopologySnapshot();
     uint64_t nowMs = GetSteadyClockTimeStampMs();
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     ExpireTimeoutTasksLocked(nowMs);
     ReleaseSnapshotHoldsLocked(snapshot);
 
@@ -146,7 +146,10 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
     const uint64_t targetUsed = (targetNodeIt != snapshot.end()) ? targetNodeIt->second.usedMemory : 0;
     const uint64_t targetLimit =
         (targetNodeIt != snapshot.end()) ? targetNodeIt->second.memoryLimit : runningTask.targetMemoryLimit;
-    const uint64_t inflightNow = futureView_[task.target_worker()].inflightBytes;
+    const auto &targetDelta = futureView_[task.target_worker()];
+    const uint64_t inflightNow = targetDelta.inflightBytes;
+    const uint64_t heldNow = targetDelta.heldBytes;
+    const uint64_t freshUsed = targetDelta.freshUsedMemory;
     const uint64_t currentRate = CalculateUsageRate(targetUsed, targetLimit);
     const uint64_t batchRate = CalculateUsageRate(SaturatingAdd(targetUsed, inflightNow), targetLimit);
     const uint64_t cyclePlannedRate = CalculateUsageRate(
@@ -154,9 +157,11 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
         targetLimit);
     LOG(INFO) << FormatString(
         "[MemoryRebalance] assign task %s source=%s target=%s max_bytes=%lu total_budget=%lu "
-        "target_usage_rate=%lu%% -> batch %lu%%, cycle_planned %lu%% timeout_ms=%lu deadline_ms=%lu",
+        "target_usage_rate=%lu%% -> batch %lu%%, cycle_planned %lu%% inflight=%lu held=%lu fresh_used=%lu "
+        "timeout_ms=%lu deadline_ms=%lu",
         task.task_id(), task.source_worker(), task.target_worker(), task.max_bytes(), runningTask.totalBudget,
-        currentRate, batchRate, cyclePlannedRate, task.timeout_ms(), task.deadline_ms());
+        currentRate, batchRate, cyclePlannedRate, inflightNow, heldNow, freshUsed, task.timeout_ms(),
+        task.deadline_ms());
     INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.AssignTask");
 
     auto newTask = activeTasksBySource_.find(reportingWorker);
@@ -180,9 +185,8 @@ bool MemoryRebalanceScheduler::NeedSnapshotForSchedule(const master::ResourceRep
 
     auto topologySnapshot = GetTopologySnapshot();
     uint64_t nowMs = GetSteadyClockTimeStampMs();
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     ExpireTimeoutTasksLocked(nowMs);
-    ReleaseReporterHoldsLocked(reportingWorker, reportingNode.timestamp);
 
     auto activeTask = activeTasksBySource_.find(reportingWorker);
     if (activeTask != activeTasksBySource_.end()) {
@@ -223,7 +227,7 @@ Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResul
     CHECK_FAIL_RETURN_STATUS(IsTerminalStatus(req.status()), K_INVALID, "The rebalance task status is not terminal");
 
     uint64_t nowMs = GetSteadyClockTimeStampMs();
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     ExpireTimeoutTasksLocked(nowMs);
 
     auto taskIt = activeTasksBySource_.find(req.source_worker());
@@ -261,25 +265,31 @@ void MemoryRebalanceScheduler::ProcessFreshFeedbackLocked(RunningTask &prevTask,
                                                           uint64_t nowMs,
                                                           master::ReportRebalanceResultRspPb &rsp)
 {
-    // proto3 scalar uint64 has no presence; treat 0 (wire default, old worker) and UINT64_MAX
-    // (new worker sentinel) both as "no fresh signal". Chain ends; genuine remain=0 also lands
-    // here -- the watermark stop in BuildNextBatchTaskLocked would have fired anyway.
+    // proto3 scalar uint64 has no presence: remain==0 is ambiguous (genuine target full OR old
+    // worker that never set the field). End the chain either way -- a genuine "target full" would
+    // also stop on the watermark ceiling, so no behavioral regression. UINT64_MAX is the explicit
+    // "no fresh signal" sentinel from new workers. No freshUsedMemory overlay is set here so the
+    // upstream MergedSnapshotGivesFreshProjectionAndCorrectBudget flow (which omits remain_bytes)
+    // falls back to the timestamp-based ReleaseSnapshotHoldsLocked path.
     if (IsFailedStatus(req.status()) || req.target_remain_bytes() == 0
         || req.target_remain_bytes() == UINT64_MAX) {
         return;
     }
+    const uint64_t freshUsed = SubOrZero(prevTask.targetMemoryCapacity, req.target_remain_bytes());
+    futureView_[req.target_worker()].freshUsedMemory =
+        std::max(futureView_[req.target_worker()].freshUsedMemory, freshUsed);
     prevTask.cumulativeMigrated += req.migrated_bytes();
-    // Don't continue the chain if the batch was partial (candidates exhausted, didn't reach
-    // max_bytes); the next batch would immediately fail with NO_CANDIDATE and trigger a cooldown.
     if (req.migrated_bytes() < prevTask.task.max_bytes()) {
         return;
     }
     master::RebalanceTaskPb nextTask;
+    uint64_t savedFreshUsed = 0;
     if (BuildNextBatchTaskLocked(prevTask, req.target_remain_bytes(), nowMs, nextTask)) {
         // Release the held charge only when a next batch is built. If the chain ends, keep the
         // held so the #685 stale-snapshot guard protects the target until its own ResourceReport
         // arrives. BuildNextBatchTaskLocked already excluded held from its inflight projection.
         auto deltaIt = futureView_.find(req.target_worker());
+        savedFreshUsed = (deltaIt != futureView_.end()) ? deltaIt->second.freshUsedMemory : 0;
         if (deltaIt != futureView_.end() && deltaIt->second.heldBytes > 0) {
             ReleaseHeldLocked(req.target_worker(), deltaIt->second.heldBytes);
         }
@@ -300,6 +310,13 @@ void MemoryRebalanceScheduler::ProcessFreshFeedbackLocked(RunningTask &prevTask,
         *rsp.mutable_next_rebalance_task() = nextTask;
         INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.ReportResult.AssignNextTask");
     }
+    // Re-apply AFTER the chain-continues block: ReleaseHeldLocked may erase the entry (when
+    // held == inflight) and operator[] recreates it with freshUsedMemory=0. Use max() with
+    // savedFreshUsed so a concurrent source's higher observation is not lost when the chain
+    // continues and ReleaseHeldLocked clears the field. When the chain does not continue,
+    // savedFreshUsed is 0 and this reduces to the same max(existing, freshUsed) as before.
+    futureView_[req.target_worker()].freshUsedMemory =
+        std::max({futureView_[req.target_worker()].freshUsedMemory, savedFreshUsed, freshUsed});
 }
 
 void MemoryRebalanceScheduler::ExpireTimeoutTasksLocked(uint64_t nowMs)
@@ -448,7 +465,7 @@ void MemoryRebalanceScheduler::RemoveTaskLocked(const std::string &sourceWorker,
             // issue #685: do NOT clear the in-flight charge on success. The target's snapshot
             // still shows stale-low usage until it reports again, so clearing now would let the
             // next source re-pick the just-received target. Hold the charge; it is released by
-            // ReleaseReporterHoldsLocked / ReleaseSnapshotHoldsLocked when the target reports.
+            // ReleaseSnapshotHoldsLocked when the merge refreshes the snapshot.
             auto &delta = futureView_[task.target_worker()];
             delta.heldBytes = SaturatingAdd(delta.heldBytes, task.max_bytes());
             if (nowMs > delta.holdSinceMs) {
@@ -505,35 +522,17 @@ void MemoryRebalanceScheduler::ReleaseHeldLocked(const std::string &worker, uint
     if (cur != futureView_.end()) {
         cur->second.heldBytes = 0;
         cur->second.holdSinceMs = 0;
+        cur->second.freshUsedMemory = 0;
     }
-}
-
-void MemoryRebalanceScheduler::ReleaseReporterHoldsLocked(const std::string &worker, uint64_t reportTimestamp)
-{
-    auto it = futureView_.find(worker);
-    if (it == futureView_.end() || it->second.heldBytes == 0) {
-        return;  // no held charge for this worker
-    }
-    if (reportTimestamp <= it->second.holdSinceMs) {
-        return;  // worker has not reported since its latest held completion
-    }
-    // The worker just reported (reportTimestamp is fresh), so its snapshot now reflects the
-    // post-receive memory. Drop the held charge so the worker can be re-evaluated on its merits.
-    const uint64_t heldBytes = it->second.heldBytes;
-    LOG(INFO) << FormatString(
-        "[MemoryRebalance] release held in-flight target=%s bytes=%lu hold_age=%lums via reporter", worker, heldBytes,
-        reportTimestamp - it->second.holdSinceMs);
-    ReleaseHeldLocked(worker, heldBytes);
 }
 
 void MemoryRebalanceScheduler::ReleaseSnapshotHoldsLocked(const std::unordered_map<std::string, NodeInfo> &snapshot)
 {
-    // Backup release path for non-reporting targets: a target whose snapshot timestamp advanced
-    // past its held completion time has had its memory re-published by the master snapshot swap.
-    // The swap runs every FLAGS_master_snapshot_swap_interval_s (~10s), so a non-reporting
-    // target's hold may persist up to ~10s after its snapshot is actually fresh -- within that
-    // window CollectCandidatePairsLocked may over-estimate its projected usage and briefly skip
-    // it. Acceptable: the reporter path (ReleaseReporterHoldsLocked) is the primary release.
+    // Release path for held targets: a target whose snapshot timestamp advanced past its held
+    // completion time has had its memory refreshed by the background merge. The merge runs every
+    // 10s, so a target's hold may persist up to ~10s after its snapshot is actually fresh.
+    // During that window CollectCandidatePairsLocked uses freshUsedMemory (if available from a
+    // prior batch result) or the held charge to compensate for the stale snapshot.
     std::vector<std::pair<std::string, uint64_t>> toRelease;
     for (const auto &[worker, delta] : futureView_) {
         if (delta.heldBytes == 0) {
@@ -546,8 +545,11 @@ void MemoryRebalanceScheduler::ReleaseSnapshotHoldsLocked(const std::unordered_m
         if (nit->second.timestamp <= delta.holdSinceMs) {
             continue;  // snapshot timestamp still predates the held completion
         }
+        if (delta.freshUsedMemory > 0 && nit->second.usedMemory < delta.freshUsedMemory) {
+            continue;  // snapshot usedMemory hasn't caught up to fresh signal — stale sample
+        }
         LOG(INFO) << FormatString(
-            "[MemoryRebalance] release held in-flight target=%s bytes=%lu hold_age=%lums via snapshot-swap", worker,
+            "[MemoryRebalance] release held in-flight target=%s bytes=%lu hold_age=%lums via snapshot-merge", worker,
             delta.heldBytes, nit->second.timestamp - delta.holdSinceMs);
         toRelease.emplace_back(worker, delta.heldBytes);
     }
@@ -562,7 +564,7 @@ std::shared_ptr<const cluster::TopologySnapshot> MemoryRebalanceScheduler::GetTo
     {
         // Copy the non-owning view under the scheduler lock, then invoke it without the lock. SetTopologyMembership is
         // an initialization operation; WorkerOCServer also destroys this scheduler before the topology engine.
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         topologyMembership = topologyMembership_;
     }
     if (topologyMembership == nullptr) {
@@ -634,12 +636,21 @@ void MemoryRebalanceScheduler::CollectCandidatePairsLocked(const std::vector<con
                 continue;
             }
             uint64_t targetInflightBytes = GetTargetInflightBytesLocked(target->nodeId);
-            uint64_t maxBytes = CalculateTaskBytesLocked(*source, *target, targetInflightBytes);
+            uint64_t heldBytes = 0;
+            uint64_t freshUsedMemory = 0;
+            auto deltaIt = futureView_.find(target->nodeId);
+            if (deltaIt != futureView_.end()) {
+                heldBytes = deltaIt->second.heldBytes;
+                freshUsedMemory = deltaIt->second.freshUsedMemory;
+            }
+            uint64_t maxBytes = CalculateTaskBytesLocked(*source, *target, targetInflightBytes,
+                                                         heldBytes, freshUsedMemory);
             if (maxBytes == 0) {
                 continue;
             }
+            const uint64_t effectiveTargetUsed = std::max(target->usedMemory, freshUsedMemory);
             const uint64_t sourceUsage = CalculateUsageRate(*source);
-            const uint64_t targetUsage = CalculateUsageRate(*target);
+            const uint64_t targetUsage = CalculateUsageRate(effectiveTargetUsed, target->memoryLimit);
             const uint64_t usageGap = sourceUsage > targetUsage ? sourceUsage - targetUsage : 0;
             if (usageGap < FLAGS_rebalance_usage_gap_percent) {
                 continue;
@@ -649,10 +660,18 @@ void MemoryRebalanceScheduler::CollectCandidatePairsLocked(const std::vector<con
             pair.source = source;
             pair.target = target;
             pair.maxBytes = maxBytes;
-            pair.targetAvailableAfterInFlight = SubOrZero(target->availableMemory, targetInflightBytes);
+            pair.effectiveTargetUsed = effectiveTargetUsed;
+            if (freshUsedMemory > 0) {
+                uint64_t baseAvailable = SubOrZero(target->memoryCapacity, freshUsedMemory);
+                pair.targetAvailableAfterInFlight = SubOrZero(baseAvailable,
+                    SubOrZero(targetInflightBytes, heldBytes));
+            } else {
+                pair.targetAvailableAfterInFlight = SubOrZero(target->availableMemory, targetInflightBytes);
+            }
             pair.usageGapRate = static_cast<uint32_t>(usageGap);
             pair.projectedTargetUsageRate =
-                static_cast<uint32_t>(CalculateProjectedTargetUsageRate(*target, targetInflightBytes, maxBytes));
+                static_cast<uint32_t>(CalculateProjectedTargetUsageRate(*target, targetInflightBytes,
+                                                                        heldBytes, freshUsedMemory, maxBytes));
             targetPairs.emplace_back(pair);
         }
     }
@@ -686,11 +705,11 @@ void MemoryRebalanceScheduler::FillTaskFromPairLocked(const CandidatePair &bestP
     // the target's watermark headroom and eviction headroom. Per-batch 300MB caps only each
     // batch (bestPair.maxBytes already applies it for the first batch); totalBudget is uncapped
     // so the loop can issue multiple batches until the planned convergence amount is migrated.
-    const uint64_t usageGapBytes = (bestPair.source->usedMemory > bestPair.target->usedMemory)
-        ? (bestPair.source->usedMemory - bestPair.target->usedMemory) / 2 : 0;
+    const uint64_t usageGapBytes = (bestPair.source->usedMemory > bestPair.effectiveTargetUsed)
+        ? (bestPair.source->usedMemory - bestPair.effectiveTargetUsed) / 2 : 0;
     const uint64_t watermarkBytes =
         bestPair.target->memoryLimit * FLAGS_rebalance_source_usage_percent / PERCENT_BASE;
-    const uint64_t headroomToWatermark = SubOrZero(watermarkBytes, bestPair.target->usedMemory);
+    const uint64_t headroomToWatermark = SubOrZero(watermarkBytes, bestPair.effectiveTargetUsed);
     runningTask.totalBudget = std::min({ usageGapBytes, headroomToWatermark, bestPair.targetAvailableAfterInFlight });
     runningTask.cumulativeMigrated = 0;
     runningTask.epochStartMs = nowMs;
@@ -732,12 +751,19 @@ Status MemoryRebalanceScheduler::TryBuildTaskLocked(const std::unordered_map<std
     const CandidatePair &bestPair = targetPairs.front();
 
     FillTaskFromPairLocked(bestPair, nowMs, runningTask);
+    // projectedTargetUsageRate is per-batch (after the first 300MB); for a near-empty target it
+    // reads as a tiny "0% -> 2%" and hides the cycle's planned convergence. Print the cycle
+    // endpoint (after totalBudget) too so operators see both per-batch step and cycle target.
+    const uint64_t targetInflight = GetTargetInflightBytesLocked(bestPair.target->nodeId);
+    const uint64_t cycleProjectedUsed = SaturatingAdd(
+        SaturatingAdd(bestPair.target->usedMemory, targetInflight), runningTask.totalBudget);
+    const uint64_t cycleProjectedRate = CalculateUsageRate(cycleProjectedUsed, bestPair.target->memoryLimit);
     LOG(INFO) << FormatString(
-        "[MemoryRebalance] select source=%s(%lu%%) target=%s(%lu%% -> %u%%), max_bytes=%lu, "
+        "[MemoryRebalance] select source=%s(%lu%%) target=%s(%lu%% -> batch %u%%, cycle %lu%%), max_bytes=%lu, "
         "target_available_after_in_flight=%lu, usage_gap=%u%%",
         bestPair.source->nodeId, CalculateUsageRate(*bestPair.source), bestPair.target->nodeId,
-        CalculateUsageRate(*bestPair.target), bestPair.projectedTargetUsageRate, bestPair.maxBytes,
-        bestPair.targetAvailableAfterInFlight, bestPair.usageGapRate);
+        CalculateUsageRate(*bestPair.target), bestPair.projectedTargetUsageRate, cycleProjectedRate,
+        bestPair.maxBytes, bestPair.targetAvailableAfterInFlight, bestPair.usageGapRate);
     return Status::OK();
 }
 
@@ -824,33 +850,41 @@ bool MemoryRebalanceScheduler::BuildNextBatchTaskLocked(const RunningTask &prevT
 }
 
 uint64_t MemoryRebalanceScheduler::CalculateTaskBytesLocked(const NodeInfo &source, const NodeInfo &target,
-                                                            uint64_t targetInflightBytes) const
+                                                            uint64_t targetInflightBytes,
+                                                            uint64_t heldBytes,
+                                                            uint64_t freshUsedMemory) const
 {
-    if (source.usedMemory <= target.usedMemory) {
+    uint64_t baseUsed = std::max(target.usedMemory, freshUsedMemory);
+    if (source.usedMemory <= baseUsed) {
         return 0;
     }
-    // Rebalance goal: converge source and target toward the usage midpoint (keep the existing
-    // gap/2 logic). This is the migration amount, NOT a drain-to-watermark.
-    const uint64_t usageGapBytes = (source.usedMemory - target.usedMemory) / 2;
-    // Target ceiling: do not push the target past the rebalance watermark (source_usage_percent).
-    // memoryCapacity == highWater line, so headroomToWatermark is how much the target can still
-    // absorb before hitting the watermark usage rate.
+    uint64_t inflightForProjection = (freshUsedMemory > 0)
+        ? SubOrZero(targetInflightBytes, heldBytes)
+        : targetInflightBytes;
+    const uint64_t usageGapBytes = (source.usedMemory - baseUsed) / 2;
     const uint64_t watermarkBytes = target.memoryLimit * FLAGS_rebalance_source_usage_percent / PERCENT_BASE;
-    // Account for other sources' in-flight bytes so concurrent tasks don't each reuse the same
-    // watermark headroom. projectedUsed = already-landed + not-yet-landed (in-flight).
-    const uint64_t projectedUsed = SaturatingAdd(target.usedMemory, targetInflightBytes);
+    const uint64_t projectedUsed = SaturatingAdd(baseUsed, inflightForProjection);
     const uint64_t headroomToWatermark = SubOrZero(watermarkBytes, projectedUsed);
-    const uint64_t targetAvailableAfterInFlight = SubOrZero(target.availableMemory, targetInflightBytes);
+    uint64_t baseAvailable = target.availableMemory;
+    if (freshUsedMemory > 0) {
+        baseAvailable = SubOrZero(target.memoryCapacity, freshUsedMemory);
+    }
+    const uint64_t targetAvailableAfterInFlight = SubOrZero(baseAvailable, inflightForProjection);
     return std::min({ usageGapBytes, headroomToWatermark, targetAvailableAfterInFlight,
                       REBALANCE_MAX_BYTES_PER_TASK });
 }
 
 uint64_t MemoryRebalanceScheduler::CalculateProjectedTargetUsageRate(const NodeInfo &target,
                                                                      uint64_t targetInflightBytes,
+                                                                     uint64_t heldBytes,
+                                                                     uint64_t freshUsedMemory,
                                                                      uint64_t maxBytes) const
 {
-    uint64_t projectedUsed = target.usedMemory;
-    projectedUsed = SaturatingAdd(projectedUsed, targetInflightBytes);
+    uint64_t baseUsed = std::max(target.usedMemory, freshUsedMemory);
+    uint64_t inflightForProjection = (freshUsedMemory > 0)
+        ? SubOrZero(targetInflightBytes, heldBytes)
+        : targetInflightBytes;
+    uint64_t projectedUsed = SaturatingAdd(baseUsed, inflightForProjection);
     projectedUsed = SaturatingAdd(projectedUsed, maxBytes);
     return CalculateUsageRate(projectedUsed, target.memoryLimit);
 }
