@@ -223,6 +223,14 @@ public:
         return Status::OK();
     }
 
+    Status PureQueryMeta(master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &response) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++pureQueryMetaCallCount_;
+        response = pureQueryMetaResponse_;
+        return pureQueryMetaStatus_;
+    }
+
     void SetResponse(const master::GIncreaseRspPb &response)
     {
         response_ = response;
@@ -246,6 +254,16 @@ public:
     void SetGetObjectLocationsResponse(const master::GetObjectLocationsRspPb &response)
     {
         getObjectLocationsResponse_ = response;
+    }
+
+    void SetPureQueryMetaStatus(const Status &status)
+    {
+        pureQueryMetaStatus_ = status;
+    }
+
+    void SetPureQueryMetaResponse(const master::PureQueryMetaRspPb &response)
+    {
+        pureQueryMetaResponse_ = response;
     }
 
     void SetDecreaseResponse(const master::GDecreaseRspPb &response)
@@ -315,6 +333,12 @@ public:
         return removeMetaRequests_;
     }
 
+    int PureQueryMetaCallCount() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return pureQueryMetaCallCount_;
+    }
+
 private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -322,9 +346,11 @@ private:
     master::GDecreaseRspPb decreaseResponse_;
     master::QueryMetaRspPb queryMetaResponse_;
     master::GetObjectLocationsRspPb getObjectLocationsResponse_;
+    master::PureQueryMetaRspPb pureQueryMetaResponse_;
     Status status_{ Status::OK() };
     Status queryMetaStatus_{ Status::OK() };
     Status getObjectLocationsStatus_{ Status::OK() };
+    Status pureQueryMetaStatus_{ Status::OK() };
     std::vector<std::string> requestedObjectKeys_;
     bool returnRefMovingOnce_{ false };
     bool firstRefMovingCallSeen_{ false };
@@ -335,6 +361,7 @@ private:
     std::vector<master::RemoveMetaReqPb> removeMetaRequests_;
     int queryMetaCallCount_{ 0 };
     int getObjectLocationsCallCount_{ 0 };
+    int pureQueryMetaCallCount_{ 0 };
 };
 
 class FakeWorkerMasterApiManager final : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
@@ -503,6 +530,19 @@ public:
         obj->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
         obj->stateInfo.SetDataFormat(DataFormat::BINARY);
         obj->stateInfo.SetPrimaryCopy(true);
+        DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));
+    }
+
+    void AddReadableObject(const std::string &objectKey, uint64_t version = 1, uint64_t dataSize = 1024)
+    {
+        auto obj = std::make_unique<ObjCacheShmUnit>();
+        obj->SetDataSize(dataSize);
+        obj->SetCreateTime(version);
+        obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        obj->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE_EVICT);
+        obj->stateInfo.SetDataFormat(DataFormat::BINARY);
+        obj->stateInfo.SetPrimaryCopy(true);
+        obj->SetShmUnit(std::make_shared<ShmUnit>());
         DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));
     }
 
@@ -1607,7 +1647,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterDoesNotReportLocalRetryBu
     EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_OK)));
 }
 
-TEST_F(WorkerOcServiceImplTest, RedirectGetObjectLocationsReportsMetadataRpcFailure)
+TEST_F(WorkerOcServiceImplTest, RedirectGetObjectLocationsMapsMetadataRpcFailure)
 {
     const HostPort redirectAddress("127.0.0.1", 18482);
     auto api = std::make_shared<FakeWorkerMasterOCApi>(redirectAddress);
@@ -1630,7 +1670,7 @@ TEST_F(WorkerOcServiceImplTest, RedirectGetObjectLocationsReportsMetadataRpcFail
 
     DS_ASSERT_OK(getImpl.QueryObjectLocationsFromRedirectMaster(infos, result, lastRc));
 
-    EXPECT_EQ(lastRc.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(lastRc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
     EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
     EXPECT_THAT(observations, ElementsAre(Pair(redirectAddress.ToString(), K_RPC_UNAVAILABLE)));
 }
@@ -1666,6 +1706,163 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysDoesNotReportLocalRetryBudgetT
     EXPECT_EQ(lastRc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
     EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_OK)));
+}
+
+TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysMapsOwnerPeerDeadToMetadataOwnerUnavailable)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort masterAddress("127.0.0.1", 18482);
+    const std::string objectKey = "metadata-owner-peer-dead-key";
+    TestDistributedTopology topology(localAddress_, masterAddress);
+    DS_ASSERT_OK(topology.InitStatus());
+    topology.SetOwner(objectKey, masterAddress);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    api->SetGetObjectLocationsStatus(Status(K_RPC_PEER_DEAD, "metadata owner refused"));
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    std::vector<std::pair<std::string, StatusCode>> observations;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        apiManager, topology.Route(), topology.EndpointPolicy(),
+        [&observations](const HostPort &target, const Status &status) {
+            observations.emplace_back(target.ToString(), status.GetCode());
+        });
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
+    Status lastRc;
+
+    auto rc = getImpl.GetMapOfObjectKeys({ objectKey }, result, lastRc);
+
+    EXPECT_EQ(rc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
+    EXPECT_EQ(lastRc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
+    EXPECT_TRUE(result.empty());
+    EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
+    EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_RPC_PEER_DEAD)));
+}
+
+TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysKeepsNonConnectionOwnerError)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort masterAddress("127.0.0.1", 18482);
+    const std::string objectKey = "metadata-owner-runtime-error-key";
+    TestDistributedTopology topology(localAddress_, masterAddress);
+    DS_ASSERT_OK(topology.InitStatus());
+    topology.SetOwner(objectKey, masterAddress);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    api->SetGetObjectLocationsStatus(Status(K_RUNTIME_ERROR, "metadata owner internal error"));
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    std::vector<std::pair<std::string, StatusCode>> observations;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        apiManager, topology.Route(), topology.EndpointPolicy(),
+        [&observations](const HostPort &target, const Status &status) {
+            observations.emplace_back(target.ToString(), status.GetCode());
+        });
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
+    Status lastRc;
+
+    auto rc = getImpl.GetMapOfObjectKeys({ objectKey }, result, lastRc);
+
+    EXPECT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_EQ(lastRc.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_THAT(rc.GetMsg(), Not(HasSubstr("Metadata owner RPC failure")));
+    EXPECT_TRUE(result.empty());
+    EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
+    EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_RUNTIME_ERROR)));
+}
+
+TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsMapsPureMetadataOwnerPeerDead)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort masterAddress("127.0.0.1", 18482);
+    const std::string objectKey = "pure-metadata-owner-peer-dead-key";
+    TestDistributedTopology topology(localAddress_, masterAddress);
+    DS_ASSERT_OK(topology.InitStatus());
+    topology.SetOwner(objectKey, masterAddress);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    api->SetPureQueryMetaStatus(Status(K_RPC_PEER_DEAD, "pure metadata owner refused"));
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    std::vector<std::pair<std::string, StatusCode>> observations;
+    WorkerOcServiceCrudParam param = MakeCrudParam(
+        apiManager, topology.Route(), topology.EndpointPolicy(),
+        [&observations](const HostPort &target, const Status &status) {
+            observations.emplace_back(target.ToString(), status.GetCode());
+        });
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_map<std::string, master::ObjectLocationInfoPb> locations;
+
+    auto rc = getImpl.QueryObjectLocations({ objectKey }, locations);
+
+    EXPECT_EQ(rc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
+    EXPECT_TRUE(locations.empty());
+    EXPECT_EQ(api->PureQueryMetaCallCount(), 1);
+    EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_RPC_PEER_DEAD)));
+}
+
+TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoUsesLocalObjectBeforeStaleOwner)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort staleOwnerAddress("127.0.0.1", 18482);
+    const std::string objectKey = "scale-in-local-object";
+    constexpr uint64_t dataSize = 8192;
+    AddReadableObject(objectKey, 7, dataSize);
+    TestDistributedTopology topology(localAddress_, staleOwnerAddress);
+    DS_ASSERT_OK(topology.InitStatus());
+    topology.SetOwner(objectKey, staleOwnerAddress);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(staleOwnerAddress);
+    api->SetGetObjectLocationsStatus(Status(K_RPC_PEER_DEAD, "stale owner down"));
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
+                                   nullptr);
+    GetObjMetaInfoReqPb req;
+    req.add_object_keys(objectKey);
+    GetObjMetaInfoRspPb resp;
+
+    DS_ASSERT_OK(getImpl.GetObjMetaInfo(req, resp));
+
+    ASSERT_EQ(resp.objs_meta_info_size(), 1);
+    EXPECT_EQ(resp.objs_meta_info(0).obj_size(), dataSize);
+    ASSERT_EQ(resp.objs_meta_info(0).location_ids_size(), 1);
+    EXPECT_EQ(resp.objs_meta_info(0).location_ids(0), localAddress_.ToString());
+    EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
+}
+
+TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoDoesNotHideRemoteOwnerFailureAfterLocalHit)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort staleOwnerAddress("127.0.0.1", 18482);
+    const std::string localObjectKey = "scale-in-mixed-local-object";
+    const std::string remoteObjectKey = "scale-in-mixed-remote-object";
+    AddReadableObject(localObjectKey);
+    TestDistributedTopology topology(localAddress_, staleOwnerAddress);
+    DS_ASSERT_OK(topology.InitStatus());
+    topology.SetOwner(localObjectKey, staleOwnerAddress);
+    topology.SetOwner(remoteObjectKey, staleOwnerAddress);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(staleOwnerAddress);
+    api->SetGetObjectLocationsStatus(Status(K_RPC_PEER_DEAD, "stale owner down"));
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
+                                   nullptr);
+    GetObjMetaInfoReqPb req;
+    req.add_object_keys(localObjectKey);
+    req.add_object_keys(remoteObjectKey);
+    GetObjMetaInfoRspPb resp;
+
+    auto rc = getImpl.GetObjMetaInfo(req, resp);
+
+    EXPECT_EQ(rc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
+    EXPECT_EQ(resp.objs_meta_info_size(), 0);
+    EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
 }
 
 TEST_F(WorkerOcServiceImplTest, UpdateMasterForFirstIdsRollsBackAllPendingGroupsOnRefMoving)

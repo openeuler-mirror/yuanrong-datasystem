@@ -2971,6 +2971,7 @@ Status WorkerOcServiceGetImpl::QueryObjectLocationsFromRedirectMaster(
         rc = redirectWorkerMasterApi->GetObjectLocations(redirectReq, redirectRsp);
         ObserveMetadataRpc(redirectWorkerMasterApi, rc);
         if (rc.IsError()) {
+            rc = TranslateMetadataOwnerRpcFailure(redirectWorkerMasterApi, rc, true);
             LOG(ERROR) << FormatString("Query locations from redirect master %s failed: %s",
                                        redirectMasterAddr.ToString(), rc.ToString());
             lastRc = rc;
@@ -2997,14 +2998,18 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
         auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(workerAddr);
         CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "hash master get failed, GetObjMetaInfo failed");
+        bool metadataRpcFailed = false;
         std::function<Status(master::GetObjectLocationsReqPb &, master::GetObjectLocationsRspPb &)> func =
-            [this, &workerMasterApi](master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &rsp) {
+            [this, &workerMasterApi, &metadataRpcFailed](master::GetObjectLocationsReqPb &req,
+                                                         master::GetObjectLocationsRspPb &rsp) {
                 auto status = workerMasterApi->GetObjectLocations(req, rsp);
                 ObserveMetadataRpc(workerMasterApi, status);
+                metadataRpcFailed = status.IsError();
                 return status;
             };
         auto status = RedirectRetryWhenMetasMoving(masterReq, masterRsp, func);
         if (status.IsError()) {
+            status = TranslateMetadataOwnerRpcFailure(workerMasterApi, status, metadataRpcFailed);
             LOG(ERROR) << FormatString("Query locations from %s of %s failed. %s", workerAddr.ToString(),
                                        VectorToString(objs), status.ToString());
             lastRc = status;
@@ -3012,6 +3017,13 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
         }
         MergeObjectLocations(masterRsp, result);
         QueryObjectLocationsFromRedirectMaster(masterRsp.info(), result, lastRc);
+    }
+    if (lastRc.IsError()) {
+        for (const auto &objectKey : objectKeys) {
+            if (result.find(objectKey) == result.end()) {
+                return lastRc;
+            }
+        }
     }
     if (result.empty()) {
         return lastRc;
@@ -3069,13 +3081,17 @@ Status WorkerOcServiceGetImpl::QueryPureMetadataGroup(const HostPort &masterAddr
     request.set_address(localAddress_.ToString());
     request.mutable_object_keys()->Add(objectKeys.begin(), objectKeys.end());
     master::PureQueryMetaRspPb response;
+    bool metadataRpcFailed = false;
     std::function<Status(master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)> query =
-        [this, &workerMasterApi](master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) {
+        [this, &workerMasterApi, &metadataRpcFailed](master::PureQueryMetaReqPb &req,
+                                                     master::PureQueryMetaRspPb &rsp) {
             auto rc = workerMasterApi->PureQueryMeta(req, rsp);
             ObserveMetadataRpc(workerMasterApi, rc);
+            metadataRpcFailed = rc.IsError();
             return rc;
         };
-    RETURN_IF_NOT_OK(RedirectRetryWhenMetasMoving(request, response, query));
+    auto rc = RedirectRetryWhenMetasMoving(request, response, query);
+    RETURN_IF_NOT_OK(TranslateMetadataOwnerRpcFailure(workerMasterApi, rc, metadataRpcFailed));
     queryMetas.insert(queryMetas.end(), response.mutable_query_metas()->begin(),
                       response.mutable_query_metas()->end());
     return QueryPureMetadataRedirects(response.info(), queryMetas);
@@ -3096,15 +3112,40 @@ Status WorkerOcServiceGetImpl::QueryPureMetadataRedirects(
         request.set_address(localAddress_.ToString());
         request.mutable_object_keys()->Add(redirect.change_meta_ids().begin(), redirect.change_meta_ids().end());
         master::PureQueryMetaRspPb response;
+        bool metadataRpcFailed = false;
         std::function<Status(master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)> query =
-            [this, &workerMasterApi](master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) {
+            [this, &workerMasterApi, &metadataRpcFailed](master::PureQueryMetaReqPb &req,
+                                                         master::PureQueryMetaRspPb &rsp) {
                 auto rc = workerMasterApi->PureQueryMeta(req, rsp);
                 ObserveMetadataRpc(workerMasterApi, rc);
+                metadataRpcFailed = rc.IsError();
                 return rc;
             };
-        RETURN_IF_NOT_OK(RedirectRetryWhenMetasMoving(request, response, query));
+        auto rc = RedirectRetryWhenMetasMoving(request, response, query);
+        RETURN_IF_NOT_OK(TranslateMetadataOwnerRpcFailure(workerMasterApi, rc, metadataRpcFailed));
         queryMetas.insert(queryMetas.end(), response.mutable_query_metas()->begin(),
                           response.mutable_query_metas()->end());
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::FillLocalObjectLocations(
+    const std::vector<std::string> &objectKeys,
+    std::unordered_map<std::string, master::ObjectLocationInfoPb> &result, std::vector<std::string> &misses)
+{
+    misses.clear();
+    misses.reserve(objectKeys.size());
+    for (const auto &objectKey : objectKeys) {
+        std::unique_ptr<GetObjEntryParams> params;
+        RETURN_IF_NOT_OK(TryAcquireLocalObject(objectKey, params));
+        if (params == nullptr) {
+            misses.emplace_back(objectKey);
+            continue;
+        }
+        auto &location = result[objectKey];
+        location.set_object_key(objectKey);
+        location.set_object_size(params->dataSize);
+        location.add_object_locations(localAddress_.ToString());
     }
     return Status::OK();
 }
@@ -3116,9 +3157,19 @@ Status WorkerOcServiceGetImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, Ge
     RETURN_IF_NOT_OK(AuthenticateGetMetaUser(akSkManager_.get(), req));
     // construct objectKey by the input tenantId
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(req.tenantid(), req.object_keys());
-    std::unordered_map<std::string, ObjectLocationInfoPb> result;
     Status lastRc;
-    RETURN_IF_NOT_OK(GetMapOfObjectKeys(objectKeys, result, lastRc));
+    std::unordered_map<std::string, ObjectLocationInfoPb> result;
+    auto rc = GetMapOfObjectKeys(objectKeys, result, lastRc);
+    if (rc.IsError()) {
+        RETURN_IF_NOT_OK_EXCEPT(rc, K_METADATA_OWNER_UNAVAILABLE);
+        std::vector<std::string> localMisses;
+        std::unordered_map<std::string, ObjectLocationInfoPb> localResult;
+        RETURN_IF_NOT_OK(FillLocalObjectLocations(objectKeys, localResult, localMisses));
+        if (!localMisses.empty()) {
+            return rc;
+        }
+        result = std::move(localResult);
+    }
     FillGetObjMetaInfoRspPb(objectKeys, result, resp);
     return Status::OK();
 }

@@ -452,6 +452,9 @@ protected:
 
     bool IsMetadataRpcFailureReported(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi) const;
 
+    Status TranslateMetadataOwnerRpcFailure(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+                                            const Status &status, bool rpcDispatched) const;
+
     Status TranslateQualifiedMetadataDeadline(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                                               const Status &status, bool rpcDispatched) const;
 

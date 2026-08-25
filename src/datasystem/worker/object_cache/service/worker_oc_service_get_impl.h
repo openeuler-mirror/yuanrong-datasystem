@@ -336,6 +336,10 @@ private:
     Status GetMapOfObjectKeys(const std::vector<std::basic_string<char>> &objectKeys,
                               std::unordered_map<std::string, master::ObjectLocationInfoPb> &result, Status &lastRc);
 
+    Status FillLocalObjectLocations(const std::vector<std::string> &objectKeys,
+                                    std::unordered_map<std::string, master::ObjectLocationInfoPb> &result,
+                                    std::vector<std::string> &misses);
+
     /**
      * @brief Query object locations from redirect master.
      * @param[in] infos Redirect metadata infos.
