@@ -183,20 +183,6 @@ public:
         Builder &MonitorConfigPath(const std::string &path);
 
         /**
-         * @brief Number of ZMQ client IO contexts.
-         * @param[in] threads Equivalent to flag zmq_client_io_context.
-         * @return Reference to self for chaining.
-         */
-        Builder &ZmqClientIoContext(int32_t threads);
-
-        /**
-         * @brief Number of ZMQ client IO threads.
-         * @param[in] threads Equivalent to flag zmq_client_io_thread.
-         * @return Reference to self for chaining.
-         */
-        Builder &ZmqClientIoThread(int32_t threads);
-
-        /**
          * @brief Validate and build KVClientConfig.
          * @param[out] config Built config.
          * @return K_OK on success; the error code otherwise.

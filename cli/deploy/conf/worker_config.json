@@ -499,18 +499,6 @@
         "value": "5000",
         "description": "Cross-process RPC latency threshold (microseconds) for slow-log and latencySummary. Default 5000 (5ms). Accepts a positive integer (e.g. 2000 for 2ms). 0 means disabled. When enabled, requests whose RPC sub-phases exceed this threshold will include a latencySummary in the access log."
     },
-    "enable_curve_zmq": {
-        "value": "false",
-        "description": "Whether to enable Curve ZMQ for authentication and authorization between components."
-    },
-    "zmq_client_io_context": {
-        "value": "5",
-        "description": "Optimize the performance of a client stub. Default value 5. The higher the throughput, the higher the value, but should be in range [1, 32]."
-    },
-    "zmq_client_io_thread": {
-        "value": "1",
-        "description": "Optimize the performance of the client stub io thread. Default value 1. The higher the throughput, the higher the value, but should be in range [1, 32]."
-    },
     "io_thread_nice": {
         "value": "0",
         "description": "Nice value for selected IO threads. Valid range is [-20, 19]. 0 skips nice adjustment and preserves the thread's inherited nice value. Only non-zero values call setpriority; negative values usually require appropriate privileges."
@@ -538,10 +526,6 @@
     "brpc_max_concurrency": {
         "value": "128",
         "description": "Max concurrent in-flight RPCs per brpc server. 0 means unlimited. Recommended: brpc_server_num_threads * 2 (e.g. 128 for 64 threads). When exceeded, brpc returns ELIMIT immediately so a slow handler cannot exhaust bthreads and cause OOM. Must not be smaller than brpc_server_num_threads. Default is 128."
-    },
-    "curve_key_dir": {
-        "value": "",
-        "description": "The directory to find ZMQ curve key files. This path must be specified when zmq authentication is enabled."
     },
     "enable_etcd_auth": {
         "value": "false",

@@ -441,10 +441,6 @@ void Logging::InitClientAdvancedConfig()
         FLAGS_log_monitor = GetBoolFromEnv(LOG_MONITOR_ENABLE.c_str(), DEFAULT_CLIENT_LOG_MONITOR);
     }
 
-    if (!WasCommandLineFlagSpecified("zmq_client_io_thread")) {
-        FLAGS_zmq_client_io_thread = GetInt32FromEnv("DATASYSTEM_ZMQ_CLIENT_IO_THREAD", 1);
-    }
-
     if (!WasCommandLineFlagSpecified("log_only_write_info_file")) {
         FLAGS_log_only_write_info_file =
             GetBoolFromEnv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str(), DEFAULT_LOG_ONLY_WRITE_INFO_FILE);

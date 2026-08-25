@@ -31,10 +31,6 @@ constexpr int MAX_MAX_LOG_SIZE_MB = 4095;
 constexpr uint32_t MAX_LOG_FILE_NUM = 200000;
 constexpr uint32_t MIN_LOG_ASYNC_QUEUE_SIZE = 256;
 constexpr uint32_t MAX_LOG_ASYNC_QUEUE_SIZE = 1048576;
-constexpr int32_t MIN_ZMQ_CLIENT_IO_CONTEXT = 1;
-constexpr int32_t MAX_ZMQ_CLIENT_IO_CONTEXT = 128;
-constexpr int32_t MIN_ZMQ_CLIENT_IO_THREAD = 1;
-constexpr int32_t MAX_ZMQ_CLIENT_IO_THREAD = 32;
 
 std::string ConfigBoolToString(bool enable)
 {
@@ -160,14 +156,6 @@ void ValidateKvClientNumericFields(const std::unordered_map<std::string, std::st
                                        MAX_LOG_ASYNC_QUEUE_SIZE, reason)) {
         AddError(errors, "LogAsyncQueueSize", reason);
     }
-    if (!ValidateOptionalIntInRange(args, "zmq_client_io_context", MIN_ZMQ_CLIENT_IO_CONTEXT,
-                                    MAX_ZMQ_CLIENT_IO_CONTEXT, reason)) {
-        AddError(errors, "ZmqClientIoContext", reason);
-    }
-    if (!ValidateOptionalIntInRange(args, "zmq_client_io_thread", MIN_ZMQ_CLIENT_IO_THREAD, MAX_ZMQ_CLIENT_IO_THREAD,
-                                    reason)) {
-        AddError(errors, "ZmqClientIoThread", reason);
-    }
 }
 
 void CollectKvClientBuildErrors(const std::unordered_map<std::string, std::string> &args,
@@ -283,18 +271,6 @@ KVClientConfig::Builder &KVClientConfig::Builder::LogMonitorEnable(bool enable)
 KVClientConfig::Builder &KVClientConfig::Builder::MonitorConfigPath(const std::string &path)
 {
     args_["monitor_config_file"] = path;
-    return *this;
-}
-
-KVClientConfig::Builder &KVClientConfig::Builder::ZmqClientIoContext(int32_t threads)
-{
-    args_["zmq_client_io_context"] = std::to_string(threads);
-    return *this;
-}
-
-KVClientConfig::Builder &KVClientConfig::Builder::ZmqClientIoThread(int32_t threads)
-{
-    args_["zmq_client_io_thread"] = std::to_string(threads);
     return *this;
 }
 

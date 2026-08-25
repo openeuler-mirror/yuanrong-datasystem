@@ -161,12 +161,6 @@ DS_DEFINE_int32(io_thread_nice, 0,
                 "require appropriate privileges.");
 DS_DEFINE_bool(enable_sched_runtime, true,
                "Enable selected threads to set the Linux scheduler runtime. Default is true.");
-DS_DEFINE_int32(zmq_client_io_context, 5,
-                "Optimize the performance of the client stub. Default value 5. "
-                "The higher the throughput, the higher the value, but should be in range [1, 32]");
-DS_DEFINE_int32(zmq_client_io_thread, 1,
-                "Optimize the performance of the client stub. Default value 1. "
-                "The higher the throughput, the higher the value, but should be in range [1, 32]");
 DS_DEFINE_int32(zmq_chunk_sz, 1048576, "Parallel payload split chunk size. Default to 1048756 bytes");
 DS_DEFINE_bool(cache_rpc_session, true, "Deprecated: This flag is deprecated and will be removed in future releases.");
 DS_DEFINE_string(etcd_address, "", "Address of ETCD server");

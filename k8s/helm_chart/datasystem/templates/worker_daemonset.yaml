@@ -226,15 +226,8 @@ spec:
         - -rebalance_task_report_grace_ms={{ $.Values.global.memoryRebalance.rebalanceTaskReportGraceMs }}
         - -data_migrate_rate_limit_mb={{ $.Values.global.gracefulShutdown.dataMigrateRateLimitMb }}
         - -data_migrate_urma_transport_mode={{ $.Values.global.gracefulShutdown.dataMigrateUrmaTransportMode }}
-        - -enable_curve_zmq={{ $.Values.global.rpc.enableCurveZmq }}
         - -ipc_through_shared_memory={{ $.Values.global.ipc.ipcThroughSharedMemory }}
         - -shared_memory_worker_port={{ $.Values.global.ipc.sharedMemoryWorkerPort }}
-        - -curve_key_dir=$(CURVE_KEY_DIR)
-        {{- if not $.Values.global.rpc.brpc.useBrpc }}
-        - -zmq_server_io_context={{ $.Values.global.rpc.zmqServerIoContext }}
-        {{- end }}
-        - -zmq_client_io_context={{ $.Values.global.rpc.zmqClientIoContext }}
-        - -zmq_client_io_thread={{ $.Values.global.rpc.zmqClientIoThread }}
         - -io_thread_nice={{ $.Values.global.rpc.ioThreadNice }}
         - -enable_sched_runtime={{ $.Values.global.performance.enableSchedRuntime }}
         - -zmq_chunk_sz={{ $.Values.global.rpc.zmqChunkSz | int64 }}
@@ -390,10 +383,6 @@ spec:
             value: "{{ $.Values.global.log.slowLogProcessSlowerThan }}"
           - name: SLOW_LOG_RPC_SLOWER_THAN
             value: "{{ $.Values.global.log.slowLogRpcSlowerThan }}"
-          - name: CURVE_KEY_DIR
-            value: {{ $.Values.global.rpc.curveKeyDir }}
-          - name: ENABLE_CURVE_ZMQ
-            value: "{{ $.Values.global.rpc.enableCurveZmq }}"
           - name: ETCD_CERT_DIR
             value: {{ $.Values.global.etcd.etcdCertDir }}
           - name: YUANRONG_IAM_DIR
@@ -464,10 +453,6 @@ spec:
             hugepages-2Mi: {{ $.Values.global.resources.datasystemWorker.requests.hugepages2Mi}}
             {{- end }}
         volumeMounts:
-        {{- if $.Values.global.rpc.enableCurveZmq }}
-        - mountPath: {{ $.Values.global.rpc.curveKeyDir }}
-          name: secret-dir
-        {{- end }}
         {{- if $.Values.global.etcd.enableEtcdAuth }}
         - mountPath: {{ $.Values.global.etcd.etcdCertDir }}
           name: etcd-cert-empty-dir
@@ -541,11 +526,6 @@ spec:
         securityContext:
           runAsUser: 0
         {{- $initCmds := list }}
-        {{- if $.Values.global.rpc.enableCurveZmq }}
-        {{- $initCmds = append $initCmds (printf "cp -rH /home/yuanrong/curve/* %s" $.Values.global.rpc.curveKeyDir) }}
-        {{- $initCmds = append $initCmds (printf "chmod 700 %s" $.Values.global.rpc.curveKeyDir) }}
-        {{- $initCmds = append $initCmds (printf "chown -R -h yuanrong:yuanrong %s" $.Values.global.rpc.curveKeyDir) }}
-        {{- end }}
         {{- if $.Values.global.etcd.enableEtcdAuth }}
         {{- $initCmds = append $initCmds (printf "cp -rH /home/yuanrong/etcd-cert/* %s" $.Values.global.etcd.etcdCertDir) }}
         {{- $initCmds = append $initCmds (printf "chmod 700 %s" $.Values.global.etcd.etcdCertDir) }}
@@ -593,12 +573,6 @@ spec:
             cpu: 150m
             memory: 200Mi
         volumeMounts:
-        {{- if $.Values.global.rpc.enableCurveZmq  }}
-        - mountPath: {{ $.Values.global.rpc.curveKeyDir }}
-          name: secret-dir
-        - mountPath: "/home/yuanrong/curve"
-          name: curve-key-worker
-        {{- end }}
         {{- if $.Values.global.etcd.enableEtcdAuth}}
         - mountPath: {{ $.Values.global.etcd.etcdCertDir }}
           name: etcd-cert-empty-dir
@@ -630,23 +604,6 @@ spec:
           name: distributed-disk
         {{- end }}
       volumes:
-        {{- if $.Values.global.rpc.enableCurveZmq }}
-        - emptyDir: {}
-          name: secret-dir
-        - name: curve-key-worker
-          secret:
-            secretName: auth
-            defaultMode: 0400
-            items:
-              - key: worker.key
-                path: worker.key
-              - key: worker.secret_key
-                path: worker.secret_key
-              - key: client.key
-                path: worker_authorized_clients/client.key
-              - key: worker.key
-                path: worker_authorized_clients/worker.key
-        {{- end }}
         {{- if $.Values.global.etcd.enableEtcdAuth }}
         - emptyDir: {}
           name: etcd-cert-empty-dir
