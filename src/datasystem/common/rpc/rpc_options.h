@@ -62,16 +62,6 @@ private:
     int timeout_;
     int hwm_;  // RPC high-watermark
 
-    // ZMQ specific options
-    template <typename W, typename R>
-    friend class MsgQue;
-    /*
-     * The ZMQ_LINGER option shall set the linger period for the specified socket.
-     * The linger period determines how long pending messages which have yet to be sent to a peer shall
-     * linger in memory after a socket is closed with zmq_close,
-     * and further affects the termination of the socket's context with zmq_term.
-     */
-    int linger_;
     bool immediate_;
 };
 }  // namespace datasystem

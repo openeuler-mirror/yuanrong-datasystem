@@ -642,8 +642,7 @@ TEST_F(KVCacheClientTest, TestFirstStubConnectFailed)
     InitTestKVClient(0, client);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(1, client1);
-    // The stub-connect failure inject (ZmqSockConnHelper/ZmqBaseStubConn) was removed with
-    // the ZMQ transport; only the direct-port-disable inject remains.
+    // Only the direct-port-disable inject remains for stub-connect failure.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "RpcStubCacheMgr.EnableOcWorkerWorkerDirectPort", "return()"));
     std::string key = "key";
     std::string value = GenRandomString(1024 * 1024);

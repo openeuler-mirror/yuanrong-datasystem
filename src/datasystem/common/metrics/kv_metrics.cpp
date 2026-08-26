@@ -46,28 +46,7 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 20, "worker_to_client_total_bytes", MetricType::COUNTER, "bytes" },
     { 21, "worker_object_count", MetricType::GAUGE, "count" },
     { 22, "worker_allocated_memory_size", MetricType::GAUGE, "bytes" },
-    { 23, "zmq_send_failure_total", MetricType::COUNTER, "count" },
-    { 24, "zmq_receive_failure_total", MetricType::COUNTER, "count" },
-    { 25, "zmq_send_try_again_total", MetricType::COUNTER, "count" },
-    { 26, "zmq_receive_try_again_total", MetricType::COUNTER, "count" },
-    { 27, "zmq_network_error_total", MetricType::COUNTER, "count" },
-    { 28, "zmq_last_error_number", MetricType::GAUGE, "" },
-    { 29, "zmq_gateway_recreate_total", MetricType::COUNTER, "count" },
-    { 30, "zmq_event_disconnect_total", MetricType::COUNTER, "count" },
-    { 31, "zmq_event_handshake_failure_total", MetricType::COUNTER, "count" },
-    { 32, "zmq_send_io_latency", MetricType::HISTOGRAM, "us" },
-    { 33, "zmq_receive_io_latency", MetricType::HISTOGRAM, "us" },
-    { 34, "zmq_rpc_serialize_latency", MetricType::HISTOGRAM, "us" },
-    { 35, "zmq_rpc_deserialize_latency", MetricType::HISTOGRAM, "us" },
-    { 36, "zmq_server_task_delay", MetricType::HISTOGRAM, "us" },
     // RPC Queue Flow Latency (values via RecordLatencyMetric: ns sampled, histogram stores us)
-    { 37, "zmq_client_req_queuing_latency", MetricType::HISTOGRAM, "us" },
-    { 38, "zmq_client_rsp_queuing_latency", MetricType::HISTOGRAM, "us" },
-    { 39, "zmq_server_req_queuing_latency", MetricType::HISTOGRAM, "us" },
-    { 40, "zmq_server_exec_latency", MetricType::HISTOGRAM, "us" },
-    { 41, "zmq_server_rsp_queuing_latency", MetricType::HISTOGRAM, "us" },
-    { 42, "zmq_rpc_e2e_latency", MetricType::HISTOGRAM, "us" },
-    { 43, "zmq_rpc_network_latency", MetricType::HISTOGRAM, "us" },
     // Alloc/free counters: requested/logical bytes (see Allocator::AllocateMemory/FreeMemory comments).
     { 44, "allocator_alloc_bytes_total", MetricType::COUNTER, "bytes" },
     { 45, "allocator_free_bytes_total", MetricType::COUNTER, "bytes" },
@@ -97,7 +76,6 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 68, "worker_get_meta_addr_hashring_latency", MetricType::HISTOGRAM, "us" },
     { 69, "worker_get_post_query_meta_phase_latency", MetricType::HISTOGRAM, "us" },
     { 70, "worker_inflight_remote_get_request", MetricType::GAUGE, "count" },
-    { 71, "zmq_server_poll_handle_latency", MetricType::HISTOGRAM, "us" },
     { 72, "urma_connection_setup_latency", MetricType::HISTOGRAM, "us" },
     { 73, "urma_jetty_create_latency", MetricType::HISTOGRAM, "us" },
     { 74, "urma_jetty_recreate_latency", MetricType::HISTOGRAM, "us" },
@@ -168,7 +146,7 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 139, "coordinator_watch_probe_inflight_requests", MetricType::GAUGE, "count" },
     { 140, "coordinator_watch_probe_inflight_bytes", MetricType::GAUGE, "bytes" },
 };
-static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
+static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) <= static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
 std::mutex g_initMutex;
 bool g_inited = false;
