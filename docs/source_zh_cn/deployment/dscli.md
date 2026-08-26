@@ -1305,12 +1305,8 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | payload_nocopy_threshold | string | `"104857600"` | 否 | datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位） |
 | rpc_thread_num | int | `16` | 否 | 配置服务端的RPC线程数，必须为大于0的数 |
 | oc_thread_num | int | `32` | 否 | 配置服务端用于处理对象/KV缓存的业务线程数 |
-| zmq_server_io_context | int | `5` | 否 | ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
-| zmq_client_io_context | int | `5` | 否 | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
-| zmq_client_io_thread | int | `1` | 否 | ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | io_thread_nice | int | `0` | 否 | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
 | enable_sched_runtime | bool | `true` | 否 | 是否允许指定 worker 线程设置 Linux 调度 runtime。当前仅用于 URMA JFC poll 线程；设置为 `false` 时保留线程继承的调度参数且不调用 `sched_setattr`。 |
-| zmq_chunk_sz | int | `1048576` | 否 | 并行负载分块大小配置（以字节为单位） |
 | brpc_event_dispatcher_num | int | `0` | 否 | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | max_rpc_session_num | int | `2048` | 否 | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | remote_send_thread_num | int | `8` | 否 | 配置服务端用于将元素发送到远程工作线程的线程数量 |
