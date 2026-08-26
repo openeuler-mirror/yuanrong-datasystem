@@ -287,7 +287,7 @@ service CoordinatorService {
       returns (ReportTopologyRecoveryCandidateRspPb) {}
   rpc GetClusterRawSnapshot(GetClusterRawSnapshotReqPb) returns (GetClusterRawSnapshotRspPb) {}
   rpc GetRaftBootstrapState(GetRaftBootstrapStateReqPb) returns (GetRaftBootstrapStateRspPb) {}
-  // Append-only: ZMQ dispatch uses the service method index for the existing RPCs above.
+  // Append-only: the generated brpc stubs dispatch by service method index, so existing RPCs above must keep their order.
   rpc EnsureLeaderMembership(EnsureLeaderMembershipReqPb) returns (EnsureLeaderMembershipRspPb) {}
   rpc ReportWorkerLiveness(ReportWorkerLivenessReqPb) returns (ReportWorkerLivenessRspPb) {}
 }

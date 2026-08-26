@@ -267,7 +267,7 @@ public:
             result.first = std::move(rsp_);
             result.second = std::move(replyStatus_);
         } else if (timeoutMs != 0) {
-            // Blocking read, zmq Async read does not support setting a unique timeout for each rpc
+            // Blocking read; the async read path does not support a unique timeout per rpc
             result.second = rpcRespFunc_(*this, tagId_, result.first, RpcRecvFlags::NONE);
         } else {
             result.second = { K_TRY_AGAIN, "Reply is not ready" };

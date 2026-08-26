@@ -191,7 +191,7 @@ DS_DEFINE_int32(brpc_max_concurrency, 128,
                 "and cause OOM. Must not be smaller than brpc_server_num_threads.");
 DS_DEFINE_bool(brpc_enable_builtin_services, false,
                "Expose brpc built-in HTTP services (/flags, /pprof, /vars, /status) on the RPC port. "
-               "Default false to match the ZMQ security baseline (no HTTP endpoint); the /flags and "
+               "Default false to keep a tight security surface (no HTTP endpoint); the /flags and "
                "/pprof endpoints allow gflag mutation and memory dumps. Set true only for debugging "
                "on a trusted network.");
 DS_DEFINE_string(brpc_connection_type, GetStringFromEnv("DATASYSTEM_BRPC_CONNECTION_TYPE", "pooled"),

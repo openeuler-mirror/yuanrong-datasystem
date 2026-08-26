@@ -132,10 +132,11 @@ protected:
     /**
      * @brief Register GenericService as a brpc service.
      *
-     * CreateGenericService() only wires GenericService into the ZMQ builder (via
-     * builder_.AddService). In brpc mode the ZMQ path is not started, so the test
-     * control-plane RPCs (SetInjectAction / ClearInjectAction / GetInjectActionExecuteCount
-     * / GcovFlush) have no brpc handler and time out. This registers the generated
+     * CreateGenericService() only wires GenericService into the legacy service
+     * builder (via builder_.AddService). The brpc server does not start from that
+     * builder path, so the test control-plane RPCs (SetInjectAction /
+     * ClearInjectAction / GetInjectActionExecuteCount / GcovFlush) have no brpc
+     * handler and time out. This registers the generated
      * GenericServiceBrpcAdapter with the brpc server so those RPCs are reachable.
      *
      * Must be called after rpcServer_ is built and after CreateGenericService(),

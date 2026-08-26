@@ -24,7 +24,7 @@
  * common/util/request_context.h — and are accessed via GetRequestContext()->field.
  *
  * This header now only forwards the per-request type definitions
- * (TimeoutDuration, ZmqMessage, ScopedBthreadLocal) so the many translation
+ * (TimeoutDuration, ScopedBthreadLocal) so the many translation
  * units that historically included it for those types continue to build. New
  * code should include request_context.h directly and use GetRequestContext().
  */

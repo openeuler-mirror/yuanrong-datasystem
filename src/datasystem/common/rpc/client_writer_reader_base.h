@@ -16,7 +16,7 @@
 
 /**
  * Description: Abstract base class for client-side bidi-streaming WriterReader.
- * Both ZMQ and brpc implementations inherit from this interface.
+ * The brpc implementation (BrpcClientStreamWriterReader) inherits from this interface.
  */
 #ifndef DATASYSTEM_COMMON_RPC_CLIENT_WRITER_READER_BASE_H
 #define DATASYSTEM_COMMON_RPC_CLIENT_WRITER_READER_BASE_H
@@ -32,8 +32,7 @@ namespace datasystem {
 /**
  * @brief Pure virtual interface for client-side bidi-streaming.
  *
- * Defines the contract that both ClientWriterReaderImpl (ZMQ) and
- * BrpcClientStreamWriterReader (brpc) must implement.
+ * Defines the contract that BrpcClientStreamWriterReader must implement.
  *
  * @tparam W Write (request) protobuf type.
  * @tparam R Read (response) protobuf type.
@@ -80,7 +79,7 @@ public:
     /**
      * @brief Non-blocking close. Called by the wrapper destructor so the brpc
      * handler can trigger async on_closed (which clears its self-keepalive).
-     * Default no-op for ZMQ; brpc overrides.
+     * Default is a no-op; the brpc implementation overrides.
      */
     virtual void Close() {}
 };

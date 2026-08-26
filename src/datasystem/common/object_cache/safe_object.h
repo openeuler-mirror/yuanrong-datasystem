@@ -174,8 +174,8 @@ public:
 
     /**
      * @brief Acquires a read lock with a deadline. If the lock is not acquired within timeoutUs,
-     * returns K_RPC_DEADLINE_EXCEEDED. Brpc mode uses bthread_rwlock_timedrdlock (yields the
-     * worker thread while waiting); ZMQ mode falls back to blocking.
+     * returns K_RPC_DEADLINE_EXCEEDED. Uses bthread_rwlock_timedrdlock, which yields the
+     * worker thread while waiting.
      * @param[in] nullable Whether allow null after get read lock.
      * @param[in] timeoutUs Maximum wait in microseconds; <=0 means immediate fail.
      * @return Status of the call.
@@ -200,7 +200,7 @@ public:
      * @brief Acquires a global reference lock on the SafeObject. The lock can prevent the concurrency of increasing or
      * decreasing global reference.
      * @note Lock ordering: object WLock must be acquired before GRefLock. Do not acquire WLock while holding GRefLock.
-     * @note GRefLock uses bthread::Mutex in both brpc and ZMQ mode. This prevents brpc bthread waiters from blocking
+     * @note GRefLock uses bthread::Mutex. This prevents bthread waiters from blocking
      *       worker pthreads, but adds one butex-backed mutex per SafeObject. Keep critical sections bounded and do not
      *       issue nested callbacks or RPC response paths that recursively acquire the same object's GRefLock.
      */

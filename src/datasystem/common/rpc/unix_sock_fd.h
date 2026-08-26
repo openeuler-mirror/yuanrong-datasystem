@@ -242,12 +242,12 @@ public:
 
     /**
      * @brief Bind to an endpoint starts with either "ipc://" or "tcp://"
-     * @param[in] ZmqEndPt
+     * @param[in] endPoint
      * @param[in] perm Permission of path to bind to (ipc:// only)
      * @param[out] bindStr (same as endpoint without ipc:// or tcp://, and random port is fully expanded)
      * @return Status
      */
-    Status Bind(const std::string &ZmqEndPt, mode_t perm, std::string &bindStr);
+    Status Bind(const std::string &endPoint, mode_t perm, std::string &bindStr);
 
     /**
      * @brief Connect to a remote end point.
@@ -264,10 +264,10 @@ public:
 
     /**
      * @brief Connect to an endpoint starts with either "ipc://" or "tcp://"
-     * @param ZmqEndPt
+     * @param endPoint
      * @return Status
      */
-    Status Connect(const std::string &ZmqEndPt);
+    Status Connect(const std::string &endPoint);
 
     /**
      * @brief Uses this UnixSockFd as a listener socket and accepts incoming connection. Creates a new UnixSockFd as

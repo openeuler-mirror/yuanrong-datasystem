@@ -1184,7 +1184,7 @@ Status WorkerOCServer::InitializeWorkerServices()
             K_INVALID, "enable_lossless_data_exit_mode can be set to true only when enable_distributed_master is true");
     }
     // Register GenericService (test control-plane: SetInjectAction / GcovFlush / ...)
-    // as a brpc service. No-op in ZMQ mode or non-test builds.
+    // as a brpc service. No-op in non-test builds.
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitGenericBrpcService(), "InitGenericBrpcService failed");
     // Init the services and hook them up to the RPC server.
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitWorkerOCService(), "InitWorkerOCService failed");
@@ -2726,8 +2726,8 @@ size_t WorkerOCServer::ScheduleWorkerMasterRpcWarmupTasks(const std::vector<cons
             continue;
         }
         // In centralized mode, only warmup the actual master; non-master workers
-        // do not register MasterOCServiceBrpcAdapter, leading to "Fail to find method"
-        // errors in brpc mode (ZMQ mode silently fails on unknown services).
+        // do not register MasterOCServiceBrpcAdapter, so a warmup RPC to them would
+        // return "Fail to find method".
         if (!FLAGS_enable_distributed_master && address != masterAddr_.ToString()) {
             continue;
         }

@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: A general framework for creating a ZMQ app.
+ * Description: General framework for interruptible/callable RPC service abstractions.
  */
 #ifndef DATASYSTEM_COMMON_RPC_RPC_HELPER_H
 #define DATASYSTEM_COMMON_RPC_RPC_HELPER_H

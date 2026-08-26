@@ -65,7 +65,7 @@ public:
         ~Builder() = default;
 
         /**
-         * @brief Enable zmq logging.
+         * @brief Enable RPC verbose logging.
          * @return Reference to this builder.
          */
         Builder &SetDebug()

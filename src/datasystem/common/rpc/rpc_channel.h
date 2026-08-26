@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: A channel encapsulates the zmq transport method.
+ * Description: A channel encapsulates an RPC endpoint (tcp:// or ipc://).
  */
 #ifndef DATASYSTEM_COMMON_RPC_RPC_CHANNEL_H
 #define DATASYSTEM_COMMON_RPC_RPC_CHANNEL_H
@@ -31,15 +31,15 @@ namespace datasystem {
 class RpcChannel {
 public:
     /**
-     * @brief This form of constructor takes a ZMQ transport directly.
-     * @note A ZMQ transport begins with tcpip:// or ipc:// or inproc://.
-     * @param[in] zmqEndPoint Zmq endpoint string.
+     * @brief This form of constructor takes an endpoint string directly.
+     * @note An endpoint begins with tcpip:// or ipc:// or inproc://.
+     * @param[in] endPoint Endpoint string.
      */
-    RpcChannel(std::string zmqEndPoint);
+    RpcChannel(std::string endPoint);
 
     /**
-     * @brief This form of constructor takes a target HostPort and return a tcp/ip ZMQ end point.
-     * @param[in] destAddr Zmq endpoint info in host-port structure.
+     * @brief This form of constructor takes a target HostPort and return a tcp/ip endpoint.
+     * @param[in] destAddr Endpoint info in host-port structure.
      */
     RpcChannel(const HostPort &destAddr);
 
@@ -82,10 +82,10 @@ public:
     static Status ParseTcpipEndpoint(const std::string &endPoint, std::string &addr, std::string &port);
 
     /**
-     * @brief Get Zmq End Point.
-     * @return const std::string& Zmq endpoint string
+     * @brief Get End Point.
+     * @return const std::string& Endpoint string
      */
-    const std::string &GetZmqEndPoint() const;
+    const std::string &GetEndPoint() const;
 
     /**
      * @brief Get the HostPort object.
@@ -160,21 +160,21 @@ struct hash<datasystem::RpcChannel> {
 public:
     size_t operator()(const datasystem::RpcChannel &channel) const
     {
-        return std::hash<std::string>()(channel.GetZmqEndPoint());
+        return std::hash<std::string>()(channel.GetEndPoint());
     }
 };
 template <>
 struct equal_to<datasystem::RpcChannel> {
     bool operator()(const datasystem::RpcChannel &lhs, const datasystem::RpcChannel &rhs) const
     {
-        return lhs.GetZmqEndPoint() == rhs.GetZmqEndPoint();
+        return lhs.GetEndPoint() == rhs.GetEndPoint();
     }
 };
 template <>
 struct less<datasystem::RpcChannel> {
     bool operator()(const datasystem::RpcChannel &lhs, const datasystem::RpcChannel &rhs) const
     {
-        return lhs.GetZmqEndPoint() < rhs.GetZmqEndPoint();
+        return lhs.GetEndPoint() < rhs.GetEndPoint();
     }
 };
 }  // namespace std

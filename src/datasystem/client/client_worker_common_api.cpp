@@ -884,9 +884,7 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetToken(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    // ZMQ connection teardown is synchronous and needs headroom for in-flight
-    // frames; keep the legacy 10 min timeout.  brpc connections use a short
-    // 1 s timeout — the DisconnectClient RPC is a lightweight handshake.
+    // brpc connection teardown for DisconnectClient is a lightweight 1 s handshake RPC.
     static constexpr int32_t BRPC_DISCONNECT_RPC_TIMEOUT_MS = 1000;           // 1s, brpc lightweight handshake
     int rpcTimeoutMs = BRPC_DISCONNECT_RPC_TIMEOUT_MS;
 #ifdef WITH_TESTS

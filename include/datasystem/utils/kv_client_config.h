@@ -24,7 +24,7 @@
 
 namespace datasystem {
 /**
- * @brief KV client initialization config for logging, monitoring, and ZMQ flags.
+ * @brief KV client initialization config for logging and monitoring.
  *
  * Build via Builder and pass to KVClient::Init. Does not cover ConnectOptions.
  * The first Init in a process freezes the config snapshot; per-field priority on that

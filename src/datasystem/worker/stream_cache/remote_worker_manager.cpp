@@ -803,14 +803,14 @@ Status RemoteWorker::FillExclusivePushReqHelper(const std::string &streamName, c
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(it->first->traceId_);
     pushReqPb.set_trace_id(Trace::Instance().GetTraceID());
     size_t chunkSz = 0;
-    const size_t zmqChunkSz = STREAM_PUSH_CHUNK_SIZE;
+    const size_t streamChunkSz = STREAM_PUSH_CHUNK_SIZE;
     // Only batch up to STREAM_PUSH_CHUNK_SIZE. Make sure we send at least one PV
     do {
         auto seqNo = it->second;
         auto streamElementView = std::static_pointer_cast<StreamElementView>(it->first);
         auto &eleSzs = streamElementView->sz_;
         size_t payloadSz = std::accumulate(eleSzs.begin(), eleSzs.end(), 0ul);
-        if ((chunkSz > 0 && ((payloadSz > zmqChunkSz) || chunkSz > zmqChunkSz - payloadSz))) {
+        if ((chunkSz > 0 && ((payloadSz > streamChunkSz) || chunkSz > streamChunkSz - payloadSz))) {
             break;
         }
         chunkSz += payloadSz;
@@ -851,7 +851,7 @@ Status RemoteWorker::FillSharedPushReqHelper(const std::string &producerId, std:
     pushReqPb.set_trace_id(Trace::Instance().GetTraceID());
     bool requestReady = false;
     size_t chunkSz = 0;
-    const size_t zmqChunkSz = STREAM_PUSH_CHUNK_SIZE;
+    const size_t streamChunkSz = STREAM_PUSH_CHUNK_SIZE;
     // Only batch up to STREAM_PUSH_CHUNK_SIZE. Make sure we send at least one PV
     do {
         // Fixme: actually deal with list of element views.
@@ -878,7 +878,7 @@ Status RemoteWorker::FillSharedPushReqHelper(const std::string &producerId, std:
             iter = streamIndexMapping.emplace(streamName, streamIndexMapping.size()).first;
             pushReqPb.mutable_stream_names()->Add(streamName.c_str());
         }
-        if ((chunkSz > 0 && ((payloadSz > zmqChunkSz) || (chunkSz + payloadSz) > zmqChunkSz))) {
+        if ((chunkSz > 0 && ((payloadSz > streamChunkSz) || (chunkSz + payloadSz) > streamChunkSz))) {
             break;
         }
         chunkSz += payloadSz;

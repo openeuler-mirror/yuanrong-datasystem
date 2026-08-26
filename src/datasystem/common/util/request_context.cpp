@@ -19,8 +19,8 @@
  *
  * Design: GetRequestContext() never returns nullptr.
  * - In brpc handlers: bthread_getspecific returns the pointer set by SetRequestContext().
- * - In ZMQ/pthread handlers: bthread_getspecific returns nullptr, fall back to a
- *   per-pthread static thread_local RequestContext.
+ * - In pthread handlers / background threads: bthread_getspecific returns nullptr,
+ *   fall back to a per-pthread static thread_local RequestContext.
  *
  * Callers simply write GetRequestContext()->xxx without any transport-mode checks.
  */
@@ -73,9 +73,9 @@ static RequestContext* GetFallbackRequestContext()
 // per-bthread Trace when a handler is active (ScopedRequestContext on the
 // current bthread), or nullptr otherwise so Trace::Instance() can fall back to
 // its thread_local instance. This keeps weak/strong semantics aligned (both may
-// return nullptr) and prevents background std::thread / async thread pool / ZMQ
-// handler paths from accidentally sharing the per-pthread fallback
-// RequestContext's Trace across tasks (would let traceID/latencyTicks leak). We
+// return nullptr) and prevents background std::thread / async thread pool paths
+// from accidentally sharing the per-pthread fallback RequestContext's Trace
+// across tasks (would let traceID/latencyTicks leak). We
 // intentionally do NOT call GetRequestContext() here, because its NEVER-nullptr
 // contract would always return a (fallback) Trace and make the nullptr signal
 // impossible to express.
@@ -230,9 +230,9 @@ RequestContext* GetRequestContext(const char* file, int line)
             "ScopedRequestContext as the first line of the handler.";
     }
     // No active ScopedRequestContext on this thread: use per-pthread fallback.
-    // ZMQ uses usercode_in_pthread=true, so each handler has a dedicated pthread
-    // and thread_local is safe. brpc background threads (EvictionTask, etc.) also
-    // land here — they never set a ScopedRequestContext.
+    // brpc background threads (EvictionTask, etc.) land here — they never set a
+    // ScopedRequestContext — and client/utility threads each own their pthread,
+    // so a per-pthread thread_local fallback is safe.
     return GetFallbackRequestContext();
 }
 

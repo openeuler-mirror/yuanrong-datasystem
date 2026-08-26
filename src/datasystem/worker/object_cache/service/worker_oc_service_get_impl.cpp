@@ -1524,7 +1524,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     } while (dataSizeChange);
     // At this point, we haven't materialized the payload which is still sitting in the tcp/ip buffers.
     // We either receive payload directly into shared memory or fall back to the old behavior to save
-    // the payload in ZMQ private memory
+    // the payload in the worker's private memory
     if (rspPb.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
         PerfPoint retrieveRemotePayloadPoint(PerfKey::WORKER_RETRIEVE_REMOTE_PAYLOAD);
         RETURN_IF_NOT_OK(RetrieveRemotePayload(address, objectKV, clientApi, rspPb));

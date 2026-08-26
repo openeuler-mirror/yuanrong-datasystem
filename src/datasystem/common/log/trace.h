@@ -148,11 +148,11 @@ public:
      * @brief Singleton mode, obtaining instance.
      * Under brpc M:N, returns the RequestContext's per-bthread Trace when a
      * ScopedRequestContext is active on the current bthread. Otherwise
-     * (background std::thread, client SDK threads, async thread pools, ZMQ
-     * pthread handlers, or any context without an active ScopedRequestContext),
-     * GetBthreadTrace() returns nullptr and this falls back to a per-pthread
-     * thread_local Trace, which is safe because such contexts each own their
-     * pthread or are cooperative-yield-free within a single LOG/Trace call.
+     * (background std::thread, client SDK threads, async thread pools, or any
+     * context without an active ScopedRequestContext), GetBthreadTrace()
+     * returns nullptr and this falls back to a per-pthread thread_local Trace,
+     * which is safe because such contexts each own their pthread or are
+     * cooperative-yield-free within a single LOG/Trace call.
      *
      * Implementation note: the body lives in trace.cpp (out-of-line). When the
      * body was inlined in this header, each DSO that includes trace.h got its

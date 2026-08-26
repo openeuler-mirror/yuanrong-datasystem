@@ -591,7 +591,7 @@ Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb
         if (subResp.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
             // At this point, we haven't materialized the payload which is still sitting in the tcp/ip buffers.
             // We either receive payload directly into shared memory or fall back to the old behavior to save
-            // the payload in ZMQ private memory
+            // the payload in the worker's private memory
             subRc = BatchGetRetrieveRemotePayload(subResp.data_size(), objectKV, payloads, payloadIndex);
         }
 

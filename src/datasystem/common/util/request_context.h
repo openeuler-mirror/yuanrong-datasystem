@@ -35,7 +35,7 @@
  *   // ... handler logic ...
  *   GetRequestContext()->workerTimeCost.Append("op", ms);  // always works
  *
- *   // ZMQ handler or utility code — no entry change needed
+ *   // Utility code (no active ScopedRequestContext) — no entry change needed
  *   GetRequestContext()->workerTimeCost.Append("op", ms);  // auto-fallback
  */
 
@@ -103,7 +103,7 @@ void SetRequestContext(RequestContext* ctx);
 
 // Get the RequestContext for the current execution context.
 // NEVER returns nullptr — falls back to a per-pthread static instance
-// when bthread_getspecific returns nullptr (ZMQ / user-thread paths).
+// when bthread_getspecific returns nullptr (user-thread / background-thread paths).
 // file/line parameters use __builtin_FILE()/__builtin_LINE() defaults so
 // error logs identify the exact call site when no ScopedRequestContext is active.
 RequestContext* GetRequestContext(const char* file = __builtin_FILE(), int line = __builtin_LINE());
@@ -142,7 +142,7 @@ class ScopedRequestContext {
 public:
     // When traceID is provided (brpc adapter extracts it from the request attachment),
     // use it directly — bypassing the unreliable brpc M:N thread_local fallback.
-    // When empty (legacy ZMQ path, or nested ScopedRequestContext in handler code),
+    // When empty (nested ScopedRequestContext in handler code, or non-adapter paths),
     // inherit traceID from Trace::Instance().GetTraceID() as before.
     explicit ScopedRequestContext(const std::string& traceID = "")
         : saved_(GetRequestContext())
@@ -195,9 +195,7 @@ public:
             // (outer) trace. Under brpc M:N, Trace::Instance() routes to this ctx_.trace
             // via bthread_getspecific, so without this restore the access recorder
             // (constructed inside the nested scope) sees requestLogTrace=false and
-            // sampling is bypassed. Under ZMQ, GetBthreadTrace() returns nullptr and
-            // Trace::Instance() is the thread_local singleton, so this restore is a
-            // no-op for ZMQ behavior.
+            // sampling is bypassed.
             if (saved_ != nullptr) {
                 bool outerAdmitted = false;
                 const bool outerHasDecision = saved_->trace.GetRequestSampleDecision(outerAdmitted);
@@ -221,7 +219,7 @@ private:
 
 // Client API boundary for BRPC mode. It keeps an already-active request context
 // unchanged for nested calls, but installs a fresh context when the caller only
-// has the unsafe per-pthread fallback. ZMQ keeps using its pthread-local context.
+// has the unsafe per-pthread fallback.
 class ScopedClientRequestContext {
 public:
     ScopedClientRequestContext();
