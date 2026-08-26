@@ -21,7 +21,6 @@
 
 #include "common.h"
 #include "sc_client_common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/stream/consumer.h"
 #include "datasystem/stream/element.h"
 #include "datasystem/stream/producer.h"

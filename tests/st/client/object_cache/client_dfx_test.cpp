@@ -42,7 +42,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "oc_client_common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #ifdef WITH_TESTS
 #include "datasystem/common/rpc/brpc_factory.h"

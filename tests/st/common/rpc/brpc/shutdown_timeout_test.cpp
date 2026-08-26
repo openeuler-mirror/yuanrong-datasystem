@@ -220,7 +220,6 @@ TEST_F(ShutdownTimeoutTest, StopBrpcServerIdempotentNoAbort)
     // This exercises the actual StopBrpcServer() code path.
     std::unique_ptr<RpcServer> rpcServer;
     ASSERT_EQ(RpcServer::Builder()
-                  .SetUseBrpc(true)
                   .SetBrpcAddr("127.0.0.1", kTestPortStop)
                   .Init(rpcServer),
               Status::OK());
@@ -271,7 +270,6 @@ TEST_F(ShutdownTimeoutTest, ConcurrentStopBrpcServerSerialized)
 
     std::unique_ptr<RpcServer> rpcServer;
     ASSERT_EQ(RpcServer::Builder()
-                  .SetUseBrpc(true)
                   .SetBrpcAddr("127.0.0.1", kTestPortConcurrent)
                   .Init(rpcServer),
               Status::OK());
@@ -314,7 +312,6 @@ TEST_F(ShutdownTimeoutTest, StopBrpcServerWithInFlightRpc)
 
     std::unique_ptr<RpcServer> rpcServer;
     ASSERT_EQ(RpcServer::Builder()
-                  .SetUseBrpc(true)
                   .SetBrpcAddr("127.0.0.1", kTestPortInFlight)
                   .Init(rpcServer),
               Status::OK());

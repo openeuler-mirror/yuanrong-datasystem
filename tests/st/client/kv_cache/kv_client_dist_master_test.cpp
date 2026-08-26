@@ -14,7 +14,7 @@
 /**
  * Description: State client tests.
  */
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/kv_client.h"

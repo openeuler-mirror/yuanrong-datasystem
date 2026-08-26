@@ -15,7 +15,7 @@
  */
 
 #include <unistd.h>
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/stream_client.h"
 

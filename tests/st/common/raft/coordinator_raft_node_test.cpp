@@ -372,7 +372,7 @@ protected:
         configurationHistory_->Clear();
         std::vector<std::string> bootstrapPeers(addresses_.begin(), addresses_.begin() + kBootstrapNodeCount);
         for (size_t i = 0; i < kMembershipNodeCount; ++i) {
-            auto status = RpcServer::Builder().SetUseBrpc(true).Init(rpcServers_[i]);
+            auto status = RpcServer::Builder().Init(rpcServers_[i]);
             ASSERT_TRUE(status.IsOk()) << status.ToString();
 
             coordinator::RaftStartPlan startPlan =
@@ -609,7 +609,7 @@ protected:
     void PrepareOneNode(coordinator::CoordinatorRaftEventCallbacks callbacks = {},
                         std::optional<coordinator::RaftStartPlan> startPlan = std::nullopt)
     {
-        auto status = RpcServer::Builder().SetUseBrpc(true).Init(rpcServer_);
+        auto status = RpcServer::Builder().Init(rpcServer_);
         ASSERT_TRUE(status.IsOk()) << status.ToString();
 
         localAddress_ = std::string(kLoopbackIp) + ":" + std::to_string(portLease_.Port());

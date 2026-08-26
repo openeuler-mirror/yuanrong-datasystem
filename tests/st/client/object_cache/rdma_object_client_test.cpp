@@ -23,7 +23,6 @@
 #include <chrono>
 #include <thread>
 
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"

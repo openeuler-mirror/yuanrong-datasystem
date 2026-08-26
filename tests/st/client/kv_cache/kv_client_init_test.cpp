@@ -203,9 +203,7 @@ TEST_F(KVClientInitTest, ConfigAfterDefaultInitDoesNotOverrideProcessConfig)
 
 TEST_F(KVClientInitTest, ExplicitEmptyLogNameUsesDefaultAndIgnoresEnv)
 {
-    if (FLAGS_use_brpc) {
-        GTEST_SKIP() << "brpc fork-safety: brpc channel/bthread global state not fork-safe. Tracked separately.";
-    }
+    GTEST_SKIP() << "brpc fork-safety: brpc channel/bthread global state not fork-safe. Tracked separately.";
     auto connectOptions = GetConnectOptions();
     RunInChildProcess([connectOptions]() -> int {
         setenv("DATASYSTEM_CLIENT_LOG_NAME", "env_client", 1);

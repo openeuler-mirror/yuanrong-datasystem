@@ -373,7 +373,6 @@ protected:
     std::string targetKey_;
     std::vector<std::shared_ptr<KVClient>> clients_;
     bool clusterStarted_ = false;
-    bool previousUseBrpc_ = false;
 };
 
 class CoordinatorActiveFailureTwoWorkerTest : public CoordinatorActiveFailureStopResumeTest {

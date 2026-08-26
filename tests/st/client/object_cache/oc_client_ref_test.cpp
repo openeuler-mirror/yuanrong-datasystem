@@ -16,7 +16,7 @@
  */
 #include "oc_client_common.h"
 
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"

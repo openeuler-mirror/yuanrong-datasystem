@@ -733,7 +733,7 @@ void CoordinatorServiceImpl::ConfigureRpcService()
 
     brpcAddr_ = coordinatorAddr_.Host();
     brpcPort_ = coordinatorAddr_.Port();
-    builder_.SetUseBrpc(true).SetBrpcAddr(brpcAddr_, brpcPort_);
+    builder_.SetBrpcAddr(brpcAddr_, brpcPort_);
     builder_.AddService(this, cfg);
 }
 

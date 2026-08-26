@@ -34,7 +34,7 @@
 #include <unistd.h>
 
 #include "client/object_cache/oc_client_common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"

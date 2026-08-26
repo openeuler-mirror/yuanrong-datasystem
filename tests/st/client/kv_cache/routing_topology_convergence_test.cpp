@@ -263,7 +263,6 @@ protected:
     std::shared_ptr<KVClient> multiPublishClient_;
     std::shared_ptr<KVClient> createClient_;
     std::shared_ptr<KVClient> multiCreateClient_;
-    bool previousUseBrpc_ = false;
 };
 
 TEST_F(RoutingTopologyConvergenceTest, U6ScaleDownRejectsWritesAndConvergesRouting)

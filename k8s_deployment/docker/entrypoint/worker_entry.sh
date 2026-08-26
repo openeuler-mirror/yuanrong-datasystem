@@ -100,7 +100,6 @@ BASE_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
     while [ ! -f "${HEALTH_CHECK_PATH}" ]; do
         sleep 1
     done
-    [[ -d "${DS_CURVE_KEY_DIR}" ]] && rm -rf "${DS_CURVE_KEY_DIR:?}/"*
     [[ -d "${A_DIR}" ]] && rm -rf "${A_DIR:?}/"*
     [[ -d "${B_DIR}" ]] && rm -rf "${B_DIR:?}/"*
     [[ -d "${C_DIR}" ]] && rm -rf "${C_DIR:?}/"*

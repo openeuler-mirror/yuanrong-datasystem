@@ -431,7 +431,6 @@ protected:
     std::unique_ptr<EtcdStore> etcd_;
     std::vector<std::unique_ptr<worker::WorkerRemoteMasterOCApi>> masterApis_;
     std::string queryAddress_;
-    bool previousUseBrpc_ = false;
     DataPlacementPolicy routedDataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_META_OWNER;
 };
 

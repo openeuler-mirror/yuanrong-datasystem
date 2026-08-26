@@ -103,10 +103,6 @@
     "value": "10000",
     "description": "Interval in milliseconds between Coordinator typed metrics summary emissions. Must be greater than 0."
   },
-  "use_brpc": {
-    "value": "true",
-    "description": "Use brpc instead of ZMQ for RPC communication. When enabled, brpc owns the worker TCP port exclusively (same port as worker_address, no offset) and the ZMQ TCP endpoint is skipped. Per-service thread pools (rpc_thread_num, oc_thread_num, etc.) still apply. Default is true (also reads the DATASYSTEM_USE_BRPC env var)."
-  },
   "brpc_server_num_threads": {
     "value": "64",
     "description": "Number of brpc server worker threads (bthread worker pool size). Default is 64."

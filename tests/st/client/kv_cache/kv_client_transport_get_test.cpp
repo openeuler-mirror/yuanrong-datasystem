@@ -554,7 +554,6 @@ protected:
     std::shared_ptr<KVClient> reader_;
     bool hadPreviousUbGetSize_ = false;
     std::string previousUbGetSize_;
-    bool previousUseBrpc_ = false;
 };
 
 class KVClientTransportGetWithShmTest : public KVClientTransportGetTest {
@@ -2357,7 +2356,6 @@ protected:
 
     std::shared_ptr<KVClient> writer_;
     std::shared_ptr<KVClient> reader_;
-    bool previousUseBrpc_ = false;
 };
 
 // Baseline: a direct Get with SHM enabled succeeds and returns the written value.

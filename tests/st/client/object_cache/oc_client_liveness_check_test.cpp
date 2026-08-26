@@ -20,7 +20,6 @@
 
 #include <chrono>
 #include <thread>
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"

@@ -132,8 +132,6 @@ const std::unordered_set<std::string> &ClientUsedFlagNames()
         "monitor_config_file",
         // ---- client slow-log thresholds (GetClientLatencyTraceConfig on client path) ----
         "client_slow_log_process_slower_than", "client_slow_log_rpc_slower_than",
-        // ---- RPC backend selection (every client RPC / startup path) ----
-        "use_brpc",
         // ---- URMA data-plane (client UB transport + failover) ----
         "enable_urma", "urma_send_jetty_lane_pool_size",
         "urma_failover_success_rate_ratio", "urma_failover_min_sample_count",

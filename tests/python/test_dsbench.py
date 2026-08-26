@@ -25,19 +25,6 @@ from yr.datasystem.cli.benchmark.kv.bench_suite_builder import KVBenchSuiteBuild
 from yr.datasystem.cli.benchmark.task import BenchArgs
 
 
-def make_test_case():
-    args = argparse.Namespace(min_log_level=2, log_monitor_enable=False)
-    bench_args = BenchArgs(
-        name="bench_kv",
-        start_time="20260724160000",
-        cwd="/tmp",
-        log_dir="/tmp/dsbench-test",
-        result_csv_file="result.csv",
-        args=args,
-    )
-    return BenchTestCase("set", bench_args, None)
-
-
 def make_kv_test_case(**overrides):
     values = {
         "owner_worker": "",
@@ -69,19 +56,6 @@ def make_kv_test_case(**overrides):
         args=args,
     )
     return KVBenchTestCase("placement", bench_args, None, 1)
-
-
-class DsbenchEnvironmentTest(unittest.TestCase):
-    def test_use_brpc_environment_is_forwarded(self):
-        test_case = make_test_case()
-        for value in ("true", "false"):
-            with self.subTest(value=value), patch.dict(os.environ, {"DATASYSTEM_USE_BRPC": value}):
-                self.assertEqual(test_case.generate_env()["DATASYSTEM_USE_BRPC"], value)
-
-    def test_use_brpc_environment_is_omitted_when_unset(self):
-        test_case = make_test_case()
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertNotIn("DATASYSTEM_USE_BRPC", test_case.generate_env())
 
 
 class DsbenchDataPlacementTest(unittest.TestCase):

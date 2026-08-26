@@ -1183,13 +1183,10 @@ TEST_F(NotifyRemoteGetMigrationTest, GetObjectFromAnywhereAllowsNullRequestWithR
 
 TEST_F(NotifyRemoteGetMigrationTest, DispatchQueryMetadataGroupsKeepsPeerDeadOverOtherErrors)
 {
-    const bool oldUseBrpc = FLAGS_use_brpc;
-    Raii restoreFlag([oldUseBrpc]() { FLAGS_use_brpc = oldUseBrpc; });
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(1'000);
 
-    auto run = [this](bool useBrpc) {
-        FLAGS_use_brpc = useBrpc;
+    auto run = [this] {
         std::unordered_map<HostPort, std::vector<std::string>> groups;
         groups.emplace(localAddress_, std::vector<std::string>{ "local-owner-key" });
         groups.emplace(leavingWorkerAddress_, std::vector<std::string>{ "dead-owner-key" });
@@ -1215,19 +1212,14 @@ TEST_F(NotifyRemoteGetMigrationTest, DispatchQueryMetadataGroupsKeepsPeerDeadOve
         return impl_->DispatchQueryMetadataGroups(groups, 0, results);
     };
 
-    EXPECT_EQ(run(true).GetCode(), K_RPC_PEER_DEAD);
-    EXPECT_EQ(run(false).GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_EQ(run().GetCode(), K_RPC_PEER_DEAD);
 }
 
 TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataKeepsPeerDeadWhenAnotherOwnerResponseIsInvalid)
 {
-    const bool oldUseBrpc = FLAGS_use_brpc;
-    Raii restoreFlag([oldUseBrpc]() { FLAGS_use_brpc = oldUseBrpc; });
-
-    auto run = [this](bool useBrpc) {
-        FLAGS_use_brpc = useBrpc;
-        const std::string deadKey = useBrpc ? "merge-peer-dead-brpc" : "merge-peer-dead-threadpool";
-        const std::string malformedKey = useBrpc ? "merge-malformed-brpc" : "merge-malformed-threadpool";
+    auto run = [this] {
+        const std::string deadKey = "merge-peer-dead";
+        const std::string malformedKey = "merge-malformed";
         RouteObjectToMaster(deadKey, leavingWorkerAddress_);
         RouteObjectToMaster(malformedKey, localAddress_);
 
@@ -1251,8 +1243,7 @@ TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataKeepsPeerDeadWhenAnotherOwnerR
         return impl_->QueryMetadataFromMaster({ deadKey, malformedKey }, 0, result);
     };
 
-    EXPECT_EQ(run(true).GetCode(), K_RPC_PEER_DEAD);
-    EXPECT_EQ(run(false).GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_EQ(run().GetCode(), K_RPC_PEER_DEAD);
 }
 
 TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataReturnsErrorWhenEtcdStoreUnavailable)

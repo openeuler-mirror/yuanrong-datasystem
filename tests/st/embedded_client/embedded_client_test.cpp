@@ -29,7 +29,7 @@
 #include <vector>
 
 #include "common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"

@@ -34,7 +34,7 @@
 #include "cluster/external_cluster.h"
 #include "common.h"
 #include "common_distributed_ext.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/kv_client.h"

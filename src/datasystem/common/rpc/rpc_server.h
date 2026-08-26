@@ -98,17 +98,6 @@ public:
         }
 
         /**
-         * @brief Enable brpc mode instead of ZMQ.
-         * @param[in] use Whether to use brpc.
-         * @return Reference to this builder.
-         */
-        Builder &SetUseBrpc(bool use)
-        {
-            useBrpc_ = use;
-            return *this;
-        }
-
-        /**
          * @brief Set brpc listen address.
          * @param[in] addr IP address.
          * @param[in] port Port number.
@@ -124,12 +113,10 @@ public:
         /**
          * @brief Build and start RPC server.
          *
-         * In ZMQ mode (useBrpc_=false): starts ZMQ server and returns.
-         * In brpc mode (useBrpc_=true):  only builds the server skeleton;
-         *   does NOT start brpc.  The caller must register brpc adapter
-         *   services via AddBrpcService(), then call
-         *   server->StartBrpcServer(brpcAddr_, brpcPort_) explicitly.
-         *   See WorkerOCServer::Init() for the canonical usage pattern.
+         * Only builds the server skeleton; does NOT start brpc. The caller must
+         * register brpc adapter services via AddBrpcService(), then call
+         * server->StartBrpcServer(brpcAddr_, brpcPort_) explicitly.
+         * See WorkerOCServer::Init() for the canonical usage pattern.
          *
          * @param[out] server Built rpc server.
          * @return Status of the call.
@@ -160,7 +147,6 @@ public:
     private:
         std::vector<std::pair<RpcServiceBase *, RpcServiceCfg>> svcList_;
         std::function<Status()> preStartCallback_{};
-        bool useBrpc_ = false;
         std::string brpcAddr_;
         int brpcPort_ = 0;
     };
@@ -247,7 +233,7 @@ public:
      */
     bool IsBrpc() const
     {
-        return useBrpc_;
+        return true;
     }
 
     /**
@@ -284,7 +270,6 @@ private:
 
     std::map<std::string, RpcServiceBase *> svcMap_;
     std::unique_ptr<brpc::Server> brpcServer_;
-    bool useBrpc_ = false;
     std::mutex brpcStopMtx_;  ///< Serializes StopBrpcServer() concurrent calls.
 };
 }  // namespace datasystem

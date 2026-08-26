@@ -29,7 +29,7 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/file_util.h"

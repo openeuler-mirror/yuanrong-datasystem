@@ -41,8 +41,6 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 
-DS_DECLARE_bool(use_brpc);
-
 namespace datasystem {
 namespace st {
 namespace {
@@ -76,8 +74,6 @@ public:
 
     void SetUp() override
     {
-        previousUseBrpc_ = FLAGS_use_brpc;
-        FLAGS_use_brpc = true;
         ExternalClusterTest::SetUp();
         WaitForWorkersActive();
         InitTestKVClient(0, client0_);
@@ -89,7 +85,6 @@ public:
         client0_.reset();
         client1_.reset();
         ExternalClusterTest::TearDown();
-        FLAGS_use_brpc = previousUseBrpc_;
     }
 
     // Block until the named inject point has been hit on the given worker so the test can
@@ -152,7 +147,6 @@ public:
 protected:
     std::shared_ptr<KVClient> client0_;
     std::shared_ptr<KVClient> client1_;
-    bool previousUseBrpc_ = false;
 
 private:
     void WaitForWorkersActive()
