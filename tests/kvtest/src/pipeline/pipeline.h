@@ -11,13 +11,13 @@
 #include <string>
 #include <vector>
 
-// Measure execution time of a function. Returns true if fn succeeded.
-inline bool Measure(std::function<datasystem::Status()> fn, double &latencyMs) {
+// Measure execution time of a function. Returns the Status produced by fn.
+inline datasystem::Status Measure(std::function<datasystem::Status()> fn, double &latencyMs) {
     auto start = std::chrono::steady_clock::now();
     datasystem::Status rc = fn();
     auto end = std::chrono::steady_clock::now();
     latencyMs = std::chrono::duration<double, std::milli>(end - start).count();
-    return rc.IsOk();
+    return rc;
 }
 
 struct PipelineContext {
@@ -37,10 +37,13 @@ struct PipelineContext {
     class MetricsCollector *metrics = nullptr;
 };
 
-std::string GenerateTraceId(const char *prefix);
+// Build a traceId that is unique across worker instances running on the same
+// host. The instanceId prefix disambiguates workers that happen to share a
+// pid (e.g. after a restart) while the trailing index keeps it sortable.
+std::string GenerateTraceId(const char *prefix, int instanceId);
 
-// Op function: returns true on success, fills latencyMs.
-using OpFunc = std::function<bool(PipelineContext &ctx, double &latencyMs)>;
+// Op function: returns Status::OK() on success and fills latencyMs.
+using OpFunc = std::function<datasystem::Status(PipelineContext &ctx, double &latencyMs)>;
 
 // Op name constants
 inline constexpr const char *kOpSetStringView = "setStringView";
@@ -72,4 +75,5 @@ bool ExecutePipeline(
     const std::vector<std::pair<std::string, OpFunc>> &ops,
     PipelineContext &ctx,
     class MetricsCollector &metrics,
-    std::atomic<uint64_t> &verifyFailCount);
+    std::atomic<uint64_t> &verifyFailCount,
+    int instanceId);

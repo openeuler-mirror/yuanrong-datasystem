@@ -3,9 +3,12 @@
 // Run:   ./gen_metrics_output <output_dir>
 
 #include "metrics/metrics.h"
+#include <datasystem/utils/status.h>
 #include <cstdio>
 #include <filesystem>
 #include <thread>
+
+using namespace datasystem;
 
 static std::string sub(const std::string &base, const std::string &name) {
     auto p = base + "/" + name;
@@ -24,7 +27,7 @@ int main(int argc, char **argv) {
         MetricsCollector m(0, 100, d);
         m.Start();
         for (int i = 0; i < 200; i++) {
-            m.Record("setStringView", static_cast<double>(i % 50 + 1), true, 1024 * (i % 10 + 1));
+            m.Record("setStringView", static_cast<double>(i % 50 + 1), static_cast<uint32_t>(StatusCode::K_OK), 1024 * (i % 10 + 1));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         m.Stop();
@@ -37,13 +40,17 @@ int main(int argc, char **argv) {
         MetricsCollector m(1, 100, d);
         m.Start();
         for (int i = 0; i < 100; i++) {
-            m.Record("getBuffer", static_cast<double>(i % 30 + 1), i % 10 != 0);
+            m.Record("getBuffer", static_cast<double>(i % 30 + 1),
+                     i % 10 != 0 ? static_cast<uint32_t>(StatusCode::K_OK)
+                                 : static_cast<uint32_t>(StatusCode::K_RUNTIME_ERROR));
         }
         for (int i = 0; i < 50; i++) {
-            m.Record("exist", static_cast<double>(i % 5 + 1), true);
+            m.Record("exist", static_cast<double>(i % 5 + 1), static_cast<uint32_t>(StatusCode::K_OK));
         }
         for (int i = 0; i < 80; i++) {
-            m.Record("mCreate", static_cast<double>(i % 20 + 1), i % 5 != 0, 4096);
+            m.Record("mCreate", static_cast<double>(i % 20 + 1),
+                     i % 5 != 0 ? static_cast<uint32_t>(StatusCode::K_OK)
+                                 : static_cast<uint32_t>(StatusCode::K_RUNTIME_ERROR), 4096);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         m.Stop();
@@ -58,7 +65,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 75; i++) m.RecordCacheHit();
         for (int i = 0; i < 25; i++) m.RecordCacheMiss();
         for (int i = 0; i < 50; i++) {
-            m.Record("cacheGetOrCreate", static_cast<double>(i % 10 + 1), true);
+            m.Record("cacheGetOrCreate", static_cast<double>(i % 10 + 1), static_cast<uint32_t>(StatusCode::K_OK));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         m.Stop();
@@ -72,10 +79,10 @@ int main(int argc, char **argv) {
         m.SetQpsStages({100, 200, 500}, 60);
         m.Start();
         for (int i = 0; i < 500; i++) {
-            m.Record("setStringView", static_cast<double>(i % 100 + 1), true, 8192);
+            m.Record("setStringView", static_cast<double>(i % 100 + 1), static_cast<uint32_t>(StatusCode::K_OK), 8192);
         }
         for (int i = 0; i < 200; i++) {
-            m.Record("mSet", static_cast<double>(i % 50 + 1), true, 4096);
+            m.Record("mSet", static_cast<double>(i % 50 + 1), static_cast<uint32_t>(StatusCode::K_OK), 4096);
         }
         m.RecordVerifyFail();
         m.RecordVerifyFail();
@@ -91,7 +98,7 @@ int main(int argc, char **argv) {
         MetricsCollector m(4, 200, d);
         m.Start();
         for (int i = 0; i < 50000; i++) {
-            m.Record("setStringView", static_cast<double>(i % 200 + 1), true, 1024);
+            m.Record("setStringView", static_cast<double>(i % 200 + 1), static_cast<uint32_t>(StatusCode::K_OK), 1024);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
         m.Stop();
@@ -103,7 +110,7 @@ int main(int argc, char **argv) {
         auto d = sub(dir, "06_json_stats");
         MetricsCollector m(99, 1000, d);
         m.Start();
-        for (int i = 0; i < 10; i++) m.Record("setStringView", static_cast<double>(i + 1), true);
+        for (int i = 0; i < 10; i++) m.Record("setStringView", static_cast<double>(i + 1), static_cast<uint32_t>(StatusCode::K_OK));
         auto json = m.GetStatsJson();
         m.Stop();
         // Write JSON to file

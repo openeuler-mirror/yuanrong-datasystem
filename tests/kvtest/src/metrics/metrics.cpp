@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <sstream>
 #include <thread>
+#include <datasystem/utils/status.h>
 #include "vendor/nlohmann_json.hpp"
 
 using json = nlohmann::json;
@@ -36,11 +37,17 @@ OpMetrics& MetricsCollector::GetOrCreateOp(const std::string &op) {
     return ref;
 }
 
-void MetricsCollector::Record(const std::string &op, double latencyMs, bool success, uint64_t bytes) {
+void MetricsCollector::Record(const std::string &op, double latencyMs, uint32_t code, uint64_t bytes) {
     auto &m = GetOrCreateOp(op);
     m.totalCount++;
-    if (success) m.successCount++;
-    else m.failCount++;
+    if (code == static_cast<uint32_t>(datasystem::StatusCode::K_OK)) {
+        m.successCount++;
+    } else {
+        m.failCount++;
+        if (code == static_cast<uint32_t>(datasystem::StatusCode::K_NOT_FOUND)) {
+            m.notFindFailCount++;
+        }
+    }
     m.totalBytes += bytes;
 
     {
@@ -50,11 +57,10 @@ void MetricsCollector::Record(const std::string &op, double latencyMs, bool succ
     }
     {
         std::lock_guard<std::mutex> lock(m.globalMutex);
-        if (m.globalRing.empty()) return;  // not yet initialized
-        size_t cap = m.globalRing.size();
-        m.globalRing[m.globalHead] = latencyMs;
-        m.globalHead = (m.globalHead + 1) % cap;
-        if (m.globalCount < cap) m.globalCount++;
+        m.gDigest->add(latencyMs);
+        m.sumLatency += latencyMs;
+        if (latencyMs < m.minV) m.minV = latencyMs;
+        if (latencyMs > m.maxV) m.maxV = latencyMs;
     }
 }
 
@@ -63,12 +69,12 @@ void MetricsCollector::RecordVerifyFail() {
 }
 
 void MetricsCollector::Start() {
-    // Pre-create all pipeline op types and pre-allocate ring buffers
-    // Reserve to prevent reallocation (which would invalidate opsMap_ pointers)
+    // Pre-create all pipeline op types so the hot path can find them without
+    // taking opsMutex_. Reserve to prevent reallocation (which would
+    // invalidate opsMap_ pointers).
     ops_.reserve(GetAllOpNames(cacheModeEnabled_).size());
     for (auto *name : GetAllOpNames(cacheModeEnabled_)) {
-        auto &m = GetOrCreateOp(name);
-        m.globalRing.resize(100000);
+        (void)GetOrCreateOp(name);
     }
 
     startTime_ = std::chrono::steady_clock::now();
@@ -183,36 +189,34 @@ void MetricsCollector::WriteSummary() {
     f << "Uptime: " << uptime << " seconds\n\n";
 
     for (auto &m : ops_) {
-        std::vector<double> latencies;
+        f << "--- " << m->opName << " ---\n";
+        f << "Total: " << m->totalCount << ", Success: " << m->successCount
+          << ", Fail: " << m->failCount << ", Not_Find: " << m->notFindFailCount << "\n";
+
+        double avg = 0;
+        double p90 = 0;
+        double p99 = 0;
+        double p999 = 0;
+        double p9999 = 0;
+        double minV = 0;
+        double maxV = 0;
+        uint64_t sampleCount = 0;
         {
             std::lock_guard<std::mutex> lock(m->globalMutex);
-            if (m->globalCount < m->globalRing.size()) {
-                latencies.assign(m->globalRing.begin(),
-                                m->globalRing.begin() + m->globalCount);
-            } else {
-                latencies.assign(m->globalRing.begin() + m->globalHead,
-                                m->globalRing.end());
-                latencies.insert(latencies.end(),
-                                m->globalRing.begin(),
-                                m->globalRing.begin() + m->globalHead);
+            m->gDigest->compress();
+            sampleCount = m->totalCount.load();
+            if (sampleCount > 0) {
+                avg = m->sumLatency / sampleCount;
+                p90 = m->gDigest->quantile(0.9);
+                p99 = m->gDigest->quantile(0.99);
+                p999 = m->gDigest->quantile(0.999);
+                p9999 = m->gDigest->quantile(0.9999);
+                minV = m->minV;
+                maxV = m->maxV;
             }
         }
 
-        f << "--- " << m->opName << " ---\n";
-        f << "Total: " << m->totalCount << ", Success: " << m->successCount
-          << ", Fail: " << m->failCount << "\n";
-
-        if (!latencies.empty()) {
-            std::sort(latencies.begin(), latencies.end());
-            double sum = 0;
-            for (auto l : latencies) sum += l;
-            double avg = sum / latencies.size();
-            double p90 = Percentile(latencies, 90.0);
-            double p99 = Percentile(latencies, 99.0);
-            double p999 = Percentile(latencies, 99.9);
-            double p9999 = Percentile(latencies, 99.99);
-            double minV = latencies.front();
-            double maxV = latencies.back();
+        if (sampleCount > 0) {
             double qps = uptime > 0 ? (double)m->totalCount.load() / uptime : 0;
             uint64_t bytes = m->totalBytes.load();
             double throughputMB = uptime > 0 ? bytes / (1024.0 * 1024.0) / uptime : 0;

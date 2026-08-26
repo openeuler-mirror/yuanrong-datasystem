@@ -129,6 +129,15 @@ def install_fake_native_module():
     fake_ds.CoordinatorServiceDiscovery = FakeNativeDiscovery
     fake_ds.KVClient = FakeNativeKVClient
     fake_ds.ExistenceOpt = type("ExistenceOpt", (), {"NONE": 0, "NX": 1})
+    fake_ds.DataPlacementPolicy = type(
+        "DataPlacementPolicy",
+        (),
+        {
+            "PREFERRED_SAME_NODE": 0,
+            "REQUIRED_SAME_NODE": 1,
+            "PREFERRED_META_OWNER": 2,
+        },
+    )
     fake_ds.WriteMode = type(
         "WriteMode",
         (),
@@ -205,7 +214,7 @@ class TestServiceDiscoveryApi(unittest.TestCase):
         self.assertEqual(native_discovery.init_calls, 1)
         self.assertEqual(native_discovery.select_worker_calls, 0)
         self.assertEqual(len(FakeNativeKVClient.instances), 1)
-        self.assertIs(FakeNativeKVClient.instances[0].args[-1], native_discovery)
+        self.assertIs(FakeNativeKVClient.instances[0].args[-3], native_discovery)
 
     def test_kv_client_passes_etcd_discovery_to_native_client(self):
         discovery_module = importlib.import_module("yr.datasystem.service_discovery")
@@ -220,7 +229,7 @@ class TestServiceDiscoveryApi(unittest.TestCase):
         kv_module.KVClient(service_discovery=service_discovery, enable_cross_node_connection=True)
 
         self.assertEqual(len(FakeNativeKVClient.instances), 1)
-        self.assertIs(FakeNativeKVClient.instances[0].args[-1], service_discovery.native_discovery)
+        self.assertIs(FakeNativeKVClient.instances[0].args[-3], service_discovery.native_discovery)
         self.assertEqual(service_discovery.native_discovery.options.cluster_name, "cluster-a")
 
     def test_kv_client_without_discovery_uses_host_port(self):
@@ -231,7 +240,7 @@ class TestServiceDiscoveryApi(unittest.TestCase):
         self.assertEqual(len(FakeNativeKVClient.instances), 1)
         self.assertEqual(FakeNativeKVClient.instances[0].args[0], "worker-address")
         self.assertEqual(FakeNativeKVClient.instances[0].args[1], 1234)
-        self.assertEqual(len(FakeNativeKVClient.instances[0].args), 13)
+        self.assertEqual(len(FakeNativeKVClient.instances[0].args), 15)
 
     def test_kv_client_rejects_uninitialized_discovery(self):
         discovery_module = importlib.import_module("yr.datasystem.service_discovery")

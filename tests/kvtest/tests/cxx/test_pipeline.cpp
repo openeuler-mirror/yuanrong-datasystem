@@ -58,7 +58,7 @@ TEST(ExecutePipeline_Empty) {
     std::atomic<uint64_t> vf{0};
     PipelineContext ctx;
     std::vector<std::pair<std::string, OpFunc>> ops;
-    bool ok = ExecutePipeline(ops, ctx, m, vf);
+    bool ok = ExecutePipeline(ops, ctx, m, vf, 0);
     ASSERT_TRUE(ok);
     m.Stop();
     std::filesystem::remove_all("/tmp/kvtest_pipeline_test");

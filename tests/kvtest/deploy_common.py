@@ -15,11 +15,66 @@ passed into the shared helpers as parameters.
 import base64
 import glob
 import json
+import logging
 import os
 import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+# Two-stream design preserves print()'s stdout/stderr split: log_info goes to
+# stdout (visible in normal pipe captures), log_info/log_error go to
+# stderr (visible even when stdout is redirected to /dev/null). Format is the
+# raw message only — no timestamp, no level prefix — so existing callers and
+# CI greps that parsed print() output keep working unchanged. setup_logging()
+# in each deploy_*.main() flips to DEBUG when --verbose is set.
+
+_stdout_logger = logging.getLogger('deploy.stdout')
+_stderr_logger = logging.getLogger('deploy.stderr')
+for _lg in (_stdout_logger, _stderr_logger):
+    _lg.handlers = []
+    _lg.propagate = False
+
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setFormatter(logging.Formatter('%(message)s'))
+_stdout_logger.addHandler(_stdout_handler)
+_stdout_logger.setLevel(logging.INFO)
+
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setFormatter(logging.Formatter('%(message)s'))
+_stderr_logger.addHandler(_stderr_handler)
+_stderr_logger.setLevel(logging.WARNING)
+
+
+def setup_logging(verbose: bool = False) -> None:
+    """Configure deploy loggers. Idempotent; safe to call multiple times.
+
+    Optional; if a main() never calls this, log_info/warning/error still work
+    using the default INFO/WARNING levels installed at import time. Pass
+    verbose=True to lower both thresholds to DEBUG.
+    """
+    _stdout_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    _stderr_logger.setLevel(logging.DEBUG if verbose else logging.WARNING)
+
+
+def log_info(msg, *args):
+    """Info-level message to stdout. Drop-in for ``print(msg)``."""
+    if args:
+        _stdout_logger.info(msg, *args)
+    else:
+        _stdout_logger.info(msg)
+
+
+def log_error(msg, *args):
+    """Error-level message to stderr. Drop-in for ``print(msg, file=sys.stderr)``."""
+    if args:
+        _stderr_logger.error(msg, *args)
+    else:
+        _stderr_logger.error(msg)
 
 
 # Default timeout for all kubectl operations (seconds).
@@ -43,10 +98,10 @@ def get_pods(namespace, prefixes):
              '--field-selector=status.phase=Running'],
             text=True, timeout=DEFAULT_TIMEOUT)
     except FileNotFoundError:
-        print('ERROR: kubectl not found', file=sys.stderr)
+        log_error('ERROR: kubectl not found')
         sys.exit(1)
     except subprocess.CalledProcessError as e:
-        print(f'ERROR: kubectl failed: {e.stderr}', file=sys.stderr)
+        log_error(f'ERROR: kubectl failed: {e.stderr}')
         sys.exit(1)
 
     prefixes = list(prefixes or [])
@@ -66,7 +121,7 @@ def get_pods(namespace, prefixes):
     pods.sort(key=lambda p: p['name'])
     for p in prefixes:
         if not any(pod['name'].startswith(p) for pod in pods):
-            print(f'WARNING: prefix "{p}" matched 0 pods', file=sys.stderr)
+            log_error(f'WARNING: prefix "{p}" matched 0 pods')
     return pods
 
 
@@ -88,10 +143,10 @@ def discover_nodes(timeout=DEFAULT_TIMEOUT):
             ['kubectl', 'get', 'nodes', '-o', 'json'],
             text=True, timeout=timeout)
     except FileNotFoundError:
-        print('ERROR: kubectl not found', file=sys.stderr)
+        log_error('ERROR: kubectl not found')
         return []
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        print(f'ERROR: kubectl get nodes failed: {e}', file=sys.stderr)
+        log_error(f'ERROR: kubectl get nodes failed: {e}')
         return []
 
     nodes = []
@@ -180,7 +235,7 @@ def start_procmon(pod, namespace, target_pid, remote_dir='/tmp',
            f'--output resource_monitor.log --background')
     try:
         result = kubectl_exec(pod['name'], namespace, cmd,
-                               check=False, timeout=timeout)
+                              check=False, timeout=timeout)
         pid = result.stdout.strip()
         if pid and pid.isdigit():
             return pid
@@ -208,12 +263,12 @@ def resolve_procmon_dir(config_template, remote_config):
 def find_pid_by_port(pod, namespace, port, process_name, timeout=DEFAULT_TIMEOUT):
     """Find service PID by listening port, falling back to pgrep on process name."""
     result = kubectl_exec(pod['name'], namespace,
-        f'ss -tlnp \'sport = :{port}\' 2>/dev/null | grep -oP \'pid=\\K[0-9]+\' | head -1',
-        check=False, timeout=timeout)
+                          f'ss -tlnp \'sport = :{port}\' 2>/dev/null | grep -oP \'pid=\\K[0-9]+\' | head -1',
+                          check=False, timeout=timeout)
     if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip().split('\n')[0]
     result = kubectl_exec(pod['name'], namespace,
-        f'pgrep -f {process_name} | head -1', check=False, timeout=timeout)
+                          f'pgrep -f {process_name} | head -1', check=False, timeout=timeout)
     if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip().split('\n')[0]
     return None
@@ -221,7 +276,7 @@ def find_pid_by_port(pod, namespace, port, process_name, timeout=DEFAULT_TIMEOUT
 
 def do_for_all_pods(pods, do_op, desc):
     """Execute operation for all pods in parallel."""
-    print(f'\n{desc}...')
+    log_info(f'\n{desc}...')
     results = []
     with ThreadPoolExecutor(max_workers=len(pods)) as pool:
         futures = {pool.submit(do_op, pod): pod for pod in pods}
@@ -229,7 +284,7 @@ def do_for_all_pods(pods, do_op, desc):
             results.append(future.result())
 
     ok = sum(1 for r in results if r)
-    print(f'\nResult: {ok}/{len(results)} succeeded')
+    log_info(f'\nResult: {ok}/{len(results)} succeeded')
     return 0 if ok == len(results) else 1
 
 
@@ -243,8 +298,8 @@ def check_process(pod, namespace, process_name, timeout=DEFAULT_TIMEOUT):
     pod_name = pod['name']
     try:
         result = kubectl_exec(pod_name, namespace,
-            f'ps aux | grep "{process_name}" | grep -v grep | wc -l',
-            check=False, timeout=timeout)
+                              f'ps aux | grep "{process_name}" | grep -v grep | wc -l',
+                              check=False, timeout=timeout)
     except subprocess.TimeoutExpired:
         return (pod, 'error', 'timeout')
     if result.returncode != 0:
@@ -259,16 +314,16 @@ def kill_process(pod, namespace, process_name, timeout=DEFAULT_TIMEOUT):
     pod_ip = pod['ip']
     try:
         kubectl_exec(pod_name, namespace,
-            f'pgrep -f {process_name} | xargs -r kill -9; '
-            f'pgrep -f procmon.py | xargs -r kill -9',
-            check=False, timeout=timeout)
-        print(f'  {pod_name} ({pod_ip}) -> killed')
+                     f'pgrep -f {process_name} | xargs -r kill -9; '
+                     f'pgrep -f procmon.py | xargs -r kill -9',
+                     check=False, timeout=timeout)
+        log_info(f'  {pod_name} ({pod_ip}) -> killed')
         return True
     except subprocess.TimeoutExpired:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
         return False
     except Exception as e:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
         return False
 
 
@@ -284,18 +339,18 @@ def stop_service(pod, namespace, remote_config, timeout=DEFAULT_TIMEOUT,
     flag = '-C' if service_type == 'coordinator' else '-W'
     try:
         kubectl_exec(pod_name, namespace, f'dscli stop {flag} {remote_config} -t {timeout}',
-                      timeout=timeout)
-        print(f'  {pod_name} ({pod_ip}) -> stopped')
+                     timeout=timeout)
+        log_info(f'  {pod_name} ({pod_ip}) -> stopped')
         return True
     except subprocess.TimeoutExpired:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
         return False
     except subprocess.CalledProcessError as e:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: '
-              f'{e.stderr.strip() if e.stderr else "unknown"}')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: '
+                 f'{e.stderr.strip() if e.stderr else "unknown"}')
         return False
     except Exception as e:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
         return False
 
 
@@ -325,23 +380,23 @@ def install_whl(pod, namespace, whl_path, timeout=DEFAULT_TIMEOUT):
     remote_whl = f'/tmp/{os.path.basename(whl_path)}'
 
     try:
-        print(f'  {pod_name} ({pod_ip}) -> copying whl...')
+        log_info(f'  {pod_name} ({pod_ip}) -> copying whl...')
         kubectl_cp_to(pod_name, namespace, whl_path, remote_whl, timeout=timeout)
 
         install_cmd = f'pip3 install --force-reinstall {remote_whl}'
         kubectl_exec(pod_name, namespace, install_cmd, timeout=timeout)
-        print(f'  {pod_name} ({pod_ip}) -> whl installed successfully')
+        log_info(f'  {pod_name} ({pod_ip}) -> whl installed successfully')
         return True
 
     except subprocess.TimeoutExpired:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
         return False
     except subprocess.CalledProcessError as e:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: '
-              f'{e.stderr.strip() if e.stderr else "unknown error"}')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: '
+                 f'{e.stderr.strip() if e.stderr else "unknown error"}')
         return False
     except Exception as e:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
         return False
     finally:
         try:
@@ -395,7 +450,7 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
             kubectl_exec(pod_name, namespace, cmd, timeout=timeout)
         finally:
             pod['_start_elapsed'] = time.monotonic() - t_start
-        print(f'  {pod_name} ({pod_ip}) -> started')
+        log_info(f'  {pod_name} ({pod_ip}) -> started')
 
         if enable_procmon:
             if upload_procmon(pod, namespace, procmon_remote_dir, timeout):
@@ -403,24 +458,24 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
                 pid = find_pid_by_port(pod, namespace, port, process_name, timeout)
                 if pid:
                     procmon_pid = start_procmon(pod, namespace, pid,
-                                                 procmon_remote_dir)
+                                                procmon_remote_dir)
                     if procmon_pid:
-                        print(f'  {pod_name} ({pod_ip}) -> procmon started '
-                              f'(pid={procmon_pid}, monitoring {process_name} '
-                              f'pid={pid})')
+                        log_info(f'  {pod_name} ({pod_ip}) -> procmon started '
+                                 f'(pid={procmon_pid}, monitoring {process_name} '
+                                 f'pid={pid})')
                     else:
-                        print(f'  {pod_name} ({pod_ip}) -> procmon start failed')
+                        log_info(f'  {pod_name} ({pod_ip}) -> procmon start failed')
                 else:
-                    print(f'  {pod_name} ({pod_ip}) -> procmon skipped: '
-                          f'{process_name} pid not found')
+                    log_info(f'  {pod_name} ({pod_ip}) -> procmon skipped: '
+                             f'{process_name} pid not found')
             else:
-                print(f'  {pod_name} ({pod_ip}) -> procmon skipped: upload failed')
+                log_info(f'  {pod_name} ({pod_ip}) -> procmon skipped: upload failed')
         return True
     except subprocess.TimeoutExpired:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
         return False
     except subprocess.CalledProcessError as e:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: {e.stderr.strip()}')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: {e.stderr.strip()}')
         return False
     finally:
         os.unlink(tmp_path)
@@ -440,22 +495,22 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
 
     try:
         ls_result = kubectl_exec(pod_name, namespace,
-            f'ls -d {log_dir} 2>/dev/null', check=False, timeout=timeout)
+                                 f'ls -d {log_dir} 2>/dev/null', check=False, timeout=timeout)
         if ls_result.returncode != 0:
-            print(f'  {pod_name} ({pod_ip}) -> log dir {log_dir} does not exist')
+            log_info(f'  {pod_name} ({pod_ip}) -> log dir {log_dir} does not exist')
             return True
 
         ls_result = kubectl_exec(pod_name, namespace,
-            f'ls {log_dir}/*.log {log_dir}/*.log.gz {log_dir}/*.txt 2>/dev/null',
-            check=False, timeout=timeout)
+                                 f'ls {log_dir}/*.log {log_dir}/*.log.gz {log_dir}/*.txt 2>/dev/null',
+                                 check=False, timeout=timeout)
         log_files = [f.strip() for f in (ls_result.stdout or '').splitlines()
                      if f.strip()]
 
         if not log_files:
-            print(f'  {pod_name} ({pod_ip}) -> no log files found')
+            log_info(f'  {pod_name} ({pod_ip}) -> no log files found')
             return True
 
-        print(f'  {pod_name} ({pod_ip}) -> found {len(log_files)} log files')
+        log_info(f'  {pod_name} ({pod_ip}) -> found {len(log_files)} log files')
 
         # Collect each log file using base64 to safely transfer
         # binary/non-UTF-8 content. kubectl_exec uses text=True which fails
@@ -465,12 +520,12 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
                 fname = os.path.basename(remote_path)
                 local_path = os.path.join(local_pod_dir, fname)
                 result = kubectl_exec(pod_name, namespace,
-                    f'base64 {remote_path}', check=True, timeout=timeout)
+                                      f'base64 {remote_path}', check=True, timeout=timeout)
                 content = base64.b64decode(result.stdout)
                 with open(local_path, 'wb') as f:
                     f.write(content)
             except Exception as e:
-                print(f'    {os.path.basename(remote_path)} -> FAILED: {e}')
+                log_info(f'    {os.path.basename(remote_path)} -> FAILED: {e}')
 
         # Collect procmon resource_monitor.log from remote_config_dir
         # (start's fallback) and from log_dir (when config had log_dir from
@@ -489,10 +544,10 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
             procmon_log = f'{pdir}/resource_monitor.log'
             try:
                 result = kubectl_exec(pod_name, namespace,
-                    f'base64 {procmon_log}', check=True, timeout=timeout)
+                                      f'base64 {procmon_log}', check=True, timeout=timeout)
                 content = base64.b64decode(result.stdout)
                 local_path = os.path.join(local_pod_dir,
-                                           'resource_monitor.log')
+                                          'resource_monitor.log')
                 with open(local_path, 'wb') as f:
                     f.write(content)
             except Exception:
@@ -505,7 +560,7 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
             stdout_path = f'{remote_config_dir}/stdout.log'
             try:
                 result = kubectl_exec(pod_name, namespace,
-                    f'base64 {stdout_path}', check=True, timeout=timeout)
+                                      f'base64 {stdout_path}', check=True, timeout=timeout)
                 content = base64.b64decode(result.stdout)
                 local_path = os.path.join(local_pod_dir, 'stdout.log')
                 with open(local_path, 'wb') as f:
@@ -515,10 +570,10 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
 
         return True
     except subprocess.TimeoutExpired:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
         return False
     except Exception as e:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
         return False
 
 
@@ -534,16 +589,16 @@ def clean_pod(pod, namespace, log_dir, remote_config_dir, process_name,
             kubectl_exec(pod_name, namespace, f'rm -rf {log_dir}',
                          check=False, timeout=timeout)
         kubectl_exec(pod_name, namespace,
-            f'rm -f {remote_config_dir}/resource_monitor.log',
-            check=False, timeout=timeout)
+                     f'rm -f {remote_config_dir}/resource_monitor.log',
+                     check=False, timeout=timeout)
 
-        print(f'  {pod_name} ({pod_ip}) -> OK')
+        log_info(f'  {pod_name} ({pod_ip}) -> OK')
         return True
     except subprocess.TimeoutExpired:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
         return False
     except Exception as e:
-        print(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
+        log_info(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
         return False
 
 
@@ -558,11 +613,10 @@ def read_remote_log_dir(namespace, pods, remote_config, timeout=DEFAULT_TIMEOUT)
         return None, {}
     try:
         result = kubectl_exec(pods[0]['name'], namespace,
-            f'cat {remote_config}', check=True, timeout=timeout)
+                              f'cat {remote_config}', check=True, timeout=timeout)
         config = json.loads(result.stdout)
     except Exception as e:
-        print(f'WARNING: Failed to read remote config from pod: {e}',
-              file=sys.stderr)
+        log_error(f'WARNING: Failed to read remote config from pod: {e}')
         return None, {}
 
     log_dir_entry = config.get('log_dir', {})
@@ -602,17 +656,17 @@ def apply_config_overrides(config_template, overrides):
     overrides (no '=') are warned and skipped. The dscli config style wraps
     values in {"value": ...}; that wrapper is what dscli start/stop expect.
     """
-    print('\nApplying config overrides:')
+    log_info('\nApplying config overrides:')
     for override in overrides or []:
         if '=' not in override:
-            print(f'  WARNING: Ignoring invalid override: {override}')
+            log_info(f'  WARNING: Ignoring invalid override: {override}')
             continue
         key, value = override.split('=', 1)
         key = key.strip()
         value = value.strip()
         parsed_value = parse_config_override(value)
         config_template[key] = {"value": parsed_value}
-        print(f'  Set {key}.value = {parsed_value}')
+        log_info(f'  Set {key}.value = {parsed_value}')
 
 
 # --- Shared subcommand implementations ---
@@ -628,21 +682,21 @@ def cmd_exec_impl(pods, namespace, cmd, timeout=DEFAULT_TIMEOUT):
         pod_ip = pod['ip']
         try:
             result = kubectl_exec(pod_name, namespace, cmd,
-                                   check=False, timeout=timeout)
+                                  check=False, timeout=timeout)
             success = result.returncode == 0
-            print(f'  {pod_name} ({pod_ip}) -> {"OK" if success else "FAILED"}')
+            log_info(f'  {pod_name} ({pod_ip}) -> {"OK" if success else "FAILED"}')
             if result.stdout.strip():
                 for line in result.stdout.strip().split('\n')[:5]:
-                    print(f'    stdout: {line}')
+                    log_info(f'    stdout: {line}')
             if result.stderr.strip():
                 for line in result.stderr.strip().split('\n')[:5]:
-                    print(f'    stderr: {line}')
+                    log_info(f'    stderr: {line}')
             return success
         except subprocess.TimeoutExpired:
-            print(f'  {pod_name} ({pod_ip}) -> TIMEOUT')
+            log_info(f'  {pod_name} ({pod_ip}) -> TIMEOUT')
             return False
         except Exception as e:
-            print(f'  {pod_name} ({pod_ip}) -> ERROR: {e}')
+            log_info(f'  {pod_name} ({pod_ip}) -> ERROR: {e}')
             return False
 
     return do_for_all_pods(pods, do_op, f'Executing command: {cmd}')
@@ -653,7 +707,7 @@ def cmd_check_impl(pods, namespace, process_name, label, timeout=DEFAULT_TIMEOUT
 
     Always returns 0; check is non-fatal. Tally: alive / dead / error.
     """
-    print(f'\nChecking {label} ({process_name})...')
+    log_info(f'\nChecking {label} ({process_name})...')
     results = []
     with ThreadPoolExecutor(max_workers=len(pods)) as pool:
         futures = {pool.submit(check_process, pod, namespace, process_name,
@@ -667,16 +721,16 @@ def cmd_check_impl(pods, namespace, process_name, label, timeout=DEFAULT_TIMEOUT
     for pod, status, detail in results:
         if status == 'alive':
             alive += 1
-            print(f'  {pod["name"]} ({pod["ip"]}) -> alive (count={detail})')
+            log_info(f'  {pod["name"]} ({pod["ip"]}) -> alive (count={detail})')
         elif status == 'dead':
             dead += 1
-            print(f'  {pod["name"]} ({pod["ip"]}) -> dead')
+            log_info(f'  {pod["name"]} ({pod["ip"]}) -> dead')
         else:
             errors += 1
-            print(f'  {pod["name"]} ({pod["ip"]}) -> error ({detail})')
+            log_info(f'  {pod["name"]} ({pod["ip"]}) -> error ({detail})')
 
     total = len(results)
-    print(f'\nResult: {alive} alive / {dead} dead / {errors} error / {total} total')
+    log_info(f'\nResult: {alive} alive / {dead} dead / {errors} error / {total} total')
     return 0
 
 
@@ -700,11 +754,11 @@ def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
     """Collect service logs from all pods."""
     log_dir, _ = read_remote_log_dir(namespace, pods, remote_config, timeout)
     if not log_dir:
-        print('ERROR: log_dir not found in remote config', file=sys.stderr)
+        log_error('ERROR: log_dir not found in remote config')
         return 1
 
     remote_config_dir = os.path.dirname(remote_config)
-    print(f'Using log directory from remote config: {log_dir}')
+    log_info(f'Using log directory from remote config: {log_dir}')
     local_dir = output_dir
 
     def do_op(pod):
@@ -715,7 +769,7 @@ def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
 
 
 def cmd_clean_impl(pods, namespace, remote_config, process_name, label,
-                    timeout=DEFAULT_TIMEOUT):
+                   timeout=DEFAULT_TIMEOUT):
     """Kill service processes and clean log directories across all pods."""
     log_dir, _ = read_remote_log_dir(namespace, pods, remote_config, timeout)
     remote_config_dir = os.path.dirname(remote_config)
@@ -732,7 +786,7 @@ def cmd_install_impl(pods, namespace, whl, timeout=DEFAULT_TIMEOUT):
     Validates the local whl path exists before dispatching per-pod installs.
     """
     if not os.path.exists(whl):
-        print(f'ERROR: whl file not found: {whl}', file=sys.stderr)
+        log_error(f'ERROR: whl file not found: {whl}')
         return 1
 
     def do_op(pod):
@@ -754,11 +808,11 @@ def kubectl_exec_raw(pod, namespace, cmd, timeout=DEFAULT_TIMEOUT):
         return ''
 
 
-import tarfile
+import tarfile  # noqa: E402  (kept here to match the original deferred import)
 
 
 def install_binary(pod, namespace, local_binary, local_lib_dir, remote_dir,
-                    timeout=DEFAULT_TIMEOUT):
+                   timeout=DEFAULT_TIMEOUT):
     """Copy a standalone binary + .so deps to a pod.
 
     ``local_lib_dir`` is a local directory containing .so files. It is tar'd
@@ -766,15 +820,15 @@ def install_binary(pod, namespace, local_binary, local_lib_dir, remote_dir,
     variants (symlinks resolved to real files via realpath).
     """
     if not os.path.exists(local_binary):
-        print(f'ERROR: binary not found: {local_binary}', file=sys.stderr)
+        log_error(f'ERROR: binary not found: {local_binary}')
         return False
     name = pod['name']
     subprocess.run(['kubectl', 'exec', '-n', namespace, name, '--', 'mkdir', '-p', remote_dir],
-                    timeout=timeout)
+                   timeout=timeout)
     subprocess.run(['kubectl', 'cp', '-n', namespace, local_binary, f'{name}:{remote_dir}/'],
-                    timeout=timeout)
+                   timeout=timeout)
     subprocess.run(['kubectl', 'exec', '-n', namespace, name, '--', 'chmod', '+x',
-                     f'{remote_dir}/{os.path.basename(local_binary)}'], timeout=timeout)
+                    f'{remote_dir}/{os.path.basename(local_binary)}'], timeout=timeout)
     # Copy .so files via tar (preserves all .so.N variants; realpath follows symlinks)
     if local_lib_dir and os.path.isdir(local_lib_dir):
         so_files = glob.glob(os.path.join(local_lib_dir, '*.so*'))
@@ -788,20 +842,20 @@ def install_binary(pod, namespace, local_binary, local_lib_dir, remote_dir,
                 kubectl_cp_to(name, namespace, tar_path,
                               f'/tmp/lib_{name}.tar', timeout=timeout)
                 kubectl_exec_raw({'name': name}, namespace,
-                    f'mkdir -p {remote_dir}/lib && '
-                    f'tar xf /tmp/lib_{name}.tar -C {remote_dir}/lib/ && '
-                    f'rm /tmp/lib_{name}.tar', timeout=timeout)
+                                 f'mkdir -p {remote_dir}/lib && '
+                                 f'tar xf /tmp/lib_{name}.tar -C {remote_dir}/lib/ && '
+                                 f'rm /tmp/lib_{name}.tar', timeout=timeout)
             finally:
                 os.unlink(tar_path)
     return True
 
 
 def start_service_standalone(pod, namespace, binary_name, remote_dir, config_path,
-                              jf_addr, service_name, extra_args='',
-                              config=None,
-                              enable_procmon=True, procmon_remote_dir='/tmp',
-                              port=None, process_name=None,
-                              timeout=DEFAULT_TIMEOUT):
+                             jf_addr, service_name, extra_args='',
+                             config=None,
+                             enable_procmon=True, procmon_remote_dir='/tmp',
+                             port=None, process_name=None,
+                             timeout=DEFAULT_TIMEOUT):
     """Start a standalone test binary in a pod.
 
     Uses ``standalone_launcher.py`` (uploaded alongside procmon) to fork +
@@ -870,8 +924,8 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
                 ready_timeout=min(timeout, 60),
                 subprocess_timeout=timeout)
         else:
-            print(f'  {name} ({pod_ip}) -> launcher upload failed, '
-                  f'falling back to nohup path', file=sys.stderr)
+            log_error(f'  {name} ({pod_ip}) -> launcher upload failed, '
+                      f'falling back to nohup path')
             pid = _launch_via_nohup(
                 name, namespace, binary_name, remote_dir, log_path,
                 lib_path, config_path, jf_addr, service_name, extra_args,
@@ -889,24 +943,24 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
             pid = find_pid_by_port(pod, namespace, port, process_name, timeout)
         else:
             verify = kubectl_exec_raw({'name': name}, namespace,
-                                       f'pgrep -f {binary_name}', timeout=10)
+                                      f'pgrep -f {binary_name}', timeout=10)
             if verify and verify.strip():
                 pid = verify.strip().split('\n')[0]
     if not pid:
-        print(f'  {name} ({pod_ip}) -> FAILED: process not found')
+        log_info(f'  {name} ({pod_ip}) -> FAILED: process not found')
         return False
-    print(f'  {name} ({pod_ip}) -> started (pid={pid})')
+    log_info(f'  {name} ({pod_ip}) -> started (pid={pid})')
     # Attach procmon (same logic as start_service dscli path)
     if enable_procmon:
         if upload_procmon(pod, namespace, procmon_remote_dir, timeout):
             procmon_pid = start_procmon(pod, namespace, pid, procmon_remote_dir)
             if procmon_pid:
-                print(f'  {name} ({pod_ip}) -> procmon started '
-                      f'(pid={procmon_pid}, monitoring pid={pid})')
+                log_info(f'  {name} ({pod_ip}) -> procmon started '
+                         f'(pid={procmon_pid}, monitoring pid={pid})')
             else:
-                print(f'  {name} ({pod_ip}) -> procmon start failed')
+                log_info(f'  {name} ({pod_ip}) -> procmon start failed')
         else:
-            print(f'  {name} ({pod_ip}) -> procmon skipped: upload failed')
+            log_info(f'  {name} ({pod_ip}) -> procmon skipped: upload failed')
     return True
 
 
@@ -939,13 +993,13 @@ def _launch_via_launcher(name, namespace, launcher_remote, binary_path,
     cmd.extend(binary_argv)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True,
-                                 timeout=subprocess_timeout)
+                                timeout=subprocess_timeout)
     except subprocess.TimeoutExpired:
         return None
     if result.returncode != 0:
         stderr = (result.stderr or '').strip()
         if stderr:
-            print(stderr, file=sys.stderr)
+            log_error(stderr)
         return None
     out = (result.stdout or '').strip()
     if not out:
@@ -1031,16 +1085,16 @@ def _print_timings(action, timings):
     """
     if not timings:
         return
-    print(f'\n{action} per-pod timings:')
+    log_info(f'\n{action} per-pod timings:')
     for pod_name, elapsed, ok in sorted(timings, key=lambda x: x[0]):
-        print(f'  {pod_name:<40} {elapsed:7.2f}s  {"OK" if ok else "FAIL"}')
+        log_info(f'  {pod_name:<40} {elapsed:7.2f}s  {"OK" if ok else "FAIL"}')
     elapsed_all = [t for _, t, _ in timings]
     ok_count = sum(1 for _, _, ok in timings if ok)
     fail_count = len(timings) - ok_count
-    print(f'  min={min(elapsed_all):.2f}s  max={max(elapsed_all):.2f}s  '
-          f'avg={sum(elapsed_all) / len(elapsed_all):.2f}s  '
-          f'total={sum(elapsed_all):.2f}s  '
-          f'(succeeded={ok_count}, failed={fail_count})')
+    log_info(f'  min={min(elapsed_all):.2f}s  max={max(elapsed_all):.2f}s  '
+             f'avg={sum(elapsed_all) / len(elapsed_all):.2f}s  '
+             f'total={sum(elapsed_all):.2f}s  '
+             f'(succeeded={ok_count}, failed={fail_count})')
 
 
 def cmd_exec_shared(args, pods, timeout=DEFAULT_TIMEOUT):
@@ -1057,7 +1111,7 @@ def cmd_collect_shared(args, pods, label, timeout=DEFAULT_TIMEOUT):
 def cmd_clean_shared(args, pods, process_name, label, timeout=DEFAULT_TIMEOUT):
     """Kill service processes and clean log directories."""
     return cmd_clean_impl(pods, args.namespace, args.remote_config,
-                           process_name, label, timeout)
+                          process_name, label, timeout)
 
 
 def cmd_kill_shared(args, pods, process_name_standalone, label,
@@ -1069,7 +1123,7 @@ def cmd_kill_shared(args, pods, process_name_standalone, label,
 
 
 def cmd_install_shared(args, pods, process_name_standalone, label,
-                        script_dir, timeout=DEFAULT_TIMEOUT):
+                       script_dir, timeout=DEFAULT_TIMEOUT):
     """Install: standalone mode copies binary + .so (no whl);
     non-standalone mode installs whl only."""
     if getattr(args, 'standalone', False):
@@ -1077,6 +1131,7 @@ def cmd_install_shared(args, pods, process_name_standalone, label,
             script_dir, 'output', process_name_standalone)
         lib_dir = getattr(args, 'lib_dir', None) or os.path.join(
             script_dir, 'output', 'lib')
+
         def do_op(pod):
             return install_binary(pod, args.namespace, binary, lib_dir,
                                   args.remote_dir, timeout)
@@ -1092,6 +1147,7 @@ def cmd_stop_shared(args, pods, process_name_standalone, label,
     non-standalone uses dscli stop."""
     if getattr(args, 'standalone', False):
         timings = []
+
         def do_op(pod):
             import time as _time
             t0 = _time.monotonic()
@@ -1111,6 +1167,7 @@ def cmd_stop_shared(args, pods, process_name_standalone, label,
     if with_timings:
         import time as _time
         timings = []
+
         def do_op(pod):
             t0 = _time.monotonic()
             ok = False
@@ -1133,8 +1190,11 @@ def cmd_stop_shared(args, pods, process_name_standalone, label,
 # Pod creation helpers (shared by deploy_jf, deploy_coordinator, deploy_worker)
 # ============================================================================
 
-from types import SimpleNamespace
-import deploy_pods
+# Deferred imports to avoid circular dependency: deploy_pods imports from
+# deploy_common at its top level, so these must run after deploy_common's own
+# symbols are defined.
+from types import SimpleNamespace  # noqa: E402
+import deploy_pods  # noqa: E402
 
 
 def distribute_instances(num_instances, nodes):
@@ -1167,14 +1227,14 @@ def create_pods(prefix, namespace, image, instances,
     try:
         distribution = distribute_instances(instances, nodes)
     except ValueError as e:
-        print(f'ERROR: {e}', file=sys.stderr)
+        log_error(f'ERROR: {e}')
         return None
     replicas_str = ','.join(f'{ip}:{count}' for ip, count in distribution.items())
 
     pod_count = sum(distribution.values())
-    print(f'Creating {pod_count} pod(s) across {len(distribution)} node(s):')
+    log_info(f'Creating {pod_count} pod(s) across {len(distribution)} node(s):')
     for ip, count in distribution.items():
-        print(f'  {ip}: {count}')
+        log_info(f'  {ip}: {count}')
 
     deploy_args = SimpleNamespace(
         namespace=namespace,
@@ -1194,7 +1254,7 @@ def create_pods(prefix, namespace, image, instances,
     )
     rc = deploy_pods.cmd_deploy(deploy_args)
     if rc != 0:
-        print('ERROR: deploy_pods failed', file=sys.stderr)
+        log_error('ERROR: deploy_pods failed')
         return None
     if dry_run:
         return []

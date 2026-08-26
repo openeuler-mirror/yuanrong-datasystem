@@ -18,7 +18,7 @@ from __future__ import absolute_import
 
 from yr.datasystem.util import Validator as validator
 from yr.datasystem.object_client import ObjectClient
-from yr.datasystem.kv_client import KVClient
+from yr.datasystem.kv_client import KVClient, DataPlacementPolicy
 from yr.datasystem.hetero_client import HeteroClient
 from yr.datasystem.service_discovery import CoordinatorServiceDiscovery, ServiceDiscovery
 
@@ -42,13 +42,15 @@ class DsClient:
         tenant_id="",
         enable_cross_node_connection=False,
         req_timeout_ms=0,
-        service_discovery=None
+        service_discovery=None,
+        enable_local_cache=True,
+        data_placement_policy=DataPlacementPolicy.PREFERRED_SAME_NODE
     ):
         """Constructor of the DsClient class
 
         Args:
             host(str): The host of the worker address. If host and port are not provided,
-                       service_discovery must be provided to discover worker addresses.
+                       service_discovery must be provided to to discover worker addresses.
             port(int): The port of the worker address.
             connect_timeout_ms(int): The timeout_ms interval for the connection between the client and worker.
             token(str): A string used for authentication.
@@ -64,6 +66,12 @@ class DsClient:
             service_discovery(ServiceDiscovery): The service discovery instance for discovering available workers.
                 If provided, the client will use service discovery to find worker addresses instead of
                 using the provided host and port.
+            enable_local_cache(bool): Indicates whether to enable the local client cache. Default is True. When False,
+            Get/MGet query metadata owners through the transport layer instead of using the bound worker path.
+            Propagated to the underlying KV client.
+            data_placement_policy(DataPlacementPolicy): Set/MSet data placement policy. Only takes effect when
+            enable_local_cache is False. Default is DataPlacementPolicy.PREFERRED_SAME_NODE, matching the C++
+            ConnectOptions default. Independent of enable_local_cache. Propagated to the underlying KV client.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -80,6 +88,8 @@ class DsClient:
             ["tenant_id", tenant_id, str],
             ["enable_cross_node_connection", enable_cross_node_connection, bool],
             ["req_timeout_ms", req_timeout_ms, int],
+            ["enable_local_cache", enable_local_cache, bool],
+            ["data_placement_policy", data_placement_policy, type(DataPlacementPolicy.PREFERRED_SAME_NODE)],
         ]
 
         if service_discovery is not None:
@@ -113,7 +123,9 @@ class DsClient:
             secret_key,
             tenant_id,
             enable_cross_node_connection,
-            req_timeout_ms
+            req_timeout_ms,
+            enable_local_cache=enable_local_cache,
+            data_placement_policy=data_placement_policy
         )
         self._hetero_client = HeteroClient(
             host,

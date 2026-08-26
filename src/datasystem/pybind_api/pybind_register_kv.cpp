@@ -29,6 +29,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/pybind_api/pybind_register.h"
+#include "datasystem/utils/connection.h"
 
 using datasystem::ConnectOptions;
 using datasystem::object_cache::ObjectClientImpl;
@@ -41,8 +42,9 @@ ConnectOptions BuildKvConnectOptions(const std::string &host, int32_t port, int3
                                      const std::string &token, const std::string &clientPublicKey,
                                      const std::string &clientPrivateKey, const std::string &serverPublicKey,
                                      const std::string &accessKey, const std::string &secretKey,
-                                     const std::string &tenantId, bool enableCrossNodeConnection,
-                                     int32_t reqTimeoutMs, uint64_t fastTransportMemSize,
+                                     const std::string &tenantId, bool enableCrossNodeConnection, bool enableLocalCache,
+                                     DataPlacementPolicy dataPlacementPolicy, int32_t reqTimeoutMs,
+                                     uint64_t fastTransportMemSize,
                                      std::shared_ptr<IServiceDiscovery> serviceDiscovery)
 {
     return ConnectOptions{ .host = host,
@@ -57,6 +59,8 @@ ConnectOptions BuildKvConnectOptions(const std::string &host, int32_t port, int3
                            .secretKey = secretKey,
                            .tenantId = tenantId,
                            .enableCrossNodeConnection = enableCrossNodeConnection,
+                           .enableLocalCache = enableLocalCache,
+                           .dataPlacementPolicy = dataPlacementPolicy,
                            .serviceDiscovery = serviceDiscovery,
                            .fastTransportMemSize = fastTransportMemSize };
 }
@@ -220,29 +224,47 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .value("NX", ExistenceOpt::NX)
         .export_values();
 
+    py::enum_<DataPlacementPolicy>(*m, "DataPlacementPolicy")
+        .value("PREFERRED_SAME_NODE", DataPlacementPolicy::PREFERRED_SAME_NODE)
+        .value("REQUIRED_SAME_NODE", DataPlacementPolicy::REQUIRED_SAME_NODE)
+        .value("PREFERRED_META_OWNER", DataPlacementPolicy::PREFERRED_META_OWNER)
+        .export_values();
+
     py::class_<ObjectClientImpl, std::shared_ptr<ObjectClientImpl>>(*m, "KVClient")
         .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs, const std::string &token,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
                          const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
-                         uint64_t fastTransportMemSize) {
-            auto connectOpts =
-                BuildKvConnectOptions(host, port, connectTimeoutMs, token, clientPublicKey, clientPrivateKey,
-                                      serverPublicKey, accessKey, secretKey, tenantId, enableCrossNodeConnection,
-                                      reqTimeoutMs, fastTransportMemSize, nullptr);
+                         uint64_t fastTransportMemSize, const bool enableLocalCache,
+                         const DataPlacementPolicy dataPlacementPolicy) {
+            auto connectOpts = BuildKvConnectOptions(host, port, connectTimeoutMs, token, clientPublicKey,
+                                                     clientPrivateKey, serverPublicKey, accessKey, secretKey, tenantId,
+                                                     enableCrossNodeConnection, enableLocalCache, dataPlacementPolicy,
+                                                     reqTimeoutMs, fastTransportMemSize, nullptr);
             return std::make_unique<ObjectClientImpl>(connectOpts);
-        }))
+        }),
+        py::arg("host"), py::arg("port"), py::arg("connectTimeoutMs"), py::arg("token"),
+        py::arg("clientPublicKey"), py::arg("clientPrivateKey"), py::arg("serverPublicKey"), py::arg("accessKey"),
+        py::arg("secretKey"), py::arg("tenantId"), py::arg("enableCrossNodeConnection"), py::arg("reqTimeoutMs"),
+        py::arg("fastTransportMemSize"), py::arg("enableLocalCache") = true,
+        py::arg("dataPlacementPolicy") = DataPlacementPolicy::PREFERRED_SAME_NODE)
         .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs, const std::string &token,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
                          const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
-                         uint64_t fastTransportMemSize, std::shared_ptr<IServiceDiscovery> serviceDiscovery) {
-            auto connectOpts =
-                BuildKvConnectOptions(host, port, connectTimeoutMs, token, clientPublicKey, clientPrivateKey,
-                                      serverPublicKey, accessKey, secretKey, tenantId, enableCrossNodeConnection,
-                                      reqTimeoutMs, fastTransportMemSize, serviceDiscovery);
+                         uint64_t fastTransportMemSize, std::shared_ptr<IServiceDiscovery> serviceDiscovery,
+                         const bool enableLocalCache, const DataPlacementPolicy dataPlacementPolicy) {
+            auto connectOpts = BuildKvConnectOptions(host, port, connectTimeoutMs, token, clientPublicKey,
+                                                     clientPrivateKey, serverPublicKey, accessKey, secretKey, tenantId,
+                                                     enableCrossNodeConnection, enableLocalCache, dataPlacementPolicy,
+                                                     reqTimeoutMs, fastTransportMemSize, serviceDiscovery);
             return std::make_unique<ObjectClientImpl>(connectOpts);
-        }))
+        }),
+        py::arg("host"), py::arg("port"), py::arg("connectTimeoutMs"), py::arg("token"),
+        py::arg("clientPublicKey"), py::arg("clientPrivateKey"), py::arg("serverPublicKey"), py::arg("accessKey"),
+        py::arg("secretKey"), py::arg("tenantId"), py::arg("enableCrossNodeConnection"), py::arg("reqTimeoutMs"),
+        py::arg("fastTransportMemSize"), py::arg("serviceDiscovery"), py::arg("enableLocalCache") = true,
+        py::arg("dataPlacementPolicy") = DataPlacementPolicy::PREFERRED_SAME_NODE)
         .def("Init",
              [](ObjectClientImpl &client) {
                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();

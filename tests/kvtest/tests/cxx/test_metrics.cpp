@@ -7,6 +7,9 @@
 #include <sstream>
 #include <thread>
 #include <unistd.h>
+#include <datasystem/utils/status.h>
+
+using namespace datasystem;  // for K_OK / K_RUNTIME_ERROR in Record() calls below
 
 static std::string MakeTempDir() {
     static int idx = 0;
@@ -27,7 +30,7 @@ TEST(RecordAndCount) {
     auto dir = MakeTempDir();
     MetricsCollector m(0, 1000, dir);
     m.Start();
-    m.Record("setStringView", 1.0, true, 1024);
+    m.Record("setStringView", 1.0, K_OK, 1024);
     auto snap = m.SnapshotCounts();
     ASSERT_TRUE(!snap.empty());
     bool found = false;
@@ -43,8 +46,8 @@ TEST(RecordMultipleOps) {
     auto dir = MakeTempDir();
     MetricsCollector m(0, 1000, dir);
     m.Start();
-    m.Record("setStringView", 1.0, true);
-    m.Record("getBuffer", 2.0, true);
+    m.Record("setStringView", 1.0, K_OK);
+    m.Record("getBuffer", 2.0, K_OK);
     auto snap = m.SnapshotCounts();
     ASSERT_TRUE(snap.size() >= 2);
     m.Stop();
@@ -55,8 +58,8 @@ TEST(RecordSuccessFail) {
     auto dir = MakeTempDir();
     MetricsCollector m(0, 1000, dir);
     m.Start();
-    m.Record("op", 1.0, true);
-    m.Record("op", 2.0, false);
+    m.Record("op", 1.0, K_OK);
+    m.Record("op", 2.0, K_RUNTIME_ERROR);
     auto json = m.GetStatsJson();
     ASSERT_TRUE(json.find("\"op_count\": 2") != std::string::npos);
     ASSERT_TRUE(json.find("\"op_success\": 1") != std::string::npos);
@@ -101,7 +104,7 @@ TEST(SnapshotCounts_Accurate) {
     auto dir = MakeTempDir();
     MetricsCollector m(0, 1000, dir);
     m.Start();
-    for (int i = 0; i < 100; i++) m.Record("setStringView", 1.0, true);
+    for (int i = 0; i < 100; i++) m.Record("setStringView", 1.0, K_OK);
     auto snap = m.SnapshotCounts();
     uint64_t total = 0;
     for (auto &s : snap) {
@@ -116,7 +119,7 @@ TEST(FlushWindow_CsvFormat) {
     auto dir = MakeTempDir();
     MetricsCollector m(0, 100, dir);
     m.Start();
-    m.Record("setStringView", 1.0, true, 1024);
+    m.Record("setStringView", 1.0, K_OK, 1024);
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     m.Stop();
     auto lines = ReadFileLines(dir + "/latency_timeseries.csv");
@@ -144,7 +147,7 @@ TEST(FlushWindow_Percentile) {
     MetricsCollector m(0, 100, dir);
     m.Start();
     for (int i = 1; i <= 100; i++) {
-        m.Record("setStringView", static_cast<double>(i), true);
+        m.Record("setStringView", static_cast<double>(i), K_OK);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     m.Stop();
@@ -165,7 +168,7 @@ TEST(WriteSummary_ContainsOps) {
     auto dir = MakeTempDir();
     MetricsCollector m(0, 100, dir);
     m.Start();
-    m.Record("setStringView", 1.0, true);
+    m.Record("setStringView", 1.0, K_OK);
     m.Stop();
     auto lines = ReadFileLines(dir + "/run_summary.txt");
     bool found = false;
@@ -181,7 +184,7 @@ TEST(WriteSummary_Percentile) {
     MetricsCollector m(0, 100, dir);
     m.Start();
     for (int i = 1; i <= 100; i++) {
-        m.Record("setStringView", static_cast<double>(i), true);
+        m.Record("setStringView", static_cast<double>(i), K_OK);
     }
     m.Stop();
     auto lines = ReadFileLines(dir + "/run_summary.txt");
@@ -215,7 +218,7 @@ TEST(GetStatsJson_Valid) {
     auto dir = MakeTempDir();
     MetricsCollector m(0, 1000, dir);
     m.Start();
-    m.Record("setStringView", 1.0, true);
+    m.Record("setStringView", 1.0, K_OK);
     auto json = m.GetStatsJson();
     ASSERT_TRUE(json.find("instance_id") != std::string::npos);
     ASSERT_TRUE(json.find("uptime_seconds") != std::string::npos);
@@ -230,7 +233,7 @@ TEST(RingBuffer_Overwrite) {
     m.Start();
     // Record more than the 100k ring buffer size
     for (int i = 0; i < 200000; i++) {
-        m.Record("setStringView", static_cast<double>(i), true);
+        m.Record("setStringView", static_cast<double>(i), K_OK);
     }
     m.Stop();
     // Summary should exist and show 200k total
@@ -248,7 +251,7 @@ TEST(FlushWindow_QpsStages) {
     MetricsCollector m(0, 100, dir);
     m.SetQpsStages({100, 200}, 60);
     m.Start();
-    m.Record("setStringView", 1.0, true);
+    m.Record("setStringView", 1.0, K_OK);
     m.Stop();
     auto lines = ReadFileLines(dir + "/run_summary.txt");
     bool found = false;

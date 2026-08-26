@@ -39,8 +39,11 @@ from deploy_common import (
     find_default_whl,
     get_pods,
     kubectl_exec_raw,
+    log_error,
+    log_info,
     read_remote_log_dir,
     resolve_procmon_dir,
+    setup_logging,
     start_service,
     start_service_standalone,
 )
@@ -104,13 +107,13 @@ def cmd_start(args, pods):
     if args.set:
         apply_config_overrides(config_template, args.set)
     else:
-        print('\nNo config overrides specified')
+        log_info('\nNo config overrides specified')
 
     def do_op(pod):
         _, status, _ = check_process(pod, args.namespace, PROCESS_NAME,
-                                    timeout=args.timeout)
+                                     timeout=args.timeout)
         if status == 'alive':
-            print(f'  {pod["name"]} ({pod["ip"]}) -> already running, skip')
+            log_info(f'  {pod["name"]} ({pod["ip"]}) -> already running, skip')
             return True
         cfg = json.loads(json.dumps(config_template))
         cfg[ADDRESS_KEY]['value'] = f'{pod["ip"]}:{args.port}'
@@ -127,7 +130,7 @@ def cmd_start(args, pods):
 def cmd_start_standalone(args, pods):
     """Start coordinator_test binary in standalone mode."""
     if not getattr(args, 'jf', None):
-        print('ERROR: --jf is required in standalone mode', file=sys.stderr)
+        log_error('ERROR: --jf is required in standalone mode')
         return 1
     with open(args.config) as f:
         config_template = json.load(f)
@@ -144,7 +147,7 @@ def cmd_start_standalone(args, pods):
         _, status, _ = check_process(pod, args.namespace, binary_name,
                                      timeout=args.timeout)
         if status == 'alive':
-            print(f'  {pod["name"]} ({pod["ip"]}) -> already running, skip')
+            log_info(f'  {pod["name"]} ({pod["ip"]}) -> already running, skip')
             return True
         cfg = json.loads(json.dumps(config_template))
         cfg[ADDRESS_KEY] = {'value': f'{pod["ip"]}:{args.port}'}
@@ -231,18 +234,18 @@ def cmd_deploy(args, pods=None):
     --image: create pods first. Without --image: use existing pods.
     """
     if not args.prefixes or len(args.prefixes) != 1:
-        print('ERROR: deploy requires exactly one --prefix '
-              '(e.g. -p coordinator-a)', file=sys.stderr)
+        log_error('ERROR: deploy requires exactly one --prefix '
+                  '(e.g. -p coordinator-a)')
         return 1
     prefix = args.prefixes[0]
 
     # Validate: --image requires --instances
     if args.image and not args.instances:
-        print('ERROR: --instances is required when --image is set', file=sys.stderr)
+        log_error('ERROR: --instances is required when --image is set')
         return 1
     # Validate: standalone requires --jf
     if getattr(args, 'standalone', False) and not getattr(args, 'jf', None):
-        print('ERROR: --jf is required in standalone mode', file=sys.stderr)
+        log_error('ERROR: --jf is required in standalone mode')
         return 1
 
     # Step 1: create pods if --image is set
@@ -256,41 +259,41 @@ def cmd_deploy(args, pods=None):
         if pods is None:
             return 1
         if args.dry_run:
-            print('Dry run: skipped install and start')
+            log_info('Dry run: skipped install and start')
             return 0
         if not pods:
-            print('ERROR: no running pods found after bringup', file=sys.stderr)
+            log_error('ERROR: no running pods found after bringup')
             return 1
     else:
         if pods is None:
             pods = get_pods(args.namespace, args.prefixes)
         if not pods:
-            print('ERROR: no running pods found matching prefix', file=sys.stderr)
+            log_error('ERROR: no running pods found matching prefix')
             return 1
-    print(f'\nFound {len(pods)} pod(s):')
+    log_info(f'\nFound {len(pods)} pod(s):')
     for p in pods:
-        print(f'  {p["name"]} ({p["ip"]})')
+        log_info(f'  {p["name"]} ({p["ip"]})')
 
     # Step 2 + 3: install + start
     if getattr(args, 'standalone', False):
-        print('\n--- Step 2/2: installing binary + .so (standalone) ---')
+        log_info('\n--- Step 2/2: installing binary + .so (standalone) ---')
         install_rc = cmd_install_shared(args, pods, PROCESS_NAME_STANDALONE, 'coordinator',
-                                       os.path.dirname(os.path.abspath(__file__)),
-                                       args.timeout)
+                                        os.path.dirname(os.path.abspath(__file__)),
+                                        args.timeout)
         if install_rc != 0:
-            print('ERROR: install failed', file=sys.stderr)
+            log_error('ERROR: install failed')
             return install_rc
-        print('\n--- Step 2/2: starting coordinators (standalone) ---')
+        log_info('\n--- Step 2/2: starting coordinators (standalone) ---')
         return cmd_start_standalone(args, pods)
     else:
-        print('\n--- Step 2/3: installing whl ---')
+        log_info('\n--- Step 2/3: installing whl ---')
         if cmd_install_impl(pods, args.namespace, args.whl,
                             timeout=args.timeout) != 0:
-            print('ERROR: whl install failed; leaving pods running '
-                  'for inspection', file=sys.stderr)
+            log_error('ERROR: whl install failed; leaving pods running '
+                      'for inspection')
             return 1
 
-        print('\n--- Step 3/3: starting coordinators ---')
+        log_info('\n--- Step 3/3: starting coordinators ---')
         with open(args.config) as f:
             config_template = json.load(f)
         if args.procmon_dir is None:
@@ -299,7 +302,7 @@ def cmd_deploy(args, pods=None):
         if args.set:
             apply_config_overrides(config_template, args.set)
         else:
-            print('\nNo config overrides specified')
+            log_info('\nNo config overrides specified')
 
         def do_op(pod):
             cfg = json.loads(json.dumps(config_template))
@@ -313,8 +316,8 @@ def cmd_deploy(args, pods=None):
 
         rc = do_for_all_pods(pods, do_op, 'Starting coordinators')
         if rc != 0:
-            print('ERROR: some coordinators failed to start; pods left '
-                  'running for inspection', file=sys.stderr)
+            log_error('ERROR: some coordinators failed to start; pods left '
+                      'running for inspection')
         return rc
 
 
@@ -354,7 +357,7 @@ def cmd_check(args, pods):
     port = getattr(args, 'port', 31511)
 
     # 2a: TCP port check on each pod
-    print('\nChecking coordinator port readiness...')
+    log_info('\nChecking coordinator port readiness...')
     all_port_ok = True
     for pod in pods:
         pod_ip = pod['ip']
@@ -363,23 +366,23 @@ def cmd_check(args, pods):
                                  f's.connect((\\\"{pod_ip}\\\",{port}));s.close()" 2>/dev/null '
                                  f'&& echo OK || echo FAIL', timeout=10)
         status = r.strip() if r else 'FAIL'
-        print(f'  {pod["name"]} ({pod_ip}:{port}) -> {status}')
+        log_info(f'  {pod["name"]} ({pod_ip}:{port}) -> {status}')
         if status != 'OK':
             all_port_ok = False
     if not all_port_ok:
-        print('Result: some coordinator ports not ready')
+        log_info('Result: some coordinator ports not ready')
         return 1
 
     # 2b: Leader elected check (for multi-replica)
     expected_members = getattr(args, 'expected_member_count', 1)
     if expected_members > 1:
-        print(f'\nChecking leader election (expected {expected_members} members)...')
+        log_info(f'\nChecking leader election (expected {expected_members} members)...')
         # Read log_dir from the remote config (same as collect command)
         remote_config = getattr(args, 'remote_config', '/tmp/coordinator.config')
         log_dir, _ = read_remote_log_dir(args.namespace, pods, remote_config, args.timeout)
         if not log_dir:
-            print(f'  WARNING: log_dir not found in remote config, '
-                  f'cannot check leader election')
+            log_info(f'  WARNING: log_dir not found in remote config, '
+                     f'cannot check leader election')
             return 0
         leader_found = False
         check_pod = pods[0]
@@ -391,16 +394,16 @@ def cmd_check(args, pods):
                 timeout=10)
             if r and r.strip():
                 leader_found = True
-                print(f'  Leader elected (detected in {check_pod["name"]})')
+                log_info(f'  Leader elected (detected in {check_pod["name"]})')
                 break
             if i % 5 == 0:
-                print(f'  Waiting for leader election... ({i}s)')
+                log_info(f'  Waiting for leader election... ({i}s)')
             time.sleep(1)
         if not leader_found:
-            print('  Leader not elected after 60s')
+            log_info('  Leader not elected after 60s')
             return 1
 
-    print('\nAll coordinators ready')
+    log_info('\nAll coordinators ready')
     return 0
 
 
@@ -469,20 +472,20 @@ def main():
                               dest='enable_procmon',
                               help='Disable procmon.py monitoring (default)')
     parser_start.add_argument('--procmon-dir', default=None,
-                               help='Remote directory for procmon files (default: same as --remote-config dir)')
+                              help='Remote directory for procmon files (default: same as --remote-config dir)')
     # Standalone mode (coordinator_test binary instead of dscli)
     parser_start.add_argument('-S', '--standalone', action='store_true', default=False,
-                               help='Use coordinator_test binary instead of dscli')
+                              help='Use coordinator_test binary instead of dscli')
     parser_start.add_argument('--jf', default=None,
-                               help='JF mock address for service discovery (standalone mode only)')
+                              help='JF mock address for service discovery (standalone mode only)')
     parser_start.add_argument('--service', default='kvcache_coordinator',
-                               help='JF service name (standalone mode only, default: kvcache_coordinator)')
+                              help='JF service name (standalone mode only, default: kvcache_coordinator)')
     parser_start.add_argument('--ttl', type=int, default=30,
-                               help='Heartbeat TTL seconds (standalone mode only, default: 30)')
+                              help='Heartbeat TTL seconds (standalone mode only, default: 30)')
     parser_start.add_argument('--expected-member-count', type=int, default=1,
-                               help='Raft member count for multi-replica (standalone mode only, default: 1)')
+                              help='Raft member count for multi-replica (standalone mode only, default: 1)')
     parser_start.add_argument('--remote-dir', default='/tmp/ds_coordinator',
-                               help='Remote directory with standalone binary (must match install --remote-dir)')
+                              help='Remote directory with standalone binary (must match install --remote-dir)')
 
     # Stop subcommand (graceful stop using dscli)
     parser_stop = subparsers.add_parser('stop', parents=[parent_parser],
@@ -505,14 +508,14 @@ def main():
                               help=f'Process name to check (default: {PROCESS_NAME})')
     parser_check.add_argument('-S', '--standalone', action='store_true', default=False)
     parser_check.add_argument('--ready', action='store_true', default=False,
-                               help='Wait for coordinator readiness: port connectable, '
-                                    'leader elected (standalone only)')
+                              help='Wait for coordinator readiness: port connectable, '
+                              'leader elected (standalone only)')
     parser_check.add_argument('--port', type=int, default=31511,
-                               help='Coordinator port for TCP check (default: 31511)')
+                              help='Coordinator port for TCP check (default: 31511)')
     parser_check.add_argument('--expected-member-count', type=int, default=1,
-                               help='Expected member count for leader election check (default: 1)')
+                              help='Expected member count for leader election check (default: 1)')
     parser_check.add_argument('--remote-config', default='/tmp/coordinator.config',
-                               help='Remote config path (used to read log_dir for leader check)')
+                              help='Remote config path (used to read log_dir for leader check)')
 
     # Exec subcommand
     parser_exec = subparsers.add_parser('exec', parents=[parent_parser],
@@ -578,55 +581,56 @@ def main():
     parser_deploy.add_argument('--procmon-dir', default=None,
                                help='Remote directory for procmon files (default: same as --remote-config dir)')
     parser_deploy.add_argument('--whl', default=find_default_whl(),
-                                help='Path to datasystem whl package (non-standalone mode)')
+                               help='Path to datasystem whl package (non-standalone mode)')
     parser_deploy.add_argument('-S', '--standalone', action='store_true', default=False,
-                                help='Standalone mode: install binary + .so, start coordinator_test')
+                               help='Standalone mode: install binary + .so, start coordinator_test')
     parser_deploy.add_argument('--image', '-i', required=False, default=None,
-                                help='Container image (if set, create pods first)')
+                               help='Container image (if set, create pods first)')
     parser_deploy.add_argument('--yaml', '-y',
-                                default='config/pod_config.yaml.example',
-                                help='Pod YAML template (default: config/pod_config.yaml.example)')
+                               default='config/pod_config.yaml.example',
+                               help='Pod YAML template (default: config/pod_config.yaml.example)')
     parser_deploy.add_argument('--cpu', default='8',
-                                help='Pod CPU limit (default: 8)')
+                               help='Pod CPU limit (default: 8)')
     parser_deploy.add_argument('--memory', '-m', default='16Gi',
-                                help='Pod memory limit (default: 16Gi)')
+                               help='Pod memory limit (default: 16Gi)')
     parser_deploy.add_argument('--requests-cpu', default=None,
-                                help='Pod CPU request (default: same as --cpu)')
+                               help='Pod CPU request (default: same as --cpu)')
     parser_deploy.add_argument('--requests-memory', default=None,
                                help='Pod memory request (default: same as --memory)')
     parser_deploy.add_argument('--instances', type=int, required=False, default=None,
-                                help='Number of coordinator instances (required when --image is set)')
+                               help='Number of coordinator instances (required when --image is set)')
     parser_deploy.add_argument('--force', '-f', action='store_true', default=False,
-                                help='Delete existing pods with same prefix before deploying')
+                               help='Delete existing pods with same prefix before deploying')
     parser_deploy.add_argument('--dry-run', action='store_true', default=False,
-                                help='Preview pod manifest only; skip install and start')
+                               help='Preview pod manifest only; skip install and start')
     # Standalone mode params
     parser_deploy.add_argument('--jf', default=None,
-                                help='JF mock address (standalone mode)')
+                               help='JF mock address (standalone mode)')
     parser_deploy.add_argument('--service', default='kvcache_coordinator',
-                                help='JF service name (standalone mode)')
+                               help='JF service name (standalone mode)')
     parser_deploy.add_argument('--ttl', type=int, default=30,
-                                help='Heartbeat TTL (standalone mode)')
+                               help='Heartbeat TTL (standalone mode)')
     parser_deploy.add_argument('--expected-member-count', type=int, default=1,
-                                help='Raft member count (standalone mode)')
+                               help='Raft member count (standalone mode)')
     parser_deploy.add_argument('--binary', default=None,
-                                help='Path to coordinator_test binary (standalone mode)')
+                               help='Path to coordinator_test binary (standalone mode)')
     parser_deploy.add_argument('--lib-dir', default=None,
-                                help='Local .so directory (standalone mode)')
+                               help='Local .so directory (standalone mode)')
     parser_deploy.add_argument('--remote-dir', default='/tmp/ds_coordinator',
-                                help='Remote directory for standalone binary')
+                               help='Remote directory for standalone binary')
 
     args = parser.parse_args()
 
     if not args.action:
         parser.print_help()
         return 1
+    setup_logging()
 
     # argparse with action='append' default=None won't enforce presence, so
     # validate explicitly here with a clear message.
     if not args.prefixes:
-        print('ERROR: at least one --prefix is required '
-              '(e.g. -p coordinator-a [-p coordinator-b])', file=sys.stderr)
+        log_error('ERROR: at least one --prefix is required '
+                  '(e.g. -p coordinator-a [-p coordinator-b])')
         return 1
 
     # deploy brings up its own pods; skip the pre-fetch used by the
@@ -636,13 +640,13 @@ def main():
     else:
         pods = get_pods(args.namespace, args.prefixes)
         if not pods:
-            print(f'No running pods found matching prefixes {args.prefixes} '
-                  f'in namespace "{args.namespace}"')
+            log_info(f'No running pods found matching prefixes {args.prefixes} '
+                     f'in namespace "{args.namespace}"')
             return 1
 
-        print(f'Found {len(pods)} pods:')
+        log_info(f'Found {len(pods)} pods:')
         for p in pods:
-            print(f'  {p["name"]} ({p["ip"]})')
+            log_info(f'  {p["name"]} ({p["ip"]})')
 
     # Dispatch
     if args.action == 'start':

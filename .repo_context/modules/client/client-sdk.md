@@ -324,10 +324,23 @@
     cross-node connection is disabled; only later runtime switch-over is blocked. The flag that
     prevents Init-stage remote fallback is `affinityPolicy = REQUIRED_SAME_NODE`, not
     `enableCrossNodeConnection`.
-  - local-cache routing toggle; `enableLocalCache=false` routes Set according to
-    `ConnectOptions::dataPlacementPolicy`
-    and supports single- and multi-key full-object `Get`, with per-key partial results and without RH2D (L2 loading
-    follows the `Get` `queryL2Cache` parameter, default true)
+  - local-cache routing toggle and Set/MSet placement policy are independent fields on
+    `ConnectOptions`. `enableLocalCache=false` routes Get/MGet through the transport layer
+    (instead of the bound worker) and supports single- and multi-key full-object `Get` with per-key
+    partial results and without RH2D (L2 loading follows the `Get` `queryL2Cache` parameter, default
+    true). `dataPlacementPolicy` (default `PREFERRED_SAME_NODE`) controls Set/MSet placement and
+    only takes effect when `enableLocalCache=false`; callers may pick `PREFERRED_META_OWNER` to route
+    Set/MSet to the metadata owner. The two are intentionally independent: a caller may turn off local
+    cache while keeping `PREFERRED_SAME_NODE`, or pair it with any other policy. The Python SDK exposes
+    both as kwargs on `KVClient` and `DsClient`: `enable_local_cache=True` (default) and
+    `data_placement_policy=DataPlacementPolicy.PREFERRED_SAME_NODE` (default). The pybind `KVClient`
+    constructors receive both as trailing positional parameters
+    (`py::arg("enableLocalCache") = true`, `py::arg("dataPlacementPolicy") = PREFERRED_SAME_NODE`)
+    so existing positional callers remain compatible; `DataPlacementPolicy` is registered as a pybind
+    enum (`ds.DataPlacementPolicy.PREFERRED_SAME_NODE / REQUIRED_SAME_NODE / PREFERRED_META_OWNER`).
+    `HeteroClient` does not currently expose either kwarg; the underlying `ObjectClientImpl` still
+    honors `ConnectOptions::enableLocalCache` for D2H/H2D paths, so a future `HeteroClient` kwarg can
+    be added without changing the C++ side.
   - remote H2D toggle
   - optional `IServiceDiscovery`; the public implementations are ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`
   - fast transport shared-memory size

@@ -12,6 +12,7 @@ Usage:
     python3 deploy_jf.py clean
 """
 
+from deploy_common import DEFAULT_TIMEOUT, get_pods, create_pods, log_error, log_info, setup_logging
 import argparse
 import os
 import subprocess
@@ -19,7 +20,6 @@ import sys
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-from deploy_common import DEFAULT_TIMEOUT, get_pods, create_pods
 
 PROCESS_NAME = 'mock_jf_server.py'
 MOCK_SCRIPT = 'mock_jf_server.py'
@@ -67,11 +67,11 @@ def _start_jf_mock(pod, ns, port, ttl_default, remote_dir, timeout):
     if not os.path.exists(local_script):
         local_script = os.path.join(SCRIPT_DIR, MOCK_SCRIPT)
     if not os.path.exists(local_script):
-        print(f'ERROR: {MOCK_SCRIPT} not found', file=sys.stderr)
+        log_error(f'ERROR: {MOCK_SCRIPT} not found')
         return False
 
     subprocess.run(['kubectl', 'cp', '-n', ns, local_script, f'{name}:{remote_dir}/{MOCK_SCRIPT}'],
-                    timeout=DEFAULT_TIMEOUT)
+                   timeout=DEFAULT_TIMEOUT)
     _kubectl_exec(ns, name, f'chmod +x {remote_dir}/{MOCK_SCRIPT}')
 
     log_path = f'{remote_dir}/jf_mock.log'
@@ -84,7 +84,7 @@ def _start_jf_mock(pod, ns, port, ttl_default, remote_dir, timeout):
     result = _kubectl_exec(ns, name, cmd, timeout=timeout)
     if not result or result.returncode != 0:
         stderr = (result.stderr if result else '').strip()
-        print(f'ERROR: JF mock failed to start: {stderr}', file=sys.stderr)
+        log_error(f'ERROR: JF mock failed to start: {stderr}')
         _kubectl_exec(ns, name, f'cat {log_path}')
         return False
 
@@ -94,17 +94,17 @@ def _start_jf_mock(pod, ns, port, ttl_default, remote_dir, timeout):
     stdout = (result.stdout or '').strip()
     if stdout and stdout.splitlines()[-1].isdigit():
         jf_addr = f"{pod['ip']}:{port}"
-        print(f'JF mock ready: {jf_addr}')
+        log_info(f'JF mock ready: {jf_addr}')
         return True
 
     # Fallback: no PID on stdout (older script without --background, or
     # fork failed before printing). Poll the port explicitly.
-    print(f'JF mock: no PID on stdout, falling back to port poll')
+    log_info(f'JF mock: no PID on stdout, falling back to port poll')
     if _wait_port_ready(ns, name, port, timeout=timeout):
         jf_addr = f"{pod['ip']}:{port}"
-        print(f'JF mock ready: {jf_addr}')
+        log_info(f'JF mock ready: {jf_addr}')
         return True
-    print(f'ERROR: JF mock did not become ready within {timeout}s', file=sys.stderr)
+    log_error(f'ERROR: JF mock did not become ready within {timeout}s')
     _kubectl_exec(ns, name, f'cat {log_path}')
     return False
 
@@ -123,12 +123,12 @@ def cmd_deploy(args):
         if pods is None:
             return 1
         if getattr(args, 'dry_run', False):
-            print('Dry run: skipped copy and start')
+            log_info('Dry run: skipped copy and start')
             return 0
     else:
         pods = get_pods(ns, args.prefixes)
         if not pods:
-            print(f'No pods found matching {args.prefixes} in {ns}', file=sys.stderr)
+            log_error(f'No pods found matching {args.prefixes} in {ns}')
             return 1
 
     pod = pods[0]
@@ -139,7 +139,7 @@ def cmd_deploy(args):
 
 def cmd_start(args, pods):
     if not pods:
-        print(f'No pods matching prefix {args.prefixes}', file=sys.stderr)
+        log_error(f'No pods matching prefix {args.prefixes}')
         return 1
     pod = pods[0]
     if _start_jf_mock(pod, args.namespace, args.port, args.ttl_default, args.remote_dir, args.timeout):
@@ -158,13 +158,13 @@ def cmd_stop(args, pods):
 
 def cmd_check(args, pods):
     if not pods:
-        print('No pods found')
+        log_info('No pods found')
         return 1
     ok = True
     for pod in pods:
         r = _kubectl_exec(args.namespace, pod['name'], f'pgrep -f {PROCESS_NAME} 2>/dev/null')
         alive = r and r.returncode == 0
-        print(f"  {pod['name']}: {'ALIVE' if alive else 'NOT RUNNING'}")
+        log_info(f"  {pod['name']}: {'ALIVE' if alive else 'NOT RUNNING'}")
         if not alive:
             ok = False
     return 0 if ok else 1
@@ -192,7 +192,7 @@ def main():
     p_deploy = sub.add_parser('deploy', parents=[parent],
                               help='[optional create pod] + copy + start JF mock')
     p_deploy.add_argument('--image', default=None,
-                           help='Container image (if set, create pod first)')
+                          help='Container image (if set, create pod first)')
     p_deploy.add_argument('--yaml', default='config/pod_config.yaml.example')
     p_deploy.add_argument('--cpu', default='1')
     p_deploy.add_argument('--memory', default='1Gi')
@@ -215,13 +215,14 @@ def main():
     if not args.action:
         parser.print_help()
         return 1
+    setup_logging()
 
     if args.action == 'deploy':
         return cmd_deploy(args)
 
     pods = get_pods(args.namespace, args.prefixes)
     if not pods and args.action != 'stop':
-        print(f'No pods found matching {args.prefixes} in {args.namespace}', file=sys.stderr)
+        log_error(f'No pods found matching {args.prefixes} in {args.namespace}')
         return 1
 
     handlers = {'start': cmd_start, 'stop': cmd_stop, 'check': cmd_check, 'clean': cmd_clean}
