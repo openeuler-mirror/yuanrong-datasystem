@@ -48,6 +48,19 @@ class WorkerRpcArgsTest(unittest.TestCase):
         self.assertNotIn("-zmq_server_io_context=", self.render(use_brpc=True))
         self.assertNotIn("-zmq_server_io_context=", self.render(use_brpc=False))
 
+    def test_zmq_chunk_sz_removed(self):
+        # The ZMQ payload split flag zmq_chunk_sz was removed with the ZMQ RPC transport.
+        # The worker binary rejects it as an unknown command line flag, so it must not be
+        # rendered in either brpc or legacy mode.
+        self.assertNotIn("-zmq_chunk_sz=", self.render(use_brpc=True))
+        self.assertNotIn("-zmq_chunk_sz=", self.render(use_brpc=False))
+
+    def test_no_zmq_command_line_flags(self):
+        # The ZMQ transport was removed; the worker binary rejects any -zmq_* flag.
+        # No ZMQ-specific command line flag may be rendered in either mode.
+        for use_brpc in (True, False):
+            self.assertNotIn("-zmq_", self.render(use_brpc=use_brpc))
+
 
 if __name__ == "__main__":
     unittest.main()

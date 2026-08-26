@@ -153,11 +153,8 @@ global:
 | global.rpc.payloadNocopyThreshold | string | `"104857600"` | datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位） |
 | global.rpc.rpcThreadNum | int | `128` | 配置服务端的RPC线程数，必须为大于0的数 |
 | global.rpc.ocThreadNum | int | `64` | 配置服务端用于处理对象/KV缓存的业务线程数 |
-| global.rpc.zmqServerIoContext | int | `5` | ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
-| global.rpc.zmqClientIoContext | int | `5` | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | global.rpc.ioThreadNice | int | `0` | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
-| global.rpc.zmqChunkSz | int | `1048576` | 并行负载分块大小配置（以字节为单位） |
-| global.rpc.brpc.useBrpc | bool | `false` | 是否使用 brpc 替代 ZMQ 作为 RPC 通信传输。启用后 brpc 独占 worker 的 TCP 端口（与 `worker_address` 同端口，无端口偏移），ZMQ 的 TCP 端点不再创建，上述 ZMQ 专属参数（`zmqServerIoContext`、`zmqClientIoContext`、`zmqClientIoThread`、`zmqChunkSz`）在 brpc 模式下不生效。各服务的线程池参数（`rpcThreadNum`、`ocThreadNum`、`scThreadNum` 等）仍然生效 |
+| global.rpc.brpc.useBrpc | bool | `false` | 是否使用 brpc 替代 ZMQ 作为 RPC 通信传输。启用后 brpc 独占 worker 的 TCP 端口（与 `worker_address` 同端口，无端口偏移），ZMQ 的 TCP 端点不再创建。各服务的线程池参数（`rpcThreadNum`、`ocThreadNum`、`scThreadNum` 等）仍然生效 |
 | global.rpc.brpc.eventDispatcherNum | int | `0` | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。该值仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | global.rpc.brpc.brpcServerNumThreads | int | `64` | brpc 服务端工作线程数（bthread 工作线程池大小） |
 | global.rpc.brpc.brpcMaxConcurrency | int | `128` | 单个 brpc 服务的最大并发在途 RPC 数，0 表示不限制。推荐值为 `brpcServerNumThreads` 的 2 倍（如 64 线程对应 128）。超过该值时 brpc 会立即向客户端返回 ELIMIT，避免慢请求耗尽 bthread 导致 OOM。该值不得小于 `brpcServerNumThreads` |

@@ -230,7 +230,6 @@ spec:
         - -shared_memory_worker_port={{ $.Values.global.ipc.sharedMemoryWorkerPort }}
         - -io_thread_nice={{ $.Values.global.rpc.ioThreadNice }}
         - -enable_sched_runtime={{ $.Values.global.performance.enableSchedRuntime }}
-        - -zmq_chunk_sz={{ $.Values.global.rpc.zmqChunkSz | int64 }}
         - -use_brpc={{ $.Values.global.rpc.brpc.useBrpc }}
         - -brpc_event_dispatcher_num={{ $.Values.global.rpc.brpc.eventDispatcherNum }}
         - -brpc_server_num_threads={{ $.Values.global.rpc.brpc.brpcServerNumThreads }}
