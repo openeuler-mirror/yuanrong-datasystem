@@ -177,7 +177,7 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 | access log `cost` | SDK/Worker 访问耗时，单位 us | 用于 P50/P99 和 deadline 聚类 |
 | `client summary` | Client 侧阶段摘要 | 判断 metadata、buffer、response、copy 分段 |
 | `latencySummary:{...}` | Client/Worker 打印的阶段耗时原文和值 | 原文要保留，字段值用于聚合；不要重构后冒充 raw log |
-| `rpc slow` / `ZMQ_RPC_FRAMEWORK_SLOW` | RPC 框架分段 | 区分 client framework、server queue/exec、network residual |
+| `rpc slow` / `BRPC_RPC_FRAMEWORK_SLOW` | RPC 框架分段 | 区分 client framework、server queue/exec、network residual |
 | `[Get] Done exceed 3ms` | Worker Get 分段 | `ProcessGetObjectRequest` 常用于判断远端拉取是否主体 |
 | `[Get/RemotePull]` | Entry Worker 到远端 Worker 的同步拉取 | 和 Provider 侧 URMA 日志对齐 |
 | `URMA_ELAPSED_TOTAL` | WR/Event 到 wait 返回的总耗时 | 大尾巴通常表示 completion wait，不等于业务 QueryMeta |
@@ -199,7 +199,7 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 | `019f753c` | 248 条 Get trace，页面 `/perf/ds-get-ub-remote-trace-rootcause-20260718.html` | gzip-tar 正确解包；按 trace 聚合；RemotePull、`ProcessGetObjectRequest`、`URMA_ELAPSED_TOTAL` 对齐；CodeGraph 只做发现，结论回源码 |
 | `019f75a9` | 硬件端口隔离后 23 条 Round2 trace | 把秒级 URMA 尾巴和 20ms client WorkerRpc deadline 分开；不能用旧轮次根因覆盖新轮次 |
 | `019f7606` | 12 条无基线噪声 trace，拓扑图 | 20ms deadline、RemotePull、QueryMeta、日志顺序错位要分别计数；角色图要区分 Client、Entry、Meta、DataWorker |
-| `019f7686` | 4-8ms ZMQRPC sampled 报告 | `rpc slow` 必须解析 `server_exec_us`、`network_residual_us` 等子字段；每个 trace 支持下载 breakdown 和证据 |
+| `019f7686` | 4-8ms ZMQRPC sampled 报告（ZMQ RPC 已删除，brpc 唯一传输） | `rpc slow` 必须解析 `server_exec_us`、`network_residual_us` 等子字段；每个 trace 支持下载 breakdown 和证据 |
 | `019f76d0` | 273 条 Set/Create/Publish 写 trace | 保留原始 `latencySummary`；识别 `client.process.memory_copy` 主导；低于慢日志阈值也能通过 summary 解释 |
 | `019f7970` | 04:00 错误日志互动页 | 表格/卡片筛选、当前类别下载、完整边统计、Entry/Data/Meta 角色过滤都要独立验证 |
 | `019f79c0` | 首页白屏修复与 Top Trace 摘要移除 | HTML/索引产物必须跑 inline JS `node --check`、quoted metadata、去重、live 首页验证；Worker tag 过滤不应制造额外误导摘要 |

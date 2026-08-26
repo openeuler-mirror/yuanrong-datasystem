@@ -29,7 +29,6 @@
 
 #include "common/rdma/create_ucp_context.h"
 #include "common/rdma/mimic_remote_server.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/rdma/ucp_dlopen_util.h"

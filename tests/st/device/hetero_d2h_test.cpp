@@ -99,8 +99,8 @@ TEST_F(HeteroD2HThroughTcpTest, SetGet)
     for (auto j = 0ul; j < numOfObjs; j++) {
         inObjectKeys.emplace_back(FormatString("key_%s", j));
     }
-    // Use ForkForTest instead of raw fork(): in brpc mode it runs func in-process
-    // (brpc channel/bthread global state is not fork-safe). ZMQ mode still forks.
+    // ForkForTest does not fork; it runs func on a separate thread and returns 0
+    // (bthread global state is not fork-safe — deadlock/SIGSEGV in child).
     auto setPid = ForkForTest([&]() {
         InitAcl(0);
         InitTestHeteroClient(0, c0);

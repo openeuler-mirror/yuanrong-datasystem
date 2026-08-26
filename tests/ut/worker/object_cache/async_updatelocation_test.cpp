@@ -15,7 +15,6 @@
  * Description: Test AsyncUpdateLocationManager.
  */
 #include "ut/common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include <algorithm>
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"

@@ -26,8 +26,6 @@ ds_cc_library(
         "//src/datasystem/client/object_cache:object_client_impl",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:common_util",
-        "//src/datasystem/protos:share_memory_zmq_cc_proto",
-        "@zmq",
     ],
     alwayslink = True,
 )

@@ -143,18 +143,12 @@ global:
 | global.ipc.ipcThroughSharedMemory | bool | `true` | datasystem-worker共享内存启用开关 |
 | global.ipc.udsDir | string | `"/home/uds"` | Unix Domain Socket (UDS) 文件存储目录。UDS文件在该路径下产生，路径最大长度不能超过80个字符。该目录将挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
 | global.port.datasystemWorker | int | `31501` | openYuanrong datasystem DaemonSet占用的主机端口号 |
-| global.rpc.enableCurveZmq | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
-| global.rpc.curveKeyDir | string | `"/home/sn/datasystem/curve_key_dir"` | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
-| global.rpc.curveZmqKey.clientPublicKey | string | `""` | 客户端公钥 |
-| global.rpc.curveZmqKey.workerPublicKey | string | `""` | datasystem-worker的公钥 |
-| global.rpc.curveZmqKey.workerSecretKey | string | `""` | datasystem-worker的私钥 |
 | global.rpc.ocWorkerWorkerDirectPort | int | `0` | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
 | global.rpc.ocWorkerWorkerPoolSize | int | `3` | datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 `ocWorkerWorkerDirectPort` 指定为非0值时该配置才生效 |
 | global.rpc.payloadNocopyThreshold | string | `"104857600"` | datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位） |
 | global.rpc.rpcThreadNum | int | `128` | 配置服务端的RPC线程数，必须为大于0的数 |
 | global.rpc.ocThreadNum | int | `64` | 配置服务端用于处理对象/KV缓存的业务线程数 |
 | global.rpc.ioThreadNice | int | `0` | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
-| global.rpc.brpc.useBrpc | bool | `false` | 是否使用 brpc 替代 ZMQ 作为 RPC 通信传输。启用后 brpc 独占 worker 的 TCP 端口（与 `worker_address` 同端口，无端口偏移），ZMQ 的 TCP 端点不再创建。各服务的线程池参数（`rpcThreadNum`、`ocThreadNum`、`scThreadNum` 等）仍然生效 |
 | global.rpc.brpc.eventDispatcherNum | int | `0` | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。该值仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | global.rpc.brpc.brpcServerNumThreads | int | `64` | brpc 服务端工作线程数（bthread 工作线程池大小） |
 | global.rpc.brpc.brpcMaxConcurrency | int | `128` | 单个 brpc 服务的最大并发在途 RPC 数，0 表示不限制。推荐值为 `brpcServerNumThreads` 的 2 倍（如 64 线程对应 128）。超过该值时 brpc 会立即向客户端返回 ELIMIT，避免慢请求耗尽 bthread 导致 OOM。该值不得小于 `brpcServerNumThreads` |

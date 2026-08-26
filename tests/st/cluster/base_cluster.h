@@ -69,7 +69,6 @@ struct BaseClusterOptions {
           numWorkers(DEFAULT_COMPONENT_NUM),
           numRpcThreads(DEFAULT_THREAD_NUM),
           numRocksDBThreads(DEFAULT_THREAD_NUM),
-          numZmqServerCtx(DEFAULT_ZMQ_SERVER_IO_CTX_NUM),
           numOcThreadNum(DEFAULT_THREAD_NUM),
           numSpillThreadNum(DEFAULT_THREAD_NUM),
           numScRegularSocket(DEFAULT_THREAD_NUM),
@@ -96,10 +95,6 @@ struct BaseClusterOptions {
     // Number of background threads rocksdb can use for flushing and compacting.
     // Default: 4
     uint32_t numRocksDBThreads;
-
-    // Optimize the performance of the customer.
-    // Default: 1
-    uint32_t numZmqServerCtx;
 
     // The number of worker service for object cache.
     // Default: 4
@@ -148,7 +143,6 @@ private:
     static const int DEFAULT_THREAD_NUM = 4;
     static const int DEFAULT_COMPONENT_NUM = 1;
     static const uint32_t DEFAULT_GCS_HEARTBEAT_MS = 50;
-    static const int DEFAULT_ZMQ_SERVER_IO_CTX_NUM = 2;
 };
 
 class ServerProcess : public Subprocess {

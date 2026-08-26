@@ -2042,7 +2042,7 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
     const std::string remoteConnectionId = req.client_id().empty() ? requestAddress.ToString() : req.client_id();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     TbbUrmaConnectionMap::accessor accessor;
-    // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
+    // The comm layer has already exchanged the jfr, and we should be able to locate the entry.
     auto res = urmaConnectionMap_.find(accessor, remoteConnectionId);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
                                          FormatString("Failed to find jfr from %s", remoteConnectionId));
@@ -2393,7 +2393,7 @@ Status UrmaManager::AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo, std::share
     std::string remoteConnectionId = urmaInfo.client_id().empty() ? requestAddress.ToString() : urmaInfo.client_id();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     TbbUrmaConnectionMap::const_accessor constAccessor;
-    // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
+    // The comm layer has already exchanged the jfr, and we should be able to locate the entry.
     auto res = urmaConnectionMap_.find(constAccessor, remoteConnectionId);
     if (!res && !urmaInfo.client_id().empty()) {
         remoteConnectionId = requestAddress.ToString();
@@ -2593,7 +2593,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     std::string remoteConnectionId = urmaInfo.client_id().empty() ? requestAddress.ToString() : urmaInfo.client_id();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     TbbUrmaConnectionMap::const_accessor constAccessor;
-    // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
+    // The comm layer has already exchanged the jfr, and we should be able to locate the entry.
     auto res = urmaConnectionMap_.find(constAccessor, remoteConnectionId);
     if (!res && !urmaInfo.client_id().empty()) {
         remoteConnectionId = requestAddress.ToString();

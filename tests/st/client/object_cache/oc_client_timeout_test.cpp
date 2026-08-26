@@ -47,10 +47,8 @@ class OCClientTimeoutTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        // AdmissionReject* tests inject "ZmqService::RouteToRegBackend.elapsedUs" to
-        // exercise the ZMQ admission-reject path (deadline check before dispatch).
-        // brpc has no equivalent dispatch-path inject, so force ZMQ for workers
-        // (workers run brpc by default).
+        // AdmissionReject* tests (below) are skipped: the dispatch-path inject
+        // they relied on has no brpc equivalent.
         opts.numWorkers = 2;
         opts.numEtcd = 1;
         opts.enableDistributedMaster = "true";
@@ -307,7 +305,7 @@ TEST_F(OCClientTimeoutTest, GetObjMetaInfoIndependentDeadlineExceeded)
 }
 
 // Regression for issue #687: with a 10ms requestTimeoutMs and a 100ms server-side sleep,
-// the zmq RPC response times out. Before the fix this returned K_RPC_UNAVAILABLE; after the
+// the RPC response times out. Before the fix this returned K_RPC_UNAVAILABLE; after the
 // fix it must return K_RPC_DEADLINE_EXCEEDED so callers can distinguish deadline exhaustion
 // from connection/service failure.
 TEST_F(OCClientTimeoutTest, Level1_RpcResponseTimeoutReturnsDeadlineExceeded)

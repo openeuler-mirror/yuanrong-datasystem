@@ -525,7 +525,7 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
 - 所有 Coordinator 节点的 `coordinator_raft_initial_peers` 配置完全相同，格式为逗号分隔的 `host:port` 列表。
 - 每个节点的 `coordinator_address` 必须是本机对其他 Coordinator 和 Worker 可访问的地址，并且必须包含在 `coordinator_raft_initial_peers` 中。
 - 每个节点的 `coordinator_raft_data_dir` 必须是该节点独占的本地目录，不能在多个 Coordinator 进程之间共享。
-- 启用选主时必须设置 `use_brpc=true`。`coordinator_raft_initial_peers` 为空时按单节点无选主模式启动。
+- `coordinator_raft_initial_peers` 为空时按单节点无选主模式启动。
 - Worker 侧 `coordinator_address` 仍配置为可访问的 Coordinator 地址；如果需要客户端/Worker 自动发现多个 Coordinator，应使用支持多地址的 Coordinator Discovery 接入方式。
 
 三节点示例的静态 peers 列表如下：
@@ -546,9 +546,6 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
   },
   "coordinator_raft_data_dir": {
     "value": "./datasystem/coordinator_raft_node1"
-  },
-  "use_brpc": {
-    "value": "true"
   }
 }
 ```
@@ -565,9 +562,6 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
   },
   "coordinator_raft_data_dir": {
     "value": "./datasystem/coordinator_raft_node2"
-  },
-  "use_brpc": {
-    "value": "true"
   }
 }
 ```
@@ -582,9 +576,6 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
   },
   "coordinator_raft_data_dir": {
     "value": "./datasystem/coordinator_raft_node3"
-  },
-  "use_brpc": {
-    "value": "true"
   }
 }
 ```
@@ -1107,7 +1098,7 @@ dscli stop --worker_address 127.0.0.1:31501 --timeout 10
 `dscli query` 通过只读接口查询协调后端，并在命令行进程本地完成拓扑解码、健康状态派生、
 哈希区间计算和 key 路由。命令不会读取 `worker_config.json`，也不会自动探测后端类型；
 用户必须显式传入 ETCD 或 Coordinator 地址。
-Coordinator 使用与服务部署相同的基础地址，查询客户端按 `use_brpc` 配置选择 BRPC 或 ZMQ 传输。
+Coordinator 使用与服务部署相同的基础地址，查询客户端经 brpc 传输与 Coordinator 通信。
 `--coordinator_address` 支持逗号分隔的 `host:port` 列表，用于多实例 Coordinator 部署场景；查询客户端会经由
 Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Worker 侧 `coordinator_address` 一致。
 整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
@@ -1254,7 +1245,6 @@ dscli query route \
 | log_monitor | bool | `true` | 是 | 是否在 Coordinator INFO 日志中周期输出 `metrics_summary` 指标摘要 |
 | json_log_monitor | bool | `true` | 是 | 是否将 Coordinator 指标摘要同时输出到 `kv_metrics.log` JSON-Lines 文件 |
 | log_monitor_interval_ms | int | `10000` | 否 | Coordinator 指标摘要的采集和输出间隔，单位为毫秒 |
-| use_brpc | bool | `true` | 否 | 是否使用 brpc 进行 RPC 通信；配置文件中的显式值或环境变量 `DATASYSTEM_USE_BRPC` 可覆盖默认值；参数化入口启用选举时必须为`true` |
 | brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
 | brpc_max_concurrency | int | `128` | 否 | 每个 brpc Server 允许的最大并发 RPC 数；为 `0` 时不限制，且不能小于 `brpc_server_num_threads` |
 | request_sample_rate | double | `1.0` | 是 | 请求日志主采样率，取值范围为 `[0.0, 1.0]` |
@@ -1267,7 +1257,7 @@ Coordinator 日志和采样配置的详细语义参见[日志与可观测相关�
 Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinator_raft_data_dir`、
 `coordinator_raft_heartbeat_interval_ms`、`coordinator_raft_election_timeout_ms`、
 `coordinator_member_failure_grace_ms` 和 `coordinator_discovery_retry_interval_ms` 用于配置本节点 Raft 状态目录
-和选举时序。仅设置 `use_brpc=true` 不会启用选主，仍需配置 `coordinator_raft_initial_peers`。
+和选举时序。配置 `coordinator_raft_initial_peers` 是启用选主的必要条件。
 
 生产部署中，一个 Coordinator 配置文件对应一个 Coordinator 进程。多节点部署时，每个节点应使用自己的
 `coordinator_address` 和独占的 `coordinator_raft_data_dir`，并配置相同的 `coordinator_raft_initial_peers`。配置
@@ -1298,8 +1288,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | worker_address | string | `"127.0.0.1:31501"` | 否 | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
 | coordinator_address | string | `""` | 否 | Coordinator 服务地址，格式为 `host:port`；使用 Coordinator 集群管理方式时必须配置 |
 | kv_events_config | string | `""` | 否 | KV event publisher JSON 配置。为空表示关闭该功能；非空时需要填写 JSON 对象字符串，字段说明参见[表1](#table_kv_events_config)。例如：`{"bind_endpoint":"tcp://0.0.0.0:5557","backend_id":"worker-0"}` |
-| enable_curve_zmq | bool | `false` | 否 | 是否开启服务端组件间认证鉴权功能 |
-| curve_key_dir | string | `""` | 否 | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
 | oc_worker_worker_direct_port | int | `0` | 否 | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
 | oc_worker_worker_pool_size | int | `3` | 否 | datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 `ocWorkerWorkerDirectPort` 指定为非0值时该配置才生效 |
 | payload_nocopy_threshold | string | `"104857600"` | 否 | datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位） |
