@@ -42,6 +42,12 @@ public:
     // in-flight notify tasks drain before the client/metrics are torn down.
     void Stop() { notifyPool_.Stop(); }
 
+    // Stop without draining: drop queued notify-pipeline tasks so no new Get
+    // requests are issued from received notifies, and signal the cache reader
+    // (if any) to stop its loops. Called from /stop so the control thread
+    // replies at once; joins happen in Stop() on shutdown.
+    void StopNow();
+
 private:
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;

@@ -72,3 +72,8 @@ void NotifyDispatcher::DispatchNotify(const std::string &action, int sender,
                         metrics_.VerifyFailCounter(), cfg_.instanceId);
     });
 }
+
+void NotifyDispatcher::StopNow() {
+    notifyPool_.StopNow();
+    if (cacheReader_) cacheReader_->RequestStop();
+}

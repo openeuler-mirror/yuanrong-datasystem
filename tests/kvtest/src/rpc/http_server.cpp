@@ -1,5 +1,6 @@
 #include "http_server.h"
 #include "common/simple_log.h"
+#include "pipeline/kv_worker.h"
 #include "vendor/nlohmann_json.hpp"
 #include <thread>
 
@@ -30,6 +31,8 @@ void HttpServer::Start() {
         res.status = 200;
         res.set_content("stopping", "text/plain");
         running_ = false;
+        dispatcher_.StopNow();
+        if (worker_) worker_->RequestStop();
     });
 
     server_->Post("/summary", [this](const httplib::Request &, httplib::Response &res) {

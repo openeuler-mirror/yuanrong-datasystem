@@ -23,6 +23,14 @@ public:
     void Start();
     void Stop();
 
+    // Signal pipeline threads and the notify pool to stop without joining.
+    // Safe to call from the HTTP/bRPC control-plane thread: it flips the
+    // pipeline loop flag and drops queued notify tasks so no new Set/notify
+    // requests are issued, instead of waiting for main's shutdown delay.
+    // Mid-flight RPCs finish (cannot be killed) then threads exit; the join
+    // happens in Stop() on shutdown.
+    void RequestStop();
+
     size_t NotifyQueueSize() { return notifyPool_.QueueSize(); }
     uint64_t CurrentPoolSize() { return currentPoolSize_.load(); }
 

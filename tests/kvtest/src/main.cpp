@@ -476,6 +476,7 @@ static int RunServerMode(const Config &cfg)
     if (cfg.role == "writer") {
         worker = std::make_unique<KVWorker>(cfg, client, metrics);
         worker->Start();
+        server.SetWorker(worker.get());
     } else {
         SLOG_INFO("Reader mode: waiting for notifications...");
     }
@@ -537,11 +538,19 @@ static int RunServerMode(const Config &cfg)
 
     SLOG_INFO("Shutting down...");
 
-    // Wait for in-flight set/get/exist operations to complete before stopping
-    constexpr int kShutdownDelaySeconds = 5;
-    SLOG_INFO("Waiting " << kShutdownDelaySeconds << "s for in-flight operations to complete...");
-    std::this_thread::sleep_for(std::chrono::seconds(kShutdownDelaySeconds));
-    SLOG_INFO("Shutdown delay complete");
+    // The /stop handler already flipped every stop flag and dropped queued
+    // tasks, so no new Set/Get is issued. Two-phase drain:
+    //   1) pre-join wait: let in-flight RPCs finish naturally (each returns
+    //      within request_timeout_ms) so Stop() joins an already-exited set
+    //      of threads instead of blocking on mid-flight RPCs;
+    //   2) post-join wait: after client/metrics teardown, give the worker
+    //      side / SDK connections a grace window to observe the close before
+    //      the process exits.
+    constexpr int kPreStopDelaySeconds = 3;
+    constexpr int kPostStopDelaySeconds = 2;
+    SLOG_INFO("Waiting " << kPreStopDelaySeconds
+              << "s for in-flight operations to complete before join...");
+    std::this_thread::sleep_for(std::chrono::seconds(kPreStopDelaySeconds));
 
     if (cacheReader)
         cacheReader->Stop();
@@ -549,6 +558,10 @@ static int RunServerMode(const Config &cfg)
         worker->Stop();
     server.Stop();
     metrics.Stop();
+
+    SLOG_INFO("Waiting " << kPostStopDelaySeconds
+              << "s after teardown for connection cleanup...");
+    std::this_thread::sleep_for(std::chrono::seconds(kPostStopDelaySeconds));
 
     SLOG_INFO("Shutdown complete");
     return 0;

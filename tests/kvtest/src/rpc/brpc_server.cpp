@@ -2,6 +2,7 @@
 
 #include "common/simple_log.h"
 #include "kvtest_control.pb.h"
+#include "pipeline/kv_worker.h"
 
 #include <butil/logging.h>
 #include <brpc/closure_guard.h>
@@ -62,6 +63,8 @@ public:
             auto *resp = static_cast<kvtest_control::StopResp *>(response);
             SLOG_INFO("Received KvtestControl.Stop RPC");
             running_->store(false);
+            dispatcher_->StopNow();
+            if (worker_) worker_->RequestStop();
             resp->set_stopping(true);
         } else if (name == kSummary) {
             auto *resp = static_cast<kvtest_control::SummaryResp *>(response);
@@ -98,10 +101,14 @@ public:
 
     brpc::Server &Server() { return server_; }
 
+    // Forwarded from BrpcControlServer::SetWorker after the worker is created.
+    void SetWorker(KVWorker *worker) { worker_ = worker; }
+
 private:
     NotifyDispatcher *dispatcher_;
     MetricsCollector *metrics_;
     std::atomic<bool> *running_;
+    KVWorker *worker_ = nullptr;
     const google::protobuf::ServiceDescriptor *descriptor_ = nullptr;
     brpc::Server server_;
 };
@@ -114,6 +121,10 @@ BrpcControlServer::BrpcControlServer(const Config &cfg,
       impl_(std::make_unique<Impl>(&dispatcher_, &metrics_, &running_)) {}
 
 BrpcControlServer::~BrpcControlServer() { Stop(); }
+
+void BrpcControlServer::SetWorker(KVWorker *worker) {
+    impl_->SetWorker(worker);
+}
 
 void BrpcControlServer::Start() {
     // Map the legacy httplib paths to the KvtestControl methods so external
