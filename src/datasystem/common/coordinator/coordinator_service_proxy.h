@@ -91,6 +91,34 @@ public:
                          std::string *coordinatorId = nullptr) = 0;
 
     /**
+     * @brief Conditionally read one exact key.
+     * @param[in] key Physical exact key.
+     * @param[in] knownModRevision Exact-key revision already held by the caller.
+     * @param[out] kvs Result entry when changed.
+     * @param[out] revision Result store revision.
+     * @param[out] unchanged Whether the key still has knownModRevision.
+     * @param[in] timeoutMs RPC deadline in milliseconds.
+     * @param[out] coordinatorId Exact response CoordinatorId; nullptr ignores it.
+     * @return Existing Range status contract.
+     */
+    virtual Status RangeIfChanged(const std::string &key, int64_t knownModRevision, std::vector<KeyValueEntry> &kvs,
+                                  int64_t &revision, bool &unchanged,
+                                  int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                                  std::string *coordinatorId = nullptr)
+    {
+        unchanged = false;
+        auto status = Range(key, "", kvs, revision, timeoutMs, coordinatorId);
+        if (status.IsError()) {
+            return status;
+        }
+        if (knownModRevision > 0 && kvs.size() == 1 && kvs.front().modRevision == knownModRevision) {
+            kvs.clear();
+            unchanged = true;
+        }
+        return Status::OK();
+    }
+
+    /**
      * @brief Delete an exact key or range.
      * @param[in] key Physical start key.
      * @param[in] rangeEnd Physical range end; empty means exact delete.
@@ -264,6 +292,13 @@ public:
                  int64_t &revision, int32_t timeoutMs, std::string *coordinatorId) override;
 
     /**
+     * @copydoc ICoordinatorServiceProxy::RangeIfChanged
+     */
+    Status RangeIfChanged(const std::string &key, int64_t knownModRevision, std::vector<KeyValueEntry> &kvs,
+                          int64_t &revision, bool &unchanged, int32_t timeoutMs,
+                          std::string *coordinatorId) override;
+
+    /**
      * @copydoc ICoordinatorServiceProxy::DeleteRange
      */
     Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
@@ -343,6 +378,8 @@ private:
     Status DeleteRangeInternal(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
                                int64_t &revision, int32_t timeoutMs, int64_t expectedModRevision,
                                bool recoveryControl);
+    static bool CanAcceptUnchangedRange(const std::string &startedCoordinatorId,
+                                        const std::string &responseCoordinatorId);
     class InFlightScope;
 
     /**

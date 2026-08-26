@@ -42,6 +42,17 @@ public:
      */
     Status Read(int32_t timeoutMs, std::shared_ptr<const TopologySnapshot> &snapshot) const;
 
+    /**
+     * @brief Conditionally exact-read and build an immutable Snapshot.
+     * @param[in] timeoutMs Positive backend timeout in milliseconds.
+     * @param[in] knownAuthorityRevision Authority revision already held by the caller.
+     * @param[out] snapshot New Snapshot when changed; unchanged otherwise.
+     * @param[out] unchanged Whether topology still has knownAuthorityRevision.
+     * @return Repository, digest, or Snapshot validation status.
+     */
+    Status ReadIfChanged(int32_t timeoutMs, int64_t knownAuthorityRevision,
+                         std::shared_ptr<const TopologySnapshot> &snapshot, bool &unchanged) const;
+
 private:
     TopologyRepository &repository_;
 };

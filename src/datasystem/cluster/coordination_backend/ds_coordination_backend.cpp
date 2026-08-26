@@ -115,6 +115,33 @@ Status DsCoordinationBackend::Get(const std::string &tableName, const std::strin
     return Status::OK();
 }
 
+Status DsCoordinationBackend::GetIfChanged(const std::string &tableName, const std::string &key,
+                                           int64_t knownModRevision, RangeSearchResult &res, bool &unchanged,
+                                           int32_t timeoutMs)
+{
+    CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
+    CHECK_FAIL_RETURN_STATUS(knownModRevision > 0, K_INVALID, "known modification revision must be positive");
+    std::vector<KeyValueEntry> kvs;
+    int64_t revision = 0;
+    auto rc =
+        proxy_->RangeIfChanged(BuildRealKey(tableName, key), knownModRevision, kvs, revision, unchanged, timeoutMs);
+    RefreshWatchIdentity(rc);
+    RETURN_IF_NOT_OK(rc);
+    if (unchanged) {
+        CHECK_FAIL_RETURN_STATUS(kvs.empty(), K_RUNTIME_ERROR, "unchanged Coordinator Range returned values");
+        return Status::OK();
+    }
+    if (kvs.empty()) {
+        RETURN_STATUS(K_NOT_FOUND, "The key does not exist in coordinator. key:" + key);
+    }
+    CHECK_FAIL_RETURN_STATUS(kvs.size() == 1, K_KVSTORE_ERROR, "Coordinator key value is not unique. key:" + key);
+    res.key = kvs.front().key;
+    res.value = std::move(kvs.front().value);
+    res.version = kvs.front().version;
+    res.modRevision = kvs.front().modRevision;
+    return Status::OK();
+}
+
 Status DsCoordinationBackend::CAS(const std::string &tableName, const std::string &key,
                                   const ProcessFunction &processFunc, RangeSearchResult &res)
 {

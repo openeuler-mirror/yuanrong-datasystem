@@ -91,6 +91,14 @@
   exact-read doorbells. RESET, overflow, malformed payloads, revision gaps, and conflicts force Controller exact resync
   while retaining last-good state. Coordinator Host keeps Store mutations as RESET doorbells, so its Controller continues
   exact-reading Store facts. Observer watches exact topology only.
+- After a Worker has an authoritative topology Snapshot, subsequent exact reads send its `AuthorityRevision` as
+  `known_mod_revision`. Coordinator compares that token with the topology key's modification revision and returns
+  `unchanged=true` without the topology value when they match. Revision zero keeps exact and prefix Range behavior
+  unchanged; only exact-key reads accept a positive conditional revision, while a positive revision with a non-empty
+  range end returns `K_INVALID`. Missing keys, changed keys, and older peers retain full-read behavior. Workers accept
+  `unchanged` only when the request and response belong to the same Coordinator process lifetime, and unified ETCD
+  topology reads remain unconditional because bare revisions do not identify an ETCD authority lineage. The protobuf
+  fields are append-only for rolling compatibility.
 - When unified ETCD loses write quorum or becomes unreachable after a last-good snapshot exists, Engine publishes
   `CONTROL_DEGRADED` without revoking business admission and keeps that immutable snapshot authoritative. The Controller
   treats ETCD membership absence as suspicion rather than proof of Worker failure: only members continuously absent for

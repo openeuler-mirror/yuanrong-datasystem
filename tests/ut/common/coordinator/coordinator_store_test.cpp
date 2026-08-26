@@ -489,6 +489,71 @@ TEST_F(CoordinatorIdTest, AddsStableCoordinatorIdToResponses)
     DS_ASSERT_OK(service.Shutdown());
 }
 
+TEST_F(CoordinatorIdTest, ExactRangeOmitsUnchangedValueByModificationRevision)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18510));
+    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
+
+    coordinator::PutReqPb put;
+    put.set_key("/conditional/key");
+    put.set_value("large-value");
+    coordinator::PutRspPb firstPut;
+    DS_ASSERT_OK(service.Put(put, firstPut));
+
+    coordinator::RangeReqPb conditional;
+    conditional.set_key(put.key());
+    conditional.set_known_mod_revision(firstPut.revision());
+    coordinator::RangeRspPb unchanged;
+    DS_ASSERT_OK(service.Range(conditional, unchanged));
+    EXPECT_TRUE(unchanged.unchanged());
+    EXPECT_TRUE(unchanged.kvs().empty());
+
+    coordinator::PutReqPb unrelatedPut;
+    unrelatedPut.set_key("/conditional/unrelated");
+    unrelatedPut.set_value("other");
+    coordinator::PutRspPb unrelatedResponse;
+    DS_ASSERT_OK(service.Put(unrelatedPut, unrelatedResponse));
+
+    coordinator::RangeRspPb unchangedAfterUnrelatedMutation;
+    DS_ASSERT_OK(service.Range(conditional, unchangedAfterUnrelatedMutation));
+    EXPECT_TRUE(unchangedAfterUnrelatedMutation.unchanged());
+    EXPECT_TRUE(unchangedAfterUnrelatedMutation.kvs().empty());
+    EXPECT_GT(unchangedAfterUnrelatedMutation.revision(), firstPut.revision());
+
+    put.set_value("new-value");
+    put.set_expected_version(COORDINATOR_NO_VERSION_CHECK);
+    coordinator::PutRspPb secondPut;
+    DS_ASSERT_OK(service.Put(put, secondPut));
+    coordinator::RangeRspPb changed;
+    DS_ASSERT_OK(service.Range(conditional, changed));
+    EXPECT_FALSE(changed.unchanged());
+    ASSERT_EQ(changed.kvs_size(), 1);
+    EXPECT_EQ(changed.kvs(0).value(), put.value());
+    EXPECT_EQ(changed.kvs(0).mod_revision(), secondPut.revision());
+    DS_ASSERT_OK(service.Shutdown());
+}
+
+TEST_F(CoordinatorIdTest, ConditionalRangeRejectsPrefixAndNegativeRevision)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18511));
+    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
+
+    coordinator::RangeReqPb prefix;
+    prefix.set_key("/conditional/");
+    prefix.set_range_end("/conditional0");
+    prefix.set_known_mod_revision(1);
+    coordinator::RangeRspPb response;
+    EXPECT_EQ(service.Range(prefix, response).GetCode(), K_INVALID);
+
+    coordinator::RangeReqPb negative;
+    negative.set_key("/conditional/key");
+    negative.set_known_mod_revision(-1);
+    EXPECT_EQ(service.Range(negative, response).GetCode(), K_INVALID);
+    DS_ASSERT_OK(service.Shutdown());
+}
+
 TEST_F(CoordinatorIdTest, PutRejectsAStaleCoordinatorIdBeforeMutation)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18483));

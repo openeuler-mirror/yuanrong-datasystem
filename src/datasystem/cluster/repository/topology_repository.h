@@ -89,6 +89,18 @@ public:
     Status ReadTopology(int32_t timeoutMs, TopologyState &state, int64_t &authorityRevision) const;
 
     /**
+     * @brief Conditionally exact-read authoritative topology.
+     * @param[in] timeoutMs Positive backend timeout.
+     * @param[in] knownAuthorityRevision Authority revision already held by the caller.
+     * @param[out] state Decoded topology when changed; unchanged otherwise.
+     * @param[out] authorityRevision Exact-read revision when changed; unchanged otherwise.
+     * @param[out] unchanged Whether topology still has knownAuthorityRevision.
+     * @return Backend, K_NOT_FOUND, or validation status.
+     */
+    Status ReadTopologyIfChanged(int32_t timeoutMs, int64_t knownAuthorityRevision, TopologyState &state,
+                                 int64_t &authorityRevision, bool &unchanged) const;
+
+    /**
      * @brief CAS topology by expected version with exact unknown read-back.
      * @param[in] expectedVersion Required current version.
      * @param[in] desired Complete next-version topology.

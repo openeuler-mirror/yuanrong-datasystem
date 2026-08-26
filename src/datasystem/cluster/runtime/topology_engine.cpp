@@ -1175,7 +1175,10 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     std::shared_ptr<const TopologySnapshot> previous;
     const bool hasPrevious = snapshots_.Load(previous).IsOk();
     std::shared_ptr<const TopologySnapshot> candidate;
-    auto rc = reader_.Read(ENGINE_READ_TIMEOUT_MS, candidate);
+    bool unchanged = false;
+    auto rc = !options_.unifiedEtcdWatch && hasPrevious && previous->AuthorityRevision() > 0
+                  ? reader_.ReadIfChanged(ENGINE_READ_TIMEOUT_MS, previous->AuthorityRevision(), candidate, unchanged)
+                  : reader_.Read(ENGINE_READ_TIMEOUT_MS, candidate);
     if (rc.IsError()) {
         std::shared_ptr<const TopologySnapshot> lastGood;
         const bool hasLastGood = snapshots_.Load(lastGood).IsOk();
@@ -1184,6 +1187,11 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
                             rc.GetCode() == K_NOT_FOUND ? "topology_missing" : "topology_recovering");
         }
         return rc;
+    }
+    if (unchanged) {
+        RETURN_IF_NOT_OK(PublishBackendEvidence(*previous));
+        RestoreReadyAfterCoordinatorTopologyReload(*previous);
+        return Status::OK();
     }
     SnapshotUpdateOutcome outcome;
     rc = snapshots_.Publish(candidate, outcome);

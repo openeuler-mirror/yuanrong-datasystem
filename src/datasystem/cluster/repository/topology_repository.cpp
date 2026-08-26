@@ -200,6 +200,25 @@ Status TopologyRepository::ReadTopology(int32_t timeoutMs, TopologyState &state,
     return Status::OK();
 }
 
+Status TopologyRepository::ReadTopologyIfChanged(int32_t timeoutMs, int64_t knownAuthorityRevision,
+                                                 TopologyState &state, int64_t &authorityRevision,
+                                                 bool &unchanged) const
+{
+    CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "invalid topology read timeout");
+    CHECK_FAIL_RETURN_STATUS(knownAuthorityRevision > 0, K_INVALID, "known authority revision must be positive");
+    RangeSearchResult result;
+    RETURN_IF_NOT_OK(backend_.GetIfChanged(keys_.TopologyTable(), TopologyKeyHelper::TopologyKey(),
+                                           knownAuthorityRevision, result, unchanged, timeoutMs));
+    if (unchanged) {
+        return Status::OK();
+    }
+    TopologyState decoded;
+    RETURN_IF_NOT_OK(TopologyRepositoryCodec::DecodeTopology(result.value, decoded));
+    state = std::move(decoded);
+    authorityRevision = result.modRevision;
+    return Status::OK();
+}
+
 Status TopologyRepository::CompareAndSwapTopology(uint64_t expectedVersion, const TopologyState &desired,
                                                   TopologyCasResult &result, int64_t expectedAuthorityRevision)
 {

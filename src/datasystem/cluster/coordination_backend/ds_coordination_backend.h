@@ -90,6 +90,13 @@ public:
                int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT) override;
 
     /**
+     * @brief Conditionally read one exact key from Coordinator.
+     */
+    Status GetIfChanged(const std::string &tableName, const std::string &key, int64_t knownModRevision,
+                        RangeSearchResult &res, bool &unchanged,
+                        int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT) override;
+
+    /**
      * @brief Atomically transform one value and return its committed metadata.
      * @param[in] tableName Logical table name.
      * @param[in] key Relative key within the table.

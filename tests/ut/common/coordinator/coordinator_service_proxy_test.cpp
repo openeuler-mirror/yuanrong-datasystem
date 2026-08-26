@@ -229,6 +229,13 @@ TEST(CoordinatorServiceProxyTest, RecoveringResponseRequiresExplicitAcceptance)
     EXPECT_EQ(observedCoordinatorId, COORDINATOR_ID);
 }
 
+TEST(CoordinatorServiceProxyTest, UnchangedRangeRequiresStableCoordinatorIdentity)
+{
+    EXPECT_FALSE(CoordinatorServiceProxyBase::CanAcceptUnchangedRange("", COORDINATOR_ID));
+    EXPECT_FALSE(CoordinatorServiceProxyBase::CanAcceptUnchangedRange(COORDINATOR_ID, "fedcba9876543210"));
+    EXPECT_TRUE(CoordinatorServiceProxyBase::CanAcceptUnchangedRange(COORDINATOR_ID, COORDINATOR_ID));
+}
+
 TEST(CoordinatorServiceProxyTest, RpcBeforeInitDoesNotDiscover)
 {
     auto discovery = MakeDiscovery(Status::OK(), { ADDRESS_A });

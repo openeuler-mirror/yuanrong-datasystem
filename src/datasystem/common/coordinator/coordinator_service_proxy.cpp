@@ -354,6 +354,42 @@ Status CoordinatorServiceProxyBase::Range(const std::string &key, const std::str
     return Status::OK();
 }
 
+Status CoordinatorServiceProxyBase::RangeIfChanged(const std::string &key, int64_t knownModRevision,
+                                                   std::vector<KeyValueEntry> &kvs, int64_t &revision, bool &unchanged,
+                                                   int32_t timeoutMs, std::string *coordinatorId)
+{
+    CHECK_FAIL_RETURN_STATUS(knownModRevision > 0, K_INVALID, "known modification revision must be positive");
+    auto inFlight = BeginRpc(timeoutMs);
+    coordinator::RangeReqPb req;
+    req.set_key(key);
+    req.set_known_mod_revision(knownModRevision);
+    coordinator::RangeRspPb rsp;
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.Range(opts, request, response);
+    }));
+    std::string responseCoordinatorId;
+    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), &responseCoordinatorId));
+    if (rsp.unchanged() && !CanAcceptUnchangedRange(inFlight.StartedCoordinatorId(), responseCoordinatorId)) {
+        unchanged = false;
+        return Range(key, "", kvs, revision, timeoutMs, coordinatorId);
+    }
+    if (coordinatorId != nullptr) {
+        *coordinatorId = responseCoordinatorId;
+    }
+    FillKeyValueEntries(rsp.kvs(), kvs);
+    revision = rsp.revision();
+    unchanged = rsp.unchanged();
+    return Status::OK();
+}
+
+bool CoordinatorServiceProxyBase::CanAcceptUnchangedRange(const std::string &startedCoordinatorId,
+                                                          const std::string &responseCoordinatorId)
+{
+    return !startedCoordinatorId.empty() && startedCoordinatorId == responseCoordinatorId;
+}
+
 Status CoordinatorServiceProxyBase::DeleteRange(
     const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
     int64_t expectedModRevision)
