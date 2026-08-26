@@ -906,6 +906,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败  |
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 |--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
+|--jemalloc_prof_conf &lt;CONF&gt;|无|设置 Worker 子进程的 jemalloc profiling 配置。仅适用于使用 `build.sh -x on` 构建的安装包，且必须位于 `--worker_args`、`--coordinator_args` 或 `--coordinator_worker_args` 之前|
 
 常用启动方式的短参数和长参数等价示例如下：
 
@@ -965,6 +966,23 @@ dscli start --coordinator_config_path coordinator_config.json
 > 例子：
 > ```bash
 > dscli start --enable_ums --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+> ```
+
+> **jemalloc profiling 注意事项**：
+>
+> - `--jemalloc_prof_conf` 是 dscli 参数，不是 Worker 启动参数，因此不写入 `worker_config.json`。
+> - 该参数只能用于启动 Worker，并要求安装包通过 `build.sh -x on` 构建。普通构建传入该参数会在 Worker 启动前报错并提示重新构建。
+> - dscli 会自动补充 `prof:true`。如果未指定 `prof_prefix`，默认前缀为 `<log_dir>/jemalloc/datasystem_worker`。
+> - 显式指定 `prof_prefix` 时完全使用该前缀，不再使用默认日志路径。`prof_prefix` 是文件名前缀而不是目录，例如 `prof_prefix:/data/heap/worker` 会生成 `/data/heap/worker.<pid>...heap`。
+> - dscli 不会自动配置 `prof_final`、`prof_gdump` 或 `lg_prof_interval`。heap 文件也不参与日志轮转、压缩或清理，用户需要自行选择 dump 策略并管理磁盘空间。
+>
+> 例子：
+> ```bash
+> # heap 文件默认写入 log_dir/jemalloc
+> dscli start --jemalloc_prof_conf "prof_final:true,lg_prof_sample:20" -W worker_config.json
+>
+> # 使用用户指定的文件名前缀
+> dscli start --jemalloc_prof_conf "prof_final:true,prof_prefix:/data/heap/worker" -W worker_config.json
 > ```
 
 
@@ -1028,6 +1046,7 @@ dscli stop --worker_address 127.0.0.1:31501 --timeout 10
 |--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败 |
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 |--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
+|--jemalloc_prof_conf &lt;CONF&gt;|无|将 jemalloc profiling 配置转发到每个远端 Worker；每个节点都必须使用 `build.sh -x on` 构建的安装包|
 |--metastore_head_node <NODE_IP> | 无 | 指定<NODE_IP>节点的worker启动Metastore取代ETCD |
 
 
@@ -1054,6 +1073,8 @@ dscli stop --worker_address 127.0.0.1:31501 --timeout 10
 > ```bash
 > dscli up --enable_ums -f ./cluster_config.json
 > ```
+
+> `dscli up --jemalloc_prof_conf <CONF>` 会把同一配置安全转发到每个远端 `dscli start`。是否支持 profiling 由各远端安装包独立检查。默认和显式 `prof_prefix` 的规则与 `dscli start` 相同。
 
 ### dscli down
 

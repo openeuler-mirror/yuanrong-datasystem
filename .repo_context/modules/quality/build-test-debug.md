@@ -114,6 +114,9 @@ Backed by `CMakeLists.txt`:
 - release builds enable hardening flags such as `-fstack-protector-strong`, `-Wl,-z,relro`, `-Wl,-z,now`, `-Wl,-z,noexecstack`, `-D_FORTIFY_SOURCE=2`, and `-fPIE -pie`;
 - sanitizers are supported through `build.sh -S address|thread|undefined|address_undefined`;
 - coverage mode is supported through `build.sh -c on|html`.
+- CMake and Bazel packages generate `yr/datasystem/jemalloc_build_config.py` from the same Python template. Its
+  `JEMALLOC_PROF_ENABLED` field follows `SUPPORT_JEPROF` for CMake and `//:enable_jemalloc_prof` for Bazel, allowing
+  dscli to reject profiling configuration without runtime allocator or shared-library probing.
 
 Backed by `tools/tsan/BUILD.bazel`, `.bazelrc` (`build:tsan`), `bazel/build_defs.bzl`, and the
 `datasystem_worker` / `datasystem_coordinator` binary targets:

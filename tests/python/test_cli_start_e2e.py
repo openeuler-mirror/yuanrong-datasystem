@@ -62,14 +62,17 @@ class CliStartE2eTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def run_start(self, worker_source, timeout="1"):
+    def run_start(self, worker_source, timeout="1", dscli_args=None):
         self.fake_worker.write_text(worker_source, encoding="utf-8")
         self.fake_worker.chmod(self.fake_worker.stat().st_mode | stat.S_IXUSR)
         env = os.environ.copy()
         env["PYTHONPATH"] = str(self.pkg)
+        dscli_args = dscli_args or []
         cmd = [
             sys.executable, str(self.root / "run_dscli.py"), "start", "-t", timeout,
-            "-d", str(self.home), "-w",
+            "-d", str(self.home),
+            *dscli_args,
+            "-w",
             "--worker_address", "127.0.0.1:31501",
             "--coordinator_address", "127.0.0.1:31511",
             "--ready_check_path", str(self.home / "ready"),
@@ -79,6 +82,19 @@ class CliStartE2eTest(unittest.TestCase):
             "--enable_urma", "false",
         ]
         return subprocess.run(cmd, env=env, text=True, capture_output=True, timeout=6, check=False)
+
+    def test_missing_build_marker_rejects_jemalloc_prof(self):
+        result = self.run_start(
+            "#!/usr/bin/env python3\n",
+            dscli_args=["--jemalloc_prof_conf", "prof_final:true"],
+        )
+        output = result.stdout + result.stderr
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "Jemalloc profiling is not enabled in the current build", output
+        )
+        self.assertIn("build.sh -x on", output)
 
     def test_worker_bind_conflict_reports_address_resource(self):
         result = self.run_start(

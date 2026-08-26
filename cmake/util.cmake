@@ -666,6 +666,17 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   set(DATASYSTEM_WHEEL_PATH ${CMAKE_BINARY_DIR}/dist/yr/datasystem)
   set(DATASYSTEM_SETUP_PATH ${CMAKE_BINARY_DIR}/dist)
   set(DATASYSTEM_PACKAGE_LIBPATH ${CMAKE_SOURCE_DIR})
+  if (SUPPORT_JEPROF)
+    set(JEMALLOC_PROF_ENABLED True)
+  else()
+    set(JEMALLOC_PROF_ENABLED False)
+  endif()
+  set(JEMALLOC_BUILD_CONFIG_DIR ${CMAKE_BINARY_DIR}/generated/yr/datasystem)
+  file(MAKE_DIRECTORY ${JEMALLOC_BUILD_CONFIG_DIR})
+  configure_file(
+    ${CMAKE_SOURCE_DIR}/cmake/jemalloc_build_config.py.in
+    ${JEMALLOC_BUILD_CONFIG_DIR}/jemalloc_build_config.py
+    @ONLY)
 
   # Store helm chart
   set(HELM_CHART_PATH ${CMAKE_SOURCE_DIR}/k8s/helm_chart)
@@ -742,6 +753,8 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
 
   # Copy ds cli source files to package lib path
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/cli
+    DESTINATION ${DATASYSTEM_WHEEL_PATH})
+  install(FILES ${JEMALLOC_BUILD_CONFIG_DIR}/jemalloc_build_config.py
     DESTINATION ${DATASYSTEM_WHEEL_PATH})
 
   #Copy setup.py

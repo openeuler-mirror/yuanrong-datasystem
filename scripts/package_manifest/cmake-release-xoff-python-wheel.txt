@@ -117,6 +117,7 @@ yr/datasystem/include/datasystem/utils/sensitive_value.h
 yr/datasystem/include/datasystem/utils/service_discovery.h
 yr/datasystem/include/datasystem/utils/status.h
 yr/datasystem/include/datasystem/utils/string_view.h
+yr/datasystem/jemalloc_build_config.py
 yr/datasystem/kv_client.py
 yr/datasystem/lib/libabseil_dll.so.2407.0.0
 yr/datasystem/lib/libaddress_sorting.so.42

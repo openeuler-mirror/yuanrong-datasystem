@@ -1,6 +1,7 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "bool_setting")
 load("@bazel_skylib//rules:copy_directory.bzl", "copy_directory")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
 load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
 load("@local_ascend//:ascend_config.bzl", "ASCEND_HIXL_PLUGIN_TARGETS")
 load("@rules_cc//cc:defs.bzl", "cc_shared_library")
@@ -577,6 +578,20 @@ copy_directory(
     name = "cli_files",
     src = "cli",
     out = "yr/datasystem/cli",
+)
+
+expand_template(
+    name = "jemalloc_build_config",
+    out = "yr/datasystem/jemalloc_build_config.py",
+    substitutions = select({
+        ":enable_jemalloc_prof": {"@JEMALLOC_PROF_ENABLED@": "True"},
+        "//conditions:default": {"@JEMALLOC_PROF_ENABLED@": "False"},
+    }),
+    template = "cmake/jemalloc_build_config.py.in",
+    visibility = [
+        "//bazel:__pkg__",
+        "//tests/bazel:__pkg__",
+    ],
 )
 
 copy_directory(

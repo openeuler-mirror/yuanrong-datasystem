@@ -1,6 +1,16 @@
 package(default_visibility = ["//visibility:public"])
 
 sh_test(
+    name = "jemalloc_build_config_test",
+    srcs = ["jemalloc_build_config_test.sh"],
+    args = ["$(location //:jemalloc_build_config)"] + select({
+        "//:enable_jemalloc_prof": ["True"],
+        "//conditions:default": ["False"],
+    }),
+    data = ["//:jemalloc_build_config"],
+)
+
+sh_test(
     name = "worker_jemalloc_link_test",
     srcs = ["worker_jemalloc_link_test.sh"],
     args = [
