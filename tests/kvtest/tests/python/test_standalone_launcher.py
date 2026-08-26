@@ -102,6 +102,58 @@ class TestIsFileReady(unittest.TestCase):
         self.assertFalse(launcher.is_file_ready(None))
 
 
+class TestClearStaleReadyFile(unittest.TestCase):
+    """clear_stale_ready_file must remove an existing ready file and be a
+    no-op when the file is absent. Path resolution must match
+    is_file_ready (relative paths resolved against cwd) so the launcher
+    deletes the same path it later polls."""
+
+    def test_removes_existing_absolute_path(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            path = tf.name
+        try:
+            self.assertTrue(os.path.exists(path))
+            self.assertTrue(launcher.clear_stale_ready_file(path))
+            self.assertFalse(os.path.exists(path))
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_missing_absolute_path_is_noop(self):
+        # False but does not raise.
+        self.assertFalse(
+            launcher.clear_stale_ready_file('/tmp/this_should_not_exist_xyz'))
+        self.assertFalse(launcher.clear_stale_ready_file(None))
+        self.assertFalse(launcher.clear_stale_ready_file(''))
+
+    def test_relative_path_resolved_against_cwd(self):
+        # Mirror is_file_ready: relative path resolved against cwd so the
+        # launcher deletes the same file it would later poll.
+        import tempfile
+        import shutil
+        tmpdir = tempfile.mkdtemp()
+        try:
+            rel = 'ready_marker'
+            abs_path = os.path.join(tmpdir, rel)
+            with open(abs_path, 'w') as f:
+                f.write('stale\n')
+            self.assertTrue(launcher.clear_stale_ready_file(rel, cwd=tmpdir))
+            self.assertFalse(os.path.exists(abs_path))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_missing_relative_path_is_noop(self):
+        import tempfile
+        import shutil
+        tmpdir = tempfile.mkdtemp()
+        try:
+            self.assertFalse(
+                launcher.clear_stale_ready_file('absent_marker', cwd=tmpdir))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 class TestBuildEnv(unittest.TestCase):
     """build_env must prepend LD_LIBRARY_PATH only when a lib path is given."""
 
@@ -245,6 +297,94 @@ class TestMainEarlyExitFails(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         # Must not have printed a PID — early exit is a failure.
         self.assertEqual(stdout_buf.getvalue().strip(), '')
+
+
+class TestMainClearsStaleReadyFile(unittest.TestCase):
+    """main() must remove a stale ready_file before Popen.
+
+    Regression guard for the stale-file TOCTOU: previously the readiness
+    poll could hit a file left by a previous run and report ``ready`` in
+    milliseconds, before the new binary reached ReadinessProbe(). The
+    contract mirrors dscli ``start_worker`` (``cli/start.py:671-672``):
+    unlink the ready_file before launching, then poll for the new binary
+    to (re)create it.
+    """
+
+    def test_stale_ready_file_removed_before_popen(self):
+        import io
+        import tempfile
+        import contextlib
+        from unittest.mock import patch, MagicMock
+        fd, path = tempfile.mkstemp(suffix='.ready')
+        os.write(fd, b'stale\n')
+        os.close(fd)
+        # Use a portable temp log path so the test runs on Windows too
+        # (the existing /bin/true-based tests skip on Windows but this
+        # regression test should not).
+        log_path = os.path.join(tempfile.gettempdir(),
+                                'launcher_test_stale.log')
+        try:
+            self.assertTrue(os.path.exists(path),
+                            'precondition: stale ready_file exists')
+            # Track call order: unlink (via clear_stale_ready_file) must
+            # happen before Popen. Force is_file_ready to False and
+            # time.monotonic past the deadline so main() returns quickly
+            # without actually launching anything.
+            call_order = []
+            real_unlink = os.unlink
+            tracking_popen_calls = []
+
+            def tracking_unlink(p, *a, **kw):
+                call_order.append('unlink')
+                return real_unlink(p, *a, **kw)
+
+            def tracking_popen(*a, **kw):
+                call_order.append('popen')
+                tracking_popen_calls.append((a, kw))
+                return mock_proc
+
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None  # binary never exits
+            mock_proc.pid = 12345
+
+            stdout_buf = io.StringIO()
+            stderr_buf = io.StringIO()
+            with contextlib.redirect_stdout(stdout_buf), \
+                    contextlib.redirect_stderr(stderr_buf), \
+                    patch('standalone_launcher.os.unlink',
+                          side_effect=tracking_unlink), \
+                    patch('standalone_launcher.subprocess.Popen',
+                          side_effect=tracking_popen), \
+                    patch('standalone_launcher.is_file_ready',
+                          return_value=False), \
+                    patch('standalone_launcher.time.sleep'), \
+                    patch('standalone_launcher.time.monotonic',
+                          side_effect=[0.0, 0.0, 100.0, 100.0]):
+                launcher.main([
+                    '--binary', '/bin/true',  # not executed (Popen mocked)
+                    '--log', log_path,
+                    '--ready-file', path,
+                    '--ready-timeout', '0.5',
+                    '--ready-interval', '0.1',
+                ])
+            # Stale file must be gone.
+            self.assertFalse(os.path.exists(path),
+                             'stale ready_file must be removed before Popen')
+            # Popen must have been called exactly once after unlink.
+            self.assertEqual(len(tracking_popen_calls), 1)
+            self.assertIn('unlink', call_order)
+            self.assertIn('popen', call_order)
+            self.assertLess(call_order.index('unlink'),
+                            call_order.index('popen'),
+                            'clear_stale_ready_file must run before Popen')
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+            if os.path.exists(log_path):
+                try:
+                    os.unlink(log_path)
+                except OSError:
+                    pass
 
 
 if __name__ == '__main__':
