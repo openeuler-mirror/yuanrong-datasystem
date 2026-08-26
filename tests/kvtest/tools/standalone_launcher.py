@@ -64,6 +64,36 @@ def is_file_ready(path, cwd=None):
     return os.path.exists(path)
 
 
+def clear_stale_ready_file(path, cwd=None):
+    """Remove a stale ready file before launching a new binary.
+
+    Mirrors dscli ``start_worker`` (``cli/start.py:671-672``): the worker
+    binary deletes ``FLAGS_ready_check_path`` at the start of
+    ``ReadinessProbe()`` and re-creates it only after
+    ``WaitForTopologyReady()`` completes (``worker_oc_server.cpp:2920-2922``).
+    The worker's ``Shutdown()`` does not delete the file, so without this
+    cleanup a second launch would hit the previous run's stale file on the
+    first readiness poll and report ``ready`` in milliseconds, before the
+    new worker has reached ``ReadinessProbe()``.
+
+    Relative paths are resolved against ``cwd`` to match ``is_file_ready``.
+    Returns True when a file was removed, False when it was already absent
+    or could not be removed (treated as best-effort: launch proceeds and
+    the readiness poll still bounds the wait).
+    """
+    if not path:
+        return False
+    if not os.path.isabs(path) and cwd:
+        path = os.path.join(cwd, path)
+    try:
+        os.unlink(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+
 def build_env(extra_lib_path=None):
     """Return a copy of os.environ with LD_LIBRARY_PATH prepended if given."""
     env = os.environ.copy()
@@ -117,6 +147,14 @@ def main(argv=None):
     # its copy after Popen so the file is only held by the child.
     log_fd = os.open(args.log,
                      os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+
+    # Clear any stale ready_file before Popen, mirroring dscli start_worker
+    # (cli/start.py:671-672). Without this, the first readiness poll could
+    # hit a file left by a previous run and report ready before the new
+    # binary reaches ReadinessProbe(). See clear_stale_ready_file for the
+    # full rationale.
+    if args.ready_file:
+        clear_stale_ready_file(args.ready_file, args.cwd)
 
     try:
         proc = subprocess.Popen(
