@@ -2406,6 +2406,13 @@ Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi>
 Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi,
                                                std::unique_ptr<Raii> &raii)
 {
+    WorkerNode workerNode;
+    return GetAvailableWorkerApi(workerApi, raii, workerNode);
+}
+
+Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi,
+                                               std::unique_ptr<Raii> &raii, WorkerNode &workerNode)
+{
     std::shared_ptr<client::ListenWorker> listenWorker;
     {
         std::lock_guard<std::mutex> lock(switchNodeMutex_);
@@ -2418,6 +2425,7 @@ Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi>
             id = LOCAL_WORKER;
             workerApi = workerApi_[id];
         }
+        workerNode = id;
         listenWorker = id < listenWorker_.size() ? listenWorker_[id] : nullptr;
         CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_NOT_READY, "No available client identity");
         workerApi->IncreaseInvokeCount();
@@ -5554,6 +5562,44 @@ Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &o
     return FinishTransportRead(itemStatuses, actualKind, transportStatus);
 }
 
+Status ObjectClientImpl::RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                                  GetParam &getParam, WorkerNode workerNode,
+                                                  const std::vector<std::string> &objectKeys,
+                                                  std::vector<std::shared_ptr<Buffer>> &buffers)
+{
+    auto recoveryReason = client::WorkerRecoveryReason::CLIENT_REMOVED;
+    auto recoveryStatus = workerNode == LOCAL_WORKER
+                              ? ProcessWorkerLost(recoveryReason)
+                              : ProcessStandbyWorkerLost(workerNode, recoveryReason);
+    if (recoveryStatus.IsError()) {
+        return recoveryStatus;
+    }
+    buffers.assign(objectKeys.size(), nullptr);
+    return GetBuffersFromWorker(workerApi, getParam, buffers);
+}
+
+Status ObjectClientImpl::GetFromLocalWorker(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
+                                            std::vector<std::shared_ptr<Buffer>> &buffers, bool queryL2Cache,
+                                            bool isRH2DSupported, int32_t requestTimeoutMs)
+{
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    WorkerNode workerNode;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii, workerNode));
+    GetParam getParam{ .objectKeys = objectKeys,
+                       .subTimeoutMs = subTimeoutMs,
+                       .readParams = {},
+                       .queryL2Cache = queryL2Cache,
+                       .isRH2DSupported = isRH2DSupported,
+                       .requestTimeoutMs = requestTimeoutMs };
+    auto rc = GetBuffersFromWorker(workerApi, getParam, buffers);
+    if (rc.GetCode() == K_CLIENT_WORKER_DISCONNECT) {
+        rc = RecoverWorkerAndRetryGet(workerApi, getParam, workerNode, objectKeys, buffers);
+    }
+    HandleDirectGetFailure(workerApi, rc);
+    return rc;
+}
+
 Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
                              std::vector<Optional<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported,
                              int32_t requestTimeoutMs)
@@ -5578,17 +5624,8 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
                                  "Remote H2D is not supported when local cache is disabled");
         rc = GetFromTransportLayer(objectKeys, objectBuffers, traceEnabled, subTimeoutMs, queryL2Cache);
     } else {
-        std::shared_ptr<IClientWorkerApi> workerApi;
-        std::unique_ptr<Raii> raii;
-        RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-        GetParam getParam{ .objectKeys = objectKeys,
-                           .subTimeoutMs = subTimeoutMs,
-                           .readParams = {},
-                           .queryL2Cache = queryL2Cache,
-                           .isRH2DSupported = isRH2DSupported,
-                           .requestTimeoutMs = requestTimeoutMs };
-        rc = GetBuffersFromWorker(workerApi, getParam, objectBuffers);
-        HandleDirectGetFailure(workerApi, rc);
+        rc = GetFromLocalWorker(objectKeys, subTimeoutMs, objectBuffers, queryL2Cache, isRH2DSupported,
+                                requestTimeoutMs);
     }
     buffers.clear();
     for (auto &objectBuffer : objectBuffers) {

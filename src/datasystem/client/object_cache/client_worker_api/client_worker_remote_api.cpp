@@ -602,6 +602,9 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
             INJECT_POINT("Get.RetryOnError.retry_on_error_after_func");
             RETURN_IF_NOT_OK(getStatus);
             Status recvStatus = Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+            if (recvStatus.GetCode() == StatusCode::K_CLIENT_WORKER_DISCONNECT) {
+                return recvStatus;
+            }
             if (recvStatus.GetCode() == StatusCode::K_TRY_AGAIN || IsRetryableRpcError(recvStatus)
                 || IsNonRetryableRpcError(recvStatus)
                 || (recvStatus.GetCode() == StatusCode::K_OUT_OF_MEMORY && IsAllGetFailed(rsp))) {
