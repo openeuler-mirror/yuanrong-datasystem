@@ -2820,8 +2820,8 @@ TEST_F(ProducerTest, TestDuplicatedBlockedCreateRequest)
     // Normal Send.
     DS_ASSERT_OK(producer->Send(element));
 
-    // ZMQ timeout before the BlockedCreateRequest is processed normally or timer expried but not yet remove the
-    // BlockedCreateRequest.
+    // RPC times out before the BlockedCreateRequest is processed normally or the timer expired
+    // but has not yet removed the BlockedCreateRequest.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UnblockCreators.sleep", "sleep(10000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetBlockedCreateRequest.sleep", "sleep(10000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ClientWorkerSCServiceImpl.HandleBlockedCreateTimeout.sleep",
@@ -2931,8 +2931,8 @@ TEST_F(ProducerNoKeysTest, TestDuplicatedBlockedCreateRequestNoSignature)
     // Normal Send.
     DS_ASSERT_OK(producer->Send(element));
 
-    // ZMQ timeout before the BlockedCreateRequest is processed normally or timer expried but not yet remove the
-    // BlockedCreateRequest.
+    // RPC times out before the BlockedCreateRequest is processed normally or the timer expired
+    // but has not yet removed the BlockedCreateRequest.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UnblockCreators.sleep", "sleep(10000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetBlockedCreateRequest.sleep", "sleep(10000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ClientWorkerSCServiceImpl.HandleBlockedCreateTimeout.sleep",

@@ -33,8 +33,7 @@ namespace {
 
 using CoordinatorDiscoveryPtr = std::shared_ptr<ICoordinatorDiscovery>;
 
-static_assert(std::is_constructible_v<CoordinatorServiceProxyZmqImpl, CoordinatorDiscoveryPtr>
-              && std::is_constructible_v<CoordinatorServiceProxyBrpcImpl, CoordinatorDiscoveryPtr>);
+static_assert(std::is_constructible_v<CoordinatorServiceProxyBrpcImpl, CoordinatorDiscoveryPtr>);
 
 constexpr char ADDRESS_A[] = "127.0.0.1:31501";
 constexpr char ADDRESS_B[] = "127.0.0.1:31502";
@@ -105,7 +104,7 @@ Status RangeOnce(ICoordinatorServiceProxy &proxy)
 TEST(CoordinatorServiceProxyTest, RejectsNullDiscovery)
 {
     std::shared_ptr<ICoordinatorDiscovery> discovery;
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     Status status = proxy.Init();
 
@@ -116,7 +115,7 @@ TEST(CoordinatorServiceProxyTest, PropagatesDiscoveryErrorExactly)
 {
     const Status discoveryError(K_RUNTIME_ERROR, "scripted discovery failure");
     auto discovery = MakeDiscovery(discoveryError, { ADDRESS_A });
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     Status status = proxy.Init();
 
@@ -131,7 +130,7 @@ TEST(CoordinatorServiceProxyTest, ConvertsDiscoveryExceptionToGenericRuntimeErro
     auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>(std::vector<DiscoveryReply>{
         { Status::OK(), {}, true, exceptionMessage },
     });
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     Status status = proxy.Init();
 
@@ -143,7 +142,7 @@ TEST(CoordinatorServiceProxyTest, ConvertsDiscoveryExceptionToGenericRuntimeErro
 TEST(CoordinatorServiceProxyTest, RejectsEmptyDiscoveryResult)
 {
     auto discovery = MakeDiscovery(Status::OK(), {});
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     Status status = proxy.Init();
 
@@ -154,7 +153,7 @@ TEST(CoordinatorServiceProxyTest, RejectsEmptyDiscoveryResult)
 TEST(CoordinatorServiceProxyTest, InitializesFromOneCoordinator)
 {
     auto discovery = MakeDiscovery(Status::OK(), { ADDRESS_A });
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     Status status = proxy.Init();
 
@@ -165,7 +164,7 @@ TEST(CoordinatorServiceProxyTest, InitializesFromOneCoordinator)
 TEST(CoordinatorServiceProxyTest, AcceptsMultipleCoordinatorCandidates)
 {
     auto discovery = MakeDiscovery(Status::OK(), { ADDRESS_A, ADDRESS_B, ADDRESS_C });
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     Status status = proxy.Init();
 
@@ -176,7 +175,7 @@ TEST(CoordinatorServiceProxyTest, AcceptsMultipleCoordinatorCandidates)
 TEST(CoordinatorServiceProxyTest, SkipsMalformedCandidateWhenLaterCoordinatorIsValid)
 {
     auto discovery = MakeDiscovery(Status::OK(), { "malformed-address", ADDRESS_A });
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     Status status = proxy.Init();
 
@@ -187,7 +186,7 @@ TEST(CoordinatorServiceProxyTest, SkipsMalformedCandidateWhenLaterCoordinatorIsV
 TEST(CoordinatorServiceProxyTest, SuccessfulInitIsIdempotent)
 {
     auto discovery = MakeDiscovery(Status::OK(), { ADDRESS_A });
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     DS_ASSERT_OK(proxy.Init());
     DS_ASSERT_OK(proxy.Init());
@@ -202,7 +201,7 @@ TEST(CoordinatorServiceProxyTest, FailedInitCanRetryDiscovery)
         { discoveryError, {}, false, "" },
         { Status::OK(), { ADDRESS_A }, false, "" },
     });
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     Status firstStatus = proxy.Init();
     Status secondStatus = proxy.Init();
@@ -216,7 +215,7 @@ TEST(CoordinatorServiceProxyTest, FailedInitCanRetryDiscovery)
 TEST(CoordinatorServiceProxyTest, RecoveringResponseRequiresExplicitAcceptance)
 {
     auto discovery = MakeDiscovery(Status::OK(), { ADDRESS_A });
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
     coordinator::ResponseHeader header;
     header.set_coordinator_id(COORDINATOR_ID);
     header.set_is_leader(false);
@@ -233,7 +232,7 @@ TEST(CoordinatorServiceProxyTest, RecoveringResponseRequiresExplicitAcceptance)
 TEST(CoordinatorServiceProxyTest, RpcBeforeInitDoesNotDiscover)
 {
     auto discovery = MakeDiscovery(Status::OK(), { ADDRESS_A });
-    CoordinatorServiceProxyZmqImpl proxy(discovery);
+    CoordinatorServiceProxyBrpcImpl proxy(discovery);
 
     Status status = RangeOnce(proxy);
 

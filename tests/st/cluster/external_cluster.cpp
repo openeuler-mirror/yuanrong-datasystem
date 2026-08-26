@@ -915,8 +915,8 @@ Status ExternalCluster::WaitUntilClusterReadyOrTimeout(int timeoutSecs)
     }
 
     // Check whether the RPC service is started by verifying the process listens on the IP port.
-    // In both ZMQ-only mode and brpc mode, the same configured port is used, so a
-    // single CheckIpPortListen suffices.
+    // The same configured port is used regardless of transport, so a single
+    // CheckIpPortListen suffices.
     for (auto addr : allAddrs) {
         timeval curr;
         gettimeofday(&curr, nullptr);
@@ -1277,8 +1277,6 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
     (void)DeleteFile(rootDir + "/health");
     AppendWorkerRuntimeFlags(index, rootDir, gFlag, cmd);
     RETURN_IF_NOT_OK(AppendWorkerBackendFlags(index, address, cmd));
-    // Explicitly propagate the test process's transport selection to the worker
-    // subprocess. ZMQ-scoped tests (e.g. CURVE auth, ZmqService fault injection)
     LOG(INFO) << "Launch worker [" << index << "] command: " << cmd;
     auto workerProcess = std::make_unique<WorkerProcess>(cmd, opts_.workerConfigs[index]);
     std::string workerName = "worker_" + std::to_string(index);

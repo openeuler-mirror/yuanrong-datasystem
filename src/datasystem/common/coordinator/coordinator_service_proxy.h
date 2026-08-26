@@ -339,14 +339,6 @@ public:
     void GetObservedCoordinatorId(std::string &coordinatorId) const override;
 
 protected:
-    enum class Transport { ZMQ, BRPC };
-
-    /**
-     * @brief Return the concrete RPC transport used by this proxy.
-     * @return ZMQ or BRPC transport kind.
-     */
-    virtual Transport GetTransport() const = 0;
-
 private:
     Status DeleteRangeInternal(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
                                int64_t &revision, int32_t timeoutMs, int64_t expectedModRevision,
@@ -428,26 +420,6 @@ private:
     std::mutex identityRefreshMutex_;
 };
 
-class CoordinatorServiceProxyZmqImpl final : public CoordinatorServiceProxyBase {
-public:
-    using CoordinatorServiceProxyBase::CoordinatorServiceProxyBase;
-
-    /**
-     * @brief Release the ZMQ proxy after all callers have stopped.
-     */
-    ~CoordinatorServiceProxyZmqImpl() override = default;
-
-protected:
-    /**
-     * @brief Select the ZMQ Coordinator RPC stub.
-     * @return ZMQ transport kind.
-     */
-    Transport GetTransport() const override
-    {
-        return Transport::ZMQ;
-    }
-};
-
 class CoordinatorServiceProxyBrpcImpl final : public CoordinatorServiceProxyBase {
 public:
     using CoordinatorServiceProxyBase::CoordinatorServiceProxyBase;
@@ -456,16 +428,6 @@ public:
      * @brief Release the BRPC proxy after all callers have stopped.
      */
     ~CoordinatorServiceProxyBrpcImpl() override = default;
-
-protected:
-    /**
-     * @brief Select the BRPC Coordinator RPC stub.
-     * @return BRPC transport kind.
-     */
-    Transport GetTransport() const override
-    {
-        return Transport::BRPC;
-    }
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_COORDINATOR_COORDINATOR_SERVICE_PROXY_H

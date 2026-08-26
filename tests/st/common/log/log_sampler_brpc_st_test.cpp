@@ -24,7 +24,7 @@
  * false on the worker, LogSampler::ClassifyRuntime() returned BYPASS, and
  * 100% of access/request logs were recorded regardless of *_sample_rate.
  *
- * With request_sample_rate=0.0 + access_sample_rate=0.0 + use_brpc=true, a
+ * With request_sample_rate=0.0 + access_sample_rate=0.0, a
  * successful Set/Get must NOT produce an access.log line for that key on the
  * worker (the request is rejected and access is sampled out). Before the fix
  * this assertion fails because BYPASS forces every access log to be emitted.
@@ -127,10 +127,9 @@ public:
         for (auto &addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        // so the worker binds brpc (not zmq). All three sample
-        // rates = 0.0 so the request is rejected and access is sampled out:
-        // a successful Set/Get must leave NO access.log line for that key on
-        // the worker once the fix propagates log_sample_state over brpc.
+        // All three sample rates = 0.0 so the request is rejected and access is
+        // sampled out: a successful Set/Get must leave NO access.log line for that
+        // key on the worker once the fix propagates log_sample_state over brpc.
         opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1"
             " -log_monitor=true -log_monitor_interval_ms=1000"
             " -request_sample_rate=0.0 -access_sample_rate=0.0 -diagnostic_sample_rate=0.0";

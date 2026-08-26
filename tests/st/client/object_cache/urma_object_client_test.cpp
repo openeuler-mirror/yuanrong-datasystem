@@ -211,7 +211,7 @@ public:
     {
         pid_t child = fork();
         if (child == 0) {
-            // avoid zmq problem when fork.
+            // Run func on a fresh thread: brpc channel/bthread global state is not fork-safe.
             std::thread thread(func);
             thread.join();
             exit(0);

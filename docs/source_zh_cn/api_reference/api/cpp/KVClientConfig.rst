@@ -9,7 +9,7 @@ KVClientConfig
     KV 客户端初始化配置。通过嵌套类 :cpp:class:`KVClientConfig::Builder` 构建，
     并在 ``KVClient::Init(const KVClientConfig &clientConfig)`` 中传入。
 
-    本配置仅覆盖客户端日志、监控与 ZMQ 相关参数，不包含 :cpp:class:`ConnectOptions` 中的连接选项。
+    本配置仅覆盖客户端日志与监控参数，不包含 :cpp:class:`ConnectOptions` 中的连接选项。
 
     **配置生效规则**
 
@@ -59,7 +59,7 @@ KVClientConfig
     :header-file: #include <datasystem/utils/kv_client_config.h>
     :namespace: datasystem
 
-    KV 客户端配置构建器，支持链式设置日志、监控和 ZMQ 相关参数。
+    KV 客户端配置构建器，支持链式设置日志和监控参数。
 
     **公共函数**
 
@@ -173,15 +173,6 @@ KVClientConfig
        对应环境变量 ``DATASYSTEM_CLIENT_CONFIG_PATH``，默认值为
        ``~/datasystem/config/datasystem.config``。设为空字符串时禁用文件监控，
        此时可通过 :cpp:func:`KVClient::UpdateConfig` 动态更新配置；两者互斥，不能同时使用。
-
-    .. cpp:function:: Builder &ZmqClientIoContext(int32_t threads)
-
-       设置 ZMQ 客户端 IO context 数量。取值范围 ``[1, 128]``，默认值为 ``1``。
-
-    .. cpp:function:: Builder &ZmqClientIoThread(int32_t threads)
-
-       设置 ZMQ 客户端 IO 线程数量，数值与系统吞吐量正相关。取值范围 ``[1, 32]``，
-       默认值为 ``1``。对应环境变量 ``DATASYSTEM_ZMQ_CLIENT_IO_THREAD``。
 
     .. cpp:function:: Status Build(KVClientConfig &config) const
 

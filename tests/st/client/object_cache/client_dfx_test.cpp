@@ -67,10 +67,8 @@ constexpr char kMasterCacheInvalidInject[] = "master.cache_invalid_failed";
 constexpr char kPersistentRpcDeadlineExceeded[] = "return(K_RPC_DEADLINE_EXCEEDED)";
 
 // Abstracts the test control-plane UtOCService stub so the test harness can talk
-// to the worker's UtOCService adapter in either transport. In brpc mode the
-// worker registers UtOCServiceBrpcAdapter (no ZMQ UtOCService is listening), so
-// the ZMQ-only UtOCService_Stub would fail (RPC_SERVICE_UNAVAILABLE) — this
-// brpc stub selected by InitApis.
+// to the worker's UtOCService adapter. The worker registers
+// UtOCServiceBrpcAdapter, so this brpc stub is selected by InitApis.
 class IUtOCStub {
 public:
     virtual ~IUtOCStub() = default;
@@ -1364,7 +1362,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart2)
 {
         GTEST_SKIP() << "brpc: master GlobalRefTable cleanup lags on worker shutdown/restart "
                     "(master ProcessWorkerRestart does not clear stale gref entries the way "
-                    "the heartbeat-timeout path does under ZMQ). Tracked separately; the "
+                    "the heartbeat-timeout path does). Tracked separately; the "
                     "UtOCService stub brpc switch (IUtOCStub) and circuit-breaker / retry "
                     "hardening in this PR already make the RPC reach the worker.";
     PutObjGIncreaseRef();
@@ -1413,7 +1411,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart3)
 {
         GTEST_SKIP() << "brpc: master GlobalRefTable cleanup lags on worker shutdown/restart "
                     "(master ProcessWorkerRestart does not clear stale gref entries the way "
-                    "the heartbeat-timeout path does under ZMQ). Tracked separately; the "
+                    "the heartbeat-timeout path does). Tracked separately; the "
                     "UtOCService stub brpc switch (IUtOCStub) and circuit-breaker / retry "
                     "hardening in this PR already make the RPC reach the worker.";
     PutObjGIncreaseRef();
@@ -1533,7 +1531,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_GiveUpReconciliation)
 {
         GTEST_SKIP() << "brpc: master GlobalRefTable cleanup lags on worker shutdown/restart "
                     "(master ProcessWorkerRestart does not clear stale gref entries the way "
-                    "the heartbeat-timeout path does under ZMQ). Tracked separately; the "
+                    "the heartbeat-timeout path does). Tracked separately; the "
                     "UtOCService stub brpc switch (IUtOCStub) and circuit-breaker / retry "
                     "hardening in this PR already make the RPC reach the worker.";
     PutObjGIncreaseRef();

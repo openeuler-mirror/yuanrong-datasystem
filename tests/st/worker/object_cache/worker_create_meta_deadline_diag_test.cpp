@@ -16,7 +16,7 @@
 
 /**
  * Description: ST that validates the end-to-end client-deadline propagation
- * through brpc.  Requires brpc mode (-on the test binary).
+ * through brpc.
  * Injects a 300ms master-side delay and issues a Set with a 20ms request
  * budget from worker 1 (master on worker 0, non-distributed).
  *
@@ -26,11 +26,6 @@
  * exceeds the propagated budget (20ms).  If propagation is broken (e.g. the
  * 60s default sneaks in), the Set runs the full 300ms master delay and
  * returns OK — the assertion fails, catching the regression.
- *
- * Important: the test forces workers AND the client onto brpc. Without
- * -at the test-binary level, ZMQ is the default transport
- * and the ST validates the wrong code path (ZMQ does not exercise the
- * brpc_service_generator changes at all).
  */
 #include <chrono>
 #include <memory>
@@ -59,8 +54,6 @@ public:
         opts.enableDistributedMaster = "false";
         opts.masterIdx = 0;
         opts.waitWorkerReady = true;
-        // brpc is the sole transport.
-        // The ZMQ default would silently skip the generator fix under test.
         opts.workerGflagParams = "-shared_memory_size_mb=1024 -v=2";
     }
 
