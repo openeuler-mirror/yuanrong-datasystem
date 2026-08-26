@@ -17,12 +17,17 @@
 #ifndef DATASYSTEM_WORKER_OC_EVICTION_MANAGER_H
 #define DATASYSTEM_WORKER_OC_EVICTION_MANAGER_H
 
+#include <array>
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <future>
+#include <functional>
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -40,8 +45,10 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/object/object_enum.h"
+#include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/metadata_route_resolver.h"
 #include "datasystem/worker/object_cache/eviction_list.h"
+#include "datasystem/worker/object_cache/eviction_strategy.h"
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 
@@ -61,16 +68,47 @@ class SpillEvictionTest;
 namespace datasystem {
 
 namespace master {
-class DeleteAllCopyMetaReqPb;
-class DeleteAllCopyMetaRspPb;
 class MasterOCServiceImpl;
-class RemoveMetaReqPb;
-class RemoveMetaRspPb;
 }
 namespace object_cache {
 
 class WorkerOcEvictionManager : public std::enable_shared_from_this<WorkerOcEvictionManager> {
 public:
+    enum class PolicyUpdatePhase : uint8_t { STABLE, DRAINING, MIGRATING, VERIFYING, ACTIVATING };
+
+    struct PolicyStateSnapshot {
+        PolicyUpdatePhase phase{ PolicyUpdatePhase::STABLE };
+        EvictionPolicy activePolicy{ EvictionPolicy::CLOCK };
+        uint64_t epoch{ 0 };
+        EvictionPolicy targetPolicy{ EvictionPolicy::CLOCK };
+    };
+
+    struct CopyWatermarkStats {
+        EvictionPolicy policy{ EvictionPolicy::CLOCK };
+        uint64_t coldPrimaryCopyCount{ 0 };
+        uint64_t warmPrimaryCopyCount{ 0 };
+        uint64_t hotPrimaryCopyCount{ 0 };
+        uint64_t totalPrimaryCopyCount{ 0 };
+        uint64_t coldPrimaryCopyBytes{ 0 };
+        uint64_t warmPrimaryCopyBytes{ 0 };
+        uint64_t hotPrimaryCopyBytes{ 0 };
+        uint64_t totalPrimaryCopyBytes{ 0 };
+        double counterP50{ 0.0 };
+        double counterP90{ 0.0 };
+        double counterP99{ 0.0 };
+        uint64_t cappedPrimaryCopyCount{ 0 };
+    };
+    using CopyWatermarkObserver = std::function<void(const CopyWatermarkStats &)>;
+
+    struct PersistedPolicyState {
+        EvictionPolicy activePolicy{ EvictionPolicy::CLOCK };
+        uint64_t activeEpoch{ 0 };
+        bool hasTransitionIntent{ false };
+        EvictionPolicy targetPolicy{ EvictionPolicy::CLOCK };
+        uint64_t transitionEpoch{ 0 };
+    };
+    using PolicyStateLoader = std::function<Status(PersistedPolicyState &state, bool &found)>;
+    using PolicyStateStorer = std::function<Status(const PersistedPolicyState &state)>;
 
     /**
      * @brief Construct WorkerOcEvictionManager.
@@ -84,16 +122,7 @@ public:
                             const worker::MetadataRouteResolver &metadataRoute,
                             master::MasterOCServiceImpl *masterOc = nullptr);
 
-    ~WorkerOcEvictionManager()
-    {
-        LOG(INFO) << "WorkerOcEvictionManager exit";
-        // Wait for the thread execution to complete first to avoid releasing other variables.
-        memEvictTaskThreadPool_.reset();
-        primaryEndLifeThreadPool_.reset();
-        spillEvictTaskThreadPool_.reset();
-        spillTaskThreadPool_.reset();
-        masterTaskThreadPool_.reset();
-    }
+    ~WorkerOcEvictionManager();
 
     /**
      * @brief Initialize the WorkerOcEvictionManager Object.
@@ -105,10 +134,26 @@ public:
                 std::shared_ptr<AkSkManager> akSkManager);
 
     /**
+     * @brief Install the worker-local policy state store and restore last-good state.
+     *
+     * This must be called before object-cache services start adding eviction memberships.
+     */
+    Status InitPolicyStateStore(PolicyStateLoader loader, PolicyStateStorer storer);
+
+    /**
      * @brief Add a object to EvictionManager.
      * @param[in] objectKey The objectKey to add.
      */
     void Add(const std::string &objectKey);
+
+    /**
+     * @brief Apply heat received with a migrated primary copy.
+     * @param[in] objectKey The migrated object key.
+     * @param[in] heat Point-in-time heat snapshot from the source.
+     * @param[in] mergeExisting Preserve a higher heat already observed by an existing target replica.
+     * @return Status of the call.
+     */
+    Status ApplyMigratedHeat(const std::string &objectKey, double heat, bool mergeExisting);
 
     /**
      * @brief Erase a object from EvictionManager.
@@ -124,6 +169,119 @@ public:
     void Evict(uint64_t needSize = 0, CacheType cacheType = CacheType::MEMORY);
 
     /**
+     * @brief Touch an object on a cache hit (Get memory hit). Dispatches to the active
+     *        eviction strategy (clock: refill curCounter; heat: add size-normalized heat + lastAccess).
+     * @param[in] objectKey The hit object key.
+     */
+    void OnCacheHit(const std::string &objectKey, uint64_t migratableSize = 0);
+
+    /**
+     * @brief Apply a cache hit immediately when the route is stably CLOCK and therefore does not need object size.
+     * @return True if the CLOCK mutation was applied; false if the caller must resolve size and use OnCacheHit.
+     */
+    bool TryOnCacheHitWithoutSize(const std::string &objectKey);
+
+    /**
+     * @brief Touch an object loaded by a successful Get from spill, L2, or a remote worker.
+     *        Heat records the current access and grants one size-normalized admission credit.
+     */
+    void OnRefill(const std::string &objectKey, uint64_t migratableSize = 0);
+
+    /**
+     * @brief Apply a refill immediately when the route is stably CLOCK and therefore does not need object size.
+     * @return True if the CLOCK mutation was applied; false if the caller must resolve size and use OnRefill.
+     */
+    bool TryOnRefillWithoutSize(const std::string &objectKey);
+
+    /**
+     * @brief Whether foreground Get paths need allocator-accounted object size for the active policy route.
+     * @return True while Heat is active or is the target of an in-progress policy update.
+     */
+    bool NeedsMigratableSize() const noexcept
+    {
+        return needsMigratableSize_.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief Start a worker-local Clock/Heat policy conversion.
+     *
+     * New eviction rounds are fenced before this call drains an in-flight round.
+     * Object Value ownership is unchanged; only eviction metadata is copied to
+     * the inactive list.
+     */
+    Status BeginPolicyUpdate(EvictionPolicy targetPolicy, uint64_t epoch);
+
+    /**
+     * @brief Convert at most maxKeys source memberships into the target list.
+     * @param[out] done True when the source list is empty.
+     */
+    Status MigratePolicyBatch(size_t maxKeys, bool &done);
+
+    /**
+     * @brief Atomically publish the target list after migration completes.
+     */
+    Status CommitPolicyUpdate(uint64_t epoch);
+
+    /**
+     * @brief Execute one idempotent control-plane step for a master-delivered update.
+     */
+    Status HandlePolicyUpdate(EvictionPolicy targetPolicy, uint64_t epoch, size_t maxKeys, bool &complete);
+
+    /**
+     * @brief Validate a rollout without draining eviction or mutating either list.
+     */
+    Status PrecheckPolicyUpdate(EvictionPolicy targetPolicy, uint64_t epoch, size_t migrationBatchSize,
+                                uint64_t minimumAvailableMemoryBytes, uint64_t maximumSourceObjects,
+                                uint64_t deadlineUnixMs, uint64_t &sourceObjects);
+
+    /**
+     * @brief Return bounded progress counters for resource-report acknowledgements.
+     */
+    void GetPolicyUpdateProgress(uint64_t &totalObjects, uint64_t &migratedObjects) const;
+
+    EvictionPolicy GetActiveEvictionPolicy() const;
+    uint64_t GetPolicyUpdateEpoch() const;
+    PolicyStateSnapshot GetPolicyStateSnapshot() const;
+    Status ValidateRebalancePolicy(uint32_t policy, uint64_t epoch) const;
+
+    /**
+     * @brief Run heat decay and collect post-decay hot-primary statistics in one full-list pass.
+     *        Used by heat rebalance resource reporting to avoid separate O(N) object-table scans.
+     */
+    Status MaintainHeatAndCollectHotPrimaryStats(CopyWatermarkStats &stats);
+
+    /**
+     * @brief Collect stable primary-copy count and allocator-accounted bytes without heat maintenance.
+     *        The default clock path does not call this; workload telemetry enables it through a test inject point.
+     */
+    Status CollectPrimaryCopyStats(uint64_t &totalPrimaryCopyCount, uint64_t &totalPrimaryCopyBytes);
+
+    /**
+     * @brief Register the callback that publishes a read-only copy-watermark snapshot.
+     *
+     * Workload telemetry refreshes the snapshot immediately before a periodic worker resource report. Collection
+     * never decays or otherwise mutates policy counters. Clock considers counter >= Q2 hot; Heat uses
+     * rebalance_heat_hot_counter_threshold.
+     */
+    void SetCopyWatermarkObserver(CopyWatermarkObserver observer);
+
+    /**
+     * @brief Collect and publish the current copy-watermark snapshot through the registered observer.
+     *        Called by the Worker resource-report control path; does not mutate policy counters.
+     */
+    void RefreshCopyWatermarkSnapshot();
+
+    /**
+     * @brief Register and refresh the read-only hot-primary snapshot used by master scheduling.
+     *
+     * A successful keep-local rebalance changes primary ownership without reducing source memory usage. Refreshing
+     * this snapshot before reporting task completion prevents the master from scheduling against the previous
+     * 30-second maintenance snapshot. Neither method performs heat decay.
+     */
+    void SetHotPrimaryReportObserver(CopyWatermarkObserver observer);
+    void RefreshHotPrimaryReport();
+
+    /**
      * @brief Get all object infos (for testing).
      * @param[out] res All objects info in EvictionManager.
      * @param[out] oldest The oldest object in EvictionManager.
@@ -132,12 +290,22 @@ public:
     Status GetAllObjectsInfo(std::vector<EvictionList::Node> &res, EvictionList::Node &oldest);
 
     /**
+     * @brief Snapshot one eviction node.
+     */
+    Status GetObjectInfo(const std::string &objectKey, EvictionList::Node &node);
+
+    /**
      * @brief Get a bounded object info snapshot from eviction list oldest position.
      * @param[in] maxScanCount The maximum number of nodes to copy.
      * @param[out] res The bounded object info snapshot.
      * @return Status of the call.
      */
     Status GetObjectsInfoFromOldest(size_t maxScanCount, std::vector<EvictionList::Node> &res);
+
+    /**
+     * @brief Snapshot Heat nodes ordered from lowest to highest heat for memory-pressure rebalance.
+     */
+    Status GetLowestHeatObjects(size_t maxCount, std::vector<EvictionList::Node> &res);
 
     /**
      * @brief Setter function to assign the async send manager.
@@ -187,12 +355,6 @@ public:
     void UnmarkRebalancingObject(const std::string &objectKey);
 
     /**
-     * @brief Remove rebalance marks from objects.
-     * @param[in] objectKeys The object keys.
-     */
-    void UnmarkRebalancingObjects(const std::vector<std::string> &objectKeys);
-
-    /**
      * @brief Check whether an object is being rebalanced.
      * @param[in] objectKey The object key.
      * @return true if object is being rebalanced.
@@ -218,6 +380,14 @@ public:
 
     Status DeletePrimaryEndLifeLocalForTest(const std::string &objectKey,
                                             const std::shared_ptr<SafeObjType> &entry);
+    Status ReacquirePrimaryEndLifeForTest(const std::string &objectKey, uint64_t version,
+                                          std::shared_ptr<SafeObjType> &entry);
+    void AddHeatNodeForTest(const std::string &objectKey, double heat, uint64_t nowMs);
+    Status CollectCopyWatermarkStatsForTest(CopyWatermarkStats &stats);
+    void NotifyCopyWatermarkObserverForTest();
+    void MarkPrimaryEndLifeTaskActiveForTest(const std::string &objectKey, uint64_t version);
+    void FinishPrimaryEndLifeTaskAndWorkerForTest(const std::string &objectKey, uint64_t version);
+    void HoldStableRouteReaderForTest(const std::function<void()> &callback);
 #endif
 
 private:
@@ -304,6 +474,7 @@ private:
     struct SpillTask {
         std::future<SpillResult> future;
         std::unique_ptr<EvictionTrace> trace;
+        EvictionCandidate candidate;
     };
 
     struct PrimaryEndLifeTask {
@@ -314,6 +485,9 @@ private:
         // True when master metadata was already deleted and only local cleanup should be retried.
         bool metaDeleted{ false };
         uint64_t queuedAtMs{ 0 };
+        // Present when the task originated from an eviction selection. It carries Heat retry state across the async
+        // primary-end-life lane without consulting strategy-global mutable bookkeeping.
+        std::optional<EvictionCandidate> evictionCandidate{ std::nullopt };
     };
 
     struct PrimaryEndLifeCandidate {
@@ -344,6 +518,83 @@ private:
     };
 
     using EvictFailedList = std::vector<std::pair<std::string, uint8_t>>;
+    struct EvictionRetry {
+        EvictionCandidate candidate;
+        uint8_t counter{ 0 };
+    };
+    using EvictionRetryList = std::vector<EvictionRetry>;
+
+    struct PolicyRoute {
+        uint64_t epoch{ 0 };
+        EvictionPolicy sourcePolicy{ EvictionPolicy::CLOCK };
+        EvictionList *sourceList{ nullptr };
+        std::shared_ptr<EvictionStrategy> sourceStrategy;
+        HeatPolicyConfig sourceHeatConfig;
+        EvictionPolicy targetPolicy{ EvictionPolicy::CLOCK };
+        EvictionList *targetList{ nullptr };
+        std::shared_ptr<EvictionStrategy> targetStrategy;
+        HeatPolicyConfig targetHeatConfig;
+    };
+
+    static constexpr size_t POLICY_MIGRATION_LOCK_COUNT = 256;
+    static constexpr size_t POLICY_MIGRATION_LOCK_ALIGNMENT = 64;
+    struct alignas(POLICY_MIGRATION_LOCK_ALIGNMENT) PolicyMigrationLock {
+        std::mutex mutex;
+    };
+
+    static constexpr size_t STABLE_ROUTE_READER_SLOT_COUNT = 64;
+    static constexpr size_t STABLE_ROUTE_READER_SLOT_ALIGNMENT = 64;
+    struct alignas(STABLE_ROUTE_READER_SLOT_ALIGNMENT) StableRouteReaderSlot {
+        std::atomic<uint64_t> count{ 0 };
+    };
+
+    class StableRouteReadGuard {
+    public:
+        explicit StableRouteReadGuard(WorkerOcEvictionManager &manager);
+        ~StableRouteReadGuard();
+        explicit operator bool() const;
+
+        StableRouteReadGuard(const StableRouteReadGuard &) = delete;
+        StableRouteReadGuard &operator=(const StableRouteReadGuard &) = delete;
+
+    private:
+        WorkerOcEvictionManager &manager_;
+        size_t slot_{ 0 };
+        bool acquired_{ false };
+    };
+
+    enum class PolicyMutationKind : uint8_t { ADD, CACHE_HIT, REFILL, ERASE, EXTRACT };
+    Status RoutePolicyMutation(const std::string &objectKey, PolicyMutationKind kind, uint64_t migratableSize = 0,
+                               EvictionList::Node *snapshot = nullptr);
+    bool TryApplyClockMutationWithoutSize(const std::string &objectKey, PolicyMutationKind kind);
+    Status RoutePolicyMutationDuringUpdate(const std::string &objectKey, PolicyMutationKind kind,
+                                           uint64_t migratableSize, EvictionList::Node *snapshot);
+    static Status ApplyPolicyMutation(const PolicyRoute &route, const std::string &objectKey, PolicyMutationKind kind,
+                                      uint64_t migratableSize, EvictionList::Node *snapshot);
+    Status ConvertPolicySnapshot(const EvictionList::Node &source, EvictionPolicy sourcePolicy,
+                                 EvictionPolicy targetPolicy, const HeatPolicyConfig &targetHeatConfig,
+                                 EvictionList::Node &target);
+
+    Status PersistPolicyState(const PersistedPolicyState &state) const;
+
+    Status PersistTransitionIntent(EvictionPolicy activePolicy, uint64_t activeEpoch, EvictionPolicy targetPolicy,
+                                   uint64_t epoch);
+
+    Status PersistLastGood(EvictionPolicy activePolicy, uint64_t epoch);
+
+    Status AuditPolicyUpdateMembership(uint64_t epoch, uint64_t &auditedGeneration);
+
+    static bool IsEligibleEvictionMembership(const ObjectInterface &object);
+
+    void BeginTrackedPolicyMutation();
+
+    void EndTrackedPolicyMutation();
+    Status MoveOnePolicyNode(const std::string &objectKey);
+    std::mutex &GetPolicyMigrationLock(const std::string &objectKey);
+    bool TryAcquireStableRouteReader(size_t &slot);
+    void ReleaseStableRouteReader(size_t slot);
+    bool StableRouteReadersDrained() const;
+    void NotifyEvictionStopped();
 
     /**
      * @brief Get the evict action name.
@@ -403,7 +654,8 @@ private:
      * @return Status of the call.
      */
     Status EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects = nullptr,
-                       CacheType cacheType = CacheType::MEMORY, uint64_t needSize = 0);
+                       CacheType cacheType = CacheType::MEMORY, uint64_t needSize = 0,
+                       const EvictionCandidate *candidate = nullptr);
 
     /**
      * @brief Run eviction for one locked object and update async spill bookkeeping.
@@ -416,7 +668,7 @@ private:
      */
     Status TryEvictObject(std::shared_ptr<SafeObjType> &entry, std::unique_ptr<EvictionTrace> trace,
                           size_t &pendingSpillSize, std::unordered_map<std::string, SpillTask> &spillTasks,
-                          bool &locked, CacheType cacheType = CacheType::MEMORY,
+                          bool &locked, const EvictionCandidate &candidate, CacheType cacheType = CacheType::MEMORY,
                           EvictDeletedObjects *deletedObjects = nullptr, uint64_t needSize = 0);
 
     /**
@@ -453,7 +705,8 @@ private:
      * @param[out] accepted Whether this object is newly accepted into the pending set.
      * @return Status of the submit operation.
      */
-    Status SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType, uint64_t needSize, bool &accepted);
+    Status SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType, uint64_t needSize, bool &accepted,
+                                    const EvictionCandidate *candidate);
 
     /**
      * @brief Reserve a primary end-life task in the pending set before enqueueing it.
@@ -765,7 +1018,7 @@ private:
      * @return The spilled size.
      */
     size_t ReleaseSpillFutures(std::unordered_map<std::string, SpillTask> &spillTasks,
-                               std::vector<std::pair<std::string, uint8_t>> &evictFailedIds, bool last);
+                               EvictionRetryList &evictFailedIds, bool last);
 
     /**
      * @brief Submit async evict task to evict spilled objects when spill happen.
@@ -778,6 +1031,8 @@ private:
      * @param[in] objectSize Object data size.
      */
     void EvictSpilledObjects(uint64_t objectSize);
+    void FinishEvictSpilledObjects(EvictionList &spillEvictionList, const EvictFailedList &evictFailedIds,
+                                   uint64_t objectSize, bool &forceCompact);
 
     /**
      * @brief Indicate the object is evitable or not.
@@ -804,11 +1059,12 @@ private:
      * @brief Get a object from ObjectTable and lock it.
      * @param[in] objectKey The ID of the object that need to get.
      * @param[out] entry The object entry that need to get.
-     * @param[out] evictFailedIds Object keys that cannot be locked temporarily.
+     * @param[out] retrySnapshot Current eviction metadata when the entry cannot be locked temporarily.
      * @return Status of the call.
      */
     Status GetAndLockEntry(const std::string &objectKey, std::shared_ptr<SafeObjType> &entry,
-                           EvictFailedList &evictFailedIds);
+                           std::optional<EvictionList::Node> &retrySnapshot);
+    Status ExtractEvictionNode(const std::string &objectKey, EvictionList::Node &snapshot);
 
     /**
      * @brief Get a object from ObjectTable and lock it.
@@ -842,10 +1098,52 @@ private:
      */
     uint64_t GetLowWaterMark(CacheType cacheType = CacheType::MEMORY);
 
+    EvictionList::HeatNodeMetadata ResolveHeatNodeMetadata(const std::string &objectKey) const;
+    Status CollectCopyWatermarkStats(CopyWatermarkStats &stats, bool collectCounterDistribution = true);
+    void NotifyCopyWatermarkObserver();
+    Status EnsureTargetMembership(const std::string &objectKey);
+    Status EnsureMigratedHeatTarget(const std::string &objectKey);
+    Status PreparePolicyUpdate(EvictionPolicy targetPolicy, uint64_t epoch, bool &phaseAcquired);
+    Status DrainPolicyUpdateActivity();
+    Status InitializePolicyUpdateTarget(EvictionPolicy targetPolicy, uint64_t epoch);
+    void ResetPolicyUpdatePhase();
+
     std::shared_ptr<ObjectTable> objectTable_;
+    // Declared before policyRoute_ so ClockEvictionStrategy's reference to this slot remains valid through teardown.
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> gRefTable_{ nullptr };
     EvictionList memEvictionList_;
-    mutable std::mutex rebalancingObjectsMutex_;
-    std::unordered_set<std::string> rebalancingObjects_;
+    EvictionList alternateEvictionList_;
+    mutable std::shared_mutex policyRouteMutex_;
+    PolicyRoute policyRoute_;
+    std::array<PolicyMigrationLock, POLICY_MIGRATION_LOCK_COUNT> policyMigrationLocks_;
+    std::atomic<PolicyUpdatePhase> policyUpdatePhase_{ PolicyUpdatePhase::STABLE };
+    // Avoid an allocator metadata lookup on every CLOCK hit. This is published before a Clock->Heat transition can
+    // route foreground mutations to the Heat target and remains true until Heat is no longer reachable.
+    std::atomic<bool> needsMigratableSize_{ false };
+    std::atomic<uint64_t> policyUpdateTotalObjects_{ 0 };
+    std::atomic<uint64_t> policyUpdateRemainingObjects_{ 0 };
+    std::atomic<uint64_t> policyMutationGeneration_{ 0 };
+    std::atomic<uint64_t> policyMutationWriters_{ 0 };
+    PolicyStateLoader policyStateLoader_;
+    PolicyStateStorer policyStateStorer_;
+    bool recoveredTransitionIntent_{ false };
+    EvictionPolicy recoveredTargetPolicy_{ EvictionPolicy::CLOCK };
+    uint64_t recoveredTransitionEpoch_{ 0 };
+    std::atomic<bool> evictionCancelRequested_{ false };
+    std::condition_variable evictionStoppedCv_;
+    // STABLE cache operations are read-mostly but extremely frequent. Shard reader ownership by execution thread so
+    // cache hits do not bounce one global counter cache line. Admission and policy close use seq_cst operations to
+    // order the phase transition against reader registration; DRAINING waits until every slot reaches zero.
+    std::array<StableRouteReaderSlot, STABLE_ROUTE_READER_SLOT_COUNT> stableRouteReaderSlots_;
+    std::condition_variable stableRouteReadersCv_;
+    // Rebalancing membership is sparse and has no cross-key invariant. A concurrent key map avoids serializing
+    // eviction and migration workers that operate on unrelated objects.
+    using RebalancingObjectTable = tbb::concurrent_hash_map<ImmutableString, bool>;
+    mutable RebalancingObjectTable rebalancingObjects_;
+    // Observer registration is rare and notification is read-mostly. Publish immutable callbacks atomically so
+    // eviction and post-migration reporting do not contend on callback-registration mutexes.
+    std::shared_ptr<const CopyWatermarkObserver> copyWatermarkObserver_;
+    std::shared_ptr<const CopyWatermarkObserver> hotPrimaryReportObserver_;
     std::unique_ptr<ThreadPool> memEvictTaskThreadPool_{ nullptr };
     std::unique_ptr<ThreadPool> primaryEndLifeThreadPool_{ nullptr };
     std::unique_ptr<ThreadPool> spillEvictTaskThreadPool_{ nullptr };
@@ -855,13 +1153,14 @@ private:
     HostPort localAddress_;
     HostPort masterAddress_;
     std::atomic<bool> isDone_;
-    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> gRefTable_{ nullptr };
     master::MasterOCServiceImpl *masterOc_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     const worker::MetadataRouteResolver &metadataRoute_;
+    std::atomic<bool> scheduleEvictionRunning_{ false };
     std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };
     std::weak_ptr<AsyncSendManager> asyncSendManager_{};
     std::mutex primaryEndLifeMutex_;
+    std::condition_variable primaryEndLifeDrainedCv_;
     std::unordered_map<std::string, uint64_t> pendingPrimaryEndLifeObjects_;
     std::atomic<uint64_t> primaryEndLifePendingFullCount_{ 0 };
     // Tracks metadata-deleted objects whose local cleanup failed and must be retried locally.

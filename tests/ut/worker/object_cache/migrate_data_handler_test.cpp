@@ -35,6 +35,7 @@
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/flags/eviction_heat.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
@@ -63,6 +64,9 @@ DS_DECLARE_string(spill_directory);
 DS_DECLARE_string(data_migrate_urma_transport_mode);
 DS_DECLARE_uint64(spill_size_limit);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
+DS_DECLARE_string(eviction_strategy);
+DS_DECLARE_double(eviction_heat_initial_counter);
+DS_DECLARE_uint32(eviction_heat_max_counter);
 namespace datasystem {
 namespace ut {
 
@@ -187,6 +191,17 @@ TEST_F(DataLimiterTest, TestLimiterBasicFunction)
     ASSERT_GE(timer.ElapsedMilliSecond(), double(120));
 }
 
+TEST_F(DataLimiterTest, CancellationInterruptsRateLimitWait)
+{
+    DataLimiter limiter(1, 1);
+    std::atomic<bool> cancelled{ false };
+    auto wait = std::async(std::launch::async, [&] { return limiter.WaitAllow(100, &cancelled); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    cancelled.store(true, std::memory_order_release);
+    ASSERT_EQ(wait.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_FALSE(wait.get());
+}
+
 TEST_F(DataLimiterTest, TestLimiterVerySmallSize)
 {
     LOG(INFO) << "Test migrate data limiter very small sizes";
@@ -283,7 +298,8 @@ public:
         CommonTest::SetUp();
         Init();
         const uint64_t memSize = 1024ul * 1024ul * 1024ul;
-        DS_ASSERT_OK(memory::Allocator::Instance()->Init(memSize));
+        allocator = memory::Allocator::Instance();
+        DS_ASSERT_OK(allocator->Init(memSize));
         FLAGS_spill_directory = "./spill" + GetStringUuid();
         FLAGS_spill_size_limit = memSize;
         DS_ASSERT_OK(WorkerOcSpill::Instance()->Init());
@@ -292,7 +308,18 @@ public:
 
     void TearDown() override
     {
+        AsyncResourceReleaser::Instance().Shutdown();
+        (void)inject::ClearAll();
         RELEASE_STUBS
+        strategy_.reset();
+        remoteApi_.reset();
+        objectTable_.reset();
+        WorkerOcSpill::Instance()->ResetForTest();
+        if (allocator != nullptr) {
+            allocator->ResetForTest();
+            allocator = nullptr;
+        }
+        CommonTest::TearDown();
     }
 
     virtual void Init()
@@ -398,6 +425,33 @@ TEST_F(MigrateDataHandlerTest, TestMigrateDataMeetsNoSpaceError)
     EXPECT_EQ(result2.status.GetCode(), StatusCode::K_NO_SPACE);
 }
 
+TEST_F(MigrateDataHandlerTest, RebalanceMemoryMigrationReachesTargetWhenReportedRemainBytesIsZero)
+{
+    type_ = MigrateType::REBALANCE_KEEP_LOCAL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    const std::string objectKey = "rebalance-target-recycle";
+    DS_ASSERT_OK(CreateObject(objectKey, 1024));
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(2)
+        .WillRepeatedly(Invoke([&](MigrateDataReqPb &req, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
+            rsp.set_remain_bytes(0);
+            rsp.set_limit_rate(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
+            if (!req.objects().empty()) {
+                EXPECT_EQ(req.objects_size(), 1);
+                EXPECT_EQ(req.objects(0).object_key(), objectKey);
+                rsp.add_success_ids(objectKey);
+            }
+            return Status::OK();
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", { objectKey }, objectTable_, remoteApi_, strategy_, nullptr);
+    auto result = handler.MigrateDataToRemote();
+    DS_ASSERT_OK(result.status);
+    EXPECT_EQ(result.successIds.count(objectKey), size_t(1));
+    EXPECT_TRUE(result.failedIds.empty());
+}
+
 Status MigrateDataHandlerTest::MockMigrateSmallData1(MigrateDataReqPb &req, const std::vector<MemView> &payloads,
                                                      MigrateDataRspPb &rsp)
 {
@@ -415,6 +469,7 @@ Status MigrateDataHandlerTest::MockMigrateSmallData1(MigrateDataReqPb &req, cons
     auto objectInfos = req.objects();
     for (const auto &info : objectInfos) {
         const auto objectKey = info.object_key();
+        EXPECT_FALSE(info.has_heat());
         EXPECT_EQ(info.part_index().size(), 1);
         const auto &memView = payloads[info.part_index(0)];
         EXPECT_EQ(memView.Size(), info.data_size());
@@ -446,6 +501,136 @@ TEST_F(MigrateDataHandlerTest, TestMigrateSmallMemoryObjects)
     ASSERT_EQ(result.successIds.size(), count);
     ASSERT_TRUE(result.skipIds.empty());
     ASSERT_TRUE(result.failedIds.empty());
+}
+
+TEST_F(MigrateDataHandlerTest, HeatRebalanceSerializesHeatAndKeepLocalPreservesSourceNode)
+{
+    FLAGS_eviction_strategy = "heat";
+    FLAGS_eviction_heat_initial_counter = 2.0;
+    FLAGS_eviction_heat_max_counter = 32;
+    RefreshHeatFactors();
+    Raii restoreHeatFlags([]() {
+        FLAGS_eviction_strategy = "clock";
+        RefreshHeatFactors();
+    });
+
+    auto evictionManager = std::make_shared<WorkerOcEvictionManager>(
+        objectTable_, HostPort("127.0.0.1:18888"), HostPort("127.0.0.1:18889"), GetTestMetadataRoute());
+    const std::string objectKey = "keep-local-heat";
+    DS_ASSERT_OK(CreateObject(objectKey, 100));
+    evictionManager->Add(objectKey);
+    for (int i = 0; i < 7; ++i) {
+        evictionManager->OnCacheHit(objectKey);
+    }
+
+    constexpr double sourceHeat = 9.0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(2)
+        .WillRepeatedly(Invoke([&](MigrateDataReqPb &req, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
+            rsp.set_remain_bytes(1024ul * 1024ul * 1024ul);
+            rsp.set_available_ratio(85.0);
+            rsp.set_limit_rate(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
+            EXPECT_TRUE(req.has_rebalance_policy_fence());
+            EXPECT_EQ(req.target_eviction_policy(), static_cast<uint32_t>(master::EVICTION_POLICY_HEAT));
+            EXPECT_EQ(req.target_eviction_policy_epoch(), 23u);
+            EXPECT_EQ(req.rebalance_task_id(), "heat-fenced-task");
+            if (!req.objects().empty()) {
+                EXPECT_EQ(req.objects_size(), 1);
+                EXPECT_TRUE(req.objects(0).has_heat());
+                EXPECT_DOUBLE_EQ(req.objects(0).heat(), sourceHeat);
+                rsp.add_success_ids(objectKey);
+            }
+            return Status::OK();
+        }));
+
+    type_ = MigrateType::REBALANCE_KEEP_LOCAL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    RebalancePolicyFence fence{ true, static_cast<uint32_t>(master::EVICTION_POLICY_HEAT), 23, "heat-fenced-task" };
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", { objectKey }, objectTable_, remoteApi_, strategy_, nullptr,
+                               nullptr, false, 0, { { objectKey, sourceHeat } }, std::move(fence));
+    auto result = handler.MigrateDataToRemote();
+    DS_ASSERT_OK(result.status);
+    EXPECT_EQ(result.successIds.count(objectKey), size_t(1));
+
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+    EXPECT_FALSE((*entry)->stateInfo.IsPrimaryCopy());
+    EvictionList::Node node;
+    DS_ASSERT_OK(evictionManager->GetObjectInfo(objectKey, node));
+    EXPECT_DOUBLE_EQ(node.heat, sourceHeat);
+}
+
+TEST_F(MigrateDataHandlerTest, KeepLocalDoesNotDemoteRecreatedObject)
+{
+    const std::string objectKey = "keep-local-recreated";
+    DS_ASSERT_OK(CreateObject(objectKey, 100));
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(2)
+        .WillRepeatedly(Invoke([&](MigrateDataReqPb &req, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
+            rsp.set_remain_bytes(1024ul * 1024ul * 1024ul);
+            rsp.set_available_ratio(85.0);
+            rsp.set_limit_rate(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
+            if (req.objects().empty()) {
+                return Status::OK();
+            }
+
+            EXPECT_EQ(req.objects_size(), 1);
+            EXPECT_EQ(req.objects(0).object_key(), objectKey);
+            EXPECT_TRUE(DeleteObject(objectKey).IsOk());
+            EXPECT_TRUE(CreateObject(objectKey, 100).IsOk());
+            std::shared_ptr<SafeObjType> recreated;
+            EXPECT_TRUE(objectTable_->Get(objectKey, recreated).IsOk());
+            if (recreated != nullptr && recreated->WLock().IsOk()) {
+                (*recreated)->SetCreateTime(2);
+                recreated->WUnlock();
+            }
+            rsp.add_success_ids(objectKey);
+            return Status::OK();
+        }));
+
+    type_ = MigrateType::REBALANCE_KEEP_LOCAL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", { objectKey }, objectTable_, remoteApi_, strategy_, nullptr);
+    auto result = handler.MigrateDataToRemote();
+    DS_ASSERT_OK(result.status);
+
+    std::shared_ptr<SafeObjType> recreated;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, recreated));
+    ASSERT_NE(recreated, nullptr);
+    EXPECT_EQ((*recreated)->GetCreateTime(), 2u);
+    EXPECT_TRUE((*recreated)->stateInfo.IsPrimaryCopy());
+}
+
+TEST_F(MigrateDataHandlerTest, KeepLocalReleasesExpiredObjectInsteadOfRetainingReplica)
+{
+    const std::string objectKey = "keep-local-expired";
+    DS_ASSERT_OK(CreateObject(objectKey, 100));
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(2)
+        .WillRepeatedly(Invoke([&](MigrateDataReqPb &req, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
+            rsp.set_remain_bytes(1024ul * 1024ul * 1024ul);
+            rsp.set_available_ratio(85.0);
+            rsp.set_limit_rate(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
+            if (!req.objects().empty()) {
+                EXPECT_EQ(req.objects_size(), 1);
+                rsp.add_expired_ids(objectKey);
+            }
+            return Status::OK();
+        }));
+
+    type_ = MigrateType::REBALANCE_KEEP_LOCAL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", { objectKey }, objectTable_, remoteApi_, strategy_, nullptr);
+    auto result = handler.MigrateDataToRemote();
+    DS_ASSERT_OK(result.status);
+    EXPECT_EQ(result.successIds.count(objectKey), size_t(0));
+
+    std::shared_ptr<SafeObjType> entry;
+    EXPECT_EQ(objectTable_->Get(objectKey, entry).GetCode(), StatusCode::K_NOT_FOUND);
 }
 
 TEST_F(MigrateDataHandlerTest, TestMigrateNoExistObjects)
@@ -500,6 +685,28 @@ TEST_F(MigrateDataHandlerTest, TestMigrateObjectsButLockFail)
     ASSERT_EQ(result.successIds.size(), succCount);
     ASSERT_TRUE(result.skipIds.empty());
     ASSERT_EQ(result.failedIds.size(), failCount);
+}
+
+TEST_F(MigrateDataHandlerTest, BusyObjectWriteLockDoesNotBlockMigrationCollection)
+{
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("busy_object", 100, 1, objectKeys);
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKeys.front(), entry));
+    DS_ASSERT_OK(entry->WLock());
+    Raii unlock([&entry]() { entry->WUnlock(); });
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_, nullptr);
+    auto migrate = std::async(std::launch::async, [&handler]() { return handler.MigrateDataToRemote(); });
+
+    ASSERT_EQ(migrate.wait_for(std::chrono::milliseconds(500)), std::future_status::ready)
+        << "a busy object must not stall the entire migration batch";
+    auto result = migrate.get();
+    DS_ASSERT_OK(result.status);
+    EXPECT_TRUE(result.successIds.empty());
+    EXPECT_TRUE(result.failedIds.empty());
+    ASSERT_EQ(result.skipIds.size(), 1);
+    EXPECT_NE(result.skipIds.find(objectKeys.front()), result.skipIds.end());
 }
 
 Status MigrateDataHandlerTest::MockMigrateSmallData2(MigrateDataReqPb &req, const std::vector<MemView> &payloads,
@@ -739,7 +946,8 @@ public:
     {
         Init();
         const uint64_t memSize = 1024UL * 1024UL * 1024UL;
-        DS_ASSERT_OK(memory::Allocator::Instance()->Init(memSize));
+        allocator = memory::Allocator::Instance();
+        DS_ASSERT_OK(allocator->Init(memSize));
     }
 
     void Init() override
@@ -796,7 +1004,13 @@ TEST_F(MigrateDataHandlerSpillTest, SpillMigrationErasesEvictionEntryAlongsideOb
     auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     DS_ASSERT_OK(evictionManager->Init(globalRefTable, akSkManager));
     Raii restore([]() { AsyncResourceReleaser::Instance().Shutdown(); });
-    AsyncResourceReleaser::Instance().Init(objectTable_, evictionManager);
+    std::weak_ptr<WorkerOcEvictionManager> weakManager = evictionManager;
+    AsyncResourceReleaser::Instance().Init(objectTable_, [weakManager](const ImmutableString &objectKey) {
+        auto manager = weakManager.lock();
+        if (manager != nullptr) {
+            manager->Erase(objectKey);
+        }
+    });
 
     BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
         .WillRepeatedly(Invoke(this, &MigrateDataHandlerTest::MockMigrateSmallData1));
@@ -849,7 +1063,10 @@ TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestMigrateObjectsByFastTransport)
             return Status::OK();
         }));
 
-    BINEXPECT_CALL(&AsyncResourceReleaser::AddTask, (_, _)).Times(0);
+    BINEXPECT_CALL(static_cast<Status (AsyncResourceReleaser::*)(const ImmutableString &, uint64_t)>(
+                       &AsyncResourceReleaser::AddTask),
+                   (_, _))
+        .Times(0);
 
     MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
                                nullptr);
@@ -981,6 +1198,10 @@ TEST_F(MigrateDataHandlerTest, TestUrmaReadTransportModeUsesMigrateDataDirect)
 
     constexpr uint64_t objectSize = 100;
     constexpr uint64_t objectCount = 2;
+    type_ = MigrateType::SPILL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
     std::vector<ImmutableString> objectKeys;
     CreateObjects("UrmaReadTransportMode", objectSize, objectCount, objectKeys);
     BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::NotifyRemoteGet, (_, _)).Times(0);
@@ -988,6 +1209,7 @@ TEST_F(MigrateDataHandlerTest, TestUrmaReadTransportModeUsesMigrateDataDirect)
         .Times(1)
         .WillOnce(Invoke([](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
             EXPECT_EQ(req.objects_size(), 2);
+            EXPECT_FALSE(req.has_type());
             rsp.set_remain_bytes(1024ul * 1024ul);
             rsp.set_limit_rate(1024ul * 1024ul);
             return Status::OK();
@@ -1012,6 +1234,9 @@ TEST_F(MigrateDataHandlerTest, UrmaReadFailurePreservesStructuredOperatorDetail)
     });
     FLAGS_data_migrate_urma_transport_mode = "read";
     FLAGS_data_migrate_rate_limit_mb = 1;
+    type_ = MigrateType::SPILL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
         .Times(1)
@@ -1054,6 +1279,9 @@ TEST_F(MigrateDataHandlerTest, SendAdmissionStopsLaterTransportBatch)
     });
     FLAGS_data_migrate_urma_transport_mode = "read";
     FLAGS_data_migrate_rate_limit_mb = 1;
+    type_ = MigrateType::SPILL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
         .Times(1)
@@ -1071,18 +1299,22 @@ TEST_F(MigrateDataHandlerTest, SendAdmissionStopsLaterTransportBatch)
     MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_, nullptr);
     uint32_t admissionChecks = 0;
     handler.SetSendAdmission([&admissionChecks] {
-        return ++admissionChecks == 1 ? Status::OK() : Status(K_NOT_READY, "target left topology");
+        return ++admissionChecks <= 2 ? Status::OK() : Status(K_NOT_READY, "target left topology");
     });
     auto result = handler.MigrateDataToRemote();
 
     EXPECT_EQ(result.status.GetCode(), K_NOT_READY);
-    EXPECT_EQ(admissionChecks, 2u);
+    EXPECT_EQ(admissionChecks, 3u);
     EXPECT_EQ(result.successIds.size(), 2u);
     EXPECT_EQ(result.failedIds.size(), 1u);
 }
 
 TEST_F(MigrateDataHandlerTest, TestFastTransportZeroRateRecoversByProbe)
 {
+    type_ = MigrateType::SPILL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
     const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
     Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
     FLAGS_data_migrate_urma_transport_mode = "read";
@@ -1124,6 +1356,10 @@ TEST_F(MigrateDataHandlerTest, TestFastTransportZeroRateRecoversByProbe)
 
 TEST_F(MigrateDataHandlerTest, TestBusyGuardSelfHealsAfterRatePoisonedToZero)
 {
+    type_ = MigrateType::SPILL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
     const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
     Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
     FLAGS_data_migrate_urma_transport_mode = "read";
@@ -1272,6 +1508,10 @@ TEST_F(MigrateDataHandlerTest, TestScaleDownRejectsPersistentlyLowNonZeroRate)
 
 TEST_F(MigrateDataHandlerTest, TestBusyGuardGivesUpWhenRateStaysZero)
 {
+    type_ = MigrateType::SPILL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
     const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
     Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
     FLAGS_data_migrate_urma_transport_mode = "read";
@@ -1335,6 +1575,10 @@ TEST_F(MigrateDataHandlerTest, TestBusyGuardGivesUpWhenRateStaysZero)
 
 TEST_F(MigrateDataHandlerTest, TestBusyGuardSelfHealProbesAfterBudgetWouldExpire)
 {
+    type_ = MigrateType::SPILL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
     const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
     Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
     FLAGS_data_migrate_urma_transport_mode = "read";
@@ -1395,6 +1639,10 @@ TEST_F(MigrateDataHandlerTest, TestBusyGuardSelfHealProbesAfterBudgetWouldExpire
 
 TEST_F(MigrateDataHandlerTest, TestBusyGuardProbeRpcErrorReturnsRpcError)
 {
+    type_ = MigrateType::SPILL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
     const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
     Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
     FLAGS_data_migrate_urma_transport_mode = "read";
@@ -1458,6 +1706,10 @@ TEST_F(MigrateDataHandlerTest, TestBusyGuardProbeRpcErrorReturnsRpcError)
 
 TEST_F(MigrateDataHandlerTest, TestBusyGuardProbeNonRpcErrorReturnsError)
 {
+    type_ = MigrateType::SPILL;
+    strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
     const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
     Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
     FLAGS_data_migrate_urma_transport_mode = "read";
@@ -1575,7 +1827,10 @@ TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestFastTransportRetryOnRpcError)
         .WillOnce(Return(Status(StatusCode::K_RPC_UNAVAILABLE, "rpc error")))
         .WillOnce(Return(Status::OK()));
 
-    BINEXPECT_CALL(&AsyncResourceReleaser::AddTask, (_, _)).Times(0);
+    BINEXPECT_CALL(static_cast<Status (AsyncResourceReleaser::*)(const ImmutableString &, uint64_t)>(
+                       &AsyncResourceReleaser::AddTask),
+                   (_, _))
+        .Times(0);
 
     MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
                                nullptr);

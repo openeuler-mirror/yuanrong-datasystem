@@ -38,6 +38,17 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "eviction_strategy_header",
+    hdrs = [
+        "eviction_strategy.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/worker/object_cache:eviction_list",
+    ],
+)
+
+ds_cc_library(
     name = "worker_worker_oc_api",
     srcs = [
         "worker_worker_oc_api.cpp",
@@ -416,7 +427,9 @@ ds_cc_library(
 ds_cc_library(
     name = "worker_oc_eviction_manager",
     srcs = [
+        "eviction_strategy.cpp",
         "worker_oc_eviction_manager.cpp",
+        "worker_oc_eviction_policy.cpp",
     ],
     hdrs = [
         "worker_oc_eviction_manager.h",
@@ -432,10 +445,12 @@ ds_cc_library(
         "//src/datasystem/common/object_cache:safe_table",
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/flags:eviction_heat",
         "//src/datasystem/common/flags:eviction_watermark",
         "//include/datasystem/object:object_headers",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker/object_cache:eviction_list",
+        "//src/datasystem/worker/object_cache:eviction_strategy_header",
         "//src/datasystem/worker/object_cache:kv_event_publisher",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
@@ -459,6 +474,7 @@ ds_cc_library(
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/object_cache:safe_table",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/flags:eviction_heat",
         "//src/datasystem/worker/object_cache:eviction_list",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
@@ -582,6 +598,7 @@ ds_cc_library(
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker/object_cache/device:device_obj_cache",
         "//src/datasystem/worker/object_cache:eviction_list",
+        "//src/datasystem/worker/object_cache:eviction_strategy_header",
         "//src/datasystem/worker/object_cache:object_cache_worker_flags",
         "//src/datasystem/worker/object_cache:kv_event_publisher",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
@@ -739,9 +756,11 @@ ds_cc_library(
     deps = [
         ":worker_oc_service_impl",
         "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/object_cache:ub_health",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
         "//src/datasystem/common/util:raii",

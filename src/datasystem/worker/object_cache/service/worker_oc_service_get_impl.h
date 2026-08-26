@@ -624,10 +624,15 @@ private:
                                            std::vector<RpcMessage> &payloads);
 
     /**
-     * @brief submit async add evict task
-     * @param[in] objectIds object ids need evict.
+     * @brief Submit asynchronous eviction-metadata touches.
+     * @param[in] objects Object keys and the versions observed by their Get operations.
+     * @param[in] isRefill Whether these objects were newly refilled rather than local-memory hits.
      */
-    void SubmitAsyncAddEvictTask(std::vector<std::string> objectIds);
+    // The second field is the object version observed by the Get. Background Heat updates revalidate this version
+    // under the owning object lock before reading allocator-accounted size.
+    using EvictionTouch = std::pair<std::string, uint64_t>;
+    void SubmitAsyncAddEvictTask(std::vector<EvictionTouch> objects, bool isRefill = false);
+    void ApplyEvictionTouch(const EvictionTouch &touch, bool isRefill);
 
     /**
      * @brief Get objects from anywhere, can be serial or batched.
@@ -901,7 +906,8 @@ private:
      */
     void HandleBatchSubResponsePart2(Status &subRc, const std::string &address, ObjectMetaPb *meta,
                                      ReadObjectKV &objectKV, const Status &checkConnectStatus,
-                                     bool &tryGetFromElsewhere, std::vector<std::string> &needEvictIds);
+                                     bool &tryGetFromElsewhere,
+                                     std::vector<EvictionTouch> &needEvictIds);
 
     /**
      * @brief Helper function process the response from batch get.

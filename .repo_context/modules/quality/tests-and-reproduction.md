@@ -234,6 +234,79 @@ bazel test --config=release --config=test \
   '--test_filter=*.ThreeNodesElectOneLeader'
 ```
 
+## Recommendation workload trace replay
+
+- `tests/st/client/kv_cache/kv_client_eviction_rebalance_telemetry_test.cpp` remains self-contained and deterministic by
+  default. When `DS_TLM_KUAIRAND_TRACE` names a normalized KuaiRand trace, its eviction/rebalance recall and fine-rank
+  cases replay real exposure order/popularity while retaining the fixed key placement and object-size distribution.
+- Create the bounded trace with `tests/st/client/kv_cache/tools/prepare_kuairand_trace.py`; usage, source checksum,
+  engagement definition, format, and dataset-license notes are in `tests/st/client/kv_cache/tools/README.md`.
+- The external dataset and generated trace are intentionally not repository or CI inputs. Recall uses all exposures;
+  fine-rank uses engaged events as a proxy because KuaiRand-Pure has no complete candidate slate.
+- This manual LEVEL1 workload overrides `ClusterTest::GetTestCaseTimeoutSecs()` with
+  `max(80, DS_TLM_MEASURE_SEC + 60)` so a 60-second measurement is not aborted by the normal 80-second end-to-end
+  ST guard after cluster startup, warm-up, and pressure setup. Other ST fixtures retain the 80-second default.
+- The same source also provides `EXCLUSIVE_LEVEL1_KVClientCombinedWorkloadTelemetryTest`, a three-Worker manual
+  topology that enables spill eviction, distributed master, data replication, keep-local-copy, and rebalance at the
+  same time. It writes 400 resident objects per Worker, applies the remaining pressure only through worker0, and maps
+  KuaiRand popularity ranks round-robin onto keys owned by all three Workers. The older eviction-only and
+  rebalance-only fixtures retain contiguous popularity mapping for historical reproducibility.
+- The ARM-calibrated combined default uses 48 MiB of physical shared memory per Worker and test-local 75%/65%
+  eviction watermarks. The split keeps copy-on-Get/migration headroom while holding the Clock/Memory recall resident
+  set near a 70% request-weighted memory-hit rate. `DS_TLM_COMBINED_MEMORY_MB` remains a calibration-only override.
+- Heat workload fixtures use test-only 15s/15s primary/local half-lives so strategy comparisons share the same decay
+  horizon. Production defaults and public configuration are unchanged.
+- The allocator-size-normalized Heat validation keeps that topology, trace, capacity, watermarks, and decay horizon
+  fixed. On ARM, `HeatEvictionListTest.*:HeatEvictionTest.*` covers the 4 KiB access-credit unit and exact-ranking
+  boundary; the final 60-second x3 combined Recall run reached 89.990%, 90.300%, and 90.047% request-weighted memory
+  hit rate with zero Get errors/wrong values and both mechanisms observed. Raw per-second CSV is archived under the
+  sibling `zcode/eviction-rebalance-telemetry/csv/heat-size-credit-final-20260806/` directory.
+- Set `DS_TLM_OUTPUT_DIR` to a persistent directory when per-round CSV artifacts must survive fixture teardown. If it
+  is unset, the CSV remains under the cluster root and follows the existing temporary-lifecycle behavior.
+- `EXCLUSIVE_LEVEL1_KVClientBlockRecallWorkloadTelemetryTest.RecallBlockWorkload` is an additional, independent
+  three-Worker recall workload; the existing eviction-only, rebalance-only, and combined cases are unchanged. One
+  logical request issues a single vector Get for 16 Block keys. Defaults are 64 tokens per Block and 12 KiB per token,
+  hence 768 KiB per Block and exactly 12 MiB per logical KVC request. The geometry is test-configurable through
+  `DS_TLM_BLOCKS_PER_REQUEST`, `DS_TLM_TOKENS_PER_BLOCK`, and `DS_TLM_BYTES_PER_TOKEN`.
+- The Block recall case is disabled in routine CTest/CI discovery because its 10,000-request calibration warm-up and
+  pressure setup exceed the normal 80-second ST budget and require an isolated performance runner. Invoke the
+  `DISABLED_RecallBlockWorkload` GoogleTest case explicitly with `--gtest_also_run_disabled_tests` for manual runs.
+- The Block workload applies a default 1:64 resource scale to both object payload and Worker memory: 12 KiB/token
+  becomes 192 B/token and 70 GiB/node becomes 1,120 MiB/Worker. Three simulated nodes therefore offer 211 logical
+  requests/s (`ceil(4500 * 3 / 64)`), preserving about 253 MiB/s of modeled 30%-miss traffic per node. Overrides are
+  `DS_TLM_BLOCK_RESOURCE_SCALE`, `DS_TLM_BLOCK_MEMORY_MB`, `DS_TLM_TARGET_REQUEST_QPS`, and
+  `DS_TLM_BLOCK_REQUEST_THREADS`.
+- The KuaiRand mapping covers all 7,552 unique videos using 7,680 logical KVCs instead of truncating and renormalizing
+  the top 32. A deterministic 10,000-request full-trace warm-up and 800-KVC low-frequency scan are excluded from
+  measured deltas. During measurement, 64 entirely new KVCs/s model the 30% miss/refill stream; cold-write attempts,
+  successes, and errors are reported separately and do not enter the Get hit-rate denominator.
+  `DS_TLM_BLOCK_OWNER_AFFINITY=true`
+  is a diagnostic mode that routes each KVC to its owning POD, matching per-node spill discoverability; the default
+  distributed-copy mode retains the cross-Worker requester-local hit-rate comparison. The two modes must not be
+  combined into one result: owner affinity removes the metadata-discovery failure mode but changes the capacity
+  oracle and hit-rate distribution.
+- The separate `block_summary_*.csv` preserves the old columns and appends payload-scale, modeled miss-bandwidth,
+  warm-up, and cold-write fields. With 60-second measurement at the default 1:64 geometry, ARM measured Clock/Memory
+  at 71.4557% and Heat/Heat at 79.4866%, both at the full 211 request/s with zero Get/value/cold-write errors and both
+  eviction and rebalance observed. After the migration target-recycle fix, a 2026-08-10 formal rerun measured
+  71.6393% / 79.1920% under the same geometry and correctness conditions; Heat remained +7.5527pp over Clock and both
+  contracts passed. Subsequent requested experiments measured 71.0638% at 120s/80s and 72.9836% at 120s/120s; both
+  intentionally failed the unchanged >=79% contract, while QPS, correctness, eviction, and rebalance remained healthy.
+  The Block fixture therefore uses the previously validated 600s/300s window again. The product defaults were then
+  aligned to 600s/300s; deployments that explicitly pass either flag remain unchanged.
+  A 2026-08-12 current-worktree rebuild and single formal rerun measured Clock/Memory at 71.4701% and Heat/Heat at
+  79.2024%, both at 211 requests/s and 3,376 Block Gets/s with zero errors and both mechanisms observed. The sanitized
+  CSV is under the sibling `zcode/eviction-rebalance-telemetry/csv/block-current-code-retest-20260812/` directory.
+  This is a one-run confirmation, not a variance-qualified three-round matrix. Do not weaken correctness checks or
+  reinterpret mem+remote as a memory hit. The 68%-72% Clock and >=79% Heat contracts are enabled only for the calibrated 60-second,
+  10,000-warm-up, 800-scan, 64-cold-write/s geometry; diagnostic overrides, including explicit zero scan/write, retain
+  correctness and mechanism checks without applying the calibrated hit-rate contract.
+  A test-only 2026-08-13 extension appends cold/warm Primary bytes and within-Primary ratios to a read-only snapshot
+  refreshed before periodic Worker-to-Master resource reporting. Clock classifies counter 0/1/>=2 as cold/warm/hot;
+  Heat retains the current
+  `<eviction threshold` / inclusive middle / `>rebalance hot threshold` definitions. The Block comparison and sanitized
+  CSV are under the sibling `zcode/eviction-rebalance-telemetry/block-cold-warm-hot-comparison-20260813.md` record.
+
 - Verified from `tests/perf/client/CMakeLists.txt`:
   - `peer_ub_admission_timeout_bench`
 - Verified from `tests/common/binmock/CMakeLists.txt`:
@@ -398,6 +471,13 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
     `tests/st/worker/object_cache`.
 - KV cache behavior:
   - check `ds_st_kv_cache` and ST paths under `tests/st/client/kv_cache`.
+  - `kv_client_heat_functional_workload_test.cpp` contains Heat-only 8-Worker/4-Client functional workloads. The
+    bursty-QPS case uses a fixed seed, defaults to 10,000 QPS for 15 seconds, exports per-client QPS and scheduler task
+    directions, and treats reverse directions only as ping-pong candidates because task logs do not expose object
+    IDs. `IdleTargetsEvictColdPrimariesAndContinueReceiving` is enabled: clients write only to workers 0--3 and the
+    test requires workers 4--7 to receive migrated primaries, spill cold data, and complete another active-to-idle
+    migration after spill begins. It uses `NONE_L2_CACHE_EVICT`, so each Set is immediately read/value-checked but
+    historical keys are not required to remain readable after intentional end-life eviction.
   - `KVCacheClientExistTest.TestBatchSizeLimit` verifies the 100,000-key `Exist` boundary while other batch APIs
     remain capped at 10,000; `KVCacheClientExistTest.TestConcurrentLargeBatch` runs three clients concurrently with
     32,768 missing keys each and logs the aggregate wall-clock latency.

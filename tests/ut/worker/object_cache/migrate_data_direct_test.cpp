@@ -44,6 +44,8 @@ using namespace datasystem::worker;
 namespace datasystem {
 namespace ut {
 
+using PrimarySwitchOutcome = WorkerOcServiceMigrateImpl::PrimarySwitchOutcome;
+
 class MigrateDataDirectTest : public CommonTest, public EvictionManagerCommon {
 public:
     MigrateDataDirectTest() = default;
@@ -59,6 +61,16 @@ public:
         allocator->Init(memSize);
         SetMemoryAvailable(true);
         BINEXPECT_CALL(&WorkerOcEvictionManager::Add, (_)).WillRepeatedly(Return());
+    }
+
+    void TearDown() override
+    {
+        RELEASE_STUBS
+        impl_.reset();
+        threadPool_.reset();
+        objectTable_.reset();
+        allocator = nullptr;
+        CommonTest::TearDown();
     }
 
     void Init()
@@ -197,18 +209,17 @@ public:
 
     void MockReplacePrimaryOk(int expectedNeedSendMasterSize = -1)
     {
-        BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _))
+        BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _))
             .Times(1)
             .WillOnce(
             Invoke([expectedNeedSendMasterSize](const std::string &, const ObjectInfoMap &needSendMasterIds,
-                                                const MigrateType &, std::unordered_set<std::string> &successIds,
-                                                std::unordered_set<std::string> &failedIds) {
-                (void)failedIds;
+                                                const MigrateType &,
+                                                WorkerOcServiceMigrateImpl::PrimarySwitchOutcome &outcome) {
                 if (expectedNeedSendMasterSize >= 0) {
                     EXPECT_EQ(static_cast<int>(needSendMasterIds.size()), expectedNeedSendMasterSize);
                 }
                 for (const auto &it : needSendMasterIds) {
-                    successIds.insert(it.first);
+                    outcome.confirmedIds.insert(it.first);
                 }
                 return Status::OK();
             }));
@@ -257,19 +268,20 @@ TEST_F(MigrateDataDirectTest, TestMigrateDataDirectUrmaNotEnabled)
     ASSERT_EQ(rsp.failed_object_keys_size(), 1);
 }
 
-TEST_F(MigrateDataDirectTest, TestMigrateDataDirectOOM)
+TEST_F(MigrateDataDirectTest, DirectAdmissionDefersHighWaterDecisionToEvictionAwareAllocation)
 {
     SetMemoryAvailable(false);
     EnableUrma(true);
 
     auto req = MakeReq({ { .objectKey = "obj1" } });
     MigrateDataDirectRspPb rsp;
-    ASSERT_EQ(impl_->MigrateDataDirect(req, rsp).GetCode(), StatusCode::K_OUT_OF_MEMORY);
-    ASSERT_EQ(rsp.failed_object_keys_size(), 1);
+    DS_ASSERT_OK(impl_->PreCheckMigrateDataDirect(req, rsp));
+    ASSERT_EQ(rsp.failed_object_keys_size(), 0);
 }
 
 TEST_F(MigrateDataDirectTest, TestMigrateDataDirectSuccess)
 {
+    SetMemoryAvailable(false);
     EnableUrma(true);
     MockQueryMasterMetadataOk(1, defaultDataSize_);
     MockUrmaReadReturnOnce(Status::OK());
@@ -294,7 +306,7 @@ TEST_F(MigrateDataDirectTest, TestMigrateDataDirectWaitEventFail)
     MockQueryMasterMetadataOk(1, defaultDataSize_);
     MockUrmaReadReturnOnce(Status::OK(), { waitEventKey_ });
     MockWaitFastTransportEventOnce(Status(StatusCode::K_RUNTIME_ERROR, "wait failed"));
-    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _)).Times(0);
     BINEXPECT_CALL(&WorkerOcEvictionManager::Erase, (_)).Times(1).WillRepeatedly(Return());
 
     auto req = MakeReq({ { .objectKey = "obj1", .version = 1, .dataSize = defaultDataSize_, .withUrmaInfo = true } });
@@ -311,7 +323,7 @@ TEST_F(MigrateDataDirectTest, Error4ReturnsStructuredDetailAndQuarantinesLocalRe
     MockQueryMasterMetadataOk(1, defaultDataSize_);
     MockUrmaReadReturnOnce(Status::OK(), { waitEventKey_ });
     MockWaitFastTransportError4();
-    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _)).Times(0);
     BINEXPECT_CALL(&WorkerOcEvictionManager::Erase, (_)).Times(1).WillRepeatedly(Return());
     auto req = MakeReq({ { .objectKey = "obj1", .version = 1, .dataSize = defaultDataSize_,
                            .withUrmaInfo = true } },
@@ -378,7 +390,7 @@ TEST_F(MigrateDataDirectTest, TestMigrateDataDirectVersionMismatch)
 
     BINEXPECT_CALL(&datasystem::UrmaRead, (_, _, _, _, _, _, _)).Times(0);
     BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).Times(0);
-    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _)).Times(0);
 
     auto req = MakeReq({ { .objectKey = "obj1", .version = 1, .dataSize = defaultDataSize_ } });
 
@@ -398,7 +410,7 @@ TEST_F(MigrateDataDirectTest, TestMigrateDataDirectUrmaReadFail)
     MockQueryMasterMetadataOk(1, defaultDataSize_);
     MockUrmaReadReturnOnce(Status(StatusCode::K_RUNTIME_ERROR, "urma read failed"));
     BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).Times(0);
-    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _)).Times(0);
 
     auto req = MakeReq({ { .objectKey = "obj1", .version = 1, .dataSize = defaultDataSize_ } });
 
@@ -488,7 +500,7 @@ TEST_F(MigrateDataDirectTest, MetadataNotFoundSkipsObjectAndDoesNotCallReplacePr
         }));
     BINEXPECT_CALL(&datasystem::UrmaRead, (_, _, _, _, _, _, _)).Times(0);
     BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).Times(0);
-    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _)).Times(0);
 
     auto req = MakeReq({ { .objectKey = "skipObj", .version = 1, .dataSize = defaultDataSize_ } });
 
@@ -499,6 +511,40 @@ TEST_F(MigrateDataDirectTest, MetadataNotFoundSkipsObjectAndDoesNotCallReplacePr
     ASSERT_EQ(rsp.skipped_object_keys_size(), 1);
     ASSERT_EQ(rsp.skipped_object_keys(0), "skipObj");
     ASSERT_EQ(rsp.failed_object_keys_size(), 0);
+    std::shared_ptr<SafeObjType> entry;
+    EXPECT_EQ(objectTable_->Get("skipObj", entry).GetCode(), K_NOT_FOUND);
+}
+
+TEST_F(MigrateDataDirectTest, NewerTargetCopyWithoutMetadataRemainsSkipped)
+{
+    EnableUrma(true);
+    constexpr uint64_t requestVersion = 1;
+    constexpr uint64_t targetVersion = 2;
+    const std::string objectKey = "newerTargetWithoutMeta";
+    auto ptr = std::make_unique<object_cache::ObjCacheShmUnit>();
+    ptr->SetCreateTime(targetVersion);
+    ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
+    ptr->modeInfo.SetCacheType(CacheType::MEMORY);
+    ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
+    ptr->stateInfo.SetPrimaryCopy(true);
+    DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(ptr)));
+
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::QueryMasterMetadata, (_, _, _))
+        .Times(1)
+        .WillOnce(Invoke([](const std::unordered_set<std::string> &, QueryMetaMap &,
+                            std::unordered_set<std::string> &) { return Status::OK(); }));
+    BINEXPECT_CALL(&datasystem::UrmaRead, (_, _, _, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _)).Times(0);
+
+    auto req = MakeReq({ { .objectKey = objectKey, .version = requestVersion, .dataSize = defaultDataSize_ } });
+
+    MigrateDataDirectRspPb rsp;
+    DS_ASSERT_OK(impl_->MigrateDataDirect(req, rsp));
+    ASSERT_EQ(rsp.skipped_object_keys_size(), 1);
+    EXPECT_EQ(rsp.skipped_object_keys(0), objectKey);
+    EXPECT_EQ(rsp.failed_object_keys_size(), 0);
 }
 
 TEST_F(MigrateDataDirectTest, NeedModifyPrimaryWithMetadataCallsReplacePrimary)
@@ -518,8 +564,7 @@ TEST_F(MigrateDataDirectTest, NeedModifyPrimaryWithMetadataCallsReplacePrimary)
     MockQueryMasterMetadataOk(version, defaultDataSize_);
     BINEXPECT_CALL(&datasystem::UrmaRead, (_, _, _, _, _, _, _)).Times(0);
     BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).Times(0);
-    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryImpl, (_, _, _, _, _))
-        .WillOnce(Return(Status::OK()));
+    MockReplacePrimaryOk(1);
 
     auto req = MakeReq({ { .objectKey = objectKey, .version = version, .dataSize = defaultDataSize_ } });
 

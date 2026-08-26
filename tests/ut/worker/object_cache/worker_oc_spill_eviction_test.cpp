@@ -86,6 +86,16 @@ public:
         LOG_IF_ERROR(inject::Set("worker.Spill.Sync", "return()"), "set inject point failed");
     }
 
+    void TearDown() override
+    {
+        evictionManager_.reset();
+        gRefTable_.reset();
+        akSkManager_.reset();
+        objectTable_.reset();
+        WorkerOcSpill::Instance()->ResetForTest();
+        CommonTest::TearDown();
+    }
+
     void CreateObjects(const std::string &prefix, uint64_t dataSize, uint32_t count,
                        WriteMode mode = WriteMode::NONE_L2_CACHE)
     {

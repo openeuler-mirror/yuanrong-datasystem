@@ -20,5 +20,5 @@ endif()
 target_link_libraries(dynamic_flag_config PRIVATE ${DYNAMIC_FLAG_CONFIG_LIBS})
 target_link_libraries(dynamic_flag_config PRIVATE ds_flags)
 
-add_library(common_flags SHARED common_flag_define.cpp eviction_watermark.cpp $<TARGET_OBJECTS:ds_flags>)
+add_library(common_flags SHARED common_flag_define.cpp eviction_watermark.cpp eviction_heat.cpp $<TARGET_OBJECTS:ds_flags>)
 target_link_libraries(common_flags PRIVATE ${SECUREC_LIBRARY})

@@ -46,6 +46,11 @@ public:
         bool isRetry{ false };
         uint32_t slotId{ 0 };
         bool isSlotMigration{ true };
+        std::unordered_map<std::string, double> objectHeats{};
+        RebalancePolicyFence rebalancePolicyFence{};
+        // Optional per-operation cancellation. The caller waits on the returned future, so this pointer outlives the
+        // migration handler. Ordinary migrations leave it null and continue using DataMigrator::stopping_.
+        const std::atomic<bool> *cancellation{ nullptr };
     };
 
     DataMigrator(MigrateType type, const worker::MetadataRouteResolver &metadataRoute,

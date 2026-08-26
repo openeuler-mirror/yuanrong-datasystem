@@ -465,6 +465,13 @@ public:
         handler->Init();
     }
 
+    void TearDown() override
+    {
+        (void)inject::Clear("worker.Spill.Write");
+        handler->ResetForTest();
+        CommonTest::TearDown();
+    }
+
     void CompactSmallObjFile()
     {
         size_t size = 512 * 1024;

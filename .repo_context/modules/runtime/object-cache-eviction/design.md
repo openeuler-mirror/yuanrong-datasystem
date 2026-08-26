@@ -121,6 +121,23 @@
     `primaryEndLifeThreadPool_`；`PRIMARY_END_LIFE_THREAD_NUM=4` 个 drain 线程同步发送 RPC，请求
     `async_delete=true` 时 Master 入队后快速返回，`EvictSpilledObjects` 和 `SpillImpl` no-space fallback
     保持同步。
+  - 热度衰减和 rebalance 候选扫描对 `SafeObjType` 使用单次 `TryRLock`；对象正被前台写入时跳过本轮，
+    不能等待对象锁，也不能把未解析元数据误判为 local copy 后应用更短半衰期。
+  - `NodeSelector` 以 atomic shared immutable snapshot 发布节点表、资源上报状态和回调；选址/上报读侧
+    不获取应用层 mutex。只有后台退出条件和 pre-report hook cadence 保留独立互斥锁。
+  - eviction policy membership audit 仅在 `SafeTable` 隐式表锁下复制 `{key, shared_ptr}` 快照，逐对象
+    try-lock 和目标 list 校验在表锁外执行；并发 membership 变化由 generation fence 使 commit 重试。
+  - `WorkerOcEvictionManager::RoutePolicyMutation` 收敛稳定态和切换态的 Add/Hit/Refill/Erase/Extract 路由；
+    stable reader、mutation generation、route lock、per-key migration lock 及 target-first merge 顺序保持不变。
+  - Heat 配置只保留 `EvictionHeatConfig` 和 `RebalanceHeatConfig` 两个进程生命周期快照；启动校验成功后刷新，
+    strategy/scheduler 在调用点读取完整快照，避免多字段 getter 漂移或热路径回读 gflag。
+  - `EvictionStrategy` 不提供空的 cancel/decay hook；周期衰减统一走
+    `MaintainHeatAndCollectHotPrimaryStats` / `DecayAllAndCollect`，rebalance cleanup 统一由精确版本 release 路径负责。
+  - `RebalanceScheduler` 集中管理 memory/Heat 两种 scheduler 的 active task、inflight/held future delta、worker
+    cooldown、超时与 hold release 扫描。具体 scheduler 仍各自持锁并拥有候选、failure-side cooldown 和连续
+    batch/部分迁移完成策略，共享 helper 不自行加锁或执行日志/RPC。
+  - migration rate controller 用 oneTBB concurrent hash map 按 worker 串行 rate/timestamp record，不再用
+    一把全局 map 锁阻塞不同 worker；1 秒 bandwidth deque 仍由单锁保护 prune/accounting 不变量。
 - Relevant constraints from current release or deployment:
   - 对象 table、shm、spill state、master metadata 之间依赖 create time/version 防止误删。
   - eviction 是后台路径，但被 allocation retry 触发时会直接影响前台延迟和成功率。
@@ -248,6 +265,8 @@ Failure-sensitive steps:
 
 - `EvictionList` 自身有锁保护，但对象状态由 `SafeObjType` 锁保护；不能只依赖 list membership 判断对象可删。
 - 重试 counter 太高会降低短期释放效率，太低会增加热点对象锁竞争。
+- 周期 heat decay 和 rebalance scan 遇到 busy object 必须跳过本轮；这些路径是 best-effort，最终
+  eviction/migration 执行阶段仍会在对象锁下复核状态和版本。
 
 ### Memory Eviction Task
 
@@ -511,6 +530,9 @@ Failure-sensitive steps:
   - 失败候选应保留重试资格；
   - local shm 不应在 spill 失败时释放；
   - newer object incarnation 不应被旧 eviction 删除。
+  - migration release 的派生索引清理失败不能留下 live orphan：`AsyncResourceReleaser` 先按精确版本删除
+    `ObjectTable` ownership，再以 noexcept best-effort callback 清理 eviction membership；残留陈旧候选由
+    后续 candidate lookup 在发现 ObjectTable row 不存在时清除。
 
 ## Resilience
 
@@ -708,6 +730,8 @@ Failure-sensitive steps:
 | EV-NONE-003 | two-worker last local copy metadata | 验证所有 copy meta 清理 | two workers | remove both copy locations | query meta returns not exist |
 | EV-SPILL-001 | spill full eviction | 验证 spill eviction list | small spill limit | fill spill and add evictable objects | spill files are deleted/compacted below water |
 | EV-LOCK-001 | object lock busy | 验证 re-add behavior | object held by another operation | trigger eviction | candidate re-adds with retry counter |
+| EV-LOCK-002 | heat decay / rebalance scan sees busy object | 验证后台扫描不被前台 writer 拖住 | hold object write lock | run decay or candidate selection asynchronously | operation promptly finishes, skips busy key, and does not mis-decay its heat |
+| EV-LOCK-003 | policy audit object-table snapshot | 验证 audit 不长持表锁 | pause after table snapshot | insert/register a new object concurrently | insert completes before audit resumes; generation fence makes stale commit retry |
 | EV-RPC-001 | DeleteAllCopyMeta timeout/failure | 验证有界重试和可用性兜底 | inject worker/master RPC failure | evict none-L2-evict primary | each call is bounded to 1s; after three communication failures, local erase still rechecks object version |
 | EV-RPC-002 | slow master and large primary objects | 验证 low watermark 复查避免过度释放 | small memory, mixed local and large none-L2 primary objects | delay master delete, let local eviction reduce pressure, then recover master | queued primary end-life does not continue after low watermark is reached; no obvious over-evict |
 | EV-RPC-003 | batch DeleteAllCopyMeta by master | 验证同 master 聚合和跨 master 拆分 | multi-master or injectable routing | evict multiple none-L2 primary keys mapped to same and different masters | same-master keys are sent in batch, different-master keys are split, partial failures do not erase failed keys |

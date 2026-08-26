@@ -397,7 +397,8 @@ Status LoadSpilledObjectToMemory(ReadObjectKV &objectKV, std::shared_ptr<WorkerO
         }
         return status;
     }
-    evictionManager->Add(objectKey);
+    const auto &shmUnit = entry->GetShmUnit();
+    evictionManager->OnRefill(objectKey, shmUnit == nullptr ? 0 : shmUnit->GetMigratableSize());
     return Status::OK();
 }
 

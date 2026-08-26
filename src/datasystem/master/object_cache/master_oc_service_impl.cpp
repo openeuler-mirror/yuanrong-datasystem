@@ -899,6 +899,24 @@ Status MasterOCServiceImpl::ReportRebalanceResult(const ReportRebalanceResultReq
     return resourceManager_->ReportRebalanceResult(req, rsp);
 }
 
+Status MasterOCServiceImpl::StartEvictionPolicyUpdate(const StartEvictionPolicyUpdateReqPb &req,
+                                                      StartEvictionPolicyUpdateRspPb &rsp)
+{
+    (void)rsp;
+    ScopedRequestContext ctx;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    CHECK_FAIL_RETURN_STATUS(req.has_update(), K_INVALID, "Eviction policy update intent is missing");
+    return resourceManager_->SetEvictionPolicyUpdate(req.update(), req.cohort_percent());
+}
+
+Status MasterOCServiceImpl::GetEvictionPolicyUpdateProgress(const GetEvictionPolicyUpdateProgressReqPb &req,
+                                                            GetEvictionPolicyUpdateProgressRspPb &rsp)
+{
+    ScopedRequestContext ctx;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    return resourceManager_->GetEvictionPolicyUpdateProgress(req.epoch(), rsp);
+}
+
 Status MasterOCServiceImpl::PutP2PMeta(const PutP2PMetaReqPb &req, PutP2PMetaRspPb &resp)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");

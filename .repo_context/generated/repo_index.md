@@ -140,6 +140,8 @@ src/datasystem/
   - stream_cache/
   - BUILD.bazel
   - CMakeLists.txt
+  - heat_rebalance_scheduler.cpp
+  - heat_rebalance_scheduler.h
   - master_service_impl.cpp
   - master_service_impl.h
   - memory_rebalance_scheduler.cpp
@@ -151,6 +153,8 @@ src/datasystem/
   - node_descriptor.cpp
   - node_descriptor.h
   - node_manager.h
+  - rebalance_scheduler.cpp
+  - rebalance_scheduler.h
   - resource_manager.cpp
   - resource_manager.h
   - worker_manager.cpp
@@ -511,6 +515,7 @@ tests/
     - common.cpp
     - external_cluster.cpp
     - external_cluster.h
+    - heat_watermark_collector.h
     - mock_obs_service.py
     - subprocess.cpp
     - subprocess.h
@@ -570,7 +575,6 @@ tests/
   - st_oc_service_impl.cpp
   - st_oc_service_impl.h
   - test_main.cpp
-  - zmq_curve_test_common.h
 - support/
   - datasystem/
     - common/
@@ -585,7 +589,6 @@ tests/
     - mmap_table_test.cpp
     - object_client_impl_exist_test.cpp
     - parallel_for_local_test.cpp
-    - service_parallel_policy_test.cpp
     - shm_connection_pool_test.cpp
     - transport_admission_test.cpp
     - transport_phase_latency_recorder_test.cpp

@@ -117,6 +117,35 @@ DS_DEFINE_double(spill_high_watermark_ratio, 0.8,
 DS_DEFINE_double(spill_low_watermark_ratio, 0.6,
                  "Spill directory usage low watermark (ratio of spill_size_limit, 0.0-1.0). Valid range: 0.01-0.99. "
                  "Must be less than spill_high_watermark_ratio.");
+DS_DEFINE_string(eviction_strategy, "clock",
+                 "Eviction strategy selection. \"clock\" = existing clock/second-chance algorithm (default); "
+                 "\"heat\" = heat-counter strategy with periodic exponential decay. This is the worker startup "
+                 "default; runtime strategy changes are coordinated by the master policy rollout protocol.");
+DS_DEFINE_double(eviction_heat_half_life_primary_s, 600.0,
+                 "Primary-copy heat decay half-life T (seconds, >0) for the heat eviction strategy. "
+                 "Periodic decay applies count_new = count_old * 0.5^(dt/T). Fixed at startup; restart required.");
+DS_DEFINE_double(eviction_heat_half_life_local_s, 300.0,
+                 "Local/replica-copy heat decay half-life T (seconds, >0) for the heat eviction strategy. "
+                 "Should be <= the primary half-life so local copies decay faster and are evicted sooner. "
+                 "Fixed at startup; restart required.");
+DS_DEFINE_double(eviction_heat_threshold, 2.0,
+                 "Heat threshold for the heat eviction strategy: objects with heat below this value are "
+                 "first-round eviction candidates; if none qualify in a full scan, the minimum-heat object "
+                 "is chosen. Fixed at startup; restart required.");
+DS_DEFINE_uint32(eviction_heat_max_counter, 256,
+                 "Maximum heat value a counter may reach via cache-hit increments (the counter cap) for the "
+                 "heat eviction strategy. Fixed at startup; restart required.");
+DS_DEFINE_double(eviction_heat_initial_counter, 2.0,
+                 "Initial heat value assigned to a newly inserted object (AddHeatNode) under the heat eviction "
+                 "strategy. Keep >= eviction_heat_threshold so fresh objects are not first-round eviction "
+                 "candidates, <= eviction_heat_max_counter, and < rebalance_heat_hot_counter_threshold so fresh "
+                 "inserts are not counted as hot data for heat rebalance. Fixed at startup; restart required.");
+DS_DEFINE_uint32(data_migrate_rate_limit_mb, 40,
+                 "Data migrate rate limit for every node when scale down or rebalance happens.");
+DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_t value) {
+    (void)flagName;
+    return value > 0;
+});
 DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
 DS_DEFINE_uint32(hash_ring_tokens_per_member, 4,
                  "Token count allocated to each Worker for new hash-ring bootstrap and scale-out plans. "
@@ -151,6 +180,37 @@ DS_DEFINE_uint32(rebalance_source_usage_percent, 80,
 DS_DEFINE_uint32(rebalance_usage_gap_percent, 20,
                  "Minimum memory usage percent gap between source and target for memory rebalance.");
 DS_DEFINE_uint32(rebalance_task_report_grace_ms, 30000, "rebalance task report grace ms.");
+DS_DEFINE_string(rebalance_strategy, "memory",
+                 "Rebalance strategy selection. \"memory\" = existing usage-driven master-scheduled rebalance "
+                 "(default); \"heat\" = heat-driven rebalance that migrates the lowest-heat primary copies from "
+                 "over-loaded workers. Fixed at startup; when set to \"heat\", eviction_strategy must also be "
+                 "\"heat\" because heat counters are only maintained by the heat eviction strategy.");
+DS_DEFINE_double(rebalance_heat_hot_counter_threshold, 4.0,
+                 "For the heat rebalance strategy, a primary copy with heat counter strictly above this value is "
+                 "considered hot data. Keep > eviction_heat_initial_counter so fresh inserts are not counted as hot.");
+DS_DEFINE_uint32(rebalance_heat_source_usage_percent, 60,
+                 "For heat rebalance path A, a worker with memory usage strictly above this percent and at least one "
+                 "primary copy is a source candidate.");
+DS_DEFINE_uint32(rebalance_heat_source_hot_ratio_percent, 40,
+                 "For heat rebalance path B, hot primary copy bytes as a percent of memory capacity must be strictly "
+                 "above this percent.");
+DS_DEFINE_uint32(rebalance_heat_source_usage_percent_low, 50,
+                 "For heat rebalance path B, a worker with memory usage strictly above this percent and hot primary "
+                 "copy bytes above rebalance_heat_source_hot_ratio_percent is a source candidate. Must be less than "
+                 "rebalance_heat_source_usage_percent.");
+DS_DEFINE_uint32(rebalance_heat_target_usage_percent, 50,
+                 "For the heat rebalance strategy, a target is eligible if its memory usage is strictly below this "
+                 "percent AND its hot primary copy bytes (as a percent of memory capacity) is below the target "
+                 "hot-ratio threshold.");
+DS_DEFINE_uint32(rebalance_heat_target_hot_ratio_percent, 30,
+                 "For the heat rebalance strategy, a target is eligible if its usage is below the target usage "
+                 "percent AND its hot primary copy bytes (as a percent of memory capacity) is strictly below this "
+                 "percent.");
+DS_DEFINE_bool(rebalance_keep_local_copy, false,
+               "When true, rebalance migration keeps a local non-primary copy at the source worker instead of "
+               "erasing it. The source's PRIMARY_COPY flag is demoted to false; the target becomes the new "
+               "primary. Orthogonal to rebalance_strategy (works with both memory and heat). Default false for "
+               "rolling-upgrade compatibility; enable only after every target understands REBALANCE_KEEP_LOCAL.");
 DS_DEFINE_uint32(node_timeout_s, 60, "maximum time interval before a node is considered lost");
 DS_DEFINE_int32(io_thread_nice, 0,
                 "Nice value for selected IO threads. Valid range is [-20, 19]. 0 skips nice adjustment and preserves "

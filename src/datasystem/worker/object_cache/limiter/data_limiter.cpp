@@ -43,6 +43,11 @@ DataLimiter::DataLimiter(uint64_t rate, uint64_t maxTokenSize)
 
 void DataLimiter::WaitAllow(uint64_t requiredSize)
 {
+    (void)WaitAllow(requiredSize, nullptr);
+}
+
+bool DataLimiter::WaitAllow(uint64_t requiredSize, const std::atomic<bool> *cancelled)
+{
     std::unique_lock<std::mutex> l(mtx_);
     uint64_t originalMax = maxTokenSize_;
     bool needRestore = false;
@@ -52,9 +57,20 @@ void DataLimiter::WaitAllow(uint64_t requiredSize)
         needRestore = true;
     }
     while (tokens_ < requiredSize) {
+        if (cancelled != nullptr && cancelled->load(std::memory_order_acquire)) {
+            if (needRestore) {
+                maxTokenSize_ = originalMax;
+            }
+            return false;
+        }
         Refill();
         if (tokens_ < requiredSize) {
-            cond_.wait_for(l, std::chrono::milliseconds(WaitMilliseconds(requiredSize)));
+            auto waitMs = WaitMilliseconds(requiredSize);
+            if (cancelled != nullptr) {
+                constexpr uint64_t CANCEL_POLL_MS = 10;
+                waitMs = std::min(waitMs, CANCEL_POLL_MS);
+            }
+            cond_.wait_for(l, std::chrono::milliseconds(waitMs));
         } else {
             break;
         }
@@ -63,6 +79,7 @@ void DataLimiter::WaitAllow(uint64_t requiredSize)
     if (needRestore) {
         maxTokenSize_ = originalMax;
     }
+    return true;
 }
 
 uint64_t DataLimiter::EstimateWaitMilliseconds(uint64_t requiredSize)
@@ -147,33 +164,31 @@ uint64_t MigrateDataRateController::CalculateSmoothedRate(uint64_t lastRate, uin
 
 uint64_t MigrateDataRateController::CalculateNewRate(const std::string &workerAddr)
 {
-    uint64_t maxBandwidth;
-    uint64_t availableBandwidth;
+    const uint64_t maxBandwidth = rateLimiter_.GetMaxBandwidth();
+    const uint64_t availableBandwidth = rateLimiter_.GetAvailableBandwidth();
+    const uint64_t timestampMs = GetSteadyClockTimeStampMs();
     uint64_t lastRate;
     uint64_t newRate;
     {
-        std::lock_guard<std::shared_timed_mutex> l(mutex_);
-        maxBandwidth = rateLimiter_.GetMaxBandwidth();
-        availableBandwidth = rateLimiter_.GetAvailableBandwidth();
-        lastRate = rateMap_.count(workerAddr) ? rateMap_[workerAddr] : maxBandwidth / RATE_SMOOTHING_DIVISOR;
+        RateTable::accessor record;
+        const bool inserted = rateTable_.insert(record, workerAddr);
+        lastRate = inserted ? maxBandwidth / RATE_SMOOTHING_DIVISOR : record->second.rate;
         newRate = CalculateSmoothedRate(lastRate, availableBandwidth);
-        uint64_t timestampMs = GetSteadyClockTimeStampMs();
-        rateTimeStampMap_[workerAddr] = timestampMs;
-        rateMap_[workerAddr] = newRate;
-        TimerQueue::TimerImpl timer;
-        const uint32_t expireMs = RATE_RECORD_EXPIRE_MS;
-        std::weak_ptr<MigrateDataRateController> weakPtr = weak_from_this();
-        TimerQueue::GetInstance()->AddTimer(
-            expireMs,
-            [workerAddr, expireMs, timestampMs, weakPtr]() {
-                auto sharedPtr = weakPtr.lock();
-                if (sharedPtr == nullptr) {
-                    return;
-                }
-                sharedPtr->ClearExpiredRate(workerAddr, expireMs, timestampMs);
-            },
-            timer);
+        record->second = { newRate, timestampMs };
     }
+    TimerQueue::TimerImpl timer;
+    const uint32_t expireMs = RATE_RECORD_EXPIRE_MS;
+    std::weak_ptr<MigrateDataRateController> weakPtr = weak_from_this();
+    TimerQueue::GetInstance()->AddTimer(
+        expireMs,
+        [workerAddr, expireMs, timestampMs, weakPtr]() {
+            auto sharedPtr = weakPtr.lock();
+            if (sharedPtr == nullptr) {
+                return;
+            }
+            sharedPtr->ClearExpiredRate(workerAddr, expireMs, timestampMs);
+        },
+        timer);
     constexpr uint64_t lowRateDivisor = 10;
     constexpr uint32_t lowRateLogEveryN = 100;
     if (newRate == 0 || newRate <= maxBandwidth / lowRateDivisor) {
@@ -187,23 +202,24 @@ uint64_t MigrateDataRateController::CalculateNewRate(const std::string &workerAd
 
 uint64_t MigrateDataRateController::PeekAvailableRate(const std::string &workerAddr)
 {
-    std::shared_lock<std::shared_timed_mutex> l(mutex_);
-    auto it = rateMap_.find(workerAddr);
-    uint64_t lastRate = (it != rateMap_.end()) ? it->second : rateLimiter_.GetMaxBandwidth() / RATE_SMOOTHING_DIVISOR;
+    const uint64_t maxBandwidth = rateLimiter_.GetMaxBandwidth();
+    uint64_t lastRate;
+    {
+        RateTable::const_accessor record;
+        lastRate = rateTable_.find(record, workerAddr) ? record->second.rate : maxBandwidth / RATE_SMOOTHING_DIVISOR;
+    }
     return CalculateSmoothedRate(lastRate, rateLimiter_.GetAvailableBandwidth());
 }
 
 void MigrateDataRateController::ClearExpiredRate(const std::string &workerAddr, uint64_t expireMs,
                                                  uint64_t lastUpdateTimeMs)
 {
-    std::lock_guard<std::shared_timed_mutex> l(mutex_);
-    auto it = rateTimeStampMap_.find(workerAddr);
-    if (it == rateTimeStampMap_.end() || it->second != lastUpdateTimeMs) {
+    RateTable::accessor record;
+    if (!rateTable_.find(record, workerAddr) || record->second.timestampMs != lastUpdateTimeMs) {
         return;
     }
-    if (GetSteadyClockTimeStampMs() - it->second >= expireMs) {
-        rateMap_.erase(workerAddr);
-        rateTimeStampMap_.erase(workerAddr);
+    if (GetSteadyClockTimeStampMs() - record->second.timestampMs >= expireMs) {
+        rateTable_.erase(record);
     }
 }
 }  // namespace object_cache

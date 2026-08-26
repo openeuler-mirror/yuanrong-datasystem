@@ -21,6 +21,7 @@
 
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
@@ -61,7 +62,7 @@ RebalanceExecutor::RebalanceExecutor(RebalanceExecutorConfig config)
       objectTable_(std::move(config.objectTable)),
       evictionManager_(std::move(config.evictionManager)),
       apiManager_(std::move(config.apiManager)),
-      candidateProvider_(evictionManager_, objectTable_),
+      candidateProvider_(MakeRebalanceCandidateProvider(evictionManager_, objectTable_)),
       executorPool_(0, 1, "RebalanceExecutor")
 {
 }
@@ -74,17 +75,29 @@ void RebalanceExecutor::Submit(const master::RebalanceTaskPb &task, std::string 
 
     bool duplicate = false;
     bool busy = false;
+    bool paused = false;
     std::string runningTaskId;
+    std::shared_ptr<const TerminalResult> terminalReplay;
     {
         std::lock_guard<std::mutex> lock(taskMutex_);
-        if (running_) {
+        if (terminalResult_ != nullptr && terminalResult_->task.task_id() == task.task_id()) {
+            // A predecessor may be retried while its successor is already running. Replay the exact terminal result
+            // before reporting busy; otherwise master can turn a completed migration into a false failure.
+            terminalReplay = terminalResult_;
+        } else if (running_) {
             duplicate = runningTaskId_ == task.task_id();
             busy = !duplicate;
             runningTaskId = runningTaskId_;
+        } else if (admissionPaused_) {
+            paused = true;
         } else {
             running_ = true;
             runningTaskId_ = task.task_id();
         }
+    }
+    if (paused) {
+        SubmitRejectedResult(task, "source worker rebalance admission is paused");
+        return;
     }
     if (duplicate) {
         LOG(INFO) << FormatString("Ignore duplicated rebalance task %s because it is already running", task.task_id());
@@ -94,30 +107,64 @@ void RebalanceExecutor::Submit(const master::RebalanceTaskPb &task, std::string 
         SubmitBusyResult(task, runningTaskId);
         return;
     }
+    if (terminalReplay != nullptr) {
+        LOG(INFO) << FormatString("Replay terminal result for completed rebalance task %s", task.task_id());
+        SubmitTerminalResult(std::move(terminalReplay));
+        return;
+    }
 
     // Do not block the resource-report thread; run data migration in the single-task executor.
     auto traceId = Trace::Instance().GetTraceID();
     try {
         executorPool_.Execute([this, task, assignedMasterAddress = std::move(assignedMasterAddress), traceId]() {
-            SetRequestContext(nullptr);
-            ScopedRequestContext ctx(traceId);
-            try {
-                Execute(task, assignedMasterAddress);
-            } catch (const std::exception &e) {
-                LOG(ERROR) << "Execute rebalance task " << task.task_id() << " failed by exception: " << e.what();
-                ReportFailure(task, master::REBALANCE_FAILURE_SOURCE, e.what());
-                MarkTaskDone();
-            } catch (...) {
-                LOG(ERROR) << "Execute rebalance task " << task.task_id() << " failed by unknown exception";
-                ReportFailure(task, master::REBALANCE_FAILURE_SOURCE, "unknown exception");
-                MarkTaskDone();
-            }
+            ExecuteSubmittedTask(task, assignedMasterAddress, traceId);
         });
     } catch (const std::exception &e) {
         LOG(ERROR) << "Submit rebalance task " << task.task_id() << " failed: " << e.what();
-        MarkTaskDone();
-        ReportFailure(task, master::REBALANCE_FAILURE_SOURCE, e.what());
+        HandleSubmitFailure(task, e.what());
     }
+}
+
+void RebalanceExecutor::ExecuteSubmittedTask(const master::RebalanceTaskPb &task,
+                                             const std::string &assignedMasterAddress, const std::string &traceId)
+{
+    SetRequestContext(nullptr);
+    ScopedRequestContext ctx(traceId);
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+    try {
+        Execute(task, assignedMasterAddress);
+    } catch (const std::exception &e) {
+        LOG(ERROR) << "Execute rebalance task " << task.task_id() << " failed by exception: " << e.what();
+        HandleSubmitFailure(task, e.what());
+    } catch (...) {
+        LOG(ERROR) << "Execute rebalance task " << task.task_id() << " failed by unknown exception";
+        HandleSubmitFailure(task, "unknown exception");
+    }
+}
+
+void RebalanceExecutor::HandleSubmitFailure(const master::RebalanceTaskPb &task, const std::string &reason)
+{
+    TerminalResult result{ task, master::REBALANCE_TASK_FAILED, 0, 0, 0, master::REBALANCE_FAILURE_SOURCE, reason };
+    CacheTerminalResultAndMarkDone(result);
+    master::ReportRebalanceResultRspPb rsp;
+    (void)ReportResult(result, rsp);
+}
+
+Status RebalanceExecutor::PauseAndCheckDrained()
+{
+    std::lock_guard<std::mutex> lock(taskMutex_);
+    admissionPaused_ = true;
+    cancelRequested_.store(true, std::memory_order_release);
+    INJECT_POINT_NO_RETURN("RebalanceExecutor.PauseAndCheckDrained.afterCancelRequested");
+    RETURN_OK_IF_TRUE(!running_);
+    RETURN_STATUS(K_TRY_AGAIN, "Source rebalance task is still draining");
+}
+
+void RebalanceExecutor::Resume()
+{
+    std::lock_guard<std::mutex> lock(taskMutex_);
+    cancelRequested_.store(false, std::memory_order_release);
+    admissionPaused_ = false;
 }
 
 void RebalanceExecutor::SubmitBusyResult(const master::RebalanceTaskPb &task, const std::string &runningTaskId)
@@ -129,12 +176,29 @@ void RebalanceExecutor::SubmitBusyResult(const master::RebalanceTaskPb &task, co
         executorPool_.Execute([this, task, traceId]() {
             SetRequestContext(nullptr);
             ScopedRequestContext ctx(traceId);
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             ReportFailure(task, master::REBALANCE_FAILURE_SOURCE, "source worker is busy");
         });
     } catch (const std::exception &e) {
         LOG(ERROR) << "Submit busy rebalance result " << task.task_id() << " failed: " << e.what();
     } catch (...) {
         LOG(ERROR) << "Submit busy rebalance result " << task.task_id() << " failed by unknown exception";
+    }
+}
+
+void RebalanceExecutor::SubmitRejectedResult(const master::RebalanceTaskPb &task, const std::string &reason)
+{
+    LOG(WARNING) << FormatString("Reject rebalance task %s: %s", task.task_id(), reason);
+    try {
+        auto traceId = Trace::Instance().GetTraceID();
+        executorPool_.Execute([this, task, reason, traceId]() {
+            SetRequestContext(nullptr);
+            ScopedRequestContext ctx(traceId);
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            ReportFailure(task, master::REBALANCE_FAILURE_SOURCE, reason);
+        });
+    } catch (const std::exception &e) {
+        LOG(ERROR) << "Submit rejected rebalance result " << task.task_id() << " failed: " << e.what();
     }
 }
 
@@ -158,7 +222,17 @@ Status RebalanceExecutor::ValidateTask(const master::RebalanceTaskPb &task, Host
         failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
         RETURN_STATUS(K_RUNTIME_ERROR, "Rebalance task is expired");
     }
-    auto rc = targetAddr.ParseString(task.target_worker());
+    CHECK_FAIL_RETURN_STATUS(evictionManager_ != nullptr, K_RUNTIME_ERROR, "Eviction manager is not initialized");
+    Status rc;
+    if (task.has_eviction_policy_fence()) {
+        rc = evictionManager_->ValidateRebalancePolicy(static_cast<uint32_t>(task.source_eviction_policy()),
+                                                       task.source_eviction_policy_epoch());
+        if (rc.IsError()) {
+            failureSide = master::REBALANCE_FAILURE_SOURCE;
+            return rc;
+        }
+    }
+    rc = targetAddr.ParseString(task.target_worker());
     if (rc.IsError() || targetAddr == localAddress_) {
         failureSide = master::REBALANCE_FAILURE_TARGET;
         return rc.IsError() ? rc : Status(K_INVALID, "Rebalance target can not be local worker");
@@ -179,17 +253,25 @@ Status RebalanceExecutor::CheckTargetAdmission(const HostPort &targetAddr) const
     return Status::OK();
 }
 
-Status RebalanceExecutor::SelectCandidates(uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates,
+bool RebalanceExecutor::IsCancellationRequested() const
+{
+    return cancelRequested_.load(std::memory_order_acquire);
+}
+
+Status RebalanceExecutor::SelectCandidates(object_cache::RebalanceCandidateSession &session, uint64_t maxBytes,
+                                           std::unordered_map<std::string, uint64_t> &candidates,
+                                           ObjectHeatMap &objectHeats,
                                            const std::unordered_set<std::string> &skipKeys)
 {
 #ifdef WITH_TESTS
     if (selectHook_ != nullptr) {
-        return selectHook_(maxBytes, candidates, skipKeys);
+        return selectHook_(maxBytes, candidates, objectHeats, skipKeys);
     }
 #endif
     // Apply a local batch cap so a large master task does not reserve too many eviction-list objects at once.
     const auto batchBytes = std::min(maxBytes, REBALANCE_BATCH_MAX_BYTES);
-    RETURN_IF_NOT_OK(candidateProvider_.Select(batchBytes, REBALANCE_BATCH_MAX_OBJECTS, candidates, &skipKeys));
+    RETURN_IF_NOT_OK(candidateProvider_->Select(session, batchBytes, REBALANCE_BATCH_MAX_OBJECTS, candidates,
+                                                objectHeats, &skipKeys));
     CHECK_FAIL_RETURN_STATUS(!candidates.empty(), K_NOT_FOUND, "No object can be selected for rebalance");
     return Status::OK();
 }
@@ -197,18 +279,35 @@ Status RebalanceExecutor::SelectCandidates(uint64_t maxBytes, std::unordered_map
 RebalanceExecutor::MigrateResult RebalanceExecutor::MigrateToTarget(const master::RebalanceTaskPb &task,
                                                                     const HostPort &targetAddr,
                                                                     const std::vector<std::string> &objectKeys,
+                                                                    const ObjectHeatMap &objectHeats,
                                                                     object_cache::DataMigrator &migrator)
 {
-    (void)task;
 #ifdef WITH_TESTS
     if (migrateHook_ != nullptr) {
-        return migrateHook_(task, targetAddr, objectKeys);
+        return migrateHook_(task, targetAddr, objectKeys, objectHeats);
     }
-#else
-    (void)task;
 #endif
-    object_cache::DataMigrator::TargetMigrationOptions options{ .isSlotMigration = false };
+    object_cache::DataMigrator::TargetMigrationOptions options{ .isSlotMigration = false,
+                                                                 .objectHeats = objectHeats,
+                                                                 .rebalancePolicyFence =
+                                                                     BuildRebalancePolicyFence(task),
+                                                                 .cancellation = &cancelRequested_ };
     return migrator.MigrateToTargetNode(objectKeys, targetAddr, nullptr, options).get();
+}
+
+object_cache::RebalancePolicyFence RebalanceExecutor::BuildRebalancePolicyFence(
+    const master::RebalanceTaskPb &task)
+{
+    object_cache::RebalancePolicyFence fence;
+    // Old masters do not populate the policy fields. Preserve that absence on the worker-to-worker request instead
+    // of turning the proto defaults (UNSPECIFIED/0) into an enabled fence that a new target must reject.
+    fence.enabled = task.has_eviction_policy_fence();
+    if (fence.enabled) {
+        fence.targetPolicy = static_cast<uint32_t>(task.target_eviction_policy());
+        fence.targetEpoch = task.target_eviction_policy_epoch();
+        fence.taskId = task.task_id();
+    }
+    return fence;
 }
 
 uint64_t RebalanceExecutor::NowMsForExpiryCheck() const
@@ -311,7 +410,8 @@ Status RebalanceExecutor::ClassifyBatchResult(const MigrateResult &result, const
     return Status::OK();
 }
 
-Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
+Status RebalanceExecutor::ExecuteBatch(object_cache::RebalanceCandidateSession &candidateSession,
+                                       const master::RebalanceTaskPb &task, const HostPort &targetAddr,
                                        ExecutionStats &stats, object_cache::DataMigrator &migrator,
                                        std::unordered_set<std::string> &taskSkippedKeys)
 {
@@ -321,7 +421,9 @@ Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, cons
         return rc;
     }
     std::unordered_map<std::string, uint64_t> candidates;
-    rc = SelectCandidates(task.max_bytes() - stats.migratedBytes, candidates, taskSkippedKeys);
+    ObjectHeatMap objectHeats;
+    rc = SelectCandidates(candidateSession, task.max_bytes() - stats.migratedBytes, candidates, objectHeats,
+                          taskSkippedKeys);
     if (rc.IsError()) {
         stats.lastBatchAllSkipped = false;
         stats.failureSide = rc.GetCode() == K_NOT_FOUND ? master::REBALANCE_FAILURE_NO_CANDIDATE
@@ -345,8 +447,9 @@ Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, cons
     }
 
     // Reuse the SPILL migration path; after a successful batch, the lower layer switches the primary copy to
-    // the target worker through ReplacePrimary.
-    auto result = MigrateToTarget(task, targetAddr, objectKeys, migrator);
+    // the target worker through ReplacePrimary. Under rebalance_keep_local_copy the MigrateType is
+    // REBALANCE_KEEP_LOCAL: the source's objectTable entry is kept and demoted to non-primary instead of erased.
+    auto result = MigrateToTarget(task, targetAddr, objectKeys, objectHeats, migrator);
     auto batchMigratedBytes = CalculateMigratedBytes(candidates, result);
     stats.migratedBytes += batchMigratedBytes;
     stats.migratedObjects += result.successIds.size();
@@ -369,49 +472,79 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
     // destroyed when ExecuteBatches returns, so each new task starts fresh.
     std::unordered_set<std::string> taskSkippedKeys;
     std::unique_ptr<object_cache::DataMigrator> migrator;
+    object_cache::RebalanceCandidateSession candidateSession;
     while (stats.migratedBytes < task.max_bytes()) {
+        if (IsCancellationRequested()) {
+            stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
+            stats.failedReason = "Rebalance task cancelled for eviction policy update";
+            break;
+        }
+        if (task.has_eviction_policy_fence()) {
+            auto fenceRc = evictionManager_->ValidateRebalancePolicy(
+                static_cast<uint32_t>(task.source_eviction_policy()), task.source_eviction_policy_epoch());
+            if (fenceRc.IsError()) {
+                stats.failureSide = master::REBALANCE_FAILURE_SOURCE;
+                stats.failedReason = fenceRc.ToString();
+                break;
+            }
+        }
         if (IsExpired(localDeadlineMs) || IsExitRequested()) {
             stats.status = master::REBALANCE_TASK_EXPIRED;
             stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
-            stats.failedReason = "Rebalance task is expired";
+            stats.failedReason = IsExitRequested() ? "Source worker is exiting" : "Rebalance task is expired";
             break;
         }
         if (IsAssignedMasterUnavailable(task, stats)) {
             break;
         }
-        if (migrator == nullptr) {
-            if (metadataRoute_ == nullptr || membership_ == nullptr || endpointPolicy_ == nullptr
-                || exitRequested_ == nullptr) {
-                stats.failureSide = master::REBALANCE_FAILURE_SOURCE;
-                stats.failedReason = "Rebalance topology dependencies are not initialized";
-                break;
-            }
-            migrator = std::make_unique<object_cache::DataMigrator>(
-                MigrateType::SPILL, *metadataRoute_, *membership_, *endpointPolicy_, exitRequested_, localAddress_,
-                akSkManager_, objectTable_, task.task_id(), 0);
-            migrator->SetUbAdmission(ubAdmission_);
-            migrator->Init();
+        auto initRc = EnsureMigratorInitialized(task, migrator);
+        if (initRc.IsError()) {
+            stats.failureSide = master::REBALANCE_FAILURE_SOURCE;
+            stats.failedReason = "Rebalance topology dependencies are not initialized";
+            break;
         }
-        auto rc = ExecuteBatch(task, targetAddr, stats, *migrator, taskSkippedKeys);
+        auto rc = ExecuteBatch(candidateSession, task, targetAddr, stats, *migrator, taskSkippedKeys);
         if (rc.IsError()) {
-            // When the entire batch was skipped (metadata-not-found) but the task had partial success,
-            // retry instead of breaking: SelectCandidates now has taskSkippedKeys and will scan past
-            // the skipped objects to find valid candidates behind them. This prevents a large
-            // meta-not-found object at the eviction-list head from starving subsequent batches.
-            // Only retry when there was partial success (migratedBytes > 0); if the first batch was
-            // all-skip, breaking is the right behavior since all candidates had no metadata.
-            if (rc.GetCode() == K_NOT_FOUND && stats.lastBatchAllSkipped
-                && stats.migratedBytes > 0 && stats.migratedBytes < task.max_bytes()) {
+            if (ShouldRetryBatchFailure(rc, task, stats)) {
                 continue;
-            }
-            stats.candidatesExhausted = rc.GetCode() == K_NOT_FOUND;
-            if (stats.failedReason.empty()) {
-                stats.failedReason =
-                    stats.migratedBytes == 0 ? rc.ToString() : "No more object can be selected for rebalance";
             }
             break;
         }
     }
+}
+
+bool RebalanceExecutor::ShouldRetryBatchFailure(const Status &status, const master::RebalanceTaskPb &task,
+                                                ExecutionStats &stats)
+{
+    // An all-skipped batch after partial success can retry: taskSkippedKeys lets selection scan past missing metadata.
+    if (status.GetCode() == K_NOT_FOUND && stats.lastBatchAllSkipped && stats.migratedBytes > 0
+        && stats.migratedBytes < task.max_bytes()) {
+        return true;
+    }
+    stats.candidatesExhausted = status.GetCode() == K_NOT_FOUND;
+    if (stats.failedReason.empty()) {
+        stats.failedReason =
+            stats.migratedBytes == 0 ? status.ToString() : "No more object can be selected for rebalance";
+    }
+    return false;
+}
+
+Status RebalanceExecutor::EnsureMigratorInitialized(
+    const master::RebalanceTaskPb &task, std::unique_ptr<object_cache::DataMigrator> &migrator)
+{
+    if (migrator != nullptr) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(metadataRoute_ != nullptr && membership_ != nullptr && endpointPolicy_ != nullptr
+                                 && exitRequested_ != nullptr,
+                             K_RUNTIME_ERROR, "Rebalance topology dependencies are not initialized");
+    const auto migrateType = FLAGS_rebalance_keep_local_copy ? MigrateType::REBALANCE_KEEP_LOCAL : MigrateType::SPILL;
+    migrator = std::make_unique<object_cache::DataMigrator>(
+        migrateType, *metadataRoute_, *membership_, *endpointPolicy_, exitRequested_, localAddress_, akSkManager_,
+        objectTable_, task.task_id(), 0);
+    migrator->SetUbAdmission(ubAdmission_);
+    migrator->Init();
+    return Status::OK();
 }
 
 void RebalanceExecutor::ClassifyBatchResult(const master::RebalanceTaskPb &task, bool masterUnavailable,
@@ -445,23 +578,8 @@ void RebalanceExecutor::LogBatchResult(const master::RebalanceTaskPb &task, cons
         static_cast<unsigned long long>(costMs), stats.failedReason);
 }
 
-void RebalanceExecutor::ReportEmptyMasterAndDone(const master::RebalanceTaskPb &task)
-{
-    ExecutionStats stats;
-    stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
-    stats.failedReason = "Assigned cluster master address is empty";
-    master::ReportRebalanceResultRspPb rsp;
-    ReportResult(task, stats, rsp);
-    MarkTaskDone();
-}
-
 void RebalanceExecutor::Execute(master::RebalanceTaskPb task, std::string assignedMasterAddress)
 {
-    // Hoisted: assignedMasterAddress is a function parameter that does not change between batches.
-    if (assignedMasterAddress.empty()) {
-        ReportEmptyMasterAndDone(task);
-        return;
-    }
     master::RebalanceTaskPb currentTask = task;
     bool hasMoreBatches = true;
     while (hasMoreBatches) {
@@ -471,38 +589,55 @@ void RebalanceExecutor::Execute(master::RebalanceTaskPb task, std::string assign
         ExecutionStats stats;
         stats.assignedMasterAddress = assignedMasterAddress;
         Timer timer;
+        if (stats.assignedMasterAddress.empty()) {
+            stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
+            stats.failedReason = "Assigned cluster master address is empty";
+        }
         LOG(INFO) << "Start rebalance task " << currentTask.task_id() << ", master: " << stats.assignedMasterAddress;
         HostPort targetAddr;
         auto localDeadlineMs = BuildLocalDeadlineMs(currentTask);
-        auto rc = ValidateTask(currentTask, targetAddr, localDeadlineMs, stats.failureSide);
+        auto rc = stats.failedReason.empty()
+                      ? ValidateTask(currentTask, targetAddr, localDeadlineMs, stats.failureSide)
+                      : Status(K_INVALID, stats.failedReason);
         if (rc.IsError()) {
-            stats.failedReason = rc.ToString();
+            if (stats.failedReason.empty()) {
+                stats.failedReason = rc.ToString();
+            }
             if (IsExpired(localDeadlineMs)) {
                 stats.status = master::REBALANCE_TASK_EXPIRED;
             }
-            master::ReportRebalanceResultRspPb rsp;
-            ReportResult(currentTask, stats, rsp);
-            break;
+        } else {
+            ExecuteBatches(currentTask, targetAddr, stats, localDeadlineMs);
         }
-        ExecuteBatches(currentTask, targetAddr, stats, localDeadlineMs);
         bool masterUnavailable = IsAssignedMasterUnavailable(currentTask, stats);
         ClassifyBatchResult(currentTask, masterUnavailable, stats);
         LogBatchResult(currentTask, stats, timer.ElapsedMilliSecond());
-        master::ReportRebalanceResultRspPb rsp;
-        ReportResult(currentTask, stats, rsp);
-        // Only a successful batch can yield a next task; a dead master or any failure stops the loop.
-        if (masterUnavailable || stats.status != master::REBALANCE_TASK_SUCCEEDED
-            || !rsp.has_next_rebalance_task() || rsp.next_rebalance_task().task_id().empty()) {
-            hasMoreBatches = false;
-        } else {
-            // Copy proto and update runningTaskId_ under one lock so a heartbeat continuation
-            // cannot observe a stale predecessor id. Safe -- Submit/MarkTaskDone hold briefly.
-            std::lock_guard<std::mutex> lock(taskMutex_);
-            currentTask = rsp.next_rebalance_task();
-            runningTaskId_ = currentTask.task_id();
-        }
+        hasMoreBatches = ReportTaskResultAndAdvance(stats, masterUnavailable, currentTask);
     }
     MarkTaskDone();
+}
+
+bool RebalanceExecutor::ReportTaskResultAndAdvance(const ExecutionStats &stats, bool masterUnavailable,
+                                                   master::RebalanceTaskPb &currentTask)
+{
+    TerminalResult result{ currentTask, stats.status, stats.migratedBytes, stats.migratedObjects,
+                           stats.failedObjects, stats.failureSide, stats.failedReason, stats.targetRemainBytes };
+    CacheTerminalResult(result);
+    master::ReportRebalanceResultRspPb rsp;
+    (void)ReportResult(result, rsp);
+    // Only a successful batch can yield a next task; a dead master or any failure stops the loop.
+    if (masterUnavailable || stats.status != master::REBALANCE_TASK_SUCCEEDED
+        || !rsp.has_next_rebalance_task() || rsp.next_rebalance_task().task_id().empty()) {
+        return false;
+    }
+    auto nextTask = rsp.next_rebalance_task();
+    {
+        // Only the shared id requires synchronization. Publish the successor id before its execution can start.
+        std::lock_guard<std::mutex> lock(taskMutex_);
+        runningTaskId_ = nextTask.task_id();
+    }
+    currentTask = std::move(nextTask);
+    return true;
 }
 
 uint64_t RebalanceExecutor::CalculateMigratedBytes(const std::unordered_map<std::string, uint64_t> &candidates,
@@ -556,33 +691,29 @@ master::RebalanceFailureSidePb RebalanceExecutor::ClassifyMigrationFailure(const
 void RebalanceExecutor::ReportFailure(const master::RebalanceTaskPb &task,
                                       master::RebalanceFailureSidePb failureSide, const std::string &reason)
 {
-    ExecutionStats stats;
-    stats.failureSide = failureSide;
-    stats.failedReason = reason;
+    TerminalResult result{ task, master::REBALANCE_TASK_FAILED, 0, 0, 0, failureSide, reason };
     master::ReportRebalanceResultRspPb rsp;
-    ReportResult(task, stats, rsp);
+    (void)ReportResult(result, rsp);
 }
 
-void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats,
-                                     master::ReportRebalanceResultRspPb &rspOut)
+Status RebalanceExecutor::ReportResult(const TerminalResult &result, master::ReportRebalanceResultRspPb &rspOut)
 {
     master::ReportRebalanceResultReqPb req;
-    req.set_task_id(task.task_id());
+    req.set_task_id(result.task.task_id());
     req.set_source_worker(localAddress_.ToString());
-    req.set_target_worker(task.target_worker());
-    req.set_status(stats.status);
-    req.set_migrated_bytes(stats.migratedBytes);
-    req.set_migrated_objects(stats.migratedObjects);
-    req.set_failed_objects(stats.failedObjects);
-    req.set_failed_reason(stats.failedReason);
-    req.set_failure_side(stats.failureSide);
+    req.set_target_worker(result.task.target_worker());
+    req.set_status(result.status);
+    req.set_migrated_bytes(result.migratedBytes);
+    req.set_migrated_objects(result.migratedObjects);
+    req.set_failed_objects(result.failedObjects);
+    req.set_failed_reason(result.failedReason);
+    req.set_failure_side(result.failureSide);
     // Fresh per-batch feedback for master's next-batch decision. target_remain_bytes uses
     // UINT64_MAX as the "no batch sent" sentinel.
-    req.set_target_remain_bytes(stats.targetRemainBytes);
+    req.set_target_remain_bytes(result.targetRemainBytes);
 #ifdef WITH_TESTS
     if (reportHook_ != nullptr) {
-        reportHook_(req, rspOut);
-        return;
+        return reportHook_(req, rspOut);
     }
 #endif
 
@@ -594,16 +725,17 @@ void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, const 
         auto rc = GetWorkerMasterApi(workerMasterApi);
         if (rc.IsError()) {
             LOG(WARNING) << FormatString("Get worker master api failed, taskId: %s, retry: %d, rc: %s",
-                                         task.task_id(), i, rc.ToString());
+                                         result.task.task_id(), i, rc.ToString());
             std::this_thread::sleep_for(std::chrono::milliseconds(REPORT_RESULT_RETRY_INTERVAL_MS));
             continue;
         }
 
         rc = workerMasterApi->ReportRebalanceResult(req, rspOut);
         if (rc.IsOk()) {
-            return;
+            return Status::OK();
         }
-        LOG(WARNING) << FormatString("Report rebalance result failed, taskId: %s, retry: %d, rc: %s", task.task_id(),
+        LOG(WARNING) << FormatString("Report rebalance result failed, taskId: %s, retry: %d, rc: %s",
+                                     result.task.task_id(),
                                      i, rc.ToString());
         rspOut.Clear();  // a failed attempt may have left partial data; start clean next try
         std::this_thread::sleep_for(std::chrono::milliseconds(REPORT_RESULT_RETRY_INTERVAL_MS));
@@ -611,14 +743,45 @@ void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, const 
     LOG(ERROR) << FormatString(
         "Report rebalance result ultimately failed after %d retries, taskId: %s. "
         "The task will expire at deadline on master side.",
-        REPORT_RESULT_RETRY_TIMES, task.task_id());
+        REPORT_RESULT_RETRY_TIMES, result.task.task_id());
+    RETURN_STATUS(K_RPC_UNAVAILABLE, "Report rebalance result failed after all retries");
+}
+
+void RebalanceExecutor::SubmitTerminalResult(std::shared_ptr<const TerminalResult> result)
+{
+    const std::string taskId = result->task.task_id();
+    try {
+        executorPool_.Execute([this, result = std::move(result)]() {
+            master::ReportRebalanceResultRspPb rsp;
+            (void)ReportResult(*result, rsp);
+        });
+    } catch (const std::exception &e) {
+        LOG(ERROR) << "Submit terminal rebalance result " << taskId << " failed: " << e.what();
+    } catch (...) {
+        LOG(ERROR) << "Submit terminal rebalance result " << taskId << " failed by unknown exception";
+    }
+}
+
+void RebalanceExecutor::CacheTerminalResultAndMarkDone(TerminalResult result)
+{
+    CacheTerminalResult(std::move(result));
+    MarkTaskDone();
+}
+
+void RebalanceExecutor::CacheTerminalResult(TerminalResult result)
+{
+    auto terminalResult = std::make_shared<const TerminalResult>(std::move(result));
+    std::lock_guard<std::mutex> lock(taskMutex_);
+    terminalResult_ = std::move(terminalResult);
 }
 
 void RebalanceExecutor::MarkTaskDone()
 {
-    std::lock_guard<std::mutex> lock(taskMutex_);
-    running_ = false;
-    runningTaskId_.clear();
+    {
+        std::lock_guard<std::mutex> lock(taskMutex_);
+        running_ = false;
+        runningTaskId_.clear();
+    }
 }
 
 }  // namespace worker

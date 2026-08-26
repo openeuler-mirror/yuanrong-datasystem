@@ -17,6 +17,20 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "heat_watermark_collector",
+    hdrs = ["heat_watermark_collector.h"],
+    includes = [".."],
+    testonly = True,
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
 # st_cluster 需要将 tests/st/ 加入 include 路径，以支持 "cluster/xxx.h" 风格的 include
 cc_library(
     name = "st_cluster",

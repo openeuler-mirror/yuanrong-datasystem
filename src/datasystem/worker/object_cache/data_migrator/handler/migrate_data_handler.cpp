@@ -19,10 +19,14 @@
  */
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 
+#include <chrono>
+#include <thread>
+
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/timer.h"
@@ -43,8 +47,10 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
                                        std::shared_ptr<ObjectTable> objectTable,
                                        std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi,
                                        std::shared_ptr<SelectionStrategy> strategy,
-                                       std::atomic<bool> *stoppingPtr,
-                                       std::shared_ptr<MigrateProgress> progress, bool isRetry, uint32_t slotId)
+                                       const std::atomic<bool> *stoppingPtr,
+                                       std::shared_ptr<MigrateProgress> progress, bool isRetry, uint32_t slotId,
+                                       std::unordered_map<std::string, double> objectHeats,
+                                       RebalancePolicyFence rebalancePolicyFence)
     : type_(type),
       localAddr_(localAddr),
       needMigrateDataIds_(needMigrateDataIds.begin(), needMigrateDataIds.end()),
@@ -58,6 +64,8 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
       progress_(std::move(progress)),
       isRetry_(isRetry),
       slotId_(slotId),
+      objectHeats_(std::move(objectHeats)),
+      rebalancePolicyFence_(std::move(rebalancePolicyFence)),
       stoppingPtr_(stoppingPtr)
 {
     if (ShouldUseFastTransport()) {
@@ -73,6 +81,20 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
 
 bool MigrateDataHandler::ShouldUseFastTransport() const
 {
+    // Heat metadata is carried only by the TCP request. Keep the direct wire protocol unchanged for compatibility
+    // with old authenticated peers.
+    if (!objectHeats_.empty() || rebalancePolicyFence_.enabled) {
+        return false;
+    }
+    // REBALANCE_KEEP_LOCAL forces TCP because an old target only understands the existing SPILL/SCALE_DOWN direct
+    // migration protocol. Other rebalance modes stay on TCP so their extended metadata remains wire-compatible.
+    if (type_ == MigrateType::REBALANCE_KEEP_LOCAL) {
+        return false;
+    }
+    if (FLAGS_data_migrate_urma_transport_mode == "read" && type_ != MigrateType::SPILL
+        && type_ != MigrateType::SCALE_DOWN) {
+        return false;
+    }
     return IsUrmaEnabled();
 }
 
@@ -82,7 +104,7 @@ void MigrateDataHandler::SplitByCacheType(std::vector<std::string> &memoryDataId
     for (const auto &objectKey : needMigrateDataIds_) {
         std::shared_ptr<SafeObjType> entry;
         Status rc = objectTable_->Get(objectKey, entry);
-        if (rc.IsError() || entry->RLock().IsError()) {
+        if (rc.IsError() || entry->TryRLock().IsError()) {
             (void)skipIds_.emplace(objectKey);
             continue;
         }
@@ -124,7 +146,11 @@ Status MigrateDataHandler::MigrateDataByCacheType(CacheType type, std::vector<st
     RETURN_IF_NOT_OK(PrepareRemoteMigration(type, needMigrateDataIds));
 
     for (auto it = needMigrateDataIds.begin(); it != needMigrateDataIds.end(); ++it) {
-        if (IsRemoteLackResources()) {
+        if (stoppingPtr_ != nullptr && stoppingPtr_->load(std::memory_order_acquire)) {
+            failedIds_.insert(it, needMigrateDataIds.end());
+            RETURN_STATUS(K_NOT_READY, "Migration cancelled before collecting the next object");
+        }
+        if (IsRemoteLackResources(type)) {
             LOG(WARNING) << FormatString(
                 "[Migrate Data] Remote node %s has no remain bytes, local node: %s, cache type: %d, "
                 "max batch size: %ld",
@@ -170,17 +196,7 @@ void MigrateDataHandler::CollectObjectForMigration(const std::string &objectKey,
         return;
     }
 
-    auto lockStartUs = GetSteadyClockTimeStampUs();
-    rc = entry->RLock();
-    auto lockWaitUs = GetSteadyClockTimeStampUs() - lockStartUs;
-    constexpr int64_t slowLockThresholdUs = 100'000;
-    constexpr uint32_t slowLockLogEveryN = 100;
-    if (lockWaitUs >= slowLockThresholdUs) {
-        LOG_FIRST_EVERY_N(INFO, slowLockLogEveryN)
-            << "event=MIGRATE_OBJECT_LOCK_SLOW target=" << remoteApi_->Address()
-            << " object_key_hash=" << std::hash<std::string>{}(objectKey) << " wait_ms=" << lockWaitUs / SECS_TO_MS
-            << " status=" << rc.ToString();
-    }
+    rc = entry->TryRLock();
     if (rc.IsError()) {
         (void)skipIds_.emplace(objectKey);
         return;
@@ -230,7 +246,7 @@ Status MigrateDataHandler::SpyOnRemoteRemainBytes(CacheType type)
         RETURN_IF_NOT_OK(SpyOnRemoteRemainBytesByRpc(type));
     }
 
-    if (IsRemoteLackResources()) {
+    if (IsRemoteLackResources(type)) {
         LOG(WARNING) << FormatString(
             "[Migrate Data] Remote node %s has no remain bytes, local node: %s, cache type: %d, max batch size: %ld",
             remoteApi_->Address(), localAddr_, static_cast<int>(type), maxBatchSize_);
@@ -247,6 +263,7 @@ Status MigrateDataHandler::SpyOnRemoteRemainBytesByRpc(CacheType type)
 {
     MigrateDataReqPb req;
     req.set_type(type_);
+    ApplyRebalancePolicyFence(req);
     MigrateDataRspPb rsp;
     Status s = MigrateDataToRemoteRetry(remoteApi_, req, {}, rsp);
     if (s.IsError()) {
@@ -277,6 +294,17 @@ Status MigrateDataHandler::SpyOnRemoteRemainBytesByRpc(CacheType type)
     return Status::OK();
 }
 
+void MigrateDataHandler::ApplyRebalancePolicyFence(MigrateDataReqPb &req) const
+{
+    if (!rebalancePolicyFence_.enabled) {
+        return;
+    }
+    req.set_has_rebalance_policy_fence(true);
+    req.set_target_eviction_policy(rebalancePolicyFence_.targetPolicy);
+    req.set_target_eviction_policy_epoch(rebalancePolicyFence_.targetEpoch);
+    req.set_rebalance_task_id(rebalancePolicyFence_.taskId);
+}
+
 void MigrateDataHandler::AdjustMaxBatchSize(uint64_t size)
 {
     if (size == UINT64_MAX) {
@@ -285,9 +313,18 @@ void MigrateDataHandler::AdjustMaxBatchSize(uint64_t size)
     maxBatchSize_ = std::min<uint64_t>(maxBatchSize_, size);
 }
 
-bool MigrateDataHandler::IsRemoteLackResources() const
+bool MigrateDataHandler::IsRemoteLackResources(CacheType cacheType) const
 {
     constexpr uint64_t minRemianBytes = 1024ul * 1024ul;
+    // Rebalance targets can recycle cold memory while receiving the next object. Do not let the legacy 1 MiB
+    // batching floor prevent that allocation from reaching the target; maxBatchSize_ == 0 naturally produces
+    // single-object batches. Disk migration and scale-down keep their strict remaining-capacity admission.
+    const bool canRecycleTargetMemory = cacheType == CacheType::MEMORY
+                                        && (type_ == MigrateType::SPILL
+                                            || type_ == MigrateType::REBALANCE_KEEP_LOCAL);
+    if (canRecycleTargetMemory) {
+        return false;
+    }
     return maxBatchSize_ < minRemianBytes;
 }
 
@@ -326,22 +363,66 @@ Status MigrateDataHandler::AddObjectDataLocked(const ObjectKV &objectKV)
     return Status::OK();
 }
 
-void MigrateDataHandler::ReleaseResources(const std::unordered_set<ImmutableString> &successIds)
+void MigrateDataHandler::DemotePrimaryCopies(const std::unordered_set<ImmutableString> &successIds)
 {
-    if (type_ != MigrateType::SPILL) {
-        return;
-    }
-    uint64_t releasedCount = 0;
-    uint64_t releasedBytes = 0;
-    for (const auto &data : datas_) {
+    uint64_t demotedCount = 0;
+    for (size_t i = 0; i < datas_.size(); ++i) {
+        const auto &data = datas_[i];
         const auto &objectKey = data->Id();
         if (successIds.find(objectKey) == successIds.end()) {
+            continue;
+        }
+        std::shared_ptr<SafeObjType> safeEntry;
+        if (objectTable_->Get(objectKey, safeEntry).IsError() || safeEntry == nullptr) {
+            continue;  // object already evicted or erased between migration and demote
+        }
+        if (safeEntry->WLock().IsError()) {
+            continue;  // a deleted or null entry cannot retain a live primary view
+        }
+        Raii unlockRaii([safeEntry]() { safeEntry->WUnlock(); });
+        // The primary switch confirms the exact version captured in this batch. A same-key recreation after the send
+        // is a different object and must not be demoted by this completed migration.
+        if ((*safeEntry)->GetCreateTime() != data->Version()) {
+            continue;
+        }
+        if ((*safeEntry)->IsBinary()) {
+            (*safeEntry)->stateInfo.SetPrimaryCopy(false);
+            demotedCount++;
+        }
+    }
+    if (demotedCount > 0) {
+        VLOG(1) << FormatString("[Migrate Data] Demoted %lu primary copies to local for rebalance-keep-local",
+                                demotedCount);
+    }
+}
+
+void MigrateDataHandler::ReleaseResources(const std::unordered_set<ImmutableString> &successIds,
+                                          const std::unordered_set<ImmutableString> &expiredIds)
+{
+    if (type_ == MigrateType::SCALE_DOWN) {
+        return;  // source worker is leaving; keep its copy as-is
+    }
+    std::unordered_set<ImmutableString> releaseIds = expiredIds;
+    if (type_ == MigrateType::REBALANCE_KEEP_LOCAL) {
+        DemotePrimaryCopies(successIds);
+    } else {
+        releaseIds.insert(successIds.begin(), successIds.end());
+    }
+    // SPILL releases confirmed and expired source copies. REBALANCE_KEEP_LOCAL retains only confirmed replicas and
+    // releases expired versions, because the target never committed those stale objects.
+    uint64_t releasedCount = 0;
+    uint64_t releasedBytes = 0;
+    for (size_t i = 0; i < datas_.size(); ++i) {
+        const auto &data = datas_[i];
+        const auto &objectKey = data->Id();
+        if (releaseIds.find(objectKey) == releaseIds.end()) {
             continue;
         }
 
         Status rc = AsyncResourceReleaser::Instance().Release(objectKey, data->Version());
         if (rc.IsError()) {
-            AsyncResourceReleaser::Instance().AddTask(objectKey, data->Version());
+            LOG_IF_ERROR(AsyncResourceReleaser::Instance().AddTask(std::move(preparedReleaseTasks_[i])),
+                         FormatString("Failed to transfer prepared source cleanup for object %s", objectKey));
             continue;
         }
         releasedCount++;
@@ -361,21 +442,17 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
         Clear();
         return;
     }
-    if (!CheckSendAdmission()) {
+    if (!PrepareTransportSend()) {
         return;
     }
-
-    Status rateRc = EnsureRateForBatch();
-    if (rateRc.IsError()) {
-        LOG(WARNING) << FormatString("[Migrate Data] Remote %s rate is not usable after probe: %s",
-                                     remoteApi_->Address(), rateRc.ToString());
+    Status prepareRc = PrepareReleaseTasks();
+    if (prepareRc.IsError()) {
         std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
-                       [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
-        lastRc_ = rateRc;
+                       [](const std::unique_ptr<BaseDataUnit> &data) { return data->Id(); });
+        lastRc_ = prepareRc;
         Clear();
         return;
     }
-    limiter_.WaitAllow(currBatchSize_);
 
     MigrateTransport::Request req{ .type = type_,
                                    .api = remoteApi_,
@@ -385,7 +462,10 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
                                    .progress = progress_,
                                    .isSlotMigration = isSlotMigration,
                                    .isRetry = isRetry_,
-                                   .slotId = slotId_ };
+                                   .slotId = slotId_,
+                                   .objectHeats = objectHeats_.empty() ? nullptr : &objectHeats_,
+                                   .rebalancePolicyFence =
+                                       rebalancePolicyFence_.enabled ? &rebalancePolicyFence_ : nullptr };
     MigrateTransport::Response rsp;
     PerfPoint point(PerfKey::WORKER_MIGRATE_TRANSPORT_SEND_DATA);
     INJECT_POINT_NO_RETURN("MigrateDataHandler.BeforeTransportSend");
@@ -404,6 +484,51 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
     point.Record();
     HandleMigrationTransportResponse(s, rsp);
     Clear();
+}
+
+Status MigrateDataHandler::PrepareReleaseTasks()
+{
+    preparedReleaseTasks_.clear();
+    if (type_ == MigrateType::SCALE_DOWN) {
+        return Status::OK();
+    }
+    try {
+        preparedReleaseTasks_.resize(datas_.size());
+    } catch (const std::exception &e) {
+        RETURN_STATUS(K_OUT_OF_MEMORY, FormatString("Failed to reserve source cleanup ownership: %s", e.what()));
+    } catch (...) {
+        RETURN_STATUS(K_OUT_OF_MEMORY, "Failed to reserve source cleanup ownership");
+    }
+    for (size_t i = 0; i < datas_.size(); ++i) {
+        RETURN_IF_NOT_OK(AsyncResourceReleaser::Instance().PrepareTask(datas_[i]->Id(), datas_[i]->Version(),
+                                                                       preparedReleaseTasks_[i]));
+    }
+    return Status::OK();
+}
+
+bool MigrateDataHandler::PrepareTransportSend()
+{
+    if (!CheckSendAdmission()) {
+        return false;
+    }
+    Status rateRc = EnsureRateForBatch();
+    if (rateRc.IsError()) {
+        LOG(WARNING) << FormatString("[Migrate Data] Remote %s rate is not usable after probe: %s",
+                                     remoteApi_->Address(), rateRc.ToString());
+        std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
+                       [](const std::unique_ptr<BaseDataUnit> &data) { return data->Id(); });
+        lastRc_ = rateRc;
+        Clear();
+        return false;
+    }
+    if (!limiter_.WaitAllow(currBatchSize_, stoppingPtr_)) {
+        std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
+                       [](const std::unique_ptr<BaseDataUnit> &data) { return data->Id(); });
+        lastRc_ = Status(K_NOT_READY, "Migration cancelled while waiting for rate-limit tokens");
+        Clear();
+        return false;
+    }
+    return CheckSendAdmission();
 }
 
 Status MigrateDataHandler::EnsureRateForBatch()
@@ -427,6 +552,13 @@ Status MigrateDataHandler::EnsureRateForBatch()
 
 bool MigrateDataHandler::CheckSendAdmission()
 {
+    if (stoppingPtr_ != nullptr && stoppingPtr_->load(std::memory_order_acquire)) {
+        std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
+                       [](const std::unique_ptr<BaseDataUnit> &data) { return data->Id(); });
+        lastRc_ = Status(K_NOT_READY, "Migration cancelled before transport send");
+        Clear();
+        return false;
+    }
     if (!sendAdmission_) {
         return true;
     }
@@ -464,7 +596,7 @@ void MigrateDataHandler::HandleMigrationTransportResponse(const Status &status, 
     skipIds_.insert(response.skipKeys.begin(), response.skipKeys.end());
     Status rateStatus = TryUpdateRate(response.limitRate);
     LOG_IF_ERROR(rateStatus, FormatString("[Migrate Data] Rate update failed for %s", remoteApi_->Address()));
-    ReleaseResources(response.successKeys);
+    ReleaseResources(response.successKeys, response.expiredKeys);
 }
 
 Status MigrateDataHandler::MigrateDataToRemoteRetry(const std::shared_ptr<WorkerRemoteWorkerOCApi> &api,
@@ -612,6 +744,7 @@ void MigrateDataHandler::Clear()
     currBatchSize_ = 0;
     currBatchCount_ = 0;
     datas_.clear();
+    preparedReleaseTasks_.clear();
 }
 
 }  // namespace object_cache

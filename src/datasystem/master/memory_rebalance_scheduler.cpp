@@ -68,18 +68,21 @@ uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
 {
     return lhs > rhs ? lhs - rhs : 0;
 }
+
+void CopyPolicyFence(const master::RebalanceTaskPb &source, master::RebalanceTaskPb &target)
+{
+    target.set_source_eviction_policy(source.source_eviction_policy());
+    target.set_source_eviction_policy_epoch(source.source_eviction_policy_epoch());
+    target.set_target_eviction_policy(source.target_eviction_policy());
+    target.set_target_eviction_policy_epoch(source.target_eviction_policy_epoch());
+    target.set_has_eviction_policy_fence(source.has_eviction_policy_fence());
+}
 }  // namespace
 
 void MemoryRebalanceScheduler::SetTopologyMembership(const cluster::MembershipEndpointView *topologyMembership)
 {
     std::lock_guard<bthread::Mutex> lock(mutex_);
     topologyMembership_ = topologyMembership;
-}
-
-bool MemoryRebalanceScheduler::IsTerminalStatus(master::RebalanceTaskStatusPb status)
-{
-    return status == master::REBALANCE_TASK_SUCCEEDED || status == master::REBALANCE_TASK_FAILED
-           || status == master::REBALANCE_TASK_EXPIRED;
 }
 
 bool MemoryRebalanceScheduler::IsFailedStatus(master::RebalanceTaskStatusPb status)
@@ -121,7 +124,6 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
 
     auto activeTask = activeTasksBySource_.find(reportingWorker);
     if (activeTask != activeTasksBySource_.end()) {
-        MarkTaskDispatchedLocked(activeTask->second);
         *rsp.mutable_rebalance_task() = activeTask->second.task;
         return Status::OK();
     }
@@ -134,8 +136,7 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
 
     const auto &task = runningTask.task;
     activeTasksBySource_.emplace(task.source_worker(), runningTask);
-    futureView_[task.target_worker()].inflightBytes =
-        SaturatingAdd(futureView_[task.target_worker()].inflightBytes, task.max_bytes());
+    IncreaseTargetInflightLocked(task.target_worker(), task.max_bytes());
 
     // cycle_planned is a SNAPSHOT-TIME projection (target.usedMemory + inflight + totalBudget).
     // After the 300MB-per-batch refactor the chain may diverge from this plan: each batch lands a
@@ -149,7 +150,7 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
     const auto &targetDelta = futureView_[task.target_worker()];
     const uint64_t inflightNow = targetDelta.inflightBytes;
     const uint64_t heldNow = targetDelta.heldBytes;
-    const uint64_t freshUsed = targetDelta.freshUsedMemory;
+    const uint64_t freshUsed = targetDelta.minimumObservedUsedMemory;
     const uint64_t currentRate = CalculateUsageRate(targetUsed, targetLimit);
     const uint64_t batchRate = CalculateUsageRate(SaturatingAdd(targetUsed, inflightNow), targetLimit);
     const uint64_t cyclePlannedRate = CalculateUsageRate(
@@ -166,7 +167,6 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
 
     auto newTask = activeTasksBySource_.find(reportingWorker);
     if (newTask != activeTasksBySource_.end()) {
-        MarkTaskDispatchedLocked(newTask->second);
         *rsp.mutable_rebalance_task() = newTask->second.task;
     }
     return Status::OK();
@@ -190,7 +190,6 @@ bool MemoryRebalanceScheduler::NeedSnapshotForSchedule(const master::ResourceRep
 
     auto activeTask = activeTasksBySource_.find(reportingWorker);
     if (activeTask != activeTasksBySource_.end()) {
-        MarkTaskDispatchedLocked(activeTask->second);
         *rsp.mutable_rebalance_task() = activeTask->second.task;
         return false;
     }
@@ -276,8 +275,8 @@ void MemoryRebalanceScheduler::ProcessFreshFeedbackLocked(RunningTask &prevTask,
         return;
     }
     const uint64_t freshUsed = SubOrZero(prevTask.targetMemoryCapacity, req.target_remain_bytes());
-    futureView_[req.target_worker()].freshUsedMemory =
-        std::max(futureView_[req.target_worker()].freshUsedMemory, freshUsed);
+    futureView_[req.target_worker()].minimumObservedUsedMemory =
+        std::max(futureView_[req.target_worker()].minimumObservedUsedMemory, freshUsed);
     prevTask.cumulativeMigrated += req.migrated_bytes();
     if (req.migrated_bytes() < prevTask.task.max_bytes()) {
         return;
@@ -289,7 +288,7 @@ void MemoryRebalanceScheduler::ProcessFreshFeedbackLocked(RunningTask &prevTask,
         // held so the #685 stale-snapshot guard protects the target until its own ResourceReport
         // arrives. BuildNextBatchTaskLocked already excluded held from its inflight projection.
         auto deltaIt = futureView_.find(req.target_worker());
-        savedFreshUsed = (deltaIt != futureView_.end()) ? deltaIt->second.freshUsedMemory : 0;
+        savedFreshUsed = (deltaIt != futureView_.end()) ? deltaIt->second.minimumObservedUsedMemory : 0;
         if (deltaIt != futureView_.end() && deltaIt->second.heldBytes > 0) {
             ReleaseHeldLocked(req.target_worker(), deltaIt->second.heldBytes);
         }
@@ -305,8 +304,7 @@ void MemoryRebalanceScheduler::ProcessFreshFeedbackLocked(RunningTask &prevTask,
         nextRunningTask.epochStartMs = prevTask.epochStartMs;
         nextRunningTask.immediatePredecessorTaskId = prevTask.task.task_id();
         activeTasksBySource_.emplace(nextTask.source_worker(), nextRunningTask);
-        futureView_[nextTask.target_worker()].inflightBytes =
-            SaturatingAdd(futureView_[nextTask.target_worker()].inflightBytes, nextTask.max_bytes());
+        IncreaseTargetInflightLocked(nextTask.target_worker(), nextTask.max_bytes());
         *rsp.mutable_next_rebalance_task() = nextTask;
         INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.ReportResult.AssignNextTask");
     }
@@ -315,20 +313,13 @@ void MemoryRebalanceScheduler::ProcessFreshFeedbackLocked(RunningTask &prevTask,
     // savedFreshUsed so a concurrent source's higher observation is not lost when the chain
     // continues and ReleaseHeldLocked clears the field. When the chain does not continue,
     // savedFreshUsed is 0 and this reduces to the same max(existing, freshUsed) as before.
-    futureView_[req.target_worker()].freshUsedMemory =
-        std::max({futureView_[req.target_worker()].freshUsedMemory, savedFreshUsed, freshUsed});
+    futureView_[req.target_worker()].minimumObservedUsedMemory =
+        std::max({futureView_[req.target_worker()].minimumObservedUsedMemory, savedFreshUsed, freshUsed});
 }
 
 void MemoryRebalanceScheduler::ExpireTimeoutTasksLocked(uint64_t nowMs)
 {
-    std::vector<std::string> expiredSources;
-    expiredSources.reserve(activeTasksBySource_.size());
-    for (const auto &[source, runningTask] : activeTasksBySource_) {
-        if (runningTask.task.deadline_ms() <= nowMs) {
-            expiredSources.emplace_back(source);
-        }
-    }
-    for (const auto &source : expiredSources) {
+    for (const auto &source : CollectExpiredTaskSourcesLocked(nowMs)) {
         auto taskIt = activeTasksBySource_.find(source);
         if (taskIt == activeTasksBySource_.end()) {
             continue;
@@ -344,13 +335,7 @@ void MemoryRebalanceScheduler::ExpireTimeoutTasksLocked(uint64_t nowMs)
 
 void MemoryRebalanceScheduler::ExpireCooldownsLocked(uint64_t nowMs)
 {
-    for (auto iter = cooldownUntilMs_.begin(); iter != cooldownUntilMs_.end();) {
-        if (iter->second <= nowMs) {
-            iter = cooldownUntilMs_.erase(iter);
-        } else {
-            ++iter;
-        }
-    }
+    ExpireWorkerCooldownsLocked(nowMs);
     for (auto source = pairCooldownUntilMs_.begin(); source != pairCooldownUntilMs_.end();) {
         for (auto target = source->second.begin(); target != source->second.end();) {
             if (target->second <= nowMs) {
@@ -371,31 +356,12 @@ void MemoryRebalanceScheduler::GcHeldInflightLocked(uint64_t nowMs)
 {
     const uint64_t holdTtlMs =
         std::max(static_cast<uint64_t>(FLAGS_node_dead_timeout_s), HOLD_TTL_MIN_S) * MS_PER_SECOND;
-    // Collect targets whose held charge outlived the TTL, then release outside the iteration so
-    // DecreaseInflightLocked's erase-on-zero cannot invalidate the range iterator.
-    std::vector<std::pair<std::string, uint64_t>> expired;
-    for (const auto &[worker, delta] : futureView_) {
-        if (delta.heldBytes == 0) {
-            continue;  // no held charge on this target
-        }
-        // heldBytes > 0 implies holdSinceMs was set (the two are updated together on success), so
-        // there is no orphan case to defend here -- the single FutureDelta entry keeps them paired.
-        if (nowMs - delta.holdSinceMs > holdTtlMs) {
-            expired.emplace_back(worker, delta.heldBytes);
-        }
-    }
-    for (const auto &[worker, heldBytes] : expired) {
+    for (const auto &[worker, heldBytes] : CollectExpiredHoldsLocked(nowMs, holdTtlMs)) {
         LOG(WARNING) << FormatString(
-            "[MemoryRebalance] release held in-flight target=%s after TTL %lus (hold_age=%lums, bytes=%lu)",
-            worker, holdTtlMs / MS_PER_SECOND, nowMs - futureView_.at(worker).holdSinceMs, heldBytes);
+            "[MemoryRebalance] release held in-flight target=%s after TTL %lus (hold_age=%lums, bytes=%lu)", worker,
+            holdTtlMs / MS_PER_SECOND, nowMs - futureView_.at(worker).holdSinceMs, heldBytes);
         ReleaseHeldLocked(worker, heldBytes);
     }
-}
-
-bool MemoryRebalanceScheduler::IsInCooldownLocked(const std::string &worker, uint64_t nowMs) const
-{
-    auto iter = cooldownUntilMs_.find(worker);
-    return iter != cooldownUntilMs_.end() && iter->second > nowMs;
 }
 
 bool MemoryRebalanceScheduler::IsPairInCooldownLocked(const std::string &source, const std::string &target,
@@ -419,10 +385,7 @@ uint64_t MemoryRebalanceScheduler::CalculateCooldownDeadlineMs(uint64_t nowMs)
 
 void MemoryRebalanceScheduler::AddCooldownLocked(const std::string &worker, uint64_t nowMs)
 {
-    if (worker.empty()) {
-        return;
-    }
-    cooldownUntilMs_[worker] = CalculateCooldownDeadlineMs(nowMs);
+    SetCooldownUntilLocked(worker, CalculateCooldownDeadlineMs(nowMs));
 }
 
 void MemoryRebalanceScheduler::AddPairCooldownLocked(const std::string &source, const std::string &target,
@@ -465,12 +428,8 @@ void MemoryRebalanceScheduler::RemoveTaskLocked(const std::string &sourceWorker,
             // issue #685: do NOT clear the in-flight charge on success. The target's snapshot
             // still shows stale-low usage until it reports again, so clearing now would let the
             // next source re-pick the just-received target. Hold the charge; it is released by
-            // ReleaseSnapshotHoldsLocked when the merge refreshes the snapshot.
-            auto &delta = futureView_[task.target_worker()];
-            delta.heldBytes = SaturatingAdd(delta.heldBytes, task.max_bytes());
-            if (nowMs > delta.holdSinceMs) {
-                delta.holdSinceMs = nowMs;  // keep the latest completion time
-            }
+            // ReleaseSnapshotHoldsLocked when the merged snapshot catches up.
+            auto &delta = HoldTargetInflightLocked(task.target_worker(), task.max_bytes(), nowMs);
             LOG(INFO) << FormatString(
                 "[MemoryRebalance] hold in-flight target=%s bytes=%lu pending=%lu until target reports",
                 task.target_worker(), task.max_bytes(), delta.heldBytes);
@@ -483,77 +442,16 @@ void MemoryRebalanceScheduler::RemoveTaskLocked(const std::string &sourceWorker,
     }
 }
 
-void MemoryRebalanceScheduler::MarkTaskDispatchedLocked(RunningTask &runningTask)
-{
-    if (runningTask.dispatched) {
-        return;
-    }
-    runningTask.dispatched = true;
-}
-
-uint64_t MemoryRebalanceScheduler::GetTargetInflightBytesLocked(const std::string &targetWorker) const
-{
-    auto inFlightIt = futureView_.find(targetWorker);
-    if (inFlightIt != futureView_.end()) {
-        return inFlightIt->second.inflightBytes;
-    }
-    return 0;
-}
-
-void MemoryRebalanceScheduler::DecreaseInflightLocked(const std::string &targetWorker, uint64_t bytes)
-{
-    auto it = futureView_.find(targetWorker);
-    if (it == futureView_.end()) {
-        return;
-    }
-    it->second.inflightBytes = it->second.inflightBytes > bytes ? it->second.inflightBytes - bytes : 0;
-    if (it->second.inflightBytes == 0) {
-        // No inflight charge remains on this target. Since heldBytes is always a subset of
-        // inflightBytes (invariant), the held charge was part of the inflight just released,
-        // so erasing the entry cannot drop a still-held charge.
-        futureView_.erase(it);
-    }
-}
-
-void MemoryRebalanceScheduler::ReleaseHeldLocked(const std::string &worker, uint64_t heldBytes)
-{
-    DecreaseInflightLocked(worker, heldBytes);
-    auto cur = futureView_.find(worker);
-    if (cur != futureView_.end()) {
-        cur->second.heldBytes = 0;
-        cur->second.holdSinceMs = 0;
-        cur->second.freshUsedMemory = 0;
-    }
-}
-
 void MemoryRebalanceScheduler::ReleaseSnapshotHoldsLocked(const std::unordered_map<std::string, NodeInfo> &snapshot)
 {
-    // Release path for held targets: a target whose snapshot timestamp advanced past its held
-    // completion time has had its memory refreshed by the background merge. The merge runs every
-    // 10s, so a target's hold may persist up to ~10s after its snapshot is actually fresh.
-    // During that window CollectCandidatePairsLocked uses freshUsedMemory (if available from a
-    // prior batch result) or the held charge to compensate for the stale snapshot.
-    std::vector<std::pair<std::string, uint64_t>> toRelease;
-    for (const auto &[worker, delta] : futureView_) {
-        if (delta.heldBytes == 0) {
-            continue;
-        }
-        auto nit = snapshot.find(worker);
-        if (nit == snapshot.end()) {
-            continue;  // worker no longer in the snapshot (down / scaled away)
-        }
-        if (nit->second.timestamp <= delta.holdSinceMs) {
-            continue;  // snapshot timestamp still predates the held completion
-        }
-        if (delta.freshUsedMemory > 0 && nit->second.usedMemory < delta.freshUsedMemory) {
-            continue;  // snapshot usedMemory hasn't caught up to fresh signal — stale sample
-        }
+    // Release a held target only after the merged snapshot timestamp and used-memory value both
+    // catch up to the latest result feedback. CollectReleasableHoldsLocked applies both guards.
+    for (const auto &[worker, heldBytes] : CollectReleasableHoldsLocked(snapshot)) {
+        const auto &delta = futureView_.at(worker);
+        const auto &node = snapshot.at(worker);
         LOG(INFO) << FormatString(
             "[MemoryRebalance] release held in-flight target=%s bytes=%lu hold_age=%lums via snapshot-merge", worker,
-            delta.heldBytes, nit->second.timestamp - delta.holdSinceMs);
-        toRelease.emplace_back(worker, delta.heldBytes);
-    }
-    for (const auto &[worker, heldBytes] : toRelease) {
+            heldBytes, node.timestamp - delta.holdSinceMs);
         ReleaseHeldLocked(worker, heldBytes);
     }
 }
@@ -581,19 +479,8 @@ std::shared_ptr<const cluster::TopologySnapshot> MemoryRebalanceScheduler::GetTo
     return snapshot;
 }
 
-bool MemoryRebalanceScheduler::IsWorkerActiveInTopology(
-    const std::string &worker, const cluster::TopologySnapshot *topologySnapshot) const
-{
-    if (topologySnapshot == nullptr) {
-        return true;
-    }
-    const cluster::Member *member = nullptr;
-    auto rc = topologySnapshot->FindMemberByAddress(worker, member);
-    return rc.IsOk() && member != nullptr && member->state == cluster::MemberState::ACTIVE;
-}
-
-bool MemoryRebalanceScheduler::IsSourceCandidateLocked(
-    const NodeInfo &node, uint64_t nowMs, const cluster::TopologySnapshot *topologySnapshot) const
+bool MemoryRebalanceScheduler::IsSourceCandidateLocked(const NodeInfo &node, uint64_t nowMs,
+                                                       const cluster::TopologySnapshot *topologySnapshot) const
 {
     uint64_t targetInflightBytes = GetTargetInflightBytesLocked(node.nodeId);
     bool hasInboundTask = targetInflightBytes > 0;
@@ -613,10 +500,12 @@ void MemoryRebalanceScheduler::CollectWorkerCandidatesLocked(const std::unordere
     targets.reserve(snapshot.size());
     for (const auto &[worker, node] : snapshot) {
         (void)worker;
-        if (node.nodeId == sourceWorker && IsSourceCandidateLocked(node, nowMs, topologySnapshot)) {
+        if (node.evictionPolicy == master::EVICTION_POLICY_CLOCK && node.nodeId == sourceWorker
+            && IsSourceCandidateLocked(node, nowMs, topologySnapshot)) {
             sources.emplace_back(&node);
         }
-        if (node.isReady && IsWorkerActiveInTopology(node.nodeId, topologySnapshot) && node.memoryLimit > 0
+        if (node.evictionPolicy == master::EVICTION_POLICY_CLOCK && node.isReady
+            && IsWorkerActiveInTopology(node.nodeId, topologySnapshot) && node.memoryLimit > 0
             && !IsInCooldownLocked(node.nodeId, nowMs)) {
             targets.emplace_back(&node);
         }
@@ -641,7 +530,7 @@ void MemoryRebalanceScheduler::CollectCandidatePairsLocked(const std::vector<con
             auto deltaIt = futureView_.find(target->nodeId);
             if (deltaIt != futureView_.end()) {
                 heldBytes = deltaIt->second.heldBytes;
-                freshUsedMemory = deltaIt->second.freshUsedMemory;
+                freshUsedMemory = deltaIt->second.minimumObservedUsedMemory;
             }
             uint64_t maxBytes = CalculateTaskBytesLocked(*source, *target, targetInflightBytes,
                                                          heldBytes, freshUsedMemory);
@@ -699,6 +588,13 @@ void MemoryRebalanceScheduler::FillTaskFromPairLocked(const CandidatePair &bestP
 {
     FillTaskProtoLocked(bestPair.source->nodeId, bestPair.target->nodeId, bestPair.maxBytes, nowMs,
                         runningTask.task);
+    runningTask.task.set_source_eviction_policy(
+        static_cast<master::EvictionPolicyPb>(bestPair.source->evictionPolicy));
+    runningTask.task.set_source_eviction_policy_epoch(bestPair.source->evictionPolicyEpoch);
+    runningTask.task.set_target_eviction_policy(
+        static_cast<master::EvictionPolicyPb>(bestPair.target->evictionPolicy));
+    runningTask.task.set_target_eviction_policy_epoch(bestPair.target->evictionPolicyEpoch);
+    runningTask.task.set_has_eviction_policy_fence(true);
     runningTask.targetMemoryLimit = bestPair.target->memoryLimit;
     runningTask.targetMemoryCapacity = bestPair.target->memoryCapacity;
     // Fixed total migration budget for this 30s cycle: the midpoint gap (usageGap/2) capped by
@@ -842,6 +738,7 @@ bool MemoryRebalanceScheduler::BuildNextBatchTaskLocked(const RunningTask &prevT
         return false;
     }
     FillTaskProtoLocked(prevTask.task.source_worker(), prevTask.task.target_worker(), nextBytes, nowMs, nextTask);
+    CopyPolicyFence(prevTask.task, nextTask);
     LOG(INFO) << FormatString("[MemoryRebalance] next batch source=%s target=%s max_bytes=%lu "
                               "(remaining_budget=%lu, target_usage_rate=%lu%%)",
                               nextTask.source_worker(), nextTask.target_worker(), nextBytes, remaining,

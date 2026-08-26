@@ -119,6 +119,7 @@ ds_cc_library(
 )
 
 alias(name = "device_buffer", actual = ":buffer")
+alias(name = "eviction_policy_common", actual = ":common_object_cache")
 alias(name = "object_base", actual = ":common_object_cache")
 alias(name = "lock", actual = ":common_object_cache")
 alias(name = "object_ref_info", actual = ":common_object_cache")

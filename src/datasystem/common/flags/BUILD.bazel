@@ -8,6 +8,7 @@ _FLAG_RUNTIME_HDRS = [
     "config_monitor_state.h",
     "dynamic_config_updater.h",
     "dynamic_flag_config.h",
+    "eviction_heat.h",
     "eviction_watermark.h",
 ]
 
@@ -92,6 +93,16 @@ ds_cc_library(
     name = "eviction_watermark",
     srcs = ["eviction_watermark.cpp"],
     hdrs = ["eviction_watermark.h"],
+    deps = [
+        ":dynamic_flag_config",
+        ":dynamic_flag_config_header",
+    ],
+)
+
+ds_cc_library(
+    name = "eviction_heat",
+    srcs = ["eviction_heat.cpp"],
+    hdrs = ["eviction_heat.h"],
     deps = [
         ":dynamic_flag_config",
         ":dynamic_flag_config_header",

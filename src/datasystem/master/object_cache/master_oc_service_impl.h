@@ -353,6 +353,18 @@ public:
     Status ReportRebalanceResult(const ReportRebalanceResultReqPb &req, ReportRebalanceResultRspPb &rsp) override;
 
     /**
+     * @brief Publish a controller-owned eviction policy rollout intent.
+     */
+    Status StartEvictionPolicyUpdate(const StartEvictionPolicyUpdateReqPb &req,
+                                     StartEvictionPolicyUpdateRspPb &rsp) override;
+
+    /**
+     * @brief Query worker acknowledgement and migration progress for the active rollout.
+     */
+    Status GetEvictionPolicyUpdateProgress(const GetEvictionPolicyUpdateProgressReqPb &req,
+                                           GetEvictionPolicyUpdateProgressRspPb &rsp) override;
+
+    /**
      * @brief Create multi meta.
      * @param[in] req The rpc request protobuf.
      * @param[out] rsp The rpc response protobuf.

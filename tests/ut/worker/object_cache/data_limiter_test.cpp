@@ -17,15 +17,19 @@
 /**
  * Description: Tests for MigrateDataRateController peek-only rate lookup.
  */
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "ut/common.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
 
 using namespace datasystem::object_cache;
@@ -112,6 +116,36 @@ TEST_F(MigrateDataRateControllerTest, TestSlidingWindowPrunesOnlyExpiredEntries)
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     // Read prunes only entry 1; entry 2 stays. available = max - secondBytes.
     ASSERT_EQ(limiter.GetAvailableBandwidth(), maxBandwidth - secondBytes);
+}
+
+TEST_F(MigrateDataRateControllerTest, TestConcurrentPerWorkerRateAccess)
+{
+    constexpr uint64_t maxBandwidth = 1'000'000;
+    constexpr size_t workerCount = 16;
+    constexpr size_t iterations = 1'000;
+    ASSERT_TRUE(TimerQueue::GetInstance()->Initialize());
+    auto controller = std::make_shared<MigrateDataRateController>(maxBandwidth);
+    std::atomic<bool> start{ false };
+    std::vector<std::future<void>> workers;
+    workers.reserve(workerCount);
+
+    for (size_t worker = 0; worker < workerCount; ++worker) {
+        workers.emplace_back(std::async(std::launch::async, [&, worker]() {
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            const std::string address = "worker-" + std::to_string(worker);
+            EXPECT_GT(controller->CalculateNewRate(address), 0u);
+            for (size_t i = 0; i < iterations; ++i) {
+                EXPECT_GT(controller->PeekAvailableRate(address), 0u);
+            }
+        }));
+    }
+    start.store(true, std::memory_order_release);
+    for (auto &worker : workers) {
+        ASSERT_EQ(worker.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        worker.get();
+    }
 }
 
 }  // namespace ut

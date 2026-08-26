@@ -68,6 +68,9 @@ Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &r
     reqPb.set_is_slot_migration(req.isSlotMigration);
     reqPb.set_slot_id(req.slotId);
     reqPb.set_is_retry(req.isRetry);
+    // MigrateDataDirect is restricted to the legacy SPILL semantics. Do not serialize the newer type fields here:
+    // an old authenticated peer parses them as unknown fields and reserializes them after timestamp, changing the
+    // AK/SK canonical byte order during a rolling upgrade.
     uint64_t totalDataBytes = 0;
     for (const auto &data : *req.datas) {
         Status s = data->LockData();

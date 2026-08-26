@@ -616,7 +616,7 @@ Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb
 void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const std::string &address, ObjectMetaPb *meta,
                                                          ReadObjectKV &objectKV, const Status &checkConnectStatus,
                                                          bool &tryGetFromElsewhere,
-                                                         std::vector<std::string> &needEvictIds)
+                                                         std::vector<EvictionTouch> &needEvictIds)
 {
     auto &objectKey = objectKV.GetObjKey();
     auto &entry = objectKV.GetObjEntry();
@@ -634,7 +634,7 @@ void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const st
     // PullObjectDataFromRemoteWorker.
     if (subRc.IsOk()) {
         PerfPoint point(PerfKey::WORKER_HANDLE_BATCH_SUB_ADD_EVICTION);
-        needEvictIds.emplace_back(objectKey);
+        needEvictIds.emplace_back(objectKey, entry->GetCreateTime());
         entry->stateInfo.SetNeedToDelete(true);
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_SYNC_META);
         if (FLAGS_enable_data_replication) {
@@ -670,7 +670,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     Status lastRc;
     uint64_t payloadIndex = 0;
     auto iter = infos.begin();
-    std::vector<std::string> needEvictObjs;
+    std::vector<EvictionTouch> needEvictObjs;
     needEvictObjs.reserve(infos.size());
     std::shared_ptr<std::string> commId = nullptr;
     if (IsRemoteH2DEnabled() && request != nullptr) {
@@ -753,7 +753,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         }
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_OTHER);
     }
-    SubmitAsyncAddEvictTask(std::move(needEvictObjs));
+    SubmitAsyncAddEvictTask(std::move(needEvictObjs), true);
     return lastRc;
 }
 

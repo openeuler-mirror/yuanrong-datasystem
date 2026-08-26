@@ -28,7 +28,6 @@
 #include <utility>
 #include <vector>
 
-
 #include <google/protobuf/repeated_field.h>
 
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -62,7 +61,8 @@ namespace datasystem {
 namespace object_cache {
 
 namespace {
-std::unordered_set<std::string> CollectRequestObjectKeys(const ObjInfoPbList &objects)
+template <typename ObjectList>
+std::unordered_set<std::string> CollectRequestObjectKeys(const ObjectList &objects)
 {
     std::unordered_set<std::string> objectKeys;
     std::transform(objects.begin(), objects.end(), std::inserter(objectKeys, objectKeys.end()),
@@ -114,7 +114,7 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateData(const MigrateDataReqPb &re
         auto allocRc = BatchAllocateObjectGroupBySlot(req, units);
         if (IsNoSpace(allocRc)) {
             auto failedIds = CollectRequestObjectKeys(req.objects());
-            FillMigrateDataResponse(req, {}, failedIds, true, rsp);
+            FillMigrateDataResponse(req, {}, {}, failedIds, true, rsp);
             return Status(StatusCode::K_NO_SPACE, "Slot migration allocate memory failed");
         }
         RETURN_IF_NOT_OK(allocRc);
@@ -130,7 +130,11 @@ Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, Mi
             oom = !IsMemoryAvailable(0, req.type()) && !IsSpillAvaialble() && !IsDiskAvailable();
             break;
         case MigrateType::SPILL:
-            oom = !IsMemoryAvailable(0, req.type());
+        case MigrateType::REBALANCE_KEEP_LOCAL:
+            // A rebalance target can already be at the high water mark while still containing evictable objects.
+            // Defer the exact-size decision to SaveDataWithObjectLocked, which uses the regular
+            // allocate-evict-retry path. Rejecting here prevents heat eviction from recycling cold migrated data.
+            oom = false;
             break;
         default:
             RETURN_STATUS(StatusCode::K_INVALID, "Invalid migrate type");
@@ -140,13 +144,26 @@ Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, Mi
     std::unordered_set<std::string> failedIds;
     std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
                    [](const auto &info) { return info.object_key(); });
-    FillMigrateDataResponse(req, {}, failedIds, true, rsp);
+    FillMigrateDataResponse(req, {}, {}, failedIds, true, rsp);
     LOG(INFO) << "[Migrate Data] OOM";
     RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, "OOM");
 }
 
 Status WorkerOcServiceMigrateImpl::CheckMigrateDataAdmission(const MigrateDataReqPb &req, MigrateDataRspPb &rsp)
 {
+    if (req.has_rebalance_policy_fence()) {
+        CHECK_FAIL_RETURN_STATUS(evictionManager_ != nullptr, StatusCode::K_NOT_READY,
+                                 "Target eviction manager is not initialized");
+        auto fenceRc =
+            evictionManager_->ValidateRebalancePolicy(req.target_eviction_policy(), req.target_eviction_policy_epoch());
+        if (fenceRc.IsError()) {
+            std::unordered_set<std::string> failedIds;
+            std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
+                           [](const auto &info) { return info.object_key(); });
+            FillMigrateDataResponse(req, {}, {}, failedIds, false, rsp);
+            return fenceRc;
+        }
+    }
     auto rc = AcquireIncomingMigrationAdmission();
     if (rc.IsOk()) {
         return Status::OK();
@@ -154,7 +171,7 @@ Status WorkerOcServiceMigrateImpl::CheckMigrateDataAdmission(const MigrateDataRe
     std::unordered_set<std::string> failedIds;
     std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
                    [](const auto &info) { return info.object_key(); });
-    FillMigrateDataResponse(req, {}, failedIds, false, rsp);
+    FillMigrateDataResponse(req, {}, {}, failedIds, false, rsp);
     rsp.set_scale_down_state(MigrateDataRspPb::DATA_MIGRATION_STARTED);
     return rc;
 }
@@ -170,8 +187,10 @@ Status WorkerOcServiceMigrateImpl::AcquireIncomingMigrationAdmission(bool requir
         RETURN_IF_NOT_OK(ubAdmission_->CheckWriteTarget(local, UbOperationKind::MIGRATION_READ));
     }
     std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
-    CHECK_FAIL_RETURN_STATUS(!incomingMigrationAdmissionClosed_, StatusCode::K_NOT_READY,
-                             "Target Worker has started draining and cannot accept migrated data");
+    const bool localExiting = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed);
+    CHECK_FAIL_RETURN_STATUS(!incomingMigrationAdmissionClosed_ && !incomingMigrationAdmissionPaused_ && !localExiting,
+                             StatusCode::K_NOT_READY,
+                             "Target Worker is exiting or migration admission is paused");
     ++incomingMigrationCount_;
     return Status::OK();
 }
@@ -212,6 +231,25 @@ Status WorkerOcServiceMigrateImpl::CloseIncomingMigrationAdmissionAndWait(
     return Status::OK();
 }
 
+Status WorkerOcServiceMigrateImpl::PauseIncomingMigrationAdmissionAndCheckDrained()
+{
+    std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
+    CHECK_FAIL_RETURN_STATUS(!incomingMigrationAdmissionClosed_, StatusCode::K_NOT_READY,
+                             "Incoming migration admission is permanently closed");
+    incomingMigrationAdmissionPaused_ = true;
+    INJECT_POINT_NO_RETURN("WorkerOcServiceMigrateImpl.PauseIncomingMigrationAdmissionAndCheckDrained.afterPaused");
+    RETURN_OK_IF_TRUE(incomingMigrationCount_ == 0);
+    RETURN_STATUS(K_TRY_AGAIN, "Incoming migrations are still draining");
+}
+
+void WorkerOcServiceMigrateImpl::ResumeIncomingMigrationAdmission()
+{
+    std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
+    if (!incomingMigrationAdmissionClosed_.load(std::memory_order_acquire)) {
+        incomingMigrationAdmissionPaused_ = false;
+    }
+}
+
 Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
                                                std::vector<RpcMessage> payloads)
 {
@@ -226,7 +264,7 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
         std::unordered_set<std::string> failedIds;
         std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
                        [](const auto &info) { return info.object_key(); });
-        FillMigrateDataResponse(req, {}, failedIds, false, rsp);
+        FillMigrateDataResponse(req, {}, {}, failedIds, false, rsp);
         rsp.set_scale_down_state(MigrateDataRspPb::DATA_MIGRATION_STARTED);
         return Status(StatusCode::K_NOT_READY, "admission closed before data processing");
     }
@@ -249,65 +287,83 @@ Status WorkerOcServiceMigrateImpl::MigrateDataImpl(const MigrateDataReqPb &req, 
     std::unordered_map<std::string, std::shared_ptr<ShmUnit>> units;
     RETURN_IF_NOT_OK(PrepareMigrateData(req, rsp, units));
 
-    // 1. Lock objects.
+    // Query master metadata before taking target object locks. Master RPC retries and redirects can take seconds;
+    // holding a whole migration batch WLocked across that network path stalls foreground access to hot targets.
+    std::unordered_set<std::string> needQueryIds = CollectRequestObjectKeys(req.objects());
+    QueryMetaMap metas;
+    std::unordered_set<std::string> failedIds;
+    Status rc = QueryMasterMetadata(needQueryIds, metas, failedIds);
+    if (rc.IsError()) {
+        FillMigrateDataResponse(req, {}, {}, failedIds, false, rsp);
+        return rc;
+    }
+
+    // Lock only objects whose metadata query did not fail. FillObjectsLocked revalidates the requested version under
+    // each WLock, so a concurrent target update between the query and lock is handled by the existing version rules.
     LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
-    std::unordered_set<std::string> failedIds;
+    std::unordered_set<std::string> expiredIds;
+    std::unordered_set<std::string> skippedIds;
     LockedEntryMap needModifyPrimary;
     BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
     Raii raii([this, &lockedEntries, &needModifyPrimary]() {
         BatchUnlock(lockedEntries);
         BatchUnlock(needModifyPrimary);
     });
-    // 2. Get object metadata from master.
-    // needModifyPrimary objects (equal-version copies on target) are not in lockedEntries, so
-    // their keys must be added explicitly to needQueryIds — otherwise metas would never contain
-    // them and the needModifyPrimary loop below would unconditionally skip them, breaking
-    // ReplacePrimary for idempotent retries and same-version primary handoff.
-    std::unordered_set<std::string> needQueryIds;
-    std::transform(lockedEntries.begin(), lockedEntries.end(), std::inserter(needQueryIds, needQueryIds.end()),
-                   [](const auto &entry) { return entry.first; });
-    for (const auto &[objectKey, it] : needModifyPrimary) {
-        (void)needQueryIds.insert(objectKey);
-    }
-    QueryMetaMap metas;
-    Status rc = QueryMasterMetadata(needQueryIds, metas, failedIds);
-    if (rc.IsError()) {
-        FillMigrateDataResponse(req, successIds, failedIds, false, rsp);
-        return rc;
-    }
-
-    // 3. Fill data and metadata to object entry.
-    ObjectInfoMap needSendMasterIds;
-    std::unordered_set<std::string> skippedIds;
-    Status status =
-        FillObjectsLocked(req, lockedEntries, metas, payloads, failedIds, needSendMasterIds, units,
-                          skippedIds);
+    // Fill data and metadata to object entry.
+    ObjectInfoMap stagedObjectInfos;
+    Status status = FillObjectsLocked(req, lockedEntries, metas, payloads, failedIds, stagedObjectInfos, units,
+                                      skippedIds);
     bool oom = IsNoSpace(status);
 
-    for (const auto &[objectKey, it] : needModifyPrimary) {
-        if (metas.find(objectKey) == metas.end()) {
-            (void)skippedIds.emplace(objectKey);
-            (void)successIds.erase(objectKey);
-            continue;
-        }
-        needSendMasterIds.emplace(objectKey, std::make_pair(it.first, false));
-    }
+    ObjectInfoMap needSendMasterIds = BuildPrimarySwitchInputs(stagedObjectInfos, needModifyPrimary, metas,
+                                                               needQueryIds, failedIds, successIds, skippedIds);
     // 4. Send replace primary copy to master.
     if (!needSendMasterIds.empty()) {
-        status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, req.type(), successIds, failedIds);
+        PrimarySwitchOutcome outcome;
+        status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, req.type(), outcome);
+        FinalizePrimarySwitch(needSendMasterIds, stagedObjectInfos, outcome, successIds, failedIds);
+        expiredIds = outcome.expiredIds;
+        ApplyConfirmedMigratedHeats(req, needSendMasterIds, stagedObjectInfos, outcome);
     }
 
     // 5. Fill response.
-    FillMigrateDataResponse(req, successIds, failedIds, oom, rsp, skippedIds);
-    if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
+    FillMigrateDataResponse(req, successIds, expiredIds, failedIds, oom, rsp, skippedIds);
+    if ((!successIds.empty() || !expiredIds.empty()) && req.is_slot_migration() && !req.is_retry()) {
         auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
         LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
                                              req.slot_id(), merStatus.ToString()));
     }
     LOG(INFO) << "[Migrate Data] Migrate finish, success size: " << successIds.size()
-              << ", failed size: " << failedIds.size() << ", last status: " << status.ToString();
-    return successIds.empty() ? status : Status::OK();
+              << ", expired size: " << expiredIds.size() << ", skipped size: " << skippedIds.size()
+              << ", failed size: " << failedIds.size()
+              << ", last status: " << status.ToString();
+    return successIds.empty() && expiredIds.empty() ? status : Status::OK();
+}
+
+ObjectInfoMap WorkerOcServiceMigrateImpl::BuildPrimarySwitchInputs(
+    const ObjectInfoMap &stagedObjectInfos, const LockedEntryMap &needModifyPrimary, const QueryMetaMap &metas,
+    const std::unordered_set<std::string> &needQueryIds, const std::unordered_set<std::string> &failedIds,
+    std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &skippedIds) const
+{
+    // A target-side newer copy can be classified as successful without entering lockedEntries. If authoritative
+    // metadata does not contain that key, keep the source copy just like the ordinary fill path.
+    for (const auto &objectKey : needQueryIds) {
+        if (failedIds.count(objectKey) == 0 && metas.count(objectKey) == 0) {
+            (void)skippedIds.emplace(objectKey);
+            (void)successIds.erase(objectKey);
+        }
+    }
+    ObjectInfoMap needSendMasterIds = stagedObjectInfos;
+    for (const auto &[objectKey, entry] : needModifyPrimary) {
+        if (metas.count(objectKey) == 0) {
+            (void)skippedIds.emplace(objectKey);
+            (void)successIds.erase(objectKey);
+            continue;
+        }
+        needSendMasterIds.emplace(objectKey, std::make_pair(entry.first, false));
+    }
+    return needSendMasterIds;
 }
 
 Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
@@ -356,8 +412,11 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectError(const MigrateDa
 Status WorkerOcServiceMigrateImpl::PreCheckMigrateDataDirect(const MigrateDataDirectReqPb &req,
                                                              MigrateDataDirectRspPb &rsp)
 {
-    if (!IsMemoryAvailable(0, MigrateType::SPILL)) {
-        return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_OUT_OF_MEMORY, "OOM");
+    // Direct migration remains a SPILL-only wire protocol. Absence is the legacy SPILL encoding; a present non-SPILL
+    // value is rejected instead of silently retaining the old source location.
+    if (req.has_type() && req.type() != MigrateType::SPILL) {
+        return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_INVALID,
+                                             "MigrateDataDirect only supports SPILL type");
     }
     if (!IsUrmaEnabled()) {
         return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_RUNTIME_ERROR, "URMA is not enabled");
@@ -366,27 +425,12 @@ Status WorkerOcServiceMigrateImpl::PreCheckMigrateDataDirect(const MigrateDataDi
 }
 
 Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectEntries(
-    const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp, PerfPoint &point, LockedEntryMap &lockedEntries,
+    const MigrateDataDirectReqPb &req, PerfPoint &point, LockedEntryMap &lockedEntries,
     std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &failedIds,
-    LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds,
+    LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds, const QueryMetaMap &metas,
     std::unordered_set<std::string> &skippedIds)
 {
     BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
-
-    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_QUERY_META);
-    std::unordered_set<std::string> needQueryIds;
-    std::transform(lockedEntries.begin(), lockedEntries.end(), std::inserter(needQueryIds, needQueryIds.end()),
-                   [](const auto &entry) { return entry.first; });
-    for (const auto &[objectKey, it] : needModifyPrimary) {
-        (void)needQueryIds.insert(objectKey);
-    }
-    QueryMetaMap metas;
-    Status rc = QueryMasterMetadata(needQueryIds, metas, failedIds);
-    if (rc.IsError()) {
-        FillMigrateDataDirectResponse(req, failedIds, false, 0, rsp);
-        return rc;
-    }
-
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_META);
     FillMetaToObjectEntries(lockedEntries, metas, successIds, failedIds, needReadDataIds, skippedIds);
     for (auto it = needModifyPrimary.begin(); it != needModifyPrimary.end();) {
@@ -396,6 +440,13 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectEntries(
             it = needModifyPrimary.erase(it);
         } else {
             ++it;
+        }
+    }
+    for (const auto &object : req.objects()) {
+        const auto &objectKey = object.object_key();
+        if (failedIds.count(objectKey) == 0 && metas.count(objectKey) == 0) {
+            (void)skippedIds.emplace(objectKey);
+            (void)successIds.erase(objectKey);
         }
     }
     return Status::OK();
@@ -425,23 +476,38 @@ void WorkerOcServiceMigrateImpl::ReplacePrimaryForMigrateDataDirect(const Migrat
                                                                     ObjectInfoMap &needSendMasterIds, Status &status)
 {
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_REPLACE_PRIMARY);
+    if (!failedIds.empty()) {
+        RollbackObjects(failedIds, needReadDataIds);
+    }
     for (const auto &[objectKey, it] : needModifyPrimary) {
         needSendMasterIds.emplace(objectKey, std::make_pair(it.first, false));
     }
     if (!needSendMasterIds.empty()) {
-        status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, MigrateType::SPILL, successIds, failedIds);
-    }
-    if (!failedIds.empty()) {
-        RollbackObjects(failedIds, needReadDataIds);
+        // Old sources that don't set the optional 'type' field are legacy SPILL migrations.
+        // has_type()=false → default to SPILL so remove_location=true (erase source location),
+        // matching the pre-REBALANCE_KEEP_LOCAL behavior.
+        MigrateType type = req.has_type() ? req.type() : MigrateType::SPILL;
+        PrimarySwitchOutcome outcome;
+        status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, type, outcome);
+        FinalizePrimarySwitch(needSendMasterIds, needReadDataIds, outcome, successIds, failedIds);
     }
 }
 
 Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
 {
-    PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_LOCK);
+    PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_QUERY_META);
+    std::unordered_set<std::string> failedIds;
+    QueryMetaMap metas;
+    auto queryIds = CollectRequestObjectKeys(req.objects());
+    Status rc = QueryMasterMetadata(queryIds, metas, failedIds);
+    if (rc.IsError()) {
+        FillMigrateDataDirectResponse(req, failedIds, false, 0, rsp);
+        return rc;
+    }
+
+    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_LOCK);
     LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
-    std::unordered_set<std::string> failedIds;
     std::unordered_set<std::string> skippedIds;
     LockedEntryMap needModifyPrimary;
     ObjectInfoMap needReadDataIds;
@@ -449,8 +515,8 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
         BatchUnlock(lockedEntries);
         BatchUnlock(needModifyPrimary);
     });
-    RETURN_IF_NOT_OK(PrepareMigrateDataDirectEntries(req, rsp, point, lockedEntries, successIds, failedIds,
-                                                     needModifyPrimary, needReadDataIds, skippedIds));
+    RETURN_IF_NOT_OK(PrepareMigrateDataDirectEntries(req, point, lockedEntries, successIds, failedIds,
+                                                     needModifyPrimary, needReadDataIds, metas, skippedIds));
 
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_DATA);
     DirectReadOutcome readOutcome{ req, needReadDataIds, {}, failedIds, {}, {} };
@@ -483,6 +549,9 @@ void WorkerOcServiceMigrateImpl::BatchLock(const std::map<std::string, uint64_t>
                                            LockedEntryMap &needModifyPrimary)
 {
     for (const auto &[objectKey, version] : toLockIds) {
+        if (failedIds.count(objectKey) > 0 || successIds.count(objectKey) > 0) {
+            continue;
+        }
         std::shared_ptr<SafeObjType> entry;
         bool isInsert = false;
 
@@ -496,42 +565,50 @@ void WorkerOcServiceMigrateImpl::BatchLock(const std::map<std::string, uint64_t>
             SetEmptyObjectEntry(objectKey, *entry);
             (void)lockedEntries.emplace(objectKey, std::make_pair(std::move(entry), version));
         } else {
-            s = TryLockWithRetry(objectKey, entry, true);
-            if (!s.IsOk()) {
-                LOG(ERROR) << FormatString("[Migrate Data] %s try lock failed, would not be process this time.",
-                                           objectKey);
-                (void)failedIds.emplace(objectKey);
-                continue;
-            }
-            if (entry->Get() == nullptr) {
-                SetEmptyObjectEntry(objectKey, *entry);
-            }
-            if (!IsNewerVersion(entry, version)) {
-                (void)lockedEntries.emplace(objectKey, std::make_pair(std::move(entry), version));
-            } else {
-                std::stringstream ss;
-                ss << FormatString(
-                    "[Migrate Data] %s version [%ld >= %ld] is newer, cache invalid: %s, primary copy: %s, not need to "
-                    "migrate data.",
-                    objectKey, (*entry)->GetCreateTime(), version,
-                    (*entry)->stateInfo.IsCacheInvalid() ? "true" : "false", (*entry)->GetAddress());
-                if (IsEqualVersion(entry, version)) {
-                    ss << " And need modify primary copy.";
-                    (void)needModifyPrimary.emplace(objectKey, std::make_pair(entry, version));
-                }
-                if (IsEqualVersion(entry, version) && entry->Get()->IsWriteBackMode()) {
-                    ss << " Would add to l2 queue.";
-                    std::future<Status> future;
-                    LOG_IF_ERROR(asyncSendManager_->Add(objectKey, entry, future),
-                                 FormatString("[Migrate Data] [%s] add to async queue failed", objectKey));
-                }
-                LOG(INFO) << ss.str();
-                // The object's version is newer than the request node, it means that the object has been updated before
-                // RPC arrived, so we can just treat it as an success op.
-                (void)successIds.emplace(objectKey);
-            }
+            HandleExistingLockedEntry(objectKey, version, std::move(entry), lockedEntries, successIds, failedIds,
+                                      needModifyPrimary);
         }
     }
+}
+
+void WorkerOcServiceMigrateImpl::HandleExistingLockedEntry(
+    const std::string &objectKey, uint64_t version, std::shared_ptr<SafeObjType> entry, LockedEntryMap &lockedEntries,
+    std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &failedIds,
+    LockedEntryMap &needModifyPrimary)
+{
+    Status rc = TryLockWithRetry(objectKey, entry, true);
+    if (rc.IsError()) {
+        LOG(ERROR) << FormatString("[Migrate Data] %s try lock failed, would not be process this time.", objectKey);
+        (void)failedIds.emplace(objectKey);
+        return;
+    }
+    if (entry->Get() == nullptr) {
+        SetEmptyObjectEntry(objectKey, *entry);
+    }
+    if (!IsNewerVersion(entry, version)) {
+        (void)lockedEntries.emplace(objectKey, std::make_pair(std::move(entry), version));
+        return;
+    }
+    std::stringstream ss;
+    ss << FormatString(
+        "[Migrate Data] %s version [%ld >= %ld] is newer, cache invalid: %s, primary copy: %s, not need to migrate "
+        "data.",
+        objectKey, (*entry)->GetCreateTime(), version, (*entry)->stateInfo.IsCacheInvalid() ? "true" : "false",
+        (*entry)->GetAddress());
+    if (IsEqualVersion(entry, version)) {
+        ss << " And need modify primary copy.";
+        (void)needModifyPrimary.emplace(objectKey, std::make_pair(entry, version));
+        if (entry->Get()->IsWriteBackMode()) {
+            ss << " Would add to l2 queue.";
+            std::future<Status> future;
+            LOG_IF_ERROR(asyncSendManager_->Add(objectKey, entry, future),
+                         FormatString("[Migrate Data] [%s] add to async queue failed", objectKey));
+        }
+    } else {
+        // A valid newer local copy still needs master confirmation before it is returned as a successful migration.
+        (void)successIds.emplace(objectKey);
+    }
+    LOG(INFO) << ss.str();
 }
 
 void WorkerOcServiceMigrateImpl::QueryMasterMetadataForGroup(
@@ -699,7 +776,7 @@ void WorkerOcServiceMigrateImpl::FillMetaToObjectEntries(LockedEntryMap &lockedE
         }
         bool isNewCreate = IsNewCreatedObject(entry);
         SetObjectEntryAccordingToMeta(meta.meta(), GetMetadataSize(), *entry);
-        (*entry)->stateInfo.SetPrimaryCopy(true);
+        (*entry)->stateInfo.SetPrimaryCopy(false);
         needReadDataIds.emplace(objectKey, std::make_pair(entry, isNewCreate));
     }
 }
@@ -709,27 +786,9 @@ Status WorkerOcServiceMigrateImpl::AggregateAllocateHelper(const MigrateDataDire
                                                            std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
                                                            std::vector<uint32_t> &shmIndexMapping)
 {
-    // Calculate total size of objects that need aggregate pre-allocation:
-    // small objects only by default, or all objects for slot migration.
-    constexpr uint64_t smallObjectThreshold = 1UL * 1024UL * 1024UL;
+    // Aggregate allocation uses the same allocate-evict-retry semantics as ordinary object allocation. The target can
+    // be above its high water mark while still containing cold, evictable objects.
     const bool includeLargeObjects = req.is_slot_migration();
-    uint64_t sumObjects = 0;
-    for (int i = 0; i < req.objects_size(); ++i) {
-        const auto &object = req.objects(i);
-        if (needReadDataIds.find(object.object_key()) == needReadDataIds.end()) {
-            continue;
-        }
-        if (includeLargeObjects || object.data_size() < smallObjectThreshold) {
-            sumObjects = (sumObjects > UINT64_MAX - object.data_size()) ? UINT64_MAX : sumObjects + object.data_size();
-        }
-    }
-    static constexpr double factor = 1.2;
-    uint64_t checkSize = static_cast<uint64_t>(static_cast<double>(sumObjects) * factor);
-    if (!IsMemoryAvailable(checkSize, MigrateType::SPILL)) {
-        return Status(StatusCode::K_OUT_OF_MEMORY, "OOM");
-    }
-
-    // Perform aggregate allocation.
     const size_t metaSz = GetMetadataSize();
     std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> traversalHelper =
         [&req, &needReadDataIds, &metaSz](const std::function<void(uint64_t, uint64_t, uint32_t)> &collector,
@@ -744,7 +803,7 @@ Status WorkerOcServiceMigrateImpl::AggregateAllocateHelper(const MigrateDataDire
             }
         };
     const auto &firstObjectKey = req.objects().begin()->object_key();
-    return AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping, false,
+    return AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping, true,
                              includeLargeObjects);
 }
 
@@ -852,10 +911,9 @@ Status WorkerOcServiceMigrateImpl::StartRemoteReadTasks(DirectReadOutcome &outco
         if (shmOwner) {
             lastRc = DistributeMemoryForObject(objectKey, dataSize, metaSize, true, shmOwner, *shmUnit);
         } else {
-            lastRc = Status(StatusCode::K_OUT_OF_MEMORY, "OOM");
-            if (IsMemoryAvailable(dataSize, MigrateType::SPILL)) {
-                lastRc = AllocateMemoryForObject(objectKey, dataSize, metaSize, true, evictionManager_, *shmUnit);
-            }
+            lastRc =
+                AllocateMemoryForObject(objectKey, dataSize, metaSize, true, evictionManager_, *shmUnit,
+                                        CacheType::MEMORY, true);
         }
         if (lastRc.IsError()) {
             LOG(ERROR) << FormatString("[Migrate Data] %s allocate memory failed: %s", objectKey, lastRc.ToString());
@@ -928,8 +986,7 @@ void WorkerOcServiceMigrateImpl::RecordDirectReadUbFailure(const ReadTask &task,
 
 Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originAddr,
                                                       const ObjectInfoMap &needSendMasterIds, const MigrateType &type,
-                                                      std::unordered_set<std::string> &successIds,
-                                                      std::unordered_set<std::string> &failedIds)
+                                                      PrimarySwitchOutcome &outcome)
 {
     auto objectKeys = CollectObjectInfoKeys(needSendMasterIds);
     std::vector<std::string> objectKeyList{ objectKeys.begin(), objectKeys.end() };
@@ -940,44 +997,72 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
     Status lastRc;
     RedirectMap needRedirectIds;
     for (auto &item : objKeysGrpByMaster) {
-        master::ReplacePrimaryReqPb req;
-        req.set_redirect(true);
-        req.set_origin_primary_addr(originAddr);
-        req.set_new_primary_addr(localAddr_);
-        req.set_remove_location(type == MigrateType::SPILL);
-        HostPort masterAddr = item.first;
-        const auto &ids = item.second;
-        AddReplacePrimaryObjectInfos(req, ids, needSendMasterIds);
-        VLOG(1) << FormatString("[Migrate Data] Replace %ld objects primary location from %s to %s, master address: %s",
-                                ids.size(), originAddr, localAddr_, masterAddr.ToString());
-        auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-        if (workerMasterApi == nullptr) {
-            std::stringstream ss;
-            ss << "[Migrate Data] hash master get failed, Replace primary copy failed: " << masterAddr.ToString();
-            LOG(ERROR) << ss.str();
-            lastRc = Status(StatusCode::K_RUNTIME_ERROR, ss.str());
-            failedIds.insert(ids.begin(), ids.end());
-            continue;
-        }
-        master::ReplacePrimaryRspPb rsp;
-        Status rc = ReplacePrimaryRetry(workerMasterApi, req, rsp);
+        Status rc = ReplacePrimaryForMaster(originAddr, item.first, item.second, needSendMasterIds, type, outcome,
+                                            needRedirectIds);
         if (rc.IsError()) {
-            lastRc = rc;
+            lastRc = std::move(rc);
         }
-        ProcessReplacePrimaryRsp(rsp, needSendMasterIds, successIds, failedIds, needRedirectIds);
     }
 
-    Status rc = ReplacePrimaryToRedirectMaster(originAddr, needRedirectIds, needSendMasterIds, successIds, failedIds);
+    Status rc = ReplacePrimaryToRedirectMaster(originAddr, needRedirectIds, needSendMasterIds, type, outcome);
     if (rc.IsError()) {
         lastRc = rc;
     }
+
+    // A key omitted from every master response is not safe to release at the source. Treat it as failed explicitly.
+    for (const auto &objectKey : objectKeys) {
+        if (outcome.confirmedIds.count(objectKey) == 0 && outcome.expiredIds.count(objectKey) == 0
+            && outcome.failedIds.count(objectKey) == 0) {
+            outcome.failedIds.emplace(objectKey);
+        }
+    }
+    // A confirmed switch is authoritative if retries or redirects produced duplicate classifications.
+    for (const auto &objectKey : outcome.confirmedIds) {
+        outcome.expiredIds.erase(objectKey);
+        outcome.failedIds.erase(objectKey);
+    }
+    for (const auto &objectKey : outcome.expiredIds) {
+        outcome.failedIds.erase(objectKey);
+    }
     return lastRc;
+}
+
+Status WorkerOcServiceMigrateImpl::ReplacePrimaryForMaster(
+    const std::string &originAddr, const HostPort &masterAddr, const std::vector<std::string> &ids,
+    const ObjectInfoMap &needSendMasterIds, const MigrateType &type, PrimarySwitchOutcome &outcome,
+    RedirectMap &needRedirectIds)
+{
+    master::ReplacePrimaryReqPb req;
+    req.set_redirect(true);
+    req.set_origin_primary_addr(originAddr);
+    req.set_new_primary_addr(localAddr_);
+    req.set_remove_location(type == MigrateType::SPILL);
+    AddReplacePrimaryObjectInfos(req, ids, needSendMasterIds);
+    VLOG(1) << FormatString("[Migrate Data] Replace %ld objects primary location from %s to %s, master address: %s",
+                            ids.size(), originAddr, localAddr_, masterAddr.ToString());
+    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
+    if (workerMasterApi == nullptr) {
+        std::stringstream ss;
+        ss << "[Migrate Data] hash master get failed, Replace primary copy failed: " << masterAddr.ToString();
+        LOG(ERROR) << ss.str();
+        outcome.failedIds.insert(ids.begin(), ids.end());
+        return Status(StatusCode::K_RUNTIME_ERROR, ss.str());
+    }
+    master::ReplacePrimaryRspPb rsp;
+    Status rc = ReplacePrimaryRetry(workerMasterApi, req, rsp);
+    if (rc.IsError()) {
+        outcome.failedIds.insert(ids.begin(), ids.end());
+        return rc;
+    }
+    ProcessReplacePrimaryRsp(rsp, needSendMasterIds, outcome, needRedirectIds);
+    return Status::OK();
 }
 
 uint64_t WorkerOcServiceMigrateImpl::CalcRemainBytes(const MigrateType &type)
 {
     switch (type) {
         case MigrateType::SPILL:
+        case MigrateType::REBALANCE_KEEP_LOCAL:
             return memory::Allocator::Instance()->GetMemoryAvailToHighWater();
         case MigrateType::SCALE_DOWN:
         default: {
@@ -993,12 +1078,23 @@ uint64_t WorkerOcServiceMigrateImpl::CalcRemainBytes(const MigrateType &type)
 
 void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb &req,
                                                          const std::unordered_set<std::string> &successIds,
+                                                         const std::unordered_set<std::string> &expiredIds,
                                                          const std::unordered_set<std::string> &failedIds, bool oom,
                                                          MigrateDataRspPb &rsp,
                                                          const std::unordered_set<std::string> &skipIds)
 {
     for (const auto &id : successIds) {
         rsp.add_success_ids(id);
+    }
+    for (const auto &id : expiredIds) {
+        // Legacy SPILL sources already release every success id, so preserve their wire contract during rolling
+        // upgrades. Keep-local needs an explicit classification because confirmed ids are retained as replicas while
+        // expired versions must be erased.
+        if (req.type() == MigrateType::REBALANCE_KEEP_LOCAL) {
+            rsp.add_expired_ids(id);
+        } else {
+            rsp.add_success_ids(id);
+        }
     }
     for (const auto &id : failedIds) {
         rsp.add_fail_ids(id);
@@ -1146,7 +1242,9 @@ Status WorkerOcServiceMigrateImpl::FillOneObjectLocked(std::shared_ptr<SafeObjTy
     if ((*entry)->IsMemoryCache() && (*entry)->GetShmUnit() == nullptr) {
         (*entry)->stateInfo.SetSpillState(true);
     }
-    (*entry)->stateInfo.SetPrimaryCopy(true);
+    // Keep the staged object non-primary until master confirms ReplacePrimary. The object WLock remains held across
+    // the RPC, so eviction cannot delete the pending copy before the local state is committed or rolled back.
+    (*entry)->stateInfo.SetPrimaryCopy(false);
     needSendMasterIds.emplace(objectKey, std::make_pair(entry, isNewCreate));
     if ((*entry).Get()->IsWriteBackMode()) {
         std::future<Status> future;
@@ -1183,8 +1281,12 @@ Status WorkerOcServiceMigrateImpl::SaveDataWithObjectLocked(std::shared_ptr<Safe
     }
 
     Status rc = Status(StatusCode::K_OUT_OF_MEMORY, "OOM");
-    if (IsResourceAvailable(type, (*entry)->modeInfo.GetCacheType(), info.data_size())) {
-        rc = AllocateAndAssignData(objectKey, entry, pairs, info.data_size(), unit);
+    const bool memoryRebalance = (*entry)->IsMemoryCache()
+                                 && (type == MigrateType::SPILL || type == MigrateType::REBALANCE_KEEP_LOCAL);
+    if (unit != nullptr || memoryRebalance
+        || IsResourceAvailable(type, (*entry)->modeInfo.GetCacheType(), info.data_size())) {
+        rc = AllocateAndAssignData(objectKey, entry, pairs, info.data_size(), unit,
+                                   memoryRebalance && evictionManager_ != nullptr);
         VLOG(1) << FormatString("[ObjectKey %s] Save data to memory, result: %s", objectKey, rc.ToString());
     }
     if (type == MigrateType::SCALE_DOWN && (*entry)->IsMemoryCache() && rc.IsError()
@@ -1220,17 +1322,17 @@ Status WorkerOcServiceMigrateImpl::BatchAllocateObjectGroupBySlot(
 
 Status WorkerOcServiceMigrateImpl::AllocateAndAssignData(
     const std::string &objectKey, std::shared_ptr<SafeObjType> &entry,
-    const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size, std::shared_ptr<ShmUnit> unit)
+    const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size, std::shared_ptr<ShmUnit> unit,
+    bool retryOnOOM)
 {
     auto metaSize = GetMetadataSize();
     auto needSize = size + metaSize;
     std::shared_ptr<ShmUnit> shmUnit = unit;
     if (shmUnit == nullptr) {
         shmUnit = std::make_shared<ShmUnit>();
-        auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            shmUnit->AllocateMemory(tenantId, needSize, false, ServiceType::OBJECT,
-                                    static_cast<memory::CacheType>((*entry)->modeInfo.GetCacheType())),
+            AllocateMemoryForObject(objectKey, size, metaSize, false, evictionManager_, *shmUnit,
+                                    (*entry)->modeInfo.GetCacheType(), retryOnOOM),
             FormatString("[Migrate Data] %s allocate memory failed, size: %ld", objectKey, needSize));
         shmUnit->id = ShmKey::Intern(GetStringUuid());
     }
@@ -1282,8 +1384,8 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryRetry(const std::shared_ptr<wor
 Status WorkerOcServiceMigrateImpl::ReplacePrimaryToRedirectMaster(const std::string &originAddr,
                                                                   const RedirectMap &needRedirectIds,
                                                                   const ObjectInfoMap &needSendMasterIds,
-                                                                  std::unordered_set<std::string> &successIds,
-                                                                  std::unordered_set<std::string> &failedIds)
+                                                                  const MigrateType &type,
+                                                                  PrimarySwitchOutcome &outcome)
 {
     Status lastRc;
     for (const auto &item : needRedirectIds) {
@@ -1297,6 +1399,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryToRedirectMaster(const std::str
         master::ReplacePrimaryRspPb rsp;
         req.set_origin_primary_addr(originAddr);
         req.set_new_primary_addr(localAddr_);
+        req.set_remove_location(type == MigrateType::SPILL);
         req.set_redirect(false);
         for (const auto &info : infos) {
             auto newInfo = req.add_object_infos();
@@ -1309,7 +1412,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryToRedirectMaster(const std::str
         if (!rc.IsOk()) {
             lastRc = rc;
             LOG(WARNING) << "[Migrate Data] Get redirect master address failed: " << rc.ToString();
-            std::transform(infos.begin(), infos.end(), std::inserter(failedIds, failedIds.end()),
+            std::transform(infos.begin(), infos.end(), std::inserter(outcome.failedIds, outcome.failedIds.end()),
                            [](const auto &info) { return info.object_key(); });
             continue;
         }
@@ -1320,7 +1423,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryToRedirectMaster(const std::str
             ss << "[Migrate Data] Failed to get redirect WorkerMasterApi, masterAddr: " << address;
             LOG(ERROR) << ss.str();
             lastRc = Status(StatusCode::K_RUNTIME_ERROR, ss.str());
-            std::transform(infos.begin(), infos.end(), std::inserter(failedIds, failedIds.end()),
+            std::transform(infos.begin(), infos.end(), std::inserter(outcome.failedIds, outcome.failedIds.end()),
                            [](const auto &info) { return info.object_key(); });
             continue;
         }
@@ -1330,9 +1433,12 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryToRedirectMaster(const std::str
         if (rc.IsError()) {
             lastRc = rc;
             LOG(WARNING) << "remove meta failed: " << rc.ToString();
+            std::transform(infos.begin(), infos.end(), std::inserter(outcome.failedIds, outcome.failedIds.end()),
+                           [](const auto &info) { return info.object_key(); });
+            continue;
         }
         RedirectMap needRedirectIds1;
-        ProcessReplacePrimaryRsp(rsp, needSendMasterIds, successIds, failedIds, needRedirectIds1);
+        ProcessReplacePrimaryRsp(rsp, needSendMasterIds, outcome, needRedirectIds1);
         if (!needRedirectIds1.empty()) {
             LOG(WARNING) << "[Migrate Data] The redirect ids should not happen: " << needRedirectIds1.size();
         }
@@ -1343,14 +1449,12 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryToRedirectMaster(const std::str
 
 void WorkerOcServiceMigrateImpl::ProcessReplacePrimaryRsp(master::ReplacePrimaryRspPb &rsp,
                                                           const ObjectInfoMap &needSendMasterIds,
-                                                          std::unordered_set<std::string> &successIds,
-                                                          std::unordered_set<std::string> &failedIds,
+                                                          PrimarySwitchOutcome &outcome,
                                                           RedirectMap &needRedirectIds)
 {
-    // 1. We treat the expire objects as success objects, we just need to clear their resources.
-    successIds.insert(rsp.expired_ids().begin(), rsp.expired_ids().end());
-    successIds.insert(rsp.success_ids().begin(), rsp.success_ids().end());
-    failedIds.insert(rsp.failed_ids().begin(), rsp.failed_ids().end());
+    outcome.expiredIds.insert(rsp.expired_ids().begin(), rsp.expired_ids().end());
+    outcome.confirmedIds.insert(rsp.success_ids().begin(), rsp.success_ids().end());
+    outcome.failedIds.insert(rsp.failed_ids().begin(), rsp.failed_ids().end());
 
     // 2. Fill redirect infos.
     for (const auto &redirectInfo : rsp.info()) {
@@ -1360,7 +1464,7 @@ void WorkerOcServiceMigrateImpl::ProcessReplacePrimaryRsp(master::ReplacePrimary
             if (it == needSendMasterIds.end()) {
                 LOG(WARNING) << FormatString("[Migrate Data] %s not found in needSendMasterIds, it should not happen!",
                                              objectKey);
-                (void)failedIds.emplace(objectKey);
+                (void)outcome.failedIds.emplace(objectKey);
                 continue;
             }
             auto info = needRedirectIds[addr].Add();
@@ -1368,9 +1472,69 @@ void WorkerOcServiceMigrateImpl::ProcessReplacePrimaryRsp(master::ReplacePrimary
             info->set_version((*it->second.first)->GetCreateTime());
         }
     }
+}
 
-    // 3. Rollback failed or expired objects.
-    RollbackObjects(rsp.expired_ids(), needSendMasterIds);
+void WorkerOcServiceMigrateImpl::FinalizePrimarySwitch(const ObjectInfoMap &needSendMasterIds,
+                                                       const ObjectInfoMap &stagedObjectInfos,
+                                                       const PrimarySwitchOutcome &outcome,
+                                                       std::unordered_set<std::string> &successIds,
+                                                       std::unordered_set<std::string> &failedIds)
+{
+    for (const auto &objectKey : outcome.confirmedIds) {
+        auto iter = needSendMasterIds.find(objectKey);
+        if (iter == needSendMasterIds.end()) {
+            LOG(ERROR) << FormatString("[Migrate Data] Confirmed primary object %s is not in send list", objectKey);
+            failedIds.emplace(objectKey);
+            continue;
+        }
+        (*iter->second.first)->stateInfo.SetPrimaryCopy(true);
+        successIds.emplace(objectKey);
+    }
+
+    // Expired means the source request is terminal and may release its stale copy, but data staged by this request is
+    // not a committed primary and must be rolled back on the target.
+    std::unordered_set<std::string> stagedExpiredIds;
+    std::copy_if(outcome.expiredIds.begin(), outcome.expiredIds.end(),
+                 std::inserter(stagedExpiredIds, stagedExpiredIds.end()),
+                 [&stagedObjectInfos](const auto &objectKey) { return stagedObjectInfos.count(objectKey) > 0; });
+    RollbackObjects(stagedExpiredIds, stagedObjectInfos);
+
+    failedIds.insert(outcome.failedIds.begin(), outcome.failedIds.end());
+    std::unordered_set<std::string> stagedFailedIds;
+    std::copy_if(outcome.failedIds.begin(), outcome.failedIds.end(),
+                 std::inserter(stagedFailedIds, stagedFailedIds.end()),
+                 [&stagedObjectInfos](const auto &objectKey) { return stagedObjectInfos.count(objectKey) > 0; });
+    RollbackObjects(stagedFailedIds, stagedObjectInfos);
+
+    // Keep response sets disjoint even if an earlier phase classified a key before master confirmation.
+    for (const auto &objectKey : successIds) {
+        failedIds.erase(objectKey);
+    }
+}
+
+void WorkerOcServiceMigrateImpl::ApplyConfirmedMigratedHeats(const MigrateDataReqPb &req,
+                                                             const ObjectInfoMap &needSendMasterIds,
+                                                             const ObjectInfoMap &stagedObjectInfos,
+                                                             const PrimarySwitchOutcome &outcome)
+{
+    if (evictionManager_ == nullptr || outcome.confirmedIds.empty()) {
+        return;
+    }
+    for (const auto &info : req.objects()) {
+        const auto &objectKey = info.object_key();
+        if (!info.has_heat() || outcome.confirmedIds.count(objectKey) == 0
+            || needSendMasterIds.count(objectKey) == 0) {
+            continue;
+        }
+        auto stagedIt = stagedObjectInfos.find(objectKey);
+        // A newly created target object has only the synthetic initial heat and should restore the source value
+        // exactly. An existing target replica may have observed local reads, so retain the higher of both values.
+        const bool mergeExisting = stagedIt == stagedObjectInfos.end() || !stagedIt->second.second;
+        auto rc = evictionManager_->ApplyMigratedHeat(objectKey, info.heat(), mergeExisting);
+        LOG_IF(WARNING, rc.IsError()) << FormatString(
+            "[Migrate Data] Ignore invalid or unavailable heat for confirmed object %s: %s", objectKey,
+            rc.ToString());
+    }
 }
 
 template <typename Container>
@@ -1441,6 +1605,7 @@ bool WorkerOcServiceMigrateImpl::IsMemoryAvailable(uint64_t size, MigrateType ty
     }
     switch (type) {
         case MigrateType::SPILL:
+        case MigrateType::REBALANCE_KEEP_LOCAL:
             return memory::Allocator::Instance()->GetMemoryAvailToHighWater() > size;
         case MigrateType::SCALE_DOWN:
         default:

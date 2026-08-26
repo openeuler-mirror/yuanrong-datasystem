@@ -30,6 +30,7 @@
 #define private public
 #include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport2.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport.h"
+#include "datasystem/worker/object_cache/data_migrator/transport/tcp_migrate_transport.h"
 #undef private
 
 using namespace datasystem::object_cache;
@@ -102,6 +103,26 @@ TEST(FastMigrateTransportTest, ProcessMigrateResponsePopulatesSkipKeys)
     EXPECT_EQ(rsp.successKeys.size(), 1u);
     EXPECT_TRUE(rsp.successKeys.count("k2") > 0);
     EXPECT_TRUE(rsp.successKeys.count("k1") == 0);
+}
+
+TEST(TcpMigrateTransportTest, ProcessMigrateResponsePreservesSkipAndExpiredClassifications)
+{
+    MigrateDataRspPb rspPb;
+    rspPb.add_success_ids("success");
+    rspPb.add_success_ids("skip");
+    rspPb.add_skipped_object_keys("skip");
+    rspPb.add_expired_ids("expired");
+
+    auto req = MakeEmptyRequest();
+    MigrateTransport::Response rsp;
+    TcpMigrateTransport transport;
+    transport.ProcessMigrateRsp(rspPb, req, rsp);
+
+    EXPECT_EQ(rsp.successKeys.size(), 1u);
+    EXPECT_TRUE(rsp.successKeys.count("success") > 0);
+    EXPECT_TRUE(rsp.successKeys.count("skip") == 0);
+    EXPECT_TRUE(rsp.skipKeys.count("skip") > 0);
+    EXPECT_TRUE(rsp.expiredKeys.count("expired") > 0);
 }
 
 }  // namespace ut

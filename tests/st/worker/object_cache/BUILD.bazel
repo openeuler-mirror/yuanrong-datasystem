@@ -85,6 +85,24 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "eviction_policy_hot_update_test",
+    srcs = ["eviction_policy_hot_update_test.cpp"],
+    tags = ["manual", "level1"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rpc:brpc_factory",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/protos:master_object_brpc",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)
+
+ds_cc_test(
     name="evict_primary_redirect_scale_test",
     srcs=["evict_primary_redirect_scale_test.cpp"],
     # CMake registers the LEVEL1_ case in regular level1 CI. Keep the standalone Bazel target manual because

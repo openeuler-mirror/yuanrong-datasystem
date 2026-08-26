@@ -287,6 +287,29 @@ void Allocator::Shutdown()
     }
 }
 
+#ifdef WITH_TESTS
+void Allocator::ResetForTest()
+{
+    if (arenaManager_ != nullptr) {
+        LOG_IF_ERROR(arenaManager_->DestroyAllArenaGroup(), "destroy test arena groups failed");
+    }
+    arenaManager_.reset();
+    physicalMemoryStats_.reset();
+    physicalDiskStats_.reset();
+    diskStats_.reset();
+    devDeviceMemStats_.reset();
+    devHostMemStats_.reset();
+    ubTransportStats_.reset();
+    objectMemoryStats_.reset();
+    streamMemoryStats_.reset();
+    diskDetecter_.reset();
+    checkIfAllFdReleasedHandler_ = nullptr;
+    refPageCount_.store(0, std::memory_order_relaxed);
+    noRefPageCount_.store(0, std::memory_order_relaxed);
+    totalNumOfAllocated_.store(0, std::memory_order_relaxed);
+}
+#endif
+
 Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate, void *&pointer, int &fd,
                                  ptrdiff_t &offset, uint64_t &mmapSize, ServiceType serviceType, CacheType cacheType)
 {

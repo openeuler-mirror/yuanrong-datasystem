@@ -31,10 +31,136 @@
   - `EvictWhenMemoryExceedThrehold` 在 object 或 stream 分配前/重试期间按高水位触发 memory eviction。
   - `WorkerOcEvictionManager::Init` 创建 memory eviction、spill eviction、master metadata task、spill task 和定时检查线程池。
   - `EvictionList` 使用带计数的 clock/second-chance 队列选择候选对象，不是严格 LRU。
+  - 淘汰策略通过 `PolicyRoute` 路由：稳定态持 active list/strategy；热更新态同时持 source/target
+    list/strategy。Clock/Heat 参数由 strategy 构造时的不可变快照持有，不再由策略热路径反复读取目标参数。
+    - `ClockEvictionStrategy` 封装现有时钟算法，行为与策略化前逐字节等价（`OnAdd==OnCacheHit==EvictionList::Add`，
+      `Decay()` 空，`SelectCandidate()==FindEvictCandidate`）。
+    - `HeatEvictionStrategy`：`EvictionList::Node` 新增 `heat`(double, 上限 `FLAGS_eviction_heat_max_counter` 默认 256)、
+      `lastAccessMs`、`lastDelayMs` 字段。`OnAdd`(`AddHeatNode`) 首次入列初始化 heat=`FLAGS_eviction_heat_initial_counter`(默认 2，
+      而非 max——fresh 不被算作热数据以避免触发误 rebalance，且 heat=阈值不进首轮淘汰、fallback 靠 lastAccess 平局保护)；`OnCacheHit`(`IncrementHeat`)
+      缓存命中时按 `min(1, 4KiB/ShmUnit::GetMigratableSize())` 增加 heat（封顶）并刷新 lastAccess；未知大小兼容
+      旧接口并记 1。该 allocator-byte 归一化避免 128 KiB 对象与 1--4 KiB 对象每次访问获得相同信用、过快进入
+      heat>4 精确保护层；`Decay()` 周期衰减 `count_new=count_old*0.5^(dt/T)`，
+      primary/local copy 用不同 T（`IsObjectPrimaryCopy` 经 `objectTable_` 查询），local T 更小→衰减更快→更易淘汰；
+      淘汰轮次通过 `GetHeatCandidates` 产生最多 256 个有序快照，优先 heat<阈值者、否则最低 heat，平局取
+      lastAccess 最旧；对象写锁取得后用同 key generation/update-seq 再校验。无关 key 的插入不再使整批候选失效。
+      eviction 专用扫描从首个非最近访问且 heat<2 的节点起，最多检查 `8*batch=2048` 个有效快照，并保留其中
+      最冷的 256 个，避免 first-match 的链表插入顺序偏差；策略在 list 锁外通过 ObjectTable `TryRLock` 读取
+      `ShmUnit::GetMigratableSize()`，heat<=4 的候选按 heat/allocator-byte 排序，无法解析大小者后置。heat>4
+      继续按 heat、lastAccess 精确排序。最近访问保护窗口为 100ms，阻止同一淘汰突发立即删除刚访问对象，但不让
+      大对象 refill 在多轮淘汰中获得整整 1 秒的无条件保护。rebalance 仍使用自己的全局 heat 有序批次。
+      候选批次中的 generation/update-seq 快照按 key 独立校验：某个候选因并发命中变 stale 时只跳过该 key，
+      不再丢弃其余仍有效的快照并重复执行最多 2048 项扫描、256 项大小解析和排序；最终对象写锁后的逐 key
+      校验保持不变。
+      命中热路径从已持有的 `ShmUnit` 读取 migratable size，增加一次浮点除法；对已存在 key 仍使用 TBB shared
+      accessor 和 atomic CAS，不获取同 key 独占 accessor 或全局 list 写锁，不增加对象查找、分配或 IO。
+      `DecayAll` 先在 list 锁下快照不可变 key/generation，再在 per-key accessor 下取得一致 heat/timestamp 快照；
+      写回检查 generation/lastDelay，保留快照后的命中增量，并跳过同名重建、并发 reinsert 和重叠 decay。
+  - **Clock/Heat worker 内热更新首版**：
+    `BeginPolicyUpdate` 先禁止新淘汰并请求当前淘汰轮在候选边界退出，最多等待 30 秒；已进入对象淘汰的 candidate
+    继续完成，spill future、失败回加、metadata flush 以及 primary-end-life queue/worker/pending map 全部 drain 后
+    才创建 target list；异步失败回加在转换期间计入 mutation generation 并经 Router 写入正确列表。
+    迁移期间 Hit/Add 在固定 256 条 key stripe 内执行 target-first：target 缺失时转换 source 快照、创建 target、
+    将本次访问记入 target，source 留待后台 `MoveOnePolicyNode` 合并并删除；创建失败则回退更新 source。
+    Clock→Heat 后台合并使用 `min(targetHeat + convertedSourceHeat, maxCounter)`；跨 worker migrated heat 和恢复路径
+    仍取最大值，防止重试或回滚重复累计。
+    Erase 同时删除两表，Extract 优先 target。`MigratePolicyBatch` 有界扫描 source，source 为空后进入 VERIFYING，
+    `CommitPolicyUpdate` 核对 list/index/HeatState 内部结构，并按 ObjectTable eligible resident copy 核对 target
+    membership；审计期间使用 entry `TryRLock` 避免 ObjectTable→entry 锁反转，并在取得 route 独占锁后复核
+    mutation generation，关闭 audit→publish 的竞态窗口。last-good 原子文件写入在 route 锁外完成，
+    `ACTIVATING` 阶段的业务 mutation 继续路由到 target，写入成功后再在 route 独占锁下发布 target。
+    inactive list 在下一轮反向更新中复用。
+    Value/ObjectTable/ShmUnit 不参与复制。
+  - 控制通道复用资源上报：`WorkerStat` 上报 active/control epoch、phase、READY/CONVERTING/ACTIVE/FAILED、
+    对象进度和有界失败原因，`ResourceReportRspPb` 返回 `EvictionPolicyUpdatePb`；`NodeSelector` 每轮仅推进一个
+    batch，batch 上限为 4096。master `ResourceManager` 接受 controller 提交的
+    PRECHECK/COMMIT、epoch/target/batch/cohort 和准入门槛，
+    通过 coordination backend CAS 持久化 rollout，启动加载并周期刷新其他 master 的提交，再按 worker 地址稳定 hash
+    下发。`GetEvictionPolicyUpdateProgress` 返回该 master 最近观测的 worker ACK；worker 明细保留用于诊断，但
+    READY/CONVERTING/ACTIVE/FAILED 计数只统计当前 rollout epoch，避免上一 epoch 的失败状态污染新任务进度；
+    跨 master READY barrier 由控制器汇总。
+    worker 在 drain 前通过原子文件持久化 transition intent，重启恢复 last-good，并只允许未完成 COMMIT 向同一
+    epoch/target 收敛。COMMIT 下发的同一资源报告以及所有非 STABLE worker 报告均标记为 rebalance not-ready，
+    避免禁止淘汰期间继续成为 rebalance source/target。RebalanceTask 同时携带 source/target policy+epoch；
+    source 启动与逐批校验、target RPC 准入再校验。worker 在 COMMIT 前暂停并排空 outbound rebalance 与 inbound
+    migration，转换结束后恢复；带 target fence 的迁移强制 TCP，阻止迟到旧 epoch 写入。混合版本阶段保持热更新
+    入口关闭：旧 task 缺少 fence 时新 worker 安全拒绝，旧 worker 的 `UNSPECIFIED` policy 不参与新 master 调度；待
+    master/worker 全部升级后再提交 PRECHECK/COMMIT。
+  - heat 衰减不在淘汰时做（淘汰时 counter 不衰减），改为在 worker 周期资源上报前做一次：`NodeSelector::CollectClusterInfo`
+    开头调用已注册的 pre-report hook（`RegisterPreReportHook`，仿 `RegisterRebalanceTaskHandler`，
+    于 `WorkerOCServer::CreateRebalanceExecutor` 注册、`StopRebalanceExecutor` 反注册），
+    钩子有独立 30 秒最小执行间隔，master 不可用时 500ms 资源上报重试不会放大 O(N) 扫描。heat eviction 下
+    调 `MaintainHeatAndCollectHotPrimaryStats()`，在一次 eviction-list 快照和一次对象解析中同时完成 decay、
+    post-decay hot-primary 统计及全部 stable-primary 字节统计。clock 默认不扫描。workload telemetry 的
+    `WorkerOCServer.copyWatermarkTelemetryIntervalMs` 注入注册独立的 pre-report hook：Worker 向 Master 周期上报
+    资源前按注入周期刷新一次只读冷/温/热快照。该 hook 在 heat maintenance 之后注册，因此同一轮同时到期时
+    统计衰减后的 Heat 状态；Clock 热数据定义为 counter>=Q2(2)。它不缩短 heat decay/master 调度统计周期，
+    也不覆盖 Master 调度输入；生产默认路径不注册该额外 Clock/Heat 遥测扫描。
+  - **热度 rebalance 策略**（`FLAGS_rebalance_strategy`="heat"，默认 "memory"=既有 usage 驱动 rebalance）：
+    与热度淘汰联动，优先迁 source 侧热度最低的 stable primary copy 到低水位 target。
+    - master：`HeatRebalanceScheduler`（独立类，继承 `RebalanceScheduler` 基类；`MemoryRebalanceScheduler` 同继承但逻辑逐字不变）。
+      source 触发为两条 OR 路径：usage>60% 且仍有 primary（内存压力兜底），或 usage>50% 且
+      hot bytes/capacity>40%；target 合格=usage<50% 且 hot bytes/capacity<30%；迁移量=
+      MIN(source capacity 的 10%、target available-在途、per-round 上限)；排序=使用率升序→扣除在途后空间降序→nodeId；
+      成功不加 cooldown，但 target 在途字节保留到更新的 target 资源快照到达，避免使用成功前的旧
+      available 重复派发；失败/超时释放在途并加 cooldown。
+    - worker：`WorkerOcEvictionManager::MaintainHeatAndCollectHotPrimaryStats`(pre-report hook)统计热 primary
+      count/bytes 与全部 stable primary count/bytes；bytes 使用 `ShmUnit::GetMigratableSize()`，与 allocator real usage、
+      迁移预算同单位。原 count/hot-bytes 经 `NodeSelector::SetHotPrimaryReport`→`WorkerStat` proto 字段(7/8/9)
+      上报 master；完整缓存快照经 `OBJECT_COPY_WATERMARK` 写入 resource log，采集线程本身不扫描对象。
+      `HeatRebalanceCandidateProvider::Select` 用 `EvictionList::GetHeatCandidates(+inf)` 按 heat 升序选 stable primary，
+      避免热 primary 迁完后冷 primary 把 keep-local source 卡在高水位。成功迁移后 executor 立即只读刷新 source 的
+      master hot-primary report，避免继续使用 30 秒旧 ownership 快照。迁移完成后的
+      `OnMigrated` 对 memory/heat 均为 no-op。两种 provider 都把 task `max_bytes` 当作 target room/inflight 的硬预算，
+      超过剩余预算的候选会 unmark 后跳过。SPILL source object 与 eviction node 的清理由
+      `AsyncResourceReleaser` 在对象精确版本写锁内通过 RAII transaction 统一提交；状态错误或异常会恢复 eviction
+      node 并重试，线程入口 catch-all 阻止异常穿透 `noexcept`，也避免同 key 重建的 TOCTOU。
+      `RebalanceExecutor` 缓存最近一个 terminal result；master 因结果 RPC 丢失而重放同一 task id 时只重报结果，
+      不重复迁移。缓存为单项、进程内状态；worker 重启后的跨进程去重不在本次修复范围。
+    - 校验：`rebalance_strategy=heat`⟹`eviction_strategy=heat`、`eviction_heat_initial_counter<rebalance_heat_hot_counter_threshold`、
+      source low usage/hot 阈值分别严格小于对应 high 阈值；flag 快照访问器在 `eviction_heat.{h,cpp}`，
+      校验在 `worker_update_flag_check.cpp`。
+    - **rebalance/eviction 互斥不变**：`TryMarkRebalancingObject`/`IsObjectBeingRebalanced` + `EvictionTask` 写锁配对仍生效（两策略共用）。
+
+  - **keep-local-copy 迁移模式**（`FLAGS_rebalance_keep_local_copy`=true，默认关闭）：
+    与 `rebalance_strategy` 正交（memory/heat 都可开）。开启后 `RebalanceExecutor` 用 `MigrateType::REBALANCE_KEEP_LOCAL`
+    替代 `SPILL`；迁移后 src 保留 local 非 primary 副本（`SetPrimaryCopy(false)` 降级），而非 `AsyncResourceReleaser` 擦除。
+    - 控制点：`MigrateDataHandler::ReleaseResources` 对 `REBALANCE_KEEP_LOCAL` 的 confirmed ids 调 `DemotePrimaryCopies`（Get→WLock→
+      校验本批次 create-time version→`SetPrimaryCopy(false)`→WUnlock），同 key 重建对象不会被旧迁移结果误降级；
+      master 返回的 expired ids 通过 `MigrateDataRspPb.expired_ids` 单独传递并按精确版本释放。legacy SPILL 仍把
+      expired ids 编入 success 响应，保持旧 source 的 wire contract。
+      `ReplacePrimaryImpl` 的 `remove_location=(type==SPILL)`
+      天然 false → master locations 保留 src；candidate provider 的 `OnMigrated` 为 no-op，eviction-list 节点有效不擦除。
+      `data_migrator.cpp`/`worker_oc_service_migrate_impl.cpp` 各 MigrateType switch 加 case。
+    - direct/URMA-read 迁移当前只允许 legacy `SPILL`；keep-local 及其他非 SPILL 类型走 TCP。direct sender 不序列化
+      新增的 `type/has_type` 字段，以保持旧 AK/SK peer 的 canonical bytes；新 target 将字段缺失解释为 legacy SPILL，
+      并拒绝显式非 SPILL direct 请求。
+    - MEMORY `SPILL` / `REBALANCE_KEEP_LOCAL` 的 target 准入不能只凭 high-water 或 source 所见剩余空间提前
+      返回 OOM：target 可能仍持有可淘汰冷对象。source 的 legacy 1 MiB batching floor 对这两类迁移放行，即使
+      target 上报 0 剩余空间也形成 singleton batch；target 再按对象实际大小走
+      `AllocateMemoryForObject(..., retryOnOOM=true)`，在对象锁保护下执行 allocate-evict-retry。disk migration 和
+      `SCALE_DOWN` 保留严格容量门禁。该路径不增加锁或改变锁序。
+    - 降级后对象 non-primary：`TryGetObjectSize`/热 primary 统计跳过、heat decay 用 local 半衰期、eviction 可 DELETE 回收。
+    - 滚动升级：旧 target 不识别新的迁移枚举值，因此默认保持 legacy SPILL 擦除路径；确认所有 target 升级后再显式
+      设置 `rebalance_keep_local_copy=true`。回滚时恢复 false。
+
+  - cache-hit 命中点（`worker_oc_service_get_impl.cpp` 的 `IncMemHit(1)` 处：快路径 `SubmitAsyncAddEvictTask` 与
+    WLock 路径 `KeepObjectDataInMemory`）把已持有的 allocator-accounted migratable size 一并传给
+    `evictionManager_->OnCacheHit`；publish/create/migrate/remote 回填
+    中，publish/create/migrate 保持 `Add`（→`OnAdd`，首次入列）；由成功 Get 触发的 spill/L2/remote 回填调用
+    `OnRefill`。单 key 和 BatchGet 的远端回填都明确走 refill 语义；Heat 的 `OnRefill` 通过单个
+    `RefillHeatNode` 在节点可见前原子计入本次 size-normalized Get，4 KiB 及以下对象的默认 heat 从 2 升到 3，
+    128 KiB 对象只增加 0.03125。Heat eviction 候选扫描把最近 100ms 访问的节点排在批次末尾，但在释放预算需要
+    时仍可选中。保护复用原子 `lastAccessMs`，不增加 per-object 字段；Clock 忽略 size，
+    `OnRefill==OnCacheHit==OnAdd`，行为不变。
   - `GetObjectNextAction` 根据 primary copy、cache type、spill 状态、L2 是否可用、远端迁移能力和本地 spill 能力选择 `DELETE`、`FREE_MEMORY`、`SPILL`、`MIGRATE`、`END_LIFE` 或 `RETAIN`。
   - `DELETE` 路径本地擦除 object table 后异步批量 `RemoveMeta`。
   - eviction manager 删除本地副本时使用 `RemoveMetaReqPb::EVICTION`；Get 失败后的 requester location 清理使用
     `RemoveMetaReqPb::NORMAL`，两者不能互换。
+    异步 EVICTION cleanup 可能与同版本 rebalance primary promotion 交错：若请求抵达 Master 时待删地址已是
+    当前 `primary_address`，`OCMetadataManager::RemoveMetaLocation` 将请求按幂等成功处理但保留 location。
+    object version 本身不能 fence 这种同版本 ownership 变化；普通 non-primary cleanup 不受影响，primary
+    end-life 仍由 `DeleteAllCopyMeta` 协调。
   - `DeleteNoneL2CacheEvictableObject` 仍同步调用 master `DeleteAllCopyMeta`，该路径仅保留给
     `EvictSpilledObjects` 和 `SpillImpl` no-space fallback；初始 owner 可重定向一次，转发请求设置
     `redirect=false`，目标再次重定向或失败时保留本地对象并重试。
@@ -115,6 +241,25 @@
   - `spill_file_max_size_mb`: 单个 spill 文件大小上限，默认 200 MB。
   - `spill_file_open_limit`: spill 文件打开 fd 上限，默认 512。
   - `spill_to_remote_worker`: 允许将本地内存压力迁移到其他 worker 内存，默认 false。
+  - `eviction_strategy`: 启动时的初始淘汰策略，`"clock"`(默认，现有时钟算法) 或 `"heat"`(热度衰减策略)；
+    运行时 Clock/Heat 切换由 master 的 epoch/cohort 控制通道执行，不直接动态修改该 flag。
+    默认 Clock 的 resident list node 只保留 object key 与 counter；Heat 原子、时间戳和 generation 位于仅 Heat 策略
+    创建的旁路表，避免为每个 Clock 对象支付 Heat 状态开销。
+  - `eviction_heat_half_life_primary_s` / `eviction_heat_half_life_local_s`: heat 策略 primary / local copy 衰减半衰期 T(秒)，产品默认 600s/300s，local 应 ≤ primary（local 更易淘汰）；当前为启动配置，不支持运行时修改，升级后须重启 Worker 才使用新默认值。
+  - `eviction_heat_threshold`: heat 策略首轮候选阈值（heat < 阈值者优先淘汰）；当前为启动配置。
+  - `eviction_heat_max_counter`: heat 计数器递增上限（默认 256）；当前为启动配置。淘汰候选因并发冲突回插时恢复
+    被选中时的 heat，不再把对象直接提升到 cap；若期间有并发 hit，则保留两者较大值。
+  - `eviction_heat_initial_counter`: 新对象 `OnAdd` 初始 heat（默认 2，非 max）；当前为启动配置。须 ≥ `eviction_heat_threshold`、≤ `eviction_heat_max_counter` 且 < `rebalance_heat_hot_counter_threshold`，使 fresh 既不进首轮淘汰、又不被算作热数据。
+  - `rebalance_strategy`: rebalance 策略选择，`"memory"`(默认，既有 usage 驱动) 或 `"heat"`(热度驱动)，仅启动时切换；`"heat"` 须配 `eviction_strategy="heat"`。
+  - `rebalance_heat_hot_counter_threshold`: heat>此值=热数据（默认 4），须 > `eviction_heat_initial_counter`。
+  - `rebalance_heat_source_usage_percent`: 高水位+仍有 primary 的内存压力兜底路径（默认 60）。
+  - `rebalance_heat_source_usage_percent_low` / `_source_hot_ratio_percent`: 中水位+高热度路径（默认 50/40）。
+  - `rebalance_heat_target_usage_percent` / `_target_hot_ratio_percent`: target 双重合格线（usage< 且热占比<，默认 50/30）。
+  - `rebalance_keep_local_copy`: rebalance 迁移后 src 是否保留 local 非 primary 副本（默认 false=legacy SPILL
+    擦除，true=降级保留），与 `rebalance_strategy` 正交。滚动升级时保持 false，待 target 全部升级后再显式启用。
+  - 测试注入开启的 pre-resource-report copy-watermark telemetry 将稳定 Primary 按 allocator bytes 分为冷/温/热：
+    Clock 使用 counter 0/1/>=2，Heat 使用 heat<`eviction_heat_threshold`、中间闭区间、
+    heat>`rebalance_heat_hot_counter_threshold`。该分类不进入 Master 调度 protobuf，生产默认 callback 不启用。
 
 ## Main Dependencies
 
@@ -174,6 +319,9 @@
   - 对象被选为候选后必须先取得对象写锁；拿不到锁时从 eviction list 暂时移除并以 `READD_COUNTER` 回填。
   - `IsObjectEvictable` 必须确认对象仍在 eviction list 且 binary 对象仍有 shm。
   - `SPILL` 成功后才释放内存并标记 spill state；重加锁失败时需要回滚 spill 文件。
+  - 迁移成功后的异步本地释放以 `ObjectTable` 为所有权真值：精确版本写锁校验通过后先从
+    `ObjectTable` 删除，再清理派生的 eviction-list membership。派生清理失败最多留下可自愈的陈旧候选，
+    不能先摘 eviction node 再依赖可能失败的反向恢复，否则会留下仍可访问但永不驱逐的活对象。
   - spill eviction 只删除 write-through、write-back 且 writeback done、或 `NONE_L2_CACHE_EVICT` 对象。
   - 对 `NONE_L2_CACHE_EVICT`，真实 `EVICTION` 表示本地数据已经消失，即使还有 migration-inflight location
     也删除整条 metadata；`NORMAL` 只删除请求中的 location，仅当最后一个 location 消失时删除整条 metadata。

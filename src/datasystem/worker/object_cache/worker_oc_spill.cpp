@@ -1012,7 +1012,11 @@ WorkerOcSpill::~WorkerOcSpill()
 
 Status WorkerOcSpill::Init()
 {
-    CHECK_FAIL_RETURN_STATUS(fileMgr_.empty(), K_RUNTIME_ERROR, "The Spill File Manager has already been Initialized.");
+    std::lock_guard<std::mutex> lock(initMutex_);
+    if (initialized_) {
+        VLOG(1) << "WorkerOcSpill has already been initialized, reuse the process-wide instance.";
+        return Status::OK();
+    }
     std::string realSpillDirectory = FLAGS_spill_directory + SPILL_PATH_PREFIX;
     if (!FLAGS_spill_directory.empty()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveAll(realSpillDirectory), "[Spill] RemoveAll failed");
@@ -1031,10 +1035,50 @@ Status WorkerOcSpill::Init()
     totalActiveSpilledSize_ = 0;
     stopCompaction_ = false;
     spillCompactionThread_ = Thread(&WorkerOcSpill::Compact, this);
+    initialized_ = true;
     LOG(INFO) << "WorkerOcSpill init success, spill_directory: " << realSpillDirectory
               << ", spill_size_limit: " << GetSpillLimitSize();
     return Status::OK();
 }
+
+#ifdef WITH_TESTS
+void WorkerOcSpill::ResetForTest()
+{
+    std::lock_guard<std::mutex> lock(initMutex_);
+    if (initialized_) {
+        stopCompaction_.store(true, std::memory_order_release);
+        waitPost_.Set();
+        if (spillCompactionThread_.joinable()) {
+            spillCompactionThread_.join();
+        }
+    }
+    fileMgr_.clear();
+    totalActiveSpilledSize_.store(0, std::memory_order_relaxed);
+    totalSpillFileDiskSize.store(0, std::memory_order_relaxed);
+    initial95SpillFreeSpace_ = 0;
+    freeSpaceInRealTime_ = 0;
+    spillIoCounters_.spillInCount.store(0, std::memory_order_relaxed);
+    spillIoCounters_.spillInBytes.store(0, std::memory_order_relaxed);
+    spillIoCounters_.spillInFailCount.store(0, std::memory_order_relaxed);
+    spillIoCounters_.spillOutCount.store(0, std::memory_order_relaxed);
+    spillIoCounters_.spillOutBytes.store(0, std::memory_order_relaxed);
+    spillIoCounters_.spillEvictCount.store(0, std::memory_order_relaxed);
+    spillIoCounters_.spillEvictBytes.store(0, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> statsLock(spillIoStatsMutex_);
+        prevSnapshot_ = {};
+        lastHourlyResetTimeMs_ = 0;
+    }
+    std::vector<EvictionList::Node> spillNodes;
+    EvictionList::Node oldest;
+    if (spillEvictionList_.GetAllObjectsInfo(spillNodes, oldest).IsOk()) {
+        for (const auto &node : spillNodes) {
+            (void)spillEvictionList_.Erase(node.objectKey);
+        }
+    }
+    initialized_ = false;
+}
+#endif
 
 void WorkerOcSpill::Compact()
 {

@@ -123,6 +123,7 @@ message GetClusterStateRspPb {
 enum MigrateType {
   SCALE_DOWN = 0;
   SPILL = 1;
+  REBALANCE_KEEP_LOCAL = 2;
 }
 
 message MigrateDataReqPb {
@@ -132,6 +133,10 @@ message MigrateDataReqPb {
     uint64 data_size = 3;
     repeated uint32 part_index = 4;
     uint32 cache_type = 5;
+    // Point-in-time source heat used by heat rebalance. The explicit presence bit distinguishes an old sender from
+    // a legitimate zero heat value during a rolling upgrade.
+    double heat = 6;
+    bool has_heat = 7;
   }
   repeated ObjectInfoPb objects = 1;
   string worker_addr = 2;
@@ -140,6 +145,11 @@ message MigrateDataReqPb {
   bool is_slot_migration = 5;
   bool is_retry = 6;
   uint32 slot_id = 7;
+  // Rebalance-only target fence. Old/non-rebalance senders leave has_rebalance_policy_fence false.
+  bool has_rebalance_policy_fence = 8;
+  uint32 target_eviction_policy = 9;
+  uint64 target_eviction_policy_epoch = 10;
+  string rebalance_task_id = 11;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -162,6 +172,9 @@ message MigrateDataRspPb {
   ScaleDownState scale_down_state = 7;
   uint64 limit_rate = 8;
   repeated string skipped_object_keys = 9;
+  // Objects whose primary-switch request was terminal because the source version had expired. The source must
+  // release these stale copies instead of treating them as confirmed migrated replicas.
+  repeated string expired_ids = 10;
 }
 
 message MigrateDataDirectReqPb {
@@ -176,6 +189,8 @@ message MigrateDataDirectReqPb {
   bool is_slot_migration = 3;
   uint32 slot_id = 4;
   bool is_retry = 5;
+  MigrateType type = 6;
+  bool has_type = 7;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

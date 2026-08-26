@@ -23,6 +23,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -60,6 +61,7 @@ struct RebalanceExecutorConfig {
 class RebalanceExecutor {
 public:
     using MigrateResult = object_cache::MigrateDataHandler::MigrateResult;
+    using ObjectHeatMap = object_cache::RebalanceCandidateProvider::ObjectHeatMap;
 
     explicit RebalanceExecutor(RebalanceExecutorConfig config);
 
@@ -70,15 +72,19 @@ public:
      * @param[in] task The rebalance task assigned to this source worker.
      * @param[in] assignedMasterAddress Exact master address that returned the task.
      */
+    /** Pause new tasks, request cancellation, and return K_TRY_AGAIN instead of waiting while a task drains. */
+    Status PauseAndCheckDrained();
+    void Resume();
     void Submit(const master::RebalanceTaskPb &task, std::string assignedMasterAddress);
 
 #ifdef WITH_TESTS
-    using SelectCandidatesHook = std::function<Status(uint64_t, std::unordered_map<std::string, uint64_t> &,
-                                                      const std::unordered_set<std::string> &)>;
+    using SelectCandidatesHook =
+        std::function<Status(uint64_t, std::unordered_map<std::string, uint64_t> &, ObjectHeatMap &,
+                             const std::unordered_set<std::string> &)>;
     using MigrateToTargetHook = std::function<MigrateResult(const master::RebalanceTaskPb &, const HostPort &,
-                                                            const std::vector<std::string> &)>;
+                                                            const std::vector<std::string> &, const ObjectHeatMap &)>;
     using ReportResultHook =
-        std::function<void(const master::ReportRebalanceResultReqPb &, master::ReportRebalanceResultRspPb &)>;
+        std::function<Status(const master::ReportRebalanceResultReqPb &, master::ReportRebalanceResultRspPb &)>;
 
     void SetTestHooks(SelectCandidatesHook selectHook, MigrateToTargetHook migrateHook, ReportResultHook reportHook)
     {
@@ -105,6 +111,18 @@ public:
         running_ = running;
         runningTaskId_ = runningTaskId;
     }
+
+    void CacheTerminalResultForTest(const master::RebalanceTaskPb &task,
+                                    master::RebalanceTaskStatusPb status = master::REBALANCE_TASK_SUCCEEDED)
+    {
+        CacheTerminalResult(TerminalResult{ task, status });
+    }
+
+    static object_cache::RebalancePolicyFence BuildRebalancePolicyFenceForTest(
+        const master::RebalanceTaskPb &task)
+    {
+        return BuildRebalancePolicyFence(task);
+    }
 #endif
 
 private:
@@ -118,41 +136,65 @@ private:
         bool lastBatchAllSkipped = false;
         master::RebalanceFailureSidePb failureSide = master::REBALANCE_FAILURE_UNKNOWN;
         std::string assignedMasterAddress;
-        std::string failedReason;
+        std::string failedReason{};
         // Target's fresh remain_bytes from the last batch's MigrateDataRspPb. UINT64_MAX means no
         // batch was sent; forwarded to master only when a real value exists.
         uint64_t targetRemainBytes{ UINT64_MAX };
     };
 
+    struct TerminalResult {
+        master::RebalanceTaskPb task;
+        master::RebalanceTaskStatusPb status = master::REBALANCE_TASK_FAILED;
+        uint64_t migratedBytes = 0;
+        uint64_t migratedObjects = 0;
+        uint64_t failedObjects = 0;
+        master::RebalanceFailureSidePb failureSide = master::REBALANCE_FAILURE_UNKNOWN;
+        std::string failedReason{};
+        uint64_t targetRemainBytes{ UINT64_MAX };
+    };
+
     void Execute(master::RebalanceTaskPb task, std::string assignedMasterAddress);
-    // Report a control-plane failure (empty assigned master) and clear the running state so
-    // the executor can accept a new task. Returns true when the caller should early-exit.
-    void ReportEmptyMasterAndDone(const master::RebalanceTaskPb &task);
+    void ExecuteSubmittedTask(const master::RebalanceTaskPb &task, const std::string &assignedMasterAddress,
+                              const std::string &traceId);
+    void HandleSubmitFailure(const master::RebalanceTaskPb &task, const std::string &reason);
     void SubmitBusyResult(const master::RebalanceTaskPb &task, const std::string &runningTaskId);
+    void SubmitRejectedResult(const master::RebalanceTaskPb &task, const std::string &reason);
     uint64_t BuildLocalDeadlineMs(const master::RebalanceTaskPb &task) const;
     uint64_t NowMsForExpiryCheck() const;
     bool IsExpired(uint64_t localDeadlineMs) const;
+    bool IsCancellationRequested() const;
     bool IsAssignedMasterUnavailable(const master::RebalanceTaskPb &task, ExecutionStats &stats) const;
     bool IsExitRequested() const { return exitRequested_ != nullptr && exitRequested_->load(); }
     void ClassifyBatchResult(const master::RebalanceTaskPb &task, bool masterUnavailable, ExecutionStats &stats);
     void LogBatchResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats, uint64_t costMs);
-    Status ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
+    Status ExecuteBatch(object_cache::RebalanceCandidateSession &candidateSession,
+                        const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
                         object_cache::DataMigrator &migrator,
                         std::unordered_set<std::string> &taskSkippedKeys);
     void ExecuteBatches(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
                         uint64_t localDeadlineMs);
+    Status EnsureMigratorInitialized(const master::RebalanceTaskPb &task,
+                                     std::unique_ptr<object_cache::DataMigrator> &migrator);
+    bool ShouldRetryBatchFailure(const Status &status, const master::RebalanceTaskPb &task, ExecutionStats &stats);
+    bool ReportTaskResultAndAdvance(const ExecutionStats &stats, bool masterUnavailable,
+                                    master::RebalanceTaskPb &currentTask);
     Status ValidateTask(const master::RebalanceTaskPb &task, HostPort &targetAddr, uint64_t localDeadlineMs,
                         master::RebalanceFailureSidePb &failureSide) const;
+    Status SelectCandidates(object_cache::RebalanceCandidateSession &session, uint64_t maxBytes,
+                            std::unordered_map<std::string, uint64_t> &candidates,
+                            ObjectHeatMap &objectHeats, const std::unordered_set<std::string> &skipKeys);
     Status CheckTargetAdmission(const HostPort &targetAddr) const;
-    Status SelectCandidates(uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates,
-                            const std::unordered_set<std::string> &skipKeys);
     MigrateResult MigrateToTarget(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
-                                  const std::vector<std::string> &objectKeys,
+                                  const std::vector<std::string> &objectKeys, const ObjectHeatMap &objectHeats,
                                   object_cache::DataMigrator &migrator);
+    static object_cache::RebalancePolicyFence BuildRebalancePolicyFence(const master::RebalanceTaskPb &task);
+    Status ReportResult(const TerminalResult &result, master::ReportRebalanceResultRspPb &rsp);
+    void SubmitTerminalResult(std::shared_ptr<const TerminalResult> result);
+    void CacheTerminalResult(TerminalResult result);
+    void CacheTerminalResultAndMarkDone(TerminalResult result);
+    void MarkTaskDone();
     master::RebalanceFailureSidePb ClassifyMigrationFailure(const MigrateResult &result,
                                                             const HostPort &targetAddr) const;
-    void ReportResult(const master::RebalanceTaskPb &task, const ExecutionStats &stats,
-                     master::ReportRebalanceResultRspPb &rsp);
     void ReportFailure(const master::RebalanceTaskPb &task, master::RebalanceFailureSidePb failureSide,
                        const std::string &reason);
     Status ClassifyBatchResult(const MigrateResult &result, const HostPort &targetAddr,
@@ -160,8 +202,6 @@ private:
     Status GetWorkerMasterApi(std::shared_ptr<WorkerMasterOCApi> &workerMasterApi) const;
     uint64_t CalculateMigratedBytes(const std::unordered_map<std::string, uint64_t> &candidates,
                                     const MigrateResult &result) const;
-    void MarkTaskDone();
-
     HostPort localAddress_;
     const worker::MetadataRouteResolver *metadataRoute_{ nullptr };
     const cluster::MembershipEndpointView *membership_{ nullptr };
@@ -172,10 +212,16 @@ private:
     std::shared_ptr<object_cache::ObjectTable> objectTable_{ nullptr };
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager_{ nullptr };
     std::shared_ptr<WorkerMasterApiManagerBase<WorkerMasterOCApi>> apiManager_{ nullptr };
-    object_cache::RebalanceCandidateProvider candidateProvider_;
+    std::unique_ptr<object_cache::RebalanceCandidateProvider> candidateProvider_;
     mutable std::mutex taskMutex_;
     bool running_{ false };
+    bool admissionPaused_{ false };
+    std::atomic<bool> cancelRequested_{ false };
     std::string runningTaskId_;
+    // The scheduler may redeliver its active task when the terminal-result RPC is lost. Keep the latest terminal
+    // result so the task is never migrated twice; a replay only resends this result. A source has at most one active
+    // scheduler task, so one cached terminal result is sufficient and keeps memory bounded.
+    std::shared_ptr<const TerminalResult> terminalResult_;
 #ifdef WITH_TESTS
     SelectCandidatesHook selectHook_;
     MigrateToTargetHook migrateHook_;

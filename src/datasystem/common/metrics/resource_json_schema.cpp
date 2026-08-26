@@ -81,6 +81,11 @@ const std::array<ResourceFieldDesc, DESC_COUNT> DESC_TABLE = {
         "current_hour_spill_evict_count", "current_hour_spill_evict_bytes" },
         { true, true, true, true, true, true, true, true, true, true, true, true, true, true },
         '/', true, "spill_io_stats" },
+    ResourceFieldDesc{ { "hot_primary_bytes", "primary_bytes", "copy_capacity", "hot_primary_ratio",
+        "primary_ratio", "hot_within_primary_ratio", "copy_watermark_valid", "cold_primary_bytes",
+        "warm_primary_bytes", "cold_within_primary_ratio", "warm_within_primary_ratio" },
+        { true, true, true, true, true, true, true, true, true, true, true }, '/', true,
+        "object_copy_watermark" },
 };
 
 const ResourceFieldDesc NULL_DESC{ {}, {}, '\0', false, "" };

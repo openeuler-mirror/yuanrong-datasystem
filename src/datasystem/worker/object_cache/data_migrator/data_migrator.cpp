@@ -74,6 +74,7 @@ std::shared_ptr<SelectionStrategy> DataMigrator::GetStrategyByType()
 {
     switch (type_) {
         case MigrateType::SPILL:
+        case MigrateType::REBALANCE_KEEP_LOCAL:
             return std::make_shared<SpillNodeSelector>(localAddress_);
         case MigrateType::SCALE_DOWN:
         default:
@@ -221,36 +222,41 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToTargetNode
     if (traceID.empty()) {
         traceID = "migr;" + GetStringUuid();
     }
-    return threadPool_->Submit([this, objectKeys, targetAddr, traceID, strategy, options]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+    return threadPool_->Submit(
+        [this, objectKeys, targetAddr, traceID, strategy, options = std::move(options)]() mutable {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
 
-        MigrateDataHandler::MigrateResult finalResult;
-        finalResult.address = targetAddr.ToString();
-        finalResult.strategy = strategy;
+            MigrateDataHandler::MigrateResult finalResult;
+            finalResult.address = targetAddr.ToString();
+            finalResult.strategy = strategy;
 
-        std::shared_ptr<WorkerRemoteWorkerOCApi> remoteWorkerStub;
-        Status rc = ConnectAndCreateRemoteApi(remoteWorkerStub, targetAddr);
-        if (rc.IsError()) {
-            LOG(ERROR) << "connect to remote worker " << finalResult.address << "failed: failed rc:" << rc.ToString();
-            finalResult.status = rc;
-            finalResult.failedIds.insert(objectKeys.begin(), objectKeys.end());
-            return finalResult;
-        }
+            std::shared_ptr<WorkerRemoteWorkerOCApi> remoteWorkerStub;
+            Status rc = ConnectAndCreateRemoteApi(remoteWorkerStub, targetAddr);
+            if (rc.IsError()) {
+                LOG(ERROR) << "connect to remote worker " << finalResult.address << "failed: failed rc:"
+                           << rc.ToString();
+                finalResult.status = rc;
+                finalResult.failedIds.insert(objectKeys.begin(), objectKeys.end());
+                return finalResult;
+            }
 
-        std::vector<ImmutableString> needMigrateDataIds{ objectKeys.begin(), objectKeys.end() };
-        MigrateDataHandler handler(type_, localAddress_.ToString(), needMigrateDataIds, objectTable_, remoteWorkerStub,
-                                   strategy, &stopping_, progress_, options.isRetry, options.slotId);
-        rc = ConfigureSendAdmission(handler, targetAddr.ToString());
-        if (rc.IsError()) {
-            finalResult.status = rc;
-            finalResult.failedIds.insert(objectKeys.begin(), objectKeys.end());
-            return finalResult;
-        }
-        auto result = handler.MigrateDataToRemote(options.isSlotMigration);
-        bool localOperator = false;
-        (void)LearnStructuredUbFailure(result, localOperator);
-        return result;
-    });
+            std::vector<ImmutableString> needMigrateDataIds{ objectKeys.begin(), objectKeys.end() };
+            MigrateDataHandler handler(type_, localAddress_.ToString(), needMigrateDataIds, objectTable_,
+                                       remoteWorkerStub, strategy,
+                                       options.cancellation == nullptr ? &stopping_ : options.cancellation, progress_,
+                                       options.isRetry, options.slotId, std::move(options.objectHeats),
+                                       std::move(options.rebalancePolicyFence));
+            rc = ConfigureSendAdmission(handler, targetAddr.ToString());
+            if (rc.IsError()) {
+                finalResult.status = rc;
+                finalResult.failedIds.insert(objectKeys.begin(), objectKeys.end());
+                return finalResult;
+            }
+            auto result = handler.MigrateDataToRemote(options.isSlotMigration);
+            bool localOperator = false;
+            (void)LearnStructuredUbFailure(result, localOperator);
+            return result;
+        });
 }
 
 Status DataMigrator::MigrateL2CacheBySlot(const std::vector<std::string> &objectKeys)
@@ -502,7 +508,7 @@ Status DataMigrator::HandleFailedResult()
 {
     if (type_ == MigrateType::SCALE_DOWN) {
         RETURN_OK_IF_TRUE(taskId_.empty());
-    } else if (type_ == MigrateType::SPILL) {
+    } else if (type_ == MigrateType::SPILL || type_ == MigrateType::REBALANCE_KEEP_LOCAL) {
         if (exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed)) {
             RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Local node is exiting, no need to execute migrate task"));
         }

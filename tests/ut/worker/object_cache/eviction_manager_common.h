@@ -122,8 +122,9 @@ public:
 
     ~EvictionManagerCommon()
     {
-        if (allocator) {
-            allocator->Shutdown();
+        objectTable_.reset();
+        if (allocator != nullptr) {
+            allocator->ResetForTest();
         }
     }
 

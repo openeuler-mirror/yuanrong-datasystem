@@ -325,6 +325,7 @@ proto_library(
         ":object_posix_proto",
         ":p2p_subscribe_proto",
         ":rpc_option_proto",
+        ":share_memory_proto",
         ":utils_proto",
     ],
 )

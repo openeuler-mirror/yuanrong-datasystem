@@ -16,11 +16,14 @@
  */
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 
+#include "datasystem/common/flags/eviction_heat.h"
 #include "datasystem/common/flags/eviction_watermark.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <map>
 #include <optional>
@@ -34,6 +37,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/object_cache/shm_guard.h"
+#include "datasystem/common/object_cache/eviction_policy_common.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/arena_group_key.h"
@@ -51,6 +55,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
+#include "datasystem/worker/object_cache/eviction_strategy.h"
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
@@ -68,10 +73,26 @@ constexpr uint32_t MASTER_TASK_THREAD_NUM = 8;
 
 constexpr uint32_t SPILL_EVICT_THREAD_NUM = 1;
 constexpr uint32_t MEM_EVICT_THREAD_NUM = 1;
+// Number of concurrent drain workers for primary end-life tasks. End-life involves
+// master RPC (DeleteAllCopyMeta) which is the eviction throughput bottleneck under
+// high write load (issue #750). Multiple workers drain the queue in parallel so the
+// pending set (limit 64) turns over fast enough to keep up with EvictionTask.
 constexpr uint32_t PRIMARY_END_LIFE_THREAD_NUM = 4;
 
 namespace datasystem {
 namespace object_cache {
+namespace {
+EvictionCandidate MakeEvictionCandidate(EvictionPolicy policy, const EvictionList::Node &snapshot)
+{
+    EvictionCandidate candidate;
+    candidate.objectKey = snapshot.objectKey;
+    candidate.policy = policy;
+    candidate.heat = snapshot.heat;
+    candidate.generation = snapshot.generation;
+    candidate.heatUpdateSeq = snapshot.heatUpdateSeq;
+    return candidate;
+}
+}  // namespace
 static constexpr int DEBUG_LOG_LEVEL = 1;
 static constexpr int BATCH_DELETE_META_THRESHOLD = 300;
 static constexpr int BATCH_DELETE_META_MAX_DELAY_MS = 10;
@@ -222,6 +243,116 @@ WorkerOcEvictionManager::WorkerOcEvictionManager(std::shared_ptr<ObjectTable> ob
       masterOc_(masterOc),
       metadataRoute_(metadataRoute)
 {
+    const auto policy = GetEvictionStrategy() == "heat" ? EvictionPolicy::HEAT : EvictionPolicy::CLOCK;
+    policyRoute_.sourceHeatConfig = GetCurrentHeatPolicyConfig();
+    policyRoute_.sourcePolicy = policy;
+    needsMigratableSize_.store(policy == EvictionPolicy::HEAT, std::memory_order_release);
+    policyRoute_.sourceList = &memEvictionList_;
+    policyRoute_.sourceStrategy = MakeEvictionStrategy(
+        policy, memEvictionList_, objectTable_, gRefTable_, policyRoute_.sourceHeatConfig);
+}
+
+WorkerOcEvictionManager::~WorkerOcEvictionManager()
+{
+    LOG(INFO) << "WorkerOcEvictionManager exit";
+    // The scheduler calls into the eviction pools, so stop and join it before
+    // releasing any dependency it may still access.
+    scheduleEvictionRunning_.store(false, std::memory_order_release);
+    scheduleEvictThreadPool_.reset();
+    memEvictTaskThreadPool_.reset();
+    primaryEndLifeThreadPool_.reset();
+    spillEvictTaskThreadPool_.reset();
+    spillTaskThreadPool_.reset();
+    masterTaskThreadPool_.reset();
+}
+
+Status WorkerOcEvictionManager::InitPolicyStateStore(PolicyStateLoader loader, PolicyStateStorer storer)
+{
+    CHECK_FAIL_RETURN_STATUS(loader != nullptr && storer != nullptr, K_INVALID,
+                             "Eviction policy state store callbacks must be configured");
+    CHECK_FAIL_RETURN_STATUS(memEvictionList_.Size() == 0 && alternateEvictionList_.Size() == 0, K_NOT_READY,
+                             "Eviction policy state must be restored before memberships are added");
+
+    PersistedPolicyState state;
+    bool found = false;
+    RETURN_IF_NOT_OK(loader(state, found));
+    if (found) {
+        CHECK_FAIL_RETURN_STATUS(
+            state.activePolicy == EvictionPolicy::CLOCK || state.activePolicy == EvictionPolicy::HEAT, K_INVALID,
+            "Persisted active eviction policy is invalid");
+        CHECK_FAIL_RETURN_STATUS(
+            !state.hasTransitionIntent
+                || (state.transitionEpoch > state.activeEpoch
+                    && (state.targetPolicy == EvictionPolicy::CLOCK || state.targetPolicy == EvictionPolicy::HEAT)),
+            K_INVALID, "Persisted eviction policy transition intent is invalid");
+    } else {
+        state.activePolicy = policyRoute_.sourcePolicy;
+    }
+
+    {
+        std::unique_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        CHECK_FAIL_RETURN_STATUS(policyStateLoader_ == nullptr && policyStateStorer_ == nullptr, K_INVALID,
+                                 "Eviction policy state store is already initialized");
+        policyStateLoader_ = std::move(loader);
+        policyStateStorer_ = std::move(storer);
+        policyRoute_.sourcePolicy = state.activePolicy;
+        needsMigratableSize_.store(state.activePolicy == EvictionPolicy::HEAT, std::memory_order_release);
+        policyRoute_.epoch = state.activeEpoch;
+        policyRoute_.sourceHeatConfig = GetCurrentHeatPolicyConfig();
+        policyRoute_.sourceStrategy = MakeEvictionStrategy(
+            state.activePolicy, *policyRoute_.sourceList, objectTable_, gRefTable_, policyRoute_.sourceHeatConfig);
+        recoveredTransitionIntent_ = state.hasTransitionIntent;
+        recoveredTargetPolicy_ = state.targetPolicy;
+        recoveredTransitionEpoch_ = state.transitionEpoch;
+    }
+    if (!found) {
+        RETURN_IF_NOT_OK(PersistPolicyState(state));
+    }
+    if (state.hasTransitionIntent) {
+        LOG(WARNING) << "Recovered unfinished eviction policy update intent, active epoch: " << state.activeEpoch
+                     << ", transition epoch: " << recoveredTransitionEpoch_
+                     << ", target policy: " << static_cast<int>(recoveredTargetPolicy_);
+    }
+    return Status::OK();
+}
+
+Status WorkerOcEvictionManager::PersistPolicyState(const PersistedPolicyState &state) const
+{
+    if (policyStateStorer_ == nullptr) {
+        return Status::OK();
+    }
+    return policyStateStorer_(state);
+}
+
+Status WorkerOcEvictionManager::PersistTransitionIntent(EvictionPolicy activePolicy, uint64_t activeEpoch,
+                                                        EvictionPolicy targetPolicy, uint64_t epoch)
+{
+    PersistedPolicyState state;
+    state.activePolicy = activePolicy;
+    state.activeEpoch = activeEpoch;
+    state.hasTransitionIntent = true;
+    state.targetPolicy = targetPolicy;
+    state.transitionEpoch = epoch;
+    return PersistPolicyState(state);
+}
+
+Status WorkerOcEvictionManager::PersistLastGood(EvictionPolicy activePolicy, uint64_t epoch)
+{
+    PersistedPolicyState state;
+    state.activePolicy = activePolicy;
+    state.activeEpoch = epoch;
+    return PersistPolicyState(state);
+}
+
+void WorkerOcEvictionManager::BeginTrackedPolicyMutation()
+{
+    policyMutationWriters_.fetch_add(1, std::memory_order_acq_rel);
+    policyMutationGeneration_.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void WorkerOcEvictionManager::EndTrackedPolicyMutation()
+{
+    policyMutationWriters_.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<ClientKey>> &gRefTable,
@@ -243,10 +374,11 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
     RETURN_IF_NOT_OK(WorkerOcSpill::Instance()->Init());
     gRefTable_ = gRefTable;
     akSkManager_ = std::move(akSkManager);
+    scheduleEvictionRunning_.store(true, std::memory_order_release);
     scheduleEvictThreadPool_->Submit([this]() {
         Trace::Instance().SetTraceNewID("EvictionTimer;" + GetStringUuid(), true);
         Timer timer;
-        while (!IsTermSignalReceived()) {
+        while (scheduleEvictionRunning_.load(std::memory_order_acquire) && !IsTermSignalReceived()) {
             auto evictInterval = 10;
             if (timer.ElapsedSecond() > evictInterval) {
                 EvictWhenMemoryExceedThrehold("", 0, shared_from_this(), ServiceType::OBJECT);
@@ -260,51 +392,420 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
     return Status::OK();
 }
 
+#ifdef WITH_TESTS
+void WorkerOcEvictionManager::AddHeatNodeForTest(const std::string &objectKey, double heat, uint64_t nowMs)
+{
+    memEvictionList_.AddHeatNode(objectKey, heat, nowMs);
+}
+
+Status WorkerOcEvictionManager::CollectCopyWatermarkStatsForTest(CopyWatermarkStats &stats)
+{
+    return CollectCopyWatermarkStats(stats);
+}
+
+void WorkerOcEvictionManager::NotifyCopyWatermarkObserverForTest()
+{
+    NotifyCopyWatermarkObserver();
+}
+
+void WorkerOcEvictionManager::MarkPrimaryEndLifeTaskActiveForTest(const std::string &objectKey, uint64_t version)
+{
+    std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+    pendingPrimaryEndLifeObjects_[objectKey] = version;
+    ++activeDrainWorkers_;
+}
+
+void WorkerOcEvictionManager::FinishPrimaryEndLifeTaskAndWorkerForTest(const std::string &objectKey, uint64_t version)
+{
+    PrimaryEndLifeTask task;
+    task.objectKey = objectKey;
+    task.version = version;
+    FinishPrimaryEndLifeTask(task, true);
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        --activeDrainWorkers_;
+    }
+    primaryEndLifeDrainedCv_.notify_all();
+}
+
+void WorkerOcEvictionManager::HoldStableRouteReaderForTest(const std::function<void()> &callback)
+{
+    StableRouteReadGuard guard(*this);
+    if (guard) {
+        callback();
+    }
+}
+#endif
+
 bool WorkerOcEvictionManager::TryMarkRebalancingObject(const std::string &objectKey)
 {
-    std::lock_guard<std::mutex> lock(rebalancingObjectsMutex_);
-    return rebalancingObjects_.emplace(objectKey).second;
+    RebalancingObjectTable::accessor accessor;
+    return rebalancingObjects_.insert(accessor, objectKey);
 }
 
 void WorkerOcEvictionManager::UnmarkRebalancingObject(const std::string &objectKey)
 {
-    std::lock_guard<std::mutex> lock(rebalancingObjectsMutex_);
     (void)rebalancingObjects_.erase(objectKey);
-}
-
-void WorkerOcEvictionManager::UnmarkRebalancingObjects(const std::vector<std::string> &objectKeys)
-{
-    std::lock_guard<std::mutex> lock(rebalancingObjectsMutex_);
-    for (const auto &objectKey : objectKeys) {
-        (void)rebalancingObjects_.erase(objectKey);
-    }
 }
 
 bool WorkerOcEvictionManager::IsObjectBeingRebalanced(const std::string &objectKey) const
 {
-    std::lock_guard<std::mutex> lock(rebalancingObjectsMutex_);
-    return rebalancingObjects_.find(objectKey) != rebalancingObjects_.end();
+    RebalancingObjectTable::const_accessor accessor;
+    return rebalancingObjects_.find(accessor, objectKey);
 }
 
 void WorkerOcEvictionManager::Add(const std::string &objectKey)
 {
     VLOG(DEBUG_LOG_LEVEL) << FormatString("[ObjectKey %s] EvictionManager add start.", objectKey);
-    uint8_t counter;
-    // Mutable or immutable object
-    const uint32_t workerRefCnt = gRefTable_->GetRefWorkerCount(objectKey);
-    if (workerRefCnt == 0) {
-        counter = Q1;
-    } else {
-        counter = Q2;
+    Status rc = RoutePolicyMutation(objectKey, PolicyMutationKind::ADD);
+    LOG_IF_ERROR(rc, "Failed to update eviction metadata");
+}
+
+Status WorkerOcEvictionManager::ApplyMigratedHeat(const std::string &objectKey, double heat, bool mergeExisting)
+{
+    bool trackMutation = policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE;
+    if (trackMutation) {
+        BeginTrackedPolicyMutation();
     }
-    memEvictionList_.Add(objectKey, counter);
+    Raii mutationDone([this, &trackMutation]() {
+        if (trackMutation) {
+            EndTrackedPolicyMutation();
+        }
+    });
+    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    const auto phase = policyUpdatePhase_.load(std::memory_order_acquire);
+    if (!trackMutation && phase != PolicyUpdatePhase::STABLE) {
+        BeginTrackedPolicyMutation();
+        trackMutation = true;
+    }
+    if (phase == PolicyUpdatePhase::STABLE || phase == PolicyUpdatePhase::DRAINING) {
+        if (policyRoute_.sourcePolicy != EvictionPolicy::HEAT) {
+            return Status::OK();
+        }
+        return policyRoute_.sourceList->ApplyMigratedHeat(objectKey, heat, policyRoute_.sourceHeatConfig.maxCounter,
+                                                          static_cast<uint64_t>(GetSteadyClockTimeStampMs()),
+                                                          mergeExisting);
+    }
+
+    std::lock_guard<std::mutex> keyLock(GetPolicyMigrationLock(objectKey));
+    if (policyRoute_.targetPolicy == EvictionPolicy::HEAT) {
+        RETURN_IF_NOT_OK(EnsureMigratedHeatTarget(objectKey));
+        return policyRoute_.targetList->ApplyMigratedHeat(objectKey, heat, policyRoute_.targetHeatConfig.maxCounter,
+                                                          static_cast<uint64_t>(GetSteadyClockTimeStampMs()),
+                                                          mergeExisting);
+    }
+    if (!std::isfinite(heat) || heat < 0.0) {
+        RETURN_STATUS(K_INVALID, "Invalid migrated heat");
+    }
+    const auto now = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    EvictionList::Node heatNode(objectKey, heat, now, now);
+    EvictionList::Node clockNode;
+    RETURN_IF_NOT_OK(ConvertPolicySnapshot(heatNode, EvictionPolicy::HEAT, EvictionPolicy::CLOCK,
+                                           policyRoute_.targetHeatConfig, clockNode));
+    bool inserted = false;
+    Status rc = policyRoute_.targetList->InsertOrMerge(clockNode, EvictionList::StateKind::CLOCK, 0.0,
+                                                       EvictionList::HeatMergeMode::PRESERVE_MAX, inserted);
+    if (rc.IsError()) {
+        return rc;
+    }
+    // Clock state has no exact heat representation. InsertOrMerge preserves the
+    // more protected counter instead of destructively lowering a local access.
+    return Status::OK();
+}
+
+Status WorkerOcEvictionManager::EnsureMigratedHeatTarget(const std::string &objectKey)
+{
+    if (policyRoute_.targetList->Exist(objectKey)) {
+        return Status::OK();
+    }
+    if (!policyRoute_.sourceList->Exist(objectKey)) {
+        policyRoute_.targetStrategy->OnAdd(objectKey);
+        CHECK_FAIL_RETURN_STATUS(policyRoute_.targetList->Exist(objectKey), K_RUNTIME_ERROR,
+                                 "Failed to create target Heat membership for migrated object");
+        return Status::OK();
+    }
+    EvictionList::Node sourceNode;
+    RETURN_IF_NOT_OK(policyRoute_.sourceList->GetObjectInfo(objectKey, sourceNode));
+    EvictionList::Node targetNode;
+    RETURN_IF_NOT_OK(ConvertPolicySnapshot(sourceNode, policyRoute_.sourcePolicy, policyRoute_.targetPolicy,
+                                           policyRoute_.targetHeatConfig, targetNode));
+    bool inserted = false;
+    return policyRoute_.targetList->InsertOrMerge(targetNode, EvictionList::StateKind::HEAT,
+                                                  policyRoute_.targetHeatConfig.maxCounter,
+                                                  EvictionList::HeatMergeMode::PRESERVE_MAX, inserted);
+}
+
+void WorkerOcEvictionManager::OnCacheHit(const std::string &objectKey, uint64_t migratableSize)
+{
+    Status rc = RoutePolicyMutation(objectKey, PolicyMutationKind::CACHE_HIT, migratableSize);
+    LOG_IF_ERROR(rc, "Failed to update eviction metadata on cache hit");
+}
+
+bool WorkerOcEvictionManager::TryOnCacheHitWithoutSize(const std::string &objectKey)
+{
+    return TryApplyClockMutationWithoutSize(objectKey, PolicyMutationKind::CACHE_HIT);
+}
+
+void WorkerOcEvictionManager::OnRefill(const std::string &objectKey, uint64_t migratableSize)
+{
+    Status rc = RoutePolicyMutation(objectKey, PolicyMutationKind::REFILL, migratableSize);
+    LOG_IF_ERROR(rc, "Failed to update eviction metadata on cache refill");
+}
+
+bool WorkerOcEvictionManager::TryOnRefillWithoutSize(const std::string &objectKey)
+{
+    return TryApplyClockMutationWithoutSize(objectKey, PolicyMutationKind::REFILL);
+}
+
+EvictionPolicy WorkerOcEvictionManager::GetActiveEvictionPolicy() const
+{
+    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    return policyRoute_.sourcePolicy;
+}
+
+uint64_t WorkerOcEvictionManager::GetPolicyUpdateEpoch() const
+{
+    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    return policyRoute_.epoch;
+}
+
+WorkerOcEvictionManager::PolicyStateSnapshot WorkerOcEvictionManager::GetPolicyStateSnapshot() const
+{
+    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    return { policyUpdatePhase_.load(std::memory_order_acquire), policyRoute_.sourcePolicy, policyRoute_.epoch,
+             policyRoute_.targetPolicy };
+}
+
+Status WorkerOcEvictionManager::ValidateRebalancePolicy(uint32_t policy, uint64_t epoch) const
+{
+    CHECK_FAIL_RETURN_STATUS(policy == static_cast<uint32_t>(master::EVICTION_POLICY_CLOCK)
+                                 || policy == static_cast<uint32_t>(master::EVICTION_POLICY_HEAT),
+                             K_INVALID, "Rebalance task has an invalid eviction policy");
+    CHECK_FAIL_RETURN_STATUS(policyUpdatePhase_.load(std::memory_order_acquire) == PolicyUpdatePhase::STABLE,
+                             K_NOT_READY, "Eviction policy update is in progress");
+    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    const auto expected = policyRoute_.sourcePolicy == EvictionPolicy::CLOCK
+                              ? static_cast<uint32_t>(master::EVICTION_POLICY_CLOCK)
+                              : static_cast<uint32_t>(master::EVICTION_POLICY_HEAT);
+    CHECK_FAIL_RETURN_STATUS(policy == expected && epoch == policyRoute_.epoch, K_NOT_READY,
+                             "Rebalance task eviction policy fence is stale");
+    return Status::OK();
+}
+
+std::mutex &WorkerOcEvictionManager::GetPolicyMigrationLock(const std::string &objectKey)
+{
+    return policyMigrationLocks_[std::hash<std::string>{}(objectKey) % policyMigrationLocks_.size()].mutex;
+}
+
+WorkerOcEvictionManager::StableRouteReadGuard::StableRouteReadGuard(WorkerOcEvictionManager &manager)
+    : manager_(manager), acquired_(manager_.TryAcquireStableRouteReader(slot_))
+{
+}
+
+WorkerOcEvictionManager::StableRouteReadGuard::~StableRouteReadGuard()
+{
+    if (acquired_) {
+        manager_.ReleaseStableRouteReader(slot_);
+    }
+}
+
+WorkerOcEvictionManager::StableRouteReadGuard::operator bool() const
+{
+    return acquired_;
+}
+
+bool WorkerOcEvictionManager::TryAcquireStableRouteReader(size_t &slot)
+{
+    if (policyUpdatePhase_.load(std::memory_order_seq_cst) != PolicyUpdatePhase::STABLE) {
+        return false;
+    }
+    static thread_local const size_t readerSlot =
+        std::hash<std::thread::id>{}(std::this_thread::get_id()) % STABLE_ROUTE_READER_SLOT_COUNT;
+    slot = readerSlot;
+    stableRouteReaderSlots_[slot].count.fetch_add(1, std::memory_order_seq_cst);
+    if (policyUpdatePhase_.load(std::memory_order_seq_cst) == PolicyUpdatePhase::STABLE) {
+        return true;
+    }
+    ReleaseStableRouteReader(slot);
+    return false;
+}
+
+void WorkerOcEvictionManager::ReleaseStableRouteReader(size_t slot)
+{
+    const bool slotDrained = stableRouteReaderSlots_[slot].count.fetch_sub(1, std::memory_order_seq_cst) == 1;
+    if (slotDrained && policyUpdatePhase_.load(std::memory_order_seq_cst) != PolicyUpdatePhase::STABLE) {
+        // Synchronize with the predicate-to-wait handoff so the final draining notification cannot be lost. This
+        // mutex is never touched by the STABLE hot path; only readers leaving during a policy transition take it.
+        std::lock_guard<std::mutex> lock(cvMutex_);
+        stableRouteReadersCv_.notify_all();
+    }
+}
+
+bool WorkerOcEvictionManager::StableRouteReadersDrained() const
+{
+    return std::all_of(stableRouteReaderSlots_.begin(), stableRouteReaderSlots_.end(),
+                       [](const auto &slot) { return slot.count.load(std::memory_order_seq_cst) == 0; });
+}
+
+Status WorkerOcEvictionManager::RoutePolicyMutation(const std::string &objectKey, PolicyMutationKind kind,
+                                                    uint64_t migratableSize, EvictionList::Node *snapshot)
+{
+    bool trackMutation = policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE;
+    if (trackMutation) {
+        BeginTrackedPolicyMutation();
+    }
+    Raii mutationDone([this, &trackMutation]() {
+        if (trackMutation) {
+            EndTrackedPolicyMutation();
+        }
+    });
+    StableRouteReadGuard stableRoute(*this);
+    if (stableRoute) {
+        return ApplyPolicyMutation(policyRoute_, objectKey, kind, migratableSize, snapshot);
+    }
+    if (!trackMutation) {
+        BeginTrackedPolicyMutation();
+        trackMutation = true;
+    }
+
+    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    const auto phase = policyUpdatePhase_.load(std::memory_order_acquire);
+    if (phase == PolicyUpdatePhase::STABLE || phase == PolicyUpdatePhase::DRAINING) {
+        return ApplyPolicyMutation(policyRoute_, objectKey, kind, migratableSize, snapshot);
+    }
+
+    return RoutePolicyMutationDuringUpdate(objectKey, kind, migratableSize, snapshot);
+}
+
+bool WorkerOcEvictionManager::TryApplyClockMutationWithoutSize(const std::string &objectKey,
+                                                               PolicyMutationKind kind)
+{
+    // The atomic is only a fast rejection for stable Heat. Correctness comes from acquiring the same stable-route
+    // reader that policy rollout drains: either this CLOCK mutation completes before the transition, or admission
+    // fails and the caller resolves size for the Heat-capable route.
+    if (needsMigratableSize_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    INJECT_POINT_NO_RETURN("WorkerOcEvictionManager.TryClockMutation.afterSizeCheck", []() {});
+    StableRouteReadGuard stableRoute(*this);
+    if (!stableRoute || policyRoute_.sourcePolicy != EvictionPolicy::CLOCK) {
+        return false;
+    }
+    Status rc = ApplyPolicyMutation(policyRoute_, objectKey, kind, 0, nullptr);
+    LOG_IF_ERROR(rc, "Failed to update CLOCK eviction metadata without object-size lookup");
+    return true;
+}
+
+Status WorkerOcEvictionManager::RoutePolicyMutationDuringUpdate(
+    const std::string &objectKey, PolicyMutationKind kind, uint64_t migratableSize, EvictionList::Node *snapshot)
+{
+    std::lock_guard<std::mutex> keyLock(GetPolicyMigrationLock(objectKey));
+    if (kind == PolicyMutationKind::ERASE) {
+        (void)policyRoute_.targetList->Erase(objectKey);
+        (void)policyRoute_.sourceList->Erase(objectKey);
+        return Status::OK();
+    }
+    if (kind == PolicyMutationKind::EXTRACT) {
+        CHECK_FAIL_RETURN_STATUS(snapshot != nullptr, K_INVALID, "Eviction snapshot output is required");
+        Status rc = policyRoute_.targetList->Extract(objectKey, *snapshot);
+        if (rc.IsOk()) {
+            (void)policyRoute_.sourceList->Erase(objectKey);
+            return rc;
+        }
+        RETURN_IF_NOT_OK_EXCEPT(rc, K_NOT_FOUND);
+        return policyRoute_.sourceList->Extract(objectKey, *snapshot);
+    }
+    Status rc = EnsureTargetMembership(objectKey);
+    if (rc.IsError()) {
+        LOG(WARNING) << "Eviction policy target creation failed; applied the access to source instead. Detail: "
+                     << rc.ToString();
+        (void)ApplyPolicyMutation(policyRoute_, objectKey, kind, migratableSize, snapshot);
+        return rc;
+    }
+    PolicyRoute targetRoute;
+    targetRoute.sourceList = policyRoute_.targetList;
+    targetRoute.sourceStrategy = policyRoute_.targetStrategy;
+    RETURN_IF_NOT_OK(ApplyPolicyMutation(targetRoute, objectKey, kind, migratableSize, snapshot));
+    CHECK_FAIL_RETURN_STATUS(policyRoute_.targetList->Exist(objectKey), K_RUNTIME_ERROR,
+                             "Target eviction policy did not create the requested membership");
+    return Status::OK();
+}
+
+Status WorkerOcEvictionManager::ApplyPolicyMutation(const PolicyRoute &route, const std::string &objectKey,
+                                                    PolicyMutationKind kind, uint64_t migratableSize,
+                                                    EvictionList::Node *snapshot)
+{
+    switch (kind) {
+        case PolicyMutationKind::ADD:
+            route.sourceStrategy->OnAdd(objectKey);
+            break;
+        case PolicyMutationKind::CACHE_HIT:
+            route.sourceStrategy->OnCacheHit(objectKey, migratableSize);
+            break;
+        case PolicyMutationKind::REFILL:
+            route.sourceStrategy->OnRefill(objectKey, migratableSize);
+            break;
+        case PolicyMutationKind::ERASE:
+            (void)route.sourceList->Erase(objectKey);
+            break;
+        case PolicyMutationKind::EXTRACT:
+            CHECK_FAIL_RETURN_STATUS(snapshot != nullptr, K_INVALID, "Eviction snapshot output is required");
+            return route.sourceList->Extract(objectKey, *snapshot);
+    }
+    return Status::OK();
+}
+
+Status WorkerOcEvictionManager::EnsureTargetMembership(const std::string &objectKey)
+{
+    if (policyRoute_.targetList->Exist(objectKey) || !policyRoute_.sourceList->Exist(objectKey)) {
+        return Status::OK();
+    }
+    EvictionList::Node sourceNode;
+    RETURN_IF_NOT_OK(policyRoute_.sourceList->GetObjectInfo(objectKey, sourceNode));
+    EvictionList::Node targetNode;
+    RETURN_IF_NOT_OK(ConvertPolicySnapshot(sourceNode, policyRoute_.sourcePolicy, policyRoute_.targetPolicy,
+                                           policyRoute_.targetHeatConfig, targetNode));
+    bool inserted = false;
+    return policyRoute_.targetList->InsertOrMerge(targetNode,
+                                                  policyRoute_.targetPolicy == EvictionPolicy::HEAT
+                                                      ? EvictionList::StateKind::HEAT
+                                                      : EvictionList::StateKind::CLOCK,
+                                                  policyRoute_.targetHeatConfig.maxCounter,
+                                                  EvictionList::HeatMergeMode::PRESERVE_MAX, inserted);
+}
+
+Status WorkerOcEvictionManager::ConvertPolicySnapshot(const EvictionList::Node &source, EvictionPolicy sourcePolicy,
+                                                      EvictionPolicy targetPolicy,
+                                                      const HeatPolicyConfig &targetHeatConfig,
+                                                      EvictionList::Node &target)
+{
+    if (sourcePolicy == targetPolicy) {
+        target = source;
+        return Status::OK();
+    }
+    if (targetPolicy == EvictionPolicy::HEAT) {
+        static constexpr std::array<double, 6> COUNTER_TO_HEAT{ 0.0, 2.0, 4.0, 8.0, 12.0, 16.0 };
+        const auto counter = std::min<size_t>(source.curCounter, COUNTER_TO_HEAT.size() - 1);
+        const auto now = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+        target = EvictionList::Node(source.objectKey, std::min(COUNTER_TO_HEAT[counter], targetHeatConfig.maxCounter),
+                                    now, now);
+        return Status::OK();
+    }
+    const uint8_t counter = source.heat < 2.0 ? 0 : (source.heat < 4.0 ? 1 : 2);
+    target = EvictionList::Node(source.objectKey, counter);
+    target.maxCounter = std::max(counter, ComputeClockAddCounter(gRefTable_, source.objectKey));
+    return Status::OK();
 }
 
 void WorkerOcEvictionManager::Erase(const std::string &objectKey)
 {
     VLOG(DEBUG_LOG_LEVEL) << FormatString("[ObjectKey %s] EvictionManager erase start.", objectKey);
-    // If the data does not exist, it means that the deletion was successful, so there is no need to return a Status.
-    (void)memEvictionList_.Erase(objectKey);
+    (void)RoutePolicyMutation(objectKey, PolicyMutationKind::ERASE);
+}
+
+Status WorkerOcEvictionManager::ExtractEvictionNode(const std::string &objectKey, EvictionList::Node &snapshot)
+{
+    return RoutePolicyMutation(objectKey, PolicyMutationKind::EXTRACT, 0, &snapshot);
 }
 
 Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObjects &objectKeyVersions)
@@ -488,20 +989,20 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
 }
 
 Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects,
-                                            CacheType cacheType, uint64_t needSize)
+                                            CacheType cacheType, uint64_t needSize, const EvictionCandidate *candidate)
 {
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &entry = objectKV.GetObjEntry();
     if (nextAction == Action::END_LIFE) {
         bool accepted = false;
-        Status rc = SubmitPrimaryEndLifeTask(objectKV, cacheType, needSize, accepted);
-        (void)memEvictionList_.Erase(objectKey);
+        Status rc = SubmitPrimaryEndLifeTask(objectKV, cacheType, needSize, accepted, candidate);
+        Erase(objectKey);
         RETURN_IF_NOT_OK(rc);
         VLOG(1) << FormatString("[ObjectKey %s] Object will be end of life, accepted: %d", objectKey, accepted);
         return Status::OK();
     }
+    Erase(objectKey);
     const bool hadCpuCopy = entry.Get() != nullptr && !entry->stateInfo.IsCacheInvalid();
-    (void)memEvictionList_.Erase(objectKey);
     if (nextAction == Action::DELETE) {
         PerfPoint point(PerfKey::WORKER_EVICT_DELETE);
         uint64_t version = entry.Get()->GetCreateTime();
@@ -565,8 +1066,23 @@ bool WorkerOcEvictionManager::IsAboveLowWaterMark(uint64_t needSize, size_t pend
 
 void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheType)
 {
+    Raii finishTask([this]() {
+        isDone_.store(true, std::memory_order_release);
+        NotifyEvictionStopped();
+    });
+    std::shared_ptr<EvictionStrategy> strategy;
+    EvictionList *evictionList = nullptr;
+    {
+        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        if (policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE) {
+            return;
+        }
+        strategy = policyRoute_.sourceStrategy;
+        evictionList = policyRoute_.sourceList;
+    }
     Timer evictionTaskTimer;
-    EvictFailedList evictFailedIds;
+    EvictionRetryList evictFailedIds;
+    EvictionRoundState evictionRound;
     // IMPORTANT — declaration order:
     // evictionAggregator MUST be declared before spillTasks.
     // spillTasks entries hold EvictionTrace objects whose aggregator_ pointer
@@ -592,24 +1108,34 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         deletedObjects.clear();
         deletedObjectsFlushTimer.Reset();
     };
-    LOG(INFO) << "EvictionList size before evict: " << memEvictionList_.Size();
+    LOG(INFO) << "EvictionList size before evict: " << evictionList->Size();
     VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=start, eviction_list_size="
                           << memEvictionList_.Size() << ", pressure=" << GetPrimaryEndLifePressure();
     size_t pendingSpillSize = 0;
     // The size of low water mark memory usage is not fixed. It varies on the size of shared memory available.
     // Share memory release is delayed due to asynchronous spill, so the pending spill data size needs to be counted to
     // prevent all objects from being spilled.
-    while (IsAboveLowWaterMark(needSize, pendingSpillSize, cacheType) && memEvictionList_.Size() != 0) {
-        std::string candidateId;
-        if (memEvictionList_.FindEvictCandidate(candidateId).IsError()) {
+    while (!evictionCancelRequested_.load(std::memory_order_acquire)
+           && IsAboveLowWaterMark(needSize, pendingSpillSize, cacheType) && evictionList->Size() != 0) {
+        EvictionCandidate candidate;
+        if (strategy->SelectCandidate(evictionRound, candidate).IsError()) {
             LOG(ERROR) << "FindEvictCandidate failed, EvictionList is empty.";
             continue;
+        }
+        const auto &candidateId = candidate.objectKey;
+        if (evictionCancelRequested_.load(std::memory_order_acquire)) {
+            break;
         }
         auto trace = std::make_unique<EvictionTrace>(candidateId);
         trace->aggregator_ = &evictionAggregator;
         std::shared_ptr<SafeObjType> entry;
-        Status rc = GetAndLockEntry(candidateId, entry, evictFailedIds);
+        std::optional<EvictionList::Node> retrySnapshot;
+        Status rc = GetAndLockEntry(candidateId, entry, retrySnapshot);
         if (rc.IsError()) {
+            if (retrySnapshot.has_value()) {
+                evictFailedIds.push_back(
+                    { MakeEvictionCandidate(candidate.policy, *retrySnapshot), static_cast<uint8_t>(Q1) });
+            }
             trace->rc = Status(rc.GetCode(), FormatString("GetAndLockEntry failed %s.", rc.GetMsg()));
             continue;
         }
@@ -620,12 +1146,18 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
                 entry->WUnlock();
             }
         });
+        // Heat selection consumes a bounded snapshot batch. Revalidate after taking the object write lock so a cache
+        // hit, decay, reinsert, or same-key recreation cannot evict a stale snapshot.
+        if (!strategy->ValidateCandidate(evictionRound, candidate)) {
+            trace->rc = Status(K_NOT_READY, "Eviction candidate changed after selection");
+            continue;
+        }
         // Pair with RebalanceCandidateProvider, which marks candidates while holding the object read lock. A prior mark
         // is visible after this write lock is acquired; later rebalance validation waits until eviction ends.
         if (IsObjectBeingRebalanced(candidateId)) {
             trace->rc = Status(K_NOT_READY, "Object is being rebalanced");
-            (void)memEvictionList_.Erase(candidateId);
-            evictFailedIds.emplace_back(candidateId, READD_COUNTER);
+            (void)evictionList->Erase(candidateId);
+            evictFailedIds.push_back({ candidate, READD_COUNTER });
             continue;
         }
         trace->AddObjectKeySize(candidateId, (*entry)->GetDataSize());
@@ -638,8 +1170,8 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         }
         GetObjectNextAction(*entry, trace, pendingSpillSize);
         bool wasDeletedObjectsEmpty = deletedObjects.empty();
-        rc = TryEvictObject(entry, std::move(trace), pendingSpillSize, spillTasks, locked, cacheType, &deletedObjects,
-                            needSize);
+        rc = TryEvictObject(entry, std::move(trace), pendingSpillSize, spillTasks, locked, candidate, cacheType,
+                            &deletedObjects, needSize);
         if (wasDeletedObjectsEmpty && !deletedObjects.empty()) {
             deletedObjectsFlushTimer.Reset();
         }
@@ -655,7 +1187,7 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
             // With push_back the object lands at the tail, so the 5-round backoff
             // (~list_size / write_rate per round) is a reasonable delay (issue #750).
             uint8_t counter = (rc.GetCode() == StatusCode::K_TRY_AGAIN) ? Q1 : READD_COUNTER;
-            evictFailedIds.emplace_back(candidateId, counter);
+            evictFailedIds.push_back({ candidate, counter });
         }
         auto spilledSize = ReleaseSpillFutures(spillTasks, evictFailedIds, false);
         pendingSpillSize -= std::min(pendingSpillSize, spilledSize);
@@ -669,35 +1201,38 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
     // in ~EvictionTrace(), causing use-after-free.
     (void)ReleaseSpillFutures(spillTasks, evictFailedIds, true);
 
-    for (const auto &objKeyCounter : evictFailedIds) {
-        memEvictionList_.Add(objKeyCounter.first, objKeyCounter.second);
+    for (const auto &retry : evictFailedIds) {
+        strategy->ReaddCandidate(retry.candidate, retry.counter);
     }
-    isDone_ = true;
-    LOG(INFO) << "EvictionList size after evict:" << memEvictionList_.Size()
-              << ", failed size:" << evictFailedIds.size();
+    LOG(INFO) << "EvictionList size after evict:" << evictionList->Size() << ", failed size:" << evictFailedIds.size();
     auto evictionElapsedMs = evictionTaskTimer.ElapsedMilliSecond();
     if (evictionElapsedMs >= PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS) {
         LOG(WARNING) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=complete, elapsed_ms="
-                     << evictionElapsedMs << ", eviction_list_size=" << memEvictionList_.Size()
+                     << evictionElapsedMs << ", eviction_list_size=" << evictionList->Size()
                      << ", failed_keys=" << evictFailedIds.size() << ", pressure=" << GetPrimaryEndLifePressure();
     } else {
         VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=complete, elapsed_ms="
-                              << evictionElapsedMs << ", eviction_list_size=" << memEvictionList_.Size()
+                              << evictionElapsedMs << ", eviction_list_size=" << evictionList->Size()
                               << ", failed_keys=" << evictFailedIds.size()
                               << ", pressure=" << GetPrimaryEndLifePressure();
     }
 }
 
+void WorkerOcEvictionManager::NotifyEvictionStopped()
+{
+    evictionStoppedCv_.notify_all();
+}
+
 Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &entry,
                                                std::unique_ptr<EvictionTrace> trace, size_t &pendingSpillSize,
                                                std::unordered_map<std::string, SpillTask> &spillTasks, bool &locked,
-                                               CacheType cacheType, EvictDeletedObjects *deletedObjects,
-                                               uint64_t needSize)
+                                               const EvictionCandidate &candidate, CacheType cacheType,
+                                               EvictDeletedObjects *deletedObjects, uint64_t needSize)
 {
     const auto &objectKey = trace->taskId;
     ObjectKV objectKV(objectKey, *entry);
     PerfPoint point(PerfKey::WORKER_EVICT_ONE_OBJECT);
-    Status rc = EvictObject(objectKV, trace->action, deletedObjects, cacheType, needSize);
+    Status rc = EvictObject(objectKV, trace->action, deletedObjects, cacheType, needSize, &candidate);
     if (rc.IsError()) {
         trace->rc = rc;
         if (rc.GetCode() != K_NOT_READY) {
@@ -717,7 +1252,7 @@ Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &ent
         entry->WUnlock();
         locked = false;
         pendingSpillSize += objectSize;
-        spillTasks.emplace(objectKey, SpillTask{ SubmitSpillTask(objectKey, version), std::move(trace) });
+        spillTasks.emplace(objectKey, SpillTask{ SubmitSpillTask(objectKey, version), std::move(trace), candidate });
     }
     return Status::OK();
 }
@@ -725,8 +1260,17 @@ Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &ent
 void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType)
 {
     LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL3) << "Eviction start.";
+    if (policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE) {
+        LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL3) << "Eviction is disabled during policy update.";
+        return;
+    }
     bool expected = true;
     if (isDone_.compare_exchange_strong(expected, false)) {
+        if (policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE) {
+            isDone_.store(true, std::memory_order_release);
+            NotifyEvictionStopped();
+            return;
+        }
         std::unique_lock<std::mutex> lk(cvMutex_);
         auto traceID = Trace::Instance().GetTraceID();
         memEvictTaskThreadPool_->Execute([this, traceID, needSize, cacheType] {
@@ -740,12 +1284,51 @@ void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType)
 
 Status WorkerOcEvictionManager::GetAllObjectsInfo(std::vector<EvictionList::Node> &res, EvictionList::Node &oldest)
 {
-    return memEvictionList_.GetAllObjectsInfo(res, oldest);
+    StableRouteReadGuard stableRoute(*this);
+    if (stableRoute) {
+        return policyRoute_.sourceList->GetAllObjectsInfo(res, oldest);
+    }
+    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    return policyRoute_.sourceList->GetAllObjectsInfo(res, oldest);
+}
+
+Status WorkerOcEvictionManager::GetObjectInfo(const std::string &objectKey, EvictionList::Node &node)
+{
+    StableRouteReadGuard stableRoute(*this);
+    if (stableRoute) {
+        return policyRoute_.sourceList->GetObjectInfo(objectKey, node);
+    }
+    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    const auto phase = policyUpdatePhase_.load(std::memory_order_acquire);
+    if (phase != PolicyUpdatePhase::STABLE && phase != PolicyUpdatePhase::DRAINING) {
+        Status rc = policyRoute_.targetList->GetObjectInfo(objectKey, node);
+        if (rc.IsOk() || rc.GetCode() != K_NOT_FOUND) {
+            return rc;
+        }
+    }
+    return policyRoute_.sourceList->GetObjectInfo(objectKey, node);
 }
 
 Status WorkerOcEvictionManager::GetObjectsInfoFromOldest(size_t maxScanCount, std::vector<EvictionList::Node> &res)
 {
-    return memEvictionList_.GetObjectsInfoFromOldest(maxScanCount, res);
+    StableRouteReadGuard stableRoute(*this);
+    if (!stableRoute) {
+        RETURN_STATUS(K_NOT_READY, "Eviction candidates are unavailable during policy update");
+    }
+    return policyRoute_.sourceList->GetObjectsInfoFromOldest(maxScanCount, res);
+}
+
+Status WorkerOcEvictionManager::GetLowestHeatObjects(size_t maxCount, std::vector<EvictionList::Node> &res)
+{
+    StableRouteReadGuard stableRoute(*this);
+    if (!stableRoute || policyRoute_.sourcePolicy != EvictionPolicy::HEAT) {
+        RETURN_STATUS(K_NOT_READY, "Active eviction policy is not Heat");
+    }
+    // Rebalance consumes a bounded candidate batch and revalidates every selected object. A global full-list minimum
+    // is not required, while holding listMutex_ across millions of nodes would stall eviction-list writers. Passing a
+    // finite threshold activates the same 8 * maxCount scan bound used by normal heat eviction.
+    return policyRoute_.sourceList->GetHeatCandidates(std::numeric_limits<double>::infinity(), maxCount, res, 0,
+                                                      std::numeric_limits<double>::max());
 }
 
 void WorkerOcEvictionManager::SubmitAsyncMasterTask(const EvictDeletedObjects &objectKeyVersions)
@@ -782,11 +1365,15 @@ void WorkerOcEvictionManager::AsyncMasterTask(const EvictDeletedObjects &objectK
 }
 
 Status WorkerOcEvictionManager::SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType,
-                                                         uint64_t needSize, bool &accepted)
+                                                         uint64_t needSize, bool &accepted,
+                                                         const EvictionCandidate *candidate)
 {
     const auto &objectKey = objectKV.GetObjKey();
     PrimaryEndLifeTask task{ objectKey, objectKV.GetObjEntry()->GetCreateTime(), cacheType, needSize };
     task.queuedAtMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    if (candidate != nullptr) {
+        task.evictionCandidate = *candidate;
+    }
     RETURN_IF_NOT_OK(ReservePrimaryEndLifeTask(task, accepted));
     if (!accepted) {
         VLOG(DEBUG_LOG_LEVEL) << FormatString("[ObjectKey %s] Primary end-life task already pending.", objectKey);
@@ -803,7 +1390,10 @@ Status WorkerOcEvictionManager::SubmitPrimaryEndLifeTask(const ObjectKV &objectK
 
 Status WorkerOcEvictionManager::ReservePrimaryEndLifeTask(PrimaryEndLifeTask &task, bool &accepted)
 {
-    std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+    size_t pendingSize = 0;
+    size_t queueSize = 0;
+    int activeWorkers = 0;
+    std::unique_lock<std::mutex> lock(primaryEndLifeMutex_);
     task.metaDeleted = false;
     auto metaIter = metaDeletedPrimaryEndLifeObjects_.find(task.objectKey);
     if (metaIter != metaDeletedPrimaryEndLifeObjects_.end()) {
@@ -821,11 +1411,15 @@ Status WorkerOcEvictionManager::ReservePrimaryEndLifeTask(PrimaryEndLifeTask &ta
     if (pendingPrimaryEndLifeObjects_.size() > PRIMARY_END_LIFE_PENDING_LIMIT) {
         pendingPrimaryEndLifeObjects_.erase(iter);
         primaryEndLifePendingFullCount_.fetch_add(1, std::memory_order_relaxed);
+        pendingSize = pendingPrimaryEndLifeObjects_.size();
+        queueSize = primaryEndLifeQueue_.size();
+        activeWorkers = activeDrainWorkers_;
+        lock.unlock();
         LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL2)
             << "Primary end-life pending queue is full, full count since last log: "
             << primaryEndLifePendingFullCount_.exchange(0, std::memory_order_relaxed)
-            << ", pending size: " << pendingPrimaryEndLifeObjects_.size()
-            << ", queue size: " << primaryEndLifeQueue_.size() << ", active drain workers: " << activeDrainWorkers_
+            << ", pending size: " << pendingSize
+            << ", queue size: " << queueSize << ", active drain workers: " << activeWorkers
             << ", limit: " << PRIMARY_END_LIFE_PENDING_LIMIT << ", rejected object: " << task.objectKey;
 
         RETURN_STATUS(K_TRY_AGAIN, "Primary end-life pending queue is full.");
@@ -860,13 +1454,16 @@ Status WorkerOcEvictionManager::EnqueuePrimaryEndLifeTask(const PrimaryEndLifeTa
                 DrainPrimaryEndLifeTasks();
             });
         } catch (const std::exception &e) {
-            std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
-            activeDrainWorkers_--;
-            // The task stays in primaryEndLifeQueue_ and will be drained by the next
-            // worker (queue is non-empty, so the next Enqueue or the restart-guard in
-            // DrainPrimaryEndLifeTasks spawns one). Do NOT pop_back: between emplace_back
-            // (earlier lock) and here the lock was released, so another thread may have
-            // appended its own task at the back - pop_back would discard that task.
+            {
+                std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+                activeDrainWorkers_--;
+                // The task stays in primaryEndLifeQueue_ and will be drained by the next
+                // worker (queue is non-empty, so the next Enqueue or the restart-guard in
+                // DrainPrimaryEndLifeTasks spawns one). Do NOT pop_back: between emplace_back
+                // (earlier lock) and here the lock was released, so another thread may have
+                // appended its own task at the back - pop_back would discard that task.
+            }
+            primaryEndLifeDrainedCv_.notify_all();
             RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Submit primary end-life task failed: %s", e.what()));
         }
     }
@@ -875,11 +1472,14 @@ Status WorkerOcEvictionManager::EnqueuePrimaryEndLifeTask(const PrimaryEndLifeTa
 
 void WorkerOcEvictionManager::ClearPrimaryEndLifePending(const PrimaryEndLifeTask &task)
 {
-    std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
-    auto iter = pendingPrimaryEndLifeObjects_.find(task.objectKey);
-    if (iter != pendingPrimaryEndLifeObjects_.end() && iter->second == task.version) {
-        pendingPrimaryEndLifeObjects_.erase(iter);
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        auto iter = pendingPrimaryEndLifeObjects_.find(task.objectKey);
+        if (iter != pendingPrimaryEndLifeObjects_.end() && iter->second == task.version) {
+            pendingPrimaryEndLifeObjects_.erase(iter);
+        }
     }
+    primaryEndLifeDrainedCv_.notify_all();
 }
 
 void WorkerOcEvictionManager::FinishPrimaryEndLifeTask(const PrimaryEndLifeTask &task, bool readd)
@@ -897,8 +1497,35 @@ void WorkerOcEvictionManager::FinishPrimaryEndLifeTask(const PrimaryEndLifeTask 
             metaDeletedPrimaryEndLifeObjects_.erase(metaIter);
         }
     }
+    primaryEndLifeDrainedCv_.notify_all();
     if (readd) {
-        memEvictionList_.Add(task.objectKey, READD_COUNTER);
+        bool trackMutation = policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE;
+        if (trackMutation) {
+            BeginTrackedPolicyMutation();
+        }
+        Raii mutationDone([this, &trackMutation]() {
+            if (trackMutation) {
+                EndTrackedPolicyMutation();
+            }
+        });
+        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        const auto phase = policyUpdatePhase_.load(std::memory_order_acquire);
+        if (!trackMutation && phase != PolicyUpdatePhase::STABLE) {
+            BeginTrackedPolicyMutation();
+            trackMutation = true;
+        }
+        EvictionCandidate retryCandidate;
+        if (task.evictionCandidate.has_value()) {
+            retryCandidate = *task.evictionCandidate;
+        } else {
+            retryCandidate.objectKey = task.objectKey;
+        }
+        if (phase == PolicyUpdatePhase::STABLE || phase == PolicyUpdatePhase::DRAINING) {
+            policyRoute_.sourceStrategy->ReaddCandidate(retryCandidate, READD_COUNTER);
+        } else {
+            std::lock_guard<std::mutex> keyLock(GetPolicyMigrationLock(task.objectKey));
+            policyRoute_.targetStrategy->ReaddCandidate(retryCandidate, READD_COUNTER);
+        }
     }
 }
 
@@ -1002,6 +1629,7 @@ void WorkerOcEvictionManager::OnDrainWorkerIdle()
             needRestart = true;
         }
     }
+    primaryEndLifeDrainedCv_.notify_all();
     if (needRestart) {
         try {
             auto drainTraceID = Trace::Instance().GetTraceID();
@@ -1011,8 +1639,11 @@ void WorkerOcEvictionManager::OnDrainWorkerIdle()
             });
         } catch (const std::exception &e) {
             LOG(ERROR) << FormatString("Restart drain worker failed: %s", e.what());
-            std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
-            activeDrainWorkers_--;
+            {
+                std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+                activeDrainWorkers_--;
+            }
+            primaryEndLifeDrainedCv_.notify_all();
         }
     }
 }
@@ -1204,16 +1835,29 @@ Status WorkerOcEvictionManager::ReacquireAndValidateForLocalDelete(PrimaryEndLif
         std::this_thread::sleep_for(std::chrono::milliseconds(PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS));
     }
     RETURN_IF_NOT_OK(rc);
-    // If version changed during the RPC window, skip local Erase.
-    if ((*entry)->GetCreateTime() != candidate.task.version) {
+    // Version and rebalance admission can both change while the object lock is released for the metadata RPC.
+    // Never erase a source object after a rebalance task has claimed it.
+    if ((*entry)->GetCreateTime() != candidate.task.version || IsObjectBeingRebalanced(candidate.task.objectKey)) {
         entry->WUnlock();
         RETURN_STATUS(StatusCode::K_NOT_FOUND,
-                      FormatString("[ObjectKey %s] Version changed during end-life RPC window, skip local erase.",
+                      FormatString("[ObjectKey %s] Object changed or entered rebalance during end-life RPC window, "
+                                   "skip local erase.",
                                    candidate.task.objectKey));
     }
     candidate.entry = entry;
     return Status::OK();
 }
+
+#ifdef WITH_TESTS
+Status WorkerOcEvictionManager::ReacquirePrimaryEndLifeForTest(const std::string &objectKey, uint64_t version,
+                                                               std::shared_ptr<SafeObjType> &entry)
+{
+    PrimaryEndLifeCandidate candidate{ { objectKey, version, CacheType::MEMORY }, nullptr };
+    auto rc = ReacquireAndValidateForLocalDelete(candidate);
+    entry = candidate.entry;
+    return rc;
+}
+#endif
 
 Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(const std::vector<PrimaryEndLifeTask> &tasks,
                                                                 std::vector<PrimaryEndLifeCandidate> &candidates,
@@ -1758,12 +2402,10 @@ std::future<WorkerOcEvictionManager::SpillResult> WorkerOcEvictionManager::Submi
 }
 
 size_t WorkerOcEvictionManager::ReleaseSpillFutures(std::unordered_map<std::string, SpillTask> &spillTasks,
-                                                    std::vector<std::pair<std::string, uint8_t>> &evictFailedIds,
-                                                    bool last)
+                                                    EvictionRetryList &evictFailedIds, bool last)
 {
     size_t spilledSize = 0;
     for (auto iter = spillTasks.begin(); iter != spillTasks.end();) {
-        const auto &objectKey = iter->first;
         auto &future = iter->second.future;
         if (!future.valid()) {
             ++iter;
@@ -1785,7 +2427,7 @@ size_t WorkerOcEvictionManager::ReleaseSpillFutures(std::unordered_map<std::stri
         if (spillRc.IsError()) {
             // Transient spill lock contention uses Q1, persistent spill failure uses READD.
             auto counter = spillRc.GetCode() == StatusCode::K_TRY_AGAIN ? Q1 : READD_COUNTER;
-            evictFailedIds.emplace_back(objectKey, counter);
+            evictFailedIds.push_back({ iter->second.candidate, counter });
         }
         trace->rc = spillRc;
         trace->spillCost = result.elapsed;
@@ -1828,8 +2470,12 @@ void WorkerOcEvictionManager::EvictSpilledObjects(uint64_t objectSize)
         }
 
         std::shared_ptr<SafeObjType> entry;
-        Status rc = GetAndLockEntry(candidateId, entry, evictFailedIds);
+        std::optional<EvictionList::Node> retrySnapshot;
+        Status rc = GetAndLockEntry(candidateId, entry, retrySnapshot);
         if (rc.IsError()) {
+            if (retrySnapshot.has_value()) {
+                evictFailedIds.emplace_back(candidateId, Q1);
+            }
             needSkipCount++;
             continue;
         }
@@ -1855,18 +2501,24 @@ void WorkerOcEvictionManager::EvictSpilledObjects(uint64_t objectSize)
         }
     }
 
+    FinishEvictSpilledObjects(spillEvictionList, evictFailedIds, objectSize, forceCompact);
+
+    LOG(INFO) << "Spill eviction list size after evict:" << spillEvictionList.Size()
+              << ", need retry size:" << evictFailedIds.size() << ", force compact: " << forceCompact;
+}
+
+void WorkerOcEvictionManager::FinishEvictSpilledObjects(
+    EvictionList &spillEvictionList, const EvictFailedList &evictFailedIds, uint64_t objectSize, bool &forceCompact)
+{
     for (const auto &objKeyCounter : evictFailedIds) {
         spillEvictionList.Add(objKeyCounter.first, objKeyCounter.second);
     }
-
-    double ratio = (WorkerOcSpill::Instance()->LowWaterFactor() + WorkerOcSpill::Instance()->HighWaterFactor()) / 2.0;
+    const double ratio =
+        (WorkerOcSpill::Instance()->LowWaterFactor() + WorkerOcSpill::Instance()->HighWaterFactor()) / 2.0;
     forceCompact &= WorkerOcSpill::Instance()->IsSpaceExceed(ratio, objectSize);
     if (forceCompact) {
         WorkerOcSpill::Instance()->ForceCompact();
     }
-
-    LOG(INFO) << "Spill eviction list size after evict:" << spillEvictionList.Size()
-              << ", need retry size:" << evictFailedIds.size() << ", force compact: " << forceCompact;
 }
 
 bool WorkerOcEvictionManager::IsSpilledObjectEvictable(const std::shared_ptr<SafeObjType> &entry)
@@ -1963,23 +2615,24 @@ Status WorkerOcEvictionManager::DeleteL2CacheEvictableObject(const ObjectKV &obj
 }
 
 Status WorkerOcEvictionManager::GetAndLockEntry(const std::string &objectKey, std::shared_ptr<SafeObjType> &entry,
-                                                EvictFailedList &evictFailedIds)
+                                                std::optional<EvictionList::Node> &retrySnapshot)
 {
+    retrySnapshot.reset();
     Status rc = objectTable_->Get(objectKey, entry);
     if (rc.IsError()) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Object not in ObjectTable, %s.", objectKey, rc.ToString());
-        (void)memEvictionList_.Erase(objectKey);
+        Erase(objectKey);
         return rc;
     }
     rc = entry->TryWLock();
     if (rc.IsError()) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Object TryWLock failed, %s.", objectKey, rc.ToString());
-        Status eraseRc = memEvictionList_.Erase(objectKey);
+        EvictionList::Node erasedNode;
+        Status eraseRc = ExtractEvictionNode(objectKey, erasedNode);
         if (rc.GetCode() == K_TRY_AGAIN && eraseRc.IsOk()) {
             // Transient lock contention: re-add with Q1 so the object does not gain 5x clock
             // protection that would invert LRU order (issue #750).
-            uint8_t counter = Q1;
-            evictFailedIds.emplace_back(objectKey, counter);
+            retrySnapshot = std::move(erasedNode);
         }
     }
     return rc;
@@ -2030,19 +2683,20 @@ bool WorkerOcEvictionManager::IsObjectEvictable(const ObjectKV &objectKV)
 {
     const auto &objectKey = objectKV.GetObjKey();
     const SafeObjType &entry = objectKV.GetObjEntry();
-    if (!memEvictionList_.Exist(objectKey)) {
+    EvictionList::Node evictionNode;
+    if (GetObjectInfo(objectKey, evictionNode).IsError()) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Object not in EvictionList.", objectKey);
         return false;
     }
     bool isBinary = entry->IsBinary();
     if (!isBinary && !entry->HasL2Cache()) {
         LOG(ERROR) << FormatString("[ObjectId %s] Object doesn't have L2 cache, it's wrong status.", objectKey);
-        (void)memEvictionList_.Erase(objectKey);
+        Erase(objectKey);
         return false;
     }
     if (isBinary && entry->GetShmUnit() == nullptr) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Object's shm has been free.", objectKey);
-        (void)memEvictionList_.Erase(objectKey);
+        Erase(objectKey);
         return false;
     }
     return true;

@@ -703,6 +703,119 @@ message WorkerStat {
   uint64 used_memory = 4;
   uint64 memory_capacity = 5;
   uint64 memory_limit = 6;
+  // Heat-rebalance reporting fields (only populated by workers running the heat eviction strategy).
+  // Field numbers 7/8/9 chosen to avoid master's memory_limit (6).
+  uint64 hot_primary_copy_count = 7;
+  uint64 total_primary_copy_count = 8;
+  uint64 hot_primary_copy_bytes = 9;
+  EvictionPolicyPb eviction_policy = 10;
+  uint64 eviction_policy_epoch = 11;
+  EvictionPolicyUpdatePhasePb eviction_policy_update_phase = 12;
+  EvictionPolicyWorkerStatusPb eviction_policy_worker_status = 13;
+  uint64 eviction_policy_total_objects = 14;
+  uint64 eviction_policy_migrated_objects = 15;
+  int32 eviction_policy_failure_code = 16;
+  string eviction_policy_failure_reason = 17;
+  uint64 eviction_policy_control_epoch = 18;
+}
+
+enum EvictionPolicyPb {
+  EVICTION_POLICY_UNSPECIFIED = 0;
+  EVICTION_POLICY_CLOCK = 1;
+  EVICTION_POLICY_HEAT = 2;
+}
+
+enum EvictionPolicyUpdatePhasePb {
+  EVICTION_POLICY_STABLE = 0;
+  EVICTION_POLICY_DRAINING = 1;
+  EVICTION_POLICY_MIGRATING = 2;
+  EVICTION_POLICY_VERIFYING = 3;
+  EVICTION_POLICY_ACTIVATING = 4;
+}
+
+enum EvictionPolicyCommandPb {
+  EVICTION_POLICY_COMMAND_UNSPECIFIED = 0;
+  EVICTION_POLICY_COMMIT_CONVERT = 1;
+  EVICTION_POLICY_PRECHECK = 2;
+}
+
+enum EvictionPolicyWorkerStatusPb {
+  EVICTION_POLICY_WORKER_NONE = 0;
+  EVICTION_POLICY_WORKER_READY = 1;
+  EVICTION_POLICY_WORKER_CONVERTING = 2;
+  EVICTION_POLICY_WORKER_ACTIVE = 3;
+  EVICTION_POLICY_WORKER_FAILED = 4;
+}
+
+message EvictionPolicyUpdatePb {
+  uint64 epoch = 1;
+  EvictionPolicyPb target_policy = 2;
+  uint32 migration_batch_size = 3;
+  EvictionPolicyCommandPb command = 4;
+  uint64 minimum_available_memory_bytes = 5;
+  uint64 maximum_source_objects = 6;
+  uint64 deadline_unix_ms = 7;
+}
+
+// Durable cluster-wide rollout intent stored in the coordination backend.
+message EvictionPolicyRolloutPb {
+  EvictionPolicyUpdatePb update = 1;
+  uint32 cohort_percent = 2;
+}
+
+// Worker-local crash-recovery state. The transition intent is persisted before
+// eviction is drained; last-good is advanced only after migration audit passes.
+message EvictionPolicyWorkerStatePb {
+  EvictionPolicyPb active_policy = 1;
+  uint64 active_epoch = 2;
+  bool has_transition_intent = 3;
+  EvictionPolicyPb target_policy = 4;
+  uint64 transition_epoch = 5;
+  string cluster_name = 6;
+}
+
+message StartEvictionPolicyUpdateReqPb {
+  EvictionPolicyUpdatePb update = 1;
+  uint32 cohort_percent = 2;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message StartEvictionPolicyUpdateRspPb {}
+
+message GetEvictionPolicyUpdateProgressReqPb {
+  uint64 epoch = 1;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message EvictionPolicyWorkerProgressPb {
+  string address = 1;
+  EvictionPolicyPb active_policy = 2;
+  uint64 epoch = 3;
+  EvictionPolicyUpdatePhasePb phase = 4;
+  EvictionPolicyWorkerStatusPb status = 5;
+  uint64 total_objects = 6;
+  uint64 migrated_objects = 7;
+  int32 failure_code = 8;
+  string failure_reason = 9;
+}
+
+message GetEvictionPolicyUpdateProgressRspPb {
+  EvictionPolicyRolloutPb rollout = 1;
+  repeated EvictionPolicyWorkerProgressPb workers = 2;
+  // Selected workers observed by this Master, not the global topology cohort size.
+  uint64 selected_workers = 3;
+  uint64 ready_workers = 4;
+  uint64 converting_workers = 5;
+  uint64 active_workers = 6;
+  uint64 failed_workers = 7;
 }
 
 message RebalanceTaskPb {
@@ -714,6 +827,13 @@ message RebalanceTaskPb {
   uint64 create_time_ms = 6;
   // Relative timeout assigned by master. Source worker converts it to a local steady-clock deadline.
   uint64 timeout_ms = 7;
+  // Policy fences captured from the same resource snapshot used to select the pair.
+  EvictionPolicyPb source_eviction_policy = 8;
+  uint64 source_eviction_policy_epoch = 9;
+  EvictionPolicyPb target_eviction_policy = 10;
+  uint64 target_eviction_policy_epoch = 11;
+  // Old masters omit policy fields. Keep their tasks wire-compatible during rolling upgrade.
+  bool has_eviction_policy_fence = 12;
 }
 
 enum RebalanceTaskStatusPb {
@@ -774,6 +894,7 @@ message ResourceReportReqPb {
 message ResourceReportRspPb {
   repeated WorkerStat stats = 1;
   RebalanceTaskPb rebalance_task = 2;
+  EvictionPolicyUpdatePb eviction_policy_update = 3;
 }
 
 message LivenessCheckReqPb {
@@ -820,6 +941,9 @@ service MasterOCService {
   rpc CreateMultiMeta(CreateMultiMetaReqPb) returns (CreateMultiMetaRspPb) {}
   rpc ReportResource(ResourceReportReqPb) returns (ResourceReportRspPb) {}
   rpc ReportRebalanceResult(ReportRebalanceResultReqPb) returns (ReportRebalanceResultRspPb) {}
+  rpc StartEvictionPolicyUpdate(StartEvictionPolicyUpdateReqPb) returns (StartEvictionPolicyUpdateRspPb) {}
+  rpc GetEvictionPolicyUpdateProgress(GetEvictionPolicyUpdateProgressReqPb)
+      returns (GetEvictionPolicyUpdateProgressRspPb) {}
   rpc LivenessCheck(LivenessCheckReqPb) returns (LivenessCheckRspPb) {}
 
 

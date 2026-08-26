@@ -1675,6 +1675,18 @@ Status OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, con
                 response.add_success_ids(objectKey);
                 continue;
             }
+            // Eviction deletes a local non-primary copy before this asynchronous request reaches the master. In the
+            // meantime, a same-version rebalance can promote that address to primary. Version comparison cannot
+            // distinguish the stale delete from the new ownership state, so never let an eviction cleanup remove the
+            // master's current primary. Primary end-of-life uses its coordinated DeleteAllCopyMeta path instead.
+            if (request.cause() == RemoveMetaReqPb::EVICTION && !accessor->second.IsNoneL2CacheEvict()
+                && accessor->second.meta.primary_address() == address) {
+                LOG(WARNING) << FormatString(
+                    "[ObjectKey %s] Ignore stale eviction RemoveMeta for current primary %s, version: %zu",
+                    objectKey, address, latestVersion);
+                response.add_success_ids(objectKey);
+                continue;
+            }
             (void)accessor->second.locations.erase(address);
             (void)objectStore_->RemoveObjectLocation(objectKey, address);
             if (ShouldRemoveNoneL2Meta(accessor->second, request.cause())) {

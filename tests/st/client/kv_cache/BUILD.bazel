@@ -57,6 +57,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "kv_cache_client_heat_evict_test",
+    srcs = ["kv_cache_client_heat_evict_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//tests/st/cluster:heat_watermark_collector",
+    ],
+)
+
+ds_cc_test(
     name = "kv_cache_client_exist_test",
     srcs = ["kv_cache_client_exist_test.cpp"],
     tags = ["manual"],
@@ -373,6 +382,36 @@ ds_cc_test(
         "//src/datasystem/common/util:format",
         "//src/datasystem/protos:cluster_topology_cc_proto",
         "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_heat_rebalance_test",
+    srcs = ["kv_client_heat_rebalance_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+        "//tests/st/cluster:heat_watermark_collector",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_keep_local_rebalance_test",
+    srcs = ["kv_client_keep_local_rebalance_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+        "//tests/st/cluster:heat_watermark_collector",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_eviction_rebalance_telemetry_test",
+    srcs = ["kv_client_eviction_rebalance_telemetry_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/util:format",
     ],
 )
 
