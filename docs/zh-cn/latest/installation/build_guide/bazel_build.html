@@ -810,7 +810,7 @@ ASan 的运行时约束（ASLR、shadow memory、leak detection），是 binding
 <td><p>忽略</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-x</span></code> (jemalloc profiling)</p></td>
-<td><p>暂不支持</p></td>
+<td><p>支持；Worker 始终使用 jemalloc 作为默认进程内存分配器，<code class="docutils literal notranslate"><span class="pre">-x</span> <span class="pre">on</span></code> 选择启用 profiling 能力的 jemalloc 共享库</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-J</span></code> (Java API)</p></td>
 <td><p>暂不支持</p></td>
@@ -824,6 +824,9 @@ ASan 的运行时约束（ASLR、shadow memory、leak detection），是 binding
 </tbody>
 </table>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">-x</span> <span class="pre">on</span></code> 只编译 jemalloc profiling 能力，不会默认启动采样。需要采集 heap profile 时，再在启动 Worker
+前通过 <code class="docutils literal notranslate"><span class="pre">MALLOC_CONF</span></code> 配置 <code class="docutils literal notranslate"><span class="pre">prof:true</span></code> 等运行时选项；未使用 <code class="docutils literal notranslate"><span class="pre">-x</span> <span class="pre">on</span></code> 的普通构建仍由 jemalloc 接管
+Worker 进程分配，但不包含 profiling 能力。</p>
 </section>
 </section>
 <section id="bazel-build">

@@ -263,12 +263,12 @@ ssh username@hostname
 
 ### 集群部署
 
-本节介绍 Worker 对接 ETCD 或 Coordinator 的单机和多机部署方式。部署 Worker 前，需要先准备且仅准备一种集群管理后端：
+本节介绍 Worker 对接 ETCD 或 Coordinator 的单机和多机部署方式。两种方式只能选择其一：
 
-- 对接 ETCD 时，先完成[安装并部署ETCD](#安装并部署etcd)。
-- 对接 Coordinator 时，先完成[安装并部署Coordinator](#安装并部署coordinator)。
+- 选择 ETCD：部署前先完成[安装并部署ETCD](#安装并部署etcd)，并确认 Worker 使用 `etcd_address`。
+- 选择 Coordinator：部署前先完成[安装并部署Coordinator](#安装并部署coordinator)，并确认 Worker 使用 `coordinator_address`。
 
-Worker 的 `coordinator_address`、`etcd_address`、`metastore_address` 必须且只能配置一个；本节仅介绍对接 ETCD 和 Coordinator 的部署方式。
+Worker 的 `coordinator_address`、`etcd_address`、`metastore_address` 必须且只能配置一个；请不要同时配置 ETCD 与 Coordinator。
 
 #### 单机部署
 

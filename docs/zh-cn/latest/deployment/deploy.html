@@ -895,12 +895,12 @@ chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>~
 </section>
 <section id="id14">
 <h3>集群部署<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
-<p>本节介绍 Worker 对接 ETCD 或 Coordinator 的单机和多机部署方式。部署 Worker 前，需要先准备且仅准备一种集群管理后端：</p>
+<p>本节介绍 Worker 对接 ETCD 或 Coordinator 的单机和多机部署方式。两种方式只能选择其一：</p>
 <ul class="simple">
-<li><p>对接 ETCD 时，先完成<a class="reference internal" href="#etcd">安装并部署ETCD</a>。</p></li>
-<li><p>对接 Coordinator 时，先完成<a class="reference internal" href="#coordinator">安装并部署Coordinator</a>。</p></li>
+<li><p>选择 ETCD：部署前先完成<a class="reference internal" href="#etcd">安装并部署ETCD</a>，并确认 Worker 使用 <code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>。</p></li>
+<li><p>选择 Coordinator：部署前先完成<a class="reference internal" href="#coordinator">安装并部署Coordinator</a>，并确认 Worker 使用 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>。</p></li>
 </ul>
-<p>Worker 的 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>、<code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>、<code class="docutils literal notranslate"><span class="pre">metastore_address</span></code> 必须且只能配置一个；本节仅介绍对接 ETCD 和 Coordinator 的部署方式。</p>
+<p>Worker 的 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>、<code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>、<code class="docutils literal notranslate"><span class="pre">metastore_address</span></code> 必须且只能配置一个；请不要同时配置 ETCD 与 Coordinator。</p>
 <section id="id15">
 <h4>单机部署<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h4>
 <p>单机部署支持快速部署和通过配置项部署两种方式。</p>
