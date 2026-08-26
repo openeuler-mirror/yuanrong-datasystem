@@ -14,7 +14,7 @@ openYuanrong datasystem 已发布至 [PyPI](https://pypi.org/project/openyuanron
 
 - **Python 版本**：Python 3.9、3.10 或 3.11
 - **操作系统**：Linux（推荐 glibc 2.34+）
-- **架构**：x86-64
+- **架构**：x86_64 或 aarch64
 
 您可以通过以下命令检查：
 
