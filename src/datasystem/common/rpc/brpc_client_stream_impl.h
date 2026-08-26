@@ -20,12 +20,10 @@
  * BrpcClientWriterImpl<W> — client-streaming (stream→unary):
  *   Client writes N messages via brpc::StreamWrite on a StreamCreate'd stream,
  *   closes the stream, then reads a single response from the RPC.
- *   Comparable to ZMQ ClientWriterImpl<W>.
  *
  * BrpcClientReaderImpl<R> — server-streaming (unary→stream):
  *   Client sends a single request via CallMethod, receives N response
  *   messages via the stream's on_received_messages callback.
- *   Comparable to ZMQ ClientReaderImpl<R>.
  */
 #ifndef DATASYSTEM_COMMON_RPC_BRPC_CLIENT_STREAM_IMPL_H
 #define DATASYSTEM_COMMON_RPC_BRPC_CLIENT_STREAM_IMPL_H

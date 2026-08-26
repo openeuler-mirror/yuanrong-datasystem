@@ -109,9 +109,9 @@ Status SubmitRemoteAsyncRpc(const std::shared_ptr<BrpcSession> &brpcSession, int
     return Status::OK();
 }
 
-// Dispatch an AsyncWrite call to either the brpc or zmq session of remoteRpc, log and forward any
-// failure via serverApi, and stamp the response tag on success. The two write operations are passed
-// as generic lambdas because the stub AsyncWrite methods are overloaded (PTMFs do not resolve cleanly).
+// Dispatch an AsyncWrite call to the brpc session of remoteRpc, log and forward any
+// failure via serverApi, and stamp the response tag on success. The write operation is passed
+// as a generic lambda because the stub AsyncWrite methods are overloaded (PTMFs do not resolve cleanly).
 template <typename RemoteRpc, typename ReqT, typename ServerApiT, typename BrpcWrite>
 Status RunAsyncWrite(RemoteRpc &remoteRpc, int64_t remainingTime, const ReqT &req,
                      const std::shared_ptr<ServerApiT> &serverApi, const std::string &logTag,

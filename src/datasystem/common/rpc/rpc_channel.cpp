@@ -23,10 +23,10 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-RpcChannel::RpcChannel(std::string zmqEndPoint)
-    : endPoint_(std::move(zmqEndPoint))
+RpcChannel::RpcChannel(std::string endPoint)
+    : endPoint_(std::move(endPoint))
 {
-    isIPv6_ = IsTcpipEndPointIPv6(zmqEndPoint);
+    isIPv6_ = IsTcpipEndPointIPv6(endPoint);
 }
 
 RpcChannel::RpcChannel(const HostPort &destAddr)
@@ -87,7 +87,7 @@ std::string RpcChannel::TcpipEndPoint(const HostPort &localAddress)
     return std::string("tcp://") + localAddress.ToString();
 }
 
-const std::string &RpcChannel::GetZmqEndPoint() const
+const std::string &RpcChannel::GetEndPoint() const
 {
     return endPoint_;
 }

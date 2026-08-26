@@ -21,9 +21,8 @@
  * Binary payloads are transferred via brpc IOBuf attachments.
  *
  * Async completion model:
- *   In ZMQ mode, ServerUnaryWriterReader owns the response lifetime and
- *   sends it directly. In brpc, the response is owned by CallMethod and
- *   sent when CallMethod returns (or done->Run() is called).
+ *   The response is owned by CallMethod and sent when CallMethod returns
+ *   (or done->Run() is called).
  *
  *   Service methods that dispatch to a thread pool (e.g., CreateProducer)
  *   return immediately from CallMethod, but the thread pool worker calls
@@ -287,13 +286,13 @@ public:
         if (doneConsumed_.load(std::memory_order_acquire)) {
             return Status::OK();
         }
-        // tagPayloadFrame is a ZMQ concept: when true, the size frame's message
-        // type is set to PAYLOAD_SZ for ZMQ routing. In brpc, all payload is
-        // sent via Controller::response_attachment() with a uniform [count][size][data]
-        // framing -- there is no equivalent ZMQ message-type flag.
+        // tagPayloadFrame is a legacy ZMQ routing concept: when true, the size
+        // frame's message type was set to PAYLOAD_SZ. Under the brpc-only path it
+        // is dead -- all payload is sent via Controller::response_attachment() with
+        // a uniform [count][size][data] framing, and there is no message-type flag.
         if (tagPayloadFrame) {
             LOG_EVERY_N(WARNING, kTagPayloadFrameWarnInterval) << "SendAndTagPayload tagPayloadFrame ignored -- "
-                                         "ZMQ frame tags not applicable to brpc attachment path";
+                                         "legacy frame tag not applicable to brpc attachment path";
         }
         auto st = AppendToResponseAttachment(buffer);
         if (st.IsOk()) {
@@ -309,7 +308,7 @@ public:
         }
         if (tagPayloadFrame) {
             LOG_EVERY_N(WARNING, kTagPayloadFrameWarnInterval) << "SendAndTagPayload tagPayloadFrame ignored -- "
-                                         "ZMQ frame tags not applicable to brpc attachment path";
+                                         "legacy frame tag not applicable to brpc attachment path";
         }
         auto st = AppendMemViewToResponseAttachment(payload);
         if (st.IsOk()) {
@@ -352,7 +351,7 @@ public:
 
     bool EnableMsgQ() override
     {
-        // brpc uses its own internal messaging, not ZMQ message queues.
+        // brpc handles message dispatch internally; no external message queue is needed.
         return false;
     }
 

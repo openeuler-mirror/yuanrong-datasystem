@@ -1204,7 +1204,7 @@ private:
     void BatchReleaseBufferPtr(const std::vector<Buffer *> &buffers);
 
     /**
-     * @brief Batch release local memory ref by zmq RPC.
+     * @brief Batch release local memory ref by RPC.
      * @param[in] shmInfos The shared memory info of buffers.
      */
     void BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos);
@@ -1730,9 +1730,8 @@ private:
 
     // Whether a failed Init attempt's error code indicates the worker is genuinely
     // unreachable and should be excluded for the remainder of this Init call.
-    // K_RPC_UNAVAILABLE and K_CLIENT_WORKER_DISCONNECT always qualify; under zmq
-    // K_RPC_DEADLINE_EXCEEDED also qualifies (a post-TCP-probe timeout is the only
-    // dead-worker signal). Under brpc K_RPC_DEADLINE_EXCEEDED is treated as transient.
+    // K_RPC_UNAVAILABLE and K_CLIENT_WORKER_DISCONNECT always qualify;
+    // K_RPC_DEADLINE_EXCEEDED is treated as transient.
     bool ShouldExcludeFailedWorker(const Status &rc) const;
 
     bool ShouldRetryInit(const Status &status) const;

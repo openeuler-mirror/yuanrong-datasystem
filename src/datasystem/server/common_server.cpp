@@ -59,8 +59,9 @@ Status CommonServer::InitGenericBrpcService()
 #ifdef WITH_TESTS
     // GenericService (SetInjectAction / ClearInjectAction / GetInjectActionExecuteCount /
     // GcovFlush) is only created under WITH_TESTS. CreateGenericService() wires it
-    // into the ZMQ builder only; in brpc mode we must register the generated
-    // GenericServiceBrpcAdapter so test control-plane RPCs reach a brpc handler.
+    // into the legacy service builder only; the generated GenericServiceBrpcAdapter
+    // must also be registered with the brpc server so test control-plane RPCs reach
+    // a brpc handler.
     if (genericSvc_ != nullptr && rpcServer_ != nullptr && rpcServer_->IsBrpc()) {
         brpcGenericAdapter_ = std::make_unique<GenericServiceBrpcAdapter>(*genericSvc_);
         RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcGenericAdapter_.get()));

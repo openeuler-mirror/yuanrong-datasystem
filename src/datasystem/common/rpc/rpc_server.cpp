@@ -112,8 +112,8 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port)
 
     brpc::ServerOptions options;
     options.idle_timeout_sec = -1;
-    // Builtin HTTP services (/flags, /pprof, /vars) are off by default to match the
-    // ZMQ security baseline; set FLAGS_brpc_enable_builtin_services=true to debug.
+    // Builtin HTTP services (/flags, /pprof, /vars) are off by default for a
+    // tight security surface; set FLAGS_brpc_enable_builtin_services=true to debug.
     options.has_builtin_services = FLAGS_brpc_enable_builtin_services;
     // ST workers run worker + master in the same process, so a brpc handler on
     // worker can make a nested brpc call to itself (as master). With the default

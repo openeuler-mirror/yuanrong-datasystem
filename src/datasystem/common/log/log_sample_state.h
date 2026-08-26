@@ -18,16 +18,16 @@
  * Description: Transport-neutral helpers for request log sampling state.
  *
  * GetOrCreateLogSampleState() serializes the current thread/bthread Trace
- * request-sampling decision into the LogSampleState enum carried by RPC
- * metadata (zmq MetaPb.log_sample_state, or the brpc trace attachment state
- * byte). ApplyLogSampleState() restores that decision into the receiving
- * side's Trace. Both transports (zmq MetaPb, brpc attachment) share these
- * helpers so the sampling contract has exactly one definition.
+ * request-sampling decision into the LogSampleState enum carried by the brpc
+ * trace attachment state byte (mirroring the MetaPb.log_sample_state field on
+ * the request metadata proto). ApplyLogSampleState() restores that decision
+ * into the receiving side's Trace, so the sampling contract has exactly one
+ * definition.
  *
  * The LogSampleState enum itself lives in the transport-neutral
  * datasystem/protos/log_sample.proto (imported by meta_zmq.proto for the
  * MetaPb field), so this log module header depends on log_sample_cc_proto and
- * does NOT pull the zmq-specific meta_zmq proto.
+ * does NOT pull the meta_zmq proto.
  */
 
 #ifndef DATASYSTEM_COMMON_LOG_LOG_SAMPLE_STATE_H

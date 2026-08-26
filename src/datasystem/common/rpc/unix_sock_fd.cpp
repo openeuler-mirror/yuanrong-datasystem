@@ -406,12 +406,12 @@ Status UnixSockFd::BindTcp(struct addrinfo *servInfo, HostPort &outHostPort)
     return Status::OK();
 }
 
-Status UnixSockFd::Bind(const std::string &zmqEndPt, mode_t perm, std::string &bindStr)
+Status UnixSockFd::Bind(const std::string &endPoint, mode_t perm, std::string &bindStr)
 {
     const std::string tcpTransport = "tcp://";
     const std::string udsTransport = "ipc://";
-    std::string tcpHostPort = ParseEndPt(zmqEndPt, tcpTransport);
-    std::string udsPath = ParseEndPt(zmqEndPt, udsTransport);
+    std::string tcpHostPort = ParseEndPt(endPoint, tcpTransport);
+    std::string udsPath = ParseEndPt(endPoint, udsTransport);
 
     CHECK_FAIL_RETURN_STATUS(fd_ == RPC_NO_FILE_FD, K_RUNTIME_ERROR,
                              FormatString("Bind attempted against a socket that is not closed."));
@@ -431,7 +431,7 @@ Status UnixSockFd::Bind(const std::string &zmqEndPt, mode_t perm, std::string &b
         RETURN_IF_NOT_OK(BindUds(addr, perm));
         bindStr = udsPath;
     } else {
-        RETURN_STATUS(K_INVALID, FormatString("Invalid end point %s", zmqEndPt));
+        RETURN_STATUS(K_INVALID, FormatString("Invalid end point %s", endPoint));
     }
     return Status::OK();
 }
@@ -495,15 +495,15 @@ Status UnixSockFd::ConnectTcp(struct addrinfo *servInfo)
     return Status::OK();
 }
 
-Status UnixSockFd::Connect(const std::string &ZmqEndPt)
+Status UnixSockFd::Connect(const std::string &endPoint)
 {
     std::string tcpHostPort;
     std::string udsPath;
-    if (!(tcpHostPort = ParseEndPt(ZmqEndPt, "tcp://")).empty()) {
+    if (!(tcpHostPort = ParseEndPt(endPoint, "tcp://")).empty()) {
         struct addrinfo *servInfo;
         RETURN_IF_NOT_OK(GetAddrInfo(tcpHostPort, &servInfo));
         RETURN_IF_NOT_OK(ConnectTcp(servInfo));
-    } else if (!(udsPath = ParseEndPt(ZmqEndPt, "ipc://")).empty()) {
+    } else if (!(udsPath = ParseEndPt(endPoint, "ipc://")).empty()) {
         sockaddr_un addr{};
         RETURN_IF_NOT_OK(UnixSockFd::SetUpSockPath(udsPath, addr));
         if (fd_ == RPC_NO_FILE_FD) {
@@ -511,7 +511,7 @@ Status UnixSockFd::Connect(const std::string &ZmqEndPt)
         }
         RETURN_IF_NOT_OK(Connect(addr));
     } else {
-        RETURN_STATUS(K_INVALID, FormatString("Invalid end point %s", ZmqEndPt));
+        RETURN_STATUS(K_INVALID, FormatString("Invalid end point %s", endPoint));
     }
     return Status::OK();
 }

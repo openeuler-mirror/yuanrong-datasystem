@@ -23,7 +23,7 @@
  * The trailing 1-byte LogSampleState carries the request sampling decision
  * (NONE/ADMIT/REJECT/UNDECIDED) so the receiving side restores
  * requestLogTrace + sampleDecision via ApplyLogSampleState(), mirroring the
- * zmq MetaPb.log_sample_state propagation. The server adapter strips this
+ * MetaPb.log_sample_state field. The server adapter strips this
  * prefix in CallMethod before dispatching. The magic version is intentionally
  * left at V1; the state byte is read defensively on the server (absent or
  * out-of-range byte falls back to LOG_SAMPLE_UNDECIDED), so this change

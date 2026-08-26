@@ -53,7 +53,7 @@ int64_t RemainingCallbackBudgetUs(std::chrono::steady_clock::time_point deadline
  * OnFailure on every surviving worker. Each survivor's RpcStubCacheMgr may still hold
  * WORKER_WORKER_OC_SVC / WORKER_WORKER_SC_SVC / WORKER_WORKER_TRANS_SVC stubs to the dead
  * peer; without removal they keep reconnecting and retransmitting TCP SYNs (Issue #766).
- * brpc Channel and ZMQ socket destruction are both driven by RpcStubCacheMgr::Remove.
+ * brpc Channel destruction is driven by RpcStubCacheMgr::Remove.
  *
  * @param[in] action Topology callback facts carrying the failed member identity.
  * @return K_OK on success; K_INVALID if the failed address is absent/unparseable;

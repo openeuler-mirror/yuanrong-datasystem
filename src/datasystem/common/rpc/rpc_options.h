@@ -46,7 +46,8 @@ public:
 
     /**
      * @brief Set the high watermark.
-     * @note Increase the frontend zmq socket hwm to infinite, using `SetHWM(0)`.
+     * @note HWM is a legacy config field; under brpc it is written to RpcServiceCfg
+     *       but not consumed by the transport. Kept for caller compatibility.
      * @param[in] hwm High watermark value.
      */
     void SetHWM(int hwm);

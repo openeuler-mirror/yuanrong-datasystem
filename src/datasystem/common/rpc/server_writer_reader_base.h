@@ -16,7 +16,7 @@
 
 /**
  * Description: Abstract base class for server-side bidi-streaming WriterReader.
- * Both ZMQ and brpc implementations inherit from this interface.
+ * The brpc implementation (BrpcServerWriterReaderImpl) inherits from this interface.
  */
 #ifndef DATASYSTEM_COMMON_RPC_SERVER_WRITER_READER_BASE_H
 #define DATASYSTEM_COMMON_RPC_SERVER_WRITER_READER_BASE_H
@@ -32,8 +32,7 @@ namespace datasystem {
 /**
  * @brief Pure virtual interface for server-side bidi-streaming.
  *
- * Defines the contract that both ServerWriterReaderImpl (ZMQ) and
- * BrpcServerWriterReaderImpl (brpc) must implement.
+ * Defines the contract that BrpcServerWriterReaderImpl must implement.
  *
  * @tparam W Write (response) protobuf type.
  * @tparam R Read (request) protobuf type.

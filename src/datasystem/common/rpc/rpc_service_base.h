@@ -34,8 +34,9 @@ namespace datasystem {
 /**
  * @brief Abstract base for RPC services emitted by the protoc generator.
  * The generator emits a subclass per service; brpc adapters dispatch onto it.
- * zmq dispatch fields (methodMap_/serviceName_) are retained for generated-code
- * compatibility and are dead under brpc-only transport.
+ * serviceName_ is retained for generated-code compatibility (generator emits a
+ * constructor that assigns it); ServiceName() overrides return the literal
+ * name, so the member is dead under the brpc-only transport.
  */
 class RpcServiceBase {
 public:
