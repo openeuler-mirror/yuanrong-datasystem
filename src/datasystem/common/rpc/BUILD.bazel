@@ -142,7 +142,6 @@ ds_cc_library(
         ":bthread_utils",
         ":rpc_auth_key_manager",
         ":rpc_constants",
-        ":rpc_credential",
         ":rpc_helper",
         ":rpc_options",
         ":rpc_service_cfg",
@@ -165,7 +164,6 @@ ds_cc_library(
         "rpc_auth_keys.h",
     ],
     deps = [
-        ":rpc_credential",
         #":rpc_server",
         "//src/datasystem/common/encrypt:common_encrypt",
         "//src/datasystem/common/flags:ds_flags",
@@ -187,7 +185,6 @@ ds_cc_library(
         "rpc_channel.h",
     ],
     deps = [
-        ":rpc_credential",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:sensitive_value",
         "//src/datasystem/common/util:status_helper",
@@ -327,23 +324,6 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "rpc_credential",
-    srcs = [
-        "rpc_credential.cpp",
-    ],
-    hdrs = [
-        "rpc_credential.h",
-    ],
-    deps = [
-        ":rpc_message",
-        ":rpc_options",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/protos:meta_zmq_cc_proto",
-    ],
-)
-
-ds_cc_library(
     name = "rpc_unary_client_impl",
     hdrs = [
         "brpc_async_context.h",
@@ -454,7 +434,6 @@ ds_cc_library(
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/lru:lru_cache",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
-        "//src/datasystem/common/rpc:rpc_credential",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:raii",
@@ -481,7 +460,6 @@ ds_cc_library(
         "//src/datasystem/common/lru:lru_headers",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
-        "//src/datasystem/common/rpc:rpc_credential",
         "//src/datasystem/common/util:bitmask_enum",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:net_util",

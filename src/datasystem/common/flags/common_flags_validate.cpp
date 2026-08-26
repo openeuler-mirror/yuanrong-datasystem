@@ -239,7 +239,6 @@ bool ValidateOptionalLogName(const char *flagName, const std::string &value)
 DS_DEFINE_validator(l2_cache_type, &Validator::ValidateL2CacheType);
 DS_DEFINE_validator(sdk_data_placement_policy, &ValidateDataPlacementPolicy);
 DS_DEFINE_validator(io_thread_nice, &ValidateIoThreadNice);
-DS_DEFINE_validator(zmq_chunk_sz, &Validator::ValidateInt32);
 DS_DEFINE_validator(node_timeout_s, &Validator::ValidateNodeTimeout);
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);
 DS_DEFINE_validator(eviction_high_watermark_ratio, &Validator::ValidateWatermarkHighRatio);
@@ -266,7 +265,6 @@ DS_DEFINE_validator(rebalance_task_report_grace_ms, &Validator::ValidateUint32);
 DS_DEFINE_validator(monitor_config_file, &Validator::ValidatePathString);
 DS_DEFINE_validator(unix_domain_socket_dir, &Validator::ValidateUnixDomainSocketDir);
 DS_DEFINE_validator(log_filename, &ValidateOptionalLogName);
-DS_DEFINE_validator(curve_key_dir, &Validator::ValidatePathString);
 DS_DEFINE_validator(shared_disk_directory, &Validator::ValidatePathString);
 DS_DEFINE_validator(distributed_disk_path, &Validator::ValidatePathString);
 DS_DEFINE_validator(encrypt_kit, &Validator::ValidateEncryptKit);

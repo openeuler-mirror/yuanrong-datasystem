@@ -42,9 +42,6 @@ DS_DEFINE_string(
 DS_DEFINE_string(log_filename, "",
                  "Prefix of log filename, default is program invocation short name. Only letters, digits, and "
                  "underscores are allowed.");
-DS_DEFINE_string(curve_key_dir, "",
-                 "The directory to find ZMQ curve key files. This path must be specified "
-                 "when zmq authentication is enabled. Path must be less than 4095 characters (PATH_MAX).");
 DS_DEFINE_string(
     shared_disk_directory, "",
     "Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled.");
@@ -161,7 +158,6 @@ DS_DEFINE_int32(io_thread_nice, 0,
                 "require appropriate privileges.");
 DS_DEFINE_bool(enable_sched_runtime, true,
                "Enable selected threads to set the Linux scheduler runtime. Default is true.");
-DS_DEFINE_int32(zmq_chunk_sz, 1048576, "Parallel payload split chunk size. Default to 1048756 bytes");
 DS_DEFINE_bool(cache_rpc_session, true, "Deprecated: This flag is deprecated and will be removed in future releases.");
 DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
 DS_DEFINE_string(coordinator_address, "",

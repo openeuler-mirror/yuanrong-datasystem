@@ -31,7 +31,6 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/lru/lru_cache.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"

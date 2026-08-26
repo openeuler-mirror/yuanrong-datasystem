@@ -64,7 +64,6 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/rpc/brpc_stream_close_helper.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -2039,10 +2038,6 @@ Status WorkerOCServer::Init()
 
 Status WorkerOCServer::InitRpcAndMemoryRuntime()
 {
-    RpcCredential cred;
-    RETURN_IF_NOT_OK(RpcAuthKeyManager::ServerLoadKeys(WORKER_SERVER_NAME, cred));
-    builder_.SetCredential(cred);
-
     // Configure HCCS worker IP before any allocator/mmap path can trigger RemoteH2DManager::Instance()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetRH2DLocalEndpointIp(hostPort_.Host()), "Failed to configure HCCS worker IP");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeRemoteH2DManager(), "Remote H2D transport init failed");

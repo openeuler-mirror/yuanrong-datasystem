@@ -31,7 +31,7 @@
 #include "datasystem/client/stream_cache/client_worker_api.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/rpc/rpc_auth_keys.h"
 #include "datasystem/stream/consumer.h"
 #include "datasystem/stream/producer.h"
 #include "datasystem/stream/stream_config.h"

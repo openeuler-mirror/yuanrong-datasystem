@@ -32,7 +32,7 @@
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/rpc/rpc_auth_keys.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
@@ -1238,8 +1238,6 @@ public:
         fakeLocalAddr.ParseString("127.0.0.1:30000");
         aksk_ = std::make_shared<AkSkManager>();
         DS_ASSERT_OK(aksk_->SetClientAkSk(ak_, sk_));
-        RpcCredential cred;
-        RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred);
         // brpc mode: worker registers UtOCServiceBrpcAdapter. Use a brpc channel +
         // the generated UtOCService_BrpcGenericStub.
         const int32_t timeoutMs = 500;

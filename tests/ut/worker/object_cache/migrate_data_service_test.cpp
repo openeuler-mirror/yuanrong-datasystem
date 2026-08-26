@@ -1197,7 +1197,7 @@ TEST_F(NotifyRemoteGetMigrationTest, DispatchQueryMetadataGroupsKeepsPeerDeadOve
 
         const auto firstAddress = groups.begin()->first;
         const auto secondAddress = std::next(groups.begin())->first;
-        const bool firstIsDead = !ShouldUseServiceThreadPoolFanout(useBrpc);
+        const bool firstIsDead = true;
         auto makeApi = [this](const HostPort &masterAddress, Status status) {
             auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
             api->queryMeta_ = [status](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,

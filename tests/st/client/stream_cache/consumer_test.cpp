@@ -25,7 +25,6 @@
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "common/stream_cache/stream_common.h"
 #include "sc_client_common.h"
-#include "zmq_curve_test_common.h"
 #include "common/stream_cache/element_generator.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/timer.h"
@@ -1367,44 +1366,6 @@ TEST_F(ConsumerTest, GetStatisticsMessage3)
     ASSERT_EQ(recEle, K_10 + K_1000);
     ASSERT_EQ(notProcEle, 0);
 }
-
-
-class SCClientZmqCurveTest : public ConsumerTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.numWorkers = workerCount;
-        opts.enableLivenessProbe = true;
-        ConsumerTest::SetClusterSetupOptions(opts);
-        // use default configurations for all the other zmq curve gflags settings
-        opts.numEtcd = 1;
-        opts.vLogLevel = defaultLogLevel;
-    }
-
-    void SetUp() override
-    {
-        ExternalClusterTest::SetUp();
-    }
-
-    void TearDown() override
-    {
-        client1_.reset();
-        client2_.reset();
-        ExternalClusterTest::TearDown();
-    }
-
-protected:
-    Status InitTest()
-    {
-        InitStreamClient(0, client1_);
-        InitStreamClient(1, client2_);
-        return Status::OK();
-    }
-    std::shared_ptr<StreamClient> client1_ = nullptr;
-    std::shared_ptr<StreamClient> client2_ = nullptr;
-    const uint32_t workerCount = 2;
-    const uint32_t defaultLogLevel = 3;
-};
 
 /*
 On same node. Producer created before consumer. Consumer calls receive before producer send.

@@ -867,8 +867,6 @@ void SharedPageSendRecvOOMTest::SetClusterSetupOptions(ExternalClusterOptions &o
     opts.enableDistributedMaster = "true";
     opts.numRpcThreads = 0;
     opts.vLogLevel = DEFAULT_LOG_LEVEL;
-    // Increase the zmq_chunk_sz to beyond shared page size, so then it can batch elements from multiple pages.
-    opts.workerGflagParams = " -zmq_chunk_sz=10485760";
     SCClientCommon::SetClusterSetupOptions(opts);
 }
 

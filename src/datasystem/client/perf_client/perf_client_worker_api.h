@@ -24,7 +24,6 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
-#include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/perf_posix.stub.rpc.pb.h"
 #include "datasystem/protos/perf_posix.brpc.stub.pb.h"
@@ -40,7 +39,6 @@ public:
 
    /**
     * @brief Initialize AdminWorkerApi.
-    * @param[in] cred The authentication credential.
     * @return Status of the call.
     */
    Status Init();

@@ -22,10 +22,11 @@
 namespace datasystem {
 namespace object_cache {
 
-inline bool ShouldUseServiceThreadPoolFanout(bool useBrpc)
+// brpc is the only RPC transport: service handlers run on the caller thread
+// (fanout would join worker tasks with std::future::get/wait, which is not used).
+inline bool ShouldUseServiceThreadPoolFanout()
 {
-    // Service fanout joins worker tasks with std::future::get/wait. Keep brpc handlers on the caller thread.
-    return !useBrpc;
+    return false;
 }
 
 template <typename Iterator, typename TaskFn>

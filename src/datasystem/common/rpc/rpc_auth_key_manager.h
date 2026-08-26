@@ -21,7 +21,6 @@
 #define DATASYSTEM_COMMON_RPC_RPC_AUTH_KEY_MANAGER_H
 
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
 
 #include <set>
@@ -88,34 +87,6 @@ public:
     {
         return authKeys_;
     }
-
-    /**
-     * @brief Load curve key files for server side.
-     * @param[in] serverName The server node type.
-     * @param[out] cred The authentication credentials.
-     * @return Status of the call.
-     */
-    static Status ServerLoadKeys(const std::string &serverName, RpcCredential &cred);
-
-    /**
-     * @brief Set up the credentials using the stored keys in manager.
-     * @param[in] serverName The server node type.
-     * @param[out] cred The authentication credentials.
-     * @return Status of the call.
-     */
-    static Status CreateCredentials(const std::string &serverName, RpcCredential &cred);
-
-    /**
-     * @brief Set up the client credentials using the explicitly provided keys.
-     * @note The lifetime of the provided keys must exceed that of the credentials, because only the pointers are used
-     * in the credentials.
-     * @param[in] authKeys The explicitly provided authentication keys.
-     * @param[in] serverName The server node type.
-     * @param[out] cred The authentication credentials.
-     * @return Status of the call.
-     */
-    static Status CreateClientCredentials(const RpcAuthKeys &authKeys, const std::string &serverName,
-                                          RpcCredential &cred);
 
     /**
      * @brief Copy the curve authentication key from src to dest.

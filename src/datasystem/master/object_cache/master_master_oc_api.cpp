@@ -21,7 +21,6 @@
 #include "datasystem/master/object_cache/master_master_oc_api.h"
 
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/request_context.h"

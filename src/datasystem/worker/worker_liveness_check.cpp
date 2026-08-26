@@ -26,7 +26,6 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"

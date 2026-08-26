@@ -53,7 +53,6 @@
 #include "datasystem/worker/stream_cache/stream_manager.h"
 
 DS_DECLARE_uint32(page_size);
-DS_DECLARE_int32(zmq_chunk_sz);
 DS_DECLARE_uint64(client_dead_timeout_s);
 DS_DEFINE_int32(sc_thread_num, 128, "Number of threads for (non rpc) stream cache service work");
 DS_DEFINE_validator(sc_thread_num, &Validator::ValidateThreadNum);

@@ -691,12 +691,3 @@ copy_file(
     src = "cli/deploy/conf/coordinator_config.json",
     out = "yr/datasystem/coordinator_config.json",
 )
-
-copy_file(
-    name = "curve_keygen_file",
-    src = "//tests/st/common/rpc:curvekey_generator",
-    out = "yr/datasystem/tools/curve_keygen",
-    visibility = [
-        "//bazel:__pkg__",
-    ],
-)

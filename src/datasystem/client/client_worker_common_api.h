@@ -43,7 +43,6 @@
 #include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/token/client_access_token.h"
 #include "datasystem/common/ak_sk/signature.h"
-#include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/util/compatibility_manager.h"
@@ -499,14 +498,13 @@ public:
     /**
      * @brief Construct ClientWorkerApi.
      * @param[in] hostPort The address of worker node.
-     * @param[in] cred The authentication credentials.
      * @param[in] heartbeatType The type of heartbeat.
      * @param[in] signature Used to do AK/SK authenticate.
      * @param[in] tenantId TenantId of client user.
      * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
      * @param[in] deviceId pipeline h2d device id
      */
-    explicit ClientWorkerRemoteCommonApi(HostPort hostPort, RpcCredential cred = {},
+    explicit ClientWorkerRemoteCommonApi(HostPort hostPort,
                                          HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
                                          SensitiveValue token = "", Signature *signature = nullptr,
                                          std::string tenantId = "", bool enableCrossNodeConnection = false,
@@ -620,7 +618,6 @@ protected:
     virtual void PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp);
 
     static constexpr int32_t retryTimes_ = 3;
-    RpcCredential cred_;
     // Protect 'standbyWorkerAddrs_'
     std::shared_timed_mutex standbyWorkerMutex_;
     std::unordered_set<HostPort> standbyWorkerAddrs_;

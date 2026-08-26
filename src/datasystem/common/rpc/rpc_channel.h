@@ -25,7 +25,6 @@
 #include <string>
 #include <utility>
 
-#include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/util/net_util.h"
 
 namespace datasystem {
@@ -35,16 +34,14 @@ public:
      * @brief This form of constructor takes a ZMQ transport directly.
      * @note A ZMQ transport begins with tcpip:// or ipc:// or inproc://.
      * @param[in] zmqEndPoint Zmq endpoint string.
-     * @param[in] cred RPC credential
      */
-    RpcChannel(std::string zmqEndPoint, const RpcCredential &cred);
+    RpcChannel(std::string zmqEndPoint);
 
     /**
      * @brief This form of constructor takes a target HostPort and return a tcp/ip ZMQ end point.
      * @param[in] destAddr Zmq endpoint info in host-port structure.
-     * @param[in] cred RPC credential
      */
-    RpcChannel(const HostPort &destAddr, const RpcCredential &cred);
+    RpcChannel(const HostPort &destAddr);
 
     virtual ~RpcChannel();
 
@@ -96,11 +93,6 @@ public:
      */
     const HostPort &GetHostPort() const;
 
-    RpcCredential GetCredential() const
-    {
-        return cred_;
-    }
-
     /**
      * @brief Enable uds for matching service name
      * @param[in] svcName. Full service names (with namespace)
@@ -149,7 +141,6 @@ public:
 
 private:
     std::string endPoint_;
-    RpcCredential cred_;
     std::mutex udsMux_;
     std::map<std::string, std::string> udsCfg_;
     std::map<std::string, bool> tcpDirect_;

@@ -368,7 +368,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vecto
     const auto traceId = Trace::Instance().GetTraceID();
     std::vector<std::future<CreateMultiMetaResult>> futures;
     CreateMultiMetaResult lastRc;
-    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(true);
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout();
     for (size_t i = 0; i < masterAddrs.size(); i++) {
         auto &masterAddr = masterAddrs[i];
         auto &req = reqs[i];

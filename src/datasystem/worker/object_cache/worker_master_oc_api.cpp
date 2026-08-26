@@ -25,7 +25,6 @@
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/kv_metrics.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -721,8 +720,6 @@ Status WorkerRemoteMasterOCApi::ReconcileMembershipChange(master::Reconciliation
     LOG(INFO) << "worker on " << localHostPort_.ToString() << " sends a reconciliation request to the remote master on "
               << hostPort_.ToString();
     req.set_hostport(localHostPort_.ToString());
-    RpcCredential cred;
-    RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateCredentials(WORKER_SERVER_NAME, cred));
     int retryTimeout = 60 * 1000;  // 1 minutes
     INJECT_POINT("WorkerRemoteMasterOCApi.ReconcileMembershipChange.retryTimeout", [&retryTimeout](int timeout) {
         retryTimeout = timeout;

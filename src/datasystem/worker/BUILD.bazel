@@ -326,7 +326,6 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
-        "//src/datasystem/common/rpc:rpc_credential",
         "//src/datasystem/common/rpc:rpc_options",
         "//src/datasystem/common/util:file_util",
         "//src/datasystem/common/util:format",

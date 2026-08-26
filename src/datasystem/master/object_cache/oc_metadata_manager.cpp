@@ -42,7 +42,6 @@
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/parallel/parallel_for.h"
-#include "datasystem/common/parallel/service_parallel_policy.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/bthread_utils.h"
@@ -1315,41 +1314,8 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
         return Status::OK();
     };
 
-    const size_t parallelLimit = 128;
-    const size_t objectKeyCount = objectKeys.size();
-    // Use serial lookup when URMA is disabled or the batch is small (brpc must avoid ParallelFor sem_wait).
-    if (!IsUrmaEnabled() || !Parallel::ShouldUseServiceParallelFor(objectKeyCount, parallelLimit, true)) {
-        for (const auto &objectKey : objectKeys) {
-            func(objectKey, infos, notExistObjectKeys);
-        }
-    } else {
-        // protect infos/notExistObjectKeys/lastRc
-        std::mutex mutex;
-        Status lastRc;
-        auto batchHandler = [&](size_t start, size_t end) {
-            std::vector<QueryMetaInfoPb> batchInfos;
-            std::vector<std::string> batchNotExists;
-            Status rc;
-            for (size_t i = start; i < end; i++) {
-                const auto &objectKey = objectKeys[i];
-                rc = func(objectKey, batchInfos, batchNotExists);
-                if (rc.IsError()) {
-                    break;
-                }
-            }
-            {
-                std::lock_guard<std::mutex> locker(mutex);
-                infos.insert(infos.end(), std::make_move_iterator(batchInfos.begin()),
-                             std::make_move_iterator(batchInfos.end()));
-                notExistObjectKeys.insert(notExistObjectKeys.end(), std::make_move_iterator(batchNotExists.begin()),
-                                          std::make_move_iterator(batchNotExists.end()));
-                lastRc = rc.IsError() ? rc : lastRc;
-            }
-        };
-        const int parallism = 4;
-        LOG_IF_ERROR(Parallel::ParallelFor<size_t>(0, objectKeyCount, batchHandler, 0, parallism),
-                     "ParallelFor QueryMetaFromMetaTable failed");
-        RETURN_IF_NOT_OK(lastRc);
+    for (const auto &objectKey : objectKeys) {
+        func(objectKey, infos, notExistObjectKeys);
     }
     if (!infos.empty()) {
         rsp.mutable_query_metas()->Reserve(static_cast<int>(infos.size()));

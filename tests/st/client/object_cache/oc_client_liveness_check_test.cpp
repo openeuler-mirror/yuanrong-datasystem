@@ -26,7 +26,6 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/timer.h"
 #include "oc_client_common.h"
-#include "zmq_curve_test_common.h"
 
 namespace datasystem {
 namespace st {

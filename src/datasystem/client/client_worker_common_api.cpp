@@ -353,13 +353,12 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     return Status::OK();
 }
 
-ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort, RpcCredential cred,
+ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort,
                                                          HeartbeatType heartbeatType, SensitiveValue token,
                                                          Signature *signature, std::string tenantId,
                                                          bool enableCrossNodeConnection,
                                                          std::string deviceId)
     : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature),
-      cred_(cred),
       tenantId_(std::move(tenantId)),
       deviceId_(std::move(deviceId))
 {

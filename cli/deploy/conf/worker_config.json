@@ -507,10 +507,6 @@
         "value": "true",
         "description": "Enable selected worker threads to set the Linux scheduler runtime. Default is true. Set false to retain the inherited scheduler runtime."
     },
-    "zmq_chunk_sz": {
-        "value": "1048576",
-        "description": "Parallel payload split chunk size. Default to 1048756 bytes."
-    },
     "use_brpc": {
         "value": "true",
         "description": "Use brpc instead of ZMQ for RPC communication. When enabled, brpc owns the worker TCP port exclusively (same port as worker_address, no offset) and the ZMQ TCP endpoint is skipped. ZMQ-specific options (zmq_server_io_context, zmq_client_io_context, zmq_client_io_thread, zmq_chunk_sz) do not take effect in brpc mode. Per-service thread pools (rpc_thread_num, oc_thread_num, etc.) still apply. Default is true (also reads the DATASYSTEM_USE_BRPC env var)."

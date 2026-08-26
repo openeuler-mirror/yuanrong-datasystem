@@ -27,7 +27,6 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
@@ -58,8 +57,8 @@ public:
         ExternalClusterTest::SetUp();
         // These tests exercise ZMQ CURVE/ZAP auth compatibility between client and
         // worker versions. brpc has no equivalent auth wired in yet (known gap),
-        // and the client uses a ZMQ RpcChannel with RpcCredential. Skip under
-        // brpc until the brpc auth path is added.
+        // and the client used a ZMQ RpcChannel with RpcCredential (now removed).
+        // Skip under brpc until the brpc auth path is added.
             GTEST_SKIP() << "OcAuthCompatibilityTest is ZMQ-CURVE auth scoped; "
                         "brpc auth is not yet implemented (skipped under brpc).";
         akSkManager_ = std::make_shared<AkSkManager>();
@@ -67,8 +66,6 @@ public:
 
         HostPort workerAddr0;
         DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr0));
-        RpcCredential cred;
-        RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred);
         BrpcChannelConfig cfg; cfg.endpoint = workerAddr0.ToString(); cfg.timeout_ms = 5000; auto channel = std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(cfg));
         stub_ = std::make_shared<UtOCService_BrpcGenericStub>(channel.get(), 5000);
     }

@@ -40,7 +40,6 @@ class Service;
 }  // namespace google
 
 #include "datasystem/common/rpc/rpc_constants.h"
-#include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_helper.h"
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/rpc/rpc_service_base.h"
@@ -84,17 +83,6 @@ public:
         Builder &AddService(RpcServiceBase *svc, const RpcServiceCfg &svcEle)
         {
             svcList_.emplace_back(svc, svcEle);
-            return *this;
-        }
-
-        /**
-         * @brief Set up server credential.
-         * @param[in] cred Server credential.
-         * @return Reference to this builder.
-         */
-        Builder &SetCredential(const RpcCredential &cred)
-        {
-            cred_ = cred;
             return *this;
         }
 
@@ -171,7 +159,6 @@ public:
 
     private:
         std::vector<std::pair<RpcServiceBase *, RpcServiceCfg>> svcList_;
-        RpcCredential cred_;
         std::function<Status()> preStartCallback_{};
         bool useBrpc_ = false;
         std::string brpcAddr_;
@@ -194,9 +181,8 @@ public:
     /**
      * @note Only Builder can call the constructor
      * @param[in] key Token.
-     * @param[in] cred Server credential.
      */
-    explicit RpcServer(Token key, const RpcCredential &cred = RpcCredential());
+    explicit RpcServer(Token key);
     ~RpcServer() noexcept;
     RpcServer(const RpcServer &) = delete;
     RpcServer &operator=(const RpcServer &) = delete;

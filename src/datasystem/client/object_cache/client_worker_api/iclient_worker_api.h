@@ -122,7 +122,7 @@ public:
     ~IClientWorkerApi() = default;
 
     virtual std::shared_ptr<IClientWorkerApi> CloneWith(
-        HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
+        HostPort hostPort, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
         SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
         bool enableCrossNodeConnection = false,
         std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api = nullptr, void *worker = nullptr) const = 0;

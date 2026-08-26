@@ -41,10 +41,10 @@
 namespace datasystem {
 namespace client {
 namespace stream_cache {
-ClientWorkerApi::ClientWorkerApi(const HostPort &hostPort, RpcCredential cred, SensitiveValue token,
+ClientWorkerApi::ClientWorkerApi(const HostPort &hostPort, SensitiveValue token,
                                  Signature *signature, std::string tenantId)
     : IClientWorkerCommonApi(hostPort, HeartbeatType::RPC_HEARTBEAT, false, signature),
-      ClientWorkerRemoteCommonApi(hostPort, cred, HeartbeatType::RPC_HEARTBEAT, std::move(token), signature,
+      ClientWorkerRemoteCommonApi(hostPort, HeartbeatType::RPC_HEARTBEAT, std::move(token), signature,
                                   std::move(tenantId))
 {
 }

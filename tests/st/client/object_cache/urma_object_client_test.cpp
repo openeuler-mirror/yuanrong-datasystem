@@ -42,7 +42,6 @@
 #include "datasystem/kv_client.h"
 #include "oc_client_common.h"
 #include "securec.h"
-#include "zmq_curve_test_common.h"
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_string(log_dir);
