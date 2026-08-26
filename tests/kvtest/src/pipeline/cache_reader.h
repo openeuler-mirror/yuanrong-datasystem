@@ -29,6 +29,13 @@ public:
     void Start();
     void Stop();
 
+    // Signal reader threads to stop without joining. Safe to call from the
+    // HTTP/bRPC control-plane thread; the join happens in Stop() on shutdown.
+    void RequestStop() {
+        running_ = false;
+        warmupCv_.notify_all();
+    }
+
 private:
     void ReaderLoop(int threadId);
     bool CacheGetOrFill(const std::string &key, uint64_t size);

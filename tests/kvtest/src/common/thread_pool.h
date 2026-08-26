@@ -58,6 +58,23 @@ public:
         workers_.clear();
     }
 
+    // Stop without draining: flip the stopped flag, drop queued (not-yet-
+    // started) tasks, wake idle workers, and return immediately without
+    // joining. A worker mid-task finishes that one task (cannot be forcibly
+    // killed) then sees stopped_ and exits. Used by the /stop path so the
+    // HTTP/bRPC control thread replies at once; the eventual join happens in
+    // the normal Stop()/destructor on shutdown. Unlike Stop(), this does not
+    // wait for in-flight tasks or queued tasks to drain.
+    void StopNow() {
+        {
+            std::lock_guard<kvtest::mutex> lock(mutex_);
+            if (stopped_) return;
+            stopped_ = true;
+            while (!tasks_.empty()) tasks_.pop();
+        }
+        cv_.notify_all();
+    }
+
 private:
     void WorkerLoop() {
         while (true) {
@@ -65,7 +82,7 @@ private:
             {
                 std::unique_lock<kvtest::mutex> lock(mutex_);
                 cv_.wait(lock, [this] { return stopped_ || !tasks_.empty(); });
-                if (stopped_ && tasks_.empty()) return;
+                if (stopped_) return;
                 task = std::move(tasks_.front());
                 tasks_.pop();
             }

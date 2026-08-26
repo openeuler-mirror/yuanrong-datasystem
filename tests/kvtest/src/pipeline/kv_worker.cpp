@@ -112,6 +112,11 @@ void KVWorker::Stop() {
     notifyPool_.Stop();
 }
 
+void KVWorker::RequestStop() {
+    running_ = false;
+    notifyPool_.StopNow();
+}
+
 void KVWorker::PipelineLoop(int threadId) {
     auto calcMyQps = [&](int totalQps) -> int {
         if (totalQps <= 0 || cfg_.numThreads <= 0) return 0;

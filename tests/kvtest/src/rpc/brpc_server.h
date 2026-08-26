@@ -10,11 +10,13 @@
 #include <google/protobuf/service.h>
 
 class CacheReader;
+class KVWorker;
 
 // brpc-backed control plane (bazel mode, KVTEST_USE_BRPC). Mirrors the
-// HttpServer interface (Start/Stop/NotifyQueueSize/SetCacheReader) so main.cpp
-// can select between them with a single #ifdef. Composes a NotifyDispatcher so
-// the notify protocol semantics are identical to the httplib path.
+// HttpServer interface (Start/Stop/NotifyQueueSize/SetCacheReader/SetWorker) so
+// main.cpp can select between them with a single #ifdef. Composes a
+// NotifyDispatcher so the notify protocol semantics are identical to the
+// httplib path.
 class BrpcControlServer {
 public:
     BrpcControlServer(const Config &cfg, std::shared_ptr<datasystem::KVClient> client,
@@ -27,6 +29,10 @@ public:
     size_t NotifyQueueSize() { return dispatcher_.QueueSize(); }
 
     void SetCacheReader(CacheReader *reader) { dispatcher_.SetCacheReader(reader); }
+
+    // Inject the writer so the Stop RPC can flip its pipeline loop flag
+    // immediately instead of waiting for main's shutdown delay.
+    void SetWorker(KVWorker *worker);
 
 private:
     Config cfg_;

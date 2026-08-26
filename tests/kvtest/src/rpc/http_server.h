@@ -10,6 +10,7 @@
 #include <thread>
 
 class CacheReader;
+class KVWorker;
 
 // httplib-backed control plane (cmake mode). The brpc mode (bazel) uses
 // BrpcControlServer instead; both compose a NotifyDispatcher so the notify
@@ -27,6 +28,10 @@ public:
 
     void SetCacheReader(CacheReader *reader) { dispatcher_.SetCacheReader(reader); }
 
+    // Inject the writer so /stop can flip its pipeline loop flag immediately
+    // instead of waiting for main's shutdown delay. Mirrors SetCacheReader.
+    void SetWorker(KVWorker *worker) { worker_ = worker; }
+
 private:
     void HandleNotify(const std::string &body);
 
@@ -36,4 +41,5 @@ private:
     NotifyDispatcher dispatcher_;
     std::unique_ptr<httplib::Server> server_;
     std::thread serverThread_;
+    KVWorker *worker_ = nullptr;
 };
