@@ -86,7 +86,7 @@ public:
         opts.masterIdx = 0;
         opts.workerGflagParams =
             "-shared_memory_size_mb=64 -log_monitor=true -log_monitor_interval_ms=1000 "
-            "-eviction_strategy=clock -enable_memory_rebalance=false -use_brpc=true -v=1";
+            "-eviction_strategy=clock -enable_memory_rebalance=false -v=1";
         opts.injectActions = "NodeSelector.setInterval:call(200);ResourceManager.setInterval:call(200);"
                              "WorkerOCServer.heatMaintenanceIntervalMs:call(200)";
     }
@@ -567,7 +567,7 @@ public:
         opts.workerGflagParams =
             "-shared_memory_size_mb=64 -log_monitor=true -log_monitor_interval_ms=1000 "
             "-eviction_strategy=clock -enable_memory_rebalance=true -rebalance_source_usage_percent=30 "
-            "-rebalance_usage_gap_percent=10 -use_brpc=true -v=1";
+            "-rebalance_usage_gap_percent=10 -v=1";
     }
 };
 
