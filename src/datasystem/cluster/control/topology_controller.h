@@ -384,18 +384,24 @@ private:
 
     Status TryStartNextBatch(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
-    Status TryStartBatchAfterCollection(const TopologySnapshot &latest, const TopologyState &state,
-                                        const std::vector<MemberIdentity> &participants, TopologyChangeType type,
-                                        bool bootstrap);
+    bool UpdateBatchCollectState(const TopologySnapshot &latest, const std::vector<MemberIdentity> &participants,
+                                 TopologyChangeType type, bool bootstrap,
+                                 std::chrono::steady_clock::time_point now);
 
     void ClearBatchCollectState(TopologyChangeType type, const char *reason);
 
-    void CollectNextBatchCandidates(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships,
-                                    std::vector<MemberIdentity> &leaving,
-                                    std::vector<MemberIdentity> &joining) const;
+    Status CollectNextBatchCandidates(const TopologySnapshot &latest,
+                                      const std::vector<MembershipRecord> &memberships,
+                                      std::vector<MemberIdentity> &leaving,
+                                      std::vector<MemberIdentity> &joining,
+                                      bool materializeNewMemberIds);
 
-    Status CommitBatchStart(const TopologySnapshot &latest, const TopologyState &state,
-                            const std::vector<MemberIdentity> &participants, TopologyChangeType type, bool bootstrap);
+    void PrepareBatchStartState(const TopologySnapshot &latest,
+                                const std::vector<MemberIdentity> &participants,
+                                TopologyChangeType type, TopologyState &state) const;
+
+    Status CommitBatchStart(const TopologySnapshot &latest, const std::vector<MemberIdentity> &participants,
+                            TopologyChangeType type, bool bootstrap);
 
     void LogBatchStart(const TopologySnapshot &latest, const TopologySnapshot &committed,
                        const std::vector<MemberIdentity> &participants, const char *action) const;
@@ -444,10 +450,9 @@ private:
     std::optional<BatchDeadlineState> batchDeadline_;
     uint64_t loggedExpiredBatchEpoch_{ 0 };
     uint64_t loggedScaleInWaitEpoch_{ 0 };
-    // State-thread-owned, in-process and non-persistent collect deadline for ordinary SCALE_IN coalescing.
-    // Not written to topology, not part of CAS, not shared across Controller instances or restarts.
+    // State-thread-owned, in-process and non-persistent ordinary batch collection deadlines.
+    // They may age concurrently but are not written to topology or shared across Controller instances or restarts.
     std::optional<BatchCollectState> scaleInCollect_;
-    // State-thread-owned bounded quiet window that coalesces INITIAL members into one SCALE_OUT batch.
     std::optional<BatchCollectState> scaleOutCollect_;
     bool activeBatchObserved_{ false };
     // The Controller state thread exclusively owns derived-generation and task-progress cursors/caches below.

@@ -176,21 +176,18 @@
   membership reads for `node_dead_timeout_s`; presence clears the window and Store read failures pause it. Collective
   stale-topology recovery additionally uses the bounded validation-only Coordinator-to-Worker watch-transport probe
   described above.
-- Both backends use the same fixed three-second joining collection window beginning at the first eligible member.
-  Later arrivals do not extend the deadline. An empty cluster admits the collected bootstrap members directly without
-  migration; an initialized cluster starts one multi-member ScaleOut batch. While no batch is active, READY ScaleOut
-  candidates take priority over pending `PRE_LEAVING` ScaleIn candidates, so a replacement Worker reaches
-  `JOINING`/`ACTIVE` before old committed owners enter ScaleIn. Once any batch is active, later ordinary candidates wait
-  and never preempt it. Their first observation starts the next ScaleOut collection deadline, but they remain
-  membership-only until the active batch finalizes; this keeps the active topology generation and restart-fact
-  recipients stable. After finalization the Controller exact-rereads membership, admits the still-valid candidates, and
-  starts the next batch immediately when that preserved deadline has already expired. An expired next-batch collection
-  deadline does not wake-spin while a batch is active. At expiry, an `INITIAL` candidate in the authoritative topology
-  reconciles a process-local admission whose CAS succeeded but exact read-back failed, including another Controller's
-  equivalent commit. Before reusing a non-expired admitted-candidate deadline, the Controller also revalidates that a
-  READY `INITIAL` still exists; if another Controller already consumed that cohort, the next unknown READY starts a new
-  full window. Once a no-batch collection expires with valid `INITIAL` candidates, later READY arrivals are left for the
-  following cohort instead of starving the closed cohort. Failure remains higher priority.
+- Both backends use independent fixed three-second ScaleOut and ScaleIn collection windows beginning at the first
+  eligible member; later arrivals do not extend either deadline. A window is cleared when its current candidate cohort
+  becomes empty, and a later candidate starts a new full window. An empty cluster admits the collected bootstrap members
+  directly without migration. An initialized Coordinator keeps ordinary `READY`/`EXITING` facts
+  membership-only while collecting, then commits one `JOINING` ScaleOut or `LEAVING` ScaleIn batch without persisting
+  intermediate `INITIAL`/`PRE_LEAVING` topology states. Non-Coordinator modes retain those intermediate states. The two
+  collection deadlines age concurrently, including while another batch is active, but ordinary candidates never
+  preempt that batch. When both cohorts exist, ScaleOut keeps priority so a replacement Worker reaches
+  `JOINING`/`ACTIVE` before old owners enter ScaleIn; an already-expired ScaleIn collection starts immediately after
+  ScaleOut finalizes. Each commit exact-rereads membership and uses the latest still-valid cohort. Expired deadlines do
+  not wake-spin while a batch is active, and CAS conflicts retain their original deadlines. Failure remains higher
+  priority.
 - Repeated expected backend-access failures while already in `CONTROL_DEGRADED` still refresh the diagnostic
   `lastError`, but the warning log is sampled. State transitions and unexpected runtime failures remain unsampled.
 - Topology observability is carried by structured `CLUSTER_*` logs on the low-frequency control path: watch events and
