@@ -28,5 +28,8 @@ DS_DEFINE_string(
 DS_DEFINE_string(bind_address, "",
                  "Address of ds worker to bind socket and must under this format <ip>:<port>, the same with "
                  "worker_address if not provide");
+DS_DEFINE_bool(jemalloc_stats, false,
+               "Expose process jemalloc statistics through BRPC builtin /vars. "
+               "Requires brpc_enable_builtin_services=true and a Worker restart after changing the value.");
 DS_DEFINE_validator(worker_address, &Validator::ValidateHostPortStringWithLog);
 DS_DEFINE_validator(bind_address, &Validator::ValidateHostPortStringWithLog);

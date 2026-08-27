@@ -53,6 +53,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_health.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/common/memory/jemalloc_stats_bvar.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/object_cache/object_base.h"
@@ -98,6 +99,7 @@
 #include "datasystem/worker/worker_topology_phase_callbacks.h"
 
 DS_DECLARE_bool(enable_reconciliation);
+DS_DECLARE_bool(jemalloc_stats);
 DS_DECLARE_string(coordinator_address);
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
 DS_DEFINE_bool(enable_distributed_master, true, "Whether to support distributed master, default is true.");
@@ -652,6 +654,7 @@ WorkerOCServer::~WorkerOCServer()
     if (rpcServer_) {
         rpcServer_->Shutdown();
     }
+    jemallocStatsBvar_.reset();
     StopPreShutdownWorkers();
     const auto topologyStopDeadline = std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE;
     const auto topologyStopStatus = StopTopologyRuntime(topologyStopDeadline);
@@ -2436,6 +2439,8 @@ Status WorkerOCServer::Init()
 
 Status WorkerOCServer::InitRpcAndMemoryRuntime()
 {
+    CHECK_FAIL_RETURN_STATUS(!FLAGS_jemalloc_stats || FLAGS_brpc_enable_builtin_services, StatusCode::K_INVALID,
+                             "jemalloc_stats requires brpc_enable_builtin_services=true");
     // Configure HCCS worker IP before any allocator/mmap path can trigger RemoteH2DManager::Instance()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetRH2DLocalEndpointIp(hostPort_.Host()), "Failed to configure HCCS worker IP");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeRemoteH2DManager(), "Remote H2D transport init failed");
@@ -2522,6 +2527,14 @@ Status WorkerOCServer::StartBrpcIfEnabled()
     // BuildAndStart() in CommonServer::Init() skips brpc start because
     // services are added later via AddBrpcService() calls.
     if (rpcServer_) {
+        if (FLAGS_jemalloc_stats) {
+            jemallocStatsBvar_ = std::make_unique<memory::JemallocStatsBvar>();
+            const auto status = jemallocStatsBvar_->Init();
+            if (status.IsError()) {
+                LOG(ERROR) << "Failed to expose jemalloc statistics: " << status.ToString();
+                jemallocStatsBvar_.reset();
+            }
+        }
         int brpcPort = bindHostPort_.Port();
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rpcServer_->StartBrpcServer(bindHostPort_.Host(), brpcPort),
                                          "Failed to start brpc server");
@@ -3662,6 +3675,7 @@ Status WorkerOCServer::Shutdown()
     // Drain external RPC ingress before stopping the Engine. Rebalance and Worker common-service producers are
     // already stopped above, so no business owner can start a new topology-dependent operation during Engine drain.
     (void)CommonServer::Shutdown();
+    jemallocStatsBvar_.reset();
     const auto stopDeadline = std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE;
     RETURN_IF_NOT_OK(StopTopologyRuntime(stopDeadline));
     if (objCacheMasterSvc_) {

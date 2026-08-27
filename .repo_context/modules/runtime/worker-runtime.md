@@ -90,6 +90,9 @@
   marker rejects this option before launch when the package was not built with `-x on`. Missing `prof:true` and
   `prof_prefix` entries are derived by dscli; the default prefix is under the resolved Worker `log_dir` at
   `jemalloc/datasystem_worker`. `dscli up` forwards the option and each remote package checks its own marker.
+- `jemalloc_stats=true` registers cached process-allocator bvars from `common/memory/jemalloc_stats_bvar`; it requires
+  `brpc_enable_builtin_services=true`, and the Worker rejects startup when that dependency is missing. BRPC `/vars`
+  reads allocated, active, resident, metadata, mapped, retained, dirty, and muzzy values without a file exporter.
 
 ## Runtime Entry Points
 

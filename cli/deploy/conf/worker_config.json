@@ -519,6 +519,14 @@
         "value": "128",
         "description": "Max concurrent in-flight RPCs per brpc server. 0 means unlimited. Recommended: brpc_server_num_threads * 2 (e.g. 128 for 64 threads). When exceeded, brpc returns ELIMIT immediately so a slow handler cannot exhaust bthreads and cause OOM. Must not be smaller than brpc_server_num_threads. Default is 128."
     },
+    "brpc_enable_builtin_services": {
+        "value": "false",
+        "description": "Expose BRPC builtin diagnostic HTTP services such as /flags, /pprof, /vars, and /status. Enable only on trusted networks."
+    },
+    "jemalloc_stats": {
+        "value": "false",
+        "description": "Startup-only flag that exposes process jemalloc statistics through BRPC builtin /vars. Requires brpc_enable_builtin_services=true and a Worker restart after changing the value."
+    },
     "enable_etcd_auth": {
         "value": "false",
         "description": "Whether to enable ETCD auth, default is false. ETCD certificate will be obtained."
