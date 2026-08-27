@@ -20,8 +20,12 @@
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <dirent.h>
 #include <functional>
+#include <limits>
 #include <limits.h>
 #include <sstream>
 #include <unistd.h>
@@ -88,6 +92,18 @@ bool IsFileOpenInCurrentProcess(const std::string &path)
     }
     return false;
 }
+
+SpillIoOptions DirectIoOptions(uint32_t writeBatchOps = 1, uint32_t queueCapacity = 64,
+                               uint64_t writeBatchTimeoutUs = 1000)
+{
+    SpillIoOptions options;
+    options.mode = SpillIoMode::DIRECT_IO_URING;
+    options.queueCapacity = queueCapacity;
+    options.writeBatchOps = writeBatchOps;
+    options.writeBatchBytes = std::numeric_limits<uint64_t>::max();
+    options.writeBatchTimeoutUs = writeBatchTimeoutUs;
+    return options;
+}
 }  // namespace
 
 class SpillFileManagerTest : public CommonTest {
@@ -115,6 +131,515 @@ TEST_F(SpillFileManagerTest, TestWriteToFile)
     uint64_t decSize;
     DS_EXPECT_OK(fileMgr_->DeleteFromDisk(objectKey, decSize));
     ASSERT_EQ(decSize, in.size());
+}
+
+TEST_F(SpillFileManagerTest, SpillCompletionCompletesOnlyOnce)
+{
+    SpillCompletion completion;
+    auto future = completion.TakeFuture();
+    ASSERT_TRUE(completion.CompleteOnce(Status::OK()));
+    ASSERT_FALSE(completion.CompleteOnce(Status(K_RUNTIME_ERROR, "must be ignored")));
+    ASSERT_TRUE(future.get().IsOk());
+}
+
+TEST_F(SpillFileManagerTest, SpillIoOptionsUsesInternalProductionDefaults)
+{
+    SpillIoOptions options;
+    ASSERT_EQ(options.mode, SpillIoMode::BUFFERED);
+    ASSERT_EQ(options.queueDepth, 16u);
+    ASSERT_EQ(options.queueCapacity, 64u);
+    ASSERT_EQ(options.queueBytes, 8 * 1024 * 1024u);
+    ASSERT_EQ(options.writeBatchOps, 32u);
+    ASSERT_EQ(options.writeBatchBytes, 4 * 1024 * 1024u);
+    ASSERT_EQ(options.writeBatchTimeoutUs, 1000u);
+    ASSERT_EQ(options.directAlignment, 4096u);
+}
+
+TEST_F(SpillFileManagerTest, IoUringWriteChunkSizeDoesNotOverflowSqeLength)
+{
+    constexpr uint32_t alignment = 4096;
+    constexpr uint64_t fourGiB = 4ULL * 1024 * 1024 * 1024;
+    const uint32_t maxChunk = SpillIoUring::WriteChunkSize(fourGiB, alignment);
+    ASSERT_EQ(maxChunk, 0x7ffff000u);
+    ASSERT_EQ(maxChunk % alignment, 0u);
+    ASSERT_LE(maxChunk, static_cast<uint64_t>(std::numeric_limits<int32_t>::max()));
+
+    uint64_t remaining = fourGiB + alignment;
+    uint64_t total = 0;
+    while (remaining > 0) {
+        const uint32_t chunk = SpillIoUring::WriteChunkSize(remaining, alignment);
+        ASSERT_GT(chunk, 0u);
+        ASSERT_EQ(chunk % alignment, 0u);
+        ASSERT_LE(chunk, static_cast<uint64_t>(std::numeric_limits<int32_t>::max()));
+        total += chunk;
+        remaining -= chunk;
+    }
+    ASSERT_EQ(total, fourGiB + alignment);
+}
+
+TEST_F(SpillFileManagerTest, SpillBatchPolicySealsByOperationCount)
+{
+    SpillIoOptions options;
+    options.writeBatchOps = 16;
+    options.writeBatchBytes = std::numeric_limits<uint64_t>::max();
+    options.writeBatchTimeoutUs = 1000;
+    SpillBatchPolicy policy(options);
+    const auto now = std::chrono::steady_clock::now();
+    for (uint32_t i = 0; i < 15; ++i) {
+        policy.Add(135168, now);
+    }
+    ASSERT_FALSE(policy.ShouldSeal(now));
+    policy.Add(135168, now);
+    ASSERT_TRUE(policy.ShouldSeal(now));
+    ASSERT_EQ(policy.Ops(), 16u);
+    ASSERT_EQ(policy.Bytes(), 16u * 135168u);
+}
+
+TEST_F(SpillFileManagerTest, SpillBatchPolicySealsByBytesAndTimeout)
+{
+    SpillIoOptions options;
+    options.writeBatchOps = 32;
+    options.writeBatchBytes = 2 * 1024 * 1024;
+    options.writeBatchTimeoutUs = 1000;
+    SpillBatchPolicy policy(options);
+    const auto start = std::chrono::steady_clock::now();
+    for (uint32_t i = 0; i < 15; ++i) {
+        policy.Add(135168, start);
+    }
+    ASSERT_FALSE(policy.ShouldSeal(start));
+    policy.Add(135168, start);
+    ASSERT_TRUE(policy.ShouldSeal(start));
+
+    policy.Reset();
+    policy.Add(135168, start);
+    ASSERT_FALSE(policy.ReachedCapacity());
+    ASSERT_FALSE(policy.ShouldSeal(start + std::chrono::microseconds(999)));
+    ASSERT_TRUE(policy.ShouldSeal(start + std::chrono::microseconds(1000)));
+    policy.Reset();
+    ASSERT_FALSE(policy.ShouldSeal(start, true));
+}
+
+TEST_F(SpillFileManagerTest, AsyncWriteCompletionPrecedesLocationPublication)
+{
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    manager.Init("./spill_AsyncWriteCompletionPrecedesLocationPublication");
+    constexpr size_t recordSize = 132 * 1024;
+    void *alignedBuffer = nullptr;
+    ASSERT_EQ(posix_memalign(&alignedBuffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([alignedBuffer] { free(alignedBuffer); });
+    std::memset(alignedBuffer, 0x5a, recordSize);
+
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "async-object", alignedBuffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    auto result = future.get();
+    DS_EXPECT_OK(result.first);
+    ASSERT_TRUE(manager.GetObjectLocation("async-object").empty());
+    DS_EXPECT_OK(manager.FinishAsync("async-object", result.second, true));
+
+    std::vector<uint8_t> output(recordSize);
+    DS_EXPECT_OK(manager.LoadFromDisk("async-object", output.data(), output.size()));
+    ASSERT_TRUE(std::all_of(output.begin(), output.end(), [](uint8_t value) { return value == 0x5a; }));
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, AsyncDirectFallsBackForUnalignedRecord)
+{
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    manager.Init("./spill_AsyncDirectFallsBackForUnalignedRecord");
+    std::vector<uint8_t> buffer(132 * 1024 + 1);
+    std::fill(buffer.begin() + 1, buffer.end(), 0x6b);
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "unaligned", buffer.data() + 1, 132 * 1024,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    auto result = future.get();
+    DS_EXPECT_OK(result.first);
+    DS_EXPECT_OK(manager.FinishAsync("unaligned", result.second, true));
+    std::vector<uint8_t> output(132 * 1024);
+    DS_EXPECT_OK(manager.LoadFromDisk("unaligned", output.data(), output.size()));
+    ASSERT_TRUE(std::all_of(output.begin(), output.end(), [](uint8_t value) { return value == 0x6b; }));
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, IoUringInitializationFailureFallsBackToBufferedAsyncIo)
+{
+    auto restore = Raii([] {
+        (void)inject::Clear("worker.Spill.IoUringInitError");
+    });
+    DS_ASSERT_OK(inject::Set("worker.Spill.IoUringInitError", "return(K_RUNTIME_ERROR)"));
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_IoUringInitializationFailureFallsBack"));
+    ASSERT_EQ(manager.GetAsyncBackend(), "buffered_async_pwrite");
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, IoUringSubmitFailureCancelsRingAndFallsBack)
+{
+    auto restore = Raii([] {
+        (void)inject::Clear("worker.Spill.IoUringSubmitError");
+    });
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_IoUringSubmitFailure"));
+    if (manager.GetAsyncBackend() != "direct_io_uring") {
+        GTEST_SKIP() << "io_uring is unavailable in this test environment";
+    }
+    constexpr size_t recordSize = 132 * 1024;
+    void *buffer = nullptr;
+    ASSERT_EQ(posix_memalign(&buffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([buffer] { free(buffer); });
+    std::memset(buffer, 0x19, recordSize);
+    DS_ASSERT_OK(inject::Set("worker.Spill.IoUringSubmitError", "1*return(K_RUNTIME_ERROR)"));
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "submit-error", buffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    auto result = future.get();
+    ASSERT_TRUE(result.first.IsError());
+    DS_EXPECT_OK(manager.FinishAsync("submit-error", result.second, false));
+    ASSERT_EQ(manager.GetAsyncBackend(), "buffered_async_pwrite");
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, IoUringWaitFailureCancelsInflightAndFallsBack)
+{
+    auto restore = Raii([] {
+        (void)inject::Clear("worker.Spill.IoUringWaitCompletionError");
+    });
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_IoUringWaitFailure"));
+    if (manager.GetAsyncBackend() != "direct_io_uring") {
+        GTEST_SKIP() << "io_uring is unavailable in this test environment";
+    }
+    constexpr size_t recordSize = 132 * 1024;
+    void *buffer = nullptr;
+    ASSERT_EQ(posix_memalign(&buffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([buffer] { free(buffer); });
+    std::memset(buffer, 0x29, recordSize);
+    DS_ASSERT_OK(inject::Set("worker.Spill.IoUringWaitCompletionError", "1*return(K_RUNTIME_ERROR)"));
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "wait-error", buffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    auto result = future.get();
+    ASSERT_TRUE(result.first.IsError());
+    DS_EXPECT_OK(manager.FinishAsync("wait-error", result.second, false));
+    ASSERT_EQ(manager.GetAsyncBackend(), "buffered_async_pwrite");
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, ShutdownInterruptsIoUringCompletionWait)
+{
+    auto restore = Raii([] {
+        (void)inject::Clear("worker.Spill.IoUringWaitCompletionTimeout");
+    });
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_ShutdownInterruptsIoUringCompletionWait"));
+    if (manager.GetAsyncBackend() != "direct_io_uring") {
+        GTEST_SKIP() << "io_uring is unavailable in this test environment";
+    }
+    constexpr size_t recordSize = 132 * 1024;
+    void *buffer = nullptr;
+    ASSERT_EQ(posix_memalign(&buffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([buffer] { free(buffer); });
+    std::memset(buffer, 0x2a, recordSize);
+    DS_ASSERT_OK(inject::Set("worker.Spill.IoUringWaitCompletionTimeout", "return(K_TRY_AGAIN)"));
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "shutdown-wait", buffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+
+    const auto start = std::chrono::steady_clock::now();
+    manager.ShutdownAsync();
+    ASSERT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(2));
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    auto result = future.get();
+    ASSERT_TRUE(result.first.IsError());
+    DS_EXPECT_OK(manager.FinishAsync("shutdown-wait", result.second, false));
+}
+
+TEST_F(SpillFileManagerTest, BufferedAsyncRolloverClosesIdleFullFile)
+{
+    const auto oldMaxFileSize = FLAGS_spill_file_max_size_mb;
+    const auto oldOpenLimit = FLAGS_spill_file_open_limit;
+    auto restore = Raii([=] {
+        FLAGS_spill_file_max_size_mb = oldMaxFileSize;
+        FLAGS_spill_file_open_limit = oldOpenLimit;
+        (void)inject::Clear("worker.Spill.IoUringInitError");
+    });
+    FLAGS_spill_file_max_size_mb = 1;
+    FLAGS_spill_file_open_limit = 1;
+    DS_ASSERT_OK(inject::Set("worker.Spill.IoUringInitError", "return(K_RUNTIME_ERROR)"));
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_BufferedAsyncRolloverClosesIdleFullFile"));
+
+    constexpr size_t recordSize = 600 * 1024;
+    std::vector<uint8_t> buffer(recordSize, 0x35);
+    auto writeObject = [&manager, &buffer](const std::string &key) {
+        std::promise<std::pair<Status, ObjectLocation>> completion;
+        auto future = completion.get_future();
+        DS_EXPECT_OK(manager.SubmitAsync(
+            key, buffer.data(), buffer.size(),
+            [&completion](const Status &rc, const ObjectLocation &location) {
+                completion.set_value({ rc, location });
+            }));
+        auto result = future.get();
+        DS_EXPECT_OK(result.first);
+        DS_EXPECT_OK(manager.FinishAsync(key, result.second, true));
+        return result.second.path;
+    };
+
+    const std::string firstPath = writeObject("rollover-first");
+    ASSERT_TRUE(IsFileOpenInCurrentProcess(firstPath));
+    const std::string secondPath = writeObject("rollover-second");
+    ASSERT_NE(firstPath, secondPath);
+    ASSERT_FALSE(IsFileOpenInCurrentProcess(firstPath));
+    ASSERT_TRUE(IsFileOpenInCurrentProcess(secondPath));
+
+    std::vector<uint8_t> output(recordSize);
+    DS_EXPECT_OK(manager.LoadFromDisk("rollover-first", output.data(), output.size()));
+    ASSERT_EQ(output, buffer);
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, DirectAsyncRolloverReservesBothNewFileDescriptors)
+{
+    const auto oldMaxFileSize = FLAGS_spill_file_max_size_mb;
+    const auto oldOpenLimit = FLAGS_spill_file_open_limit;
+    auto restore = Raii([=] {
+        FLAGS_spill_file_max_size_mb = oldMaxFileSize;
+        FLAGS_spill_file_open_limit = oldOpenLimit;
+    });
+    FLAGS_spill_file_max_size_mb = 1;
+    FLAGS_spill_file_open_limit = 2;
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_DirectAsyncRolloverReservesBothFds"));
+    if (manager.GetAsyncBackend() != "direct_io_uring") {
+        GTEST_SKIP() << "io_uring is unavailable in this test environment";
+    }
+
+    constexpr size_t recordSize = 600 * 1024;
+    void *rawBuffer = nullptr;
+    ASSERT_EQ(posix_memalign(&rawBuffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([rawBuffer] { free(rawBuffer); });
+    auto *buffer = static_cast<uint8_t *>(rawBuffer);
+    std::memset(buffer, 0x46, recordSize);
+    auto writeObject = [&manager, buffer](const std::string &key) {
+        std::promise<std::pair<Status, ObjectLocation>> completion;
+        auto future = completion.get_future();
+        DS_EXPECT_OK(manager.SubmitAsync(
+            key, buffer, recordSize,
+            [&completion](const Status &rc, const ObjectLocation &location) {
+                completion.set_value({ rc, location });
+            }));
+        auto result = future.get();
+        DS_EXPECT_OK(result.first);
+        DS_EXPECT_OK(manager.FinishAsync(key, result.second, true));
+        return result.second.path;
+    };
+
+    const std::string firstPath = writeObject("direct-rollover-first");
+    ASSERT_TRUE(IsFileOpenInCurrentProcess(firstPath));
+    const std::string secondPath = writeObject("direct-rollover-second");
+    ASSERT_NE(firstPath, secondPath);
+    ASSERT_FALSE(IsFileOpenInCurrentProcess(firstPath));
+    ASSERT_TRUE(IsFileOpenInCurrentProcess(secondPath));
+
+    std::vector<uint8_t> output(recordSize);
+    DS_EXPECT_OK(manager.LoadFromDisk("direct-rollover-first", output.data(), output.size()));
+    ASSERT_TRUE(std::all_of(output.begin(), output.end(), [](uint8_t value) { return value == 0x46; }));
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, IoUringWriteCqeFailureDoesNotPublishLocation)
+{
+    auto restore = Raii([] {
+        (void)inject::Clear("worker.Spill.IoUringCompletionResult");
+    });
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_IoUringWriteCqeFailure"));
+    if (manager.GetAsyncBackend() != "direct_io_uring") {
+        GTEST_SKIP() << "io_uring is unavailable in this test environment";
+    }
+    constexpr size_t recordSize = 132 * 1024;
+    void *buffer = nullptr;
+    ASSERT_EQ(posix_memalign(&buffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([buffer] { free(buffer); });
+    std::memset(buffer, 0x31, recordSize);
+    DS_ASSERT_OK(inject::Set("worker.Spill.IoUringCompletionResult", "1*call(-5)"));
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "failed-cqe", buffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    auto result = future.get();
+    ASSERT_TRUE(result.first.IsError());
+    ASSERT_TRUE(manager.GetObjectLocation("failed-cqe").empty());
+    DS_EXPECT_OK(manager.FinishAsync("failed-cqe", result.second, false));
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, IoUringAlignedShortWriteIsRetriedAndReadBack)
+{
+    auto restore = Raii([] {
+        (void)inject::Clear("worker.Spill.IoUringCompletionResult");
+    });
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_IoUringAlignedShortWrite"));
+    if (manager.GetAsyncBackend() != "direct_io_uring") {
+        GTEST_SKIP() << "io_uring is unavailable in this test environment";
+    }
+    constexpr size_t recordSize = 132 * 1024;
+    void *buffer = nullptr;
+    ASSERT_EQ(posix_memalign(&buffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([buffer] { free(buffer); });
+    std::memset(buffer, 0x42, recordSize);
+    DS_ASSERT_OK(inject::Set("worker.Spill.IoUringCompletionResult", "1*call(4096)"));
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "short-write", buffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    auto result = future.get();
+    DS_EXPECT_OK(result.first);
+    DS_EXPECT_OK(manager.FinishAsync("short-write", result.second, true));
+    std::vector<uint8_t> output(recordSize);
+    DS_EXPECT_OK(manager.LoadFromDisk("short-write", output.data(), output.size()));
+    ASSERT_TRUE(std::all_of(output.begin(), output.end(), [](uint8_t value) { return value == 0x42; }));
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, IoUringWriteCompletionPublishesWithoutDurabilityBarrier)
+{
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_IoUringWriteCompletionWithoutDataSync"));
+    if (manager.GetAsyncBackend() != "direct_io_uring") {
+        GTEST_SKIP() << "io_uring is unavailable in this test environment";
+    }
+    constexpr size_t recordSize = 132 * 1024;
+    void *buffer = nullptr;
+    ASSERT_EQ(posix_memalign(&buffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([buffer] { free(buffer); });
+    std::memset(buffer, 0x24, recordSize);
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "write-completed", buffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    auto result = future.get();
+    DS_EXPECT_OK(result.first);
+    DS_EXPECT_OK(manager.FinishAsync("write-completed", result.second, true));
+    std::vector<uint8_t> output(recordSize);
+    DS_EXPECT_OK(manager.LoadFromDisk("write-completed", output.data(), output.size()));
+    ASSERT_TRUE(std::all_of(output.begin(), output.end(), [](uint8_t value) { return value == 0x24; }));
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, BufferedFallbackPublishesAfterWriteAndReportsBytes)
+{
+    auto restore = Raii([] {
+        (void)inject::Clear("worker.Spill.IoUringInitError");
+    });
+    DS_ASSERT_OK(inject::Set("worker.Spill.IoUringInitError", "return(K_RUNTIME_ERROR)"));
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_BufferedWriteCompletionWithoutDataSync"));
+    ASSERT_EQ(manager.GetAsyncBackend(), "buffered_async_pwrite");
+
+    constexpr size_t recordSize = 132 * 1024;
+    std::vector<uint8_t> buffer(recordSize, 0x27);
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "buffered-write-completed", buffer.data(), buffer.size(),
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    auto result = future.get();
+    DS_EXPECT_OK(result.first);
+
+    auto stats = manager.GetAsyncIoStats();
+    ASSERT_EQ(stats.completedOps, 1u);
+    ASSERT_EQ(stats.completedBytes, recordSize);
+    ASSERT_EQ(stats.failedOps, 0u);
+    ASSERT_EQ(stats.batches, 1u);
+
+    DS_EXPECT_OK(manager.FinishAsync("buffered-write-completed", result.second, true));
+    std::vector<uint8_t> output(recordSize);
+    DS_EXPECT_OK(manager.LoadFromDisk("buffered-write-completed", output.data(), output.size()));
+    ASSERT_EQ(output, buffer);
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, ShutdownSealsPartialBatchAndCompletesFuture)
+{
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions(32, 64, 60 * 1000 * 1000));
+    DS_EXPECT_OK(manager.Init("./spill_ShutdownSealsPartialBatch"));
+    constexpr size_t recordSize = 132 * 1024;
+    void *buffer = nullptr;
+    ASSERT_EQ(posix_memalign(&buffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([buffer] { free(buffer); });
+    std::memset(buffer, 0x18, recordSize);
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "shutdown-partial", buffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    manager.ShutdownAsync();
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    auto result = future.get();
+    DS_EXPECT_OK(result.first);
+    DS_EXPECT_OK(manager.FinishAsync("shutdown-partial", result.second, true));
+}
+
+TEST_F(SpillFileManagerTest, AsyncQueueCapacityIncludesWriteCompletedUnconsumedRequest)
+{
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions(1, 1));
+    DS_EXPECT_OK(manager.Init("./spill_AsyncQueueCapacity"));
+    constexpr size_t recordSize = 132 * 1024;
+    void *buffer = nullptr;
+    ASSERT_EQ(posix_memalign(&buffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([buffer] { free(buffer); });
+    std::memset(buffer, 0x39, recordSize);
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    DS_EXPECT_OK(manager.SubmitAsync(
+        "queue-first", buffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); }));
+    auto result = future.get();
+    DS_EXPECT_OK(result.first);
+    Status secondRc = manager.SubmitAsync("queue-second", buffer, recordSize,
+                                          [](const Status &, const ObjectLocation &) {});
+    ASSERT_EQ(secondRc.GetCode(), StatusCode::K_TRY_AGAIN);
+    DS_EXPECT_OK(manager.FinishAsync("queue-first", result.second, true));
+    manager.ShutdownAsync();
+}
+
+TEST_F(SpillFileManagerTest, AsyncQueueAllowsSingleObjectLargerThanByteBudget)
+{
+    SpillFileManager manager(0, spillIoCounters_, DirectIoOptions());
+    DS_EXPECT_OK(manager.Init("./spill_AsyncQueueAllowsLargeObject"));
+
+    constexpr size_t recordSize = 8 * 1024 * 1024 + 4096;
+    void *buffer = nullptr;
+    ASSERT_EQ(posix_memalign(&buffer, 4096, recordSize), 0);
+    auto freeBuffer = Raii([buffer] { free(buffer); });
+    std::memset(buffer, 0x51, recordSize);
+    std::promise<std::pair<Status, ObjectLocation>> completion;
+    auto future = completion.get_future();
+    Status submitRc = manager.SubmitAsync(
+        "large-object", buffer, recordSize,
+        [&completion](const Status &rc, const ObjectLocation &location) { completion.set_value({ rc, location }); });
+    ASSERT_TRUE(submitRc.IsOk()) << submitRc.ToString();
+    auto result = future.get();
+    DS_EXPECT_OK(result.first);
+    DS_EXPECT_OK(manager.FinishAsync("large-object", result.second, true));
+    manager.ShutdownAsync();
 }
 
 TEST_F(SpillFileManagerTest, TestSmallObjectSyncFailurePreservesBufferedObjects)

@@ -432,6 +432,7 @@ ds_cc_library(
         "worker_oc_eviction_policy.cpp",
     ],
     hdrs = [
+        "spill_object_location.h",
         "worker_oc_eviction_manager.h",
     ],
     deps = [
@@ -547,11 +548,14 @@ ds_cc_library(
     srcs = [
         "obj_cache_shm_unit.cpp",
         "object_kv.cpp",
+        "spill_io_uring.cpp",
         "worker_oc_spill.cpp",
     ],
     hdrs = [
         "obj_cache_shm_unit.h",
         "object_kv.h",
+        "spill_io_uring.h",
+        "spill_object_location.h",
         "worker_oc_eviction_manager.h",
         "worker_oc_spill.h",
     ],

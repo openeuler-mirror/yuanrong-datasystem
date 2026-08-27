@@ -20,6 +20,7 @@
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 #include <iterator>
+#include <exception>
 #include <limits>
 #include <shared_mutex>
 #include <string>
@@ -77,6 +78,12 @@ DS_DEFINE_uint64_dynamic(
 DS_DEFINE_validator(spill_file_open_limit, &Validator::ValidateSpillOpenFileLimit);
 DS_DEFINE_bool(spill_enable_readahead, true,
                "Disable readahead can mitigate the read amplification problem for offset read, default is true");
+DS_DEFINE_string(spill_io_mode, "buffered",
+                 "Spill write backend. Supported values: buffered and direct_io_uring. The value is fixed for the "
+                 "worker lifetime.");
+DS_DEFINE_validator(spill_io_mode, [](const char *, const std::string &value) {
+    return value == "buffered" || value == "direct_io_uring";
+});
 
 namespace datasystem {
 namespace object_cache {
@@ -86,9 +93,15 @@ constexpr int MAX_OPEN_RETRY = 10;
 constexpr int BACKOFF_TIME_MS = 200;
 constexpr int INVALID_FD = -1;
 constexpr int PERMISSION = 0700;
+constexpr int IO_COMPLETION_POLL_TIMEOUT_MS = 100;
+constexpr int IO_COMPLETION_DEADLINE_MS = 30 * 1000;
+constexpr uint64_t DIRECT_SPILL_FILE_FD_COUNT = 2;
+constexpr uint64_t BUFFERED_SPILL_FILE_FD_COUNT = 1;
+constexpr uint64_t ASYNC_STATS_REPORT_BATCH_INTERVAL = 100;
 
 // Total spill file disk size
 std::atomic<uint64_t> totalSpillFileDiskSize{ 0 };
+std::atomic<uint64_t> pendingAsyncSpillBytes{ 0 };
 std::atomic<int64_t> openFdCount{ 0 };
 
 SpillBuffer::SpillBuffer()
@@ -203,7 +216,7 @@ void SpillBuffer::CloneTo(SpillBuffer &buffer)
 
 Status ActiveSpillFile::Read(void *buffer, size_t count, off_t offset)
 {
-    return ReadFile(fd_, buffer, count, offset);
+    return ReadFile(readFd_, buffer, count, offset);
 }
 
 Status ActiveSpillFile::ReadToRpcMessage(size_t size, size_t offset, std::vector<RpcMessage> &messages)
@@ -214,7 +227,7 @@ Status ActiveSpillFile::ReadToRpcMessage(size_t size, size_t offset, std::vector
         messages.emplace_back();
         RETURN_IF_NOT_OK(messages.back().Resize(bufSize));
         PerfPoint p(PerfKey::WORKER_SPILL_READ_FILE);
-        RETURN_IF_NOT_OK(ReadFile(fd_, messages.back().Data(), bufSize, offset));
+        RETURN_IF_NOT_OK(ReadFile(readFd_, messages.back().Data(), bufSize, offset));
         p.Record();
         size -= bufSize;
         offset += bufSize;
@@ -225,7 +238,7 @@ Status ActiveSpillFile::ReadToRpcMessage(size_t size, size_t offset, std::vector
 Status ActiveSpillFile::Write(const void *buffer, size_t count, off_t offset)
 {
     INJECT_POINT("worker.Spill.Write");
-    return WriteFile(fd_, buffer, count, offset);
+    return WriteFile(writeFd_, buffer, count, offset);
 }
 
 Status ActiveSpillFile::Sync()
@@ -234,34 +247,61 @@ Status ActiveSpillFile::Sync()
     INJECT_POINT("worker.Spill.SyncError", []() {
         return Status(StatusCode::K_IO_ERROR, "Injected sync failure");
     });
-    if (syncfs(fd_) != 0) {
+    if (syncfs(writeFd_) != 0) {
         return Status(StatusCode::K_IO_ERROR,
-                      FormatString("syncfs failed for fd %d, errno=%d, errmsg=%s", fd_, errno, StrErr(errno)));
+                      FormatString("syncfs failed for fd %d, errno=%d, errmsg=%s", writeFd_, errno, StrErr(errno)));
     }
     return Status::OK();
 }
 
 int ActiveSpillFile::GetFd()
 {
-    return fd_;
+    return writeFd_ == INVALID_FD ? readFd_ : writeFd_;
+}
+
+int ActiveSpillFile::GetReadFd() const
+{
+    return readFd_;
+}
+
+int ActiveSpillFile::GetWriteFd() const
+{
+    return writeFd_;
+}
+
+void ActiveSpillFile::CloseWriteFd()
+{
+    if (writeFd_ == INVALID_FD || writeFd_ == readFd_) {
+        return;
+    }
+    RETRY_ON_EINTR(close(writeFd_));
+    openFdCount--;
+    VLOG(1) << FormatString("Close completed spill write fd %d, openFdCount: %ld", writeFd_, openFdCount.load());
+    writeFd_ = INVALID_FD;
 }
 
 ActiveSpillFile::~ActiveSpillFile()
 {
-    if (fd_ == INVALID_FD) {
-        return;
+    if (writeFd_ != INVALID_FD) {
+        RETRY_ON_EINTR(close(writeFd_));
+        openFdCount--;
+        VLOG(1) << FormatString("Close spill write fd %d success, openFdCount: %ld", writeFd_, openFdCount.load());
     }
-    RETRY_ON_EINTR(close(fd_));
-    openFdCount--;
+    if (readFd_ != INVALID_FD && readFd_ != writeFd_) {
+        RETRY_ON_EINTR(close(readFd_));
+        openFdCount--;
+        VLOG(1) << FormatString("Close spill read fd %d success, openFdCount: %ld", readFd_, openFdCount.load());
+    }
     if (openFdCount < 0) {
         openFdCount = 0;
     }
-    VLOG(1) << FormatString("Close fd %d success, openFdCount: %ld", fd_, openFdCount.load());
-    fd_ = INVALID_FD;
+    readFd_ = INVALID_FD;
+    writeFd_ = INVALID_FD;
 }
 
 SpillFileManager::~SpillFileManager()
 {
+    ShutdownAsync();
     // Close all Fd and delete file
     for (auto &tenantInfo : tenant2FileInfo_) {
         for (auto &fileInfo : tenantInfo.second) {
@@ -277,10 +317,644 @@ SpillFileManager::~SpillFileManager()
     }
 }
 
-void SpillFileManager::Init(const std::string &directory)
+Status SpillFileManager::Init(const std::string &directory)
 {
     spillDir_ = directory;
     tenant2FileInfo_[DEFAULT_TENANT_ID] = {};
+    return InitAsyncBackend();
+}
+
+Status SpillFileManager::InitAsyncBackend()
+{
+    if (asyncOptions_.mode == SpillIoMode::BUFFERED) {
+        asyncBackend_ = "buffered";
+        LOG(INFO) << FormatString("[SpillAsync] manager=%u backend=%s", id_, asyncBackend_);
+        return Status::OK();
+    }
+    if (asyncOptions_.directAlignment < DEFAULT_SPILL_DIRECT_ALIGNMENT
+        || asyncOptions_.directAlignment % DEFAULT_SPILL_DIRECT_ALIGNMENT != 0) {
+        RETURN_STATUS(K_INVALID,
+                      FormatString("Invalid internal O_DIRECT alignment %u, expected a multiple of 4096",
+                                   asyncOptions_.directAlignment));
+    }
+
+    ioUring_ = std::make_unique<SpillIoUring>();
+    Status ringRc = ioUring_->Init(asyncOptions_.queueDepth);
+    if (ringRc.IsOk()) {
+        asyncBackend_ = "direct_io_uring";
+    } else {
+        ioUring_.reset();
+        asyncBackend_ = "buffered_async_pwrite";
+        LOG(WARNING) << FormatString("[SpillAsync] manager=%u io_uring unavailable, fallback backend=%s, reason=%s",
+                                     id_, asyncBackend_, ringRc.ToString());
+    }
+    asyncAccepting_ = true;
+    asyncStopping_ = false;
+    asyncLastReportTime_ = std::chrono::steady_clock::now();
+    asyncIoThread_ = std::thread(&SpillFileManager::AsyncIoLoop, this);
+    LOG(INFO) << FormatString(
+        "[SpillAsync] manager=%u backend=%s ring_depth=%u queue_capacity=%u queue_bytes=%llu write_batch_ops=%u "
+        "write_batch_bytes=%llu write_batch_timeout_us=%llu direct_alignment=%u",
+        id_, asyncBackend_, ioUring_ == nullptr ? 0 : ioUring_->Depth(), asyncOptions_.queueCapacity,
+        asyncOptions_.queueBytes, asyncOptions_.writeBatchOps, asyncOptions_.writeBatchBytes,
+        asyncOptions_.writeBatchTimeoutUs, asyncOptions_.directAlignment);
+    return Status::OK();
+}
+
+std::string SpillFileManager::GetAsyncBackend() const
+{
+    std::lock_guard<std::mutex> lock(asyncMutex_);
+    return asyncBackend_;
+}
+
+SpillAsyncIoStats SpillFileManager::GetAsyncIoStats() const
+{
+    std::lock_guard<std::mutex> lock(asyncMutex_);
+    return asyncIoStats_;
+}
+
+Status SpillFileManager::CreateAsyncSpillFile(const std::string &directory, bool direct, std::string &path,
+                                              std::shared_ptr<ActiveSpillFile> &file)
+{
+    do {
+        path = directory + "/" + GetStringUuid();
+    } while (FileExist(path));
+    RETURN_IF_NOT_OK(CreateDir(directory, true, PERMISSION));
+
+    int writeFd = INVALID_FD;
+    int readFd = INVALID_FD;
+    if (direct) {
+        RETURN_IF_NOT_OK(OpenFile(path, O_WRONLY | O_CREAT | O_DIRECT, SPILL_FILE_MODE, &writeFd));
+        openFdCount++;
+        Status readRc = OpenFile(path, O_RDONLY, SPILL_FILE_MODE, &readFd);
+        if (readRc.IsError()) {
+            RETRY_ON_EINTR(close(writeFd));
+            openFdCount--;
+            LOG_IF_ERROR(DeleteFile(path), "Delete spill file after read fd open failure");
+            return readRc;
+        }
+        openFdCount++;
+        DisableReadAheadIfNeed(readFd);
+        file = std::make_shared<ActiveSpillFile>(readFd, writeFd);
+    } else {
+        RETURN_IF_NOT_OK(OpenFile(path, O_RDWR | O_CREAT, SPILL_FILE_MODE, &writeFd));
+        openFdCount++;
+        DisableReadAheadIfNeed(writeFd);
+        file = std::make_shared<ActiveSpillFile>(writeFd);
+    }
+    return Status::OK();
+}
+
+Status SpillFileManager::FindBestAsyncWriteFile(const std::string &tenantId, size_t size, bool direct,
+                                                ObjectLocation &location,
+                                                std::shared_ptr<ActiveSpillFile> &file)
+{
+    const SpillFileType expectedType = direct ? SpillFileType::DIRECT_OBJ_FILE : SpillFileType::ASYNC_BUFFERED_OBJ_FILE;
+    auto &files = tenant2FileInfo_[tenantId];
+    for (auto &item : files) {
+        auto &info = item.second;
+        if (info.spillFileType != expectedType || info.full || info.file == nullptr) {
+            continue;
+        }
+        if (info.size + size > FLAGS_spill_file_max_size_mb * MB) {
+            info.full = true;
+            FinalizeAsyncFileIfIdle(
+                info, direct ? DIRECT_SPILL_FILE_FD_COUNT : BUFFERED_SPILL_FILE_FD_COUNT);
+            continue;
+        }
+        location = ObjectLocation{ .path = item.first,
+                                   .offset = info.size,
+                                   .size = size,
+                                   .physicalOffset = info.size,
+                                   .physicalSize = size };
+        info.size += size;
+        info.full = info.size == FLAGS_spill_file_max_size_mb * MB;
+        ++info.asyncPending;
+        file = info.file;
+        return Status::OK();
+    }
+
+    const std::string directory = spillDir_ + "/" + tenantId;
+    std::string path;
+    RETURN_IF_NOT_OK(CreateAsyncSpillFile(directory, direct, path, file));
+    const bool full = size >= FLAGS_spill_file_max_size_mb * MB;
+    files[path] = FileInfo{ .file = file,
+                            .size = size,
+                            .holesSize = 0,
+                            .full = full,
+                            .asyncPending = 1,
+                            .spillFileType = expectedType,
+                            .path = path };
+    location = ObjectLocation{
+        .path = path, .offset = 0, .size = size, .physicalOffset = 0, .physicalSize = size
+    };
+    return Status::OK();
+}
+
+void SpillFileManager::FinalizeAsyncFileIfIdle(FileInfo &info, uint64_t requiredFds)
+{
+    if (!info.full || info.asyncPending != 0 || info.file == nullptr) {
+        return;
+    }
+    if (info.spillFileType == SpillFileType::DIRECT_OBJ_FILE) {
+        info.file->CloseWriteFd();
+    }
+    const bool lacksRequiredFds = requiredFds > 0
+                                  && static_cast<uint64_t>(openFdCount) + requiredFds
+                                         > FLAGS_spill_file_open_limit;
+    if (FdCountExceedLimit() || lacksRequiredFds) {
+        info.file.reset();
+    }
+}
+
+bool SpillFileManager::IsAsyncStopping() const
+{
+    std::lock_guard<std::mutex> lock(asyncMutex_);
+    return asyncStopping_;
+}
+
+Status SpillFileManager::SubmitAsync(const std::string &objectKey, const void *buffer, uint64_t size,
+                                     AsyncWriteCallback callback)
+{
+    CHECK_FAIL_RETURN_STATUS(asyncOptions_.mode == SpillIoMode::DIRECT_IO_URING, K_RUNTIME_ERROR,
+                             "Asynchronous spill backend is disabled");
+    CHECK_FAIL_RETURN_STATUS(size > 0, K_INVALID, "Spill size must be greater than zero");
+
+    auto request = BuildAsyncWriteRequest(objectKey, buffer, size, std::move(callback));
+    RETURN_IF_NOT_OK(ReserveAsyncCapacity(request));
+    Status reserveRc = ReserveAsyncLocation(request);
+    if (reserveRc.IsError()) {
+        RollbackAsyncCapacity(request);
+        return reserveRc;
+    }
+    if (request->direct && request->location.physicalOffset % asyncOptions_.directAlignment != 0) {
+        LOG_IF_ERROR(FinishAsync(objectKey, request->location, false), "Rollback unaligned direct reservation failed");
+        RETURN_STATUS(K_INVALID, "Direct spill file offset is not 4 KiB aligned");
+    }
+    {
+        std::lock_guard<std::mutex> lock(asyncMutex_);
+        asyncQueue_.push_back(request);
+    }
+    asyncCv_.notify_one();
+    return Status::OK();
+}
+
+std::shared_ptr<SpillFileManager::AsyncWriteRequest> SpillFileManager::BuildAsyncWriteRequest(
+    const std::string &objectKey, const void *buffer, uint64_t size, AsyncWriteCallback callback) const
+{
+    auto request = std::make_shared<AsyncWriteRequest>();
+    request->objectKey = objectKey;
+    request->tenantId = TenantAuthManager::ExtractTenantId(objectKey);
+    std::replace(request->tenantId.begin(), request->tenantId.end(), '/', '_');
+    request->buffer = static_cast<const uint8_t *>(buffer);
+    request->size = size;
+    request->callback = std::move(callback);
+    request->enqueueTime = std::chrono::steady_clock::now();
+    return request;
+}
+
+Status SpillFileManager::ReserveAsyncCapacity(const std::shared_ptr<AsyncWriteRequest> &request)
+{
+    const uint64_t directAlignment = asyncOptions_.directAlignment;
+    {
+        std::lock_guard<std::mutex> lock(asyncMutex_);
+        request->direct = asyncBackend_ == "direct_io_uring"
+                          && reinterpret_cast<uintptr_t>(request->buffer) % directAlignment == 0
+                          && request->size % directAlignment == 0;
+        CHECK_FAIL_RETURN_STATUS(asyncAccepting_ && !asyncStopping_, K_TRY_AGAIN,
+                                 "Spill manager is stopping async I/O");
+        CHECK_FAIL_RETURN_STATUS(asyncReservations_.count(request->objectKey) == 0, K_TRY_AGAIN,
+                                 "An async spill reservation already exists for this object");
+        CHECK_FAIL_RETURN_STATUS(asyncReservations_.size() < asyncOptions_.queueCapacity, K_TRY_AGAIN,
+                                 "Spill async request capacity reached");
+        CHECK_FAIL_RETURN_STATUS(asyncReservations_.empty()
+                                     || request->size <= asyncOptions_.queueBytes
+                                                           - std::min(asyncOptions_.queueBytes, asyncOutstandingBytes_),
+                                 K_TRY_AGAIN, "Spill async byte capacity reached");
+        asyncOutstandingBytes_ += request->size;
+        pendingAsyncSpillBytes += request->size;
+        asyncReservations_[request->objectKey] = request;
+    }
+    return Status::OK();
+}
+
+Status SpillFileManager::ReserveAsyncLocation(const std::shared_ptr<AsyncWriteRequest> &request)
+{
+    Status reserveRc;
+    {
+        std::lock_guard<std::shared_timed_mutex> lock(fileInfoMutex_);
+        reserveRc =
+            FindBestAsyncWriteFile(request->tenantId, request->size, request->direct, request->location, request->file);
+        if (reserveRc.IsError() && request->direct) {
+            LOG(WARNING) << FormatString(
+                "[SpillAsync] manager=%u cannot create direct spill file, use isolated buffered file: %s", id_,
+                reserveRc.ToString());
+            request->direct = false;
+            reserveRc = FindBestAsyncWriteFile(request->tenantId, request->size, false, request->location,
+                                               request->file);
+        }
+        if (reserveRc.IsOk()) {
+            tenant2FileInfo_[request->tenantId][request->location.path].objectKeys.insert(request->objectKey);
+        }
+    }
+    return reserveRc;
+}
+
+void SpillFileManager::RollbackAsyncCapacity(const std::shared_ptr<AsyncWriteRequest> &request)
+{
+    std::lock_guard<std::mutex> lock(asyncMutex_);
+    asyncReservations_.erase(request->objectKey);
+    asyncOutstandingBytes_ -= request->size;
+    pendingAsyncSpillBytes -= request->size;
+}
+
+std::vector<std::shared_ptr<SpillFileManager::AsyncWriteRequest>> SpillFileManager::TakeAsyncBatch()
+{
+    std::unique_lock<std::mutex> lock(asyncMutex_);
+    asyncCv_.wait(lock, [this] { return asyncStopping_ || !asyncQueue_.empty(); });
+    if (asyncQueue_.empty()) {
+        return {};
+    }
+    const auto deadline = asyncQueue_.front()->enqueueTime
+                          + std::chrono::microseconds(asyncOptions_.writeBatchTimeoutUs);
+    while (!asyncStopping_) {
+        SpillBatchPolicy policy(asyncOptions_);
+        const auto path = asyncQueue_.front()->location.path;
+        bool reachedFileBoundary = false;
+        for (const auto &request : asyncQueue_) {
+            if (request->location.path != path) {
+                reachedFileBoundary = true;
+                break;
+            }
+            policy.Add(request->size, request->enqueueTime);
+            if (policy.ShouldSeal(std::chrono::steady_clock::now())) {
+                break;
+            }
+        }
+        if (reachedFileBoundary || policy.ShouldSeal(std::chrono::steady_clock::now())) {
+            break;
+        }
+        if (asyncCv_.wait_until(lock, deadline) == std::cv_status::timeout) {
+            break;
+        }
+    }
+
+    std::vector<std::shared_ptr<AsyncWriteRequest>> batch;
+    SpillBatchPolicy policy(asyncOptions_);
+    const auto path = asyncQueue_.front()->location.path;
+    while (!asyncQueue_.empty() && asyncQueue_.front()->location.path == path) {
+        auto request = asyncQueue_.front();
+        asyncQueue_.pop_front();
+        batch.emplace_back(std::move(request));
+        policy.Add(batch.back()->size, batch.back()->enqueueTime);
+        if (policy.ReachedCapacity()) {
+            break;
+        }
+    }
+    return batch;
+}
+
+Status SpillFileManager::WriteBatchBuffered(const std::vector<std::shared_ptr<AsyncWriteRequest>> &batch,
+                                            double &writeUs)
+{
+    Timer timer;
+    for (const auto &request : batch) {
+        RETURN_IF_NOT_OK(request->file->Write(request->buffer, request->size, request->location.physicalOffset));
+    }
+    writeUs = timer.ElapsedMicroSecond();
+    return Status::OK();
+}
+
+Status SpillFileManager::WriteBatchWithIoUring(const std::vector<std::shared_ptr<AsyncWriteRequest>> &batch,
+                                               double &writeUs)
+{
+    Timer timer;
+    AsyncWriteProgress written;
+    size_t complete = 0;
+    while (complete < batch.size()) {
+        uint32_t submitted = 0;
+        RETURN_IF_NOT_OK(SubmitIoUringWave(batch, written, submitted));
+        RETURN_IF_NOT_OK(WaitIoUringWave(submitted, written, complete));
+    }
+
+    writeUs = timer.ElapsedMicroSecond();
+    return Status::OK();
+}
+
+Status SpillFileManager::SubmitIoUringWave(const AsyncWriteBatch &batch, AsyncWriteProgress &written,
+                                           uint32_t &submitted)
+{
+    submitted = 0;
+    for (const auto &request : batch) {
+        uint64_t &done = written[request.get()];
+        if (done == request->size || submitted >= asyncOptions_.queueDepth) {
+            continue;
+        }
+        const uint32_t writeSize =
+            SpillIoUring::WriteChunkSize(request->size - done, asyncOptions_.directAlignment);
+        CHECK_FAIL_RETURN_STATUS(writeSize > 0, K_INVALID, "Invalid O_DIRECT spill write chunk");
+        RETURN_IF_NOT_OK(ioUring_->PrepareWrite(request->file->GetWriteFd(), request->buffer + done, writeSize,
+                                                request->location.physicalOffset + done, request.get()));
+        ++submitted;
+    }
+    CHECK_FAIL_RETURN_STATUS(submitted > 0, K_RUNTIME_ERROR, "No io_uring spill writes were submitted");
+    return ioUring_->Submit();
+}
+
+Status SpillFileManager::WaitIoUringCompletion(SpillIoUring::Completion &completion,
+                                               std::chrono::steady_clock::time_point deadline)
+{
+    Status waitRc = ioUring_->WaitCompletion(completion, IO_COMPLETION_POLL_TIMEOUT_MS);
+    while (waitRc.GetCode() == StatusCode::K_TRY_AGAIN && std::chrono::steady_clock::now() < deadline) {
+        CHECK_FAIL_RETURN_STATUS(!IsAsyncStopping(), K_INTERRUPTED,
+                                 "Spill manager stopped while waiting for io_uring completion");
+        waitRc = ioUring_->WaitCompletion(completion, IO_COMPLETION_POLL_TIMEOUT_MS);
+    }
+    if (waitRc.GetCode() == StatusCode::K_TRY_AGAIN) {
+        RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Timed out waiting for spill io_uring write completion");
+    }
+    return waitRc;
+}
+
+Status SpillFileManager::ApplyIoUringCompletion(const SpillIoUring::Completion &completion,
+                                                AsyncWriteProgress &written, size_t &complete)
+{
+    auto *request = static_cast<AsyncWriteRequest *>(completion.context);
+    auto writtenIter = written.find(request);
+    CHECK_FAIL_RETURN_STATUS(request != nullptr && writtenIter != written.end(), K_RUNTIME_ERROR,
+                             "Unexpected spill write CQE context");
+    if (completion.result <= 0) {
+        RETURN_STATUS(K_IO_ERROR,
+                      FormatString("io_uring write failed for object %s: %s", request->objectKey,
+                                   completion.result < 0 ? StrErr(-completion.result) : "short write of zero"));
+    }
+    uint64_t &done = writtenIter->second;
+    CHECK_FAIL_RETURN_STATUS(static_cast<uint64_t>(completion.result) <= request->size - done, K_IO_ERROR,
+                             "io_uring write CQE exceeds expected size");
+    done += static_cast<uint64_t>(completion.result);
+    if (done == request->size) {
+        ++complete;
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(done % asyncOptions_.directAlignment == 0
+                                 && (request->size - done) % asyncOptions_.directAlignment == 0,
+                             K_IO_ERROR, "Unaligned O_DIRECT short write cannot be retried safely");
+    return Status::OK();
+}
+
+Status SpillFileManager::WaitIoUringWave(uint32_t submitted, AsyncWriteProgress &written, size_t &complete)
+{
+    Status waveRc = Status::OK();
+    const auto deadline = std::chrono::steady_clock::now()
+                          + std::chrono::milliseconds(IO_COMPLETION_DEADLINE_MS);
+    for (uint32_t i = 0; i < submitted; ++i) {
+        SpillIoUring::Completion completion;
+        RETURN_IF_NOT_OK(WaitIoUringCompletion(completion, deadline));
+        Status completionRc = ApplyIoUringCompletion(completion, written, complete);
+        if (waveRc.IsOk() && completionRc.IsError()) {
+            waveRc = std::move(completionRc);
+        }
+    }
+    return waveRc;
+}
+
+void SpillFileManager::CompleteAsyncBatch(const std::vector<std::shared_ptr<AsyncWriteRequest>> &batch,
+                                          const Status &rc, double writeUs)
+{
+    uint64_t bytes = 0;
+    for (const auto &request : batch) {
+        bytes += request->size;
+    }
+    totalSpillFileDiskSize += bytes;
+    pendingAsyncSpillBytes -= bytes;
+    UpdateAsyncBatchStats(batch, rc, writeUs, bytes);
+    FinalizeAsyncBatchFile(batch);
+    InvokeAsyncCallbacks(batch, rc);
+}
+
+void SpillFileManager::UpdateAsyncBatchStats(const AsyncWriteBatch &batch, const Status &rc, double writeUs,
+                                             uint64_t bytes)
+{
+    {
+        std::lock_guard<std::mutex> lock(asyncMutex_);
+        ++asyncIoStats_.batches;
+        asyncIoStats_.writeElapsedUs += static_cast<uint64_t>(writeUs);
+        if (rc.IsOk()) {
+            asyncIoStats_.completedOps += batch.size();
+            asyncIoStats_.completedBytes += bytes;
+            for (const auto &request : batch) {
+                request->writeCompleted = true;
+            }
+        } else {
+            asyncIoStats_.failedOps += batch.size();
+            asyncIoStats_.failedBytes += bytes;
+        }
+    }
+    if (rc.IsOk()) {
+        spillIoCounters_.spillInCount.fetch_add(batch.size(), std::memory_order_relaxed);
+        spillIoCounters_.spillInBytes.fetch_add(bytes, std::memory_order_relaxed);
+    } else {
+        spillIoCounters_.spillInFailCount.fetch_add(batch.size(), std::memory_order_relaxed);
+    }
+}
+
+void SpillFileManager::FinalizeAsyncBatchFile(const AsyncWriteBatch &batch)
+{
+    {
+        std::lock_guard<std::shared_timed_mutex> lock(fileInfoMutex_);
+        auto &files = tenant2FileInfo_[batch.front()->tenantId];
+        auto iter = files.find(batch.front()->location.path);
+        if (iter != files.end()) {
+            auto &info = iter->second;
+            info.asyncPending -= std::min<uint64_t>(info.asyncPending, batch.size());
+            FinalizeAsyncFileIfIdle(info);
+        }
+    }
+    for (const auto &request : batch) {
+        request->file.reset();
+    }
+}
+
+void SpillFileManager::InvokeAsyncCallbacks(const AsyncWriteBatch &batch, const Status &rc)
+{
+    for (const auto &request : batch) {
+        {
+            std::lock_guard<std::mutex> lock(asyncMutex_);
+            request->callbackCompleted = true;
+        }
+        try {
+            request->callback(rc, request->location);
+        } catch (const std::exception &e) {
+            LOG(ERROR) << FormatString("Async spill completion callback failed for object %s: %s",
+                                       request->objectKey, e.what());
+        } catch (...) {
+            LOG(ERROR) << FormatString("Async spill completion callback failed for object %s",
+                                       request->objectKey);
+        }
+    }
+}
+
+void SpillFileManager::LogAsyncIoStats(bool force)
+{
+    SpillAsyncIoStats stats;
+    std::string backend;
+    {
+        std::lock_guard<std::mutex> lock(asyncMutex_);
+        stats = asyncIoStats_;
+        backend = asyncBackend_;
+    }
+    if (!force && stats.batches - asyncLastReportedBatches_ < ASYNC_STATS_REPORT_BATCH_INTERVAL) {
+        return;
+    }
+    if (force && stats.batches == asyncLastReportedBatches_) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto intervalUs = std::max<int64_t>(
+        1, std::chrono::duration_cast<std::chrono::microseconds>(now - asyncLastReportTime_).count());
+    const uint64_t deltaOps = stats.completedOps - asyncLastReportedOps_;
+    const uint64_t deltaBytes = stats.completedBytes - asyncLastReportedBytes_;
+    const double bandwidthMiBPerSec = static_cast<double>(deltaBytes) * 1000000.0 / intervalUs / MB;
+    LOG(INFO) << FormatString(
+        "[SpillAsyncStats] manager=%u backend=%s interval_us=%lld delta_ops=%llu delta_bytes=%llu "
+        "bandwidth_mib_s=%.2f cumul_ops=%llu cumul_bytes=%llu failed_ops=%llu failed_bytes=%llu batches=%llu "
+        "write_us=%llu final=%s",
+        id_, backend, static_cast<long long>(intervalUs), static_cast<unsigned long long>(deltaOps),
+        static_cast<unsigned long long>(deltaBytes), bandwidthMiBPerSec,
+        static_cast<unsigned long long>(stats.completedOps), static_cast<unsigned long long>(stats.completedBytes),
+        static_cast<unsigned long long>(stats.failedOps), static_cast<unsigned long long>(stats.failedBytes),
+        static_cast<unsigned long long>(stats.batches), static_cast<unsigned long long>(stats.writeElapsedUs),
+        force ? "true" : "false");
+    asyncLastReportTime_ = now;
+    asyncLastReportedOps_ = stats.completedOps;
+    asyncLastReportedBytes_ = stats.completedBytes;
+    asyncLastReportedBatches_ = stats.batches;
+}
+
+void SpillFileManager::AsyncIoLoop()
+{
+    while (!IsAsyncDrained()) {
+        auto batch = TakeAsyncBatch();
+        if (batch.empty()) {
+            continue;
+        }
+        ProcessAsyncBatch(batch);
+    }
+    LogAsyncIoStats(true);
+}
+
+bool SpillFileManager::IsAsyncDrained() const
+{
+    std::lock_guard<std::mutex> lock(asyncMutex_);
+    return asyncStopping_ && asyncQueue_.empty();
+}
+
+void SpillFileManager::ProcessAsyncBatch(const AsyncWriteBatch &batch)
+{
+    double writeUs = 0;
+    const bool useIoUring = batch.front()->direct && ioUring_ != nullptr;
+    Status rc = useIoUring ? WriteBatchWithIoUring(batch, writeUs) : WriteBatchBuffered(batch, writeUs);
+    if (useIoUring && rc.IsError()) {
+        ioUring_->Shutdown();
+        ioUring_.reset();
+        {
+            std::lock_guard<std::mutex> lock(asyncMutex_);
+            asyncBackend_ = "buffered_async_pwrite";
+        }
+        LOG(WARNING) << FormatString(
+            "[SpillAsync] manager=%u runtime io_uring failure, fallback backend=buffered_async_pwrite, reason=%s",
+            id_, rc.ToString());
+    }
+    uint64_t bytes = 0;
+    for (const auto &request : batch) {
+        bytes += request->size;
+    }
+    size_t queued = 0;
+    uint64_t outstandingBytes = 0;
+    {
+        std::lock_guard<std::mutex> lock(asyncMutex_);
+        queued = asyncQueue_.size();
+        outstandingBytes = asyncOutstandingBytes_;
+    }
+    CompleteAsyncBatch(batch, rc, writeUs);
+    LOG_EVERY_N(INFO, ASYNC_STATS_REPORT_BATCH_INTERVAL)
+        << FormatString("[SpillAsyncBatch] manager=%u backend=%s ops=%zu bytes=%llu write_us=%.0f "
+                        "queued=%zu outstanding_bytes=%llu status=%s",
+                        id_, useIoUring ? "direct_io_uring" : "buffered_async_pwrite", batch.size(), bytes,
+                        writeUs, queued, outstandingBytes, rc.ToString());
+    LogAsyncIoStats(false);
+}
+
+Status SpillFileManager::FinishAsync(const std::string &objectKey, const ObjectLocation &location, bool publish)
+{
+    std::shared_ptr<AsyncWriteRequest> request;
+    {
+        std::lock_guard<std::mutex> lock(asyncMutex_);
+        auto iter = asyncReservations_.find(objectKey);
+        CHECK_FAIL_RETURN_STATUS(iter != asyncReservations_.end(), K_NOT_FOUND, "Async spill reservation not found");
+        request = iter->second;
+        CHECK_FAIL_RETURN_STATUS(request->location.path == location.path
+                                     && request->location.physicalOffset == location.physicalOffset,
+                                 K_RUNTIME_ERROR, "Async spill reservation location mismatch");
+        CHECK_FAIL_RETURN_STATUS(!publish || request->writeCompleted, K_NOT_READY,
+                                 "Cannot publish an async spill request before write completion");
+        asyncOutstandingBytes_ -= request->size;
+        asyncReservations_.erase(iter);
+    }
+    {
+        std::lock_guard<std::shared_timed_mutex> lock(fileInfoMutex_);
+        auto &info = tenant2FileInfo_[request->tenantId][request->location.path];
+        if (publish) {
+            UpdateSpillInfo(request->tenantId, objectKey, request->location);
+        } else {
+            info.objectKeys.erase(objectKey);
+            info.holesSize += request->location.physicalSize;
+        }
+    }
+    if (!publish) {
+        std::lock_guard<std::shared_timed_mutex> lock(fallocateQueueMutex_);
+        fallocateQueue_.emplace_back(objectKey, request->location);
+    }
+    asyncCv_.notify_all();
+    return Status::OK();
+}
+
+void SpillFileManager::ShutdownAsync()
+{
+    {
+        std::lock_guard<std::mutex> lock(asyncMutex_);
+        asyncAccepting_ = false;
+        asyncStopping_ = true;
+    }
+    asyncCv_.notify_all();
+    if (asyncIoThread_.joinable()) {
+        asyncIoThread_.join();
+    }
+    std::vector<std::shared_ptr<AsyncWriteRequest>> abandoned;
+    {
+        std::lock_guard<std::mutex> lock(asyncMutex_);
+        for (auto &item : asyncReservations_) {
+            if (!item.second->callbackCompleted) {
+                abandoned.emplace_back(item.second);
+                item.second->callbackCompleted = true;
+            }
+        }
+    }
+    const Status shutdownRc(K_INTERRUPTED, "Spill manager shut down before request completion");
+    for (const auto &request : abandoned) {
+        try {
+            request->callback(shutdownRc, request->location);
+        } catch (const std::exception &e) {
+            LOG(ERROR) << FormatString("Async spill shutdown callback failed for object %s: %s",
+                                       request->objectKey, e.what());
+        } catch (...) {
+            LOG(ERROR) << FormatString("Async spill shutdown callback failed for object %s", request->objectKey);
+        }
+    }
+    if (ioUring_ != nullptr) {
+        ioUring_->Shutdown();
+    }
 }
 
 Status SpillFileManager::SpillSmallObject(const std::string &objectKey, const void *buffer, size_t size)
@@ -514,12 +1188,12 @@ Status SpillFileManager::GetFileInfoAndReopenFile(const std::string &objectKey, 
     }
     int fd;
     RETURN_IF_NOT_OK(RetryFileOperation(MAX_OPEN_RETRY, BACKOFF_TIME_MS, [&path, &fd]() {
-        return OpenFile(path, O_RDWR | O_CREAT, SPILL_FILE_MODE, &fd);
+        return OpenFile(path, O_RDONLY, SPILL_FILE_MODE, &fd);
     }));
     DisableReadAheadIfNeed(fd);
     openFdCount++;
     isReopen = true;
-    outFileInfo->file = std::make_shared<ActiveSpillFile>(fd);
+    outFileInfo->file = std::make_shared<ActiveSpillFile>(fd, INVALID_FD);
     VLOG(1) << FormatString("Reopen file: %s, objectKey: %s, openFdCount: %ld", path, objectKey, openFdCount.load());
     return Status::OK();
 }
@@ -722,8 +1396,10 @@ Status SpillFileManager::DeleteFromDisk(const std::string &objectKey, uint64_t &
 void SpillFileManager::DeleteLargeObj(const std::string &objectKey, const ObjectLocation &loc,
                                       std::unordered_map<std::string, FileInfo> &fileInfoMap)
 {
-    if (loc.size >= LARGE_OBJ_SIZE_THRESHOLD) {
-        auto &fileInfo = fileInfoMap[loc.path];
+    auto &fileInfo = fileInfoMap[loc.path];
+    const bool asyncFile = fileInfo.spillFileType == SpillFileType::DIRECT_OBJ_FILE
+                           || fileInfo.spillFileType == SpillFileType::ASYNC_BUFFERED_OBJ_FILE;
+    if (loc.size >= LARGE_OBJ_SIZE_THRESHOLD || asyncFile) {
         if (fileInfo.objectKeys.empty() && fileInfo.full) {
             LOG(INFO) << FormatString("Delete empty spill file %s immediately", loc.path);
             if (fileInfo.file != nullptr) {
@@ -756,7 +1432,9 @@ Status SpillFileManager::FallocateInplace(const ObjectLocation &loc)
         LOG(ERROR) << FormatString("[ProcessFallocateQueue] Failed to open file %s with error:%d", loc.path, errno);
         return rc;
     }
-    int ret = fallocate(tmpFd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, loc.offset, loc.size);
+    const uint64_t physicalOffset = loc.physicalSize == 0 ? loc.offset : loc.physicalOffset;
+    const uint64_t physicalSize = loc.physicalSize == 0 ? loc.size : loc.physicalSize;
+    int ret = fallocate(tmpFd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, physicalOffset, physicalSize);
     if (ret != 0) {
         LOG(ERROR) << FormatString("[ProcessFallocateQueue] Failed to fallocate file with error:%d", errno);
     }
@@ -802,7 +1480,10 @@ void SpillFileManager::ProcessFallocateOneTask(const std::string &objectKey, con
         }
         auto &fileInfo = iter->second;
         // only delete large object file here, small object file will be deleted by CompactFile
-        if (fileInfo.objectKeys.empty() && fileInfo.full && fileInfo.spillFileType == SpillFileType::LARGE_OBJ_FILE) {
+        const bool independentlyReclaimable = fileInfo.spillFileType == SpillFileType::LARGE_OBJ_FILE
+                                              || fileInfo.spillFileType == SpillFileType::DIRECT_OBJ_FILE
+                                              || fileInfo.spillFileType == SpillFileType::ASYNC_BUFFERED_OBJ_FILE;
+        if (fileInfo.objectKeys.empty() && fileInfo.full && independentlyReclaimable) {
             if (fileInfo.file != nullptr) {
                 fileInfo.file = nullptr;
             }
@@ -852,7 +1533,11 @@ void SpillFileManager::GetHoleFiles(float holeSizeRatioThreshold, std::vector<Ho
     std::shared_lock<std::shared_timed_mutex> l(fileInfoMutex_);
     for (const auto &tenantInfo : tenant2FileInfo_) {
         for (const auto &fileinfo : tenantInfo.second) {
-            if (!fileinfo.second.full || fileinfo.second.spillFileType == SpillFileType::LARGE_OBJ_FILE) {
+            const bool individuallyReclaimed = fileinfo.second.spillFileType == SpillFileType::LARGE_OBJ_FILE
+                                               || fileinfo.second.spillFileType == SpillFileType::DIRECT_OBJ_FILE
+                                               || fileinfo.second.spillFileType
+                                                      == SpillFileType::ASYNC_BUFFERED_OBJ_FILE;
+            if (!fileinfo.second.full || individuallyReclaimed) {
                 VLOG(1) << FormatString("[Compact] File %s not full or not large obj file.", fileinfo.first);
                 continue;
             }
@@ -1008,6 +1693,7 @@ WorkerOcSpill::~WorkerOcSpill()
     if (spillCompactionThread_.joinable()) {
         spillCompactionThread_.join();
     }
+    ShutdownAsync();
 }
 
 Status WorkerOcSpill::Init()
@@ -1027,9 +1713,13 @@ Status WorkerOcSpill::Init()
         LOG(INFO) << FormatString("[SPill] spill_size_limit automatically set to %llu bytes.",
                                   initial95SpillFreeSpace_);
     }
+    SpillIoOptions asyncOptions;
+    asyncOptions.mode = FLAGS_spill_io_mode == "direct_io_uring" ? SpillIoMode::DIRECT_IO_URING
+                                                                 : SpillIoMode::BUFFERED;
     for (uint32_t i = 0; i < FLAGS_spill_thread_num; i++) {
-        auto tmpMgr = std::make_unique<SpillFileManager>(i, spillIoCounters_);
-        tmpMgr->Init(realSpillDirectory);
+        auto tmpMgr = std::make_unique<SpillFileManager>(i, spillIoCounters_, asyncOptions);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(tmpMgr->Init(realSpillDirectory),
+                                         FormatString("Initialize SpillFileManager %u failed", i));
         fileMgr_.emplace_back(std::move(tmpMgr));
     }
     totalActiveSpilledSize_ = 0;
@@ -1051,10 +1741,12 @@ void WorkerOcSpill::ResetForTest()
         if (spillCompactionThread_.joinable()) {
             spillCompactionThread_.join();
         }
+        ShutdownAsync();
     }
     fileMgr_.clear();
     totalActiveSpilledSize_.store(0, std::memory_order_relaxed);
     totalSpillFileDiskSize.store(0, std::memory_order_relaxed);
+    pendingAsyncSpillBytes.store(0, std::memory_order_relaxed);
     initial95SpillFreeSpace_ = 0;
     freeSpaceInRealTime_ = 0;
     spillIoCounters_.spillInCount.store(0, std::memory_order_relaxed);
@@ -1098,13 +1790,13 @@ void WorkerOcSpill::Compact()
         freeSpaceInRealTime_ = GetFreeSpaceBytes(realSpillDirectory);
         LOG(INFO) << "[Spill] freeSpaceInRealTime: " << freeSpaceInRealTime_;
         waitPost_.WaitForAndClear(compactIntervalMs);
-        for (uint32_t mgrIndex = 0; mgrIndex < FLAGS_spill_thread_num && !stopCompaction_; mgrIndex++) {
+        for (uint32_t mgrIndex = 0; mgrIndex < fileMgr_.size() && !stopCompaction_; mgrIndex++) {
             Status rc = fileMgr_[mgrIndex]->CompactFiles(SpillFileManager::HOLE_SIZE_RATIO_THRESHOLD_50);
             LOG_IF_ERROR(rc, "failed to CompactFiles");
         }
         if (totalSpillFileDiskSize >= diskSpaceThreshold) {
             VLOG(1) << "[Compact] start to compact spill files as disk usage is:" << totalSpillFileDiskSize;
-            for (uint32_t mgrIndex = 0; mgrIndex < FLAGS_spill_thread_num && !stopCompaction_; mgrIndex++) {
+            for (uint32_t mgrIndex = 0; mgrIndex < fileMgr_.size() && !stopCompaction_; mgrIndex++) {
                 Status rc = fileMgr_[mgrIndex]->CompactFiles(SpillFileManager::HOLE_SIZE_RATIO_THRESHOLD_30);
                 LOG_IF_ERROR(rc, "failed to CompactFiles");
             }
@@ -1141,6 +1833,40 @@ Status WorkerOcSpill::Spill(const std::string &objectKey,
         spillEvictionList_.Add(objectKey, size >= SpillFileManager::LARGE_OBJ_SIZE_THRESHOLD ? Q2 : Q1);
     }
     return Status::OK();
+}
+
+Status WorkerOcSpill::SubmitAsync(const std::string &objectKey, const void *buffer, size_t size,
+                                  SpillFileManager::AsyncWriteCallback callback)
+{
+    if (IsSpaceFull(size)) {
+        spillIoCounters_.spillInFailCount.fetch_add(1, std::memory_order_relaxed);
+        RETURN_STATUS(K_NO_SPACE, "No space when WorkerOcSpill::SubmitAsync");
+    }
+    const size_t mgrIndex = GetMgrIndex(objectKey);
+    VLOG(1) << FormatString("[SpillAsync] object=%s manager=%zu", objectKey, mgrIndex);
+    return fileMgr_[mgrIndex]->SubmitAsync(objectKey, buffer, size, std::move(callback));
+}
+
+Status WorkerOcSpill::FinishAsync(const std::string &objectKey, const ObjectLocation &location, bool publish,
+                                  bool evictable)
+{
+    const size_t mgrIndex = GetMgrIndex(objectKey);
+    RETURN_IF_NOT_OK(fileMgr_[mgrIndex]->FinishAsync(objectKey, location, publish));
+    if (publish) {
+        totalActiveSpilledSize_ += location.size;
+        if (evictable) {
+            spillEvictionList_.Add(objectKey,
+                                   location.size >= SpillFileManager::LARGE_OBJ_SIZE_THRESHOLD ? Q2 : Q1);
+        }
+    }
+    return Status::OK();
+}
+
+void WorkerOcSpill::ShutdownAsync()
+{
+    for (auto &manager : fileMgr_) {
+        manager->ShutdownAsync();
+    }
 }
 
 Status WorkerOcSpill::Get(const std::string &objectKey, void *buffer, size_t size, size_t offset)
@@ -1183,8 +1909,12 @@ bool WorkerOcSpill::IsEnabled() const
 
 size_t WorkerOcSpill::GetMgrIndex(const std::string &objectKey)
 {
+    if (fileMgr_.empty()) {
+        LOG(ERROR) << "No spill file manager has been initialized";
+        return 0;
+    }
     std::hash<std::string> hash;
-    return hash(objectKey) % FLAGS_spill_thread_num;
+    return hash(objectKey) % fileMgr_.size();
 }
 
 std::string WorkerOcSpill::GetObjectLocation(const std::string &objectKey)
@@ -1265,7 +1995,13 @@ bool WorkerOcSpill::IsSpaceExceedHWM(size_t size)
 bool WorkerOcSpill::IsSpaceExceed(double ratio, size_t size)
 {
     auto spillSizeLimit = GetSpillLimitSize();
-    return (totalSpillFileDiskSize + size >= spillSizeLimit * ratio);
+    const auto diskBytes = totalSpillFileDiskSize.load(std::memory_order_relaxed);
+    const auto pendingBytes = pendingAsyncSpillBytes.load(std::memory_order_relaxed);
+    if (pendingBytes > std::numeric_limits<uint64_t>::max() - diskBytes
+        || size > std::numeric_limits<uint64_t>::max() - diskBytes - pendingBytes) {
+        return true;
+    }
+    return diskBytes + pendingBytes + size >= spillSizeLimit * ratio;
 }
 
 bool WorkerOcSpill::IsActiveSpillSizeExceedLWM(size_t size)

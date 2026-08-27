@@ -64,6 +64,7 @@
 
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 DS_DECLARE_uint32(spill_thread_num);
+DS_DECLARE_string(spill_io_mode);
 
 #ifdef WITH_TESTS
 constexpr uint32_t MASTER_TASK_THREAD_NUM = 4;
@@ -2389,15 +2390,144 @@ Status WorkerOcEvictionManager::SpillImpl(const std::string &objectKey, uint64_t
     return Status::OK();
 }
 
+void WorkerOcEvictionManager::AsyncSpillContext::CompleteOnce(const Status &rc, const ObjectLocation &location)
+{
+    bool expected = false;
+    if (!completed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+    promise.set_value(SpillResult{ .rc = rc,
+                                   .elapsed = timer.ElapsedMilliSecond(),
+                                   .location = std::make_shared<ObjectLocation>(location),
+                                   .context = shared_from_this() });
+}
+
+void WorkerOcEvictionManager::PrepareAsyncSpill(const std::shared_ptr<AsyncSpillContext> &context)
+{
+    std::shared_ptr<SafeObjType> entryPtr;
+    Status rc = GetAndLockEntry(context->objectKey, context->version, false, entryPtr);
+    if (rc.IsError()) {
+        context->CompleteOnce(rc.GetCode() == K_TRY_AGAIN ? rc : Status::OK(), ObjectLocation{});
+        return;
+    }
+    bool locked = true;
+    Raii unlock([entryPtr, &locked] {
+        if (locked) {
+            entryPtr->RUnlock();
+        }
+    });
+    SafeObjType &entry = *entryPtr;
+    context->dataSize = entry->GetDataSize();
+    const auto metaSize = entry->GetMetadataSize();
+    TryEvictSpilledObjects(context->dataSize);
+    context->shmGuard = std::make_unique<ShmGuard>(entry->GetShmUnit(), context->dataSize, metaSize);
+    if (WorkerOcServiceCrudCommonApi::ShmEnable() && !context->shmGuard->TryRLatch(false)) {
+        context->CompleteOnce(Status(K_TRY_AGAIN, "TryRLatch failed"), ObjectLocation{});
+        return;
+    }
+    auto shmUnit = entry->GetShmUnit();
+    if (shmUnit == nullptr) {
+        context->CompleteOnce(Status(K_RUNTIME_ERROR, "The spill SHM unit is null"), ObjectLocation{});
+        return;
+    }
+    const void *buffer = static_cast<uint8_t *>(shmUnit->GetPointer()) + metaSize;
+    context->isNoneL2EvictType = entry->IsNoneL2CacheEvictMode();
+    context->canEvict = entry->HasL2Cache() || context->isNoneL2EvictType;
+    entryPtr->RUnlock();
+    locked = false;
+
+    rc = WorkerOcSpill::Instance()->SubmitAsync(
+        context->objectKey, buffer, context->dataSize,
+        [context](const Status &writeRc, const ObjectLocation &location) { context->CompleteOnce(writeRc, location); });
+    if (rc.IsError()) {
+        context->CompleteOnce(rc, ObjectLocation{});
+    }
+}
+
+Status WorkerOcEvictionManager::FinalizeAsyncSpill(const SpillResult &result)
+{
+    auto context = result.context;
+    RETURN_RUNTIME_ERROR_IF_NULL(context);
+    if (result.rc.IsError()) {
+        if (result.location != nullptr && !result.location->path.empty()) {
+            LOG_IF_ERROR(WorkerOcSpill::Instance()->FinishAsync(context->objectKey, *result.location, false),
+                         "Abort async spill reservation failed");
+        }
+        if (context->isNoneL2EvictType && result.rc.GetCode() == StatusCode::K_NO_SPACE) {
+            std::shared_ptr<SafeObjType> entryPtr;
+            Status lockRc = GetAndLockEntry(context->objectKey, context->version, true, entryPtr);
+            if (lockRc.IsOk()) {
+                Raii unlock([entryPtr] { entryPtr->WUnlock(); });
+                return DeleteNoneL2CacheEvictableObject({ context->objectKey, *entryPtr });
+            }
+        }
+        return result.rc;
+    }
+    RETURN_RUNTIME_ERROR_IF_NULL(result.location);
+    // The object may disappear or change before the preparation thread acquires
+    // its read lock. That is an intentional no-op and has no file reservation to
+    // publish or roll back.
+    if (result.location->path.empty()) {
+        return Status::OK();
+    }
+
+    std::shared_ptr<SafeObjType> entryPtr;
+    Status lockRc = GetAndLockEntry(context->objectKey, context->version, true, entryPtr);
+    if (lockRc.IsError()) {
+        LOG_IF_ERROR(WorkerOcSpill::Instance()->FinishAsync(context->objectKey, *result.location, false),
+                     "Rollback stale async spill reservation failed");
+        return lockRc.GetCode() == K_TRY_AGAIN ? lockRc : Status::OK();
+    }
+    Raii unlock([entryPtr] { entryPtr->WUnlock(); });
+    Status publishRc = WorkerOcSpill::Instance()->FinishAsync(context->objectKey, *result.location, true,
+                                                              context->canEvict);
+    if (publishRc.IsError()) {
+        return publishRc;
+    }
+    LOG_IF_ERROR((*entryPtr)->FreeResources(), "SafeObj free failed");
+    (*entryPtr)->stateInfo.SetSpillState(true);
+    context->shmGuard.reset();
+    return Status::OK();
+}
+
 std::future<WorkerOcEvictionManager::SpillResult> WorkerOcEvictionManager::SubmitSpillTask(const std::string &objectKey,
                                                                                            uint64_t version)
 {
     auto traceId = Trace::Instance().GetTraceID();
+    if (FLAGS_spill_io_mode == "direct_io_uring") {
+        auto context = std::make_shared<AsyncSpillContext>();
+        context->objectKey = objectKey;
+        context->version = version;
+        auto future = context->TakeFuture();
+        try {
+            spillTaskThreadPool_->Execute([this, context, traceId] {
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+                try {
+                    PrepareAsyncSpill(context);
+                } catch (const std::exception &e) {
+                    context->CompleteOnce(
+                        Status(K_RUNTIME_ERROR, FormatString("Prepare async spill failed: %s", e.what())),
+                        ObjectLocation{});
+                } catch (...) {
+                    context->CompleteOnce(Status(K_RUNTIME_ERROR, "Prepare async spill failed with unknown error"),
+                                          ObjectLocation{});
+                }
+            });
+        } catch (const std::exception &e) {
+            context->CompleteOnce(Status(K_RUNTIME_ERROR, FormatString("Submit async spill preparation failed: %s",
+                                                                       e.what())),
+                                  ObjectLocation{});
+        }
+        return future;
+    }
     return spillTaskThreadPool_->Submit([this, objectKey, version, traceId] {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         Timer timer;
         auto rc = SpillImpl(objectKey, version);
-        return SpillResult{ .rc = rc, .elapsed = timer.ElapsedMilliSecond() };
+        return SpillResult{ .rc = rc,
+                            .elapsed = timer.ElapsedMilliSecond(),
+                            .location = nullptr,
+                            .context = nullptr };
     });
 }
 
@@ -2422,7 +2552,7 @@ size_t WorkerOcEvictionManager::ReleaseSpillFutures(std::unordered_map<std::stri
             future.wait();
         }
         auto result = future.get();
-        Status spillRc = result.rc;
+        Status spillRc = result.context == nullptr ? result.rc : FinalizeAsyncSpill(result);
         spilledSize += trace->objectSize;
         if (spillRc.IsError()) {
             // Transient spill lock contention uses Q1, persistent spill failure uses READD.

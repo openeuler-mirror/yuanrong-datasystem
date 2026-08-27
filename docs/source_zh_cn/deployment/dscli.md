@@ -1367,6 +1367,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | spill_directory | string | `""` | 否 | 配置缓存溢出功能的本地磁盘路径，为空表示禁用缓存溢出功能。当配置该路径后，溢出的缓存数据将保存在该路径下的 `datasystem_spill_data` 目录下 |
 | spill_size_limit | int | `0` | 是 | 配置缓存溢出的最大容量（以字节为单位） |
 | spill_thread_num | int | `8` | 否 | 表示溢出数据写文件的最大并行度，线程数越多会消耗越多的CPU和I/O资源 |
+| spill_io_mode | string | `"buffered"` | 否 | Spill写盘模式。`buffered`使用缓冲I/O；`direct_io_uring`使用异步Direct I/O，不能直接使用Direct I/O的对象会自动回退到缓冲I/O |
 | spill_file_max_size_mb | int | `200` | 是 | 单个溢出文件的最大大小（以MB为单位）；对于小于此值的对象，会聚合存储于同一个文件中；对于超过此值的对象，将以单个对象单独存为一个文件 |
 | spill_file_open_limit | int | `512` | 是 | 溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值 |
 | spill_enable_readahead | bool | `true` | 否 | 是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 `Read` 接口偏移读取导致的读放大问题 |

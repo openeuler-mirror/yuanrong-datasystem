@@ -21,6 +21,11 @@
 #define DATASYSTEM_WORKER_OBJECT_CACHE_WORKER_OC_SPILL_H
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -38,30 +43,126 @@
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/worker/object_cache/eviction_list.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/worker/object_cache/spill_io_uring.h"
+#include "datasystem/worker/object_cache/spill_object_location.h"
 
 namespace datasystem {
 namespace object_cache {
 
+enum class SpillIoMode { BUFFERED, DIRECT_IO_URING };
+
+constexpr uint32_t DEFAULT_SPILL_DIRECT_ALIGNMENT = 4096;
+
+struct SpillIoOptions {
+    SpillIoMode mode = SpillIoMode::BUFFERED;
+    uint32_t queueDepth = 16;
+    uint32_t queueCapacity = 64;
+    uint64_t queueBytes = 8 * 1024 * 1024;
+    uint32_t writeBatchOps = 32;
+    uint64_t writeBatchBytes = 4 * 1024 * 1024;
+    uint64_t writeBatchTimeoutUs = 1000;
+    uint32_t directAlignment = DEFAULT_SPILL_DIRECT_ALIGNMENT;
+};
+
+class SpillBatchPolicy {
+public:
+    explicit SpillBatchPolicy(SpillIoOptions options) : options_(options)
+    {
+    }
+    ~SpillBatchPolicy() = default;
+
+    void Add(uint64_t bytes, std::chrono::steady_clock::time_point now)
+    {
+        if (ops_ == 0) {
+            oldest_ = now;
+        }
+        ++ops_;
+        bytes_ += bytes;
+    }
+
+    bool ShouldSeal(std::chrono::steady_clock::time_point now, bool force = false) const
+    {
+        if (ops_ == 0) {
+            return false;
+        }
+        return force || ReachedCapacity()
+               || now - oldest_ >= std::chrono::microseconds(options_.writeBatchTimeoutUs);
+    }
+
+    bool ReachedCapacity() const
+    {
+        return ops_ >= options_.writeBatchOps || bytes_ >= options_.writeBatchBytes;
+    }
+
+    void Reset()
+    {
+        ops_ = 0;
+        bytes_ = 0;
+    }
+
+    uint32_t Ops() const
+    {
+        return ops_;
+    }
+
+    uint64_t Bytes() const
+    {
+        return bytes_;
+    }
+
+private:
+    SpillIoOptions options_;
+    uint32_t ops_ = 0;
+    uint64_t bytes_ = 0;
+    std::chrono::steady_clock::time_point oldest_{};
+};
+
+class SpillCompletion {
+public:
+    SpillCompletion() : future_(promise_.get_future())
+    {
+    }
+    ~SpillCompletion() = default;
+
+    SpillCompletion(const SpillCompletion &) = delete;
+    SpillCompletion &operator=(const SpillCompletion &) = delete;
+
+    std::future<Status> TakeFuture()
+    {
+        return std::move(future_);
+    }
+
+    bool CompleteOnce(const Status &rc)
+    {
+        bool expected = false;
+        if (!completed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return false;
+        }
+        promise_.set_value(rc);
+        return true;
+    }
+
+private:
+    std::promise<Status> promise_;
+    std::future<Status> future_;
+    std::atomic<bool> completed_{ false };
+};
+
 const std::string SPILL_BUFFER = "SPILL_BUFFER";
 const std::string SPILL_PATH_PREFIX = "/datasystem_spill_data";
 
-struct ObjectLocation {
-    // Path to the file stored the object
-    std::string path;
-    // Offset of the file to the object
-    uint64_t offset = 0;
-    // Size of the data stored in the file
-    uint64_t size = 0;
-};
-
 // spill file type, large object or small object file
-enum class SpillFileType { LARGE_OBJ_FILE, SMALL_OBJ_FILE };
+enum class SpillFileType { LARGE_OBJ_FILE, SMALL_OBJ_FILE, DIRECT_OBJ_FILE, ASYNC_BUFFERED_OBJ_FILE };
 
 class ActiveSpillFile {
 public:
-    ActiveSpillFile(int fd) : fd_(fd)
+    explicit ActiveSpillFile(int fd) : readFd_(fd), writeFd_(fd)
     {
         LOG(INFO) << "New fd:" << fd;
+    }
+    ActiveSpillFile(int readFd, int writeFd) : readFd_(readFd), writeFd_(writeFd)
+    {
+        LOG(INFO) << "New spill read fd:" << readFd << ", write fd:" << writeFd;
     }
     ActiveSpillFile(const ActiveSpillFile &) = delete;
     ActiveSpillFile &operator=(const ActiveSpillFile &) = delete;
@@ -106,8 +207,15 @@ public:
      */
     int GetFd();
 
+    int GetReadFd() const;
+
+    int GetWriteFd() const;
+
+    void CloseWriteFd();
+
 private:
-    int fd_;
+    int readFd_;
+    int writeFd_;
 };
 
 struct FileInfo {
@@ -115,6 +223,7 @@ struct FileInfo {
     size_t size;
     size_t holesSize;
     bool full = false;
+    uint64_t asyncPending = 0;
     SpillFileType spillFileType;
     std::string path;
     std::unordered_set<std::string> objectKeys{};
@@ -136,6 +245,15 @@ struct SpillIoCounters {
     std::atomic<uint64_t> spillOutBytes{ 0 };
     std::atomic<uint64_t> spillEvictCount{ 0 };
     std::atomic<uint64_t> spillEvictBytes{ 0 };
+};
+
+struct SpillAsyncIoStats {
+    uint64_t completedOps = 0;
+    uint64_t completedBytes = 0;
+    uint64_t failedOps = 0;
+    uint64_t failedBytes = 0;
+    uint64_t batches = 0;
+    uint64_t writeElapsedUs = 0;
 };
 
 // Snapshot of spill IO counters, used for delta calculation in GetSpillIoStats.
@@ -282,8 +400,8 @@ public:
     // large object size threshold 1 MB
     static const size_t LARGE_OBJ_SIZE_THRESHOLD = 1024 * 1024;
 
-    SpillFileManager(uint32_t id, SpillIoCounters &spillIoCounters)
-        : spillIoCounters_(spillIoCounters), id_(id)
+    SpillFileManager(uint32_t id, SpillIoCounters &spillIoCounters, SpillIoOptions asyncOptions = {})
+        : spillIoCounters_(spillIoCounters), id_(id), asyncOptions_(std::move(asyncOptions))
     {
     }
 
@@ -293,7 +411,7 @@ public:
      * @brief Init the Spill File Manager.
      * @param[in] directory Directory to store the spill file.
      */
-    void Init(const std::string &directory);
+    Status Init(const std::string &directory);
 
     /**
      * @brief Spill the object to local disk.
@@ -313,6 +431,27 @@ public:
      * @return Status of the call.
      */
     Status Spill(const std::string &objectKey, void *buffer, uint64_t size);
+
+    using AsyncWriteCallback = std::function<void(const Status &, const ObjectLocation &)>;
+
+    /**
+     * @brief Reserve and enqueue an object for asynchronous spill writing.
+     */
+    Status SubmitAsync(const std::string &objectKey, const void *buffer, uint64_t size, AsyncWriteCallback callback);
+
+    /**
+     * @brief Publish or discard a completed write after the caller validates the object version.
+     */
+    Status FinishAsync(const std::string &objectKey, const ObjectLocation &location, bool publish);
+
+    /**
+     * @brief Stop accepting requests, seal partial batches and drain the manager event loop.
+     */
+    void ShutdownAsync();
+
+    std::string GetAsyncBackend() const;
+
+    SpillAsyncIoStats GetAsyncIoStats() const;
 
     /**
      * @brief Spill the small object.
@@ -389,6 +528,53 @@ private:
         uint64_t writeElapsed = 0;
         uint64_t syncElapsed = 0;
     };
+
+    struct AsyncWriteRequest {
+        std::string objectKey;
+        std::string tenantId;
+        const uint8_t *buffer = nullptr;
+        uint64_t size = 0;
+        ObjectLocation location;
+        std::shared_ptr<ActiveSpillFile> file;
+        AsyncWriteCallback callback;
+        std::chrono::steady_clock::time_point enqueueTime;
+        bool writeCompleted = false;
+        bool callbackCompleted = false;
+        bool direct = false;
+    };
+
+    using AsyncWriteBatch = std::vector<std::shared_ptr<AsyncWriteRequest>>;
+    using AsyncWriteProgress = std::unordered_map<AsyncWriteRequest *, uint64_t>;
+
+    Status InitAsyncBackend();
+    void AsyncIoLoop();
+    bool IsAsyncDrained() const;
+    AsyncWriteBatch TakeAsyncBatch();
+    std::shared_ptr<AsyncWriteRequest> BuildAsyncWriteRequest(const std::string &objectKey, const void *buffer,
+                                                             uint64_t size, AsyncWriteCallback callback) const;
+    Status ReserveAsyncCapacity(const std::shared_ptr<AsyncWriteRequest> &request);
+    Status ReserveAsyncLocation(const std::shared_ptr<AsyncWriteRequest> &request);
+    void RollbackAsyncCapacity(const std::shared_ptr<AsyncWriteRequest> &request);
+    Status WriteBatchWithIoUring(const AsyncWriteBatch &batch, double &writeUs);
+    Status WriteBatchBuffered(const AsyncWriteBatch &batch, double &writeUs);
+    Status SubmitIoUringWave(const AsyncWriteBatch &batch, AsyncWriteProgress &written, uint32_t &submitted);
+    Status WaitIoUringCompletion(SpillIoUring::Completion &completion,
+                                 std::chrono::steady_clock::time_point deadline);
+    Status ApplyIoUringCompletion(const SpillIoUring::Completion &completion, AsyncWriteProgress &written,
+                                  size_t &complete);
+    Status WaitIoUringWave(uint32_t submitted, AsyncWriteProgress &written, size_t &complete);
+    void ProcessAsyncBatch(const AsyncWriteBatch &batch);
+    void CompleteAsyncBatch(const AsyncWriteBatch &batch, const Status &rc, double writeUs);
+    void UpdateAsyncBatchStats(const AsyncWriteBatch &batch, const Status &rc, double writeUs, uint64_t bytes);
+    void FinalizeAsyncBatchFile(const AsyncWriteBatch &batch);
+    void InvokeAsyncCallbacks(const AsyncWriteBatch &batch, const Status &rc);
+    void LogAsyncIoStats(bool force);
+    Status CreateAsyncSpillFile(const std::string &directory, bool direct, std::string &path,
+                                std::shared_ptr<ActiveSpillFile> &file);
+    Status FindBestAsyncWriteFile(const std::string &tenantId, size_t size, bool direct, ObjectLocation &location,
+                                  std::shared_ptr<ActiveSpillFile> &file);
+    void FinalizeAsyncFileIfIdle(FileInfo &info, uint64_t requiredFds = 0);
+    bool IsAsyncStopping() const;
 
     Status FlushSpillBuffer(const std::string &failedObjectKey);
     Status SpillBufferFailure(const std::string &objectKey, const Status &rc);
@@ -620,6 +806,23 @@ private:
     SpillBuffer buffer_;
     size_t sizeThreshold_ = 10 * 1024;
     uint32_t id_;
+
+    SpillIoOptions asyncOptions_;
+    std::unique_ptr<SpillIoUring> ioUring_;
+    std::string asyncBackend_ = "buffered";
+    std::thread asyncIoThread_;
+    mutable std::mutex asyncMutex_;
+    std::condition_variable asyncCv_;
+    std::deque<std::shared_ptr<AsyncWriteRequest>> asyncQueue_;
+    std::unordered_map<std::string, std::shared_ptr<AsyncWriteRequest>> asyncReservations_;
+    uint64_t asyncOutstandingBytes_ = 0;
+    SpillAsyncIoStats asyncIoStats_;
+    std::chrono::steady_clock::time_point asyncLastReportTime_;
+    uint64_t asyncLastReportedOps_ = 0;
+    uint64_t asyncLastReportedBytes_ = 0;
+    uint64_t asyncLastReportedBatches_ = 0;
+    bool asyncAccepting_ = false;
+    bool asyncStopping_ = false;
 };
 
 class WorkerOcSpill {
@@ -644,6 +847,14 @@ public:
 
     Status Spill(const std::string &objectKey, const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads,
                  bool evictable = false);
+
+    Status SubmitAsync(const std::string &objectKey, const void *buffer, size_t size,
+                       SpillFileManager::AsyncWriteCallback callback);
+
+    Status FinishAsync(const std::string &objectKey, const ObjectLocation &location, bool publish,
+                       bool evictable = false);
+
+    void ShutdownAsync();
 
     /**
      * @brief Delete the object that has already spilled to the external storage.

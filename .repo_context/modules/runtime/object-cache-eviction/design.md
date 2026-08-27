@@ -354,11 +354,18 @@ Failure-sensitive steps:
 
 1. action 为 `SPILL` 时，`TryEvictObject` 记录对象大小和 create time。
 2. 主 loop 释放对象写锁，提交 `SubmitSpillTask` 到 `SpillThread`。
-3. `SpillImpl` 按版本读锁对象，latch shm，判断对象是否可在 spill 满时被淘汰。
-4. 释放读锁后调用 `WorkerOcSpill::Spill` 写本地文件。
-5. 如果 `NONE_L2_CACHE_EVICT` 对象遇到 `K_NO_SPACE`，重新写锁并走 `DeleteNoneL2CacheEvictableObject`。
-6. spill 成功后，按版本重新写锁对象；若版本变化或锁失败，删除刚写入的 spill 文件做回滚。
-7. 成功重锁后释放 shm 并设置 spill state。
+3. buffered 模式仍由 `SpillThread` 执行同步 `pwrite + syncfs`；`direct_io_uring` 模式按版本读锁对象、latch
+   shm，并将带独立 promise 的请求按 object key hash 提交到固定 `SpillFileManager` 后立即处理下一对象。
+   Direct I/O 使用内部固定 4 KiB 对齐；不满足地址或长度约束的请求写入独立 buffered fallback 文件，因此
+   Worker 的全局 `memory_alignment` 保持默认 64 时也能启用该模式。
+4. 每个 Manager 的事件线程独占自己的 ring、pending queue、batch 和 direct 写 fd。batch 收割全部
+   O_DIRECT WRITE CQE 后完成 promise；spill 是允许掉电丢失的临时缓存，不执行 DATASYNC，失败批次不发布 location。
+5. WRITE 完成后 promise ready；`ReleaseSpillFutures` 精确版本重取对象写锁，版本一致才发布预留 location、
+   释放 shm 并设置 spilled。版本变化时不发布并把已写范围记为 hole。
+6. 如果 `NONE_L2_CACHE_EVICT` 对象在准备阶段遇到 `K_NO_SPACE`，重新写锁并走
+   `DeleteNoneL2CacheEvictableObject`。
+7. shutdown 先停止新请求和准备线程入队，再 seal 剩余 batch、drain CQE、完成全部 promise，最后关闭
+   direct write/buffered read fd 并销毁 ring。
 
 Key files:
 
@@ -368,6 +375,8 @@ Key files:
 Failure-sensitive steps:
 
 - I/O 前释放锁减少阻塞，但必须用 create time 防止 spill 老版本。
+- SHM lease 必须覆盖 direct WRITE 完成和版本检查，不能让异步请求引用已复用内存。
+- 每个 Manager 的 queue count/bytes 包括 queued、submitted 和 WRITE 完成待 future 消费状态。
 - `NONE_L2_CACHE_EVICT` spill 满时的 fallback 仍会同步调用 master。
 
 ### Remote Migrate Path
@@ -428,7 +437,8 @@ Failure-sensitive steps:
   - master metadata is authoritative for global object/copy visibility。
 - Concurrency or thread-affinity rules:
   - 主 eviction 同一时间一个 `EvictionTask`。
-  - spill write futures run on `SpillThread`。
+  - buffered spill write futures run on `SpillThread`；direct async 模式的 `SpillThread` 只准备请求，每个
+    `SpillFileManager` 的事件线程独占 ring 并在完整 WRITE CQE 后完成 promise。
   - `RemoveMeta` runs on `MasterTaskThread`。
   - spill eviction runs on one `SpillEvictionThread` task at a time。
   - object mutation requires `SafeObjType` write lock；spill read path uses read lock plus shm latch。

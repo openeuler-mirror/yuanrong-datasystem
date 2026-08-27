@@ -42,6 +42,7 @@
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/object/object_enum.h"
@@ -51,6 +52,7 @@
 #include "datasystem/worker/object_cache/eviction_strategy.h"
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/spill_object_location.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -466,9 +468,32 @@ private:
         std::unordered_map<Action, ActionSummary> summaries_;
     };
 
+    struct AsyncSpillContext;
+
     struct SpillResult {
         Status rc;
         double elapsed;
+        std::shared_ptr<ObjectLocation> location;
+        std::shared_ptr<AsyncSpillContext> context;
+    };
+
+    struct AsyncSpillContext : public std::enable_shared_from_this<AsyncSpillContext> {
+        std::string objectKey;
+        uint64_t version = 0;
+        uint64_t dataSize = 0;
+        bool canEvict = false;
+        bool isNoneL2EvictType = false;
+        std::unique_ptr<ShmGuard> shmGuard;
+        Timer timer;
+        std::promise<SpillResult> promise;
+        std::atomic<bool> completed{ false };
+
+        std::future<SpillResult> TakeFuture()
+        {
+            return promise.get_future();
+        }
+
+        void CompleteOnce(const Status &rc, const ObjectLocation &location);
     };
 
     struct SpillTask {
@@ -1009,6 +1034,8 @@ private:
      * @return Status
      */
     Status SpillImpl(const std::string &objectKey, uint64_t version);
+    void PrepareAsyncSpill(const std::shared_ptr<AsyncSpillContext> &context);
+    Status FinalizeAsyncSpill(const SpillResult &result);
 
     /**
      * @brief Release finished spill task.
