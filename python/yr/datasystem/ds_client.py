@@ -124,6 +124,7 @@ class DsClient:
             tenant_id,
             enable_cross_node_connection,
             req_timeout_ms,
+            service_discovery=service_discovery,
             enable_local_cache=enable_local_cache,
             data_placement_policy=data_placement_policy
         )
