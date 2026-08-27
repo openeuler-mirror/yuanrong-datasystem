@@ -2081,7 +2081,7 @@ Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &re
                                     : worker::Authenticate(akSkManager_, req, tenantId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     if (req.object_keys_size() > 0) {
-        LOG(INFO) << FormatString("[shmId %s] [client: %s] DoDecrease", req.object_keys(0), req.client_id());
+        VLOG(1) << FormatString("[shmId %s] [client: %s] DoDecrease", req.object_keys(0), req.client_id());
     }
     std::vector<ShmKey> shmIds;
     // Although the field in pb is called object key, its content is actually shmId, which is very misleading.
