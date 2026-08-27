@@ -26,7 +26,8 @@
     ".skills/ds-pr-review/tests/test_common.py",
     ".skills/ds-pr-review/tests/test_diff_position.py",
     ".skills/ds-create-pr/tests/test_create_pr.py",
-    ".skills/ds-refresh-docs/tests/test_refresh_online_docs.py"
+    ".skills/ds-refresh-docs/tests/test_refresh_online_docs.py",
+    ".skills/ds-network-latency-analysis/scripts/test_network_latency_analysis.py"
   ],
   "module_boundary": {
     "related_modules": [
@@ -40,12 +41,16 @@
       "skill routing",
       "trigger skills",
       "online docs trigger",
-      "ds-refresh-docs"
+      "ds-refresh-docs",
+      "ds-network-latency-analysis",
+      "network residual latency",
+      "scheduling latency"
     ],
     "intent_examples": [
       "understand repository-local skills",
       "decide whether a natural-language request should trigger a skill",
-      "maintain skill trigger routing"
+      "maintain skill trigger routing",
+      "analyze BRPC network or scheduling latency from collected logs"
     ]
   }
 }
