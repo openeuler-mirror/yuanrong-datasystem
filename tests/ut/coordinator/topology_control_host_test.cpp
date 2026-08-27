@@ -1054,9 +1054,6 @@ TEST_F(TopologyControlHostTest, Burst500MembershipsReachOneMaterializedScaleOutW
         CommitMembership("burst", address, static_cast<int64_t>(index + 2));
     }
     ASSERT_TRUE(WaitUntil(
-        [&] { return TopologyHasStateCount("burst", cluster::MemberState::INITIAL, TEST_JOINING_MEMBER_COUNT); },
-        TEST_LARGE_BATCH_DEADLINE));
-    ASSERT_TRUE(WaitUntil(
         [&] { return HasScaleOutNotify("burst", MEMBER_A); }, TEST_LARGE_BATCH_DEADLINE));
     ASSERT_TRUE(WaitUntil(
         [&] { return MigrateTaskRecordCount("burst") == TEST_JOINING_MEMBER_COUNT; },
@@ -1140,7 +1137,9 @@ TEST_F(TopologyControlHostTest, StopsEmptyRuntimeBeforeReusingClusterSlot)
 TEST_F(TopologyControlHostTest, EmptyObservationCannotEraseConcurrentMembershipAdmission)
 {
     constexpr char injectPoint[] = "TopologyControlHost.ReleaseClusterIfEmpty.afterRead";
-    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, MakeOptions());
+    auto options = MakeOptions();
+    options.controller.scaleOutCollectWindow = std::chrono::milliseconds(0);
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     DS_ASSERT_OK(host_->Start());
     CommitMembership("blue");
     CommitMembership("green");
