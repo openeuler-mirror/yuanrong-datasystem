@@ -1016,6 +1016,14 @@ private:
     Status GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerApi, GetParam &getParam,
                                 std::vector<std::shared_ptr<Buffer>> &buffers);
 
+    Status RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerApi> &workerApi, GetParam &getParam,
+                                    WorkerNode workerNode, const std::vector<std::string> &objectKeys,
+                                    std::vector<std::shared_ptr<Buffer>> &buffers);
+
+    Status GetFromLocalWorker(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
+                              std::vector<std::shared_ptr<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported,
+                              int32_t requestTimeoutMs);
+
     Status InitTransportLayer();
 
     void BuildTransportReadRequest(const std::vector<std::string> &objectKeys, client::ObjectReadRequest &request,
@@ -1464,6 +1472,16 @@ private:
      * @return Status of the call.
      */
     Status GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi, std::unique_ptr<Raii> &raii);
+
+    /**
+     * @brief Get the available workerApi and its node.
+     * @param[out] workerApi The available workerApi.
+     * @param[out] raii Raii for record the invoke count.
+     * @param[out] workerNode The node selected for the workerApi.
+     * @return Status of the call.
+     */
+    Status GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi, std::unique_ptr<Raii> &raii,
+                                 WorkerNode &workerNode);
 
     /**
      * @brief Mmap a ShmUnit to client.

@@ -469,6 +469,9 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
 - Object cache behavior:
   - check `ds_ut_object`, `ds_st_object_cache`, and ST paths under `tests/st/client/object_cache` or
     `tests/st/worker/object_cache`.
+  - `MasterClientRecoveryDfxTest.TestGetAfterMasterRestartReRegistersClient` covers the old Object client Get
+    request racing a restarted master Worker before its in-memory client registration is restored; run it with the
+    existing `MasterDfxTest.TestMasterCrashAndGet` when changing client-worker recovery or Get retry behavior.
 - KV cache behavior:
   - check `ds_st_kv_cache` and ST paths under `tests/st/client/kv_cache`.
   - `kv_client_heat_functional_workload_test.cpp` contains Heat-only 8-Worker/4-Client functional workloads. The

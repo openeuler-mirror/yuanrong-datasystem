@@ -1018,6 +1018,52 @@ TEST_F(MasterDfxTest, LEVEL1_TestMasterCrashAndGet)
     ASSERT_EQ(realData1, randData);
 }
 
+class MasterClientRecoveryDfxTest : public OCClientCommon {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.workerGflagParams = "-client_reconnect_wait_s=1 -node_timeout_s=1 -heartbeat_interval_ms=500 -v=1";
+        opts.numWorkers = 3;
+        opts.masterIdx = 2;
+        opts.numEtcd = 1;
+        opts.enableDistributedMaster = "false";
+        opts.disableRocksDB = false;
+        datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(60000)");
+    }
+};
+
+TEST_F(MasterClientRecoveryDfxTest, LEVEL1_TestGetAfterMasterRestartReRegistersClient)
+{
+    std::shared_ptr<ObjectClient> sourceClient;
+    std::shared_ptr<ObjectClient> masterClient;
+    InitTestClient(0, sourceClient);
+    InitTestClient(2, masterClient);
+
+    std::string objectKey = NewObjectKey();
+    std::vector<uint8_t> data(600 * 1024, 7);
+    CreateAndPublishObject(sourceClient, objectKey, data);
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(masterClient->Get({ objectKey }, 5'000, buffers));
+
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 2));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2));
+
+    Status status;
+    const auto reconnectDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    do {
+        buffers.clear();
+        status = masterClient->Get({ objectKey }, 1'000, buffers);
+        if (status.GetCode() != K_RPC_PEER_DEAD) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    } while (std::chrono::steady_clock::now() < reconnectDeadline);
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    ASSERT_TRUE(NotExistsNone(buffers));
+}
+
 class MasterWorkerDisconnectDfxTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
