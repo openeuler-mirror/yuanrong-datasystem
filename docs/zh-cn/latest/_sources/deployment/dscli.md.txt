@@ -525,7 +525,7 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
 - 所有 Coordinator 节点的 `coordinator_raft_initial_peers` 配置完全相同，格式为逗号分隔的 `host:port` 列表。
 - 每个节点的 `coordinator_address` 必须是本机对其他 Coordinator 和 Worker 可访问的地址，并且必须包含在 `coordinator_raft_initial_peers` 中。
 - 每个节点的 `coordinator_raft_data_dir` 必须是该节点独占的本地目录，不能在多个 Coordinator 进程之间共享。
-- 启用选主时必须设置 `use_brpc=true`。`coordinator_raft_initial_peers` 为空时按单节点无选主模式启动。
+- `coordinator_raft_initial_peers` 为空时按单节点无选主模式启动。
 - Worker 侧 `coordinator_address` 仍配置为可访问的 Coordinator 地址；如果需要客户端/Worker 自动发现多个 Coordinator，应使用支持多地址的 Coordinator Discovery 接入方式。
 
 三节点示例的静态 peers 列表如下：
@@ -546,9 +546,6 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
   },
   "coordinator_raft_data_dir": {
     "value": "./datasystem/coordinator_raft_node1"
-  },
-  "use_brpc": {
-    "value": "true"
   }
 }
 ```
@@ -565,9 +562,6 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
   },
   "coordinator_raft_data_dir": {
     "value": "./datasystem/coordinator_raft_node2"
-  },
-  "use_brpc": {
-    "value": "true"
   }
 }
 ```
@@ -582,9 +576,6 @@ Coordinator 支持快速部署和通过配置项部署两种方式。
   },
   "coordinator_raft_data_dir": {
     "value": "./datasystem/coordinator_raft_node3"
-  },
-  "use_brpc": {
-    "value": "true"
   }
 }
 ```
@@ -915,6 +906,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败  |
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 |--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
+|--jemalloc_prof_conf &lt;CONF&gt;|无|设置 Worker 子进程的 jemalloc profiling 配置。仅适用于使用 `build.sh -x on` 构建的安装包，且必须位于 `--worker_args`、`--coordinator_args` 或 `--coordinator_worker_args` 之前|
 
 常用启动方式的短参数和长参数等价示例如下：
 
@@ -974,6 +966,23 @@ dscli start --coordinator_config_path coordinator_config.json
 > 例子：
 > ```bash
 > dscli start --enable_ums --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+> ```
+
+> **jemalloc profiling 注意事项**：
+>
+> - `--jemalloc_prof_conf` 是 dscli 参数，不是 Worker 启动参数，因此不写入 `worker_config.json`。
+> - 该参数只能用于启动 Worker，并要求安装包通过 `build.sh -x on` 构建。普通构建传入该参数会在 Worker 启动前报错并提示重新构建。
+> - dscli 会自动补充 `prof:true`。如果未指定 `prof_prefix`，默认前缀为 `<log_dir>/jemalloc/datasystem_worker`。
+> - 显式指定 `prof_prefix` 时完全使用该前缀，不再使用默认日志路径。`prof_prefix` 是文件名前缀而不是目录，例如 `prof_prefix:/data/heap/worker` 会生成 `/data/heap/worker.<pid>...heap`。
+> - dscli 不会自动配置 `prof_final`、`prof_gdump` 或 `lg_prof_interval`。heap 文件也不参与日志轮转、压缩或清理，用户需要自行选择 dump 策略并管理磁盘空间。
+>
+> 例子：
+> ```bash
+> # heap 文件默认写入 log_dir/jemalloc
+> dscli start --jemalloc_prof_conf "prof_final:true,lg_prof_sample:20" -W worker_config.json
+>
+> # 使用用户指定的文件名前缀
+> dscli start --jemalloc_prof_conf "prof_final:true,prof_prefix:/data/heap/worker" -W worker_config.json
 > ```
 
 
@@ -1037,6 +1046,7 @@ dscli stop --worker_address 127.0.0.1:31501 --timeout 10
 |--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败 |
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 |--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
+|--jemalloc_prof_conf &lt;CONF&gt;|无|将 jemalloc profiling 配置转发到每个远端 Worker；每个节点都必须使用 `build.sh -x on` 构建的安装包|
 |--metastore_head_node <NODE_IP> | 无 | 指定<NODE_IP>节点的worker启动Metastore取代ETCD |
 
 
@@ -1063,6 +1073,8 @@ dscli stop --worker_address 127.0.0.1:31501 --timeout 10
 > ```bash
 > dscli up --enable_ums -f ./cluster_config.json
 > ```
+
+> `dscli up --jemalloc_prof_conf <CONF>` 会把同一配置安全转发到每个远端 `dscli start`。是否支持 profiling 由各远端安装包独立检查。默认和显式 `prof_prefix` 的规则与 `dscli start` 相同。
 
 ### dscli down
 
@@ -1107,7 +1119,7 @@ dscli stop --worker_address 127.0.0.1:31501 --timeout 10
 `dscli query` 通过只读接口查询协调后端，并在命令行进程本地完成拓扑解码、健康状态派生、
 哈希区间计算和 key 路由。命令不会读取 `worker_config.json`，也不会自动探测后端类型；
 用户必须显式传入 ETCD 或 Coordinator 地址。
-Coordinator 使用与服务部署相同的基础地址，查询客户端按 `use_brpc` 配置选择 BRPC 或 ZMQ 传输。
+Coordinator 使用与服务部署相同的基础地址，查询客户端经 brpc 传输与 Coordinator 通信。
 `--coordinator_address` 支持逗号分隔的 `host:port` 列表，用于多实例 Coordinator 部署场景；查询客户端会经由
 Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Worker 侧 `coordinator_address` 一致。
 整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
@@ -1254,7 +1266,6 @@ dscli query route \
 | log_monitor | bool | `true` | 是 | 是否在 Coordinator INFO 日志中周期输出 `metrics_summary` 指标摘要 |
 | json_log_monitor | bool | `true` | 是 | 是否将 Coordinator 指标摘要同时输出到 `kv_metrics.log` JSON-Lines 文件 |
 | log_monitor_interval_ms | int | `10000` | 否 | Coordinator 指标摘要的采集和输出间隔，单位为毫秒 |
-| use_brpc | bool | `true` | 否 | 是否使用 brpc 进行 RPC 通信；配置文件中的显式值或环境变量 `DATASYSTEM_USE_BRPC` 可覆盖默认值；参数化入口启用选举时必须为`true` |
 | brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
 | brpc_max_concurrency | int | `128` | 否 | 每个 brpc Server 允许的最大并发 RPC 数；为 `0` 时不限制，且不能小于 `brpc_server_num_threads` |
 | request_sample_rate | double | `1.0` | 是 | 请求日志主采样率，取值范围为 `[0.0, 1.0]` |
@@ -1267,7 +1278,7 @@ Coordinator 日志和采样配置的详细语义参见[日志与可观测相关�
 Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinator_raft_data_dir`、
 `coordinator_raft_heartbeat_interval_ms`、`coordinator_raft_election_timeout_ms`、
 `coordinator_member_failure_grace_ms` 和 `coordinator_discovery_retry_interval_ms` 用于配置本节点 Raft 状态目录
-和选举时序。仅设置 `use_brpc=true` 不会启用选主，仍需配置 `coordinator_raft_initial_peers`。
+和选举时序。配置 `coordinator_raft_initial_peers` 是启用选主的必要条件。
 
 生产部署中，一个 Coordinator 配置文件对应一个 Coordinator 进程。多节点部署时，每个节点应使用自己的
 `coordinator_address` 和独占的 `coordinator_raft_data_dir`，并配置相同的 `coordinator_raft_initial_peers`。配置
@@ -1298,19 +1309,13 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | worker_address | string | `"127.0.0.1:31501"` | 否 | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
 | coordinator_address | string | `""` | 否 | Coordinator 服务地址，格式为 `host:port`；使用 Coordinator 集群管理方式时必须配置 |
 | kv_events_config | string | `""` | 否 | KV event publisher JSON 配置。为空表示关闭该功能；非空时需要填写 JSON 对象字符串，字段说明参见[表1](#table_kv_events_config)。例如：`{"bind_endpoint":"tcp://0.0.0.0:5557","backend_id":"worker-0"}` |
-| enable_curve_zmq | bool | `false` | 否 | 是否开启服务端组件间认证鉴权功能 |
-| curve_key_dir | string | `""` | 否 | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
 | oc_worker_worker_direct_port | int | `0` | 否 | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
 | oc_worker_worker_pool_size | int | `3` | 否 | datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 `ocWorkerWorkerDirectPort` 指定为非0值时该配置才生效 |
 | payload_nocopy_threshold | string | `"104857600"` | 否 | datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位） |
 | rpc_thread_num | int | `16` | 否 | 配置服务端的RPC线程数，必须为大于0的数 |
 | oc_thread_num | int | `32` | 否 | 配置服务端用于处理对象/KV缓存的业务线程数 |
-| zmq_server_io_context | int | `5` | 否 | ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
-| zmq_client_io_context | int | `5` | 否 | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
-| zmq_client_io_thread | int | `1` | 否 | ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | io_thread_nice | int | `0` | 否 | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
 | enable_sched_runtime | bool | `true` | 否 | 是否允许指定 worker 线程设置 Linux 调度 runtime。当前仅用于 URMA JFC poll 线程；设置为 `false` 时保留线程继承的调度参数且不调用 `sched_setattr`。 |
-| zmq_chunk_sz | int | `1048576` | 否 | 并行负载分块大小配置（以字节为单位） |
 | brpc_event_dispatcher_num | int | `0` | 否 | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | max_rpc_session_num | int | `2048` | 否 | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | remote_send_thread_num | int | `8` | 否 | 配置服务端用于将元素发送到远程工作线程的线程数量 |

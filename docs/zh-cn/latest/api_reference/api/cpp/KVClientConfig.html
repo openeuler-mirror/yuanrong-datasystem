@@ -608,7 +608,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </dl>
 <p>KV 客户端初始化配置。通过嵌套类 <a class="reference internal" href="#_CPPv4N14KVClientConfig7BuilderE" title="KVClientConfig::Builder"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig::Builder</span></code></a> 构建，
 并在 <code class="docutils literal notranslate"><span class="pre">KVClient::Init(const</span> <span class="pre">KVClientConfig</span> <span class="pre">&amp;clientConfig)</span></code> 中传入。</p>
-<p>本配置仅覆盖客户端日志、监控与 ZMQ 相关参数，不包含 <a class="reference internal" href="struct-ConnectOptions.html#_CPPv414ConnectOptions" title="ConnectOptions"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ConnectOptions</span></code></a> 中的连接选项。</p>
+<p>本配置仅覆盖客户端日志与监控参数，不包含 <a class="reference internal" href="struct-ConnectOptions.html#_CPPv414ConnectOptions" title="ConnectOptions"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ConnectOptions</span></code></a> 中的连接选项。</p>
 <p><strong>配置生效规则</strong></p>
 <p>进程内 <strong>首次</strong> 调用任意 <code class="docutils literal notranslate"><span class="pre">KVClient::Init``（含无参</span> <span class="pre">``Init()</span></code>）时，会将当前传入的
 <a class="reference internal" href="#_CPPv414KVClientConfig" title="KVClientConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig</span></code></a> 快照固化为进程级配置；此后同一进程内其他 <code class="docutils literal notranslate"><span class="pre">KVClient</span></code> 实例再调用
@@ -667,7 +667,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <dd class="field-even"><p>datasystem</p>
 </dd>
 </dl>
-<p>KV 客户端配置构建器，支持链式设置日志、监控和 ZMQ 相关参数。</p>
+<p>KV 客户端配置构建器，支持链式设置日志和监控参数。</p>
 <p><strong>公共函数</strong></p>
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N14KVClientConfig7Builder7BuilderEv">
@@ -821,19 +821,6 @@ document.addEventListener('DOMContentLoaded', function() {
 </dd></dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N14KVClientConfig7Builder18ZmqClientIoContextE7int32_t">
-<span id="_CPPv3N14KVClientConfig7Builder18ZmqClientIoContextE7int32_t"></span><span id="_CPPv2N14KVClientConfig7Builder18ZmqClientIoContextE7int32_t"></span><span id="KVClientConfig::Builder::ZmqClientIoContext__int32_t"></span><a class="reference internal" href="#_CPPv4N14KVClientConfig7BuilderE" title="KVClientConfig::Builder"><span class="n"><span class="pre">Builder</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">ZmqClientIoContext</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">int32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">threads</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14KVClientConfig7Builder18ZmqClientIoContextE7int32_t" title="Link to this definition">¶</a><br /></dt>
-<dd><p>设置 ZMQ 客户端 IO context 数量。取值范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">128]</span></code>，默认值为 <code class="docutils literal notranslate"><span class="pre">1</span></code>。</p>
-</dd></dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N14KVClientConfig7Builder17ZmqClientIoThreadE7int32_t">
-<span id="_CPPv3N14KVClientConfig7Builder17ZmqClientIoThreadE7int32_t"></span><span id="_CPPv2N14KVClientConfig7Builder17ZmqClientIoThreadE7int32_t"></span><span id="KVClientConfig::Builder::ZmqClientIoThread__int32_t"></span><a class="reference internal" href="#_CPPv4N14KVClientConfig7BuilderE" title="KVClientConfig::Builder"><span class="n"><span class="pre">Builder</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">ZmqClientIoThread</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">int32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">threads</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14KVClientConfig7Builder17ZmqClientIoThreadE7int32_t" title="Link to this definition">¶</a><br /></dt>
-<dd><p>设置 ZMQ 客户端 IO 线程数量，数值与系统吞吐量正相关。取值范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">32]</span></code>，
-默认值为 <code class="docutils literal notranslate"><span class="pre">1</span></code>。对应环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_ZMQ_CLIENT_IO_THREAD</span></code>。</p>
-</dd></dl>
-
-<dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4NK14KVClientConfig7Builder5BuildER14KVClientConfig">
 <span id="_CPPv3NK14KVClientConfig7Builder5BuildER14KVClientConfig"></span><span id="_CPPv2NK14KVClientConfig7Builder5BuildER14KVClientConfig"></span><span id="KVClientConfig::Builder::Build__KVClientConfigRC"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Build</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#_CPPv414KVClientConfig" title="KVClientConfig"><span class="n"><span class="pre">KVClientConfig</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">config</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK14KVClientConfig7Builder5BuildER14KVClientConfig" title="Link to this definition">¶</a><br /></dt>
 <dd><p>校验并构建 <a class="reference internal" href="#_CPPv414KVClientConfig" title="KVClientConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig</span></code></a>。</p>
@@ -932,8 +919,6 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N14KVClientConfig7Builder17LogAsyncQueueSizeE8uint32_t"><code class="docutils literal notranslate"><span class="pre">Builder::LogAsyncQueueSize()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14KVClientConfig7Builder16LogMonitorEnableEb"><code class="docutils literal notranslate"><span class="pre">Builder::LogMonitorEnable()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14KVClientConfig7Builder17MonitorConfigPathERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">Builder::MonitorConfigPath()</span></code></a></li>
-<li><a class="reference internal" href="#_CPPv4N14KVClientConfig7Builder18ZmqClientIoContextE7int32_t"><code class="docutils literal notranslate"><span class="pre">Builder::ZmqClientIoContext()</span></code></a></li>
-<li><a class="reference internal" href="#_CPPv4N14KVClientConfig7Builder17ZmqClientIoThreadE7int32_t"><code class="docutils literal notranslate"><span class="pre">Builder::ZmqClientIoThread()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4NK14KVClientConfig7Builder5BuildER14KVClientConfig"><code class="docutils literal notranslate"><span class="pre">Builder::Build()</span></code></a></li>
 </ul>
 </li>

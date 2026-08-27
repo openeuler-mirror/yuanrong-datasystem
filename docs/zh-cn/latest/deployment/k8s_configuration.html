@@ -880,112 +880,67 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">31501</span></code></p></td>
 <td><p>openYuanrong datasystem DaemonSet占用的主机端口号</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.enableCurveZmq</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>是否开启服务端组件间认证鉴权功能</p></td>
-</tr>
-<tr class="row-even"><td><p>global.rpc.curveKeyDir</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;/home/sn/datasystem/curve_key_dir&quot;</span></code></p></td>
-<td><p>用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.rpc.curveZmqKey.clientPublicKey</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>客户端公钥</p></td>
-</tr>
-<tr class="row-even"><td><p>global.rpc.curveZmqKey.workerPublicKey</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>datasystem-worker的公钥</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.rpc.curveZmqKey.workerSecretKey</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>datasystem-worker的私钥</p></td>
-</tr>
-<tr class="row-even"><td><p>global.rpc.ocWorkerWorkerDirectPort</p></td>
+<tr class="row-odd"><td><p>global.rpc.ocWorkerWorkerDirectPort</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.ocWorkerWorkerPoolSize</p></td>
+<tr class="row-even"><td><p>global.rpc.ocWorkerWorkerPoolSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">3</span></code></p></td>
 <td><p>datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 <code class="docutils literal notranslate"><span class="pre">ocWorkerWorkerDirectPort</span></code> 指定为非0值时该配置才生效</p></td>
 </tr>
-<tr class="row-even"><td><p>global.rpc.payloadNocopyThreshold</p></td>
+<tr class="row-odd"><td><p>global.rpc.payloadNocopyThreshold</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;104857600&quot;</span></code></p></td>
 <td><p>datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位）</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.rpcThreadNum</p></td>
+<tr class="row-even"><td><p>global.rpc.rpcThreadNum</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
 <td><p>配置服务端的RPC线程数，必须为大于0的数</p></td>
 </tr>
-<tr class="row-even"><td><p>global.rpc.ocThreadNum</p></td>
+<tr class="row-odd"><td><p>global.rpc.ocThreadNum</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>配置服务端用于处理对象/KV缓存的业务线程数</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.zmqServerIoContext</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
-<td><p>ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
-</tr>
-<tr class="row-even"><td><p>global.rpc.zmqClientIoContext</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
-<td><p>ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.rpc.ioThreadNice</p></td>
+<tr class="row-even"><td><p>global.rpc.ioThreadNice</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 <code class="docutils literal notranslate"><span class="pre">setpriority</span></code>；设置负值通常需要相应权限</p></td>
 </tr>
-<tr class="row-even"><td><p>global.rpc.zmqChunkSz</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">1048576</span></code></p></td>
-<td><p>并行负载分块大小配置（以字节为单位）</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.rpc.brpc.useBrpc</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>是否使用 brpc 替代 ZMQ 作为 RPC 通信传输。启用后 brpc 独占 worker 的 TCP 端口（与 <code class="docutils literal notranslate"><span class="pre">worker_address</span></code> 同端口，无端口偏移），ZMQ 的 TCP 端点不再创建，上述 ZMQ 专属参数（<code class="docutils literal notranslate"><span class="pre">zmqServerIoContext</span></code>、<code class="docutils literal notranslate"><span class="pre">zmqClientIoContext</span></code>、<code class="docutils literal notranslate"><span class="pre">zmqClientIoThread</span></code>、<code class="docutils literal notranslate"><span class="pre">zmqChunkSz</span></code>）在 brpc 模式下不生效。各服务的线程池参数（<code class="docutils literal notranslate"><span class="pre">rpcThreadNum</span></code>、<code class="docutils literal notranslate"><span class="pre">ocThreadNum</span></code>、<code class="docutils literal notranslate"><span class="pre">scThreadNum</span></code> 等）仍然生效</p></td>
-</tr>
-<tr class="row-even"><td><p>global.rpc.brpc.eventDispatcherNum</p></td>
+<tr class="row-odd"><td><p>global.rpc.brpc.eventDispatcherNum</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。该值仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.brpc.brpcServerNumThreads</p></td>
+<tr class="row-even"><td><p>global.rpc.brpc.brpcServerNumThreads</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>brpc 服务端工作线程数（bthread 工作线程池大小）</p></td>
 </tr>
-<tr class="row-even"><td><p>global.rpc.brpc.brpcMaxConcurrency</p></td>
+<tr class="row-odd"><td><p>global.rpc.brpc.brpcMaxConcurrency</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
 <td><p>单个 brpc 服务的最大并发在途 RPC 数，0 表示不限制。推荐值为 <code class="docutils literal notranslate"><span class="pre">brpcServerNumThreads</span></code> 的 2 倍（如 64 线程对应 128）。超过该值时 brpc 会立即向客户端返回 ELIMIT，避免慢请求耗尽 bthread 导致 OOM。该值不得小于 <code class="docutils literal notranslate"><span class="pre">brpcServerNumThreads</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.maxRpcSessionNum</p></td>
+<tr class="row-even"><td><p>global.rpc.maxRpcSessionNum</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
 <td><p>单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000]</p></td>
 </tr>
-<tr class="row-even"><td><p>global.rpc.streamIdleTimes</p></td>
+<tr class="row-odd"><td><p>global.rpc.streamIdleTimes</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
 <td><p>配置流的空闲时间。默认值为300秒（5分钟）</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.rpc.remoteSendThreadNum</p></td>
+<tr class="row-even"><td><p>global.rpc.remoteSendThreadNum</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>配置服务端用于将元素发送到远程工作线程的线程数量</p></td>
 </tr>
-<tr class="row-even"><td><p>global.rpc.scThreadNum</p></td>
+<tr class="row-odd"><td><p>global.rpc.scThreadNum</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
 <td><p>配置流缓存master工作的最大线程数</p></td>
