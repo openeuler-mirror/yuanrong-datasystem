@@ -347,13 +347,34 @@ void ApplyTransportReadRetryWaitFailure(const std::vector<size_t> &retryIndexes,
                                         const Status &waitStatus, std::vector<Status> &itemStatuses)
 {
     for (auto index : retryIndexes) {
-        if (states[index].policy != TransportReadRetryPolicy::DRAINING) {
-            continue;
-        }
         const auto outputIndex = states[index].outputIndex;
         Status deadlineStatus = waitStatus;
         deadlineStatus.AppendMsg(itemStatuses[outputIndex].GetMsg());
         itemStatuses[outputIndex] = std::move(deadlineStatus);
+    }
+}
+
+void ApplyTransportReadRetryBudgetFailure(const std::vector<TransportReadRetryState> &states,
+                                          std::vector<Status> &itemStatuses)
+{
+    const bool deadlineExpired = ApiDeadline::Instance().ApiRemainingUs() <= 0;
+    for (const auto &state : states) {
+        if (state.policy != TransportReadRetryPolicy::STALE
+            || (!deadlineExpired && CanRetryTransportRead(state))) {
+            continue;
+        }
+        const auto outputIndex = state.outputIndex;
+        if (outputIndex >= itemStatuses.size()
+            || !client::IsTransportSnapshotStaleLocation(itemStatuses[outputIndex])) {
+            continue;
+        }
+        Status finalStatus = deadlineExpired
+                                 ? Status(K_RPC_DEADLINE_EXCEEDED,
+                                          "API deadline exceeded while waiting for transport snapshot refresh")
+                                 : Status(K_RPC_UNAVAILABLE,
+                                          "Transport snapshot refresh exhausted before a readable replica was found");
+        finalStatus.AppendMsg(itemStatuses[outputIndex].GetMsg());
+        itemStatuses[outputIndex] = std::move(finalStatus);
     }
 }
 
@@ -5590,6 +5611,7 @@ Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &o
                                             roundResult.statuses, actualKind, transportStatus));
         CollectRetryTransportReadRound(retryIndexes, roundResult, buffers, itemStatuses, retryStates);
     }
+    ApplyTransportReadRetryBudgetFailure(retryStates, itemStatuses);
     return FinishTransportRead(itemStatuses, actualKind, transportStatus);
 }
 

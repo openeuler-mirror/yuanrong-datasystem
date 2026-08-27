@@ -3346,10 +3346,147 @@ TEST(ObjectClientTransportTest, StaleLocationStopsAfterFiveRetries)
     const std::vector<std::string> objectKeys{ "stale" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
     Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
-    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc));
+    EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
     EXPECT_EQ(metadata->keyGroups.size(), 6u);
     EXPECT_EQ(replicas->unaryKeys.size(), 6u);
     EXPECT_EQ(buffers[0], nullptr);
+}
+
+TEST(ObjectClientTransportTest, StaleLocationBackoffDeadlineReturnsPublicDeadline)
+{
+    ApiDeadlineGuard deadline(10);
+    const auto ownerAddress = MakeAddress(41);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    replicas->statusHandler = [&ownerAddress](const std::string &) { return MakeStaleSnapshotStatus(ownerAddress); };
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
+    workerApi->clientId_ = "stale-deadline-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "stale" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED) << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
+    EXPECT_EQ(metadata->keyGroups.size(), 1u);
+    EXPECT_EQ(replicas->unaryKeys.size(), 1u);
+    EXPECT_EQ(buffers[0], nullptr);
+}
+
+TEST(ObjectClientTransportTest, StaleLocationSlowReadDeadlineReturnsPublicDeadline)
+{
+    ApiDeadlineGuard deadline(10);
+    const auto ownerAddress = MakeAddress(41);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    replicas->statusHandler = [&ownerAddress](const std::string &) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        return MakeStaleSnapshotStatus(ownerAddress);
+    };
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
+    workerApi->clientId_ = "stale-slow-read-deadline-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "stale" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED) << rc.ToString();
+    EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
+    EXPECT_EQ(metadata->keyGroups.size(), 1u);
+    EXPECT_EQ(replicas->unaryKeys.size(), 1u);
+    EXPECT_EQ(buffers[0], nullptr);
+}
+
+TEST(ObjectClientTransportTest, BatchStaleLocationBudgetReturnsPublicAvailability)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto ownerAddress = MakeAddress(41);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    replicas->statusHandler = [&ownerAddress](const std::string &) { return MakeStaleSnapshotStatus(ownerAddress); };
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
+    workerApi->clientId_ = "batch-stale-budget-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "stale-a", "stale-b" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE) << rc.ToString();
+    EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
+    EXPECT_EQ(metadata->keyGroups.size(), 6u);
+    EXPECT_EQ(replicas->batchKeys.size(), 6u);
+    EXPECT_EQ(buffers[0], nullptr);
+    EXPECT_EQ(buffers[1], nullptr);
+}
+
+TEST(ObjectClientTransportTest, BatchStaleLocationSlowReadDeadlineReturnsPublicDeadline)
+{
+    ApiDeadlineGuard deadline(10);
+    const auto ownerAddress = MakeAddress(41);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    replicas->statusHandler = [&ownerAddress](const std::string &) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        return MakeStaleSnapshotStatus(ownerAddress);
+    };
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(
+        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
+    workerApi->clientId_ = "batch-stale-slow-read-deadline-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
+
+    const std::vector<std::string> objectKeys{ "stale-a", "stale-b" };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED) << rc.ToString();
+    EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
+    EXPECT_EQ(metadata->keyGroups.size(), 1u);
+    EXPECT_EQ(replicas->batchKeys.size(), 1u);
+    EXPECT_EQ(buffers[0], nullptr);
+    EXPECT_EQ(buffers[1], nullptr);
 }
 
 TEST(ObjectClientTransportTest, BatchExternalOwnersMaterializeIntoIndependentSdkBuffers)
@@ -5531,6 +5668,22 @@ TEST(ReplicaReaderTest, PeerDeadReplicaTriesNextLocationWithoutRefreshingMetadat
     EXPECT_EQ(manager->transportBuildCount, 2);
 }
 
+TEST(ReplicaReaderTest, PeerDeadReplicaReturnsForMetadataRefreshAfterAllReplicas)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = { { Status(K_RPC_PEER_DEAD, "dead replica") } };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 4, { MakeAddress(35) });
+    ObjectReadItemResult result;
+
+    Status rc = reader.Read(location, result, MakeReadContext());
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find("dead replica"), std::string::npos);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+}
+
 TEST(ReplicaReaderTest, StaleTransportSnapshotTriesNextReplica)
 {
     ApiDeadlineGuard deadline(1000);
@@ -6085,6 +6238,27 @@ TEST(ReplicaReaderTest, BatchStaleTransportSnapshotCompletesForMetadataRefreshAf
     EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc));
     EXPECT_TRUE(IsTransportSnapshotStaleLocation(result.status));
     EXPECT_EQ(manager->transportBuildCount, 0);
+}
+
+TEST(ReplicaReaderTest, BatchPeerDeadReplicaCompletesForMetadataRefreshAfterAllReplicas)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &, FakeTransporter &transporter) {
+        transporter.getHandler = [](const DataGetRequest &, DataGetResult &) {
+            return Status(K_RPC_PEER_DEAD, "dead replica");
+        };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(90) });
+    ObjectReadItemResult result;
+
+    Status rc = reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) });
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(result.status)) << result.status.ToString();
+    EXPECT_NE(result.status.GetMsg().find("dead replica"), std::string::npos);
+    EXPECT_EQ(manager->transportBuildCount, 1);
 }
 
 TEST(ReplicaReaderTest, BatchBacksOffOnceAfterAllUnresolvedItemsCompleteReplicaRound)
