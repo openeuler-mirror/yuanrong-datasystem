@@ -17,6 +17,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_publish_impl.h"
 
 #include <algorithm>
+#include <exception>
 #include <utility>
 
 
@@ -29,7 +30,6 @@
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
-#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/deadlock_util.h"
@@ -59,6 +59,7 @@ static constexpr int64_t META_ROUTE_ATTEMPT_TIMEOUT_MS = 2 * 1000;
 static constexpr int64_t META_ROUTE_RETRY_INTERVAL_MS = 100;
 static constexpr int64_t META_FAILURE_PROBE_TIMEOUT_MS = 200;
 static constexpr int64_t META_FAILURE_PROBE_INTERVAL_MS = 100;
+static constexpr size_t META_FAILURE_PROBE_THREAD_NUM = 1;
 
 namespace {
 bool IsMetadataRouteRetryable(const Status &rc)
@@ -131,7 +132,8 @@ WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam 
     : WorkerOcServiceCrudCommonApi(initParam),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       akSkManager_(std::move(akSkManager)),
-      localAddress_(localAddress)
+      localAddress_(localAddress),
+      metadataOwnerProbeThreadPool_(META_FAILURE_PROBE_THREAD_NUM, META_FAILURE_PROBE_THREAD_NUM, "MetaOwnerProbe")
 {
 }
 
@@ -308,18 +310,86 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
     return Status::OK();
 }
 
-bool WorkerOcServicePublishImpl::ReserveMetadataOwnerProbe(const HostPort &owner,
+bool WorkerOcServicePublishImpl::EnqueueMetadataOwnerProbe(const HostPort &owner, const std::string &objectKey,
                                                            std::chrono::steady_clock::time_point now)
 {
     const auto ownerAddress = owner.ToString();
     const auto minInterval = std::chrono::milliseconds(META_FAILURE_PROBE_INTERVAL_MS);
     std::lock_guard<std::mutex> lock(metadataOwnerProbeMutex_);
+    if (metadataOwnerProbesPending_.find(ownerAddress) != metadataOwnerProbesPending_.end()) {
+        return false;
+    }
     auto &lastProbeAt = metadataOwnerProbeAt_[ownerAddress];
     if (lastProbeAt.time_since_epoch().count() != 0 && now - lastProbeAt < minInterval) {
         return false;
     }
-    lastProbeAt = now;
+    const auto previousProbeAt = lastProbeAt;
+    const bool shouldScheduleDrain = !metadataOwnerProbeDrainScheduled_;
+    try {
+        metadataOwnerProbesPending_.insert(ownerAddress);
+        metadataOwnerProbeQueue_.push_back(
+            { owner, objectKey, workerMasterApiManager_, metadataRpcObserver_, localAddress_.ToString() });
+        if (shouldScheduleDrain) {
+            metadataOwnerProbeDrainScheduled_ = true;
+            metadataOwnerProbeThreadPool_.Execute([this]() noexcept { DrainMetadataOwnerProbes(); });
+        }
+        lastProbeAt = now;
+    } catch (...) {
+        if (shouldScheduleDrain) {
+            metadataOwnerProbeDrainScheduled_ = false;
+        }
+        if (!metadataOwnerProbeQueue_.empty()
+            && metadataOwnerProbeQueue_.back().owner.ToString() == ownerAddress) {
+            metadataOwnerProbeQueue_.pop_back();
+        }
+        metadataOwnerProbesPending_.erase(ownerAddress);
+        if (previousProbeAt.time_since_epoch().count() == 0) {
+            metadataOwnerProbeAt_.erase(ownerAddress);
+        } else {
+            lastProbeAt = previousProbeAt;
+        }
+        throw;
+    }
     return true;
+}
+
+void WorkerOcServicePublishImpl::DrainMetadataOwnerProbes() noexcept
+{
+    std::unique_lock<std::mutex> lock(metadataOwnerProbeMutex_);
+    while (!metadataOwnerProbeQueue_.empty()) {
+        auto probe = std::move(metadataOwnerProbeQueue_.front());
+        metadataOwnerProbeQueue_.pop_front();
+        lock.unlock();
+        RunMetadataOwnerProbe(probe);
+        lock.lock();
+        metadataOwnerProbesPending_.erase(probe.owner.ToString());
+    }
+    metadataOwnerProbeDrainScheduled_ = false;
+}
+
+void WorkerOcServicePublishImpl::RunMetadataOwnerProbe(const MetadataOwnerProbe &probe) noexcept
+{
+    try {
+        ScopedRequestContext requestContext;
+        GetRequestContext()->reqTimeoutDuration.Init(META_FAILURE_PROBE_TIMEOUT_MS);
+
+        std::shared_ptr<WorkerMasterOCApi> api;
+        Status status = probe.apiManager->GetWorkerMasterApi(probe.owner, api);
+        if (status.IsOk()) {
+            master::PureQueryMetaReqPb req;
+            master::PureQueryMetaRspPb rsp;
+            req.set_redirect(true);
+            req.set_address(probe.sourceAddress);
+            req.add_object_keys(probe.objectKey);
+            status = api->PureQueryMeta(req, rsp);
+        }
+        probe.observer(probe.owner, status);
+    } catch (const std::exception &error) {
+        LOG(ERROR) << "Metadata owner probe failed with exception, owner: " << probe.owner.ToString()
+                   << ", error: " << error.what();
+    } catch (...) {
+        LOG(ERROR) << "Metadata owner probe failed with unknown exception, owner: " << probe.owner.ToString();
+    }
 }
 
 void WorkerOcServicePublishImpl::ProbeMetadataOwnerAfterDeadlineGate(const std::string &objectKey)
@@ -332,31 +402,11 @@ void WorkerOcServicePublishImpl::ProbeMetadataOwnerAfterDeadlineGate(const std::
     if (rc.IsError() || owner == localAddress_) {
         return;
     }
-    if (!ReserveMetadataOwnerProbe(owner, std::chrono::steady_clock::now())) {
-        return;
-    }
-
-    const auto apiManager = workerMasterApiManager_;
-    const auto observer = metadataRpcObserver_;
-    const auto sourceAddress = localAddress_.ToString();
-    auto startRc = StartBackgroundTask(nullptr, [apiManager, observer, owner, sourceAddress, objectKey]() {
-        ScopedRequestContext requestContext;
-        GetRequestContext()->reqTimeoutDuration.Init(META_FAILURE_PROBE_TIMEOUT_MS);
-
-        std::shared_ptr<WorkerMasterOCApi> api;
-        Status status = apiManager->GetWorkerMasterApi(owner, api);
-        if (status.IsOk()) {
-            master::PureQueryMetaReqPb req;
-            master::PureQueryMetaRspPb rsp;
-            req.set_redirect(true);
-            req.set_address(sourceAddress);
-            req.add_object_keys(objectKey);
-            status = api->PureQueryMeta(req, rsp);
-        }
-        observer(owner, status);
-    });
-    if (startRc != 0) {
-        VLOG(1) << "Failed to start metadata owner probe for " << owner.ToString() << ", objectKey: " << objectKey;
+    try {
+        (void)EnqueueMetadataOwnerProbe(owner, objectKey, std::chrono::steady_clock::now());
+    } catch (const std::exception &error) {
+        VLOG(1) << "Failed to submit metadata owner probe for " << owner.ToString()
+                << ", objectKey: " << objectKey << ", error: " << error.what();
     }
 }
 

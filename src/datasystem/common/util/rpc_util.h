@@ -30,10 +30,11 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/util/format.h"
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/rpc/network_latency_estimator.h"
 #include "datasystem/common/rpc/timeout_duration.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/sensitive_value.h"
 
@@ -128,7 +129,7 @@ inline void HandleRetryTime(int32_t &retryInterval, int32_t &remainTime, uint64_
     remainTime -= retryInterval;
     ++retryCount;
     if (retryInterval > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(retryInterval));
+        SleepCurrentFor(std::chrono::milliseconds(retryInterval));
     }
 }
 

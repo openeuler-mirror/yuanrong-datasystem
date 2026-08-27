@@ -30,6 +30,7 @@
 
 #include <bthread/bthread.h>
 
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <type_traits>
@@ -58,7 +59,22 @@ inline void SleepCurrentFor(std::chrono::duration<Rep, Period> duration)
     if (durationUs <= std::chrono::microseconds::zero()) {
         durationUs = std::chrono::microseconds(minSleepUs);
     }
-    (void)bthread_usleep(durationUs.count());
+    const auto deadline = std::chrono::steady_clock::now() + durationUs;
+    errno = 0;
+    auto sleepRc = bthread_usleep(static_cast<uint64_t>(durationUs.count()));
+    while (sleepRc != 0 && errno == EINTR) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            return;
+        }
+        const auto remaining = deadline - now;
+        durationUs = std::chrono::duration_cast<std::chrono::microseconds>(remaining);
+        if (durationUs < remaining) {
+            durationUs += std::chrono::microseconds(minSleepUs);
+        }
+        errno = 0;
+        sleepRc = bthread_usleep(static_cast<uint64_t>(durationUs.count()));
+    }
 }
 
 // Start a background bthread to execute fn. Returns 0 on success,

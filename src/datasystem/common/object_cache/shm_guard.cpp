@@ -19,6 +19,7 @@
  */
 
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 
 namespace datasystem {
@@ -58,7 +59,7 @@ Status ShmGuard::TryRLatch(bool retry)
             break;
         }
         LOG_EVERY_N(WARNING, kLatchRetryWarnEveryN) << "Try read latch failed, try again...";
-        std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+        SleepCurrentFor(std::chrono::milliseconds(sleepTimeMs));
     }
     // A failed read latch is a transient contention with writers (set/eviction/migration), not a fatal
     // data error. Returning K_TRY_AGAIN lets the transport reader retry the replica or back off until

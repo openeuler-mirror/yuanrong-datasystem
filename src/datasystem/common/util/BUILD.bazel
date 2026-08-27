@@ -77,6 +77,7 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/rpc:bthread_utils",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/eventloop:timer_queue_hdrs",
         "//src/datasystem/common/rpc:scoped_bthread_local",
@@ -97,6 +98,7 @@ ds_cc_library(
     deps = [
         ":common_util_impl",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:bthread_utils",
     ],
 )
 

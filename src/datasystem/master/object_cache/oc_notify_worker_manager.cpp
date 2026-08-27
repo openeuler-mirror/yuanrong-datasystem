@@ -114,20 +114,11 @@ OCNotifyWorkerManager::~OCNotifyWorkerManager()
     }
 }
 
-struct SendResult {
-    std::shared_ptr<MasterWorkerOCApi> api;
-    int64_t tag = -1;
-    std::string address;
-    Status status;
-};  // Result bundle for a single DeleteObject notification
-
 Status OCNotifyWorkerManager::Init()
 {
     LOG(INFO) << "init OCNotifyWorkerManager" << this;
     thread_ = std::make_unique<Thread>(&OCNotifyWorkerManager::ProcessAsyncNotifyOp, this);
     thread_->set_name("ProcessAsyncNotifyOp");
-    deleteThreadPool_ =
-        std::make_unique<datasystem::ThreadPool>(minDeleteThreadSize, maxDeleteThreadSize, "NotifyDeleteSend");
     asyncDeleteReplayThreadPool_ =
         std::make_unique<datasystem::ThreadPool>(0, maxAsyncDeleteReplayThreadSize, "AsyncDeleteReplay");
     EraseFailedNodeApiEvent::GetInstance().AddSubscriber(subscriberPrefix_ + "OCNotifyWorkerManager",
@@ -740,9 +731,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
     Timer timer;
     int64_t realTimeoutMs = GetRequestContext()->timeoutDuration.CalcRealRemainingTime();
     std::string traceID = Trace::Instance().GetTraceID();
-    std::vector<std::future<SendResult>> futures;
-    futures.reserve(replicas2Obj.size());
-    std::atomic<bool> needAbort{ false };
+    Status lastErr;
     for (const auto &item : replicas2Obj) {
         const auto &address = item.first;
         const auto &objectItem = item.second;
@@ -756,50 +745,42 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
         if (!HandleWorkerDisconnection(address, objectItem, asyncNotifyIds)) {
             continue;
         }
-        if (needAbort.load()) {
-            LOG(WARNING) << "Aborting remaining tasks due to timeout.";
+        int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
+        if (elapsed >= realTimeoutMs) {
+            LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", realTimeoutMs:" << realTimeoutMs;
+            if (!isAsync) {
+                lastErr = Status(StatusCode::K_RUNTIME_ERROR, "Rpc timeout");
+            }
             break;
         }
-        futures.emplace_back(deleteThreadPool_->Submit([=, &needAbort, &timer]() -> SendResult {
+        Status status;
+        std::shared_ptr<MasterWorkerOCApi> api;
+        int64_t tag = -1;
+        {
             ScopedRequestContext ctx;
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-            int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
-            if (elapsed >= realTimeoutMs) {
-                LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", realTimeoutMs:" << realTimeoutMs
-                           << ", NotifyDeleteSend threads Statistics: " << deleteThreadPool_->GetStatistics();
-                needAbort.store(true);
-                return { nullptr, -1, address, Status(StatusCode::K_RUNTIME_ERROR, "Rpc timeout") };
-            }
             GetRequestContext()->timeoutDuration.Init(realTimeoutMs - elapsed);
-            std::shared_ptr<MasterWorkerOCApi> api;
-            Status st = GetMasterWorkerApi(address, api);
-            int64_t tag = -1;
-            if (st.IsOk()) {
+            status = GetMasterWorkerApi(address, api);
+            if (status.IsOk()) {
                 auto req = std::make_unique<DeleteObjectReqPb>();
                 SetDeleteObjectReq(req, isAsync, sourceWorker, objectItem);
-                st = api->DeleteNotificationSend(std::move(req), tag);
+                status = api->DeleteNotificationSend(std::move(req), tag);
             }
-            return { api, tag, address, st };
-        }));
-    }
-    Status lastErr;
-    SendResult res;
-    for (auto &f : futures) {
-        res = f.get();
-        if (res.status.IsError()) {
-            LOG(ERROR) << "Send delete to " << res.address << " failed: " << res.status.ToString();
-            if (ShouldDeferDeleteNotification(res.status)) {
-                const auto objectItems = replicas2Obj.find(res.address);
+        }
+        if (status.IsError()) {
+            LOG(ERROR) << "Send delete to " << address << " failed: " << status.ToString();
+            if (ShouldDeferDeleteNotification(status)) {
+                const auto objectItems = replicas2Obj.find(address);
                 if (objectItems != replicas2Obj.end()) {
-                    AppendAsyncDeleteNotifications(res.address, objectItems->second, asyncNotifyIds);
+                    AppendAsyncDeleteNotifications(address, objectItems->second, asyncNotifyIds);
                     continue;
                 }
             }
             if (!isAsync) {
-                lastErr = res.status;
+                lastErr = status;
             }
         } else {
-            api2Tag.emplace(res.api, std::make_pair(res.tag, res.address));
+            api2Tag.emplace(std::move(api), std::make_pair(tag, address));
         }
     }
     RETURN_IF_NOT_OK(AsyncNotifyWorkerDelete(asyncNotifyIds, replicas2Obj, failedObjects));

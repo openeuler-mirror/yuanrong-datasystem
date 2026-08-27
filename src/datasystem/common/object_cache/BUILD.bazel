@@ -40,6 +40,7 @@ ds_cc_library(
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rdma/npu:remote_h2d_manager",
+        "//src/datasystem/common/rpc:bthread_utils",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/common/string_intern:string_ref",
