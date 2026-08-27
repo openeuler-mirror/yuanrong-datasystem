@@ -1451,5 +1451,59 @@ TEST_F(EtcdSslWithPassphraseTest, TestCreateSessionWithTls)
     std::string value = rangeRsp.kvs(0).value();
     ASSERT_EQ(value, "kmcValue");
 }
+
+// After MarkReady->UpdateNodeState(READY) writes READY into etcd,
+// the in-memory keepAliveValue_ must also be READY.
+TEST_F(EtcdStoreTest, UpdateNodeStateSyncsKeepAliveSnapshotAfterReady)
+{
+    constexpr char MEMBER_ADDRESS[] = "127.0.0.1:31003";
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    DS_ASSERT_OK(db_->InitKeepAlive(tableName_, MEMBER_ADDRESS, false));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this] {
+            return db_->IsFirstKeepAliveSent() ? Status::OK()
+                                               : Status(K_NOT_READY, "membership lease has not been published");
+        },
+        10, K_OK));
+    // The first AutoCreate leaves the in-memory snapshot in RECOVERING (STARTING/RESTARTING promoted
+    // after the initial Put). READY is then published via UpdateNodeState.
+    EXPECT_EQ(db_->KeepAliveMembershipState(), cluster::MemberLifecycleState::RECOVERING);
+
+    DS_ASSERT_OK(db_->UpdateNodeState(cluster::MemberLifecycleState::READY));
+
+    // In-memory snapshot must now reflect READY so a reconnect re-publishes READY, not RECOVERING.
+    EXPECT_EQ(db_->KeepAliveMembershipState(), cluster::MemberLifecycleState::READY);
+    std::string stored;
+    DS_ASSERT_OK(db_->Get(tableName_, MEMBER_ADDRESS, stored));
+    ExpectKeepAliveState(stored, cluster::MemberLifecycleState::READY);
+}
+
+// InformReconciliationDone promotes a RESTARTING/RECOVERING member to READY in etcd;
+// the in-memory keepAliveValue_ must follow so a later keepalive reconnect does not regress it.
+TEST_F(EtcdStoreTest, InformReconciliationDoneSyncsKeepAliveSnapshotAfterReady)
+{
+    constexpr char MEMBER_ADDRESS[] = "127.0.0.1:31004";
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    DS_ASSERT_OK(db_->InitKeepAlive(tableName_, MEMBER_ADDRESS, false));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this] {
+            return db_->IsFirstKeepAliveSent() ? Status::OK()
+                                               : Status(K_NOT_READY, "membership lease has not been published");
+        },
+        10, K_OK));
+    DS_ASSERT_OK(db_->UpdateNodeState(cluster::MemberLifecycleState::RECOVERING));
+    EXPECT_EQ(db_->KeepAliveMembershipState(), cluster::MemberLifecycleState::RECOVERING);
+
+    HostPort localAddress;
+    DS_ASSERT_OK(localAddress.ParseString(MEMBER_ADDRESS));
+    DS_ASSERT_OK(db_->InformReconciliationDone(localAddress));
+
+    EXPECT_EQ(db_->KeepAliveMembershipState(), cluster::MemberLifecycleState::READY);
+    std::string stored;
+    DS_ASSERT_OK(db_->Get(tableName_, MEMBER_ADDRESS, stored));
+    ExpectKeepAliveState(stored, cluster::MemberLifecycleState::READY);
+}
 }  // namespace st
 }  // namespace datasystem

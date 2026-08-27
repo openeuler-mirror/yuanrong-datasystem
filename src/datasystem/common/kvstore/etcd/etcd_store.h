@@ -461,6 +461,18 @@ public:
     }
 
     /**
+     * @brief Return the lifecycle state cached in the membership lease value.
+     *
+     * Exposed for tests to assert that UpdateNodeState keeps the in-memory snapshot in sync with the
+     * value written to etcd, so a keepalive reconnect (AutoCreate) does not regress it.
+     * @return The cached MemberLifecycleState.
+     */
+    cluster::MemberLifecycleState KeepAliveMembershipState() const
+    {
+        return keepAliveValue_.state;
+    }
+
+    /**
      * @brief Obtains the success rate of all etcd requests.
      * @return The success rate string.
      */

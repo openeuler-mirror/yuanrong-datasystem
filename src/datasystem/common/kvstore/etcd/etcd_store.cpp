@@ -576,6 +576,9 @@ Status EtcdStore::UpdateNodeState(cluster::MemberLifecycleState state, int32_t t
                              "Membership lifecycle update timeout expired before ETCD Put");
     RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, valueStr, leaseId_,
                                     static_cast<int32_t>(remainingMs)));
+    // Synchronize the in-memory membership so a later keepalive reconnect (AutoCreate) re-publishes
+    // the intended state instead of the stale STARTING/RECOVERING snapshot.
+    keepAliveValue_ = std::move(value);
     return Status::OK();
 }
 
@@ -1150,6 +1153,12 @@ Status EtcdStore::InformReconciliationDone(const HostPort &workerAddr)
         auto readyValue = value.ToString();
         CHECK_FAIL_RETURN_STATUS(!readyValue.empty(), K_INVALID, "Node state should not be empty.");
         RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, workerAddr.ToString(), readyValue, CheckLeaseId()));
+        // Keep the in-memory lease snapshot aligned with the persisted READY so a keepalive reconnect
+        // (AutoCreate) does not regress the local member back to RESTARTING/RECOVERING.
+        if (workerAddr.ToString() == keepAliveKey_) {
+            keepAliveValue_.state = cluster::MemberLifecycleState::READY;
+            keepAliveValue_.timestamp = value.timestamp;
+        }
     }
     return Status::OK();
 }
