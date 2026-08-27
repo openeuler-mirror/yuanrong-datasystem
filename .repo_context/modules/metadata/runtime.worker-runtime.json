@@ -34,10 +34,13 @@
     "keywords": [
       "worker runtime",
       "worker startup",
+      "jemalloc stats",
+      "brpc vars",
       "runtime services"
     ],
     "intent_examples": [
-      "understand worker startup and runtime services"
+      "understand worker startup and runtime services",
+      "expose worker jemalloc statistics through brpc"
     ]
   }
 }

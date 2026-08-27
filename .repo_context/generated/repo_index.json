@@ -1,6 +1,6 @@
 {
   "repo_root": ".",
-  "generated_at_utc": "2026-08-25T10:47:16+00:00",
+  "generated_at_utc": "2026-08-27T03:44:39+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -85,6 +85,7 @@
         "  - l2cache/",
         "  - log/",
         "  - lru/",
+        "  - memory/",
         "  - metrics/",
         "  - object_cache/",
         "  - os_transport_pipeline/",
@@ -177,7 +178,6 @@
         "  - utils.proto",
         "  - worker_object.proto",
         "  - worker_stream.proto",
-        "  - zmq_perf.proto",
         "- pybind_api/",
         "  - BUILD.bazel",
         "  - CMakeLists.txt",
@@ -355,6 +355,7 @@
       "tree": [
         "- bazel/",
         "  - BUILD.bazel",
+        "  - jemalloc_build_config_test.sh",
         "  - jemalloc_profile_config_test.cpp",
         "  - worker_jemalloc_link_test.sh",
         "- benchmark/",
@@ -465,6 +466,7 @@
         "  - test_cli_start.py",
         "  - test_cli_start_e2e.py",
         "  - test_cli_stop.py",
+        "  - test_cli_up.py",
         "  - test_device_oc_client.py",
         "  - test_ds_client.py",
         "  - test_ds_tensor_client.py",

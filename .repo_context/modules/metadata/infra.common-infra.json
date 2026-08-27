@@ -38,11 +38,14 @@
       "common infra",
       "shared infrastructure",
       "common",
+      "memory diagnostics",
+      "jemalloc stats",
       "task_action",
       "TaskActionRegistry"
     ],
     "intent_examples": [
       "understand shared infra used across modules",
+      "find reusable process memory diagnostics",
       "find the shared task action registry"
     ]
   }

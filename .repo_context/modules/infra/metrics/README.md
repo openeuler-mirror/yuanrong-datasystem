@@ -47,6 +47,8 @@
   - `worker_oc_server.cpp` is a major registration point for many resource metrics.
   - `metrics.h/.cpp` now provide a lightweight typed `datasystem::metrics` API with `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and a periodic `LOG(INFO)` summary writer for release-scoped request-path instrumentation.
   - the typed metrics log path emits one-line JSON summaries and splits oversized payloads into multiple JSON lines; tests that still prefer flat-string assertions should derive that view locally from `DumpSummaryForTest()`.
+  - process jemalloc bvars live in `src/datasystem/common/memory/jemalloc_stats_bvar.*`; they are a BRPC `/vars`
+    pull path and do not participate in `common_metrics`, resource-monitor logs, or JSON-lines exporters.
 - Pending verification:
   - whether any additional registration points outside `WorkerOCServer` should get their own context note;
   - whether a non-harddisk exporter backend is planned but not yet implemented.

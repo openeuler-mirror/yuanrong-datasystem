@@ -90,6 +90,10 @@ namespace datasystem::ut {
 class WorkerOCServerTest;
 }
 
+namespace datasystem::memory {
+class JemallocStatsBvar;
+}
+
 namespace datasystem::worker {
 
 class WorkerOCServer : public CommonServer {
@@ -909,6 +913,7 @@ private:
     bool evictionPolicyBarrierActive_{ false };
     uint64_t evictionPolicyBarrierEpoch_{ 0 };
     std::chrono::steady_clock::time_point evictionPolicyBarrierDeadline_{};
+    std::unique_ptr<memory::JemallocStatsBvar> jemallocStatsBvar_{ nullptr };
     std::unique_ptr<WorkerOCServiceBrpcAdapter> brpcOcAdapter_{ nullptr };
     std::unique_ptr<master::MasterServiceBrpcAdapter> brpcMasterAdapter_{ nullptr };
     std::unique_ptr<WorkerServiceBrpcAdapter> brpcWorkerAdapter_{ nullptr };

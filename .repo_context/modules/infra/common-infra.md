@@ -7,6 +7,7 @@
   - especially:
     - `rpc`
     - `shared_memory`
+    - `memory`
     - `kvstore`
     - `log`
     - `metrics`
@@ -21,6 +22,7 @@
   - `src/datasystem/common/CMakeLists.txt`
   - `src/datasystem/common/rpc/CMakeLists.txt`
   - `src/datasystem/common/shared_memory/CMakeLists.txt`
+  - `src/datasystem/common/memory/CMakeLists.txt`
   - `src/datasystem/common/kvstore/CMakeLists.txt`
   - `src/datasystem/common/kvstore/etcd/CMakeLists.txt`
   - `src/datasystem/common/kvstore/metastore/CMakeLists.txt`
@@ -39,7 +41,7 @@
   - top-level common subdomains currently include:
     - auth and identity helpers: `ak_sk`, `iam`, `token`, `encrypt`
     - runtime plumbing: `rpc`, `eventloop`, `parallel`, `signal`, `flags`, `inject`, `util`
-    - storage and memory: `shared_memory`, `kvstore`, `l2cache`, `object_cache`, `stream_cache`
+    - storage and memory: `memory`, `shared_memory`, `kvstore`, `l2cache`, `object_cache`, `stream_cache`
     - observability: `log`, `metrics`, `perf`
     - transport and device paths: `rdma`, `device`, `os_transport_pipeline`
     - parallel task dispatch contract: `task_action` (subscribers wired today, not yet dispatched from production paths)
@@ -54,6 +56,7 @@
 | ----------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `rpc`                   | RPC plumbing plus code generation plugins and ZMQ-based transport implementation | builds rpc plugins, `common_rpc_zmq`, `common_rpc_zmq_client`, `rpc_stub_cache_mgr`  |
 | `shared_memory`         | shared-memory allocator, arena, mmap abstractions, shared-disk detection         | builds `common_shared_memory` and `common_shm_unit_info`                             |
+| `memory`                | reusable process-memory diagnostics                                               | builds `jemalloc_stats_bvar`; roles link and own it explicitly                       |
 | `kvstore`               | metadata/backend storage families                                                | split into `etcd`, `metastore`, `rocksdb`                                            |
 | `log`                   | logging, access recording, tracing, failure handling                             | builds `common_log`                                                                  |
 | `metrics`               | resource metrics and exporters                                                   | builds `common_metrics` and exporter base                                            |
@@ -95,6 +98,9 @@ Detailed follow-up docs now exist for:
 ## Transport And Memory Notes
 
 - Verified:
+  - `memory/jemalloc_stats_bvar` reads process-level jemalloc stats through `mallctl` and exposes cached bvars. It does
+    not use the prefixed allocator owned by `shared_memory`, does not create a collection thread or write files, and
+    remains inactive unless an owning process explicitly constructs it.
   - `rpc` contains both generation tooling and the main ZMQ transport implementation.
   - `ScopedBthreadLocal<T>` exposes materializing access only through `Get()`, `operator->`, `operator*`, assignment, and conversion. Its non-materializing existing-value lookup is a private implementation helper used only by `Get()`; no production or test caller consumes a public `Peek()` API. This API contraction does not change key creation, per-execution-context allocation, locking, or value lifetime behavior.
   - selected ZMQ, message-queue, and URMA IO threads can be deprioritized together via `io_thread_nice`, which

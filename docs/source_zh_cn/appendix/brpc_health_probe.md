@@ -64,6 +64,9 @@ curl -s http://127.0.0.1:31501/status | head
 # 浏览 bvar 指标（QPS/P99/错误率/连接数，人读文本格式）
 curl -s http://127.0.0.1:31501/vars | less
 
+# 按需查看进程 jemalloc 指标（同时设置 jemalloc_stats=true）
+curl -s 'http://127.0.0.1:31501/vars/anon_jemalloc_*?console=1'
+
 # Prometheus 抓取（注意是 /prometheus_metrics，不是 /vars）
 curl -s http://127.0.0.1:31501/prometheus_metrics
 
@@ -78,6 +81,13 @@ curl -s http://127.0.0.1:31501/bthreads | head -50
 
 - **brpc 内置服务默认关闭**，保持无 HTTP 管理端点的安全基线。`/flags` 可 POST 翻转任意 gflag，`/pprof/heap` 可 dump 内存，默认关闭可防止经业务 RPC 端口越权操作。
 - 由 gflag `FLAGS_brpc_enable_builtin_services` 控制（默认 `false`）。仅在受信网络调试时设为 `true` 开启 `/flags`、`/pprof`、`/vars` 等诊断接口，无需改代码重新编译。
+- Worker 设置 `jemalloc_stats=true` 后会注册进程 jemalloc 指标。该参数仅在启动时读取，修改配置后必须重启
+  Worker，不支持通过 `/flags` 动态启停。该参数要求 `brpc_enable_builtin_services=true`，不满足时 Worker 拒绝启动。
+- `anon_jemalloc_{allocated,active,resident,metadata,mapped,retained,dirty,muzzy}_bytes` 的单位均为字节。
+  指标按查询触发采集并缓存一秒；没有查询时不采集，也不落盘。
+- 先检查 `anon_jemalloc_stats_available`：值为 `1` 时 `_bytes` 属于本次有效快照；值为 `0` 时读取失败，
+  `_bytes` 保留上次成功值（首次采集失败时为 `0`），不能当作实时数据。`anon_jemalloc_stats_read_failures`
+  记录进程启动后失败的快照刷新次数，具体失败的 mallctl 名和返回码写入限频错误日志。
 - K8s 健康探针**不依赖** brpc 内置服务。本仓 K8s 部署（`worker_daemonset.yaml`）的 startup/readiness/liveness probe 均为 `exec` 文件检查（`file_check.sh` / `liveness_check.sh -f $(LIVENESS_CHECK_PATH)`，检查 `/home/yuanrong/datasystem/health/{healthy,ready,liveness}` 文件），与 `has_builtin_services` 是否开启无关。
 - 仅当希望用 brpc HTTP `/health`、`/status` 作为探针时，才需设 `FLAGS_brpc_enable_builtin_services=true` 并参考上文 `httpGet` 示例；此时 `/health` 与 `/status` 是只读 GET，不鉴权、不产生业务负载。
 - 探针端口若与业务端口相同，注意 NetworkPolicy / 端口策略放行 K8s node→Pod 的 31501。
