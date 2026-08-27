@@ -185,12 +185,14 @@ message WorkerServiceInfoPb {
 message RangeReqPb {
   bytes key = 1;
   bytes range_end = 2;
+  int64 known_mod_revision = 3; // Exact-key revision already held by the caller; zero disables conditional read.
 }
 
 message RangeRspPb {
   ResponseHeader header = 1;
   repeated KeyValue kvs = 2;
   int64 revision = 3;
+  bool unchanged = 4; // True when known_mod_revision matches; kvs is omitted.
 }
 
 message DeleteRangeReqPb {

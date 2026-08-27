@@ -136,6 +136,34 @@ public:
                        int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT) = 0;
 
     /**
+     * @brief Conditionally read one exact key while preserving backend revision information.
+     * @param[in] tableName Logical table name.
+     * @param[in] key Exact relative key.
+     * @param[in] knownModRevision Exact-key revision already held by the caller.
+     * @param[out] res Returned result when changed; unchanged otherwise.
+     * @param[out] unchanged Whether the key still has knownModRevision.
+     * @param[in] timeoutMs Operation timeout in milliseconds.
+     * @return Backend operation status.
+     */
+    virtual Status GetIfChanged(const std::string &tableName, const std::string &key, int64_t knownModRevision,
+                                RangeSearchResult &res, bool &unchanged,
+                                int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT)
+    {
+        unchanged = false;
+        RangeSearchResult candidate;
+        auto status = Get(tableName, key, candidate, timeoutMs);
+        if (status.IsError()) {
+            return status;
+        }
+        if (knownModRevision > 0 && candidate.modRevision == knownModRevision) {
+            unchanged = true;
+            return Status::OK();
+        }
+        res = std::move(candidate);
+        return Status::OK();
+    }
+
+    /**
      * @brief Execute callback-form single-key CAS and return revision information.
      * @param[in] tableName Logical table name.
      * @param[in] key Exact relative key.

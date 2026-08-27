@@ -1114,11 +1114,18 @@ Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
     CHECK_FAIL_RETURN_STATUS(topologyRecoveryManager_ != nullptr, K_NOT_READY, "recovery manager is not bound");
     RETURN_IF_NOT_OK(topologyRecoveryManager_->CheckReadAllowed(req.key(), req.range_end()));
+    CHECK_FAIL_RETURN_STATUS(req.known_mod_revision() >= 0, K_INVALID,
+                             "known modification revision must not be negative");
+    CHECK_FAIL_RETURN_STATUS(req.known_mod_revision() == 0 || req.range_end().empty(), K_INVALID,
+                             "conditional Range only supports an exact key");
 
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
-    RETURN_IF_NOT_OK(store_->Range(req.key(), req.range_end(), kvs, revision));
+    bool unchanged = false;
+    RETURN_IF_NOT_OK(
+        store_->Range(req.key(), req.range_end(), kvs, revision, req.known_mod_revision(), &unchanged));
     rsp.set_revision(revision);
+    rsp.set_unchanged(unchanged);
     for (const auto &entry : kvs) {
         FillKeyValuePb(entry, rsp.add_kvs());
     }

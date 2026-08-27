@@ -73,10 +73,12 @@ public:
      * @param[in] rangeEnd End key (exclusive). Empty for single key.
      * @param[out] kvs Output key-value entries.
      * @param[out] revision Snapshot revision corresponding to the returned entries.
+     * @param[in] knownModRevision Exact-key revision already held by the caller. Zero disables conditional read.
+     * @param[out] unchanged Whether the exact key still has knownModRevision.
      * @return Status of the operation.
      */
     Status Range(const std::string &key, const std::string &rangeEnd, std::vector<KeyValueEntry> &kvs,
-                 int64_t &revision);
+                 int64_t &revision, int64_t knownModRevision = 0, bool *unchanged = nullptr);
 
     /**
      * @brief Delete keys in range [key, rangeEnd).

@@ -115,10 +115,10 @@ Status CoordinatorStore::Put(const std::string &key, const std::string &value, i
 }
 
 Status CoordinatorStore::Range(const std::string &key, const std::string &rangeEnd, std::vector<KeyValueEntry> &kvs,
-                               int64_t &revision)
+                               int64_t &revision, int64_t knownModRevision, bool *unchanged)
 {
     RETURN_IF_NOT_OK(CheckInitialized());
-    memKvStore_->Range(key, rangeEnd, kvs, revision);
+    memKvStore_->Range(key, rangeEnd, kvs, revision, knownModRevision, unchanged);
     VLOG(1) << "Range key: " << key << " rangeEnd: " << rangeEnd << ", revision: " << revision;
     return Status::OK();
 }

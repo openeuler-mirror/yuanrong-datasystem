@@ -89,14 +89,21 @@ Status MemoryKvStore::Put(const std::string &key, const std::string &value, int6
 }
 
 void MemoryKvStore::Range(const std::string &key, const std::string &rangeEnd, std::vector<KeyValueEntry> &kvs,
-                          int64_t &revision)
+                          int64_t &revision, int64_t knownModRevision, bool *unchanged)
 {
     std::shared_lock lock(mutex_);
     revision = revision_.load(std::memory_order_relaxed);
+    if (unchanged != nullptr) {
+        *unchanged = false;
+    }
 
     if (rangeEnd.empty()) {
         auto it = data_.find(key);
         if (it != data_.end()) {
+            if (unchanged != nullptr && knownModRevision > 0 && it->second.modRevision == knownModRevision) {
+                *unchanged = true;
+                return;
+            }
             kvs.push_back(KeyValueEntry{ it->first, it->second.value, it->second.version, it->second.modRevision });
         }
     } else {
