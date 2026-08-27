@@ -24,8 +24,12 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <sched.h>
 #include <string>
+#include <sys/syscall.h>
+#include <unistd.h>
 
+#include <bthread/bthread.h>
 #include <butil/iobuf.h>
 
 #include "datasystem/common/log/log.h"
@@ -55,6 +59,11 @@ inline uint64_t BrpcTraceNowNs()
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+inline pid_t BrpcTraceGetTid()
+{
+    return static_cast<pid_t>(syscall(SYS_gettid));
 }
 
 inline uint64_t BrpcNsToUs(uint64_t ns)
@@ -378,7 +387,10 @@ inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
                     << " cntl_deadline_us=" << trace.CntlDeadlineUs()
                     << " cntl_error_code=" << trace.CntlErrorCode()
                     << " cntl_failed=" << (trace.CntlFailed() ? 1 : 0)
-                    << " resp_attachment_bytes=" << trace.RespAttachmentSize();
+                    << " resp_attachment_bytes=" << trace.RespAttachmentSize()
+                    << " ClientSend=" << trace.ClientSendTs() << " ClientRecv=" << trace.ClientRecvTs()
+                    << " ServerSend=" << trace.ServerSendTs() << " ServerRecv=" << trace.ServerRecvTs()
+                    << " tid=" << BrpcTraceGetTid();
 }
 
 }  // namespace datasystem
