@@ -18,6 +18,7 @@
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/rpc/brpc_perf_trace.h"
 
+#include <algorithm>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -96,15 +97,16 @@ TEST_F(BrpcPerfTraceTest, metric_descs_register_brpc_rpc_phase_histograms)
     size_t count = 0;
     auto descs = metrics::GetKvMetricDescs(count);
     ASSERT_NE(descs, nullptr);
-    ASSERT_EQ(count, static_cast<size_t>(metrics::KvMetricId::KV_METRIC_END));
+    ASSERT_LE(count, static_cast<size_t>(metrics::KvMetricId::KV_METRIC_END));
 
     auto expectMetric = [descs, count](metrics::KvMetricId id, const std::string &name) {
-        const auto idx = static_cast<size_t>(id);
-        ASSERT_LT(idx, count);
-        EXPECT_EQ(descs[idx].id, idx);
-        EXPECT_EQ(descs[idx].name, name);
-        EXPECT_EQ(descs[idx].type, metrics::MetricType::HISTOGRAM);
-        EXPECT_STREQ(descs[idx].unit, "us");
+        const auto wantId = static_cast<uint16_t>(id);
+        const auto *desc = std::find_if(descs, descs + count,
+            [wantId](const metrics::MetricDesc &d) { return d.id == wantId; });
+        ASSERT_NE(desc, descs + count) << "metric id " << wantId << " not found";
+        EXPECT_EQ(desc->name, name);
+        EXPECT_EQ(desc->type, metrics::MetricType::HISTOGRAM);
+        EXPECT_STREQ(desc->unit, "us");
     };
     expectMetric(metrics::KvMetricId::BRPC_CLIENT_REQ_FRAMEWORK_LATENCY, "brpc_client_req_framework_latency");
     expectMetric(metrics::KvMetricId::BRPC_REMOTE_PROCESSING_LATENCY, "brpc_remote_processing_latency");

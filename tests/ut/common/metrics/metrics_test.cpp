@@ -769,9 +769,11 @@ TEST_F(MetricsTest, kv_metric_desc_test)
     size_t count = 0;
     auto descs = metrics::GetKvMetricDescs(count);
     ASSERT_NE(descs, nullptr);
-    ASSERT_EQ(count, static_cast<size_t>(metrics::KvMetricId::KV_METRIC_END));
+    ASSERT_LE(count, static_cast<size_t>(metrics::KvMetricId::KV_METRIC_END));
+    std::set<uint16_t> ids;
     for (size_t i = 0; i < count; ++i) {
-        EXPECT_EQ(descs[i].id, i);
+        EXPECT_LT(descs[i].id, static_cast<uint16_t>(metrics::KvMetricId::KV_METRIC_END));
+        EXPECT_TRUE(ids.emplace(descs[i].id).second);
         EXPECT_NE(descs[i].name, nullptr);
         EXPECT_NE(descs[i].unit, nullptr);
     }
@@ -873,16 +875,13 @@ TEST_F(MetricsTest, coordinator_metric_desc_test)
           "coordinator_watch_probe_inflight_bytes", metrics::MetricType::GAUGE, "bytes" },
     };
     for (size_t i = 0; i < sizeof(coordinatorMetrics) / sizeof(coordinatorMetrics[0]); ++i) {
-        const auto id = static_cast<size_t>(coordinatorMetrics[i].id);
-        ASSERT_LT(id, count);
-        EXPECT_EQ(descs[id].id, id);
-        EXPECT_STREQ(descs[id].name, coordinatorMetrics[i].name);
-        EXPECT_EQ(descs[id].type, coordinatorMetrics[i].type);
-        EXPECT_STREQ(descs[id].unit, coordinatorMetrics[i].unit);
-        if (i > 0) {
-            EXPECT_EQ(static_cast<uint16_t>(coordinatorMetrics[i].id),
-                      static_cast<uint16_t>(coordinatorMetrics[i - 1].id) + 1);
-        }
+        const auto wantId = static_cast<uint16_t>(coordinatorMetrics[i].id);
+        const auto *desc = std::find_if(descs, descs + count,
+            [wantId](const metrics::MetricDesc &d) { return d.id == wantId; });
+        ASSERT_NE(desc, descs + count) << "coordinator metric id " << wantId << " not found";
+        EXPECT_STREQ(desc->name, coordinatorMetrics[i].name);
+        EXPECT_EQ(desc->type, coordinatorMetrics[i].type);
+        EXPECT_STREQ(desc->unit, coordinatorMetrics[i].unit);
     }
 }
 
@@ -908,12 +907,14 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
     size_t count = 0;
     auto descs = metrics::GetKvMetricDescs(count);
     ASSERT_NE(descs, nullptr);
-    ASSERT_EQ(count, static_cast<size_t>(metrics::KvMetricId::KV_METRIC_END));
+    ASSERT_LE(count, static_cast<size_t>(metrics::KvMetricId::KV_METRIC_END));
     ASSERT_GT(count, static_cast<size_t>(metrics::KvMetricId::WORKER_GET_POST_QUERY_META_PHASE_LATENCY));
 
-    // Enum order, ids, and KV_METRIC_DESCS must stay in lockstep. Do not hardcode stale numeric ids here:
-    // inserting KvMetricId values above this block shifts all following ids and breaks log/JSON consumers
-    // that key by number — prefer appending new ids before KV_METRIC_END when possible.
+    // Numeric metric ids are stable contract for log/JSON consumers that key by number. Deleted ZMQ_* ids
+    // (23-43, 71) leave holes; the descs array is no longer densely indexed by id, so look up by id
+    // instead of descs[id]. Do not hardcode stale numeric ids here: inserting KvMetricId values above
+    // this block shifts all following ids and breaks consumers that key by number — prefer appending
+    // new ids before KV_METRIC_END when possible.
     static const struct {
         metrics::KvMetricId id;
         const char *name;
@@ -927,7 +928,6 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
         { metrics::KvMetricId::WORKER_GET_META_ADDR_HASHRING_LATENCY, "worker_get_meta_addr_hashring_latency" },
         { metrics::KvMetricId::WORKER_GET_POST_QUERY_META_PHASE_LATENCY, "worker_get_post_query_meta_phase_latency" },
         { metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST, "worker_inflight_remote_get_request" },
-        { metrics::KvMetricId::ZMQ_SERVER_POLL_HANDLE_LATENCY, "zmq_server_poll_handle_latency" },
         { metrics::KvMetricId::URMA_CONNECTION_SETUP_LATENCY, "urma_connection_setup_latency" },
         { metrics::KvMetricId::URMA_JETTY_CREATE_LATENCY, "urma_jetty_create_latency" },
         { metrics::KvMetricId::URMA_JETTY_RECREATE_LATENCY, "urma_jetty_recreate_latency" },
@@ -965,18 +965,14 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_UB_SPLIT_TOTAL), 98u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL), 99u);
     for (size_t k = 0; k < sizeof(kTailMetrics) / sizeof(kTailMetrics[0]); ++k) {
-        const size_t i = static_cast<size_t>(kTailMetrics[k].id);
-        ASSERT_LT(i, count);
-        EXPECT_EQ(descs[i].id, i);
-        EXPECT_STREQ(descs[i].name, kTailMetrics[k].name);
-        if (i >= static_cast<size_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL)) {
-            EXPECT_EQ(descs[i].type, metrics::MetricType::COUNTER);
-            EXPECT_STREQ(descs[i].unit, "count");
-        }
-        if (k > 0) {
-            EXPECT_EQ(static_cast<uint16_t>(kTailMetrics[k].id),
-                      static_cast<uint16_t>(kTailMetrics[k - 1].id) + 1)
-                << "KvMetricId tail must stay dense; gap breaks id-based dashboards";
+        const auto wantId = static_cast<uint16_t>(kTailMetrics[k].id);
+        const auto *desc = std::find_if(descs, descs + count,
+            [wantId](const metrics::MetricDesc &d) { return d.id == wantId; });
+        ASSERT_NE(desc, descs + count) << "metric id " << wantId << " (" << kTailMetrics[k].name << ") not found";
+        EXPECT_STREQ(desc->name, kTailMetrics[k].name);
+        if (wantId >= static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL)) {
+            EXPECT_EQ(desc->type, metrics::MetricType::COUNTER);
+            EXPECT_STREQ(desc->unit, "count");
         }
     }
 }

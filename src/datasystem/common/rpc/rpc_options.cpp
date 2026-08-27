@@ -26,7 +26,7 @@
 #include "datasystem/protos/rpc_option.pb.h"
 
 namespace datasystem {
-RpcOptions::RpcOptions() : timeout_(RPC_TIMEOUT), hwm_(RPC_HWM), linger_(0), immediate_(true)
+RpcOptions::RpcOptions() : timeout_(RPC_TIMEOUT), hwm_(RPC_HWM), immediate_(true)
 {
 }
 
