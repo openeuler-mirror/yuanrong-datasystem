@@ -17,11 +17,12 @@
 /**
  * Description: Unit tests for ScopedBthreadLocal<T> — per-bthread storage wrapper.
  *
- * Covers two execution modes:
- *   - ZMQ mode (default): per-pthread isolation via pthread_getspecific fallback.
- *     Tests 1-10 below verify this mode.
- *   - brpc mode (DATASYSTEM_USE_BRPC=1): per-bthread isolation via bthread_key_t.
- *     Test 11 requires a running brpc server and is skipped otherwise.
+ * Covers two execution contexts:
+ *   - Default UT context: bthread_getspecific without a running bthread worker
+ *     pool degrades to per-pthread isolation. Tests 1-10 below verify this.
+ *   - Full brpc M:N context (DATASYSTEM_USE_BRPC=1 with a running server):
+ *     per-bthread isolation via bthread_key_t. Test 11 verifies this and is
+ *     skipped without a running brpc server.
  *
  * Verifies:
  *  - Get() / operator->() / operator*() correctness
@@ -151,8 +152,9 @@ TEST(BthreadLocalTest, MultipleIndependentInstances)
 
 // ============================================================================
 // Test 9: Pthread isolation — child std::thread sees default (0), not parent's value.
-// In ZMQ mode, bthread_getspecific falls back to pthread_getspecific; each
-// pthread has its own key table, providing the same isolation as thread_local.
+// Outside a running bthread worker pool, bthread_getspecific falls back to
+// pthread_getspecific; each pthread has its own key table, providing the same
+// isolation as thread_local.
 // ============================================================================
 TEST(BthreadLocalTest, PthreadChildIsolation)
 {
@@ -192,8 +194,8 @@ TEST(BthreadLocalTest, MoveFromWrapper)
 
 // ============================================================================
 // Test 11: Per-bthread isolation (brpc M:N mode).
-// Skipped in default ZMQ test mode. Run with:
-//   bazel test //tests/ut/common/rpc:bthread_local_test 
+// Skipped without a running brpc server. Run with:
+//   bazel test //tests/ut/common/rpc:bthread_local_test
 //     --config=test --test_env=DATASYSTEM_USE_BRPC=1
 // ============================================================================
 TEST(BthreadLocalTest, PerBthreadIsolationRequiresBrpcMode)

@@ -86,7 +86,6 @@ enum class KvMetricId : uint16_t {
     WORKER_GET_POST_QUERY_META_PHASE_LATENCY = 69,
     /** Worker outbound BatchGetObjectRemote requests currently in progress */
     WORKER_INFLIGHT_REMOTE_GET_REQUEST = 70,
-    /** ZMQ server poll handle latency */
     // Append new metric families here to preserve existing numeric IDs.
     URMA_CONNECTION_SETUP_LATENCY = 72,
     URMA_JETTY_CREATE_LATENCY = 73,

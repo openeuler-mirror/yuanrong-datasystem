@@ -145,7 +145,7 @@ TEST_F(BrpcPerfTraceTest, trace_clock_returns_monotonic_nanoseconds)
     EXPECT_GT(after - before, 0u);
 }
 
-TEST_F(BrpcPerfTraceTest, record_unary_rpc_observes_zmq_equivalent_phase_metrics)
+TEST_F(BrpcPerfTraceTest, record_unary_rpc_observes_phase_metrics)
 {
     BrpcPerfTrace trace("trace-1", "WorkerService.GetObject");
     trace.MarkClientStart(1'000'000'000ULL);

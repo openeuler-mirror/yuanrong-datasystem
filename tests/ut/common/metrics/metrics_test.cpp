@@ -910,8 +910,8 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
     ASSERT_LE(count, static_cast<size_t>(metrics::KvMetricId::KV_METRIC_END));
     ASSERT_GT(count, static_cast<size_t>(metrics::KvMetricId::WORKER_GET_POST_QUERY_META_PHASE_LATENCY));
 
-    // Numeric metric ids are stable contract for log/JSON consumers that key by number. Deleted ZMQ_* ids
-    // (23-43, 71) leave holes; the descs array is no longer densely indexed by id, so look up by id
+    // Numeric metric ids are stable contract for log/JSON consumers that key by number.
+    // The descs array is not densely indexed by id (id holes exist), so look up by id
     // instead of descs[id]. Do not hardcode stale numeric ids here: inserting KvMetricId values above
     // this block shifts all following ids and breaks consumers that key by number — prefer appending
     // new ids before KV_METRIC_END when possible.

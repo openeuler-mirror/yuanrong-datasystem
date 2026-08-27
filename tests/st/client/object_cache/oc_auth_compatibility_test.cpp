@@ -55,9 +55,9 @@ public:
     void SetUp() override
     {
         ExternalClusterTest::SetUp();
-        // The ZMQ CURVE/ZAP auth transport was removed; the brpc auth path is not
+        // The legacy CURVE/ZAP auth transport was removed; the brpc auth path is not
         // wired in yet. Skip until the brpc equivalent is implemented.
-            GTEST_SKIP() << "OcAuthCompatibilityTest is ZMQ-CURVE auth scoped; "
+            GTEST_SKIP() << "OcAuthCompatibilityTest is legacy-CURVE auth scoped; "
                         "brpc auth is not yet implemented (skipped under brpc).";
         akSkManager_ = std::make_shared<AkSkManager>();
         DS_ASSERT_OK(akSkManager_->SetClientAkSk(accessKey_, secretKey_));

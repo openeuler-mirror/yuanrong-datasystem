@@ -332,9 +332,11 @@ TEST_F(PubSubComplexTest, TestCreateWritePageTimeout)
         const size_t minEleSize = 1024;
         const size_t maxEleSize = 5 * 1024;
         int residualReqTimeoutDurationTimeoutMs = 10;
-        int injectElapsedUs = residualReqTimeoutDurationTimeoutMs * 1000;
-        RETURN_IF_NOT_OK(cluster_->SetInjectAction(WORKER, 0, "ZmqService::RouteToRegBackend.elapsedUs",
-                                                   FormatString("call(%d)", injectElapsedUs)));
+        // Migrated from ZmqService::RouteToRegBackend.elapsedUs (deleted with ZMQ transport).
+        // Use the BRPC-side inject point to tighten the CreateWritePage RPC timeout to match
+        // the request budget, preserving deadline-propagation coverage.
+        RETURN_IF_NOT_OK(datasystem::inject::Set("ProducerConsumerWorkerApi.CreateWritePage.adjustRpcTimeoutMs",
+                                 FormatString("call(%d)", residualReqTimeoutDurationTimeoutMs)));
         for (size_t i = 0; i < numElements; ++i) {
             const size_t elementSize = randomData_.GetRandomUint64(minEleSize, maxEleSize);
             std::string data(elementSize, 'a');

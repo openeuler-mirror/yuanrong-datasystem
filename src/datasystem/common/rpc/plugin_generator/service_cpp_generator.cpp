@@ -62,9 +62,9 @@ void RpcGenerator::ImplementZmqCallMethodDef(io::Printer &printer, const google:
     (void)indent;
     std::map<std::string, std::string> vars;
     vars["svcName"] = svcName;
-    // brpc dispatches via the generated BrpcAdapter; the zmq CallMethod entry is dead
+    // brpc dispatches via the generated BrpcAdapter; the legacy CallMethod entry is dead
     // under brpc-only transport. Keep the override defined (RpcServiceBase requires it)
-    // but with no zmq dispatch body so generated code does not reference zmq types.
+    // but with an empty body so generated code does not reference dead dispatch types.
     printer.Print(vars,
         "::datasystem::Status $svcName$::CallMethod(::datasystem::MetaPb meta,\n"
         "                                           std::deque<::datasystem::RpcMessage> &&inMsg, int64_t seqNo) {\n"

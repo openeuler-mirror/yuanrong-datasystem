@@ -32,8 +32,7 @@
 #include "datasystem/protos/utils.pb.h"
 
 namespace datasystem {
-// Values mirror the fixed libzmq wire flags (zmq.h: ZMQ_DONTWAIT=1, ZMQ_SNDMORE=2)
-// so zmq_msg_send/recv keep working without including <zmq.h> here.
+// Wire flags for payload framing: DONTWAIT=1 (non-blocking), SNDMORE=2 (multi-frame).
 enum class RpcSendFlags : int { NONE = 0, DONTWAIT = 1, SNDMORE = 2 };
 enum class RpcRecvFlags : int { NONE = 0, DONTWAIT = 1 };
 typedef void(MsgFreeFn)(void *data, void *hint);
@@ -69,8 +68,7 @@ public:
 
     void Clear();
 
-    // Frame metadata used by the zmq wire protocol (payload-size / decoder markers
-    // and multi-frame continuation); kept until the zmq transport is removed.
+    // Frame metadata: payload-size / decoder markers and multi-frame continuation.
     void SetType(MsgType type)
     {
         type_ = type;

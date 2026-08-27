@@ -442,7 +442,6 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
         { LOG_ASYNC_ENABLE, "false" },
         { LOG_ASYNC_QUEUE_SIZE, "4096" },
         { LOG_ONLY_WRITE_INFO_FILE_ENV, "false" },
-        { "DATASYSTEM_ZMQ_CLIENT_IO_THREAD", "3" },
     });
 
     KVClientConfig config;

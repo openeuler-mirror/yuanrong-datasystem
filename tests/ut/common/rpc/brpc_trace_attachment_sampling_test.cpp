@@ -16,12 +16,11 @@
 
 /**
  * Description: Test request-log sampling state propagation through the brpc
- * request attachment. Mirrors ZmqTraceSamplingMetaTest for the brpc transport:
- * AttachTraceIDToAttachment() encodes traceID + 1-byte LogSampleState;
- * ExtractTraceIDAndSampleState() decodes it; ApplyLogSampleState() restores
- * requestLogTrace + sampleDecision on the receiving side so the generated
- * brpc CallMethod handler participates in LogSampler instead of being
- * bypassed (the regression this guards against).
+ * request attachment: AttachTraceIDToAttachment() encodes traceID +
+ * 1-byte LogSampleState; ExtractTraceIDAndSampleState() decodes it;
+ * ApplyLogSampleState() restores requestLogTrace + sampleDecision on the
+ * receiving side so the generated brpc CallMethod handler participates in
+ * LogSampler instead of being bypassed (the regression this guards against).
  */
 
 #include "datasystem/common/rpc/trace_attachment.h"
@@ -269,7 +268,7 @@ TEST_F(BrpcTraceAttachmentSamplingTest, EmptyAttachmentIsSafe)
 
 // Direct encode/decode parity for each enum value via the manual frame
 // builder, independent of the sampler's GetOrCreateLogSampleState() logic
-// (which is already covered by ZmqTraceSamplingMetaTest).
+// (which is covered separately by the sampler's own tests).
 TEST_F(BrpcTraceAttachmentSamplingTest, ManualFrameDecodesAllStates)
 {
     const std::string traceID = "rpc-trace-x";

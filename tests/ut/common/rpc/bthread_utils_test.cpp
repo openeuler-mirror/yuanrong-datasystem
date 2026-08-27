@@ -19,7 +19,7 @@
  *
  * YieldCurrent() works in all modes (no-op when bthread runtime is absent).
  * StartBackgroundTask() requires a running bthread worker pool (brpc mode);
- * those tests are skipped in default ZMQ test mode and should be run with:
+ * those tests are skipped in default UT mode and should be run with:
  *   bazel test //tests/ut/common/rpc:bthread_utils_test \
  *     --config=test --test_env=DATASYSTEM_USE_BRPC=1
  */
@@ -37,7 +37,7 @@ namespace datasystem {
 namespace {
 
 // ============================================================================
-// Test 1: YieldCurrent() always succeeds — no-op in ZMQ mode, yields in brpc mode
+// Test 1: YieldCurrent() always succeeds — no-op in default mode, yields in brpc mode
 // ============================================================================
 TEST(BthreadUtilsTest, YieldCurrentDoesNotCrash)
 {
