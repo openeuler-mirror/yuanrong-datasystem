@@ -30,7 +30,7 @@
   - `tests/ut/worker/object_cache/worker_oc_spill_eviction_test.cpp`
   - `tests/st/client/kv_cache/kv_cache_client_evict_test.cpp`
 - Last verified against source:
-  - `2026-06-03`
+  - `2026-08-20`
 
 ## Purpose
 
@@ -156,14 +156,15 @@ Use this section when implementing the formal primary end-life lane plan.
   - keep `SpillImpl` none-L2 no-space fallback synchronous.
 - Threading:
   - use the source-fixed `PRIMARY_END_LIFE_THREAD_NUM=4` `primaryEndLifeThreadPool_`;
-  - let the drain task send `DeleteAllCopyMeta` synchronously; do not add a separate RPC pool or a second RPC task;
-  - implement an internal queue/drain model for primary end-life tasks; do not submit one lambda per key that immediately sends a single-key RPC, because the formal plan requires same-master batch aggregation;
+  - start four persistent drains; each drain sends one owner batch synchronously, then returns to the ready/delayed scheduler;
+  - maintain a Worker-global owner lane keyed by `HostPort`; the same owner may have at most one RPC in flight, while different owners may use different drains concurrently;
+  - when one raw batch contains multiple free owners, let the current drain lease one deterministic owner and return the other groups to the ready queue for other drains;
   - do not reuse `masterTaskThreadPool_`;
   - do not add user-visible thread-count or pending-limit flags.
 - Pending:
   - maintain `objectKey -> version`, where version is `entry->GetCreateTime()`;
   - use pending size as the authoritative backpressure counter;
-  - use a source constant such as `PRIMARY_END_LIFE_PENDING_LIMIT = 64`;
+  - use the source constant `PRIMARY_END_LIFE_PENDING_LIMIT = 1024`;
   - remember that the pending limit bounds key count, not bytes; large queued primary objects are controlled by the low-watermark recheck and per-batch release budget before `DeleteAllCopyMeta`, not by a global pending-bytes budget in this plan;
   - clear pending only if the stored version matches the task version;
   - if the key is already pending, treat the existing lane task as owner: return OK, do not call
@@ -181,8 +182,12 @@ Use this section when implementing the formal primary end-life lane plan.
   - enqueue success means the task was pushed to the primary end-life queue and accepted by the lane, not "memory freed";
   - enqueue failure, pending full, or thread-pool submit exception returns an error so the main loop re-adds the key;
 - Lane behavior:
-  - drain a bounded snapshot from the primary end-life queue, optionally using a short internal flush window such as 10 ms to aggregate nearby submissions;
-  - group drained keys by `HostPort` / master using `GroupKeysByMetaOwner()` or equivalent; same-master keys must be sent together up to the internal batch limit, while different masters must be split into separate requests;
+  - drain a bounded snapshot from the ready queue using the 10 ms flush window, and promote delayed retries with the scheduler condition variable;
+  - group every dequeued or awakened task again with `MetadataRouteResolver::GroupOwners()`; same-master keys use one batch, while route failures clear pending and re-add to the eviction list so they cannot occupy the bounded pending queue indefinitely;
+  - preserve the batch topology version. Source retry budget is keyed by `(owner, topologyVersion)` and resets when either value changes or the source successfully redirects to another owner;
+  - park tasks in `owner.waitingTasks` when that owner already has an in-flight RPC; release uses allocation-free list splice to move them back to the unrouted ready queue so they observe the latest topology;
+  - consume active isolation through the latest placement snapshot: after a FAILURE topology moves the key from owner A
+    to recovery owner B, no new RPC may be sent to A. Do not equate `MemberState::FAILED` with metadata deletion;
   - classify grouping errors per key: `K_RPC_UNAVAILABLE` as master/connection unavailable and `K_NOT_FOUND` as route/meta-address unavailable; grouping failures do not send RPC and must not erase local objects;
   - before RPC, acquire object WLock with fixed short retry for `K_TRY_AGAIN`; use source constants such as
     `PRIMARY_END_LIFE_LOCK_RETRY_TIMES = 3` and `PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS = 1`;
@@ -210,18 +215,20 @@ Use this section when implementing the formal primary end-life lane plan.
     relevant failure/version result through `failed_object_keys`, `outdated_objs`, `objs_without_meta`, redirect info,
     `meta_is_moving`, and `last_rc`;
   - on success only, delete spill file if needed, clear spill state, and erase object table;
-  - retry the same batch immediately only when `DeleteAllCopyMeta` returns an RPC communication error, with at most
-    three Worker RPC calls and no cross-round or per-key failure counter;
-  - after the third RPC communication error, log an ERROR, reacquire the object WLock, revalidate version, and force
-    local deletion;
-  - route failures, Master per-key failures, `meta_is_moving`, and non-RPC batch errors remain conservative failures:
-    clear pending and re-add to `memEvictionList_` with `READD_COUNTER`;
+  - send only one source RPC per owner lease. A retryable transport error releases the owner lane and schedules the task
+    after 100 ms; do not synchronously send attempt two or three in the same drain call;
+  - after the third retryable communication error for the same `(owner, topologyVersion)`, log an ERROR, reacquire the
+    object WLock, revalidate version, and force local deletion;
+  - `meta_is_moving` stays pending and delayed. Route failures, Master per-key failures, and non-RPC batch errors remain
+    conservative failures that clear pending and re-add to `memEvictionList_` with `READD_COUNTER`; route-failure logging must be aggregated and rate limited;
+  - parse source redirect without forwarding in the source call stack. Release the source owner lane, then schedule a
+    single `redirect=false` target attempt through the same global owner lanes and with the source deadline remainder;
   - do not actively call `Evict()` after re-adding from the lane.
 - Timeout and shutdown:
-  - remote master uses a 1s budget for each `WorkerRemoteMasterOCApi::DeleteAllCopyMeta` call and performs at most
-    three calls for RPC communication errors;
+  - remote master uses a 1s budget for each source `WorkerRemoteMasterOCApi::DeleteAllCopyMeta` call; retries are separate
+    delayed rounds, and a redirect target consumes the source call's remaining logical budget;
   - local-bypass master uses request timeout and master-side `timeoutDuration`, but this is not a transport-level forced interrupt;
-  - construct `primaryEndLifeThreadPool_` with droppable shutdown if the implementation wants queued-but-not-started tasks to be discarded on worker exit;
+  - set the scheduler stopping flag and notify all four persistent drains before resetting `primaryEndLifeThreadPool_`;
   - reset `primaryEndLifeThreadPool_` in `WorkerOcEvictionManager` destruction before dependencies used by lane tasks can be released.
 - Observability:
   - use `PRIMARY_END_LIFE_DIAG` stages for eviction summary, dequeue, route grouping, candidate prepare, RPC attempt,
@@ -232,7 +239,7 @@ Use this section when implementing the formal primary end-life lane plan.
     primary end-life lane backlog;
   - use `VLOG(1)` for normal completion and `LOG(WARNING)` when stage latency or oldest queue wait reaches 100 ms,
     or when an RPC/per-key result is unsuccessful;
-  - include pending, queued, active drain, and pending limit in the pressure snapshot;
+  - include pending, ready, delayed, owner waiting, in-flight owner, active drain, and pending limit in the pressure snapshot;
   - record master, attempt number, single-attempt latency, and cumulative latency for `DeleteAllCopyMeta`;
   - take the queue snapshot under `primaryEndLifeMutex_`, but format and emit logs after releasing the mutex.
 - Locking:
@@ -243,14 +250,14 @@ Use this section when implementing the formal primary end-life lane plan.
 
 - Must preserve:
   - `NONE_L2_CACHE_EVICT` primary copy normally waits for Master end-life acceptance; the explicit availability
-    override permits forced local erase after three RPC communication failures in the same batch；
+    override permits forced local erase after three retryable RPC communication failures for the same route identity；
   - write-back objects are only treated as L2-existing after writeback done；
   - async spill revalidates version before freeing shm；
   - failed candidates return to an eviction list unless object no longer exists；
   - 如果修改 eviction end-life 的异步、重试或队列行为，需要使用 create-time/version 防止误删新 incarnation。
   - primary end-life lane 入队成功只表示任务已接管；实际内存释放必须等 lane 成功 erase。
-  - primary end-life lane 的路由或 Master 业务失败回补 eviction list 时使用 `READD_COUNTER`，且不主动调用
-    `Evict()`；仅同一 batch 连续三次 RPC 通信失败进入强制本地删除。
+  - primary end-life lane 的 Master 业务失败回补 eviction list 时使用 `READD_COUNTER`，且不主动调用
+    `Evict()`；路由失败清理 pending 并回补 eviction list，仅同一 `(owner, topologyVersion)` 三轮可重试通信失败进入强制本地删除。
 - Must not change without explicit review:
   - `isDone_` single-task gate；
   - memory eviction 线程数、单任务门闩或等价运行时并发配置；

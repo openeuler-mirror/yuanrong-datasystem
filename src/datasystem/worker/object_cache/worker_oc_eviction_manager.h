@@ -25,9 +25,11 @@
 #include <future>
 #include <functional>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <queue>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -115,8 +117,8 @@ public:
      * @param[in] objectTable The pointer to a ObjectTable.
      * @param[in] localAddress Address of the worker.
      * @param[in] masterAddress Address of the local master.
-     * @param[in] masterOc Pointer to the master object cache service.
      * @param[in] metadataRoute Metadata owner resolver that outlives this manager.
+     * @param[in] masterOc Pointer to the master object cache service.
      */
     WorkerOcEvictionManager(std::shared_ptr<ObjectTable> objectTable, HostPort localAddress, HostPort masterAddress,
                             const worker::MetadataRouteResolver &metadataRoute,
@@ -488,6 +490,47 @@ private:
         // Present when the task originated from an eviction selection. It carries Heat retry state across the async
         // primary-end-life lane without consulting strategy-global mutable bookkeeping.
         std::optional<EvictionCandidate> evictionCandidate{ std::nullopt };
+        HostPort lastAttemptOwner{ "", 0 };
+        uint64_t lastAttemptTopologyVersion{ 0 };
+        uint8_t retryableFailureCount{ 0 };
+        HostPort redirectTarget{ "", 0 };
+        uint64_t redirectTopologyVersion{ 0 };
+        uint64_t logicalAttemptDeadlineMs{ 0 };
+    };
+
+    struct DelayedPrimaryEndLifeTask {
+        uint64_t readyAtMs{ 0 };
+        uint64_t sequence{ 0 };
+        PrimaryEndLifeTask task;
+    };
+
+    struct DelayedPrimaryEndLifeTaskCompare {
+        bool operator()(const DelayedPrimaryEndLifeTask &lhs, const DelayedPrimaryEndLifeTask &rhs) const
+        {
+            return lhs.readyAtMs == rhs.readyAtMs ? lhs.sequence > rhs.sequence : lhs.readyAtMs > rhs.readyAtMs;
+        }
+    };
+
+    struct PrimaryEndLifeOwnerLane {
+        bool inFlight{ false };
+        std::list<PrimaryEndLifeTask> waitingTasks;
+    };
+
+    struct PrimaryEndLifeOwnerBatch {
+        HostPort owner;
+        uint64_t topologyVersion{ 0 };
+        bool redirectAttempt{ false };
+        std::vector<PrimaryEndLifeTask> tasks;
+        PrimaryEndLifeOwnerLane *ownerLane{ nullptr };
+    };
+
+    using PrimaryEndLifeTaskMap = std::unordered_map<std::string, PrimaryEndLifeTask>;
+    using PrimaryEndLifeOwnerBatchMap = std::map<std::pair<HostPort, bool>, PrimaryEndLifeOwnerBatch>;
+    using PrimaryEndLifeBatchLane = std::pair<PrimaryEndLifeOwnerBatch *, PrimaryEndLifeOwnerLane *>;
+
+    struct StagedPrimaryEndLifeTasks {
+        PrimaryEndLifeOwnerLane *lane;
+        std::list<PrimaryEndLifeTask> tasks;
     };
 
     struct PrimaryEndLifeCandidate {
@@ -708,6 +751,8 @@ private:
     Status SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType, uint64_t needSize, bool &accepted,
                                     const EvictionCandidate *candidate);
 
+    Status StartPrimaryEndLifeWorkers();
+
     /**
      * @brief Reserve a primary end-life task in the pending set before enqueueing it.
      * @param[in,out] task The primary end-life task to reserve.
@@ -743,45 +788,110 @@ private:
     void ReaddPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks);
 
     /**
-     * @brief Drain queued primary end-life tasks until the queue is empty.
+     * @brief Persistently drain primary end-life tasks until manager shutdown.
      */
     void DrainPrimaryEndLifeTasks();
 
     /**
-     * @brief Called when a drain worker finds the queue empty: decrements the active
-     *        worker count and restarts a worker if the queue became non-empty meanwhile.
-     */
-    void OnDrainWorkerIdle();
-
-    /**
-     * @brief Pop all currently queued primary end-life tasks as a drain batch.
+     * @brief Wait for ready work or the earliest delayed retry and pop one bounded raw batch.
      * @return A batch of queued primary end-life tasks.
      */
-    std::vector<PrimaryEndLifeTask> PopPrimaryEndLifeTasks();
+    std::vector<PrimaryEndLifeTask> WaitAndPopPrimaryEndLifeTasks();
+
+    void PromoteReadyPrimaryEndLifeTasks(uint64_t nowMs);
+
+    void ScheduleDelayedPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks);
+
+    void EnqueueReadyPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks);
+
+    void ReleasePrimaryEndLifeOwner(PrimaryEndLifeOwnerLane *ownerLane) noexcept;
 
     /**
-     * @brief Group primary end-life tasks by current master and process each master batch.
+     * @brief Route tasks, park busy owners, and process at most one owner batch.
      * @param[in] tasks The tasks popped from the primary end-life queue.
      */
     void ProcessPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks);
+
+    void IndexPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks, std::vector<std::string> &objectKeys,
+                                  PrimaryEndLifeTaskMap &taskByKey);
+
+    void ReaddPrimaryEndLifeRouteFailures(const worker::MetaOwnerRouteGroups &grouped,
+                                          const PrimaryEndLifeTaskMap &taskByKey);
+
+    PrimaryEndLifeOwnerBatchMap BuildPrimaryEndLifeOwnerBatches(const worker::MetaOwnerRouteGroups &grouped,
+                                                                 const PrimaryEndLifeTaskMap &taskByKey);
+
+    PrimaryEndLifeBatchLane StagePrimaryEndLifeOwnerBatchesLocked(
+        PrimaryEndLifeOwnerBatchMap &batches, std::vector<PrimaryEndLifeBatchLane> &batchLanes,
+        std::vector<PrimaryEndLifeOwnerLane *> &insertedLanes,
+        std::vector<StagedPrimaryEndLifeTasks> &stagedTasks);
+
+    void CommitPrimaryEndLifeOwnerBatchLocked(const PrimaryEndLifeBatchLane &selectedBatchLane,
+                                              std::vector<StagedPrimaryEndLifeTasks> &stagedTasks,
+                                              std::optional<PrimaryEndLifeOwnerBatch> &selected);
+
+    void RollbackPrimaryEndLifeOwnerLanesLocked(const std::vector<PrimaryEndLifeOwnerLane *> &insertedLanes);
+
+    std::optional<PrimaryEndLifeOwnerBatch> AcquirePrimaryOwnerBatch(PrimaryEndLifeOwnerBatchMap &batches);
 
     /**
      * @brief Process one master batch by deleting remote metadata before local object erase.
      * @param[in] masterAddr The owner master address for this batch.
      * @param[in] tasks The primary end-life tasks routed to the same master.
      */
-    void ProcessPrimaryEndLifeMasterBatch(const HostPort &masterAddr, std::vector<PrimaryEndLifeTask> tasks);
+    void ProcessPrimaryEndLifeMasterBatch(const PrimaryEndLifeOwnerBatch &batch);
+
+    bool PreparePrimaryEndLifeMasterBatch(const PrimaryEndLifeOwnerBatch &batch,
+                                          std::vector<PrimaryEndLifeCandidate> &candidates,
+                                          std::vector<PrimaryEndLifeCandidate> &needDeleteMetaCandidates);
+
+    int64_t GetPrimaryEndLifeRpcTimeout(const PrimaryEndLifeOwnerBatch &batch,
+                                        const std::vector<PrimaryEndLifeCandidate> &candidates);
+
+    Status DeletePrimaryEndLifeMetadataForBatch(const PrimaryEndLifeOwnerBatch &batch,
+                                                const std::vector<PrimaryEndLifeCandidate> &candidates,
+                                                std::unordered_set<std::string> &failedKeys,
+                                                std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups);
+
+    void HandlePrimaryEndLifeBatchFailure(const PrimaryEndLifeOwnerBatch &batch,
+                                          std::vector<PrimaryEndLifeCandidate> &candidates, const Status &rc);
+
+    void FinishPrimaryEndLifeMasterBatch(std::vector<PrimaryEndLifeCandidate> &candidates, Status &rc,
+                                         std::unordered_set<std::string> &failedKeys,
+                                         const std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups);
 
     /**
-     * @brief Delete primary end-life metadata with bounded RPC retries.
+     * @brief Send one primary end-life metadata deletion attempt.
      * @param[in] masterAddr The metadata owner.
      * @param[in] needDeleteMetaCandidates Candidates that still need metadata deletion.
+     * @param[in] allowRedirect Whether this source attempt may return a redirect.
+     * @param[in] topologyVersion Placement version used for this attempt.
+     * @param[in] timeoutMs Remaining logical attempt timeout.
      * @param[out] failedKeys Keys rejected by the Master.
-     * @return K_OK after Master acceptance or three RPC failures; a non-RPC error otherwise.
+     * @param[out] redirectGroups Redirected candidates grouped by target owner.
+     * @return Master acceptance or the single RPC attempt status.
      */
     Status DeletePrimaryEndLifeMetadata(const HostPort &masterAddr,
                                         const std::vector<PrimaryEndLifeCandidate> &needDeleteMetaCandidates,
-                                        std::unordered_set<std::string> &failedKeys);
+                                        bool allowRedirect, uint64_t topologyVersion, int64_t timeoutMs,
+                                        std::unordered_set<std::string> &failedKeys,
+                                        std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups);
+
+    void HandlePrimaryEndLifeRpcFailure(const PrimaryEndLifeOwnerBatch &batch,
+                                        std::vector<PrimaryEndLifeCandidate> &candidates, const Status &rc);
+
+    void ClassifyPrimaryEndLifeRpcFailure(const PrimaryEndLifeOwnerBatch &batch, PrimaryEndLifeCandidate &candidate,
+                                          const Status &rc, std::vector<PrimaryEndLifeTask> &delayedTasks,
+                                          std::vector<PrimaryEndLifeTask> &readdTasks,
+                                          std::vector<PrimaryEndLifeCandidate> &forceDeleteCandidates);
+
+    static void ResetPrimaryEndLifeRetryState(PrimaryEndLifeTask &task);
+
+    void ForceDeletePrimaryEndLifeCandidates(const PrimaryEndLifeOwnerBatch &batch,
+                                              std::vector<PrimaryEndLifeCandidate> &candidates, const Status &rc);
+
+    void SchedulePrimaryEndLifeRedirects(const std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups,
+                                         std::unordered_set<std::string> &redirectKeys);
 
     /**
      * @brief Get a snapshot of primary end-life queue and drain pressure.
@@ -810,8 +920,9 @@ private:
      * @param[in] failedKeys The number of keys rejected by the Master.
      * @param[in] rc The RPC or response status.
      */
-    void LogPrimaryEndLifeRpcAttempt(const HostPort &masterAddr, uint32_t attempt, double attemptElapsedMs,
-                                     double totalElapsedMs, size_t batchKeys, size_t failedKeys, const Status &rc);
+    void LogPrimaryEndLifeRpcAttempt(const HostPort &masterAddr, uint64_t topologyVersion, bool redirectAttempt,
+                                     bool deferred, uint32_t attempt, double attemptElapsedMs, double totalElapsedMs,
+                                     size_t batchKeys, size_t failedKeys, const Status &rc);
 
     /**
      * @brief Revalidate tasks, acquire object write locks, and select candidates within the release budget.
@@ -857,7 +968,9 @@ private:
      */
     Status DeleteAllCopyMetaForPrimaryEndLife(const HostPort &masterAddr,
                                               const std::vector<PrimaryEndLifeCandidate> &candidates,
-                                              std::unordered_set<std::string> &failedKeys);
+                                              bool allowRedirect, int64_t timeoutMs,
+                                              std::unordered_set<std::string> &failedKeys,
+                                              std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups);
 
     /**
      * @brief Send one DeleteAllCopyMeta request to a metadata owner.
@@ -931,10 +1044,6 @@ private:
      * @param[in] redirectGroups Redirected candidates grouped by target owner.
      * @param[out] failedKeys Keys rejected by, or not safely classified at, the target owner.
      */
-    void ForwardPrimaryEndLifeRedirectGroups(const HostPort &sourceMaster,
-                                             const std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups,
-                                             std::unordered_set<std::string> &failedKeys);
-
     /**
      * @brief Collect primary end-life failures while treating no-meta and outdated versions as completed.
      * @param[in] rsp The DeleteAllCopyMeta response.
@@ -1165,10 +1274,14 @@ private:
     std::atomic<uint64_t> primaryEndLifePendingFullCount_{ 0 };
     // Tracks metadata-deleted objects whose local cleanup failed and must be retried locally.
     std::unordered_map<std::string, uint64_t> metaDeletedPrimaryEndLifeObjects_;
-    std::deque<PrimaryEndLifeTask> primaryEndLifeQueue_;
-    // Count of drain workers currently running (guarded by primaryEndLifeMutex_).
-    // Replaces the single-task primaryEndLifeDrainRunning_ flag so up to
-    // PRIMARY_END_LIFE_THREAD_NUM workers can drain the end-life queue concurrently.
+    std::list<PrimaryEndLifeTask> primaryEndLifeReadyQueue_;
+    std::priority_queue<DelayedPrimaryEndLifeTask, std::vector<DelayedPrimaryEndLifeTask>,
+                        DelayedPrimaryEndLifeTaskCompare>
+        delayedPrimaryEndLifeQueue_;
+    std::unordered_map<HostPort, PrimaryEndLifeOwnerLane> primaryEndLifeOwnerLanes_;
+    std::condition_variable primaryEndLifeCv_;
+    bool primaryEndLifeStopping_{ true };
+    uint64_t primaryEndLifeDeferredSequence_{ 0 };
     int activeDrainWorkers_{ 0 };
     // Keep the publisher alive until eviction background tasks have drained in this manager's destructor.
     std::shared_ptr<KvEventPublisher> kvEventPublisher_{ nullptr };

@@ -101,6 +101,7 @@ static constexpr size_t PRIMARY_END_LIFE_BATCH_LIMIT = 64;
 static constexpr int PRIMARY_END_LIFE_BATCH_MAX_DELAY_MS = 10;
 static constexpr int64_t PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS = 1000;
 static constexpr int64_t PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS = 100;
+static constexpr uint64_t PRIMARY_END_LIFE_RETRY_DELAY_MS = 100;
 static constexpr uint32_t PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES = 3;
 static constexpr uint32_t PRIMARY_END_LIFE_LOCK_RETRY_TIMES = 3;
 static constexpr int PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS = 1;
@@ -260,6 +261,11 @@ WorkerOcEvictionManager::~WorkerOcEvictionManager()
     scheduleEvictionRunning_.store(false, std::memory_order_release);
     scheduleEvictThreadPool_.reset();
     memEvictTaskThreadPool_.reset();
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        primaryEndLifeStopping_ = true;
+    }
+    primaryEndLifeCv_.notify_all();
     primaryEndLifeThreadPool_.reset();
     spillEvictTaskThreadPool_.reset();
     spillTaskThreadPool_.reset();
@@ -360,8 +366,7 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
 {
     RETURN_IF_EXCEPTION_OCCURS(memEvictTaskThreadPool_ =
                                    std::make_unique<ThreadPool>(MEM_EVICT_THREAD_NUM, 0, "MemEvictionThread"));
-    RETURN_IF_EXCEPTION_OCCURS(primaryEndLifeThreadPool_ = std::make_unique<ThreadPool>(PRIMARY_END_LIFE_THREAD_NUM, 0,
-                                                                                        "PrimaryEndLifeThread"));
+    RETURN_IF_NOT_OK(StartPrimaryEndLifeWorkers());
     RETURN_IF_EXCEPTION_OCCURS(spillEvictTaskThreadPool_ =
                                    std::make_unique<ThreadPool>(SPILL_EVICT_THREAD_NUM, 0, "SpillEvictionThread"));
     RETURN_IF_EXCEPTION_OCCURS(masterTaskThreadPool_ =
@@ -436,6 +441,31 @@ void WorkerOcEvictionManager::HoldStableRouteReaderForTest(const std::function<v
     }
 }
 #endif
+
+Status WorkerOcEvictionManager::StartPrimaryEndLifeWorkers()
+{
+    RETURN_IF_EXCEPTION_OCCURS(primaryEndLifeThreadPool_ = std::make_unique<ThreadPool>(PRIMARY_END_LIFE_THREAD_NUM, 0,
+                                                                                        "PrimaryEndLifeThread"));
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        primaryEndLifeStopping_ = false;
+        activeDrainWorkers_ = 0;
+    }
+    try {
+        for (uint32_t i = 0; i < PRIMARY_END_LIFE_THREAD_NUM; ++i) {
+            primaryEndLifeThreadPool_->Execute([this]() { DrainPrimaryEndLifeTasks(); });
+        }
+    } catch (const std::exception &e) {
+        {
+            std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+            primaryEndLifeStopping_ = true;
+        }
+        primaryEndLifeCv_.notify_all();
+        primaryEndLifeThreadPool_.reset();
+        RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Start primary end-life workers failed: %s", e.what()));
+    }
+    return Status::OK();
+}
 
 bool WorkerOcEvictionManager::TryMarkRebalancingObject(const std::string &objectKey)
 {
@@ -1412,7 +1442,7 @@ Status WorkerOcEvictionManager::ReservePrimaryEndLifeTask(PrimaryEndLifeTask &ta
         pendingPrimaryEndLifeObjects_.erase(iter);
         primaryEndLifePendingFullCount_.fetch_add(1, std::memory_order_relaxed);
         pendingSize = pendingPrimaryEndLifeObjects_.size();
-        queueSize = primaryEndLifeQueue_.size();
+        queueSize = primaryEndLifeReadyQueue_.size();
         activeWorkers = activeDrainWorkers_;
         lock.unlock();
         LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL2)
@@ -1430,43 +1460,16 @@ Status WorkerOcEvictionManager::ReservePrimaryEndLifeTask(PrimaryEndLifeTask &ta
 
 Status WorkerOcEvictionManager::EnqueuePrimaryEndLifeTask(const PrimaryEndLifeTask &task)
 {
-    bool needStartWorker = false;
     {
-        std::unique_lock<std::mutex> lock(primaryEndLifeMutex_);
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        CHECK_FAIL_RETURN_STATUS(!primaryEndLifeStopping_, K_NOT_READY, "Primary end-life workers are stopping.");
         try {
-            primaryEndLifeQueue_.emplace_back(task);
+            primaryEndLifeReadyQueue_.emplace_back(task);
         } catch (const std::exception &e) {
             RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Enqueue primary end-life task failed: %s", e.what()));
         }
-        // Spawn a new drain worker if the active count is below the thread limit. Existing
-        // workers loop on PopPrimaryEndLifeTasks and will consume the queue, but spawning up
-        // to PRIMARY_END_LIFE_THREAD_NUM workers lets end-life batches run in parallel.
-        if (activeDrainWorkers_ < static_cast<int>(PRIMARY_END_LIFE_THREAD_NUM)) {
-            activeDrainWorkers_++;
-            needStartWorker = true;
-        }
     }
-    if (needStartWorker) {
-        try {
-            auto drainTraceID = Trace::Instance().GetTraceID();
-            primaryEndLifeThreadPool_->Execute([this, drainTraceID]() {
-                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(drainTraceID);
-                DrainPrimaryEndLifeTasks();
-            });
-        } catch (const std::exception &e) {
-            {
-                std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
-                activeDrainWorkers_--;
-                // The task stays in primaryEndLifeQueue_ and will be drained by the next
-                // worker (queue is non-empty, so the next Enqueue or the restart-guard in
-                // DrainPrimaryEndLifeTasks spawns one). Do NOT pop_back: between emplace_back
-                // (earlier lock) and here the lock was released, so another thread may have
-                // appended its own task at the back - pop_back would discard that task.
-            }
-            primaryEndLifeDrainedCv_.notify_all();
-            RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Submit primary end-life task failed: %s", e.what()));
-        }
-    }
+    primaryEndLifeCv_.notify_one();
     return Status::OK();
 }
 
@@ -1540,15 +1543,25 @@ std::string WorkerOcEvictionManager::GetPrimaryEndLifePressure()
 {
     size_t pendingSize;
     size_t queueSize;
+    size_t delayedSize;
+    size_t ownerWaitingSize = 0;
+    size_t inFlightOwners = 0;
     int activeDrainWorkers;
     {
         std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
         pendingSize = pendingPrimaryEndLifeObjects_.size();
-        queueSize = primaryEndLifeQueue_.size();
+        queueSize = primaryEndLifeReadyQueue_.size();
+        delayedSize = delayedPrimaryEndLifeQueue_.size();
+        for (const auto &item : primaryEndLifeOwnerLanes_) {
+            ownerWaitingSize += item.second.waitingTasks.size();
+            inFlightOwners += item.second.inFlight ? 1 : 0;
+        }
         activeDrainWorkers = activeDrainWorkers_;
     }
-    return FormatString("pending=%zu,queued=%zu,active_drains=%d,pending_limit=%zu", pendingSize, queueSize,
-                        activeDrainWorkers, PRIMARY_END_LIFE_PENDING_LIMIT);
+    return FormatString(
+        "pending=%zu,ready=%zu,delayed=%zu,owner_waiting=%zu,inflight_owners=%zu,active_drains=%d,pending_limit=%zu",
+        pendingSize, queueSize, delayedSize, ownerWaitingSize, inFlightOwners, activeDrainWorkers,
+        PRIMARY_END_LIFE_PENDING_LIMIT);
 }
 
 void WorkerOcEvictionManager::LogPrimaryEndLifeStage(const char *stage, double elapsedMs, size_t batchKeys,
@@ -1566,12 +1579,15 @@ void WorkerOcEvictionManager::LogPrimaryEndLifeStage(const char *stage, double e
                           << ", pressure=" << GetPrimaryEndLifePressure();
 }
 
-void WorkerOcEvictionManager::LogPrimaryEndLifeRpcAttempt(const HostPort &masterAddr, uint32_t attempt,
-                                                          double attemptElapsedMs, double totalElapsedMs,
-                                                          size_t batchKeys, size_t failedKeys, const Status &rc)
+void WorkerOcEvictionManager::LogPrimaryEndLifeRpcAttempt(
+    const HostPort &masterAddr, uint64_t topologyVersion, bool redirectAttempt, bool deferred, uint32_t attempt,
+    double attemptElapsedMs, double totalElapsedMs, size_t batchKeys, size_t failedKeys, const Status &rc)
 {
     if (rc.IsError() || failedKeys > 0 || attemptElapsedMs >= PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS) {
         LOG(WARNING) << "PRIMARY_END_LIFE_DIAG stage=rpc_attempt, event=complete, master=" << masterAddr.ToString()
+                     << ", topology_version=" << topologyVersion
+                     << ", attempt_kind=" << (redirectAttempt ? "redirect" : "source")
+                     << ", deferred=" << (deferred ? "true" : "false")
                      << ", attempt=" << attempt << "/" << PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES
                      << ", elapsed_ms=" << attemptElapsedMs << ", total_elapsed_ms=" << totalElapsedMs
                      << ", batch_keys=" << batchKeys << ", failed_keys=" << failedKeys
@@ -1579,7 +1595,9 @@ void WorkerOcEvictionManager::LogPrimaryEndLifeRpcAttempt(const HostPort &master
         return;
     }
     VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=rpc_attempt, event=complete, master="
-                          << masterAddr.ToString() << ", attempt=" << attempt << "/"
+                          << masterAddr.ToString() << ", topology_version=" << topologyVersion
+                          << ", attempt_kind=" << (redirectAttempt ? "redirect" : "source")
+                          << ", deferred=" << (deferred ? "true" : "false") << ", attempt=" << attempt << "/"
                           << PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES << ", elapsed_ms=" << attemptElapsedMs
                           << ", total_elapsed_ms=" << totalElapsedMs << ", batch_keys=" << batchKeys
                           << ", failed_keys=" << failedKeys << ", status=" << rc.ToString()
@@ -1588,11 +1606,10 @@ void WorkerOcEvictionManager::LogPrimaryEndLifeRpcAttempt(const HostPort &master
 
 void WorkerOcEvictionManager::DrainPrimaryEndLifeTasks()
 {
-    std::this_thread::sleep_for(std::chrono::milliseconds(PRIMARY_END_LIFE_BATCH_MAX_DELAY_MS));
+    auto traceGuard = Trace::Instance().SetTraceUUID();
     while (true) {
-        auto tasks = PopPrimaryEndLifeTasks();
+        auto tasks = WaitAndPopPrimaryEndLifeTasks();
         if (tasks.empty()) {
-            OnDrainWorkerIdle();
             return;
         }
         auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
@@ -1603,190 +1620,553 @@ void WorkerOcEvictionManager::DrainPrimaryEndLifeTasks()
         try {
             ProcessPrimaryEndLifeTasks(tasks);
         } catch (const std::exception &e) {
-            // ProcessPrimaryEndLifeTasks takes a const&, so tasks is still intact.
-            // Re-add the batch so pendingPrimaryEndLifeObjects_ entries that were not
-            // yet processed by FinishPrimaryEndLifeTask are cleared and the objects
-            // are returned to the eviction list for later retry.
             LOG(ERROR) << FormatString("ProcessPrimaryEndLifeTasks exception: %s", e.what());
             ReaddPrimaryEndLifeTasks(tasks);
         }
         LogPrimaryEndLifeStage("drain_batch", batchTimer.ElapsedMilliSecond(), tasks.size());
+        {
+            std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+            --activeDrainWorkers_;
+        }
+        primaryEndLifeDrainedCv_.notify_all();
     }
 }
 
-void WorkerOcEvictionManager::OnDrainWorkerIdle()
+void WorkerOcEvictionManager::PromoteReadyPrimaryEndLifeTasks(uint64_t nowMs)
 {
-    // Decrement the active count, then guard against the race where a new task was
-    // enqueued between Pop and the count decrement: if the queue is non-empty but no
-    // worker remains, restart one. Extracted from DrainPrimaryEndLifeTasks to keep
-    // nesting depth within G.FUN.01-CPP limits.
-    bool needRestart = false;
+    while (!delayedPrimaryEndLifeQueue_.empty() && delayedPrimaryEndLifeQueue_.top().readyAtMs <= nowMs) {
+        auto delayed = delayedPrimaryEndLifeQueue_.top();
+        delayedPrimaryEndLifeQueue_.pop();
+        primaryEndLifeReadyQueue_.emplace_back(std::move(delayed.task));
+    }
+}
+
+std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> WorkerOcEvictionManager::WaitAndPopPrimaryEndLifeTasks()
+{
+    std::unique_lock<std::mutex> lock(primaryEndLifeMutex_);
+    while (!primaryEndLifeStopping_) {
+        auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+        PromoteReadyPrimaryEndLifeTasks(nowMs);
+        if (!primaryEndLifeReadyQueue_.empty()) {
+            auto oldestQueuedAt = primaryEndLifeReadyQueue_.front().queuedAtMs;
+            auto batchReadyAt = oldestQueuedAt + PRIMARY_END_LIFE_BATCH_MAX_DELAY_MS;
+            if (primaryEndLifeReadyQueue_.size() < PRIMARY_END_LIFE_BATCH_LIMIT && nowMs < batchReadyAt) {
+                primaryEndLifeCv_.wait_until(
+                    lock, std::chrono::steady_clock::time_point(std::chrono::milliseconds(batchReadyAt)));
+                continue;
+            }
+            auto batchSize = std::min(primaryEndLifeReadyQueue_.size(), PRIMARY_END_LIFE_BATCH_LIMIT);
+            std::vector<PrimaryEndLifeTask> tasks;
+            tasks.reserve(batchSize);
+            for (size_t i = 0; i < batchSize; ++i) {
+                tasks.emplace_back(std::move(primaryEndLifeReadyQueue_.front()));
+                primaryEndLifeReadyQueue_.pop_front();
+            }
+            ++activeDrainWorkers_;
+            return tasks;
+        }
+        if (delayedPrimaryEndLifeQueue_.empty()) {
+            primaryEndLifeCv_.wait(lock);
+        } else {
+            auto readyAt = delayedPrimaryEndLifeQueue_.top().readyAtMs;
+            primaryEndLifeCv_.wait_until(lock,
+                                         std::chrono::steady_clock::time_point(std::chrono::milliseconds(readyAt)));
+        }
+    }
+    return {};
+}
+
+void WorkerOcEvictionManager::ScheduleDelayedPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks)
+{
+    if (tasks.empty()) {
+        return;
+    }
+    auto readyAt = static_cast<uint64_t>(GetSteadyClockTimeStampMs()) + PRIMARY_END_LIFE_RETRY_DELAY_MS;
     {
         std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
-        activeDrainWorkers_--;
-        if (!primaryEndLifeQueue_.empty() && activeDrainWorkers_ == 0) {
-            activeDrainWorkers_++;
-            needRestart = true;
+        if (primaryEndLifeStopping_) {
+            return;
+        }
+        for (auto &task : tasks) {
+            delayedPrimaryEndLifeQueue_.push(
+                DelayedPrimaryEndLifeTask{ readyAt, primaryEndLifeDeferredSequence_++, std::move(task) });
         }
     }
-    primaryEndLifeDrainedCv_.notify_all();
-    if (needRestart) {
-        try {
-            auto drainTraceID = Trace::Instance().GetTraceID();
-            primaryEndLifeThreadPool_->Execute([this, drainTraceID]() {
-                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(drainTraceID);
-                DrainPrimaryEndLifeTasks();
-            });
-        } catch (const std::exception &e) {
-            LOG(ERROR) << FormatString("Restart drain worker failed: %s", e.what());
-            {
-                std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
-                activeDrainWorkers_--;
-            }
-            primaryEndLifeDrainedCv_.notify_all();
-        }
-    }
+    primaryEndLifeCv_.notify_all();
 }
 
-std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> WorkerOcEvictionManager::PopPrimaryEndLifeTasks()
+void WorkerOcEvictionManager::EnqueueReadyPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks)
 {
-    std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
-    if (primaryEndLifeQueue_.empty()) {
-        return {};
+    if (tasks.empty()) {
+        return;
     }
-    auto batchSize = std::min(primaryEndLifeQueue_.size(), PRIMARY_END_LIFE_BATCH_LIMIT);
-    std::vector<PrimaryEndLifeTask> tasks;
-    tasks.reserve(batchSize);
-    for (size_t i = 0; i < batchSize; ++i) {
-        tasks.emplace_back(std::move(primaryEndLifeQueue_.front()));
-        primaryEndLifeQueue_.pop_front();
+    std::list<PrimaryEndLifeTask> stagedTasks;
+    for (auto &task : tasks) {
+        stagedTasks.emplace_back(std::move(task));
     }
-    return tasks;
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        if (primaryEndLifeStopping_) {
+            return;
+        }
+        primaryEndLifeReadyQueue_.splice(primaryEndLifeReadyQueue_.end(), stagedTasks);
+    }
+    primaryEndLifeCv_.notify_all();
+}
+
+void WorkerOcEvictionManager::ReleasePrimaryEndLifeOwner(PrimaryEndLifeOwnerLane *ownerLane) noexcept
+{
+    if (ownerLane == nullptr) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        ownerLane->inFlight = false;
+        primaryEndLifeReadyQueue_.splice(primaryEndLifeReadyQueue_.end(), ownerLane->waitingTasks);
+        for (auto iter = primaryEndLifeOwnerLanes_.begin(); iter != primaryEndLifeOwnerLanes_.end(); ++iter) {
+            if (&iter->second == ownerLane) {
+                primaryEndLifeOwnerLanes_.erase(iter);
+                break;
+            }
+        }
+    }
+    primaryEndLifeCv_.notify_all();
 }
 
 void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks)
 {
-    auto traceGuard = Trace::Instance().SetTraceUUID();
     std::vector<std::string> objectKeys;
-    std::unordered_map<std::string, PrimaryEndLifeTask> taskByKey;
+    PrimaryEndLifeTaskMap taskByKey;
+    IndexPrimaryEndLifeTasks(tasks, objectKeys, taskByKey);
+    LogPrimaryEndLifeStage("route_group", 0, tasks.size(), 0, "start");
+    Timer routeTimer;
+    auto grouped = metadataRoute_.GroupOwners(objectKeys);
+    LogPrimaryEndLifeStage("route_group", routeTimer.ElapsedMilliSecond(), tasks.size());
+    ReaddPrimaryEndLifeRouteFailures(grouped, taskByKey);
+    auto batches = BuildPrimaryEndLifeOwnerBatches(grouped, taskByKey);
+    auto selected = AcquirePrimaryOwnerBatch(batches);
+    if (selected.has_value()) {
+        ProcessPrimaryEndLifeMasterBatch(*selected);
+    }
+}
+
+void WorkerOcEvictionManager::IndexPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks,
+                                                       std::vector<std::string> &objectKeys,
+                                                       PrimaryEndLifeTaskMap &taskByKey)
+{
     objectKeys.reserve(tasks.size());
     taskByKey.reserve(tasks.size());
     for (const auto &task : tasks) {
         objectKeys.emplace_back(task.objectKey);
         taskByKey.emplace(task.objectKey, task);
     }
-    LogPrimaryEndLifeStage("route_group", 0, tasks.size(), 0, "start");
-    Timer routeTimer;
-    auto grouped = metadataRoute_.GroupOwners(objectKeys);
-    LogPrimaryEndLifeStage("route_group", routeTimer.ElapsedMilliSecond(), tasks.size());
-    std::unordered_set<std::string> routeFailedKeys;
-    for (const auto &item : grouped.failures) {
-        LOG(WARNING) << FormatString("[ObjectKey %s] Skip primary end-life, master unavailable: %s.", item.first,
-                                     item.second.ToString());
-        routeFailedKeys.emplace(item.first);
-    }
-    std::vector<PrimaryEndLifeTask> failedTasks;
-    failedTasks.reserve(routeFailedKeys.size());
-    for (const auto &key : routeFailedKeys) {
-        auto iter = taskByKey.find(key);
-        if (iter != taskByKey.end()) {
-            failedTasks.emplace_back(iter->second);
-        }
-    }
-    ReaddPrimaryEndLifeTasks(failedTasks);
+}
 
+void WorkerOcEvictionManager::ReaddPrimaryEndLifeRouteFailures(const worker::MetaOwnerRouteGroups &grouped,
+                                                               const PrimaryEndLifeTaskMap &taskByKey)
+{
+    std::vector<PrimaryEndLifeTask> routeFailedTasks;
+    for (const auto &item : grouped.failures) {
+        auto iter = taskByKey.find(item.first);
+        if (iter != taskByKey.end()) {
+            routeFailedTasks.emplace_back(iter->second);
+        }
+    }
+    if (!grouped.failures.empty()) {
+        const auto &firstFailure = *grouped.failures.begin();
+        LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL2)
+            << "Skip and re-add primary end-life tasks because metadata routing is unavailable, failed_keys="
+            << grouped.failures.size() << ", first_object_key=" << firstFailure.first
+            << ", first_status=" << firstFailure.second.ToString();
+    }
+    ReaddPrimaryEndLifeTasks(routeFailedTasks);
+}
+
+WorkerOcEvictionManager::PrimaryEndLifeOwnerBatchMap WorkerOcEvictionManager::BuildPrimaryEndLifeOwnerBatches(
+    const worker::MetaOwnerRouteGroups &grouped, const PrimaryEndLifeTaskMap &taskByKey)
+{
+    PrimaryEndLifeOwnerBatchMap batches;
     for (const auto &item : grouped.groups) {
-        HostPort masterAddr = item.first;
-        std::vector<PrimaryEndLifeTask> masterTasks;
-        masterTasks.reserve(item.second.size());
         for (const auto &objectKey : item.second) {
-            if (routeFailedKeys.count(objectKey) == 0 && taskByKey.count(objectKey) > 0) {
-                masterTasks.emplace_back(taskByKey.at(objectKey));
+            auto taskIter = taskByKey.find(objectKey);
+            if (taskIter == taskByKey.end()) {
+                continue;
             }
+            auto task = taskIter->second;
+            bool redirectAttempt = !task.redirectTarget.Empty();
+            bool useRedirectHint = redirectAttempt && item.first != task.redirectTarget
+                                   && (task.redirectTopologyVersion == 0
+                                       || grouped.topologyVersion < task.redirectTopologyVersion);
+            HostPort owner = useRedirectHint ? task.redirectTarget : item.first;
+            if (!redirectAttempt) {
+                task.redirectTarget = HostPort();
+                task.redirectTopologyVersion = 0;
+                task.logicalAttemptDeadlineMs = 0;
+            }
+            auto &batch = batches[{ owner, redirectAttempt }];
+            batch.owner = owner;
+            batch.topologyVersion = useRedirectHint ? task.redirectTopologyVersion : grouped.topologyVersion;
+            batch.redirectAttempt = redirectAttempt;
+            batch.tasks.emplace_back(std::move(task));
         }
-        if (masterTasks.empty()) {
+    }
+    return batches;
+}
+
+std::optional<WorkerOcEvictionManager::PrimaryEndLifeOwnerBatch> WorkerOcEvictionManager::AcquirePrimaryOwnerBatch(
+    PrimaryEndLifeOwnerBatchMap &batches)
+{
+    std::optional<PrimaryEndLifeOwnerBatch> selected;
+    std::vector<PrimaryEndLifeBatchLane> batchLanes;
+    std::vector<PrimaryEndLifeOwnerLane *> insertedLanes;
+    std::vector<StagedPrimaryEndLifeTasks> stagedTasks;
+    batchLanes.reserve(batches.size());
+    insertedLanes.reserve(batches.size());
+    stagedTasks.reserve(batches.size());
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        primaryEndLifeOwnerLanes_.reserve(primaryEndLifeOwnerLanes_.size() + batches.size());
+        try {
+            auto selectedBatchLane =
+                StagePrimaryEndLifeOwnerBatchesLocked(batches, batchLanes, insertedLanes, stagedTasks);
+            INJECT_POINT_NO_RETURN("WorkerOcEvictionManager.AcquirePrimaryOwnerBatch.beforeCommit",
+                                   []() { throw std::bad_alloc(); });
+            CommitPrimaryEndLifeOwnerBatchLocked(selectedBatchLane, stagedTasks, selected);
+        } catch (...) {
+            RollbackPrimaryEndLifeOwnerLanesLocked(insertedLanes);
+            throw;
+        }
+    }
+    primaryEndLifeCv_.notify_all();
+    return selected;
+}
+
+WorkerOcEvictionManager::PrimaryEndLifeBatchLane WorkerOcEvictionManager::StagePrimaryEndLifeOwnerBatchesLocked(
+    PrimaryEndLifeOwnerBatchMap &batches, std::vector<PrimaryEndLifeBatchLane> &batchLanes,
+    std::vector<PrimaryEndLifeOwnerLane *> &insertedLanes,
+    std::vector<StagedPrimaryEndLifeTasks> &stagedTasks)
+{
+    for (auto &item : batches) {
+        auto &batch = item.second;
+        auto [iter, inserted] = primaryEndLifeOwnerLanes_.try_emplace(batch.owner);
+        if (inserted) {
+            insertedLanes.emplace_back(&iter->second);
+        }
+        batchLanes.emplace_back(&batch, &iter->second);
+    }
+
+    PrimaryEndLifeBatchLane selectedBatchLane{ nullptr, nullptr };
+    for (const auto &[batch, lane] : batchLanes) {
+        if (selectedBatchLane.first == nullptr && !lane->inFlight) {
+            selectedBatchLane = { batch, lane };
             continue;
         }
-        if (masterAddr.Empty()) {
-            ReaddPrimaryEndLifeTasks(masterTasks);
-            continue;
+        stagedTasks.emplace_back(StagedPrimaryEndLifeTasks{ lane, {} });
+        for (const auto &task : batch->tasks) {
+            stagedTasks.back().tasks.emplace_back(task);
         }
-        ProcessPrimaryEndLifeMasterBatch(masterAddr, std::move(masterTasks));
+    }
+    return selectedBatchLane;
+}
+
+void WorkerOcEvictionManager::CommitPrimaryEndLifeOwnerBatchLocked(
+    const PrimaryEndLifeBatchLane &selectedBatchLane, std::vector<StagedPrimaryEndLifeTasks> &stagedTasks,
+    std::optional<PrimaryEndLifeOwnerBatch> &selected)
+{
+    const auto &[selectedBatch, selectedLane] = selectedBatchLane;
+    if (selectedBatch != nullptr) {
+        selected.emplace(std::move(*selectedBatch));
+        selected->ownerLane = selectedLane;
+        selectedLane->inFlight = true;
+    }
+    for (auto &staged : stagedTasks) {
+        auto &target = staged.lane->inFlight ? staged.lane->waitingTasks : primaryEndLifeReadyQueue_;
+        target.splice(target.end(), staged.tasks);
+    }
+    for (auto iter = primaryEndLifeOwnerLanes_.begin(); iter != primaryEndLifeOwnerLanes_.end();) {
+        if (!iter->second.inFlight && iter->second.waitingTasks.empty()) {
+            iter = primaryEndLifeOwnerLanes_.erase(iter);
+        } else {
+            ++iter;
+        }
     }
 }
 
-void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &masterAddr,
-                                                               std::vector<PrimaryEndLifeTask> tasks)
+void WorkerOcEvictionManager::RollbackPrimaryEndLifeOwnerLanesLocked(
+    const std::vector<PrimaryEndLifeOwnerLane *> &insertedLanes)
 {
+    for (auto iter = primaryEndLifeOwnerLanes_.begin(); iter != primaryEndLifeOwnerLanes_.end();) {
+        if (std::find(insertedLanes.begin(), insertedLanes.end(), &iter->second) != insertedLanes.end()) {
+            iter = primaryEndLifeOwnerLanes_.erase(iter);
+        } else {
+            ++iter;
+        }
+    }
+}
+
+void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const PrimaryEndLifeOwnerBatch &batch)
+{
+    bool ownerLeaseHeld = true;
+    try {
+        std::vector<PrimaryEndLifeCandidate> candidates;
+        std::vector<PrimaryEndLifeCandidate> needDeleteMetaCandidates;
+        if (!PreparePrimaryEndLifeMasterBatch(batch, candidates, needDeleteMetaCandidates)) {
+            ReleasePrimaryEndLifeOwner(batch.ownerLane);
+            return;
+        }
+        std::unordered_set<std::string> failedKeys;
+        std::vector<PrimaryEndLifeRedirectGroup> redirectGroups;
+        Status rc = DeletePrimaryEndLifeMetadataForBatch(batch, needDeleteMetaCandidates, failedKeys, redirectGroups);
+        ReleasePrimaryEndLifeOwner(batch.ownerLane);
+        ownerLeaseHeld = false;
+        if (rc.IsError()) {
+            HandlePrimaryEndLifeBatchFailure(batch, candidates, rc);
+            return;
+        }
+        FinishPrimaryEndLifeMasterBatch(candidates, rc, failedKeys, redirectGroups);
+    } catch (...) {
+        if (ownerLeaseHeld) {
+            ReleasePrimaryEndLifeOwner(batch.ownerLane);
+        }
+        throw;
+    }
+}
+
+bool WorkerOcEvictionManager::PreparePrimaryEndLifeMasterBatch(
+    const PrimaryEndLifeOwnerBatch &batch, std::vector<PrimaryEndLifeCandidate> &candidates,
+    std::vector<PrimaryEndLifeCandidate> &needDeleteMetaCandidates)
+{
+    auto tasks = batch.tasks;
     LogPrimaryEndLifeStage("prepare", 0, tasks.size(), 0, "start");
     Timer prepareTimer;
     std::sort(tasks.begin(), tasks.end(),
               [](const auto &lhs, const auto &rhs) { return lhs.objectKey < rhs.objectKey; });
-    std::vector<PrimaryEndLifeCandidate> candidates;
     std::vector<PrimaryEndLifeTask> skippedTasks;
     LOG_IF_ERROR(PreparePrimaryEndLifeCandidates(tasks, candidates, skippedTasks),
                  "Prepare primary end-life candidates failed.");
     ReaddPrimaryEndLifeTasks(skippedTasks);
     if (candidates.empty()) {
         LogPrimaryEndLifeStage("prepare", prepareTimer.ElapsedMilliSecond(), tasks.size());
-        return;
+        return false;
     }
-    std::vector<PrimaryEndLifeCandidate> needDeleteMetaCandidates;
     needDeleteMetaCandidates.reserve(candidates.size());
     for (const auto &candidate : candidates) {
         if (!candidate.task.metaDeleted) {
             needDeleteMetaCandidates.emplace_back(candidate);
         }
     }
+    auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    if (!batch.redirectAttempt) {
+        for (auto &candidate : needDeleteMetaCandidates) {
+            candidate.task.logicalAttemptDeadlineMs = nowMs + PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS;
+        }
+    }
     // Release W-lock before the master RPC so concurrent Get RLocks are not blocked for the RPC duration.
     UnlockPrimaryEndLifeCandidates(candidates);
     LogPrimaryEndLifeStage("prepare", prepareTimer.ElapsedMilliSecond(), tasks.size());
-    std::unordered_set<std::string> failedKeys;
-    Status rc = DeletePrimaryEndLifeMetadata(masterAddr, needDeleteMetaCandidates, failedKeys);
+    return true;
+}
+
+int64_t WorkerOcEvictionManager::GetPrimaryEndLifeRpcTimeout(
+    const PrimaryEndLifeOwnerBatch &batch, const std::vector<PrimaryEndLifeCandidate> &candidates)
+{
+    int64_t timeoutMs = PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS;
+    if (batch.redirectAttempt && !candidates.empty()) {
+        auto deadlineMs = candidates.front().task.logicalAttemptDeadlineMs;
+        for (const auto &candidate : candidates) {
+            deadlineMs = std::min(deadlineMs, candidate.task.logicalAttemptDeadlineMs);
+        }
+        auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+        timeoutMs = deadlineMs > nowMs ? static_cast<int64_t>(deadlineMs - nowMs) : 0;
+    }
+    return timeoutMs;
+}
+
+Status WorkerOcEvictionManager::DeletePrimaryEndLifeMetadataForBatch(
+    const PrimaryEndLifeOwnerBatch &batch, const std::vector<PrimaryEndLifeCandidate> &candidates,
+    std::unordered_set<std::string> &failedKeys, std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups)
+{
+    if (candidates.empty()) {
+        return Status::OK();
+    }
+    auto timeoutMs = GetPrimaryEndLifeRpcTimeout(batch, candidates);
+    if (timeoutMs <= 0) {
+        return Status(K_RPC_DEADLINE_EXCEEDED, "Primary end-life redirect deadline expired before dispatch.");
+    }
+    return DeletePrimaryEndLifeMetadata(batch.owner, candidates, !batch.redirectAttempt, batch.topologyVersion,
+                                        timeoutMs, failedKeys, redirectGroups);
+}
+
+void WorkerOcEvictionManager::HandlePrimaryEndLifeBatchFailure(const PrimaryEndLifeOwnerBatch &batch,
+                                                               std::vector<PrimaryEndLifeCandidate> &candidates,
+                                                               const Status &rc)
+{
+    std::vector<PrimaryEndLifeCandidate> localCleanupCandidates;
+    std::vector<PrimaryEndLifeCandidate> rpcFailedCandidates;
+    localCleanupCandidates.reserve(candidates.size());
+    rpcFailedCandidates.reserve(candidates.size());
+    for (auto &candidate : candidates) {
+        if (candidate.task.metaDeleted) {
+            localCleanupCandidates.emplace_back(std::move(candidate));
+        } else {
+            rpcFailedCandidates.emplace_back(std::move(candidate));
+        }
+    }
+    Status localCleanupRc = Status::OK();
+    std::unordered_set<std::string> noFailedKeys;
+    ProcessPrimaryEndLifeLocalErase(localCleanupCandidates, localCleanupRc, noFailedKeys);
+    HandlePrimaryEndLifeRpcFailure(batch, rpcFailedCandidates, rc);
+}
+
+void WorkerOcEvictionManager::FinishPrimaryEndLifeMasterBatch(
+    std::vector<PrimaryEndLifeCandidate> &candidates, Status &rc, std::unordered_set<std::string> &failedKeys,
+    const std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups)
+{
+    std::unordered_set<std::string> redirectKeys;
+    SchedulePrimaryEndLifeRedirects(redirectGroups, redirectKeys);
+    std::vector<PrimaryEndLifeCandidate> acceptedCandidates;
+    acceptedCandidates.reserve(candidates.size());
+    for (auto &candidate : candidates) {
+        if (redirectKeys.count(candidate.task.objectKey) > 0) {
+            continue;
+        }
+        if (failedKeys.count(candidate.task.objectKey) > 0) {
+            FinishPrimaryEndLifeTask(candidate.task, true);
+            continue;
+        }
+        acceptedCandidates.emplace_back(std::move(candidate));
+    }
     // Re-acquire WLock per candidate for local erase only.
-    LogPrimaryEndLifeStage("local_cleanup", 0, candidates.size(), 0, "start");
+    LogPrimaryEndLifeStage("local_cleanup", 0, acceptedCandidates.size(), 0, "start");
     Timer localCleanupTimer;
-    ProcessPrimaryEndLifeLocalErase(candidates, rc, failedKeys);
-    LogPrimaryEndLifeStage("local_cleanup", localCleanupTimer.ElapsedMilliSecond(), candidates.size());
+    std::unordered_set<std::string> noFailedKeys;
+    ProcessPrimaryEndLifeLocalErase(acceptedCandidates, rc, noFailedKeys);
+    LogPrimaryEndLifeStage("local_cleanup", localCleanupTimer.ElapsedMilliSecond(), acceptedCandidates.size());
 }
 
 Status WorkerOcEvictionManager::DeletePrimaryEndLifeMetadata(
     const HostPort &masterAddr, const std::vector<PrimaryEndLifeCandidate> &needDeleteMetaCandidates,
-    std::unordered_set<std::string> &failedKeys)
+    bool allowRedirect, uint64_t topologyVersion, int64_t timeoutMs, std::unordered_set<std::string> &failedKeys,
+    std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups)
 {
     if (needDeleteMetaCandidates.empty()) {
         return Status::OK();
     }
     Timer rpcTotalTimer;
-    Status rc;
-    for (uint32_t attempt = 1; attempt <= PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES; ++attempt) {
-        failedKeys.clear();
-        VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=rpc_attempt, event=start, master="
-                              << masterAddr.ToString() << ", attempt=" << attempt << "/"
-                              << PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES
-                              << ", batch_keys=" << needDeleteMetaCandidates.size()
-                              << ", pressure=" << GetPrimaryEndLifePressure();
-        Timer rpcAttemptTimer;
-        rc = DeleteAllCopyMetaForPrimaryEndLife(masterAddr, needDeleteMetaCandidates, failedKeys);
-        auto attemptElapsedMs = rpcAttemptTimer.ElapsedMilliSecond();
-        LogPrimaryEndLifeRpcAttempt(masterAddr, attempt, attemptElapsedMs, rpcTotalTimer.ElapsedMilliSecond(),
-                                    needDeleteMetaCandidates.size(), failedKeys.size(), rc);
-        if (rc.IsOk() || !IsRetryableRpcError(rc)) {
-            return rc;
-        }
+    failedKeys.clear();
+    bool deferred = needDeleteMetaCandidates.front().task.retryableFailureCount > 0;
+    VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=rpc_attempt, event=start, master="
+                          << masterAddr.ToString() << ", topology_version=" << topologyVersion
+                          << ", attempt_kind=" << (allowRedirect ? "source" : "redirect")
+                          << ", deferred=" << (deferred ? "true" : "false")
+                          << ", batch_keys=" << needDeleteMetaCandidates.size()
+                          << ", pressure=" << GetPrimaryEndLifePressure();
+    Timer rpcAttemptTimer;
+    Status rc = DeleteAllCopyMetaForPrimaryEndLife(masterAddr, needDeleteMetaCandidates, allowRedirect, timeoutMs,
+                                                   failedKeys, redirectGroups);
+    auto attempt = static_cast<uint32_t>(needDeleteMetaCandidates.front().task.retryableFailureCount) + 1;
+    LogPrimaryEndLifeRpcAttempt(masterAddr, topologyVersion, !allowRedirect, deferred, attempt,
+                                rpcAttemptTimer.ElapsedMilliSecond(), rpcTotalTimer.ElapsedMilliSecond(),
+                                needDeleteMetaCandidates.size(), failedKeys.size(), rc);
+    return rc;
+}
+
+void WorkerOcEvictionManager::HandlePrimaryEndLifeRpcFailure(const PrimaryEndLifeOwnerBatch &batch,
+                                                             std::vector<PrimaryEndLifeCandidate> &candidates,
+                                                             const Status &rc)
+{
+    std::vector<PrimaryEndLifeTask> delayedTasks;
+    std::vector<PrimaryEndLifeTask> readdTasks;
+    std::vector<PrimaryEndLifeCandidate> forceDeleteCandidates;
+    for (auto &candidate : candidates) {
+        ClassifyPrimaryEndLifeRpcFailure(batch, candidate, rc, delayedTasks, readdTasks, forceDeleteCandidates);
+    }
+    ScheduleDelayedPrimaryEndLifeTasks(std::move(delayedTasks));
+    ReaddPrimaryEndLifeTasks(readdTasks);
+    ForceDeletePrimaryEndLifeCandidates(batch, forceDeleteCandidates, rc);
+}
+
+void WorkerOcEvictionManager::ClassifyPrimaryEndLifeRpcFailure(
+    const PrimaryEndLifeOwnerBatch &batch, PrimaryEndLifeCandidate &candidate, const Status &rc,
+    std::vector<PrimaryEndLifeTask> &delayedTasks, std::vector<PrimaryEndLifeTask> &readdTasks,
+    std::vector<PrimaryEndLifeCandidate> &forceDeleteCandidates)
+{
+    auto task = candidate.task;
+    task.logicalAttemptDeadlineMs = 0;
+    if (batch.redirectAttempt) {
+        task.redirectTarget = HostPort();
+        task.redirectTopologyVersion = 0;
+        ResetPrimaryEndLifeRetryState(task);
+        delayedTasks.emplace_back(std::move(task));
+        return;
+    }
+    if (rc.GetCode() == K_RPC_PEER_DEAD || rc.GetCode() == K_TRY_AGAIN) {
+        delayedTasks.emplace_back(std::move(task));
+        return;
+    }
+    if (!IsRetryableRpcError(rc)) {
+        readdTasks.emplace_back(std::move(task));
+        return;
+    }
+    if (task.lastAttemptOwner == batch.owner && task.lastAttemptTopologyVersion == batch.topologyVersion) {
+        ++task.retryableFailureCount;
+    } else {
+        task.lastAttemptOwner = batch.owner;
+        task.lastAttemptTopologyVersion = batch.topologyVersion;
+        task.retryableFailureCount = 1;
+    }
+    if (task.retryableFailureCount >= PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES) {
+        candidate.task = std::move(task);
+        forceDeleteCandidates.emplace_back(std::move(candidate));
+    } else {
+        delayedTasks.emplace_back(std::move(task));
+    }
+}
+
+void WorkerOcEvictionManager::ResetPrimaryEndLifeRetryState(PrimaryEndLifeTask &task)
+{
+    task.lastAttemptOwner = HostPort();
+    task.lastAttemptTopologyVersion = 0;
+    task.retryableFailureCount = 0;
+}
+
+void WorkerOcEvictionManager::ForceDeletePrimaryEndLifeCandidates(const PrimaryEndLifeOwnerBatch &batch,
+                                                                  std::vector<PrimaryEndLifeCandidate> &candidates,
+                                                                  const Status &rc)
+{
+    if (candidates.empty()) {
+        return;
     }
     std::vector<std::string> forceDeleteKeys;
-    forceDeleteKeys.reserve(needDeleteMetaCandidates.size());
-    for (const auto &candidate : needDeleteMetaCandidates) {
+    forceDeleteKeys.reserve(candidates.size());
+    for (const auto &candidate : candidates) {
         forceDeleteKeys.emplace_back(candidate.task.objectKey);
     }
     LOG(ERROR) << "Force deleting primary END_LIFE objects after DeleteAllCopyMeta RPC failed "
-               << PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES << " times, master=" << masterAddr.ToString()
-               << ", total_elapsed_ms=" << rpcTotalTimer.ElapsedMilliSecond()
+               << PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES << " scheduled attempts, master="
+               << batch.owner.ToString() << ", topology_version=" << batch.topologyVersion
                << ", object_keys=" << JoinKeys(forceDeleteKeys) << ", last_status=" << rc.ToString()
                << ", pressure=" << GetPrimaryEndLifePressure();
-    failedKeys.clear();
-    return Status::OK();
+    Status forceRc = Status::OK();
+    std::unordered_set<std::string> noFailedKeys;
+    ProcessPrimaryEndLifeLocalErase(candidates, forceRc, noFailedKeys);
+}
+
+void WorkerOcEvictionManager::SchedulePrimaryEndLifeRedirects(
+    const std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups, std::unordered_set<std::string> &redirectKeys)
+{
+    std::vector<PrimaryEndLifeTask> redirectTasks;
+    for (const auto &group : redirectGroups) {
+        for (const auto &candidate : group.candidates) {
+            auto task = candidate.task;
+            ResetPrimaryEndLifeRetryState(task);
+            task.redirectTarget = group.masterAddress;
+            task.redirectTopologyVersion = group.topologyVersion;
+            redirectKeys.emplace(task.objectKey);
+            redirectTasks.emplace_back(std::move(task));
+        }
+    }
+    EnqueueReadyPrimaryEndLifeTasks(std::move(redirectTasks));
 }
 
 void WorkerOcEvictionManager::ProcessPrimaryEndLifeLocalErase(std::vector<PrimaryEndLifeCandidate> &candidates,
@@ -1986,19 +2366,32 @@ uint64_t WorkerOcEvictionManager::GetPrimaryEndLifeReleaseBudget(CacheType cache
 
 Status WorkerOcEvictionManager::DeleteAllCopyMetaForPrimaryEndLife(
     const HostPort &masterAddr, const std::vector<PrimaryEndLifeCandidate> &candidates,
-    std::unordered_set<std::string> &failedKeys)
+    bool allowRedirect, int64_t timeoutMs, std::unordered_set<std::string> &failedKeys,
+    std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups)
 {
-    auto req = BuildPrimaryEndLifeDeleteReq(candidates, true);
+    auto req = BuildPrimaryEndLifeDeleteReq(candidates, allowRedirect);
     master::DeleteAllCopyMetaRspPb rsp;
-    GetRequestContext()->reqTimeoutDuration.Init(PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS);
+    GetRequestContext()->reqTimeoutDuration.Init(timeoutMs);
     ApiDeadline::Instance().Reset();
     Raii resetTimeout([] { GetRequestContext()->reqTimeoutDuration.Reset(); });
     RETURN_IF_NOT_OK(DeleteAllCopyMetaOnce(masterAddr, req, rsp));
-
-    std::vector<PrimaryEndLifeRedirectGroup> redirectGroups;
-    RETURN_IF_NOT_OK(CollectPrimaryEndLifeSourceResult(masterAddr, candidates, rsp, failedKeys, redirectGroups));
-    ForwardPrimaryEndLifeRedirectGroups(masterAddr, redirectGroups, failedKeys);
-    return Status::OK();
+    if (allowRedirect) {
+        return CollectPrimaryEndLifeSourceResult(masterAddr, candidates, rsp, failedKeys, redirectGroups);
+    }
+    std::unordered_set<std::string> candidateKeys;
+    candidateKeys.reserve(candidates.size());
+    for (const auto &candidate : candidates) {
+        candidateKeys.emplace(candidate.task.objectKey);
+    }
+    for (const auto &redirectInfo : rsp.info()) {
+        if (redirectInfo.change_meta_ids().empty()
+            || std::any_of(redirectInfo.change_meta_ids().begin(), redirectInfo.change_meta_ids().end(),
+                           [&candidateKeys](const auto &key) { return candidateKeys.count(key) == 0; })) {
+            failedKeys.insert(candidateKeys.begin(), candidateKeys.end());
+            return Status::OK();
+        }
+    }
+    return CollectPrimaryEndLifeDeleteResult(rsp, failedKeys);
 }
 
 Status WorkerOcEvictionManager::DeleteAllCopyMetaOnce(const HostPort &masterAddr,
@@ -2175,68 +2568,6 @@ void WorkerOcEvictionManager::BuildPrimaryEndLifeRedirectGroups(
     redirectGroups.reserve(groupsByTarget.size());
     for (auto &item : groupsByTarget) {
         redirectGroups.emplace_back(std::move(item.second));
-    }
-}
-
-void WorkerOcEvictionManager::ForwardPrimaryEndLifeRedirectGroups(
-    const HostPort &sourceMaster, const std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups,
-    std::unordered_set<std::string> &failedKeys)
-{
-    for (const auto &group : redirectGroups) {
-        auto markGroupFailed = [&group, &failedKeys] {
-            for (const auto &candidate : group.candidates) {
-                failedKeys.emplace(candidate.task.objectKey);
-            }
-        };
-        auto req = BuildPrimaryEndLifeDeleteReq(group.candidates, false);
-        master::DeleteAllCopyMetaRspPb rsp;
-        Status rc = DeleteAllCopyMetaOnce(group.masterAddress, req, rsp);
-        size_t failedBefore = failedKeys.size();
-        if (rc.IsError()) {
-            markGroupFailed();
-        } else {
-            std::unordered_set<std::string> groupKeys;
-            groupKeys.reserve(group.candidates.size());
-            for (const auto &candidate : group.candidates) {
-                groupKeys.emplace(candidate.task.objectKey);
-            }
-            bool malformedRedirect = false;
-            for (const auto &redirectInfo : rsp.info()) {
-                if (redirectInfo.change_meta_ids().empty()) {
-                    malformedRedirect = true;
-                    break;
-                }
-                for (const auto &objectKey : redirectInfo.change_meta_ids()) {
-                    if (groupKeys.count(objectKey) == 0) {
-                        malformedRedirect = true;
-                        break;
-                    }
-                }
-                if (malformedRedirect) {
-                    break;
-                }
-            }
-            std::unordered_set<std::string> targetFailedKeys;
-            Status collectRc = CollectPrimaryEndLifeDeleteResult(rsp, targetFailedKeys);
-            if (collectRc.IsError() || malformedRedirect) {
-                rc = collectRc.IsError()
-                         ? collectRc
-                         : Status(K_TRY_AGAIN, "Forwarded DeleteAllCopyMeta returned invalid redirect.");
-                markGroupFailed();
-            } else {
-                for (const auto &objectKey : targetFailedKeys) {
-                    if (groupKeys.count(objectKey) > 0) {
-                        failedKeys.emplace(objectKey);
-                    }
-                }
-            }
-        }
-        VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=redirect_forward, source_master="
-                              << sourceMaster.ToString() << ", target_master=" << group.masterAddress.ToString()
-                              << ", topology_version=" << group.topologyVersion
-                              << ", batch_keys=" << group.candidates.size()
-                              << ", failed_keys=" << (failedKeys.size() - failedBefore)
-                              << ", status=" << rc.ToString();
     }
 }
 

@@ -35,6 +35,7 @@ namespace datasystem::worker {
  * @brief Successful metadata-owner groups plus explicit per-key failures.
  */
 struct MetaOwnerRouteGroups {
+    uint64_t topologyVersion{ 0 };
     std::unordered_map<HostPort, std::vector<std::string>> groups;
     std::unordered_map<std::string, Status> failures;
 };
@@ -43,6 +44,7 @@ struct MetaOwnerRouteGroups {
  * @brief Successful indexed metadata-owner groups plus explicit per-key failures.
  */
 struct IndexedMetaOwnerRouteGroups {
+    uint64_t topologyVersion{ 0 };
     std::unordered_map<HostPort, std::vector<std::pair<std::string, size_t>>> groups;
     std::unordered_map<std::string, Status> failures;
 };
