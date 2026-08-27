@@ -96,6 +96,7 @@ private:
         std::function<Status(const std::string &, int32_t, RaftBootstrapState &)> probePeer;
         std::function<Status(const std::vector<std::string> &, std::string &)> digestCandidates;
         std::function<std::chrono::steady_clock::time_point()> now;
+        std::function<std::chrono::milliseconds(std::chrono::milliseconds)> jitterBootstrapRetry;
         std::function<void()> onBootstrapWorkerExit;
         std::function<std::unique_ptr<NodeHandle>(const CoordinatorRaftOptions &,
                                                   const CoordinatorRaftEventCallbacks &)> createNode;
@@ -131,7 +132,7 @@ private:
     void PublishBootstrapState(RaftBootstrapState state);
     void RecordBootstrapTerminalStatus(Status status);
     bool GetBootstrapTerminalStatus(Status &status) const;
-    bool WaitForBootstrapRetryOrStop();
+    bool WaitForBootstrapRetryOrStop(std::chrono::milliseconds &baseDelay);
     bool IsBootstrapStopRequested() const;
     void WarnBootstrapRetry(const Status &status, std::chrono::steady_clock::time_point &nextWarningAt) const;
 

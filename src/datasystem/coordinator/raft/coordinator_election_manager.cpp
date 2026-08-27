@@ -36,6 +36,7 @@
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -54,6 +55,11 @@ constexpr size_t kCoordinatorRaftLogIndexWidth = 20;
 constexpr size_t kCoordinatorRaftClosedLogIndexCount = 2;
 constexpr size_t kSha256HexLength = 64;
 constexpr char K_COORDINATOR_BOOTSTRAP_TRACE_PREFIX[] = "CoordinatorBootstrap;";
+constexpr std::chrono::milliseconds kInitialBootstrapRetryDelay{ 100 };
+constexpr std::chrono::milliseconds kMaxBootstrapRetryDelay{ 1'000 };
+constexpr uint32_t kBootstrapRetryJitterMinPercent = 80;
+constexpr uint32_t kBootstrapRetryJitterMaxPercent = 120;
+constexpr uint32_t kPercentBase = 100;
 
 struct DirectoryCloser {
     void operator()(DIR *directory) const noexcept
@@ -472,6 +478,13 @@ CoordinatorElectionManager::Dependencies CoordinatorElectionManager::MakeProduct
     };
     dependencies.digestCandidates = BuildCandidateDigest;
     dependencies.now = [] { return std::chrono::steady_clock::now(); };
+    dependencies.jitterBootstrapRetry = [](std::chrono::milliseconds baseDelay) {
+        thread_local RandomData random;
+        const auto baseCount = static_cast<uint32_t>(baseDelay.count());
+        const auto minDelay = baseCount * kBootstrapRetryJitterMinPercent / kPercentBase;
+        const auto maxDelay = baseCount * kBootstrapRetryJitterMaxPercent / kPercentBase;
+        return std::chrono::milliseconds(random.GetRandomUint32(minDelay, maxDelay));
+    };
     dependencies.createNode = [](const CoordinatorRaftOptions &options,
                                  const CoordinatorRaftEventCallbacks &callbacks) {
         auto handle = std::make_unique<NodeHandle>();
@@ -553,9 +566,10 @@ Status CoordinatorElectionManager::ValidateStartupInput() const
                              "Coordinator Raft local address must be normalized");
     CHECK_FAIL_RETURN_STATUS(
         dependencies_.probeLocalMetadata && dependencies_.discoverCandidates && dependencies_.probePeer
-            && dependencies_.digestCandidates && dependencies_.now && dependencies_.createNode
-            && dependencies_.startNode && dependencies_.createMembership && dependencies_.startMembership
-            && dependencies_.shutdownMembership && dependencies_.isLeader && dependencies_.getLeader,
+            && dependencies_.digestCandidates && dependencies_.now && dependencies_.jitterBootstrapRetry
+            && dependencies_.createNode && dependencies_.startNode && dependencies_.createMembership
+            && dependencies_.startMembership && dependencies_.shutdownMembership && dependencies_.isLeader
+            && dependencies_.getLeader,
         K_INVALID, "Coordinator election manager dependencies are incomplete");
     return Status::OK();
 }
@@ -633,6 +647,7 @@ void CoordinatorElectionManager::RunBootstrapControl() noexcept
     }
 
     std::chrono::steady_clock::time_point nextWarningAt{};
+    std::chrono::milliseconds bootstrapRetryBaseDelay = kInitialBootstrapRetryDelay;
     while (!IsBootstrapStopRequested()) {
         std::vector<std::string> normalizedCandidates;
         status = RefreshBootstrapObservation(localState, normalizedCandidates);
@@ -645,7 +660,7 @@ void CoordinatorElectionManager::RunBootstrapControl() noexcept
             localState.statusCode = static_cast<int32_t>(status.GetCode());
             PublishBootstrapState(localState);
             WarnBootstrapRetry(status, nextWarningAt);
-            if (WaitForBootstrapRetryOrStop()) {
+            if (WaitForBootstrapRetryOrStop(bootstrapRetryBaseDelay)) {
                 return;
             }
             continue;
@@ -667,7 +682,7 @@ void CoordinatorElectionManager::RunBootstrapControl() noexcept
         localState.statusCode = static_cast<int32_t>(status.GetCode());
         PublishBootstrapState(localState);
         WarnBootstrapRetry(status, nextWarningAt);
-        if (WaitForBootstrapRetryOrStop()) {
+        if (WaitForBootstrapRetryOrStop(bootstrapRetryBaseDelay)) {
             return;
         }
     }
@@ -1133,13 +1148,25 @@ void CoordinatorElectionManager::RecordBootstrapTerminalStatus(Status status)
     }
 }
 
-bool CoordinatorElectionManager::WaitForBootstrapRetryOrStop()
+bool CoordinatorElectionManager::WaitForBootstrapRetryOrStop(std::chrono::milliseconds &baseDelay)
 {
+    auto retryDelay = baseDelay;
+    try {
+        retryDelay = dependencies_.jitterBootstrapRetry(baseDelay);
+    } catch (const std::exception &exception) {
+        LOG_FIRST_N(WARNING, 1) << "Failed to jitter Coordinator bootstrap retry delay, using base delay: "
+                                << exception.what();
+    } catch (...) {
+        LOG_FIRST_N(WARNING, 1)
+            << "Failed to jitter Coordinator bootstrap retry delay with an unknown exception, using base delay";
+    }
+    baseDelay = std::min(baseDelay * 2, kMaxBootstrapRetryDelay);
+
     std::unique_lock<std::mutex> lock(bootstrapMutex_);
     const auto observedWakeGeneration = bootstrapWakeGeneration_;
     ++bootstrapRetryWaiters_;
     bootstrapCv_.notify_all();
-    bootstrapCv_.wait_for(lock, options_.membershipOptions.discoveryRetryInterval, [this, observedWakeGeneration] {
+    bootstrapCv_.wait_for(lock, retryDelay, [this, observedWakeGeneration] {
         return bootstrapStopRequested_ || bootstrapWakeGeneration_ != observedWakeGeneration;
     });
     --bootstrapRetryWaiters_;
