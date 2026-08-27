@@ -71,8 +71,20 @@ constexpr std::chrono::milliseconds kHealthCheckInterval{ 10 };
 constexpr std::chrono::milliseconds kMemberFailureGrace{ 20 };
 constexpr std::chrono::hours kDiscoveryRetryInterval{ 1 };
 constexpr std::chrono::milliseconds kBootstrapWarningInterval{ 30 };
+constexpr std::chrono::milliseconds kInitialBootstrapRetryDelay{ 100 };
+constexpr std::chrono::milliseconds kSecondBootstrapRetryDelay{ 200 };
+constexpr std::chrono::milliseconds kThirdBootstrapRetryDelay{ 400 };
+constexpr std::chrono::milliseconds kFourthBootstrapRetryDelay{ 800 };
+constexpr std::chrono::milliseconds kMaxBootstrapRetryDelay{ 1'000 };
+constexpr uint32_t kBootstrapRetryJitterMinPercent = 80;
+constexpr uint32_t kBootstrapRetryJitterMaxPercent = 120;
+constexpr uint32_t kPercentBase = 100;
 constexpr std::chrono::seconds kConcurrencyDeadline{ 2 };
+constexpr std::chrono::seconds kLongBootstrapRetryDelay{ 10 };
 constexpr size_t kConcurrentSnapshotIterations = 100;
+constexpr size_t kBootstrapRetrySequenceLength = 6;
+constexpr size_t kManagerGenerationCount = 2;
+constexpr size_t kJitterSampleCount = 100;
 constexpr size_t kSha256HexLength = 64;
 
 constexpr char kProbeLocal[] = "probe_local";
@@ -137,6 +149,12 @@ public:
         return calls;
     }
 
+    std::vector<std::chrono::milliseconds> BootstrapRetryBaseDelays() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return bootstrapRetryBaseDelays;
+    }
+
     mutable std::mutex mutex;
     std::condition_variable cv;
     std::vector<std::string> calls;
@@ -148,6 +166,9 @@ public:
     Status discoveryResult;
     bool discoveryThrows{ false };
     size_t discoveryCalls{ 0 };
+    std::vector<std::chrono::milliseconds> bootstrapRetryBaseDelays;
+    std::chrono::milliseconds bootstrapRetryDelayOverride{ 0 };
+    bool bootstrapRetryJitterThrows{ false };
     std::string latestDigest;
     size_t latestCandidateCount{ 0 };
     std::map<std::string, PeerScript> peers;
@@ -251,6 +272,21 @@ CoordinatorElectionManager::Dependencies MakeDependencies(const std::shared_ptr<
         return iter->second.result;
     };
     dependencies.now = [] { return std::chrono::steady_clock::time_point{}; };
+    dependencies.jitterBootstrapRetry = [state](std::chrono::milliseconds baseDelay) {
+        std::chrono::milliseconds delayOverride;
+        bool shouldThrow;
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->bootstrapRetryBaseDelays.emplace_back(baseDelay);
+            delayOverride = state->bootstrapRetryDelayOverride;
+            shouldThrow = state->bootstrapRetryJitterThrows;
+        }
+        state->cv.notify_all();
+        if (shouldThrow) {
+            throw std::runtime_error("scripted bootstrap retry jitter exception");
+        }
+        return delayOverride.count() > 0 ? delayOverride : baseDelay;
+    };
     dependencies.onBootstrapWorkerExit = [state] { state->Record(kWorkerExit); };
     dependencies.createNode =
         [state](const CoordinatorRaftOptions &options, const CoordinatorRaftEventCallbacks &callbacks) {
@@ -1070,20 +1106,89 @@ TEST(CoordinatorElectionManagerTest, DigestMismatchRetriesWithoutCreatingNode)
     DS_ASSERT_OK(manager->Shutdown());
 }
 
-TEST(CoordinatorElectionManagerTest, DiscoveryFailureRetriesUntilShutdown)
+TEST(CoordinatorElectionManagerTest, BootstrapRetryBackoffGrowsAndCapsIndependentlyOfMembershipInterval)
 {
     auto state = std::make_shared<DependencyState>();
     state->discoveryResult = Status(K_NOT_READY, "scripted Discovery outage");
     auto manager = MakeManager(state);
 
     DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    EXPECT_EQ(state->discoveryCalls, 1U);
-    WakeRetry(*manager);
-    ASSERT_TRUE(state->WaitFor([state] { return state->discoveryCalls >= 2; }));
-    ASSERT_TRUE(WaitForRetry(*manager));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
+    for (size_t attempt = 1; attempt <= kBootstrapRetrySequenceLength; ++attempt) {
+        ASSERT_TRUE(WaitForRetry(*manager));
+        ASSERT_TRUE(state->WaitFor(
+            [state, attempt] { return state->bootstrapRetryBaseDelays.size() >= attempt; }));
+        if (attempt < kBootstrapRetrySequenceLength) {
+            WakeRetry(*manager);
+            ASSERT_TRUE(state->WaitFor([state, attempt] { return state->discoveryCalls > attempt; }));
+        }
+    }
+
+    EXPECT_EQ(state->BootstrapRetryBaseDelays(),
+              (std::vector<std::chrono::milliseconds>{ kInitialBootstrapRetryDelay,
+                                                       kSecondBootstrapRetryDelay,
+                                                       kThirdBootstrapRetryDelay,
+                                                       kFourthBootstrapRetryDelay,
+                                                       kMaxBootstrapRetryDelay,
+                                                       kMaxBootstrapRetryDelay }));
+    EXPECT_EQ(manager->options_.membershipOptions.discoveryRetryInterval, kDiscoveryRetryInterval);
     DS_ASSERT_OK(manager->Shutdown());
+}
+
+TEST(CoordinatorElectionManagerTest, NewManagerStartsBootstrapRetryBackoffFromInitialDelay)
+{
+    for (size_t generation = 0; generation < kManagerGenerationCount; ++generation) {
+        auto state = std::make_shared<DependencyState>();
+        state->discoveryResult = Status(K_NOT_READY, "scripted Discovery outage");
+        auto manager = MakeManager(state);
+
+        DS_ASSERT_OK(manager->Start());
+        ASSERT_TRUE(WaitForRetry(*manager));
+        ASSERT_TRUE(state->WaitFor([state] { return !state->bootstrapRetryBaseDelays.empty(); }));
+        EXPECT_EQ(state->BootstrapRetryBaseDelays().front(), kInitialBootstrapRetryDelay);
+        DS_ASSERT_OK(manager->Shutdown());
+    }
+}
+
+TEST(CoordinatorElectionManagerTest, ProductionBootstrapRetryJitterStaysWithinTwentyPercent)
+{
+    const auto dependencies = CoordinatorElectionManager::MakeProductionDependencies();
+    for (const auto baseDelay : { kInitialBootstrapRetryDelay, kMaxBootstrapRetryDelay }) {
+        for (size_t iteration = 0; iteration < kJitterSampleCount; ++iteration) {
+            const auto delay = dependencies.jitterBootstrapRetry(baseDelay);
+            EXPECT_GE(delay, baseDelay * kBootstrapRetryJitterMinPercent / kPercentBase);
+            EXPECT_LE(delay, baseDelay * kBootstrapRetryJitterMaxPercent / kPercentBase);
+        }
+    }
+}
+
+TEST(CoordinatorElectionManagerTest, BootstrapRetryJitterExceptionFallsBackToInterruptibleBaseDelay)
+{
+    auto state = std::make_shared<DependencyState>();
+    state->discoveryResult = Status(K_NOT_READY, "scripted Discovery outage");
+    state->bootstrapRetryJitterThrows = true;
+    auto manager = MakeManager(state);
+
+    DS_ASSERT_OK(manager->Start());
+    ASSERT_TRUE(WaitForRetry(*manager));
+    DS_ASSERT_OK(manager->Shutdown());
+    EXPECT_EQ(state->CallCount(kWorkerExit), 1U);
+}
+
+TEST(CoordinatorElectionManagerTest, DiscoveryFailureRetriesUntilShutdown)
+{
+    auto state = std::make_shared<DependencyState>();
+    state->discoveryResult = Status(K_NOT_READY, "scripted Discovery outage");
+    state->bootstrapRetryDelayOverride = kLongBootstrapRetryDelay;
+    auto manager = MakeManager(state);
+
+    DS_ASSERT_OK(manager->Start());
+    ASSERT_TRUE(WaitForRetry(*manager));
+    const auto discoveryCallsBeforeShutdown = state->discoveryCalls;
+    std::this_thread::sleep_for(kInitialBootstrapRetryDelay * 2);
+    EXPECT_EQ(state->discoveryCalls, discoveryCallsBeforeShutdown);
+    DS_ASSERT_OK(manager->Shutdown());
+    EXPECT_EQ(state->CallCount(kWorkerExit), 1U);
+    EXPECT_EQ(state->discoveryCalls, discoveryCallsBeforeShutdown);
 }
 
 TEST(CoordinatorElectionManagerTest, ConfigurationCallbackUpdatesBootstrapSnapshotBeforeExternalCallback)

@@ -97,6 +97,8 @@ Updates are process-local and are not distributed or persisted.
 
 User-facing Coordinator election timing flags are `coordinator_raft_heartbeat_interval_ms`, `coordinator_raft_election_timeout_ms`, `coordinator_discovery_retry_interval_ms`, and `coordinator_member_failure_grace_ms`. `coordinator_raft_heartbeat_interval_ms` defaults to 100 ms and must be in `[10, 10000]`; `coordinator_raft_election_timeout_ms` defaults to 1000 ms and must be an integer multiple of heartbeat with a ratio in `[5, 10]`. Discovery retry defaults to 5000 ms and member failure grace defaults to 10000 ms.
 
+Fresh-bootstrap `K_NOT_READY` observations use an internal jittered exponential retry with base delays `100, 200, 400, 800, 1000...` ms and ±20% jitter. This retry belongs only to the bootstrap worker. `coordinator_discovery_retry_interval_ms` continues to govern Membership Discovery after Node startup, so fast cold-start convergence does not increase steady-state polling.
+
 The repository's braft patch initializes the follower election timer with the sum of the configured election timeout and braft's clock-drift margin, while the Leader stepdown timer retains the configured election timeout. Each accepted current-Leader `AppendEntries` renews the follower lease and resets the election timer from the same observation, keeping the lease and election timer aligned.
 
 The membership health-check interval and bootstrap retry-warning interval are internal values. Production snapshots inject 3000 ms defaults, while in-process tests may override them by constructing `CoordinatorRaftFlags` directly.
