@@ -191,7 +191,7 @@ void ListenWorker::SetRecoverLocalWorkerHandle(std::function<bool()> callback)
 
 void ListenWorker::SetWorkerTimeoutHandle(std::function<void()> callback)
 {
-    std::lock_guard<std::shared_timed_mutex> l(workerTimeoutHandleMutex_);
+    std::lock_guard<SharedMutex> l(workerTimeoutHandleMutex_);
     workerTimeoutHandle_ = std::move(callback);
 }
 
@@ -328,7 +328,7 @@ void ListenWorker::CheckAndSetClientTimeout(int64_t failureTime, int64_t nodeTim
                 clientCommonWorker_->clientId_, clientCommonWorker_->hostPort_.ToString(), status.ToString());
             workerAvailable_ = false;
             NotifyFirstHeartbeat(false);
-            std::shared_lock<std::shared_timed_mutex> l(workerTimeoutHandleMutex_);
+            std::shared_lock<SharedMutex> l(workerTimeoutHandleMutex_);
             if (workerTimeoutHandle_) {
                 recoveryPending_ = true;
                 workerTimeoutHandle_();
@@ -353,7 +353,7 @@ Status ListenWorker::RunAllCallback(WorkerRecoveryReason reason)
     auto traceId = Trace::Instance().GetTraceID();
     auto func = [this, traceId, reason]() -> Status {
         auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        std::shared_lock<std::shared_timed_mutex> l(callbackMutex_);
+        std::shared_lock<SharedMutex> l(callbackMutex_);
         Status result = Status::OK();
         for (const auto &func : callBackTable_) {
             if (stop_) {
@@ -394,7 +394,7 @@ void ListenWorker::AddRecoveryCallback(void *pointer, std::function<Status(Worke
     if (stop_ || pointer == nullptr) {
         return;
     }
-    std::lock_guard<std::shared_timed_mutex> l(callbackMutex_);
+    std::lock_guard<SharedMutex> l(callbackMutex_);
     if (callBackTable_.find(pointer) != callBackTable_.end()) {
         LOG(WARNING) << "Try to add fail handle function twice.";
     }
@@ -406,13 +406,13 @@ void ListenWorker::RemoveCallBackFunc(void *pointer)
     if (stop_ || pointer == nullptr) {
         return;
     }
-    std::lock_guard<std::shared_timed_mutex> l(deletedCallbackMutex_);
+    std::lock_guard<SharedMutex> l(deletedCallbackMutex_);
     deletedCallbacks_.emplace(pointer);
 }
 
 void ListenWorker::SetSwitchWorkerHandle(std::function<bool(uint32_t, SwitchTriggerReason)> callback)
 {
-    std::lock_guard<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
+    std::lock_guard<SharedMutex> l(switchWorkerHandleMutex_);
     switchWorkerHandle_ = std::move(callback);
 }
 
@@ -438,7 +438,7 @@ bool ListenWorker::TryAcquireAsyncSwitchPool(std::shared_ptr<Raii> &raii)
 void ListenWorker::SwitchToRemoteWorker(SwitchTriggerReason reason)
 {
     {
-        std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
+        std::shared_lock<SharedMutex> l(switchWorkerHandleMutex_);
         if (!switchWorkerHandle_) {
             return;
         }
@@ -450,7 +450,7 @@ void ListenWorker::SwitchToRemoteWorker(SwitchTriggerReason reason)
     auto traceId = Trace::Instance().GetTraceID();
     asyncSwitchWorkerPool_->Execute([this, self = shared_from_this(), traceId, raii, reason]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
+        std::shared_lock<SharedMutex> l(switchWorkerHandleMutex_);
         LOG(INFO) << "[Switch] Worker " << clientCommonWorker_->workerId_
                   << " will be switched, client id: " << clientId_;
         isSwitched_ = switchWorkerHandle_(index_, reason);
@@ -460,7 +460,7 @@ void ListenWorker::SwitchToRemoteWorker(SwitchTriggerReason reason)
 void ListenWorker::TrySwitchBackToLocalWorker()
 {
     {
-        std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
+        std::shared_lock<SharedMutex> l(switchWorkerHandleMutex_);
         if (!switchWorkerHandle_) {
             return;
         }
@@ -472,7 +472,7 @@ void ListenWorker::TrySwitchBackToLocalWorker()
     auto traceId = Trace::Instance().GetTraceID();
     asyncSwitchWorkerPool_->Execute([this, self = shared_from_this(), traceId, raii]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
+        std::shared_lock<SharedMutex> l(switchWorkerHandleMutex_);
         LOG(INFO) << "[Switch] Local worker " << clientCommonWorker_->workerId_ << " is recovering";
         isSwitched_ = !switchWorkerHandle_(index_, SwitchTriggerReason::WORKER_UNAVAILABLE);
     });
@@ -551,8 +551,8 @@ Status ListenWorker::CheckWorkerAvailable()
 
 void ListenWorker::CleanInvalidCallback()
 {
-    std::lock_guard<std::shared_timed_mutex> lock(deletedCallbackMutex_);
-    std::lock_guard<std::shared_timed_mutex> l(callbackMutex_);
+    std::lock_guard<SharedMutex> lock(deletedCallbackMutex_);
+    std::lock_guard<SharedMutex> l(callbackMutex_);
     for (auto pointer : deletedCallbacks_) {
         callBackTable_.erase(pointer);
     }

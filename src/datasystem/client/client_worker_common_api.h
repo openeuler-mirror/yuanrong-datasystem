@@ -38,6 +38,7 @@
 // Include log.h early so the datasystem spdlog-based LOG macro is in scope
 // before any brpc/butil header can #undef it.
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 
 #include "datasystem/common/heartbeat_type.h"
 #include "datasystem/common/object_cache/ub_health_summary_codec.h"
@@ -619,7 +620,7 @@ protected:
 
     static constexpr int32_t retryTimes_ = 3;
     // Protect 'standbyWorkerAddrs_'
-    std::shared_timed_mutex standbyWorkerMutex_;
+    SharedMutex standbyWorkerMutex_;
     std::unordered_set<HostPort> standbyWorkerAddrs_;
     HostPort masterAddress_;
     std::string workerStartId_;  // To judge whether the worker is restarted.

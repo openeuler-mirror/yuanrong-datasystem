@@ -28,6 +28,8 @@
 
 #include <brpc/channel.h>
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/lru/lru_cache.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
@@ -159,7 +161,7 @@ public:
 
     std::shared_ptr<RpcStubBase> GetData()
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        std::shared_lock<SharedMutex> lck(mutex_);
         return data_;
     }
 
@@ -177,7 +179,7 @@ public:
 
 private:
     std::atomic<bool> lockedExternally_{ false };
-    std::shared_timed_mutex mutex_;
+    SharedMutex mutex_;
     std::shared_ptr<RpcStubBase> data_;
     HostPort hostPort_;
     StubType type_;

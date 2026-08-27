@@ -960,7 +960,7 @@ void SpillFileManager::ShutdownAsync()
 Status SpillFileManager::SpillSmallObject(const std::string &objectKey, const void *buffer, size_t size)
 {
     PerfPoint p(PerfKey::WORKER_SPILL_TO_BUFFER);
-    std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
+    std::unique_lock<SharedMutex> lock(fileInfoMutex_);
     buffer_.Append(objectKey, static_cast<const char *>(buffer), size);
     if (buffer_.Size() < SpillFileManager::LARGE_OBJ_SIZE_THRESHOLD) {
         return Status::OK();
@@ -1062,7 +1062,7 @@ Status SpillFileManager::WriteSpillObject(
     const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, SpillFileContext &context)
 {
     Timer timer;
-    std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
+    std::unique_lock<SharedMutex> lock(fileInfoMutex_);
     context.waitLockElapsed = timer.ElapsedMilliSecond();
 
     Status rc = FindBestWriteFile(context.tenantId, context.size, context.location, context.file);
@@ -1079,7 +1079,7 @@ Status SpillFileManager::WriteSpillObject(
     rc = WriteFile(context.file, payloads, context.location.offset);
     if (rc.IsError()) {
         spillIoCounters_.spillInFailCount.fetch_add(1, std::memory_order_relaxed);
-        std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
+        std::unique_lock<SharedMutex> lock(fileInfoMutex_);
         tenant2FileInfo_[context.tenantId][context.location.path].objectKeys.erase(context.objectKey);
         return rc;
     }
@@ -1096,7 +1096,7 @@ Status SpillFileManager::SyncSpillObject(SpillFileContext &context)
     context.syncElapsed = timer.ElapsedMilliSecond();
     if (syncRc.IsError()) {
         spillIoCounters_.spillInFailCount.fetch_add(1, std::memory_order_relaxed);
-        std::unique_lock<std::shared_timed_mutex> failedLock(fileInfoMutex_);
+        std::unique_lock<SharedMutex> failedLock(fileInfoMutex_);
         auto fileInfoIter = tenant2FileInfo_[context.tenantId].find(context.location.path);
         if (fileInfoIter != tenant2FileInfo_[context.tenantId].end()) {
             (void)fileInfoIter->second.objectKeys.erase(context.objectKey);
@@ -1113,7 +1113,7 @@ Status SpillFileManager::SyncSpillObject(SpillFileContext &context)
 
     // update after spill to file.
     {
-        std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
+        std::unique_lock<SharedMutex> lock(fileInfoMutex_);
         objLocations_[context.objectKey] = context.location;
     }
     return Status::OK();
@@ -1350,7 +1350,7 @@ Status SpillFileManager::DeleteFromDisk(const std::string &objectKey, uint64_t &
 {
     PerfPoint point(PerfKey::WORKER_SPILL_DELETE);
     Timer timer;
-    std::lock_guard<std::shared_timed_mutex> fileLock(fileInfoMutex_);
+    std::lock_guard<SharedMutex> fileLock(fileInfoMutex_);
     auto waitElapsed = timer.ElapsedMilliSecond();
     GetWorkerTimeCost().Append("Delete From Disk Get lock", timer.ElapsedMilliSecond());
     // Delete from SpillBuffer.
@@ -1416,7 +1416,7 @@ void SpillFileManager::DeleteLargeObj(const std::string &objectKey, const Object
                 totalSpillFileDiskSize = 0;
             }
         } else {
-            std::lock_guard<std::shared_timed_mutex> queueLock(fallocateQueueMutex_);
+            std::lock_guard<SharedMutex> queueLock(fallocateQueueMutex_);
             fallocateQueue_.emplace_back(objectKey, loc);
         }
     }
@@ -1446,7 +1446,7 @@ void SpillFileManager::ProcessFallocateQueue()
 {
     std::vector<std::pair<std::string, ObjectLocation>> fallocateQueueCopy;
     {
-        std::lock_guard<std::shared_timed_mutex> lock(fallocateQueueMutex_);
+        std::lock_guard<SharedMutex> lock(fallocateQueueMutex_);
         fallocateQueueCopy.swap(fallocateQueue_);
     }
     for (const auto &objectLocationIter : fallocateQueueCopy) {
@@ -1471,7 +1471,7 @@ void SpillFileManager::ProcessFallocateOneTask(const std::string &objectKey, con
     auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
     std::replace(tenantId.begin(), tenantId.end(), '/', '_');
     {
-        std::lock_guard<std::shared_timed_mutex> lock(fileInfoMutex_);
+        std::lock_guard<SharedMutex> lock(fileInfoMutex_);
         auto &fileInfoMap = tenant2FileInfo_[tenantId];
         auto iter = fileInfoMap.find(loc.path);
         if (iter == fileInfoMap.end()) {
@@ -1530,7 +1530,7 @@ Status SpillFileManager::CompactFiles(float holeSizeRatioThreshold)
 
 void SpillFileManager::GetHoleFiles(float holeSizeRatioThreshold, std::vector<HoleFileInfo> &holeFileArray)
 {
-    std::shared_lock<std::shared_timed_mutex> l(fileInfoMutex_);
+    std::shared_lock<SharedMutex> l(fileInfoMutex_);
     for (const auto &tenantInfo : tenant2FileInfo_) {
         for (const auto &fileinfo : tenantInfo.second) {
             const bool individuallyReclaimed = fileinfo.second.spillFileType == SpillFileType::LARGE_OBJ_FILE
@@ -1588,7 +1588,7 @@ Status SpillFileManager::CompactFile(const std::string &tenantId, const std::str
     totalSpillFileDiskSize += newFileInfo.size;
     // update objects meta info, delete old spill file and the map fileInfo
     uint64_t usedSize = 0;
-    std::lock_guard<std::shared_timed_mutex> lock(fileInfoMutex_);
+    std::lock_guard<SharedMutex> lock(fileInfoMutex_);
     auto &fileInfoMap = tenant2FileInfo_[tenantId];
     fileInfoMap[newFilePath] = newFileInfo;
     for (const auto &objectKey : fileinfo.objectKeys) {
@@ -1619,7 +1619,7 @@ Status SpillFileManager::CopyObjects(const FileInfo &fileinfo, const std::string
     std::unordered_map<std::string, ObjectLocation> oldObjectLocationsMap;
     {
         // copy old spill file obj meta info
-        std::shared_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
+        std::shared_lock<SharedMutex> lock(fileInfoMutex_);
         for (auto &objectKey : fileinfo.objectKeys) {
             RETURN_IF_NOT_OK(GetObjectFileLocation(objectKey, oldLoc));
             oldObjectLocationsMap[objectKey] = oldLoc;

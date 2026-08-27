@@ -852,7 +852,7 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
                        businessOperationId);
     CHECK_FAIL_RETURN_STATUS(failures.empty(), K_TRY_AGAIN, "migrated metadata removal needs retry");
     {
-        std::lock_guard<std::shared_timed_mutex> lock(clearIdsMutex_);
+        std::lock_guard<SharedMutex> lock(clearIdsMutex_);
         voluntaryScaleDownClearIds_ = std::move(waitIds);
     }
     if (asyncTasksDoneChecker_ != nullptr) {
@@ -1011,7 +1011,7 @@ Status WorkerOCServiceImpl::CleanupLocalStateForRejoin(std::chrono::steady_clock
 Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
 {
     {
-        std::shared_lock<std::shared_timed_mutex> l(clearIdsMutex_);
+        std::shared_lock<SharedMutex> l(clearIdsMutex_);
         if (voluntaryScaleDownClearIds_.empty()) {
             LOG(INFO) << "RemoveWriteBackIdsLocation: voluntaryScaleDownClearIds_ is empty, skip";
             return Status::OK();
@@ -1021,7 +1021,7 @@ Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
     LOG(INFO) << "RemoveWriteBackIdsLocation begin, WriteBackIds size: " << voluntaryScaleDownClearIds_.size();
     std::vector<std::string> clearIds;
     {
-        std::lock_guard<std::shared_timed_mutex> l(clearIdsMutex_);
+        std::lock_guard<SharedMutex> l(clearIdsMutex_);
         clearIds = std::move(voluntaryScaleDownClearIds_);
     }
     std::vector<std::string> removeFailedIds;

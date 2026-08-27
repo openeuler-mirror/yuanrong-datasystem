@@ -34,6 +34,7 @@
 #include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/common/eventloop/event_loop.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread.h"
@@ -323,11 +324,11 @@ private:
 
     // Worker fail handle callback function.
     std::unordered_map<void *, std::function<Status(WorkerRecoveryReason)>> callBackTable_;
-    std::shared_timed_mutex callbackMutex_;  // Protect 'callBackTable_'.
+    SharedMutex callbackMutex_;  // Protect 'callBackTable_'.
     std::unordered_set<void *> deletedCallbacks_;
-    std::shared_timed_mutex deletedCallbackMutex_;  // Protect 'deletedCallbacks'
+    SharedMutex deletedCallbackMutex_;  // Protect 'deletedCallbacks'
     std::function<bool(uint32_t, SwitchTriggerReason)> switchWorkerHandle_;
-    std::shared_timed_mutex switchWorkerHandleMutex_;  // Protect 'switchWorkerHandle_'.
+    SharedMutex switchWorkerHandleMutex_;  // Protect 'switchWorkerHandle_'.
     std::atomic<bool> isSwitched_{ false };
     std::atomic<bool> isLocalWorker_{ true };
 
@@ -348,7 +349,7 @@ private:
     std::function<bool()> recoverLocalWorkerHandle_;
     std::atomic<int64_t> lastLocalRecoveryAttemptMs_{ 0 };
     std::function<void()> workerTimeoutHandle_;
-    std::shared_timed_mutex workerTimeoutHandleMutex_;  // Protect 'workerTimeoutHandle_'.
+    SharedMutex workerTimeoutHandleMutex_;  // Protect 'workerTimeoutHandle_'.
     ThreadPool *asyncSwitchWorkerPool_;
     const uint32_t index_;
 };
