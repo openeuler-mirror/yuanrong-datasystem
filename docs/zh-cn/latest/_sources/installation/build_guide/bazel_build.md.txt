@@ -714,7 +714,7 @@ int main() {
 
 `CoordinatorServer`只能通过`GetInstance()`获取，它是生产单例façade，并拥有一个`CoordinatorRuntime`。
 参数化入口启用Coordinator选举，要求`configFilePath`非空、`coordinatorDiscovery`非空、
-`expectedMemberCount > 0`，并在`coordinator_config.json`中设置`use_brpc=true`。文件访问、JSON解析和flag校验
+`expectedMemberCount > 0`。文件访问、JSON解析和flag校验
 由`FlagManager`及Runtime启动流程负责。`expectedMemberCount = N`
 表示目标voting成员数，不表示首次bootstrap时Discovery必须精确返回N个候选。Discovery必须来自同一个全局
 收敛的部署控制域，返回值必须是数字IPv4 `host:port`；同步`GetCoordinators`实现必须在provider自身控制的

@@ -1420,7 +1420,7 @@ build:urma --copt=-DURMA_OVER_UB
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">CoordinatorServer</span></code>只能通过<code class="docutils literal notranslate"><span class="pre">GetInstance()</span></code>获取，它是生产单例façade，并拥有一个<code class="docutils literal notranslate"><span class="pre">CoordinatorRuntime</span></code>。
 参数化入口启用Coordinator选举，要求<code class="docutils literal notranslate"><span class="pre">configFilePath</span></code>非空、<code class="docutils literal notranslate"><span class="pre">coordinatorDiscovery</span></code>非空、
-<code class="docutils literal notranslate"><span class="pre">expectedMemberCount</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>，并在<code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code>中设置<code class="docutils literal notranslate"><span class="pre">use_brpc=true</span></code>。文件访问、JSON解析和flag校验
+<code class="docutils literal notranslate"><span class="pre">expectedMemberCount</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>。文件访问、JSON解析和flag校验
 由<code class="docutils literal notranslate"><span class="pre">FlagManager</span></code>及Runtime启动流程负责。<code class="docutils literal notranslate"><span class="pre">expectedMemberCount</span> <span class="pre">=</span> <span class="pre">N</span></code>
 表示目标voting成员数，不表示首次bootstrap时Discovery必须精确返回N个候选。Discovery必须来自同一个全局
 收敛的部署控制域，返回值必须是数字IPv4 <code class="docutils literal notranslate"><span class="pre">host:port</span></code>；同步<code class="docutils literal notranslate"><span class="pre">GetCoordinators</span></code>实现必须在provider自身控制的

@@ -793,7 +793,7 @@ git<span class="w"> </span>log<span class="w"> </span>-1<span class="w"> </span>
 <td><p>Client/Worker 打印的阶段耗时原文和值</p></td>
 <td><p>原文要保留，字段值用于聚合；不要重构后冒充 raw log</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rpc</span> <span class="pre">slow</span></code> / <code class="docutils literal notranslate"><span class="pre">ZMQ_RPC_FRAMEWORK_SLOW</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rpc</span> <span class="pre">slow</span></code> / <code class="docutils literal notranslate"><span class="pre">BRPC_RPC_FRAMEWORK_SLOW</span></code></p></td>
 <td><p>RPC 框架分段</p></td>
 <td><p>区分 client framework、server queue/exec、network residual</p></td>
 </tr>
@@ -870,7 +870,7 @@ git<span class="w"> </span>log<span class="w"> </span>-1<span class="w"> </span>
 <td><p>20ms deadline、RemotePull、QueryMeta、日志顺序错位要分别计数；角色图要区分 Client、Entry、Meta、DataWorker</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">019f7686</span></code></p></td>
-<td><p>4-8ms ZMQRPC sampled 报告</p></td>
+<td><p>4-8ms ZMQRPC sampled 报告（ZMQ RPC 已删除，brpc 唯一传输）</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">rpc</span> <span class="pre">slow</span></code> 必须解析 <code class="docutils literal notranslate"><span class="pre">server_exec_us</span></code>、<code class="docutils literal notranslate"><span class="pre">network_residual_us</span></code> 等子字段；每个 trace 支持下载 breakdown 和证据</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">019f76d0</span></code></p></td>

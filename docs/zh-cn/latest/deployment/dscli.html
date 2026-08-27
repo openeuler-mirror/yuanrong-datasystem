@@ -1116,7 +1116,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<
 <li><p>所有 Coordinator 节点的 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 配置完全相同，格式为逗号分隔的 <code class="docutils literal notranslate"><span class="pre">host:port</span></code> 列表。</p></li>
 <li><p>每个节点的 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 必须是本机对其他 Coordinator 和 Worker 可访问的地址，并且必须包含在 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 中。</p></li>
 <li><p>每个节点的 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_data_dir</span></code> 必须是该节点独占的本地目录，不能在多个 Coordinator 进程之间共享。</p></li>
-<li><p>启用选主时必须设置 <code class="docutils literal notranslate"><span class="pre">use_brpc=true</span></code>。<code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 为空时按单节点无选主模式启动。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 为空时按单节点无选主模式启动。</p></li>
 <li><p>Worker 侧 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 仍配置为可访问的 Coordinator 地址；如果需要客户端/Worker 自动发现多个 Coordinator，应使用支持多地址的 Coordinator Discovery 接入方式。</p></li>
 </ul>
 <p>三节点示例的静态 peers 列表如下：</p>
@@ -1133,9 +1133,6 @@ dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<
 <span class="w">  </span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;coordinator_raft_data_dir&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./datasystem/coordinator_raft_node1&quot;</span>
-<span class="w">  </span><span class="p">},</span>
-<span class="w">  </span><span class="nt">&quot;use_brpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
@@ -1150,9 +1147,6 @@ dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<
 <span class="w">  </span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;coordinator_raft_data_dir&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./datasystem/coordinator_raft_node2&quot;</span>
-<span class="w">  </span><span class="p">},</span>
-<span class="w">  </span><span class="nt">&quot;use_brpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
@@ -1166,9 +1160,6 @@ dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<
 <span class="w">  </span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;coordinator_raft_data_dir&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./datasystem/coordinator_raft_node3&quot;</span>
-<span class="w">  </span><span class="p">},</span>
-<span class="w">  </span><span class="nt">&quot;use_brpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
@@ -1519,6 +1510,10 @@ dscli<span class="w"> </span>start<span class="w"> </span>--datasystem_home_dir<
 <td><p>无</p></td>
 <td><p>启用ums后，datasystem worker之间的rpc消息将通过 ub 传输</p></td>
 </tr>
+<tr class="row-even"><td><p>–jemalloc_prof_conf &lt;CONF&gt;</p></td>
+<td><p>无</p></td>
+<td><p>设置 Worker 子进程的 jemalloc profiling 配置。仅适用于使用 <code class="docutils literal notranslate"><span class="pre">build.sh</span> <span class="pre">-x</span> <span class="pre">on</span></code> 构建的安装包，且必须位于 <code class="docutils literal notranslate"><span class="pre">--worker_args</span></code>、<code class="docutils literal notranslate"><span class="pre">--coordinator_args</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--coordinator_worker_args</span></code> 之前</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -1578,6 +1573,24 @@ modprobe<span class="w"> </span>ums
 </div>
 <p>例子：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--enable_ums<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+</pre></div>
+</div>
+</div></blockquote>
+<blockquote>
+<div><p><strong>jemalloc profiling 注意事项</strong>：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--jemalloc_prof_conf</span></code> 是 dscli 参数，不是 Worker 启动参数，因此不写入 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code>。</p></li>
+<li><p>该参数只能用于启动 Worker，并要求安装包通过 <code class="docutils literal notranslate"><span class="pre">build.sh</span> <span class="pre">-x</span> <span class="pre">on</span></code> 构建。普通构建传入该参数会在 Worker 启动前报错并提示重新构建。</p></li>
+<li><p>dscli 会自动补充 <code class="docutils literal notranslate"><span class="pre">prof:true</span></code>。如果未指定 <code class="docutils literal notranslate"><span class="pre">prof_prefix</span></code>，默认前缀为 <code class="docutils literal notranslate"><span class="pre">&lt;log_dir&gt;/jemalloc/datasystem_worker</span></code>。</p></li>
+<li><p>显式指定 <code class="docutils literal notranslate"><span class="pre">prof_prefix</span></code> 时完全使用该前缀，不再使用默认日志路径。<code class="docutils literal notranslate"><span class="pre">prof_prefix</span></code> 是文件名前缀而不是目录，例如 <code class="docutils literal notranslate"><span class="pre">prof_prefix:/data/heap/worker</span></code> 会生成 <code class="docutils literal notranslate"><span class="pre">/data/heap/worker.&lt;pid&gt;...heap</span></code>。</p></li>
+<li><p>dscli 不会自动配置 <code class="docutils literal notranslate"><span class="pre">prof_final</span></code>、<code class="docutils literal notranslate"><span class="pre">prof_gdump</span></code> 或 <code class="docutils literal notranslate"><span class="pre">lg_prof_interval</span></code>。heap 文件也不参与日志轮转、压缩或清理，用户需要自行选择 dump 策略并管理磁盘空间。</p></li>
+</ul>
+<p>例子：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># heap 文件默认写入 log_dir/jemalloc</span>
+dscli<span class="w"> </span>start<span class="w"> </span>--jemalloc_prof_conf<span class="w"> </span><span class="s2">&quot;prof_final:true,lg_prof_sample:20&quot;</span><span class="w"> </span>-W<span class="w"> </span>worker_config.json
+
+<span class="c1"># 使用用户指定的文件名前缀</span>
+dscli<span class="w"> </span>start<span class="w"> </span>--jemalloc_prof_conf<span class="w"> </span><span class="s2">&quot;prof_final:true,prof_prefix:/data/heap/worker&quot;</span><span class="w"> </span>-W<span class="w"> </span>worker_config.json
 </pre></div>
 </div>
 </div></blockquote>
@@ -1698,7 +1711,11 @@ dscli<span class="w"> </span>stop<span class="w"> </span>--worker_address<span c
 <td><p>无</p></td>
 <td><p>启用ums后，datasystem worker之间的rpc消息将通过 ub 传输</p></td>
 </tr>
-<tr class="row-even"><td><p>–metastore_head_node &lt;NODE_IP&gt;</p></td>
+<tr class="row-even"><td><p>–jemalloc_prof_conf &lt;CONF&gt;</p></td>
+<td><p>无</p></td>
+<td><p>将 jemalloc profiling 配置转发到每个远端 Worker；每个节点都必须使用 <code class="docutils literal notranslate"><span class="pre">build.sh</span> <span class="pre">-x</span> <span class="pre">on</span></code> 构建的安装包</p></td>
+</tr>
+<tr class="row-odd"><td><p>–metastore_head_node &lt;NODE_IP&gt;</p></td>
 <td><p>无</p></td>
 <td><p>指定&lt;NODE_IP&gt;节点的worker启动Metastore取代ETCD</p></td>
 </tr>
@@ -1727,6 +1744,9 @@ dscli<span class="w"> </span>up<span class="w"> </span>--interleave<span class="
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>up<span class="w"> </span>--enable_ums<span class="w"> </span>-f<span class="w"> </span>./cluster_config.json
 </pre></div>
 </div>
+</div></blockquote>
+<blockquote>
+<div><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">up</span> <span class="pre">--jemalloc_prof_conf</span> <span class="pre">&lt;CONF&gt;</span></code> 会把同一配置安全转发到每个远端 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code>。是否支持 profiling 由各远端安装包独立检查。默认和显式 <code class="docutils literal notranslate"><span class="pre">prof_prefix</span></code> 的规则与 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 相同。</p>
 </div></blockquote>
 </section>
 <section id="dscli-down">
@@ -1856,7 +1876,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--interleave<span class="
 <p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">query</span></code> 通过只读接口查询协调后端，并在命令行进程本地完成拓扑解码、健康状态派生、
 哈希区间计算和 key 路由。命令不会读取 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code>，也不会自动探测后端类型；
 用户必须显式传入 ETCD 或 Coordinator 地址。
-Coordinator 使用与服务部署相同的基础地址，查询客户端按 <code class="docutils literal notranslate"><span class="pre">use_brpc</span></code> 配置选择 BRPC 或 ZMQ 传输。
+Coordinator 使用与服务部署相同的基础地址，查询客户端经 brpc 传输与 Coordinator 通信。
 <code class="docutils literal notranslate"><span class="pre">--coordinator_address</span></code> 支持逗号分隔的 <code class="docutils literal notranslate"><span class="pre">host:port</span></code> 列表，用于多实例 Coordinator 部署场景；查询客户端会经由
 Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Worker 侧 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 一致。
 整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
@@ -2162,37 +2182,31 @@ Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Wo
 <td><p>否</p></td>
 <td><p>Coordinator 指标摘要的采集和输出间隔，单位为毫秒</p></td>
 </tr>
-<tr class="row-even"><td><p>use_brpc</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
-<td><p>否</p></td>
-<td><p>是否使用 brpc 进行 RPC 通信；配置文件中的显式值或环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_USE_BRPC</span></code> 可覆盖默认值；参数化入口启用选举时必须为<code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>brpc_server_num_threads</p></td>
+<tr class="row-even"><td><p>brpc_server_num_threads</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>否</p></td>
 <td><p>brpc Server 工作线程数</p></td>
 </tr>
-<tr class="row-even"><td><p>brpc_max_concurrency</p></td>
+<tr class="row-odd"><td><p>brpc_max_concurrency</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
 <td><p>否</p></td>
 <td><p>每个 brpc Server 允许的最大并发 RPC 数；为 <code class="docutils literal notranslate"><span class="pre">0</span></code> 时不限制，且不能小于 <code class="docutils literal notranslate"><span class="pre">brpc_server_num_threads</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>request_sample_rate</p></td>
+<tr class="row-even"><td><p>request_sample_rate</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
 <td><p>是</p></td>
 <td><p>请求日志主采样率，取值范围为 <code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>access_sample_rate</p></td>
+<tr class="row-odd"><td><p>access_sample_rate</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
 <td><p>是</p></td>
 <td><p>Access 日志补采样率，取值范围为 <code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>diagnostic_sample_rate</p></td>
+<tr class="row-even"><td><p>diagnostic_sample_rate</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
 <td><p>是</p></td>
@@ -2206,7 +2220,7 @@ Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Wo
 Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class="docutils literal notranslate"><span class="pre">coordinator_raft_data_dir</span></code>、
 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_heartbeat_interval_ms</span></code>、<code class="docutils literal notranslate"><span class="pre">coordinator_raft_election_timeout_ms</span></code>、
 <code class="docutils literal notranslate"><span class="pre">coordinator_member_failure_grace_ms</span></code> 和 <code class="docutils literal notranslate"><span class="pre">coordinator_discovery_retry_interval_ms</span></code> 用于配置本节点 Raft 状态目录
-和选举时序。仅设置 <code class="docutils literal notranslate"><span class="pre">use_brpc=true</span></code> 不会启用选主，仍需配置 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code>。</p>
+和选举时序。配置 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 是启用选主的必要条件。</p>
 <p>生产部署中，一个 Coordinator 配置文件对应一个 Coordinator 进程。多节点部署时，每个节点应使用自己的
 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code> 和独占的 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_data_dir</span></code>，并配置相同的 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code>。配置
 文件解析或参数校验失败时，Coordinator 启动失败；修改 Raft 成员、地址或数据目录类参数后，应停止相关节点并
@@ -2296,18 +2310,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p>否</p></td>
 <td><p>KV event publisher JSON 配置。为空表示关闭该功能；非空时需要填写 JSON 对象字符串，字段说明参见<a class="reference internal" href="#table_kv_events_config"><span class="xref myst">表1</span></a>。例如：<code class="docutils literal notranslate"><span class="pre">{&quot;bind_endpoint&quot;:&quot;tcp://0.0.0.0:5557&quot;,&quot;backend_id&quot;:&quot;worker-0&quot;}</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>enable_curve_zmq</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>否</p></td>
-<td><p>是否开启服务端组件间认证鉴权功能</p></td>
-</tr>
-<tr class="row-odd"><td><p>curve_key_dir</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>否</p></td>
-<td><p>用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径</p></td>
-</tr>
 <tr class="row-even"><td><p>oc_worker_worker_direct_port</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
@@ -2338,41 +2340,17 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p>否</p></td>
 <td><p>配置服务端用于处理对象/KV缓存的业务线程数</p></td>
 </tr>
-<tr class="row-odd"><td><p>zmq_server_io_context</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
-<td><p>否</p></td>
-<td><p>ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
-</tr>
-<tr class="row-even"><td><p>zmq_client_io_context</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
-<td><p>否</p></td>
-<td><p>ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
-</tr>
-<tr class="row-odd"><td><p>zmq_client_io_thread</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
-<td><p>否</p></td>
-<td><p>ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
-</tr>
-<tr class="row-even"><td><p>io_thread_nice</p></td>
+<tr class="row-odd"><td><p>io_thread_nice</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>否</p></td>
 <td><p>指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 <code class="docutils literal notranslate"><span class="pre">setpriority</span></code>；设置负值通常需要相应权限</p></td>
 </tr>
-<tr class="row-odd"><td><p>enable_sched_runtime</p></td>
+<tr class="row-even"><td><p>enable_sched_runtime</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>否</p></td>
 <td><p>是否允许指定 worker 线程设置 Linux 调度 runtime。当前仅用于 URMA JFC poll 线程；设置为 <code class="docutils literal notranslate"><span class="pre">false</span></code> 时保留线程继承的调度参数且不调用 <code class="docutils literal notranslate"><span class="pre">sched_setattr</span></code>。</p></td>
-</tr>
-<tr class="row-even"><td><p>zmq_chunk_sz</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">1048576</span></code></p></td>
-<td><p>否</p></td>
-<td><p>并行负载分块大小配置（以字节为单位）</p></td>
 </tr>
 <tr class="row-odd"><td><p>brpc_event_dispatcher_num</p></td>
 <td><p>int</p></td>
