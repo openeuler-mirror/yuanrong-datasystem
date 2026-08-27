@@ -215,6 +215,7 @@ spec:
         - -spill_directory={{ $.Values.global.spill.spillDirectory }}
         - -spill_size_limit={{ $.Values.global.spill.spillSizeLimit }}
         - -spill_thread_num={{ $.Values.global.spill.spillThreadNum }}
+        - -spill_io_mode={{ $.Values.global.spill.spillIoMode }}
         - -spill_file_max_size_mb={{ $.Values.global.spill.spillFileMaxSizeMb }}
         - -spill_file_open_limit={{ $.Values.global.spill.spillFileOpenLimit }}
         - -spill_enable_readahead={{ $.Values.global.spill.spillEnableReadahead }}

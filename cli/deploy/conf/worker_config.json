@@ -193,7 +193,11 @@
     },
     "spill_thread_num": {
         "value": "8",
-        "description": "It represents the maximum parallelism of writing files, more threads will consume more CPU and I/O resources."
+        "description": "Fixed at Worker startup. It controls spill preparation threads and SpillFileManager instances; more threads consume more CPU and I/O resources."
+    },
+    "spill_io_mode": {
+        "value": "buffered",
+        "description": "Spill write backend. Supported values are buffered and direct_io_uring."
     },
     "spill_file_max_size_mb": {
         "value": "200",

@@ -104,6 +104,8 @@ global:
     spillSizeLimit: "0"
     # It represents the maximum parallelism of writing files, more threads will consume more CPU and I/O resources.
     spillThreadNum: 8
+    # Spill write backend. Valid values are buffered and direct_io_uring.
+    spillIoMode: buffered
     # The size limit of single spill file, spilling objects which lager than that value with one object per file.
     # If there are some big objects, you can increase this value to avoid run out of inodes quickly.
     # The valid range is 200-10240.

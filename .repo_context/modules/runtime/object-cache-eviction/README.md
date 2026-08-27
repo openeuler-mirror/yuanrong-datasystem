@@ -238,6 +238,13 @@
   - `spill_directory`: 为空时禁用本地 spill。
   - `spill_size_limit`: spill 目录容量限制，0 表示使用启动时目录空闲空间的 95%。
   - `spill_thread_num`: `SpillThread` 和 `SpillFileManager` 并行度，默认 8。
+  - `spill_io_mode`: `buffered`（默认）保留同步写路径；`direct_io_uring` 为每个 `SpillFileManager` 创建独立 ring，
+    准备线程只提交持有 SHM lease 的异步请求。
+    ring depth 16、反压上限 64 请求/8 MiB、WRITE batch 32 请求/4 MiB/1 ms 是内部策略，不增加用户可见配置；
+    WRITE 已完成但尚未被 future 消费的请求仍计入反压。空队列允许一个超过 8 MiB 的对象进入，避免大对象永久
+    返回 `K_TRY_AGAIN`。Direct I/O 内部对齐固定为 4 KiB，不依赖全局 `memory_alignment`；地址或长度不满足
+    Direct I/O 约束的对象写入独立 buffered fallback 文件。将 `memory_alignment` 配为 4096 可提高 Direct 路径
+    覆盖率，但不是启用 `direct_io_uring` 的启动前提。direct async spill 不执行 DATASYNC，也不预分配 spill 文件。
   - `spill_file_max_size_mb`: 单个 spill 文件大小上限，默认 200 MB。
   - `spill_file_open_limit`: spill 文件打开 fd 上限，默认 512。
   - `spill_to_remote_worker`: 允许将本地内存压力迁移到其他 worker 内存，默认 false。
@@ -305,6 +312,13 @@
   - 删除 `eviction_thread_num` 必须同时覆盖 `cli/deploy/conf/worker_config.json`、`k8s_deployment/helm_chart/worker.config`、`k8s/helm_chart/datasystem/values.yaml`、`k8s/helm_chart/datasystem/templates/worker_daemonset.yaml`、`docs/source_zh_cn/deployment/dscli.md`、`docs/source_zh_cn/deployment/k8s_configuration.md` 和示例文档。
   - `DELETE` 和 `END_LIFE` 语义不同：前者只移除本 worker copy metadata，后者删除所有 copy metadata 并结束对象生命周期。
   - spill 写入会释放对象写锁再执行 I/O，之后按 create time 重新加锁校验版本；不要绕过版本校验。
+  - direct async spill 是可丢失的临时缓存，不承诺掉电恢复。future 只在 WRITE CQE 全部成功后 ready，随后仍需
+    由 eviction manager 精确版本写锁发布 location；CQ线程不得释放 SHM 或修改对象状态。
+  - ring 初始化、submit 或 CQ wait 失败时，Manager 必须先取消并销毁 ring，再降级到异步 buffered
+    `pwrite`。两种 async backend 都不执行 DATASYNC，避免失败完成后仍有 CQE 引用已释放请求。
+  - `spill_io_stats.cumul_spill_in_bytes` 记录完整 WRITE 成功的 record 字节；用两个资源日志样本做差并除以
+    时间可得到 Worker 总 spill 文件写带宽。`[SpillAsyncStats]` 额外输出每 Manager 的区间/累计字节和 MiB/s；
+    direct backend 对应 O_DIRECT WRITE CQE，底层块设备带宽和写放大仍需用 `iostat` 交叉验证。
   - 当前分支的 primary end-life lane 已使用 `ids_with_version` 并处理 `failed_object_keys` / `outdated_objs`；
     `EvictSpilledObjects` 和 `SpillImpl` fallback 保留的同步 `DeleteNoneL2CacheEvictableObject` 仍使用
     `object_keys`。

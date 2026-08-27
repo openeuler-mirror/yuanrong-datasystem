@@ -22,6 +22,7 @@ data:
     -arena_per_tenant={{ .Values.global.performance.arenaPerTenant }}
     -node_dead_timeout_s={{ .Values.global.reliability.nodeDeadTimeoutS }}
     -client_reconnect_wait_s={{ .Values.global.reliability.clientReconnectWaitS }}
+    -spill_io_mode={{ .Values.global.spill.spillIoMode }}
     -spill_file_max_size_mb={{ .Values.global.spill.spillFileMaxSizeMb }}
     -spill_file_open_limit={{ .Values.global.spill.spillFileOpenLimit }}
     -spill_size_limit={{ .Values.global.spill.spillSizeLimit }}
