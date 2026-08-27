@@ -14,7 +14,7 @@
   - `.skills/*/scripts/*`
   - `.repo_context/modules/overview/repository-skills.md`
 - Last verified against source:
-  - `2026-08-11`
+  - `2026-08-27`
 
 ## Purpose
 
@@ -102,6 +102,7 @@ Examples that should not trigger `ds-infra-engineering`:
 | `ds-test` | user asks to validate code changes, run remote validation, choose tests for a branch, or prepare PR validation evidence | user asks only what validation policy should be, or asks for a conceptual test strategy without execution |
 | `ds-pr-comment-proc` | user asks to fetch unresolved PR comments, reply to review discussions, mark comments resolved, or verify resolved state | user asks only how review comments work or wants review policy explanation |
 | `ds-log-analysis` | user asks to analyze KVCache access/resource logs or generate a report | user only asks about log format or script internals |
+| `ds-network-latency-analysis` | user asks to analyze K8s-collected DataSystem logs for BRPC network residual, TCP/NIC, scheduling, irqoff, bthread, or softirq-preemption latency and generate a localization report | user only asks about supported log formats, report fields, or script internals |
 | `rdma-ucx-perf-debug` | user asks to diagnose RDMA/UCX/P2P throughput, latency, flush, submit, or resource lifetime issues | user only asks where RDMA code lives |
 | `ds-refresh-docs` | user explicitly asks to update, refresh, or publish online docs | user only mentions online docs, `doc_pages`, or docs publishing context |
 | `ds-create-pr` | user explicitly asks to create or submit a PR for a branch | user only asks about PR policy, PR template, or merge conflicts |

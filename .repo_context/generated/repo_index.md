@@ -841,6 +841,11 @@ docs/source_zh_cn/
   - agents/
     - openai.yaml
   - SKILL.md
+- ds-network-latency-analysis/
+  - scripts/
+    - network_latency_analysis.py
+    - test_network_latency_analysis.py
+  - SKILL.md
 - ds-pr-comment-proc/
   - agents/
     - openai.yaml
