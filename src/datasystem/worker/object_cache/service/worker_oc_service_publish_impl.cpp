@@ -472,7 +472,8 @@ Status WorkerOcServicePublishImpl::RequestingToMasterCore(ObjectKV &objectKV, co
         if (rc.GetCode() == K_RPC_PEER_DEAD) {
             // A relayed K_RPC_PEER_DEAD makes the client tear down its (healthy) data plane to
             // this worker and evict it from routing. Other codes keep their transparency.
-            return Status(K_MASTER_TIMEOUT, FormatString("Create meta to master failed. detail: %s", rc.ToString()));
+            return Status(K_METADATA_OWNER_UNAVAILABLE,
+                          FormatString("Metadata owner RPC failed: %s", rc.ToString())).WithExtra(rc.GetExtra());
         }
         const auto code = rc.GetCode();
         if (code == K_METADATA_OWNER_UNAVAILABLE) {

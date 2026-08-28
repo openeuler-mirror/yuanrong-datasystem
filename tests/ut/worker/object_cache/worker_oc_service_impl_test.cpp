@@ -90,6 +90,8 @@ constexpr int64_t K_WAIT_FIRST_MOVING_CALL_TIMEOUT_MS = 1000;
 constexpr int64_t K_WAIT_RETRY_SLEEP_INJECT_TIMEOUT_MS = 1000;
 constexpr int64_t K_LOCK_PROBE_TIMEOUT_MS = 1000;
 constexpr int64_t K_REJOIN_RECONCILIATION_LOCK_UPPER_BOUND_MS = 1000;
+constexpr uint64_t K_METADATA_FAILURE_TEST_DATA_SIZE = 8;
+constexpr const char *K_METADATA_FAILURE_TEST_EXTRA = "metadata_transport_extra";
 
 bool WaitForInjectPointExecuteCount(const std::string &name, uint64_t expectedCount,
                                     std::chrono::milliseconds timeout)
@@ -118,6 +120,8 @@ bool WaitForCondition(const std::function<bool()> &condition, std::chrono::milli
 
 class FakeWorkerMasterOCApi final : public worker::WorkerLocalMasterOCApi {
 public:
+    using CreateMetaHandler = std::function<Status(master::CreateMetaReqPb &, master::CreateMetaRspPb &)>;
+
     explicit FakeWorkerMasterOCApi(const HostPort &localAddr) : WorkerLocalMasterOCApi(nullptr, localAddr, nullptr)
     {
     }
@@ -189,6 +193,13 @@ public:
             return createMultiMetaHandler_(req, rsp);
         }
         return Status::OK();
+    }
+
+    Status CreateMeta(master::CreateMetaReqPb &req, master::CreateMetaRspPb &rsp) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++createMetaCallCount_;
+        return createMetaHandler_ == nullptr ? Status::OK() : createMetaHandler_(req, rsp);
     }
 
     Status QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout, master::QueryMetaRspPb &response,
@@ -310,6 +321,18 @@ public:
         createMultiMetaHandler_ = std::move(handler);
     }
 
+    void SetCreateMetaHandler(CreateMetaHandler handler)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        createMetaHandler_ = std::move(handler);
+    }
+
+    int CreateMetaCallCount() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return createMetaCallCount_;
+    }
+
     std::vector<master::CreateMultiMetaReqPb> CreateMultiMetaRequests() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -358,11 +381,13 @@ private:
     int increaseCallCount_{ 0 };
     int decreaseCallCount_{ 0 };
     std::function<Status(master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &)> createMultiMetaHandler_;
+    CreateMetaHandler createMetaHandler_;
     std::vector<master::CreateMultiMetaReqPb> createMultiMetaRequests_;
     std::vector<master::RemoveMetaReqPb> removeMetaRequests_;
     int queryMetaCallCount_{ 0 };
     int getObjectLocationsCallCount_{ 0 };
     int pureQueryMetaCallCount_{ 0 };
+    int createMetaCallCount_{ 0 };
 };
 
 class FakeWorkerMasterApiManager final : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
@@ -388,6 +413,9 @@ public:
 
     Status GetWorkerMasterApi(const HostPort &masterAddress, std::shared_ptr<worker::WorkerMasterOCApi> &api) override
     {
+        if (lookupStatus_.IsError()) {
+            return lookupStatus_;
+        }
         auto iter = apis_.find(masterAddress);
         api = iter == apis_.end() ? api_ : iter->second;
         return api == nullptr ? Status(K_RUNTIME_ERROR, "test master api is nullptr") : Status::OK();
@@ -403,9 +431,15 @@ public:
         apis_[address] = std::move(api);
     }
 
+    void SetLookupStatus(Status status)
+    {
+        lookupStatus_ = std::move(status);
+    }
+
 private:
     std::shared_ptr<worker::WorkerMasterOCApi> api_;
     std::unordered_map<HostPort, std::shared_ptr<worker::WorkerMasterOCApi>> apis_;
+    Status lookupStatus_;
 };
 
 class TestDistributedTopology final {
@@ -589,6 +623,24 @@ public:
         };
     }
 
+    std::unique_ptr<SafeObjType> MakeMetadataFailureObject(ObjectLifeState lifeState)
+    {
+        auto object = std::make_unique<ObjCacheShmUnit>();
+        object->SetDataSize(K_METADATA_FAILURE_TEST_DATA_SIZE);
+        object->SetLifeState(lifeState);
+        object->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
+        object->stateInfo.SetDataFormat(DataFormat::BINARY);
+        return std::make_unique<SafeObjType>(std::move(object));
+    }
+
+    std::unique_ptr<WorkerOcServicePublishImpl> MakePublishProcessor(
+        const std::shared_ptr<WorkerMasterOCApiManager> &apiManager)
+    {
+        auto param = MakeCrudParam(apiManager);
+        return std::make_unique<WorkerOcServicePublishImpl>(
+            param, std::make_shared<ThreadPool>(1), std::make_shared<AkSkManager>(0), localAddress_);
+    }
+
 protected:
     static constexpr const char *kRecoverMasterAppRefSubscriber = "WorkerOcServiceImplTest.RecoverMasterAppRef";
 
@@ -665,6 +717,59 @@ TEST_F(WorkerOcServiceImplTest, MetadataDeadlineTriggersRefreshStatusOnlyAfterFa
     EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, deadline, false).GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, deadline, true).GetCode(), K_METADATA_OWNER_UNAVAILABLE);
     EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, Status::OK(), true).GetCode(), K_OK);
+}
+
+TEST_F(WorkerOcServiceImplTest, CreateMetadataMapsDispatchedOwnerPeerDead)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const std::string objectKey = "create-metadata-peer-dead";
+    placement_.SetOwner(objectKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    api->SetCreateMetaHandler([](master::CreateMetaReqPb &, master::CreateMetaRspPb &) {
+        return Status(K_RPC_PEER_DEAD, "metadata owner peer dead").WithExtra(K_METADATA_FAILURE_TEST_EXTRA);
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    auto publish = MakePublishProcessor(apiManager);
+    auto safeObj = MakeMetadataFailureObject(ObjectLifeState::OBJECT_INVALID);
+    ObjectKV objectKV(objectKey, *safeObj);
+    const std::vector<std::string> nestedKeys;
+    const WorkerOcServicePublishImpl::PublishParams params{
+        ObjectLifeState::OBJECT_PUBLISHED, nestedKeys, false, 0, ExistenceOptPb::NONE, CacheType::MEMORY
+    };
+
+    auto rc = publish->RequestingToMasterCore(objectKV, params);
+
+    EXPECT_EQ(rc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
+    EXPECT_EQ(rc.GetExtra(), K_METADATA_FAILURE_TEST_EXTRA);
+    EXPECT_EQ(api->CreateMetaCallCount(), 1);
+}
+
+TEST_F(WorkerOcServiceImplTest, CreateMetadataMapsUndispatchedOwnerPeerDead)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const std::string objectKey = "create-metadata-route-peer-dead";
+    placement_.SetOwner(objectKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    apiManager->SetLookupStatus(
+        Status(K_RPC_PEER_DEAD, "metadata route peer dead").WithExtra(K_METADATA_FAILURE_TEST_EXTRA));
+    auto publish = MakePublishProcessor(apiManager);
+    auto safeObj = MakeMetadataFailureObject(ObjectLifeState::OBJECT_INVALID);
+    ObjectKV objectKV(objectKey, *safeObj);
+    const std::vector<std::string> nestedKeys;
+    const WorkerOcServicePublishImpl::PublishParams params{
+        ObjectLifeState::OBJECT_PUBLISHED, nestedKeys, false, 0, ExistenceOptPb::NONE, CacheType::MEMORY
+    };
+
+    auto rc = publish->RequestingToMasterCore(objectKV, params);
+
+    EXPECT_EQ(rc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
+    EXPECT_EQ(rc.GetExtra(), K_METADATA_FAILURE_TEST_EXTRA);
+    EXPECT_EQ(api->CreateMetaCallCount(), 0);
 }
 
 TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaFollowsRedirectToTarget)
