@@ -679,6 +679,10 @@ TEST(WorkerLeaderReconcilerTest, ExitingMembershipDeadlineBoundsInflightLeaderEn
     const auto status = backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, 20);
     const auto elapsed = std::chrono::steady_clock::now() - start;
     EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_NE(status.GetMsg().find("waiter=mark_exiting"), std::string::npos) << status.ToString();
+    EXPECT_NE(status.GetMsg().find("owner=ensure_membership"), std::string::npos) << status.ToString();
+    EXPECT_NE(status.GetMsg().find("owner_phase=ensure_rpc"), std::string::npos) << status.ToString();
+    EXPECT_NE(status.GetMsg().find("held_ms="), std::string::npos) << status.ToString();
     EXPECT_LT(elapsed, std::chrono::milliseconds(200));
 
     proxy.ReleaseEnsure();

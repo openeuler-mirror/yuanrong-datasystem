@@ -205,6 +205,8 @@
   | `CLUSTER_WATCH_QUEUE` | `CoordinationEventDispatcher` | queued event overflow/coalescing and reset doorbells; includes event counters and depth. |
   | `CLUSTER_MEMBERSHIP` | Controller membership reconciliation | membership read failures or per-cycle membership summary; includes version and member counts. |
   | `CLUSTER_MEMBERSHIP_OBSERVED` | Controller membership reconciliation | changed membership digest/sample after membership watch dirties state. |
+  | `Membership mutation lock timed out` | Worker membership lifecycle publication | blocked `EXITING` or state update; includes waiter, current owner, owner phase, wait time, and held time. |
+  | `CLUSTER_MEMBERSHIP_MUTATION` | Worker membership serialization | `slow_hold` means a released mutation held the lock past the Coordinator RPC timeout; includes owner, final phase, and held time. |
   | `CLUSTER_MEMBER_TRANSITION` | Controller planner | member state changes such as INITIAL/JOINING/LEAVING/FAILED. |
   | `CLUSTER_FAILURE_DETECT` | Failure classifier/controller | endpoint or membership failures promoted to topology change candidates; Witness probe decisions carry `probe_id`. |
   | `CLUSTER_WORKER_PROBE` | Worker/Coordinator probe delivery | end-to-end Witness event, queue, peer probe, report, and ingress stages correlated by `probe_id`. |
