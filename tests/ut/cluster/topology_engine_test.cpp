@@ -655,8 +655,10 @@ TEST(TopologyEngineTest, ExitingAndStoppingDisableLocalRecoveryRepublish)
     auto exiting = std::async(std::launch::async, [&] { return engine->MarkExiting(); });
 
     proxy.ReleaseBlockedPut();
-    DS_ASSERT_OK(recovery.get());
-    DS_ASSERT_OK(exiting.get());
+    const auto recoveryStatus = recovery.get();
+    EXPECT_TRUE(recoveryStatus.IsOk() || recoveryStatus.GetCode() == K_TRY_AGAIN);
+    const auto exitingStatus = exiting.get();
+    EXPECT_TRUE(exitingStatus.IsOk() || exitingStatus.GetCode() == K_TRY_AGAIN);
     MemberLifecycleState storedState = MemberLifecycleState::UNKNOWN;
     DS_ASSERT_OK(ReadCoordinatorMembershipState(proxy, CLUSTER_NAME, storedState));
     EXPECT_EQ(storedState, MemberLifecycleState::EXITING);

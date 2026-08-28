@@ -28,6 +28,17 @@
 
 namespace datasystem::cluster {
 
+namespace coordination_backend_detail {
+inline int32_t RemainingTimeoutMs(std::chrono::steady_clock::time_point deadline,
+                                  std::chrono::steady_clock::time_point now)
+{
+    if (now >= deadline) {
+        return 0;
+    }
+    return static_cast<int32_t>(std::chrono::ceil<std::chrono::milliseconds>(deadline - now).count());
+}
+}
+
 /**
  * @brief Adapt the DataSystem Coordinator KV/watch/lease APIs to the cluster coordination contract.
  */
@@ -279,7 +290,7 @@ public:
     Status PrepareMembershipRecreate();
 
     /**
-     * @brief Serialize one remote Leader Ensure with ordinary membership mutations.
+     * @brief Ensure membership without holding the local mutation lock during the remote call.
      * @param[in] coordinatorId Coordinator lifetime that accepts the Ensure.
      * @param[in] ensure Handler that sends and validates the bounded Ensure RPC using the latest payload.
      * @param[in] markRestarting Whether this Ensure is recovering from a lost membership incarnation.
@@ -343,27 +354,9 @@ private:
     enum class MembershipMutationPhase : uint8_t {
         NONE,
         ACQUIRED,
-        DELETE_RPC,
-        REFRESH_WATCH_IDENTITY,
-        RANGE_RPC,
-        PUT_RPC,
-        UPDATE_LOCAL_MEMBERSHIP,
-        GET_OBSERVED_COORDINATOR,
-        COLLECT_FAILED_TARGETS,
-        KEEPALIVE_RPC,
-        RECORD_KEEPALIVE_FAILURE,
-        MEMBERSHIP_SUCCESS_CALLBACK,
-        MEMBERSHIP_SUCCESS_EVENT_HANDLER_STATE,
-        MEMBERSHIP_SUCCESS_WATCH_STATE,
-        MEMBERSHIP_SUCCESS_DISPATCH_RESET,
-        MEMBERSHIP_SUCCESS_READY_HANDLER,
-        MEMBERSHIP_SUCCESS_HANDLER_DRAIN,
         PREPARE_PAYLOAD,
+        UPDATE_LOCAL_MEMBERSHIP,
         INSTALL_REVISION,
-        REFRESH_WATCH_AFTER_RANGE,
-        PUT_READY_RPC,
-        REFRESH_WATCH_AFTER_PUT,
-        ENSURE_RPC,
         COUNT
     };
 
@@ -389,6 +382,17 @@ private:
     };
 
     struct KeepAliveFailureState;
+    struct MembershipIncarnation {
+        std::string coordinatorId;
+        int64_t modRevision{ COORDINATOR_NO_MOD_REVISION_CHECK };
+    };
+    struct MembershipMutation {
+        MembershipIncarnation startedFrom;
+        MembershipValue value;
+        std::string encodedValue;
+        bool required{ true };
+    };
+    enum class MembershipCommitResult { COMMITTED, SUPERSEDED, STALE_LIFETIME };
     struct WatchedKey {
         std::string key;
         bool isPrefix{ false };
@@ -429,11 +433,29 @@ private:
      */
     Status AutoCreateKeepAliveKey(bool recreated = false);
 
+    Status EncodeMembershipForRecreation(const std::vector<KeyValueEntry> &current,
+                                         const MembershipIncarnation &startedFrom,
+                                         const std::string &rangeCoordinatorId, MembershipValue &publishedValue,
+                                         std::string &encodedValue);
+
+    Status CommitCreatedMembership(const MembershipIncarnation &startedFrom, const std::string &coordinatorId,
+                                   int64_t revision, const MembershipValue &publishedValue, bool recreated);
+
     /**
      * @brief Renew the current membership lease once.
      * @return Status of the call.
      */
     Status RenewKeepAliveOnce();
+
+    Status PrepareNodeStateMutation(MemberLifecycleState state, int32_t timeoutMs, MembershipMutation &mutation);
+
+    Status CommitNodeStateMutation(const MembershipMutation &mutation, const std::string &coordinatorId,
+                                   int64_t revision, bool &retry);
+
+    Status PublishNodeStateMutation(MemberLifecycleState &state, std::chrono::steady_clock::time_point deadline,
+                                    bool &retry);
+
+    Status RepairEnsuredMembership(const MembershipValue &ensuredValue, MembershipCommitResult result);
 
     /**
      * @brief Start the named membership renewal thread.
@@ -456,19 +478,21 @@ private:
      * @param[in] coordinatorId Exact successful membership response identity.
      * @param[in] recreated True when the membership key was newly created or recreated.
      */
-    void HandleMembershipSuccess(const std::string &coordinatorId, bool recreated = false);
+    void HandleMembershipSuccess(const std::string &coordinatorId, uint64_t successEpoch, bool recreated = false);
+    bool PrepareMembershipSuccess(const std::string &coordinatorId, uint64_t successEpoch,
+                                  MembershipReadyHandler &handler, bool &identityChanged);
+    bool InvalidateMembershipWatches(const std::string &coordinatorId, uint64_t successEpoch, bool recreated);
+    void InvokeMembershipReadyHandler(const MembershipReadyHandler &handler, const std::string &coordinatorId,
+                                      uint64_t successEpoch, bool refreshRequired);
+    void HandleRemoteMembershipSuccess(const std::string &coordinatorId);
 
-    /**
-     * @brief Install an ensured revision while membershipMutationMutex_ is held.
-     */
-    void InstallEnsuredMembershipLocked(const std::string &coordinatorId, int64_t membershipModRevision);
-
-    /**
-     * @brief Publish a lifecycle state while membershipMutationMutex_ is held.
-     */
-    Status UpdateNodeStateLocked(MemberLifecycleState state, int32_t effectiveTimeoutMs,
-                                 std::chrono::steady_clock::time_point startedAt,
-                                 MembershipMutationGuard &mutationGuard);
+    MembershipIncarnation GetMembershipIncarnationLocked() const;
+    bool IsMembershipIncarnationCurrentLocked(const MembershipIncarnation &incarnation) const;
+    MembershipCommitResult CommitMembershipRevisionLocked(const MembershipIncarnation &startedFrom,
+                                                           const std::string &coordinatorId, int64_t revision);
+    MembershipCommitResult InstallEnsuredMembership(const MembershipIncarnation &startedFrom,
+                                                     const std::string &coordinatorId,
+                                                     int64_t membershipModRevision);
 
     void RecordMembershipMutationAcquired(MembershipMutationOperation operation,
                                           std::chrono::steady_clock::time_point acquiredAt);
@@ -585,6 +609,7 @@ private:
     bool watchRegistrationInProgress_{ false };
     bool rewatchRequired_{ false };
     bool watchStopping_{ false };
+    uint64_t lastWatchMembershipSuccessEpoch_{ 0 };
     static constexpr std::chrono::milliseconds INITIAL_IDENTITY_PROBE_BACKOFF{ 100 };
     static constexpr std::chrono::milliseconds INITIAL_IDENTITY_PROBE_BACKOFF_LIMIT{ 1'000 };
     static constexpr std::chrono::seconds IDENTITY_PROBE_BACKOFF_GROWTH_WINDOW{ 10 };
@@ -603,6 +628,7 @@ private:
     MembershipReconcileHandler membershipReconcileHandler_;
     MembershipRecreateGate membershipRecreateGate_;
     std::string lastMembershipCoordinatorId_;
+    uint64_t lastMembershipSuccessEpoch_{ 0 };
     std::function<bool()> checkStoreStateWhenNetworkFailedHandler_;
     size_t activeEventHandlers_{ 0 };
     size_t activeMembershipReadyHandlers_{ 0 };
@@ -614,13 +640,15 @@ private:
 
     std::string keepAliveTableName_;
     std::string keepAliveKey_;
-    // Serializes membership RPC commit order and protects keepAliveModRevision_.
+    // Protects the local membership incarnation and short mutation commit sections; never held across an RPC/callback.
     bthread::Mutex membershipMutationMutex_;
     mutable std::mutex membershipMutationDiagnosticMutex_;
     MembershipMutationOperation membershipMutationOwner_{ MembershipMutationOperation::NONE };
     MembershipMutationPhase membershipMutationPhase_{ MembershipMutationPhase::NONE };
     std::chrono::steady_clock::time_point membershipMutationAcquiredAt_;
+    std::string membershipCoordinatorId_;
     int64_t keepAliveModRevision_{ COORDINATOR_NO_MOD_REVISION_CHECK };
+    uint64_t membershipSuccessEpoch_{ 0 };
     std::atomic<bool> exitMembershipRequested_{ false };
     // Protects keepAliveValue_; also used by keepAliveCv_ to interrupt its wait.
     mutable std::mutex keepAliveMutex_;
@@ -633,6 +661,7 @@ private:
     std::atomic<bool> keepAliveTimeout_{ false };
     // Monotonic publication fact; unlike keepAliveValue_, it does not regress when lifecycle advances to READY.
     std::atomic<bool> firstKeepAliveSent_{ false };
+    static constexpr size_t MAX_MEMBERSHIP_MUTATION_ATTEMPTS = 2;
     static constexpr int64_t MS_PER_SECOND = 1'000;
     int64_t keepAliveTtlMs_{ 0 };
     int64_t keepAliveIntervalMs_{ 0 };

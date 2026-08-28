@@ -398,20 +398,23 @@ Status CoordinatorServiceProxyBase::DeleteRange(
 }
 
 Status CoordinatorServiceProxyBase::DeleteMembership(
-    const std::string &key, int64_t &deleted, int64_t &revision, int32_t timeoutMs, int64_t expectedModRevision)
+    const std::string &key, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
+    const std::string &expectedCoordinatorId, int64_t expectedModRevision)
 {
-    return DeleteRangeInternal(key, "", deleted, revision, timeoutMs, expectedModRevision, true);
+    return DeleteRangeInternal(key, "", deleted, revision, timeoutMs, expectedModRevision, true,
+                               expectedCoordinatorId);
 }
 
 Status CoordinatorServiceProxyBase::DeleteRangeInternal(
     const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
-    int64_t expectedModRevision, bool recoveryControl)
+    int64_t expectedModRevision, bool recoveryControl, const std::string &expectedCoordinatorId)
 {
     auto inFlight = BeginRpc(timeoutMs);
     coordinator::DeleteRangeReqPb req;
     req.set_key(key);
     req.set_range_end(rangeEnd);
-    req.set_expected_coordinator_id(inFlight.StartedCoordinatorId());
+    req.set_expected_coordinator_id(expectedCoordinatorId.empty() ? inFlight.StartedCoordinatorId()
+                                                                  : expectedCoordinatorId);
     req.set_expected_mod_revision(expectedModRevision);
     coordinator::DeleteRangeRspPb rsp;
     RpcOptions options;

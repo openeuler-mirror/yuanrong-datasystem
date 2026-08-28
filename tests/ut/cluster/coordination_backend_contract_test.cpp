@@ -186,6 +186,16 @@ TEST(CoordinationBackendContractTest, RevisionReadFailsExplicitlyWhenBackendDoes
     EXPECT_EQ(revision, 0);
 }
 
+TEST(CoordinationBackendContractTest, MembershipDeleteFenceFailsClosedByDefault)
+{
+    FakeCoordinatorServiceProxy proxy;
+    int64_t deleted = 0;
+    int64_t revision = 0;
+
+    EXPECT_EQ(proxy.DeleteMembership("membership", deleted, revision, 1, "coordinator-a", 7).GetCode(),
+              K_NOT_SUPPORTED);
+}
+
 TEST(CoordinationBackendContractTest, DsBackendPreservesClusterScopedMembershipTable)
 {
     DsCoordinationBackend backend(nullptr, "127.0.0.1:1");
