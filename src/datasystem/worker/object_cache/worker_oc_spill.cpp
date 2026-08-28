@@ -542,7 +542,7 @@ Status SpillFileManager::ReserveAsyncLocation(const std::shared_ptr<AsyncWriteRe
 {
     Status reserveRc;
     {
-        std::lock_guard<std::shared_timed_mutex> lock(fileInfoMutex_);
+        std::lock_guard<SharedMutex> lock(fileInfoMutex_);
         reserveRc =
             FindBestAsyncWriteFile(request->tenantId, request->size, request->direct, request->location, request->file);
         if (reserveRc.IsError() && request->direct) {
@@ -761,7 +761,7 @@ void SpillFileManager::UpdateAsyncBatchStats(const AsyncWriteBatch &batch, const
 void SpillFileManager::FinalizeAsyncBatchFile(const AsyncWriteBatch &batch)
 {
     {
-        std::lock_guard<std::shared_timed_mutex> lock(fileInfoMutex_);
+        std::lock_guard<SharedMutex> lock(fileInfoMutex_);
         auto &files = tenant2FileInfo_[batch.front()->tenantId];
         auto iter = files.find(batch.front()->location.path);
         if (iter != files.end()) {
@@ -903,7 +903,7 @@ Status SpillFileManager::FinishAsync(const std::string &objectKey, const ObjectL
         asyncReservations_.erase(iter);
     }
     {
-        std::lock_guard<std::shared_timed_mutex> lock(fileInfoMutex_);
+        std::lock_guard<SharedMutex> lock(fileInfoMutex_);
         auto &info = tenant2FileInfo_[request->tenantId][request->location.path];
         if (publish) {
             UpdateSpillInfo(request->tenantId, objectKey, request->location);
@@ -913,7 +913,7 @@ Status SpillFileManager::FinishAsync(const std::string &objectKey, const ObjectL
         }
     }
     if (!publish) {
-        std::lock_guard<std::shared_timed_mutex> lock(fallocateQueueMutex_);
+        std::lock_guard<SharedMutex> lock(fallocateQueueMutex_);
         fallocateQueue_.emplace_back(objectKey, request->location);
     }
     asyncCv_.notify_all();
