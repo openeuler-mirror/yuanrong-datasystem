@@ -1101,42 +1101,47 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>表示溢出数据写文件的最大并行度，线程数越多会消耗越多的CPU和I/O资源</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.spill.spillFileMaxSizeMb</p></td>
+<tr class="row-odd"><td><p>global.spill.spillIoMode</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;buffered&quot;</span></code></p></td>
+<td><p>Spill写盘模式。<code class="docutils literal notranslate"><span class="pre">buffered</span></code>使用缓冲I/O；<code class="docutils literal notranslate"><span class="pre">direct_io_uring</span></code>使用异步Direct I/O，不能直接使用Direct I/O的对象会自动回退到缓冲I/O</p></td>
+</tr>
+<tr class="row-even"><td><p>global.spill.spillFileMaxSizeMb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">200</span></code></p></td>
 <td><p>单个溢出文件的最大大小（以MB为单位），对于小于此值的对象，会聚合存储于同一个文件中，对于超过此值的对象，将以单个对象单独存为一个文件</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.spillFileOpenLimit</p></td>
+<tr class="row-odd"><td><p>global.spill.spillFileOpenLimit</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">512</span></code></p></td>
 <td><p>溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.spill.spillEnableReadahead</p></td>
+<tr class="row-even"><td><p>global.spill.spillEnableReadahead</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 <code class="docutils literal notranslate"><span class="pre">Read</span></code> 接口偏移读取导致的读放大问题</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.evictionReserveMemThresholdMB</p></td>
+<tr class="row-odd"><td><p>global.spill.evictionReserveMemThresholdMB</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10240</span></code></p></td>
 <td><p>内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, evictionReserveMemThresholdMB)；与 evictionHighWatermarkRatio 共同决定驱逐触发线。有效范围 100-102400</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.spill.evictionHighWatermarkRatio</p></td>
+<tr class="row-even"><td><p>global.spill.evictionHighWatermarkRatio</p></td>
 <td><p>float</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.9</span></code></p></td>
 <td><p>内存占用率高水位（比例 0.0-1.0，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - evictionReserveMemThresholdMB) 时触发驱逐。有效范围 0.02-1.0，须大于 evictionLowWatermarkRatio</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.evictionLowWatermarkRatio</p></td>
+<tr class="row-odd"><td><p>global.spill.evictionLowWatermarkRatio</p></td>
 <td><p>float</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.8</span></code></p></td>
 <td><p>内存占用率低水位（比例 0.0-1.0），后台驱逐运行直至占用率降至该比例及以下。有效范围 0.01-0.99，须小于 evictionHighWatermarkRatio</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.spill.spillHighWatermarkRatio</p></td>
+<tr class="row-even"><td><p>global.spill.spillHighWatermarkRatio</p></td>
 <td><p>float</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.8</span></code></p></td>
 <td><p>Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spillLowWatermarkRatio</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.spillLowWatermarkRatio</p></td>
+<tr class="row-odd"><td><p>global.spill.spillLowWatermarkRatio</p></td>
 <td><p>float</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.6</span></code></p></td>
 <td><p>Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spillHighWatermarkRatio</p></td>
@@ -1152,6 +1157,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <span class="w">    </span><span class="nt">spillDirectory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill&quot;</span>
 <span class="w">    </span><span class="nt">spillSizeLimit</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;10737418240&quot;</span>
 <span class="w">    </span><span class="nt">spillThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">    </span><span class="nt">spillIoMode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">buffered</span>
 <span class="w">    </span><span class="nt">spillFileMaxSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
 <span class="w">    </span><span class="nt">spillFileOpenLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
 <span class="w">    </span><span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
@@ -1165,6 +1171,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <span class="w">    </span><span class="nt">spillDirectory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill&quot;</span>
 <span class="w">    </span><span class="nt">spillSizeLimit</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;10737418240&quot;</span>
 <span class="w">    </span><span class="nt">spillThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">    </span><span class="nt">spillIoMode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">direct_io_uring</span>
 <span class="w">    </span><span class="nt">spillFileMaxSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
 <span class="w">    </span><span class="nt">spillFileOpenLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
 <span class="w">    </span><span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
