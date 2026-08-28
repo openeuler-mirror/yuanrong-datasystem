@@ -212,6 +212,8 @@ public:
         ensureMembershipModRevision_ = ++membershipRevision_;
         response.set_result(ensureResult_);
         response.set_membership_mod_revision(ensureMembershipModRevision_);
+        ++ensureCompletions_;
+        cv_.notify_all();
         return ensureStatus_;
     }
     ICoordinatorLeaderRouteProvider *GetLeaderRouteProvider() override { return &routes_; }
@@ -227,6 +229,11 @@ public:
     {
         std::unique_lock<std::mutex> lock(mutex_);
         return cv_.wait_for(lock, 2s, [&] { return ensureRequests_.size() >= count; });
+    }
+    bool WaitForEnsureCompletions(size_t count) const
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return cv_.wait_for(lock, 2s, [&] { return ensureCompletions_ >= count; });
     }
     bool WaitForReports(size_t count) const
     {
@@ -293,6 +300,7 @@ private:
     mutable std::condition_variable cv_;
     std::vector<coordinator::EnsureLeaderMembershipReqPb> ensureRequests_;
     std::vector<coordinator::ReportTopologyRecoveryCandidateReqPb> reportRequests_;
+    size_t ensureCompletions_{ 0 };
     std::string remoteMembershipKey_;
     std::string remoteMembershipValue_;
     int64_t membershipVersion_{ 0 };
@@ -663,6 +671,8 @@ TEST(WorkerLeaderReconcilerTest, ExitingMembershipWinsAgainstInflightLeaderEnsur
 
 TEST(WorkerLeaderReconcilerTest, ExitingMembershipDeadlineBoundsInflightLeaderEnsure)
 {
+    constexpr int32_t exitTimeoutMs = 200;
+    constexpr auto promptCompletionTimeout = std::chrono::seconds(1);
     FakeProxy proxy;
     proxy.SetKeepAliveSucceeds();
     DsCoordinationBackend backend(&proxy, kWorkerAddress);
@@ -676,18 +686,20 @@ TEST(WorkerLeaderReconcilerTest, ExitingMembershipDeadlineBoundsInflightLeaderEn
     ASSERT_TRUE(proxy.WaitForEnsures(1));
 
     const auto start = std::chrono::steady_clock::now();
-    const auto status = backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, 20);
+    const auto status = backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, exitTimeoutMs);
     const auto elapsed = std::chrono::steady_clock::now() - start;
-    EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
-    EXPECT_NE(status.GetMsg().find("waiter=mark_exiting"), std::string::npos) << status.ToString();
-    EXPECT_NE(status.GetMsg().find("owner=ensure_membership"), std::string::npos) << status.ToString();
-    EXPECT_NE(status.GetMsg().find("owner_phase=ensure_rpc"), std::string::npos) << status.ToString();
-    EXPECT_NE(status.GetMsg().find("held_ms="), std::string::npos) << status.ToString();
-    EXPECT_LT(elapsed, std::chrono::milliseconds(200));
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_LT(elapsed, promptCompletionTimeout);
+    MembershipValue remoteValue;
+    const auto initialDecodeStatus = MembershipValueCodec::Decode(proxy.RemoteMembershipValue(), remoteValue);
+    EXPECT_TRUE(initialDecodeStatus.IsOk()) << initialDecodeStatus.ToString();
+    if (initialDecodeStatus.IsOk()) {
+        EXPECT_EQ(remoteValue.lifecycleState, MemberLifecycleState::EXITING);
+    }
 
     proxy.ReleaseEnsure();
-    ASSERT_TRUE(backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, 1'000).IsOk());
-    MembershipValue remoteValue;
+    ASSERT_TRUE(proxy.WaitForEnsureCompletions(1));
+    ASSERT_TRUE(proxy.WaitForMembershipState(MemberLifecycleState::EXITING));
     ASSERT_TRUE(MembershipValueCodec::Decode(proxy.RemoteMembershipValue(), remoteValue).IsOk());
     EXPECT_EQ(remoteValue.lifecycleState, MemberLifecycleState::EXITING);
     reconciler.Shutdown();

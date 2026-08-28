@@ -76,10 +76,21 @@ public:
                int32_t timeoutMs, std::string *coordinatorId, const std::string &expectedCoordinatorId,
                int64_t expectedModRevision) override
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         ++putCalls_;
         lastPutTimeoutMs_ = timeoutMs;
         lastPutTtlMs_ = ttlMs;
+        if (blockNextPutBeforeCommit_) {
+            blockNextPutBeforeCommit_ = false;
+            putEntered_ = true;
+            watchCv_.notify_all();
+            const bool released = watchCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                                                    [this] { return !blockPutBeforeCommit_; });
+            if (!released) {
+                blockPutBeforeCommit_ = false;
+                return Status(K_RPC_DEADLINE_EXCEEDED, "injected Put deadline exceeded");
+            }
+        }
         if (!putStatuses_.empty()) {
             auto status = std::move(putStatuses_.front());
             putStatuses_.erase(putStatuses_.begin());
@@ -99,6 +110,12 @@ public:
         revision = ++putRevision_;
         lastPutValue_ = value;
         observedCoordinatorId_ = putCoordinatorId_;
+        if (blockNextPutAfterCommit_) {
+            blockNextPutAfterCommit_ = false;
+            putCommitted_ = true;
+            watchCv_.notify_all();
+            watchCv_.wait(lock, [this] { return !blockPutAfterCommit_; });
+        }
         if (coordinatorId != nullptr) {
             *coordinatorId = putCoordinatorId_;
         }
@@ -108,7 +125,13 @@ public:
     Status Range(const std::string &, const std::string &, std::vector<KeyValueEntry> &entries, int64_t &revision,
                  int32_t, std::string *coordinatorId) override
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (blockNextRange_) {
+            blockNextRange_ = false;
+            rangeEntered_ = true;
+            watchCv_.notify_all();
+            watchCv_.wait(lock, [this] { return !blockRange_; });
+        }
         entries = rangeEntries_;
         revision = putRevision_;
         observedCoordinatorId_ = putCoordinatorId_;
@@ -121,7 +144,13 @@ public:
     Status DeleteRange(const std::string &, const std::string &, int64_t &deleted, int64_t &, int32_t,
                        int64_t expectedModRevision) override
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (blockNextDelete_) {
+            blockNextDelete_ = false;
+            deleteEntered_ = true;
+            watchCv_.notify_all();
+            watchCv_.wait(lock, [this] { return !blockDelete_; });
+        }
         lastDeleteModRevision_ = expectedModRevision;
         if (putRevision_ != 0 && expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK
             && expectedModRevision != putRevision_) {
@@ -133,11 +162,18 @@ public:
     }
 
     Status DeleteMembership(const std::string &key, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
-                            int64_t expectedModRevision) override
+                            const std::string &expectedCoordinatorId, int64_t expectedModRevision) override
     {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            lastDeleteCoordinatorId_ = expectedCoordinatorId;
+            lastDeleteModRevision_ = expectedModRevision;
+            membershipDeleteUsed_ = true;
+            if (expectedCoordinatorId != putCoordinatorId_) {
+                return Status(K_TRY_AGAIN, "membership Coordinator changed");
+            }
+        }
         auto status = DeleteRange(key, "", deleted, revision, timeoutMs, expectedModRevision);
-        std::lock_guard<std::mutex> lock(mutex_);
-        membershipDeleteUsed_ = true;
         return status;
     }
 
@@ -184,12 +220,14 @@ public:
                      const std::string &expectedCoordinatorId, int64_t expectedModRevision,
                      const std::vector<std::string> &failedTargets = {}) override
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         lastKeepAliveCoordinatorId_ = expectedCoordinatorId;
         lastKeepAliveModRevision_ = expectedModRevision;
         lastFailedTargets_ = failedTargets;
         ++keepAliveCalls_;
+        keepAliveEntered_ = true;
         watchCv_.notify_all();
+        watchCv_.wait(lock, [this] { return !blockKeepAlive_; });
         if (keepAliveStatus_.IsError()) {
             return keepAliveStatus_;
         }
@@ -264,6 +302,110 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         keepAliveStatus_ = std::move(status);
+    }
+
+    void BlockNextKeepAlive()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        keepAliveEntered_ = false;
+        blockKeepAlive_ = true;
+    }
+
+    bool WaitForBlockedKeepAlive(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return watchCv_.wait_for(lock, timeout, [this] { return keepAliveEntered_; });
+    }
+
+    void ReleaseBlockedKeepAlive()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        blockKeepAlive_ = false;
+        watchCv_.notify_all();
+    }
+
+    void BlockNextPutBeforeCommit()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        putEntered_ = false;
+        blockNextPutBeforeCommit_ = true;
+        blockPutBeforeCommit_ = true;
+    }
+
+    bool WaitForBlockedPut(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return watchCv_.wait_for(lock, timeout, [this] { return putEntered_; });
+    }
+
+    void ReleaseBlockedPut()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        blockPutBeforeCommit_ = false;
+        watchCv_.notify_all();
+    }
+
+    void BlockNextPutAfterCommit()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        putCommitted_ = false;
+        blockNextPutAfterCommit_ = true;
+        blockPutAfterCommit_ = true;
+    }
+
+    bool WaitForCommittedPut(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return watchCv_.wait_for(lock, timeout, [this] { return putCommitted_; });
+    }
+
+    void ReleaseCommittedPut()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        blockPutAfterCommit_ = false;
+        watchCv_.notify_all();
+    }
+
+    void BlockNextRange()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rangeEntered_ = false;
+        blockNextRange_ = true;
+        blockRange_ = true;
+    }
+
+    bool WaitForBlockedRange(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return watchCv_.wait_for(lock, timeout, [this] { return rangeEntered_; });
+    }
+
+    void ReleaseBlockedRange()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        blockRange_ = false;
+        watchCv_.notify_all();
+    }
+
+    void BlockNextDelete()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        deleteEntered_ = false;
+        blockNextDelete_ = true;
+        blockDelete_ = true;
+    }
+
+    bool WaitForBlockedDelete(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return watchCv_.wait_for(lock, timeout, [this] { return deleteEntered_; });
+    }
+
+    void ReleaseBlockedDelete()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        blockDelete_ = false;
+        watchCv_.notify_all();
     }
 
     void SetBeforeWatchReturn(std::function<void()> hook)
@@ -366,6 +508,12 @@ public:
         return lastDeleteModRevision_;
     }
 
+    std::string LastDeleteCoordinatorId() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lastDeleteCoordinatorId_;
+    }
+
     bool MembershipDeleteUsed() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -391,6 +539,14 @@ public:
         putRevision_ = revision;
     }
 
+    void InstallEnsuredValue(const std::string &value, int64_t &revision)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++putVersion_;
+        revision = ++putRevision_;
+        lastPutValue_ = value;
+    }
+
     void SetRangeEntries(std::vector<KeyValueEntry> entries)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -409,6 +565,7 @@ private:
     std::string observedCoordinatorId_;
     std::string lastExpectedCoordinatorId_;
     std::string lastKeepAliveCoordinatorId_;
+    std::string lastDeleteCoordinatorId_;
     int64_t lastExpectedModRevision_{ 0 };
     int32_t lastPutTimeoutMs_{ 0 };
     int64_t lastPutTtlMs_{ 0 };
@@ -429,6 +586,104 @@ private:
     std::function<void()> beforeWatchReturn_;
     bool blockWatch_{ false };
     bool watchEntered_{ false };
+    bool blockKeepAlive_{ false };
+    bool keepAliveEntered_{ false };
+    bool blockNextPutBeforeCommit_{ false };
+    bool blockPutBeforeCommit_{ false };
+    bool putEntered_{ false };
+    bool blockNextPutAfterCommit_{ false };
+    bool blockPutAfterCommit_{ false };
+    bool putCommitted_{ false };
+    bool blockNextRange_{ false };
+    bool blockRange_{ false };
+    bool rangeEntered_{ false };
+    bool blockNextDelete_{ false };
+    bool blockDelete_{ false };
+    bool deleteEntered_{ false };
+};
+
+class BlockingMembershipEnsure {
+public:
+    BlockingMembershipEnsure(DeterministicCoordinatorProxy &proxy, MemberLifecycleState expectedState)
+        : proxy_(proxy), expectedState_(expectedState)
+    {
+    }
+
+    Status Run(const DsCoordinationBackend::MembershipRenewalPayload &payload, int64_t &revision)
+    {
+        MembershipValue captured;
+        RETURN_IF_NOT_OK(MembershipValueCodec::Decode(payload.encodedValue, captured));
+        CHECK_FAIL_RETURN_STATUS(expectedState_ == MemberLifecycleState::UNKNOWN
+                                     || captured.lifecycleState == expectedState_,
+                                 K_INVALID, "Ensure captured an unexpected membership state");
+        std::unique_lock<std::mutex> lock(mutex_);
+        entered_ = true;
+        cv_.notify_all();
+        cv_.wait(lock, [this] { return released_; });
+        proxy_.InstallEnsuredValue(payload.encodedValue, revision);
+        return Status::OK();
+    }
+
+    bool WaitForEntry(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        const bool reached = cv_.wait_for(lock, timeout, [this] { return entered_; });
+        if (!reached) {
+            released_ = true;
+            cv_.notify_all();
+        }
+        return reached;
+    }
+
+    void Release()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        released_ = true;
+        cv_.notify_all();
+    }
+
+private:
+    DeterministicCoordinatorProxy &proxy_;
+    MemberLifecycleState expectedState_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool entered_{ false };
+    bool released_{ false };
+};
+
+class BlockingMembershipEnsureAfterCommit {
+public:
+    explicit BlockingMembershipEnsureAfterCommit(DeterministicCoordinatorProxy &proxy) : proxy_(proxy) {}
+
+    Status Run(const DsCoordinationBackend::MembershipRenewalPayload &payload, int64_t &revision)
+    {
+        proxy_.InstallEnsuredValue(payload.encodedValue, revision);
+        std::unique_lock<std::mutex> lock(mutex_);
+        committed_ = true;
+        cv_.notify_all();
+        cv_.wait(lock, [this] { return released_; });
+        return Status::OK();
+    }
+
+    bool WaitForCommit(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return cv_.wait_for(lock, timeout, [this] { return committed_; });
+    }
+
+    void Release()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        released_ = true;
+        cv_.notify_all();
+    }
+
+private:
+    DeterministicCoordinatorProxy &proxy_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool committed_{ false };
+    bool released_{ false };
 };
 
 std::vector<WatchKey> TwoWatchPlan()
@@ -955,6 +1210,17 @@ TEST(DsCoordinationBackendSessionTest, ExitingPublicationUsesCallerTimeoutBudget
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
+TEST(DsCoordinationBackendSessionTest, RemainingTimeoutRoundsPositiveSubMillisecondBudgetUp)
+{
+    const auto now = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    EXPECT_EQ(coordination_backend_detail::RemainingTimeoutMs(now + std::chrono::nanoseconds(1), now), 1);
+    EXPECT_EQ(coordination_backend_detail::RemainingTimeoutMs(now + std::chrono::microseconds(999), now), 1);
+    EXPECT_EQ(coordination_backend_detail::RemainingTimeoutMs(now + std::chrono::milliseconds(1), now), 1);
+    EXPECT_EQ(coordination_backend_detail::RemainingTimeoutMs(now, now), 0);
+    EXPECT_EQ(coordination_backend_detail::RemainingTimeoutMs(now - std::chrono::nanoseconds(1), now), 0);
+}
+
 TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotOverwriteReplacement)
 {
     DeterministicCoordinatorProxy proxy;
@@ -980,6 +1246,64 @@ TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotDeleteRep
     proxy.ReplaceMembershipIncarnation();
     EXPECT_EQ(backend.Delete("/datasystem/c/cluster", WATCHER_ADDRESS).GetCode(), K_TRY_AGAIN);
     EXPECT_EQ(proxy.LastDeleteModRevision(), 2);
+}
+
+TEST(DsCoordinationBackendSessionTest, MembershipDeleteKeepsCoordinatorAndRevisionPaired)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+
+    proxy.SetPutCoordinatorId(COORDINATOR_B);
+    proxy.SetMembershipRevision(1);
+    EXPECT_EQ(backend.Delete("/datasystem/c/cluster", WATCHER_ADDRESS).GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(proxy.LastDeleteCoordinatorId(), COORDINATOR_A);
+    EXPECT_EQ(proxy.LastDeleteModRevision(), 1);
+}
+
+TEST(DsCoordinationBackendSessionTest, RecreationRejectsRevisionCollisionFromAnotherProcess)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    MembershipValue replacement;
+    ASSERT_TRUE(ReadRenewalValue(backend, replacement).IsOk());
+    ++replacement.timestamp;
+    std::string encoded;
+    ASSERT_TRUE(MembershipValueCodec::Encode(replacement, encoded).IsOk());
+    proxy.SetPutCoordinatorId(COORDINATOR_B);
+    proxy.SetMembershipRevision(1);
+    proxy.SetRangeEntries({ { "membership", encoded, 1, 1 } });
+    const auto putCalls = proxy.PutCalls();
+
+    EXPECT_EQ(backend.CreateKeepAliveKeyWithRetry().GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(proxy.PutCalls(), putCalls);
+}
+
+TEST(DsCoordinationBackendSessionTest, RecreationAdoptsNewLifetimeStateForSameProcess)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    MembershipValue replacement;
+    ASSERT_TRUE(ReadRenewalValue(backend, replacement).IsOk());
+    replacement.lifecycleState = MemberLifecycleState::READY;
+    std::string encoded;
+    ASSERT_TRUE(MembershipValueCodec::Encode(replacement, encoded).IsOk());
+    proxy.SetPutCoordinatorId(COORDINATOR_B);
+    proxy.SetMembershipRevision(1);
+    proxy.SetRangeEntries({ { "membership", encoded, 1, 1 } });
+
+    ASSERT_TRUE(backend.CreateKeepAliveKeyWithRetry().IsOk());
+    MembershipValue renewal;
+    ASSERT_TRUE(ReadRenewalValue(backend, renewal).IsOk());
+    EXPECT_EQ(renewal.lifecycleState, MemberLifecycleState::READY);
 }
 
 TEST(DsCoordinationBackendSessionTest, StartupRollbackDeletesOnlyPublishedMembership)
@@ -1041,6 +1365,26 @@ TEST(DsCoordinationBackendSessionTest, EnsuredMembershipClearsEarlierRenewalFail
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
+TEST(DsCoordinationBackendSessionTest, SupersededEnsureDoesNotClearNewerRenewalFailure)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status(K_RPC_UNAVAILABLE, "injected renewal failure"));
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    proxy.SetMembershipRevision(17);
+    const auto callsBeforeInstall = proxy.KeepAliveCalls();
+    ASSERT_TRUE(backend.OnMembershipEnsured(COORDINATOR_A, 17).IsOk());
+    ASSERT_TRUE(proxy.WaitForKeepAliveRevision(17, callsBeforeInstall + 1, std::chrono::seconds(2)));
+    for (size_t retry = 0; retry < 100 && !backend.IsKeepAliveTimeout(); ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(backend.IsKeepAliveTimeout());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+
+    ASSERT_TRUE(backend.OnMembershipEnsured(COORDINATOR_A, 2).IsOk());
+    EXPECT_TRUE(backend.IsKeepAliveTimeout());
+}
+
 TEST(DsCoordinationBackendSessionTest, EnsuredMembershipWakesRenewalBeforeLeaseExpires)
 {
     DeterministicCoordinatorProxy proxy;
@@ -1060,6 +1404,7 @@ TEST(DsCoordinationBackendSessionTest, EnsuredMembershipWakesRenewalBeforeLeaseE
 TEST(DsCoordinationBackendSessionTest, StaleEnsuredRevisionCannotRollbackNewerMembershipMutation)
 {
     DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
 
@@ -1142,50 +1487,27 @@ TEST(DsCoordinationBackendSessionTest, EnsureTransactionCannotReplayRecoveringAf
     proxy.SetKeepAliveStatus(Status::OK());
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
-    MembershipValue recovering{ 123, MemberLifecycleState::RECOVERING, "host-a", "v1" };
+    MembershipValue recovering;
+    ASSERT_TRUE(ReadRenewalValue(backend, recovering).IsOk());
+    recovering.lifecycleState = MemberLifecycleState::RECOVERING;
     std::string encoded;
     ASSERT_TRUE(MembershipValueCodec::Encode(recovering, encoded).IsOk());
     proxy.SetRangeEntries({ { "/datasystem/c/cluster/" + std::string(WATCHER_ADDRESS), encoded, 1, 1 } });
     HostPort localAddress;
     ASSERT_TRUE(localAddress.ParseString(WATCHER_ADDRESS).IsOk());
 
-    std::mutex barrierMutex;
-    std::condition_variable barrierCv;
-    bool payloadCaptured = false;
-    bool releaseEnsure = false;
+    BlockingMembershipEnsure blocker(proxy, MemberLifecycleState::RECOVERING);
     auto ensure = std::async(std::launch::async, [&] {
-        return backend.EnsureMembership(
-            COORDINATOR_A,
-            [&](const DsCoordinationBackend::MembershipRenewalPayload &payload, int64_t &membershipModRevision) {
-                MembershipValue captured;
-                RETURN_IF_NOT_OK(MembershipValueCodec::Decode(payload.encodedValue, captured));
-                CHECK_FAIL_RETURN_STATUS(captured.lifecycleState == MemberLifecycleState::RECOVERING, K_INVALID,
-                                         "Ensure did not capture RECOVERING membership");
-                std::unique_lock<std::mutex> lock(barrierMutex);
-                payloadCaptured = true;
-                barrierCv.notify_all();
-                barrierCv.wait(lock, [&] { return releaseEnsure; });
-                membershipModRevision = 1;
-                return Status::OK();
-            });
+        return backend.EnsureMembership(COORDINATOR_A, [&](const auto &payload, int64_t &revision) {
+            return blocker.Run(payload, revision);
+        });
     });
-    bool reachedBarrier = false;
-    {
-        std::unique_lock<std::mutex> lock(barrierMutex);
-        reachedBarrier = barrierCv.wait_for(lock, std::chrono::seconds(2), [&] { return payloadCaptured; });
-        if (!reachedBarrier) {
-            releaseEnsure = true;
-            barrierCv.notify_all();
-        }
-    }
-    ASSERT_TRUE(reachedBarrier);
+    ASSERT_TRUE(blocker.WaitForEntry(std::chrono::seconds(2)));
     auto reconciliation =
         std::async(std::launch::async, [&] { return backend.InformReconciliationDone(localAddress); });
-    {
-        std::lock_guard<std::mutex> lock(barrierMutex);
-        releaseEnsure = true;
-        barrierCv.notify_all();
-    }
+    const auto reconciliationCompletion = reconciliation.wait_for(std::chrono::seconds(2));
+    blocker.Release();
+    ASSERT_EQ(reconciliationCompletion, std::future_status::ready);
     ASSERT_TRUE(ensure.get().IsOk());
     ASSERT_TRUE(reconciliation.get().IsOk());
 
@@ -1198,59 +1520,357 @@ TEST(DsCoordinationBackendSessionTest, EnsureTransactionCannotReplayRecoveringAf
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
-TEST(DsCoordinationBackendSessionTest, ExitingTimeoutReportsBlockedMembershipReadyHandler)
+TEST(DsCoordinationBackendSessionTest, BlockingEnsureDoesNotDelayExitingPublication)
 {
+    constexpr int32_t operationTimeoutMs = 2'000;
+    constexpr auto operationTimeout = std::chrono::milliseconds(operationTimeoutMs);
+    constexpr auto promptCompletionTimeout = std::chrono::milliseconds(500);
     DeterministicCoordinatorProxy proxy;
     proxy.SetKeepAliveStatus(Status::OK());
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
 
+    BlockingMembershipEnsure blocker(proxy, MemberLifecycleState::UNKNOWN);
+    auto ensure = std::async(std::launch::async, [&] {
+        return backend.EnsureMembership(COORDINATOR_A, [&](const auto &payload, int64_t &revision) {
+            return blocker.Run(payload, revision);
+        });
+    });
+    ASSERT_TRUE(blocker.WaitForEntry(operationTimeout));
+
+    auto exiting = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, operationTimeoutMs);
+    });
+    const auto completion = exiting.wait_for(promptCompletionTimeout);
+    blocker.Release();
+
+    EXPECT_EQ(completion, std::future_status::ready);
+    EXPECT_TRUE(exiting.get().IsOk());
+    EXPECT_TRUE(ensure.get().IsOk());
+    MembershipValue stored;
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.LastPutValue(), stored).IsOk());
+    EXPECT_EQ(stored.lifecycleState, MemberLifecycleState::EXITING);
+}
+
+TEST(DsCoordinationBackendSessionTest, BlockingMembershipPutDoesNotDelayExitingPublication)
+{
+    constexpr int32_t operationTimeoutMs = 2'000;
+    constexpr auto barrierTimeout = std::chrono::milliseconds(operationTimeoutMs);
+    constexpr auto promptCompletionTimeout = std::chrono::milliseconds(500);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    proxy.BlockNextPutBeforeCommit();
+
+    auto ready = std::async(std::launch::async, [&] { return backend.UpdateNodeState(MemberLifecycleState::READY); });
+    const bool putEntered = proxy.WaitForBlockedPut(barrierTimeout);
+    if (!putEntered) {
+        proxy.ReleaseBlockedPut();
+    }
+    ASSERT_TRUE(putEntered);
+    auto exiting = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, operationTimeoutMs);
+    });
+    const auto completion = exiting.wait_for(promptCompletionTimeout);
+    proxy.ReleaseBlockedPut();
+
+    EXPECT_EQ(completion, std::future_status::ready);
+    EXPECT_TRUE(exiting.get().IsOk());
+    EXPECT_EQ(ready.get().GetCode(), K_TRY_AGAIN);
+}
+
+TEST(DsCoordinationBackendSessionTest, SupersededReadyResponseRepublishesReady)
+{
+    constexpr auto barrierTimeout = std::chrono::seconds(2);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    proxy.BlockNextPutAfterCommit();
+
+    auto ready = std::async(std::launch::async, [&] { return backend.UpdateNodeState(MemberLifecycleState::READY); });
+    const bool putCommitted = proxy.WaitForCommittedPut(barrierTimeout);
+    if (!putCommitted) {
+        proxy.ReleaseCommittedPut();
+    }
+    ASSERT_TRUE(putCommitted);
+    const auto ensureStatus = backend.EnsureMembership(COORDINATOR_A, [&proxy](const auto &payload, int64_t &revision) {
+        proxy.InstallEnsuredValue(payload.encodedValue, revision);
+        return Status::OK();
+    });
+    proxy.ReleaseCommittedPut();
+
+    ASSERT_TRUE(ensureStatus.IsOk());
+    EXPECT_TRUE(ready.get().IsOk());
+    MembershipValue stored;
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.LastPutValue(), stored).IsOk());
+    EXPECT_EQ(stored.lifecycleState, MemberLifecycleState::READY);
+}
+
+TEST(DsCoordinationBackendSessionTest, DelayedReadyResponseCannotRollbackRejoinTimestamp)
+{
+    constexpr auto barrierTimeout = std::chrono::seconds(2);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    MembershipValue original;
+    ASSERT_TRUE(ReadRenewalValue(backend, original).IsOk());
+    proxy.BlockNextPutAfterCommit();
+
+    auto ready = std::async(std::launch::async, [&] { return backend.UpdateNodeState(MemberLifecycleState::READY); });
+    const bool readyCommitted = proxy.WaitForCommittedPut(barrierTimeout);
+    if (!readyCommitted) {
+        proxy.ReleaseCommittedPut();
+    }
+    ASSERT_TRUE(readyCommitted);
+    BlockingMembershipEnsureAfterCommit blocker(proxy);
+    auto ensure = std::async(std::launch::async, [&] {
+        return backend.EnsureMembership(COORDINATOR_A, [&](const auto &payload, int64_t &revision) {
+            return blocker.Run(payload, revision);
+        }, true);
+    });
+    const bool ensureCommitted = blocker.WaitForCommit(barrierTimeout);
+    if (!ensureCommitted) {
+        blocker.Release();
+        proxy.ReleaseCommittedPut();
+    }
+    ASSERT_TRUE(ensureCommitted);
+    proxy.ReleaseCommittedPut();
+    const auto readyStatus = ready.get();
+    blocker.Release();
+
+    EXPECT_TRUE(readyStatus.IsOk() || readyStatus.GetCode() == K_TRY_AGAIN) << readyStatus.ToString();
+    ASSERT_TRUE(ensure.get().IsOk());
+    MembershipValue renewal;
+    ASSERT_TRUE(ReadRenewalValue(backend, renewal).IsOk());
+    MembershipValue remote;
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.LastPutValue(), remote).IsOk());
+    EXPECT_NE(renewal.timestamp, original.timestamp);
+    EXPECT_EQ(remote.timestamp, renewal.timestamp);
+}
+
+TEST(DsCoordinationBackendSessionTest, SupersededReadyResponsePublishesCurrentGeneration)
+{
+    constexpr auto barrierTimeout = std::chrono::seconds(2);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    MembershipValue original;
+    ASSERT_TRUE(ReadRenewalValue(backend, original).IsOk());
+    proxy.BlockNextPutAfterCommit();
+
+    auto ready = std::async(std::launch::async, [&] { return backend.UpdateNodeState(MemberLifecycleState::READY); });
+    const bool readyCommitted = proxy.WaitForCommittedPut(barrierTimeout);
+    if (!readyCommitted) {
+        proxy.ReleaseCommittedPut();
+    }
+    ASSERT_TRUE(readyCommitted);
+    const auto ensureStatus = backend.EnsureMembership(COORDINATOR_A, [&proxy](const auto &payload, int64_t &revision) {
+        proxy.InstallEnsuredValue(payload.encodedValue, revision);
+        return Status::OK();
+    }, true);
+    proxy.ReleaseCommittedPut();
+
+    ASSERT_TRUE(ensureStatus.IsOk());
+    ASSERT_TRUE(ready.get().IsOk());
+    MembershipValue renewal;
+    ASSERT_TRUE(ReadRenewalValue(backend, renewal).IsOk());
+    MembershipValue remote;
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.LastPutValue(), remote).IsOk());
+    EXPECT_NE(renewal.timestamp, original.timestamp);
+    EXPECT_EQ(remote.timestamp, renewal.timestamp);
+    EXPECT_EQ(remote.lifecycleState, MemberLifecycleState::READY);
+}
+
+TEST(DsCoordinationBackendSessionTest, ExitingRepairSharesLifecycleDeadline)
+{
+    constexpr int32_t lifecycleTimeoutMs = 200;
+    constexpr auto completionTimeout = std::chrono::seconds(1);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    const auto initialPutCalls = proxy.PutCalls();
+    proxy.BlockNextPutAfterCommit();
+
+    const auto start = std::chrono::steady_clock::now();
+    auto ready = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::READY, lifecycleTimeoutMs);
+    });
+    const bool readyCommitted = proxy.WaitForCommittedPut(completionTimeout);
+    if (!readyCommitted) {
+        proxy.ReleaseCommittedPut();
+    }
+    ASSERT_TRUE(readyCommitted);
+    EXPECT_EQ(backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, 0).GetCode(),
+              K_RPC_DEADLINE_EXCEEDED);
+    proxy.BlockNextPutBeforeCommit();
+    proxy.ReleaseCommittedPut();
+    const auto completion = ready.wait_for(completionTimeout);
+    if (completion != std::future_status::ready) {
+        proxy.ReleaseBlockedPut();
+    }
+
+    EXPECT_EQ(completion, std::future_status::ready);
+    EXPECT_EQ(ready.get().GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_LT(std::chrono::steady_clock::now() - start, completionTimeout);
+    EXPECT_EQ(proxy.PutCalls() - initialPutCalls, 2U);
+}
+
+TEST(DsCoordinationBackendSessionTest, BlockingKeepAliveDoesNotDelayExitingPublication)
+{
+    constexpr int32_t operationTimeoutMs = 2'000;
+    constexpr auto barrierTimeout = std::chrono::milliseconds(operationTimeoutMs);
+    constexpr auto promptCompletionTimeout = std::chrono::milliseconds(500);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status(K_RPC_UNAVAILABLE, "injected delayed renewal failure"));
+    proxy.BlockNextKeepAlive();
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    const bool keepAliveEntered = proxy.WaitForBlockedKeepAlive(barrierTimeout);
+    if (!keepAliveEntered) {
+        proxy.ReleaseBlockedKeepAlive();
+    }
+    ASSERT_TRUE(keepAliveEntered);
+
+    auto exiting = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, operationTimeoutMs);
+    });
+    const auto completion = exiting.wait_for(promptCompletionTimeout);
+    proxy.ReleaseBlockedKeepAlive();
+
+    EXPECT_EQ(completion, std::future_status::ready);
+    EXPECT_TRUE(exiting.get().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+    EXPECT_FALSE(backend.IsKeepAliveTimeout());
+}
+
+TEST(DsCoordinationBackendSessionTest, BlockingMembershipReadyHandlerDoesNotDelayExitingPublication)
+{
+    constexpr int32_t operationTimeoutMs = 2'000;
+    constexpr auto barrierTimeout = std::chrono::milliseconds(operationTimeoutMs);
+    constexpr auto promptCompletionTimeout = std::chrono::milliseconds(500);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
     std::mutex barrierMutex;
     std::condition_variable barrierCv;
+    bool blockNextHandler = false;
     bool handlerEntered = false;
     bool releaseHandler = false;
-    backend.SetMembershipReadyHandler([&](const std::string &, bool recreated) {
-        if (!recreated) {
+    backend.SetMembershipReadyHandler([&](const std::string &, bool) {
+        std::unique_lock<std::mutex> lock(barrierMutex);
+        if (!blockNextHandler) {
             return;
         }
-        std::unique_lock<std::mutex> lock(barrierMutex);
+        blockNextHandler = false;
         handlerEntered = true;
         barrierCv.notify_all();
         barrierCv.wait(lock, [&] { return releaseHandler; });
     });
-    auto ensure = std::async(std::launch::async, [&] {
-        return backend.EnsureMembership(
-            COORDINATOR_A, [](const DsCoordinationBackend::MembershipRenewalPayload &, int64_t &revision) {
-                revision = 17;
-                return Status::OK();
-            });
-    });
-    bool reachedHandler = false;
+    {
+        std::lock_guard<std::mutex> lock(barrierMutex);
+        blockNextHandler = true;
+    }
+    auto ready = std::async(std::launch::async, [&] { return backend.UpdateNodeState(MemberLifecycleState::READY); });
+    bool handlerReached = false;
     {
         std::unique_lock<std::mutex> lock(barrierMutex);
-        reachedHandler = barrierCv.wait_for(lock, std::chrono::seconds(2), [&] { return handlerEntered; });
-        if (!reachedHandler) {
-            releaseHandler = true;
-            barrierCv.notify_all();
-        }
+        handlerReached = barrierCv.wait_for(lock, barrierTimeout, [&] { return handlerEntered; });
     }
-    ASSERT_TRUE(reachedHandler);
-
-    const auto status = backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, 20);
-    EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
-    EXPECT_NE(status.GetMsg().find("waiter=mark_exiting"), std::string::npos) << status.ToString();
-    EXPECT_NE(status.GetMsg().find("owner=ensure_membership"), std::string::npos) << status.ToString();
-    EXPECT_NE(status.GetMsg().find("owner_phase=membership_success_ready_handler"), std::string::npos)
-        << status.ToString();
-    EXPECT_NE(status.GetMsg().find("held_ms="), std::string::npos) << status.ToString();
-
+    EXPECT_TRUE(handlerReached);
+    auto exiting = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, operationTimeoutMs);
+    });
+    const auto completion = exiting.wait_for(promptCompletionTimeout);
     {
         std::lock_guard<std::mutex> lock(barrierMutex);
         releaseHandler = true;
         barrierCv.notify_all();
     }
-    ASSERT_TRUE(ensure.get().IsOk());
-    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+    EXPECT_EQ(completion, std::future_status::ready);
+    EXPECT_TRUE(exiting.get().IsOk());
+    EXPECT_TRUE(ready.get().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, BlockingReconciliationRangeDoesNotDelayExitingPublication)
+{
+    constexpr int32_t operationTimeoutMs = 2'000;
+    constexpr auto barrierTimeout = std::chrono::milliseconds(operationTimeoutMs);
+    constexpr auto promptCompletionTimeout = std::chrono::milliseconds(500);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, true, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    MembershipValue stored{ 123, MemberLifecycleState::RECOVERING, "host-a", "v1" };
+    std::string encoded;
+    ASSERT_TRUE(MembershipValueCodec::Encode(stored, encoded).IsOk());
+    proxy.SetRangeEntries({ { "/datasystem/c/cluster/" + std::string(WATCHER_ADDRESS), encoded, 1, 1 } });
+    proxy.BlockNextRange();
+    HostPort localAddress;
+    ASSERT_TRUE(localAddress.ParseString(WATCHER_ADDRESS).IsOk());
+
+    auto reconciliation =
+        std::async(std::launch::async, [&] { return backend.InformReconciliationDone(localAddress); });
+    const bool rangeEntered = proxy.WaitForBlockedRange(barrierTimeout);
+    if (!rangeEntered) {
+        proxy.ReleaseBlockedRange();
+    }
+    ASSERT_TRUE(rangeEntered);
+    auto exiting = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, operationTimeoutMs);
+    });
+    const auto completion = exiting.wait_for(promptCompletionTimeout);
+    proxy.ReleaseBlockedRange();
+
+    EXPECT_EQ(completion, std::future_status::ready);
+    EXPECT_TRUE(exiting.get().IsOk());
+    const auto reconciliationStatus = reconciliation.get();
+    EXPECT_TRUE(reconciliationStatus.IsOk() || reconciliationStatus.GetCode() == K_TRY_AGAIN);
+}
+
+TEST(DsCoordinationBackendSessionTest, BlockingMembershipDeleteDoesNotDelayExitingPublication)
+{
+    constexpr int32_t operationTimeoutMs = 2'000;
+    constexpr auto barrierTimeout = std::chrono::milliseconds(operationTimeoutMs);
+    constexpr auto promptCompletionTimeout = std::chrono::milliseconds(500);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    proxy.BlockNextDelete();
+
+    auto removal = std::async(std::launch::async, [&] {
+        return backend.Delete("/datasystem/c/cluster", WATCHER_ADDRESS);
+    });
+    const bool deleteEntered = proxy.WaitForBlockedDelete(barrierTimeout);
+    if (!deleteEntered) {
+        proxy.ReleaseBlockedDelete();
+    }
+    ASSERT_TRUE(deleteEntered);
+    auto exiting = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, operationTimeoutMs);
+    });
+    const auto completion = exiting.wait_for(promptCompletionTimeout);
+    proxy.ReleaseBlockedDelete();
+
+    EXPECT_EQ(completion, std::future_status::ready);
+    EXPECT_TRUE(exiting.get().IsOk());
+    const auto removalStatus = removal.get();
+    EXPECT_EQ(removalStatus.GetCode(), K_TRY_AGAIN);
 }
 
 TEST(DsCoordinationBackendSessionTest, FailedExitIntentFencesReconciliationAndEnsurePayload)

@@ -22,7 +22,6 @@
 #include <algorithm>
 #include <array>
 #include <exception>
-#include <optional>
 #include <thread>
 
 #include "datasystem/common/inject/inject_point.h"
@@ -165,27 +164,9 @@ const char *DsCoordinationBackend::MembershipMutationPhaseName(MembershipMutatio
     static constexpr std::array<const char *, static_cast<size_t>(MembershipMutationPhase::COUNT)> names{
         "none",
         "acquired",
-        "delete_rpc",
-        "refresh_watch_identity",
-        "range_rpc",
-        "put_rpc",
-        "update_local_membership",
-        "get_observed_coordinator",
-        "collect_failed_targets",
-        "keepalive_rpc",
-        "record_keepalive_failure",
-        "membership_success_callback",
-        "membership_success_event_handler_state",
-        "membership_success_watch_state",
-        "membership_success_dispatch_reset",
-        "membership_success_ready_handler",
-        "membership_success_handler_drain",
         "prepare_payload",
-        "install_revision",
-        "refresh_watch_after_range",
-        "put_ready_rpc",
-        "refresh_watch_after_put",
-        "ensure_rpc"
+        "update_local_membership",
+        "install_revision"
     };
     return names[static_cast<size_t>(phase)];
 }
@@ -347,25 +328,30 @@ Status DsCoordinationBackend::Delete(const std::string &tableName, const std::st
     int64_t deleted = 0;
     int64_t revision = 0;
     const bool deletesLocalMembership = tableName == keepAliveTableName_ && key == keepAliveKey_;
-    std::optional<MembershipMutationGuard> mutationGuard;
+    MembershipIncarnation startedFrom;
     if (deletesLocalMembership) {
-        mutationGuard.emplace(*this, MembershipMutationOperation::DELETE_MEMBERSHIP);
-        mutationGuard->SetPhase(MembershipMutationPhase::DELETE_RPC);
+        MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::DELETE_MEMBERSHIP);
+        mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
+        startedFrom = GetMembershipIncarnationLocked();
     }
     const int64_t expectedModRevision =
-        deletesLocalMembership ? keepAliveModRevision_ : COORDINATOR_NO_MOD_REVISION_CHECK;
+        deletesLocalMembership ? startedFrom.modRevision : COORDINATOR_NO_MOD_REVISION_CHECK;
     const auto realKey = BuildRealKey(tableName, key);
     auto rc = deletesLocalMembership
-                  ? proxy_->DeleteMembership(realKey, deleted, revision, timeoutMs, expectedModRevision)
+                  ? proxy_->DeleteMembership(realKey, deleted, revision, timeoutMs, startedFrom.coordinatorId,
+                                             expectedModRevision)
                   : proxy_->DeleteRange(realKey, "", deleted, revision, timeoutMs, expectedModRevision);
-    if (mutationGuard.has_value()) {
-        mutationGuard->SetPhase(MembershipMutationPhase::REFRESH_WATCH_IDENTITY);
-    }
     RefreshWatchIdentity(rc);
-    if (rc.IsOk() && deletesLocalMembership) {
-        keepAliveModRevision_ = COORDINATOR_NO_MOD_REVISION_CHECK;
+    if (rc.IsError() || !deletesLocalMembership) {
+        return rc;
     }
-    return rc;
+    MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::DELETE_MEMBERSHIP);
+    mutationGuard.SetPhase(MembershipMutationPhase::UPDATE_LOCAL_MEMBERSHIP);
+    if (!IsMembershipIncarnationCurrentLocked(startedFrom)) {
+        RETURN_STATUS(K_TRY_AGAIN, "membership changed while deletion was in flight");
+    }
+    keepAliveModRevision_ = COORDINATOR_NO_MOD_REVISION_CHECK;
+    return Status::OK();
 }
 
 Status DsCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys)
@@ -682,66 +668,113 @@ Status DsCoordinationBackend::AutoCreateKeepAliveKey(bool recreated)
     if (recreateGate != nullptr) {
         RETURN_IF_NOT_OK(recreateGate());
     }
-    MembershipMutationGuard mutationGuard(
-        *this, recreated ? MembershipMutationOperation::RECREATE_KEEPALIVE
-                         : MembershipMutationOperation::CREATE_KEEPALIVE);
-
+    MembershipIncarnation startedFrom;
+    {
+        const auto operation = recreated ? MembershipMutationOperation::RECREATE_KEEPALIVE
+                                         : MembershipMutationOperation::CREATE_KEEPALIVE;
+        MembershipMutationGuard mutationGuard(*this, operation);
+        mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
+        startedFrom = GetMembershipIncarnationLocked();
+    }
     const std::string physicalKey = BuildRealKey(keepAliveTableName_, keepAliveKey_);
     std::vector<KeyValueEntry> current;
     int64_t rangeRevision = 0;
     std::string rangeCoordinatorId;
-    mutationGuard.SetPhase(MembershipMutationPhase::RANGE_RPC);
-    RETURN_IF_NOT_OK(proxy_->Range(physicalKey, "", current, rangeRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
-                                   &rangeCoordinatorId));
+    auto rangeStatus = proxy_->Range(physicalKey, "", current, rangeRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                                     &rangeCoordinatorId);
+    RETURN_IF_NOT_OK(rangeStatus);
     CHECK_FAIL_RETURN_STATUS(current.size() <= 1, K_RUNTIME_ERROR,
                              "membership exact read returned multiple values");
     const int64_t expectedVersion =
         current.empty() ? COORDINATOR_KEY_NOT_EXISTS_VERSION : current.front().version;
     const int64_t expectedModRevision =
         current.empty() ? COORDINATOR_NO_MOD_REVISION_CHECK : current.front().modRevision;
-
-    MembershipValue value;
-    {
-        std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        CHECK_FAIL_RETURN_STATUS(keepAliveValue_.lifecycleState != MemberLifecycleState::UNKNOWN, K_INVALID,
-                                 "Node state should not be empty.");
-        value = keepAliveValue_;
-    }
-    if (exitMembershipRequested_.load(std::memory_order_acquire)) {
-        value.lifecycleState = MemberLifecycleState::EXITING;
-    }
-    if (!current.empty() && keepAliveModRevision_ != COORDINATOR_NO_MOD_REVISION_CHECK
-        && current.front().modRevision != keepAliveModRevision_) {
-        MembershipValue currentValue;
-        RETURN_IF_NOT_OK(MembershipValueCodec::Decode(current.front().value, currentValue));
-        CHECK_FAIL_RETURN_STATUS(currentValue.timestamp == value.timestamp, K_TRY_AGAIN,
-                                 "membership process incarnation changed before recreation");
-    }
+    MembershipValue publishedValue;
     std::string valueStr;
-    RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, valueStr));
+    RETURN_IF_NOT_OK(
+        EncodeMembershipForRecreation(current, startedFrom, rangeCoordinatorId, publishedValue, valueStr));
     int64_t version = 0;
     int64_t revision = 0;
     std::string coordinatorId;
-    mutationGuard.SetPhase(MembershipMutationPhase::PUT_RPC);
     auto rc = proxy_->Put(physicalKey, valueStr, keepAliveTtlMs_, expectedVersion, version, revision,
                           DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId, rangeCoordinatorId,
                           expectedModRevision);
     LOG(INFO) << "AutoCreateKeepAliveKey: Put keepalive key " << keepAliveKey_ << " result: " << rc.ToString();
     RETURN_IF_NOT_OK(rc);
-    keepAliveModRevision_ = revision;
-    firstKeepAliveSent_.store(true, std::memory_order_release);
-    mutationGuard.SetPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_CALLBACK);
-    HandleMembershipSuccess(coordinatorId, recreated);
-    mutationGuard.SetPhase(MembershipMutationPhase::UPDATE_LOCAL_MEMBERSHIP);
+    return CommitCreatedMembership(startedFrom, coordinatorId, revision, publishedValue, recreated);
+}
+
+Status DsCoordinationBackend::EncodeMembershipForRecreation(const std::vector<KeyValueEntry> &current,
+                                                            const MembershipIncarnation &startedFrom,
+                                                            const std::string &rangeCoordinatorId,
+                                                            MembershipValue &publishedValue,
+                                                            std::string &encodedValue)
+{
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        if (exitMembershipRequested_.load(std::memory_order_acquire)) {
-            keepAliveValue_.lifecycleState = MemberLifecycleState::EXITING;
-        } else if (keepAliveValue_.lifecycleState == MemberLifecycleState::STARTING
-            || keepAliveValue_.lifecycleState == MemberLifecycleState::RESTARTING) {
-            keepAliveValue_.lifecycleState = MemberLifecycleState::RECOVERING;
+        CHECK_FAIL_RETURN_STATUS(keepAliveValue_.lifecycleState != MemberLifecycleState::UNKNOWN, K_INVALID,
+                                 "Node state should not be empty.");
+        publishedValue = keepAliveValue_;
+    }
+    const bool observedDifferentIncarnation = !current.empty()
+                                              && startedFrom.modRevision != COORDINATOR_NO_MOD_REVISION_CHECK
+                                              && (rangeCoordinatorId != startedFrom.coordinatorId
+                                                  || current.front().modRevision != startedFrom.modRevision);
+    if (observedDifferentIncarnation) {
+        MembershipValue currentValue;
+        RETURN_IF_NOT_OK(MembershipValueCodec::Decode(current.front().value, currentValue));
+        CHECK_FAIL_RETURN_STATUS(currentValue.timestamp == publishedValue.timestamp, K_TRY_AGAIN,
+                                 "membership process incarnation changed before recreation");
+        publishedValue = std::move(currentValue);
+    }
+    if (exitMembershipRequested_.load(std::memory_order_acquire)) {
+        publishedValue.lifecycleState = MemberLifecycleState::EXITING;
+    }
+    return MembershipValueCodec::Encode(publishedValue, encodedValue);
+}
+
+Status DsCoordinationBackend::CommitCreatedMembership(const MembershipIncarnation &startedFrom,
+                                                      const std::string &coordinatorId, int64_t revision,
+                                                      const MembershipValue &publishedValue, bool recreated)
+{
+    MembershipCommitResult result;
+    uint64_t successEpoch = 0;
+    bool repairExit = false;
+    bool generationChanged = false;
+    {
+        const auto operation = recreated ? MembershipMutationOperation::RECREATE_KEEPALIVE
+                                         : MembershipMutationOperation::CREATE_KEEPALIVE;
+        MembershipMutationGuard mutationGuard(*this, operation);
+        mutationGuard.SetPhase(MembershipMutationPhase::UPDATE_LOCAL_MEMBERSHIP);
+        result = CommitMembershipRevisionLocked(startedFrom, coordinatorId, revision);
+        if (result == MembershipCommitResult::COMMITTED) {
+            firstKeepAliveSent_.store(true, std::memory_order_release);
+            std::lock_guard<std::mutex> lock(keepAliveMutex_);
+            generationChanged = keepAliveValue_.timestamp != publishedValue.timestamp;
+            if (!generationChanged) {
+                keepAliveValue_ = publishedValue;
+                successEpoch = ++membershipSuccessEpoch_;
+            }
+            if (exitMembershipRequested_.load(std::memory_order_acquire)) {
+                keepAliveValue_.lifecycleState = MemberLifecycleState::EXITING;
+                repairExit = publishedValue.lifecycleState != MemberLifecycleState::EXITING;
+            } else if (!generationChanged
+                       && (keepAliveValue_.lifecycleState == MemberLifecycleState::STARTING
+                           || keepAliveValue_.lifecycleState == MemberLifecycleState::RESTARTING)) {
+                keepAliveValue_.lifecycleState = MemberLifecycleState::RECOVERING;
+            }
         }
     }
+    CHECK_FAIL_RETURN_STATUS(result != MembershipCommitResult::STALE_LIFETIME, K_TRY_AGAIN,
+                             "membership Coordinator changed while recreation was in flight");
+    if (result == MembershipCommitResult::COMMITTED && !generationChanged) {
+        HandleMembershipSuccess(coordinatorId, successEpoch, recreated);
+    }
+    if (result == MembershipCommitResult::COMMITTED && repairExit) {
+        return UpdateNodeState(MemberLifecycleState::EXITING);
+    }
+    CHECK_FAIL_RETURN_STATUS(!generationChanged, K_TRY_AGAIN,
+                             "membership generation changed while recreation was in flight");
     return Status::OK();
 }
 
@@ -749,29 +782,37 @@ Status DsCoordinationBackend::RenewKeepAliveOnce()
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     INJECT_POINT("CoordinationBackend.KeepAlive.returnError");
-    MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::RENEW_KEEPALIVE);
-    CHECK_FAIL_RETURN_STATUS(keepAliveModRevision_ != COORDINATOR_NO_MOD_REVISION_CHECK, K_NOT_READY,
-                             "membership incarnation is not established");
+    MembershipIncarnation startedFrom;
+    {
+        MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::RENEW_KEEPALIVE);
+        mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
+        CHECK_FAIL_RETURN_STATUS(keepAliveModRevision_ != COORDINATOR_NO_MOD_REVISION_CHECK, K_NOT_READY,
+                                 "membership incarnation is not established");
+        startedFrom = GetMembershipIncarnationLocked();
+    }
     int64_t ttlMs = keepAliveTtlMs_;
     int64_t remainingTtlMs = 0;
     std::string coordinatorId;
-    std::string expectedCoordinatorId;
-    mutationGuard.SetPhase(MembershipMutationPhase::GET_OBSERVED_COORDINATOR);
-    proxy_->GetObservedCoordinatorId(expectedCoordinatorId);
-    mutationGuard.SetPhase(MembershipMutationPhase::COLLECT_FAILED_TARGETS);
     const auto failedTargets = GetFailedTargets(std::chrono::steady_clock::now());
-    mutationGuard.SetPhase(MembershipMutationPhase::KEEPALIVE_RPC);
     auto rc = proxy_->KeepAlive(BuildRealKey(keepAliveTableName_, keepAliveKey_), ttlMs, remainingTtlMs,
-                                DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId, expectedCoordinatorId,
-                                keepAliveModRevision_, failedTargets);
+                                DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId, startedFrom.coordinatorId,
+                                startedFrom.modRevision, failedTargets);
+    uint64_t successEpoch = 0;
+    {
+        MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::RENEW_KEEPALIVE);
+        mutationGuard.SetPhase(MembershipMutationPhase::UPDATE_LOCAL_MEMBERSHIP);
+        if (!IsMembershipIncarnationCurrentLocked(startedFrom)) {
+            return Status::OK();
+        }
+        if (rc.IsError()) {
+            keepAliveTimeout_ = true;
+        } else {
+            keepAliveTimeout_ = false;
+            successEpoch = ++membershipSuccessEpoch_;
+        }
+    }
     if (rc.IsOk()) {
-        mutationGuard.SetPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_CALLBACK);
-        HandleMembershipSuccess(coordinatorId);
-    } else {
-        mutationGuard.SetPhase(MembershipMutationPhase::RECORD_KEEPALIVE_FAILURE);
-        // This write shares membershipMutationMutex_ with OnMembershipEnsured(), so a completed Ensure cannot be
-        // overwritten by an earlier renewal failure after it installed the replacement revision.
-        keepAliveTimeout_ = true;
+        HandleMembershipSuccess(coordinatorId, successEpoch);
     }
     return rc;
 }
@@ -991,36 +1032,20 @@ void DsCoordinationBackend::RunKeepAliveLoop()
 
 void DsCoordinationBackend::HandleKeepAliveSuccess(KeepAliveFailureState &state)
 {
-    keepAliveTimeout_ = false;
     state.confirmTimes = 0;
     state.needHandleFailure = true;
 }
 
-void DsCoordinationBackend::HandleMembershipSuccess(const std::string &coordinatorId, bool recreated)
+void DsCoordinationBackend::HandleMembershipSuccess(const std::string &coordinatorId, uint64_t successEpoch,
+                                                    bool recreated)
 {
-    RecordMembershipMutationPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_EVENT_HANDLER_STATE);
     MembershipReadyHandler handler;
     bool identityChanged = false;
-    {
-        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
-        identityChanged = !coordinatorId.empty() && lastMembershipCoordinatorId_ != coordinatorId;
-        lastMembershipCoordinatorId_ = coordinatorId;
-        handler = membershipReadyHandler_;
-        if (handler != nullptr) {
-            ++activeMembershipReadyHandlers_;
-        }
+    if (!PrepareMembershipSuccess(coordinatorId, successEpoch, handler, identityChanged)) {
+        return;
     }
-    bool invalidated = false;
-    RecordMembershipMutationPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_WATCH_STATE);
-    {
-        std::lock_guard<std::mutex> lock(watchMutex_);
-        if (!watchPlan_.empty() && !rewatchRequired_ && (recreated || registeredCoordinatorId_ != coordinatorId)) {
-            rewatchRequired_ = true;
-            invalidated = true;
-        }
-    }
+    const bool invalidated = InvalidateMembershipWatches(coordinatorId, successEpoch, recreated);
     if (invalidated) {
-        RecordMembershipMutationPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_DISPATCH_RESET);
         DispatchWatchEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
     }
     if (identityChanged || recreated) {
@@ -1029,19 +1054,62 @@ void DsCoordinationBackend::HandleMembershipSuccess(const std::string &coordinat
                   << ", membership_recreated=" << recreated << ", watches_invalidated=" << invalidated;
     }
     if (handler != nullptr) {
-        RecordMembershipMutationPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_READY_HANDLER);
-        try {
-            handler(coordinatorId, recreated || invalidated);
-        } catch (const std::exception &error) {
-            LOG(ERROR) << "Coordinator membership-ready handler threw: " << error.what();
-        } catch (...) {
-            LOG(ERROR) << "Coordinator membership-ready handler threw an unknown exception";
-        }
-        RecordMembershipMutationPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_HANDLER_DRAIN);
-        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
-        --activeMembershipReadyHandlers_;
-        eventHandlerCv_.notify_all();
+        InvokeMembershipReadyHandler(handler, coordinatorId, successEpoch, recreated || invalidated);
     }
+}
+
+bool DsCoordinationBackend::PrepareMembershipSuccess(const std::string &coordinatorId, uint64_t successEpoch,
+                                                     MembershipReadyHandler &handler, bool &identityChanged)
+{
+    std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+    if (successEpoch <= lastMembershipSuccessEpoch_) {
+        return false;
+    }
+    lastMembershipSuccessEpoch_ = successEpoch;
+    identityChanged = !coordinatorId.empty() && lastMembershipCoordinatorId_ != coordinatorId;
+    lastMembershipCoordinatorId_ = coordinatorId;
+    handler = membershipReadyHandler_;
+    if (handler != nullptr) {
+        ++activeMembershipReadyHandlers_;
+    }
+    return true;
+}
+
+bool DsCoordinationBackend::InvalidateMembershipWatches(const std::string &coordinatorId, uint64_t successEpoch,
+                                                        bool recreated)
+{
+    std::lock_guard<std::mutex> lock(watchMutex_);
+    bool invalidated = false;
+    if (successEpoch >= lastWatchMembershipSuccessEpoch_ && !watchPlan_.empty() && !rewatchRequired_
+        && (recreated || registeredCoordinatorId_ != coordinatorId)) {
+        rewatchRequired_ = true;
+        invalidated = true;
+    }
+    lastWatchMembershipSuccessEpoch_ = std::max(lastWatchMembershipSuccessEpoch_, successEpoch);
+    return invalidated;
+}
+
+void DsCoordinationBackend::InvokeMembershipReadyHandler(const MembershipReadyHandler &handler,
+                                                         const std::string &coordinatorId, uint64_t successEpoch,
+                                                         bool refreshRequired)
+{
+    bool current = false;
+    {
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        current = successEpoch == lastMembershipSuccessEpoch_;
+    }
+    try {
+        if (current) {
+            handler(coordinatorId, refreshRequired);
+        }
+    } catch (const std::exception &error) {
+        LOG(ERROR) << "Coordinator membership-ready handler threw: " << error.what();
+    } catch (...) {
+        LOG(ERROR) << "Coordinator membership-ready handler threw an unknown exception";
+    }
+    std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+    --activeMembershipReadyHandlers_;
+    eventHandlerCv_.notify_all();
 }
 
 bool DsCoordinationBackend::CheckStoreAvailableAfterKeepAliveFailure(KeepAliveFailureState &state)
@@ -1156,53 +1224,6 @@ Status DsCoordinationBackend::UpdateNodeState(MemberLifecycleState state)
     return UpdateNodeStateWithTimeout(state, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS);
 }
 
-Status DsCoordinationBackend::UpdateNodeStateLocked(MemberLifecycleState state, int32_t effectiveTimeoutMs,
-                                                    std::chrono::steady_clock::time_point startedAt,
-                                                    MembershipMutationGuard &mutationGuard)
-{
-    mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
-    if (state == MemberLifecycleState::EXITING) {
-        std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        keepAliveValue_.lifecycleState = MemberLifecycleState::EXITING;
-    } else if (exitMembershipRequested_.load(std::memory_order_acquire)) {
-        return Status::OK();
-    }
-    CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
-                             "The key written to the cluster table must be bound to a lease");
-    MembershipValue value;
-    {
-        std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        value = keepAliveValue_;
-        value.lifecycleState = state;
-    }
-    std::string valueStr;
-    RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, valueStr));
-    int64_t version = 0;
-    int64_t revision = 0;
-    std::string coordinatorId;
-    std::string expectedCoordinatorId;
-    mutationGuard.SetPhase(MembershipMutationPhase::GET_OBSERVED_COORDINATOR);
-    proxy_->GetObservedCoordinatorId(expectedCoordinatorId);
-    const auto elapsedMs =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count();
-    const auto remainingMs = static_cast<int64_t>(effectiveTimeoutMs) - elapsedMs;
-    CHECK_FAIL_RETURN_STATUS(remainingMs > 0, K_RPC_DEADLINE_EXCEEDED,
-                             "Membership lifecycle update timeout expired before Coordinator Put");
-    mutationGuard.SetPhase(MembershipMutationPhase::PUT_RPC);
-    RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), valueStr, keepAliveTtlMs_,
-                                 COORDINATOR_NO_VERSION_CHECK, version, revision,
-                                 static_cast<int32_t>(remainingMs), &coordinatorId, expectedCoordinatorId,
-                                 keepAliveModRevision_));
-    keepAliveModRevision_ = revision;
-    {
-        std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        keepAliveValue_ = value;
-    }
-    mutationGuard.SetPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_CALLBACK);
-    HandleMembershipSuccess(coordinatorId);
-    return Status::OK();
-}
-
 Status DsCoordinationBackend::UpdateNodeStateWithTimeout(MemberLifecycleState state, int32_t timeoutMs)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
@@ -1211,19 +1232,115 @@ Status DsCoordinationBackend::UpdateNodeStateWithTimeout(MemberLifecycleState st
     }
     CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_RPC_DEADLINE_EXCEEDED,
                              "Membership lifecycle update timeout expired");
+    const auto effectiveTimeoutMs = std::min(timeoutMs, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(effectiveTimeoutMs);
+    auto pendingState = state;
+    for (size_t attempt = 0; attempt < MAX_MEMBERSHIP_MUTATION_ATTEMPTS; ++attempt) {
+        bool retry = false;
+        auto status = PublishNodeStateMutation(pendingState, deadline, retry);
+        if (status.IsError() || !retry) {
+            return status;
+        }
+    }
+    RETURN_STATUS(K_TRY_AGAIN, "membership changed repeatedly while lifecycle update was in flight");
+}
+
+Status DsCoordinationBackend::PublishNodeStateMutation(MemberLifecycleState &state,
+                                                       std::chrono::steady_clock::time_point deadline, bool &retry)
+{
+    const auto remainingMs = coordination_backend_detail::RemainingTimeoutMs(
+        deadline, std::chrono::steady_clock::now());
+    CHECK_FAIL_RETURN_STATUS(remainingMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             "Membership lifecycle update timeout expired");
+    MembershipMutation mutation;
+    RETURN_IF_NOT_OK(PrepareNodeStateMutation(state, remainingMs, mutation));
+    RETURN_OK_IF_TRUE(!mutation.required);
+    const auto rpcTimeoutMs = coordination_backend_detail::RemainingTimeoutMs(
+        deadline, std::chrono::steady_clock::now());
+    CHECK_FAIL_RETURN_STATUS(rpcTimeoutMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             "Membership lifecycle update timeout expired");
+    int64_t version = 0;
+    int64_t revision = 0;
+    std::string coordinatorId;
+    RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), mutation.encodedValue,
+                                 keepAliveTtlMs_,
+                                 COORDINATOR_NO_VERSION_CHECK, version, revision,
+                                 rpcTimeoutMs, &coordinatorId,
+                                 mutation.startedFrom.coordinatorId, mutation.startedFrom.modRevision));
+    RETURN_IF_NOT_OK(CommitNodeStateMutation(mutation, coordinatorId, revision, retry));
+    if (retry && exitMembershipRequested_.load(std::memory_order_acquire)) {
+        state = MemberLifecycleState::EXITING;
+    }
+    return Status::OK();
+}
+
+Status DsCoordinationBackend::PrepareNodeStateMutation(MemberLifecycleState state, int32_t timeoutMs,
+                                                       MembershipMutation &mutation)
+{
     const auto operation = state == MemberLifecycleState::EXITING
                                ? MembershipMutationOperation::MARK_EXITING
                                : MembershipMutationOperation::UPDATE_MEMBERSHIP_STATE;
-    const auto effectiveTimeoutMs = std::min(timeoutMs, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS);
-    const auto start = std::chrono::steady_clock::now();
-    timespec deadlineTs = butil::milliseconds_from_now(effectiveTimeoutMs);
+    const auto waitStartedAt = std::chrono::steady_clock::now();
+    timespec deadlineTs = butil::milliseconds_from_now(timeoutMs);
     if (!membershipMutationMutex_.timed_lock(&deadlineTs)) {
         RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED,
                       "Membership lifecycle update timed out waiting for serialization; "
-                          + GetMembershipMutationDiagnostic(operation, start));
+                          + GetMembershipMutationDiagnostic(operation, waitStartedAt));
     }
-    MembershipMutationGuard mutationGuard(*this, operation, std::adopt_lock);
-    return UpdateNodeStateLocked(state, effectiveTimeoutMs, start, mutationGuard);
+    {
+        MembershipMutationGuard mutationGuard(*this, operation, std::adopt_lock);
+        mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
+        if (state == MemberLifecycleState::EXITING) {
+            std::lock_guard<std::mutex> lock(keepAliveMutex_);
+            keepAliveValue_.lifecycleState = MemberLifecycleState::EXITING;
+        } else if (exitMembershipRequested_.load(std::memory_order_acquire)) {
+            mutation.required = false;
+            return Status::OK();
+        }
+        CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
+                                 "The key written to the cluster table must be bound to a lease");
+        mutation.startedFrom = GetMembershipIncarnationLocked();
+        std::lock_guard<std::mutex> lock(keepAliveMutex_);
+        mutation.value = keepAliveValue_;
+        mutation.value.lifecycleState = state;
+    }
+    return MembershipValueCodec::Encode(mutation.value, mutation.encodedValue);
+}
+
+Status DsCoordinationBackend::CommitNodeStateMutation(const MembershipMutation &mutation,
+                                                      const std::string &coordinatorId, int64_t revision, bool &retry)
+{
+    MembershipCommitResult result;
+    uint64_t successEpoch = 0;
+    retry = false;
+    {
+        const auto operation = mutation.value.lifecycleState == MemberLifecycleState::EXITING
+                                   ? MembershipMutationOperation::MARK_EXITING
+                                   : MembershipMutationOperation::UPDATE_MEMBERSHIP_STATE;
+        MembershipMutationGuard mutationGuard(*this, operation);
+        mutationGuard.SetPhase(MembershipMutationPhase::UPDATE_LOCAL_MEMBERSHIP);
+        result = CommitMembershipRevisionLocked(mutation.startedFrom, coordinatorId, revision);
+        if (result == MembershipCommitResult::COMMITTED) {
+            std::lock_guard<std::mutex> lock(keepAliveMutex_);
+            const bool sameProcess = keepAliveValue_.timestamp == mutation.value.timestamp;
+            const bool allowedByExit = !exitMembershipRequested_.load(std::memory_order_acquire)
+                                       || mutation.value.lifecycleState == MemberLifecycleState::EXITING;
+            if (sameProcess && allowedByExit) {
+                keepAliveValue_ = mutation.value;
+                successEpoch = ++membershipSuccessEpoch_;
+            } else {
+                retry = true;
+            }
+        } else if (result == MembershipCommitResult::SUPERSEDED) {
+            retry = true;
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(result != MembershipCommitResult::STALE_LIFETIME, K_TRY_AGAIN,
+                             "membership Coordinator changed while lifecycle update was in flight");
+    if (result == MembershipCommitResult::COMMITTED && successEpoch > 0) {
+        HandleMembershipSuccess(coordinatorId, successEpoch);
+    }
+    return Status::OK();
 }
 
 Status DsCoordinationBackend::GetStorePrefix(const std::string &tableName, std::string &prefix)
@@ -1240,16 +1357,21 @@ Status DsCoordinationBackend::GetStorePrefix(const std::string &tableName, std::
 Status DsCoordinationBackend::InformReconciliationDone(const HostPort &workerAddr)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
-    MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::INFORM_RECONCILIATION_DONE);
     RETURN_OK_IF_TRUE(exitMembershipRequested_.load(std::memory_order_acquire));
-    const std::string realKey = BuildRealKey(keepAliveTableName_, workerAddr.ToString());
+    const auto workerAddress = workerAddr.ToString();
+    const bool updatesLocalMembership = workerAddress == keepAliveKey_;
+    MembershipMutation mutation;
+    if (updatesLocalMembership) {
+        MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::INFORM_RECONCILIATION_DONE);
+        mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
+        mutation.startedFrom = GetMembershipIncarnationLocked();
+    }
+    const std::string realKey = BuildRealKey(keepAliveTableName_, workerAddress);
     std::vector<KeyValueEntry> entries;
     int64_t revision = 0;
     std::string rangeCoordinatorId;
-    mutationGuard.SetPhase(MembershipMutationPhase::RANGE_RPC);
     auto rangeStatus = proxy_->Range(realKey, "", entries, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
                                      &rangeCoordinatorId);
-    mutationGuard.SetPhase(MembershipMutationPhase::REFRESH_WATCH_AFTER_RANGE);
     RefreshWatchIdentity(rangeStatus);
     RETURN_IF_NOT_OK(rangeStatus);
     CHECK_FAIL_RETURN_STATUS(!entries.empty(), K_NOT_FOUND, "membership does not exist during reconciliation");
@@ -1257,28 +1379,41 @@ Status DsCoordinationBackend::InformReconciliationDone(const HostPort &workerAdd
     RETURN_IF_NOT_OK(MembershipValueCodec::Decode(entries.front().value, value));
     if (value.lifecycleState == MemberLifecycleState::RESTARTING
         || value.lifecycleState == MemberLifecycleState::RECOVERING) {
+        RETURN_OK_IF_TRUE(exitMembershipRequested_.load(std::memory_order_acquire));
         value.lifecycleState = MemberLifecycleState::READY;
         std::string readyValue;
         RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, readyValue));
         int64_t version = 0;
         int64_t putRevision = 0;
         std::string coordinatorId;
-        mutationGuard.SetPhase(MembershipMutationPhase::PUT_READY_RPC);
         auto putStatus = proxy_->Put(realKey, readyValue, keepAliveTtlMs_, entries.front().version, version,
                                      putRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId,
                                      rangeCoordinatorId, entries.front().modRevision);
-        mutationGuard.SetPhase(MembershipMutationPhase::REFRESH_WATCH_AFTER_PUT);
         RefreshWatchIdentity(putStatus);
         RETURN_IF_NOT_OK(putStatus);
-        if (workerAddr.ToString() == keepAliveKey_) {
-            keepAliveModRevision_ = putRevision;
-            std::lock_guard<std::mutex> lock(keepAliveMutex_);
-            keepAliveValue_ = value;
+        if (updatesLocalMembership) {
+            mutation.value = value;
+            bool retry = false;
+            RETURN_IF_NOT_OK(CommitNodeStateMutation(mutation, coordinatorId, putRevision, retry));
+            const auto retryState = exitMembershipRequested_.load(std::memory_order_acquire)
+                                        ? MemberLifecycleState::EXITING
+                                        : MemberLifecycleState::READY;
+            return retry ? UpdateNodeState(retryState) : Status::OK();
         }
-        mutationGuard.SetPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_CALLBACK);
-        HandleMembershipSuccess(coordinatorId);
+        HandleRemoteMembershipSuccess(coordinatorId);
     }
     return Status::OK();
+}
+
+void DsCoordinationBackend::HandleRemoteMembershipSuccess(const std::string &coordinatorId)
+{
+    uint64_t successEpoch = 0;
+    {
+        MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::INFORM_RECONCILIATION_DONE);
+        mutationGuard.SetPhase(MembershipMutationPhase::UPDATE_LOCAL_MEMBERSHIP);
+        successEpoch = ++membershipSuccessEpoch_;
+    }
+    HandleMembershipSuccess(coordinatorId, successEpoch);
 }
 
 bool DsCoordinationBackend::IsKeepAliveTimeout()
@@ -1369,40 +1504,91 @@ Status DsCoordinationBackend::PrepareMembershipRecreate()
 
 void DsCoordinationBackend::InstallEnsuredMembership(const std::string &coordinatorId, int64_t membershipModRevision)
 {
-    MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::INSTALL_ENSURED_MEMBERSHIP);
-    mutationGuard.SetPhase(MembershipMutationPhase::INSTALL_REVISION);
-    InstallEnsuredMembershipLocked(coordinatorId, membershipModRevision);
+    MembershipIncarnation startedFrom;
+    {
+        MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::INSTALL_ENSURED_MEMBERSHIP);
+        mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
+        startedFrom = GetMembershipIncarnationLocked();
+    }
+    static_cast<void>(InstallEnsuredMembership(startedFrom, coordinatorId, membershipModRevision));
 }
 
-void DsCoordinationBackend::InstallEnsuredMembershipLocked(const std::string &coordinatorId,
-                                                           int64_t membershipModRevision)
+DsCoordinationBackend::MembershipIncarnation DsCoordinationBackend::GetMembershipIncarnationLocked() const
 {
-    bool sameCoordinatorLifetime = false;
-    {
-        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
-        sameCoordinatorLifetime = lastMembershipCoordinatorId_ == coordinatorId;
+    return { membershipCoordinatorId_, keepAliveModRevision_ };
+}
+
+bool DsCoordinationBackend::IsMembershipIncarnationCurrentLocked(const MembershipIncarnation &incarnation) const
+{
+    return membershipCoordinatorId_ == incarnation.coordinatorId
+           && keepAliveModRevision_ == incarnation.modRevision;
+}
+
+DsCoordinationBackend::MembershipCommitResult DsCoordinationBackend::CommitMembershipRevisionLocked(
+    const MembershipIncarnation &startedFrom, const std::string &coordinatorId, int64_t revision)
+{
+    if (membershipCoordinatorId_ == coordinatorId) {
+        if (keepAliveModRevision_ > revision) {
+            return MembershipCommitResult::SUPERSEDED;
+        }
+    } else if (!IsMembershipIncarnationCurrentLocked(startedFrom)) {
+        return MembershipCommitResult::STALE_LIFETIME;
     }
-    // Revisions are monotonic only within one Coordinator lifetime. A replacement Coordinator owns a new Store and may
-    // legitimately return a lower revision, while a delayed Ensure from the same lifetime must not roll back newer
-    // state.
-    keepAliveModRevision_ = sameCoordinatorLifetime ? std::max(membershipModRevision, keepAliveModRevision_)
-                                                    : membershipModRevision;
-    keepAliveTimeout_ = false;
-    firstKeepAliveSent_.store(true, std::memory_order_release);
-    RecordMembershipMutationPhase(MembershipMutationPhase::MEMBERSHIP_SUCCESS_CALLBACK);
-    HandleMembershipSuccess(coordinatorId, true);
-    RecordMembershipMutationPhase(MembershipMutationPhase::UPDATE_LOCAL_MEMBERSHIP);
+    membershipCoordinatorId_ = coordinatorId;
+    keepAliveModRevision_ = revision;
+    return MembershipCommitResult::COMMITTED;
+}
+
+DsCoordinationBackend::MembershipCommitResult DsCoordinationBackend::InstallEnsuredMembership(
+    const MembershipIncarnation &startedFrom, const std::string &coordinatorId, int64_t membershipModRevision)
+{
+    MembershipCommitResult result;
+    uint64_t successEpoch = 0;
+    {
+        MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::INSTALL_ENSURED_MEMBERSHIP);
+        mutationGuard.SetPhase(MembershipMutationPhase::INSTALL_REVISION);
+        result = CommitMembershipRevisionLocked(startedFrom, coordinatorId, membershipModRevision);
+        if (result == MembershipCommitResult::COMMITTED) {
+            successEpoch = ++membershipSuccessEpoch_;
+            keepAliveTimeout_ = false;
+            firstKeepAliveSent_.store(true, std::memory_order_release);
+            std::lock_guard<std::mutex> lock(keepAliveMutex_);
+            if (exitMembershipRequested_.load(std::memory_order_acquire)) {
+                keepAliveValue_.lifecycleState = MemberLifecycleState::EXITING;
+            } else if (keepAliveValue_.lifecycleState == MemberLifecycleState::STARTING
+                       || keepAliveValue_.lifecycleState == MemberLifecycleState::RESTARTING) {
+                keepAliveValue_.lifecycleState = MemberLifecycleState::RECOVERING;
+            }
+            ++keepAliveWakeEpoch_;
+        }
+    }
+    if (result == MembershipCommitResult::COMMITTED) {
+        HandleMembershipSuccess(coordinatorId, successEpoch, true);
+    }
+    if (result == MembershipCommitResult::COMMITTED) {
+        keepAliveCv_.notify_all();
+    }
+    return result;
+}
+
+Status DsCoordinationBackend::RepairEnsuredMembership(const MembershipValue &ensuredValue,
+                                                      MembershipCommitResult result)
+{
+    if (result != MembershipCommitResult::COMMITTED) {
+        return Status::OK();
+    }
+    MembershipValue currentValue;
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        if (exitMembershipRequested_.load(std::memory_order_acquire)) {
-            keepAliveValue_.lifecycleState = MemberLifecycleState::EXITING;
-        } else if (keepAliveValue_.lifecycleState == MemberLifecycleState::STARTING
-            || keepAliveValue_.lifecycleState == MemberLifecycleState::RESTARTING) {
-            keepAliveValue_.lifecycleState = MemberLifecycleState::RECOVERING;
-        }
-        ++keepAliveWakeEpoch_;
+        currentValue = keepAliveValue_;
     }
-    keepAliveCv_.notify_all();
+    const bool sameProcess = currentValue.timestamp == ensuredValue.timestamp;
+    const bool needsRepair = currentValue.lifecycleState == MemberLifecycleState::READY
+                             || currentValue.lifecycleState == MemberLifecycleState::EXITING;
+    if (!sameProcess || !needsRepair || currentValue.lifecycleState == ensuredValue.lifecycleState) {
+        return Status::OK();
+    }
+    return UpdateNodeState(currentValue.lifecycleState);
 }
 
 Status DsCoordinationBackend::EnsureMembership(const std::string &coordinatorId,
@@ -1410,29 +1596,49 @@ Status DsCoordinationBackend::EnsureMembership(const std::string &coordinatorId,
                                                bool markRestarting)
 {
     CHECK_FAIL_RETURN_STATUS(ensure != nullptr, K_INVALID, "Membership Ensure handler is empty");
-    MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::ENSURE_MEMBERSHIP);
-    if (markRestarting && !exitMembershipRequested_.load(std::memory_order_acquire)) {
-        std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        keepAliveValue_.lifecycleState = MemberLifecycleState::RESTARTING;
-        keepAliveValue_.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-    }
     MembershipRenewalPayload payload;
-    mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
-    RETURN_IF_NOT_OK(GetMembershipRenewalPayload(payload));
+    MembershipIncarnation startedFrom;
+    {
+        MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::ENSURE_MEMBERSHIP);
+        mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
+        startedFrom = GetMembershipIncarnationLocked();
+        if (markRestarting && !exitMembershipRequested_.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(keepAliveMutex_);
+            keepAliveValue_.lifecycleState = MemberLifecycleState::RESTARTING;
+            keepAliveValue_.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
+        }
+        RETURN_IF_NOT_OK(GetMembershipRenewalPayload(payload));
+    }
+    MembershipValue ensuredValue;
+    RETURN_IF_NOT_OK(MembershipValueCodec::Decode(payload.encodedValue, ensuredValue));
     int64_t membershipModRevision = 0;
-    mutationGuard.SetPhase(MembershipMutationPhase::ENSURE_RPC);
     RETURN_IF_NOT_OK(ensure(payload, membershipModRevision));
     CHECK_FAIL_RETURN_STATUS(membershipModRevision > 0, K_TRY_AGAIN,
                              "Coordinator accepted membership Ensure without a revision");
-    mutationGuard.SetPhase(MembershipMutationPhase::INSTALL_REVISION);
-    InstallEnsuredMembershipLocked(coordinatorId, membershipModRevision);
-    return Status::OK();
+    const auto result = InstallEnsuredMembership(startedFrom, coordinatorId, membershipModRevision);
+    CHECK_FAIL_RETURN_STATUS(result != MembershipCommitResult::STALE_LIFETIME, K_TRY_AGAIN,
+                             "Coordinator changed while membership Ensure was in flight");
+    return RepairEnsuredMembership(ensuredValue, result);
 }
 
 Status DsCoordinationBackend::OnMembershipEnsured(const std::string &coordinatorId, int64_t membershipModRevision)
 {
     RETURN_IF_NOT_OK(PrepareMembershipRecreate());
-    InstallEnsuredMembership(coordinatorId, membershipModRevision);
+    CHECK_FAIL_RETURN_STATUS(membershipModRevision > 0, K_TRY_AGAIN,
+                             "Coordinator accepted membership Ensure without a revision");
+    MembershipIncarnation startedFrom;
+    {
+        MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::INSTALL_ENSURED_MEMBERSHIP);
+        mutationGuard.SetPhase(MembershipMutationPhase::PREPARE_PAYLOAD);
+        startedFrom = GetMembershipIncarnationLocked();
+    }
+    const auto result = InstallEnsuredMembership(startedFrom, coordinatorId, membershipModRevision);
+    CHECK_FAIL_RETURN_STATUS(result != MembershipCommitResult::STALE_LIFETIME, K_TRY_AGAIN,
+                             "Coordinator changed while membership Ensure was being installed");
+    if (result == MembershipCommitResult::COMMITTED
+        && exitMembershipRequested_.load(std::memory_order_acquire)) {
+        return UpdateNodeState(MemberLifecycleState::EXITING);
+    }
     return Status::OK();
 }
 

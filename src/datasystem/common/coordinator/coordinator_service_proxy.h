@@ -134,11 +134,18 @@ public:
 
     /**
      * @brief Delete one fenced membership incarnation, including while the Leader recovery gate is closed.
+     * @param[in] expectedCoordinatorId Coordinator lifetime paired with expectedModRevision.
      */
     virtual Status DeleteMembership(const std::string &key, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
-                                    int64_t expectedModRevision)
+                                    const std::string &expectedCoordinatorId, int64_t expectedModRevision)
     {
-        return DeleteRange(key, "", deleted, revision, timeoutMs, expectedModRevision);
+        static_cast<void>(key);
+        static_cast<void>(deleted);
+        static_cast<void>(revision);
+        static_cast<void>(timeoutMs);
+        static_cast<void>(expectedCoordinatorId);
+        static_cast<void>(expectedModRevision);
+        return Status(K_NOT_SUPPORTED, "fenced membership delete is not supported by this proxy");
     }
 
     /**
@@ -309,7 +316,7 @@ public:
      * @copydoc ICoordinatorServiceProxy::DeleteMembership
      */
     Status DeleteMembership(const std::string &key, int64_t &deleted, int64_t &revision, int32_t timeoutMs,
-                            int64_t expectedModRevision) override;
+                            const std::string &expectedCoordinatorId, int64_t expectedModRevision) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::WatchRange
@@ -377,7 +384,7 @@ protected:
 private:
     Status DeleteRangeInternal(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
                                int64_t &revision, int32_t timeoutMs, int64_t expectedModRevision,
-                               bool recoveryControl);
+                               bool recoveryControl, const std::string &expectedCoordinatorId = "");
     static bool CanAcceptUnchangedRange(const std::string &startedCoordinatorId,
                                         const std::string &responseCoordinatorId);
     class InFlightScope;

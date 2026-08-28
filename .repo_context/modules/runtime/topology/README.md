@@ -22,9 +22,20 @@
   an older same-address Worker incarnation cannot overwrite or renew the current membership record. Revisions are
   monotonic only within one Coordinator lifetime: a same-lifetime delayed Ensure retains the newer local revision, while
   a changed `CoordinatorId` replaces it with the new in-memory Store's ensured revision even when that number is lower.
-  Worker Leader reconciliation serializes payload capture, its bounded Ensure RPC, and revision installation with
-  ordinary membership mutations. This prevents an in-flight recovery payload from overwriting EXITING; the local
-  cleanup gate remains outside that serialization boundary. Installation stays outside the Reconciler state mutex
+  `membershipMutationMutex_` protects only short local snapshot and commit sections; Coordinator RPCs, identity refresh,
+  watch reset dispatch and membership-ready callbacks always run after releasing it. Each mutation captures the paired
+  `(CoordinatorId, modRevision)` incarnation, executes its remotely fenced RPC, then commits only when the response is
+  current. A higher revision in the same Coordinator lifetime supersedes a delayed result; lifecycle publication then
+  retries at most once with the current token and the original absolute deadline, while a response from a stale lifetime
+  returns `K_TRY_AGAIN`. Positive sub-millisecond deadline remainder is rounded up so a caller's final 1 ms budget still
+  reaches the Coordinator. A successful old-generation response may advance the local revision fence but cannot replace
+  a newer process timestamp; it is retried with the current payload within that same attempt/deadline budget.
+  Membership deletion explicitly carries both captured fields; proxy implementations that do not support the paired
+  fence fail closed instead of degrading to a revision-only delete. Recreation treats either field changing as a new
+  remote incarnation whose process timestamp must still match. Because Coordinator Ensure cannot use the ordinary
+  membership mod-revision CAS, it republishes a same-process READY or EXITING value when its captured payload is stale.
+  Successful membership callbacks use a local commit epoch so a delayed callback cannot regress identity/watch state.
+  The local cleanup gate remains outside the mutation lock. Installation stays outside the Reconciler state mutex
   because it synchronously publishes membership readiness, then Router identity is rechecked before reporting. Failed
   identity probes schedule exponential backoff from probe completion rather than probe start, so a slow probe cannot
   consume its own throttle interval and immediately amplify concurrent failure signals to the maximum backoff. The
@@ -34,10 +45,11 @@
   the local rejoin cleanup. Only `TopologyEngine` confirmation that the local Worker must rejoin uses the explicit
   destructive rejoin path. This keeps a new Coordinator lifetime from being mistaken for a new Worker incarnation.
   A successful local reconciliation-to-READY write also replaces the local renewal payload and its modification
-  revision before later Ensure/keepalive activity can replay it. Ensure payload capture, the synchronous Ensure RPC and
-  returned-revision installation share that same membership mutation fence, so an earlier RECOVERING payload cannot be
-  committed after a later READY transition. Failed writes and reconciliation of another Worker do not change that
-  process-local payload. Voluntary EXITING intent is monotonic for one Worker process lifetime in both Coordinator and
+  revision before later Ensure/keepalive activity can replay it. Ensure payload capture and returned-revision
+  installation use short mutation-lock sections around a lock-free remote RPC; revision ordering plus bounded
+  compensation prevents an earlier RECOVERING payload from replacing a later READY transition. Failed writes and
+  reconciliation of another Worker do not change that process-local payload. Voluntary EXITING intent is monotonic for
+  one Worker process lifetime in both Coordinator and
   ETCD backends: reconciliation, READY publication, Ensure and lease recreation cannot replace it with a non-EXITING
   value, including when the first EXITING write fails. Engine shutdown publishes STOPPING and closes its local admission
   gate before backend teardown; it does not wait for an in-flight membership RPC before canceling event sources.
@@ -205,8 +217,8 @@
   | `CLUSTER_WATCH_QUEUE` | `CoordinationEventDispatcher` | queued event overflow/coalescing and reset doorbells; includes event counters and depth. |
   | `CLUSTER_MEMBERSHIP` | Controller membership reconciliation | membership read failures or per-cycle membership summary; includes version and member counts. |
   | `CLUSTER_MEMBERSHIP_OBSERVED` | Controller membership reconciliation | changed membership digest/sample after membership watch dirties state. |
-  | `Membership mutation lock timed out` | Worker membership lifecycle publication | blocked `EXITING` or state update; includes waiter, current owner, owner phase, wait time, and held time. |
-  | `CLUSTER_MEMBERSHIP_MUTATION` | Worker membership serialization | `slow_hold` means a released mutation held the lock past the Coordinator RPC timeout; includes owner, final phase, and held time. |
+  | `Membership mutation lock timed out` | Worker | short local lock wait timed out; logs owner, phase, and timing. |
+  | `CLUSTER_MEMBERSHIP_MUTATION` | Worker | slow short local hold; logs owner, phase, and timing. |
   | `CLUSTER_MEMBER_TRANSITION` | Controller planner | member state changes such as INITIAL/JOINING/LEAVING/FAILED. |
   | `CLUSTER_FAILURE_DETECT` | Failure classifier/controller | endpoint or membership failures promoted to topology change candidates; Witness probe decisions carry `probe_id`. |
   | `CLUSTER_WORKER_PROBE` | Worker/Coordinator probe delivery | end-to-end Witness event, queue, peer probe, report, and ingress stages correlated by `probe_id`. |

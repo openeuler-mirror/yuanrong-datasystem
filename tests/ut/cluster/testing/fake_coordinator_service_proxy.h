@@ -106,24 +106,16 @@ public:
                        int32_t, int64_t expectedModRevision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        CHECK_FAIL_RETURN_STATUS(expectedModRevision == COORDINATOR_NO_MOD_REVISION_CHECK || rangeEnd.empty(),
-                                 K_INVALID, "modification revision fence requires exact delete");
-        auto current = entries_.find(key);
-        if (expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK && current != entries_.end()
-            && current->second.revision != expectedModRevision) {
-            RETURN_STATUS(K_TRY_AGAIN, "Coordinator membership incarnation changed");
-        }
-        deleted = 0;
-        auto iter = entries_.lower_bound(key);
-        while (iter != entries_.end() && MatchesRange(iter->first, key, rangeEnd)) {
-            iter = entries_.erase(iter);
-            ++deleted;
-        }
-        if (deleted > 0) {
-            ++revision_;
-        }
-        revision = revision_;
-        return Status::OK();
+        return DeleteRangeLocked(key, rangeEnd, deleted, revision, expectedModRevision);
+    }
+
+    Status DeleteMembership(const std::string &key, int64_t &deleted, int64_t &revision, int32_t,
+                            const std::string &expectedCoordinatorId, int64_t expectedModRevision) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        CHECK_FAIL_RETURN_STATUS(expectedCoordinatorId == coordinatorId_, K_TRY_AGAIN,
+                                 "Coordinator membership lifetime changed");
+        return DeleteRangeLocked(key, "", deleted, revision, expectedModRevision);
     }
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
@@ -327,6 +319,29 @@ private:
         int64_t revision{ 0 };
         int64_t ttlMs{ 0 };
     };
+
+    Status DeleteRangeLocked(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
+                             int64_t &revision, int64_t expectedModRevision)
+    {
+        CHECK_FAIL_RETURN_STATUS(expectedModRevision == COORDINATOR_NO_MOD_REVISION_CHECK || rangeEnd.empty(),
+                                 K_INVALID, "modification revision fence requires exact delete");
+        auto current = entries_.find(key);
+        if (expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK && current != entries_.end()
+            && current->second.revision != expectedModRevision) {
+            RETURN_STATUS(K_TRY_AGAIN, "Coordinator membership incarnation changed");
+        }
+        deleted = 0;
+        auto iter = entries_.lower_bound(key);
+        while (iter != entries_.end() && MatchesRange(iter->first, key, rangeEnd)) {
+            iter = entries_.erase(iter);
+            ++deleted;
+        }
+        if (deleted > 0) {
+            ++revision_;
+        }
+        revision = revision_;
+        return Status::OK();
+    }
 
     static bool MatchesRange(const std::string &candidate, const std::string &key, const std::string &rangeEnd)
     {
