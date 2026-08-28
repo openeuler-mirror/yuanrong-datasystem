@@ -49,6 +49,7 @@
 #include "datasystem/common/rdma/urma_dlopen_util.h"
 #include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/rpc/rpc_constants.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/numa_util.h"
@@ -1742,8 +1743,15 @@ Status UrmaManager::AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConn
                                                   std::shared_ptr<UrmaJetty> &jetty, urma_target_jetty_t *&targetJetty)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
+    // Cap per-peer in-flight jetty usage so a bad peer cannot drain the pool: at most
+    // MAX_INFLIGHT_JETTIES are occupied concurrently per peer, blocking further acquire until one
+    // is released. Bound the wait by the remaining API deadline so a peer whose jetties are stuck
+    // in cqe9 does not block callers indefinitely.
+    const int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
+    RETURN_IF_NOT_OK(connection->AcquireInflightSlot(remainingUs));
     auto rc = urmaResource_->AcquireJetty(jetty);
     if (rc.IsError()) {
+        connection->ReleaseInflightSlot();
         if (rc.GetCode() == K_URMA_TRY_AGAIN) {
             INJECT_POINT("UrmaManager.AcquireSendLaneFromConnection.PoolExhausted");
             const auto stats = urmaResource_->GetSendJettyPoolStats();
@@ -1761,10 +1769,12 @@ Status UrmaManager::AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConn
         }
         return rc;
     }
+    jetty->BindConnection(connection);
     targetJetty = connection->GetTargetJetty();
     if (targetJetty == nullptr) {
         urmaResource_->ReleaseJetty(jetty);
         jetty.reset();
+        connection->ReleaseInflightSlot();
         const auto &jfrInfo = connection->GetUrmaJfrInfo();
         const auto srcAddress = localUrmaInfo_.localAddress.ToString();
         const auto targetAddress = jfrInfo.localAddress.ToString();
@@ -2238,6 +2248,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         if (registerRc.IsError()) {
             LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
                          "Failed to retire URMA send Jetty after lane registration failure");
+            args.connection->ReleaseInflightSlot();
             return registerRc;
         }
     } else {
@@ -2413,6 +2424,7 @@ Status UrmaManager::AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo, std::share
     if (registerRc.IsError()) {
         LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
                      "Failed to retire URMA send Jetty after lane registration failure");
+        connection->ReleaseInflightSlot();
         laneLease.reset();
         return registerRc;
     }
@@ -2500,6 +2512,7 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
             if (registerRc.IsError()) {
                 LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
                              "Failed to retire URMA send Jetty after lane registration failure");
+                connection->ReleaseInflightSlot();
                 return registerRc;
             }
         } else {
@@ -2622,6 +2635,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     if (registerRc.IsError()) {
         LOG_IF_ERROR(urmaResource_->RetireJetty(jetty),
                      "Failed to retire URMA send Jetty after lane registration failure");
+        connection->ReleaseInflightSlot();
         return registerRc;
     }
     bool laneLeaseSealed = false;
@@ -2734,6 +2748,7 @@ Status UrmaManager::InitGatherWriteContext(const RemoteSegInfo &remoteInfo, size
         if (registerRc.IsError()) {
             LOG_IF_ERROR(urmaResource_->RetireJetty(context.jetty),
                          "Failed to retire URMA send Jetty after lane registration failure");
+            context.connection->ReleaseInflightSlot();
             return registerRc;
         }
     } else {

@@ -22,6 +22,7 @@
 #define DATASYSTEM_COMMON_RDMA_URMA_RESOURCE_H
 
 #include <atomic>
+#include <algorithm>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -971,10 +972,50 @@ public:
      */
     void Clear();
 
+    /**
+     * @brief Reserve one in-flight Jetty slot for this peer. Blocks when the peer already holds
+     *        MAX_INFLIGHT_JETTIES concurrent slots until one is released or the deadline elapses.
+     *        Bounds a bad peer's pool footprint: it can occupy at most MAX_INFLIGHT_JETTIES, the
+     *        rest of the pool stays available to other peers.
+     * @param[in] remainingUs API deadline remaining, in microseconds. <= 0 returns K_RPC_DEADLINE_EXCEEDED.
+     * @return Status::OK on success, K_RPC_DEADLINE_EXCEEDED on timeout.
+     */
+    Status AcquireInflightSlot(int64_t remainingUs);
+
+    /**
+     * @brief Release one in-flight Jetty slot and wake one blocked waiter.
+     */
+    void ReleaseInflightSlot();
+
+    /**
+     * @brief Record that serving this peer retired a Jetty (fatal-CQE form of issue #93: the
+     *        peer's write drove the Jetty into URMA_JETTY_STATE_ERROR). Once MAX_RETIRED_JETTIES
+     *        Jetties died for this peer, AcquireInflightSlot circuit-breaks the peer: the cap
+     *        alone only bounds CONCURRENT holding, while a bad peer rotating writes would
+     *        otherwise retire the whole pool one batch at a time. A re-established connection is
+     *        a fresh object with a zeroed counter, which is the recovery path.
+     */
+    void OnJettyRetired();
+
+    /**
+     * @brief Whether this peer is circuit-broken (too many of its Jetties retired).
+     */
+    bool IsCircuitBroken() const;
+
 private:
     std::unique_ptr<UrmaTargetJetty> targetJetty_;
     UrmaJfrInfo urmaJfrInfo_;
     UrmaRemoteSegmentMap tsegs_;
+    // Per-peer in-flight jetty concurrency cap. Bounds the blast radius of a bad peer: at most
+    // MAX_INFLIGHT_JETTIES of the pool can be simultaneously occupied by requests to one peer.
+    static constexpr uint32_t MAX_INFLIGHT_JETTIES = 8;
+    uint32_t inflightJettyCount_ = 0;
+    // Circuit-breaker state: Jetties retired while serving this peer (fatal CQE attributed to
+    // the peer). Guarded by inflightMutex_ together with the in-flight counter.
+    static constexpr uint32_t MAX_RETIRED_JETTIES = 8;
+    uint32_t retiredJetties_ = 0;
+    mutable bthread::Mutex inflightMutex_;
+    bthread::ConditionVariable inflightCv_;
 };
 
 /**
