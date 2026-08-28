@@ -136,6 +136,7 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
     Status firstError;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery;
     int expectedMemberCount = 0;
+    auto bootstrapMode = coordinator::RaftBootstrapMode::DISCOVERY_OBSERVATION;
     do {
         if (options != nullptr) {
             onStart_ = options->onStart;
@@ -151,6 +152,7 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
                     std::make_shared<StaticCoordinatorDiscovery>(FLAGS_coordinator_raft_initial_peers);
                 expectedMemberCount = static_cast<int>(staticCoordinatorDiscovery->GetCount());
                 coordinatorDiscovery = std::move(staticCoordinatorDiscovery);
+                bootstrapMode = coordinator::RaftBootstrapMode::STATIC_INITIAL_PEERS;
                 LOG(INFO) << "Coordinator initialize with static peers:" << FLAGS_coordinator_raft_initial_peers;
             } else {
                 LOG(INFO) << "Coordinator initialize in single-node no-election mode:" << FLAGS_coordinator_address;
@@ -167,7 +169,7 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
 
         service_ = std::make_unique<coordinator::CoordinatorServiceImpl>(localAddress, std::move(coordinatorDiscovery),
                                                                          expectedMemberCount, std::move(raftFlags),
-                                                                         watchDispatcherBthreadTag_);
+                                                                         watchDispatcherBthreadTag_, bootstrapMode);
         firstError = service_->Init();
         if (firstError.IsError()) {
             break;

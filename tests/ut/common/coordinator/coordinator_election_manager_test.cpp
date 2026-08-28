@@ -13,45 +13,29 @@
 // limitations under the License.
 
 /**
- * Description: Unit tests for the Coordinator bootstrap and election lifecycle owner.
+ * Description: Unit tests for Coordinator bootstrap observation convergence.
  */
 
-#include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <functional>
-#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <stdexcept>
 #include <string>
-#include <string_view>
 #include <thread>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
-#include <unistd.h>
-
 #include <gtest/gtest.h>
 
-#include "datasystem/coordinator/raft/coordinator_membership_manager.h"
-#include "datasystem/coordinator/raft/coordinator_raft_node.h"
-#include "datasystem/coordinator/raft/coordinator_raft_state_machine.h"
-#include "datasystem/coordinator/raft/coordinator_raft_types.h"
-#include "datasystem/common/log/trace.h"
-#include "datasystem/utils/coordinator_discovery.h"
-#include "datasystem/utils/status.h"
 #define private public
 #include "datasystem/coordinator/raft/coordinator_election_manager.h"
 #undef private
+#include "datasystem/utils/coordinator_discovery.h"
 #include "ut/common.h"
 
 namespace datasystem::coordinator {
@@ -61,49 +45,17 @@ constexpr char kPeer2[] = "127.0.0.2:18480";
 constexpr char kPeer3[] = "127.0.0.3:18480";
 constexpr char kPeer4[] = "127.0.0.4:18480";
 constexpr char kPeer5[] = "127.0.0.5:18480";
+constexpr char kPeer6[] = "127.0.0.6:18480";
 constexpr char kDataDir[] = "coordinator-election-manager-test-data";
-constexpr char kLeader[] = "127.0.0.2:18480";
 constexpr int kHeartbeatIntervalMs = 100;
 constexpr int kElectionTimeoutMs = 1'000;
-constexpr size_t kExpectedMemberCount = 3;
-constexpr size_t kFiveMemberCount = 5;
 constexpr std::chrono::milliseconds kHealthCheckInterval{ 10 };
 constexpr std::chrono::milliseconds kMemberFailureGrace{ 20 };
 constexpr std::chrono::hours kDiscoveryRetryInterval{ 1 };
 constexpr std::chrono::milliseconds kBootstrapWarningInterval{ 30 };
-constexpr std::chrono::milliseconds kInitialBootstrapRetryDelay{ 100 };
-constexpr std::chrono::milliseconds kSecondBootstrapRetryDelay{ 200 };
-constexpr std::chrono::milliseconds kThirdBootstrapRetryDelay{ 400 };
-constexpr std::chrono::milliseconds kFourthBootstrapRetryDelay{ 800 };
-constexpr std::chrono::milliseconds kMaxBootstrapRetryDelay{ 1'000 };
-constexpr uint32_t kBootstrapRetryJitterMinPercent = 80;
-constexpr uint32_t kBootstrapRetryJitterMaxPercent = 120;
-constexpr uint32_t kPercentBase = 100;
-constexpr std::chrono::seconds kConcurrencyDeadline{ 2 };
-constexpr std::chrono::seconds kLongBootstrapRetryDelay{ 10 };
-constexpr size_t kConcurrentSnapshotIterations = 100;
-constexpr size_t kBootstrapRetrySequenceLength = 6;
-constexpr size_t kManagerGenerationCount = 2;
-constexpr size_t kJitterSampleCount = 100;
-constexpr size_t kSha256HexLength = 64;
-
-constexpr char kProbeLocal[] = "probe_local";
-constexpr char kDiscovery[] = "discovery";
-constexpr char kProbePeer[] = "probe_peer";
-constexpr char kCreateNode[] = "create_node";
-constexpr char kStartNode[] = "start_node";
-constexpr char kCreateMembership[] = "create_membership";
-constexpr char kStartMembership[] = "start_membership";
-constexpr char kWorkerExit[] = "worker_exit";
-constexpr char kShutdownMembership[] = "shutdown_membership";
-constexpr char kDestroyMembership[] = "destroy_membership";
-constexpr char kDestroyNode[] = "destroy_node";
-
-static_assert(std::is_final_v<CoordinatorElectionManager>);
-static_assert(!std::is_copy_constructible_v<CoordinatorElectionManager>);
-static_assert(!std::is_copy_assignable_v<CoordinatorElectionManager>);
-static_assert(!std::is_move_constructible_v<CoordinatorElectionManager>);
-static_assert(!std::is_move_assignable_v<CoordinatorElectionManager>);
+constexpr std::chrono::seconds kWaitTimeout{ 2 };
+constexpr std::chrono::milliseconds kStableViewElapsed{ 1'000 };
+constexpr std::chrono::milliseconds kStaleRpcDelay{ 100 };
 
 class EmptyCoordinatorDiscovery final : public ICoordinatorDiscovery {
 public:
@@ -114,90 +66,51 @@ public:
     }
 };
 
-struct PeerScript {
-    RaftBootstrapState state;
-    Status result;
-    bool matchCandidateObservation{ true };
-};
-
-class DependencyState {
-public:
-    void Record(std::string call)
-    {
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            calls.emplace_back(std::move(call));
-        }
-        cv.notify_all();
-    }
+struct DependencyState {
+    mutable std::mutex mutex;
+    std::condition_variable cv;
+    RaftMetadataState metadataState{ RaftMetadataState::ABSENT };
+    Status metadataStatus;
+    std::vector<std::string> discoveredPeers;
+    Status discoveryStatus;
+    std::map<std::string, Status> exchangeStatus;
+    std::map<std::string, RaftBootstrapObservationPb> exchangeResponses;
+    std::vector<std::string> exchangePeers;
+    std::chrono::steady_clock::time_point now;
+    size_t discoveryCalls{ 0 };
+    size_t exchangeCalls{ 0 };
+    size_t createNodeCalls{ 0 };
+    size_t startNodeCalls{ 0 };
+    size_t createMembershipCalls{ 0 };
+    size_t startMembershipCalls{ 0 };
+    size_t shutdownMembershipCalls{ 0 };
+    bool nodeAlive{ false };
+    bool membershipAlive{ false };
+    CoordinatorRaftOptions raftOptions;
 
     bool WaitFor(const std::function<bool()> &predicate)
     {
         std::unique_lock<std::mutex> lock(mutex);
-        return cv.wait_until(lock, std::chrono::steady_clock::now() + kConcurrencyDeadline, predicate);
+        return cv.wait_until(lock, std::chrono::steady_clock::now() + kWaitTimeout, predicate);
     }
 
-    size_t CallCount(const std::string &call) const
+    bool WaitForManager(const std::function<bool()> &predicate)
     {
-        std::lock_guard<std::mutex> lock(mutex);
-        return static_cast<size_t>(std::count(calls.begin(), calls.end(), call));
+        const auto deadline = std::chrono::steady_clock::now() + kWaitTimeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (predicate()) {
+                return true;
+            }
+            std::unique_lock<std::mutex> lock(mutex);
+            cv.wait_until(lock, std::min(deadline, std::chrono::steady_clock::now() + kHealthCheckInterval));
+        }
+        return predicate();
     }
-
-    std::vector<std::string> Calls() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return calls;
-    }
-
-    std::vector<std::chrono::milliseconds> BootstrapRetryBaseDelays() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return bootstrapRetryBaseDelays;
-    }
-
-    mutable std::mutex mutex;
-    std::condition_variable cv;
-    std::vector<std::string> calls;
-    RaftMetadataState localMetadataState{ RaftMetadataState::ABSENT };
-    Status localMetadataResult;
-    bool blockLocalProbe{ false };
-    bool releaseLocalProbe{ false };
-    std::vector<std::string> discoveredCandidates;
-    Status discoveryResult;
-    bool discoveryThrows{ false };
-    size_t discoveryCalls{ 0 };
-    std::vector<std::chrono::milliseconds> bootstrapRetryBaseDelays;
-    std::chrono::milliseconds bootstrapRetryDelayOverride{ 0 };
-    bool bootstrapRetryJitterThrows{ false };
-    std::string latestDigest;
-    size_t latestCandidateCount{ 0 };
-    std::map<std::string, PeerScript> peers;
-    size_t peerProbeCalls{ 0 };
-    Status nodeStartResult;
-    bool blockNodeStart{ false };
-    bool releaseNodeStart{ false };
-    bool nodeStartEntered{ false };
-    bool invokeConfigurationOnNodeStart{ false };
-    bool invokeErrorOnNodeStart{ false };
-    bool invokeErrorOnMembershipStart{ false };
-    Status managedErrorStatus;
-    std::vector<std::string> configurationOnNodeStart;
-    int64_t configurationIndex{ 1 };
-    Status membershipStartResult;
-    Status membershipShutdownResult;
-    bool blockMembershipShutdown{ false };
-    bool releaseMembershipShutdown{ false };
-    bool membershipShutdownEntered{ false };
-    bool nodeAlive{ false };
-    bool membershipAlive{ false };
-    bool leader{ true };
-    CoordinatorRaftOptions raftOptions;
-    CoordinatorMembershipOptions membershipOptions;
-    CoordinatorRaftEventCallbacks managedCallbacks;
 };
 
-CoordinatorElectionOptions MakeOptions(const std::string &localPeer = kPeer1,
-                                       size_t expectedMemberCount = kExpectedMemberCount)
+CoordinatorElectionOptions MakeOptions(
+    const std::string &localPeer, size_t expectedMemberCount,
+    RaftBootstrapMode bootstrapMode = RaftBootstrapMode::DISCOVERY_OBSERVATION)
 {
     CoordinatorElectionOptions options;
     options.raftFlags = CoordinatorRaftFlags{ localPeer,
@@ -215,6 +128,7 @@ CoordinatorElectionOptions MakeOptions(const std::string &localPeer = kPeer1,
                                                                kHealthCheckInterval,
                                                                kMemberFailureGrace,
                                                                kDiscoveryRetryInterval };
+    options.bootstrapMode = bootstrapMode;
     return options;
 }
 
@@ -222,1341 +136,504 @@ CoordinatorElectionManager::Dependencies MakeDependencies(const std::shared_ptr<
 {
     CoordinatorElectionManager::Dependencies dependencies;
     dependencies.probeLocalMetadata = [state](const std::string &, RaftMetadataState &metadataState) {
-        std::unique_lock<std::mutex> lock(state->mutex);
-        state->calls.emplace_back(kProbeLocal);
-        state->cv.notify_all();
-        if (!state->cv.wait_until(lock, std::chrono::steady_clock::now() + kConcurrencyDeadline,
-                                  [state] { return !state->blockLocalProbe || state->releaseLocalProbe; })) {
-            return Status(K_RUNTIME_ERROR, "timed out waiting to release local metadata probe");
-        }
-        metadataState = state->localMetadataState;
-        return state->localMetadataResult;
+        std::lock_guard<std::mutex> lock(state->mutex);
+        metadataState = state->metadataState;
+        return state->metadataStatus;
     };
     dependencies.discoverCandidates =
-        [state](const std::shared_ptr<ICoordinatorDiscovery> &, std::vector<std::string> &candidates) {
-            std::lock_guard<std::mutex> lock(state->mutex);
-            state->calls.emplace_back(kDiscovery);
-            ++state->discoveryCalls;
-            state->cv.notify_all();
-            if (state->discoveryThrows) {
-                throw std::runtime_error("scripted Discovery exception");
-            }
-            candidates = state->discoveredCandidates;
-            return state->discoveryResult;
-        };
-    dependencies.digestCandidates = [state](const std::vector<std::string> &candidates, std::string &digest) {
-        const auto marker = static_cast<char>('a' + std::min(candidates.size(), size_t{ 25 }));
-        digest.assign(kSha256HexLength, marker);
-        {
-            std::lock_guard<std::mutex> lock(state->mutex);
-            state->latestDigest = digest;
-            state->latestCandidateCount = candidates.size();
-        }
-        state->cv.notify_all();
-        return Status::OK();
-    };
-    dependencies.probePeer = [state](const std::string &peer, int32_t, RaftBootstrapState &bootstrapState) {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        state->calls.emplace_back(std::string(kProbePeer) + ":" + peer);
-        ++state->peerProbeCalls;
-        state->cv.notify_all();
-        const auto iter = state->peers.find(peer);
-        if (iter == state->peers.end()) {
-            return Status(K_NOT_READY, "unscripted peer");
-        }
-        bootstrapState = iter->second.state;
-        if (iter->second.matchCandidateObservation) {
-            bootstrapState.candidateCount = state->latestCandidateCount;
-            bootstrapState.candidateDigest = state->latestDigest;
-        }
-        return iter->second.result;
-    };
-    dependencies.now = [] { return std::chrono::steady_clock::time_point{}; };
-    dependencies.jitterBootstrapRetry = [state](std::chrono::milliseconds baseDelay) {
-        std::chrono::milliseconds delayOverride;
-        bool shouldThrow;
-        {
-            std::lock_guard<std::mutex> lock(state->mutex);
-            state->bootstrapRetryBaseDelays.emplace_back(baseDelay);
-            delayOverride = state->bootstrapRetryDelayOverride;
-            shouldThrow = state->bootstrapRetryJitterThrows;
-        }
-        state->cv.notify_all();
-        if (shouldThrow) {
-            throw std::runtime_error("scripted bootstrap retry jitter exception");
-        }
-        return delayOverride.count() > 0 ? delayOverride : baseDelay;
-    };
-    dependencies.onBootstrapWorkerExit = [state] { state->Record(kWorkerExit); };
-    dependencies.createNode =
-        [state](const CoordinatorRaftOptions &options, const CoordinatorRaftEventCallbacks &callbacks) {
+        [state](const std::shared_ptr<ICoordinatorDiscovery> &, std::vector<std::string> &peers) {
             {
                 std::lock_guard<std::mutex> lock(state->mutex);
-                state->calls.emplace_back(kCreateNode);
-                state->raftOptions = options;
-                state->managedCallbacks = callbacks;
+                peers = state->discoveredPeers;
+                ++state->discoveryCalls;
+            }
+            state->cv.notify_all();
+            return state->discoveryStatus;
+        };
+    dependencies.exchangeObservation =
+        [state](const std::string &peer, int32_t, const RaftBootstrapObservationPb &request,
+                RaftBootstrapObservationPb &response) {
+            Status status(K_RPC_UNAVAILABLE, "No bootstrap observation response configured");
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                ++state->exchangeCalls;
+                state->exchangePeers.emplace_back(peer);
+                const auto iter = state->exchangeStatus.find(peer);
+                if (iter != state->exchangeStatus.end()) {
+                    status = iter->second;
+                }
+                const auto responseIter = state->exchangeResponses.find(peer);
+                if (responseIter != state->exchangeResponses.end()) {
+                    response = responseIter->second;
+                    status = Status::OK();
+                } else {
+                    response = request;
+                }
+            }
+            state->cv.notify_all();
+            return status;
+        };
+    dependencies.now = [state] {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        return state->now;
+    };
+    dependencies.createNode =
+        [state](const CoordinatorRaftOptions &options, const CoordinatorRaftEventCallbacks &) {
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                ++state->createNodeCalls;
                 state->nodeAlive = true;
+                state->raftOptions = options;
             }
             state->cv.notify_all();
             auto handle = std::make_unique<CoordinatorElectionManager::NodeHandle>();
             handle->onDestroyed = [state] {
-                {
-                    std::lock_guard<std::mutex> lock(state->mutex);
-                    state->calls.emplace_back(kDestroyNode);
-                    state->nodeAlive = false;
-                }
-                state->cv.notify_all();
+                std::lock_guard<std::mutex> lock(state->mutex);
+                state->nodeAlive = false;
             };
             return handle;
         };
     dependencies.startNode = [state](CoordinatorElectionManager::NodeHandle &, RaftMetadataState) {
-        CoordinatorRaftEventCallbacks callbacks;
-        std::vector<std::string> committedPeers;
-        int64_t committedIndex = 0;
-        bool invokeConfiguration = false;
-        bool invokeError = false;
-        Status managedErrorStatus;
-        Status result;
         {
-            std::unique_lock<std::mutex> lock(state->mutex);
-            state->calls.emplace_back(kStartNode);
-            state->nodeStartEntered = true;
-            state->cv.notify_all();
-            if (!state->cv.wait_until(lock, std::chrono::steady_clock::now() + kConcurrencyDeadline,
-                                      [state] { return !state->blockNodeStart || state->releaseNodeStart; })) {
-                return Status(K_RUNTIME_ERROR, "timed out waiting to release Node startup");
-            }
-            callbacks = state->managedCallbacks;
-            committedPeers = state->configurationOnNodeStart;
-            committedIndex = state->configurationIndex;
-            invokeConfiguration = state->invokeConfigurationOnNodeStart;
-            invokeError = state->invokeErrorOnNodeStart;
-            managedErrorStatus = state->managedErrorStatus;
-            result = state->nodeStartResult;
+            std::lock_guard<std::mutex> lock(state->mutex);
+            ++state->startNodeCalls;
         }
-        if (result.IsOk() && invokeError && callbacks.onError) {
-            callbacks.onError(std::move(managedErrorStatus));
-        }
-        if (result.IsOk() && invokeConfiguration && callbacks.onConfigurationCommitted) {
-            callbacks.onConfigurationCommitted(std::move(committedPeers), committedIndex);
-        }
-        return result;
+        state->cv.notify_all();
+        return Status::OK();
     };
     dependencies.createMembership =
-        [state](const CoordinatorMembershipOptions &options, CoordinatorElectionManager::NodeHandle &,
+        [state](const CoordinatorMembershipOptions &, CoordinatorElectionManager::NodeHandle &,
                 const std::shared_ptr<ICoordinatorDiscovery> &) {
             {
                 std::lock_guard<std::mutex> lock(state->mutex);
-                state->calls.emplace_back(kCreateMembership);
-                state->membershipOptions = options;
+                ++state->createMembershipCalls;
                 state->membershipAlive = true;
             }
             state->cv.notify_all();
             auto handle = std::make_unique<CoordinatorElectionManager::MembershipHandle>();
             handle->onDestroyed = [state] {
-                {
-                    std::lock_guard<std::mutex> lock(state->mutex);
-                    state->calls.emplace_back(kDestroyMembership);
-                    state->membershipAlive = false;
-                }
-                state->cv.notify_all();
+                std::lock_guard<std::mutex> lock(state->mutex);
+                state->membershipAlive = false;
             };
             return handle;
         };
     dependencies.startMembership = [state](CoordinatorElectionManager::MembershipHandle &) {
-        CoordinatorRaftEventCallbacks callbacks;
-        bool invokeError = false;
-        Status managedErrorStatus;
-        Status result;
         {
             std::lock_guard<std::mutex> lock(state->mutex);
-            state->calls.emplace_back(kStartMembership);
-            callbacks = state->managedCallbacks;
-            invokeError = state->invokeErrorOnMembershipStart;
-            managedErrorStatus = state->managedErrorStatus;
-            result = state->membershipStartResult;
+            ++state->startMembershipCalls;
         }
         state->cv.notify_all();
-        if (result.IsOk() && invokeError && callbacks.onError) {
-            callbacks.onError(std::move(managedErrorStatus));
-        }
-        return result;
+        return Status::OK();
     };
     dependencies.shutdownMembership = [state](CoordinatorElectionManager::MembershipHandle &) {
-        std::unique_lock<std::mutex> lock(state->mutex);
-        state->calls.emplace_back(kShutdownMembership);
-        state->membershipShutdownEntered = true;
-        state->cv.notify_all();
-        if (!state->cv.wait_until(
-                lock, std::chrono::steady_clock::now() + kConcurrencyDeadline,
-                [state] { return !state->blockMembershipShutdown || state->releaseMembershipShutdown; })) {
-            return Status(K_RUNTIME_ERROR, "timed out waiting to release Membership shutdown");
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            ++state->shutdownMembershipCalls;
         }
-        return state->membershipShutdownResult;
-    };
-    dependencies.isLeader = [state](const CoordinatorElectionManager::NodeHandle &) {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        return state->leader;
-    };
-    dependencies.getLeader = [](const CoordinatorElectionManager::NodeHandle &, std::string &leaderAddress) {
-        leaderAddress = kLeader;
+        state->cv.notify_all();
         return Status::OK();
+    };
+    dependencies.isLeader = [](const CoordinatorElectionManager::NodeHandle &) { return false; };
+    dependencies.getLeader = [](const CoordinatorElectionManager::NodeHandle &, std::string &) {
+        return Status(K_NOT_READY, "No leader");
     };
     return dependencies;
 }
 
-PeerScript MakePeerState(const std::string &peer, RaftMetadataState metadataState,
-                         std::vector<std::string> committedPeers = {})
-{
-    PeerScript script;
-    script.state.probeReady = true;
-    script.state.groupId = kCoordinatorRaftGroupId;
-    script.state.localPeer = peer;
-    script.state.expectedMemberCount = kExpectedMemberCount;
-    script.state.metadataState = metadataState;
-    script.state.committedPeers = std::move(committedPeers);
-    return script;
-}
-
-std::unique_ptr<CoordinatorElectionManager> MakeManager(
-    const std::shared_ptr<DependencyState> &state, CoordinatorElectionOptions options = MakeOptions(),
-    CoordinatorRaftEventCallbacks callbacks = {})
+std::unique_ptr<CoordinatorElectionManager> MakeManager(const std::shared_ptr<DependencyState> &state,
+                                                        size_t expectedMemberCount = 3,
+                                                        RaftBootstrapMode bootstrapMode =
+                                                            RaftBootstrapMode::DISCOVERY_OBSERVATION)
 {
     return std::make_unique<CoordinatorElectionManager>(
-        std::move(options), std::move(callbacks), std::make_shared<EmptyCoordinatorDiscovery>(),
-        MakeDependencies(state));
+        MakeOptions(kPeer1, expectedMemberCount, bootstrapMode), CoordinatorRaftEventCallbacks{},
+        std::make_shared<EmptyCoordinatorDiscovery>(), MakeDependencies(state));
 }
 
-bool WaitForRetry(CoordinatorElectionManager &manager)
+RaftBootstrapObservationPb MakeObservation(const std::string &sender, size_t expectedMemberCount,
+                                           const std::vector<std::string> &peers,
+                                           RaftBootstrapObservationPhasePb phase = RAFT_BOOTSTRAP_OBSERVING,
+                                           const std::vector<std::string> &committedPeers = {})
 {
-    std::unique_lock<std::mutex> lock(manager.bootstrapMutex_);
-    return manager.bootstrapCv_.wait_until(lock, std::chrono::steady_clock::now() + kConcurrencyDeadline,
-                                           [&manager] { return manager.bootstrapRetryWaiters_ > 0; });
-}
-
-void WakeRetry(CoordinatorElectionManager &manager)
-{
-    {
-        std::lock_guard<std::mutex> lock(manager.bootstrapMutex_);
-        ++manager.bootstrapWakeGeneration_;
+    RaftBootstrapObservationPb observation;
+    observation.set_sender_peer(sender);
+    observation.set_expected_member_count(expectedMemberCount);
+    observation.set_phase(phase);
+    for (const auto &peer : peers) {
+        observation.add_peers(peer);
     }
-    manager.bootstrapCv_.notify_all();
-}
-
-bool WaitForTerminalStatus(CoordinatorElectionManager &manager)
-{
-    std::unique_lock<std::mutex> lock(manager.bootstrapMutex_);
-    return manager.bootstrapCv_.wait_until(lock, std::chrono::steady_clock::now() + kConcurrencyDeadline, [&manager] {
-        return manager.bootstrapState_.phase == RaftBootstrapPhase::TERMINAL;
-    });
-}
-
-bool WaitForCall(const std::shared_ptr<DependencyState> &state, const std::string &call)
-{
-    return state->WaitFor([state, call] {
-        return std::find(state->calls.begin(), state->calls.end(), call) != state->calls.end();
-    });
-}
-
-bool StartAndWaitForWorkerExit(CoordinatorElectionManager &manager,
-                               const std::shared_ptr<DependencyState> &state)
-{
-    return manager.Start().IsOk() && WaitForCall(state, kWorkerExit);
-}
-
-const BootstrapPlan &GetBootstrapPlan(const CoordinatorRaftOptions &options)
-{
-    return std::get<BootstrapPlan>(options.startPlan);
-}
-
-class CoordinatorRaftMetadataProbeTest : public testing::Test {
-public:
-protected:
-    void SetUp() override
-    {
-        dataRoot_ =
-            (std::filesystem::temp_directory_path() / ("coordinator-raft-metadata-" + std::to_string(getpid()))).string();
-        ResetDataRoot();
+    for (const auto &peer : committedPeers) {
+        observation.add_committed_peers(peer);
     }
-
-    void TearDown() override
-    {
-        std::error_code error;
-        std::filesystem::remove_all(dataRoot_, error);
-    }
-
-    void ResetDataRoot()
-    {
-        std::error_code error;
-        std::filesystem::remove_all(dataRoot_, error);
-        ASSERT_FALSE(error) << error.message();
-        ASSERT_TRUE(std::filesystem::create_directories(dataRoot_, error));
-        ASSERT_FALSE(error) << error.message();
-    }
-
-    void CreateFile(const std::string &relativePath, std::string_view contents)
-    {
-        const auto path = std::filesystem::path(dataRoot_) / relativePath;
-        std::error_code error;
-        std::filesystem::create_directories(path.parent_path(), error);
-        ASSERT_FALSE(error) << error.message();
-        std::ofstream output(path, std::ios::binary);
-        ASSERT_TRUE(output.is_open());
-        output << contents;
-        ASSERT_TRUE(output.good());
-    }
-
-    Status Probe(RaftMetadataState &metadataState) const
-    {
-        return CoordinatorElectionManager::MakeProductionDependencies().probeLocalMetadata(dataRoot_, metadataState);
-    }
-
-    std::string dataRoot_;
-};
-}  // namespace
-
-TEST_F(CoordinatorRaftMetadataProbeTest, MissingAndEmptyPersistenceFilesAreAbsent)
-{
-    std::error_code error;
-    ASSERT_TRUE(std::filesystem::create_directories(std::filesystem::path(dataRoot_) / "raft_meta", error));
-    ASSERT_FALSE(error) << error.message();
-    CreateFile("raft_meta/raft_meta", "");
-    ASSERT_TRUE(std::filesystem::create_directories(std::filesystem::path(dataRoot_) / "log", error));
-    ASSERT_FALSE(error) << error.message();
-    CreateFile("log/log_meta", "");
-    CreateFile("log/log_inprogress_00000000000000000001", "");
-
-    RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
-    DS_ASSERT_OK(Probe(metadataState));
-    EXPECT_EQ(metadataState, RaftMetadataState::ABSENT);
-    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "raft_meta/raft_meta"));
-    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "log/log_meta"));
-    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "log/log_inprogress_00000000000000000001"));
+    return observation;
 }
 
-TEST_F(CoordinatorRaftMetadataProbeTest, AnyNonEmptyRecognizedPersistenceFileIsValid)
+void SendObservation(CoordinatorElectionManager &manager, const RaftBootstrapObservationPb &observation)
 {
-    const std::vector<std::string> persistenceFiles{
-        "raft_meta/raft_meta",
-        "log/log_meta",
-        "log/log_inprogress_00000000000000000001",
-        "log/log_00000000000000000001_00000000000000000002",
-    };
-    for (const auto &persistenceFile : persistenceFiles) {
-        ResetDataRoot();
-        CreateFile(persistenceFile, "persisted");
-
-        RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
-        DS_ASSERT_OK(Probe(metadataState));
-        EXPECT_EQ(metadataState, RaftMetadataState::VALID) << persistenceFile;
-    }
+    RaftBootstrapObservationPb response;
+    DS_ASSERT_OK(manager.ExchangeBootstrapObservation(observation, response));
 }
 
-TEST_F(CoordinatorRaftMetadataProbeTest, NonEmptyPersistencePreservesEmptyPersistenceFiles)
+void SetNow(const std::shared_ptr<DependencyState> &state, std::chrono::steady_clock::time_point now)
 {
-    CreateFile("raft_meta/raft_meta", "persisted");
-    CreateFile("log/log_meta", "");
-    CreateFile("log/log_inprogress_00000000000000000001", "");
-
-    RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
-    DS_ASSERT_OK(Probe(metadataState));
-    EXPECT_EQ(metadataState, RaftMetadataState::VALID);
-    EXPECT_TRUE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "log/log_meta"));
-    EXPECT_TRUE(std::filesystem::exists(std::filesystem::path(dataRoot_) / "log/log_inprogress_00000000000000000001"));
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->now = now;
 }
 
-TEST_F(CoordinatorRaftMetadataProbeTest, UnrecognizedNonEmptyFilesDoNotCountAsPersistence)
-{
-    CreateFile("unrelated", "persisted");
-    CreateFile("log/not_a_log_segment", "persisted");
-
-    RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
-    DS_ASSERT_OK(Probe(metadataState));
-    EXPECT_EQ(metadataState, RaftMetadataState::ABSENT);
-}
-
-TEST_F(CoordinatorRaftMetadataProbeTest, RecognizedPathTypeMismatchIsInvalid)
-{
-    const std::vector<std::string> directoryPaths{ "raft_meta", "log" };
-    for (const auto &directoryPath : directoryPaths) {
-        ResetDataRoot();
-        CreateFile(directoryPath, "not-a-directory");
-
-        RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
-        EXPECT_EQ(Probe(metadataState).GetCode(), K_INVALID) << directoryPath;
-    }
-
-    const std::vector<std::string> filePaths{
-        "raft_meta/raft_meta",
-        "log/log_meta",
-        "log/log_inprogress_00000000000000000001",
-    };
-    for (const auto &filePath : filePaths) {
-        ResetDataRoot();
-        std::error_code error;
-        ASSERT_TRUE(std::filesystem::create_directories(std::filesystem::path(dataRoot_) / filePath, error));
-        ASSERT_FALSE(error) << error.message();
-
-        RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
-        EXPECT_EQ(Probe(metadataState).GetCode(), K_INVALID) << filePath;
-    }
-}
-
-TEST(CoordinatorElectionManagerTest, StartReturnsAfterOwningBootstrapWorker)
+TEST(CoordinatorElectionManagerTest, IncompleteExpectedViewDoesNotCreateNode)
 {
     auto state = std::make_shared<DependencyState>();
-    state->blockLocalProbe = true;
+    state->discoveredPeers = { kPeer1, kPeer2, kPeer3 };
     auto manager = MakeManager(state);
-
     DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForCall(state, kProbeLocal));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
+
+    SendObservation(*manager, MakeObservation(kPeer2, 3, { kPeer1, kPeer2 }));
+    ASSERT_TRUE(state->WaitFor([state] { return state->exchangeCalls >= 2; }));
     {
         std::lock_guard<std::mutex> lock(state->mutex);
-        state->releaseLocalProbe = true;
+        EXPECT_EQ(state->createNodeCalls, 0U);
     }
-    state->cv.notify_all();
     DS_ASSERT_OK(manager->Shutdown());
 }
 
-TEST(CoordinatorElectionManagerTest, OneOfThreeCandidatesWaitsWithoutCreatingNode)
+TEST(CoordinatorElectionManagerTest, CompleteStableViewAndMatchingFrozenPlansStartFullConfiguration)
 {
     auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1 };
+    const std::vector<std::string> peers{ kPeer1, kPeer2, kPeer3 };
+    state->discoveredPeers = peers;
     auto manager = MakeManager(state);
-
     DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::RETRYING);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_NOT_READY));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
+
+    SendObservation(*manager, MakeObservation(kPeer2, 3, peers));
+    SendObservation(*manager, MakeObservation(kPeer3, 3, peers));
+    ASSERT_TRUE(state->WaitForManager([&manager] {
+        RaftBootstrapState snapshot;
+        return manager->GetBootstrapState(snapshot).IsOk() && snapshot.consistentView.has_value();
+    }));
+
+    SetNow(state, std::chrono::steady_clock::time_point{} + kStableViewElapsed);
+    SendObservation(*manager, MakeObservation(kPeer2, 3, peers));
+    SendObservation(*manager, MakeObservation(kPeer3, 3, peers));
+    ASSERT_TRUE(state->WaitForManager([&manager] {
+        RaftBootstrapState snapshot;
+        return manager->GetBootstrapState(snapshot).IsOk() && snapshot.frozenPlan.has_value();
+    }));
+
+    SendObservation(*manager, MakeObservation(kPeer2, 3, peers, RAFT_BOOTSTRAP_PROPOSED));
+    SendObservation(*manager, MakeObservation(kPeer3, 3, peers, RAFT_BOOTSTRAP_PROPOSED));
+    ASSERT_TRUE(state->WaitFor([state] { return state->createNodeCalls == 1; }));
+
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        const auto *plan = std::get_if<BootstrapPlan>(&state->raftOptions.startPlan);
+        ASSERT_NE(plan, nullptr);
+        EXPECT_EQ(plan->initialPeers, peers);
+    }
     DS_ASSERT_OK(manager->Shutdown());
 }
 
-TEST(CoordinatorElectionManagerTest, TwoOfThreeCandidatesCreateTwoPeerBootstrapPlan)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer2, kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
-              (std::vector<std::string>{ kPeer1, kPeer2 }));
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::STARTED);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_OK));
-    EXPECT_TRUE(state->nodeAlive);
-    EXPECT_TRUE(state->membershipAlive);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, TwoReachableStaticCandidatesBootstrapDespiteUnavailablePeer)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer3, kPeer2, kPeer1 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    auto unavailable = MakePeerState(kPeer3, RaftMetadataState::UNKNOWN);
-    unavailable.result = Status(K_RPC_UNAVAILABLE, "scripted unavailable peer");
-    state->peers.emplace(kPeer3, std::move(unavailable));
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
-              (std::vector<std::string>{ kPeer1, kPeer2 }));
-    EXPECT_EQ(state->peerProbeCalls, 2U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, OneReachableStaticCandidateWaitsForBootstrapQuorum)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer3, kPeer2, kPeer1 };
-    auto unavailablePeer2 = MakePeerState(kPeer2, RaftMetadataState::UNKNOWN);
-    unavailablePeer2.result = Status(K_RPC_UNAVAILABLE, "scripted unavailable peer2");
-    auto unavailablePeer3 = MakePeerState(kPeer3, RaftMetadataState::UNKNOWN);
-    unavailablePeer3.result = Status(K_RPC_UNAVAILABLE, "scripted unavailable peer3");
-    state->peers.emplace(kPeer2, std::move(unavailablePeer2));
-    state->peers.emplace(kPeer3, std::move(unavailablePeer3));
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-    EXPECT_EQ(state->peerProbeCalls, 2U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, ReachableUnknownStaticCandidateBlocksFreshBootstrap)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer3, kPeer2, kPeer1 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->peers.emplace(kPeer3, MakePeerState(kPeer3, RaftMetadataState::UNKNOWN));
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-    EXPECT_EQ(state->peerProbeCalls, 2U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, MoreThanTargetCandidatesSelectFirstSortedPeers)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer4, kPeer3, kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->peers.emplace(kPeer3, MakePeerState(kPeer3, RaftMetadataState::ABSENT));
-    state->peers.emplace(kPeer4, MakePeerState(kPeer4, RaftMetadataState::ABSENT));
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
-              (std::vector<std::string>{ kPeer1, kPeer2, kPeer3 }));
-    EXPECT_EQ(state->CallCount(std::string(kProbePeer) + ":" + kPeer4), 1U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, UnselectedFirstBootstrapCandidateCreatesWaitingToJoinPlan)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer4, kPeer3, kPeer1, kPeer2 };
-    state->peers.emplace(kPeer1, MakePeerState(kPeer1, RaftMetadataState::ABSENT));
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->peers.emplace(kPeer3, MakePeerState(kPeer3, RaftMetadataState::ABSENT));
-    auto manager = MakeManager(state, MakeOptions(kPeer4));
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_TRUE(std::holds_alternative<WaitingToJoinPlan>(state->raftOptions.startPlan));
-    EXPECT_EQ(state->CallCount(kCreateNode), 1U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, SingleCommittedConfigurationObservationRetriesWithoutCreatingNode)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2, kPeer3 };
-    state->peers.emplace(kPeer2,
-                         MakePeerState(kPeer2, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3 }));
-    state->peers.emplace(kPeer3, MakePeerState(kPeer3, RaftMetadataState::ABSENT));
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::RETRYING);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_NOT_READY));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, SingleFullTargetConfigurationObservationKeepsFiveFreshMembersRetrying)
+TEST(CoordinatorElectionManagerTest, FourOfFiveReproductionWaitsUntilFifthConfirmsSamePlan)
 {
     auto state = std::make_shared<DependencyState>();
     const std::vector<std::string> peers{ kPeer1, kPeer2, kPeer3, kPeer4, kPeer5 };
-    state->discoveredCandidates = peers;
-
-    auto committedPeer = MakePeerState(kPeer2, RaftMetadataState::VALID, peers);
-    committedPeer.state.expectedMemberCount = kFiveMemberCount;
-    state->peers.emplace(kPeer2, std::move(committedPeer));
-    for (const auto *peer : { kPeer3, kPeer4, kPeer5 }) {
-        auto freshPeer = MakePeerState(peer, RaftMetadataState::ABSENT);
-        freshPeer.state.expectedMemberCount = kFiveMemberCount;
-        state->peers.emplace(peer, std::move(freshPeer));
-    }
-    auto manager = MakeManager(state, MakeOptions(kPeer1, kFiveMemberCount));
-
+    state->discoveredPeers = peers;
+    auto manager = MakeManager(state, 5);
     DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    EXPECT_EQ(state->discoveryCalls, 1U);
-    EXPECT_EQ(state->peerProbeCalls, 4U);
 
-    WakeRetry(*manager);
-    ASSERT_TRUE(state->WaitFor([state] { return state->discoveryCalls >= 2; }));
-    ASSERT_TRUE(WaitForRetry(*manager));
+    const std::vector<std::string> fourPeers{ kPeer1, kPeer2, kPeer3, kPeer4 };
+    for (const auto &peer : { kPeer2, kPeer3, kPeer4 }) {
+        SendObservation(*manager, MakeObservation(peer, 5, fourPeers));
+    }
+    ASSERT_TRUE(state->WaitFor([state] { return state->exchangeCalls >= 4; }));
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        EXPECT_EQ(state->createNodeCalls, 0U);
+    }
 
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::RETRYING);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_NOT_READY));
-    EXPECT_EQ(state->peerProbeCalls, 8U);
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
+    for (const auto &peer : { kPeer2, kPeer3, kPeer4, kPeer5 }) {
+        SendObservation(*manager, MakeObservation(peer, 5, peers));
+    }
+    ASSERT_TRUE(state->WaitForManager([&manager] {
+        RaftBootstrapState snapshot;
+        return manager->GetBootstrapState(snapshot).IsOk() && snapshot.consistentView.has_value();
+    }));
+    SetNow(state, std::chrono::steady_clock::time_point{} + kStableViewElapsed);
+    for (const auto &peer : { kPeer2, kPeer3, kPeer4, kPeer5 }) {
+        SendObservation(*manager, MakeObservation(peer, 5, peers));
+    }
+    ASSERT_TRUE(state->WaitForManager([&manager] {
+        RaftBootstrapState snapshot;
+        return manager->GetBootstrapState(snapshot).IsOk() && snapshot.frozenPlan.has_value();
+    }));
+    for (const auto &peer : { kPeer2, kPeer3, kPeer4, kPeer5 }) {
+        SendObservation(*manager, MakeObservation(peer, 5, peers, RAFT_BOOTSTRAP_PROPOSED));
+    }
+    ASSERT_TRUE(state->WaitFor([state] { return state->createNodeCalls == 1; }));
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        const auto *plan = std::get_if<BootstrapPlan>(&state->raftOptions.startPlan);
+        ASSERT_NE(plan, nullptr);
+        EXPECT_EQ(plan->initialPeers, peers);
+    }
     DS_ASSERT_OK(manager->Shutdown());
 }
 
-TEST(CoordinatorElectionManagerTest, ValidPeerWithoutCommittedConfigurationJoinsFreshBootstrapCandidates)
+TEST(CoordinatorElectionManagerTest, FivePeersBootstrapWhenDiscoveryContainsUnreachableStalePeer)
 {
     auto state = std::make_shared<DependencyState>();
     const std::vector<std::string> peers{ kPeer1, kPeer2, kPeer3, kPeer4, kPeer5 };
-    state->discoveredCandidates = peers;
+    state->discoveredPeers = { kPeer1, kPeer2, kPeer3, kPeer4, kPeer5, kPeer6 };
+    state->exchangeStatus.emplace(kPeer6, Status(K_RPC_UNAVAILABLE, "stale discovery endpoint"));
+    auto manager = MakeManager(state, 5);
+    DS_ASSERT_OK(manager->Start());
 
-    auto startedPeer = MakePeerState(kPeer2, RaftMetadataState::VALID);
-    startedPeer.state.expectedMemberCount = kFiveMemberCount;
-    state->peers.emplace(kPeer2, std::move(startedPeer));
-    for (const auto *peer : { kPeer3, kPeer4, kPeer5 }) {
-        auto freshPeer = MakePeerState(peer, RaftMetadataState::ABSENT);
-        freshPeer.state.expectedMemberCount = kFiveMemberCount;
-        state->peers.emplace(peer, std::move(freshPeer));
+    for (const auto &peer : { kPeer2, kPeer3, kPeer4, kPeer5 }) {
+        SendObservation(*manager, MakeObservation(peer, 5, peers));
     }
-    auto manager = MakeManager(state, MakeOptions(kPeer1, kFiveMemberCount));
+    ASSERT_TRUE(state->WaitForManager([&manager] {
+        RaftBootstrapState snapshot;
+        return manager->GetBootstrapState(snapshot).IsOk() && snapshot.consistentView.has_value();
+    }));
 
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers, peers);
-    EXPECT_EQ(state->CallCount(kCreateNode), 1U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
+    SetNow(state, std::chrono::steady_clock::time_point{} + kStableViewElapsed);
+    for (const auto &peer : { kPeer2, kPeer3, kPeer4, kPeer5 }) {
+        SendObservation(*manager, MakeObservation(peer, 5, peers));
+    }
+    ASSERT_TRUE(state->WaitForManager([&manager] {
+        RaftBootstrapState snapshot;
+        return manager->GetBootstrapState(snapshot).IsOk() && snapshot.frozenPlan.has_value();
+    }));
 
-TEST(CoordinatorElectionManagerTest, MatchingFreshCommittedConfigurationCreatesBootstrapPlan)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::VALID, { kPeer1, kPeer2 }));
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers, (std::vector<std::string>{ kPeer1, kPeer2 }));
-    EXPECT_EQ(state->CallCount(kCreateNode), 1U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, NonMemberCommittedConfigurationObservationDoesNotCountTowardQuorum)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2, kPeer4 };
-    state->peers.emplace(kPeer2,
-                         MakePeerState(kPeer2, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3 }));
-    state->peers.emplace(kPeer4,
-                         MakePeerState(kPeer4, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3 }));
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::RETRYING);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_NOT_READY));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-    EXPECT_EQ(state->peerProbeCalls, 2U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, QuorumCommittedConfigurationWinsOverEarlierUnavailablePeer)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2, kPeer3, kPeer4 };
-    auto unavailable = MakePeerState(kPeer2, RaftMetadataState::UNKNOWN);
-    unavailable.result = Status(K_RPC_UNAVAILABLE, "scripted unavailable peer");
-    state->peers.emplace(kPeer2, std::move(unavailable));
-    state->peers.emplace(kPeer3,
-                         MakePeerState(kPeer3, RaftMetadataState::VALID, { kPeer1, kPeer3, kPeer4 }));
-    state->peers.emplace(kPeer4,
-                         MakePeerState(kPeer4, RaftMetadataState::VALID, { kPeer1, kPeer3, kPeer4 }));
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
-              (std::vector<std::string>{ kPeer1, kPeer3, kPeer4 }));
-    EXPECT_EQ(state->peerProbeCalls, 3U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, QuorumCommittedConfigurationWinsOverEarlierAbsentDigestMismatch)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2, kPeer3, kPeer4 };
-    auto mismatched = MakePeerState(kPeer2, RaftMetadataState::ABSENT);
-    mismatched.matchCandidateObservation = false;
-    mismatched.state.candidateCount = 2;
-    mismatched.state.candidateDigest.assign(kSha256HexLength, 'f');
-    state->peers.emplace(kPeer2, std::move(mismatched));
-    state->peers.emplace(kPeer3,
-                         MakePeerState(kPeer3, RaftMetadataState::VALID, { kPeer1, kPeer3, kPeer4 }));
-    state->peers.emplace(kPeer4,
-                         MakePeerState(kPeer4, RaftMetadataState::VALID, { kPeer1, kPeer3, kPeer4 }));
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
-              (std::vector<std::string>{ kPeer1, kPeer3, kPeer4 }));
-    EXPECT_EQ(state->peerProbeCalls, 3U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, BelowConfigQuorumCommittedObservationRetriesWithoutNode)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer2 };
-    state->peers.emplace(kPeer2,
-                         MakePeerState(kPeer2, RaftMetadataState::VALID, { kPeer2, kPeer3, kPeer4 }));
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-    EXPECT_EQ(state->peerProbeCalls, 1U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, AbsentCommittedMemberRebuildsAfterCommittedConfigurationQuorum)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2, kPeer3 };
-    state->peers.emplace(kPeer2,
-                         MakePeerState(kPeer2, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3 }));
-    state->peers.emplace(kPeer3,
-                         MakePeerState(kPeer3, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3 }));
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
-              (std::vector<std::string>{ kPeer1, kPeer2, kPeer3 }));
-    EXPECT_EQ(state->CallCount(kCreateNode), 1U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, ConflictingAuthoritativeConfigurationsRetryUntilTheyConverge)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2, kPeer3 };
-    state->peers.emplace(kPeer2,
-                         MakePeerState(kPeer2, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3 }));
-    state->peers.emplace(
-        kPeer3, MakePeerState(kPeer3, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3, kPeer4 }));
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-    RaftBootstrapState retryingSnapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(retryingSnapshot));
-    EXPECT_EQ(retryingSnapshot.phase, RaftBootstrapPhase::RETRYING);
-    EXPECT_EQ(retryingSnapshot.statusCode, static_cast<int32_t>(K_NOT_READY));
+    for (const auto &peer : { kPeer2, kPeer3, kPeer4, kPeer5 }) {
+        SendObservation(*manager, MakeObservation(peer, 5, peers, RAFT_BOOTSTRAP_PROPOSED));
+    }
+    ASSERT_TRUE(state->WaitFor([state] { return state->createNodeCalls == 1; }));
     {
         std::lock_guard<std::mutex> lock(state->mutex);
-        state->peers[kPeer3] =
-            MakePeerState(kPeer3, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3 });
+        const auto *plan = std::get_if<BootstrapPlan>(&state->raftOptions.startPlan);
+        ASSERT_NE(plan, nullptr);
+        EXPECT_EQ(plan->initialPeers, peers);
     }
-    WakeRetry(*manager);
-    ASSERT_TRUE(WaitForCall(state, kWorkerExit));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
-              (std::vector<std::string>{ kPeer1, kPeer2, kPeer3 }));
-    EXPECT_EQ(state->CallCount(kCreateNode), 1U);
     DS_ASSERT_OK(manager->Shutdown());
 }
 
-TEST(CoordinatorElectionManagerTest, UnavailableCandidateWithoutValidConfigurationPreventsBootstrap)
+TEST(CoordinatorElectionManagerTest, SuccessfulExchangeResponsesContributeToConsistentView)
 {
     auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    auto unavailable = MakePeerState(kPeer2, RaftMetadataState::UNKNOWN);
-    unavailable.result = Status(K_RPC_UNAVAILABLE, "scripted unavailable peer");
-    state->peers.emplace(kPeer2, std::move(unavailable));
+    const std::vector<std::string> peers{ kPeer1, kPeer2, kPeer3 };
+    state->discoveredPeers = peers;
+    state->exchangeResponses.emplace(kPeer2, MakeObservation(kPeer2, 3, peers));
+    state->exchangeResponses.emplace(kPeer3, MakeObservation(kPeer3, 3, peers));
     auto manager = MakeManager(state);
 
     DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-    EXPECT_EQ(state->peerProbeCalls, 1U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, RemoteUnknownOrCorruptMetadataRetriesThenCreatesBootstrapPlan)
-{
-    for (const auto initialMetadataState :
-         std::vector<RaftMetadataState>{ RaftMetadataState::UNKNOWN, RaftMetadataState::CORRUPT }) {
-        SCOPED_TRACE(static_cast<int>(initialMetadataState));
-        auto state = std::make_shared<DependencyState>();
-        state->discoveredCandidates = { kPeer1, kPeer2 };
-        state->peers.emplace(kPeer2, MakePeerState(kPeer2, initialMetadataState));
-        auto manager = MakeManager(state);
-
-        DS_ASSERT_OK(manager->Start());
-        ASSERT_TRUE(WaitForRetry(*manager));
-        EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-        {
-            std::lock_guard<std::mutex> lock(state->mutex);
-            state->peers[kPeer2] = MakePeerState(kPeer2, RaftMetadataState::ABSENT);
-        }
-        WakeRetry(*manager);
-        ASSERT_TRUE(WaitForCall(state, kWorkerExit));
-        EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
-                  (std::vector<std::string>{ kPeer1, kPeer2 }));
-        EXPECT_EQ(state->CallCount(kCreateNode), 1U);
-        DS_ASSERT_OK(manager->Shutdown());
-    }
-}
-
-TEST(CoordinatorElectionManagerTest, RemoteUnknownOrCorruptMetadataRetriesThenCreatesWaitingToJoinPlan)
-{
-    for (const auto initialMetadataState :
-         std::vector<RaftMetadataState>{ RaftMetadataState::UNKNOWN, RaftMetadataState::CORRUPT }) {
-        SCOPED_TRACE(static_cast<int>(initialMetadataState));
-        auto state = std::make_shared<DependencyState>();
-        state->discoveredCandidates = { kPeer1, kPeer2, kPeer3 };
-        state->peers.emplace(kPeer2, MakePeerState(kPeer2, initialMetadataState));
-        state->peers.emplace(kPeer3, MakePeerState(kPeer3, initialMetadataState));
-        auto manager = MakeManager(state);
-
-        DS_ASSERT_OK(manager->Start());
-        ASSERT_TRUE(WaitForRetry(*manager));
-        EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-        {
-            std::lock_guard<std::mutex> lock(state->mutex);
-            state->peers[kPeer2] =
-                MakePeerState(kPeer2, RaftMetadataState::VALID, { kPeer2, kPeer3, kPeer4 });
-            state->peers[kPeer3] =
-                MakePeerState(kPeer3, RaftMetadataState::VALID, { kPeer2, kPeer3, kPeer4 });
-        }
-        WakeRetry(*manager);
-        ASSERT_TRUE(WaitForCall(state, kWorkerExit));
-        EXPECT_TRUE(std::holds_alternative<WaitingToJoinPlan>(state->raftOptions.startPlan));
-        EXPECT_EQ(state->CallCount(kCreateNode), 1U);
-        DS_ASSERT_OK(manager->Shutdown());
-    }
-}
-
-TEST(CoordinatorElectionManagerTest, ValidLocalMetadataRecoversWithoutDiscoveryOrPeerProbe)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->localMetadataState = RaftMetadataState::VALID;
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_TRUE(std::holds_alternative<RecoverPlan>(state->raftOptions.startPlan));
-    EXPECT_EQ(state->discoveryCalls, 0U);
-    EXPECT_EQ(state->peerProbeCalls, 0U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, CorruptOrUnknownLocalMetadataFailsClosed)
-{
-    for (const auto metadataState :
-         std::vector<RaftMetadataState>{ RaftMetadataState::CORRUPT, RaftMetadataState::UNKNOWN }) {
-        SCOPED_TRACE(static_cast<int>(metadataState));
-        auto state = std::make_shared<DependencyState>();
-        state->localMetadataState = metadataState;
-        auto manager = MakeManager(state);
-
-        DS_ASSERT_OK(manager->Start());
-        ASSERT_TRUE(WaitForTerminalStatus(*manager));
+    ASSERT_TRUE(state->WaitForManager([&manager] {
         RaftBootstrapState snapshot;
-        DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-        EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::TERMINAL);
-        EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_DATA_INCONSISTENCY));
-        EXPECT_EQ(state->discoveryCalls, 0U);
-        EXPECT_EQ(state->peerProbeCalls, 0U);
-        EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-        DS_ASSERT_OK(manager->Shutdown());
+        return manager->GetBootstrapState(snapshot).IsOk() && snapshot.consistentView.has_value()
+               && snapshot.knownPeers.size() == 2;
+    }));
+    DS_ASSERT_OK(manager->Shutdown());
+}
+
+TEST(CoordinatorElectionManagerTest, StaleDiscoveryFanoutIsBoundedAndKeepsActivePeersFresh)
+{
+    auto state = std::make_shared<DependencyState>();
+    auto manager = MakeManager(state, 5);
+    const std::vector<std::string> activePeers{ kPeer1, kPeer2, kPeer3, kPeer4, kPeer5 };
+    for (const auto &peer : { kPeer2, kPeer3, kPeer4, kPeer5 }) {
+        SendObservation(*manager, MakeObservation(peer, 5, activePeers));
     }
-}
-
-TEST(CoordinatorElectionManagerTest, ValidRemoteConfigurationQuorumCreatesWaitingToJoinPlan)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2, kPeer3 };
-    state->peers.emplace(kPeer2,
-                         MakePeerState(kPeer2, RaftMetadataState::VALID, { kPeer2, kPeer3, kPeer4 }));
-    state->peers.emplace(kPeer3,
-                         MakePeerState(kPeer3, RaftMetadataState::VALID, { kPeer2, kPeer3, kPeer4 }));
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_TRUE(std::holds_alternative<WaitingToJoinPlan>(state->raftOptions.startPlan));
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, AbsentCommittedMemberRebuildsFromTransitionalConfigurationQuorum)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2, kPeer3, kPeer4 };
-    state->peers.emplace(
-        kPeer2, MakePeerState(kPeer2, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3, kPeer4 }));
-    state->peers.emplace(
-        kPeer3, MakePeerState(kPeer3, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3, kPeer4 }));
-    state->peers.emplace(
-        kPeer4, MakePeerState(kPeer4, RaftMetadataState::VALID, { kPeer1, kPeer2, kPeer3, kPeer4 }));
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    EXPECT_EQ(GetBootstrapPlan(state->raftOptions).initialPeers,
-              (std::vector<std::string>{ kPeer1, kPeer2, kPeer3, kPeer4 }));
-    EXPECT_EQ(state->CallCount(kCreateNode), 1U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, DigestMismatchRetriesWithoutCreatingNode)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    auto peer = MakePeerState(kPeer2, RaftMetadataState::ABSENT);
-    peer.matchCandidateObservation = false;
-    peer.state.candidateCount = 2;
-    peer.state.candidateDigest.assign(kSha256HexLength, 'f');
-    state->peers.emplace(kPeer2, std::move(peer));
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    EXPECT_EQ(state->CallCount(kCreateNode), 0U);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, BootstrapRetryBackoffGrowsAndCapsIndependentlyOfMembershipInterval)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveryResult = Status(K_NOT_READY, "scripted Discovery outage");
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    for (size_t attempt = 1; attempt <= kBootstrapRetrySequenceLength; ++attempt) {
-        ASSERT_TRUE(WaitForRetry(*manager));
-        ASSERT_TRUE(state->WaitFor(
-            [state, attempt] { return state->bootstrapRetryBaseDelays.size() >= attempt; }));
-        if (attempt < kBootstrapRetrySequenceLength) {
-            WakeRetry(*manager);
-            ASSERT_TRUE(state->WaitFor([state, attempt] { return state->discoveryCalls > attempt; }));
-        }
-    }
-
-    EXPECT_EQ(state->BootstrapRetryBaseDelays(),
-              (std::vector<std::chrono::milliseconds>{ kInitialBootstrapRetryDelay,
-                                                       kSecondBootstrapRetryDelay,
-                                                       kThirdBootstrapRetryDelay,
-                                                       kFourthBootstrapRetryDelay,
-                                                       kMaxBootstrapRetryDelay,
-                                                       kMaxBootstrapRetryDelay }));
-    EXPECT_EQ(manager->options_.membershipOptions.discoveryRetryInterval, kDiscoveryRetryInterval);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, NewManagerStartsBootstrapRetryBackoffFromInitialDelay)
-{
-    for (size_t generation = 0; generation < kManagerGenerationCount; ++generation) {
-        auto state = std::make_shared<DependencyState>();
-        state->discoveryResult = Status(K_NOT_READY, "scripted Discovery outage");
-        auto manager = MakeManager(state);
-
-        DS_ASSERT_OK(manager->Start());
-        ASSERT_TRUE(WaitForRetry(*manager));
-        ASSERT_TRUE(state->WaitFor([state] { return !state->bootstrapRetryBaseDelays.empty(); }));
-        EXPECT_EQ(state->BootstrapRetryBaseDelays().front(), kInitialBootstrapRetryDelay);
-        DS_ASSERT_OK(manager->Shutdown());
-    }
-}
-
-TEST(CoordinatorElectionManagerTest, ProductionBootstrapRetryJitterStaysWithinTwentyPercent)
-{
-    const auto dependencies = CoordinatorElectionManager::MakeProductionDependencies();
-    for (const auto baseDelay : { kInitialBootstrapRetryDelay, kMaxBootstrapRetryDelay }) {
-        for (size_t iteration = 0; iteration < kJitterSampleCount; ++iteration) {
-            const auto delay = dependencies.jitterBootstrapRetry(baseDelay);
-            EXPECT_GE(delay, baseDelay * kBootstrapRetryJitterMinPercent / kPercentBase);
-            EXPECT_LE(delay, baseDelay * kBootstrapRetryJitterMaxPercent / kPercentBase);
-        }
-    }
-}
-
-TEST(CoordinatorElectionManagerTest, BootstrapRetryJitterExceptionFallsBackToInterruptibleBaseDelay)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveryResult = Status(K_NOT_READY, "scripted Discovery outage");
-    state->bootstrapRetryJitterThrows = true;
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    DS_ASSERT_OK(manager->Shutdown());
-    EXPECT_EQ(state->CallCount(kWorkerExit), 1U);
-}
-
-TEST(CoordinatorElectionManagerTest, DiscoveryFailureRetriesUntilShutdown)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveryResult = Status(K_NOT_READY, "scripted Discovery outage");
-    state->bootstrapRetryDelayOverride = kLongBootstrapRetryDelay;
-    auto manager = MakeManager(state);
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForRetry(*manager));
-    const auto discoveryCallsBeforeShutdown = state->discoveryCalls;
-    std::this_thread::sleep_for(kInitialBootstrapRetryDelay * 2);
-    EXPECT_EQ(state->discoveryCalls, discoveryCallsBeforeShutdown);
-    DS_ASSERT_OK(manager->Shutdown());
-    EXPECT_EQ(state->CallCount(kWorkerExit), 1U);
-    EXPECT_EQ(state->discoveryCalls, discoveryCallsBeforeShutdown);
-}
-
-TEST(CoordinatorElectionManagerTest, ConfigurationCallbackUpdatesBootstrapSnapshotBeforeExternalCallback)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->invokeConfigurationOnNodeStart = true;
-    state->configurationOnNodeStart = { kPeer2, kPeer1 };
-    std::promise<RaftBootstrapState> observedPromise;
-    auto observedFuture = observedPromise.get_future();
-    CoordinatorElectionManager *managerAddress = nullptr;
-    CoordinatorRaftEventCallbacks callbacks;
-    callbacks.onConfigurationCommitted = [&observedPromise, &managerAddress](std::vector<std::string>, int64_t) {
-        RaftBootstrapState snapshot;
-        const auto status = managerAddress->GetBootstrapState(snapshot);
-        if (status.IsOk()) {
-            observedPromise.set_value(std::move(snapshot));
-        }
-    };
-    auto manager = MakeManager(state, MakeOptions(), std::move(callbacks));
-    managerAddress = manager.get();
-
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_EQ(observedFuture.wait_until(std::chrono::steady_clock::now() + kConcurrencyDeadline),
-              std::future_status::ready);
-    EXPECT_EQ(observedFuture.get().committedPeers,
-              (std::vector<std::string>{ kPeer1, kPeer2 }));
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, ManagedRaftCallbacksCarryBootstrapTrace)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    std::vector<std::string> observedTraceIds;
-    CoordinatorRaftEventCallbacks callbacks;
-    callbacks.onLeaderStart = [&observedTraceIds](int64_t) {
-        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
-    };
-    callbacks.onLeaderStop = [&observedTraceIds](Status) {
-        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
-    };
-    callbacks.onConfigurationCommitted = [&observedTraceIds](std::vector<std::string>, int64_t) {
-        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
-    };
-    callbacks.onError = [&observedTraceIds](Status) {
-        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
-    };
-    callbacks.onShutdown = [&observedTraceIds] {
-        observedTraceIds.emplace_back(Trace::Instance().GetTraceID());
-    };
-    auto manager = MakeManager(state, MakeOptions(), std::move(callbacks));
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    CoordinatorRaftEventCallbacks managedCallbacks;
-    {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        managedCallbacks = state->managedCallbacks;
-    }
-    ASSERT_TRUE(managedCallbacks.onLeaderStart);
-    ASSERT_TRUE(managedCallbacks.onLeaderStop);
-    ASSERT_TRUE(managedCallbacks.onConfigurationCommitted);
-    ASSERT_TRUE(managedCallbacks.onError);
-    ASSERT_TRUE(managedCallbacks.onShutdown);
-    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
-
-    managedCallbacks.onLeaderStart(2);
-    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
-    managedCallbacks.onLeaderStop(Status::OK());
-    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
-    managedCallbacks.onConfigurationCommitted({ kPeer2, kPeer1 }, 3);
-    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
-    managedCallbacks.onError(Status(K_RPC_UNAVAILABLE, "scripted retryable callback error"));
-    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
-    managedCallbacks.onShutdown();
-    EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
-
-    ASSERT_EQ(observedTraceIds.size(), 5U);
-    for (const auto &traceId : observedTraceIds) {
-        EXPECT_EQ(traceId.find("CoordinatorBootstrap;"), 0U) << traceId;
-    }
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, ShutdownJoinsBootstrapBeforeDestroyingMembershipAndNode)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    auto manager = MakeManager(state);
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-
-    DS_ASSERT_OK(manager->Shutdown());
-    const auto calls = state->Calls();
-    const auto workerExit = std::find(calls.begin(), calls.end(), kWorkerExit);
-    const auto shutdownMembership = std::find(calls.begin(), calls.end(), kShutdownMembership);
-    const auto destroyMembership = std::find(calls.begin(), calls.end(), kDestroyMembership);
-    const auto destroyNode = std::find(calls.begin(), calls.end(), kDestroyNode);
-    ASSERT_NE(workerExit, calls.end());
-    ASSERT_NE(shutdownMembership, calls.end());
-    ASSERT_NE(destroyMembership, calls.end());
-    ASSERT_NE(destroyNode, calls.end());
-    EXPECT_LT(workerExit, shutdownMembership);
-    EXPECT_LT(shutdownMembership, destroyMembership);
-    EXPECT_LT(destroyMembership, destroyNode);
-}
-
-TEST(CoordinatorElectionManagerTest, ConcurrentBootstrapStateQueryReturnsCopiedSnapshots)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    auto manager = MakeManager(state);
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-
-    auto writer = std::async(std::launch::async, [state] {
-        for (size_t index = 0; index < kConcurrentSnapshotIterations; ++index) {
-            state->managedCallbacks.onConfigurationCommitted({ kPeer2, kPeer1 },
-                                                              static_cast<int64_t>(index + 1));
-        }
-    });
-    std::vector<std::future<void>> readers;
-    for (size_t reader = 0; reader < kExpectedMemberCount; ++reader) {
-        readers.emplace_back(std::async(std::launch::async, [&manager] {
-            for (size_t index = 0; index < kConcurrentSnapshotIterations; ++index) {
-                RaftBootstrapState snapshot;
-                DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-                EXPECT_EQ(snapshot.groupId, kCoordinatorRaftGroupId);
-                EXPECT_TRUE(snapshot.committedPeers.empty()
-                            || snapshot.committedPeers == std::vector<std::string>({ kPeer1, kPeer2 }));
+    std::vector<std::string> candidates{ kPeer1,          kPeer2,          kPeer3,          kPeer4,
+                                         kPeer5,          kPeer6,          "127.0.0.7:18480",
+                                         "127.0.0.8:18480", "127.0.0.9:18480", "127.0.0.10:18480",
+                                         "127.0.0.11:18480", "127.0.0.12:18480", "127.0.0.13:18480",
+                                         "127.0.0.14:18480", "127.0.0.15:18480" };
+    std::sort(candidates.begin(), candidates.end());
+    std::mutex callsMutex;
+    std::vector<std::string> calls;
+    manager->dependencies_.exchangeObservation =
+        [&callsMutex, &calls](const std::string &peer, int32_t, const RaftBootstrapObservationPb &,
+                             RaftBootstrapObservationPb &) {
+            {
+                std::lock_guard<std::mutex> lock(callsMutex);
+                calls.emplace_back(peer);
             }
-        }));
-    }
-    ASSERT_EQ(writer.wait_until(std::chrono::steady_clock::now() + kConcurrencyDeadline),
-              std::future_status::ready);
-    writer.get();
-    for (auto &reader : readers) {
-        ASSERT_EQ(reader.wait_until(std::chrono::steady_clock::now() + kConcurrencyDeadline),
-                  std::future_status::ready);
-        reader.get();
-    }
-    DS_ASSERT_OK(manager->Shutdown());
+            std::this_thread::sleep_for(kStaleRpcDelay);
+            return Status(K_RPC_UNAVAILABLE, "stale discovery endpoint");
+        };
+
+    const auto start = std::chrono::steady_clock::now();
+    DS_ASSERT_OK(manager->ExchangeBootstrapRound(candidates));
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    std::sort(calls.begin(), calls.end());
+    EXPECT_EQ(calls.size(), 5U);
+    EXPECT_TRUE(std::includes(calls.begin(), calls.end(), activePeers.begin() + 1, activePeers.end()));
+    EXPECT_LT(elapsed, kStableViewElapsed);
 }
 
-TEST(CoordinatorElectionManagerTest, TerminalNodeStartFailureLeavesManagerNotReadyAndShutdownSafe)
+TEST(CoordinatorElectionManagerTest, StaticFivePeerPlanStartsWithoutObservationExchange)
 {
     auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->blockNodeStart = true;
-    state->nodeStartResult = Status(K_RUNTIME_ERROR, "scripted asynchronous Node start failure");
-    auto manager = MakeManager(state);
+    const std::vector<std::string> staticPeers{ kPeer1, kPeer2, kPeer3, kPeer4, kPeer5 };
+    state->discoveredPeers = staticPeers;
+    auto manager = MakeManager(state, 5, RaftBootstrapMode::STATIC_INITIAL_PEERS);
 
     DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(state->WaitFor([state] { return state->nodeStartEntered; }));
-    std::string leader = "stale";
-    EXPECT_FALSE(manager->IsLeader());
-    EXPECT_EQ(manager->GetLeader(leader).GetCode(), K_NOT_READY);
-    EXPECT_TRUE(leader.empty());
+    ASSERT_TRUE(state->WaitFor([&] { return state->startMembershipCalls == 1; }));
     {
         std::lock_guard<std::mutex> lock(state->mutex);
-        state->releaseNodeStart = true;
+        EXPECT_EQ(state->exchangeCalls, 0U);
+        ASSERT_TRUE(std::holds_alternative<BootstrapPlan>(state->raftOptions.startPlan));
+        EXPECT_EQ(std::get<BootstrapPlan>(state->raftOptions.startPlan).initialPeers, staticPeers);
     }
-    state->cv.notify_all();
-    ASSERT_TRUE(WaitForTerminalStatus(*manager));
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::TERMINAL);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_RUNTIME_ERROR));
-    EXPECT_FALSE(manager->IsLeader());
+    RaftBootstrapObservationPb response;
+    EXPECT_EQ(manager->ExchangeBootstrapObservation(MakeObservation(kPeer2, 5, staticPeers), response).GetCode(),
+              K_INVALID);
     DS_ASSERT_OK(manager->Shutdown());
-    EXPECT_EQ(state->CallCount(kCreateMembership), 0U);
-    EXPECT_EQ(state->CallCount(kDestroyNode), 1U);
 }
 
-TEST(CoordinatorElectionManagerTest, FatalNodeStartErrorCallbackKeepsTerminalStateSticky)
+TEST(CoordinatorElectionManagerTest, DifferentPeerViewsDoNotEnterStabilityWindow)
 {
     auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->invokeErrorOnNodeStart = true;
-    state->managedErrorStatus = Status(K_DATA_INCONSISTENCY, "scripted managed Node fatal error");
+    state->discoveredPeers = { kPeer1, kPeer2, kPeer3 };
     auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::TERMINAL);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_DATA_INCONSISTENCY));
-    EXPECT_EQ(state->CallCount(kCreateMembership), 0U);
-    EXPECT_EQ(state->CallCount(kDestroyNode), 1U);
-    EXPECT_FALSE(state->nodeAlive);
-    EXPECT_FALSE(state->membershipAlive);
-
-    DS_ASSERT_OK(manager->Shutdown());
-    RaftBootstrapState shutdownSnapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(shutdownSnapshot));
-    EXPECT_EQ(shutdownSnapshot.phase, snapshot.phase);
-    EXPECT_EQ(shutdownSnapshot.statusCode, snapshot.statusCode);
-    EXPECT_EQ(state->CallCount(kDestroyNode), 1U);
-}
-
-TEST(CoordinatorElectionManagerTest, RuntimeNodeStartErrorCallbackKeepsTerminalStateSticky)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->invokeErrorOnNodeStart = true;
-    state->managedErrorStatus = Status(K_RUNTIME_ERROR, "scripted managed Node runtime error");
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::TERMINAL);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_RUNTIME_ERROR));
-    EXPECT_EQ(state->CallCount(kCreateMembership), 0U);
-    EXPECT_EQ(state->CallCount(kDestroyNode), 1U);
-    EXPECT_FALSE(state->nodeAlive);
-    EXPECT_FALSE(state->membershipAlive);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, TransientNodeStartErrorCallbackDoesNotRecordTerminalState)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->invokeErrorOnNodeStart = true;
-    state->managedErrorStatus = Status(K_RPC_UNAVAILABLE, "scripted managed Node transient error");
-    auto callbackCount = std::make_shared<std::atomic<int>>(0);
-    CoordinatorRaftEventCallbacks callbacks;
-    callbacks.onError = [callbackCount](Status status) {
-        EXPECT_EQ(status.GetCode(), K_RPC_UNAVAILABLE);
-        callbackCount->fetch_add(1, std::memory_order_relaxed);
-    };
-    auto manager = MakeManager(state, MakeOptions(), std::move(callbacks));
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::STARTED);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_OK));
-    EXPECT_EQ(callbackCount->load(std::memory_order_relaxed), 1);
-    EXPECT_EQ(state->CallCount(kCreateMembership), 1U);
-    EXPECT_EQ(state->CallCount(kDestroyNode), 0U);
-    EXPECT_TRUE(state->nodeAlive);
-    EXPECT_TRUE(state->membershipAlive);
-    DS_ASSERT_OK(manager->Shutdown());
-}
-
-TEST(CoordinatorElectionManagerTest, SynchronousMembershipStartErrorCallbackKeepsTerminalStateSticky)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->invokeErrorOnMembershipStart = true;
-    state->managedErrorStatus = Status(K_DATA_INCONSISTENCY, "scripted managed Membership error");
-    auto manager = MakeManager(state);
-
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
-    RaftBootstrapState snapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
-    EXPECT_EQ(snapshot.phase, RaftBootstrapPhase::TERMINAL);
-    EXPECT_EQ(snapshot.statusCode, static_cast<int32_t>(K_DATA_INCONSISTENCY));
-    EXPECT_EQ(state->CallCount(kStartMembership), 1U);
-    EXPECT_EQ(state->CallCount(kShutdownMembership), 1U);
-    EXPECT_EQ(state->CallCount(kDestroyMembership), 1U);
-    EXPECT_EQ(state->CallCount(kDestroyNode), 1U);
-    EXPECT_FALSE(state->nodeAlive);
-    EXPECT_FALSE(state->membershipAlive);
-
-    DS_ASSERT_OK(manager->Shutdown());
-    RaftBootstrapState shutdownSnapshot;
-    DS_ASSERT_OK(manager->GetBootstrapState(shutdownSnapshot));
-    EXPECT_EQ(shutdownSnapshot.phase, snapshot.phase);
-    EXPECT_EQ(shutdownSnapshot.statusCode, snapshot.statusCode);
-    EXPECT_EQ(state->CallCount(kDestroyMembership), 1U);
-    EXPECT_EQ(state->CallCount(kDestroyNode), 1U);
-}
-
-TEST(CoordinatorElectionManagerTest, StopMembershipBeforeNodeCreationPreventsLaterMembershipOwnership)
-{
-    auto state = std::make_shared<DependencyState>();
-    state->blockLocalProbe = true;
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    auto manager = MakeManager(state);
-
     DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForCall(state, kProbeLocal));
-    DS_ASSERT_OK(manager->StopMembership());
-    {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        state->releaseLocalProbe = true;
-    }
-    state->cv.notify_all();
-    ASSERT_TRUE(WaitForCall(state, kWorkerExit));
-    EXPECT_EQ(state->CallCount(kCreateNode), 1U);
-    EXPECT_EQ(state->CallCount(kCreateMembership), 0U);
+
+    SendObservation(*manager, MakeObservation(kPeer2, 3, { kPeer1, kPeer2, kPeer3 }));
+    SendObservation(*manager, MakeObservation(kPeer3, 3, { kPeer1, kPeer3 }));
+    ASSERT_TRUE(state->WaitFor([state] { return state->exchangeCalls >= 2; }));
+
+    RaftBootstrapState snapshot;
+    DS_ASSERT_OK(manager->GetBootstrapState(snapshot));
+    EXPECT_FALSE(snapshot.consistentView.has_value());
+    EXPECT_FALSE(snapshot.frozenPlan.has_value());
     DS_ASSERT_OK(manager->Shutdown());
 }
 
-TEST(CoordinatorElectionManagerTest, AsyncMembershipStartFailurePreservesFirstCleanupResult)
+TEST(CoordinatorElectionManagerTest, InconsistentViewResetsStabilityWindow)
 {
     auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->membershipStartResult = Status(K_INVALID, "scripted membership start failure");
-    state->membershipShutdownResult = Status(K_RUNTIME_ERROR, "scripted failed-start cleanup failure");
     auto manager = MakeManager(state);
+    const std::vector<std::string> fullView{ kPeer1, kPeer2, kPeer3 };
+    const auto start = std::chrono::steady_clock::time_point{};
+    SetNow(state, start);
+    SendObservation(*manager, MakeObservation(kPeer2, 3, fullView));
+    SendObservation(*manager, MakeObservation(kPeer3, 3, fullView));
 
-    DS_ASSERT_OK(manager->Start());
-    ASSERT_TRUE(WaitForTerminalStatus(*manager));
-    const auto first = manager->Shutdown();
-    const auto repeated = manager->Shutdown();
-    EXPECT_EQ(first.GetCode(), K_RUNTIME_ERROR);
-    EXPECT_EQ(repeated.GetCode(), first.GetCode());
-    EXPECT_EQ(repeated.GetMsg(), first.GetMsg());
-    const auto calls = state->Calls();
-    const auto shutdownMembership = std::find(calls.begin(), calls.end(), kShutdownMembership);
-    const auto destroyMembership = std::find(calls.begin(), calls.end(), kDestroyMembership);
-    const auto destroyNode = std::find(calls.begin(), calls.end(), kDestroyNode);
-    ASSERT_NE(shutdownMembership, calls.end());
-    ASSERT_NE(destroyMembership, calls.end());
-    ASSERT_NE(destroyNode, calls.end());
-    EXPECT_LT(shutdownMembership, destroyMembership);
-    EXPECT_LT(destroyMembership, destroyNode);
+    RaftStartPlan startPlan;
+    EXPECT_EQ(manager->TryBuildStartPlan(startPlan).GetCode(), K_NOT_READY);
+    SetNow(state, start + std::chrono::milliseconds(500));
+    SendObservation(*manager, MakeObservation(kPeer2, 3, { kPeer1, kPeer2 }));
+    EXPECT_EQ(manager->TryBuildStartPlan(startPlan).GetCode(), K_NOT_READY);
+
+    SetNow(state, start + kStableViewElapsed);
+    SendObservation(*manager, MakeObservation(kPeer2, 3, fullView));
+    SendObservation(*manager, MakeObservation(kPeer3, 3, fullView));
+    EXPECT_EQ(manager->TryBuildStartPlan(startPlan).GetCode(), K_NOT_READY);
+    EXPECT_FALSE(manager->bootstrapState_.frozenPlan.has_value());
+
+    SetNow(state, start + kStableViewElapsed * 2);
+    SendObservation(*manager, MakeObservation(kPeer2, 3, fullView));
+    SendObservation(*manager, MakeObservation(kPeer3, 3, fullView));
+    EXPECT_EQ(manager->TryBuildStartPlan(startPlan).GetCode(), K_NOT_READY);
+    ASSERT_TRUE(manager->bootstrapState_.frozenPlan.has_value());
+    EXPECT_EQ(manager->bootstrapState_.frozenPlan->initialPeers, fullView);
 }
 
-TEST(CoordinatorElectionManagerTest, ConcurrentShutdownCallersShareFirstCleanupResult)
+TEST(CoordinatorElectionManagerTest, QuorumConfirmedCommittedConfigurationOverridesFreshBootstrap)
 {
     auto state = std::make_shared<DependencyState>();
-    state->discoveredCandidates = { kPeer1, kPeer2 };
-    state->peers.emplace(kPeer2, MakePeerState(kPeer2, RaftMetadataState::ABSENT));
-    state->blockMembershipShutdown = true;
-    state->membershipShutdownResult = Status(K_RUNTIME_ERROR, "scripted membership shutdown failure");
+    const std::vector<std::string> peers{ kPeer1, kPeer2, kPeer3 };
+    state->discoveredPeers = peers;
     auto manager = MakeManager(state);
-    ASSERT_TRUE(StartAndWaitForWorkerExit(*manager, state));
+    DS_ASSERT_OK(manager->Start());
 
-    auto first = std::async(std::launch::async, [&manager] { return manager->Shutdown(); });
-    ASSERT_TRUE(state->WaitFor([state] { return state->membershipShutdownEntered; }));
-    std::promise<void> secondInvokedPromise;
-    auto secondInvoked = secondInvokedPromise.get_future();
-    auto second = std::async(std::launch::async, [&manager, &secondInvokedPromise] {
-        secondInvokedPromise.set_value();
-        return manager->Shutdown();
-    });
-    ASSERT_EQ(secondInvoked.wait_until(std::chrono::steady_clock::now() + kConcurrencyDeadline),
-              std::future_status::ready);
+    SendObservation(*manager, MakeObservation(kPeer2, 3, peers, RAFT_BOOTSTRAP_STARTED, peers));
+    SendObservation(*manager, MakeObservation(kPeer3, 3, peers, RAFT_BOOTSTRAP_STARTED, peers));
+    ASSERT_TRUE(state->WaitFor([state] { return state->createNodeCalls == 1; }));
     {
         std::lock_guard<std::mutex> lock(state->mutex);
-        state->releaseMembershipShutdown = true;
+        const auto *plan = std::get_if<BootstrapPlan>(&state->raftOptions.startPlan);
+        ASSERT_NE(plan, nullptr);
+        EXPECT_EQ(plan->initialPeers, peers);
     }
-    state->cv.notify_all();
-
-    ASSERT_EQ(first.wait_until(std::chrono::steady_clock::now() + kConcurrencyDeadline),
-              std::future_status::ready);
-    ASSERT_EQ(second.wait_until(std::chrono::steady_clock::now() + kConcurrencyDeadline),
-              std::future_status::ready);
-    const auto firstResult = first.get();
-    const auto secondResult = second.get();
-    EXPECT_EQ(firstResult.GetCode(), K_RUNTIME_ERROR);
-    EXPECT_EQ(secondResult.GetCode(), firstResult.GetCode());
-    EXPECT_EQ(secondResult.GetMsg(), firstResult.GetMsg());
-    EXPECT_EQ(manager->Shutdown().GetMsg(), firstResult.GetMsg());
+    DS_ASSERT_OK(manager->Shutdown());
 }
 
+TEST(CoordinatorElectionManagerTest, StartedRecoveryPropagatesTransitionCommittedConfigurationSeparately)
+{
+    auto state = std::make_shared<DependencyState>();
+    auto manager = MakeManager(state);
+    const std::vector<std::string> transitionPeers{ kPeer1, kPeer2, kPeer3, kPeer4 };
+    manager->bootstrapState_.phase = RaftBootstrapPhase::STARTED;
+    manager->bootstrapState_.committedPeers = transitionPeers;
+
+    RaftBootstrapObservationPb localObservation;
+    DS_ASSERT_OK(manager->BuildLocalObservationLocked({}, localObservation));
+    EXPECT_TRUE(localObservation.peers().empty());
+    EXPECT_EQ(std::vector<std::string>(localObservation.committed_peers().begin(),
+                                       localObservation.committed_peers().end()),
+              transitionPeers);
+
+    for (const auto &peer : { kPeer2, kPeer3, kPeer4 }) {
+        SendObservation(
+            *manager, MakeObservation(peer, 3, {}, RAFT_BOOTSTRAP_STARTED, transitionPeers));
+    }
+    RaftStartPlan startPlan;
+    DS_ASSERT_OK(manager->TryBuildStartPlan(startPlan));
+    const auto *plan = std::get_if<BootstrapPlan>(&startPlan);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->initialPeers, transitionPeers);
+}
+
+TEST(CoordinatorElectionManagerTest, ValidLocalMetadataRecoversWithoutDiscovery)
+{
+    auto state = std::make_shared<DependencyState>();
+    state->metadataState = RaftMetadataState::VALID;
+    auto manager = MakeManager(state);
+    DS_ASSERT_OK(manager->Start());
+    ASSERT_TRUE(state->WaitFor([state] { return state->createNodeCalls == 1; }));
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        EXPECT_TRUE(std::holds_alternative<RecoverPlan>(state->raftOptions.startPlan));
+        EXPECT_EQ(state->discoveryCalls, 0U);
+    }
+    DS_ASSERT_OK(manager->Shutdown());
+}
+
+TEST(CoordinatorElectionManagerTest, CorruptLocalMetadataFailsClosed)
+{
+    auto state = std::make_shared<DependencyState>();
+    state->metadataState = RaftMetadataState::CORRUPT;
+    auto manager = MakeManager(state);
+    DS_ASSERT_OK(manager->Start());
+    ASSERT_TRUE(state->WaitForManager([&manager] {
+        RaftBootstrapState snapshot;
+        return manager->GetBootstrapState(snapshot).IsOk() && snapshot.phase == RaftBootstrapPhase::TERMINAL;
+    }));
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        EXPECT_EQ(state->createNodeCalls, 0U);
+    }
+    DS_ASSERT_OK(manager->Shutdown());
+}
+
+TEST(CoordinatorElectionManagerTest, ObservationValidationRejectsMismatchedTargetAndUnnormalizedPeers)
+{
+    auto state = std::make_shared<DependencyState>();
+    auto manager = MakeManager(state);
+
+    RaftBootstrapObservationPb response;
+    EXPECT_EQ(manager->ExchangeBootstrapObservation(
+                  MakeObservation(kPeer2, 5, { kPeer1, kPeer2, kPeer3 }), response)
+                  .GetCode(),
+              K_INVALID);
+    EXPECT_EQ(manager->ExchangeBootstrapObservation(
+                  MakeObservation(kPeer2, 3, { kPeer2, kPeer1, kPeer3 }), response)
+                  .GetCode(),
+              K_INVALID);
+}
+
+}  // namespace
 }  // namespace datasystem::coordinator

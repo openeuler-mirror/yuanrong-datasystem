@@ -81,7 +81,7 @@ TEST(CoordinatorServiceProtocolTest, KeepsLegacyMethodIndexesStable)
     ASSERT_NE(service, nullptr);
     const auto *reportCandidate = service->FindMethodByName("ReportTopologyRecoveryCandidate");
     const auto *rawSnapshot = service->FindMethodByName("GetClusterRawSnapshot");
-    const auto *bootstrapState = service->FindMethodByName("GetRaftBootstrapState");
+    const auto *bootstrapState = service->FindMethodByName("ExchangeBootstrapObservation");
     ASSERT_NE(reportCandidate, nullptr);
     ASSERT_NE(rawSnapshot, nullptr);
     ASSERT_NE(bootstrapState, nullptr);
@@ -485,10 +485,13 @@ protected:
 
     coordinator::CoordinatorServiceImpl *MakeService(const std::shared_ptr<ICoordinatorDiscovery> &discovery,
                                                      size_t expectedMemberCount,
-                                                     coordinator::CoordinatorRaftFlags flags)
+                                                     coordinator::CoordinatorRaftFlags flags,
+                                                     coordinator::RaftBootstrapMode bootstrapMode =
+                                                         coordinator::RaftBootstrapMode::DISCOVERY_OBSERVATION)
     {
         services_.emplace_back(std::make_unique<coordinator::CoordinatorServiceImpl>(
-            HostPort(kLoopbackIp, portLeases_.front().Port()), discovery, expectedMemberCount, std::move(flags)));
+            HostPort(kLoopbackIp, portLeases_.front().Port()), discovery, expectedMemberCount, std::move(flags),
+            BTHREAD_TAG_DEFAULT, bootstrapMode));
         return services_.back().get();
     }
 
@@ -1242,17 +1245,32 @@ TEST_F(CoordinatorElectionServiceTest, BuildElectionContextOnlyCopiesImmutableMa
     EXPECT_EQ(discovery->calls_.load(), 0U);
 }
 
-TEST_F(CoordinatorElectionServiceTest, BootstrapRpcValidatesGroupAndForwardsPublishedManagerSnapshot)
+TEST_F(CoordinatorElectionServiceTest, BuildElectionContextPreservesStaticInitialPeerMode)
+{
+    auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
+    auto service = MakeService(discovery, kCoordinatorCount, raftFlags_,
+                               coordinator::RaftBootstrapMode::STATIC_INITIAL_PEERS);
+    coordinator::CoordinatorElectionOptions options;
+
+    DS_ASSERT_OK(service->BuildElectionStartupContext(options));
+
+    EXPECT_EQ(options.bootstrapMode, coordinator::RaftBootstrapMode::STATIC_INITIAL_PEERS);
+    EXPECT_EQ(discovery->calls_.load(), 0U);
+}
+
+TEST_F(CoordinatorElectionServiceTest, BootstrapRpcValidatesObservationAndForwardsPublishedManagerSnapshot)
 {
     auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
     auto service = MakeService(discovery, kCoordinatorCount);
     DS_ASSERT_OK(service->Init());
     DS_ASSERT_OK(service->Start());
-    coordinator::GetRaftBootstrapStateReqPb request;
-    request.set_group_id(coordinator::kCoordinatorRaftGroupId);
-    coordinator::GetRaftBootstrapStateRspPb response;
+    coordinator::RaftBootstrapObservationPb request;
+    request.set_sender_peer(peers_[1]);
+    request.set_expected_member_count(kCoordinatorCount);
+    request.add_peers(peers_[1]);
+    coordinator::RaftBootstrapObservationPb response;
 
-    const auto unpublishedStatus = service->GetRaftBootstrapState(request, response);
+    const auto unpublishedStatus = service->ExchangeBootstrapObservation(request, response);
     EXPECT_EQ(unpublishedStatus.GetCode(), K_NOT_READY) << unpublishedStatus.ToString();
 
     coordinator::CoordinatorElectionOptions options;
@@ -1260,22 +1278,21 @@ TEST_F(CoordinatorElectionServiceTest, BootstrapRpcValidatesGroupAndForwardsPubl
     service->electionManager_ = std::make_unique<coordinator::CoordinatorElectionManager>(
         std::move(options), service->BuildRaftEventCallbacks(), discovery);
 
-    DS_ASSERT_OK(service->GetRaftBootstrapState(request, response));
-    EXPECT_FALSE(response.probe_ready());
-    EXPECT_EQ(response.group_id(), coordinator::kCoordinatorRaftGroupId);
-    EXPECT_EQ(response.local_peer(), peers_.front());
+    DS_ASSERT_OK(service->ExchangeBootstrapObservation(request, response));
+    EXPECT_EQ(response.sender_peer(), peers_.front());
     EXPECT_EQ(response.expected_member_count(), kCoordinatorCount);
-    EXPECT_EQ(response.metadata_state(), coordinator::RAFT_METADATA_UNKNOWN);
-    EXPECT_EQ(response.candidate_count(), 0U);
-    EXPECT_TRUE(response.candidate_digest().empty());
+    ASSERT_EQ(response.peers_size(), 2);
+    auto expectedObservedPeers = std::vector<std::string>{ peers_.front(), peers_[1] };
+    std::sort(expectedObservedPeers.begin(), expectedObservedPeers.end());
+    EXPECT_EQ(response.peers(0), expectedObservedPeers[0]);
+    EXPECT_EQ(response.peers(1), expectedObservedPeers[1]);
     EXPECT_EQ(response.committed_peers_size(), 0);
     EXPECT_EQ(response.phase(), coordinator::RAFT_BOOTSTRAP_OBSERVING);
-    EXPECT_EQ(response.status_code(), static_cast<int32_t>(K_OK));
     EXPECT_EQ(discovery->calls_.load(), 0U);
 
-    request.set_group_id("wrong-coordinator-raft-group");
-    const auto wrongGroupStatus = service->GetRaftBootstrapState(request, response);
-    EXPECT_EQ(wrongGroupStatus.GetCode(), K_INVALID) << wrongGroupStatus.ToString();
+    request.set_expected_member_count(kCoordinatorCount + 1);
+    const auto mismatchedCountStatus = service->ExchangeBootstrapObservation(request, response);
+    EXPECT_EQ(mismatchedCountStatus.GetCode(), K_INVALID) << mismatchedCountStatus.ToString();
     DS_ASSERT_OK(service->Shutdown());
 }
 
@@ -1293,14 +1310,16 @@ TEST_F(CoordinatorElectionServiceTest, BootstrapHandlerReportsSanitizedTerminalP
     DS_ASSERT_OK(service->Start());
     DS_ASSERT_OK(service->StartElectionManager());
 
-    coordinator::GetRaftBootstrapStateReqPb request;
-    request.set_group_id(coordinator::kCoordinatorRaftGroupId);
-    coordinator::GetRaftBootstrapStateRspPb response;
+    coordinator::RaftBootstrapObservationPb request;
+    request.set_sender_peer(peers_[1]);
+    request.set_expected_member_count(kCoordinatorCount);
+    request.add_peers(peers_[1]);
+    coordinator::RaftBootstrapObservationPb response;
     Status queryStatus;
     bool observedTerminal = false;
     const auto deadline = std::chrono::steady_clock::now() + kTerminalDeadline;
     while (std::chrono::steady_clock::now() < deadline) {
-        queryStatus = service->GetRaftBootstrapState(request, response);
+        queryStatus = service->ExchangeBootstrapObservation(request, response);
         if (queryStatus.IsOk() && response.phase() == coordinator::RAFT_BOOTSTRAP_TERMINAL) {
             observedTerminal = true;
             break;
@@ -1309,7 +1328,6 @@ TEST_F(CoordinatorElectionServiceTest, BootstrapHandlerReportsSanitizedTerminalP
     }
 
     ASSERT_TRUE(observedTerminal) << queryStatus.ToString();
-    EXPECT_EQ(response.status_code(), static_cast<int32_t>(K_INVALID));
     EXPECT_EQ(response.GetDescriptor()->FindFieldByName("data_dir"), nullptr);
     EXPECT_EQ(response.GetDescriptor()->FindFieldByName("status_message"), nullptr);
     EXPECT_EQ(response.SerializeAsString().find(corruptDataDir), std::string::npos);
@@ -1340,11 +1358,13 @@ TEST_F(CoordinatorElectionServiceTest, PublishedManagerSnapshotIsReadableBeforeB
     std::thread startThread([&] { startStatus = service->StartElectionManager(); });
 
     const auto managerPublished = managerPublishedFuture.wait_until(deadline);
-    coordinator::GetRaftBootstrapStateReqPb request;
-    request.set_group_id(coordinator::kCoordinatorRaftGroupId);
-    coordinator::GetRaftBootstrapStateRspPb response;
+    coordinator::RaftBootstrapObservationPb request;
+    request.set_sender_peer(peers_[1]);
+    request.set_expected_member_count(kCoordinatorCount);
+    request.add_peers(peers_[1]);
+    coordinator::RaftBootstrapObservationPb response;
     const auto stateWhilePublished = service->servingState_.load(std::memory_order_acquire);
-    const auto bootstrapStatus = service->GetRaftBootstrapState(request, response);
+    const auto bootstrapStatus = service->ExchangeBootstrapObservation(request, response);
     const auto discoveryCallsBeforeWorkerStart = discovery->calls_.load();
 
     releaseManagerStartPromise.set_value();
@@ -1354,11 +1374,9 @@ TEST_F(CoordinatorElectionServiceTest, PublishedManagerSnapshotIsReadableBeforeB
     EXPECT_EQ(managerPublished, std::future_status::ready);
     EXPECT_EQ(stateWhilePublished, coordinator::CoordinatorServiceImpl::ServingState::STARTING);
     EXPECT_TRUE(bootstrapStatus.IsOk()) << bootstrapStatus.ToString();
-    EXPECT_FALSE(response.probe_ready());
-    EXPECT_EQ(response.group_id(), coordinator::kCoordinatorRaftGroupId);
-    EXPECT_EQ(response.local_peer(), peers_.front());
+    EXPECT_EQ(response.sender_peer(), peers_.front());
+    EXPECT_EQ(response.expected_member_count(), kCoordinatorCount);
     EXPECT_EQ(response.phase(), coordinator::RAFT_BOOTSTRAP_OBSERVING);
-    EXPECT_EQ(response.status_code(), static_cast<int32_t>(K_OK));
     EXPECT_EQ(discoveryCallsBeforeWorkerStart, 0U);
     EXPECT_TRUE(startStatus.IsOk()) << startStatus.ToString();
     DS_ASSERT_OK(service->Shutdown());
@@ -1386,11 +1404,14 @@ TEST_F(CoordinatorElectionServiceTest, BootstrapSnapshotRemainsSafeAfterConcurre
         (void)releaseSnapshotFuture.wait_until(deadline);
     };
 
-    coordinator::GetRaftBootstrapStateReqPb request;
-    request.set_group_id(coordinator::kCoordinatorRaftGroupId);
-    coordinator::GetRaftBootstrapStateRspPb response;
+    coordinator::RaftBootstrapObservationPb request;
+    request.set_sender_peer(peers_[1]);
+    request.set_expected_member_count(kCoordinatorCount);
+    request.add_peers(peers_[1]);
+    coordinator::RaftBootstrapObservationPb response;
     Status bootstrapStatus;
-    std::thread bootstrapThread([&] { bootstrapStatus = service->GetRaftBootstrapState(request, response); });
+    std::thread bootstrapThread(
+        [&] { bootstrapStatus = service->ExchangeBootstrapObservation(request, response); });
     const auto snapshotCopied = snapshotCopiedFuture.wait_until(deadline);
 
     std::promise<Status> shutdownPromise;
@@ -1408,8 +1429,7 @@ TEST_F(CoordinatorElectionServiceTest, BootstrapSnapshotRemainsSafeAfterConcurre
     EXPECT_EQ(shutdownCompletedBeforeResponseFormatting, std::future_status::ready);
     EXPECT_TRUE(shutdownStatus.IsOk()) << shutdownStatus.ToString();
     EXPECT_TRUE(bootstrapStatus.IsOk()) << bootstrapStatus.ToString();
-    EXPECT_EQ(response.group_id(), coordinator::kCoordinatorRaftGroupId);
-    EXPECT_EQ(response.local_peer(), coordinatorAddress_);
+    EXPECT_EQ(response.sender_peer(), coordinatorAddress_);
     EXPECT_EQ(service->electionManager_, nullptr);
 }
 
@@ -1452,10 +1472,12 @@ TEST_F(CoordinatorElectionServiceTest, AcceptedBootstrapRpcDoesNotDeadlockBrpcJo
     Status rpcStatus;
     std::thread rpcThread([&] {
         coordinator::CoordinatorService_BrpcGenericStub stub(channel.get(), kRpcTimeoutMs);
-        coordinator::GetRaftBootstrapStateReqPb request;
-        request.set_group_id(coordinator::kCoordinatorRaftGroupId);
-        coordinator::GetRaftBootstrapStateRspPb response;
-        rpcStatus = stub.GetRaftBootstrapState(request, response);
+        coordinator::RaftBootstrapObservationPb request;
+        request.set_sender_peer(peers_[1]);
+        request.set_expected_member_count(kCoordinatorCount);
+        request.add_peers(peers_[1]);
+        coordinator::RaftBootstrapObservationPb response;
+        rpcStatus = stub.ExchangeBootstrapObservation(request, response);
     });
     const auto handlerEntered = handlerEnteredFuture.wait_until(deadline);
 
@@ -1552,10 +1574,9 @@ TEST_F(CoordinatorElectionServiceTest, SynchronousManagerStartFailureDetachesPub
     EXPECT_NE(service->rpcServer_, nullptr);
     EXPECT_EQ(discovery->calls_.load(), 0U);
 
-    coordinator::GetRaftBootstrapStateReqPb request;
-    request.set_group_id(coordinator::kCoordinatorRaftGroupId);
-    coordinator::GetRaftBootstrapStateRspPb response;
-    EXPECT_EQ(service->GetRaftBootstrapState(request, response).GetCode(), K_NOT_READY);
+    coordinator::RaftBootstrapObservationPb request;
+    coordinator::RaftBootstrapObservationPb response;
+    EXPECT_EQ(service->ExchangeBootstrapObservation(request, response).GetCode(), K_NOT_READY);
     DS_ASSERT_OK(service->Shutdown());
 }
 
@@ -1602,10 +1623,9 @@ TEST_F(CoordinatorElectionServiceTest, SingleExpectedMemberKeepsElectionDisabled
     EXPECT_EQ(discovery->calls_.load(), 0U);
     DS_ASSERT_OK(service->CheckServing());
 
-    coordinator::GetRaftBootstrapStateReqPb request;
-    request.set_group_id(coordinator::kCoordinatorRaftGroupId);
-    coordinator::GetRaftBootstrapStateRspPb response;
-    EXPECT_EQ(service->GetRaftBootstrapState(request, response).GetCode(), K_INVALID);
+    coordinator::RaftBootstrapObservationPb request;
+    coordinator::RaftBootstrapObservationPb response;
+    EXPECT_EQ(service->ExchangeBootstrapObservation(request, response).GetCode(), K_INVALID);
     DS_ASSERT_OK(service->Shutdown());
 }
 

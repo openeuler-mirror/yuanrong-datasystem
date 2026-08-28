@@ -33,6 +33,7 @@
 #include "datasystem/coordinator/raft/coordinator_raft_node.h"
 #include "datasystem/coordinator/raft/coordinator_raft_state_machine.h"
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
+#include "datasystem/protos/coordinator.pb.h"
 #include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/status.h"
 
@@ -41,6 +42,7 @@ namespace datasystem::coordinator {
 struct CoordinatorElectionOptions {
     CoordinatorRaftFlags raftFlags;
     CoordinatorMembershipOptions membershipOptions;
+    RaftBootstrapMode bootstrapMode{ RaftBootstrapMode::DISCOVERY_OBSERVATION };
 };
 
 // One external owner serializes Start, StopMembership, Shutdown, leader queries, and destruction.
@@ -63,6 +65,8 @@ public:
     Status Shutdown();
 
     Status GetBootstrapState(RaftBootstrapState &state) const;
+    Status ExchangeBootstrapObservation(const RaftBootstrapObservationPb &request,
+                                        RaftBootstrapObservationPb &response);
     bool IsLeader() const;
     Status GetLeader(std::string &leaderAddress) const;
 
@@ -83,20 +87,14 @@ private:
         ~MembershipHandle() noexcept;
     };
 
-    struct BootstrapObservation {
-        std::string peer;
-        RaftBootstrapState state;
-        Status status;
-    };
-
     struct Dependencies {
         std::function<Status(const std::string &, RaftMetadataState &)> probeLocalMetadata;
         std::function<Status(const std::shared_ptr<ICoordinatorDiscovery> &, std::vector<std::string> &)>
             discoverCandidates;
-        std::function<Status(const std::string &, int32_t, RaftBootstrapState &)> probePeer;
-        std::function<Status(const std::vector<std::string> &, std::string &)> digestCandidates;
+        std::function<Status(const std::string &, int32_t, const RaftBootstrapObservationPb &,
+                             RaftBootstrapObservationPb &)>
+            exchangeObservation;
         std::function<std::chrono::steady_clock::time_point()> now;
-        std::function<std::chrono::milliseconds(std::chrono::milliseconds)> jitterBootstrapRetry;
         std::function<void()> onBootstrapWorkerExit;
         std::function<std::unique_ptr<NodeHandle>(const CoordinatorRaftOptions &,
                                                   const CoordinatorRaftEventCallbacks &)> createNode;
@@ -116,23 +114,33 @@ private:
     static Dependencies MakeProductionDependencies();
     Status ValidateStartupInput() const;
     void RunBootstrapControl() noexcept;
-    Status RefreshBootstrapObservation(RaftBootstrapState &localState,
-                                       std::vector<std::string> &normalizedCandidates);
-    Status TryBuildStartPlan(const RaftBootstrapState &localState,
-                             const std::vector<std::string> &normalizedCandidates, RaftStartPlan &startPlan);
-    Status CollectBootstrapObservations(const RaftBootstrapState &localState,
-                                        const std::vector<std::string> &normalizedCandidates,
-                                        std::vector<BootstrapObservation> &observations) const;
-    Status DecideStartPlan(const RaftBootstrapState &localState,
-                           const std::vector<std::string> &normalizedCandidates,
-                           const std::vector<BootstrapObservation> &observations, RaftStartPlan &startPlan) const;
+    Status RefreshBootstrapTargets(std::vector<std::string> &normalizedCandidates);
+    Status ExchangeBootstrapRound(const std::vector<std::string> &normalizedCandidates);
+    std::vector<std::string> BuildBootstrapProbeTargetsLocked(
+        const std::vector<std::string> &normalizedCandidates, std::chrono::steady_clock::time_point now);
+    Status TryBuildStartPlan(RaftStartPlan &startPlan);
+    Status TryBuildCommittedStartPlanLocked(const std::vector<std::string> &activePeers, RaftStartPlan &startPlan,
+                                            bool &decided) const;
+    Status TryBuildFreshStartPlanLocked(const std::vector<std::string> &activePeers,
+                                        std::chrono::steady_clock::time_point now, RaftStartPlan &startPlan,
+                                        bool &decided);
+    Status NormalizePeerObservation(const RaftBootstrapObservationPb &observation, std::string &sender,
+                                    std::vector<std::string> &peers,
+                                    std::vector<std::string> &committedPeers) const;
+    Status ParsePeerObservationPhase(const RaftBootstrapObservationPb &observation, const std::string &sender,
+                                     const std::vector<std::string> &peers, RaftBootstrapPhase &phase) const;
+    Status RecordPeerObservationLocked(const RaftBootstrapObservationPb &observation,
+                                       std::chrono::steady_clock::time_point now);
+    Status BuildLocalObservationLocked(std::chrono::steady_clock::time_point now,
+                                       RaftBootstrapObservationPb &observation) const;
+    std::vector<std::string> BuildActivePeersLocked(std::chrono::steady_clock::time_point now) const;
+    bool HasCompleteConsistentViewLocked(const std::vector<std::string> &activePeers) const;
+    bool HasMatchingFrozenPlansLocked(const std::vector<std::string> &activePeers) const;
     Status StartOwnedComponents(RaftStartPlan startPlan, RaftMetadataState metadataState);
-    Status ProbePeerBootstrapState(const std::string &peer, RaftBootstrapState &state) const;
     CoordinatorRaftEventCallbacks BuildManagedCallbacks();
-    void PublishBootstrapState(RaftBootstrapState state);
     void RecordBootstrapTerminalStatus(Status status);
     bool GetBootstrapTerminalStatus(Status &status) const;
-    bool WaitForBootstrapRetryOrStop(std::chrono::milliseconds &baseDelay);
+    bool WaitForBootstrapRetryOrStop();
     bool IsBootstrapStopRequested() const;
     void WarnBootstrapRetry(const Status &status, std::chrono::steady_clock::time_point &nextWarningAt) const;
 
@@ -152,8 +160,8 @@ private:
     RaftBootstrapState bootstrapState_;
     Status bootstrapStatus_;
     bool bootstrapStopRequested_{ false };
-    uint64_t bootstrapWakeGeneration_{ 0 };
     size_t bootstrapRetryWaiters_{ 0 };
+    size_t bootstrapProbeCursor_{ 0 };
     std::thread bootstrapThread_;
 
     mutable std::mutex lifecycleMutex_;

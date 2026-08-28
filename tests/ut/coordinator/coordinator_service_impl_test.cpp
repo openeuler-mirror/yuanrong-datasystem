@@ -210,10 +210,10 @@ TEST_F(CoordinatorServiceImplTest, EveryRpcHandlerIncrementsOnlyItsRequestCounte
     coordinator::GetClusterRawSnapshotRspPb snapshotRsp;
     expectSingleIncrement("coordinator_rpc_get_cluster_raw_snapshot_request_total",
                           [&] { (void)service_->GetClusterRawSnapshot(snapshotReq, snapshotRsp); });
-    coordinator::GetRaftBootstrapStateReqPb bootstrapReq;
-    coordinator::GetRaftBootstrapStateRspPb bootstrapRsp;
-    expectSingleIncrement("coordinator_rpc_get_raft_bootstrap_state_request_total",
-                          [&] { (void)service_->GetRaftBootstrapState(bootstrapReq, bootstrapRsp); });
+    coordinator::RaftBootstrapObservationPb bootstrapReq;
+    coordinator::RaftBootstrapObservationPb bootstrapRsp;
+    expectSingleIncrement("coordinator_rpc_exchange_bootstrap_observation_request_total",
+                          [&] { (void)service_->ExchangeBootstrapObservation(bootstrapReq, bootstrapRsp); });
     coordinator::EnsureLeaderMembershipReqPb ensureReq;
     coordinator::EnsureLeaderMembershipRspPb ensureRsp;
     expectSingleIncrement("coordinator_rpc_ensure_leader_membership_request_total",

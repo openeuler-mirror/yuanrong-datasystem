@@ -46,9 +46,20 @@ Detailed order:
 8. After Service startup, Runtime enters its condition-variable event loop until that Runtime's `Stop()` or a process termination signal. Election-enabled `RUNNING` does not imply Raft leadership or business readiness.
 9. Cleanup invokes `onStop` after an attempted `onStart` and destroys the Service after its shutdown attempt. Retry requires a new Runtime instance.
 
-All election-enabled business RPCs return `K_NOT_READY` until the local Node is the current braft Leader. `GetRaftBootstrapState` remains available independently of that business gate once the Manager is published. `StartElectionManager()` publishes lifecycle `RUNNING` after bootstrap control starts, so one-candidate shortage, peer/digest disagreement, and WaitingToJoin are normal asynchronous non-serving states rather than synchronous `InitAndRun` failures. A synchronous Manager-start failure retains the listening endpoint until Runtime invokes `onStop` and explicit Service shutdown. Concurrent Shutdown waits for an in-progress attempt to publish completion before teardown.
+All election-enabled business RPCs return `K_NOT_READY` until the local Node is the current braft Leader. `ExchangeBootstrapObservation` remains available independently of that business gate once the Manager is published. `StartElectionManager()` publishes lifecycle `RUNNING` after bootstrap control starts, so an incomplete observation view, peer disagreement, and WaitingToJoin are normal asynchronous non-serving states rather than synchronous `InitAndRun` failures. A synchronous Manager-start failure retains the listening endpoint until Runtime invokes `onStop` and explicit Service shutdown. Concurrent Shutdown waits for an in-progress attempt to publish completion before teardown.
 
-For valid local metadata, the worker directly starts `RecoverPlan` and never queries first-bootstrap Discovery. After braft successfully initializes a non-empty `BootstrapPlan`, the Node publishes lifecycle `STARTED` but does not synthesize `initial_conf` as committed index 0; only real braft configuration callbacks publish committed membership. For local `ABSENT`, one bootstrap round probes every normalized Discovery-visible candidate with the bounded peer RPC, including candidates after the deterministic first `N` and views below bootstrap quorum. The Manager decides from the complete observation set: one converged valid non-empty committed configuration takes priority, becomes `BootstrapPlan` when it includes local so braft can rebuild local election/membership metadata, and becomes `WaitingToJoinPlan` when it excludes local. Conflicting normalized full lists, including an `N` view versus a transitional `N + 1` view, return retryable `K_NOT_READY` and create no Node until they converge, except that local `ABSENT` may rebuild from a below-`N` committed candidate subset that is contained in the current normalized candidates and includes local. A successful remote observation of `UNKNOWN` or `CORRUPT` metadata is non-authoritative and retryable; local `UNKNOWN`/`CORRUPT` remains terminal. Only when no observation reports a real non-empty committed configuration, at least `floor(N / 2) + 1` candidates are bootstrappable, and local is in the deterministic first `min(N, bootstrappable_count)` may first bootstrap proceed. A candidate is bootstrappable when it is observable, agrees on the full-view candidate count/digest plus immutable group/target identity, and reports either fresh `ABSENT` metadata or `VALID` metadata with no committed configuration from an in-progress staggered bootstrap. Unavailable observations are excluded from first-bootstrap selection and do not block when a matching target majority remains; successful invalid, `UNKNOWN`/`CORRUPT`, or digest-mismatched observations keep the Manager retrying with the business gate closed. Retryable bootstrap observations use Manager-local base delays `100, 200, 400, 800, 1000...` ms with ±20% production jitter; the jitter generator is thread-local, and entropy failures fall back to the current base delay without escaping the Bootstrap worker. The existing condition variable keeps every wait immediately interruptible by Shutdown. This internal cold-start retry does not change the Membership Discovery interval used after Node startup. Counts from quorum through `N` use every bootstrappable candidate; counts above `N` select the first `N` bootstrappable endpoints after the full probe.
+For valid local metadata, the worker directly starts `RecoverPlan` and never queries fresh-bootstrap Discovery. After
+braft successfully initializes a non-empty `BootstrapPlan`, the Node publishes lifecycle `STARTED`; only real braft
+configuration callbacks publish committed membership. For local `ABSENT` in `DISCOVERY_OBSERVATION` mode, normalized
+Discovery-visible endpoints are best-effort Exchange targets. Each round concurrently probes at most `N` endpoints,
+prioritizes peers with active observations, rotates through remaining targets, and reuses a per-peer BRPC channel for
+the Manager lifetime. Individual timeout, unavailable, or connection failures do not fail the round because Discovery
+can retain stale endpoints. Valid successful responses are recorded under the same validation path as inbound requests.
+The active set is derived from observations received within the one-second TTL plus the local endpoint. Fresh bootstrap
+requires exactly `N` active members, the same complete view stable for one second, and the same frozen Plan reported by
+every member. More than `N` active members remains fail-closed rather than selecting a subset. The existing condition
+variable keeps every wait immediately interruptible by Shutdown after the bounded concurrent round completes. This
+bootstrap polling does not change the Membership Discovery interval used after Node startup.
 
 `ICoordinatorDiscovery::GetCoordinators` remains a synchronous provider API whose implementations must return within a finite provider-controlled bound. Manager shutdown observes its stop request only between calls and joins after an in-flight call returns; a provider that violates the bounded-return contract can block Manager and Service shutdown.
 
@@ -72,18 +83,21 @@ Public `CoordinatorServiceImpl::Shutdown()` serializes cleanup ownership with th
 
 ## Bootstrap RPC And Serving Contract
 
-The Manager snapshot publishes these source-backed states:
+The Manager uses one validated internal phase type for both its local state and stored peer observations:
 
-| Event | Phase | Status code |
-| --- | --- | ---: |
-| worker starts observing | `OBSERVING` | `K_OK` |
-| retryable Discovery, peer, or conflicting-configuration observation | `RETRYING` | `K_NOT_READY` |
-| Node and Membership start successfully | `STARTED` | `K_OK` |
-| first terminal local inconsistency or startup failure | `TERMINAL` | original stable `StatusCode` |
+| Event | Phase |
+| --- | --- |
+| worker is collecting a complete view | `OBSERVING` |
+| the complete stable view is frozen as the local plan | `PROPOSED` |
+| Node and Membership start successfully | `STARTED` |
+| first terminal local inconsistency or startup failure | `TERMINAL` |
 
-`TERMINAL` is a one-way Manager state. Generic bootstrap publication ignores later non-terminal phases, Node and Membership startup recheck terminal state after external calls return, and final ownership plus `STARTED` publication is decided with lifecycle mutex before bootstrap mutex. Cleanup of unpublished Membership/Node instances runs after both locks are released; ownership already published before a later error remains available to `Shutdown()` while the business gate is closed.
+The protobuf phase remains the untrusted RPC input type. `RecordPeerObservationLocked` validates it before converting it
+to the internal `RaftBootstrapPhase`. `TERMINAL` is a one-way local Manager state.
 
-`CoordinatorServiceImpl::GetRaftBootstrapState` copies the Manager value snapshot under the lifecycle lock, releases that lock, then encodes protobuf fields. The response includes phase and numeric `status_code`; it has no raw Status text or Raft data-directory field. The custom ZMQ transport depends on protobuf method indexes, so `ReportTopologyRecoveryCandidate` remains index 7, `GetClusterRawSnapshot` remains index 8, and the appended `GetRaftBootstrapState` is index 9.
+`CoordinatorServiceImpl::ExchangeBootstrapObservation` records the validated inbound observation and returns the local
+observation. The RPC remains available while fresh bootstrap is waiting; local timestamps, consistency timers, and other
+Manager control state are not sent on the wire.
 
 Service `RUNNING` and Runtime startup mean the endpoint is active and the background Manager worker started. They do not mean election completion or business readiness. `CoordinatorServiceImpl::CheckServing()` opens business access only while the local serving gate is open and the election manager still reports the local Node as current braft Leader.
 

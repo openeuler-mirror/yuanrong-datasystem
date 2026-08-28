@@ -56,10 +56,13 @@ using Deadline = std::chrono::steady_clock::time_point;
 
 constexpr char kLoopbackIp[] = "127.0.0.1";
 constexpr size_t kBaselineCoordinatorCount = 3;
-constexpr size_t kEndpointCapacity = 4;
+constexpr size_t kFiveMemberCoordinatorCount = 5;
+constexpr size_t kEndpointCapacity = 6;
 constexpr size_t kInvalidRuntimeIndex = kEndpointCapacity;
 constexpr int32_t kHeartbeatIntervalMs = 50;
 constexpr int32_t kElectionTimeoutMs = 300;
+constexpr int32_t kBootstrapRaceHeartbeatIntervalMs = 1'000;
+constexpr int32_t kBootstrapRaceElectionTimeoutMs = 10'000;
 constexpr uint32_t kHealthCheckIntervalMs = 50;
 constexpr uint32_t kMemberFailureGraceMs = 500;
 constexpr uint32_t kDiscoveryRetryIntervalMs = 100;
@@ -78,6 +81,7 @@ constexpr std::chrono::seconds kTeardownPortReleaseBudget{ 1 };
 
 static_assert(kBaselineCoordinatorCount < kEndpointCapacity);
 static_assert(kElectionTimeoutMs % kHeartbeatIntervalMs == 0);
+static_assert(kBootstrapRaceElectionTimeoutMs % kBootstrapRaceHeartbeatIntervalMs == 0);
 static_assert(kHealthCheckIntervalMs < kMemberFailureGraceMs);
 static_assert(kHealthCheckIntervalMs <= kDiscoveryRetryIntervalMs);
 static_assert(kCaseBudget < kCtestTimeout);
@@ -85,6 +89,11 @@ static_assert(kCaseBudget < kCtestTimeout);
 std::vector<size_t> BaselineIndexes()
 {
     return { 0, 1, 2 };
+}
+
+std::vector<size_t> FiveMemberIndexes()
+{
+    return { 0, 1, 2, 3, 4 };
 }
 
 template <typename Predicate>
@@ -426,7 +435,7 @@ struct BusinessRpcObservation {
 
 struct BootstrapRpcObservation {
     Status status;
-    coordinator::GetRaftBootstrapStateRspPb response;
+    coordinator::RaftBootstrapObservationPb response;
 };
 }  // namespace
 
@@ -456,7 +465,8 @@ protected:
         auto &allocator = TestPortAllocator::Instance();
         allocator.SetOwnerInfo("coordinator_runtime_election_test", testName, rootDir_);
         const std::vector<std::string> roles{ "coordinator_runtime_0", "coordinator_runtime_1",
-                                              "coordinator_runtime_2", "coordinator_runtime_3" };
+                                              "coordinator_runtime_2", "coordinator_runtime_3",
+                                              "coordinator_runtime_4", "coordinator_runtime_5" };
         const auto reserveStatus = allocator.ReserveBatch(roles, portLeases_);
         ASSERT_TRUE(reserveStatus.IsOk()) << reserveStatus.ToString();
         ASSERT_EQ(portLeases_.size(), kEndpointCapacity);
@@ -529,12 +539,18 @@ protected:
     {
         return coordinator::CoordinatorRaftFlags{ endpoints_[index],
                                                   dataRoots_[index],
-                                                  kHeartbeatIntervalMs,
-                                                  kElectionTimeoutMs,
+                                                  heartbeatIntervalMs_,
+                                                  electionTimeoutMs_,
                                                   kDiscoveryRetryIntervalMs,
                                                   kMemberFailureGraceMs,
                                                   kHealthCheckIntervalMs,
                                                   kBootstrapWarningIntervalMs };
+    }
+
+    void SetRaftTiming(int32_t heartbeatIntervalMs, int32_t electionTimeoutMs)
+    {
+        heartbeatIntervalMs_ = heartbeatIntervalMs;
+        electionTimeoutMs_ = electionTimeoutMs;
     }
 
     size_t LaunchRuntime(size_t index, size_t expectedMemberCount = kBaselineCoordinatorCount,
@@ -711,7 +727,9 @@ protected:
                && BusinessGatesMatchLeader(indexes, observation.leaderIndex, deadline);
     }
 
-    BootstrapRpcObservation CallBootstrapRpc(size_t index, Deadline deadline) const
+    BootstrapRpcObservation CallBootstrapRpc(
+        size_t index, Deadline deadline, size_t expectedMemberCount = kBaselineCoordinatorCount,
+        const std::vector<std::string> &requestPeers = {}) const
     {
         BootstrapRpcObservation observation;
         auto channel = CreateBusinessChannel(index, deadline);
@@ -722,9 +740,15 @@ protected:
         }
 
         coordinator::CoordinatorService_BrpcGenericStub stub(channel.get());
-        coordinator::GetRaftBootstrapStateReqPb request;
-        request.set_group_id(coordinator::kCoordinatorRaftGroupId);
-        observation.status = stub.GetRaftBootstrapState(request, observation.response);
+        coordinator::RaftBootstrapObservationPb request;
+        const auto senderIndex = index == 0 ? 1 : 0;
+        request.set_sender_peer(endpoints_[senderIndex]);
+        request.set_expected_member_count(expectedMemberCount);
+        const auto peers = requestPeers.empty() ? BaselineEndpointSet() : requestPeers;
+        for (const auto &peer : peers) {
+            request.add_peers(peer);
+        }
+        observation.status = stub.ExchangeBootstrapObservation(request, observation.response);
         lastBootstrapStatus_[index] = observation.status.ToString();
         return observation;
     }
@@ -732,14 +756,11 @@ protected:
     bool HasCommittedConfiguration(size_t index, const std::vector<std::string> &expectedPeers,
                                    Deadline deadline, size_t expectedMemberCount = kBaselineCoordinatorCount) const
     {
-        const auto observation = CallBootstrapRpc(index, deadline);
+        const auto observation = CallBootstrapRpc(index, deadline, expectedMemberCount, expectedPeers);
         const auto &response = observation.response;
-        if (observation.status.IsError() || !response.probe_ready()
-            || response.metadata_state() != coordinator::RAFT_METADATA_VALID
-            || response.local_peer() != endpoints_[index]
+        if (observation.status.IsError() || response.sender_peer() != endpoints_[index]
             || response.expected_member_count() != expectedMemberCount
-            || response.phase() != coordinator::RAFT_BOOTSTRAP_STARTED
-            || response.status_code() != static_cast<int32_t>(K_OK)) {
+            || response.phase() != coordinator::RAFT_BOOTSTRAP_STARTED) {
             return false;
         }
 
@@ -747,22 +768,6 @@ protected:
         auto normalizedExpected = expectedPeers;
         std::sort(normalizedExpected.begin(), normalizedExpected.end());
         return committedPeers == normalizedExpected;
-    }
-
-    bool HasWaitingBootstrapState(size_t index, size_t expectedCandidateCount, Deadline deadline,
-                                  coordinator::RaftMetadataStatePb expectedMetadataState,
-                                  coordinator::RaftBootstrapPhasePb expectedPhase, int32_t expectedStatusCode) const
-    {
-        const auto observation = CallBootstrapRpc(index, deadline);
-        const auto &response = observation.response;
-        return observation.status.IsOk() && response.probe_ready()
-               && response.group_id() == coordinator::kCoordinatorRaftGroupId
-               && response.local_peer() == endpoints_[index]
-               && response.expected_member_count() == kBaselineCoordinatorCount
-               && response.metadata_state() == expectedMetadataState
-               && response.candidate_count() == expectedCandidateCount && !response.candidate_digest().empty()
-               && response.committed_peers().empty() && response.phase() == expectedPhase
-               && response.status_code() == expectedStatusCode;
     }
 
     bool HasPersistedData(size_t index) const
@@ -868,14 +873,6 @@ protected:
         return followers;
     }
 
-    std::vector<size_t> SortedIndexes(std::vector<size_t> indexes) const
-    {
-        std::sort(indexes.begin(), indexes.end(), [this](size_t lhs, size_t rhs) {
-            return endpoints_[lhs] < endpoints_[rhs];
-        });
-        return indexes;
-    }
-
     std::vector<std::string> EndpointSet(const std::vector<size_t> &indexes) const
     {
         std::vector<std::string> endpointSet;
@@ -893,8 +890,7 @@ protected:
     }
 
     bool RemainNonServingWithoutConfiguration(const std::vector<size_t> &indexes,
-                                               std::chrono::milliseconds isolationWindow, Deadline caseDeadline,
-                                               size_t expectedCandidateCount) const
+                                               std::chrono::milliseconds isolationWindow, Deadline caseDeadline) const
     {
         const auto isolationDeadline = std::chrono::steady_clock::now() + isolationWindow;
         if (isolationDeadline > caseDeadline) {
@@ -903,24 +899,15 @@ protected:
         while (std::chrono::steady_clock::now() < isolationDeadline) {
             for (const auto index : indexes) {
                 if (runtimes_[index].active == nullptr || LifecycleCompleted(index)
-                    || runtimes_[index].active->runtime->IsLeader()) {
+                    || runtimes_[index].active->runtime->IsLeader() || HasPersistedData(index)) {
                     return false;
                 }
                 std::string leader;
                 if (runtimes_[index].active->runtime->GetLeader(leader).GetCode() != K_NOT_READY || !leader.empty()) {
                     return false;
                 }
-                if (CallBusinessRpc(index, caseDeadline).status.GetCode() != K_NOT_READY) {
-                    return false;
-                }
-                const auto bootstrap = CallBootstrapRpc(index, caseDeadline);
-                const bool observing = bootstrap.response.phase() == coordinator::RAFT_BOOTSTRAP_OBSERVING
-                                       && bootstrap.response.status_code() == static_cast<int32_t>(K_OK);
-                const bool retrying = bootstrap.response.phase() == coordinator::RAFT_BOOTSTRAP_RETRYING
-                                      && bootstrap.response.status_code() == static_cast<int32_t>(K_NOT_READY);
-                if (bootstrap.status.IsError() || !bootstrap.response.probe_ready()
-                    || bootstrap.response.candidate_count() != expectedCandidateCount
-                    || bootstrap.response.committed_peers_size() != 0 || (!observing && !retrying)) {
+                const auto businessCode = CallBusinessRpc(index, caseDeadline).status.GetCode();
+                if (businessCode != K_NOT_READY && businessCode != K_RPC_UNAVAILABLE) {
                     return false;
                 }
             }
@@ -953,75 +940,6 @@ protected:
             },
             deadline))
             << FailureDiagnostics("baseline unique Leader and business gate convergence", indexes);
-    }
-
-    void StartTargetQuorumCluster(Deadline deadline, LeaderObservation &observation)
-    {
-        discovery_ = std::make_shared<CoordinatorDiscoveryMock>();
-        discovery_->SetRegistrationBarrierTarget(1);
-        const std::vector<size_t> quorumIndexes{ 0, 1 };
-        ASSERT_EQ(LaunchRuntime(quorumIndexes[0]), 1U) << "Failed to launch " << RuntimeLabel(quorumIndexes[0], 1);
-        ASSERT_TRUE(WaitUntil(
-            [this, &quorumIndexes, deadline] {
-                return discovery_->RegisteredCount() == 1 && AllLifecyclesRunning({ quorumIndexes[0] })
-                       && HasWaitingBootstrapState(quorumIndexes[0], 1, deadline, coordinator::RAFT_METADATA_ABSENT,
-                                                   coordinator::RAFT_BOOTSTRAP_RETRYING,
-                                                   static_cast<int32_t>(K_NOT_READY));
-            },
-            deadline))
-            << FailureDiagnostics("single-candidate bootstrap wait", { quorumIndexes[0] });
-
-        ASSERT_EQ(LaunchRuntime(quorumIndexes[1]), 1U) << "Failed to launch " << RuntimeLabel(quorumIndexes[1], 1);
-        const auto quorumEndpoints = EndpointSet(quorumIndexes);
-        ASSERT_TRUE(WaitUntil(
-            [this, &quorumIndexes, &quorumEndpoints, &observation, deadline] {
-                return discovery_->RegisteredCount() == quorumIndexes.size() && AllLifecyclesRunning(quorumIndexes)
-                       && ObserveUniqueServingLeader(quorumIndexes, observation, deadline)
-                       && std::all_of(quorumIndexes.begin(), quorumIndexes.end(), [this, &quorumEndpoints, deadline](size_t index) {
-                              return HasCommittedConfiguration(index, quorumEndpoints, deadline);
-                          });
-            },
-            deadline))
-            << FailureDiagnostics("target-majority bootstrap", quorumIndexes);
-    }
-
-    void StartExtraCandidateCluster(Deadline deadline, std::vector<size_t> &selectedIndexes, size_t &waitingIndex,
-                                    LeaderObservation &observation)
-    {
-        discovery_ = std::make_shared<CoordinatorDiscoveryMock>();
-        discovery_->SetRegistrationBarrierTarget(kEndpointCapacity);
-        const std::vector<size_t> allIndexes{ 0, 1, 2, 3 };
-        for (const auto index : allIndexes) {
-            ASSERT_EQ(LaunchRuntime(index), 1U) << "Failed to launch " << RuntimeLabel(index, 1);
-        }
-        ASSERT_TRUE(WaitUntil(
-            [this, &allIndexes] {
-                return discovery_->RegisteredCount() == kEndpointCapacity
-                       && !discovery_->RegistrationBarrierTimedOut() && AllLifecyclesRunning(allIndexes);
-            },
-            deadline))
-            << FailureDiagnostics("extra-candidate registration", allIndexes);
-
-        const auto sortedIndexes = SortedIndexes(allIndexes);
-        selectedIndexes.assign(sortedIndexes.begin(), sortedIndexes.begin() + kBaselineCoordinatorCount);
-        waitingIndex = sortedIndexes.back();
-        const auto selectedEndpoints = EndpointSet(selectedIndexes);
-        ASSERT_TRUE(WaitUntil(
-            [this, &allIndexes, &selectedIndexes, waitingIndex, &selectedEndpoints, &observation, deadline] {
-                return ObserveUniqueLeader(selectedIndexes, observation)
-                       && std::all_of(selectedIndexes.begin(), selectedIndexes.end(),
-                                      [this, &selectedEndpoints, deadline](size_t index) {
-                                          return HasCommittedConfiguration(index, selectedEndpoints, deadline);
-                                      })
-                       && HasWaitingBootstrapState(waitingIndex, kEndpointCapacity, deadline,
-                                                   coordinator::RAFT_METADATA_VALID,
-                                                   coordinator::RAFT_BOOTSTRAP_STARTED,
-                                                   static_cast<int32_t>(K_OK))
-                       && !runtimes_[waitingIndex].active->runtime->IsLeader()
-                       && BusinessGatesMatchLeader(allIndexes, observation.leaderIndex, deadline);
-            },
-            deadline))
-            << FailureDiagnostics("deterministic extra-candidate selection", allIndexes);
     }
 
     std::string RuntimeLabel(size_t index, size_t generation) const
@@ -1062,12 +980,12 @@ protected:
                     const auto bootstrap = CallBootstrapRpc(
                         index, std::chrono::steady_clock::now() + std::chrono::milliseconds(kRpcTimeoutMs));
                     output << ", bootstrap_rpc={" << bootstrap.status.ToString() << "}"
-                           << ", bootstrap_probe_ready=" << (bootstrap.response.probe_ready() ? "true" : "false")
-                           << ", bootstrap_metadata=" << bootstrap.response.metadata_state()
                            << ", bootstrap_phase=" << bootstrap.response.phase()
-                           << ", bootstrap_status_code=" << bootstrap.response.status_code()
-                           << ", bootstrap_candidate_count=" << bootstrap.response.candidate_count()
-                           << ", bootstrap_digest=" << bootstrap.response.candidate_digest()
+                           << ", bootstrap_sender=" << bootstrap.response.sender_peer() << ", observed=[";
+                    for (int peerIndex = 0; peerIndex < bootstrap.response.peers_size(); ++peerIndex) {
+                        output << (peerIndex == 0 ? "" : ",") << bootstrap.response.peers(peerIndex);
+                    }
+                    output << "]"
                            << ", committed=[";
                     for (int peerIndex = 0; peerIndex < bootstrap.response.committed_peers_size(); ++peerIndex) {
                         output << (peerIndex == 0 ? "" : ",") << bootstrap.response.committed_peers(peerIndex);
@@ -1096,6 +1014,8 @@ protected:
     std::string rootDir_;
     mutable std::array<std::string, kEndpointCapacity> lastBusinessStatus_;
     mutable std::array<std::string, kEndpointCapacity> lastBootstrapStatus_;
+    int32_t heartbeatIntervalMs_{ kHeartbeatIntervalMs };
+    int32_t electionTimeoutMs_{ kElectionTimeoutMs };
 
 private:
     bool savedUseBrpc_{ false };
@@ -1111,171 +1031,19 @@ TEST_F(CoordinatorRuntimeElectionTest, OneOfThreeCandidateWaitsWithoutSynchronou
     ASSERT_TRUE(WaitUntil(
         [this, caseDeadline] {
             return discovery_->RegisteredCount() == 1 && AllLifecyclesRunning({ 0 })
-                   && HasWaitingBootstrapState(0, 1, caseDeadline, coordinator::RAFT_METADATA_ABSENT,
-                                               coordinator::RAFT_BOOTSTRAP_RETRYING,
-                                               static_cast<int32_t>(K_NOT_READY));
+                   && !runtimes_[0].active->runtime->IsLeader();
         },
         caseDeadline))
         << FailureDiagnostics("one-of-three candidate registration", { 0 });
 
-    ASSERT_TRUE(RemainNonServingWithoutConfiguration({ 0 }, kBootstrapIsolationWindow, caseDeadline, 1))
+    ASSERT_TRUE(RemainNonServingWithoutConfiguration({ 0 }, kBootstrapIsolationWindow, caseDeadline))
         << FailureDiagnostics("one-of-three candidate isolation", { 0 });
     EXPECT_FALSE(LifecycleCompleted(0));
     EXPECT_FALSE(runtimes_[0].active->runtime->IsLeader());
     EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
 }
 
-TEST_F(CoordinatorRuntimeElectionTest, TwoOfThreeCandidatesBootstrapAtTargetQuorum)
-{
-    const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
-    LeaderObservation observation;
-    ASSERT_NO_FATAL_FAILURE(StartTargetQuorumCluster(caseDeadline, observation));
-
-    const std::vector<size_t> quorumIndexes{ 0, 1 };
-    const auto quorumEndpoints = EndpointSet(quorumIndexes);
-    EXPECT_NE(std::find(quorumEndpoints.begin(), quorumEndpoints.end(), observation.endpoint), quorumEndpoints.end());
-    for (const auto index : quorumIndexes) {
-        EXPECT_TRUE(HasCommittedConfiguration(index, quorumEndpoints, caseDeadline))
-            << FailureDiagnostics("two-of-three committed configuration", quorumIndexes);
-    }
-    EXPECT_TRUE(BusinessGatesMatchLeader(quorumIndexes, observation.leaderIndex, caseDeadline));
-    EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
-}
-
-TEST_F(CoordinatorRuntimeElectionTest, LaterCandidateFillsBootstrapVacancyWithoutRemoval)
-{
-    const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
-    LeaderObservation initial;
-    ASSERT_NO_FATAL_FAILURE(StartTargetQuorumCluster(caseDeadline, initial));
-    const std::vector<size_t> bootstrapIndexes{ 0, 1 };
-    const auto bootstrapEndpoints = EndpointSet(bootstrapIndexes);
-
-    ASSERT_EQ(LaunchRuntime(2), 1U) << "Failed to launch " << RuntimeLabel(2, 1);
-    const auto allIndexes = BaselineIndexes();
-    const auto finalEndpoints = BaselineEndpointSet();
-    bool bootstrapMembersPreserved = true;
-    std::vector<std::vector<std::string>> observedConfigurations{ bootstrapEndpoints };
-    LeaderObservation final;
-    ASSERT_TRUE(WaitUntil(
-        [this, &initial, &allIndexes, &bootstrapEndpoints, &finalEndpoints, &bootstrapMembersPreserved,
-         &observedConfigurations, &final, caseDeadline] {
-            const auto bootstrap = CallBootstrapRpc(initial.leaderIndex, caseDeadline);
-            if (bootstrap.status.IsOk() && bootstrap.response.committed_peers_size() > 0) {
-                std::vector<std::string> peers(bootstrap.response.committed_peers().begin(),
-                                               bootstrap.response.committed_peers().end());
-                if (observedConfigurations.empty() || observedConfigurations.back() != peers) {
-                    observedConfigurations.emplace_back(peers);
-                }
-                bootstrapMembersPreserved = bootstrapMembersPreserved
-                                            && std::all_of(bootstrapEndpoints.begin(), bootstrapEndpoints.end(),
-                                                           [&peers](const std::string &peer) {
-                                                               return std::find(peers.begin(), peers.end(), peer)
-                                                                      != peers.end();
-                                                           });
-            }
-            return bootstrapMembersPreserved && ObserveUniqueServingLeader(allIndexes, final, caseDeadline)
-                   && std::all_of(allIndexes.begin(), allIndexes.end(),
-                                  [this, &finalEndpoints, caseDeadline](size_t index) {
-                                      return HasCommittedConfiguration(index, finalEndpoints, caseDeadline);
-                                  });
-        },
-        caseDeadline))
-        << FailureDiagnostics("vacancy Add-only convergence", allIndexes);
-
-    ASSERT_TRUE(bootstrapMembersPreserved);
-    ASSERT_FALSE(observedConfigurations.empty());
-    EXPECT_EQ(observedConfigurations.front(), bootstrapEndpoints);
-    EXPECT_EQ(observedConfigurations.back(), finalEndpoints);
-    EXPECT_TRUE(BusinessGatesMatchLeader(allIndexes, final.leaderIndex, caseDeadline));
-    EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
-}
-
-TEST_F(CoordinatorRuntimeElectionTest, ExtraCandidateWaitsOutsideFirstExpectedPeers)
-{
-    const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
-    std::vector<size_t> selectedIndexes;
-    size_t waitingIndex = kInvalidRuntimeIndex;
-    LeaderObservation observation;
-    ASSERT_NO_FATAL_FAILURE(StartExtraCandidateCluster(caseDeadline, selectedIndexes, waitingIndex, observation));
-
-    const auto sortedIndexes = SortedIndexes({ 0, 1, 2, 3 });
-    ASSERT_EQ(selectedIndexes,
-              (std::vector<size_t>{ sortedIndexes[0], sortedIndexes[1], sortedIndexes[2] }));
-    ASSERT_EQ(waitingIndex, sortedIndexes[3]);
-    const auto selectedEndpoints = EndpointSet(selectedIndexes);
-    for (const auto index : selectedIndexes) {
-        EXPECT_TRUE(HasCommittedConfiguration(index, selectedEndpoints, caseDeadline));
-    }
-    EXPECT_EQ(std::count_if(sortedIndexes.begin(), sortedIndexes.end(), [this](size_t index) {
-                  return runtimes_[index].active->runtime->IsLeader();
-              }),
-              1);
-    EXPECT_TRUE(BusinessGatesMatchLeader(sortedIndexes, observation.leaderIndex, caseDeadline));
-    EXPECT_TRUE(HasWaitingBootstrapState(waitingIndex, kEndpointCapacity, caseDeadline,
-                                         coordinator::RAFT_METADATA_VALID, coordinator::RAFT_BOOTSTRAP_STARTED,
-                                         static_cast<int32_t>(K_OK)));
-    EXPECT_FALSE(runtimes_[waitingIndex].active->runtime->IsLeader());
-    std::string waitingLeader = "stale";
-    EXPECT_EQ(runtimes_[waitingIndex].active->runtime->GetLeader(waitingLeader).GetCode(), K_NOT_READY);
-    EXPECT_TRUE(waitingLeader.empty());
-    EXPECT_EQ(CallBusinessRpc(waitingIndex, caseDeadline).status.GetCode(), K_NOT_READY);
-    EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
-}
-
-TEST_F(CoordinatorRuntimeElectionTest, WaitingCandidateReplacesFailedFollowerAddBeforeRemove)
-{
-    const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
-    std::vector<size_t> selectedIndexes;
-    size_t waitingIndex = kInvalidRuntimeIndex;
-    LeaderObservation initial;
-    ASSERT_NO_FATAL_FAILURE(StartExtraCandidateCluster(caseDeadline, selectedIndexes, waitingIndex, initial));
-    const auto followers = FollowersOf(initial, selectedIndexes);
-    ASSERT_EQ(followers.size(), kBaselineCoordinatorCount - 1);
-    const size_t failedFollower = followers.front();
-
-    std::string stopError;
-    ASSERT_TRUE(StopAndJoin(failedFollower, caseDeadline, stopError)) << stopError;
-    std::vector<size_t> finalIndexes;
-    for (const auto index : selectedIndexes) {
-        if (index != failedFollower) {
-            finalIndexes.emplace_back(index);
-        }
-    }
-    finalIndexes.emplace_back(waitingIndex);
-    const auto finalEndpoints = EndpointSet(finalIndexes);
-    bool removedBeforeAdd = false;
-    LeaderObservation final;
-    ASSERT_TRUE(WaitUntil(
-        [this, &initial, failedFollower, waitingIndex, &finalIndexes, &finalEndpoints, &removedBeforeAdd, &final,
-         caseDeadline] {
-            const auto bootstrap = CallBootstrapRpc(initial.leaderIndex, caseDeadline);
-            if (bootstrap.status.IsOk() && bootstrap.response.committed_peers_size() > 0) {
-                std::vector<std::string> peers(bootstrap.response.committed_peers().begin(),
-                                               bootstrap.response.committed_peers().end());
-                const bool containsWaiting = std::find(peers.begin(), peers.end(), endpoints_[waitingIndex]) != peers.end();
-                const bool containsFailed =
-                    std::find(peers.begin(), peers.end(), endpoints_[failedFollower]) != peers.end();
-                removedBeforeAdd = removedBeforeAdd || (!containsFailed && !containsWaiting);
-            }
-            // The deterministic Add-before-Remove transition is covered by CoordinatorMembershipManager UTs. This
-            // Runtime ST verifies that polling never observes removal before admission and requires the final state.
-            return !removedBeforeAdd && ObserveUniqueServingLeader(finalIndexes, final, caseDeadline)
-                   && std::all_of(finalIndexes.begin(), finalIndexes.end(),
-                                  [this, &finalEndpoints, caseDeadline](size_t index) {
-                                      return HasCommittedConfiguration(index, finalEndpoints, caseDeadline);
-                                  });
-        },
-        caseDeadline))
-        << FailureDiagnostics("waiting-candidate replacement", { 0, 1, 2, 3 });
-
-    EXPECT_FALSE(removedBeforeAdd);
-    EXPECT_NE(std::find(finalEndpoints.begin(), finalEndpoints.end(), endpoints_[waitingIndex]), finalEndpoints.end());
-    EXPECT_EQ(std::find(finalEndpoints.begin(), finalEndpoints.end(), endpoints_[failedFollower]), finalEndpoints.end());
-    EXPECT_TRUE(BusinessGatesMatchLeader(finalIndexes, final.leaderIndex, caseDeadline));
-    EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
-}
-
-TEST_F(CoordinatorRuntimeElectionTest, InconsistentBootstrapDigestsNeverCreateConfiguration)
+TEST_F(CoordinatorRuntimeElectionTest, InconsistentBootstrapViewsNeverCreateConfiguration)
 {
     const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
     discovery_ = std::make_shared<CoordinatorDiscoveryMock>();
@@ -1301,27 +1069,95 @@ TEST_F(CoordinatorRuntimeElectionTest, InconsistentBootstrapDigestsNeverCreateCo
         caseDeadline))
         << FailureDiagnostics("inconsistent-digest registration", indexes);
 
-    std::set<std::string> digests;
+    ASSERT_TRUE(RemainNonServingWithoutConfiguration(indexes, kBootstrapIsolationWindow, caseDeadline))
+        << FailureDiagnostics("inconsistent bootstrap view isolation", indexes);
+    EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
+}
+
+TEST_F(CoordinatorRuntimeElectionTest, FullViewBootstrapWaitsForLastExpectedMember)
+{
+    const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
+    discovery_ = std::make_shared<CoordinatorDiscoveryMock>();
+    discovery_->SetRegistrationBarrierTarget(2);
+    const std::vector<size_t> initialIndexes{ 0, 1 };
+    const auto initialCandidates = EndpointSet(initialIndexes);
+    discovery_->SetCandidates(initialCandidates);
+    for (const auto index : initialIndexes) {
+        ASSERT_EQ(LaunchRuntime(index), 1U) << "Failed to launch " << RuntimeLabel(index, 1);
+    }
     ASSERT_TRUE(WaitUntil(
-        [this, &indexes, &digests, caseDeadline] {
-            digests.clear();
-            for (const auto index : indexes) {
-                const auto bootstrap = CallBootstrapRpc(index, caseDeadline);
-                if (bootstrap.status.IsError() || !bootstrap.response.probe_ready()
-                    || bootstrap.response.metadata_state() != coordinator::RAFT_METADATA_ABSENT
-                    || bootstrap.response.candidate_count() != 2 || bootstrap.response.candidate_digest().empty()
-                    || bootstrap.response.committed_peers_size() != 0) {
-                    return false;
-                }
-                digests.emplace(bootstrap.response.candidate_digest());
-            }
-            return digests.size() == indexes.size();
+        [this, &initialIndexes] {
+            return discovery_->RegisteredCount() == initialIndexes.size() && AllLifecyclesRunning(initialIndexes);
         },
         caseDeadline))
-        << FailureDiagnostics("inconsistent bootstrap digest publication", indexes);
-    ASSERT_TRUE(RemainNonServingWithoutConfiguration(indexes, kBootstrapIsolationWindow, caseDeadline, 2))
-        << FailureDiagnostics("inconsistent bootstrap digest isolation", indexes);
-    EXPECT_EQ(digests.size(), indexes.size());
+        << FailureDiagnostics("two-candidate registration", initialIndexes);
+    ASSERT_TRUE(RemainNonServingWithoutConfiguration(initialIndexes, kBootstrapIsolationWindow, caseDeadline))
+        << FailureDiagnostics("two candidates must not bootstrap a three-member cluster", initialIndexes);
+
+    const auto allIndexes = BaselineIndexes();
+    discovery_->SetCandidates(EndpointSet(allIndexes));
+    ASSERT_EQ(LaunchRuntime(2), 1U) << "Failed to launch " << RuntimeLabel(2, 1);
+    ASSERT_TRUE(WaitUntil(
+        [this, &allIndexes] {
+            return discovery_->RegisteredCount() == allIndexes.size() && AllLifecyclesRunning(allIndexes);
+        },
+        caseDeadline))
+        << FailureDiagnostics("complete-candidate registration", allIndexes);
+
+    LeaderObservation observation;
+    const auto expectedPeers = BaselineEndpointSet();
+    ASSERT_TRUE(WaitUntil(
+        [this, &allIndexes, &observation, &expectedPeers, caseDeadline] {
+            return ObserveUniqueServingLeader(allIndexes, observation, caseDeadline)
+                   && std::all_of(allIndexes.begin(), allIndexes.end(), [this, &expectedPeers, caseDeadline](size_t index) {
+                          return HasCommittedConfiguration(index, expectedPeers, caseDeadline);
+                      });
+        },
+        caseDeadline))
+        << FailureDiagnostics("complete-view bootstrap", allIndexes);
+    EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
+}
+
+TEST_F(CoordinatorRuntimeElectionTest, FiveMemberSoClusterElectsLeaderWithUnreachableStaleDiscoveryPeer)
+{
+    const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
+    discovery_ = std::make_shared<CoordinatorDiscoveryMock>();
+    discovery_->SetRegistrationBarrierTarget(kFiveMemberCoordinatorCount);
+    const auto indexes = FiveMemberIndexes();
+    const auto expectedPeers = EndpointSet(indexes);
+    const auto discoveryCandidates = EndpointSet({ 0, 1, 2, 3, 4, 5 });
+    auto launch = [this, &discoveryCandidates](size_t index) {
+        auto injectedProvider = std::make_shared<CoordinatorDiscoveryMock>();
+        injectedProvider->ShareRegistrationStateFrom(*discovery_);
+        injectedProvider->SetCandidates(discoveryCandidates);
+        ASSERT_EQ(LaunchRuntime(index, kFiveMemberCoordinatorCount, std::move(injectedProvider)), 1U)
+            << "Failed to launch " << RuntimeLabel(index, 1);
+    };
+    launch(indexes.front());
+    ASSERT_TRUE(WaitUntil([this] { return discovery_->RegisteredCount() == 1; }, caseDeadline))
+        << FailureDiagnostics("first Coordinator initialized its process-wide bthread pool", { indexes.front() });
+    for (size_t position = 1; position < indexes.size(); ++position) {
+        launch(indexes[position]);
+    }
+    ASSERT_TRUE(WaitUntil(
+        [this, &indexes] {
+            return discovery_->RegisteredCount() == kFiveMemberCoordinatorCount
+                   && !discovery_->RegistrationBarrierTimedOut() && AllLifecyclesRunning(indexes);
+        },
+        caseDeadline))
+        << FailureDiagnostics("five-member registration with stale Discovery peer", indexes);
+
+    LeaderObservation observation;
+    ASSERT_TRUE(WaitUntil(
+        [this, &indexes, &expectedPeers, &observation, caseDeadline] {
+            return ObserveUniqueServingLeader(indexes, observation, caseDeadline)
+                   && std::all_of(indexes.begin(), indexes.end(), [this, &expectedPeers, caseDeadline](size_t index) {
+                          return HasCommittedConfiguration(index, expectedPeers, caseDeadline,
+                                                           kFiveMemberCoordinatorCount);
+                      });
+        },
+        caseDeadline))
+        << FailureDiagnostics("five-member election with stale Discovery peer", indexes);
     EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
 }
 

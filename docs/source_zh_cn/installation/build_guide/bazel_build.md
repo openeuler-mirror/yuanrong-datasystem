@@ -735,23 +735,27 @@ auto status = datasystem::CoordinatorServer::GetInstance()->UpdateConfig(
 
 本地Raft data root和权威配置按以下规则处理：
 
-- 本地metadata为`VALID`：直接从本地braft状态recover，不调用Discovery。
-- 本地metadata为`ABSENT`（目录不存在或为空）：规范化、去重并排序Discovery候选，探测所有可见候选后，
-  按下表决定首次bootstrap或等待。
-- 本地metadata为`ABSENT`且观察到一致的、非空的权威committed configuration：配置包含本机endpoint时，
-  使用该配置重建本机的选举/成员关系metadata；配置不包含本机时保持waiting，等待后续成员关系接纳。
-- 本地metadata为`CORRUPT`或`UNKNOWN`：进入terminal状态，不自动bootstrap或从peer修复。运维时不要通过
+- 本地metadata为`VALID`：直接从本地braft状态recover，不调用首次bootstrap Discovery。
+- 本地metadata为`CORRUPT`或`UNKNOWN`：进入`TERMINAL`，不自动bootstrap或从peer修复。运维时不要通过
   自动删除Raft data root强行启动；应先备份并恢复与稳定`coordinator_address`匹配的完整目录。
-- 多个权威配置不一致（例如成员变更期间同时观察到N和N+1）时返回可重试状态，持续探测，直到全量配置一致。
+- 本地metadata为`ABSENT`且观察到多数派确认的非空committed configuration：配置包含本机endpoint时，
+  使用完整配置重建本机选举和成员关系metadata；配置不包含本机时等待已有Leader接纳。
+- 观察到committed configuration但尚未获得其成员多数派确认，或多个多数派配置冲突时，保持等待，
+  不退回fresh bootstrap。
 
-首次bootstrap阈值为`Q = floor(N / 2) + 1`：
+SO集成模式通过周期性`ExchangeBootstrapObservation`完成首次bootstrap：
 
-| 规范化候选数 | 行为 |
-|---:|---|
-| `< Q` | endpoint保持监听，bootstrap phase进入`RETRYING`，不创建Raft配置，业务gate关闭 |
-| `Q ... N` | 在所有可见候选均可验证且无权威配置时，使用全部候选作为初始配置 |
-| `> N` | 先探测全部候选，再按规范化地址排序选择前N个；未选节点等待权威committed configuration |
-| 已观察到一致权威配置 | 本地`ABSENT`且配置包含本机时重建选举/成员关系metadata；不包含本机时等待加入 |
+| 观察结果 | 行为 |
+|---|---|
+| 最近1秒内有效节点少于或多于`expected_member_count` | 保持`OBSERVING`，不创建Raft配置 |
+| 全部N个节点未报告相同的完整成员集合 | 保持`OBSERVING` |
+| 完整一致视图尚未稳定1秒 | 保持`OBSERVING` |
+| 完整一致视图稳定1秒 | 冻结完整N节点Plan并进入`PROPOSED` |
+| 全部N个节点报告相同的`PROPOSED`或`STARTED` Plan | 使用该完整Plan启动braft |
+| Discovery包含无法连接的残留地址 | 继续探测；残留地址不进入有效入站观察集合，也不阻塞有效N节点收敛 |
+
+Discovery只提供探测目标，不按地址排序裁剪初始成员。实际收到超过N个有效节点的Observation时保持等待，
+不会选择top-N。
 
 生产部署每个进程只运行一个Coordinator Runtime。参数化façade将非空`configFilePath`交给Runtime解析，解析
 成功后Runtime恰好调用一次`GetRaftFlags()`，取得本机地址、独占Raft数据目录和选举时序快照。每个Coordinator
@@ -763,8 +767,8 @@ auto status = datasystem::CoordinatorServer::GetInstance()->UpdateConfig(
 并发布`RUNNING`；Manager随后异步执行本地recover或Discovery/peer探测、创建Node和Membership；Runtime进入
 event loop。`InitAndRun(options)`提交以及Service `RUNNING`只表示后台Manager已经启动且endpoint可访问，不表示
 选主完成或业务ready。只有当前braft Leader的回调打开业务gate；follower、waiting节点、bootstrap重试节点和
-丢失quorum的节点均对业务RPC返回`K_NOT_READY`。`GetRaftBootstrapState`用于观察`OBSERVING`、`RETRYING`、
-`STARTED`、`TERMINAL` phase及稳定的数值status code，不返回原始Status文本或数据目录。
+丢失quorum的节点均对业务RPC返回`K_NOT_READY`。bootstrap内部阶段为`OBSERVING`、`PROPOSED`、`STARTED`
+和`TERMINAL`；Coordinator之间只通过`ExchangeBootstrapObservation`交换协议需要的最小信息。
 
 直接调用`CoordinatorRuntime`并传入空`configFilePath`是内部同进程测试能力，不是生产façade契约。此时Runtime
 跳过文件解析，使用调用方预先设置的进程flags，并为每个实例调用一次`GetRaftFlags()`。测试fixture必须在启动

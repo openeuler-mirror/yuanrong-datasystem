@@ -246,35 +246,21 @@ message KeepAliveRspPb {
   int64 remaining_ttl = 3; // Remaining TTL in milliseconds after renewal.
 }
 
-enum RaftMetadataStatePb {
-  RAFT_METADATA_UNKNOWN = 0;
-  RAFT_METADATA_ABSENT = 1;
-  RAFT_METADATA_VALID = 2;
-  RAFT_METADATA_CORRUPT = 3;
-}
-
-enum RaftBootstrapPhasePb {
+enum RaftBootstrapObservationPhasePb {
   RAFT_BOOTSTRAP_OBSERVING = 0;
-  RAFT_BOOTSTRAP_RETRYING = 1;
+  RAFT_BOOTSTRAP_PROPOSED = 1;
   RAFT_BOOTSTRAP_STARTED = 2;
   RAFT_BOOTSTRAP_TERMINAL = 3;
 }
 
-message GetRaftBootstrapStateReqPb {
-  string group_id = 1;
-}
-
-message GetRaftBootstrapStateRspPb {
-  bool probe_ready = 1;
-  string group_id = 2;
-  string local_peer = 3;
-  uint64 expected_member_count = 4;
-  RaftMetadataStatePb metadata_state = 5;
-  uint64 candidate_count = 6;
-  string candidate_digest = 7;
-  repeated string committed_peers = 8;
-  RaftBootstrapPhasePb phase = 9;
-  int32 status_code = 10;
+message RaftBootstrapObservationPb {
+  string sender_peer = 1;
+  uint64 expected_member_count = 2;
+  // OBSERVING publishes the current view. PROPOSED publishes the immutable bootstrap plan. STARTED publishes that
+  // plan only when this process performed fresh bootstrap; recovered processes leave peers empty.
+  repeated string peers = 3;
+  RaftBootstrapObservationPhasePb phase = 4;
+  repeated string committed_peers = 5;
 }
 
 service CoordinatorService {
@@ -288,7 +274,7 @@ service CoordinatorService {
   rpc ReportTopologyRecoveryCandidate(ReportTopologyRecoveryCandidateReqPb)
       returns (ReportTopologyRecoveryCandidateRspPb) {}
   rpc GetClusterRawSnapshot(GetClusterRawSnapshotReqPb) returns (GetClusterRawSnapshotRspPb) {}
-  rpc GetRaftBootstrapState(GetRaftBootstrapStateReqPb) returns (GetRaftBootstrapStateRspPb) {}
+  rpc ExchangeBootstrapObservation(RaftBootstrapObservationPb) returns (RaftBootstrapObservationPb) {}
   // Append-only: the generated brpc stubs dispatch by service method index, so existing RPCs above must keep their order.
   rpc EnsureLeaderMembership(EnsureLeaderMembershipReqPb) returns (EnsureLeaderMembershipRspPb) {}
   rpc ReportWorkerLiveness(ReportWorkerLivenessReqPb) returns (ReportWorkerLivenessRspPb) {}

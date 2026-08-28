@@ -68,11 +68,13 @@ public:
      * @param[in] expectedMemberCount Fixed election voting-member target.
      * @param[in] raftFlags Immutable Raft identity and timing snapshot for this service generation.
      * @param[in] watchDispatcherBthreadTag Bthread tag used by watch notification tasks.
+     * @param[in] bootstrapMode Static dscli peers or integrated Discovery observation bootstrap.
      */
     explicit CoordinatorServiceImpl(const HostPort &localAddress,
                                     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery = nullptr,
                                     size_t expectedMemberCount = 0, CoordinatorRaftFlags raftFlags = {},
-                                    bthread_tag_t watchDispatcherBthreadTag = BTHREAD_TAG_DEFAULT);
+                                    bthread_tag_t watchDispatcherBthreadTag = BTHREAD_TAG_DEFAULT,
+                                    RaftBootstrapMode bootstrapMode = RaftBootstrapMode::DISCOVERY_OBSERVATION);
 
     /**
      * @brief Invoke best-effort Shutdown without allowing exceptions to escape destruction.
@@ -182,13 +184,8 @@ public:
      */
     Status GetCoordinatorId(const GetCoordinatorIdReqPb &req, GetCoordinatorIdRspPb &rsp) override;
 
-    /**
-     * @brief Forward the published election Manager's bootstrap snapshot without applying the business serving gate.
-     * @param[in] req Fixed Coordinator Raft group identity.
-     * @param[out] rsp Current Manager-owned bootstrap observation.
-     * @return Validation, lifecycle, or snapshot status.
-     */
-    Status GetRaftBootstrapState(const GetRaftBootstrapStateReqPb &req, GetRaftBootstrapStateRspPb &rsp) override;
+    Status ExchangeBootstrapObservation(const RaftBootstrapObservationPb &req,
+                                        RaftBootstrapObservationPb &rsp) override;
 
     /**
      * @brief Accept one Worker-initiated topology recovery candidate report.
@@ -311,6 +308,7 @@ private:
     HostPort coordinatorAddr_;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
     size_t expectedMemberCount_{ 0 };
+    RaftBootstrapMode bootstrapMode_{ RaftBootstrapMode::DISCOVERY_OBSERVATION };
     CoordinatorRaftFlags raftFlags_;
     const bthread_tag_t watchDispatcherBthreadTag_;
     RpcServer::Builder builder_;

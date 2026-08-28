@@ -20,9 +20,12 @@
 #ifndef DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_TYPES_H
 #define DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_TYPES_H
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -52,19 +55,32 @@ static_assert(kCoordinatorRaftMaxVoteTimerBaseMs + kCoordinatorRaftMaxVoteTimerB
 
 enum class RaftMetadataState { ABSENT, VALID, CORRUPT, UNKNOWN };
 
-enum class RaftBootstrapPhase : uint8_t { OBSERVING = 0, RETRYING = 1, STARTED = 2, TERMINAL = 3 };
+enum class RaftBootstrapMode : uint8_t { STATIC_INITIAL_PEERS = 0, DISCOVERY_OBSERVATION = 1 };
+
+enum class RaftBootstrapPhase : uint8_t { OBSERVING = 0, PROPOSED = 1, STARTED = 2, TERMINAL = 3 };
+
+struct BootstrapPlan {
+    std::vector<std::string> initialPeers;
+};
 
 struct RaftBootstrapState {
-    bool probeReady{ false };
-    std::string groupId{ kCoordinatorRaftGroupId };
-    std::string localPeer;
-    size_t expectedMemberCount{ 0 };
-    RaftMetadataState metadataState{ RaftMetadataState::UNKNOWN };
-    size_t candidateCount{ 0 };
-    std::string candidateDigest;
+    struct ReceivedObservation {
+        std::vector<std::string> peers;
+        std::vector<std::string> committedPeers;
+        RaftBootstrapPhase phase{ RaftBootstrapPhase::OBSERVING };
+        std::chrono::steady_clock::time_point lastSeen;
+    };
+
+    struct ConsistentView {
+        std::vector<std::string> peers;
+        std::chrono::steady_clock::time_point since;
+    };
+
+    std::map<std::string, ReceivedObservation> knownPeers;
+    std::optional<ConsistentView> consistentView;
+    std::optional<BootstrapPlan> frozenPlan;
     std::vector<std::string> committedPeers;
     RaftBootstrapPhase phase{ RaftBootstrapPhase::OBSERVING };
-    int32_t statusCode{ K_OK };
 };
 
 struct CoordinatorRaftFlags {
@@ -76,10 +92,6 @@ struct CoordinatorRaftFlags {
     uint32_t memberFailureGraceMs{ 0 };
     uint32_t healthCheckIntervalMs{ kDefaultCoordinatorElectionHealthCheckIntervalMs };
     uint32_t bootstrapWarningIntervalMs{ kDefaultCoordinatorElectionBootstrapWarningIntervalMs };
-};
-
-struct BootstrapPlan {
-    std::vector<std::string> initialPeers;
 };
 
 struct RecoverPlan {

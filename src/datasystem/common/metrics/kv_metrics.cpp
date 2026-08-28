@@ -131,7 +131,7 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 124, "coordinator_rpc_get_coordinator_id_request_total", MetricType::COUNTER, "count" },
     { 125, "coordinator_rpc_report_topology_recovery_candidate_request_total", MetricType::COUNTER, "count" },
     { 126, "coordinator_rpc_get_cluster_raw_snapshot_request_total", MetricType::COUNTER, "count" },
-    { 127, "coordinator_rpc_get_raft_bootstrap_state_request_total", MetricType::COUNTER, "count" },
+    { 127, "coordinator_rpc_exchange_bootstrap_observation_request_total", MetricType::COUNTER, "count" },
     { 128, "coordinator_rpc_ensure_leader_membership_request_total", MetricType::COUNTER, "count" },
     { 129, "coordinator_rpc_report_worker_liveness_request_total", MetricType::COUNTER, "count" },
     { 130, "coordinator_watch_notification_sent_batches_total", MetricType::COUNTER, "count" },
