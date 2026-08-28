@@ -11,6 +11,7 @@ set(COMMON_BUFFER_SRCS
         object_buffer.cpp)
 
 set(COMMON_BUFFER_DEPEND_LIBS
+        ${BRPC_LIBRARIES}
         ${SECUREC_LIBRARY}
         ${CLIENT_LIB}
         common_inject

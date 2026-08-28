@@ -572,11 +572,7 @@ private:
                                          const AsyncWorkerOpInsertSnapshot &snapshot,
                                          ObjectMetaStore::WriteType type, bool &retry);
 
-    const size_t minDeleteThreadSize = 1;
-    const size_t maxDeleteThreadSize = 8;
     const size_t maxAsyncDeleteReplayThreadSize = 8;
-    // Global thread pool for reusing worker threads across delete requests.
-    std::unique_ptr<ThreadPool> deleteThreadPool_;
     std::unique_ptr<ThreadPool> asyncDeleteReplayThreadPool_;
     std::shared_ptr<ObjectMetaStore> objectStore_;  // Metadata store for object.
     SharedMutex notifyWorkerOpMutex_;

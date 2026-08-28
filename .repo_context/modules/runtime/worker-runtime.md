@@ -198,6 +198,12 @@
     immediately instead of rebuilding the same dead peer's RPC stub until the configured request timeout expires.
     Background reconciliation and metadata push paths retain their bounded stub-rebuild retry because those operations
     are idempotent and must tolerate a restarting metadata owner.
+  - Object-cache request retry backoff and contended SHM read-latch retry use cooperative bthread sleep; an interrupted
+    pthread fallback resumes the remaining backoff instead of shortening it. LocalMaster delete fanout initiates each
+    eligible asynchronous Worker notification before collecting responses, without a pthread-pool `future.get()` join.
+    Publish requests that reach the pre-Master deadline gate coalesce one pending 200 ms metadata-owner probe per owner
+    in FIFO order behind a single fixed executor. Per-owner 100 ms throttling remains in force without advancing on
+    coalesced triggers, so concurrent owners keep producing topology failure-observer samples without blocking Publish.
   - Worker heartbeat and the UB-health membership sidecar publish exactly one self record. The service overwrites both
     Worker identity and incarnation at the publication boundary, so peer observations cannot leak into a self summary.
     Consumers reject stale epochs, retired incarnations, and summaries whose incarnation does not match the registered

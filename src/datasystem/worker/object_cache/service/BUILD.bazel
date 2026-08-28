@@ -207,6 +207,7 @@ ds_cc_library(
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/protos:object_posix_cc_proto",
         "//src/datasystem/worker/object_cache:async_send_manager",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api_header",

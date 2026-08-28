@@ -19,15 +19,18 @@
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_PUBLISH_IMPL_H
 
 #include <chrono>
+#include <deque>
 #include <future>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/rpc/rpc_message.h"
+#include "datasystem/common/util/thread_pool.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
@@ -60,6 +63,14 @@ public:
     Status Publish(const PublishReqPb &req, PublishRspPb &resp, std::vector<RpcMessage> &payloads);
 
 private:
+    struct MetadataOwnerProbe {
+        HostPort owner;
+        std::string objectKey;
+        std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager;
+        std::function<void(const HostPort &, const Status &)> observer;
+        std::string sourceAddress;
+    };
+
     struct PublishParams {
         const ObjectLifeState lifeState;
         const std::vector<std::string> &nestedObjectKeys;
@@ -146,7 +157,10 @@ private:
     Status CheckMasterRpcBudget(const std::string &objectKey);
     Status RequestingToMasterCore(ObjectKV &objectKV, const PublishParams &params);
     void ProbeMetadataOwnerAfterDeadlineGate(const std::string &objectKey);
-    bool ReserveMetadataOwnerProbe(const HostPort &owner, std::chrono::steady_clock::time_point now);
+    bool EnqueueMetadataOwnerProbe(const HostPort &owner, const std::string &objectKey,
+                                   std::chrono::steady_clock::time_point now);
+    void DrainMetadataOwnerProbes() noexcept;
+    static void RunMetadataOwnerProbe(const MetadataOwnerProbe &probe) noexcept;
 
     /**
      * @brief Finalize latency trace after a worker-to-master RPC call.
@@ -218,10 +232,15 @@ private:
 
     std::mutex metadataOwnerProbeMutex_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> metadataOwnerProbeAt_;
+    std::deque<MetadataOwnerProbe> metadataOwnerProbeQueue_;
+    std::unordered_set<std::string> metadataOwnerProbesPending_;
+    bool metadataOwnerProbeDrainScheduled_{ false };
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
     HostPort &localAddress_;
+
+    ThreadPool metadataOwnerProbeThreadPool_;
 };
 
 }  // namespace object_cache
