@@ -695,6 +695,9 @@ curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:31501/sta
 <span class="c1"># 浏览 bvar 指标（QPS/P99/错误率/连接数，人读文本格式）</span>
 curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:31501/vars<span class="w"> </span><span class="p">|</span><span class="w"> </span>less
 
+<span class="c1"># 按需查看进程 jemalloc 指标（同时设置 jemalloc_stats=true）</span>
+curl<span class="w"> </span>-s<span class="w"> </span><span class="s1">&#39;http://127.0.0.1:31501/vars/anon_jemalloc_*?console=1&#39;</span>
+
 <span class="c1"># Prometheus 抓取（注意是 /prometheus_metrics，不是 /vars）</span>
 curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:31501/prometheus_metrics
 
@@ -711,6 +714,13 @@ curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:31501/bth
 <ul class="simple">
 <li><p><strong>brpc 内置服务默认关闭</strong>，保持无 HTTP 管理端点的安全基线。<code class="docutils literal notranslate"><span class="pre">/flags</span></code> 可 POST 翻转任意 gflag，<code class="docutils literal notranslate"><span class="pre">/pprof/heap</span></code> 可 dump 内存，默认关闭可防止经业务 RPC 端口越权操作。</p></li>
 <li><p>由 gflag <code class="docutils literal notranslate"><span class="pre">FLAGS_brpc_enable_builtin_services</span></code> 控制（默认 <code class="docutils literal notranslate"><span class="pre">false</span></code>）。仅在受信网络调试时设为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 开启 <code class="docutils literal notranslate"><span class="pre">/flags</span></code>、<code class="docutils literal notranslate"><span class="pre">/pprof</span></code>、<code class="docutils literal notranslate"><span class="pre">/vars</span></code> 等诊断接口，无需改代码重新编译。</p></li>
+<li><p>Worker 设置 <code class="docutils literal notranslate"><span class="pre">jemalloc_stats=true</span></code> 后会注册进程 jemalloc 指标。该参数仅在启动时读取，修改配置后必须重启
+Worker，不支持通过 <code class="docutils literal notranslate"><span class="pre">/flags</span></code> 动态启停。该参数要求 <code class="docutils literal notranslate"><span class="pre">brpc_enable_builtin_services=true</span></code>，不满足时 Worker 拒绝启动。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">anon_jemalloc_{allocated,active,resident,metadata,mapped,retained,dirty,muzzy}_bytes</span></code> 的单位均为字节。
+指标按查询触发采集并缓存一秒；没有查询时不采集，也不落盘。</p></li>
+<li><p>先检查 <code class="docutils literal notranslate"><span class="pre">anon_jemalloc_stats_available</span></code>：值为 <code class="docutils literal notranslate"><span class="pre">1</span></code> 时 <code class="docutils literal notranslate"><span class="pre">_bytes</span></code> 属于本次有效快照；值为 <code class="docutils literal notranslate"><span class="pre">0</span></code> 时读取失败，
+<code class="docutils literal notranslate"><span class="pre">_bytes</span></code> 保留上次成功值（首次采集失败时为 <code class="docutils literal notranslate"><span class="pre">0</span></code>），不能当作实时数据。<code class="docutils literal notranslate"><span class="pre">anon_jemalloc_stats_read_failures</span></code>
+记录进程启动后失败的快照刷新次数，具体失败的 mallctl 名和返回码写入限频错误日志。</p></li>
 <li><p>K8s 健康探针<strong>不依赖</strong> brpc 内置服务。本仓 K8s 部署（<code class="docutils literal notranslate"><span class="pre">worker_daemonset.yaml</span></code>）的 startup/readiness/liveness probe 均为 <code class="docutils literal notranslate"><span class="pre">exec</span></code> 文件检查（<code class="docutils literal notranslate"><span class="pre">file_check.sh</span></code> / <code class="docutils literal notranslate"><span class="pre">liveness_check.sh</span> <span class="pre">-f</span> <span class="pre">$(LIVENESS_CHECK_PATH)</span></code>，检查 <code class="docutils literal notranslate"><span class="pre">/home/yuanrong/datasystem/health/{healthy,ready,liveness}</span></code> 文件），与 <code class="docutils literal notranslate"><span class="pre">has_builtin_services</span></code> 是否开启无关。</p></li>
 <li><p>仅当希望用 brpc HTTP <code class="docutils literal notranslate"><span class="pre">/health</span></code>、<code class="docutils literal notranslate"><span class="pre">/status</span></code> 作为探针时，才需设 <code class="docutils literal notranslate"><span class="pre">FLAGS_brpc_enable_builtin_services=true</span></code> 并参考上文 <code class="docutils literal notranslate"><span class="pre">httpGet</span></code> 示例；此时 <code class="docutils literal notranslate"><span class="pre">/health</span></code> 与 <code class="docutils literal notranslate"><span class="pre">/status</span></code> 是只读 GET，不鉴权、不产生业务负载。</p></li>
 <li><p>探针端口若与业务端口相同，注意 NetworkPolicy / 端口策略放行 K8s node→Pod 的 31501。</p></li>
