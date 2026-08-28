@@ -23,6 +23,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -31,6 +32,11 @@
 
 namespace datasystem {
 namespace client {
+namespace {
+constexpr int32_t REMOVABLE_NOTIFY_RETRY_TIMEOUT_MS = 1000;
+constexpr int32_t REMOVABLE_NOTIFY_RPC_TIMEOUT_MS = 200;
+}
+
 ListenWorker::ListenWorker(std::shared_ptr<IClientWorkerCommonApi> clientCommonWorker, HeartbeatType type,
                            uint32_t index, ThreadPool *pool)
     : clientCommonWorker_(std::move(clientCommonWorker)),
@@ -144,11 +150,18 @@ Status ListenWorker::NotifyClientRemovable()
     bool workerReboot = false;
     bool clientRemoved = false;
     bool isWorkerVoluntaryScaleDown = false;
+    auto releasedWorkerFds = fdReleaseHelper_.GetReleasedWorkerFds();
     std::vector<int64_t> expiredWorkerFds;
-    RETURN_IF_NOT_OK(clientCommonWorker_->SendHeartbeat(workerReboot, clientRemoved,
-                                                        clientCommonWorker_->clientDeadTimeoutMs_,
-                                                        isWorkerVoluntaryScaleDown,
-                                                        fdReleaseHelper_.GetReleasedWorkerFds(), expiredWorkerFds));
+    auto sendHeartbeat = [this, &workerReboot, &clientRemoved, &isWorkerVoluntaryScaleDown,
+                          &releasedWorkerFds, &expiredWorkerFds](int32_t rpcTimeoutMs) {
+        return clientCommonWorker_->SendHeartbeat(workerReboot, clientRemoved, rpcTimeoutMs,
+                                                  isWorkerVoluntaryScaleDown, releasedWorkerFds, expiredWorkerFds);
+    };
+    RETURN_IF_NOT_OK(RetryOnError(
+        REMOVABLE_NOTIFY_RETRY_TIMEOUT_MS, sendHeartbeat, []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE },
+        REMOVABLE_NOTIFY_RPC_TIMEOUT_MS));
     fdReleaseHelper_.Update(std::move(expiredWorkerFds));
     return Status::OK();
 }

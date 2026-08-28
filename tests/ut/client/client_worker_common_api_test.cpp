@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <utility>
 
+#include "datasystem/client/listen_worker.h"
 #include "ut/common.h"
 
 namespace datasystem {
@@ -57,6 +58,47 @@ protected:
 private:
     bool ubConfigWasApplied_{ false };
 };
+
+class TransientHeartbeatFailureApi : public TestClientWorkerRemoteCommonApi {
+public:
+    explicit TransientHeartbeatFailureApi(HostPort hostPort)
+        : client::IClientWorkerCommonApi(HostPort(hostPort), HeartbeatType::RPC_HEARTBEAT, false, nullptr),
+          TestClientWorkerRemoteCommonApi(std::move(hostPort))
+    {
+    }
+
+    Status SendHeartbeat(bool &, bool &, int64_t remainTime, bool &, const std::vector<int64_t> &,
+                         std::vector<int64_t> &) override
+    {
+        attemptTimeouts_.emplace_back(remainTime);
+        removableValues_.emplace_back(removable_.load(std::memory_order_relaxed));
+        if (attemptTimeouts_.size() == 1) {
+            return Status(K_RPC_UNAVAILABLE, "transient heartbeat failure");
+        }
+        return Status::OK();
+    }
+
+    std::vector<int64_t> attemptTimeouts_;
+    std::vector<bool> removableValues_;
+};
+
+TEST(ClientWorkerCommonApiTest, NotifyClientRemovableRetriesTransientHeartbeatFailure)
+{
+    constexpr int64_t expectedMaxAttemptTimeoutMs = 200;
+    auto api = std::make_shared<TransientHeartbeatFailureApi>(HostPort("127.0.0.1", 1));
+    api->clientDeadTimeoutMs_ = MIN_HEARTBEAT_TIMEOUT_MS;
+    client::ListenWorker listenWorker(api, HeartbeatType::RPC_HEARTBEAT);
+    int releaseFdCallbackCount = 0;
+    listenWorker.SetReleaseFdCallBack(
+        [&releaseFdCallbackCount](const std::vector<int64_t> &) { ++releaseFdCallbackCount; });
+
+    ASSERT_TRUE(listenWorker.NotifyClientRemovable().IsOk());
+    ASSERT_EQ(api->attemptTimeouts_.size(), 2u);
+    EXPECT_LE(api->attemptTimeouts_[0], expectedMaxAttemptTimeoutMs);
+    EXPECT_LE(api->attemptTimeouts_[1], expectedMaxAttemptTimeoutMs);
+    EXPECT_EQ(api->removableValues_, (std::vector<bool>{ true, true }));
+    EXPECT_EQ(releaseFdCallbackCount, 1);
+}
 
 TEST(ClientWorkerCommonApiTest, UsesWorkerMemoryAlignmentAndFallsBackForOldWorker)
 {
