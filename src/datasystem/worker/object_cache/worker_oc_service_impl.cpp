@@ -1392,6 +1392,10 @@ Status WorkerOCServiceImpl::ValidateWorkerState(BthreadReadGuard &noRecon, int r
 {
     Timer timer;
     if (!IsHealthy()) {
+        if (IsStartupReconciling()) {
+            RETURN_STATUS(K_TRY_AGAIN,
+                          "Worker is starting up and reconciliation in progress, please retry");
+        }
         RETURN_STATUS(K_NOT_READY, "Worker not ready");
     }
     static const int SEC_TO_MS = 1000;
@@ -1424,6 +1428,11 @@ Status WorkerOCServiceImpl::ValidateWorkerState(BthreadReadGuard &noRecon, int r
     }
     GetWorkerTimeCost().Append("ValidateWorkerState", timer.ElapsedMilliSecond());
     return Status::OK();
+}
+
+bool WorkerOCServiceImpl::IsStartupReconciling() const
+{
+    return isRestart_ && !reconciliationReady_.load(std::memory_order_acquire);
 }
 
 Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
