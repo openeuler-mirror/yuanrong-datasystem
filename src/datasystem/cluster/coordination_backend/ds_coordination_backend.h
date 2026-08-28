@@ -12,9 +12,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <mutex>
-#include <atomic>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -326,6 +326,68 @@ public:
     void HandleWatchEvent(const std::string &coordinatorId, int64_t watchId, CoordinationEvent &&event);
 
 private:
+    enum class MembershipMutationOperation : uint8_t {
+        NONE,
+        DELETE_MEMBERSHIP,
+        CREATE_KEEPALIVE,
+        RECREATE_KEEPALIVE,
+        RENEW_KEEPALIVE,
+        MARK_EXITING,
+        UPDATE_MEMBERSHIP_STATE,
+        INFORM_RECONCILIATION_DONE,
+        INSTALL_ENSURED_MEMBERSHIP,
+        ENSURE_MEMBERSHIP,
+        COUNT
+    };
+
+    enum class MembershipMutationPhase : uint8_t {
+        NONE,
+        ACQUIRED,
+        DELETE_RPC,
+        REFRESH_WATCH_IDENTITY,
+        RANGE_RPC,
+        PUT_RPC,
+        UPDATE_LOCAL_MEMBERSHIP,
+        GET_OBSERVED_COORDINATOR,
+        COLLECT_FAILED_TARGETS,
+        KEEPALIVE_RPC,
+        RECORD_KEEPALIVE_FAILURE,
+        MEMBERSHIP_SUCCESS_CALLBACK,
+        MEMBERSHIP_SUCCESS_EVENT_HANDLER_STATE,
+        MEMBERSHIP_SUCCESS_WATCH_STATE,
+        MEMBERSHIP_SUCCESS_DISPATCH_RESET,
+        MEMBERSHIP_SUCCESS_READY_HANDLER,
+        MEMBERSHIP_SUCCESS_HANDLER_DRAIN,
+        PREPARE_PAYLOAD,
+        INSTALL_REVISION,
+        REFRESH_WATCH_AFTER_RANGE,
+        PUT_READY_RPC,
+        REFRESH_WATCH_AFTER_PUT,
+        ENSURE_RPC,
+        COUNT
+    };
+
+    class MembershipMutationGuard {
+    public:
+        MembershipMutationGuard(DsCoordinationBackend &backend, MembershipMutationOperation operation);
+
+        MembershipMutationGuard(DsCoordinationBackend &backend, MembershipMutationOperation operation,
+                                std::adopt_lock_t);
+
+        ~MembershipMutationGuard();
+
+        MembershipMutationGuard(const MembershipMutationGuard &) = delete;
+        MembershipMutationGuard &operator=(const MembershipMutationGuard &) = delete;
+
+        void SetPhase(MembershipMutationPhase phase);
+
+    private:
+        DsCoordinationBackend &backend_;
+        MembershipMutationOperation operation_;
+        std::unique_lock<bthread::Mutex> lock_;
+        std::chrono::steady_clock::time_point acquiredAt_;
+    };
+
     struct KeepAliveFailureState;
     struct WatchedKey {
         std::string key;
@@ -400,6 +462,27 @@ private:
      * @brief Install an ensured revision while membershipMutationMutex_ is held.
      */
     void InstallEnsuredMembershipLocked(const std::string &coordinatorId, int64_t membershipModRevision);
+
+    /**
+     * @brief Publish a lifecycle state while membershipMutationMutex_ is held.
+     */
+    Status UpdateNodeStateLocked(MemberLifecycleState state, int32_t effectiveTimeoutMs,
+                                 std::chrono::steady_clock::time_point startedAt,
+                                 MembershipMutationGuard &mutationGuard);
+
+    void RecordMembershipMutationAcquired(MembershipMutationOperation operation,
+                                          std::chrono::steady_clock::time_point acquiredAt);
+
+    void RecordMembershipMutationPhase(MembershipMutationPhase phase);
+
+    MembershipMutationPhase ClearMembershipMutationOwner();
+
+    std::string GetMembershipMutationDiagnostic(MembershipMutationOperation waiter,
+                                                std::chrono::steady_clock::time_point waitStartedAt) const;
+
+    static const char *MembershipMutationOperationName(MembershipMutationOperation operation);
+
+    static const char *MembershipMutationPhaseName(MembershipMutationPhase phase);
 
     /**
      * @brief Classify and handle one failed lease renewal.
@@ -533,6 +616,10 @@ private:
     std::string keepAliveKey_;
     // Serializes membership RPC commit order and protects keepAliveModRevision_.
     bthread::Mutex membershipMutationMutex_;
+    mutable std::mutex membershipMutationDiagnosticMutex_;
+    MembershipMutationOperation membershipMutationOwner_{ MembershipMutationOperation::NONE };
+    MembershipMutationPhase membershipMutationPhase_{ MembershipMutationPhase::NONE };
+    std::chrono::steady_clock::time_point membershipMutationAcquiredAt_;
     int64_t keepAliveModRevision_{ COORDINATOR_NO_MOD_REVISION_CHECK };
     std::atomic<bool> exitMembershipRequested_{ false };
     // Protects keepAliveValue_; also used by keepAliveCv_ to interrupt its wait.

@@ -1198,6 +1198,61 @@ TEST(DsCoordinationBackendSessionTest, EnsureTransactionCannotReplayRecoveringAf
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
+TEST(DsCoordinationBackendSessionTest, ExitingTimeoutReportsBlockedMembershipReadyHandler)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+
+    std::mutex barrierMutex;
+    std::condition_variable barrierCv;
+    bool handlerEntered = false;
+    bool releaseHandler = false;
+    backend.SetMembershipReadyHandler([&](const std::string &, bool recreated) {
+        if (!recreated) {
+            return;
+        }
+        std::unique_lock<std::mutex> lock(barrierMutex);
+        handlerEntered = true;
+        barrierCv.notify_all();
+        barrierCv.wait(lock, [&] { return releaseHandler; });
+    });
+    auto ensure = std::async(std::launch::async, [&] {
+        return backend.EnsureMembership(
+            COORDINATOR_A, [](const DsCoordinationBackend::MembershipRenewalPayload &, int64_t &revision) {
+                revision = 17;
+                return Status::OK();
+            });
+    });
+    bool reachedHandler = false;
+    {
+        std::unique_lock<std::mutex> lock(barrierMutex);
+        reachedHandler = barrierCv.wait_for(lock, std::chrono::seconds(2), [&] { return handlerEntered; });
+        if (!reachedHandler) {
+            releaseHandler = true;
+            barrierCv.notify_all();
+        }
+    }
+    ASSERT_TRUE(reachedHandler);
+
+    const auto status = backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, 20);
+    EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_NE(status.GetMsg().find("waiter=mark_exiting"), std::string::npos) << status.ToString();
+    EXPECT_NE(status.GetMsg().find("owner=ensure_membership"), std::string::npos) << status.ToString();
+    EXPECT_NE(status.GetMsg().find("owner_phase=membership_success_ready_handler"), std::string::npos)
+        << status.ToString();
+    EXPECT_NE(status.GetMsg().find("held_ms="), std::string::npos) << status.ToString();
+
+    {
+        std::lock_guard<std::mutex> lock(barrierMutex);
+        releaseHandler = true;
+        barrierCv.notify_all();
+    }
+    ASSERT_TRUE(ensure.get().IsOk());
+    EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
 TEST(DsCoordinationBackendSessionTest, FailedExitIntentFencesReconciliationAndEnsurePayload)
 {
     DeterministicCoordinatorProxy proxy;
