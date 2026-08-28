@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -360,6 +361,13 @@ private:
         COUNT
     };
 
+    struct MembershipMutationDiagnosticSnapshot {
+        MembershipMutationOperation owner{ MembershipMutationOperation::NONE };
+        MembershipMutationPhase phase{ MembershipMutationPhase::NONE };
+        int64_t acquiredAtMs{ 0 };
+    };
+    using MembershipMutationDiagnostic = std::optional<MembershipMutationDiagnosticSnapshot>;
+
     class MembershipMutationGuard {
     public:
         MembershipMutationGuard(DsCoordinationBackend &backend, MembershipMutationOperation operation);
@@ -500,6 +508,11 @@ private:
     void RecordMembershipMutationPhase(MembershipMutationPhase phase);
 
     MembershipMutationPhase ClearMembershipMutationOwner();
+
+    /**
+     * @brief Read one consistent membership mutation diagnostic snapshot without acquiring a diagnostic mutex.
+     */
+    MembershipMutationDiagnostic ReadMembershipMutationDiagnostic() const;
 
     std::string GetMembershipMutationDiagnostic(MembershipMutationOperation waiter,
                                                 std::chrono::steady_clock::time_point waitStartedAt) const;
@@ -642,10 +655,12 @@ private:
     std::string keepAliveKey_;
     // Protects the local membership incarnation and short mutation commit sections; never held across an RPC/callback.
     bthread::Mutex membershipMutationMutex_;
-    mutable std::mutex membershipMutationDiagnosticMutex_;
-    MembershipMutationOperation membershipMutationOwner_{ MembershipMutationOperation::NONE };
-    MembershipMutationPhase membershipMutationPhase_{ MembershipMutationPhase::NONE };
-    std::chrono::steady_clock::time_point membershipMutationAcquiredAt_;
+    // Writers hold membershipMutationMutex_; the sequence keeps owner and acquisition time in one snapshot.
+    std::atomic<uint64_t> membershipMutationDiagnosticSequence_{ 0 };
+    std::atomic<MembershipMutationOperation> membershipMutationOwner_{ MembershipMutationOperation::NONE };
+    // Either adjacent phase is valid while the sequence-fenced owner remains unchanged.
+    std::atomic<MembershipMutationPhase> membershipMutationPhase_{ MembershipMutationPhase::NONE };
+    std::atomic<int64_t> membershipMutationAcquiredAtMs_{ 0 };
     std::string membershipCoordinatorId_;
     int64_t keepAliveModRevision_{ COORDINATOR_NO_MOD_REVISION_CHECK };
     uint64_t membershipSuccessEpoch_{ 0 };

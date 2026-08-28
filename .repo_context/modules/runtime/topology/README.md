@@ -217,8 +217,8 @@
   | `CLUSTER_WATCH_QUEUE` | `CoordinationEventDispatcher` | queued event overflow/coalescing and reset doorbells; includes event counters and depth. |
   | `CLUSTER_MEMBERSHIP` | Controller membership reconciliation | membership read failures or per-cycle membership summary; includes version and member counts. |
   | `CLUSTER_MEMBERSHIP_OBSERVED` | Controller membership reconciliation | changed membership digest/sample after membership watch dirties state. |
-  | `Membership mutation lock timed out` | Worker | short local lock wait timed out; logs owner, phase, and timing. |
-  | `CLUSTER_MEMBERSHIP_MUTATION` | Worker | slow short local hold; logs owner, phase, and timing. |
+  | `Membership mutation lock timed out` | Worker | short local lock wait timed out; includes waiter, owner, phase, and timing from a non-blocking atomic snapshot. |
+  | `CLUSTER_MEMBERSHIP_MUTATION` | Worker | slow short local hold; includes owner, final phase, and held time. |
   | `CLUSTER_MEMBER_TRANSITION` | Controller planner | member state changes such as INITIAL/JOINING/LEAVING/FAILED. |
   | `CLUSTER_FAILURE_DETECT` | Failure classifier/controller | endpoint or membership failures promoted to topology change candidates; Witness probe decisions carry `probe_id`. |
   | `CLUSTER_WORKER_PROBE` | Worker/Coordinator probe delivery | end-to-end Witness event, queue, peer probe, report, and ingress stages correlated by `probe_id`. |
@@ -230,6 +230,9 @@
   | `CLUSTER_DEGRADED` | Worker Engine | business-admission level and reason transitions during backend loss and recovery. |
   | `CLUSTER_RING` | Controller/Worker/Observer topology publication | newly committed or locally published version, membership counts, and per-member `committed_ring`/`prospective_ring` ranges. |
   | `CLUSTER_TASK` | Materializer/executor | task materialization, notify, stage start/finish/failure, exact participants/ranges, cleanup, and progress outcomes. |
+
+  Membership mutation diagnostics acquire neither the mutation lock nor a separate diagnostic mutex. `owner=changing`
+  means every bounded snapshot read overlapped an owner transition; the reader does not retry beyond its fixed budget.
 - Foreground routing uses `PlacementFacade` and one immutable snapshot per single-key or batch decision. Batch-level
   failures leave the output unchanged; one item vector returns each per-key status beside its decision so successful
   results from the same snapshot survive without an extra aligned-vector allocation. Routing never performs backend IO

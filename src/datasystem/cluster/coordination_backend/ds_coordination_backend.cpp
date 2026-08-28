@@ -53,6 +53,7 @@ constexpr int64_t MIN_INITIAL_KEEPALIVE_RETRY_MS = 10'000;
 constexpr int64_t INITIAL_KEEPALIVE_RETRY_INTERVAL_MS = 200;
 constexpr int64_t MEMBERSHIP_MUTATION_SLOW_HOLD_MS = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS;
 constexpr uint32_t MEMBERSHIP_MUTATION_SLOW_LOG_EVERY_N = 100;
+constexpr uint32_t MEMBERSHIP_MUTATION_DIAGNOSTIC_READ_RETRIES = 3;
 }
 
 struct DsCoordinationBackend::KeepAliveFailureState {
@@ -100,46 +101,74 @@ void DsCoordinationBackend::MembershipMutationGuard::SetPhase(MembershipMutation
 void DsCoordinationBackend::RecordMembershipMutationAcquired(
     MembershipMutationOperation operation, std::chrono::steady_clock::time_point acquiredAt)
 {
-    std::lock_guard<std::mutex> lock(membershipMutationDiagnosticMutex_);
-    membershipMutationOwner_ = operation;
-    membershipMutationPhase_ = MembershipMutationPhase::ACQUIRED;
-    membershipMutationAcquiredAt_ = acquiredAt;
+    const auto writeSequence = membershipMutationDiagnosticSequence_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    std::atomic_thread_fence(std::memory_order_release);
+    INJECT_POINT_NO_RETURN("CoordinationBackend.MembershipMutation.afterDiagnosticWriteBegin");
+    membershipMutationOwner_.store(operation, std::memory_order_relaxed);
+    membershipMutationPhase_.store(MembershipMutationPhase::ACQUIRED, std::memory_order_relaxed);
+    membershipMutationAcquiredAtMs_.store(
+        std::chrono::duration_cast<std::chrono::milliseconds>(acquiredAt.time_since_epoch()).count(),
+        std::memory_order_relaxed);
+    membershipMutationDiagnosticSequence_.store(writeSequence + 1, std::memory_order_release);
+    INJECT_POINT_NO_RETURN("CoordinationBackend.MembershipMutation.afterDiagnosticAcquired");
 }
 
 void DsCoordinationBackend::RecordMembershipMutationPhase(MembershipMutationPhase phase)
 {
-    std::lock_guard<std::mutex> lock(membershipMutationDiagnosticMutex_);
-    if (membershipMutationOwner_ != MembershipMutationOperation::NONE) {
-        membershipMutationPhase_ = phase;
-    }
+    membershipMutationPhase_.store(phase, std::memory_order_release);
 }
 
 DsCoordinationBackend::MembershipMutationPhase DsCoordinationBackend::ClearMembershipMutationOwner()
 {
-    std::lock_guard<std::mutex> lock(membershipMutationDiagnosticMutex_);
-    const auto phase = membershipMutationPhase_;
-    membershipMutationOwner_ = MembershipMutationOperation::NONE;
-    membershipMutationPhase_ = MembershipMutationPhase::NONE;
-    membershipMutationAcquiredAt_ = {};
+    const auto writeSequence = membershipMutationDiagnosticSequence_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    std::atomic_thread_fence(std::memory_order_release);
+    const auto phase = membershipMutationPhase_.load(std::memory_order_relaxed);
+    membershipMutationOwner_.store(MembershipMutationOperation::NONE, std::memory_order_relaxed);
+    membershipMutationPhase_.store(MembershipMutationPhase::NONE, std::memory_order_relaxed);
+    membershipMutationAcquiredAtMs_.store(0, std::memory_order_relaxed);
+    membershipMutationDiagnosticSequence_.store(writeSequence + 1, std::memory_order_release);
     return phase;
+}
+
+DsCoordinationBackend::MembershipMutationDiagnostic DsCoordinationBackend::ReadMembershipMutationDiagnostic() const
+{
+    for (uint32_t retry = 0; retry < MEMBERSHIP_MUTATION_DIAGNOSTIC_READ_RETRIES; ++retry) {
+        const auto sequenceBefore = membershipMutationDiagnosticSequence_.load(std::memory_order_acquire);
+        if ((sequenceBefore & 1U) != 0) {
+            continue;
+        }
+        MembershipMutationDiagnosticSnapshot snapshot{
+            membershipMutationOwner_.load(std::memory_order_relaxed),
+            membershipMutationPhase_.load(std::memory_order_acquire),
+            membershipMutationAcquiredAtMs_.load(std::memory_order_relaxed)
+        };
+        INJECT_POINT_NO_RETURN("CoordinationBackend.MembershipMutation.beforeDiagnosticSequenceValidation");
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (sequenceBefore == membershipMutationDiagnosticSequence_.load(std::memory_order_relaxed)) {
+            return snapshot;
+        }
+    }
+    return std::nullopt;
 }
 
 std::string DsCoordinationBackend::GetMembershipMutationDiagnostic(
     MembershipMutationOperation waiter, std::chrono::steady_clock::time_point waitStartedAt) const
 {
-    std::lock_guard<std::mutex> lock(membershipMutationDiagnosticMutex_);
+    const auto snapshot = ReadMembershipMutationDiagnostic();
     const auto now = std::chrono::steady_clock::now();
     const auto waitMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - waitStartedAt).count();
-    if (membershipMutationOwner_ == MembershipMutationOperation::NONE) {
-        return "waiter=" + std::string(MembershipMutationOperationName(waiter)) + ", wait_ms="
-               + std::to_string(waitMs) + ", owner=unknown";
+    const auto prefix = "waiter=" + std::string(MembershipMutationOperationName(waiter)) + ", wait_ms="
+                        + std::to_string(waitMs);
+    if (!snapshot.has_value()) {
+        return prefix + ", owner=changing";
     }
-    const auto heldMs =
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - membershipMutationAcquiredAt_).count();
-    return "waiter=" + std::string(MembershipMutationOperationName(waiter)) + ", wait_ms="
-           + std::to_string(waitMs) + ", owner=" + MembershipMutationOperationName(membershipMutationOwner_)
-           + ", owner_phase=" + MembershipMutationPhaseName(membershipMutationPhase_)
-           + ", held_ms=" + std::to_string(heldMs);
+    if (snapshot->owner == MembershipMutationOperation::NONE) {
+        return prefix + ", owner=unknown";
+    }
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    const auto heldMs = nowMs - snapshot->acquiredAtMs;
+    return prefix + ", owner=" + MembershipMutationOperationName(snapshot->owner)
+           + ", owner_phase=" + MembershipMutationPhaseName(snapshot->phase) + ", held_ms=" + std::to_string(heldMs);
 }
 
 const char *DsCoordinationBackend::MembershipMutationOperationName(MembershipMutationOperation operation)
