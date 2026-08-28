@@ -54,7 +54,7 @@ CommFactory::CommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerA
                          DeviceResourceManager *resourceMgr)
     : ClientDeviceCurd(std::move(workerApi)), resourceMgr_(resourceMgr)
 {
-    commThreadControl_ = std::make_shared<HcclCommMagr>();
+    commThreadControl_ = std::make_shared<HcclCommMgr>();
 }
 
 void CommFactory::ShutDown()

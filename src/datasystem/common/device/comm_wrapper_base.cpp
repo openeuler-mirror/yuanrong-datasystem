@@ -26,7 +26,7 @@
 namespace datasystem {
 
 CommWrapperBase::CommWrapperBase(const std::string &commId, int localDeviceId, int remoteDeviceId,
-                                 std::shared_ptr<HcclCommMagr> &threadControl, DeviceResourceManager *resourceMgr)
+                                 std::shared_ptr<HcclCommMgr> &threadControl, DeviceResourceManager *resourceMgr)
     : resourceMgr_(resourceMgr),
       commId_(commId),
       localDeviceIdx_(localDeviceId),

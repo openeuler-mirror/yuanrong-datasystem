@@ -989,18 +989,6 @@ private:
                            const std::shared_ptr<IClientWorkerApi> &workerApi);
 
     /**
-     * @brief Check if worker is scale down or not.
-     * @return True if worker is scale down.
-     */
-    bool IsScaleDown(WorkerNode id = LOCAL_WORKER);
-
-    /**
-     * @brief Check if worker is healthy or not.
-     * @return True if worker is healthy.
-     */
-    bool IsHealthy(WorkerNode id = LOCAL_WORKER);
-
-    /**
      * @brief Check socket network status between client and LOCAL_WORKER.
      * @return Status of network.
      */
@@ -1204,12 +1192,6 @@ private:
      */
     Status SetRemoteHostObjectBuffer(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info, uint32_t version,
                                      std::shared_ptr<Buffer> &buffer);
-
-    /**
-     * @brief Batch release buffers.
-     * @param[in] buffers The object buffers.
-     */
-    void BatchReleaseBufferPtr(const std::vector<Buffer *> &buffers);
 
     /**
      * @brief Batch release local memory ref by RPC.
@@ -1609,7 +1591,7 @@ private:
      * @param[in] isParallel Whether to copy in parallel.
      * @param[in] keys The object keys.
      * @param[in] vals The object values.
-     * @param[in] creatParam The create parameters.
+     * @param[in] createParam The create parameters.
      * @param[in,out] bufferList The buffer list.
      * @param[in,out] bufferInfoList The buffer info list.
      * @param[in] dataSizeSum The total data size.
@@ -1617,7 +1599,7 @@ private:
      * @return Status of the call.
      */
     Status MemoryCopyParallelWithDeadline(bool isParallel, const std::vector<std::string> &keys,
-                                          const std::vector<StringView> &vals, const FullParam &creatParam,
+                                          const std::vector<StringView> &vals, const FullParam &createParam,
                                           std::vector<std::shared_ptr<Buffer>> &bufferList,
                                           std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
                                           uint64_t dataSizeSum, AccessTransportKind *requestTransportKind);
@@ -1816,13 +1798,13 @@ private:
      * @param[in] isParallel Enable parallel or not.
      * @param[in] keys Object keys.
      * @param[in] vals Object values.
-     * @param[in] creatParam The creating parameter of the buffer.
+     * @param[in] createParam The creating parameter of the buffer.
      * @param[in] bufferList The buffer of the objects.
      * @param[out] bufferInfoList The buffers information for creating buffers..
      * @return K_OK on success; the error code otherwise.
      */
     Status MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,
-                              const std::vector<StringView> &vals, const FullParam &creatParam,
+                              const std::vector<StringView> &vals, const FullParam &createParam,
                               std::vector<std::shared_ptr<Buffer>> &bufferList,
                               std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
                               AccessTransportKind *requestTransportKind = nullptr);

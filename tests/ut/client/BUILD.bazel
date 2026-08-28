@@ -3,16 +3,6 @@ load("//bazel:build_defs.bzl", "ds_cc_test")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_test(
-    name = "shm_connection_pool_test",
-    srcs = ["shm_connection_pool_test.cpp"],
-    deps = [
-        "//src/datasystem/client:client_transport",
-        "//src/datasystem/common/util:status_helper",
-        "//tests/ut:ut_common",
-    ],
-)
-
-ds_cc_test(
     name = "client_worker_common_api_test",
     srcs = ["client_worker_common_api_test.cpp"],
     deps = [

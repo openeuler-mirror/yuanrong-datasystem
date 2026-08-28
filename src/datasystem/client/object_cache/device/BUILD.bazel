@@ -9,7 +9,7 @@ ds_cc_library(
         "comm_factory.h",
         "device_memory_unit.h",
         "device_object_view.h",
-        "hccl_comm_magr.h",
+        "hccl_comm_mgr.h",
         "p2p_subscribe.h",
     ],
     deps = [
@@ -51,11 +51,11 @@ ds_cc_library(
     name = "comm_factory_and_hccl_comm",
     srcs = [
         "comm_factory.cpp",
-        "hccl_comm_magr.cpp",
+        "hccl_comm_mgr.cpp",
     ],
     hdrs = [
         "comm_factory.h",
-        "hccl_comm_magr.h",
+        "hccl_comm_mgr.h",
     ],
     visibility = ["//visibility:public"],
     deps = [

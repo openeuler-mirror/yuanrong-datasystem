@@ -28,7 +28,6 @@
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/device/device_resource_manager.h"
-#include "datasystem/client/object_cache/device/device_memory_unit.h"
 #include "datasystem/client/object_cache/device/device_object_view.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/common/device/device_manager_base.h"
@@ -193,7 +192,6 @@ private:
     std::unique_ptr<DeviceResourceManager> resourceMgr_;
     std::shared_ptr<CommFactory> commFactory_;
     tbb::concurrent_hash_map<int, std::shared_ptr<P2PSubscribe>> subscribeTable_;
-    tbb::concurrent_hash_map<std::string, DeviceMemoryUnit> memUnitTable_;
     int32_t clientDevOJTimeoutMs_;
 };
 }  // namespace object_cache
