@@ -166,7 +166,7 @@ public:
 
 TEST_F(OCClientWorkerHeartbeatNoRocksDBTest, TestWorkerRestartWithoutRocksDB)
 {
-    GTEST_SKIP() << "ZMQ-only test (relied on ZMQ transport, now removed); brpc path not covered.";
+    GTEST_SKIP() << "brpc path not covered.";
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
 

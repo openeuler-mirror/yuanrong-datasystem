@@ -19,9 +19,9 @@
  *
  * Owned by the log module (not a transport-specific proto) so that the
  * transport-neutral helpers in common/log/log_sample_state.h do not pull a
- * zmq-proto dependency. The zmq MetaPb field (meta_zmq.proto) and the brpc
+ * transport-proto dependency. The MetaPb field (meta_zmq.proto) and the brpc
  * trace attachment state byte both reference this enum via import / cast, so
- * the sampling contract has exactly one definition shared by both transports.
+ * the sampling contract has exactly one definition shared across both paths.
  */
 
 syntax = "proto3";

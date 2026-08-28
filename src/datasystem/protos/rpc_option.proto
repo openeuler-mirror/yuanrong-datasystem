@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Defines the meta header message of the zmq server.
+ * Description: Defines the meta header message of the RPC server.
  */
 syntax = "proto3";
 package datasystem;
@@ -23,7 +23,7 @@ import "google/protobuf/descriptor.proto";
 
 option cc_enable_arenas = true;
 
-// Extend the rpc method. ZMQ plugin will
+// Extend the rpc method. The plugin will
 // generate an extra payload unique pointer
 // in the function signature.
 extend google.protobuf.MethodOptions {

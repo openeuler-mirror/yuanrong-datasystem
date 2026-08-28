@@ -35,7 +35,7 @@ constexpr char kClusterName[] = "cluster-a";
 constexpr char kCoordinatorId[] = "0123456789abcdef";
 constexpr char kNextCoordinatorId[] = "fedcba9876543210";
 
-TEST(WorkerWorkerOCServiceProtocolTest, KeepsLegacyZmqMethodIndexesStable)
+TEST(WorkerWorkerOCServiceProtocolTest, KeepsLegacyMethodIndexesStable)
 {
     const auto *service =
         google::protobuf::DescriptorPool::generated_pool()->FindServiceByName("datasystem.WorkerWorkerOCService");

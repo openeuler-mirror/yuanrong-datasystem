@@ -224,7 +224,7 @@ static pid_t ForkForTest(std::function<void()> func)
 {
     pid_t child = fork();
     if (child == 0) {
-        // avoid zmq problem when fork.
+        // avoid fork-related state issues.
         std::thread thread(func);
         thread.join();
         exit(0);

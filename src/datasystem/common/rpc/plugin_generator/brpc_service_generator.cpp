@@ -692,9 +692,10 @@ void RpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
 
 std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
 {
-    // Initialize per-request timeouts on the brpc server-receive path. Mirrors the ZMQ
-    // receive path (zmq_service.cpp), which initializes reqTimeoutDuration /
-    // scTimeoutDuration AND ApiDeadline at every request entry.
+    // Initialize per-request timeouts on the brpc server-receive path. Every
+    // request entry must initialize reqTimeoutDuration / scTimeoutDuration AND
+    // ApiDeadline so worker-side retry loops and outbound RPCs honor the client
+    // deadline instead of the 60s default.
     //
     // ApiDeadline initialization strategy (3 branches):
     //   A) deadlineUs > 0 && remainingUs <= 0: InitUs(remainingUs) — keep the expired
@@ -747,10 +748,10 @@ std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
         "$indent$        if (remainingUs <= 0) {\n"
         "$indent$            ::datasystem::GetRequestContext()->reqTimeoutDuration.InitUs(remainingUs);\n"
         "$indent$            ::datasystem::GetRequestContext()->scTimeoutDuration.InitUs(remainingUs);\n"
-        "$indent$            // Mirror the ZMQ receive path (zmq_service.cpp): keep the\n"
-        "$indent$            // thread-local ApiDeadline initialized so that a subsequent\n"
-        "$indent$            // outbound RPC stub's CheckApiDeadline sees the real (expired)\n"
-        "$indent$            // budget instead of a stale budget left by an earlier request.\n"
+        "$indent$            // Keep the thread-local ApiDeadline initialized so that a\n"
+        "$indent$            // subsequent outbound RPC stub's CheckApiDeadline sees the\n"
+        "$indent$            // real (expired) budget instead of a stale budget left by\n"
+        "$indent$            // an earlier request.\n"
         "$indent$            ::datasystem::ApiDeadline::Instance().InitUs(remainingUs);\n"
         "$indent$        } else {\n"
         "$indent$            remainingMs = (remainingUs + 999) / 1000;\n"
@@ -781,8 +782,8 @@ std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
         "$indent$        ::datasystem::GetRequestContext()->scTimeoutDuration.Init(remainingMs);\n"
         "$indent$        // Initialize the per-thread ApiDeadline with the same client\n"
         "$indent$        // budget. Without this, brpc server entry never initializes\n"
-        "$indent$        // ApiDeadline (unlike ZMQ), so after a worker thread serves one\n"
-        "$indent$        // request that initialized ApiDeadline via InitTimeoutsFromDispatch /\n"
+        "$indent$        // ApiDeadline, so after a worker thread serves one request\n"
+        "$indent$        // that initialized ApiDeadline via InitTimeoutsFromDispatch /\n"
         "$indent$        // ApiDeadlineGuard, a later outbound RPC's CheckApiDeadline (e.g.\n"
         "$indent$        // the stub's slow-success check) would observe a stale, already-\n"
         "$indent$        // expired deadline and wrongly fail a healthy RPC.\n"
@@ -806,7 +807,7 @@ std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
         "$indent$        ::datasystem::GetRequestContext()->scTimeoutDuration.Init();\n"
         "$indent$        // No client deadline on the wire (background / internal call):\n"
         "$indent$        // reset so ApiRemainingUs() returns the 60s default and\n"
-        "$indent$        // CheckApiDeadline() returns OK, matching the ZMQ receive path.\n"
+        "$indent$        // CheckApiDeadline() returns OK.\n"
         "$indent$        ::datasystem::ApiDeadline::Instance().Reset();\n"
         "$indent$    }\n"
         "$indent$}\n";

@@ -74,7 +74,7 @@ namespace datasystem {
 namespace ut {
 namespace {
 
-TEST(CoordinatorServiceProtocolTest, KeepsLegacyZmqMethodIndexesStable)
+TEST(CoordinatorServiceProtocolTest, KeepsLegacyMethodIndexesStable)
 {
     const auto *service = google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
         "datasystem.coordinator.CoordinatorService");
@@ -1212,9 +1212,9 @@ TEST(CoordinatorServerOptionsTest, LifecycleRejectionsAreAuditedWithoutConfigPay
     FLAGS_log_async = originalLogAsync;
 }
 
-TEST_F(CoordinatorElectionServiceTest, ElectionInputsAndZmqFailBeforeNetwork)
+TEST_F(CoordinatorElectionServiceTest, ElectionInputsAreAcceptedBeforeNetwork)
 {
-    GTEST_SKIP() << "ZMQ-only test; brpc is the sole transport, election startup is always supported.";
+    GTEST_SKIP() << "brpc is the sole transport, election startup is always supported.";
 }
 
 TEST_F(CoordinatorElectionServiceTest, BuildElectionContextOnlyCopiesImmutableManagerInput)
