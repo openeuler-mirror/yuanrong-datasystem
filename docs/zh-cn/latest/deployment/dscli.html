@@ -2168,13 +2168,13 @@ Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Wo
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是</p></td>
-<td><p>是否在 Coordinator INFO 日志中周期输出 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 指标摘要</p></td>
+<td><p>是否开启 Coordinator 指标摘要；当 JSON exporter 未启用或未创建时，摘要输出到 Coordinator INFO 作为 fallback</p></td>
 </tr>
 <tr class="row-even"><td><p>json_log_monitor</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是</p></td>
-<td><p>是否将 Coordinator 指标摘要同时输出到 <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> JSON-Lines 文件</p></td>
+<td><p>是否将 Coordinator 指标摘要输出到 <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> JSON-Lines 文件。开启且 exporter 创建成功后，每周期完整记录，Coordinator INFO 不再重复输出 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>log_monitor_interval_ms</p></td>
 <td><p>int</p></td>
@@ -2805,7 +2805,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 例如 <code class="docutils literal notranslate"><span class="pre">request=0.5,</span> <span class="pre">access=0.3</span></code> 时，access实际保留率是 65%（50%采中强制输出 + 50%未采中×30%补采样），远高于 <code class="docutils literal notranslate"><span class="pre">access_sample_rate=0.3</span></code>。
 | log_only_write_info_file | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | 否 | INFO日志文件始终写入所有级别日志。该值为<code class="docutils literal notranslate"><span class="pre">true</span></code>时不额外生成WARNING/ERROR日志文件；为<code class="docutils literal notranslate"><span class="pre">false</span></code>时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
 | log_monitor | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | 是 | 是否开启接口性能与资源观测日志 |
-| json_log_monitor | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | 是 | 是否开启 <code class="docutils literal notranslate"><span class="pre">kv_resource.log</span></code> 与 <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> JSON-Lines 观测日志 |
+| json_log_monitor | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | 是 | 是否开启 <code class="docutils literal notranslate"><span class="pre">kv_resource.log</span></code> 与 <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> JSON-Lines 观测日志。开启后 <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> 每周期完整记录 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code>，主 INFO 不再重复输出 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code>；JSON exporter 未启用或未创建时保持 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制的 INFO 输出 |
 | monitor_config_file | string | <code class="docutils literal notranslate"><span class="pre">./datasystem/config/datasystem.config</span></code> | 否 | 配置worker监控配置文件的路径 |
 | log_monitor_exporter | string | <code class="docutils literal notranslate"><span class="pre">&quot;harddisk&quot;</span></code> | 否 | 指定观测日志导出类型，当前仅支持按 <code class="docutils literal notranslate"><span class="pre">harddisk</span></code> 类型导出观测数据，即将观测数据保存到 <code class="docutils literal notranslate"><span class="pre">logDir</span></code> 路径下 |
 | log_monitor_interval_ms | int | <code class="docutils literal notranslate"><span class="pre">10000</span></code> | 否 | 观测日志收集导出的间隔时间（以毫秒为单位） |
