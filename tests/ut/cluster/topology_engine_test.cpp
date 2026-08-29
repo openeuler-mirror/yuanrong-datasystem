@@ -28,6 +28,7 @@
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/protos/coordinator.pb.h"
 #include "gtest/gtest.h"
@@ -41,6 +42,25 @@ public:
     static Status ReloadTopology(TopologyEngine &engine)
     {
         return engine.ReloadTopology(true);
+    }
+
+    static Status ApplyCoordinatorTopologyEvent(TopologyEngine &engine, const CoordinationEvent &event)
+    {
+        return engine.ApplyCoordinatorTopologyEvent(event);
+    }
+
+    static void InvalidateCoordinatorWatches(TopologyEngine &engine)
+    {
+        auto *backend = dynamic_cast<DsCoordinationBackend *>(engine.memberBackend_.get());
+        ASSERT_NE(backend, nullptr);
+        backend->InvalidateWatches();
+    }
+
+    static bool OwnsCoordinatorWatch(const TopologyEngine &engine, const std::string &coordinatorId, int64_t watchId)
+    {
+        const auto *backend = dynamic_cast<const DsCoordinationBackend *>(engine.memberBackend_.get());
+        EXPECT_NE(backend, nullptr);
+        return backend != nullptr && backend->OwnsWatchIdentity(coordinatorId, watchId);
     }
 
     static void RecordPeerRpcFailure(TopologyEngine &engine, const HostPort &target,
@@ -283,9 +303,9 @@ std::string TopologyStorageKey(const TopologyKeyHelper &keys)
 int64_t FindWatchId(const testing::FakeCoordinatorServiceProxy &proxy, const std::string &key)
 {
     const auto watches = proxy.WatchCalls();
-    auto found = std::find_if(watches.begin(), watches.end(), [&key](const auto &watch) { return watch.key == key; });
-    EXPECT_NE(found, watches.end());
-    return found == watches.end() ? 0 : found->watchId;
+    auto found = std::find_if(watches.rbegin(), watches.rend(), [&key](const auto &watch) { return watch.key == key; });
+    EXPECT_NE(found, watches.rend());
+    return found == watches.rend() ? 0 : found->watchId;
 }
 
 Status EmitTopologyEvent(testing::FakeCoordinatorServiceProxy &proxy, TestWatchIngress &ingress,
@@ -295,6 +315,17 @@ Status EmitTopologyEvent(testing::FakeCoordinatorServiceProxy &proxy, TestWatchI
     return ingress.Emit("coordinator-test", FindWatchId(proxy, key),
                         { CoordinationEventType::PUT, key, "", static_cast<int64_t>(version),
                           static_cast<int64_t>(version) });
+}
+
+Status EmitCompleteTopologyEvent(testing::FakeCoordinatorServiceProxy &proxy, TestWatchIngress &ingress,
+                                 const TopologyKeyHelper &keys, const TopologyState &state, int64_t revision)
+{
+    std::string encoded;
+    RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeTopology(state, encoded));
+    const auto key = TopologyStorageKey(keys);
+    return ingress.Emit("coordinator-test", FindWatchId(proxy, key),
+                        { CoordinationEventType::PUT, key, std::move(encoded),
+                          static_cast<int64_t>(state.version), revision });
 }
 
 void PutTopology(testing::FakeCoordinatorServiceProxy &proxy, const std::string &clusterName,
@@ -810,9 +841,15 @@ TEST(TopologyEngineTest, ProbeEventsRemainIndependentAcrossReset)
     }));
 
     DS_ASSERT_OK(ingress.Emit("coordinator-test", watchId, { CoordinationEventType::RESET, "", "", 0, 0 }));
+    int64_t currentWatchId = 0;
+    ASSERT_TRUE(WaitFor([&] {
+        currentWatchId = FindWatchId(proxy, probeKey);
+        return currentWatchId != watchId
+               && TopologyEngineTestPeer::OwnsCoordinatorWatch(*engine, "coordinator-test", currentWatchId);
+    }));
     value.set_probe_round(8);
     ASSERT_TRUE(value.SerializeToString(&encoded));
-    DS_ASSERT_OK(ingress.Emit("coordinator-test", watchId,
+    DS_ASSERT_OK(ingress.Emit("coordinator-test", currentWatchId,
                               { CoordinationEventType::PUT, probeKey, encoded, 2, 2 }));
     ASSERT_TRUE(WaitFor([&] {
         std::lock_guard<std::mutex> lock(mutex);
@@ -1487,6 +1524,108 @@ TEST(TopologyEngineTest, CoordinatorWatchEventFlowsThroughBoundedDispatcher)
     std::shared_ptr<const TopologySnapshot> snapshot;
     ASSERT_TRUE(WaitFor([&] { return engine->GetSnapshot(snapshot).IsOk() && snapshot->Version() == 2; }));
     EXPECT_GT(engine->GetDiagnostics().dispatcher.submitted, submittedBefore);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, CoordinatorTopologyWatchPublishesCompletePayloadWithoutTopologyRange)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const auto keys = MakeKeys("direct-topology-watch");
+    PutTopology(proxy, "direct-topology-watch", MakeTopology(1));
+    auto engine = BuildEngine(proxy, ingress, callbacks, "direct-topology-watch");
+    DS_ASSERT_OK(engine->Start());
+
+    PutTopology(proxy, "direct-topology-watch", MakeTopology(3));
+    proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 100);
+    DS_ASSERT_OK(EmitCompleteTopologyEvent(proxy, ingress, *keys, MakeTopology(3), 10));
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    ASSERT_TRUE(WaitFor([&] {
+        return engine->GetSnapshot(snapshot).IsOk() && snapshot->Version() == 3
+               && snapshot->AuthorityRevision() == 10;
+    }));
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, CoordinatorTopologyWatchRejectsStaleAuthority)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const auto keys = MakeKeys("stale-topology-watch");
+    PutTopology(proxy, "stale-topology-watch", MakeTopology(1));
+    auto engine = BuildEngine(proxy, ingress, callbacks, "stale-topology-watch");
+    DS_ASSERT_OK(engine->Start());
+
+    std::string encoded;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeTopology(MakeTopology(2), encoded));
+    CoordinationEvent event{ CoordinationEventType::PUT, TopologyStorageKey(*keys), std::move(encoded), 2, 10,
+                             "stale-coordinator", FindWatchId(proxy, TopologyStorageKey(*keys)) };
+    EXPECT_EQ(TopologyEngineTestPeer::ApplyCoordinatorTopologyEvent(*engine, event).GetCode(), K_NOT_READY);
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(engine->GetSnapshot(snapshot));
+    EXPECT_EQ(snapshot->Version(), 1);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, CoordinatorTopologyWatchDoesNotPublishAfterAuthorityInvalidation)
+{
+    constexpr char injectPoint[] = "TopologyEngine.ApplyCoordinatorTopologyEvent.beforeCommit";
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const auto keys = MakeKeys("invalidated-topology-watch");
+    PutTopology(proxy, "invalidated-topology-watch", MakeTopology(1));
+    auto engine = BuildEngine(proxy, ingress, callbacks, "invalidated-topology-watch");
+    DS_ASSERT_OK(engine->Start());
+
+    std::string encoded;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeTopology(MakeTopology(2), encoded));
+    CoordinationEvent event{ CoordinationEventType::PUT, TopologyStorageKey(*keys), std::move(encoded), 2, 10,
+                             "coordinator-test", FindWatchId(proxy, TopologyStorageKey(*keys)) };
+    DS_ASSERT_OK(inject::Set(injectPoint, "pause"));
+    Status applyStatus;
+    std::thread applyThread([&] {
+        applyStatus = TopologyEngineTestPeer::ApplyCoordinatorTopologyEvent(*engine, event);
+    });
+    Raii releaseApply([&] {
+        (void)inject::Clear(injectPoint);
+        if (applyThread.joinable()) {
+            applyThread.join();
+        }
+    });
+    for (size_t retry = 0; retry < 200 && inject::GetExecuteCount(injectPoint) == 0; ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(inject::GetExecuteCount(injectPoint), 0);
+    TopologyEngineTestPeer::InvalidateCoordinatorWatches(*engine);
+    DS_ASSERT_OK(inject::Clear(injectPoint));
+    applyThread.join();
+
+    EXPECT_EQ(applyStatus.GetCode(), K_NOT_READY);
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(engine->GetSnapshot(snapshot));
+    EXPECT_EQ(snapshot->Version(), 1);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, InvalidCoordinatorTopologyWatchFallsBackToRange)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const auto keys = MakeKeys("invalid-topology-watch");
+    PutTopology(proxy, "invalid-topology-watch", MakeTopology(1));
+    auto engine = BuildEngine(proxy, ingress, callbacks, "invalid-topology-watch");
+    DS_ASSERT_OK(engine->Start());
+
+    PutTopology(proxy, "invalid-topology-watch", MakeTopology(2));
+    const auto key = TopologyStorageKey(*keys);
+    DS_ASSERT_OK(ingress.Emit("coordinator-test", FindWatchId(proxy, key),
+                              { CoordinationEventType::PUT, key, "invalid", 2, 10 }));
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    ASSERT_TRUE(WaitFor([&] { return engine->GetSnapshot(snapshot).IsOk() && snapshot->Version() == 2; }));
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

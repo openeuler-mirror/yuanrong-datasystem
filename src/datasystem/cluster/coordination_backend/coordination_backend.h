@@ -44,7 +44,8 @@ constexpr int DEFAULT_COORDINATION_DELETE_TIMEOUT_MS = 3'000;
 enum class CoordinationEventType : uint8_t { UNSPECIFIED = 0, PUT, DELETE, RESET };
 
 /**
- * @brief Backend watch event. A validated ETCD event may carry an authoritative value; other backends use a doorbell.
+ * @brief Backend watch event. Validated ETCD and identity-bound Coordinator exact PUT events carry authoritative
+ *        values; RESET and other backend events are doorbells.
  */
 struct CoordinationEvent {
     CoordinationEventType type;
@@ -52,6 +53,8 @@ struct CoordinationEvent {
     std::string value;
     int64_t version = 0;
     int64_t revision = 0;
+    std::string sourceAuthorityId;
+    int64_t sourceWatchId = 0;
 
     /**
      * @brief Convert the coordination event to diagnostic text without its value.

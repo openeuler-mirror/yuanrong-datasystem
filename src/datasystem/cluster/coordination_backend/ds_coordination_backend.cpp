@@ -433,7 +433,7 @@ Status DsCoordinationBackend::PrepareWatchPlan(const std::vector<WatchKey> &watc
         coordinatorId = responseCoordinatorId;
         for (auto &kv : initialKvs) {
             initialEvents.push_back({ CoordinationEventType::PUT, std::move(kv.key), std::move(kv.value),
-                                      kv.version, kv.modRevision });
+                                      kv.version, kv.modRevision, responseCoordinatorId, watchId });
         }
     }
     return Status::OK();
@@ -1645,7 +1645,22 @@ Status DsCoordinationBackend::OnMembershipEnsured(const std::string &coordinator
 bool DsCoordinationBackend::OwnsWatchIdentity(const std::string &coordinatorId, int64_t watchId) const
 {
     std::lock_guard<std::mutex> lock(watchMutex_);
-    return !watchStopping_ && registeredCoordinatorId_ == coordinatorId
+    return OwnsWatchIdentityLocked(coordinatorId, watchId);
+}
+
+Status DsCoordinationBackend::CommitIfCurrentWatch(const std::string &coordinatorId, int64_t watchId,
+                                                   const std::function<Status()> &commit)
+{
+    CHECK_FAIL_RETURN_STATUS(commit != nullptr, K_INVALID, "current watch commit is empty");
+    std::lock_guard<std::mutex> lock(watchMutex_);
+    CHECK_FAIL_RETURN_STATUS(OwnsWatchIdentityLocked(coordinatorId, watchId),
+                             K_NOT_READY, "Coordinator watch registration is no longer authoritative");
+    return commit();
+}
+
+bool DsCoordinationBackend::OwnsWatchIdentityLocked(const std::string &coordinatorId, int64_t watchId) const
+{
+    return !watchStopping_ && !rewatchRequired_ && registeredCoordinatorId_ == coordinatorId
            && std::any_of(registrations_.begin(), registrations_.end(),
                           [watchId](const auto &entry) { return entry.watchId == watchId; });
 }
@@ -1677,6 +1692,8 @@ void DsCoordinationBackend::HandleWatchEvent(const std::string &coordinatorId, i
     if (!OwnsWatchIdentity(coordinatorId, watchId)) {
         return;
     }
+    event.sourceAuthorityId = coordinatorId;
+    event.sourceWatchId = watchId;
     if (event.type == CoordinationEventType::RESET) {
         bool invalidated = false;
         {

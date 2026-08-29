@@ -25,6 +25,7 @@
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/spdlog/provider.h"
@@ -1189,7 +1190,7 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     }
     if (unchanged) {
         RETURN_IF_NOT_OK(PublishBackendEvidence(*previous));
-        RestoreReadyAfterCoordinatorTopologyReload(*previous);
+        RestoreReadyAfterCoordinatorTopologyUpdate(*previous);
         return Status::OK();
     }
     SnapshotUpdateOutcome outcome;
@@ -1205,9 +1206,43 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
         SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "authority_version_or_digest_conflict");
     }
     RETURN_IF_NOT_OK(rc);
+    return FinalizeTopologyPublication(std::move(previous), newlyPublished);
+}
+
+Status TopologyEngine::ApplyCoordinatorTopologyEvent(const CoordinationEvent &event)
+{
+    auto *member = static_cast<DsCoordinationBackend *>(memberBackend_.get());
+    CHECK_FAIL_RETURN_STATUS(event.type == CoordinationEventType::PUT && !event.value.empty() && event.version > 0
+                                 && event.revision > 0
+                                 && keys_->ClassifyPhysicalKey(event.key, options_.localAddress)
+                                        == TopologyPhysicalKeyKind::TOPOLOGY
+                                 && member->OwnsWatchIdentity(event.sourceAuthorityId, event.sourceWatchId),
+                             K_NOT_READY, "Coordinator topology event requires an exact rebuild");
+    std::shared_ptr<const TopologySnapshot> candidate;
+    RETURN_IF_NOT_OK(TopologyReader::BuildFromEncodedTopology(event.value, event.revision, candidate));
+    INJECT_POINT("TopologyEngine.ApplyCoordinatorTopologyEvent.beforeCommit");
+    std::shared_ptr<const TopologySnapshot> previous;
+    (void)snapshots_.Load(previous);
+    SnapshotUpdateOutcome outcome;
+    bool newlyPublished = false;
+    RETURN_IF_NOT_OK(member->CommitIfCurrentWatch(event.sourceAuthorityId, event.sourceWatchId, [&] {
+        auto rc = snapshots_.Publish(candidate, outcome);
+        newlyPublished = rc.IsOk() && outcome == SnapshotUpdateOutcome::PUBLISHED;
+        if (rc.IsError() && outcome == SnapshotUpdateOutcome::VERSION_GAP) {
+            rc = snapshots_.PublishAfterFullRebuild(candidate);
+            newlyPublished = rc.IsOk();
+        }
+        return rc;
+    }));
+    return FinalizeTopologyPublication(std::move(previous), newlyPublished);
+}
+
+Status TopologyEngine::FinalizeTopologyPublication(std::shared_ptr<const TopologySnapshot> previous,
+                                                   bool newlyPublished)
+{
     std::shared_ptr<const TopologySnapshot> published;
     RETURN_IF_NOT_OK(snapshots_.Load(published));
-    if (newlyPublished && hasPrevious) {
+    if (newlyPublished && previous != nullptr) {
         for (const auto &oldMember : previous->Members()) {
             const Member *member = nullptr;
             if (published->FindMemberByAddress(oldMember.identity.address, member).IsError() || member == nullptr
@@ -1224,14 +1259,14 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
                                      << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest())
                                      << " status=published";
     RETURN_IF_NOT_OK(PublishBackendEvidence(*published));
-    RestoreReadyAfterCoordinatorTopologyReload(*published);
+    RestoreReadyAfterCoordinatorTopologyUpdate(*published);
     if (newlyPublished) {
         LogAndNotifyPublishedSnapshot(std::move(published));
     }
     return Status::OK();
 }
 
-void TopologyEngine::RestoreReadyAfterCoordinatorTopologyReload(const TopologySnapshot &snapshot) noexcept
+void TopologyEngine::RestoreReadyAfterCoordinatorTopologyUpdate(const TopologySnapshot &snapshot) noexcept
 {
     if (options_.unifiedEtcdWatch || state_.load() != TopologyEngineState::RUNNING) {
         return;
@@ -1411,12 +1446,22 @@ Status TopologyEngine::HandleRuntimeEvent(RuntimeEvent event)
         return executor_.HandleCompletion(std::move(*completion));
     }
     auto coordination = std::get<CoordinationEvent>(std::move(event.payload));
+    const auto kind = keys_->ClassifyPhysicalKey(coordination.key, options_.localAddress);
     if (coordinatorProxy_ != nullptr && coordination.type == CoordinationEventType::PUT
-        && keys_->ClassifyPhysicalKey(coordination.key, options_.localAddress)
-               == TopologyPhysicalKeyKind::LOCAL_PROBE) {
+        && kind == TopologyPhysicalKeyKind::LOCAL_PROBE) {
         return HandleWorkerProbeEvent(coordination);
     }
-    auto rc = ReloadTopologyAndNotify();
+    Status rc;
+    if (coordinatorProxy_ != nullptr && kind == TopologyPhysicalKeyKind::TOPOLOGY) {
+        rc = ApplyCoordinatorTopologyEvent(coordination);
+        if (rc.IsOk()) {
+            return Status::OK();
+        }
+        LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+            << "CLUSTER_WATCH cluster=" << options_.clusterName
+            << " role=worker scope=topology action=range_fallback status=" << rc.ToString();
+    }
+    rc = ReloadTopologyAndNotify();
     if (rc.IsError()) {
         if (IsBackendAccessFailure(rc)) {
             LOG_IF_ERROR(HandleBackendUnavailable(), "CLUSTER_BACKEND_FAILURE_CLASSIFICATION_FAILED");
