@@ -25,6 +25,7 @@ import sys
 import time
 import unittest
 import urllib.request
+import json as _json
 
 
 SCRIPT_PATH = os.path.join(os.path.dirname(__file__), '..', '..',
@@ -178,6 +179,99 @@ class TestDaemonizePortBindFailure(unittest.TestCase):
         # Must have printed an error to stderr.
         self.assertTrue(proc.stderr.strip(),
                         'expected error message on stderr for bind failure')
+
+
+@unittest.skipUnless(_HAS_FORK, 'os.fork required (Unix only)')
+class TestRequestLogging(unittest.TestCase):
+    """Verify _log emits one line per API call (register / heartbeat /
+    unregister / discover / events / health / 404) into the ``--log`` file,
+    so a ``deploy_jf.py collect`` after a test run has something to ship
+    back for diagnosis. Pins the format loosely (substring checks, not
+    exact lines) so adding a field does not break the test."""
+
+    def _post(self, host, port, path, body):
+        data = _json.dumps(body).encode()
+        req = urllib.request.Request(
+            f'http://{host}:{port}{path}', data=data,
+            headers={'Content-Type': 'application/json'},
+            method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=3) as r:
+                return r.status, _json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, _json.loads(e.read())
+        except Exception as e:
+            return -1, {'error': str(e)}
+
+    def _get(self, host, port, path):
+        try:
+            with urllib.request.urlopen(
+                    f'http://{host}:{port}{path}', timeout=3) as r:
+                return r.status, _json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, _json.loads(e.read())
+        except Exception as e:
+            return -1, {'error': str(e)}
+
+    def test_each_api_call_logs_a_line(self):
+        port = _find_free_port()
+        log_path = f'/tmp/test_jf_mock_logging_{port}.log'
+
+        proc = subprocess.run(
+            [sys.executable, SCRIPT_PATH,
+             '--port', str(port), '--ttl-default', '5',
+             '--background', '--log', log_path],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(proc.returncode, 0,
+                         f'stderr: {proc.stderr}\nlog: {_read_log(log_path)}')
+        pid = int(proc.stdout.strip().splitlines()[-1])
+        try:
+            self.assertTrue(_is_port_ready('127.0.0.1', port),
+                            f'port not ready; log: {_read_log(log_path)}')
+
+            # Hit each endpoint so each logs a line.
+            self._post('127.0.0.1', port, '/register',
+                       {'service': 'svc-a', 'port': 1234, 'ttl': 5})
+            self._post('127.0.0.1', port, '/heartbeat',
+                       {'service': 'svc-a', 'port': 1234})
+            self._get('127.0.0.1', port, '/discover/svc-a')
+            self._get('127.0.0.1', port, '/events')
+            self._get('127.0.0.1', port, '/health')
+            self._post('127.0.0.1', port, '/unregister',
+                       {'service': 'svc-a', 'port': 1234})
+            # 404 paths (unknown endpoint + heartbeat for a non-registered svc)
+            self._get('127.0.0.1', port, '/unknown')
+            self._post('127.0.0.1', port, '/heartbeat',
+                       {'service': 'svc-missing', 'port': 9999})
+
+            # Give the daemonized child a moment to flush stdout to the file
+            # (print(flush=True) flushes Python's buffer, but the OS pipe to
+            # the dup2'd file is unbuffered at the kernel level, so 0.3s is
+            # plenty on any reasonable test runner).
+            time.sleep(0.3)
+            log = _read_log(log_path)
+
+            # Each API call must have produced exactly one log line
+            # containing the action keyword. Substring check (not exact
+            # line match) so adding a field (e.g. remaining_ttl) does not
+            # break the test.
+            self.assertIn('register 200', log)
+            self.assertIn('heartbeat 200', log)
+            self.assertIn('discover 200', log)
+            self.assertIn('events 200', log)
+            self.assertIn('health 200', log)
+            self.assertIn('unregister 200', log)
+            # 404 for unknown GET path
+            self.assertIn('GET 404', log)
+            # 404 for heartbeat on a non-registered service
+            self.assertIn('heartbeat 404', log)
+            # Startup line must also be present (so the log is never empty
+            # even if no requests were made).
+            self.assertIn('JF mock server listening', log)
+        finally:
+            _kill(pid)
+            if os.path.exists(log_path):
+                os.unlink(log_path)
 
 
 if __name__ == '__main__':

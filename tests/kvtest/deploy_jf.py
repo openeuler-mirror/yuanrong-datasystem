@@ -14,6 +14,7 @@ Usage:
 
 from deploy_common import DEFAULT_TIMEOUT, get_pods, create_pods, log_error, log_info, setup_logging
 import argparse
+import base64
 import os
 import subprocess
 import sys
@@ -177,6 +178,60 @@ def cmd_clean(args, pods):
     return 0
 
 
+def cmd_collect(args, pods):
+    """Collect jf_mock.log (and any other .log/.txt, including stdout.log
+    if present) from each pod's ``--remote-dir``.
+
+    Gates on ``ls -d {remote_dir}`` so a never-deployed or already-cleaned
+    pod (no dir) is skipped silently rather than erroring -- mirrors
+    ``deploy_common.collect_logs_from_pod``'s existence gate. Uses base64
+    transfer so non-UTF-8 bytes in the log don't break the kubectl exec
+    text path. ``jf_mock.log`` is the ``--log`` redirect target written by
+    ``_daemonize`` (every register/heartbeat/unregister/discover/expire
+    line lands there); ``stdout.log`` is collected opportunistically for
+    parity with the worker/coordinator collect path, in case a future
+    launch mode writes one.
+    """
+    if not pods:
+        log_error(f'No pods matching prefix {args.prefixes}')
+        return 1
+    os.makedirs(args.output, exist_ok=True)
+    for pod in pods:
+        name = pod['name']
+        local_pod_dir = os.path.join(args.output, name)
+        os.makedirs(local_pod_dir, exist_ok=True)
+        r = _kubectl_exec(args.namespace, name,
+                          f'ls -d {args.remote_dir} 2>/dev/null')
+        if r is None or r.returncode != 0:
+            log_info(f'  {name}: {args.remote_dir} does not exist')
+            continue
+        r = _kubectl_exec(args.namespace, name,
+                          f'ls {args.remote_dir}/*.log {args.remote_dir}/*.txt 2>/dev/null')
+        files = [f.strip() for f in (r.stdout or '').splitlines()
+                 if f.strip()] if r else []
+        if not files:
+            log_info(f'  {name}: no log files in {args.remote_dir}')
+            continue
+        log_info(f'  {name}: found {len(files)} log files')
+        for remote_path in files:
+            fname = os.path.basename(remote_path)
+            local_path = os.path.join(local_pod_dir, fname)
+            try:
+                result = _kubectl_exec(args.namespace, name,
+                                      f'base64 {remote_path}')
+                if result is None or result.returncode != 0:
+                    rc = result.returncode if result else 'timeout'
+                    log_info(f'    {fname} -> FAILED: base64 rc={rc}')
+                    continue
+                content = base64.b64decode(result.stdout)
+                with open(local_path, 'wb') as f:
+                    f.write(content)
+                log_info(f'    {fname} -> collected')
+            except Exception as e:
+                log_info(f'    {fname} -> FAILED: {e}')
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description='Manage JF mock server in K8s pods')
     sub = parser.add_subparsers(dest='action')
@@ -211,6 +266,11 @@ def main():
     sub.add_parser('check', parents=[parent])
     sub.add_parser('clean', parents=[parent])
 
+    p_collect = sub.add_parser('collect', parents=[parent],
+                               help='Collect jf_mock.log + stdout.log from pods')
+    p_collect.add_argument('-o', '--output', default='collected_jf_logs',
+                           help='Local output directory (default: collected_jf_logs)')
+
     args = parser.parse_args()
     if not args.action:
         parser.print_help()
@@ -225,7 +285,8 @@ def main():
         log_error(f'No pods found matching {args.prefixes} in {args.namespace}')
         return 1
 
-    handlers = {'start': cmd_start, 'stop': cmd_stop, 'check': cmd_check, 'clean': cmd_clean}
+    handlers = {'start': cmd_start, 'stop': cmd_stop, 'check': cmd_check,
+                'clean': cmd_clean, 'collect': cmd_collect}
     return handlers[args.action](args, pods)
 
 

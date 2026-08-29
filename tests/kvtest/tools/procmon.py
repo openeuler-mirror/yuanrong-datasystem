@@ -4,6 +4,7 @@
 import argparse
 import atexit
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -174,6 +175,50 @@ def read_tcp_attempt_fails_stats():
         return None, None
 
 
+def read_port_traffic(port, timeout=5):
+    """Read cumulative bytes_sent + bytes_received across all TCP sockets
+    on the listening ``port`` via ``ss -tin``.
+
+    Returns ``(total_bytes_sent, total_bytes_received)`` — the SUM across
+    all matching sockets. ESTABLISHED sockets carry ``bytes_sent`` /
+    ``bytes_received`` counters (kernel >= 4.4, iproute2 >= 4.4); the
+    LISTEN socket does not, so it is naturally excluded. Counters are
+    cumulative since each socket's creation; callers diff successive
+    samples to get a rate:
+
+      BytesOut/s = delta(total_bytes_sent) / dt   (server-sent = outbound)
+      BytesIn/s  = delta(total_bytes_received) / dt (server-recv = inbound)
+
+    Sockets that close between samples drop their byte counters from the
+    aggregate, so the diff undercounts short-lived connections; for
+    long-lived coordinator<->worker connections this is accurate.
+
+    Returns ``(None, None)`` when ``ss`` is missing, the kernel/iproute2
+    is too old to emit byte counters, the port filter matches zero
+    sockets, or the subprocess times out — callers treat None as "no
+    traffic data this sample" and skip the rate computation.
+    """
+    try:
+        result = subprocess.run(
+            ['ss', '-tin', f'sport = :{port}'],
+            capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None, None
+    if result.returncode != 0:
+        return None, None
+    out = result.stdout or ''
+    # Real `ss -ti` output uses `key:value` colon-separated fields on the
+    # indented TCP info lines (e.g. ``bytes_sent:16703 bytes_received:1449``).
+    # Older/some iproute2 builds may use whitespace instead; ``[:\s]+`` matches
+    # both so the parser does not silently no-op on the dominant colon format.
+    sent_values = re.findall(r'bytes_sent[:\s]+(\d+)', out)
+    recv_values = re.findall(r'bytes_received[:\s]+(\d+)', out)
+    if not sent_values and not recv_values:
+        return None, None
+    return (sum(int(v) for v in sent_values),
+            sum(int(v) for v in recv_values))
+
+
 def format_mb(bytes_val):
     return f"{bytes_val / (1024 * 1024):.1f}"
 
@@ -223,6 +268,11 @@ def main():
                              "stdout, parent exits. Requires --output. Lets the "
                              "caller (kubectl exec, ssh) return immediately instead "
                              "of waiting for timeout.")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Monitor inbound/outbound byte throughput on this TCP "
+                             "listening port via `ss -tin` (aggregates bytes_sent / "
+                             "bytes_received across all ESTABLISHED sockets on the "
+                             "port). When omitted, no traffic monitoring is done.")
     args = parser.parse_args()
 
     if not args.process and not args.pid:
@@ -260,7 +310,8 @@ def main():
             sys.exit(1)
 
     emit(f"Monitoring PID={pid}, interval={args.interval}s"
-         + (f", duration={args.duration}s" if args.duration > 0 else ""))
+         + (f", duration={args.duration}s" if args.duration > 0 else "")
+         + (f", port={args.port}" if args.port else ""))
 
     samples_cpu = []
     samples_mem = []
@@ -268,10 +319,16 @@ def main():
     samples_mem_shared = []
     samples_fd = []
     samples_fails = []
+    samples_bytes_in = []
+    samples_bytes_out = []
     total_fails = 0
+    total_bytes_in = 0
+    total_bytes_out = 0
     prev_cpu = read_proc_stat(pid)
     prev_time = time.monotonic()
     prev_fails, prev_opens = read_tcp_attempt_fails_stats()
+    prev_sent, prev_recv = (read_port_traffic(args.port)
+                            if args.port else (None, None))
     start_time = prev_time
 
     running = True
@@ -333,11 +390,32 @@ def main():
             prev_fails = fails
             prev_opens = opens
 
+        traffic_str = ""
+        if args.port:
+            sent, recv = read_port_traffic(args.port)
+            if sent is not None and recv is not None:
+                if prev_sent is not None and prev_recv is not None:
+                    delta_sent = max(0, sent - prev_sent)
+                    delta_recv = max(0, recv - prev_recv)
+                else:
+                    delta_sent = 0
+                    delta_recv = 0
+                bytes_out_per_sec = delta_sent / dt if dt > 0 else 0.0
+                bytes_in_per_sec = delta_recv / dt if dt > 0 else 0.0
+                samples_bytes_in.append(bytes_in_per_sec)
+                samples_bytes_out.append(bytes_out_per_sec)
+                total_bytes_in += delta_recv
+                total_bytes_out += delta_sent
+                traffic_str = (f" BytesIn/s={format_mb(bytes_in_per_sec)}MB"
+                               f" BytesOut/s={format_mb(bytes_out_per_sec)}MB")
+                prev_sent = sent
+                prev_recv = recv
+
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         fd_str = f" FD={fd_count}" if fd_count is not None else ""
         emit(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB"
              f" Anon={format_mb(anon_bytes)}MB Shared={format_mb(shared_bytes)}MB"
-             f"{fd_str}{tcp_str}")
+             f"{fd_str}{tcp_str}{traffic_str}")
 
         prev_cpu = cpu_ticks
         prev_time = now
@@ -365,6 +443,14 @@ def main():
         avg_fails = sum(samples_fails) / len(samples_fails)
         peak_fails = max(samples_fails)
         emit(f"TCP  fails total={total_fails} avg={avg_fails:.2f}/s peak={peak_fails:.2f}/s")
+    if samples_bytes_in:
+        avg_in = sum(samples_bytes_in) / len(samples_bytes_in)
+        peak_in = max(samples_bytes_in)
+        emit(f"NET  In  total={format_mb(total_bytes_in)}MB avg={format_mb(avg_in)}MB/s peak={format_mb(peak_in)}MB/s")
+    if samples_bytes_out:
+        avg_out = sum(samples_bytes_out) / len(samples_bytes_out)
+        peak_out = max(samples_bytes_out)
+        emit(f"NET  Out total={format_mb(total_bytes_out)}MB avg={format_mb(avg_out)}MB/s peak={format_mb(peak_out)}MB/s")
 
 
 if __name__ == "__main__":

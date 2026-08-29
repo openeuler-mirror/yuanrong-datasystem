@@ -7,18 +7,26 @@ parallel pod orchestration, procmon upload, process check/kill, pid
 lookup by port, remote log_dir reading, and pod discovery.
 """
 
+import base64
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from deploy_common import (
     check_process,
+    clean_pod,
+    cmd_clean_shared,
+    cmd_collect_impl,
+    cmd_collect_shared,
     cmd_install_impl,
+    collect_logs_from_pod,
     discover_nodes,
     do_for_all_pods,
     find_default_whl,
@@ -670,6 +678,321 @@ class TestDiscoverNodes(unittest.TestCase):
         nodes = discover_nodes()
         self.assertEqual(len(nodes), 1)
         self.assertEqual(nodes[0]['ip'], '10.0.0.1')
+
+
+def _kubectl_exec_responder(log_dir_files, remote_dir_exists,
+                            stdout_log_content=None,
+                            procmon_log_content=None):
+    """Build a side_effect for kubectl_exec that responds by command text.
+
+    Responds to the collect_logs_from_pod call sequence:
+      * `ls -d {log_dir}`           -> returncode 0 (log_dir always exists
+                                       in these tests)
+      * `ls {log_dir}/*.log ...`    -> returncode 0, stdout = log_dir_files
+      * `base64 <path>`             -> returncode 0, stdout = base64 bytes
+                                       of the matching file's content; raises
+                                       CalledProcessError if path unknown
+      * `ls -d {remote_dir}`        -> returncode 0 if remote_dir_exists else 1
+    """
+    file_map = {}
+    if stdout_log_content is not None:
+        file_map['__stdout__'] = stdout_log_content
+    if procmon_log_content is not None:
+        file_map['__procmon__'] = procmon_log_content
+
+    def _resp(*args, **kwargs):
+        cmd = args[2]
+        if cmd.startswith('ls -d '):
+            target = cmd.split('ls -d ', 1)[1].split(' 2>/dev/null', 1)[0]
+            if target in ('/var/log/ds', '/tmp/ds_worker', '/tmp/ds_coordinator'):
+                if target == '/var/log/ds':
+                    return MagicMock(returncode=0)
+                return MagicMock(returncode=0 if remote_dir_exists else 1)
+            return MagicMock(returncode=0)
+        if cmd.startswith('ls '):
+            return MagicMock(returncode=0, stdout='\n'.join(log_dir_files))
+        if cmd.startswith('base64 '):
+            path = cmd.split('base64 ', 1)[1]
+            if path == '/tmp/ds_worker/stdout.log' or path == '/tmp/ds_coordinator/stdout.log':
+                if stdout_log_content is None:
+                    raise subprocess.CalledProcessError(1, cmd, b'')
+                return MagicMock(returncode=0, stdout=base64.b64encode(
+                    stdout_log_content).decode())
+            if 'resource_monitor.log' in path:
+                if procmon_log_content is None:
+                    raise subprocess.CalledProcessError(1, cmd, b'')
+                return MagicMock(returncode=0, stdout=base64.b64encode(
+                    procmon_log_content).decode())
+            return MagicMock(returncode=0, stdout=base64.b64encode(b'').decode())
+        return MagicMock(returncode=0, stdout='')
+    return _resp
+
+
+class TestCollectLogsFromPod(unittest.TestCase):
+    """collect_logs_from_pod: stdout.log is collected from remote_dir (where
+    start_service_standalone actually writes it), gated on the dir's
+    existence so dscli-mode collects skip silently without a --standalone
+    flag. Covers the regression where the old code looked in
+    remote_config_dir/stdout.log and never matched the real path."""
+
+    def _pod(self):
+        return {'name': 'p1', 'ip': '10.0.0.1'}
+
+    def _run_collect(self, remote_dir, remote_dir_exists,
+                     stdout_log_content=None):
+        tmp = tempfile.mkdtemp()
+        try:
+            responder = _kubectl_exec_responder(
+                log_dir_files=['/var/log/ds/worker.log'],
+                remote_dir_exists=remote_dir_exists,
+                stdout_log_content=stdout_log_content)
+            with patch('deploy_common.kubectl_exec', side_effect=responder):
+                ok = collect_logs_from_pod(
+                    self._pod(), 'default', '/var/log/ds', tmp,
+                    remote_config_dir='/tmp',
+                    remote_dir=remote_dir, timeout=10)
+            return ok, tmp
+        except Exception:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+
+    def _read_local(self, tmp, fname):
+        path = os.path.join(tmp, self._pod()['name'], fname)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'rb') as f:
+            return f.read()
+
+    def test_standalone_collects_stdout_log_from_remote_dir(self):
+        # remote_dir exists + stdout.log present -> file is collected.
+        # This is the regression guard: the old code looked in
+        # /tmp/stdout.log (remote_config_dir) and never found the file.
+        ok, tmp = self._run_collect(
+            remote_dir='/tmp/ds_worker', remote_dir_exists=True,
+            stdout_log_content=b'worker_test stdout output\n')
+        try:
+            self.assertTrue(ok)
+            self.assertEqual(self._read_local(tmp, 'stdout.log'),
+                             b'worker_test stdout output\n')
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_standalone_skips_stdout_log_when_remote_dir_missing(self):
+        # dscli-mode pod: remote_dir was never created (dscli installs into
+        # the package prefix). The `ls -d` gate fails silently and no
+        # base64 call is issued for stdout.log. This is the "no -S flag
+        # needed" path -- the same collect invocation serves both modes.
+        ok, tmp = self._run_collect(
+            remote_dir='/tmp/ds_worker', remote_dir_exists=False,
+            stdout_log_content=b'should-not-be-collected\n')
+        try:
+            self.assertTrue(ok)
+            self.assertIsNone(self._read_local(tmp, 'stdout.log'))
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_standalone_skips_stdout_log_when_file_missing(self):
+        # remote_dir exists but stdout.log absent (binary hasn't written
+        # yet, or crashed before redirect opened). The base64 call raises
+        # CalledProcessError and collect silently skips -- no exception
+        # propagates, no partial file is left on disk.
+        ok, tmp = self._run_collect(
+            remote_dir='/tmp/ds_worker', remote_dir_exists=True,
+            stdout_log_content=None)
+        try:
+            self.assertTrue(ok)
+            self.assertIsNone(self._read_local(tmp, 'stdout.log'))
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_no_remote_dir_skips_stdout_collection_entirely(self):
+        # remote_dir=None (older caller, no --remote-dir passed): no `ls -d`
+        # or base64 call is issued at all. Pins that the existence gate is
+        # gated on `remote_dir is not None` first, so None never reaches
+        # kubectl.
+        captured_cmds = []
+        tmp = tempfile.mkdtemp()
+        try:
+            def _capture(*args, **kwargs):
+                captured_cmds.append(args[2])
+                return MagicMock(returncode=0, stdout='')
+            with patch('deploy_common.kubectl_exec', side_effect=_capture):
+                collect_logs_from_pod(self._pod(), 'default', '/var/log/ds',
+                                      tmp, remote_config_dir='/tmp',
+                                      remote_dir=None, timeout=10)
+            self.assertFalse(
+                any('stdout.log' in c for c in captured_cmds),
+                'stdout.log must not be queried when remote_dir is None')
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestCmdCollectShared(unittest.TestCase):
+    """cmd_collect_shared forwards args.remote_dir to cmd_collect_impl so
+    standalone-mode collects pick up stdout.log; missing attr defaults to
+    None (older callers / test stubs)."""
+
+    @patch('deploy_common.cmd_collect_impl', return_value=0)
+    def test_forwards_remote_dir_from_args(self, mock_impl):
+        args = SimpleNamespace(namespace='default',
+                               remote_config='/tmp/worker.config',
+                               output='out',
+                               remote_dir='/tmp/ds_worker')
+        pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
+        rc = cmd_collect_shared(args, pods, 'worker logs', timeout=10)
+        self.assertEqual(rc, 0)
+        pos = mock_impl.call_args[0]
+        kwargs = mock_impl.call_args[1]
+        self.assertEqual(pos[0], pods)
+        self.assertEqual(pos[1], 'default')
+        self.assertEqual(pos[2], '/tmp/worker.config')
+        self.assertEqual(pos[3], 'out')
+        self.assertEqual(pos[4], 'worker logs')
+        self.assertEqual(kwargs['remote_dir'], '/tmp/ds_worker')
+        self.assertEqual(kwargs['timeout'], 10)
+
+    @patch('deploy_common.cmd_collect_impl', return_value=0)
+    def test_missing_remote_dir_attr_defaults_to_none(self, mock_impl):
+        # Older callers (or test stubs) may not set remote_dir; getattr
+        # must fall back to None rather than AttributeError, so the same
+        # shared helper keeps working after the new param is added.
+        args = SimpleNamespace(namespace='default',
+                               remote_config='/tmp/worker.config',
+                               output='out')
+        pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
+        rc = cmd_collect_shared(args, pods, 'worker logs', timeout=10)
+        self.assertEqual(rc, 0)
+        kwargs = mock_impl.call_args[1]
+        self.assertIsNone(kwargs['remote_dir'])
+
+
+class TestCleanPod(unittest.TestCase):
+    """clean_pod: kill + log_dir + resource_monitor.log removal, plus the
+    standalone-only rm -rf remote_dir (binary + .so + stdout.log). Order is
+    kill -> log_dir -> resource_monitor.log -> remote_dir so a still-running
+    binary does not race the rm -rf on its own files."""
+
+    def _pod(self):
+        return {'name': 'p1', 'ip': '10.0.0.1'}
+
+    @patch('deploy_common.kill_process')
+    @patch('deploy_common.kubectl_exec')
+    def test_non_standalone_skips_remote_dir(self, mock_exec, mock_kill):
+        # remote_dir=None (dscli mode): only log_dir + resource_monitor.log
+        # are touched. rm -rf {remote_dir} must NOT be issued.
+        clean_pod(self._pod(), 'default', '/var/log/ds', '/tmp',
+                  'datasystem_coordinator', remote_dir=None, timeout=10)
+        cmds = [c[0][2] for c in mock_exec.call_args_list]
+        self.assertIn('rm -rf /var/log/ds', cmds)
+        self.assertIn('rm -f /tmp/resource_monitor.log', cmds)
+        self.assertFalse(any(c.startswith('rm -rf /tmp/ds') for c in cmds))
+        # kill_process was the first call (before any rm)
+        mock_kill.assert_called_once_with(
+            self._pod(), 'default', 'datasystem_coordinator', timeout=10)
+
+    @patch('deploy_common.kill_process')
+    @patch('deploy_common.kubectl_exec')
+    def test_standalone_removes_remote_dir_after_logs(self, mock_exec, mock_kill):
+        # remote_dir set (standalone mode): rm -rf remote_dir is issued, and
+        # it comes AFTER the log_dir + resource_monitor.log cleanups so a
+        # still-running binary does not see its files disappear mid-shutdown.
+        clean_pod(self._pod(), 'default', '/var/log/ds', '/tmp',
+                  'coordinator_test', remote_dir='/tmp/ds_coordinator',
+                  timeout=10)
+        cmds = [c[0][2] for c in mock_exec.call_args_list]
+        self.assertIn('rm -rf /var/log/ds', cmds)
+        self.assertIn('rm -f /tmp/resource_monitor.log', cmds)
+        self.assertIn('rm -rf /tmp/ds_coordinator', cmds)
+        self.assertLess(cmds.index('rm -rf /var/log/ds'),
+                        cmds.index('rm -rf /tmp/ds_coordinator'))
+        self.assertLess(cmds.index('rm -f /tmp/resource_monitor.log'),
+                        cmds.index('rm -rf /tmp/ds_coordinator'))
+        # kill target switches to the standalone binary name
+        mock_kill.assert_called_once_with(
+            self._pod(), 'default', 'coordinator_test', timeout=10)
+
+    @patch('deploy_common.kill_process')
+    @patch('deploy_common.kubectl_exec')
+    def test_standalone_without_log_dir_still_cleans_remote_dir(self, mock_exec, mock_kill):
+        # A config without log_dir must still remove remote_dir in standalone
+        # mode (stdout.log lives there and would otherwise accumulate across
+        # deploys). log_dir is skipped via the `if log_dir:` guard.
+        clean_pod(self._pod(), 'default', None, '/tmp',
+                  'worker_test', remote_dir='/tmp/ds_worker', timeout=10)
+        cmds = [c[0][2] for c in mock_exec.call_args_list]
+        self.assertNotIn('rm -rf None', cmds)
+        self.assertIn('rm -f /tmp/resource_monitor.log', cmds)
+        self.assertIn('rm -rf /tmp/ds_worker', cmds)
+
+
+class TestCmdCleanShared(unittest.TestCase):
+    """cmd_clean_shared resolves the kill target + remote_dir from
+    args.standalone, mirroring cmd_kill_shared's pattern but with both process
+    names supplied by the role file (clean has no --process flag)."""
+
+    def _args(self, **overrides):
+        defaults = dict(namespace='default',
+                        remote_config='/tmp/coordinator.config',
+                        standalone=False,
+                        remote_dir='/tmp/ds_coordinator')
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    @patch('deploy_common.cmd_clean_impl', return_value=0)
+    def test_non_standalone_uses_dscli_process_and_skips_remote_dir(self, mock_impl):
+        # Non-standalone: kill datasystem_coordinator, do NOT remove remote_dir
+        # (dscli installs into the package prefix, not --remote-dir).
+        args = self._args(standalone=False)
+        pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
+        rc = cmd_clean_shared(args, pods, 'datasystem_coordinator',
+                              'coordinator_test', 'coordinator logs', timeout=10)
+        self.assertEqual(rc, 0)
+        pos = mock_impl.call_args[0]
+        kwargs = mock_impl.call_args[1]
+        # positional: pods, namespace, remote_config, process_name, label
+        self.assertEqual(pos[0], pods)
+        self.assertEqual(pos[1], 'default')
+        self.assertEqual(pos[2], '/tmp/coordinator.config')
+        self.assertEqual(pos[3], 'datasystem_coordinator')
+        self.assertEqual(pos[4], 'coordinator logs')
+        # remote_dir=None signals the impl to skip the rm -rf step
+        self.assertIsNone(kwargs['remote_dir'])
+        self.assertEqual(kwargs['timeout'], 10)
+
+    @patch('deploy_common.cmd_clean_impl', return_value=0)
+    def test_standalone_uses_test_binary_process_and_removes_remote_dir(self, mock_impl):
+        # Standalone: kill coordinator_test, rm -rf remote_dir so a re-deploy
+        # starts clean (no stale binary / .so / appended stdout.log).
+        args = self._args(standalone=True)
+        pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
+        rc = cmd_clean_shared(args, pods, 'datasystem_coordinator',
+                              'coordinator_test', 'coordinator logs', timeout=10)
+        self.assertEqual(rc, 0)
+        pos = mock_impl.call_args[0]
+        kwargs = mock_impl.call_args[1]
+        self.assertEqual(pos[3], 'coordinator_test')
+        self.assertEqual(kwargs['remote_dir'], '/tmp/ds_coordinator')
+
+    @patch('deploy_common.cmd_clean_impl', return_value=0)
+    def test_standalone_without_remote_dir_attr_skips_rm_rf(self, mock_impl):
+        # If a caller forgets --remote-dir in standalone mode, getattr falls
+        # back to None and clean skips the rm -rf instead of issuing rm -rf
+        # (the role CLIs always set a default, but the shared helper itself
+        # must tolerate a missing attr rather than AttributeError).
+        args = SimpleNamespace(namespace='default',
+                               remote_config='/tmp/coordinator.config',
+                               standalone=True)
+        pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
+        rc = cmd_clean_shared(args, pods, 'datasystem_coordinator',
+                              'coordinator_test', 'coordinator logs', timeout=10)
+        self.assertEqual(rc, 0)
+        kwargs = mock_impl.call_args[1]
+        self.assertIsNone(kwargs['remote_dir'])
 
 
 if __name__ == '__main__':
