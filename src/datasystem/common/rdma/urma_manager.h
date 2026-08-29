@@ -821,6 +821,7 @@ private:
         std::vector<urma_sge_t> srcSgeList;
         std::vector<urma_sge_t> dstSgeList;
         std::vector<bondp_jfs_wr_t> wrList;
+        std::vector<uint8_t> transmittedSrcChipIds;
         std::vector<uint64_t> createdEventKeys;
         std::vector<uint64_t> submittedEventKeys;
         uint8_t logicalWriteChipId = INVALID_CHIP_ID;
@@ -926,7 +927,7 @@ private:
     std::atomic<int> *GetSrcChipInflightWrCounter(uint8_t chipId);
     const char *GetSrcChipInflightWrCountsString() const;
     void RecordNumaWriteChipCounts(uint8_t srcChipId, uint8_t dstChipId);
-    void RecordNumaWriteCrossChipCount(uint8_t srcChipId, uint8_t dstChipId);
+    void RecordNumaWriteSourceSwitchCount(uint8_t transmittedSrcChipId, uint8_t selectedSrcChipId);
     const char *GetNumaWriteChipCountsString() const;
     void LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                     uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
@@ -974,8 +975,8 @@ private:
     std::vector<SrcChipInflightCounter> srcChipInflightWrCounts_;
     std::vector<std::atomic<uint64_t>> srcChipWriteCounts_;
     std::vector<std::atomic<uint64_t>> dstChipWriteCounts_;
-    std::atomic<uint64_t> src1Dst2WriteCount_{ 0 };
-    std::atomic<uint64_t> src2Dst1WriteCount_{ 0 };
+    std::atomic<uint64_t> src1Src2WriteCount_{ 0 };
+    std::atomic<uint64_t> src2Src1WriteCount_{ 0 };
     mutable std::mutex connectionKeyMutex_;
     std::unordered_map<UrmaConnection *, std::string> connectionKeys_;
     urma_log_cb_t urmaLogCallback_{};
