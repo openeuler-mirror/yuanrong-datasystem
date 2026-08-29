@@ -1336,12 +1336,13 @@ void UrmaManager::RecordNumaWriteChipCounts(uint8_t srcChipId, uint8_t dstChipId
     }
 }
 
-void UrmaManager::RecordNumaWriteCrossChipCount(uint8_t srcChipId, uint8_t dstChipId)
+void UrmaManager::RecordNumaWriteSourceSwitchCount(uint8_t transmittedSrcChipId, uint8_t selectedSrcChipId)
 {
-    if (srcChipId == URMA_AFFINITY_SRC_CHIP_MIN && dstChipId == URMA_AFFINITY_SRC_CHIP_MAX) {
-        src1Dst2WriteCount_.fetch_add(1, std::memory_order_relaxed);
-    } else if (srcChipId == URMA_AFFINITY_SRC_CHIP_MAX && dstChipId == URMA_AFFINITY_SRC_CHIP_MIN) {
-        src2Dst1WriteCount_.fetch_add(1, std::memory_order_relaxed);
+    if (transmittedSrcChipId == URMA_AFFINITY_SRC_CHIP_MIN && selectedSrcChipId == URMA_AFFINITY_SRC_CHIP_MAX) {
+        src1Src2WriteCount_.fetch_add(1, std::memory_order_relaxed);
+    } else if (transmittedSrcChipId == URMA_AFFINITY_SRC_CHIP_MAX
+               && selectedSrcChipId == URMA_AFFINITY_SRC_CHIP_MIN) {
+        src2Src1WriteCount_.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -1352,13 +1353,13 @@ const char *UrmaManager::GetNumaWriteChipCountsString() const
     const auto src2 = srcChipWriteCounts_[URMA_AFFINITY_SRC_CHIP_MAX].load(std::memory_order_relaxed);
     const auto dst1 = dstChipWriteCounts_[URMA_AFFINITY_SRC_CHIP_MIN].load(std::memory_order_relaxed);
     const auto dst2 = dstChipWriteCounts_[URMA_AFFINITY_SRC_CHIP_MAX].load(std::memory_order_relaxed);
-    const auto src1Dst2 = src1Dst2WriteCount_.load(std::memory_order_relaxed);
-    const auto src2Dst1 = src2Dst1WriteCount_.load(std::memory_order_relaxed);
+    const auto src1Src2 = src1Src2WriteCount_.load(std::memory_order_relaxed);
+    const auto src2Src1 = src2Src1WriteCount_.load(std::memory_order_relaxed);
     static constexpr char initialFormat[] =
-        "{src1:%lu,src2:%lu,dst1:%lu,dst2:%lu,src1_dst2:%lu,"
-        "src2_dst1:%lu";
+        "{src1:%lu,src2:%lu,dst1:%lu,dst2:%lu,src1_src2:%lu,"
+        "src2_src1:%lu";
     size_t length = static_cast<size_t>(
-        std::snprintf(buffer, sizeof(buffer), initialFormat, src1, src2, dst1, dst2, src1Dst2, src2Dst1));
+        std::snprintf(buffer, sizeof(buffer), initialFormat, src1, src2, dst1, dst2, src1Src2, src2Src1));
     for (size_t chipId = URMA_AFFINITY_SRC_CHIP_MAX + 1;
          chipId < srcChipWriteCounts_.size() && length < sizeof(buffer); ++chipId) {
         const auto srcCount = srcChipWriteCounts_[chipId].load(std::memory_order_relaxed);
@@ -2323,7 +2324,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         auto jettyId = jetty->GetJettyId();
         RecordNumaWriteChipCounts(srcChipId, args.dstChipId);
         if (useNumaAffinity && FLAGS_ub_numa_rr_type != static_cast<uint32_t>(UbNumaRrType::DISABLED)) {
-            RecordNumaWriteCrossChipCount(srcChipId, args.dstChipId);
+            RecordNumaWriteSourceSwitchCount(transmittedSrcChipId, srcChipId);
         }
         LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL1)
             << "URMA write useNumaAffinity:" << useNumaAffinity << ", src:" << static_cast<uint32_t>(srcChipId)
@@ -2720,6 +2721,7 @@ Status UrmaManager::InitGatherWriteContext(const RemoteSegInfo &remoteInfo, size
     context.srcSgeList.resize(sgeNum);
     context.dstSgeList.resize(dstSgeNum);
     context.wrList.resize(dstSgeNum);
+    context.transmittedSrcChipIds.resize(dstSgeNum, INVALID_CHIP_ID);
     context.createdEventKeys.reserve(dstSgeNum);
     context.submittedEventKeys.reserve(dstSgeNum);
     INJECT_POINT("UrmaManager.GatherWriteError", []() { return Status(K_RUNTIME_ERROR, "Injcect urma wait error"); });
@@ -2845,6 +2847,7 @@ Status UrmaManager::CreateGatherWriteEvent(
     wr.next = nullptr;
     bondpWr.src_chip_id = numaConfig.srcChipId;
     bondpWr.dst_chip_id = dstChipId;
+    context.transmittedSrcChipIds[dstSgeIdx] = transmittedSrcChipId;
     RETURN_IF_NOT_OK(CreateEvent(requestId, context.connection, context.laneLease, context.remoteAddress, writeSize,
                                  UrmaEvent::OperationType::WRITE, numaConfig.inflightCounter, nullptr, nullptr,
                                  lateCompletionContext, true));
@@ -2949,10 +2952,11 @@ Status UrmaManager::PostGatherWriteRequests(const RemoteSegInfo &remoteInfo, Urm
     auto ret = ds_urma_post_jetty_send_wr(gatherPermit.Raw(), &context.wrList[0].base, &badWr);
     GetWorkerTimeCost().Append("Urma gather write.", timer.ElapsedMilliSecond());
     if (ret == URMA_SUCCESS) {
-        for (const auto &wr : context.wrList) {
+        for (size_t i = 0; i < context.wrList.size(); ++i) {
+            const auto &wr = context.wrList[i];
             RecordNumaWriteChipCounts(wr.src_chip_id, wr.dst_chip_id);
             if (wr.base.flag.bs.has_drv_ext != 0) {
-                RecordNumaWriteCrossChipCount(wr.src_chip_id, wr.dst_chip_id);
+                RecordNumaWriteSourceSwitchCount(context.transmittedSrcChipIds[i], wr.src_chip_id);
             }
         }
         return Status::OK();
@@ -2962,7 +2966,7 @@ Status UrmaManager::PostGatherWriteRequests(const RemoteSegInfo &remoteInfo, Urm
         const auto &wr = context.wrList[i];
         RecordNumaWriteChipCounts(wr.src_chip_id, wr.dst_chip_id);
         if (wr.base.flag.bs.has_drv_ext != 0) {
-            RecordNumaWriteCrossChipCount(wr.src_chip_id, wr.dst_chip_id);
+            RecordNumaWriteSourceSwitchCount(context.transmittedSrcChipIds[i], wr.src_chip_id);
         }
     }
     CleanupGatherWriteEvents(context, submittedCount);

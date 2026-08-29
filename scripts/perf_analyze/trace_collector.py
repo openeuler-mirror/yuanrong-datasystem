@@ -14,12 +14,13 @@
 # limitations under the License.
 
 """
-trace_collector.py - Unified trace collection tool.
+trace_collector.py - Unified trace collection tool for scripts/perf_analyze.
 
-Supports three modes:
+Supports four modes:
   1. core: Extract traces from access logs by search string, then search in parallel.
   2. time: Extract traces by operation type and latency range, then search in parallel.
   3. percentile: Extract high-latency traces by percentile, then search in parallel.
+  4. all-core: Extract traces for every non-zero access-log status code, then search in parallel.
 
 Directory layout:
   Place this script beside collected/ and collected_worker_logs/.
@@ -37,12 +38,18 @@ Directory layout:
   |   |-- worker/
   |   |   `-- kvcache.INFO.log
   |   `-- ...
-  `-- [output_dir]/                 # Output subdirectories created by mode
+  `-- trace_collect/                # Output root (default)
+      |-- core/                     # Core-mode results
+      |-- time/                     # Time-mode results
+      `-- percentile/               # Percentile-mode results
 
 Examples:
   # core mode: extract traces by search string
   python3 trace_collector.py --type core "| 1001 | DS"
   python3 trace_collector.py --type core "| 1001 | DS:| 1002 | DS"
+
+  # all-core mode: collect every non-zero access-log status code
+  python3 trace_collector.py --type all-core
 
   # time mode: extract traces by operation type and latency range
   python3 trace_collector.py --type time DS_KV_CLIENT_GET 1000,2000
@@ -63,12 +70,13 @@ import re
 import random
 import math
 import argparse
+import gzip
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-MAX_TRACE_TOTAL = 300   # Randomly sample when the trace count exceeds this limit.
-SAMPLE_SIZE = 100       # Number of traces retained after sampling.
-# =============================
+DEFAULT_MAX_TRACES = 96
+DEFAULT_JOBS = 32
+ACCESS_STATUS_CODE_RE = re.compile(r'\|\s*(\d+)\s*\|\s*DS(?:_|\b)')
 
 
 def sanitize_filename(name: str) -> str:
@@ -96,19 +104,17 @@ def sanitize_dirname(name: str) -> str:
     return name
 
 
-def read_file_content(filepath: str) -> str:
-    """Read a file, transparently handling gzip files."""
-    if filepath.endswith('.gz'):
-        result = subprocess.run(
-            ['zcat', filepath],
-            capture_output=True, text=True,
-            encoding='utf-8', errors='replace',
-            timeout=60
-        )
-        return result.stdout
-    else:
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            return f.read()
+def mode_output_dir(output_root: str, mode: str) -> str:
+    """Return the dedicated output directory for one collection mode."""
+    return os.path.join(output_root, mode)
+
+
+def extract_trace_id(line: str) -> str:
+    """Extract the trace ID from the structured access-log trace column."""
+    parts = line.split('|')
+    if len(parts) <= 5:
+        return ""
+    return parts[5].strip()
 
 
 def run_grep_and_zgrep(trace: str, search_dirs: list, gz_files_by_dir: dict, output_path: str) -> dict:
@@ -122,16 +128,16 @@ def run_grep_and_zgrep(trace: str, search_dirs: list, gz_files_by_dir: dict, out
     for search_dir in search_dirs:
         dir_name = os.path.basename(search_dir)
 
-        # grep -rn
+        # grep -raFn: recursive, binary-safe fixed-string matching with line numbers.
         try:
             result = subprocess.run(
-                ["grep", "-rn", trace, search_dir],
+                ["grep", "-raFn", trace, search_dir],
                 capture_output=True, text=True,
                 encoding='utf-8', errors='replace',
                 timeout=300
             )
             if result.stdout:
-                results.append(f"=== grep -rn '{trace}' {search_dir} ({dir_name}) ===\n")
+                results.append(f"=== grep -raFn '{trace}' {search_dir} ({dir_name}) ===\n")
                 results.append(result.stdout)
             if result.stderr:
                 results.append(f"\n[STDERR grep {dir_name}]\n{result.stderr}\n")
@@ -140,19 +146,19 @@ def run_grep_and_zgrep(trace: str, search_dirs: list, gz_files_by_dir: dict, out
         except Exception as e:
             results.append(f"\n[ERROR grep {dir_name}] {e}\n")
 
-        # zgrep
+        # zgrep -aFn: binary-safe fixed-string matching with line numbers.
         try:
             gz_files = gz_files_by_dir[search_dir]
 
             if gz_files:
                 result = subprocess.run(
-                    ["zgrep", "-n", trace] + gz_files,
+                    ["zgrep", "-aFn", trace] + gz_files,
                     capture_output=True, text=True,
                     encoding='utf-8', errors='replace',
                     timeout=300
                 )
                 if result.stdout:
-                    results.append(f"\n=== zgrep '{trace}' {search_dir}/**/*.gz ({dir_name}) ===\n")
+                    results.append(f"\n=== zgrep -aFn '{trace}' {search_dir}/**/*.gz ({dir_name}) ===\n")
                     results.append(result.stdout)
                 if result.stderr:
                     results.append(f"\n[STDERR zgrep {dir_name}]\n{result.stderr}\n")
@@ -177,7 +183,7 @@ def run_grep_and_zgrep(trace: str, search_dirs: list, gz_files_by_dir: dict, out
     return {"trace": trace, "status": "success", "sections": match_count}
 
 
-def search_traces(traces: list, search_dirs: list, output_dir: str) -> None:
+def search_traces(traces: list, search_dirs: list, output_dir: str, jobs: int) -> None:
     """Search all traces in parallel and write results to the output directory."""
     total = len(traces)
     if total == 0:
@@ -198,15 +204,14 @@ def search_traces(traces: list, search_dirs: list, output_dir: str) -> None:
     print(f"  Found {total_gz} .gz files")
     print(f"  Processing {total} traces in parallel...")
 
-    max_workers = min(32, (os.cpu_count() or 4) * 4)
-    print(f"  Using {max_workers} threads")
+    print(f"  Using {jobs} threads")
 
     os.makedirs(output_dir, exist_ok=True)
 
     completed = 0
     success_count = 0
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with ThreadPoolExecutor(max_workers=jobs) as executor:
         future_to_trace = {}
         for trace in traces:
             filename = sanitize_filename(trace)
@@ -242,16 +247,34 @@ def search_traces(traces: list, search_dirs: list, output_dir: str) -> None:
     print(f"  Search complete: {success_count}/{total} succeeded")
 
 
-def limit_traces(traces: list) -> list:
-    """Limit traces by randomly sampling when the total exceeds the limit."""
+def limit_traces(traces: list, max_traces: int) -> list:
+    """Randomly retain at most max_traces unique traces."""
     total = len(traces)
-    if total > MAX_TRACE_TOTAL:
-        sampled = random.sample(traces, SAMPLE_SIZE)
-        print(f"  Trace limit: {total} > {MAX_TRACE_TOTAL}; sampled {SAMPLE_SIZE}")
+    if total > max_traces:
+        sampled = random.sample(traces, max_traces)
+        print(f"  Trace limit: {total} > {max_traces}; sampled {max_traces}")
         return sorted(sampled)
     else:
-        print(f"  Trace count {total} <= {MAX_TRACE_TOTAL}; retaining all")
+        print(f"  Trace count {total} <= {max_traces}; retaining all")
         return sorted(traces)
+
+
+def find_access_log_files(collected_dir: str) -> list:
+    """Return every plain or gzip-compressed client access log under collected_dir."""
+    access_files = []
+    for root, _, files in os.walk(collected_dir):
+        for filename in files:
+            if not filename.startswith("ds_client_access_"):
+                continue
+            if filename.endswith(".log") or filename.endswith(".log.gz"):
+                access_files.append(os.path.join(root, filename))
+    return sorted(access_files)
+
+
+def open_access_log(filepath: str):
+    """Open a plain or gzip-compressed access log as replacement-decoded text."""
+    opener = gzip.open if filepath.endswith('.gz') else open
+    return opener(filepath, 'rt', encoding='utf-8', errors='replace')
 
 
 # ==================== Core mode ====================
@@ -263,28 +286,7 @@ def extract_traces_core(search_core: str, collected_dir: str) -> list:
     """
     print(f"  Search string: '{search_core}'")
 
-    access_files = []
-    skipped_workers = []
-
-    for root, dirs, files in os.walk(collected_dir):
-        rel_path = os.path.relpath(root, collected_dir)
-        if rel_path == '.' or os.sep in rel_path:
-            continue
-
-        worker_name = rel_path
-        found_access = False
-
-        for f in files:
-            if f.startswith("ds_client_access_") and f.endswith(".log"):
-                access_files.append(os.path.join(root, f))
-                found_access = True
-                break
-
-        if not found_access:
-            skipped_workers.append(worker_name)
-
-    if skipped_workers:
-        print(f"  Skipped {len(skipped_workers)} workers without access logs")
+    access_files = find_access_log_files(collected_dir)
 
     if not access_files:
         print("  [WARNING] No access logs found")
@@ -292,21 +294,16 @@ def extract_traces_core(search_core: str, collected_dir: str) -> list:
 
     print(f"  Found {len(access_files)} access logs")
 
-    uuid_pattern = re.compile(
-        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
-        re.IGNORECASE
-    )
-
     traces = set()
 
     for filepath in access_files:
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            with open_access_log(filepath) as f:
                 for line in f:
                     if search_core in line:
-                        match = uuid_pattern.search(line)
-                        if match:
-                            traces.add(match.group(0))
+                        trace = extract_trace_id(line)
+                        if trace:
+                            traces.add(trace)
         except Exception as e:
             print(f"  [SKIPPED] {os.path.basename(filepath)}: {e}")
 
@@ -315,11 +312,14 @@ def extract_traces_core(search_core: str, collected_dir: str) -> list:
     return all_traces
 
 
-def process_core(search_core: str, collected_dir: str, logs_dir: str, base_output_dir: str, trace_file_base: str) -> None:
+def process_core(search_core: str, collected_dir: str, logs_dir: str, base_output_dir: str,
+                 trace_file_base: str, max_traces: int, jobs: int) -> None:
     """Process one search string in core mode."""
     core_dirname = sanitize_dirname(search_core)
     output_dir = os.path.join(base_output_dir, core_dirname)
-    trace_file = f"{trace_file_base}_{core_dirname}.txt"
+    trace_file = os.path.join(base_output_dir, f"{trace_file_base}_{core_dirname}.txt")
+
+    os.makedirs(base_output_dir, exist_ok=True)
 
     print(f"\n{'='*60}")
     print(f"[core mode] Processing search string: '{search_core}'")
@@ -330,7 +330,7 @@ def process_core(search_core: str, collected_dir: str, logs_dir: str, base_outpu
     all_traces = extract_traces_core(search_core, collected_dir)
 
     # Step 2: Limit traces.
-    traces = limit_traces(all_traces)
+    traces = limit_traces(all_traces, max_traces)
 
     # Write trace file.
     with open(trace_file, 'w', encoding='utf-8') as f:
@@ -340,9 +340,71 @@ def process_core(search_core: str, collected_dir: str, logs_dir: str, base_outpu
 
     # Step 3: Search in parallel.
     search_dirs = [collected_dir, logs_dir]
-    search_traces(traces, search_dirs, output_dir)
+    search_traces(traces, search_dirs, output_dir, jobs)
 
     print(f"  Search string '{search_core}' complete, results: {output_dir}/")
+
+
+def extract_traces_by_status_code(collected_dir: str) -> dict:
+    """Extract trace IDs grouped by non-zero status code in one access-log pass."""
+    access_files = find_access_log_files(collected_dir)
+    if not access_files:
+        print("  [WARNING] No access logs found")
+        return {}
+
+    print(f"  Found {len(access_files)} access logs")
+    traces_by_code = {}
+    for filepath in access_files:
+        try:
+            with open_access_log(filepath) as f:
+                for line in f:
+                    match = ACCESS_STATUS_CODE_RE.search(line)
+                    if match is None:
+                        continue
+                    code = match.group(1)
+                    if int(code) == 0:
+                        continue
+                    trace = extract_trace_id(line)
+                    if trace:
+                        traces_by_code.setdefault(code, set()).add(trace)
+        except Exception as e:
+            print(f"  [SKIPPED] {os.path.basename(filepath)}: {e}")
+
+    print(f"  Extracted {len(traces_by_code)} non-zero status codes")
+    return traces_by_code
+
+
+def process_all_core(collected_dir: str, logs_dir: str, base_output_dir: str, trace_file_base: str,
+                     max_traces: int, jobs: int) -> None:
+    """Collect traces for every access-log error code with an independent trace limit."""
+    print(f"\n{'='*60}")
+    print("[all-core mode] Extracting all non-zero access-log status codes")
+    print(f"{'='*60}")
+    os.makedirs(base_output_dir, exist_ok=True)
+    traces_by_code = extract_traces_by_status_code(collected_dir)
+    if not traces_by_code:
+        return
+
+    for code in sorted(traces_by_code, key=int):
+        all_traces = sorted(traces_by_code[code])
+        code_dir = os.path.join(base_output_dir, code)
+        trace_file = os.path.join(base_output_dir, f"{trace_file_base}_{code}.txt")
+        print(f"\n{'='*60}")
+        print(f"[all-core mode] Processing status code: {code}")
+        print(f"  Extracted {len(all_traces)} unique traces")
+        print(f"  Output subdirectory: {code}")
+        print(f"{'='*60}")
+
+        traces = limit_traces(all_traces, max_traces)
+        with open(trace_file, 'w', encoding='utf-8') as f:
+            f.write(f"# Status code: {code}\n")
+            f.write(f"# Total traces: {len(all_traces)}\n")
+            f.write(f"# Final traces: {len(traces)}\n")
+            for trace in traces:
+                f.write(trace + '\n')
+        print(f"  Wrote trace file: {trace_file}")
+        search_traces(traces, [collected_dir, logs_dir], code_dir, jobs)
+        print(f"  Status code {code} complete, results: {code_dir}/")
 
 
 # ==================== Time mode ====================
@@ -398,28 +460,7 @@ def extract_traces_time(op_type: str, time_range: tuple, collected_dir: str) -> 
     else:
         print("unlimited")
 
-    access_files = []
-    skipped_workers = []
-
-    for root, dirs, files in os.walk(collected_dir):
-        rel_path = os.path.relpath(root, collected_dir)
-        if rel_path == '.' or os.sep in rel_path:
-            continue
-
-        worker_name = rel_path
-        found_access = False
-
-        for f in files:
-            if f.startswith("ds_client_access_") and f.endswith(".log"):
-                access_files.append(os.path.join(root, f))
-                found_access = True
-                break
-
-        if not found_access:
-            skipped_workers.append(worker_name)
-
-    if skipped_workers:
-        print(f"  Skipped {len(skipped_workers)} workers without access logs")
+    access_files = find_access_log_files(collected_dir)
 
     if not access_files:
         print("  [WARNING] No access logs found")
@@ -427,16 +468,11 @@ def extract_traces_time(op_type: str, time_range: tuple, collected_dir: str) -> 
 
     print(f"  Found {len(access_files)} access logs")
 
-    uuid_pattern = re.compile(
-        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
-        re.IGNORECASE
-    )
-
     traces = set()
 
     for filepath in access_files:
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            with open_access_log(filepath) as f:
                 match_count = 0
                 for line in f:
                     if op_type not in line:
@@ -455,9 +491,9 @@ def extract_traces_time(op_type: str, time_range: tuple, collected_dir: str) -> 
                     if not check_time_value(time_val, time_range):
                         continue
 
-                    match = uuid_pattern.search(line)
-                    if match:
-                        traces.add(match.group(0))
+                    trace = extract_trace_id(line)
+                    if trace:
+                        traces.add(trace)
                         match_count += 1
 
                 if match_count > 0:
@@ -471,11 +507,16 @@ def extract_traces_time(op_type: str, time_range: tuple, collected_dir: str) -> 
     return all_traces
 
 
-def process_time(op_type: str, time_range: tuple, collected_dir: str, logs_dir: str, base_output_dir: str, trace_file_base: str) -> None:
+def process_time(op_type: str, time_range: tuple, collected_dir: str, logs_dir: str,
+                 base_output_dir: str, trace_file_base: str, max_traces: int, jobs: int) -> None:
     """Process one operation type in time mode."""
-    core_dirname = sanitize_dirname(f"{op_type}_{int(time_range[0]) if time_range[0] else ''}_{int(time_range[1]) if time_range[1] else ''}")
+    lower_bound = int(time_range[0]) if time_range[0] else ''
+    upper_bound = int(time_range[1]) if time_range[1] else ''
+    core_dirname = sanitize_dirname(f"{op_type}_{lower_bound}_{upper_bound}")
     output_dir = os.path.join(base_output_dir, core_dirname)
-    trace_file = f"{trace_file_base}_{core_dirname}.txt"
+    trace_file = os.path.join(base_output_dir, f"{trace_file_base}_{core_dirname}.txt")
+
+    os.makedirs(base_output_dir, exist_ok=True)
 
     print(f"\n{'='*60}")
     print(f"[time mode] Processing operation type: {op_type}")
@@ -486,7 +527,7 @@ def process_time(op_type: str, time_range: tuple, collected_dir: str, logs_dir: 
     all_traces = extract_traces_time(op_type, time_range, collected_dir)
 
     # Step 2: Limit traces.
-    traces = limit_traces(all_traces)
+    traces = limit_traces(all_traces, max_traces)
 
     # Write trace file.
     with open(trace_file, 'w', encoding='utf-8') as f:
@@ -496,7 +537,7 @@ def process_time(op_type: str, time_range: tuple, collected_dir: str, logs_dir: 
 
     # Step 3: Search in parallel.
     search_dirs = [collected_dir, logs_dir]
-    search_traces(traces, search_dirs, output_dir)
+    search_traces(traces, search_dirs, output_dir, jobs)
 
     print(f"  Operation '{op_type}' complete, results: {output_dir}/")
 
@@ -550,28 +591,7 @@ def extract_times_and_traces(op_type: str, collected_dir: str) -> tuple:
     """
     print(f"  Operation type: {op_type}")
 
-    access_files = []
-    skipped_workers = []
-
-    for root, dirs, files in os.walk(collected_dir):
-        rel_path = os.path.relpath(root, collected_dir)
-        if rel_path == '.' or os.sep in rel_path:
-            continue
-
-        worker_name = rel_path
-        found_access = False
-
-        for f in files:
-            if f.startswith("ds_client_access_") and f.endswith(".log"):
-                access_files.append(os.path.join(root, f))
-                found_access = True
-                break
-
-        if not found_access:
-            skipped_workers.append(worker_name)
-
-    if skipped_workers:
-        print(f"  Skipped {len(skipped_workers)} workers without access logs")
+    access_files = find_access_log_files(collected_dir)
 
     if not access_files:
         print("  [WARNING] No access logs found")
@@ -579,17 +599,12 @@ def extract_times_and_traces(op_type: str, collected_dir: str) -> tuple:
 
     print(f"  Found {len(access_files)} access logs")
 
-    uuid_pattern = re.compile(
-        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
-        re.IGNORECASE
-    )
-
     times = []
     time_trace_pairs = []
 
     for filepath in access_files:
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            with open_access_log(filepath) as f:
                 file_times = 0
                 for line in f:
                     if op_type not in line:
@@ -605,9 +620,8 @@ def extract_times_and_traces(op_type: str, collected_dir: str) -> tuple:
                     except ValueError:
                         continue
 
-                    match = uuid_pattern.search(line)
-                    if match:
-                        trace = match.group(0)
+                    trace = extract_trace_id(line)
+                    if trace:
                         times.append(time_val)
                         time_trace_pairs.append((time_val, trace))
                         file_times += 1
@@ -652,12 +666,15 @@ def filter_traces_by_percentile(times: list, time_trace_pairs: list, percentile:
     return threshold, filtered_traces
 
 
-def process_percentile(op_type: str, percentile: float, collected_dir: str, logs_dir: str, base_output_dir: str, trace_file_base: str) -> None:
+def process_percentile(op_type: str, percentile: float, collected_dir: str, logs_dir: str,
+                       base_output_dir: str, trace_file_base: str, max_traces: int, jobs: int) -> None:
     """Process one operation type in percentile mode."""
     p_str = f"P{percentile * 100}".replace('.0', '')
     core_dirname = sanitize_dirname(f"{op_type}_{p_str}")
     output_dir = os.path.join(base_output_dir, core_dirname)
-    trace_file = f"{trace_file_base}_{core_dirname}.txt"
+    trace_file = os.path.join(base_output_dir, f"{trace_file_base}_{core_dirname}.txt")
+
+    os.makedirs(base_output_dir, exist_ok=True)
 
     print(f"\n{'='*60}")
     print(f"[percentile mode] Processing operation type: {op_type}")
@@ -676,7 +693,7 @@ def process_percentile(op_type: str, percentile: float, collected_dir: str, logs
     threshold, filtered_traces = filter_traces_by_percentile(times, time_trace_pairs, percentile)
 
     # Step 3: Limit traces.
-    traces = limit_traces(filtered_traces)
+    traces = limit_traces(filtered_traces, max_traces)
 
     # Write trace file.
     with open(trace_file, 'w', encoding='utf-8') as f:
@@ -686,14 +703,14 @@ def process_percentile(op_type: str, percentile: float, collected_dir: str, logs
         f.write(f"# Total records: {len(times)}\n")
         f.write(f"# Filtered traces: {len(filtered_traces)}\n")
         f.write(f"# Final traces: {len(traces)}\n")
-        f.write("#" + "="*50 + "\n")
+        f.write("#" + "=" * 50 + "\n")
         for t in traces:
             f.write(t + '\n')
     print(f"  Wrote trace file: {trace_file}")
 
     # Step 4: Search in parallel.
     search_dirs = [collected_dir, logs_dir]
-    search_traces(traces, search_dirs, output_dir)
+    search_traces(traces, search_dirs, output_dir, jobs)
 
     print(f"  Operation '{op_type}' complete, results: {output_dir}/")
 
@@ -725,6 +742,8 @@ Directory layout:
   |   `-- ...
   `-- [output_dir]/                 # Output subdirectories created by mode
       |-- core_xxx/                 # Core mode output
+      |-- all-core/                 # All error-code output
+      |   |-- 1001/                 # One status code per subdirectory
       |-- time_xxx/                 # Time mode output
       `-- percentile_xxx/           # Percentile mode output
 
@@ -737,6 +756,13 @@ Modes:
     Examples:
       python3 trace_collector.py --type core "| 1001 | DS"
       python3 trace_collector.py --type core "| 1001 | DS:| 1002 | DS"
+
+  [all-core mode]
+    Extract every non-zero status code from client access logs. Each status code gets an
+    independent --max-traces limit and a separate output subdirectory. No positional value is used.
+
+    Example:
+      python3 trace_collector.py --type all-core
 
   [time mode]
     Extract traces from access logs by operation type and latency range, then search in parallel.
@@ -766,12 +792,15 @@ Common options:
             return help_text + dir_structure
 
     parser = argparse.ArgumentParser(
-        description="Unified trace collection tool supporting core, time, and percentile modes",
+        description="Unified trace collection tool supporting core, all-core, time, and percentile modes",
         formatter_class=CustomHelpFormatter,
         epilog="""
 Examples:
   # core mode
   python3 trace_collector.py --type core "| 1001 | DS"
+
+  # all-core mode
+  python3 trace_collector.py --type all-core
 
   # time mode
   python3 trace_collector.py --type time DS_KV_CLIENT_GET 1000,2000
@@ -784,13 +813,15 @@ Examples:
     parser.add_argument(
         "--type",
         required=True,
-        choices=["core", "time", "percentile"],
-        help="Mode: core (search string), time (latency range), or percentile (latency percentile)"
+        choices=["core", "all-core", "all_core", "time", "percentile"],
+        help=("Mode: core (search string), all-core (all non-zero status codes), "
+              "time (latency range), or percentile (latency percentile)")
     )
     parser.add_argument(
         "values",
-        nargs='+',
-        help="Mode arguments: core uses search strings separated by ':', time uses operation type and latency range, percentile uses operation type and percentile"
+        nargs='*',
+        help=("Mode arguments: core uses search strings separated by ':', all-core uses none, "
+              "time uses operation type and latency range, percentile uses operation type and percentile")
     )
     parser.add_argument(
         "--collected-dir",
@@ -804,31 +835,42 @@ Examples:
     )
     parser.add_argument(
         "--output-dir",
-        default=None,
-        help="Output root directory (default: core->errCollect, time->timeCollect, percentile->latencyPercentCollect)"
+        default="trace_collect",
+        help="Output root directory; results are placed in a mode-specific subdirectory (default: trace_collect)"
     )
     parser.add_argument(
         "--trace-file",
         default="unique_traces",
         help="Trace file prefix (default: unique_traces)"
     )
+    parser.add_argument(
+        "--max-traces",
+        type=int,
+        default=DEFAULT_MAX_TRACES,
+        help=f"Randomly retain at most this many traces per filter (default: {DEFAULT_MAX_TRACES})"
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=DEFAULT_JOBS,
+        help=f"Parallel trace-search workers (default: {DEFAULT_JOBS})"
+    )
 
     args = parser.parse_args()
+    if args.type == "all_core":
+        args.type = "all-core"
 
-    # Set the default output directory for each mode.
-    if args.output_dir is None:
-        default_dirs = {
-            "core": "errCollect",
-            "time": "timeCollect",
-            "percentile": "latencyPercentCollect"
-        }
-        args.output_dir = default_dirs[args.type]
+    if args.max_traces < 1:
+        parser.error("--max-traces must be at least 1")
+    if args.jobs < 1:
+        parser.error("--jobs must be at least 1")
 
     exec_dir = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
 
     collected_dir = os.path.join(exec_dir, args.collected_dir)
     logs_dir = os.path.join(exec_dir, args.logs_dir)
-    output_dir = os.path.join(exec_dir, args.output_dir)
+    output_root = os.path.join(exec_dir, args.output_dir)
+    output_dir = mode_output_dir(output_root, args.type)
 
     if not os.path.exists(collected_dir):
         print(f"ERROR: collected directory does not exist: {collected_dir}")
@@ -843,7 +885,8 @@ Examples:
     print(f"Client logs: {collected_dir}")
     print(f"Worker logs: {logs_dir}")
     print(f"Output directory: {output_dir}")
-    print(f"Limit: sample {SAMPLE_SIZE} traces when count exceeds {MAX_TRACE_TOTAL}")
+    print(f"Trace limit per filter: {args.max_traces}")
+    print(f"Parallel workers: {args.jobs}")
     print(f"{'#'*60}")
 
     # Dispatch processing by mode.
@@ -859,7 +902,12 @@ Examples:
             print(f"  {i}. '{c}'")
 
         for core in search_cores:
-            process_core(core, collected_dir, logs_dir, output_dir, args.trace_file)
+            process_core(core, collected_dir, logs_dir, output_dir, args.trace_file, args.max_traces, args.jobs)
+
+    elif args.type == "all-core":
+        if args.values:
+            parser.error("all-core mode does not accept positional values")
+        process_all_core(collected_dir, logs_dir, output_dir, args.trace_file, args.max_traces, args.jobs)
 
     elif args.type == "time":
         # Time mode requires an operation type and a latency range.
@@ -889,7 +937,8 @@ Examples:
         print(f"Latency range: {time_range_str if time_range_str else 'unlimited'}")
 
         for op_type in op_types:
-            process_time(op_type, time_range, collected_dir, logs_dir, output_dir, args.trace_file)
+            process_time(op_type, time_range, collected_dir, logs_dir, output_dir,
+                         args.trace_file, args.max_traces, args.jobs)
 
     elif args.type == "percentile":
         # Percentile mode requires an operation type and a percentile.
@@ -918,7 +967,8 @@ Examples:
         print(f"Percentile: {percentile_str} ({percentile})")
 
         for op_type in op_types:
-            process_percentile(op_type, percentile, collected_dir, logs_dir, output_dir, args.trace_file)
+            process_percentile(op_type, percentile, collected_dir, logs_dir, output_dir,
+                               args.trace_file, args.max_traces, args.jobs)
 
     print(f"\n{'#'*60}")
     print("All processing complete")
