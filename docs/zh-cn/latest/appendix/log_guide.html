@@ -607,7 +607,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><strong>容器/进程相关日志</strong>：容器运行日志，管理和监控worker进程的生命周期。</p></li>
 <li><p><strong>操作审计日志（operation）</strong>：记录进程启动/停止、构建 Commit、配置初始化及运行时动态配置变更（<code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> API 或 <code class="docutils literal notranslate"><span class="pre">monitor_config_file</span></code> 热更新），便于运维追溯版本和配置操作历史。</p></li>
 <li><p><strong>资源快照日志（kv_resource）</strong>：<code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 同源字段的 JSON-Lines 快照，每行一个完整 JSON 对象，顶层含 <code class="docutils literal notranslate"><span class="pre">time</span></code>/<code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>，<code class="docutils literal notranslate"><span class="pre">metrics</span></code> 为按 <code class="docutils literal notranslate"><span class="pre">resource_json_schema</span></code> 配置的 metric 组及子字段（需 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 且 <code class="docutils literal notranslate"><span class="pre">log_monitor_exporter=harddisk</span></code>；与 <code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 复用同一采集线程和周期，写入由 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 独立控制）。</p></li>
-<li><p><strong>指标摘要日志（kv_metrics）</strong>：Worker 或 Coordinator INFO 日志中 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 摘要的 JSON-Lines 并行输出，每行一个完整 JSON 对象，顶层含 <code class="docutils literal notranslate"><span class="pre">time</span></code>/<code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>，body 与 INFO.log 逐字一致（需 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code>；INFO.log 原 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 仍由 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制）。Worker 输出资源和数据面指标，Coordinator 输出 RPC、Watch 分发及通知指标。</p></li>
+<li><p><strong>指标摘要日志（kv_metrics）</strong>：Worker、Coordinator 和 SDK Client 共用的 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 摘要 JSON-Lines 输出，每行一个完整 JSON 对象，顶层含 <code class="docutils literal notranslate"><span class="pre">time</span></code>/<code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>，body 与原 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 摘要格式一致（需 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code>；开启且 JSON exporter 创建成功后，<code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> 每周期完整记录，主 INFO 不再重复输出 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code>；JSON exporter 未启用或未创建时，<code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制的 INFO 输出保持原行为）。Worker 输出资源和数据面指标，Coordinator 输出 RPC、Watch 分发及通知指标，SDK Client 输出客户端请求、错误和时延指标。</p></li>
 </ol>
 <p>日志目录一般为配置项 <code class="docutils literal notranslate"><span class="pre">log_dir</span></code>（如部署下的 <code class="docutils literal notranslate"><span class="pre">yr_datasystem/logs</span></code>）；下文 <code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs</span></code> 表示该目录。</p>
 <section id="id2">
@@ -665,17 +665,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-even"><td><p>9</p></td>
 <td><p>datasystem_worker</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/kv_metrics.log</span></code></p></td>
-<td><p>指标摘要 JSON-Lines；INFO.log 中 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 的并行输出，body 逐字一致，额外前置 <code class="docutils literal notranslate"><span class="pre">time</span></code>/<code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>；由 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 控制（INFO.log 原输出仍由 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制）</p></td>
-</tr>
-<tr class="row-odd"><td><p>10</p></td>
-<td><p>datasystem_coordinator</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/datasystem_coordinator.INFO.log</span></code></p></td>
-<td><p>Coordinator 运行日志；启用 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 时按 <code class="docutils literal notranslate"><span class="pre">log_monitor_interval_ms</span></code> 周期输出 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p>11</p></td>
-<td><p>datasystem_coordinator</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/kv_metrics.log</span></code></p></td>
-<td><p>Coordinator RPC、Watch 分发及通知指标的 JSON-Lines 摘要；由 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 控制</p></td>
+<td><p>指标摘要 JSON-Lines；body 与原 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 摘要格式一致，额外前置 <code class="docutils literal notranslate"><span class="pre">time</span></code>/<code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>；由 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 控制。开启后 <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> 每周期完整记录，主 INFO 不再重复输出 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code>；JSON exporter 未启用或未创建时保持 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制的 INFO 输出</p></td>
 </tr>
 <tr class="row-odd"><td><p>10</p></td>
 <td><p>Client</p></td>
@@ -693,14 +683,24 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p>SDK 接口访问日志；基名可由 <code class="docutils literal notranslate"><span class="pre">KVClientConfig::AccessLogName</span></code> 与环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_ACCESS_LOG_NAME</span></code> 覆盖，非空时仅允许英文字母、数字和下划线；显式配置空串时忽略环境变量并使用默认基名</p></td>
 </tr>
 <tr class="row-even"><td><p>13</p></td>
+<td><p>Client</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/client/kv_metrics.log</span></code></p></td>
+<td><p>SDK Client 请求、错误和时延指标的 JSON-Lines 摘要；<code class="docutils literal notranslate"><span class="pre">ObjectClient</span></code> 与 <code class="docutils literal notranslate"><span class="pre">KVClient</span></code> 初始化同一 metrics catalog。<code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 开启且 exporter 创建成功后，每周期完整写入该文件且不再向 Client INFO 重复输出；exporter 未启用或未创建时保持 INFO fallback</p></td>
+</tr>
+<tr class="row-odd"><td><p>14</p></td>
 <td><p>datasystem_coordinator</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/datasystem_coordinator.INFO.log</span></code>（及 <code class="docutils literal notranslate"><span class="pre">.WARNING</span></code>、<code class="docutils literal notranslate"><span class="pre">.ERROR</span></code> 等轮转文件）</p></td>
 <td><p>Coordinator 运行日志；启动时记录 Git Commit 和 Branch</p></td>
 </tr>
-<tr class="row-odd"><td><p>14</p></td>
+<tr class="row-even"><td><p>15</p></td>
 <td><p>datasystem_coordinator</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/datasystem_coordinator_operation.log</span></code></p></td>
 <td><p>Coordinator 操作审计日志；记录 Init/Shutdown、构建 Commit、配置初始化及运行时 <code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> 变更</p></td>
+</tr>
+<tr class="row-odd"><td><p>16</p></td>
+<td><p>datasystem_coordinator</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/kv_metrics.log</span></code></p></td>
+<td><p>Coordinator RPC、Watch 分发及通知指标的 JSON-Lines 摘要；由 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 控制。开启且 exporter 创建成功后 <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> 每周期完整记录，主 INFO 不再重复输出 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code>；JSON exporter 未启用或未创建时保持 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制的 INFO 输出</p></td>
 </tr>
 </tbody>
 </table>
