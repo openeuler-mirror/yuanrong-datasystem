@@ -521,7 +521,7 @@ Result RunOwner(const Options &opt)
     }
 
     TransferEngine engine;
-    rc = engine.Initialize(FormatHostPort(opt.localIp, opt.localPort), "p2p",
+    rc = engine.Initialize(FormatHostPort(opt.localIp, opt.localPort), "hixl",
                            "npu:" + std::to_string(opt.deviceId));
     if (rc.IsError()) {
         return rc;
@@ -647,7 +647,7 @@ Result RunRequester(const Options &opt)
     }
 
     TransferEngine engine;
-    rc = engine.Initialize(FormatHostPort(opt.localIp, opt.localPort), "p2p",
+    rc = engine.Initialize(FormatHostPort(opt.localIp, opt.localPort), "hixl",
                            "npu:" + std::to_string(opt.deviceId));
     if (rc.IsError()) {
         return rc;

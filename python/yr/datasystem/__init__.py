@@ -17,7 +17,6 @@ Python module init.
 
 import importlib.machinery
 from importlib import import_module
-import os
 from pathlib import Path
 
 __all__ = [
@@ -47,20 +46,7 @@ __all__ = [
 ]
 
 
-def _configure_transfer_engine_runtime(pkg_dir: Path) -> None:
-    candidate_dirs = [pkg_dir, pkg_dir / "lib"]
-
-    p2p_candidates = [
-        path / "libp2p_transfer.so"
-        for path in candidate_dirs
-    ]
-    for p2p_so in p2p_candidates:
-        if p2p_so.exists():
-            os.environ.setdefault("TRANSFER_ENGINE_P2P_SO_PATH", str(p2p_so))
-            break
-
 _PKG_DIR = Path(__file__).resolve().parent
-_configure_transfer_engine_runtime(_PKG_DIR)
 if any((_PKG_DIR / ("_transfer_engine" + suffix)).exists() for suffix in importlib.machinery.EXTENSION_SUFFIXES):
     __all__.extend(["TransferEngine", "Result", "ErrorCode"])
 

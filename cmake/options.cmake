@@ -9,7 +9,7 @@ option(ENABLE_STRIP "Discard symbols from object files" OFF)
 option(BUILD_WITH_URMA "Build with urma" OFF)
 option(BUILD_WITH_URMA_MOCK "Build with local shm+UDS mock URMA backend (no SDK/hardware needed, OFF by default)" OFF)
 option(BUILD_TRANSFER_ENGINE "Build transfer_engine as an integrated subproject" ON)
-option(TRANSFER_ENGINE_ENABLE_HIXL "Build transfer_engine HIXL D2D backend" OFF)
+option(TRANSFER_ENGINE_ENABLE_HIXL "Build transfer_engine HIXL D2D backend" ON)
 
 # Hetero device options (requires BUILD_HETERO=ON)
 option(BUILD_HETERO_NPU "Build NPU (Ascend) heterogeneous support" ON)

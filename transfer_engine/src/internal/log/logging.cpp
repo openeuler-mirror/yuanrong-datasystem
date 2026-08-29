@@ -866,19 +866,6 @@ void FlushLogs() noexcept
     state->FlushUnlocked();
 }
 
-void EmitExternalLog(LogSeverity severity, int vlogLevel, const char *file, int line,
-                     std::string_view message) noexcept
-{
-    if (vlogLevel >= 0) {
-        if (!ShouldVLog(vlogLevel, file)) {
-            return;
-        }
-    } else if (!ShouldLog(severity)) {
-        return;
-    }
-    EmitLog(severity, file, line, message);
-}
-
 LogMessage::LogMessage(LogSeverity severity, const char *file, int line) noexcept
     : severity_(severity), file_(file), line_(line)
 {

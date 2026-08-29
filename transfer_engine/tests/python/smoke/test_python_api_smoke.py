@@ -71,7 +71,7 @@ def format_hostname(host: str, port: int) -> str:
 def run_owner(args: argparse.Namespace) -> int:
     ensure_torch_npu()
     engine = TransferEngine()
-    rc = engine.initialize(args.local_hostname, "p2p", f"npu:{args.device_id}")
+    rc = engine.initialize(args.local_hostname, "hixl", f"npu:{args.device_id}")
     if rc.is_error():
         print(f"[ERROR] initialize failed: {rc.to_string()}", file=sys.stderr)
         return 1
@@ -127,7 +127,7 @@ def run_requester(args: argparse.Namespace) -> int:
     dst_addrs = [int(t.data_ptr()) for t in dst_tensors]
 
     engine = TransferEngine()
-    rc = engine.initialize(args.local_hostname, "p2p", f"npu:{args.device_id}")
+    rc = engine.initialize(args.local_hostname, "hixl", f"npu:{args.device_id}")
     if rc.is_error():
         print(f"[ERROR] initialize failed: {rc.to_string()}", file=sys.stderr)
         return 1

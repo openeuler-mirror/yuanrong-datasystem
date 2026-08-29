@@ -954,7 +954,6 @@ transfer_engine/
   - external_libs/
   - dependency.cmake
   - options.cmake
-  - proto.cmake
   - util.cmake
 - include/
   - datasystem/
@@ -967,7 +966,6 @@ transfer_engine/
   - build_python_artifacts.sh
   - run_cross_node_smoke_cases.sh
   - run_hixl_d2d_smoke_suite.sh
-  - run_real_npu_dual_process_validation.sh
 - src/
   - internal/
   - python/

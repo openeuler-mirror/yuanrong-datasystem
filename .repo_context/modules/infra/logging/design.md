@@ -377,7 +377,7 @@ Failure-sensitive steps:
   - exporter map keyed by `AccessKeyType` inside `AccessRecorderManager`;
   - `LogManager` thread state and timer loop;
   - spdlog global thread pool and logger registration inside the `ds_spdlog` wrapper.
-  - no-destroy private file/stderr logger state in `transfer_engine/src/internal/log/logging.cpp`; bundled P2P registers an optional callback so its integrated logs use the same TransferEngine destinations, while standalone P2P retains its stderr fallback. These states are intentionally outside the normal datasystem logging lifecycle.
+  - no-destroy private file/stderr logger state in `transfer_engine/src/internal/log/logging.cpp`. These states are intentionally outside the normal datasystem logging lifecycle.
 - Important on-disk or external state:
   - ordinary severity log files under `FLAGS_log_dir`;
   - `access.log`, `request_out.log`, `ds_client_access*.log`, and `resource*.log` families;

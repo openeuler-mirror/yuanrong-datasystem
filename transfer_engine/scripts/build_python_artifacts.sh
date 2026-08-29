@@ -53,16 +53,11 @@ cmake -S "${TRANSFER_ENGINE_SOURCE_DIR}" -B "${BUILD_DIR}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DTRANSFER_ENGINE_BUILD_PYTHON=ON \
   -DTRANSFER_ENGINE_BUILD_TESTS=OFF \
-  -DTRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY=ON \
-  -DTRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO=ON \
+  -DTRANSFER_ENGINE_ENABLE_HIXL=ON \
   -DTRANSFER_ENGINE_PYTHON_OUTPUT_DIR="${PACKAGE_DIR}" \
   -DPython3_EXECUTABLE="${PYTHON_EXECUTABLE}"
 
 cmake --build "${BUILD_DIR}" --target _transfer_engine --parallel "${PARALLEL_JOBS}"
-
-if compgen -G "${BUILD_DIR}/lib/libp2p_transfer.so*" >/dev/null; then
-  cp -a "${BUILD_DIR}"/lib/libp2p_transfer.so* "${PACKAGE_DIR}/lib/"
-fi
 
 if compgen -G "${BUILD_DIR}/lib/libds-spdlog.so*" >/dev/null; then
   cp -a "${BUILD_DIR}"/lib/libds-spdlog.so* "${PACKAGE_DIR}/lib/"
