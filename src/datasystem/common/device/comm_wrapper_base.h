@@ -19,7 +19,7 @@
 
 #include "datasystem/common/device/acl_pipeline_p2p_task.h"
 #include "datasystem/client/hetero_cache/device_util.h"
-#include "datasystem/client/object_cache/device/hccl_comm_magr.h"
+#include "datasystem/client/object_cache/device/hccl_comm_mgr.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 #include "datasystem/common/device/comm_wrapper_base.h"
 #include "datasystem/common/device/device_manager_base.h"
@@ -39,7 +39,7 @@ constexpr int WARM_UP_DATA_COUNT = 1;
 class CommWrapperBase : public DevicePointerWrapper, public std::enable_shared_from_this<CommWrapperBase> {
 public:
     explicit CommWrapperBase(const std::string &commId, int localDeviceId, int remoteDeviceId,
-                             std::shared_ptr<HcclCommMagr> &threadControl, DeviceResourceManager *resourceMgr);
+                             std::shared_ptr<HcclCommMgr> &threadControl, DeviceResourceManager *resourceMgr);
 
     ~CommWrapperBase();
 
@@ -229,7 +229,7 @@ private:
     std::atomic<CommState> commState_;
     Status commDetailState_;
     mutable std::mutex commDetailStateMutex_;  // protect commDetailState_
-    std::shared_ptr<HcclCommMagr> commThreadControl_;
+    std::shared_ptr<HcclCommMgr> commThreadControl_;
     int bindThreadId_;
     std::mutex mutex_;
     bool hasShutDown_ = false;

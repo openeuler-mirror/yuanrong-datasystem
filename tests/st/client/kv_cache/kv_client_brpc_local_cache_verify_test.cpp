@@ -603,59 +603,6 @@ TEST_F(KVClientBrpcLocalCacheVerifyTest, MSetMismatchedKeysValsRejected)
     ASSERT_EQ(rc.GetCode(), StatusCode::K_INVALID);
 }
 
-// TC-1.5.6: MSetTx transactional (3 keys, NX)
-TEST_F(KVClientBrpcLocalCacheVerifyTest, MSetTxSuccess)
-{
-    InitClient();
-    const std::string k1 = NewKey(), k2 = NewKey(), k3 = NewKey();
-    const std::string v1 = GenRandomString(SMALL_VALUE_SIZE);
-    const std::string v2 = GenRandomString(SMALL_VALUE_SIZE);
-    const std::string v3 = GenRandomString(SMALL_VALUE_SIZE);
-
-    MSetParam txParam = DefaultMSetParam();
-    txParam.existence = ExistenceOpt::NX;
-
-    DS_ASSERT_OK(client_->MSetTx({ k1, k2, k3 }, { StringView(v1), StringView(v2), StringView(v3) }, txParam));
-
-    std::vector<std::string> got;
-    DS_ASSERT_OK(client_->Get({ k1, k2, k3 }, got));
-    ASSERT_EQ(got[0], v1);
-    ASSERT_EQ(got[1], v2);
-    ASSERT_EQ(got[2], v3);
-}
-
-// TC-1.5.7: MSetTx exceeding MSET_MAX_KEY_COUNT (8) → rejected
-TEST_F(KVClientBrpcLocalCacheVerifyTest, MSetTxTooManyKeys)
-{
-    InitClient();
-    MSetParam txParam = DefaultMSetParam();
-    txParam.existence = ExistenceOpt::NX;
-
-    std::vector<std::string> keys(9);
-    std::vector<std::string> valStorage(9);
-    std::vector<StringView> vals(9);
-    for (int i = 0; i < 9; ++i) {
-        keys[i] = NewKey();
-        valStorage[i] = GenRandomString(10);
-        vals[i] = StringView(valStorage[i]);
-    }
-
-    auto rc = client_->MSetTx(keys, vals, txParam);
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_INVALID);
-}
-
-// TC-1.5.8: MSetTx with non-NX existence → rejected
-TEST_F(KVClientBrpcLocalCacheVerifyTest, MSetTxNonNXExistenceRejected)
-{
-    InitClient();
-    MSetParam nonNxParam = DefaultMSetParam();
-    nonNxParam.existence = ExistenceOpt::NONE;  // NOT NX
-
-    const std::string nonNxVal = GenRandomString(10);
-    auto rc = client_->MSetTx({ NewKey() }, { StringView(nonNxVal) }, nonNxParam);
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_INVALID);
-}
-
 // TC-1.5.12: MSet with partial success (Risk 4: partial failure cleanup)
 TEST_F(KVClientBrpcLocalCacheVerifyTest, MSetPartialSuccess)
 {

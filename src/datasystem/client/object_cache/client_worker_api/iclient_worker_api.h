@@ -436,7 +436,7 @@ public:
      */
     virtual Status ReconnectWorker(const std::vector<std::string> &gRefIds) = 0;
 
-    virtual Status PrepairForDecreaseShmRef(
+    virtual Status PrepareForDecreaseShmRef(
         std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) = 0;
     virtual Status CleanUpForDecreaseShmRefAfterWorkerLost() = 0;
 
@@ -463,52 +463,11 @@ public:
     virtual Status ReconcileShmRef(const std::unordered_set<ShmKey> &confirmedExpiredShmIds,
                                    std::vector<ShmKey> &maybeExpiredShmIds) = 0;
 
-    bool EnableDecreaseShmRefByShmQueue()
-    {
-        return IsShmEnable() && decShmUnit_->fd > 0;
-    }
-
     virtual Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
                                    uint64_t length, bool traceEnabled) = 0;
 
     virtual Status SendBufferViaUbFromPool(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
                                            uint64_t length, bool traceEnabled) = 0;
-
-protected:
-    /**
-     * @brief Prepare the put request.
-     * @param[in] bufferInfo Buffer information.
-     * @param[in] isSeal Is seal or not.
-     * @param[in] nestedKeys Nested keys.
-     * @param[in] ttlSecond Used by state api, means how many seconds the key will be delete automatically.
-     * @param[in] existence Used by state api, to determine whether to set or not set the key if it does already
-     * exist.
-     * @param[out] req The protobuf req.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
-                             const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence,
-                             PublishReqPb &req);
-
-    void ParseGlbRefPb(QueryGlobalRefNumRspCollectionPb &rsp,
-                       std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap);
-
-    /**
-     * @brief Fill device object meta to Pb.
-     * @param[in] bufferInfo The info of device buffer.
-     * @param[in] blobs The list of blob info.
-     * @param[out] metaPb The device object meta pb.
-     */
-    void FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs,
-                        DeviceObjectMetaPb *metaPb);
-
-    bool CheckUseTransferForMultiCreateRsp(const MultiCreateRspPb &rsp, bool skipCheckExistence) const;
-    void FillCreateParamsFromMultiCreateRsp(const MultiCreateRspPb &rsp, bool skipCheckExistence,
-                                            std::vector<MultiCreateParam> &createParams,
-                                            const std::vector<bool> &exists);
-    void PostMultiCreate(bool skipCheckExistence, const MultiCreateRspPb &rsp,
-                         std::vector<MultiCreateParam> &createParams, bool &useShmTransfer, PerfPoint &point,
-                         uint32_t &version, std::vector<bool> &exists);
 };
 }  // namespace object_cache
 }  // namespace datasystem

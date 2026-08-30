@@ -25,7 +25,7 @@ list(APPEND CLIENT_SRCS
         object_cache/device/comm_factory.cpp
         object_cache/device/future.cpp
         object_cache/device/device_memory_unit.cpp
-        object_cache/device/hccl_comm_magr.cpp
+        object_cache/device/hccl_comm_mgr.cpp
         kv_cache/read_only_buffer.cpp
         kv_cache/kv_client.cpp
         hetero_cache/hetero_client.cpp
@@ -40,7 +40,6 @@ list(APPEND CLIENT_SRCS
         stream_cache/producer_consumer_worker_api.cpp
         transport/transport_advisor.cpp
         transport/transport_phase_latency_recorder.cpp
-        transport/shm_connection_pool.cpp
         transport/common/deadline_retry.cpp
         transport/metadata/object_metadata_client.cpp
         transport/object_read/object_read_flow.cpp

@@ -170,7 +170,7 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
     req.set_cache_type(static_cast<uint32_t>(cacheType));
     req.set_request_timeout(TimeoutDuration::CeilUsToMs(remainingUs));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when create date.");
+                                     "Fail to generate signature when create data.");
     CreateRspPb rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCCreate(workerOCService_, req, rsp));
     shmBuf->fd = rsp.store_fd();
@@ -473,7 +473,7 @@ Status ClientWorkerLocalApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> 
     FillDevObjMeta(bufferInfo, blobs, subReq);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when FillDevObjMeta data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when create date.");
+                                     "Fail to generate signature when create data.");
     return api_->WorkerOCPutP2PMeta(workerOCService_, req, resp);
 }
 
@@ -707,7 +707,7 @@ Status ClientWorkerLocalApi::ReconnectWorker(const std::vector<std::string> &gRe
     return Status::OK();
 }
 
-Status ClientWorkerLocalApi::PrepairForDecreaseShmRef(
+Status ClientWorkerLocalApi::PrepareForDecreaseShmRef(
     std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc)
 {
     (void)mmapFunc;

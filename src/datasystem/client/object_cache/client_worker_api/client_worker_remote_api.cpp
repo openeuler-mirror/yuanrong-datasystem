@@ -53,7 +53,7 @@
 using datasystem::client::ClientWorkerRemoteCommonApi;
 
 // Dispatch helper over the brpc stub. std::atomic_load on the shared_ptr
-// bundle so RecreateOCStub cannot race with hot-path reads (F08 fix:
+// bundle so a concurrent stub swap cannot race with hot-path reads (F08 fix:
 // C++ UB on unique_ptr assignment → atomic). Returns the call result by
 // evaluating the expression directly (no return statement in the macro body).
 #define DS_OC_DISPATCH(method, ...)                                         \
@@ -280,45 +280,6 @@ Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gR
     return Status::OK();
 }
 
-void ClientWorkerRemoteApi::RecreateOCStub()
-{
-    // Recreate the OC service stub after hostPort_ changes (e.g., worker IP change).
-    // Connect() only updates commonWorkerSession_, not stub_.
-    //
-    // The stub+channel are bundled in a shared_ptr<BrpcSession> accessed via
-    // atomic_load/atomic_store.  DS_OC_DISPATCH readers get a consistent snapshot;
-    // the old session's channel stays alive until all concurrent readers release
-    // their shared_ptr copies.
-    int32_t stubTimeout = connectTimeoutMs_;
-    if (clientDeadTimeoutMs_ > 0) {
-        stubTimeout = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs_));
-    }
-    HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
-    BrpcChannelConfig cfg;
-    cfg.endpoint = brpcAddr.ToString();
-    cfg.timeout_ms = requestTimeoutMs_;
-    cfg.connect_timeout_ms = stubTimeout;
-    // Same as Init(): disable brpc blind retry on this non-idempotent object channel.
-    cfg.max_retry = 0;
-    std::shared_ptr<brpc::Channel> newChannel(BrpcChannelFactory::Create(cfg));
-    if (newChannel == nullptr) {
-        // Old BrpcSession is still valid — log and keep it as fallback.
-        LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
-        return;
-    }
-    // If the brpc socket is not reachable, keep the old session as fallback
-    // rather than swapping in a dead stub (mirrors the nullptr-channel path
-    // above). The caller's reconnect/retry loop will retry later.
-    if (!WaitForBrpcSocketAvailable(brpcAddr)) {
-        LOG(ERROR) << "brpc socket not available for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
-        return;
-    }
-    // Bundle new stub and channel; atomic_store swaps both together.
-    auto newStub = std::make_shared<WorkerOCService_BrpcGenericStub>(newChannel.get(), stubTimeout);
-    auto newSession = std::make_shared<BrpcSession>(std::move(newStub), std::move(newChannel));
-    std::atomic_store(&brpcSession_, newSession);
-}
-
 Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,
                                      uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
                                      std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType,
@@ -349,7 +310,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
             opts.SetTimeout(realRpcTimeout);
             GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                             "Fail to generate signature when create date.");
+                                             "Fail to generate signature when create data.");
             VLOG(1) << "Start to send rpc to create object: " << req.object_key();
             return DS_OC_DISPATCH(Create, opts, req, rsp);
         },
@@ -405,7 +366,7 @@ Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<M
             opts.SetTimeout(realRpcTimeout);
             GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                             "Fail to generate signature when create date.");
+                                             "Fail to generate signature when create data.");
             return DS_OC_DISPATCH(MultiCreate, opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
@@ -1291,7 +1252,7 @@ Status ClientWorkerRemoteApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeR
     GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when SubscribeReceiveEvent data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when create date.");
+                                     "Fail to generate signature when create data.");
     return DS_OC_DISPATCH(SubscribeReceiveEvent, opts, req, resp);
 }
 
@@ -1311,7 +1272,7 @@ Status ClientWorkerRemoteApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo>
     GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when FillDevObjMeta data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when create date.");
+                                     "Fail to generate signature when create data.");
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUT_P2PMETA);
     return DS_OC_DISPATCH(PutP2PMeta, opts, req, resp);
 }
@@ -1344,7 +1305,7 @@ Status ClientWorkerRemoteApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBuffe
     GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when GetP2PMeta data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when create date.");
+                                     "Fail to generate signature when create data.");
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_P2PMETA);
     return DS_OC_DISPATCH(GetP2PMeta, opts, req, resp);
 }
@@ -1405,7 +1366,7 @@ Status ClientWorkerRemoteApi::GetBlobsInfo(const std::string &devObjKey, int32_t
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when GetDataInfo.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when create date.");
+                                     "Fail to generate signature when create data.");
     GetDataInfoRspPb resp;
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_GET_DATA_INFO);
     RETURN_IF_NOT_OK(DS_OC_DISPATCH(GetDataInfo, opts, req, resp));
@@ -1618,7 +1579,7 @@ Status ClientWorkerRemoteApi::GetMetaInfo(const std::vector<std::string> &keys, 
     return Status::OK();
 }
 
-Status ClientWorkerRemoteApi::PrepairForDecreaseShmRef(
+Status ClientWorkerRemoteApi::PrepareForDecreaseShmRef(
     std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc)
 {
     if (!EnableDecreaseShmRefByShmQueue()) {

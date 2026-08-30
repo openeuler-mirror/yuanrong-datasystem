@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "datasystem/client/object_cache/device/hccl_comm_magr.h"
+#include "datasystem/client/object_cache/device/hccl_comm_mgr.h"
 
 #include "datasystem/client/object_cache/device/comm_factory.h"
 
@@ -52,7 +52,7 @@ void ThreadCommRecord::RemoveCommIdRecord(const std::string &commId)
     (void)threadCommIds_.erase(commId);
 }
 
-HcclCommMagr::HcclCommMagr()
+HcclCommMgr::HcclCommMgr()
 {
     int minThreadPoolSzie = 2;
     if (THREADPOOL_SIZE < minThreadPoolSzie) {
@@ -62,7 +62,7 @@ HcclCommMagr::HcclCommMagr()
     }
 }
 
-std::tuple<int, std::shared_ptr<ThreadPool>> HcclCommMagr::AssignThreadToComm(const std::string &commId)
+std::tuple<int, std::shared_ptr<ThreadPool>> HcclCommMgr::AssignThreadToComm(const std::string &commId)
 {
     std::string negDirectionCommId = FindNegDirectionCommKey(commId);
     if (negDirectionCommId.empty()) {
@@ -79,7 +79,7 @@ std::tuple<int, std::shared_ptr<ThreadPool>> HcclCommMagr::AssignThreadToComm(co
     return GetThreadPool(chosenThreadId);
 }
 
-Status HcclCommMagr::RemoveThreadPoolCommRecord(int tid, const std::string &commId)
+Status HcclCommMgr::RemoveThreadPoolCommRecord(int tid, const std::string &commId)
 {
     if (!(tid >= 0 && tid < THREADPOOL_SIZE)) {
         std::string errormsg =
@@ -94,7 +94,7 @@ Status HcclCommMagr::RemoveThreadPoolCommRecord(int tid, const std::string &comm
     return Status::OK();
 }
 
-std::tuple<int, std::shared_ptr<ThreadPool>> HcclCommMagr::GetThreadPool(int threadId)
+std::tuple<int, std::shared_ptr<ThreadPool>> HcclCommMgr::GetThreadPool(int threadId)
 {
     TbbThreadDetailsTable::const_accessor acc;
     if (threadDetails_.find(acc, threadId)) {
@@ -103,7 +103,7 @@ std::tuple<int, std::shared_ptr<ThreadPool>> HcclCommMagr::GetThreadPool(int thr
     return { -1, nullptr };
 }
 
-std::string HcclCommMagr::FindNegDirectionCommKey(const std::string &commId)
+std::string HcclCommMgr::FindNegDirectionCommKey(const std::string &commId)
 {
     size_t minCommIdLength = 2;
     if (commId.length() < minCommIdLength) {
@@ -123,7 +123,7 @@ std::string HcclCommMagr::FindNegDirectionCommKey(const std::string &commId)
     return std::to_string(static_cast<int>(commNegDirection)) + commTag;
 }
 
-void HcclCommMagr::GetThreadPoolBusyScore(std::vector<std::tuple<int, uint64_t>> &scoreList)
+void HcclCommMgr::GetThreadPoolBusyScore(std::vector<std::tuple<int, uint64_t>> &scoreList)
 {
     scoreList.reserve(THREADPOOL_SIZE);
     // Stuff all scores into the array first
@@ -145,8 +145,8 @@ void HcclCommMagr::GetThreadPoolBusyScore(std::vector<std::tuple<int, uint64_t>>
               });
 }
 
-int HcclCommMagr::GetOptimalThreadId(const std::vector<std::tuple<int, uint64_t>> &scoreList,
-                                     const std::string &negDirectionCommId)
+int HcclCommMgr::GetOptimalThreadId(const std::vector<std::tuple<int, uint64_t>> &scoreList,
+                                    const std::string &negDirectionCommId)
 {
     // Choose the smallest
     int threadId = std::get<0>(scoreList[0]);
@@ -168,7 +168,7 @@ int HcclCommMagr::GetOptimalThreadId(const std::vector<std::tuple<int, uint64_t>
     return threadId;
 }
 
-void HcclCommMagr::UpdateThreadDetailRecord(int threadId, const std::string &commId)
+void HcclCommMgr::UpdateThreadDetailRecord(int threadId, const std::string &commId)
 {
     TbbThreadDetailsTable::accessor threadControlAcc;
     if (threadDetails_.find(threadControlAcc, threadId) && (threadControlAcc->second != nullptr)) {

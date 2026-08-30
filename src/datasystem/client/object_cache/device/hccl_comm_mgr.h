@@ -79,11 +79,11 @@ private:
 
 using TbbThreadDetailsTable = tbb::concurrent_hash_map<int, std::shared_ptr<ThreadCommRecord>>;
 
-class HcclCommMagr {
+class HcclCommMgr {
 public:
-    HcclCommMagr();
+    HcclCommMgr();
 
-    ~HcclCommMagr() = default;
+    ~HcclCommMgr() = default;
 
     /**
      *

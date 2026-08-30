@@ -139,8 +139,7 @@ public:
                   std::vector<std::string> &failedKeys) override;
     Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey, GetMetaInfoRspPb &metaInfos) override;
     Status ReconnectWorker(const std::vector<std::string> &gRefIds) override;
-    void RecreateOCStub();
-    Status PrepairForDecreaseShmRef(
+    Status PrepareForDecreaseShmRef(
         std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) override;
     Status InitPipelineRH2DQueue(ShmConvertHookFunc hook) override;
     void CleanUpForPipelineRH2DQueueAfterWorkerLost() override;
@@ -186,25 +185,6 @@ private:
     bool IsAllGetFailed(GetRspPb &rsp);
 
     /**
-     * @brief Phase1 only: send Publish(use_ub=true), store urma_info in bufferInfo for Create+MemoryCopy+Publish path.
-     * @param[in] bufferInfo Buffer information; on success, ubUrmaInfoOpaque is set to a new UrmaRemoteAddrPb.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status PublishPhase1Only(const std::shared_ptr<ObjectBufferInfo> &bufferInfo);
-
-    /**
-     * @brief Send Publish phase2 only (publish_complete_ub=true). Used by UB path after data is sent via UrmaWrite.
-     * @param[in] bufferInfo Buffer information.
-     * @param[in] isSeal Is seal or not.
-     * @param[in] nestedKeys Nested keys.
-     * @param[in] ttlSecond TTL in seconds.
-     * @param[in] existence Existence option for state api.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status SendPublishPhase2(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
-                             const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence);
-
-    /**
      * @brief Create communication circular queue based on shared memory.
      * @return K_OK on success; the error code otherwise.
      */
@@ -248,7 +228,7 @@ private:
     std::shared_ptr<ShmCircularQueue> decreaseRPCQ_{ nullptr };
     // Atomic shared_ptr bundle: stub and channel are swapped together so that
     // concurrent DS_OC_DISPATCH readers can never observe a stub whose raw
-    // channel pointer was freed by a concurrent RecreateOCStub.
+    // channel pointer was freed by a concurrent swap.
     struct BrpcSession {
         BrpcSession(std::shared_ptr<WorkerOCService_BrpcGenericStub> s,
                     std::shared_ptr<brpc::Channel> c)

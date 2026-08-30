@@ -27,7 +27,7 @@
 
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/hetero_cache/device_util.h"
-#include "datasystem/client/object_cache/device/hccl_comm_magr.h"
+#include "datasystem/client/object_cache/device/hccl_comm_mgr.h"
 #include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/comm_wrapper.h"
@@ -209,7 +209,7 @@ private:
     TbbCommTable commTable_;
     // To prevent two threads from trying to create a communication domain at the same time.
     std::shared_timed_mutex mutex_;
-    std::shared_ptr<HcclCommMagr> commThreadControl_;
+    std::shared_ptr<HcclCommMgr> commThreadControl_;
     DeviceResourceManager *resourceMgr_;
 };
 }  // namespace datasystem

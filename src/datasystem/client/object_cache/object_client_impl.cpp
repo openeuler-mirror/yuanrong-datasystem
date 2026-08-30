@@ -29,7 +29,6 @@
 #include <memory>
 #include <optional>
 #include <mutex>
-#include <numeric>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -1256,7 +1255,7 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
         RETURN_IF_NOT_OK(InitTransportLayer());
     }
 
-    RETURN_IF_NOT_OK(workerApi->PrepairForDecreaseShmRef(std::bind(
+    RETURN_IF_NOT_OK(workerApi->PrepareForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
     RETURN_IF_NOT_OK(workerApi->InitPipelineRH2DQueue([this](std::shared_ptr<ShmUnitInfo> &shmUnitInfo) {
         return mmapManager_->LookupUnitsAndMmapFd("", shmUnitInfo);
@@ -1724,7 +1723,7 @@ Status ObjectClientImpl::RebuildWorkerShm()
     workerApi->CleanUpForPipelineRH2DQueueAfterWorkerLost();
     mmapManager_->CleanInvalidMmapTable();
 
-    auto rc = workerApi->PrepairForDecreaseShmRef(std::bind(
+    auto rc = workerApi->PrepareForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2));
     if (rc.IsError()) {
         constexpr int logInterval = 10;
@@ -2304,11 +2303,11 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
     ConfigureUrmaDataPlaneFailureCallback(LOCAL_WORKER, localWorkerApi);
 
     localMmapManager = std::make_unique<client::MmapManager>(localWorkerApi, false);
-    rc = localWorkerApi->PrepairForDecreaseShmRef(std::bind(&client::MmapManager::LookupUnitsAndMmapFd,
+    rc = localWorkerApi->PrepareForDecreaseShmRef(std::bind(&client::MmapManager::LookupUnitsAndMmapFd,
                                                             localMmapManager.get(), std::placeholders::_1,
                                                             std::placeholders::_2));
     if (rc.IsError()) {
-        LOG(ERROR) << "[Switch] PrepairForDecreaseShmRef for preferred same-node worker failed: " << rc.ToString();
+        LOG(ERROR) << "[Switch] PrepareForDecreaseShmRef for preferred same-node worker failed: " << rc.ToString();
         return rc;
     }
 
@@ -3148,22 +3147,6 @@ Status ObjectClientImpl::CheckConnection(const std::shared_ptr<client::ListenWor
              FormatString("Client connection to bound worker %s is broken.", workerApi->hostPort_.ToString()) };
 }
 
-bool ObjectClientImpl::IsScaleDown(WorkerNode id)
-{
-    if (listenWorker_.size() <= id || listenWorker_[id] == nullptr) {
-        return false;
-    }
-    return listenWorker_[id]->IsWorkerVoluntaryScaleDown();
-}
-
-bool ObjectClientImpl::IsHealthy(WorkerNode id)
-{
-    if (workerApi_.size() <= id || workerApi_[id] == nullptr) {
-        return false;
-    }
-    return workerApi_[id]->healthy_;
-}
-
 Status ObjectClientImpl::CheckConnectionWhileShmModify()
 {
     RETURN_IF_NOT_OK(CheckConnection());
@@ -3498,20 +3481,6 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     RETURN_IF_NOT_OK(MutiCreateParallel(skipCheckExistence, param, version, exists, multiCreateParamList, bufferList));
     isInactive = true;
     return Status::OK();
-}
-
-void ObjectClientImpl::BatchReleaseBufferPtr(const std::vector<Buffer *> &buffers)
-{
-    std::vector<std::pair<ShmKey, std::uint32_t>> shmInfos;
-
-    for (auto &buffer : buffers) {
-        if (!buffer || buffer->bufferInfo_->shmId.Empty()) {
-            continue;
-        }
-        shmInfos.emplace_back(buffer->bufferInfo_->shmId, buffer->bufferInfo_->version);
-        buffer->isReleased_ = true;
-    }
-    BatchDecreaseRefCnt(shmInfos);
 }
 
 void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos)
@@ -7076,7 +7045,7 @@ Status ObjectClientImpl::MCreate(const std::vector<std::string> &keys, const std
 }
 
 Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,
-                                            const std::vector<StringView> &vals, const FullParam &creatParam,
+                                            const std::vector<StringView> &vals, const FullParam &createParam,
                                             std::vector<std::shared_ptr<Buffer>> &bufferList,
                                             std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
                                             AccessTransportKind *requestTransportKind)
@@ -7090,7 +7059,7 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
             if (buffer == nullptr) {
                 bufferInfoList[i] =
                     MakeObjectBufferInfo(keys[i], reinterpret_cast<uint8_t *>(const_cast<char *>(vals[i].data())),
-                                         vals[i].size(), 0, creatParam, false, 0);
+                                         vals[i].size(), 0, createParam, false, 0);
                 continue;
             }
             RETURN_IF_NOT_OK(buffer->CheckDeprecated());
@@ -7128,7 +7097,7 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
 
 Status ObjectClientImpl::MemoryCopyParallelWithDeadline(bool isParallel, const std::vector<std::string> &keys,
                                                         const std::vector<StringView> &vals,
-                                                        const FullParam &creatParam,
+                                                        const FullParam &createParam,
                                                         std::vector<std::shared_ptr<Buffer>> &bufferList,
                                                         std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
                                                         uint64_t dataSizeSum, AccessTransportKind *requestTransportKind)
@@ -7136,7 +7105,7 @@ Status ObjectClientImpl::MemoryCopyParallelWithDeadline(bool isParallel, const s
     RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
     Timer memCopyTimer;
     auto memCopyRc =
-        MemoryCopyParallel(isParallel, keys, vals, creatParam, bufferList, bufferInfoList, requestTransportKind);
+        MemoryCopyParallel(isParallel, keys, vals, createParam, bufferList, bufferInfoList, requestTransportKind);
     int64_t memCopyCostUs = memCopyTimer.ElapsedMicroSecond();
     int64_t memCopyRemainingUs = ApiDeadline::Instance().ApiRemainingUs();
     SLOW_LOG_IF_OR_VLOG(
@@ -7412,10 +7381,10 @@ Status ObjectClientImpl::MSetCreateCopyAndPublish(const std::vector<std::string>
                                                   std::vector<std::string> &outFailedKeys, PerfPoint &point)
 {
     LOG(INFO) << "Begin to multiput object." << VectorToString(keys);
-    FullParam creatParam;
-    creatParam.writeMode = param.writeMode;
-    creatParam.consistencyType = ConsistencyType::CAUSAL;
-    creatParam.cacheType = param.cacheType;
+    FullParam createParam;
+    createParam.writeMode = param.writeMode;
+    createParam.consistencyType = ConsistencyType::CAUSAL;
+    createParam.cacheType = param.cacheType;
     const std::vector<std::string> &filteredKeys = deduplicateKeys.empty() ? keys : deduplicateKeys;
     const std::vector<StringView> &filteredValues = deduplicateVals.empty() ? vals : deduplicateVals;
     point.RecordAndReset(PerfKey::CLIENT_MSET_MULTICREATE);
@@ -7424,7 +7393,7 @@ Status ObjectClientImpl::MSetCreateCopyAndPublish(const std::vector<std::string>
     ComputeDataSizes(filteredValues, dataSizeList, dataSizeSum);
     std::vector<std::shared_ptr<Buffer>> bufferList;
     std::vector<bool> exist;
-    RETURN_IF_NOT_OK(MultiCreate(filteredKeys, dataSizeList, creatParam, true, bufferList, exist));
+    RETURN_IF_NOT_OK(MultiCreate(filteredKeys, dataSizeList, createParam, true, bufferList, exist));
     std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList(bufferList.size());
     static const int minSizeThreshold = 500 * KB;
     static const int sizeThreshold = 4 * MB_TO_BYTES;
@@ -7433,7 +7402,7 @@ Status ObjectClientImpl::MSetCreateCopyAndPublish(const std::vector<std::string>
         dataSizeSum > minSizeThreshold && (dataSizeSum >= sizeThreshold || filteredKeys.size() >= countThreshold);
     point.RecordAndReset(PerfKey::CLIENT_MSET_MEMCOPY);
     AccessTransportKind requestTransportKind = AccessTransportKind::SHM;
-    RETURN_IF_NOT_OK(MemoryCopyParallelWithDeadline(isParallel, filteredKeys, filteredValues, creatParam, bufferList,
+    RETURN_IF_NOT_OK(MemoryCopyParallelWithDeadline(isParallel, filteredKeys, filteredValues, createParam, bufferList,
                                                     bufferInfoList, dataSizeSum, &requestTransportKind));
     AccessTransportTracker::Record(requestTransportKind);
     point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLISH);

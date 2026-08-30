@@ -28,8 +28,8 @@
 
 namespace datasystem {
 namespace client {
-constexpr int INVALID_SHM_FD = -1;  // Equivalent to INVALID_SOCKET_FD (-1); duplicated here to keep
-                                    // shm_entry.h free of the heavier client_worker_common_api.h.
+constexpr int INVALID_SHM_FD = -1;  // Equivalent to INVALID_SOCKET_FD (-1); kept local to this header
+                                    // so it stays self-contained without pulling in client_worker_common_api.h.
 
 /**
  * @brief Move-only RAII owner of a shm fd-passing socket fd. Closing is idempotent: once released

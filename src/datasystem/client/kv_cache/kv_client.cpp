@@ -115,13 +115,13 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_CREATE_BUFFER);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_CREATE);
-    object_cache::FullParam creatParam;
-    creatParam.writeMode = param.writeMode;
-    creatParam.ttlSecond = param.ttlSecond;
-    creatParam.consistencyType = ConsistencyType::CAUSAL;
-    creatParam.cacheType = param.cacheType;
-    creatParam.existence = param.existence;
-    Status rc = impl_->Create(key, size, creatParam, buffer);
+    object_cache::FullParam createParam;
+    createParam.writeMode = param.writeMode;
+    createParam.ttlSecond = param.ttlSecond;
+    createParam.consistencyType = ConsistencyType::CAUSAL;
+    createParam.cacheType = param.cacheType;
+    createParam.existence = param.existence;
+    Status rc = impl_->Create(key, size, createParam, buffer);
     if (rc.IsOk()) {
         rc = buffer->UsePageableMemoryIfCudaHostMemoryPinPending();
         if (rc.IsError()) {
@@ -146,13 +146,13 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MCREATE_BUFFERS);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MCREATE);
-    object_cache::FullParam creatParam;
-    creatParam.writeMode = param.writeMode;
-    creatParam.ttlSecond = param.ttlSecond;
-    creatParam.consistencyType = ConsistencyType::CAUSAL;
-    creatParam.cacheType = param.cacheType;
-    creatParam.existence = param.existence;
-    Status rc = impl_->MCreate(keys, sizes, creatParam, buffers);
+    object_cache::FullParam createParam;
+    createParam.writeMode = param.writeMode;
+    createParam.ttlSecond = param.ttlSecond;
+    createParam.consistencyType = ConsistencyType::CAUSAL;
+    createParam.cacheType = param.cacheType;
+    createParam.existence = param.existence;
+    Status rc = impl_->MCreate(keys, sizes, createParam, buffers);
     if (rc.IsOk()) {
         for (auto &buffer : buffers) {
             if (buffer == nullptr || buffer->GetSize() == 0) {
