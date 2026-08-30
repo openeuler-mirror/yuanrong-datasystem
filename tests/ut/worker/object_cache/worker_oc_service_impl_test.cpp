@@ -2467,7 +2467,7 @@ TEST_F(WorkerOcServiceImplTest, IncomingMigrationGateClosureDoesNotImpersonateTo
         std::chrono::steady_clock::now() + closeBudget));
 
     EXPECT_FALSE(impl_->MigrateDataStarted());
-    DS_EXPECT_OK(impl_->VerifyClientWriteAdmission());
+    DS_EXPECT_OK(impl_->VerifyClientWriteAdmission(false));
 }
 
 TEST_F(WorkerOcServiceImplTest, DrainRejectsClientWritesWhenLeavingInterceptIsDisabled)
@@ -2502,6 +2502,96 @@ TEST_F(WorkerOcServiceImplTest, DrainRejectsClientWritesWhenLeavingInterceptIsDi
     req.set_data_size(1);
     CreateRspPb rsp;
     EXPECT_EQ(impl_->Create(req, rsp).GetCode(), K_SCALE_DOWN);
+}
+
+TEST_F(WorkerOcServiceImplTest, ExitIntentRejectsRoutedCreateBeforeDataDrain)
+{
+    const bool savedLeavingIntercept = FLAGS_enable_leaving_intercept;
+    Raii restore([savedLeavingIntercept] {
+        FLAGS_enable_leaving_intercept = savedLeavingIntercept;
+        SetTopologyServingAdmission(true);
+        SetUnhealthy();
+    });
+    FLAGS_enable_leaving_intercept = false;
+    SetTopologyServingAdmission(true);
+    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    exitRequested_.store(true, std::memory_order_release);
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    CreateReqPb req;
+    req.set_object_key("routed-write-after-exit-intent");
+    req.set_data_size(1);
+    req.set_is_routed(true);
+    CreateRspPb rsp;
+
+    EXPECT_EQ(impl_->Create(req, rsp).GetCode(), K_SCALE_DOWN);
+    EXPECT_FALSE(impl_->MigrateDataStarted());
+}
+
+TEST_F(WorkerOcServiceImplTest, ScaleInDrainWaitsForLocalPreShutdownGateBeforeClosingWrites)
+{
+    impl_->RegisterAsyncTasksDoneChecker(
+        [this](const std::string &, std::chrono::steady_clock::time_point,
+               const cluster::CancellationToken &) {
+            EXPECT_FALSE(impl_->MigrateDataStarted());
+            return Status(K_NOT_READY, "local pre-shutdown gate remains closed");
+        });
+    cluster::TopologyPhaseAction action;
+    action.taskId = "local-pre-shutdown-gate-task";
+    cluster::CancellationToken cancellation;
+    constexpr std::chrono::seconds drainBudget(1);
+
+    EXPECT_EQ(impl_->DrainTopologyScaleInData(action, "local-pre-shutdown-gate-operation",
+                                              std::chrono::steady_clock::now() + drainBudget, cancellation)
+                  .GetCode(),
+              K_NOT_READY);
+    EXPECT_FALSE(impl_->MigrateDataStarted());
+}
+
+TEST_F(WorkerOcServiceImplTest, ScaleInDrainDoesNotWaitForAdmittedClientWrite)
+{
+    const bool savedLeavingIntercept = FLAGS_enable_leaving_intercept;
+    const std::string injectPoint = "worker.Create.begin";
+    Raii restore([savedLeavingIntercept, &injectPoint] {
+        FLAGS_enable_leaving_intercept = savedLeavingIntercept;
+        (void)inject::Clear(injectPoint);
+        SetTopologyServingAdmission(true);
+        SetUnhealthy();
+    });
+    FLAGS_enable_leaving_intercept = false;
+    SetTopologyServingAdmission(true);
+    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    DS_ASSERT_OK(inject::Set(injectPoint, "pause()"));
+
+    CreateReqPb req;
+    req.set_object_key("admitted-write-before-scale-in-snapshot");
+    req.set_data_size(1);
+    CreateRspPb rsp;
+    auto requestFuture = std::async(std::launch::async, [this, &req, &rsp] {
+        ScopedRequestContext requestContext;
+        GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+        return impl_->Create(req, rsp);
+    });
+    constexpr std::chrono::seconds schedulingTimeout(1);
+    ASSERT_TRUE(WaitForInjectPointExecuteCount(injectPoint, 1, schedulingTimeout));
+
+    cluster::TopologyPhaseAction action;
+    action.taskId = "admitted-write-drain-task";
+    cluster::CancellationToken cancellation;
+    constexpr std::chrono::seconds drainBudget(2);
+    auto drainFuture = std::async(std::launch::async, [this, &action, &cancellation, drainBudget] {
+        return impl_->DrainTopologyScaleInData(action, "admitted-write-drain-operation",
+                                               std::chrono::steady_clock::now() + drainBudget, cancellation);
+    });
+    ASSERT_TRUE(WaitForCondition([this] { return impl_->MigrateDataStarted(); }, schedulingTimeout));
+    EXPECT_EQ(drainFuture.wait_for(schedulingTimeout), std::future_status::ready);
+
+    DS_ASSERT_OK(inject::Clear(injectPoint));
+    (void)requestFuture.get();
+    DS_EXPECT_OK(drainFuture.get());
 }
 
 TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetHoldsAdmissionUntilRequestReturns)

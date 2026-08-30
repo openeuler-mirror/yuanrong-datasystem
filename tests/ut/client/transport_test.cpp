@@ -639,7 +639,8 @@ public:
     int getObjectInvokeCount = 0;
     int clientGetInvokeCount = 0;
     int shmHeartbeatInvokeCount = 0;
-    int shmDisconnectInvokeCount = 0;
+    int getSocketPathInvokeCount = 0;
+    std::atomic<int> shmDisconnectInvokeCount{ 0 };
     int batchGetObjectInvokeCount = 0;
     int metadataInvokeCount = 0;
     int existInvokeCount = 0;
@@ -675,8 +676,17 @@ public:
     Status setInvokeStatus = Status::OK();
     Status batchGetInvokeStatus = Status::OK();
     std::vector<std::string> batchGetPayloadValues;
+    bool shmHeartbeatVoluntaryScaleDown = false;
+    bool shmHeartbeatClientRemoved = false;
+    std::function<void()> beforeShmHeartbeatReturn;
 
 protected:
+    Status DoInvokeGetSocketPath(const RpcOptions &, const GetSocketPathReqPb &, GetSocketPathRspPb &) override
+    {
+        ++getSocketPathInvokeCount;
+        return Status(K_RUNTIME_ERROR, "unexpected shared-memory reconnect");
+    }
+
     Status DoInvokeGetObject(const RpcOptions &options, const GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &,
                              std::vector<RpcMessage> &) override
     {
@@ -705,6 +715,11 @@ protected:
         shmHeartbeatRpcTimeout = options.GetTimeout();
         invokedShmHeartbeatRequest = request;
         response.set_worker_start_id("worker-start");
+        response.set_is_voluntary_scale_down(shmHeartbeatVoluntaryScaleDown);
+        response.set_client_removed(shmHeartbeatClientRemoved);
+        if (beforeShmHeartbeatReturn) {
+            beforeShmHeartbeatReturn();
+        }
         return Status::OK();
     }
 
@@ -887,12 +902,16 @@ public:
 
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param, TransportSetResult *result = nullptr) override
     {
-        static_cast<void>(buffer);
         ++setCount;
         if (result != nullptr) {
             result->publishAttempted = true;
         }
         setParams.push_back(param);
+        const auto &info = ObjectBufferInternal::GetInfo(buffer);
+        setPayloads.emplace_back(info.pointer == nullptr
+                                     ? std::string()
+                                     : std::string(reinterpret_cast<const char *>(info.pointer + info.metadataSize),
+                                                   info.dataSize));
         if (!setStatuses.empty()) {
             Status rc = setStatuses.front();
             setStatuses.erase(setStatuses.begin());
@@ -984,6 +1003,7 @@ public:
     std::vector<std::string> createdKeys;
     std::vector<uint64_t> createdSizes;
     std::vector<TransportSetParam> setParams;
+    std::vector<std::string> setPayloads;
     std::vector<std::string> mSetFailedKeys;
     std::vector<ShmKey> releasedShmIds;
     std::vector<TransportRequestContext> releaseContexts;
@@ -1424,8 +1444,14 @@ public:
         return managesWorkerReference;
     }
 
+    Status CheckAlive() const override
+    {
+        return alive ? Status::OK() : Status(K_BUFFER_DEPRECATED, "Fake buffer owner is no longer alive");
+    }
+
     std::vector<uint8_t> data;
     bool managesWorkerReference;
+    bool alive = true;
 };
 
 class FakeUbBufferProvider : public IUbReceiveBufferProvider {
@@ -1549,6 +1575,37 @@ TEST(WorkerRpcClientTest, ShmMaintenanceHeartbeatUsesSignedWorkerServiceRequest)
     EXPECT_FALSE(client.invokedShmHeartbeatRequest.signature().empty());
 }
 
+TEST(ShmConnectionTest, VoluntaryScaleDownDoesNotReconnectSharedMemory)
+{
+    auto rpcClient = std::make_shared<AuthBoundaryWorkerRpcClient>(MakeSignature());
+    rpcClient->shmHeartbeatVoluntaryScaleDown = true;
+    rpcClient->shmHeartbeatClientRemoved = true;
+    auto releasePool = std::make_shared<ThreadPool>(0, 1, "scale_in_disconnect_test");
+    ShmConnection connection(MakeAddress(9001), rpcClient, releasePool);
+    auto fdChannel = std::make_shared<ShmFdChannel>(rpcClient, ShmFd(), false, "endpoint-client");
+    auto mmapManager = std::make_shared<MmapManager>(fdChannel, false);
+    auto session = std::shared_ptr<ShmSession>(new ShmSession(
+        MakeAddress(9001), rpcClient, fdChannel, mmapManager, "endpoint-client", "worker-start", 1,
+        releasePool, MakeRequestContext(), true, connection.scaleInDraining_));
+    rpcClient->beforeShmHeartbeatReturn = [&connection, session] {
+        session->Close(false);
+        connection.Invalidate(session);
+    };
+    connection.session_ = session;
+
+    session->RunMaintenance();
+    rpcClient->beforeShmHeartbeatReturn = nullptr;
+    std::shared_ptr<ShmSession> acquired;
+    const Status rc = connection.Acquire(MakeRequestContext(), acquired);
+
+    EXPECT_TRUE(IsWorkerDrainingForScaleIn(rc));
+    EXPECT_EQ(rpcClient->shmHeartbeatInvokeCount, 1);
+    EXPECT_EQ(rpcClient->getSocketPathInvokeCount, 0);
+    EXPECT_EQ(acquired, nullptr);
+    releasePool.reset();
+    EXPECT_EQ(rpcClient->shmDisconnectInvokeCount.load(), 1);
+}
+
 TEST(WorkerRpcClientTest, ShmDisconnectUsesBoundedSignedWorkerServiceRequest)
 {
     BrpcChannelConfig config;
@@ -1561,7 +1618,7 @@ TEST(WorkerRpcClientTest, ShmDisconnectUsesBoundedSignedWorkerServiceRequest)
     DisconnectClientRspPb response;
 
     ASSERT_TRUE(client.InvokeDisconnectShmClient(request, response).IsOk());
-    EXPECT_EQ(client.shmDisconnectInvokeCount, 1);
+    EXPECT_EQ(client.shmDisconnectInvokeCount.load(), 1);
     EXPECT_GT(client.shmDisconnectRpcTimeout, 0);
     EXPECT_LE(client.shmDisconnectRpcTimeout, 1000);
     EXPECT_EQ(client.invokedShmDisconnectRequest.client_id(), "endpoint-client");
@@ -2354,6 +2411,66 @@ TEST(DataPlaneManagerTest, TransportKindChangeReusesRpcClient)
     ASSERT_EQ(manager.rpcClientsSeen.size(), 2u);
     EXPECT_EQ(manager.rpcClientsSeen[0], manager.rpcClientsSeen[1]);
     EXPECT_EQ(manager.rpcBuildCount, 1);
+    EXPECT_EQ(manager.transportBuildCount, 2);
+}
+
+TEST(DataPlaneManagerTest, ShmToUbFallbackRebuildsSingleTransporterOnDemand)
+{
+    FakeDataPlaneManager manager;
+    std::shared_ptr<IDataTransporter> firstShm;
+    std::shared_ptr<IDataTransporter> ub;
+    std::shared_ptr<IDataTransporter> secondShm;
+    const HostPort address = MakeAddress(2026);
+
+    ASSERT_TRUE(manager.GetOrCreate(address, TransportHint::SHM_CANDIDATE, firstShm).IsOk());
+    ASSERT_TRUE(manager.GetOrCreate(address, TransportHint::UB_CANDIDATE, ub).IsOk());
+    ASSERT_TRUE(manager.GetOrCreate(address, TransportHint::SHM_CANDIDATE, secondShm).IsOk());
+
+    EXPECT_NE(firstShm, secondShm);
+    EXPECT_NE(firstShm, ub);
+    EXPECT_EQ(manager.rpcBuildCount, 1);
+    EXPECT_EQ(manager.transportBuildCount, 3);
+}
+
+TEST(DataPlaneManagerTest, StaleShmHintDoesNotReplaceUbAfterScaleInDrain)
+{
+    FakeDataPlaneManager manager;
+    std::shared_ptr<IDataTransporter> shm;
+    std::shared_ptr<IDataTransporter> ub;
+    std::shared_ptr<IDataTransporter> staleShm;
+    std::shared_ptr<IDataTransporter> reusedUb;
+    const HostPort address = MakeAddress(2027);
+
+    ASSERT_TRUE(manager.GetOrCreate(address, TransportHint::SHM_CANDIDATE, shm).IsOk());
+    manager.MarkShmDraining(address);
+    ASSERT_TRUE(manager.GetOrCreate(address, TransportHint::UB_CANDIDATE, ub).IsOk());
+    const Status staleHintStatus = manager.GetOrCreate(address, TransportHint::SHM_CANDIDATE, staleShm);
+    ASSERT_TRUE(manager.GetOrCreate(address, TransportHint::UB_CANDIDATE, reusedUb).IsOk());
+
+    EXPECT_TRUE(IsWorkerDrainingForScaleIn(staleHintStatus));
+    EXPECT_EQ(staleShm, nullptr);
+    EXPECT_EQ(reusedUb, ub);
+    EXPECT_EQ(manager.rpcBuildCount, 1);
+    EXPECT_EQ(manager.transportBuildCount, 2);
+}
+
+TEST(DataPlaneManagerTest, ScaleInShmRejectionSurvivesEndpointTeardown)
+{
+    FakeDataPlaneManager manager;
+    std::shared_ptr<IDataTransporter> shm;
+    std::shared_ptr<IDataTransporter> ub;
+    std::shared_ptr<IDataTransporter> staleShm;
+    const HostPort address = MakeAddress(2028);
+
+    ASSERT_TRUE(manager.GetOrCreate(address, TransportHint::SHM_CANDIDATE, shm).IsOk());
+    manager.MarkShmDraining(address);
+    manager.Teardown(address);
+    ASSERT_TRUE(manager.GetOrCreate(address, TransportHint::UB_CANDIDATE, ub).IsOk());
+    const Status staleHintStatus = manager.GetOrCreate(address, TransportHint::SHM_CANDIDATE, staleShm);
+
+    EXPECT_TRUE(IsWorkerDrainingForScaleIn(staleHintStatus));
+    EXPECT_EQ(staleShm, nullptr);
+    EXPECT_EQ(manager.rpcBuildCount, 2);
     EXPECT_EQ(manager.transportBuildCount, 2);
 }
 
@@ -3354,35 +3471,17 @@ TEST(ObjectClientTransportTest, StaleLocationStopsAfterFiveRetries)
     EXPECT_EQ(buffers[0], nullptr);
 }
 
-TEST(ObjectClientTransportTest, StaleLocationBackoffDeadlineReturnsPublicDeadline)
+TEST(ObjectClientTransportTest, FirstStaleLocationRetryUsesZeroBackoff)
 {
-    ApiDeadlineGuard deadline(10);
-    const auto ownerAddress = MakeAddress(41);
-    auto metadata = std::make_shared<FakeObjectMetadataClient>();
-    auto replicas = std::make_shared<FakeReplicaReader>();
-    replicas->statusHandler = [&ownerAddress](const std::string &) { return MakeStaleSnapshotStatus(ownerAddress); };
-    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
-    transportLayer->SetObjectRead(
-        std::make_unique<ObjectReadFlow>(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+    constexpr uint8_t firstRetry = 0;
+    constexpr uint8_t secondRetry = 1;
+    constexpr int64_t immediateBackoffMs = 0;
+    constexpr int64_t staleBackoffMs = 20;
+    constexpr int64_t drainingBackoffMs = 1;
 
-    ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 31501;
-    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
-    workerApi->clientId_ = "stale-deadline-test-client";
-    client->workerApi_.emplace_back(workerApi);
-    client->transportLayer_ = std::move(transportLayer);
-    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
-
-    const std::vector<std::string> objectKeys{ "stale" };
-    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
-    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED) << rc.ToString();
-    EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
-    EXPECT_EQ(metadata->keyGroups.size(), 1u);
-    EXPECT_EQ(replicas->unaryKeys.size(), 1u);
-    EXPECT_EQ(buffers[0], nullptr);
+    EXPECT_EQ(SelectLocationRefreshBackoffMs(false, firstRetry, staleBackoffMs), immediateBackoffMs);
+    EXPECT_EQ(SelectLocationRefreshBackoffMs(false, secondRetry, staleBackoffMs), staleBackoffMs);
+    EXPECT_EQ(SelectLocationRefreshBackoffMs(true, firstRetry, drainingBackoffMs), drainingBackoffMs);
 }
 
 TEST(ObjectClientTransportTest, StaleLocationSlowReadDeadlineReturnsPublicDeadline)
@@ -3568,6 +3667,167 @@ TEST(ObjectClientTransportTest, RoutedShmBufferUsesTargetSessionLockId)
     EXPECT_TRUE(buffer->bufferInfo_->useSessionLockId);
     EXPECT_EQ(buffer->bufferInfo_->sessionLockId, TARGET_SESSION_LOCK_ID);
     EXPECT_EQ(std::string(static_cast<const char *>(buffer->ImmutableData()), DATA_SIZE), "data");
+}
+
+TEST(ObjectClientTransportTest, RoutedPublishReplaysScaleDownOnRemainingWorker)
+{
+    const HostPort leavingWorker = MakeAddress(31511);
+    const HostPort remainingWorker = MakeAddress(31512);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [leavingWorker](const HostPort &address, FakeTransporter &transporter) {
+        if (address == leavingWorker) {
+            transporter.setStatuses.emplace_back(K_SCALE_DOWN, "Worker is exiting now");
+        }
+    };
+    ConnectOptions options;
+    options.host = leavingWorker.Host();
+    options.port = leavingWorker.Port();
+    object_cache::ObjectClientImpl client(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(leavingWorker);
+    workerApi->clientId_ = "routed-publish-scale-down-test";
+    client.workerApi_.emplace_back(workerApi);
+    client.enableLocalCache_ = false;
+    client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(remainingWorker));
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "routed-publish-scale-down";
+    info->workerAddr = leavingWorker;
+    info->dataSize = 4;
+    info->pointer = static_cast<uint8_t *>(malloc(5));
+    ASSERT_NE(info->pointer, nullptr);
+    std::memcpy(info->pointer, "data", info->dataSize);
+    info->isRoutedWrite = true;
+    ScopedRequestContext requestContext;
+    ApiDeadlineGuard deadline(1'000);
+
+    ASSERT_TRUE(client.PublishRoutedBuffer(info, { "nested" }, true).IsOk());
+
+    ASSERT_EQ(manager->builtTransporters.size(), 2U);
+    const auto &leaving = manager->builtTransporters[0];
+    const auto &remaining = manager->builtTransporters[1];
+    EXPECT_EQ(leaving->rpcClient->WorkerAddress(), leavingWorker);
+    EXPECT_EQ(remaining->rpcClient->WorkerAddress(), remainingWorker);
+    EXPECT_EQ(leaving->setCount, 1);
+    EXPECT_EQ(remaining->createCount, 1);
+    EXPECT_EQ(remaining->setCount, 1);
+    EXPECT_EQ(remaining->setPayloads, std::vector<std::string>({ "data" }));
+    EXPECT_TRUE(remaining->setParams.front().isSeal);
+    EXPECT_EQ(remaining->setParams.front().nestedKeys, std::unordered_set<std::string>({ "nested" }));
+    EXPECT_TRUE(info->isSeal);
+    free(info->pointer);
+    info->pointer = nullptr;
+}
+
+TEST(ObjectClientTransportTest, RoutedReplayKeepsBufferUsableAfterSourceWorkerRemoval)
+{
+    const HostPort leavingWorker = MakeAddress(31513);
+    const HostPort remainingWorker = MakeAddress(31514);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [leavingWorker](const HostPort &address, FakeTransporter &transporter) {
+        if (address == leavingWorker) {
+            transporter.setStatuses.emplace_back(K_SCALE_DOWN, "Worker is exiting now");
+        }
+    };
+    ConnectOptions options;
+    options.host = leavingWorker.Host();
+    options.port = leavingWorker.Port();
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(leavingWorker);
+    workerApi->clientId_ = "routed-publish-rebind-test";
+    workerApi->SetHealthy(true);
+    client->workerApi_.emplace_back(workerApi);
+    client->listenWorker_.resize(object_cache::ObjectClientImpl::STANDBY2_WORKER + 1);
+    client->listenWorker_[object_cache::ObjectClientImpl::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
+        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::ObjectClientImpl::LOCAL_WORKER, nullptr);
+    client->enableLocalCache_ = false;
+    client->transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(remainingWorker));
+    bool initNeedsCompletion = false;
+    ASSERT_TRUE(client->clientStateManager_->ProcessInit(initNeedsCompletion).IsOk());
+    client->clientStateManager_->CompleteHandler(false, initNeedsCompletion);
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "routed-publish-rebind";
+    info->workerAddr = leavingWorker;
+    info->shmId = ShmKey::Intern("leaving-worker-shm");
+    info->dataSize = 4;
+    info->pointer = static_cast<uint8_t *>(malloc(info->dataSize + 1));
+    ASSERT_NE(info->pointer, nullptr);
+    std::memcpy(info->pointer, "data", info->dataSize);
+    info->isRoutedWrite = true;
+    auto owner = std::make_shared<FakeBufferOwner>(info->dataSize, true);
+    info->receiveBufferOwner = owner;
+    std::shared_ptr<Buffer> buffer;
+    ASSERT_TRUE(Buffer::CreateBuffer(info, client, buffer).IsOk());
+
+    ASSERT_TRUE(buffer->Publish().IsOk());
+    owner->alive = false;
+    ASSERT_TRUE(buffer->MemoryCopy("next", 4).IsOk());
+    ASSERT_TRUE(buffer->Publish().IsOk());
+    ASSERT_TRUE(buffer->Seal().IsOk());
+
+    ASSERT_EQ(manager->builtTransporters.size(), 2U);
+    EXPECT_EQ(manager->builtTransporters[0]->setCount, 1);
+    EXPECT_EQ(manager->builtTransporters[1]->createCount, 3);
+    EXPECT_EQ(manager->builtTransporters[1]->setPayloads, std::vector<std::string>({ "data", "next", "next" }));
+    buffer.reset();
+    free(info->pointer);
+    info->pointer = nullptr;
+}
+
+TEST(ObjectClientTransportTest, RoutedMultiPublishReplaysScaleDownOnRemainingWorker)
+{
+    const HostPort leavingWorker = MakeAddress(31521);
+    const HostPort remainingWorker = MakeAddress(31522);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [leavingWorker](const HostPort &address, FakeTransporter &transporter) {
+        if (address == leavingWorker) {
+            transporter.mSetStatuses.emplace_back(K_SCALE_DOWN, "Worker is exiting now");
+        }
+    };
+    ConnectOptions options;
+    options.host = leavingWorker.Host();
+    options.port = leavingWorker.Port();
+    object_cache::ObjectClientImpl client(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(leavingWorker);
+    workerApi->clientId_ = "routed-multi-publish-scale-down-test";
+    client.workerApi_.emplace_back(workerApi);
+    client.enableLocalCache_ = false;
+    client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(remainingWorker));
+    std::vector<std::shared_ptr<ObjectBufferInfo>> infos;
+    for (const auto &value : { std::string("first"), std::string("second") }) {
+        auto info = std::make_shared<ObjectBufferInfo>();
+        info->objectKey = value;
+        info->workerAddr = leavingWorker;
+        info->dataSize = value.size();
+        info->pointer = static_cast<uint8_t *>(malloc(value.size() + 1));
+        ASSERT_NE(info->pointer, nullptr);
+        std::memcpy(info->pointer, value.data(), value.size());
+        info->isRoutedWrite = true;
+        infos.emplace_back(std::move(info));
+    }
+    ScopedRequestContext requestContext;
+    ApiDeadlineGuard deadline(1'000);
+    size_t failedCount = 0;
+
+    ASSERT_TRUE(client.ProcessRoutedMSetGroup(leavingWorker, infos, failedCount).IsOk());
+    ASSERT_TRUE(client.ProcessRoutedMSetGroup(leavingWorker, infos, failedCount).IsOk());
+    ASSERT_TRUE(client.PublishRoutedBuffer(infos.front(), {}, true).IsOk());
+
+    ASSERT_EQ(manager->builtTransporters.size(), 2U);
+    const auto &leaving = manager->builtTransporters[0];
+    const auto &remaining = manager->builtTransporters[1];
+    EXPECT_EQ(leaving->mSetCount, 1);
+    EXPECT_EQ(remaining->rpcClient->WorkerAddress(), remainingWorker);
+    EXPECT_EQ(remaining->createCount, 5);
+    EXPECT_EQ(remaining->setCount, 5);
+    EXPECT_EQ(remaining->setPayloads, std::vector<std::string>({ "first", "second", "first", "second", "first" }));
+    EXPECT_TRUE(remaining->setParams.back().isSeal);
+    EXPECT_EQ(failedCount, 0U);
+    for (auto &info : infos) {
+        free(info->pointer);
+        info->pointer = nullptr;
+    }
 }
 
 TEST(ObjectClientTransportTest, ConnectOptionsPolicyControlsWritePlacement)

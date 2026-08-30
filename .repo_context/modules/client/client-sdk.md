@@ -208,9 +208,19 @@
     Same-host `PRE_LEAVING` and `LEAVING` members remain admitted for reads but enter the non-SHM partition, so
     URMA-enabled Clients select UB directly and other Clients select TCP.
     A draining error observed from a stale SHM selection immediately removes that worker from the local SHM candidate
-    set, preserving the fallback UB connection for subsequent Gets, and requests a hash-ring refresh even when the
-    UB/TCP fallback succeeds. The request is admitted at most once per published transport snapshot, preventing
-    concurrent Gets from continually extending the forced-refresh window. A later snapshot rebuilds the candidate set.
+    set and requests a hash-ring refresh even when the UB/TCP fallback succeeds. The SHM connection and its session
+    share a monotonic draining marker, so concurrent session invalidation cannot erase the voluntary reason; the
+    transition schedules at most one `DisconnectClient`, and later requests return the exact draining status instead
+    of attempting `GetSocketPath`/`RegisterClient` again. Each endpoint still caches only one data transporter. The
+    foreground request replaces the terminal SHM transporter with UB, establishes UB on demand, and then executes the
+    fallback operation; there is no background UB prewarm or SHM/UB dual slot. `enableLocalCache=true` retains its
+    direct-client drain behavior. The endpoint entry also keeps a monotonic SHM-draining bit under its existing
+    `bthread::RWLock`. Once an explicit draining response sets it, a request carrying a previously cached SHM hint is
+    rejected before the single UB/TCP slot is reset; RPC/data-plane teardown retains this bit, while authoritative
+    snapshot removal deletes the whole entry. Thus neither foreground fallback nor connection rebuild can resurrect
+    SHM for the leaving endpoint. A refresh request is admitted at most once per published transport snapshot,
+    preventing concurrent Gets from continually extending the forced-refresh window. A later snapshot rebuilds the
+    candidate set.
   - Routing owns lazy, endpoint-cached brpc channels only for versioned `GetHashRing` control requests. The channels use
     the SDK request/connect timeouts, disable brpc built-in retry and circuit breaking, and share the transport
     signature holder. Business Create/Get/Set RPCs remain owned by Transport. A later channel-unification change may
@@ -503,8 +513,10 @@
     draining errors try the remaining replicas first, and a data-replica `K_RPC_PEER_DEAD` is treated the same way. If
     another listed replica succeeds, the current Get returns that value without refreshing metadata. If all listed
     replicas are exhausted after a stale/draining/dead-replica observation, the reader returns the recorded stale
-    topology/location signal so the outer Get refreshes the hash ring and re-queries authoritative metadata. The stale
-    signal is internal to the retry loop: if the caller deadline expires before the next retry, whether during the read
+    topology/location signal so the outer Get refreshes the hash ring and re-queries authoritative metadata. The first
+    stale-location retry runs immediately after requesting the refresh; only persistent stale results use the 20 ms
+    exponential backoff. The stale signal is internal to the retry loop: if the caller deadline expires before the next
+    retry, whether during the read
     RPC itself or during refresh backoff, the public SDK result is rewritten to `K_RPC_DEADLINE_EXCEEDED`; if the stale
     refresh budget is exhausted while the API deadline is still alive, the public SDK result is rewritten to
     `K_RPC_UNAVAILABLE`. Both final statuses append the original
@@ -534,12 +546,16 @@
   - direct-read mode does not dynamically update AK/SK; callers must recreate
     the client to change credentials for that mode. L2 loading in direct-read mode follows the `Get` `queryL2Cache`
     parameter (default true, honored since the ShmSession fd-passing Get change).
-  - direct-read endpoint entries use a TBB concurrent map under a lifecycle shared mutex, while each entry has its own
-    mutex; different endpoints can initialize connections concurrently and the same endpoint is initialized once.
+  - direct-read endpoint entries use a TBB concurrent map, while each entry protects its shared RPC client and single
+    SHM/UB/TCP transporter slot with a `bthread::RWLock`; different endpoints can initialize connections concurrently.
+    A transport-kind change resets that one slot while retaining the shared RPC client. Consequently, voluntary
+    ScaleIn fallback performs UB establishment in the foreground. Ordinary transport changes may later rebuild SHM on
+    demand, but an entry that has observed an explicit ScaleIn draining response rejects every stale SHM hint until the
+    endpoint is removed from the authoritative snapshot.
     After the first `WorkerSnapshot` is published, endpoints absent from the latest snapshot are rejected before cache
     lookup so delayed requests cannot recreate removed entries. A dedicated transport reconcile thread coalesces
-    pending updates with latest-wins semantics, detaches absent entries under the lifecycle mutex, and closes their
-    data planes after releasing that mutex. Shutdown stops and joins this reconcile thread before closing the manager.
+    pending updates with latest-wins semantics, erases absent entries through TBB map accessors, and closes their data
+    planes afterward. Shutdown stops and joins this reconcile thread before closing the manager.
     Worker incarnation changes that reuse the same endpoint are intentionally outside this mechanism. The only
     admission exception is a metadata-only RPC to an owner explicitly returned by a server redirect: it triggers a
     forced ring refresh and clears any TCP/UB inline-data request before connecting. Data-plane creation, including
@@ -554,6 +570,16 @@
     missing diagnostics, timeout, EOF, connection reset, and other ambiguous failures are never replayed on another
     worker. If a same-worker retry follows an ambiguous first Publish result, `TransportLayer` preserves that first
     result so a later connection-refused error cannot make replay appear safe.
+    Routed two-step `Create(Buffer) -> Set/Seal` is pinned to the Create worker until Publish. If that worker rejects
+    Publish with the side-effect-free `K_SCALE_DOWN` admission result, the SDK excludes it and reuses the one-step
+    Create-copy-Publish flow on a remaining route, preserving mode, nested keys, TTL, existence, and seal semantics.
+    Other Publish failures remain subject to the ambiguity rule and are not replayed across workers. The old transport
+    allocation follows the existing release contract: non-owner buffers are scheduled for release by `TransportLayer`,
+    while zero-copy send owners remain attached to the caller's Buffer so replay does not invalidate its data pointer.
+    After the first `K_SCALE_DOWN` replay, that Buffer records the source as draining and retains its source mapping only
+    as staging memory. Later `MemoryCopy`, `Publish`, `Seal`, and repeated MSet calls skip source liveness and run the same
+    complete transaction on a current route; they never rebuild the removed source endpoint or rebind the caller's
+    pointer, latch, and release owner.
   - `ObjectClientImpl::InitWithServiceDiscovery` keeps a per-Init local exclusion set: a worker
     whose Init attempt fails with `K_RPC_UNAVAILABLE` or `K_CLIENT_WORKER_DISCONNECT` (or
     `K_RPC_DEADLINE_EXCEEDED` under the zmq transport, where a post-TCP-probe RPC timeout is the
@@ -594,6 +620,9 @@
     per-object failures returned after `WritePayload` may use bounded TCP fallback: limiter admission sends that object
     as a TCP payload, while limiter rejection marks only that key failed and allows other objects to publish.
     `MultiPublishReqPb` has no retry marker, so ambiguous RPC failures are not replayed on the same or another worker.
+    The narrow exception is `K_SCALE_DOWN`, which the target returns before entering `MultiPublish`; the SDK safely
+    replays each prepared two-step buffer through a complete transaction on a remaining route and retains the existing
+    partial-success result contract.
     Pre-Publish rerouting recomputes a worker for every key and regroups the remaining batch instead of moving the whole
     group to the first key's fallback worker. UB writes are submitted and completed under lifecycle lock windows bounded
     by the smaller of 32 objects and the configured process send-lane pool; the MultiPublish RPC uses a separate lock

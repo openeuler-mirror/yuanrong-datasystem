@@ -19,6 +19,7 @@
 #define DATASYSTEM_CLIENT_TRANSPORT_OBJECT_READ_OBJECT_READ_TYPES_H
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,12 @@ inline bool IsWorkerDrainingForScaleIn(const Status &status)
 {
     return status.GetCode() == K_NOT_READY
            && status.GetMsg().find(WORKER_DRAINING_FOR_SCALE_IN_MESSAGE) != std::string::npos;
+}
+
+inline int64_t SelectLocationRefreshBackoffMs(bool draining, uint8_t retryCount, int64_t currentBackoffMs)
+{
+    constexpr int64_t immediateRetryBackoffMs = 0;
+    return !draining && retryCount == 0 ? immediateRetryBackoffMs : currentBackoffMs;
 }
 
 /** @brief One object and metadata owner supplied by the routing layer. */

@@ -140,7 +140,10 @@ public:
     /** @brief Drop only the selected data-plane transporter while retaining the shared RPC connection. */
     void ResetDataPlane(const HostPort &workerAddr);
 
-    /** @brief Drop the complete worker entry, including its shared RPC connection. */
+    /** @brief Permanently reject SHM rebuilds for the current endpoint entry after scale-in is observed. */
+    void MarkShmDraining(const HostPort &workerAddr);
+
+    /** @brief Drop endpoint connections while preserving any observed scale-in SHM rejection. */
     void Teardown(const HostPort &workerAddr);
 
     /**
@@ -185,6 +188,7 @@ private:
         std::shared_ptr<WorkerRpcClient> rpcClient;
         std::shared_ptr<IDataTransporter> transporter;
         AccessTransportKind kind = AccessTransportKind::TCP;
+        bool shmDraining = false;
     };
 
     using EntryMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerTransportEntry>>;

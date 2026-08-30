@@ -582,11 +582,11 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::VerifyClientWriteAdmission()
+Status WorkerOCServiceImpl::VerifyClientWriteAdmission(bool isRouted)
 {
-    return worker::VerifyLeavingStateWithEvaluator([this] {
+    return worker::VerifyLeavingStateWithEvaluator([this, isRouted] {
         const bool exitIntent = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire);
-        return MigrateDataStarted() || (FLAGS_enable_leaving_intercept && exitIntent);
+        return MigrateDataStarted() || (exitIntent && (isRouted || FLAGS_enable_leaving_intercept));
     });
 }
 
@@ -631,7 +631,7 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before Publish dispatch, remaining %ld us.", remainingUs));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(VerifyClientWriteAdmission(), "verify client write admission failed");
+    RETURN_IF_NOT_OK(VerifyClientWriteAdmission(req.is_routed()));
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -666,7 +666,7 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(VerifyClientWriteAdmission(), "verify client write admission failed");
+    RETURN_IF_NOT_OK(VerifyClientWriteAdmission(req.is_routed()));
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -835,6 +835,9 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                              "topology ScaleIn deadline exceeded");
+    if (asyncTasksDoneChecker_ != nullptr) {
+        RETURN_IF_NOT_OK(asyncTasksDoneChecker_(action.taskId, deadline, cancellation));
+    }
     topologyScaleInDataDrainStarted_.store(true, std::memory_order_release);
     RETURN_IF_NOT_OK(CloseIncomingMigrationAdmissionAndWait(deadline));
     INJECT_POINT_NO_RETURN("WorkerOCServiceImpl.DrainTopologyScaleInData.beforeSnapshot");
@@ -854,9 +857,6 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
     {
         std::lock_guard<SharedMutex> lock(clearIdsMutex_);
         voluntaryScaleDownClearIds_ = std::move(waitIds);
-    }
-    if (asyncTasksDoneChecker_ != nullptr) {
-        RETURN_IF_NOT_OK(asyncTasksDoneChecker_(action.taskId, deadline, cancellation));
     }
     RETURN_IF_NOT_OK(MigrateL2CacheData(l2Ids, action.taskId, deadline, cancellation));
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
@@ -1439,7 +1439,7 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 {
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(VerifyClientWriteAdmission(), "verify client write admission failed");
+    RETURN_IF_NOT_OK(VerifyClientWriteAdmission(req.is_routed()));
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -1461,9 +1461,8 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_MULTI_CREATE);
     access.ObjectKeysRef(req.object_key());
     Raii raii([&returnStatus, &access]() { access.Result(returnStatus).Record(); });
-    returnStatus = VerifyClientWriteAdmission();
+    returnStatus = VerifyClientWriteAdmission(req.is_routed());
     if (returnStatus.IsError()) {
-        LOG(ERROR) << "verify client write admission failed:" << returnStatus.ToString();
         return returnStatus;
     }
     BthreadReadGuard noRecon;

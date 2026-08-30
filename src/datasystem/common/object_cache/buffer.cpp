@@ -569,6 +569,8 @@ Status Buffer::CheckDeprecated()
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                       "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
+    // A replayed routed write retains the source mapping only as staging memory; later publishes no longer use it.
+    RETURN_OK_IF_TRUE(bufferInfo_->isRoutedWrite && bufferInfo_->routedWriteSourceDraining);
     RETURN_OK_IF_TRUE(!isShm_);
     if (bufferInfo_->receiveBufferOwner != nullptr
         && bufferInfo_->receiveBufferOwner->ManagesWorkerReference()) {

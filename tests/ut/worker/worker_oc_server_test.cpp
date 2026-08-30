@@ -161,6 +161,23 @@ public:
         return server_->topologyExitRequested_.load();
     }
 
+    bool HasScaleInExitPublicationStarted() const
+    {
+        std::lock_guard<std::mutex> lock(server_->scaleInExitPublisherMutex_);
+        return server_->scaleInExitPublicationRequested_ || server_->scaleInExitPublicationPublished_;
+    }
+
+    bool IsScaleInDataDrainReady() const
+    {
+        return server_->IsScaleInDataDrainReady();
+    }
+
+    void SetScaleInDataDrainReadiness(bool asyncTasksDone, bool clientsExited)
+    {
+        server_->checkAsyncTasksDone_.store(asyncTasksDone);
+        server_->allClientsExited_.store(clientsExited);
+    }
+
     std::pair<std::thread::id, std::thread::id> ScaleInPreparationWorkerIds() const
     {
         return { server_->checkAsyncTasksThread_->get_id(), server_->clientsExitChecker_->get_id() };
@@ -421,6 +438,7 @@ TEST_F(WorkerOCServerTest, ScaleInPreparationFailsClosedWhenFirstWorkerCreationF
     EXPECT_FALSE(ShouldPublishReadyMembership(false));
     EXPECT_FALSE(HasCheckAsyncTasksThread());
     EXPECT_FALSE(HasClientsExitChecker());
+    EXPECT_FALSE(HasScaleInExitPublicationStarted());
 }
 
 TEST_F(WorkerOCServerTest, ScaleInPreparationFailsClosedWhenSecondWorkerCreationFails)
@@ -435,6 +453,7 @@ TEST_F(WorkerOCServerTest, ScaleInPreparationFailsClosedWhenSecondWorkerCreation
     EXPECT_FALSE(ShouldPublishReadyMembership(false));
     EXPECT_TRUE(HasCheckAsyncTasksThread());
     EXPECT_FALSE(HasClientsExitChecker());
+    EXPECT_FALSE(HasScaleInExitPublicationStarted());
 
     StopPreShutdownWorkers();
     EXPECT_FALSE(HasCheckAsyncTasksThread());
@@ -511,7 +530,7 @@ TEST_F(WorkerOCServerTest, RecoveredExitPublisherStopsDuringRetryBackoff)
     EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(500));
 }
 
-TEST_F(WorkerOCServerTest, ExistingScaleInPreparationIsNotClaimedAsRestartRecovery)
+TEST_F(WorkerOCServerTest, ExistingScaleInPreparationPublishesExitWithoutRestartRecovery)
 {
     std::shared_ptr<const cluster::TopologySnapshot> leaving;
     std::shared_ptr<const cluster::TopologySnapshot> removed;
@@ -523,12 +542,35 @@ TEST_F(WorkerOCServerTest, ExistingScaleInPreparationIsNotClaimedAsRestartRecove
         return Status::OK();
     });
     DS_ASSERT_OK(StartScaleInPreparation());
+    ASSERT_TRUE(WaitForScaleInExitPublished(std::chrono::milliseconds(1'000)));
 
     Publish(leaving);
     Publish(removed);
 
-    EXPECT_EQ(publishCount.load(), 0UL);
+    EXPECT_EQ(publishCount.load(), 1UL);
     EXPECT_EQ(shutdownRequestCount_, 0UL);
+}
+
+TEST_F(WorkerOCServerTest, ScaleInPreparationContinuesWhenEarlyExitPublisherIsStopped)
+{
+    StopScaleInExitPublisher();
+
+    DS_EXPECT_OK(StartScaleInPreparation());
+
+    EXPECT_TRUE(IsTopologyExitRequested());
+    EXPECT_TRUE(HasScaleInPreparationWorkers());
+}
+
+TEST_F(WorkerOCServerTest, ScaleInDataDrainWaitsForAsyncTasksAndLocalClients)
+{
+    SetScaleInDataDrainReadiness(true, false);
+    EXPECT_FALSE(IsScaleInDataDrainReady());
+
+    SetScaleInDataDrainReadiness(false, true);
+    EXPECT_FALSE(IsScaleInDataDrainReady());
+
+    SetScaleInDataDrainReadiness(true, true);
+    EXPECT_TRUE(IsScaleInDataDrainReady());
 }
 
 TEST_F(WorkerOCServerTest, LocalUbVerificationRequiresActiveMultiWorkerTopology)

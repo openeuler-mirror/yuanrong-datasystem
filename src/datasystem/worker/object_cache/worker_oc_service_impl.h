@@ -965,7 +965,7 @@ public:
 private:
     Status InitThreadResources();
     Status InitRecoveryServices();
-    Status VerifyClientWriteAdmission();
+    Status VerifyClientWriteAdmission(bool isRouted);
     void ObserveMetadataRpc(const HostPort &target, const Status &status);
 
     struct PreparedScaleInCleanupState {

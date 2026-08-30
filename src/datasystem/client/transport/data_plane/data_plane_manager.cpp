@@ -106,7 +106,8 @@ std::vector<std::string> BuildWriteProbeWorkers(const WorkerSnapshot &snapshot,
 
 bool DataPlaneManager::WorkerTransportEntry::HasAliveTransporter(AccessTransportKind expectedKind) const
 {
-    return transporter != nullptr && kind == expectedKind && transporter->IsAlive();
+    return !(shmDraining && expectedKind == AccessTransportKind::SHM) && transporter != nullptr
+           && kind == expectedKind && transporter->IsAlive();
 }
 
 void DataPlaneManager::WorkerTransportEntry::ResetDataPlaneLocked()
@@ -515,6 +516,8 @@ Status DataPlaneManager::EnsureTransporterLocked(const TransportBuildContext &co
     if (entry->HasAliveTransporter(context.expectedKind)) {
         return Status::OK();
     }
+    CHECK_FAIL_RETURN_STATUS(!(entry->shmDraining && context.expectedKind == AccessTransportKind::SHM), K_NOT_READY,
+                             WORKER_DRAINING_FOR_SCALE_IN_MESSAGE);
     entry->ResetDataPlaneLocked();
     std::shared_ptr<IDataTransporter> transporter;
     RETURN_IF_NOT_OK(
@@ -545,22 +548,60 @@ void DataPlaneManager::ResetDataPlane(const HostPort &workerAddr)
     }
 }
 
+void DataPlaneManager::MarkShmDraining(const HostPort &workerAddr)
+{
+    if (shutdown_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::shared_ptr<WorkerTransportEntry> entry;
+    std::shared_ptr<IDataTransporter> staleShm;
+    {
+        EntryMap::accessor accessor;
+        (void)entries_.insert(accessor, workerAddr.ToString());
+        if (accessor->second == nullptr) {
+            accessor->second = std::make_shared<WorkerTransportEntry>();
+        }
+        entry = accessor->second;
+        bthread::RWLockWrGuard lock(entry->mutex);
+        entry->shmDraining = true;
+        if (entry->kind == AccessTransportKind::SHM) {
+            staleShm = std::move(entry->transporter);
+        }
+    }
+    if (staleShm != nullptr) {
+        staleShm->CloseDataPlane();
+    }
+}
+
 void DataPlaneManager::Teardown(const HostPort &workerAddr)
 {
     if (shutdown_.load(std::memory_order_acquire)) {
         return;
     }
     std::shared_ptr<WorkerTransportEntry> entry;
+    std::shared_ptr<IDataTransporter> staleTransporter;
+    std::shared_ptr<WorkerRpcClient> staleRpcClient;
+    bool preserveEntry = false;
     {
         EntryMap::accessor accessor;
         if (entries_.find(accessor, workerAddr.ToString())) {
             entry = accessor->second;
-            entries_.erase(accessor);
+            bthread::RWLockWrGuard lock(entry->mutex);
+            preserveEntry = entry->shmDraining;
+            if (preserveEntry) {
+                staleTransporter = std::move(entry->transporter);
+                staleRpcClient = std::move(entry->rpcClient);
+            } else {
+                entries_.erase(accessor);
+            }
         }
     }
-    if (entry != nullptr) {
+    if (preserveEntry && staleTransporter != nullptr) {
+        staleTransporter->CloseDataPlane();
+    } else if (entry != nullptr) {
         entry->ResetDataPlane();
     }
+    staleRpcClient.reset();
 }
 
 Status DataPlaneManager::UpdateWorkerSnapshot(const WorkerSnapshot &snapshot)
