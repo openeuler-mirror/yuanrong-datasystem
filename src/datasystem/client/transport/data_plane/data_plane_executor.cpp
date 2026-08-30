@@ -132,12 +132,16 @@ bool DataPlaneExecutor::PrepareRetry(const HostPort &workerAddr, const std::shar
 
 DataPlaneExecutor::AttemptResult DataPlaneExecutor::ExecuteAttempt(const HostPort &workerAddr,
                                                                    const Operation &operation, const AttemptPlan &plan,
+                                                                   uint64_t locationTopologyVersion,
                                                                    TransportPhaseLatencyRecorder *recorder)
 {
     std::shared_ptr<IDataTransporter> transporter;
     const auto connectionBegin = recorder == nullptr ? TransportPhaseLatencyRecorder::TimePoint{}
                                                      : recorder->StartPhase();
-    Status status = manager_->GetOrCreate(workerAddr, plan.hint, transporter, recorder);
+    Status status = locationTopologyVersion == 0
+                        ? manager_->GetOrCreate(workerAddr, plan.hint, transporter, recorder)
+                        : manager_->GetOrCreateForDataLocation(workerAddr, plan.hint, locationTopologyVersion,
+                                                               transporter, recorder);
     if (recorder != nullptr) {
         recorder->RecordPhase(plan.connectionPhase, connectionBegin, TransportLatencyThreshold::PROCESS);
     }
@@ -162,6 +166,7 @@ DataPlaneExecutor::AttemptResult DataPlaneExecutor::ExecuteAttempt(const HostPor
 
 Status DataPlaneExecutor::ExecuteFallbacks(const HostPort &workerAddr, const Operation &operation,
                                            const std::vector<TransportHint> &fallbackHints,
+                                           uint64_t locationTopologyVersion,
                                            TransportPhaseLatencyRecorder *recorder)
 {
     Status status(K_NOT_SUPPORTED, "No transport fallback is available");
@@ -175,7 +180,7 @@ Status DataPlaneExecutor::ExecuteFallbacks(const HostPort &workerAddr, const Ope
         const AttemptPlan plan{ hint, attempt,
                                 ubFallback ? "ub_fallback_connection" : "tcp_fallback_connection",
                                 ubFallback ? "ub_fallback_transfer" : "tcp_fallback_transfer" };
-        AttemptResult result = ExecuteAttempt(workerAddr, operation, plan, recorder);
+        AttemptResult result = ExecuteAttempt(workerAddr, operation, plan, locationTopologyVersion, recorder);
         status = std::move(result.status);
         if (status.IsOk()) {
             LogDataPlaneOperation(workerAddr, hint, attempt, status, false);
@@ -193,6 +198,18 @@ Status DataPlaneExecutor::ExecuteFallbacks(const HostPort &workerAddr, const Ope
 
 Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &operation, bool traceEnabled)
 {
+    return ExecuteImpl(workerAddr, 0, operation, traceEnabled);
+}
+
+Status DataPlaneExecutor::ExecuteForDataLocation(const HostPort &workerAddr, uint64_t locationTopologyVersion,
+                                                 const Operation &operation, bool traceEnabled)
+{
+    return ExecuteImpl(workerAddr, locationTopologyVersion, operation, traceEnabled);
+}
+
+Status DataPlaneExecutor::ExecuteImpl(const HostPort &workerAddr, uint64_t locationTopologyVersion,
+                                      const Operation &operation, bool traceEnabled)
+{
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(operation), K_INVALID, "Data-plane operation is empty");
@@ -203,7 +220,8 @@ Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &o
     }
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);
     const AttemptPlan initialAttempt{ hint, INITIAL_ATTEMPT, "connection_acquire", "data_transfer" };
-    AttemptResult result = ExecuteAttempt(workerAddr, operation, initialAttempt, phaseRecorder);
+    AttemptResult result = ExecuteAttempt(workerAddr, operation, initialAttempt, locationTopologyVersion,
+                                          phaseRecorder);
     if (hint == TransportHint::SHM_CANDIDATE && IsShmFallbackError(result.status)) {
         if (IsWorkerDrainingForScaleIn(result.status)) {
             manager_->MarkShmDraining(workerAddr);
@@ -213,7 +231,8 @@ Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &o
             }
         }
         LogDataPlaneOperation(workerAddr, hint, INITIAL_ATTEMPT, result.status, false);
-        return ExecuteFallbacks(workerAddr, operation, advisor_->GetFallbackHints(hint), phaseRecorder);
+        return ExecuteFallbacks(workerAddr, operation, advisor_->GetFallbackHints(hint), locationTopologyVersion,
+                                phaseRecorder);
     }
     if (result.transporter == nullptr) {
         LogDataPlaneOperation(workerAddr, hint, INITIAL_ATTEMPT, result.status, true);
@@ -231,7 +250,8 @@ Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &o
         phaseRecorder->RecordPhase("retry_prepare", prepareBegin, TransportLatencyThreshold::PROCESS);
     }
     const AttemptPlan retryAttempt{ retryHint, REBUILD_ATTEMPT, "connection_rebuild", "retry_data_transfer" };
-    AttemptResult retryResult = ExecuteAttempt(workerAddr, operation, retryAttempt, phaseRecorder);
+    AttemptResult retryResult = ExecuteAttempt(workerAddr, operation, retryAttempt, locationTopologyVersion,
+                                               phaseRecorder);
     LogDataPlaneOperation(workerAddr, retryHint, REBUILD_ATTEMPT, retryResult.status, true);
     return retryResult.status;
 }

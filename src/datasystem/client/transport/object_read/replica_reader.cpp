@@ -19,6 +19,7 @@
 #include "datasystem/client/transport/object_read/replica_reader.h"
 #include "datasystem/common/util/rpc_util.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -124,6 +125,7 @@ struct EndpointWork {
     }
 
     HostPort address;
+    uint64_t locationTopologyVersion = 0;
     std::vector<ReadChunk> chunks;
 };
 
@@ -305,9 +307,10 @@ Status ReplicaReader::ReadReplicaOnce(const ReplicaReadRequest &request, int rep
     DataGetResult data;
     if (rc.IsOk()) {
         DataGetRequest dataRequest{ location.object_key(), location.object_size(), request.context };
-        rc = executor_->Execute(workerAddr, [&dataRequest, &data](IDataTransporter &transporter) {
-            return transporter.Get(dataRequest, data);
-        }, traceEnabled);
+        rc = executor_->ExecuteForDataLocation(
+            workerAddr, location.topology_version(),
+            [&dataRequest, &data](IDataTransporter &transporter) { return transporter.Get(dataRequest, data); },
+            traceEnabled);
         if (readOutcomeReport_) {
             readOutcomeReport_(workerAddr, data.response);
         }
@@ -459,7 +462,10 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
             if (inserted.second) {
                 endpointWorks.emplace_back(address);
             }
-            auto &chunks = endpointWorks[inserted.first->second].chunks;
+            auto &endpointWork = endpointWorks[inserted.first->second];
+            endpointWork.locationTopologyVersion =
+                std::max(endpointWork.locationTopologyVersion, state.location->topology_version());
+            auto &chunks = endpointWork.chunks;
             const bool exceedsByteCap = !chunks.empty() && !chunks.back().requests.empty()
                                         && (chunks.back().expectedBytes >= MAX_BATCH_EXPECTED_BYTES
                                             || state.expectedSize
@@ -504,10 +510,10 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                     chunk.attempted = true;
                     if (chunk.requests.size() == 1) {
                         DataGetResult data;
-                        Status unaryStatus = executor_->Execute(endpointWork->address,
-                                                                [&chunk, &data](IDataTransporter &t) {
-                            return t.Get(chunk.requests.front(), data);
-                        }, traceEnabled);
+                        Status unaryStatus = executor_->ExecuteForDataLocation(
+                            endpointWork->address, endpointWork->locationTopologyVersion,
+                            [&chunk, &data](IDataTransporter &t) { return t.Get(chunk.requests.front(), data); },
+                            traceEnabled);
                         chunk.results.resize(1);
                         chunk.results.front().status = unaryStatus;
                         // Preserve structured Provider failure detail even when the unary request failed.
@@ -517,8 +523,8 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                                                    ? Status::OK()
                                                    : std::move(unaryStatus);
                     } else {
-                        chunk.endpointStatus = executor_->Execute(
-                            endpointWork->address,
+                        chunk.endpointStatus = executor_->ExecuteForDataLocation(
+                            endpointWork->address, endpointWork->locationTopologyVersion,
                             [&chunk](IDataTransporter &t) { return t.BatchGet(chunk.requests, chunk.results); },
                             traceEnabled);
                     }

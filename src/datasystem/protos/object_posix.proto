@@ -678,6 +678,7 @@ message QueryAndGetLocationInfoPb {
   string object_key = 1;
   repeated string object_locations = 2;
   uint64 object_size = 3;
+  uint64 topology_version = 4;
 }
 
 message QueryAndGetShmInfoPb {

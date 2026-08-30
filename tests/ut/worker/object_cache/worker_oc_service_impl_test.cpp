@@ -407,8 +407,8 @@ public:
 
     std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApi(const HostPort &masterAddress) override
     {
-        (void)masterAddress;
-        return api_;
+        auto iter = apis_.find(masterAddress);
+        return iter == apis_.end() ? api_ : iter->second;
     }
 
     Status GetWorkerMasterApi(const HostPort &masterAddress, std::shared_ptr<worker::WorkerMasterOCApi> &api) override
@@ -1907,6 +1907,81 @@ TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsMapsPureMetadataOwnerPeerDea
     EXPECT_TRUE(locations.empty());
     EXPECT_EQ(api->PureQueryMetaCallCount(), 1);
     EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_RPC_PEER_DEAD)));
+}
+
+TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsCarriesServingMasterTopologyVersion)
+{
+    constexpr uint64_t servingMasterTopologyVersion = 11;
+    constexpr uint64_t dataSize = 8 * 1024;
+    const HostPort masterAddress("127.0.0.1", 18482);
+    const HostPort dataWorkerAddress("127.0.0.1", 18483);
+    const std::string objectKey = "versioned-location-key";
+    TestDistributedTopology topology(localAddress_, masterAddress);
+    DS_ASSERT_OK(topology.InitStatus());
+    topology.SetOwner(objectKey, masterAddress);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    master::PureQueryMetaRspPb response;
+    auto *queryMeta = response.add_query_metas();
+    queryMeta->mutable_meta()->set_object_key(objectKey);
+    queryMeta->mutable_meta()->set_data_size(dataSize);
+    queryMeta->mutable_meta()->set_primary_address(dataWorkerAddress.ToString());
+    queryMeta->set_topology_version(servingMasterTopologyVersion);
+    api->SetPureQueryMetaResponse(response);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_map<std::string, master::ObjectLocationInfoPb> locations;
+
+    DS_ASSERT_OK(getImpl.QueryObjectLocations({ objectKey }, locations));
+    ASSERT_EQ(locations.count(objectKey), 1u);
+    EXPECT_EQ(locations.at(objectKey).topology_version(), servingMasterTopologyVersion);
+}
+
+TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsCarriesPerResultServingMasterTopologyVersions)
+{
+    constexpr uint64_t redirectTopologyVersion = 7;
+    constexpr uint64_t directMasterTopologyVersion = 11;
+    constexpr uint64_t redirectMasterTopologyVersion = 13;
+    const HostPort originalMaster("127.0.0.1", 18482);
+    const HostPort redirectMaster("127.0.0.1", 18483);
+    const HostPort dataWorkerAddress("127.0.0.1", 18484);
+    const std::string directKey = "direct-versioned-location-key";
+    const std::string redirectKey = "redirect-versioned-location-key";
+    TestDistributedTopology topology(localAddress_, originalMaster);
+    DS_ASSERT_OK(topology.InitStatus());
+    topology.SetOwner(directKey, originalMaster);
+    topology.SetOwner(redirectKey, originalMaster);
+    auto originalApi = std::make_shared<FakeWorkerMasterOCApi>(originalMaster);
+    master::PureQueryMetaRspPb originalResponse;
+    auto *directMeta = originalResponse.add_query_metas();
+    directMeta->mutable_meta()->set_object_key(directKey);
+    directMeta->mutable_meta()->set_primary_address(dataWorkerAddress.ToString());
+    directMeta->set_topology_version(directMasterTopologyVersion);
+    auto *redirect = originalResponse.add_info();
+    redirect->set_redirect_meta_address(redirectMaster.ToString());
+    redirect->add_change_meta_ids(redirectKey);
+    redirect->set_topology_version(redirectTopologyVersion);
+    originalApi->SetPureQueryMetaResponse(originalResponse);
+    auto redirectApi = std::make_shared<FakeWorkerMasterOCApi>(redirectMaster);
+    master::PureQueryMetaRspPb redirectResponse;
+    auto *queryMeta = redirectResponse.add_query_metas();
+    queryMeta->mutable_meta()->set_object_key(redirectKey);
+    queryMeta->mutable_meta()->set_data_size(8 * 1024);
+    queryMeta->mutable_meta()->set_primary_address(dataWorkerAddress.ToString());
+    queryMeta->set_topology_version(redirectMasterTopologyVersion);
+    redirectApi->SetPureQueryMetaResponse(redirectResponse);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(originalMaster, originalApi);
+    apiManager->SetApi(redirectMaster, redirectApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_map<std::string, master::ObjectLocationInfoPb> locations;
+
+    DS_ASSERT_OK(getImpl.QueryObjectLocations({ directKey, redirectKey }, locations));
+    ASSERT_EQ(locations.size(), 2u);
+    EXPECT_EQ(locations.at(directKey).topology_version(), directMasterTopologyVersion);
+    EXPECT_EQ(locations.at(redirectKey).topology_version(), redirectMasterTopologyVersion);
 }
 
 TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoUsesLocalObjectBeforeStaleOwner)

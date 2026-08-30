@@ -241,13 +241,14 @@ std::vector<std::shared_ptr<ObjectBuffer>> MakeTransportBuffers(const HostPort &
 }
 
 QueryAndGetResultPb *AddLocation(QueryAndGetRspPb &response, const std::string &key,
-                                 const HostPort &address, uint64_t size = 4)
+                                 const HostPort &address, uint64_t size = 4, uint64_t topologyVersion = 0)
 {
     auto *result = response.add_results();
     auto *location = result->mutable_location();
     location->set_object_key(key);
     location->add_object_locations(address.ToString());
     location->set_object_size(size);
+    location->set_topology_version(topologyVersion);
     return result;
 }
 
@@ -2638,6 +2639,119 @@ TEST(DataPlaneManagerTest, PublishedSnapshotRejectsAbsentWorkersBeforeCleanup)
     EXPECT_EQ(transporter, liveTransporter);
 }
 
+TEST(DataPlaneManagerTest, NewerLocationSnapshotAdmitsWorkerMissingFromClientSnapshot)
+{
+    constexpr uint64_t clientTopologyVersion = 10;
+    constexpr uint64_t locationTopologyVersion = 11;
+    FakeDataPlaneManager manager;
+    const HostPort newWorker = MakeAddress(24);
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = clientTopologyVersion;
+    snapshot.remoteTransportAddrs.push_back(MakeAddress(23));
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+
+    std::shared_ptr<IDataTransporter> transporter;
+    EXPECT_TRUE(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
+                                                  transporter)
+                    .IsOk());
+    EXPECT_NE(transporter, nullptr);
+    EXPECT_EQ(manager.rpcBuildCount, 1);
+    EXPECT_EQ(manager.transportBuildCount, 1);
+}
+
+TEST(DataPlaneManagerTest, OldLocationSnapshotDoesNotAdmitMissingWorker)
+{
+    constexpr uint64_t legacyTopologyVersion = 0;
+    constexpr uint64_t clientTopologyVersion = 10;
+    constexpr uint64_t oldTopologyVersion = clientTopologyVersion - 1;
+    FakeDataPlaneManager manager;
+    const HostPort newWorker = MakeAddress(24);
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = clientTopologyVersion;
+    snapshot.remoteTransportAddrs.push_back(MakeAddress(23));
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+
+    std::shared_ptr<IDataTransporter> transporter;
+    for (uint64_t version : { legacyTopologyVersion, oldTopologyVersion, clientTopologyVersion }) {
+        SCOPED_TRACE(version);
+        EXPECT_EQ(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, version, transporter)
+                      .GetCode(),
+                  K_NOT_READY);
+        EXPECT_EQ(transporter, nullptr);
+    }
+    EXPECT_EQ(manager.rpcBuildCount, 0);
+    EXPECT_EQ(manager.transportBuildCount, 0);
+}
+
+TEST(DataPlaneManagerTest, SnapshotAdvanceRevokesNewLocationAdmissionDuringBuild)
+{
+    constexpr uint64_t clientTopologyVersion = 10;
+    constexpr uint64_t locationTopologyVersion = 11;
+    FakeDataPlaneManager manager;
+    const HostPort existingWorker = MakeAddress(23);
+    const HostPort newWorker = MakeAddress(24);
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = clientTopologyVersion;
+    snapshot.remoteTransportAddrs.push_back(existingWorker);
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+    manager.configureTransporter = [&](const HostPort &, FakeTransporter &) {
+        WorkerSnapshot advanced;
+        advanced.ringVersion = locationTopologyVersion;
+        advanced.remoteTransportAddrs.push_back(existingWorker);
+        EXPECT_TRUE(manager.UpdateWorkerSnapshot(advanced).IsOk());
+    };
+
+    std::shared_ptr<IDataTransporter> transporter;
+    EXPECT_EQ(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
+                                                transporter)
+                  .GetCode(),
+              K_NOT_READY);
+    EXPECT_EQ(transporter, nullptr);
+    EXPECT_EQ(manager.rpcBuildCount, 1);
+    EXPECT_EQ(manager.transportBuildCount, 1);
+    ASSERT_NE(manager.lastTransporter, nullptr);
+    EXPECT_EQ(manager.lastTransporter->closeCount, 0);
+    DataPlaneManager::EntryMap::const_accessor accessor;
+    EXPECT_FALSE(manager.entries_.find(accessor, newWorker.ToString()));
+}
+
+TEST(DataPlaneManagerTest, OlderReconcilePreservesLocationAdmittedEndpointUntilSnapshotCatchesUp)
+{
+    constexpr uint64_t clientTopologyVersion = 10;
+    constexpr uint64_t locationTopologyVersion = 11;
+    FakeDataPlaneManager manager;
+    const HostPort existingWorker = MakeAddress(23);
+    const HostPort newWorker = MakeAddress(24);
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = clientTopologyVersion;
+    snapshot.remoteTransportAddrs.push_back(existingWorker);
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+
+    std::shared_ptr<IDataTransporter> transporter;
+    ASSERT_TRUE(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
+                                                  transporter)
+                    .IsOk());
+    auto admittedTransporter = std::dynamic_pointer_cast<FakeTransporter>(transporter);
+    ASSERT_NE(admittedTransporter, nullptr);
+    manager.ReconcileWithSnapshot(snapshot);
+
+    EXPECT_EQ(admittedTransporter->closeCount, 0);
+    ASSERT_TRUE(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
+                                                  transporter)
+                    .IsOk());
+    EXPECT_EQ(transporter, admittedTransporter);
+    EXPECT_EQ(manager.transportBuildCount, 1);
+
+    snapshot.ringVersion = locationTopologyVersion;
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+    manager.ReconcileWithSnapshot(snapshot);
+    EXPECT_EQ(admittedTransporter->closeCount, 1);
+    EXPECT_EQ(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
+                                                transporter)
+                  .GetCode(),
+              K_NOT_READY);
+}
+
 TEST(DataPlaneManagerTest, SupersededSnapshotCannotRemoveCurrentWorkers)
 {
     FakeDataPlaneManager manager;
@@ -2918,6 +3032,26 @@ TEST(ObjectMetadataClientTest, MissingTcpInlineMarkerFallsBackToReplicaRead)
     EXPECT_TRUE(results[0].status.IsOk());
     EXPECT_FALSE(results[0].inlineData.has_value());
     EXPECT_EQ(results[0].location.object_locations(0), MakeAddress(51).ToString());
+}
+
+TEST(ObjectMetadataClientTest, QueryAndGetCopiesLocationTopologyVersion)
+{
+    constexpr uint64_t locationTopologyVersion = 11;
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->queryAndGetHandler = [](const HostPort &, const QueryAndGetReqPb &,
+                                     QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        AddLocation(response, "key", MakeAddress(51), 4, locationTopologyVersion);
+        return Status::OK();
+    };
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>(),
+                                  std::make_shared<FixedTransportAdvisor>(TransportHint::TCP_ONLY));
+    auto results = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
+    auto batch = MakeMetadataBatch(results);
+
+    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).IsOk());
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].location.topology_version(), locationTopologyVersion);
 }
 
 TEST(ObjectMetadataClientTest, RejectsInvalidTcpInlinePayloadIndex)
@@ -5891,6 +6025,55 @@ TEST(DataPlaneExecutorTest, DrainingShmDoesNotHideUbApplicationError)
     EXPECT_EQ(manager->builtTransporters[1]->getCount, 1);
 }
 #endif
+
+TEST(ReplicaReaderTest, FreshLocationVersionAdmitsWorkerMissingFromClientSnapshot)
+{
+    constexpr uint64_t clientTopologyVersion = 10;
+    constexpr uint64_t locationTopologyVersion = 11;
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = clientTopologyVersion;
+    snapshot.remoteTransportAddrs.push_back(MakeAddress(30));
+    ASSERT_TRUE(manager->UpdateWorkerSnapshot(snapshot).IsOk());
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 4, { MakeAddress(31) });
+    location.set_topology_version(locationTopologyVersion);
+    ObjectReadItemResult result;
+
+    ASSERT_TRUE(reader.Read(location, result, MakeReadContext()).IsOk());
+    EXPECT_EQ(manager->rpcBuildCount, 1);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+}
+
+TEST(ReplicaReaderTest, BatchUsesNewestLocationVersionForSharedEndpoint)
+{
+    constexpr uint64_t clientTopologyVersion = 10;
+    constexpr uint64_t locationTopologyVersion = 11;
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = clientTopologyVersion;
+    snapshot.remoteTransportAddrs.push_back(MakeAddress(30));
+    ASSERT_TRUE(manager->UpdateWorkerSnapshot(snapshot).IsOk());
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    const HostPort newWorker = MakeAddress(31);
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("new-version", 4, { newWorker }), MakeReplicaLocation("old-version", 4, { newWorker })
+    };
+    locations.front().set_topology_version(locationTopologyVersion);
+    std::vector<ObjectReadItemResult> results(locations.size());
+
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&locations[0], &results[0]),
+                                   MakeReplicaReadRequest(&locations[1], &results[1]) })
+                    .IsOk());
+    ASSERT_NE(manager->lastTransporter, nullptr);
+    EXPECT_EQ(manager->lastTransporter->batchGetCount, 1);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_TRUE(results[1].status.IsOk());
+}
 
 TEST(ReplicaReaderTest, TriesNextLocationWithoutRefreshingMetadata)
 {
