@@ -85,6 +85,8 @@
 
 namespace datasystem {
 namespace object_cache {
+
+class WorkerFailover;
 using TbbGlobalRefTable = tbb::concurrent_hash_map<std::string, int>;
 using GlobalRefInfo = std::pair<int, std::shared_ptr<TbbGlobalRefTable::accessor>>;
 
@@ -105,6 +107,7 @@ struct FullParam : public CreateParam {
 using P2PPeerTable = tbb::concurrent_hash_map<std::string, P2PPeer>;
 
 class __attribute((visibility("default"))) ObjectClientImpl : public std::enable_shared_from_this<ObjectClientImpl> {
+    friend class WorkerFailover;
 public:
     explicit ObjectClientImpl(const ConnectOptions &connectOptions);
 
@@ -1286,12 +1289,6 @@ private:
      */
     static Status CheckValidObjectKey(const std::string &key);
 
-    /**
-     * @brief Check that the string inside the container is legitimate.
-     * @param[in] vec Vector to check.
-     * @param[in] nullable Allow empty vector.
-     * @return K_OK on success; the error code otherwise.
-     */
     template <typename Vec>
     static Status CheckValidObjectKeyVector(const Vec &vec, bool nullable = false)
     {
@@ -1316,84 +1313,6 @@ private:
     uint32_t GetLockId() const;
 
     /**
-     * @brief If can not connect to worker, do some clean worker in this function.
-     */
-    Status ProcessWorkerLost(client::WorkerRecoveryReason reason);
-
-    /**
-     * @brief Clean local shm and mmap state when local worker heartbeat times out.
-     */
-    void ProcessWorkerTimeout();
-
-    /**
-     * @brief Process standby worker lost.
-     * @param[in] node Standby worker node index.
-     */
-    Status ProcessStandbyWorkerLost(WorkerNode node, client::WorkerRecoveryReason reason);
-
-    /**
-     * @brief Stop listening standby worker.
-     * @param[in] id The id of standby worker.
-     */
-    void StopStandbyWorkerListen(WorkerNode id);
-
-    /**
-     * @brief Switch available worker when current worker lost.
-     * @param[in] node Worker node index.
-     * @param[in] reason Switch trigger reason.
-     * @return True if switch success.
-     */
-    bool SwitchWorkerNode(WorkerNode node, client::SwitchTriggerReason reason);
-
-    /**
-     * @brief Switch to standby worker impl.
-     * @param[in] currentApi Current client worker api.
-     * @param[in] current current worker index.
-     * @param[in] next Next standby worker index.
-     * @param[in] switchGeneration Switch generation number.
-     * @param[in] reason Switch trigger reason.
-     * @return True if switch success.
-     */
-    bool SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode current,
-                                   WorkerNode next, uint64_t switchGeneration, client::SwitchTriggerReason reason);
-
-    /**
-     * @brief Get standby worker candidates for a switch attempt, partitioned by host affinity.
-     * @param[in] currentApi Current client worker api.
-     * @param[out] sameHost Candidates on the same host as the client.
-     * @param[out] others Remaining candidates.
-     */
-    void GetStandbyWorkersForSwitch(const std::shared_ptr<IClientWorkerApi> &currentApi,
-                                    std::vector<HostPort> &sameHost, std::vector<HostPort> &others) const;
-
-    bool CommitStandbySwitch(WorkerNode current, WorkerNode next, uint64_t switchGeneration,
-                             const std::shared_ptr<IClientWorkerApi> &candidateWorkerApi,
-                             const std::shared_ptr<client::ListenWorker> &candidateListenWorker);
-
-    StandbySwitchAttemptResult TrySwitchToStandbyWorker(const std::shared_ptr<IClientWorkerApi> &currentApi,
-                                                        WorkerNode current, WorkerNode next, uint64_t switchGeneration,
-                                                        const HostPort &standbyWorker);
-
-    /**
-     * @brief Iterate a candidate list, attempting a switch to each address until one succeeds.
-     * @param[in] currentApi Current client worker api.
-     * @param[in] current current worker index.
-     * @param[in] next Next standby worker index.
-     * @param[in] switchGeneration Switch generation number.
-     * @param[in] candidates Candidate addresses to try in order.
-     * @param[in] isSameHost If true, candidates replace LOCAL_WORKER; otherwise go into a standby slot.
-     * @return SWITCHED on success, ABORT if the switch was aborted, CONTINUE if all candidates failed.
-     */
-    StandbySwitchAttemptResult TrySwitchToCandidateList(const std::shared_ptr<IClientWorkerApi> &currentApi,
-                                                        WorkerNode current, WorkerNode next,
-                                                        uint64_t switchGeneration,
-                                                        const std::vector<HostPort> &candidates, bool isSameHost);
-
-    void MarkNoSwitchableWorkerIfNeeded(WorkerNode current, uint64_t switchGeneration);
-
-    void RestoreWorkerAvailableIfNeeded(WorkerNode current, uint64_t switchGeneration);
-
-    /**
      * @brief Best-effort warmup of the client-worker request path.
      */
     void WarmupClientWorkerConnection();
@@ -1409,42 +1328,6 @@ private:
 
     Status Set(const std::string &key, const StringView &val, const SetParam &setParam,
                int32_t requestTimeoutMs);
-
-    /**
-     * @brief Try switch back to local worker.
-     */
-    bool TrySwitchBackToLocalWorker();
-
-    /**
-     * @brief Switch the LOCAL_WORKER slot to a same-host worker at localAddress.
-     * @param[in] current current worker index.
-     * @param[in] switchGeneration Switch generation number.
-     * @param[in] localAddress Address of the same-host worker to switch to.
-     * @return SWITCHED on success, CONTINUE if prepare failed, ABORT if the switch was aborted.
-     */
-    StandbySwitchAttemptResult TrySwitchToLocalSameHost(WorkerNode current, uint64_t switchGeneration,
-                                                        const HostPort &localAddress);
-
-    /**
-     * @brief Check node is ready to exit or not.
-     * @return True if node ready to exit.
-     */
-    bool ReadyToExit(WorkerNode node, const std::shared_ptr<IClientWorkerApi> &workerApi,
-                     const std::shared_ptr<client::ListenWorker> &listenWorker);
-
-    /**
-     * @brief Wait standby worker ready.
-     * @param[in] clientWorkerApi Standby worker stub handler.
-     * @return True if worker is ready.
-     */
-    bool WaitStandbyWorkerReady(const std::shared_ptr<IClientWorkerApi> &clientWorkerApi);
-
-    /**
-     * @brief Get the next worker node.
-     * @param[in] current The current worker node.
-     * @return WorkerNode The next worker node.
-     */
-    WorkerNode GetNextWorkerNode(WorkerNode current);
 
     /**
      * @brief Get the available workerApi.
@@ -1668,26 +1551,10 @@ private:
     Status GetCurrentWorkerHostPort(HostPort &addr) const;
 
     /**
-     * @brief Configure the URMA data-plane failover callback on a worker API instance.
-     * @param[in] node The worker node slot (LOCAL_WORKER or STANDBY_WORKER).
-     * @param[in] workerApi The worker API to configure.
-     */
-    void ConfigureUrmaDataPlaneFailureCallback(WorkerNode node, const std::shared_ptr<IClientWorkerApi> &workerApi);
-
-    /**
-     * @brief Submit an asynchronous worker switch triggered by URMA data-plane failure.
-     * @param[in] node The worker node slot to switch away from.
-     * @param[in] weakWorkerApi Weak reference to the current worker API.
-     * @return True if the switch task was submitted to the async pool; false otherwise.
-     */
-    bool SubmitUrmaDataPlaneSwitch(WorkerNode node, std::weak_ptr<client::IClientWorkerCommonApi> weakWorkerApi);
-
-    /**
      * @brief Submit an asynchronous switch away from an unavailable bound worker.
      * @param[in] workerApi The worker API that triggered the switch.
      * @return True if a switch task was submitted; false if it was stale, duplicate, or switching is disabled.
      */
-    bool SubmitUnavailableWorkerSwitch(const std::shared_ptr<IClientWorkerApi> &workerApi);
 
     static bool ShouldRefreshRoutingAfterFailure(StatusCode code);
 
@@ -1695,7 +1562,6 @@ private:
 
     void MaybeSwitchWorkerRemovedFromRing(const ::datasystem::ClusterTopologyPb &ring);
 
-    void DrainAsyncSwitchWorkerPool();
 
     /**
      * @brief Check whether an asynchronous switch trigger still belongs to the current worker.
@@ -1703,8 +1569,6 @@ private:
      * @param[in] workerApi The worker API that reported the failure.
      * @return True if the trigger source is still current and should switch.
      */
-    bool IsCurrentWorkerSwitchTrigger(WorkerNode node,
-                                      const std::shared_ptr<client::IClientWorkerCommonApi> &workerApi);
 
     Status InitListenWorker();
 
@@ -1743,30 +1607,6 @@ private:
     bool ShouldRetryInit(const Status &status) const;
 
     void ClearFailedInitAttempt();
-
-    bool RecoverPreferredLocalWorker();
-
-    void MarkWorkerAvailableLocked();
-
-    void MarkNoSwitchableWorkerLocked();
-
-    Status NoSwitchableWorkerStatus() const;
-
-    bool GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress, HeartbeatType &heartbeatType);
-
-    Status PreparePreferredLocalWorker(const HostPort &localAddress, HeartbeatType heartbeatType,
-                                       std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
-                                       std::unique_ptr<client::MmapManager> &localMmapManager,
-                                       std::shared_ptr<client::ListenWorker> &localListenWorker);
-
-    void ReplacePreferredLocalWorkerLocked(std::unique_ptr<client::MmapManager> &localMmapManager,
-                                           std::shared_ptr<client::ListenWorker> &oldLocalListener,
-                                           std::unique_ptr<client::MmapManager> &oldMmapManager);
-
-    bool CommitPreferredLocalWorker(WorkerNode oldNode, const HostPort &localAddress,
-                                    const std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
-                                    std::unique_ptr<client::MmapManager> localMmapManager,
-                                    const std::shared_ptr<client::ListenWorker> &localListenWorker);
 
     /**
      * @brief Convert a list of devBlobList to a list of device buffer pointers.
@@ -1925,12 +1765,6 @@ private:
     Status PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp,
                             std::vector<std::shared_ptr<Buffer>> &buffers);
 
-    void CleanupWorkerShmAfterWorkerLost();
-
-    Status RegisterWorkerAfterWorkerLost(client::WorkerRecoveryReason reason);
-
-    Status RebuildWorkerShm();
-
     Status SetShmObjectBufferWithMetric(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
                                         uint32_t version, const std::vector<ReadParam> &readParams, size_t index,
                                         std::shared_ptr<Buffer> &bufferPtr);
@@ -1948,6 +1782,12 @@ private:
     std::unique_ptr<Signature> signature_{ nullptr };
     std::vector<std::shared_ptr<IClientWorkerApi>> workerApi_;
     std::atomic<WorkerNode> currentNode_{ LOCAL_WORKER };
+    // Destructed before workerApi_/listenWorker_; callbacks registered into them are cleared in ShutDown.
+    std::unique_ptr<WorkerFailover> failover_;
+    // Thin forwarders kept for existing callers (tests); real logic lives in WorkerFailover.
+    bool SubmitUrmaDataPlaneSwitch(WorkerNode node, std::weak_ptr<client::IClientWorkerCommonApi> weakWorkerApi);
+    bool SubmitUnavailableWorkerSwitch(const std::shared_ptr<IClientWorkerApi> &workerApi);
+    void DrainAsyncSwitchWorkerPool();
     mutable std::mutex switchNodeMutex_;  // Protecting the process of switching workers.
     WorkerSwitchState workerSwitchState_{ WorkerSwitchState::AVAILABLE };
     bool switchInProgress_{ false };
