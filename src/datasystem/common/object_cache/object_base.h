@@ -390,6 +390,7 @@ struct ObjectBufferInfo {
     HostPort workerAddr;                       // Worker address for Set(buffer) recovery
     bool isRoutedWrite = false;                // Set by routed two-step Create (lc=false). Distinguishes a routed write
                                                // buffer from a Get'd (read-only) buffer, which also carries workerAddr.
+    bool routedWriteSourceDraining = false;
 };
 
 enum class TransferType : uint8_t { HOST = 0, P2P = 1 };

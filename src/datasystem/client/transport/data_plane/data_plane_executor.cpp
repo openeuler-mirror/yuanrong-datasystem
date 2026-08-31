@@ -206,6 +206,7 @@ Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &o
     AttemptResult result = ExecuteAttempt(workerAddr, operation, initialAttempt, phaseRecorder);
     if (hint == TransportHint::SHM_CANDIDATE && IsShmFallbackError(result.status)) {
         if (IsWorkerDrainingForScaleIn(result.status)) {
+            manager_->MarkShmDraining(workerAddr);
             const bool shouldRefresh = advisor_->ObserveDrainingShmFailure(workerAddr);
             if (shouldRefresh && drainingFallbackHandler_ != nullptr) {
                 drainingFallbackHandler_(workerAddr, result.status);

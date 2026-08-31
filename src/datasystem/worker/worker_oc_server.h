@@ -253,6 +253,7 @@ private:
     Status StartPreShutdownWorkers(bool scaleIn, const std::string &traceId);
     Status StartPreShutdownWorkersLocked(bool scaleIn, const std::string &traceId);
     Status RestorePreShutdownWorkers(const std::string &traceId, bool &recovered);
+    bool IsScaleInDataDrainReady() const;
 
     /**
      * @brief Publish EXITING membership for a scale-in lifecycle restored from topology.

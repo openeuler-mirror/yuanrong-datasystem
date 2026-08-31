@@ -1190,10 +1190,11 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
     objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &,
                                                                    std::chrono::steady_clock::time_point deadline,
                                                                    const cluster::CancellationToken &cancellation) {
-        while (!checkAsyncTasksDone_.load()) {
-            CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology async-task drain cancelled");
+        while (!IsScaleInDataDrainReady()) {
+            CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY,
+                                     "topology local ScaleIn drain readiness cancelled");
             CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
-                                     "topology async-task drain deadline exceeded");
+                                     "topology local ScaleIn drain readiness deadline exceeded");
             cancellation.WaitUntil(
                 std::min(deadline, std::chrono::steady_clock::now() + std::chrono::seconds(CHECK_ASYNC_SLEEP_TIME_S)));
         }
@@ -2224,7 +2225,7 @@ void WorkerOCServer::RunScaleInExitPublisher()
         const auto retryDelay = ComputeScaleInExitRetryDelay(hostPort_.ToString(), consecutiveFailures);
         lock.unlock();
         LOG_FIRST_AND_EVERY_N(WARNING, RECOVERED_EXIT_PUBLISH_LOG_INTERVAL)
-            << "Failed to publish EXITING membership for restored scale-in; will retry after " << retryDelay.count()
+            << "Failed to publish EXITING membership for scale-in; will retry after " << retryDelay.count()
             << " ms: " << rc.ToString();
         lock.lock();
         if (scaleInExitPublisherStopping_ || !scaleInExitPublicationRequested_) {
@@ -3494,12 +3495,17 @@ Status WorkerOCServer::PreShutDown()
 {
     RETURN_OK_IF_TRUE(topologyEngine_ == nullptr);
     INJECT_POINT("worker.PreShutDown.skip");
+    bool scaleIn = IsScaleIn();
+    auto traceId = Trace::Instance().GetTraceID();
+    if (scaleIn) {
+        RETURN_IF_NOT_OK(StartPreShutdownWorkers(scaleIn, traceId));
+    }
     if (objCacheClientWorkerSvc_ != nullptr) {
         objCacheClientWorkerSvc_->RequestShutdown();
     }
-    bool scaleIn = IsScaleIn();
-    auto traceId = Trace::Instance().GetTraceID();
-    RETURN_IF_NOT_OK(StartPreShutdownWorkers(scaleIn, traceId));
+    if (!scaleIn) {
+        RETURN_IF_NOT_OK(StartPreShutdownWorkers(scaleIn, traceId));
+    }
     WaitForPreShutdownTasks(scaleIn);
     auto topoRc = Status::OK();
     if (scaleIn) {
@@ -3518,12 +3524,25 @@ Status WorkerOCServer::PreShutDown()
 
 Status WorkerOCServer::StartPreShutdownWorkers(bool scaleIn, const std::string &traceId)
 {
-    std::lock_guard<std::mutex> lock(preShutdownWorkersMutex_);
-    CHECK_FAIL_RETURN_STATUS(!preShutdownWorkersStopped_, K_NOT_READY, "pre-shutdown workers are stopping");
-    if (scaleIn) {
-        topologyExitRequested_.store(true);
+    if (!scaleIn) {
+        std::lock_guard<std::mutex> lock(preShutdownWorkersMutex_);
+        CHECK_FAIL_RETURN_STATUS(!preShutdownWorkersStopped_, K_NOT_READY, "pre-shutdown workers are stopping");
+        return StartPreShutdownWorkersLocked(false, traceId);
     }
-    return StartPreShutdownWorkersLocked(scaleIn, traceId);
+    {
+        std::lock_guard<std::mutex> lock(preShutdownWorkersMutex_);
+        CHECK_FAIL_RETURN_STATUS(!preShutdownWorkersStopped_, K_NOT_READY, "pre-shutdown workers are stopping");
+        topologyExitRequested_.store(true);
+        RETURN_IF_NOT_OK(StartPreShutdownWorkersLocked(true, traceId));
+    }
+    Status publishRc = ScheduleScaleInExitPublication();
+    LOG_IF_ERROR(publishRc, "Failed to start early EXITING publication; final ScaleIn publication will retry");
+    return Status::OK();
+}
+
+bool WorkerOCServer::IsScaleInDataDrainReady() const
+{
+    return checkAsyncTasksDone_.load() && allClientsExited_.load();
 }
 
 Status WorkerOCServer::RestorePreShutdownWorkers(const std::string &traceId, bool &recovered)
@@ -3608,13 +3627,13 @@ void WorkerOCServer::WaitForPreShutdownTasks(bool scaleIn)
 {
     std::unique_lock<std::mutex> lock(checkAsyncTasksDoneMutex_);
     auto shouldExit = [this, scaleIn]() {
-        return !scaleIn ? checkAsyncTasksDone_.load() : checkAsyncTasksDone_.load() && allClientsExited_.load();
+        return !scaleIn ? checkAsyncTasksDone_.load() : IsScaleInDataDrainReady();
     };
     bool waitFlag = false;
     while (!waitFlag) {
         if (scaleIn) {
             constexpr int kShutdownProgressLogEvery = 5;
-            waitFlag = checkAsyncTasksDone_ && allClientsExited_;
+            waitFlag = IsScaleInDataDrainReady();
             LOG_EVERY_N(INFO, kShutdownProgressLogEvery)
                 << "[Graceful exit] The progress of voluntary scaling down is as follows: "
                 << "checkAsyncTasksDone_: " << checkAsyncTasksDone_ << ", allClientsExited_: " << allClientsExited_;

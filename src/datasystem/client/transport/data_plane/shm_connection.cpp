@@ -20,6 +20,7 @@
 
 #include "datasystem/client/transport/data_plane/shm_receive_buffer_owner.h"
 #include "datasystem/client/transport/data_plane/shm_send_buffer_owner.h"
+#include "datasystem/client/transport/object_read/object_read_types.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -242,7 +243,7 @@ ShmSession::ShmSession(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpc
                        std::shared_ptr<ShmFdChannel> fdChannel, std::shared_ptr<MmapManager> mmapManager,
                        std::string clientId, std::string workerStartId, uint32_t lockId,
                        std::weak_ptr<ThreadPool> releasePool, TransportRequestContext auth,
-                       bool supportMultiRefCount)
+                       bool supportMultiRefCount, std::shared_ptr<std::atomic<bool>> scaleInDraining)
     : workerAddr_(std::move(workerAddr)),
       rpcClient_(std::move(rpcClient)),
       fdChannel_(std::move(fdChannel)),
@@ -252,12 +253,14 @@ ShmSession::ShmSession(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpc
       lockId_(lockId),
       releasePool_(std::move(releasePool)),
       auth_(std::move(auth)),
-      supportMultiRefCount_(supportMultiRefCount)
+      supportMultiRefCount_(supportMultiRefCount),
+      scaleInDraining_(std::move(scaleInDraining))
 {
 }
 
 Status ShmSession::Create(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient,
                           const TransportRequestContext &context, std::weak_ptr<ThreadPool> releasePool,
+                          std::shared_ptr<std::atomic<bool>> scaleInDraining,
                           std::shared_ptr<ShmSession> &session)
 {
     session.reset();
@@ -280,7 +283,7 @@ Status ShmSession::Create(const HostPort &workerAddr, const std::shared_ptr<Work
     auto candidate = std::shared_ptr<ShmSession>(
         new ShmSession(workerAddr, rpcClient, std::move(fdChannel), std::move(mmapManager), response.client_id(),
                        response.worker_start_id(), response.lock_id(), std::move(releasePool), context,
-                       response.support_multi_shm_ref_count()));
+                       response.support_multi_shm_ref_count(), std::move(scaleInDraining)));
     const uint64_t deadTimeoutSeconds =
         std::max<uint64_t>(response.client_dead_timeout_s(), SHM_MAINTENANCE_MIN_INTERVAL_S);
     candidate->maintenanceIntervalMs_ = std::min<uint64_t>(deadTimeoutSeconds, SHM_MAINTENANCE_MAX_INTERVAL_S)
@@ -526,7 +529,24 @@ void ShmSession::Close(bool notifyWorker)
     if (!wasAlive) {
         return;
     }
-    if (!notifyWorker || rpcClient_ == nullptr || !rpcClient_->IsAlive() || clientId_.empty()) {
+    if (notifyWorker) {
+        ScheduleDisconnect();
+    }
+}
+
+void ShmSession::CloseForScaleIn()
+{
+    scaleInDraining_->store(true, std::memory_order_release);
+    Close(false);
+    ScheduleDisconnect();
+}
+
+void ShmSession::ScheduleDisconnect()
+{
+    if (rpcClient_ == nullptr || !rpcClient_->IsAlive() || clientId_.empty()) {
+        return;
+    }
+    if (disconnectScheduled_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
     TransportRequestContext context;
@@ -659,19 +679,20 @@ void ShmSession::RunMaintenance()
     *request.mutable_released_worker_fds() = { releasedWorkerFds_.begin(), releasedWorkerFds_.end() };
     HeartbeatRspPb response;
     Status rc = rpcClient_->InvokeShmHeartbeat(request, response);
-    if (rc.IsOk() && !workerStartId_.empty() && response.worker_start_id() != workerStartId_) {
+    const bool voluntaryScaleDown = rc.IsOk() && response.is_voluntary_scale_down();
+    if (voluntaryScaleDown) {
+        rc = Status(K_NOT_READY, WORKER_DRAINING_FOR_SCALE_IN_MESSAGE);
+    } else if (rc.IsOk() && !workerStartId_.empty() && response.worker_start_id() != workerStartId_) {
         rc = Status(K_RPC_UNAVAILABLE, "Target worker restarted during shared-memory session");
-    }
-    if (rc.IsOk() && response.client_removed()) {
+    } else if (rc.IsOk() && response.client_removed()) {
         rc = Status(K_RPC_UNAVAILABLE, "Target worker removed the shared-memory client");
-    }
-    if (rc.IsOk() && (response.unhealthy() || response.is_voluntary_scale_down())) {
+    } else if (rc.IsOk() && response.unhealthy()) {
         rc = Status(K_NOT_READY, "Target worker is unavailable during shared-memory maintenance");
     }
     if (rc.IsError()) {
         LOG(WARNING) << "Routed SHM maintenance failed for worker " << workerAddr_.ToString() << ": "
                      << rc.ToString();
-        Close(false);
+        voluntaryScaleDown ? CloseForScaleIn() : Close(false);
         return;
     }
 
@@ -716,6 +737,40 @@ Status ShmConnection::WaitForConnecting(std::unique_lock<bthread::Mutex> &lock)
     return Status::OK();
 }
 
+Status ShmConnection::CompleteConnectionAttempt(uint64_t attemptId, const std::shared_ptr<ShmSession> &candidate,
+                                                Status result, std::shared_ptr<ShmSession> &session)
+{
+    bool publish = false;
+    {
+        std::lock_guard<bthread::Mutex> lock(mutex_);
+        connecting_ = false;
+        if (result.IsOk() && scaleInDraining_->load(std::memory_order_acquire)) {
+            result = Status(K_NOT_READY, WORKER_DRAINING_FOR_SCALE_IN_MESSAGE);
+        }
+        publish = result.IsOk() && !closed_ && attemptId == attemptId_;
+        if (publish) {
+            session_ = candidate;
+            session = candidate;
+            failureBackoffMs_ = SHM_CONNECT_FAILURE_BACKOFF_INITIAL_MS;
+            retryAfter_ = {};
+        } else if (result.IsError() && !closed_) {
+            lastConnectFailure_ = result;
+            retryAfter_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(failureBackoffMs_);
+            failureBackoffMs_ = std::min<int64_t>(failureBackoffMs_ * SHM_CONNECT_FAILURE_BACKOFF_MULTIPLIER,
+                                                  SHM_CONNECT_FAILURE_BACKOFF_MAX_MS);
+        }
+        cv_.notify_all();
+    }
+    if (!publish && candidate != nullptr) {
+        candidate->Close(true);
+    }
+    if (result.IsError()) {
+        return result;
+    }
+    CHECK_FAIL_RETURN_STATUS(publish, K_SHUTTING_DOWN, "Shared-memory connection closed during establishment");
+    return Status::OK();
+}
+
 Status ShmConnection::Acquire(const TransportRequestContext &context, std::shared_ptr<ShmSession> &session)
 {
     session.reset();
@@ -731,6 +786,9 @@ Status ShmConnection::Acquire(const TransportRequestContext &context, std::share
             keepWaiting = connecting_ && !closed_;
         }
         CHECK_FAIL_RETURN_STATUS(!closed_, K_SHUTTING_DOWN, "Shared-memory connection is closed");
+        if (scaleInDraining_->load(std::memory_order_acquire)) {
+            return Status(K_NOT_READY, WORKER_DRAINING_FOR_SCALE_IN_MESSAGE);
+        }
         if (session_ != nullptr && session_->IsAlive()) {
             session = session_;
             return Status::OK();
@@ -743,34 +801,8 @@ Status ShmConnection::Acquire(const TransportRequestContext &context, std::share
     }
 
     std::shared_ptr<ShmSession> candidate;
-    Status rc = ShmSession::Create(workerAddr_, rpcClient_, context, releasePool_, candidate);
-    bool publish = false;
-    {
-        std::lock_guard<bthread::Mutex> lock(mutex_);
-        connecting_ = false;
-        publish = rc.IsOk() && !closed_ && attemptId == attemptId_;
-        if (publish) {
-            session_ = candidate;
-            session = candidate;
-            failureBackoffMs_ = SHM_CONNECT_FAILURE_BACKOFF_INITIAL_MS;
-            retryAfter_ = {};
-        } else if (rc.IsError() && !closed_) {
-            lastConnectFailure_ = rc;
-            retryAfter_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(failureBackoffMs_);
-            failureBackoffMs_ = std::min<int64_t>(failureBackoffMs_ * SHM_CONNECT_FAILURE_BACKOFF_MULTIPLIER,
-                                                  SHM_CONNECT_FAILURE_BACKOFF_MAX_MS);
-        }
-        cv_.notify_all();
-    }
-    if (!publish && candidate != nullptr) {
-        candidate->Close(true);
-    }
-    if (rc.IsError()) {
-        return rc;
-    }
-    CHECK_FAIL_RETURN_STATUS(publish, K_SHUTTING_DOWN,
-                             "Shared-memory connection closed during establishment");
-    return Status::OK();
+    Status result = ShmSession::Create(workerAddr_, rpcClient_, context, releasePool_, scaleInDraining_, candidate);
+    return CompleteConnectionAttempt(attemptId, candidate, std::move(result), session);
 }
 
 void ShmConnection::Invalidate(const std::shared_ptr<ShmSession> &session)

@@ -777,7 +777,7 @@ private:
                                const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
                                uint32_t ttlSecond, int existence, const SetRouteContext &routeContext,
                                SetFailureStage &failureStage, client::TransportSetResult &transportResult,
-                               int32_t requestTimeoutMs);
+                               int32_t requestTimeoutMs, bool isSeal = false);
 
     // Routed two-step Create/Publish (Component D). When local cache is off, allocate the buffer
     // on the hash-ring-selected worker via the transport layer and bridge the result to a legacy
@@ -788,6 +788,9 @@ private:
 
     Status PublishRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                                const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal);
+
+    Status ReplayRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                              const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal);
 
     // Routed two-step MultiCreate (lc=false batch). Allocates buffers on hash-ring-selected workers
     // via transportLayer_->MCreate and bridges each ObjectBufferInfo to a legacy Buffer at its
@@ -816,6 +819,8 @@ private:
                                   const std::vector<std::shared_ptr<ObjectBufferInfo>> &infos,
                                   size_t &failedCount);
 
+    Status ReplayRoutedMSetGroup(const std::vector<std::shared_ptr<ObjectBufferInfo>> &infos, size_t &failedCount);
+
     bool HandleSetRouteFailure(const Status &status, SetFailureStage failureStage, const HostPort &worker,
                                std::vector<HostPort> &excludedWorkers, bool safeWriteTargetReplay = false);
 
@@ -828,7 +833,8 @@ private:
 
     Status ExecuteSetFlow(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                           const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
-                          int32_t requestTimeoutMs);
+                          int32_t requestTimeoutMs, bool isSeal = false,
+                          std::vector<HostPort> excludedWorkers = {});
 
     friend Buffer;
     friend DeviceBuffer;

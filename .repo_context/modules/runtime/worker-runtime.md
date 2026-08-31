@@ -286,13 +286,19 @@
   - `DataWorker` relinquishes its `WorkerOCServer` owner before returning from `ShutDown`, including error paths. The
     server and topology component destructors provide the final safe-stop/join fallback, so runtime-owned objects are
     destroyed before later-created function-local singleton dependencies begin static teardown.
-  - voluntary ScaleIn records exit intent, immediately returns `K_SCALE_DOWN` from RPC health and, when the legacy
-    leaving intercept is enabled, client-facing writes. With that intercept disabled, client writes remain admitted
-    until the authoritative topology data drain begins; a dedicated process-local drain flag then fences writes even
-    while the drain waits for already-admitted incoming migrations. Incoming migration admission closure is deliberately
-    not reused as that write fence because failure/rejoin cleanup also closes the gate and must be able to resume ordinary
-    traffic after reconciliation. Voluntary ScaleIn waits for clients and
-    asynchronous tasks without marking the process health file unhealthy, then publishes EXITING; final process-health
+  - voluntary ScaleIn records exit intent, immediately returns `K_SCALE_DOWN` from RPC health, rejects routed Create and
+    Publish requests at all four client-write entrypoints, starts both local drain helpers, and then starts the existing
+    retrying EXITING publisher. Helper construction must succeed before the irreversible publication is scheduled. With the
+    leaving intercept disabled, direct/bound-client writes retain the legacy path until the authoritative topology data
+    drain begins; Gets remain available for objects that have not migrated yet. Incoming migration admission remains a
+    separate gate because failure/rejoin cleanup also closes it and must be able to resume ordinary traffic after
+    reconciliation.
+    Voluntary ScaleIn continues waiting for local clients and asynchronous tasks without marking the process health file
+    unhealthy while EXITING publication proceeds. The topology data-drain callback waits for both conditions before it
+    marks data drain started, rejects any remaining direct writes, or selects the local object snapshot. It does not add
+    a process-wide in-flight write fence: writes already inside their processors keep the existing request-timeout and
+    migration ordering behavior. This preserves the bound-client drain contract when EXITING reaches the Coordinator
+    first; final process-health
     termination happens after topology removal or the bounded removal attempt. The Worker keeps its Engine,
     callback executor, and lease
     alive until a current immutable snapshot no longer contains the local member; only then may process shutdown begin.
@@ -300,8 +306,9 @@
     termination authority when the control plane cannot complete the transition.
   - if a restarted Worker reads its local member as `LEAVING`, it claims the process-local exit fence before fallible
     helper-thread startup, keeps READY closed, and retries creation of only a missing pre-shutdown worker after a partial
-    failure; the startup exact-snapshot pass propagates a persistent startup failure. A lazy Worker-owned thread, rather
-    than the Engine Snapshot callback, republishes EXITING with capped exponential backoff and per-Worker jitter. Removal
+    failure; the startup exact-snapshot pass propagates a persistent startup failure. The same lazy Worker-owned thread,
+    rather than the Engine Snapshot callback, publishes or republishes EXITING for both planned and recovered ScaleIn
+    with capped exponential backoff and per-Worker jitter. Removal
     terminally cancels that publisher, prevents an older concurrent `LEAVING` callback from re-arming it, and requests
     process shutdown once. An initial publication that races synchronous Snapshot delivery during Engine startup is
     woken immediately by the Engine-RUNNING transition instead of waiting for backend-failure backoff. The publisher
@@ -327,13 +334,12 @@
     propagates its non-empty `businessOperationId` as `RemoveMetaReqPb.topology_operation_id`. Metadata owners use that
     marker only to allow the callback's own idempotent remove/give-up-primary effects. The data phase, final source
     cleanup, and redirect retries must all preserve the same marker; ordinary requests leave the field unset.
-  - when `enable_leaving_intercept` is enabled, the object-cache `Create`, `Publish`, `MultiCreate`, and `MultiPublish`
-    RPC entrypoints read the process-local ScaleIn exit intent and return `K_SCALE_DOWN` before entering their write
-    processors. This client-facing gate is deliberately separate from incoming migration admission: a `PRE_LEAVING`
-    Worker stops new client writes while it can still finish an already-selected ScaleIn target task. Read-only RPCs
-    keep their existing behavior. Disabling the flag preserves the legacy write path only before data drain starts;
-    once incoming migration admission closes, all four write entrypoints reject requests unconditionally so no write can
-    arrive after the local drain snapshot.
+  - the object-cache `Create`, `Publish`, `MultiCreate`, and `MultiPublish` entrypoints read both `is_routed` and the
+    process-local ScaleIn exit intent. Routed writes return `K_SCALE_DOWN` before entering their processors regardless
+    of `enable_leaving_intercept`, allowing the SDK's existing route-failure path to exclude the leaving Worker and retry
+    another hash-ring member. Direct writes are rejected at exit intent only when `enable_leaving_intercept` is enabled;
+    otherwise they are rejected after topology data drain starts, preserving the local-client unregister contract.
+    This gate is deliberately separate from incoming migration admission. Read-only RPCs keep their existing behavior.
   - metadata ownership task ranges do not describe where object data is physically resident. ScaleIn therefore drains
     the leaving Worker's complete local object table once per source/batch before task-scoped metadata migration. The
     Worker callback adapter coalesces concurrent disjoint tasks behind a deadline-aware process-local gate; metadata

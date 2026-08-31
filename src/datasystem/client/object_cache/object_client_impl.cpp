@@ -321,10 +321,13 @@ Status PrepareTransportReadRetry(const std::shared_ptr<client::Routing> &routing
     auto &firstState = states[retryIndexes.front()];
     const bool draining = firstState.policy == TransportReadRetryPolicy::DRAINING;
     const auto retryCount = TransportReadRetryCount(firstState);
+    const bool immediateStaleRetry = !draining && retryCount == 0;
+    int64_t nextBackoffMs =
+        client::SelectLocationRefreshBackoffMs(draining, retryCount, TransportReadRetryBackoffMs(firstState));
     LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
         << "[TransportGet][Route] Retry " << (draining ? "draining" : "stale")
         << " locations, key count: " << retryIndexes.size() << ", retry count: "
-        << (static_cast<int>(retryCount) + 1) << ", backoff ms: " << TransportReadRetryBackoffMs(firstState)
+        << (static_cast<int>(retryCount) + 1) << ", backoff ms: " << nextBackoffMs
         << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
     if (!refreshRequested) {
         if (routing != nullptr) {
@@ -332,11 +335,12 @@ Status PrepareTransportReadRetry(const std::shared_ptr<client::Routing> &routing
         }
         refreshRequested = true;
     }
-    int64_t nextBackoffMs = TransportReadRetryBackoffMs(firstState);
     RETURN_IF_NOT_OK(retry.Backoff(nextBackoffMs));
     for (auto index : retryIndexes) {
         ++TransportReadRetryCount(states[index]);
-        TransportReadRetryBackoffMs(states[index]) = nextBackoffMs;
+        if (!immediateStaleRetry) {
+            TransportReadRetryBackoffMs(states[index]) = nextBackoffMs;
+        }
     }
     return Status::OK();
 }
@@ -3683,6 +3687,13 @@ Status ObjectClientImpl::PublishRoutedBuffer(const std::shared_ptr<ObjectBufferI
                                              const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    if (bufferInfo->routedWriteSourceDraining) {
+        auto rc = ReplayRoutedBuffer(bufferInfo, nestedObjectKeys, isSeal);
+        if (rc.IsOk()) {
+            bufferInfo->isSeal = isSeal;
+        }
+        return rc;
+    }
     // The worker was pinned on the buffer at Create time; rebuild the route context from it only to
     // carry the client identity (clientId/token/tenantId) into the request context. TransportLayer::Set
     // reads the target worker from the buffer's own workerAddr.
@@ -3702,10 +3713,32 @@ Status ObjectClientImpl::PublishRoutedBuffer(const std::shared_ptr<ObjectBufferI
     setParam.isSeal = isSeal;
     setParam.subTimeoutMs = requestTimeoutMs_;
     auto setRc = transportLayer_->Set(*objBuf, setParam);
+    if (setRc.GetCode() == K_SCALE_DOWN) {
+        setRc = ReplayRoutedBuffer(bufferInfo, nestedObjectKeys, isSeal);
+    }
     if (setRc.IsOk()) {
         bufferInfo->isSeal = isSeal;  // mark sealed only after a successful Set (avoid stuck-sealed on retry)
     }
     return setRc;
+}
+
+Status ObjectClientImpl::ReplayRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                            const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal)
+{
+    bufferInfo->routedWriteSourceDraining = true;
+    CHECK_FAIL_RETURN_STATUS(bufferInfo->pointer != nullptr, K_RUNTIME_ERROR,
+                             "Routed buffer has no payload for ScaleIn replay");
+    FullParam param;
+    param.cacheType = bufferInfo->objectMode.GetCacheType();
+    param.consistencyType = bufferInfo->objectMode.GetConsistencyType();
+    param.writeMode = bufferInfo->objectMode.GetWriteMode();
+    param.ttlSecond = bufferInfo->ttlSecond;
+    param.existence = static_cast<ExistenceOpt>(bufferInfo->existence);
+    const auto *data = bufferInfo->pointer + bufferInfo->metadataSize;
+    std::vector<HostPort> excludedWorkers{ bufferInfo->workerAddr };
+    return ExecuteSetFlow(bufferInfo->objectKey, data, bufferInfo->dataSize, param, nestedObjectKeys,
+                          bufferInfo->ttlSecond, bufferInfo->existence, requestTimeoutMs_, isSeal,
+                          std::move(excludedWorkers));
 }
 
 Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
@@ -4004,7 +4037,7 @@ Status ObjectClientImpl::ProcessTransportPut(
     const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
     const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
     const SetRouteContext &routeContext, SetFailureStage &failureStage,
-    client::TransportSetResult &transportResult, int32_t requestTimeoutMs)
+    client::TransportSetResult &transportResult, int32_t requestTimeoutMs, bool isSeal)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
     const int32_t subTimeoutMs = requestTimeoutMs > 0 ? requestTimeoutMs : requestTimeoutMs_;
@@ -4038,6 +4071,7 @@ Status ObjectClientImpl::ProcessTransportPut(
     setParam.nestedKeys = nestedObjectKeys;
     setParam.ttlSecond = ttlSecond;
     setParam.existence = static_cast<ExistenceOpt>(existence);
+    setParam.isSeal = isSeal;
     setParam.subTimeoutMs = subTimeoutMs;
     failureStage = SetFailureStage::PUBLISH;
     Status setRc = transportLayer_->Set(*buffer, setParam, transportResult);
@@ -4138,9 +4172,8 @@ Status ObjectClientImpl::ProcessDirectSetWithoutTransport(
 Status ObjectClientImpl::ExecuteSetFlow(
     const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
     const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
-    int32_t requestTimeoutMs)
+    int32_t requestTimeoutMs, bool isSeal, std::vector<HostPort> excludedWorkers)
 {
-    std::vector<HostPort> excludedWorkers;
     Status rc(K_RUNTIME_ERROR, "Set route attempts exhausted");
     for (size_t attempt = 0; attempt < SET_ROUTE_MAX_ATTEMPTS; ++attempt) {
         RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
@@ -4155,7 +4188,7 @@ Status ObjectClientImpl::ExecuteSetFlow(
         // uniform placement and shm lifecycle, so gate this shortcut on enableLocalCache_. Without the
         // gate, a key whose route lands on the bound worker over a SHM-capable connection with
         // size >= threshold would wrongly take ProcessShmPut.
-        if (enableLocalCache_ && routeContext.directWorkerApi != nullptr
+        if (!isSeal && enableLocalCache_ && routeContext.directWorkerApi != nullptr
             && routeContext.directWorkerApi->ShmCreateable(size)) {
             rc = ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
                                routeContext.directWorkerApi, existence, failureStage, requestTimeoutMs);
@@ -4164,13 +4197,13 @@ Status ObjectClientImpl::ExecuteSetFlow(
             }
             continue;
         }
-        if (routeContext.directWorkerApi != nullptr && transportLayer_ == nullptr) {
+        if (!isSeal && routeContext.directWorkerApi != nullptr && transportLayer_ == nullptr) {
             return ProcessDirectSetWithoutTransport(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
                                                     existence, routeContext, failureStage, excludedWorkers,
                                                     requestTimeoutMs);
         }
         rc = ProcessTransportPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence,
-                                 routeContext, failureStage, transportResult, requestTimeoutMs);
+                                 routeContext, failureStage, transportResult, requestTimeoutMs, isSeal);
         if (rc.IsOk()
             || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers,
                                       transportResult.writeTargetQuarantined
@@ -6796,6 +6829,10 @@ Status ObjectClientImpl::ProcessRoutedMSetGroup(const HostPort &worker,
                                                 const std::vector<std::shared_ptr<ObjectBufferInfo>> &infos,
                                                 size_t &failedCount)
 {
+    const auto sourceDraining = [](const auto &info) { return info->routedWriteSourceDraining; };
+    if (std::any_of(infos.begin(), infos.end(), sourceDraining)) {
+        return ReplayRoutedMSetGroup(infos, failedCount);
+    }
     SetRouteContext routeContext;
     RETURN_IF_NOT_OK(BuildSetRouteContext(worker, routeContext));
     const auto requestContext = BuildTransportRequestContext(routeContext);
@@ -6822,8 +6859,26 @@ Status ObjectClientImpl::ProcessRoutedMSetGroup(const HostPort &worker,
     setParam.subTimeoutMs = requestTimeoutMs_;
     client::TransportMSetResult result;
     auto rc = transportLayer_->MSet(objBufs, setParam, result);
+    if (rc.GetCode() == K_SCALE_DOWN) {
+        return ReplayRoutedMSetGroup(infos, failedCount);
+    }
     failedCount += rc.IsError() ? infos.size() : result.failedKeys.size();
     return rc;
+}
+
+Status ObjectClientImpl::ReplayRoutedMSetGroup(const std::vector<std::shared_ptr<ObjectBufferInfo>> &infos,
+                                               size_t &failedCount)
+{
+    Status lastRc = Status::OK();
+    const size_t failedBefore = failedCount;
+    for (const auto &info : infos) {
+        Status rc = ReplayRoutedBuffer(info, {}, false);
+        if (rc.IsError()) {
+            ++failedCount;
+            lastRc = std::move(rc);
+        }
+    }
+    return failedCount - failedBefore < infos.size() ? Status::OK() : lastRc;
 }
 
 Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
