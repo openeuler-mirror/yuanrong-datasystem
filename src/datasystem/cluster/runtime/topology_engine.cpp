@@ -1276,34 +1276,28 @@ void TopologyEngine::RestoreReadyAfterCoordinatorTopologyUpdate(const TopologySn
         || local->state != MemberState::ACTIVE) {
         return;
     }
-    std::vector<std::pair<std::string, std::string>> records;
-    auto rc = memberBackend_->GetAll(keys_->MembershipTable(), records);
+    std::string encoded;
+    auto rc = memberBackend_->Get(keys_->MembershipTable(), options_.localAddress, encoded);
     if (rc.IsError()) {
         LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
             << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
             << " role=worker action=restore_ready_after_topology_reload status=" << rc.ToString();
         return;
     }
-    for (const auto &[address, encoded] : records) {
-        if (address != options_.localAddress) {
-            continue;
-        }
-        MembershipValue value;
-        rc = MembershipValueCodec::Decode(encoded, value);
-        if (rc.IsError()) {
-            LOG(WARNING) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
-                         << " role=worker action=restore_ready_after_topology_reload"
-                         << " address=" << options_.localAddress << " status=" << rc.ToString();
-            return;
-        }
-        if (value.lifecycleState == MemberLifecycleState::RECOVERING
-            || value.lifecycleState == MemberLifecycleState::RESTARTING) {
-            LOG_IF_ERROR(RestoreReadyAfterLocalRecovery(),
-                         "CLUSTER_MEMBERSHIP cluster=" + options_.clusterName
-                             + " role=worker action=restore_ready_after_topology_reload"
-                             + " address=" + options_.localAddress);
-        }
+    MembershipValue value;
+    rc = MembershipValueCodec::Decode(encoded, value);
+    if (rc.IsError()) {
+        LOG(WARNING) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+                     << " role=worker action=restore_ready_after_topology_reload"
+                     << " address=" << options_.localAddress << " status=" << rc.ToString();
         return;
+    }
+    if (value.lifecycleState == MemberLifecycleState::RECOVERING
+        || value.lifecycleState == MemberLifecycleState::RESTARTING) {
+        LOG_IF_ERROR(RestoreReadyAfterLocalRecovery(),
+                     "CLUSTER_MEMBERSHIP cluster=" + options_.clusterName
+                         + " role=worker action=restore_ready_after_topology_reload"
+                         + " address=" + options_.localAddress);
     }
 }
 
