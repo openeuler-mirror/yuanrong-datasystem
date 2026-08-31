@@ -25,7 +25,9 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
@@ -127,12 +129,12 @@ public:
     Status StartWithActiveLocalMember(const HostPort &localAddress)
     {
         CHECK_FAIL_RETURN_STATUS(engine_ != nullptr, K_NOT_READY, "test topology engine is not initialized");
+        const auto address = localAddress.ToString();
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = 1;
-        topology.members = {
-            cluster::Member{ { std::string(16, 'l'), localAddress.ToString() }, cluster::MemberState::ACTIVE, { 1 } }
-        };
+        topology.members = { cluster::Member{ { std::string(16, 'l'), address }, cluster::MemberState::ACTIVE,
+                                              MakeTokens(address, 0) } };
         std::unique_ptr<cluster::TopologyKeyHelper> keys;
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create("", keys));
         std::string encoded;
@@ -144,12 +146,12 @@ public:
 
     Status TriggerAuthorityConflict(const HostPort &localAddress)
     {
+        const auto address = localAddress.ToString();
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = 1;
-        topology.members = {
-            cluster::Member{ { std::string(16, 'l'), localAddress.ToString() }, cluster::MemberState::ACTIVE, { 2 } }
-        };
+        topology.members = { cluster::Member{ { std::string(16, 'l'), address }, cluster::MemberState::ACTIVE,
+                                              MakeTokens(address, 1), MakeTokenSeedOverrides(1) } };
         std::unique_ptr<cluster::TopologyKeyHelper> keys;
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create("", keys));
         const auto topologyKey = keys->TopologyTable() + "/" + cluster::TopologyKeyHelper::TopologyKey();
@@ -182,6 +184,28 @@ public:
     }
 
 private:
+    static std::vector<uint32_t> MakeTokens(const std::string &address, uint32_t seed)
+    {
+        constexpr uint32_t tokenCount = 4;
+        std::vector<uint32_t> tokens;
+        tokens.reserve(tokenCount);
+        for (uint32_t index = 0; index < tokenCount; ++index) {
+            tokens.emplace_back(cluster::HashAlgorithm::MakeToken(address, index, seed));
+        }
+        return tokens;
+    }
+
+    static std::vector<cluster::TokenSeedOverride> MakeTokenSeedOverrides(uint32_t seed)
+    {
+        constexpr uint32_t tokenCount = 4;
+        std::vector<cluster::TokenSeedOverride> overrides;
+        overrides.reserve(tokenCount);
+        for (uint32_t index = 0; index < tokenCount; ++index) {
+            overrides.emplace_back(cluster::TokenSeedOverride{ index, seed });
+        }
+        return overrides;
+    }
+
     cluster::testing::FakeCoordinatorServiceProxy proxy_;
     TestTopologyPhaseCallbacks callbacks_;
     std::unique_ptr<cluster::TopologyEngine> engine_;

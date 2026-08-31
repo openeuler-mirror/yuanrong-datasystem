@@ -57,9 +57,9 @@ class RoutingFacadeTest : public CommonTest {
 protected:
     static void FillRing(::datasystem::ClusterTopologyPb &ring, std::unordered_map<std::string, std::string> &hostIdMap)
     {
+        ring.set_tokens_per_member(1);
         auto &worker = (*ring.mutable_members())["127.0.0.1:1000"];
         worker.set_state(::datasystem::MembershipPb::ACTIVE);
-        worker.add_tokens(100u);
         hostIdMap["127.0.0.1:1000"] = "host-a";
     }
 };
@@ -100,12 +100,11 @@ TEST_F(RoutingFacadeTest, TestExplicitHostIdPreservesLocalityWithRemoteInitialWo
     auto fetch = [&localWorker, &remoteWorker](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                                                std::string &, uint64_t &newVersion, bool &changed,
                                                std::unordered_map<std::string, std::string> &hostIdMap) {
+        ring.set_tokens_per_member(1);
         auto &local = (*ring.mutable_members())[localWorker.ToString()];
         local.set_state(::datasystem::MembershipPb::ACTIVE);
-        local.add_tokens(100u);
         auto &remote = (*ring.mutable_members())[remoteWorker.ToString()];
         remote.set_state(::datasystem::MembershipPb::ACTIVE);
-        remote.add_tokens(200u);
         hostIdMap[localWorker.ToString()] = "host-local";
         hostIdMap[remoteWorker.ToString()] = "host-remote";
         newVersion = 1;
@@ -155,18 +154,17 @@ TEST_F(RoutingFacadeTest, TestHostIdResolvesOnLaterRingChangeWhenFirstFetchMisse
 {
     const HostPort localWorker("127.0.0.1", 1000);
     const HostPort remoteWorker("127.0.0.1", 2000);
+    auto router = std::make_shared<client::WorkerRouter>("");
     std::atomic<int> fetchCount{ 0 };
     auto fetch = [&localWorker, &remoteWorker, &fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                                                             std::string &, uint64_t &newVersion, bool &changed,
                                                             std::unordered_map<std::string, std::string> &hostIdMap) {
         const int n = fetchCount.fetch_add(1) + 1;
+        ring.set_tokens_per_member(1);
         auto &local = (*ring.mutable_members())[localWorker.ToString()];
         local.set_state(::datasystem::MembershipPb::ACTIVE);
-        local.add_tokens(1u);  // local owns few tokens so the hash ring strongly favors remote
         auto &remote = (*ring.mutable_members())[remoteWorker.ToString()];
         remote.set_state(::datasystem::MembershipPb::ACTIVE);
-        remote.add_tokens(1'000'000u);  // remote dominates the ring; without same-node affinity
-                                        // virtually every key hashes to remote
         if (n == 1) {
             // First fetch: bound (local) worker is ACTIVE in the ring but its host_id is absent from
             // host_id_map (keepalive propagation lag). Same-node affinity cannot resolve yet.
@@ -180,8 +178,15 @@ TEST_F(RoutingFacadeTest, TestHostIdResolvesOnLaterRingChangeWhenFirstFetchMisse
         changed = true;
         return Status::OK();
     };
-    auto router = std::make_shared<client::WorkerRouter>("");
-    auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch);
+    auto resolveHostId = [&localWorker, &router](uint64_t, const ::datasystem::ClusterTopologyPb &,
+                                                 const std::unordered_map<std::string, std::string> &hostIdMap) {
+        const auto iter = hostIdMap.find(localWorker.ToString());
+        if (iter != hostIdMap.end()) {
+            router->SetHostId(iter->second);
+        }
+        return Status::OK();
+    };
+    auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch, resolveHostId);
     // Short refresh interval so a second fetch happens quickly after Init's InitialFetch.
     client::Routing routing(router, refresher, 50);
 

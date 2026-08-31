@@ -43,11 +43,17 @@ void ExpectEnumValue(const EnumDescriptor *descriptor, const std::string &name, 
 
 TEST(ClusterTopologySchemaTest, FreezesMembershipAndRangeSchema)
 {
+    const auto *tokenSeedOverride = TokenSeedOverridePb::descriptor();
+    ASSERT_EQ(tokenSeedOverride->field_count(), 2);
+    ExpectField(tokenSeedOverride, "token_index", 1);
+    ExpectField(tokenSeedOverride, "token_seed", 2);
+
     const auto *membership = MembershipPb::descriptor();
     ASSERT_EQ(membership->field_count(), 3);
-    ExpectField(membership, "tokens", 1);
+    EXPECT_TRUE(membership->IsReservedNumber(1));
     ExpectField(membership, "id", 2);
     ExpectField(membership, "state", 3);
+    ExpectField(membership, "token_seed_overrides", 4);
 
     const auto *state = membership->FindEnumTypeByName("StatePb");
     ASSERT_NE(state, nullptr);
@@ -105,12 +111,13 @@ TEST(ClusterTopologySchemaTest, FreezesRootAndActiveBatchPresence)
     const auto *topology = ClusterTopologyPb::descriptor();
     EXPECT_EQ(topology->file()->name(), "datasystem/protos/cluster_topology.proto");
     EXPECT_EQ(topology->file()->package(), "datasystem");
-    ASSERT_EQ(topology->field_count(), 5);
+    ASSERT_EQ(topology->field_count(), 6);
     ExpectField(topology, "cluster_has_init", 1);
     ExpectField(topology, "members", 2);
     ExpectField(topology, "version", 3);
     ExpectField(topology, "schema_version", 4);
     ExpectField(topology, "active_batch", 5);
+    ExpectField(topology, "tokens_per_member", 6);
 
     ClusterTopologyPb value;
     EXPECT_FALSE(value.has_active_batch());

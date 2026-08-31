@@ -30,6 +30,7 @@
 #include "datasystem/client/routing/routing.h"
 #include "datasystem/client/routing/state_filter.h"
 #include "datasystem/client/routing/worker_router.h"
+#include "datasystem/common/util/hash_ring_token.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
@@ -53,14 +54,11 @@ protected:
     std::shared_ptr<::datasystem::ClusterTopologyPb> BuildRing()
     {
         auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+        ring->set_tokens_per_member(2);
         auto &wA = (*ring->mutable_members())["127.0.0.1:1000"];
         wA.set_state(::datasystem::MembershipPb::ACTIVE);
-        wA.add_tokens(100u);
-        wA.add_tokens(200u);
         auto &wB = (*ring->mutable_members())["127.0.0.1:2000"];
         wB.set_state(::datasystem::MembershipPb::ACTIVE);
-        wB.add_tokens(300u);
-        wB.add_tokens(400u);
         return ring;
     }
 
@@ -79,6 +77,16 @@ protected:
         return router;
     }
 
+    Status UpdateHashRing(const std::shared_ptr<client::WorkerRouter> &router,
+                          std::shared_ptr<::datasystem::ClusterTopologyPb> ring,
+                          const std::shared_ptr<std::unordered_map<std::string, std::string>> &hostIdMap)
+    {
+        std::unique_ptr<client::PreparedClusterTopology> prepared;
+        RETURN_IF_NOT_OK(client::PreparedClusterTopology::Create(std::move(*ring), prepared));
+        router->UpdateHashRing(*prepared, *hostIdMap);
+        return Status::OK();
+    }
+
 };
 
 // === WorkerRouter Tests ===
@@ -94,7 +102,7 @@ TEST_F(RoutingTest, TestSelectWorkerEmptyRing)
 TEST_F(RoutingTest, TestSelectWorkerReturnsActive)
 {
     auto router = CreateRouter();
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort worker;
     DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, worker));
@@ -105,7 +113,7 @@ TEST_F(RoutingTest, TestSelectWorkerReturnsActive)
 TEST_F(RoutingTest, TestSelectWorkerConsistency)
 {
     auto router = CreateRouter();
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort w1, w2;
     DS_ASSERT_OK(router->SelectWorker("consistency_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, w1));
@@ -113,10 +121,58 @@ TEST_F(RoutingTest, TestSelectWorkerConsistency)
     EXPECT_EQ(w1.ToString(), w2.ToString());
 }
 
+TEST_F(RoutingTest, InvalidSeedOverrideDoesNotReplaceLastGoodRing)
+{
+    auto router = CreateRouter();
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
+    HostPort before;
+    DS_ASSERT_OK(router->SelectWorker("stable-key", client::DataPlacementPolicy::PREFERRED_META_OWNER, before));
+
+    auto invalidRing = BuildRing();
+    auto *seedOverride = invalidRing->mutable_members()->at("127.0.0.1:1000").add_token_seed_overrides();
+    seedOverride->set_token_index(invalidRing->tokens_per_member());
+    seedOverride->set_token_seed(1);
+    EXPECT_EQ(UpdateHashRing(router, invalidRing, BuildHostIdMap()).GetCode(), K_INVALID);
+
+    HostPort after;
+    DS_ASSERT_OK(router->SelectWorker("stable-key", client::DataPlacementPolicy::PREFERRED_META_OWNER, after));
+    EXPECT_EQ(after, before);
+}
+
+TEST_F(RoutingTest, FailedPreparationDoesNotMutatePreparedTopology)
+{
+    std::unique_ptr<client::PreparedClusterTopology> prepared;
+    auto validRing = BuildRing();
+    DS_ASSERT_OK(client::PreparedClusterTopology::Create(std::move(*validRing), prepared));
+    const auto *topology = &prepared->GetTopology();
+    const auto tokenIndex = prepared->GetTokenIndex();
+
+    auto invalidRing = BuildRing();
+    invalidRing->set_tokens_per_member(0);
+    EXPECT_EQ(client::PreparedClusterTopology::Create(std::move(*invalidRing), prepared).GetCode(), K_INVALID);
+    EXPECT_EQ(&prepared->GetTopology(), topology);
+    EXPECT_EQ(prepared->GetTokenIndex(), tokenIndex);
+}
+
+TEST_F(RoutingTest, RejectsTopologyAboveTokenLimit)
+{
+    auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    ring->set_tokens_per_member(MAX_HASH_RING_TOKENS_PER_MEMBER);
+    constexpr size_t memberCount = 640'000 / MAX_HASH_RING_TOKENS_PER_MEMBER + 1;
+    for (size_t index = 0; index < memberCount; ++index) {
+        auto &member = (*ring->mutable_members())["127.0.0.1:" + std::to_string(index + 1)];
+        member.set_state(::datasystem::MembershipPb::ACTIVE);
+    }
+
+    std::unique_ptr<client::PreparedClusterTopology> prepared;
+    EXPECT_EQ(client::PreparedClusterTopology::Create(std::move(*ring), prepared).GetCode(), K_INVALID);
+    EXPECT_EQ(prepared, nullptr);
+}
+
 TEST_F(RoutingTest, TestSelectWorkerExclude)
 {
     auto router = CreateRouter();
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort first;
     DS_ASSERT_OK(router->SelectWorker("exclude_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, first));
@@ -131,7 +187,7 @@ TEST_F(RoutingTest, TestSelectWorkerExclude)
 TEST_F(RoutingTest, TestSelectWorkersBatch)
 {
     auto router = CreateRouter();
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     std::vector<std::string> keys = { "k1", "k2", "k3", "k4", "k5" };
     std::unordered_map<HostPort, std::vector<std::string>> groups;
@@ -149,7 +205,7 @@ TEST_F(RoutingTest, TestSelectWorkersFailureDoesNotMutateOutput)
 {
     auto router = std::make_shared<client::WorkerRouter>(
         "host-a", std::vector<std::shared_ptr<client::IWorkerFilter>>{ std::make_shared<RejectAllFilter>() });
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort existing("127.0.0.1", 3000);
     std::unordered_map<HostPort, std::vector<std::string>> groups{ { existing, { "existing" } } };
@@ -173,10 +229,11 @@ TEST_F(RoutingTest, TestSelectWorkersEmptyInputClearsOutput)
 TEST_F(RoutingTest, TestSelectWorkersUsesSameNodeWorkersWithoutHashTokens)
 {
     auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    ring->set_tokens_per_member(1);
     auto &worker = (*ring->mutable_members())["127.0.0.1:1000"];
     worker.set_state(::datasystem::MembershipPb::ACTIVE);
     auto router = CreateRouter("host-a");
-    router->UpdateHashRing(ring, BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, ring, BuildHostIdMap()));
 
     std::unordered_map<HostPort, std::vector<std::string>> groups;
     DS_ASSERT_OK(router->SelectWorkers({ "k1", "k2" }, client::DataPlacementPolicy::REQUIRED_SAME_NODE, groups));
@@ -188,7 +245,7 @@ TEST_F(RoutingTest, TestSelectWorkersUsesSameNodeWorkersWithoutHashTokens)
 TEST_F(RoutingTest, TestSameNodePreferred)
 {
     auto router = CreateRouter("host-a");
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort worker;
     DS_ASSERT_OK(router->SelectWorker("samenode_key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, worker));
@@ -198,7 +255,7 @@ TEST_F(RoutingTest, TestSameNodePreferred)
 TEST_F(RoutingTest, TestRequiredSameNodeDoesNotFallback)
 {
     auto router = CreateRouter("host-without-worker");
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort worker;
     auto rc = router->SelectWorker("key", client::DataPlacementPolicy::REQUIRED_SAME_NODE, worker);
@@ -208,7 +265,7 @@ TEST_F(RoutingTest, TestRequiredSameNodeDoesNotFallback)
 TEST_F(RoutingTest, TestPreferredSameNodeFallsBackToMetaOwner)
 {
     auto router = CreateRouter("host-without-worker");
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort expected;
     DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, expected));
@@ -222,7 +279,7 @@ TEST_F(RoutingTest, TestPreferredSameNodeHonorsExclude)
     auto hostIdMap = BuildHostIdMap();
     (*hostIdMap)["127.0.0.1:2000"] = "host-a";
     auto router = CreateRouter("host-a");
-    router->UpdateHashRing(BuildRing(), hostIdMap);
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), hostIdMap));
 
     HostPort first;
     DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, first));
@@ -233,27 +290,18 @@ TEST_F(RoutingTest, TestPreferredSameNodeHonorsExclude)
 
 TEST_F(RoutingTest, TestHashEqualTokenSelectsTokenOwner)
 {
-    constexpr int MAX_KEY_SEARCH_ATTEMPTS = 100;
-    std::string key = "exact-token";
-    uint32_t keyHash = MurmurHash3_32(key);
-    for (int i = 0; keyHash == std::numeric_limits<uint32_t>::max() && i < MAX_KEY_SEARCH_ATTEMPTS; ++i) {
-        key = "exact-token-" + std::to_string(i);
-        keyHash = MurmurHash3_32(key);
-    }
-    ASSERT_NE(keyHash, std::numeric_limits<uint32_t>::max());
+    const std::string address = "127.0.0.1:1000";
+    const std::string key = address + "#0";
     auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
-    auto &exactOwner = (*ring->mutable_members())["127.0.0.1:1000"];
+    ring->set_tokens_per_member(1);
+    auto &exactOwner = (*ring->mutable_members())[address];
     exactOwner.set_state(::datasystem::MembershipPb::ACTIVE);
-    exactOwner.add_tokens(keyHash);
-    auto &nextOwner = (*ring->mutable_members())["127.0.0.1:2000"];
-    nextOwner.set_state(::datasystem::MembershipPb::ACTIVE);
-    nextOwner.add_tokens(keyHash + 1);
 
     auto router = CreateRouter();
-    router->UpdateHashRing(ring, BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, ring, BuildHostIdMap()));
     HostPort selected;
     DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
-    EXPECT_EQ(selected.ToString(), "127.0.0.1:1000");
+    EXPECT_EQ(selected.ToString(), address);
 }
 
 TEST_F(RoutingTest, TestSameNodePreferredDistributesByKey)
@@ -261,7 +309,7 @@ TEST_F(RoutingTest, TestSameNodePreferredDistributesByKey)
     auto hostIdMap = BuildHostIdMap();
     (*hostIdMap)["127.0.0.1:2000"] = "host-a";
     auto router = CreateRouter("host-a");
-    router->UpdateHashRing(BuildRing(), hostIdMap);
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), hostIdMap));
 
     std::set<std::string> selected;
     for (int i = 0; i < 64; ++i) {
@@ -278,7 +326,7 @@ TEST_F(RoutingTest, TestEmptyHostIdDoesNotTreatMissingWorkerHostIdAsSameNode)
     auto hostIdMap = BuildHostIdMap();
     (*hostIdMap)["127.0.0.1:1000"] = "";
     auto router = CreateRouter("");
-    router->UpdateHashRing(BuildRing(), hostIdMap);
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), hostIdMap));
 
     // When client hostId is empty, PREFERRED_SAME_NODE should not treat
     // workers with empty hostId as same-node. It should behave identically
@@ -301,7 +349,7 @@ TEST_F(RoutingTest, TestStateFilterRejectsLeavingWorker)
 {
     auto router = CreateRouter();
     auto ring = BuildRing();
-    router->UpdateHashRing(ring, BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, ring, BuildHostIdMap()));
 
     const std::string key = "leaving-owner";
     HostPort original;
@@ -309,7 +357,7 @@ TEST_F(RoutingTest, TestStateFilterRejectsLeavingWorker)
 
     auto updatedRing = BuildRing();
     (*updatedRing->mutable_members())[original.ToString()].set_state(::datasystem::MembershipPb::LEAVING);
-    router->UpdateHashRing(updatedRing, BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, updatedRing, BuildHostIdMap()));
 
     HostPort selected;
     DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
@@ -325,11 +373,13 @@ TEST_F(RoutingTest, TestStateFilterRejectsWhenRouterIsMissing)
 TEST_F(RoutingTest, TestConcurrentSelectAndHashRingUpdate)
 {
     auto router = CreateRouter();
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
     std::atomic<bool> failed{ false };
     std::thread updater([&] {
         for (int i = 0; i < 200; ++i) {
-            router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+            if (UpdateHashRing(router, BuildRing(), BuildHostIdMap()).IsError()) {
+                failed.store(true);
+            }
         }
     });
     std::vector<std::thread> readers;
@@ -355,7 +405,7 @@ TEST_F(RoutingTest, TestConcurrentSelectAndHashRingUpdate)
 TEST_F(RoutingTest, TestGetRingState)
 {
     auto router = CreateRouter();
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort w("127.0.0.1", 1000);
     EXPECT_EQ(router->GetRingState(w), client::WorkerRingState::ACTIVE);
@@ -445,7 +495,7 @@ TEST_F(RoutingTest, TestBrokenFilterIntegrationWithRouter)
     auto brokenFilter = std::make_shared<client::BrokenFilter>();
     auto router = std::make_shared<client::WorkerRouter>(
         "host-a", std::vector<std::shared_ptr<client::IWorkerFilter>>{brokenFilter});
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort first;
     DS_ASSERT_OK(router->SelectWorker("broken_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, first));
@@ -465,18 +515,17 @@ TEST_F(RoutingTest, U7RoutesWithFiveThousandWorkerSnapshot)
     constexpr size_t keyCount = 2'048;
     constexpr int portBase = 10'000;
     auto ring = std::make_shared<ClusterTopologyPb>();
+    ring->set_tokens_per_member(1);
     auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
     for (size_t i = 0; i < workerCount; ++i) {
         const std::string address = "127.0.0.1:" + std::to_string(portBase + i);
         auto &worker = (*ring->mutable_members())[address];
         worker.set_state(MembershipPb::ACTIVE);
-        worker.add_tokens(static_cast<uint32_t>(
-            (static_cast<uint64_t>(i) * std::numeric_limits<uint32_t>::max()) / workerCount));
         (*hostIdMap)[address] = "scale-host-" + std::to_string(i);
     }
 
     auto router = CreateRouter();
-    router->UpdateHashRing(ring, hostIdMap);
+    DS_ASSERT_OK(UpdateHashRing(router, ring, hostIdMap));
     ASSERT_EQ(router->GetAvailableWorkers().size(), workerCount);
 
     std::vector<std::string> keys;
@@ -500,14 +549,17 @@ TEST_F(RoutingTest, U7BatchSelectionNeverMixesConcurrentSnapshots)
 {
     constexpr int generationAPortBase = 11'000;
     constexpr int generationBPortBase = 21'000;
-    auto buildGeneration = [=](int tokenOwnerPortBase) {
+    auto buildGeneration = [=](uint32_t tokenSeed) {
         auto ring = std::make_shared<ClusterTopologyPb>();
+        ring->set_tokens_per_member(1);
         for (int portBase : { generationAPortBase, generationBPortBase }) {
             for (int i = 0; i < 2; ++i) {
                 auto &worker = (*ring->mutable_members())["127.0.0.1:" + std::to_string(portBase + i)];
                 worker.set_state(MembershipPb::ACTIVE);
-                if (portBase == tokenOwnerPortBase) {
-                    worker.add_tokens(i == 0 ? 0u : std::numeric_limits<uint32_t>::max() / 2);
+                if (tokenSeed != 0) {
+                    auto *seedOverride = worker.add_token_seed_overrides();
+                    seedOverride->set_token_index(0);
+                    seedOverride->set_token_seed(tokenSeed);
                 }
             }
         }
@@ -523,22 +575,32 @@ TEST_F(RoutingTest, U7BatchSelectionNeverMixesConcurrentSnapshots)
         return hostIdMap;
     };
 
-    auto ringA = buildGeneration(generationAPortBase);
-    auto ringB = buildGeneration(generationBPortBase);
+    auto ringA = buildGeneration(0);
+    auto ringB = buildGeneration(1);
     auto hostIdMap = buildHostIdMap();
     auto router = CreateRouter();
-    router->UpdateHashRing(ringA, hostIdMap);
+    std::unique_ptr<client::PreparedClusterTopology> preparedA;
+    std::unique_ptr<client::PreparedClusterTopology> preparedB;
+    DS_ASSERT_OK(client::PreparedClusterTopology::Create(std::move(*ringA), preparedA));
+    DS_ASSERT_OK(client::PreparedClusterTopology::Create(std::move(*ringB), preparedB));
 
     std::vector<std::string> keys;
     for (size_t i = 0; i < 512; ++i) {
         keys.emplace_back("u7-snapshot-key-" + std::to_string(i));
     }
+    std::unordered_map<HostPort, std::vector<std::string>> expectedA;
+    router->UpdateHashRing(*preparedA, *hostIdMap);
+    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, expectedA));
+    std::unordered_map<HostPort, std::vector<std::string>> expectedB;
+    router->UpdateHashRing(*preparedB, *hostIdMap);
+    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, expectedB));
+    ASSERT_NE(expectedA, expectedB);
 
     std::atomic<bool> stop{ false };
     std::thread updater([&] {
         while (!stop.load(std::memory_order_relaxed)) {
-            router->UpdateHashRing(ringB, hostIdMap);
-            router->UpdateHashRing(ringA, hostIdMap);
+            router->UpdateHashRing(*preparedB, *hostIdMap);
+            router->UpdateHashRing(*preparedA, *hostIdMap);
         }
     });
 
@@ -548,19 +610,7 @@ TEST_F(RoutingTest, U7BatchSelectionNeverMixesConcurrentSnapshots)
         std::unordered_map<HostPort, std::vector<std::string>> groups;
         selectionStatus =
             router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups);
-        if (selectionStatus.IsError() || groups.size() != 2u) {
-            snapshotsConsistent = false;
-            break;
-        }
-        bool allFromA = true;
-        bool allFromB = true;
-        for (const auto &group : groups) {
-            allFromA = allFromA && group.first.Port() >= generationAPortBase
-                       && group.first.Port() < generationAPortBase + 2;
-            allFromB = allFromB && group.first.Port() >= generationBPortBase
-                       && group.first.Port() < generationBPortBase + 2;
-        }
-        if (!allFromA && !allFromB) {
+        if (selectionStatus.IsError() || (groups != expectedA && groups != expectedB)) {
             snapshotsConsistent = false;
             break;
         }
@@ -584,7 +634,7 @@ TEST_F(RoutingTest, U7BatchSelectionNeverMixesConcurrentSnapshots)
 TEST_F(RoutingTest, AllWorkersBrokenExhaustsRingAndReturnsCode37)
 {
     auto router = CreateRouter();
-    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     // Sanity: routing succeeds before any worker is marked broken.
     HostPort healthy;

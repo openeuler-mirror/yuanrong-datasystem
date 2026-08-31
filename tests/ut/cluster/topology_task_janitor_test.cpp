@@ -8,6 +8,9 @@
  */
 #include "datasystem/cluster/control/topology_task_janitor.h"
 
+#include <algorithm>
+#include <vector>
+
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/control/topology_plan_builder.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
@@ -19,6 +22,17 @@
 namespace datasystem::cluster {
 namespace {
 
+std::vector<uint32_t> MakeMemberTokens(const std::string &address)
+{
+    constexpr uint32_t tokenCount = 4;
+    std::vector<uint32_t> tokens;
+    tokens.reserve(tokenCount);
+    for (uint32_t index = 0; index < tokenCount; ++index) {
+        tokens.emplace_back(HashAlgorithm::MakeToken(address, index, 0));
+    }
+    return tokens;
+}
+
 struct JanitorScenario {
     Status SetUp(bool finalize)
     {
@@ -27,7 +41,8 @@ struct JanitorScenario {
         TopologyState current;
         current.version = 1;
         current.clusterHasInit = true;
-        current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1, 100 } },
+        current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,
+                                    MakeMemberTokens("127.0.0.1:1") },
                             Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::INITIAL, {} } };
         TopologyPlanBuilder builder(algorithm);
         RETURN_IF_NOT_OK(builder.BuildScaleOutStart(current, { current.members.back().identity }, plan));

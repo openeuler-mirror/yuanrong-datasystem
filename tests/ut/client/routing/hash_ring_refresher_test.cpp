@@ -65,9 +65,9 @@ protected:
     static void FillRing(::datasystem::ClusterTopologyPb &ring, std::unordered_map<std::string, std::string> &hostIdMap,
                          const std::string &address = "127.0.0.1:1000")
     {
+        ring.set_tokens_per_member(1);
         auto &worker = (*ring.mutable_members())[address];
         worker.set_state(::datasystem::MembershipPb::ACTIVE);
-        worker.add_tokens(100u);
         hostIdMap[address] = "host-a";
     }
 };
@@ -415,6 +415,32 @@ TEST_F(HashRingRefresherTest, TestRingUpdateHookRunsBeforeRoutePublication)
     HostPort selected;
     DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
     EXPECT_EQ(selected.ToString(), "127.0.0.1:1000");
+}
+
+TEST_F(HashRingRefresherTest, InvalidTopologyDoesNotRunUpdateHook)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                    uint64_t &newVersion, bool &changed,
+                    std::unordered_map<std::string, std::string> &hostIdMap) {
+        FillRing(ring, hostIdMap);
+        ring.set_tokens_per_member(0);
+        newVersion = 5;
+        changed = true;
+        return Status::OK();
+    };
+    int hookCount = 0;
+    auto hook = [&hookCount](uint64_t, const ::datasystem::ClusterTopologyPb &,
+                             const std::unordered_map<std::string, std::string> &) {
+        ++hookCount;
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch, hook);
+
+    EXPECT_EQ(refresher.InitialFetch(HostPort("127.0.0.1", 1000)).GetCode(), K_INVALID);
+    EXPECT_EQ(hookCount, 0);
+    HostPort selected;
+    EXPECT_TRUE(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected).IsError());
 }
 
 TEST_F(HashRingRefresherTest, TestFailedRingUpdateHookRetainsVersionAndRetries)

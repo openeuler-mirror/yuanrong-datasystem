@@ -32,6 +32,7 @@
 #include <gtest/gtest.h>
 
 #include "client/object_cache/oc_client_common.h"
+#include "cluster/topology_token_helper.h"
 #include "datasystem/client/routing/routing.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/ak_sk/signature.h"
@@ -266,13 +267,7 @@ protected:
     Status FindRouteKeyToWorker(uint32_t workerIndex, const std::string &prefix, std::string &key)
     {
         ClusterTopologyPb ring;
-        if (etcd_ == nullptr) {
-            RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
-        } else {
-            std::string value;
-            RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
-            CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
-        }
+        RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
         HostPort targetWorker;
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
         CHECK_FAIL_RETURN_STATUS(ring.members().find(targetWorker.ToString()) != ring.members().end(), K_NOT_FOUND,
@@ -280,7 +275,7 @@ protected:
 
         std::map<uint32_t, std::string> tokenWorkers;
         for (const auto &worker : ring.members()) {
-            for (const auto token : worker.second.tokens()) {
+            for (const auto token : RebuildTopologyMemberTokens(ring, worker.first, worker.second)) {
                 tokenWorkers.emplace(token, worker.first);
             }
         }
@@ -303,13 +298,7 @@ protected:
                                          HostPort &preferredWorker)
     {
         ClusterTopologyPb ring;
-        if (etcd_ == nullptr) {
-            RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
-        } else {
-            std::string value;
-            RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
-            CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
-        }
+        RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
         std::map<uint32_t, std::string> tokenWorkers;
         std::vector<HostPort> sameNodeWorkers;
         for (const auto &worker : ring.members()) {
@@ -319,7 +308,7 @@ protected:
             HostPort address;
             RETURN_IF_NOT_OK(address.ParseString(worker.first));
             sameNodeWorkers.emplace_back(std::move(address));
-            for (const auto token : worker.second.tokens()) {
+            for (const auto token : RebuildTopologyMemberTokens(ring, worker.first, worker.second)) {
                 tokenWorkers.emplace(token, worker.first);
             }
         }
@@ -351,13 +340,7 @@ protected:
                                         bool requireDifferentOwner, std::string &key, HostPort &metaOwner)
     {
         ClusterTopologyPb ring;
-        if (etcd_ == nullptr) {
-            RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
-        } else {
-            std::string value;
-            RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
-            CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
-        }
+        RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
         HostPort targetWorker;
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
         std::vector<HostPort> sameNodeWorkers;
@@ -369,7 +352,7 @@ protected:
             HostPort address;
             RETURN_IF_NOT_OK(address.ParseString(worker.first));
             sameNodeWorkers.emplace_back(std::move(address));
-            for (const auto token : worker.second.tokens()) {
+            for (const auto token : RebuildTopologyMemberTokens(ring, worker.first, worker.second)) {
                 tokenWorkers.emplace(token, worker.first);
             }
         }

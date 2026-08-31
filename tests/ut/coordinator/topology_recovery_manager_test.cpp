@@ -19,6 +19,7 @@
  */
 #include "datasystem/coordinator/topology_recovery_manager.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -32,6 +33,7 @@
 
 #include "gtest/gtest.h"
 
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/model/topology_types.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
@@ -121,8 +123,12 @@ protected:
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = version;
+        std::vector<uint32_t> tokens;
+        for (uint32_t index = 0; index < 4; ++index) {
+            tokens.emplace_back(cluster::HashAlgorithm::MakeToken(address, index, 0));
+        }
         topology.members = { cluster::Member{ { std::string(16, identityByte), address },
-                                               cluster::MemberState::ACTIVE, { 10, 20, 30, 40 } } };
+                                               cluster::MemberState::ACTIVE, std::move(tokens) } };
         TopologyRecoveryCandidateReport report;
         report.reporterAddress = address;
         report.hasSnapshot = true;

@@ -27,12 +27,13 @@ Member MakeMaterializerMember(char id, uint32_t port, MemberState state, std::ve
 TEST(TopologyTaskMaterializerTest, BuildsStableOneExecutorTasksAndCompleteNotifies)
 {
     HashAlgorithm algorithm;
-    TopologyState current;
+    ScaleOutPlanInput bootstrapInput;
+    bootstrapInput.joining = { { std::string(16, 'a'), "127.0.0.1:1" } };
+    bootstrapInput.tokensPerMember = 4;
+    TopologyPlan bootstrap;
+    DS_ASSERT_OK(algorithm.BuildInitialPlacement(bootstrapInput, bootstrap));
+    TopologyState current = std::move(bootstrap.next);
     current.version = 1;
-    current.clusterHasInit = true;
-    current.members = {
-        Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 10, 100 } },
-    };
     ScaleOutPlanInput input{ current, { { std::string(16, 'b'), "127.0.0.1:2" } }, 4 };
     TopologyPlan plan;
     DS_ASSERT_OK(algorithm.PlanScaleOut(input, plan));
@@ -56,6 +57,27 @@ TEST(TopologyTaskMaterializerTest, BuildsStableOneExecutorTasksAndCompleteNotifi
     EXPECT_FALSE(task.executorAddress.empty());
     ASSERT_EQ(first.notifiesByAddress.count(task.executorAddress), 1);
     EXPECT_EQ(first.notifiesByAddress.at(task.executorAddress).taskIds.front(), task.taskId);
+}
+
+TEST(TopologyTaskMaterializerTest, DoesNotComparePlanTokensWithSnapshot)
+{
+    TopologyState state;
+    state.version = 2;
+    state.clusterHasInit = true;
+    state.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 2 };
+    state.members = {
+        MakeMaterializerMember('a', 1, MemberState::ACTIVE, { 10 }),
+        MakeMaterializerMember('b', 2, MemberState::JOINING, { 20 }),
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    TopologyPlan plan;
+    plan.next = state;
+    plan.next.members.front().tokens = { 30 };
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+
+    DS_EXPECT_OK(materializer.BuildExpected(*snapshot, plan, expected));
 }
 
 TEST(TopologyTaskMaterializerTest, BuildsOneSharedRestartSetForEveryMembershipRecipient)

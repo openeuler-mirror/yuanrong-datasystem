@@ -60,11 +60,15 @@ TEST(TopologyPlanBuilderTest, BootstrapsMultipleInitialMembersWithConfiguredToke
 
 TEST(TopologyPlanBuilderTest, StartsAndFinalizesOneMultiMemberScaleOutBatch)
 {
+    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
+    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
+    FLAGS_hash_ring_tokens_per_member = 64;
     HashAlgorithm algorithm;
     TopologyPlanBuilder builder(algorithm);
     TopologyState latest;
     latest.version = 2;
     latest.clusterHasInit = true;
+    latest.tokensPerMember = 2;
     latest.members = { MakeControlMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10, 100 }),
                        MakeControlMember('b', "127.0.0.1:2", MemberState::INITIAL),
                        MakeControlMember('c', "127.0.0.1:3", MemberState::INITIAL) };
@@ -75,6 +79,9 @@ TEST(TopologyPlanBuilderTest, StartsAndFinalizesOneMultiMemberScaleOutBatch)
     EXPECT_EQ(plan.next.activeBatch->epoch, 3);
     EXPECT_EQ(plan.next.members[1].state, MemberState::JOINING);
     EXPECT_EQ(plan.next.members[2].state, MemberState::JOINING);
+    EXPECT_EQ(plan.next.tokensPerMember, 2);
+    EXPECT_EQ(plan.next.members[1].tokens.size(), 2);
+    EXPECT_EQ(plan.next.members[2].tokens.size(), 2);
     TopologyState final;
     DS_ASSERT_OK(builder.BuildScaleOutFinal(plan.next, final));
     EXPECT_FALSE(final.activeBatch.has_value());

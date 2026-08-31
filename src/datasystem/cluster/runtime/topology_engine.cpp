@@ -1126,8 +1126,7 @@ Status TopologyEngine::GetRecoveryTopology(uint64_t &topologyVersion, std::strin
         RETURN_STATUS(K_NOT_FOUND, "cluster topology recovery Snapshot is not ready");
     }
     RETURN_IF_NOT_OK(rc);
-    TopologyState state{ snapshot->ClusterHasInit(), snapshot->Version(), snapshot->Members(),
-                         snapshot->GetActiveBatch() };
+    TopologyState state = snapshot->CopyState();
     std::string encoded;
     RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeTopology(state, encoded));
     topologyVersion = snapshot->Version();

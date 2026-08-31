@@ -13,6 +13,7 @@
 
 #include "oc_client_common.h"
 
+#include "cluster/topology_token_helper.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -69,22 +70,16 @@ void OCClientCommon::SetWorkerHashInjection(std::initializer_list<uint32_t> work
     SetWorkerHashInjection(std::vector<uint32_t>(workerIndexes));
 }
 
-void OCClientCommon::GetObjectKeysHashToWorker(EtcdStore *db, uint32_t workerIndex, size_t objectCount,
+void OCClientCommon::GetObjectKeysHashToWorker(EtcdStore *, uint32_t workerIndex, size_t objectCount,
                                                std::vector<std::string> &objectKeys)
 {
     ClusterTopologyPb ring;
-    if (db == nullptr) {
-        DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
-    } else {
-        std::string value;
-        DS_ASSERT_OK(db->Get(GetTopologyTableName(), "", value));
-        ASSERT_TRUE(ring.ParseFromString(value));
-    }
+    DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
     HostPort workerAddress;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
     std::map<uint32_t, std::string> tokenWorkers;
     for (const auto &worker : ring.members()) {
-        for (auto token : worker.second.tokens()) {
+        for (auto token : RebuildTopologyMemberTokens(ring, worker.first, worker.second)) {
             tokenWorkers.emplace(token, worker.first);
         }
     }

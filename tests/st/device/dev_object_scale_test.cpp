@@ -27,6 +27,7 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "cluster/base_cluster.h"
+#include "cluster/topology_token_helper.h"
 #include "common.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/rpc/rpc_constants.h"
@@ -111,13 +112,11 @@ public:
 
     void SaveHashToken()
     {
-        std::string value;
-        db_->Get(GetTopologyTableName(), "", value);
         ClusterTopologyPb ring;
-        ring.ParseFromString(value);
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
         for (const auto &kv : ring.members()) {
             const auto &workerId = kv.first;
-            for (auto token : kv.second.tokens()) {
+            for (auto token : RebuildTopologyMemberTokens(ring, workerId, kv.second)) {
                 tokenMap_.insert({ token, workerId });
             }
         }
@@ -125,12 +124,11 @@ public:
 
     void GetHashOnWorker(size_t workerNum)
     {
-        std::string value;
-        db_->Get(GetTopologyTableName(), "", value);
         ClusterTopologyPb ring;
-        ring.ParseFromString(value);
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
         for (size_t i = 0; i < workerNum; ++i) {
-            auto tokens = ring.members().at(workerAddress_[i]).tokens();
+            const auto &member = ring.members().at(workerAddress_[i]);
+            auto tokens = RebuildTopologyMemberTokens(ring, workerAddress_[i], member);
             workerHashValue_.emplace_back(*tokens.begin() - 1);
         }
         ASSERT_EQ(workerHashValue_.size(), workerNum);

@@ -1735,7 +1735,9 @@ Status TopologyController::BootstrapCollectiveReplacement(const TopologySnapshot
     std::unordered_set<std::string> exiting;
     std::vector<MembershipRecord> ready;
     CollectMembershipFacts(exactMemberships, exiting, ready);
-    TopologyState empty{ latest.ClusterHasInit(), latest.Version(), {}, std::nullopt };
+    TopologyState empty = latest.CopyState();
+    empty.members.clear();
+    empty.activeBatch.reset();
     std::unordered_set<std::string> known;
     std::vector<MemberIdentity> admitted;
     size_t changed = 0;
@@ -2014,7 +2016,8 @@ Status TopologyController::CommitClusterShutdown(const TopologySnapshot &latest)
 {
     LOG(INFO) << "CLUSTER_SHUTDOWN cluster=" << keys_.ClusterName() << " member_count=" << latest.Members().size()
               << " gate=all_members_exiting contract_status=satisfied";
-    TopologyState state{ latest.ClusterHasInit(), latest.Version(), latest.Members(), std::nullopt };
+    TopologyState state = latest.CopyState();
+    state.activeBatch.reset();
     for (auto &member : state.members) {
         member.state = MemberState::PRE_LEAVING;
     }
@@ -2056,8 +2059,7 @@ Status TopologyController::CommitConfirmedFailures(const TopologySnapshot &lates
                  << " sample=" << MemberIdentitySample(confirmed)
                  << " outcome=" << (replan ? "replan_pending" : "start_pending");
     TopologyPlan plan;
-    RETURN_IF_NOT_OK(planBuilder_.BuildFailureStartOrReplan(
-        { latest.ClusterHasInit(), latest.Version(), latest.Members(), latest.GetActiveBatch() }, confirmed, plan));
+    RETURN_IF_NOT_OK(planBuilder_.BuildFailureStartOrReplan(latest.CopyState(), confirmed, plan));
     EraseMembers(plan.next, classification.removeInitial);
     EraseMembers(plan.next, classification.removeJoining);
     std::shared_ptr<const TopologySnapshot> committed;
@@ -2080,7 +2082,7 @@ Status TopologyController::CommitUncommittedCleanup(const TopologySnapshot &late
     if (!classification.removeJoining.empty() && activeBatch.has_value()
         && (activeBatch->type == TopologyChangeType::SCALE_OUT || activeBatch->type == TopologyChangeType::FAILURE)) {
         TopologyPlan plan;
-        const TopologyState state{ latest.ClusterHasInit(), latest.Version(), latest.Members(), activeBatch };
+        const TopologyState state = latest.CopyState();
         if (activeBatch->type == TopologyChangeType::SCALE_OUT) {
             RETURN_IF_NOT_OK(planBuilder_.BuildScaleOutReplan(state, classification.removeJoining, plan));
         } else if (activeBatch->type == TopologyChangeType::FAILURE) {
@@ -2100,7 +2102,8 @@ Status TopologyController::CommitUncommittedCleanup(const TopologySnapshot &late
     if (classification.removeInitial.empty()) {
         return Status::OK();
     }
-    next = { latest.ClusterHasInit(), latest.Version() + 1, latest.Members(), activeBatch };
+    next = latest.CopyState();
+    ++next.version;
     EraseMembers(next, classification.removeInitial);
     return CommitAndLogMemberTransition(latest, next, classification.removeInitial, "remove_initial",
                                         expectedAuthorityRevision);
@@ -2259,7 +2262,8 @@ Status TopologyController::CommitMembershipFacts(const TopologySnapshot &latest,
     std::unordered_set<std::string> exiting;
     std::vector<MembershipRecord> ready;
     CollectMembershipFacts(memberships, exiting, ready);
-    TopologyState next{ latest.ClusterHasInit(), latest.Version() + 1, latest.Members(), latest.GetActiveBatch() };
+    TopologyState next = latest.CopyState();
+    ++next.version;
     size_t changed = 0;
     std::unordered_set<std::string> known;
     std::vector<MemberIdentity> admittedLeaving;
@@ -2477,7 +2481,7 @@ Status TopologyController::CommitBatchFinal(const TopologySnapshot &latest,
                                             const std::vector<MembershipRecord> &memberships)
 {
     TopologyState next;
-    TopologyState state{ latest.ClusterHasInit(), latest.Version(), latest.Members(), latest.GetActiveBatch() };
+    TopologyState state = latest.CopyState();
     const auto batch = *latest.GetActiveBatch();
     auto participants = CollectBatchParticipants(latest, batch.type);
     if (batch.type == TopologyChangeType::SCALE_OUT) {
@@ -2535,7 +2539,7 @@ Status TopologyController::CommitScaleOutExhaustion(const TopologySnapshot &late
             }
         }
     }
-    TopologyState state{ latest.ClusterHasInit(), latest.Version(), latest.Members(), latest.GetActiveBatch() };
+    TopologyState state = latest.CopyState();
     TopologyPlan plan;
     RETURN_IF_NOT_OK(planBuilder_.BuildScaleOutReplan(state, failedJoining, plan));
     LOG(WARNING) << "CLUSTER_CHANGE cluster=" << keys_.ClusterName() << " decision=scaleout_exhausted"
@@ -2670,7 +2674,7 @@ void TopologyController::PrepareBatchStartState(const TopologySnapshot &latest,
                                                 const std::vector<MemberIdentity> &participants,
                                                 TopologyChangeType type, TopologyState &state) const
 {
-    state = { latest.ClusterHasInit(), latest.Version(), latest.Members(), latest.GetActiveBatch() };
+    state = latest.CopyState();
     if (options_.eventSourceMode != TopologyEventSourceMode::EXTERNAL || !latest.ClusterHasInit()) {
         return;
     }

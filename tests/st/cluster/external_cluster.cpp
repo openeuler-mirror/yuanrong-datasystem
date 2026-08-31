@@ -32,6 +32,7 @@
 #include <securec.h>
 
 #include "common.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/coordinator/key_value_entry.h"

@@ -32,6 +32,7 @@
 #include <gtest/gtest.h>
 
 #include "client/object_cache/oc_client_common.h"
+#include "cluster/topology_token_helper.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/flags.h"
@@ -260,7 +261,7 @@ protected:
             if (worker.second.state() != MembershipPb::ACTIVE) {
                 continue;
             }
-            for (const auto token : worker.second.tokens()) {
+            for (const auto token : RebuildTopologyMemberTokens(ring, worker.first, worker.second)) {
                 tokenWorkers.emplace(token, worker.first);
             }
         }

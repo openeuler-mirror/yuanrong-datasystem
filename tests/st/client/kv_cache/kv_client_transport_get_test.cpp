@@ -34,6 +34,7 @@
 #include <gtest/gtest.h>
 
 #include "client/object_cache/oc_client_common.h"
+#include "cluster/topology_token_helper.h"
 #include "common_distributed_ext.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -284,18 +285,15 @@ protected:
     void GetRealHashKeysToWorker(uint32_t workerIndex, size_t keyCount, const std::string &keyPrefix,
                                  std::vector<std::string> &keys)
     {
-        ASSERT_NE(etcd_, nullptr);
-        std::string value;
-        DS_ASSERT_OK(etcd_->Get(GetTopologyTableName(), "", value));
         ClusterTopologyPb ring;
-        ASSERT_TRUE(ring.ParseFromString(value));
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
 
         HostPort targetWorker;
         DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
         ASSERT_NE(ring.members().find(targetWorker.ToString()), ring.members().end());
         std::map<uint32_t, std::string> tokenWorkers;
         for (const auto &worker : ring.members()) {
-            for (const auto token : worker.second.tokens()) {
+            for (const auto token : RebuildTopologyMemberTokens(ring, worker.first, worker.second)) {
                 tokenWorkers.emplace(token, worker.first);
             }
         }
@@ -734,15 +732,10 @@ public:
 protected:
     std::string GetKeyWithMetaOwnerAndSameNodeWorker(uint32_t metaOwnerIndex, uint32_t sameNodeWorkerIndex)
     {
-        std::string topology;
-        Status status = etcd_->Get(GetTopologyTableName(), "", topology);
+        ClusterTopologyPb ring;
+        Status status = cluster_->ReadClusterTopology(ring);
         if (status.IsError()) {
             ADD_FAILURE() << status.ToString();
-            return {};
-        }
-        ClusterTopologyPb ring;
-        if (!ring.ParseFromString(topology)) {
-            ADD_FAILURE() << "Failed to parse topology";
             return {};
         }
         HostPort sameNodeWorker;
@@ -763,7 +756,7 @@ protected:
             sameNodeWorkers.emplace_back(std::move(worker));
         }
         for (const auto &worker : ring.members()) {
-            for (const auto token : worker.second.tokens()) {
+            for (const auto token : RebuildTopologyMemberTokens(ring, worker.first, worker.second)) {
                 tokenWorkers.emplace(token, worker.first);
             }
         }

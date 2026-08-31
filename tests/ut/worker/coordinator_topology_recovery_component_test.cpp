@@ -19,6 +19,7 @@
  */
 #include "datasystem/cluster/coordination_backend/topology_recovery_reporter.h"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -30,6 +31,7 @@
 
 #include "gtest/gtest.h"
 
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/model/topology_types.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
@@ -286,11 +288,17 @@ std::string TopologyKey()
 
 std::string BuildCanonicalTopology()
 {
+    constexpr uint32_t tokenCount = 4;
+    std::vector<uint32_t> tokens;
+    tokens.reserve(tokenCount);
+    for (uint32_t index = 0; index < tokenCount; ++index) {
+        tokens.emplace_back(cluster::HashAlgorithm::MakeToken(MEMBER_ADDRESS, index, 0));
+    }
     cluster::TopologyState topology;
     topology.clusterHasInit = true;
     topology.version = TOPOLOGY_VERSION;
     topology.members = { cluster::Member{ { std::string(16, 'a'), MEMBER_ADDRESS },
-                                           cluster::MemberState::ACTIVE, { 10, 20, 30, 40 } } };
+                                           cluster::MemberState::ACTIVE, std::move(tokens) } };
     std::string canonical;
     EXPECT_TRUE(cluster::TopologyRepositoryCodec::EncodeTopology(topology, canonical).IsOk());
     return canonical;

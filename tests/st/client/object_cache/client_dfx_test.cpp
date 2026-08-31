@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "cluster/topology_token_helper.h"
 #include "common.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
@@ -1206,10 +1207,8 @@ public:
 
     void BuildHashOwnerIndex()
     {
-        std::string value;
-        DS_ASSERT_OK(db_->Get(GetTopologyTableName(), "", value));
         ClusterTopologyPb ring;
-        ASSERT_TRUE(ring.ParseFromString(value));
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
         workerAddresses_.clear();
         workerAddresses_.resize(WORKER_NUM);
         for (size_t i = 0; i < WORKER_NUM; ++i) {
@@ -1221,7 +1220,7 @@ public:
         }
         tokenOwners_.clear();
         for (const auto &worker : ring.members()) {
-            for (const auto token : worker.second.tokens()) {
+            for (const auto token : RebuildTopologyMemberTokens(ring, worker.first, worker.second)) {
                 tokenOwners_.emplace_back(token, worker.first);
             }
         }

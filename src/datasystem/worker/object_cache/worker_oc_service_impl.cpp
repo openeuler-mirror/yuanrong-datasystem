@@ -47,6 +47,7 @@
 #include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/eventloop/timer_queue.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -151,7 +152,7 @@ using namespace datasystem::worker;
 namespace datasystem {
 namespace object_cache {
 namespace {
-constexpr char CLUSTER_TOPOLOGY_SCHEMA_VERSION[] = "1";
+constexpr char CLUSTER_TOPOLOGY_SCHEMA_VERSION[] = "2";
 constexpr char TOPOLOGY_READINESS_PROBE_KEY[] = "topology-readiness-probe";
 constexpr int STARTUP_HEALTH_LOG_EVERY_COUNT = 100;
 
@@ -182,12 +183,15 @@ Status BuildClusterTopologyPb(const cluster::TopologySnapshot &snapshot, ::datas
     topologyPb.set_cluster_has_init(snapshot.ClusterHasInit());
     topologyPb.set_version(snapshot.Version());
     topologyPb.set_schema_version(CLUSTER_TOPOLOGY_SCHEMA_VERSION);
+    topologyPb.set_tokens_per_member(snapshot.TokensPerMember());
     for (const auto &member : snapshot.Members()) {
         auto &memberPb = (*topologyPb.mutable_members())[member.identity.address];
         memberPb.set_id(member.identity.id);
         memberPb.set_state(static_cast<::datasystem::MembershipPb::StatePb>(member.state));
-        for (uint32_t token : member.tokens) {
-            memberPb.add_tokens(token);
+        for (const auto &tokenSeedOverride : member.tokenSeedOverrides) {
+            auto *overridePb = memberPb.add_token_seed_overrides();
+            overridePb->set_token_index(tokenSeedOverride.tokenIndex);
+            overridePb->set_token_seed(tokenSeedOverride.tokenSeed);
         }
     }
     if (snapshot.GetActiveBatch().has_value()) {

@@ -17,6 +17,7 @@ target_link_libraries(cluster
     generic_service_protos_client
     common_etcd
     common_test
+    cluster_topology
     cluster_topology_keyspace
     test_port_allocator
 )

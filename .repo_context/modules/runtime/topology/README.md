@@ -93,6 +93,16 @@
 - `TopologyRepository` stores one `ClusterTopologyPb` authority record plus derived task/notify records and ScaleIn
   metadata-done markers. Derived records cannot replace topology authority; final progress and batch transitions are
   fenced by topology version and batch epoch.
+- `MembershipPb` persists member identity, state, and only non-default token seed overrides. The repository codec
+  reconstructs the complete token vector in logical token-index order from the member address, cluster-level
+  `tokens_per_member`, and each optional seed override before publishing domain topology state. Encoding copies the
+  stored overrides and rejects token vectors that cannot be reproduced by that fixed derivation rule, so member
+  processing order cannot change persisted collision decisions. Schema version 2 is an intentional hard protocol
+  cutover and is not compatible with schema version 1 topology records or clients. The codec derives the token count from
+  the topology record rather than process flags, and both persisted topology and client routing preparation reject more
+  than 640,000 total tokens. The bootstrap flag selects the initial cluster value; all later scale-out and recovery
+  planning preserves the value copied from the topology snapshot. Clients use the topology value when rebuilding their
+  routing index. Routing snapshots never recompute tokens on the foreground path.
 - `cluster_topology.proto` owns these topology records under protobuf package `datasystem`; coordinator and other
   unrelated protobuf contracts remain separate schemas.
 - `TopologyEngine`, `TopologyController`, and standalone `TopologyObserver` each own one serialized state loop. ETCD

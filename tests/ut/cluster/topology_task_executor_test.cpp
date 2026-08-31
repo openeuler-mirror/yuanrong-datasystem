@@ -8,6 +8,7 @@
  */
 #include "datasystem/cluster/executor/topology_task_executor.h"
 
+#include <algorithm>
 #include <future>
 #include <stdexcept>
 #include <thread>
@@ -35,6 +36,15 @@ constexpr size_t MAX_CALLBACK_THREADS = 16;
 constexpr size_t MAX_CALLBACK_QUEUE_CAPACITY = 1'024;
 constexpr uint32_t SIBLING_SCALE_IN_RANGE_FROM = 60;
 constexpr uint32_t SIBLING_SCALE_IN_RANGE_END = 70;
+
+std::vector<uint32_t> MakeExecutorTokens(const std::string &address)
+{
+    std::vector<uint32_t> tokens;
+    for (uint32_t index = 0; index < 4; ++index) {
+        tokens.emplace_back(HashAlgorithm::MakeToken(address, index, 0));
+    }
+    return tokens;
+}
 
 TEST(CancellationTokenTest, ExpiredCommitBoundaryRejectsSourceMutation)
 {
@@ -194,13 +204,17 @@ struct ExecutorScenario {
         current.clusterHasInit = true;
         TopologyPlanBuilder builder(algorithm);
         if (type == TopologyChangeType::SCALE_OUT) {
-            current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1, 100 } },
+            current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,
+                                        MakeExecutorTokens("127.0.0.1:1") },
                                 Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::INITIAL, {} } };
             return builder.BuildScaleOutStart(current, { current.members.back().identity }, plan);
         }
         const auto firstState = type == TopologyChangeType::SCALE_IN ? MemberState::PRE_LEAVING : MemberState::ACTIVE;
-        current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, firstState, { 1, 50 } },
-                            Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 100, 150 } } };
+        current.members = {
+            Member{ { std::string(16, 'a'), "127.0.0.1:1" }, firstState, MakeExecutorTokens("127.0.0.1:1") },
+            Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE,
+                    MakeExecutorTokens("127.0.0.1:2") }
+        };
         if (type == TopologyChangeType::SCALE_IN) {
             return builder.BuildScaleInStart(current, { current.members.front().identity }, plan);
         }

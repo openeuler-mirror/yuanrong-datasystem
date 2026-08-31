@@ -15,6 +15,7 @@
  * Description: Test WorkerOcServiceImpl.
  */
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -33,6 +34,7 @@
 #include <gmock/gmock.h>
 
 #include "../../../common/binmock/binmock.h"
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
@@ -481,19 +483,23 @@ private:
     static constexpr char LOCAL_MEMBER_ID_FILL = 'l';
     static constexpr char PEER_MEMBER_ID_FILL = 'p';
     static constexpr char DIGEST_FILL = 'b';
-    static constexpr uint32_t LOCAL_MEMBER_TOKEN = 1;
-    static constexpr uint32_t PEER_MEMBER_TOKEN = 2;
-
     Status Init(const HostPort &localAddress, const HostPort &peerAddress)
     {
+        const auto makeTokens = [](const std::string &address) {
+            std::vector<uint32_t> tokens;
+            for (uint32_t index = 0; index < 4; ++index) {
+                tokens.emplace_back(cluster::HashAlgorithm::MakeToken(address, index, 0));
+            }
+            return tokens;
+        };
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = TOPOLOGY_VERSION;
         topology.members = {
             cluster::Member{ { std::string(MEMBER_ID_SIZE, LOCAL_MEMBER_ID_FILL), localAddress.ToString() },
-                             cluster::MemberState::ACTIVE, { LOCAL_MEMBER_TOKEN } },
+                             cluster::MemberState::ACTIVE, makeTokens(localAddress.ToString()) },
             cluster::Member{ { std::string(MEMBER_ID_SIZE, PEER_MEMBER_ID_FILL), peerAddress.ToString() },
-                             cluster::MemberState::ACTIVE, { PEER_MEMBER_TOKEN } }
+                             cluster::MemberState::ACTIVE, makeTokens(peerAddress.ToString()) }
         };
         std::shared_ptr<const cluster::TopologySnapshot> snapshot;
         RETURN_IF_NOT_OK(cluster::TopologySnapshot::Create(std::move(topology), TOPOLOGY_VERSION,

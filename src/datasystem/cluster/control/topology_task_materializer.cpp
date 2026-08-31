@@ -14,7 +14,6 @@
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/ak_sk/hasher.h"
-#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -88,11 +87,6 @@ std::vector<TokenRange> ToRanges(const std::vector<TopologyTaskRange> &taskRange
     return ranges;
 }
 
-TopologyState CopyState(const TopologySnapshot &snapshot)
-{
-    return { snapshot.ClusterHasInit(), snapshot.Version(), snapshot.Members(), snapshot.GetActiveBatch() };
-}
-
 void CanonicalizeRanges(std::vector<TopologyTaskRange> &ranges)
 {
     std::sort(ranges.begin(), ranges.end(), [](const auto &left, const auto &right) {
@@ -103,6 +97,7 @@ void CanonicalizeRanges(std::vector<TopologyTaskRange> &ranges)
 bool MatchesSnapshot(const TopologySnapshot &latest, const TopologyState &next)
 {
     if (latest.Version() != next.version || latest.ClusterHasInit() != next.clusterHasInit
+        || latest.TokensPerMember() != next.tokensPerMember
         || latest.GetActiveBatch().has_value() != next.activeBatch.has_value()) {
         return false;
     }
@@ -115,7 +110,7 @@ bool MatchesSnapshot(const TopologySnapshot &latest, const TopologyState &next)
     for (size_t index = 0; index < next.members.size(); ++index) {
         const auto &left = latest.Members()[index];
         const auto &right = next.members[index];
-        if (!(left.identity == right.identity) || left.state != right.state || left.tokens != right.tokens) {
+        if (!(left.identity == right.identity) || left.state != right.state) {
             return false;
         }
     }
@@ -189,7 +184,7 @@ Status RebuildPlan(const TopologySnapshot &latest, const IPlanningAlgorithm &alg
 {
     const auto &batch = latest.GetActiveBatch();
     CHECK_FAIL_RETURN_STATUS(batch.has_value(), K_INVALID, "derived state requires an active batch");
-    TopologyState current = CopyState(latest);
+    TopologyState current = latest.CopyState();
     std::vector<MemberIdentity> selected;
     MemberState selectedState = MemberState::JOINING;
     if (batch->type == TopologyChangeType::SCALE_IN) {
@@ -213,18 +208,18 @@ Status RebuildPlan(const TopologySnapshot &latest, const IPlanningAlgorithm &alg
             std::any_of(latest.Members().begin(), latest.Members().end(),
                         [](const auto &member) { return member.state == MemberState::ACTIVE; });
         if (!hasHealthyOwner) {
-            plan = { CopyState(latest), {} };
+            plan = { latest.CopyState(), {} };
             return Status::OK();
         }
     }
     if (batch->type == TopologyChangeType::SCALE_OUT) {
-        RETURN_IF_NOT_OK(algorithm.PlanScaleOut({ current, selected, FLAGS_hash_ring_tokens_per_member }, plan));
+        RETURN_IF_NOT_OK(algorithm.PlanScaleOut({ current, selected, current.tokensPerMember }, plan));
     } else if (batch->type == TopologyChangeType::SCALE_IN) {
         RETURN_IF_NOT_OK(algorithm.PlanScaleIn({ current, selected }, plan));
     } else {
         RETURN_IF_NOT_OK(algorithm.PlanFailure({ current, selected }, plan));
     }
-    plan.next = CopyState(latest);
+    plan.next = latest.CopyState();
     return Status::OK();
 }
 }  // namespace

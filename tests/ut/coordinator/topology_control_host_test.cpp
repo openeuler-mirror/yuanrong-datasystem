@@ -12,6 +12,7 @@
 #include <chrono>
 #include <functional>
 #include <future>
+#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -22,6 +23,7 @@
 
 #include "gtest/gtest.h"
 
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
@@ -104,6 +106,17 @@ constexpr auto TEST_LARGE_BATCH_DEADLINE = std::chrono::seconds(5);
 constexpr size_t TEST_CLUSTER_LIMIT = 2;
 constexpr size_t TEST_JOINING_MEMBER_COUNT = 500;
 
+std::vector<uint32_t> MakeMemberTokens(const std::string &address)
+{
+    constexpr uint32_t tokenCount = 4;
+    std::vector<uint32_t> tokens;
+    tokens.reserve(tokenCount);
+    for (uint32_t index = 0; index < tokenCount; ++index) {
+        tokens.emplace_back(cluster::HashAlgorithm::MakeToken(address, index, 0));
+    }
+    return tokens;
+}
+
 TEST(TopologyControlHostCandidateTest, ActiveOnlyExpectationAllowsAdditionalPassiveCandidate)
 {
     const cluster::MemberIdentity passiveCandidate{ "passive", "127.0.0.1:12001" };
@@ -118,11 +131,9 @@ std::shared_ptr<const cluster::TopologySnapshot> MakeActiveSnapshot(size_t membe
     state.version = 1;
     state.clusterHasInit = true;
     for (size_t index = 0; index < memberCount; ++index) {
-        state.members.push_back(cluster::Member{
-            { std::string(15, 'a') + static_cast<char>('a' + index), "127.0.0.1:" + std::to_string(12001 + index) },
-            cluster::MemberState::ACTIVE,
-            { static_cast<uint32_t>(index + 1) },
-        });
+        const auto address = "127.0.0.1:" + std::to_string(12001 + index);
+        state.members.push_back(cluster::Member{ { std::string(15, 'a') + static_cast<char>('a' + index), address },
+                                                 cluster::MemberState::ACTIVE, MakeMemberTokens(address) });
     }
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     const auto rc = cluster::TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot);
@@ -138,11 +149,9 @@ std::shared_ptr<const cluster::TopologySnapshot> MakeSnapshot(
     state.version = 1;
     state.clusterHasInit = true;
     for (size_t index = 0; index < states.size(); ++index) {
-        state.members.push_back(cluster::Member{
-            { std::string(15, 'a') + static_cast<char>('a' + index), "127.0.0.1:" + std::to_string(12001 + index) },
-            states[index],
-            { static_cast<uint32_t>(index + 1) },
-        });
+        const auto address = "127.0.0.1:" + std::to_string(12001 + index);
+        state.members.push_back(cluster::Member{ { std::string(15, 'a') + static_cast<char>('a' + index), address },
+                                                 states[index], MakeMemberTokens(address) });
     }
     if (activeBatch.has_value()) {
         state.activeBatch = cluster::ActiveBatch{ *activeBatch, 1 };

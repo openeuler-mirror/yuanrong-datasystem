@@ -28,8 +28,6 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "datasystem/client/routing/worker_router.h"
-#include "datasystem/common/kvstore/coordination_keys.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 
 namespace datasystem {
@@ -57,14 +55,11 @@ public:
     void SetUp() override
     {
         ExternalClusterTest::SetUp();
-        db_ = InitTestEtcdInstance();
-        ASSERT_NE(db_, nullptr);
         WaitForActiveTopology();
     }
 
     void TearDown() override
     {
-        db_.reset();
         ExternalClusterTest::TearDown();
     }
 
@@ -91,9 +86,7 @@ protected:
 
     bool ReadTopology(ClusterTopologyPb &topology)
     {
-        std::string serialized;
-        Status rc = db_->Get(GetTopologyTableName(), "", serialized);
-        return rc.IsOk() && topology.ParseFromString(serialized);
+        return cluster_->ReadClusterTopology(topology).IsOk();
     }
 
     std::shared_ptr<std::unordered_map<std::string, std::string>> BuildHostIdMap(
@@ -131,7 +124,9 @@ protected:
 
         auto leavingTopology = std::make_shared<ClusterTopologyPb>(topology);
         (*leavingTopology->mutable_members())[targetWorker.ToString()].set_state(MembershipPb::LEAVING);
-        router.UpdateHashRing(leavingTopology, hostIdMap);
+        std::unique_ptr<client::PreparedClusterTopology> prepared;
+        DS_ASSERT_OK(client::PreparedClusterTopology::Create(std::move(*leavingTopology), prepared));
+        router.UpdateHashRing(*prepared, *hostIdMap);
         DS_ASSERT_OK(router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selectedWorker));
         EXPECT_EQ(selectedWorker, remainingWorker);
     }
@@ -159,8 +154,6 @@ protected:
         }
         FAIL() << "Broken worker filter did not expire within the recovery deadline";
     }
-
-    std::unique_ptr<EtcdStore> db_;
 };
 
 TEST_F(RoutingFailureSwitchTest, LEVEL1_StateAndDisconnectFiltersConverge)
@@ -176,12 +169,14 @@ TEST_F(RoutingFailureSwitchTest, LEVEL1_StateAndDisconnectFiltersConverge)
     DS_ASSERT_OK(cluster_->GetWorkerAddr(1, targetWorker));
 
     client::WorkerRouter router("routing-st-host");
-    router.UpdateHashRing(activeTopology, hostIdMap);
+    std::unique_ptr<client::PreparedClusterTopology> prepared;
+    DS_ASSERT_OK(client::PreparedClusterTopology::Create(std::move(*activeTopology), prepared));
+    router.UpdateHashRing(*prepared, *hostIdMap);
     const std::string key = FindKeyForWorker(router, targetWorker);
     ASSERT_FALSE(key.empty());
 
     VerifyStateFilter(topology, hostIdMap, router, remainingWorker, targetWorker, key);
-    router.UpdateHashRing(activeTopology, hostIdMap);
+    router.UpdateHashRing(*prepared, *hostIdMap);
     VerifyDisconnectFallbackAndRecovery(router, remainingWorker, targetWorker, key);
 }
 

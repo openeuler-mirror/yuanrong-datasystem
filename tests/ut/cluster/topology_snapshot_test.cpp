@@ -47,8 +47,8 @@ TEST(TopologySnapshotTest, BuildsStableIndexesAndCommittedOwnerView)
     TopologyState state;
     state.clusterHasInit = true;
     state.version = 7;
-    state.members = { MakeMember('b', "127.0.0.1:2", MemberState::JOINING, { 30, 40 }),
-                      MakeMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10, 20 }) };
+    state.members = { MakeMember('b', "127.0.0.1:2", MemberState::JOINING, { 40, 30 }),
+                      MakeMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 20, 10 }) };
     state.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 7 };
     std::shared_ptr<const TopologySnapshot> snapshot;
 
@@ -59,11 +59,37 @@ TEST(TopologySnapshotTest, BuildsStableIndexesAndCommittedOwnerView)
     EXPECT_EQ(snapshot->AuthorityRevision(), 11);
     ASSERT_EQ(snapshot->Members().size(), 2);
     EXPECT_EQ(snapshot->Members()[0].identity.address, "127.0.0.1:1");
+    EXPECT_EQ(snapshot->Members()[0].tokens, (std::vector<uint32_t>{ 20, 10 }));
+    EXPECT_EQ(snapshot->Members()[1].tokens, (std::vector<uint32_t>{ 40, 30 }));
     ASSERT_EQ(snapshot->CommittedMembers().size(), 1);
     const Member *member = nullptr;
     DS_ASSERT_OK(snapshot->FindMemberById(std::string(16, 'a'), member));
     ASSERT_NE(member, nullptr);
     EXPECT_EQ(member->identity.address, "127.0.0.1:1");
+}
+
+TEST(TopologySnapshotTest, CopiesCompleteDomainState)
+{
+    TopologyState state;
+    state.clusterHasInit = true;
+    state.version = 7;
+    state.members = { MakeMember('a', "127.0.0.1:1", MemberState::JOINING, { 10, 20 }) };
+    state.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 7 };
+    state.tokensPerMember = 32;
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(std::move(state), 11, std::string(64, 'd'), snapshot));
+
+    auto copied = snapshot->CopyState();
+
+    EXPECT_TRUE(copied.clusterHasInit);
+    EXPECT_EQ(copied.version, 7);
+    ASSERT_EQ(copied.members.size(), 1);
+    EXPECT_EQ(copied.members.front().identity, snapshot->Members().front().identity);
+    EXPECT_EQ(copied.members.front().state, snapshot->Members().front().state);
+    EXPECT_EQ(copied.members.front().tokens, snapshot->Members().front().tokens);
+    EXPECT_EQ(copied.members.front().tokenSeedOverrides, snapshot->Members().front().tokenSeedOverrides);
+    EXPECT_EQ(copied.activeBatch, snapshot->GetActiveBatch());
+    EXPECT_EQ(copied.tokensPerMember, 32);
 }
 
 TEST(TopologySnapshotTest, BuildsCanonicalStableActiveAndFailedProjections)
