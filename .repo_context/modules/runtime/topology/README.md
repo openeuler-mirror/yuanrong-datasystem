@@ -126,7 +126,9 @@
   range end returns `K_INVALID`. Missing keys, changed keys, and older peers retain full-read behavior. Workers accept
   `unchanged` only when the request and response belong to the same Coordinator process lifetime, and unified ETCD
   topology reads remain unconditional because bare revisions do not identify an ETCD authority lineage. The protobuf
-  fields are append-only for rolling compatibility.
+  fields are append-only for rolling compatibility. After either an unchanged exact read or a newly published Coordinator
+  topology, Worker readiness restoration exact-reads only its local membership key; it never fetches the complete
+  membership prefix for that local lifecycle check.
 - When unified ETCD loses write quorum or becomes unreachable after a last-good snapshot exists, Engine publishes
   `CONTROL_DEGRADED` without revoking business admission and keeps that immutable snapshot authoritative. The Controller
   treats ETCD membership absence as suspicion rather than proof of Worker failure: only members continuously absent for

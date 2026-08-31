@@ -650,8 +650,9 @@ TEST(TopologyEngineTest, SuccessfulReadyPublicationEnablesLocalRecoveryRepublish
     }
 }
 
-TEST(TopologyEngineTest, CoordinatorTopologyReloadRestoresReadyAfterMembershipRecreateWithoutNewTopologyVersion)
+TEST(TopologyEngineTest, CoordinatorTopologyReloadRestoresReadyWithExactLocalMembershipRead)
 {
+    constexpr uint32_t membershipPrefixFailureCount = 100;
     testing::FakeCoordinatorServiceProxy proxy;
     TestWatchIngress ingress;
     NoopTopologyCallbacks callbacks;
@@ -666,6 +667,7 @@ TEST(TopologyEngineTest, CoordinatorTopologyReloadRestoresReadyAfterMembershipRe
     int64_t membershipModRevision = 0;
     DS_ASSERT_OK(SetCoordinatorMembershipState(proxy, clusterName, MemberLifecycleState::RECOVERING,
                                                membershipModRevision));
+    proxy.FailRangeForKeyTimes(keys->MembershipTable() + "/", K_RPC_UNAVAILABLE, membershipPrefixFailureCount);
     DS_ASSERT_OK(TopologyEngineTestPeer::OnMembershipEnsured(*engine, "coordinator-test", membershipModRevision));
 
     ASSERT_TRUE(WaitFor([&] {
