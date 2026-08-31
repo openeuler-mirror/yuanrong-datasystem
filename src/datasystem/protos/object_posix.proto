@@ -257,6 +257,7 @@ message DecreaseReferenceRequest {
   string tenant_id = 4;
   // Routed SDK requests are authenticated by signature and do not require registration on every target worker.
   bool is_routed = 5;
+  bool delay_release = 6;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -702,6 +703,7 @@ message QueryAndGetDataResultPb {
 message QueryAndGetResultPb {
   QueryAndGetLocationInfoPb location = 1;
   QueryAndGetDataResultPb data_result = 2;
+  ErrorInfoPb status = 3;
 }
 
 message QueryAndGetRspPb {

@@ -71,17 +71,6 @@ public:
         return shmConnection_->Acquire(context, session);
     }
 
-    /**
-     * @brief Invalidate a session that returned an unusable shared-memory result.
-     * @param[in] session Session to invalidate.
-     */
-    void InvalidateSession(const std::shared_ptr<ShmSession> &session)
-    {
-        if (shmConnection_ != nullptr) {
-            shmConnection_->Invalidate(session);
-        }
-    }
-
     Status Get(const DataGetRequest &input, DataGetResult &output) override
     {
         RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
@@ -95,15 +84,9 @@ public:
         std::vector<RpcMessage> payloads;
         const DataGetBatchRequest inputs{ input };
         Status rc = session->Get(inputs, response, payloads);
-        if (rc.IsError()) {
-            shmConnection_->Invalidate(session);
-            return rc;
-        }
+        RETURN_IF_NOT_OK(rc);
         rc = ValidateShmResponse(response, payloads, 1);
-        if (rc.IsError()) {
-            shmConnection_->Invalidate(session);
-            return rc;
-        }
+        RETURN_IF_NOT_OK(rc);
         const auto &info = response.objects(0);
         if (info.store_fd() <= 0) {
             Status missingStatus = MissingObjectStatus(response);
@@ -113,11 +96,7 @@ public:
             output.response.mutable_error()->set_error_code(static_cast<int>(missingStatus.GetCode()));
             return missingStatus;
         }
-        rc = session->BuildResult(info, input, output);
-        if (rc.IsError()) {
-            shmConnection_->Invalidate(session);
-        }
-        return rc;
+        return session->BuildResult(info, input, output);
     }
 
     Status BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) override
@@ -140,15 +119,9 @@ public:
         GetRspPb response;
         std::vector<RpcMessage> payloads;
         Status rc = session->Get(inputs, response, payloads);
-        if (rc.IsError()) {
-            shmConnection_->Invalidate(session);
-            return rc;
-        }
+        RETURN_IF_NOT_OK(rc);
         rc = ValidateShmResponse(response, payloads, inputs.size());
-        if (rc.IsError()) {
-            shmConnection_->Invalidate(session);
-            return rc;
-        }
+        RETURN_IF_NOT_OK(rc);
 
         outputs.resize(inputs.size());
         const Status missingStatus = MissingObjectStatus(response);
@@ -162,7 +135,6 @@ public:
             item.status = session->BuildResult(info, inputs[index], item.data);
             if (item.status.IsError()) {
                 outputs.clear();
-                shmConnection_->Invalidate(session);
                 return item.status;
             }
         }
@@ -222,9 +194,6 @@ public:
         Status rc = shmConnection_->Acquire(param.requestContext, session);
         if (rc.IsOk()) {
             rc = BuildShmBuffer(workerAddr, key, size, param, createRsp, workerVersion, session, buffer);
-            if (rc.IsError()) {
-                shmConnection_->Invalidate(session);
-            }
         }
         if (rc.IsError()) {
             // fd-passing unavailable (K_NOT_SUPPORTED) or mmap failed; release the worker allocation.
@@ -401,9 +370,6 @@ private:
         } catch (const std::bad_alloc &e) {
             ReleaseAllocations(multiRsp, param.requestContext,
                                "MCreate allocations after local result reservation failure");
-            if (session != nullptr) {
-                shmConnection_->Invalidate(session);
-            }
             RETURN_STATUS(K_OUT_OF_MEMORY, e.what());
         }
         for (size_t i = 0; i < keys.size(); i++) {
@@ -417,9 +383,6 @@ private:
                 for (size_t j = i; j < keys.size(); j++) {
                     ReleaseAllocation(multiRsp.results(j).shm_id(), param.requestContext,
                                       "MCreate unbuilt allocation cleanup after write-region mmap failure");
-                }
-                if (session != nullptr) {
-                    shmConnection_->Invalidate(session);
                 }
                 return rc;
             }

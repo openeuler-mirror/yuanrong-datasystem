@@ -805,20 +805,6 @@ Status ShmConnection::Acquire(const TransportRequestContext &context, std::share
     return CompleteConnectionAttempt(attemptId, candidate, std::move(result), session);
 }
 
-void ShmConnection::Invalidate(const std::shared_ptr<ShmSession> &session)
-{
-    std::shared_ptr<ShmSession> stale;
-    {
-        std::lock_guard<bthread::Mutex> lock(mutex_);
-        if (session_ == session) {
-            stale = std::move(session_);
-        }
-    }
-    if (stale != nullptr) {
-        stale->Close(true);
-    }
-}
-
 bool ShmConnection::IsAlive() const
 {
     std::lock_guard<bthread::Mutex> lock(mutex_);

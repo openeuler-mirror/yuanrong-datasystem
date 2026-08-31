@@ -189,20 +189,6 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "delayed_release_shm_manager",
-    srcs = [
-        "delayed_release_shm_manager.cpp",
-    ],
-    hdrs = [
-        "delayed_release_shm_manager.h",
-    ],
-    deps = [
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/shared_memory:common_shared_memory",
-    ],
-)
-
-ds_cc_library(
     name = "async_update_location_manager",
     srcs = [
         "async_update_location_manager.cpp",

@@ -44,6 +44,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -861,6 +862,44 @@ private:
     memory::Allocator *allocator_{ nullptr };
     uint32_t savedArenaPerTenant_{ 0 };
 };
+
+TEST_F(WorkerOcServiceImplTest, DecreaseMemoryRefDelaysOnlyMarkedShmUnit)
+{
+    SetUnhealthy();
+    Raii restoreHealth([] { SetUnhealthy(); });
+    placement_.SetOwner("decrease-memory-ref", localAddress_);
+    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    impl_->reconciliationReady_.store(true, std::memory_order_release);
+    DS_ASSERT_OK(impl_->RefreshStartupHealth());
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const auto clientId = ClientKey::Intern("delay-release-client");
+    const auto remainingClientId = ClientKey::Intern("remaining-reference-client");
+
+    auto delayedShmUnit = std::make_shared<ShmUnit>();
+    delayedShmUnit->id = ShmKey::Intern("delay-release-shm");
+    const std::weak_ptr<ShmUnit> delayedWeak = delayedShmUnit;
+    impl_->memoryRefTable_->AddShmUnit(clientId, delayedShmUnit);
+    impl_->memoryRefTable_->AddShmUnit(remainingClientId, delayedShmUnit);
+    DS_ASSERT_OK(impl_->DecreaseMemoryRef(clientId, { delayedShmUnit->GetId() }, true));
+    DS_ASSERT_OK(impl_->DecreaseMemoryRef(remainingClientId, { delayedShmUnit->GetId() }, false));
+    delayedShmUnit.reset();
+    EXPECT_FALSE(delayedWeak.expired());
+
+    auto immediateShmUnit = std::make_shared<ShmUnit>();
+    immediateShmUnit->id = ShmKey::Intern("immediate-release-shm");
+    const std::weak_ptr<ShmUnit> immediateWeak = immediateShmUnit;
+    impl_->memoryRefTable_->AddShmUnit(clientId, immediateShmUnit);
+    DS_ASSERT_OK(impl_->DecreaseMemoryRef(clientId, { immediateShmUnit->GetId() }, false));
+    immediateShmUnit.reset();
+    EXPECT_TRUE(immediateWeak.expired());
+
+    EXPECT_TRUE(WaitForCondition(
+        [&delayedWeak] { return delayedWeak.expired(); },
+        std::chrono::milliseconds(DEFAULT_SHM_DELAY_RELEASE_MS * 10)));
+}
 
 TEST_F(WorkerOcServiceImplTest, RemoteGetTryLockMissDoesNotLeaveEmptyEntry)
 {

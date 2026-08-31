@@ -1101,7 +1101,7 @@ private:
      * @param[in] shmIds The ids of object reference.
      * @return K_OK on success; the error code otherwise.
      */
-    Status DecreaseMemoryRef(const ClientKey &clientId, const std::vector<ShmKey> &shmIds);
+    Status DecreaseMemoryRef(const ClientKey &clientId, const std::vector<ShmKey> &shmIds, bool delayRelease = false);
 
     /**
      * @brief Get object data from remote cache (remote worker or redis) based on object meta.

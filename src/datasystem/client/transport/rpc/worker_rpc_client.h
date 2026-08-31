@@ -86,7 +86,8 @@ public:
                                   uint32_t &workerVersion);
 
     /** @brief Release a worker-side allocation created for a routed Set transaction. */
-    virtual Status InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId);
+    virtual Status InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId,
+                                           bool delayRelease = false);
 
     /** @brief Exchange URMA connection data over this worker's cached brpc channel. */
     virtual Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response);

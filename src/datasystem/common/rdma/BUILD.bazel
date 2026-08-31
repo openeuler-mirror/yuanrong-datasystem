@@ -112,6 +112,7 @@ ds_cc_library(
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rdma/npu:remote_h2d_manager_header",
         "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:brpc_status_util",
         "//src/datasystem/common/rpc:rpc_constants",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/shared_memory:common_shared_memory",

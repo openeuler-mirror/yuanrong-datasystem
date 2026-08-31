@@ -260,6 +260,7 @@ Status WorkerRpcClient::InvokeQueryAndGet(QueryAndGetReqPb &request, QueryAndGet
     if (rpcDispatched != nullptr) {
         *rpcDispatched = true;
     }
+    INJECT_POINT("client.transport.query_and_get.after_dispatch");
     Status rc = DoInvokeQueryAndGet(options, request, response, payloads);
     return rc.IsError() ? WithRpcDiag(rc, "QueryAndGet", workerAddress_) : Status::OK();
 }
@@ -451,7 +452,8 @@ Status WorkerRpcClient::InvokeMultiSet(int64_t subTimeoutMs, MultiPublishReqPb &
     return Status::OK();
 }
 
-Status WorkerRpcClient::InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId)
+Status WorkerRpcClient::InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId,
+                                                bool delayRelease)
 {
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
                              "Routed worker RPC client is not initialized");
@@ -463,6 +465,7 @@ Status WorkerRpcClient::InvokeDecreaseReference(const TransportRequestContext &c
     request.set_token(context.token);
     request.set_tenant_id(context.tenantId);
     request.set_is_routed(true);
+    request.set_delay_release(delayRelease);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));

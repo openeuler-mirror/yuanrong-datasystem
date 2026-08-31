@@ -39,6 +39,7 @@
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_factory.h"
@@ -502,11 +503,12 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     }
 #endif
     Status getStatus;
+    Status uncertainGetStatus;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);
     Status status = RetryOnError(
         static_cast<int32_t>(std::min<int64_t>(
             TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
-        [this, &req, &rsp, &payloads, &getStatus, &config](int32_t realRpcTimeout) {
+        [this, &req, &rsp, &payloads, &getStatus, &uncertainGetStatus, &config](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
             GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
@@ -531,8 +533,21 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
                     "", hostPort_.ToString()));
 
             INJECT_POINT("Get.RetryOnError.retry_on_error_after_func");
+#ifdef USE_URMA
+            if (req.has_urma_info() && NeedDelayReleaseShmUnit(getStatus)) {
+                uncertainGetStatus = getStatus;
+                return Status(K_URMA_ERROR, getStatus.ToString());
+            }
+#endif
             RETURN_IF_NOT_OK(getStatus);
             Status recvStatus = Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+#ifdef USE_URMA
+            if (req.has_urma_info() && recvStatus.GetCode() == K_URMA_ERROR
+                && NeedDelayReleaseShmUnit(recvStatus)) {
+                uncertainGetStatus = recvStatus;
+                return recvStatus;
+            }
+#endif
             if (recvStatus.GetCode() == StatusCode::K_CLIENT_WORKER_DISCONNECT) {
                 return recvStatus;
             }
@@ -545,7 +560,27 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);
     Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_GET, traceEnabled);
-    RETURN_IF_NOT_OK(getStatus);
+    const Status &finalStatus = uncertainGetStatus.IsError() ? uncertainGetStatus : getStatus;
+#ifdef USE_URMA
+    if (NeedDelayReleaseShmUnit(finalStatus)) {
+        std::shared_ptr<ShmUnit> shmUnit;
+        if (getParam.ubPreAllocHandle != nullptr) {
+            const auto *handle = static_cast<const UrmaManager::BufferHandle *>(getParam.ubPreAllocHandle);
+            shmUnit = handle->GetShmUnit();
+        } else if (ubBufferHandle != nullptr) {
+            shmUnit = ubBufferHandle->GetShmUnit();
+        }
+        if (shmUnit != nullptr) {
+            LOG_EVERY_T(WARNING, DELAY_RELEASE_LOG_INTERVAL_SEC)
+                << "[CLIENT_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id
+                << ", identity=" << shmUnit->GetIdentity() << ", bytes=" << shmUnit->size
+                << ", delayMs=" << DEFAULT_SHM_DELAY_RELEASE_MS << ", reason=" << finalStatus;
+        }
+        DelayedReleaseShmManager::Instance().Add(
+            shmUnit, std::chrono::milliseconds(DEFAULT_SHM_DELAY_RELEASE_MS));
+    }
+#endif
+    RETURN_IF_NOT_OK(finalStatus);
     if (traceEnabled && rsp.latency_phase_us_size() > 0) {
         std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
         MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());

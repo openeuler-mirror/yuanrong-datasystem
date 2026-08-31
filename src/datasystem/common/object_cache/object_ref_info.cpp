@@ -199,7 +199,8 @@ void SharedMemoryRefTable::AddShmUnits(TbbMemoryClientRefTable::const_accessor &
     }
 }
 
-Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmKey &shmId)
+Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmKey &shmId,
+                                           std::shared_ptr<ShmUnit> *removedShmUnit)
 {
     TbbMemoryClientRefTable::accessor clientAccessor;
     TbbMemoryObjectRefTable::accessor shmAccessor;
@@ -217,6 +218,10 @@ Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmK
         return Status::OK();
     }
     auto shmUnit = shmAccessor->second.first;
+    if (removedShmUnit != nullptr) {
+        // Retain ownership before table removal so delayed release can outlive the last client reference.
+        *removedShmUnit = shmUnit;
+    }
 #ifdef WITH_TESTS
     INJECT_POINT("RemoveShmUnit");
 #endif

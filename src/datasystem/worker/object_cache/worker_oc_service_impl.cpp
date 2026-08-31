@@ -67,6 +67,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
@@ -2065,7 +2066,8 @@ Status WorkerOCServiceImpl::StartDecreaseReferenceProcess()
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const std::vector<ShmKey> &shmIds)
+Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const std::vector<ShmKey> &shmIds,
+                                              bool delayRelease)
 {
     ScopedRequestContext ctx;
     Timer timer;
@@ -2075,10 +2077,20 @@ Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const s
         "validate worker state failed");
     Status decResult = Status::OK();
     for (const auto &shmId : shmIds) {
-        Status rc = memoryRefTable_->RemoveShmUnit(clientId, shmId);
+        std::shared_ptr<ShmUnit> shmUnit;
+        Status rc = memoryRefTable_->RemoveShmUnit(clientId, shmId, delayRelease ? &shmUnit : nullptr);
         if (rc.IsError()) {
             LOG(WARNING) << FormatString("[shmId %s] DoDecrease failed, error: %s", shmId, rc.ToString());
             decResult = rc;
+        } else if (delayRelease) {
+            if (shmUnit != nullptr) {
+                LOG_EVERY_T(WARNING, DELAY_RELEASE_LOG_INTERVAL_SEC)
+                    << "[DECREASE_REF_DELAY_RELEASE_ADD] id=" << shmUnit->id
+                    << ", identity=" << shmUnit->GetIdentity() << ", bytes=" << shmUnit->size
+                    << ", delayMs=" << DEFAULT_SHM_DELAY_RELEASE_MS << ", clientId=" << clientId;
+            }
+            DelayedReleaseShmManager::Instance().Add(
+                shmUnit, std::chrono::milliseconds(DEFAULT_SHM_DELAY_RELEASE_MS));
         }
     }
     return decResult;
@@ -2100,7 +2112,7 @@ Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &re
     shmIds.reserve(req.object_keys().size());
     std::transform(req.object_keys().begin(), req.object_keys().end(), std::back_inserter(shmIds),
                    [](const auto &key) { return ShmKey::Intern(key); });
-    auto rc = DecreaseMemoryRef(ClientKey::Intern(req.client_id()), shmIds);
+    auto rc = DecreaseMemoryRef(ClientKey::Intern(req.client_id()), shmIds, req.delay_release());
     if (rc.IsError()) {
         resp.mutable_error()->set_error_code(rc.GetCode());
         resp.mutable_error()->set_error_msg(rc.GetMsg());

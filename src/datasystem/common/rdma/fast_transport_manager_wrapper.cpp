@@ -21,11 +21,22 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
+#include "datasystem/common/util/rpc_util.h"
 #ifdef USE_NPU
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 
 namespace datasystem {
+bool NeedDelayReleaseShmUnit(const Status &status)
+{
+    if (status.IsOk() || IsBrpcRequestDefinitelyNotSent(status)) {
+        return false;
+    }
+    // RPC retryability does not prove whether a request reached the peer; only definitely-not-sent is safe to release.
+    return IsRetryableRpcError(status) || IsNonRetryableRpcError(status) || status.GetCode() == K_URMA_ERROR;
+}
+
 Status GetClientCommUuid(std::string &commId)
 {
     (void)commId;

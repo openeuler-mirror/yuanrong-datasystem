@@ -55,6 +55,7 @@ public:
     void Release() override;
     bool ManagesWorkerReference() const override;
     Status CheckAlive() const override;
+    void MarkDelayRelease();
 
 private:
     std::shared_ptr<WorkerRpcClient> rpcClient_;
@@ -63,6 +64,7 @@ private:
     std::weak_ptr<ThreadPool> releasePool_;
     std::shared_ptr<void> lifecycleHandle_;  // keeps SHM mmap or UB handle alive until release
     std::function<bool()> livenessCheck_;   // optional data-plane liveness gate (e.g. ShmSession::IsAlive)
+    std::atomic<bool> delayRelease_{ false };
     std::atomic<bool> released_{ false };
 };
 

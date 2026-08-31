@@ -273,6 +273,10 @@ Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
 - the CMake mode links against a pre-installed SDK (`-s/--sdk`, default `../../output/cpp`), while the Bazel mode
   builds `//tests/kvtest:kvtest` against the in-tree `//src/datasystem/client:datasystem`, producing a self-contained
   binary that does not need `libdatasystem.so` at runtime;
+- optional NUMA support uses `HAS_LIBNUMA` as the single compile-time gate. `tests/kvtest/build.sh` enables the Bazel
+  `kvtest_numa` setting only after a compiler probe can include `numa.h` and link `-lnuma`; CMake likewise requires
+  both the header and library. A direct Bazel build without that setting keeps NUMA calls compiled out, even when a
+  host happens to expose `numa.h`, so compile and link decisions cannot diverge;
 - kvtest `build.sh -M on` mirrors the root build entrypoint for Bazel builds by adding `--config=urma`; it defaults
   to `off`, validates `on|off`, and rejects `-M on` with CMake because that mode consumes an already-built SDK
   whose compile-time transport capabilities cannot be changed by the kvtest build;

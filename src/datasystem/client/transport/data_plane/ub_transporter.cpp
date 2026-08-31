@@ -23,6 +23,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -37,12 +38,14 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/rpc/timeout_duration.h"
+#include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/common/util/numa_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/object/object_buffer.h"
@@ -122,10 +125,54 @@ public:
     {
     }
 
+    std::shared_ptr<ShmUnit> GetShmUnit() const
+    {
+        return handle_ == nullptr ? nullptr : handle_->GetShmUnit();
+    }
+
 private:
     std::shared_ptr<UrmaManager::BufferHandle> handle_;
 };
 #endif
+
+bool DelayReleaseUbReceiveBuffer(const UbReceiveBuffer &buffer, const Status &reason, const std::string &request,
+                                 const std::string &reasonSource)
+{
+    if (!NeedDelayReleaseShmUnit(reason)) {
+        return false;
+    }
+#ifdef USE_URMA
+    auto owner = std::dynamic_pointer_cast<UbReceiveBufferOwner>(buffer.owner);
+    auto shmUnit = owner == nullptr ? nullptr : owner->GetShmUnit();
+    if (shmUnit != nullptr) {
+        LOG_EVERY_T(WARNING, DELAY_RELEASE_LOG_INTERVAL_SEC)
+            << "[CLIENT_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id
+            << ", identity=" << shmUnit->GetIdentity() << ", bytes=" << shmUnit->size
+            << ", delayMs=" << DEFAULT_SHM_DELAY_RELEASE_MS << ", request=" << request
+            << ", reasonSource=" << reasonSource << ", reason=" << reason;
+        DelayedReleaseShmManager::Instance().Add(
+            shmUnit, std::chrono::milliseconds(DEFAULT_SHM_DELAY_RELEASE_MS));
+        return true;
+    }
+#else
+    (void)buffer;
+    (void)request;
+    (void)reasonSource;
+#endif
+    return false;
+}
+
+std::optional<Status> GetProviderUbFailureStatus(const GetObjectRemoteRspPb &response)
+{
+    if (!response.has_provider_ub_failure_detail()) {
+        return std::nullopt;
+    }
+    const auto &detail = response.provider_ub_failure_detail();
+    if (detail.status_code() == K_OK) {
+        return std::nullopt;
+    }
+    return Status(static_cast<StatusCode>(detail.status_code()), detail.message());
+}
 
 class DefaultUbReceiveBufferProvider final : public IUbReceiveBufferProvider {
 public:
@@ -154,6 +201,12 @@ public:
         (void)requiredSize;
         return Status(K_NOT_SUPPORTED, "USE_URMA not compiled");
 #endif
+    }
+
+    bool DelayReleaseIfNeeded(const UbReceiveBuffer &buffer, const Status &reason, const std::string &request,
+                              const std::string &reasonSource) override
+    {
+        return DelayReleaseUbReceiveBuffer(buffer, reason, request, reasonSource);
     }
 };
 
@@ -455,14 +508,27 @@ Status UbTransporter::BatchGetAggregateOnce(const DataGetBatchRequest &inputs,
         METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL);
         METRIC_ADD(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL, end - begin);
     }
-    RETURN_IF_NOT_OK(rpcClient_->InvokeBatchGetObject(request, response, payloads));
+    Status rpcRc = rpcClient_->InvokeBatchGetObject(request, response, payloads);
+    bufferProvider_->DelayReleaseIfNeeded(buffer, rpcRc, "BatchGetObjectRemote", "rpc_status");
+    RETURN_IF_NOT_OK(rpcRc);
     CHECK_FAIL_RETURN_STATUS(response.responses_size() == static_cast<int>(end - begin), K_RUNTIME_ERROR,
                              "BatchGetObjectRemote response count does not match request count");
 
     size_t expectedPayloadCount = 0;
+    bool delayReleaseAdded = false;
     for (size_t i = 0; i < end - begin; ++i) {
         const auto &itemResponse = response.responses(static_cast<int>(i));
         Status itemStatus(static_cast<StatusCode>(itemResponse.error().error_code()), itemResponse.error().error_msg());
+        if (!delayReleaseAdded && NeedDelayReleaseShmUnit(itemStatus)) {
+            delayReleaseAdded =
+                bufferProvider_->DelayReleaseIfNeeded(buffer, itemStatus, "BatchGetObjectRemote", "response_status");
+        }
+        const auto providerFailureStatus = GetProviderUbFailureStatus(itemResponse);
+        if (!delayReleaseAdded && providerFailureStatus.has_value()) {
+            delayReleaseAdded =
+                bufferProvider_->DelayReleaseIfNeeded(buffer, *providerFailureStatus, "BatchGetObjectRemote",
+                                                      "provider_ub_failure_detail");
+        }
         if (!itemStatus.IsOk()) {
             continue;
         }
@@ -562,15 +628,32 @@ Status UbTransporter::GetOnce(const DataGetRequest &input, uint64_t expectedSize
 
     Status rpcRc = rpcClient_->InvokeGetObject(request, output.response, output.rpcPayloads);
     actualSize = output.response.data_size() < 0 ? 0 : static_cast<uint64_t>(output.response.data_size());
+    bool delayReleaseAdded =
+        bufferProvider_->DelayReleaseIfNeeded(buffer, rpcRc, "GetObjectRemote", "rpc_status");
     RETURN_IF_NOT_OK(rpcRc);
     Status responseStatus(static_cast<StatusCode>(output.response.error().error_code()),
                           output.response.error().error_msg());
+    if (!delayReleaseAdded) {
+        delayReleaseAdded =
+            bufferProvider_->DelayReleaseIfNeeded(buffer, responseStatus, "GetObjectRemote", "response_status");
+    }
+    const auto providerFailureStatus = GetProviderUbFailureStatus(output.response);
+    if (!delayReleaseAdded && providerFailureStatus.has_value()) {
+        delayReleaseAdded =
+            bufferProvider_->DelayReleaseIfNeeded(buffer, *providerFailureStatus, "GetObjectRemote",
+                                                  "provider_ub_failure_detail");
+    }
     RETURN_IF_NOT_OK(responseStatus);
     if (output.response.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
         LOG(ERROR) << "[TransportGet][UB] Unexpected TCP payload response, key=" << input.objectKey
                    << ", expectedSize=" << expectedSize << ", actualSize=" << actualSize
                    << ", payloadCount=" << output.rpcPayloads.size();
-        RETURN_STATUS(K_URMA_ERROR, "UB GetObjectRemote unexpectedly returned TCP payload");
+        Status invalidSourceStatus(K_URMA_ERROR, "UB GetObjectRemote unexpectedly returned TCP payload");
+        if (!delayReleaseAdded) {
+            bufferProvider_->DelayReleaseIfNeeded(
+                buffer, invalidSourceStatus, "GetObjectRemote", "invalid_data_source");
+        }
+        return invalidSourceStatus;
     }
     CHECK_FAIL_RETURN_STATUS(output.response.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED,
                              K_RUNTIME_ERROR, "UB GetObjectRemote returned an invalid data source");
@@ -781,6 +864,19 @@ Status UbTransporter::WritePayload(ObjectBufferInfo &info)
     return rc;
 }
 
+namespace {
+void MarkDelayReleaseForAmbiguousWrite(ObjectBufferInfo &info, const Status &status)
+{
+    if (!NeedDelayReleaseShmUnit(status)) {
+        return;
+    }
+    auto owner = std::dynamic_pointer_cast<ShmSendBufferOwner>(info.receiveBufferOwner);
+    if (owner != nullptr) {
+        owner->MarkDelayRelease();
+    }
+}
+}  // namespace
+
 Status UbTransporter::WaitPayloadEvents(std::vector<uint64_t> &eventKeys, UrmaWriteFailure *failure)
 {
     auto remainingTime = []() { return TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()); };
@@ -846,6 +942,7 @@ Status UbTransporter::WritePayloads(const std::vector<ObjectBufferInfo *> &infos
             }
             infos[i]->ubProviderStatus = failures[i].providerStatus;
             infos[i]->ubCqeStatus = failures[i].cqeStatus;
+            MarkDelayReleaseForAmbiguousWrite(*infos[i], statuses[i]);
             if (statuses[i].IsOk()) {
                 infos[i]->ubDataSentByMemoryCopy = true;
                 METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, infos[i]->dataSize);
@@ -891,6 +988,7 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param, 
             METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, info.dataSize);
         } else {
             info.ubFailureReportRc = writeRc;
+            MarkDelayReleaseForAmbiguousWrite(info, writeRc);
         }
     }
 

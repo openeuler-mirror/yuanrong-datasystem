@@ -59,6 +59,9 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     virtual Status Allocate(uint64_t requiredSize, UbReceiveBuffer &buffer) = 0;
+
+    virtual bool DelayReleaseIfNeeded(const UbReceiveBuffer &buffer, const Status &reason,
+                                      const std::string &request, const std::string &reasonSource) = 0;
 };
 
 /**

@@ -7,6 +7,7 @@ target_link_libraries(common_shm_unit_info PRIVATE ${SHM_UNIT_INFO_DEPEND_LIBS})
 
 set(SHARED_MEM_SRCS
         allocator.cpp
+        delayed_release_shm_manager.cpp
         jemalloc.cpp
         arena.cpp
         shm_unit.cpp
@@ -20,6 +21,7 @@ set(SHARED_MEM_SRCS
 set(SHARED_MEM_DEPEND_LIBS
         ${JEMALLOC_PIC_LIBRARY}
         dl
+        common_log
         common_perf
         common_shm_unit_info
         common_metrics

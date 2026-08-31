@@ -110,7 +110,7 @@ private:
     Status EncodeTcp(const GetObjEntryParams &params, QueryAndGetDataResultPb &result,
                      RequestState &state, bool &encoded) const;
     Status EncodeUb(const QueryAndGetUbDataReqPb &request, size_t index, const GetObjEntryParams &params,
-                    bool &encoded) const;
+                    QueryAndGetResultPb &result, bool &encoded) const;
     void EncodeShm(const QueryAndGetShmDataReqPb &request, const GetObjEntryParams &params,
                    QueryAndGetDataResultPb &result, RequestState &state, uint64_t &shmBytes) const;
     Status FillMissLocations(RequestState &state) const;

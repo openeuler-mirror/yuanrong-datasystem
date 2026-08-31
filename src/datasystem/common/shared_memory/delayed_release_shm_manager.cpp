@@ -13,15 +13,13 @@
  * limitations under the License.
  */
 
-#include "datasystem/worker/object_cache/delayed_release_shm_manager.h"
+#include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 
 #include <algorithm>
-#include <utility>
 
 #include "datasystem/common/log/log.h"
 
 namespace datasystem {
-namespace object_cache {
 namespace {
 constexpr auto DELAYED_RELEASE_REPORT_INTERVAL = std::chrono::seconds(10);
 }  // namespace
@@ -36,7 +34,13 @@ DelayedReleaseShmManager::~DelayedReleaseShmManager()
     Stop();
 }
 
-void DelayedReleaseShmManager::Add(std::shared_ptr<ShmUnit> shmUnit, std::chrono::milliseconds delay)
+DelayedReleaseShmManager &DelayedReleaseShmManager::Instance()
+{
+    static DelayedReleaseShmManager instance;
+    return instance;
+}
+
+void DelayedReleaseShmManager::Add(const std::shared_ptr<ShmUnit> &shmUnit, std::chrono::milliseconds delay)
 {
     if (shmUnit == nullptr) {
         return;
@@ -44,12 +48,9 @@ void DelayedReleaseShmManager::Add(std::shared_ptr<ShmUnit> shmUnit, std::chrono
     const auto size = shmUnit->size;
     std::unique_lock<std::mutex> lock(mutex_);
     if (stopping_) {
-        lock.unlock();
-        LOG(WARNING) << "DelayedReleaseShmManager is stopping, reject ShmUnit: id=" << shmUnit->id
-                     << ", identity=" << shmUnit->GetIdentity();
         return;
     }
-    delayReleaseQueue_.push({ std::chrono::steady_clock::now() + delay, std::move(shmUnit) });
+    delayReleaseQueue_.push({ std::chrono::steady_clock::now() + delay, shmUnit });
     pendingBytes_ += size;
     lock.unlock();
     cv_.notify_one();
@@ -91,9 +92,10 @@ void DelayedReleaseShmManager::Run()
         const auto pendingCount = delayReleaseQueue_.size();
         const auto pendingBytes = pendingBytes_;
         lock.unlock();
-        LOG(WARNING) << "[REMOTE_GET_DELAY_RELEASE_DONE] id=" << shmUnit->id
-                     << ", identity=" << shmUnit->GetIdentity() << ", bytes=" << shmUnit->size
-                     << ", pendingCount=" << pendingCount << ", pendingBytes=" << pendingBytes;
+        LOG_EVERY_T(WARNING, DELAY_RELEASE_LOG_INTERVAL_SEC)
+            << "[DELAY_RELEASE_DONE] id=" << shmUnit->id
+            << ", identity=" << shmUnit->GetIdentity() << ", bytes=" << shmUnit->size
+            << ", pendingCount=" << pendingCount << ", pendingBytes=" << pendingBytes;
         shmUnit.reset();
         lock.lock();
     }
@@ -111,5 +113,4 @@ void DelayedReleaseShmManager::Stop()
     }
 }
 
-}  // namespace object_cache
 }  // namespace datasystem

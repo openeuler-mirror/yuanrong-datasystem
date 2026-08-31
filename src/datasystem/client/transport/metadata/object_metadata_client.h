@@ -110,8 +110,12 @@ private:
                                 bool &rpcDispatched);
     void SwitchInlineRequestToTcp(QueryAndGetReqPb &request, std::vector<RpcMessage> &payloads,
                                   InlineRequestContext &context) const;
-    Status PrepareQueryRetry(const HostPort &address, const Status &rc, bool rpcDispatched,
-                             InlineRequestContext &context, int64_t &backoffMs);
+    Status PrepareQueryRetry(const HostPort &address, const ObjectMetadataBatch &items, const Status &rc,
+                             bool rpcDispatched, InlineRequestContext &context, int64_t &backoffMs);
+    void DelayReleaseUbBuffers(InlineRequestContext &context, const Status &reason,
+                               const std::string &reasonSource) const;
+    bool HandleUbTransportStatus(ObjectMetadataItem &item, const QueryAndGetResultPb &result,
+                                 InlineRequestContext &context) const;
 
     /**
      * @brief Select and initialize the inline transport for one metadata-owner request.

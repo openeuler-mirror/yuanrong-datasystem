@@ -45,7 +45,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
-#include "datasystem/worker/object_cache/delayed_release_shm_manager.h"
+#include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/service_execution_policy.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
@@ -124,11 +124,7 @@ void CleanupWorkerWorkerOcRpcChannel(
 
 bool WorkerOcServiceGetImpl::NeedDelayReleaseRemoteGetShm(const Status &status)
 {
-    if (status.IsOk() || IsBrpcRequestDefinitelyNotSent(status)) {
-        return false;
-    }
-    return IsRetryableRpcError(status) || IsNonRetryableRpcError(status)
-           || status.GetCode() == StatusCode::K_URMA_ERROR;
+    return NeedDelayReleaseShmUnit(status);
 }
 
 void WorkerOcServiceGetImpl::DelayReleaseRemoteGetShmUnit(SafeObjType &entry, const Status &reason)
@@ -147,10 +143,12 @@ void WorkerOcServiceGetImpl::DelayReleaseRemoteGetShmUnit(SafeObjType &entry, co
     }
     shmUnit->SetHardFreeMemory();
     object->SetShmUnit(nullptr);
-    LOG(WARNING) << "[REMOTE_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id << ", identity=" << shmUnit->GetIdentity()
-                 << ", bytes=" << shmUnit->size << ", delayMs=" << REMOTE_GET_SHM_DELAY_RELEASE_MS
-                 << ", reason=" << reason;
-    delayedReleaseShmManager_->Add(std::move(shmUnit), std::chrono::milliseconds(REMOTE_GET_SHM_DELAY_RELEASE_MS));
+    LOG_EVERY_T(WARNING, DELAY_RELEASE_LOG_INTERVAL_SEC)
+        << "[REMOTE_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id << ", identity=" << shmUnit->GetIdentity()
+        << ", bytes=" << shmUnit->size << ", delayMs=" << REMOTE_GET_SHM_DELAY_RELEASE_MS
+        << ", reason=" << reason;
+    DelayedReleaseShmManager::Instance().Add(
+        shmUnit, std::chrono::milliseconds(REMOTE_GET_SHM_DELAY_RELEASE_MS));
 }
 
 void WorkerOcServiceGetImpl::DelayReleaseBatchRemoteGetShmUnits(const BatchGetObjectRemoteReqPb &reqPb,
