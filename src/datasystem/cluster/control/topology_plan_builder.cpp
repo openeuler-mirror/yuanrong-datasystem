@@ -112,7 +112,7 @@ Status TopologyPlanBuilder::BuildScaleOutStart(const TopologyState &latest, cons
     }
     RemoveMembers(current, selectedAddresses);
     TopologyPlan built;
-    RETURN_IF_NOT_OK(algorithm_.PlanScaleOut({ current, selected, FLAGS_hash_ring_tokens_per_member }, built));
+    RETURN_IF_NOT_OK(algorithm_.PlanScaleOut({ current, selected, current.tokensPerMember }, built));
     AdvanceEpoch(latest, TopologyChangeType::SCALE_OUT, built);
     RETURN_IF_NOT_OK(algorithm_.Validate(built.next));
     plan = std::move(built);
@@ -134,7 +134,7 @@ Status TopologyPlanBuilder::BuildScaleOutReplan(const TopologyState &latest,
     auto joining = MembersInState(retained, MemberState::JOINING);
     TopologyPlan built;
     if (!joining.empty()) {
-        RETURN_IF_NOT_OK(algorithm_.PlanScaleOut({ retained, joining, FLAGS_hash_ring_tokens_per_member }, built));
+        RETURN_IF_NOT_OK(algorithm_.PlanScaleOut({ retained, joining, retained.tokensPerMember }, built));
         AdvanceEpoch(latest, TopologyChangeType::SCALE_OUT, built);
     } else {
         built.next = std::move(retained);

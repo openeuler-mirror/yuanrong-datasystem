@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include "cluster/topology_token_helper.h"
 #include "common.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
@@ -81,12 +82,7 @@ public:
 
     void GetClusterTopologyPb(ClusterTopologyPb &ring)
     {
-        if (!etcd_) {
-            InitTestEtcdInstance();
-        }
-        std::string value;
-        DS_ASSERT_OK(etcd_->Get(GetTopologyTableName(), "", value));
-        ASSERT_TRUE(ring.ParseFromString(value));
+        DS_ASSERT_OK(GetCluster()->ReadClusterTopology(ring));
     }
 
     void ObtainTokens()
@@ -99,7 +95,7 @@ public:
                 continue;
             }
             const auto &workerId = kv.first;
-            for (auto token : kv.second.tokens()) {
+            for (auto token : RebuildTopologyMemberTokens(ring, workerId, kv.second)) {
                 hashTokens_.insert({ token, workerId });
             }
         }

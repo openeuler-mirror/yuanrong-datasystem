@@ -22,6 +22,7 @@
  
 #include "common.h"
 #include "datasystem/client/cluster_query/cluster_query_client.h"
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "client/object_cache/oc_client_common.h"
@@ -53,6 +54,16 @@ constexpr uint32_t TOKENS_PER_MEMBER = 4;
 const std::string AZ1 = "AZ1";
 const uint32_t ETCD_TIME_OUT_SECOND = 5;
 const uint32_t EXTRA_WAIT_SECOND = 3;
+
+std::vector<uint32_t> BuildMemberTokens(const std::string &address)
+{
+    std::vector<uint32_t> tokens;
+    tokens.reserve(TOKENS_PER_MEMBER);
+    for (uint32_t index = 0; index < TOKENS_PER_MEMBER; ++index) {
+        tokens.emplace_back(cluster::HashAlgorithm::MakeToken(address, index, 0));
+    }
+    return tokens;
+}
  
 class RouterClientTest : public OCClientCommon {
 public:
@@ -394,13 +405,13 @@ TEST_F(SimpleRouterClientTest, DestrutClientWhenTimerExists)
  
     DS_ASSERT_OK(RegisterTopologyTables(*etcdStore, AZ1));
     ClusterTopologyPb topology;
-    topology.set_schema_version("1");
+    topology.set_schema_version("2");
     topology.set_cluster_has_init(true);
     topology.set_version(1);
+    topology.set_tokens_per_member(TOKENS_PER_MEMBER);
     auto &member = (*topology.mutable_members())["127.0.0.1:3000"];
     member.set_id(std::string(16, 'a'));
     member.set_state(MembershipPb::ACTIVE);
-    member.add_tokens(1);
     DS_ASSERT_OK(etcdStore->Put(GetTopologyTableName(AZ1), "", topology.SerializeAsString()));
     DS_ASSERT_OK(inject::Set("worker.GenerateFakePutEventIfNeeded.timeout", "call(2000)"));
     DS_ASSERT_OK(inject::Set("EtcdWatch.RetrieveEventPassively.RetrieveEventQuickly", "call(100)"));
@@ -428,8 +439,10 @@ TEST_F(SimpleRouterClientTest, ReturnsOrderedTopologyCandidatesAndBinaryIdResolu
     topology.version = 1;
     topology.clusterHasInit = true;
     topology.members = {
-        cluster::Member{ { std::string(16, 'a'), "127.0.0.1:3001" }, cluster::MemberState::ACTIVE, { 1 } },
-        cluster::Member{ { std::string(16, 'b'), "127.0.0.2:3002" }, cluster::MemberState::ACTIVE, { 2 } },
+        cluster::Member{ { std::string(16, 'a'), "127.0.0.1:3001" }, cluster::MemberState::ACTIVE,
+                         BuildMemberTokens("127.0.0.1:3001") },
+        cluster::Member{ { std::string(16, 'b'), "127.0.0.2:3002" }, cluster::MemberState::ACTIVE,
+                         BuildMemberTokens("127.0.0.2:3002") },
         cluster::Member{ { std::string(16, 'c'), "127.0.0.3:3003" }, cluster::MemberState::INITIAL, {} },
     };
     std::string bytes;
@@ -477,8 +490,9 @@ class RouterClientGetWorkerIdTest : public RouterClientTest {
         DS_ASSERT_OK(db_->Init());
         (void)RegisterTopologyTables(*db_, AZ1);
         ClusterTopologyPb ring;
-        ring.set_schema_version("1");
+        ring.set_schema_version("2");
         ring.set_version(1);
+        ring.set_tokens_per_member(TOKENS_PER_MEMBER);
         DS_ASSERT_OK(db_->Put(GetTopologyTableName(AZ1), "", ring.SerializeAsString()));
     }
  
@@ -492,10 +506,6 @@ protected:
         MembershipPb wpb;
         wpb.set_id(p.second);
         wpb.set_state(MembershipPb::ACTIVE);
-        const auto tokenBase = static_cast<uint32_t>(ring.members_size()) * TOKENS_PER_MEMBER;
-        for (uint32_t offset = 0; offset < TOKENS_PER_MEMBER; ++offset) {
-            wpb.add_tokens(tokenBase + offset);
-        }
         ring.mutable_members()->insert({ p.first, wpb });
         ring.set_version(ring.version() + 1);
         DS_ASSERT_OK(db_->Put(GetTopologyTableName(AZ1), "", ring.SerializeAsString()));

@@ -26,7 +26,7 @@ class TopologyTaskMaterializer;
 class TopologyRepositoryCodec final {
 public:
     /**
-     * @brief Deterministically encode schema version 1 topology.
+     * @brief Deterministically encode schema version 2 topology.
      * @param[in] state Validated domain topology.
      * @param[out] value Canonical serialized bytes.
      * @return K_OK or K_INVALID.

@@ -15,6 +15,7 @@
 #include <unordered_set>
 
 #include "datasystem/common/util/hash_algorithm.h"
+#include "datasystem/common/util/hash_ring_token.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -22,9 +23,6 @@
 namespace datasystem::cluster {
 namespace {
 constexpr char ALGORITHM_ID[] = "hash";
-constexpr char TOKEN_SEPARATOR[] = "#";
-constexpr uint32_t MAX_TOKEN_PROBES = 1'024;
-constexpr uint32_t MAX_TOKENS_PER_MEMBER = 4'096;
 
 struct TokenOwner {
     uint32_t token;
@@ -62,33 +60,33 @@ Status ValidateSelectedMembers(const TopologyState &current, const std::vector<M
     return Status::OK();
 }
 
-uint32_t MakeToken(const std::string &address, uint32_t index, uint32_t probe)
+Status ProbeUniqueToken(const MemberIdentity &identity, uint32_t index, std::unordered_set<uint32_t> &occupied,
+                        uint32_t &token, uint32_t &seed)
 {
-    std::string seed = address + TOKEN_SEPARATOR + std::to_string(index);
-    if (probe > 0) {
-        seed += TOKEN_SEPARATOR + std::to_string(probe);
+    for (seed = 0; seed < HashAlgorithm::MAX_TOKEN_SEEDS; ++seed) {
+        token = HashAlgorithm::MakeToken(identity.address, index, seed);
+        if (occupied.insert(token).second) {
+            return Status::OK();
+        }
     }
-    return MurmurHash3_32(seed);
+    RETURN_STATUS(K_INVALID, "unique cluster token probe budget exhausted");
 }
 
 Status GenerateTokens(const MemberIdentity &identity, uint32_t count, std::unordered_set<uint32_t> &occupied,
-                      std::vector<uint32_t> &tokens)
+                      std::vector<uint32_t> &tokens, std::vector<TokenSeedOverride> &tokenSeedOverrides)
 {
     tokens.clear();
     tokens.reserve(count);
+    tokenSeedOverrides.clear();
     for (uint32_t index = 0; index < count; ++index) {
-        bool allocated = false;
-        for (uint32_t probe = 0; probe < MAX_TOKEN_PROBES; ++probe) {
-            auto token = MakeToken(identity.address, index, probe);
-            if (occupied.insert(token).second) {
-                tokens.emplace_back(token);
-                allocated = true;
-                break;
-            }
+        uint32_t token;
+        uint32_t seed;
+        RETURN_IF_NOT_OK(ProbeUniqueToken(identity, index, occupied, token, seed));
+        tokens.emplace_back(token);
+        if (seed > 0) {
+            tokenSeedOverrides.emplace_back(TokenSeedOverride{ index, seed });
         }
-        CHECK_FAIL_RETURN_STATUS(allocated, K_INVALID, "unique cluster token probe budget exhausted");
     }
-    std::sort(tokens.begin(), tokens.end());
     return Status::OK();
 }
 
@@ -192,6 +190,17 @@ uint32_t HashAlgorithm::Hash(std::string_view placementKey) const noexcept
     return MurmurHash3_32(reinterpret_cast<const uint8_t *>(placementKey.data()), placementKey.size());
 }
 
+uint32_t HashAlgorithm::MakeToken(const std::string &address, uint32_t index, uint32_t seed)
+{
+    return MakeHashRingToken(address, index, seed);
+}
+
+void HashAlgorithm::MakeTokens(const std::string &address, const std::vector<uint32_t> &seeds,
+                               std::vector<uint32_t> &tokens)
+{
+    MakeHashRingTokens(address, seeds, tokens);
+}
+
 Status HashAlgorithm::LocateOwner(const TopologySnapshot &snapshot, uint32_t token, const Member *&owner) const
 {
     return LocateIndexedOwner(snapshot.committedTokenOwners_, token, owner);
@@ -206,20 +215,22 @@ Status HashAlgorithm::LocateProspectiveOwner(const TopologySnapshot &snapshot, u
 }
 
 Status HashAlgorithm::AllocateTokens(const std::vector<MemberIdentity> &members, uint32_t tokensPerMember,
-                                     std::unordered_map<std::string, std::vector<uint32_t>> &tokens) const
+                                     std::unordered_map<std::string, TokenAllocation> &allocations) const
 {
-    CHECK_FAIL_RETURN_STATUS(tokensPerMember > 0 && tokensPerMember <= MAX_TOKENS_PER_MEMBER, K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(tokensPerMember > 0 && tokensPerMember <= MAX_HASH_RING_TOKENS_PER_MEMBER, K_INVALID,
                              "tokens per member is outside the supported range");
     RETURN_IF_NOT_OK(ValidateIdentities(members));
     auto ordered = members;
     std::sort(ordered.begin(), ordered.end(),
               [](const auto &left, const auto &right) { return left.address < right.address; });
     std::unordered_set<uint32_t> occupied;
-    std::unordered_map<std::string, std::vector<uint32_t>> allocated;
+    std::unordered_map<std::string, TokenAllocation> allocated;
     for (const auto &identity : ordered) {
-        RETURN_IF_NOT_OK(GenerateTokens(identity, tokensPerMember, occupied, allocated[identity.address]));
+        auto &allocation = allocated[identity.address];
+        RETURN_IF_NOT_OK(GenerateTokens(identity, tokensPerMember, occupied, allocation.tokens,
+                                        allocation.tokenSeedOverrides));
     }
-    tokens = std::move(allocated);
+    allocations = std::move(allocated);
     return Status::OK();
 }
 
@@ -227,16 +238,19 @@ Status HashAlgorithm::BuildInitialPlacement(const ScaleOutPlanInput &input, Topo
 {
     CHECK_FAIL_RETURN_STATUS(input.current.members.empty() && !input.joining.empty(), K_INVALID,
                              "bootstrap requires an empty topology and members");
-    std::unordered_map<std::string, std::vector<uint32_t>> tokens;
-    RETURN_IF_NOT_OK(AllocateTokens(input.joining, input.tokensPerMember, tokens));
+    std::unordered_map<std::string, TokenAllocation> allocations;
+    RETURN_IF_NOT_OK(AllocateTokens(input.joining, input.tokensPerMember, allocations));
     TopologyPlan built;
     built.next = input.current;
     built.next.clusterHasInit = true;
+    built.next.tokensPerMember = input.tokensPerMember;
     auto ordered = input.joining;
     std::sort(ordered.begin(), ordered.end(),
               [](const auto &left, const auto &right) { return left.address < right.address; });
     for (const auto &identity : ordered) {
-        built.next.members.push_back({ identity, MemberState::ACTIVE, tokens[identity.address] });
+        auto &allocation = allocations[identity.address];
+        built.next.members.push_back({ identity, MemberState::ACTIVE, std::move(allocation.tokens),
+                                       std::move(allocation.tokenSeedOverrides) });
     }
     plan = std::move(built);
     return Status::OK();
@@ -269,10 +283,12 @@ Status HashAlgorithm::PlanScaleOut(const ScaleOutPlanInput &input, TopologyPlan 
     RETURN_IF_NOT_OK(Validate(input.current));
     RETURN_IF_NOT_OK(ValidateIdentities(input.joining));
     CHECK_FAIL_RETURN_STATUS(
-        !input.joining.empty() && input.tokensPerMember > 0 && input.tokensPerMember <= MAX_TOKENS_PER_MEMBER,
+        !input.joining.empty() && input.tokensPerMember > 0
+            && input.tokensPerMember <= MAX_HASH_RING_TOKENS_PER_MEMBER,
         K_INVALID, "ScaleOut requires joining members and tokens");
     TopologyPlan built;
     built.next = input.current;
+    built.next.tokensPerMember = input.tokensPerMember;
     std::unordered_set<uint32_t> occupied;
     for (const auto &member : built.next.members) {
         occupied.insert(member.tokens.begin(), member.tokens.end());
@@ -291,9 +307,11 @@ Status HashAlgorithm::PlanScaleOut(const ScaleOutPlanInput &input, TopologyPlan 
         const auto idCollision = [&](const auto &member) { return member.identity.id == identity.id; };
         CHECK_FAIL_RETURN_STATUS(std::none_of(built.next.members.begin(), built.next.members.end(), idCollision),
                                  K_INVALID, "new ScaleOut member id collides with current topology");
-        std::vector<uint32_t> memberTokens;
-        RETURN_IF_NOT_OK(GenerateTokens(identity, input.tokensPerMember, occupied, memberTokens));
-        built.next.members.push_back({ identity, MemberState::JOINING, std::move(memberTokens) });
+        TokenAllocation allocation;
+        RETURN_IF_NOT_OK(GenerateTokens(identity, input.tokensPerMember, occupied, allocation.tokens,
+                                        allocation.tokenSeedOverrides));
+        built.next.members.push_back({ identity, MemberState::JOINING, std::move(allocation.tokens),
+                                       std::move(allocation.tokenSeedOverrides) });
     }
     std::vector<TokenOwner> fromOwners;
     std::vector<TokenOwner> toOwners;

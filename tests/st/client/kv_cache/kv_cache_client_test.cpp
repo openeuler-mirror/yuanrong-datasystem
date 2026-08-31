@@ -40,6 +40,7 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "cluster/base_cluster.h"
+#include "cluster/topology_token_helper.h"
 #include "common.h"
 #include "common_distributed_ext.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -346,7 +347,7 @@ public:
         DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
         std::map<uint32_t, std::string> tokenWorkers;
         for (const auto &worker : topology.members()) {
-            for (const auto token : worker.second.tokens()) {
+            for (const auto token : RebuildTopologyMemberTokens(topology, worker.first, worker.second)) {
                 tokenWorkers.emplace(token, worker.first);
             }
         }

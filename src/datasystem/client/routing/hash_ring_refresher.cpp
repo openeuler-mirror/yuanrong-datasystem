@@ -28,6 +28,8 @@
 namespace datasystem {
 namespace client {
 namespace {
+constexpr int TOPOLOGY_PUBLISH_FAILURE_LOG_EVERY_N = 10;
+
 int64_t SteadyNowMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -45,6 +47,15 @@ HashRingRefresher::TimedFetchRpc AdaptFetchRpc(HashRingRefresher::FetchRpc fetch
                                          std::unordered_map<std::string, std::string> &hostIdMap, int32_t) {
         return fetch(workerAddr, currentVersion, ring, masterAddress, newVersion, changed, hostIdMap);
     };
+}
+
+void LogTopologyPublishFailure(const HostPort &worker, uint64_t requestedVersion, uint64_t responseVersion,
+                               uint64_t currentVersion, const Status &status)
+{
+    LOG_FIRST_EVERY_N(WARNING, TOPOLOGY_PUBLISH_FAILURE_LOG_EVERY_N)
+        << "[Routing] Reject hash ring refresh from " << worker.ToString()
+        << ", requested version: " << requestedVersion << ", response version: " << responseVersion
+        << ", current version: " << currentVersion << ", status: " << status.ToString();
 }
 }  // namespace
 
@@ -185,7 +196,12 @@ Status HashRingRefresher::DoRefresh(bool stopAware)
                              << ", response version: " << newVersion;
                 continue;
             }
-            return PublishHashRing(newVersion, std::move(ring), std::move(hostIdMap));
+            auto publish = PublishHashRing(newVersion, std::move(ring), std::move(hostIdMap));
+            if (publish.IsError()) {
+                LogTopologyPublishFailure(worker, requestedVersion, newVersion,
+                                          currentVersion_.load(std::memory_order_acquire), publish);
+            }
+            return publish;
         }
     }
     if (reachedWorker) {
@@ -197,14 +213,15 @@ Status HashRingRefresher::DoRefresh(bool stopAware)
 Status HashRingRefresher::PublishHashRing(uint64_t newVersion, ::datasystem::ClusterTopologyPb &&ring,
                                           std::unordered_map<std::string, std::string> &&hostIdMap)
 {
+    std::unique_ptr<PreparedClusterTopology> prepared;
+    RETURN_IF_NOT_OK(PreparedClusterTopology::Create(std::move(ring), prepared));
+    const auto &topology = prepared->GetTopology();
     if (ringUpdateHook_) {
-        RETURN_IF_NOT_OK(ringUpdateHook_(newVersion, ring, hostIdMap));
+        RETURN_IF_NOT_OK(ringUpdateHook_(newVersion, topology, hostIdMap));
     }
     currentVersion_.store(newVersion, std::memory_order_release);
-    UpdateWorkerList(ring);
-    auto ringPtr = std::make_shared<::datasystem::ClusterTopologyPb>(std::move(ring));
-    auto hostIdMapPtr = std::make_shared<const std::unordered_map<std::string, std::string>>(std::move(hostIdMap));
-    router_->UpdateHashRing(std::move(ringPtr), std::move(hostIdMapPtr));
+    UpdateWorkerList(topology);
+    router_->UpdateHashRing(*prepared, hostIdMap);
     return Status::OK();
 }
 

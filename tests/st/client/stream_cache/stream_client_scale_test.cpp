@@ -30,6 +30,7 @@
 #include "common.h"
 #include "common_distributed_ext.h"
 #include "common/stream_cache/stream_common.h"
+#include "cluster/topology_token_helper.h"
 #include "client/stream_cache/sc_client_common.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
@@ -1159,11 +1160,10 @@ public:
         ASSERT_NE(db_, nullptr) << "The etcd store instance is not initialized";
         HostPort workerAddr;
         DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddr));
-        std::string value;
-        DS_ASSERT_OK(db_->Get(GetTopologyTableName(), "", value));
         ClusterTopologyPb ring;
-        ring.ParseFromString(value);
-        auto tokens = ring.members().at(workerAddr.ToString()).tokens();
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
+        const auto &member = ring.members().at(workerAddr.ToString());
+        auto tokens = RebuildTopologyMemberTokens(ring, workerAddr.ToString(), member);
         ASSERT_GT(tokens.size(), 1) << "A node should have multiple tokens";
         hash = tokens[0] != 0 ? tokens[0] - 1 : tokens[1] - 1;
     }

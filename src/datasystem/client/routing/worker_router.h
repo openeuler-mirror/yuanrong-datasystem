@@ -49,6 +49,39 @@ enum class WorkerRingState {
     FAILED,
 };
 
+struct TokenIndex {
+    std::vector<std::pair<uint32_t, int>> tokenToWorker;
+    std::vector<HostPort> workers;
+};
+
+class PreparedClusterTopology {
+public:
+    struct ConstructionToken {
+    private:
+        ConstructionToken() = default;
+
+        friend class PreparedClusterTopology;
+    };
+
+    static Status Create(::datasystem::ClusterTopologyPb &&ring,
+                         std::unique_ptr<PreparedClusterTopology> &prepared);
+    PreparedClusterTopology(ConstructionToken, std::shared_ptr<const ::datasystem::ClusterTopologyPb> topology,
+                            std::shared_ptr<const TokenIndex> tokenIndex);
+    ~PreparedClusterTopology() = default;
+
+    const ::datasystem::ClusterTopologyPb &GetTopology() const noexcept;
+    const std::shared_ptr<const TokenIndex> &GetTokenIndex() const noexcept;
+
+private:
+    static Status BuildTokenIndex(const ::datasystem::ClusterTopologyPb &ring,
+                                  std::shared_ptr<const TokenIndex> &tokenIndex);
+
+    std::shared_ptr<const ::datasystem::ClusterTopologyPb> topology_;
+    std::shared_ptr<const TokenIndex> tokenIndex_;
+
+    friend class WorkerRouter;
+};
+
 class WorkerRouter {
 public:
     explicit WorkerRouter(std::string myHostId,
@@ -69,8 +102,8 @@ public:
     std::vector<HostPort> GetAvailableWorkers() const;
 
     // Called by Refresher to update hash ring data.
-    void UpdateHashRing(std::shared_ptr<const ::datasystem::ClusterTopologyPb> ring,
-                        std::shared_ptr<const std::unordered_map<std::string, std::string>> hostIdMap);
+    void UpdateHashRing(const PreparedClusterTopology &prepared,
+                        const std::unordered_map<std::string, std::string> &hostIdMap);
 
     // Broadcast state change to all filters.
     void UpdateState(const HostPort &addr, StatusCode status);
@@ -86,10 +119,6 @@ private:
     struct RingView {
         std::shared_ptr<const ::datasystem::ClusterTopologyPb> ring;
         std::shared_ptr<const std::vector<HostPort>> sameNodeWorkers;
-        struct TokenIndex {
-            std::vector<std::pair<uint32_t, int>> tokenToWorker;
-            std::vector<HostPort> workers;
-        };
         std::shared_ptr<const TokenIndex> tokenIndex;
     };
     std::shared_ptr<const RingView> ringView_;
@@ -99,7 +128,6 @@ private:
     Status SelectWorkerFromView(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
                                 const std::vector<HostPort> &exclude,
                                 const std::shared_ptr<const RingView> &view) const;
-    static std::shared_ptr<const RingView::TokenIndex> BuildTokenIndex(const ::datasystem::ClusterTopologyPb &ring);
 };
 
 }  // namespace client

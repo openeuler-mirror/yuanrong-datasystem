@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
@@ -81,6 +82,17 @@ namespace {
 constexpr char LOCAL_ADDRESS[] = "127.0.0.1:10001";
 constexpr char LOCAL_ID[] = "aaaaaaaaaaaaaaaa";
 constexpr auto TEST_WAIT = std::chrono::seconds(3);
+
+std::vector<uint32_t> MakePersistedTokens(const std::string &address)
+{
+    constexpr uint32_t tokensPerMember = 4;
+    std::vector<uint32_t> tokens;
+    tokens.reserve(tokensPerMember);
+    for (uint32_t index = 0; index < tokensPerMember; ++index) {
+        tokens.emplace_back(HashAlgorithm::MakeToken(address, index, 0));
+    }
+    return tokens;
+}
 
 class NoopTopologyCallbacks final : public ITopologyPhaseCallbacks {
 public:
@@ -216,7 +228,7 @@ TopologyState MakeTopology(uint64_t version = 1)
     TopologyState state;
     state.clusterHasInit = true;
     state.version = version;
-    state.members = { Member{ { LOCAL_ID, LOCAL_ADDRESS }, MemberState::ACTIVE, { 0, 1'000'000'000 } } };
+    state.members = { Member{ { LOCAL_ID, LOCAL_ADDRESS }, MemberState::ACTIVE, MakePersistedTokens(LOCAL_ADDRESS) } };
     return state;
 }
 
@@ -224,10 +236,10 @@ TopologyState MakeTopologyWithPeer(uint64_t version = 1, size_t peerCount = 1, c
 {
     auto state = MakeTopology(version);
     for (size_t i = 0; i < peerCount; ++i) {
+        const auto address = "127.0.0.1:" + std::to_string(10'002 + i);
         state.members.emplace_back(
-            Member{ { std::string(16, static_cast<char>(firstPeerId + i)), "127.0.0.1:" + std::to_string(10'002 + i) },
-                    MemberState::ACTIVE,
-                    { static_cast<uint32_t>((i + 1) * 1'000'000'000 / (peerCount + 1)) } });
+            Member{ { std::string(16, static_cast<char>(firstPeerId + i)), address }, MemberState::ACTIVE,
+                    MakePersistedTokens(address) });
     }
     return state;
 }
@@ -237,9 +249,9 @@ TopologyState MakeTopologyWithoutLocal(uint64_t version = 1)
     TopologyState state;
     state.clusterHasInit = true;
     state.version = version;
-    state.members = {
-        Member{ { std::string(16, 'b'), "127.0.0.1:10002" }, MemberState::ACTIVE, { 0, 1'000'000'000 } }
-    };
+    const std::string address = "127.0.0.1:10002";
+    state.members = { Member{ { std::string(16, 'b'), address }, MemberState::ACTIVE,
+                              MakePersistedTokens(address) } };
     return state;
 }
 

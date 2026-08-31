@@ -36,6 +36,7 @@ Status MakeSnapshot(std::shared_ptr<const cluster::TopologySnapshot> &snapshot)
     cluster::TopologyState state;
     state.version = TOPOLOGY_VERSION;
     state.clusterHasInit = true;
+    state.tokensPerMember = 1;
     state.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, TOPOLOGY_VERSION };
     state.members = {
         cluster::Member{ { std::string(16, 'a'), WORKER_A }, cluster::MemberState::ACTIVE, { 100u } },
@@ -89,8 +90,9 @@ TEST_F(WorkerGetHashRingTest, DifferentVersionReturnsTopologyAndHostIdMap)
     EXPECT_TRUE(rsp.hash_ring_changed());
     EXPECT_EQ(rsp.version(), TOPOLOGY_VERSION);
     EXPECT_EQ(rsp.hash_ring().version(), TOPOLOGY_VERSION);
-    EXPECT_EQ(rsp.hash_ring().schema_version(), "1");
+    EXPECT_EQ(rsp.hash_ring().schema_version(), "2");
     EXPECT_TRUE(rsp.hash_ring().cluster_has_init());
+    EXPECT_EQ(rsp.hash_ring().tokens_per_member(), 1);
     EXPECT_EQ(rsp.hash_ring().members_size(), 2);
     EXPECT_EQ(rsp.hash_ring().members().at(WORKER_A).state(), MembershipPb::ACTIVE);
     EXPECT_EQ(rsp.hash_ring().members().at(WORKER_B).state(), MembershipPb::JOINING);

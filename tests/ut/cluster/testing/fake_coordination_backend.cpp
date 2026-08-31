@@ -13,14 +13,45 @@
  */
 #include "ut/cluster/testing/fake_coordination_backend.h"
 
+#include <algorithm>
+#include <unordered_set>
 #include <utility>
 
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
 namespace {
 constexpr size_t SINGLE_NOT_READY_GET_ATTEMPT = 1;
+
+Status MakePersistableTopology(const TopologyState &state, TopologyState &persistable)
+{
+    persistable = state;
+    std::unordered_set<uint32_t> occupied;
+    for (auto &member : persistable.members) {
+        if (member.state == MemberState::INITIAL) {
+            member.tokens.clear();
+            continue;
+        }
+        member.tokens.clear();
+        member.tokens.reserve(FLAGS_hash_ring_tokens_per_member);
+        for (uint32_t index = 0; index < FLAGS_hash_ring_tokens_per_member; ++index) {
+            bool allocated = false;
+            for (uint32_t seed = 0; seed < HashAlgorithm::MAX_TOKEN_SEEDS; ++seed) {
+                const auto token = HashAlgorithm::MakeToken(member.identity.address, index, seed);
+                if (occupied.emplace(token).second) {
+                    member.tokens.emplace_back(token);
+                    allocated = true;
+                    break;
+                }
+            }
+            CHECK_FAIL_RETURN_STATUS(allocated, K_RUNTIME_ERROR, "failed to generate unique test topology token");
+        }
+    }
+    return Status::OK();
+}
 }
 
 std::string FakeCoordinationBackend::FullKey(const std::string &table, const std::string &key) const
@@ -275,7 +306,15 @@ void FakeCoordinationBackend::PutBytes(const std::string &table, const std::stri
 void FakeCoordinationBackend::PutRaw(const std::string &table, const std::string &key, const TopologyState &state)
 {
     std::string bytes;
-    if (TopologyRepositoryCodec::EncodeTopology(state, bytes).IsOk()) {
+    auto rc = TopologyRepositoryCodec::EncodeTopology(state, bytes);
+    if (!rc.IsOk()) {
+        TopologyState persistable;
+        rc = MakePersistableTopology(state, persistable);
+        if (rc.IsOk()) {
+            rc = TopologyRepositoryCodec::EncodeTopology(persistable, bytes);
+        }
+    }
+    if (rc.IsOk()) {
         PutBytes(table, key, std::move(bytes));
     }
 }

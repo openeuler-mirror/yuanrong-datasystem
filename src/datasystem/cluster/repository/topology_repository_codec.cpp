@@ -16,8 +16,10 @@
 #include <algorithm>
 #include <utility>
 
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/common/util/hash_ring_token.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "google/protobuf/io/coded_stream.h"
@@ -30,8 +32,8 @@ constexpr size_t MAX_NOTIFY_TASK_REFS = 4'096;
 constexpr size_t MAX_NOTIFY_VALUE_BYTES = 4 * 1024 * 1024;
 constexpr size_t MAX_RESTART_NOTIFY_ENTRIES = 10'000;
 constexpr size_t MAX_TOPOLOGY_MEMBERS = 10'000;
-constexpr size_t MAX_TOPOLOGY_TOKENS = 40'000;
-constexpr char SCHEMA_VERSION[] = "1";
+constexpr size_t MAX_TOPOLOGY_TOKENS = 640'000;
+constexpr char SCHEMA_VERSION[] = "2";
 
 Status SerializeCanonical(const google::protobuf::MessageLite &message, std::string &value)
 {
@@ -179,23 +181,92 @@ Status DecodeActiveBatch(const ::datasystem::ChangeBatchPb &input, ActiveBatch &
     activeBatch = ActiveBatch{ type, input.epoch() };
     return Status::OK();
 }
+
+Status EncodeTokenSeedOverrides(const Member &member, uint32_t tokensPerMember,
+                                ::datasystem::MembershipPb &memberPb)
+{
+    if (member.state == MemberState::INITIAL) {
+        CHECK_FAIL_RETURN_STATUS(member.tokens.empty() && member.tokenSeedOverrides.empty(), K_INVALID,
+                                 "initial topology member has token state");
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(tokensPerMember > 0 && tokensPerMember <= MAX_HASH_RING_TOKENS_PER_MEMBER, K_INVALID,
+                             "tokens per member is outside the supported range");
+    CHECK_FAIL_RETURN_STATUS(member.tokens.size() == tokensPerMember, K_INVALID,
+                             "topology member token count differs from configured count");
+    std::vector<uint32_t> seeds(tokensPerMember);
+    uint32_t previousIndex = 0;
+    bool first = true;
+    for (const auto &tokenSeedOverride : member.tokenSeedOverrides) {
+        CHECK_FAIL_RETURN_STATUS(
+            tokenSeedOverride.tokenIndex < tokensPerMember && tokenSeedOverride.tokenSeed > 0
+                && tokenSeedOverride.tokenSeed < HashAlgorithm::MAX_TOKEN_SEEDS
+                && (first || tokenSeedOverride.tokenIndex > previousIndex),
+            K_INVALID, "invalid topology token seed override");
+        first = false;
+        previousIndex = tokenSeedOverride.tokenIndex;
+        seeds[tokenSeedOverride.tokenIndex] = tokenSeedOverride.tokenSeed;
+        auto *overridePb = memberPb.add_token_seed_overrides();
+        overridePb->set_token_index(tokenSeedOverride.tokenIndex);
+        overridePb->set_token_seed(tokenSeedOverride.tokenSeed);
+    }
+    std::vector<uint32_t> rebuilt;
+    HashAlgorithm::MakeTokens(member.identity.address, seeds, rebuilt);
+    CHECK_FAIL_RETURN_STATUS(rebuilt == member.tokens, K_INVALID,
+                             "topology member tokens differ from token seed overrides");
+    return Status::OK();
+}
+
+Status DecodeTokens(const ::datasystem::MembershipPb &memberPb, uint32_t tokensPerMember, Member &member)
+{
+    if (member.state == MemberState::INITIAL) {
+        CHECK_FAIL_RETURN_STATUS(memberPb.token_seed_overrides().empty(), K_INVALID,
+                                 "initial topology member has token seed overrides");
+        member.tokens.clear();
+        member.tokenSeedOverrides.clear();
+        return Status::OK();
+    }
+    std::vector<uint32_t> seeds(tokensPerMember);
+    for (const auto &overridePb : memberPb.token_seed_overrides()) {
+        CHECK_FAIL_RETURN_STATUS(overridePb.token_index() < tokensPerMember && overridePb.token_seed() > 0
+                                     && overridePb.token_seed() < HashAlgorithm::MAX_TOKEN_SEEDS,
+                                 K_INVALID, "invalid topology token seed override");
+        auto &seed = seeds[overridePb.token_index()];
+        CHECK_FAIL_RETURN_STATUS(seed == 0, K_INVALID, "duplicate topology token seed override");
+        seed = overridePb.token_seed();
+    }
+    member.tokenSeedOverrides.clear();
+    member.tokenSeedOverrides.reserve(static_cast<size_t>(memberPb.token_seed_overrides_size()));
+    for (uint32_t index = 0; index < tokensPerMember; ++index) {
+        if (seeds[index] > 0) {
+            member.tokenSeedOverrides.emplace_back(TokenSeedOverride{ index, seeds[index] });
+        }
+    }
+    HashAlgorithm::MakeTokens(member.identity.address, seeds, member.tokens);
+    return Status::OK();
+}
 }  // namespace
 
 Status TopologyRepositoryCodec::EncodeTopology(const TopologyState &state, std::string &value)
 {
     auto canonical = state;
     RETURN_IF_NOT_OK(ValidateAndCanonicalizeTopologyState(canonical));
+    CHECK_FAIL_RETURN_STATUS(
+        canonical.tokensPerMember > 0 && canonical.tokensPerMember <= MAX_HASH_RING_TOKENS_PER_MEMBER,
+        K_INVALID, "tokens per member is outside the supported range");
     ::datasystem::ClusterTopologyPb pb;
     pb.set_cluster_has_init(canonical.clusterHasInit);
     pb.set_version(canonical.version);
     pb.set_schema_version(SCHEMA_VERSION);
+    pb.set_tokens_per_member(canonical.tokensPerMember);
+    size_t tokenCount = 0;
     for (const auto &member : canonical.members) {
+        tokenCount += member.tokens.size();
+        CHECK_FAIL_RETURN_STATUS(tokenCount <= MAX_TOPOLOGY_TOKENS, K_INVALID, "topology token count exceeds limit");
         auto &memberPb = (*pb.mutable_members())[member.identity.address];
         memberPb.set_id(member.identity.id);
         memberPb.set_state(static_cast<::datasystem::MembershipPb::StatePb>(member.state));
-        for (uint32_t token : member.tokens) {
-            memberPb.add_tokens(token);
-        }
+        RETURN_IF_NOT_OK(EncodeTokenSeedOverrides(member, canonical.tokensPerMember, memberPb));
     }
     if (canonical.activeBatch.has_value()) {
         ::datasystem::TypePb typePb;
@@ -214,23 +285,34 @@ Status TopologyRepositoryCodec::DecodeTopology(const std::string &value, Topolog
                              "invalid topology value");
     CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(pb.members_size()) <= MAX_TOPOLOGY_MEMBERS, K_INVALID,
                              "topology member count exceeds limit");
-    size_t tokenCount = 0;
-    for (const auto &[address, memberPb] : pb.members()) {
-        static_cast<void>(address);
-        tokenCount += static_cast<size_t>(memberPb.tokens_size());
-        CHECK_FAIL_RETURN_STATUS(tokenCount <= MAX_TOPOLOGY_TOKENS, K_INVALID, "topology token count exceeds limit");
-    }
+    CHECK_FAIL_RETURN_STATUS(
+        pb.tokens_per_member() > 0 && pb.tokens_per_member() <= MAX_HASH_RING_TOKENS_PER_MEMBER, K_INVALID,
+        "invalid topology tokens per member");
     TopologyState decoded;
     decoded.clusterHasInit = pb.cluster_has_init();
     decoded.version = pb.version();
+    decoded.tokensPerMember = pb.tokens_per_member();
     decoded.members.reserve(static_cast<size_t>(pb.members_size()));
+    size_t tokenMemberCount = 0;
     for (const auto &[address, memberPb] : pb.members()) {
+        static_cast<void>(address);
         const int stateValue = static_cast<int>(memberPb.state());
         CHECK_FAIL_RETURN_STATUS(stateValue >= static_cast<int>(::datasystem::MembershipPb::INITIAL)
                                      && stateValue <= static_cast<int>(::datasystem::MembershipPb::FAILED),
                                  K_INVALID, "invalid member state");
-        Member member{ { memberPb.id(), address }, static_cast<MemberState>(memberPb.state()), {} };
-        member.tokens.assign(memberPb.tokens().begin(), memberPb.tokens().end());
+        if (memberPb.state() != ::datasystem::MembershipPb::INITIAL) {
+            ++tokenMemberCount;
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(tokenMemberCount <= MAX_TOPOLOGY_TOKENS / pb.tokens_per_member(), K_INVALID,
+                             "topology token count exceeds limit");
+    size_t tokenCount = 0;
+    for (const auto &[address, memberPb] : pb.members()) {
+        const auto memberState = static_cast<MemberState>(memberPb.state());
+        Member member{ { memberPb.id(), address }, memberState, {} };
+        RETURN_IF_NOT_OK(DecodeTokens(memberPb, pb.tokens_per_member(), member));
+        tokenCount += member.tokens.size();
+        CHECK_FAIL_RETURN_STATUS(tokenCount <= MAX_TOPOLOGY_TOKENS, K_INVALID, "topology token count exceeds limit");
         decoded.members.emplace_back(std::move(member));
     }
     if (pb.has_active_batch()) {

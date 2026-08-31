@@ -277,11 +277,17 @@ std::shared_ptr<Routing> MakeSingleWorkerRouting(const HostPort &address)
 {
     auto router = std::make_shared<WorkerRouter>("");
     auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    ring->set_tokens_per_member(1);
     auto &worker = (*ring->mutable_members())[address.ToString()];
     worker.set_state(::datasystem::MembershipPb::ACTIVE);
-    worker.add_tokens(0u);
     auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
-    router->UpdateHashRing(ring, hostIdMap);
+    std::unique_ptr<PreparedClusterTopology> prepared;
+    auto status = PreparedClusterTopology::Create(std::move(*ring), prepared);
+    if (status.IsError()) {
+        ADD_FAILURE() << status.ToString();
+        return nullptr;
+    }
+    router->UpdateHashRing(*prepared, *hostIdMap);
 
     auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
                     std::unordered_map<std::string, std::string> &) { return Status::OK(); };
@@ -770,7 +776,7 @@ protected:
         response.set_hash_ring_changed(true);
         auto &worker = (*response.mutable_hash_ring()->mutable_members())["127.0.0.1:18481"];
         worker.set_state(MembershipPb_StatePb_ACTIVE);
-        worker.add_tokens(1);
+        response.mutable_hash_ring()->set_tokens_per_member(1);
         (*response.mutable_host_id_map())["127.0.0.1:18481"] = "host-a";
         return Status::OK();
     }

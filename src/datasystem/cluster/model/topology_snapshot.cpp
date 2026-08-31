@@ -22,6 +22,7 @@
 #include <utility>
 
 #include "datasystem/cluster/model/topology_diagnostics.h"
+#include "datasystem/common/util/hash_ring_token.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -115,6 +116,9 @@ Status ValidateAndCanonicalizeTopologyState(TopologyState &state)
 {
     CHECK_FAIL_RETURN_STATUS(state.version > 0 && state.version <= std::numeric_limits<int64_t>::max(), K_INVALID,
                              "invalid topology version");
+    CHECK_FAIL_RETURN_STATUS(
+        state.tokensPerMember > 0 && state.tokensPerMember <= MAX_HASH_RING_TOKENS_PER_MEMBER,
+        K_INVALID, "invalid topology tokens per member");
     if (state.activeBatch.has_value()) {
         CHECK_FAIL_RETURN_STATUS(state.activeBatch->epoch > 0 && state.activeBatch->epoch <= state.version, K_INVALID,
                                  "invalid active batch epoch");
@@ -140,7 +144,6 @@ Status ValidateAndCanonicalizeTopologyState(TopologyState &state)
         CHECK_FAIL_RETURN_STATUS(index == 0 || state.members[index - 1].identity.address != member.identity.address,
                                  K_INVALID, "duplicate member address");
         CHECK_FAIL_RETURN_STATUS(ids.emplace(member.identity.id).second, K_INVALID, "duplicate member id");
-        std::sort(member.tokens.begin(), member.tokens.end());
         for (uint32_t ringPoint : member.tokens) {
             CHECK_FAIL_RETURN_STATUS(tokens.emplace(ringPoint).second, K_INVALID, "duplicate topology token");
         }
@@ -242,6 +245,16 @@ const std::string &TopologySnapshot::CanonicalDigest() const noexcept
 bool TopologySnapshot::ClusterHasInit() const noexcept
 {
     return state_.clusterHasInit;
+}
+
+uint32_t TopologySnapshot::TokensPerMember() const noexcept
+{
+    return state_.tokensPerMember;
+}
+
+TopologyState TopologySnapshot::CopyState() const
+{
+    return state_;
 }
 
 const std::optional<ActiveBatch> &TopologySnapshot::GetActiveBatch() const noexcept

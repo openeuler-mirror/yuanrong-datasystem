@@ -19,6 +19,7 @@ set(UTIL_SRCS
         numa_util.cpp
         deadlock_util.cpp
         hash_algorithm.cpp
+        hash_ring_token.cpp
         ../rpc/rpc_message.cpp
         thread_local.cpp
         sensitive_value.cpp

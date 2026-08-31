@@ -34,9 +34,9 @@ constexpr char WORKER_ADDR[] = "127.0.0.1:1000";
 std::shared_ptr<ClusterTopologyPb> BuildTopology(MembershipPb::StatePb state)
 {
     auto topology = std::make_shared<ClusterTopologyPb>();
+    topology->set_tokens_per_member(1);
     auto &member = (*topology->mutable_members())[WORKER_ADDR];
     member.set_state(state);
-    member.add_tokens(100u);
     return topology;
 }
 
@@ -45,6 +45,15 @@ std::shared_ptr<std::unordered_map<std::string, std::string>> BuildHostIdMap()
     auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
     (*hostIdMap)[WORKER_ADDR] = "host-a";
     return hostIdMap;
+}
+
+Status UpdateHashRing(client::WorkerRouter &router, std::shared_ptr<ClusterTopologyPb> topology,
+                      const std::shared_ptr<std::unordered_map<std::string, std::string>> &hostIdMap)
+{
+    std::unique_ptr<client::PreparedClusterTopology> prepared;
+    RETURN_IF_NOT_OK(client::PreparedClusterTopology::Create(std::move(*topology), prepared));
+    router.UpdateHashRing(*prepared, *hostIdMap);
+    return Status::OK();
 }
 }  // namespace
 
@@ -57,7 +66,7 @@ protected:
 
 TEST_F(StateFilterTest, ActiveWorkerIsAvailable)
 {
-    router_.UpdateHashRing(BuildTopology(MembershipPb::ACTIVE), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router_, BuildTopology(MembershipPb::ACTIVE), BuildHostIdMap()));
 
     EXPECT_TRUE(filter_.IsAvailable(worker_));
 }
@@ -73,7 +82,7 @@ TEST_F(StateFilterTest, NonActiveWorkersAreUnavailable)
     };
 
     for (auto state : unavailableStates) {
-        router_.UpdateHashRing(BuildTopology(state), BuildHostIdMap());
+        DS_ASSERT_OK(UpdateHashRing(router_, BuildTopology(state), BuildHostIdMap()));
         EXPECT_FALSE(filter_.IsAvailable(worker_)) << "state=" << state;
     }
 }
@@ -88,14 +97,14 @@ TEST_F(StateFilterTest, MissingRouterOrWorkerIsUnavailable)
 
 TEST_F(StateFilterTest, ReflectsUpdatedHashRingWithoutCachedState)
 {
-    router_.UpdateHashRing(BuildTopology(MembershipPb::ACTIVE), BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router_, BuildTopology(MembershipPb::ACTIVE), BuildHostIdMap()));
     EXPECT_TRUE(filter_.IsAvailable(worker_));
 
     auto leavingTopology = BuildTopology(MembershipPb::LEAVING);
     filter_.OnHashRingUpdated(*leavingTopology);
     EXPECT_TRUE(filter_.IsAvailable(worker_));
 
-    router_.UpdateHashRing(leavingTopology, BuildHostIdMap());
+    DS_ASSERT_OK(UpdateHashRing(router_, leavingTopology, BuildHostIdMap()));
     EXPECT_FALSE(filter_.IsAvailable(worker_));
 }
 

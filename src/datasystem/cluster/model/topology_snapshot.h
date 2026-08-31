@@ -59,6 +59,13 @@ public:
     int64_t AuthorityRevision() const noexcept;
     const std::string &CanonicalDigest() const noexcept;
     bool ClusterHasInit() const noexcept;
+    uint32_t TokensPerMember() const noexcept;
+
+    /**
+     * @brief Copy the complete domain topology state.
+     * @return Mutable state containing every cluster-level and member-level field.
+     */
+    TopologyState CopyState() const;
 
     /**
      * @brief Return the minimal active batch.

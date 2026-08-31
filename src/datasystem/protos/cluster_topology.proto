@@ -20,6 +20,11 @@ package datasystem;
 
 option cc_enable_arenas = true;
 
+message TokenSeedOverridePb {
+  uint32 token_index = 1;
+  uint32 token_seed = 2;
+}
+
 message MembershipPb {
   enum StatePb {
     INITIAL = 0;
@@ -30,9 +35,10 @@ message MembershipPb {
     FAILED = 5;
   }
 
-  repeated uint32 tokens = 1;
+  reserved 1;
   bytes id = 2;
   StatePb state = 3;
+  repeated TokenSeedOverridePb token_seed_overrides = 4;
 }
 
 message TokenRangePb {
@@ -75,4 +81,5 @@ message ClusterTopologyPb {
   uint64 version = 3;
   string schema_version = 4;
   ChangeBatchPb active_batch = 5;
+  uint32 tokens_per_member = 6;
 }

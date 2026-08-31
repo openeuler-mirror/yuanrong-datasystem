@@ -19,16 +19,20 @@
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
+#include <unordered_set>
 #include <utility>
 
 #include "datasystem/client/routing/broken_filter.h"
 #include "datasystem/client/routing/routing.h"
 #include "datasystem/client/routing/state_filter.h"
+#include "datasystem/common/util/hash_ring_token.h"
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 namespace client {
 namespace {
 constexpr size_t DEFAULT_FILTER_COUNT = 2;
+constexpr size_t MAX_ROUTING_TOKENS = 640'000;
 }  // namespace
 
 WorkerRouter::WorkerRouter(std::string myHostId, std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters)
@@ -43,7 +47,7 @@ WorkerRouter::WorkerRouter(std::string myHostId, std::vector<std::shared_ptr<IWo
     auto view = std::make_shared<RingView>();
     view->ring = std::make_shared<::datasystem::ClusterTopologyPb>();
     view->sameNodeWorkers = std::make_shared<std::vector<HostPort>>();
-    view->tokenIndex = std::make_shared<RingView::TokenIndex>();
+    view->tokenIndex = std::make_shared<TokenIndex>();
     std::atomic_store(&ringView_, std::shared_ptr<const RingView>(std::move(view)));
 }
 
@@ -52,23 +56,47 @@ void WorkerRouter::SetHostId(std::string hostId)
     myHostId_ = std::move(hostId);
 }
 
-std::shared_ptr<const WorkerRouter::RingView::TokenIndex> WorkerRouter::BuildTokenIndex(
-    const ::datasystem::ClusterTopologyPb &ring)
+Status PreparedClusterTopology::BuildTokenIndex(const ::datasystem::ClusterTopologyPb &ring,
+                                                std::shared_ptr<const TokenIndex> &tokenIndex)
 {
-    auto idx = std::make_shared<RingView::TokenIndex>();
+    const auto tokensPerMember = ring.tokens_per_member();
+    CHECK_FAIL_RETURN_STATUS(tokensPerMember > 0 && tokensPerMember <= MAX_HASH_RING_TOKENS_PER_MEMBER, K_INVALID,
+                             "invalid hash ring tokens per member");
+    size_t tokenMemberCount = 0;
+    size_t routableMemberCount = 0;
+    for (const auto &entry : ring.members()) {
+        if (entry.second.state() != ::datasystem::MembershipPb::INITIAL) {
+            ++tokenMemberCount;
+        }
+        if (entry.second.state() == ::datasystem::MembershipPb::ACTIVE
+            || entry.second.state() == ::datasystem::MembershipPb::LEAVING) {
+            ++routableMemberCount;
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(tokenMemberCount <= MAX_ROUTING_TOKENS / tokensPerMember, K_INVALID,
+                             "hash ring token count exceeds limit");
+    auto idx = std::make_shared<TokenIndex>();
+    std::unordered_set<uint32_t> occupied;
+    occupied.reserve(routableMemberCount * tokensPerMember);
     for (const auto &entry : ring.members()) {
         if (entry.second.state() != ::datasystem::MembershipPb::ACTIVE
             && entry.second.state() != ::datasystem::MembershipPb::LEAVING) {
             continue;
         }
-        if (entry.second.tokens().empty()) {
-            continue;
-        }
         HostPort hp;
-        if (!hp.ParseString(entry.first).IsOk()) {
-            continue;
+        CHECK_FAIL_RETURN_STATUS(hp.ParseString(entry.first).IsOk(), K_INVALID, "invalid hash ring member address");
+        std::vector<uint32_t> seeds(tokensPerMember);
+        for (const auto &overridePb : entry.second.token_seed_overrides()) {
+            CHECK_FAIL_RETURN_STATUS(
+                overridePb.token_index() < tokensPerMember && overridePb.token_seed() > 0
+                    && overridePb.token_seed() < MAX_HASH_RING_TOKEN_SEEDS,
+                K_INVALID, "invalid hash ring token seed override");
+            seeds[overridePb.token_index()] = overridePb.token_seed();
         }
-        for (uint32_t token : entry.second.tokens()) {
+        std::vector<uint32_t> tokens;
+        MakeHashRingTokens(entry.first, seeds, tokens);
+        for (uint32_t token : tokens) {
+            CHECK_FAIL_RETURN_STATUS(occupied.insert(token).second, K_INVALID, "duplicate hash ring token");
             idx->tokenToWorker.emplace_back(token, static_cast<int>(idx->workers.size()));
         }
         idx->workers.push_back(std::move(hp));
@@ -77,7 +105,38 @@ std::shared_ptr<const WorkerRouter::RingView::TokenIndex> WorkerRouter::BuildTok
               [](const std::pair<uint32_t, int> &a, const std::pair<uint32_t, int> &b) {
                   return a.first < b.first;
               });
-    return idx;
+    tokenIndex = std::move(idx);
+    return Status::OK();
+}
+
+PreparedClusterTopology::PreparedClusterTopology(
+    ConstructionToken,
+    std::shared_ptr<const ::datasystem::ClusterTopologyPb> topology,
+    std::shared_ptr<const TokenIndex> tokenIndex)
+    : topology_(std::move(topology)), tokenIndex_(std::move(tokenIndex))
+{
+}
+
+Status PreparedClusterTopology::Create(::datasystem::ClusterTopologyPb &&ring,
+                                       std::unique_ptr<PreparedClusterTopology> &prepared)
+{
+    std::shared_ptr<const TokenIndex> tokenIndex;
+    RETURN_IF_NOT_OK(BuildTokenIndex(ring, tokenIndex));
+
+    auto topology = std::make_shared<const ::datasystem::ClusterTopologyPb>(std::move(ring));
+    prepared = std::make_unique<PreparedClusterTopology>(ConstructionToken{}, std::move(topology),
+                                                         std::move(tokenIndex));
+    return Status::OK();
+}
+
+const ::datasystem::ClusterTopologyPb &PreparedClusterTopology::GetTopology() const noexcept
+{
+    return *topology_;
+}
+
+const std::shared_ptr<const TokenIndex> &PreparedClusterTopology::GetTokenIndex() const noexcept
+{
+    return tokenIndex_;
 }
 
 bool WorkerRouter::IsWorkerAvailable(const HostPort &addr) const
@@ -186,12 +245,10 @@ std::vector<HostPort> WorkerRouter::GetAvailableWorkers() const
     return result;
 }
 
-void WorkerRouter::UpdateHashRing(std::shared_ptr<const ::datasystem::ClusterTopologyPb> ring,
-    std::shared_ptr<const std::unordered_map<std::string, std::string>> hostIdMap)
+void WorkerRouter::UpdateHashRing(const PreparedClusterTopology &prepared,
+                                  const std::unordered_map<std::string, std::string> &hostIdMap)
 {
-    if (ring == nullptr || hostIdMap == nullptr) {
-        return;
-    }
+    const auto &ring = prepared.topology_;
 
     // Build same-node workers list
     auto sameNode = std::make_shared<std::vector<HostPort>>();
@@ -199,8 +256,8 @@ void WorkerRouter::UpdateHashRing(std::shared_ptr<const ::datasystem::ClusterTop
         if (entry.second.state() != ::datasystem::MembershipPb::ACTIVE) {
             continue;
         }
-        auto it = hostIdMap->find(entry.first);
-        if (!myHostId_.empty() && it != hostIdMap->end() && it->second == myHostId_) {
+        auto it = hostIdMap.find(entry.first);
+        if (!myHostId_.empty() && it != hostIdMap.end() && it->second == myHostId_) {
             HostPort hp;
             if (hp.ParseString(entry.first).IsOk()) {
                 sameNode->push_back(std::move(hp));
@@ -214,7 +271,7 @@ void WorkerRouter::UpdateHashRing(std::shared_ptr<const ::datasystem::ClusterTop
     auto newView = std::make_shared<RingView>();
     newView->ring = ring;
     newView->sameNodeWorkers = sameNode;
-    newView->tokenIndex = BuildTokenIndex(*ring);
+    newView->tokenIndex = prepared.tokenIndex_;
 
     // Single atomic store — all readers see the new view atomically
     std::atomic_store(&ringView_, std::shared_ptr<const RingView>(std::move(newView)));

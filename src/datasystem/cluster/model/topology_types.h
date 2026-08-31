@@ -22,6 +22,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -73,10 +74,30 @@ struct TokenRange {
     }
 };
 
+struct TokenSeedOverride {
+    uint32_t tokenIndex{ 0 };
+    uint32_t tokenSeed{ 0 };
+    bool operator==(const TokenSeedOverride &other) const noexcept
+    {
+        return tokenIndex == other.tokenIndex && tokenSeed == other.tokenSeed;
+    }
+};
+
 struct Member {
     MemberIdentity identity;
     MemberState state{ MemberState::INITIAL };
     std::vector<uint32_t> tokens;
+    std::vector<TokenSeedOverride> tokenSeedOverrides;
+
+    Member() = default;
+    Member(MemberIdentity identity, MemberState state, std::vector<uint32_t> tokens,
+           std::vector<TokenSeedOverride> tokenSeedOverrides = {})
+        : identity(std::move(identity)),
+          state(state),
+          tokens(std::move(tokens)),
+          tokenSeedOverrides(std::move(tokenSeedOverrides))
+    {
+    }
 };
 
 struct ActiveBatch {
@@ -107,6 +128,7 @@ struct TopologyState {
     uint64_t version{ 0 };
     std::vector<Member> members;
     std::optional<ActiveBatch> activeBatch;
+    uint32_t tokensPerMember{ 4 };
 };
 
 struct TopologyTaskRange {

@@ -34,6 +34,7 @@
 #include <gtest/gtest.h>
 
 #include "client/object_cache/oc_client_common.h"
+#include "cluster/topology_token_helper.h"
 #include "common.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/raii.h"
@@ -124,7 +125,7 @@ public:
             if (member.second.state() != MembershipPb::ACTIVE) {
                 continue;
             }
-            for (const auto token : member.second.tokens()) {
+            for (const auto token : RebuildTopologyMemberTokens(topology, member.first, member.second)) {
                 tokenWorkers.emplace(token, member.first);
             }
         }
