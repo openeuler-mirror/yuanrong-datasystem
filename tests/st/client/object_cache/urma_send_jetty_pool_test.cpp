@@ -54,6 +54,8 @@ constexpr char kPauseGatherWriteAfterAcquireInject[] = "UrmaManager.GatherWriteA
 constexpr char kGatherWriteInject[] = "UrmaManager.GatherWriteError";
 constexpr char kPoolExhaustedInject[] = "UrmaManager.AcquireSendLaneFromConnection.PoolExhausted";
 constexpr char kBatchGetAfterAcquireInject[] = "WorkerWorkerOCServiceImpl.BatchGetAfterAcquireSendLane";
+constexpr char kWriteTargetBlockedInject[] = "PeerUbAdmission.CheckWriteTarget.blocked";
+constexpr char kRecoveryProbeSuccessInject[] = "WorkerWorkerTransportService.ProbeProviderUbRecovery.success";
 constexpr char kCqeStatusInject[] = "UrmaManager.CheckCompletionRecordStatus";
 constexpr char kInFlightTimeoutInject[] = "UrmaManager.UrmaWaitInFlightTimeout";
 constexpr char kDeleteEventInject[] = "UrmaManager.DeleteEvent";
@@ -875,6 +877,164 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetAggregatePoolExhaustionFallsBackToTcpOnl
         DS_ASSERT_OK(writer->Set(keys.back(), values.back()));
     }
     AssertPoolExhaustedBatchFallsBack(reader, keys, values, kPauseGatherWriteAfterAcquireInject);
+}
+
+TEST_F(UrmaSendJettyPoolStTest, ProviderAdmissionPinsQuarantinedRequesterBatchGetsToTcp)
+{
+    std::shared_ptr<KVClient> writer;
+    std::shared_ptr<KVClient> reader;
+    InitTestKVClient(kSourceWorker, writer);
+    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+
+    const std::string faultKey = "urma-provider-admission-fault";
+    const std::string faultValue(kValueSize, 'f');
+    const std::string ordinaryKey = "urma-provider-admission-ordinary";
+    const std::string ordinaryValue(128 * 1024, 'o');
+    DS_ASSERT_OK(writer->Set(faultKey, faultValue));
+    DS_ASSERT_OK(writer->Set(ordinaryKey, ordinaryValue));
+
+    constexpr uint32_t kAggregateObjectCount = 128;
+    constexpr size_t kAggregateValueSize = 8 * 1024;
+    std::vector<std::string> aggregateKeys;
+    std::vector<std::string> aggregateValues;
+    aggregateKeys.reserve(kAggregateObjectCount);
+    aggregateValues.reserve(kAggregateObjectCount);
+    for (uint32_t i = 0; i < kAggregateObjectCount; ++i) {
+        aggregateKeys.emplace_back("urma-provider-admission-aggregate-" + std::to_string(i));
+        aggregateValues.emplace_back(kAggregateValueSize, static_cast<char>('a' + (i % 26)));
+        DS_ASSERT_OK(writer->Set(aggregateKeys.back(), aggregateValues.back()));
+    }
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kDestinationWorker, kRecoveryProbeSuccessInject, "pause()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kModifyJettyInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kCqeStatusInject, "1*call(0, 9)"));
+    std::string faultGot;
+    const auto faultStatus = reader->Get(faultKey, faultGot);
+    uint64_t modifyCount = 0;
+    const bool requesterQuarantined =
+        ObserveWorkerInjectExecuteCount(kSourceWorker, kModifyJettyInject, 1, modifyCount, 10000);
+    const auto clearCqe = cluster_->ClearInjectAction(WORKER, kSourceWorker, kCqeStatusInject);
+    const auto clearModify = cluster_->ClearInjectAction(WORKER, kSourceWorker, kModifyJettyInject);
+
+    Status setBlockedStatus(K_RUNTIME_ERROR, "requester quarantine was not observed");
+    Status setAcquireStatus(K_RUNTIME_ERROR, "requester quarantine was not observed");
+    Status ordinaryStatus(K_RUNTIME_ERROR, "ordinary Batch Get was not attempted");
+    Status aggregateStatus(K_RUNTIME_ERROR, "aggregate Batch Get was not attempted");
+    std::vector<std::string> ordinaryGot;
+    std::vector<std::string> aggregateGot;
+    uint64_t blockedCount = 0;
+    uint64_t acquireCount = 0;
+    Status blockedCountStatus = Status::OK();
+    Status acquireCountStatus = Status::OK();
+    if (requesterQuarantined) {
+        setBlockedStatus = cluster_->SetInjectAction(WORKER, kSourceWorker, kWriteTargetBlockedInject, "call()");
+        setAcquireStatus = cluster_->SetInjectAction(WORKER, kSourceWorker, kBatchGetAfterAcquireInject, "call()");
+        if (setBlockedStatus.IsOk() && setAcquireStatus.IsOk()) {
+            ordinaryStatus = reader->Get({ ordinaryKey }, ordinaryGot);
+            aggregateStatus = reader->Get(aggregateKeys, aggregateGot);
+            blockedCountStatus = cluster_->GetInjectActionExecuteCount(
+                WORKER, kSourceWorker, kWriteTargetBlockedInject, blockedCount);
+            acquireCountStatus = cluster_->GetInjectActionExecuteCount(
+                WORKER, kSourceWorker, kBatchGetAfterAcquireInject, acquireCount);
+        }
+    }
+
+    const auto clearBlocked = setBlockedStatus.IsOk()
+                                  ? cluster_->ClearInjectAction(WORKER, kSourceWorker, kWriteTargetBlockedInject)
+                                  : Status::OK();
+    const auto clearAcquire = setAcquireStatus.IsOk()
+                                  ? cluster_->ClearInjectAction(WORKER, kSourceWorker, kBatchGetAfterAcquireInject)
+                                  : Status::OK();
+    const auto clearRecovery =
+        cluster_->ClearInjectAction(WORKER, kDestinationWorker, kRecoveryProbeSuccessInject);
+
+    ASSERT_TRUE(faultStatus.IsOk()) << faultStatus.ToString();
+    ASSERT_EQ(faultGot, faultValue);
+    ASSERT_TRUE(requesterQuarantined) << "status-9 CQE did not quarantine the requester";
+    ASSERT_TRUE(clearCqe.IsOk()) << clearCqe.ToString();
+    ASSERT_TRUE(clearModify.IsOk()) << clearModify.ToString();
+    ASSERT_TRUE(setBlockedStatus.IsOk()) << setBlockedStatus.ToString();
+    ASSERT_TRUE(setAcquireStatus.IsOk()) << setAcquireStatus.ToString();
+    ASSERT_TRUE(blockedCountStatus.IsOk()) << blockedCountStatus.ToString();
+    ASSERT_TRUE(acquireCountStatus.IsOk()) << acquireCountStatus.ToString();
+    ASSERT_TRUE(clearBlocked.IsOk()) << clearBlocked.ToString();
+    ASSERT_TRUE(clearAcquire.IsOk()) << clearAcquire.ToString();
+    ASSERT_TRUE(clearRecovery.IsOk()) << clearRecovery.ToString();
+    ASSERT_TRUE(ordinaryStatus.IsOk()) << ordinaryStatus.ToString();
+    ASSERT_TRUE(aggregateStatus.IsOk()) << aggregateStatus.ToString();
+    ASSERT_EQ(ordinaryGot, std::vector<std::string>{ ordinaryValue });
+    ASSERT_EQ(aggregateGot, aggregateValues);
+    ASSERT_GE(blockedCount, 2U) << "both Batch Get requests must hit provider write-target admission";
+    ASSERT_EQ(acquireCount, 0U) << "a quarantined requester acquired an URMA send lane";
+}
+
+TEST_F(UrmaSendJettyPoolFallbackDisabledStTest,
+       ProviderAdmissionRejectsQuarantinedRequesterBeforeSendLaneAcquire)
+{
+    std::shared_ptr<KVClient> writer;
+    std::shared_ptr<KVClient> reader;
+    InitTestKVClient(kSourceWorker, writer);
+    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+
+    const std::string faultKey = "urma-provider-admission-disabled-fault";
+    const std::string blockedKey = "urma-provider-admission-disabled-blocked";
+    const std::string value(kValueSize, 'd');
+    DS_ASSERT_OK(writer->Set(faultKey, value));
+    DS_ASSERT_OK(writer->Set(blockedKey, value));
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kDestinationWorker, kRecoveryProbeSuccessInject, "pause()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kModifyJettyInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kCqeStatusInject, "1*call(0, 9)"));
+    std::string got;
+    const auto faultStatus = reader->Get(faultKey, got);
+    uint64_t modifyCount = 0;
+    const bool requesterQuarantined =
+        ObserveWorkerInjectExecuteCount(kSourceWorker, kModifyJettyInject, 1, modifyCount, 10000);
+    const auto clearCqe = cluster_->ClearInjectAction(WORKER, kSourceWorker, kCqeStatusInject);
+    const auto clearModify = cluster_->ClearInjectAction(WORKER, kSourceWorker, kModifyJettyInject);
+
+    Status setBlockedStatus(K_RUNTIME_ERROR, "requester quarantine was not observed");
+    Status setAcquireStatus(K_RUNTIME_ERROR, "requester quarantine was not observed");
+    Status blockedStatus(K_RUNTIME_ERROR, "blocked Batch Get was not attempted");
+    uint64_t blockedCount = 0;
+    uint64_t acquireCount = 0;
+    Status blockedCountStatus = Status::OK();
+    Status acquireCountStatus = Status::OK();
+    if (requesterQuarantined) {
+        setBlockedStatus = cluster_->SetInjectAction(WORKER, kSourceWorker, kWriteTargetBlockedInject, "call()");
+        setAcquireStatus = cluster_->SetInjectAction(WORKER, kSourceWorker, kBatchGetAfterAcquireInject, "call()");
+        if (setBlockedStatus.IsOk() && setAcquireStatus.IsOk()) {
+            blockedStatus = reader->Get(blockedKey, got);
+            blockedCountStatus = cluster_->GetInjectActionExecuteCount(
+                WORKER, kSourceWorker, kWriteTargetBlockedInject, blockedCount);
+            acquireCountStatus = cluster_->GetInjectActionExecuteCount(
+                WORKER, kSourceWorker, kBatchGetAfterAcquireInject, acquireCount);
+        }
+    }
+
+    const auto clearBlocked = setBlockedStatus.IsOk()
+                                  ? cluster_->ClearInjectAction(WORKER, kSourceWorker, kWriteTargetBlockedInject)
+                                  : Status::OK();
+    const auto clearAcquire = setAcquireStatus.IsOk()
+                                  ? cluster_->ClearInjectAction(WORKER, kSourceWorker, kBatchGetAfterAcquireInject)
+                                  : Status::OK();
+    const auto clearRecovery =
+        cluster_->ClearInjectAction(WORKER, kDestinationWorker, kRecoveryProbeSuccessInject);
+
+    ASSERT_TRUE(faultStatus.IsError()) << "fallback-disabled status-9 Get unexpectedly succeeded";
+    ASSERT_TRUE(requesterQuarantined) << "status-9 CQE did not quarantine the requester";
+    ASSERT_TRUE(clearCqe.IsOk()) << clearCqe.ToString();
+    ASSERT_TRUE(clearModify.IsOk()) << clearModify.ToString();
+    ASSERT_TRUE(setBlockedStatus.IsOk()) << setBlockedStatus.ToString();
+    ASSERT_TRUE(setAcquireStatus.IsOk()) << setAcquireStatus.ToString();
+    ASSERT_TRUE(blockedCountStatus.IsOk()) << blockedCountStatus.ToString();
+    ASSERT_TRUE(acquireCountStatus.IsOk()) << acquireCountStatus.ToString();
+    ASSERT_TRUE(clearBlocked.IsOk()) << clearBlocked.ToString();
+    ASSERT_TRUE(clearAcquire.IsOk()) << clearAcquire.ToString();
+    ASSERT_TRUE(clearRecovery.IsOk()) << clearRecovery.ToString();
+    ASSERT_EQ(blockedStatus.GetCode(), K_URMA_WORKER_UNAVAILABLE) << blockedStatus.ToString();
+    ASSERT_GE(blockedCount, 1U);
+    ASSERT_EQ(acquireCount, 0U) << "a quarantined requester acquired an URMA send lane";
 }
 
 TEST_F(UrmaSendJettyPoolFallbackDisabledStTest,

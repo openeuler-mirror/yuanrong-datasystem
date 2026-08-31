@@ -156,7 +156,10 @@ ds_cc_test(
     deps = [
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/common/binmock:binmock",

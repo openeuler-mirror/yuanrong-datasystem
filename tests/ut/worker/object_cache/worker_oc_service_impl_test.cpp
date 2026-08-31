@@ -39,7 +39,9 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_message.h"
+#include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -67,6 +69,9 @@ DS_DECLARE_string(health_check_path);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_bool(enable_leaving_intercept);
 DS_DECLARE_bool(enable_reconciliation);
+DS_DECLARE_bool(enable_transport_fallback);
+DS_DECLARE_uint32(arena_per_tenant);
+DS_DECLARE_int32(oc_worker_worker_parallel_min);
 
 namespace datasystem {
 namespace ut {
@@ -85,6 +90,7 @@ constexpr uint64_t K_FIRST_INJECT_EXECUTE_COUNT = 1;
 constexpr int K_EXPECTED_REF_MOVING_GROUP_RPC_CALLS = 3;
 constexpr const char *K_LOCAL_TEST_HOST = "127.0.0.1";
 constexpr uint16_t K_PEER_MASTER_PORT = 18482;
+constexpr uint64_t K_REMOTE_GET_TEST_MEMORY_SIZE = 32 * 1024UL * 1024UL;
 constexpr int64_t K_WAIT_FIRST_MOVING_CALL_TIMEOUT_MS = 1000;
 constexpr int64_t K_WAIT_RETRY_SLEEP_INJECT_TIMEOUT_MS = 1000;
 constexpr int64_t K_LOCK_PROBE_TIMEOUT_MS = 1000;
@@ -475,6 +481,125 @@ private:
     ObjectEndpointPolicy endpointPolicy_;
     Status initStatus_;
 };
+
+class TestGetObjectRemoteServerApi final
+    : public ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb> {
+public:
+    explicit TestGetObjectRemoteServerApi(GetObjectRemoteReqPb req) : req_(std::move(req))
+    {
+    }
+
+    Status SendStatus(const Status &rc) override
+    {
+        (void)rc;
+        return Status::OK();
+    }
+
+    Status Read(GetObjectRemoteReqPb &req) override
+    {
+        ++readCount_;
+        req = req_;
+        return Status::OK();
+    }
+
+    Status Write(const GetObjectRemoteRspPb &rsp) override
+    {
+        ++writeCount_;
+        rsp_ = rsp;
+        return Status::OK();
+    }
+
+    Status Finish() override
+    {
+        return Status::OK();
+    }
+
+    Status ReceivePayload(std::vector<RpcMessage> &payload) override
+    {
+        payload = std::move(payload_);
+        return Status::OK();
+    }
+
+    Status SendAndTagPayload(std::vector<RpcMessage> &payload, bool tagPayloadFrame) override
+    {
+        (void)tagPayloadFrame;
+        ++payloadSendCount_;
+        payload_ = std::move(payload);
+        return Status::OK();
+    }
+
+    Status SendPayload(std::vector<RpcMessage> &payload) override
+    {
+        ++payloadSendCount_;
+        payload_ = std::move(payload);
+        return Status::OK();
+    }
+
+    Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame) override
+    {
+        (void)payload;
+        (void)tagPayloadFrame;
+        return Status::OK();
+    }
+
+    Status SendPayload(const std::vector<MemView> &payload) override
+    {
+        (void)payload;
+        return Status::OK();
+    }
+
+    Status GetOutMsg(RpcMsgFrames &outMsg) override
+    {
+        (void)outMsg;
+        return Status::OK();
+    }
+
+    bool EnableMsgQ() override
+    {
+        return false;
+    }
+
+    void SetRequestInProgress() override
+    {
+    }
+
+    void SetRequestComplete() override
+    {
+    }
+
+    const GetObjectRemoteRspPb &Response() const
+    {
+        return rsp_;
+    }
+
+    const std::vector<RpcMessage> &Payload() const
+    {
+        return payload_;
+    }
+
+    size_t ReadCount() const
+    {
+        return readCount_;
+    }
+
+    size_t WriteCount() const
+    {
+        return writeCount_;
+    }
+
+    size_t PayloadSendCount() const
+    {
+        return payloadSendCount_;
+    }
+
+private:
+    GetObjectRemoteReqPb req_;
+    GetObjectRemoteRspPb rsp_;
+    std::vector<RpcMessage> payload_;
+    size_t readCount_{ 0 };
+    size_t writeCount_{ 0 };
+    size_t payloadSendCount_{ 0 };
+};
 }  // namespace
 
 class WorkerOcServiceImplTest : public CommonTest {
@@ -546,6 +671,51 @@ public:
         DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));
     }
 
+    void AddTransferableObject(const std::string &objectKey, uint64_t dataSize)
+    {
+        auto obj = std::make_unique<ObjCacheShmUnit>();
+        auto shmUnit = std::make_shared<ShmUnit>();
+        DS_ASSERT_OK(shmUnit->AllocateMemory("", dataSize, false));
+        obj->SetShmUnit(std::move(shmUnit));
+        obj->SetDataSize(dataSize);
+        obj->SetCreateTime(1);
+        obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        obj->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
+        obj->modeInfo.SetCacheType(CacheType::MEMORY);
+        obj->stateInfo.SetDataFormat(DataFormat::BINARY);
+        obj->stateInfo.SetPrimaryCopy(true);
+        DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));
+    }
+
+    static void SetUnavailableSummary(PeerUbAdmission *admission, const HostPort &peer)
+    {
+        ASSERT_NE(admission, nullptr);
+        UbHealthSummary summary;
+        summary.worker = peer;
+        summary.incarnation = "remote-get-requester";
+        summary.epoch = 1;
+        summary.writable = false;
+        summary.state = UbAdmissionState::UNAVAILABLE;
+        summary.reason = UbFailureClass::PORT_UNAVAILABLE_ERROR4;
+        summary.lastStatusCode = StatusCode::K_URMA_ERROR;
+        admission->ReplaceGlobalSummaries({ summary });
+    }
+
+    static GetObjectRemoteReqPb MakeUrmaRemoteGetRequest(const std::string &objectKey, uint64_t dataSize,
+                                                         const HostPort &peer, uint64_t remoteOffset = 0)
+    {
+        GetObjectRemoteReqPb req;
+        req.set_object_key(objectKey);
+        req.set_data_size(dataSize);
+        req.set_read_size(dataSize);
+        auto *urmaInfo = req.mutable_urma_info();
+        urmaInfo->set_seg_va(0x1000);
+        urmaInfo->set_seg_data_offset(remoteOffset);
+        urmaInfo->mutable_request_address()->set_host(peer.Host());
+        urmaInfo->mutable_request_address()->set_port(peer.Port());
+        return req;
+    }
+
     void AddWorkerRef(const std::string &objectKey, const std::string &clientId = "client-id")
     {
         std::vector<std::string> objectKeys{ objectKey };
@@ -607,6 +777,32 @@ protected:
     std::shared_ptr<WorkerOcServiceClearDataFlow> dataClearImpl_;
 };
 
+class WorkerOcRemoteGetAdmissionTest : public WorkerOcServiceImplTest {
+public:
+    void SetUp() override
+    {
+        WorkerOcServiceImplTest::SetUp();
+        savedArenaPerTenant_ = FLAGS_arena_per_tenant;
+        FLAGS_arena_per_tenant = 1;
+        allocator_ = memory::Allocator::Instance();
+        allocator_->ResetForTest();
+        DS_ASSERT_OK(allocator_->Init(K_REMOTE_GET_TEST_MEMORY_SIZE));
+    }
+
+    void TearDown() override
+    {
+        WorkerOcServiceImplTest::TearDown();
+        objectTable_.reset();
+        allocator_->ResetForTest();
+        allocator_ = nullptr;
+        FLAGS_arena_per_tenant = savedArenaPerTenant_;
+    }
+
+private:
+    memory::Allocator *allocator_{ nullptr };
+    uint32_t savedArenaPerTenant_{ 0 };
+};
+
 TEST_F(WorkerOcServiceImplTest, RemoteGetTryLockMissDoesNotLeaveEmptyEntry)
 {
     constexpr size_t kAttemptCount = 2;
@@ -640,6 +836,138 @@ TEST_F(WorkerOcServiceImplTest, RemoteGetL2MissDoesNotLeaveEmptyEntry)
 
     ASSERT_EQ(rc.GetCode(), K_NOT_FOUND);
     EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
+}
+
+TEST_F(WorkerOcRemoteGetAdmissionTest, BlockingRemoteGetAdmissionFailureFallsBackToPayloadWithoutUrmaPost)
+{
+    constexpr uint64_t dataSize = 16;
+    const std::string objectKey = "blocked-remote-get-fallback";
+    const HostPort requester("192.0.2.30", 18481);
+    AddTransferableObject(objectKey, dataSize);
+    SetUnavailableSummary(impl_->GetUbAdmission(), requester);
+    const bool savedFallback = FLAGS_enable_transport_fallback;
+    Raii restoreFallback([savedFallback] { FLAGS_enable_transport_fallback = savedFallback; });
+    FLAGS_enable_transport_fallback = true;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::CheckTransportConnectionStable, (_, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::UrmaWritePayload, (_, _, _, _, _, _, _, _, _, _, _, _, _, _)).Times(0);
+    auto akSkManager = std::make_shared<AkSkManager>();
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, akSkManager, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
+    auto req = MakeUrmaRemoteGetRequest(objectKey, dataSize, requester);
+    auto serverApi = std::make_shared<TestGetObjectRemoteServerApi>(std::move(req));
+
+    auto rc = remoteService.GetObjectRemote(serverApi);
+
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    EXPECT_EQ(serverApi->ReadCount(), 1);
+    EXPECT_EQ(serverApi->WriteCount(), 1);
+    EXPECT_EQ(serverApi->PayloadSendCount(), 1);
+    EXPECT_EQ(serverApi->Response().error().error_code(), K_OK);
+    EXPECT_EQ(serverApi->Response().data_source(), DataTransferSource::DATA_IN_PAYLOAD);
+    ASSERT_EQ(serverApi->Payload().size(), 1);
+    EXPECT_EQ(serverApi->Payload().front().Size(), dataSize);
+}
+
+TEST_F(WorkerOcRemoteGetAdmissionTest, BlockingRemoteGetAdmissionFailureReturnsUnavailableWhenFallbackDisabled)
+{
+    constexpr uint64_t dataSize = 16;
+    const std::string objectKey = "blocked-remote-get-no-fallback";
+    const HostPort requester("192.0.2.31", 18481);
+    AddTransferableObject(objectKey, dataSize);
+    SetUnavailableSummary(impl_->GetUbAdmission(), requester);
+    const bool savedFallback = FLAGS_enable_transport_fallback;
+    Raii restoreFallback([savedFallback] { FLAGS_enable_transport_fallback = savedFallback; });
+    FLAGS_enable_transport_fallback = false;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::CheckTransportConnectionStable, (_, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::UrmaWritePayload, (_, _, _, _, _, _, _, _, _, _, _, _, _, _)).Times(0);
+    auto akSkManager = std::make_shared<AkSkManager>();
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, akSkManager, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
+    auto req = MakeUrmaRemoteGetRequest(objectKey, dataSize, requester);
+    auto serverApi = std::make_shared<TestGetObjectRemoteServerApi>(std::move(req));
+
+    auto rc = remoteService.GetObjectRemote(serverApi);
+
+    EXPECT_EQ(rc.GetCode(), K_URMA_WORKER_UNAVAILABLE);
+    EXPECT_EQ(serverApi->ReadCount(), 1);
+    EXPECT_EQ(serverApi->WriteCount(), 0);
+    EXPECT_EQ(serverApi->PayloadSendCount(), 0);
+    EXPECT_TRUE(serverApi->Payload().empty());
+}
+
+TEST_F(WorkerOcRemoteGetAdmissionTest, BatchAdmissionPinsRequestToTcpBeforeLaneAndGather)
+{
+    constexpr uint64_t dataSize = 16;
+    constexpr size_t objectCount = 3;
+    const HostPort requester("192.0.2.32", 18481);
+    SetUnavailableSummary(impl_->GetUbAdmission(), requester);
+    BatchGetObjectRemoteReqPb req;
+    req.set_allow_aggregate_gather(true);
+    req.set_aggregate_gather_metadata_size(impl_->GetMetadataSize());
+    for (size_t i = 0; i < objectCount; ++i) {
+        const auto objectKey = "blocked-batch-remote-get-" + std::to_string(i);
+        AddTransferableObject(objectKey, dataSize);
+        req.add_requests()->CopyFrom(
+            MakeUrmaRemoteGetRequest(objectKey, dataSize, requester,
+                                     impl_->GetMetadataSize() + i * dataSize));
+    }
+    const bool savedFallback = FLAGS_enable_transport_fallback;
+    const int32_t savedParallelMin = FLAGS_oc_worker_worker_parallel_min;
+    Raii restoreFlags([savedFallback, savedParallelMin] {
+        FLAGS_enable_transport_fallback = savedFallback;
+        FLAGS_oc_worker_worker_parallel_min = savedParallelMin;
+    });
+    FLAGS_enable_transport_fallback = true;
+    FLAGS_oc_worker_worker_parallel_min = 0;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::AcquireUrmaSendLane, (_, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::UrmaWritePayload, (_, _, _, _, _, _, _, _, _, _, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::UrmaWritePayloadWithLane, (_, _, _, _, _, _, _, _, _, _, _, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::UrmaGatherWrite, (_, _, _, _, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::UrmaGatherWriteWithLane, (_, _, _, _, _, _)).Times(0);
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, nullptr, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
+    WorkerWorkerOCServiceImpl::BatchRh2dContext batchTransportContext;
+    BatchGetObjectRemoteRspPb rsp;
+    std::vector<RpcMessage> payload;
+    ScopedRequestContext requestContext;
+
+    DS_ASSERT_OK(remoteService.PrepareBatchGetObjectRemoteReq(req, batchTransportContext));
+    ASSERT_TRUE(batchTransportContext.IsUrmaTcpFallback());
+    DS_ASSERT_OK(remoteService.BatchGetObjectRemoteImpl(req, rsp, payload, batchTransportContext));
+
+    ASSERT_EQ(rsp.responses_size(), static_cast<int>(objectCount));
+    EXPECT_EQ(payload.size(), objectCount);
+    for (const auto &response : rsp.responses()) {
+        EXPECT_EQ(response.error().error_code(), K_OK);
+        EXPECT_EQ(response.data_source(), DataTransferSource::DATA_IN_PAYLOAD);
+    }
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchAdmissionFailsBeforeLaneWhenFallbackDisabled)
+{
+    const HostPort requester("192.0.2.33", 18481);
+    SetUnavailableSummary(impl_->GetUbAdmission(), requester);
+    BatchGetObjectRemoteReqPb req;
+    req.add_requests()->CopyFrom(MakeUrmaRemoteGetRequest("blocked-batch-no-fallback", 16, requester));
+    const bool savedFallback = FLAGS_enable_transport_fallback;
+    Raii restoreFallback([savedFallback] { FLAGS_enable_transport_fallback = savedFallback; });
+    FLAGS_enable_transport_fallback = false;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::AcquireUrmaSendLane, (_, _)).Times(0);
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, nullptr, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
+    WorkerWorkerOCServiceImpl::BatchRh2dContext batchTransportContext;
+
+    auto rc = remoteService.PrepareBatchGetObjectRemoteReq(req, batchTransportContext);
+
+    EXPECT_EQ(rc.GetCode(), K_URMA_WORKER_UNAVAILABLE);
 }
 
 class TestWorkerOcServiceCrudCommonApi : public WorkerOcServiceCrudCommonApi {

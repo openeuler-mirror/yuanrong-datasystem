@@ -679,7 +679,8 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
         // K_NOT_FOUND_IN_L2CACHE: Metadata exists in etcd but data not exists in .
         // K_OUT_OF_RANGE: offset > szie.
         static std::set<StatusCode> bypassCodeRemoteGet{ K_OUT_OF_RANGE, K_URMA_ERROR,
-                                                         K_URMA_DATA_WORKER_UNAVAILABLE };
+                                                         K_URMA_DATA_WORKER_UNAVAILABLE,
+                                                         K_URMA_WORKER_UNAVAILABLE };
         if (status.GetCode() == K_NOT_FOUND_IN_L2CACHE) {
             LOG(ERROR) << "ProcessObjectsNotExistInLocal failed with status: " << status.ToString();
             auto msg = "Cannot get object from worker and l2 cache";

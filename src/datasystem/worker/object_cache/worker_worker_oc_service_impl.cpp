@@ -203,18 +203,11 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     }
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     INJECT_POINT("worker.GetObjectRemote.afterRead");
-    auto connectionRc = CheckConnectionStable(req);
-    if (connectionRc.IsError()) {
-        VLOG(1) << "[REMOTE_GET_CONNECTION_CHECK_FAILED] method=GetObjectRemote"
-                << ", objectKey=" << req.object_key() << ", src=" << GetRemoteAddressForLog(req)
-                << ", dst=" << FLAGS_worker_address << ", status=" << connectionRc.ToString()
-                << ", willReturnViaBrpcSetFailed=true";
-        return connectionRc;
-    }
     // K_OC_REMOTE_GET_NOT_ENOUGH error happens only when URMA is used for RDMA and size of the object
     // is different from the request. A provider-local UB write failure must also cross the RPC boundary so the
     // requester can quarantine this source before its next read.
-    auto getRc = GetObjectRemote(req, rsp, payload);
+    BatchRh2dContext transportContext;
+    auto getRc = ProcessSingleGetObjectRemote(req, rsp, payload, &transportContext);
     const bool providerUbFailureEncoded = TryEncodeProviderUbFailureResponse(getRc, rsp);
     if (!providerUbFailureEncoded) {
         RETURN_IF_NOT_OK_EXCEPT(getRc, StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
@@ -245,6 +238,14 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                   std::vector<RpcMessage> &payload)
 {
+    return ProcessSingleGetObjectRemote(req, rsp, payload, nullptr);
+}
+
+Status WorkerWorkerOCServiceImpl::ProcessSingleGetObjectRemote(GetObjectRemoteReqPb &req,
+                                                               GetObjectRemoteRspPb &rsp,
+                                                               std::vector<RpcMessage> &payload,
+                                                               BatchRh2dContext *transportContext)
+{
     // Inherit the SDK traceID from the worker thread's thread_local Trace (set by
     // WorkerEntryImpl's SetTraceContextFromMeta) into the per-request context so
     // that any access recorder or log emitted inside the pull handler scope carries
@@ -256,8 +257,12 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     Timer slowLogTimer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const std::string callerAddress = GetRemoteAddressForLog(req);
+    if (transportContext != nullptr) {
+        RETURN_IF_NOT_OK(PrepareSingleGetObjectRemoteReq(req, *transportContext));
+    }
     std::vector<uint64_t> eventKeys;
-    RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys));
+    RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys, nullptr, nullptr, nullptr,
+                                            transportContext));
     auto config = GetServerLatencyTraceConfig();
     uint64_t elapsedUs = static_cast<uint64_t>(slowLogTimer.ElapsedMicroSecond());
     SLOW_LOG_IF_OR_VLOG(
@@ -270,6 +275,33 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
                          req.has_urma_info(), static_cast<double>(elapsedUs) / US_PER_MS),
             callerAddress, FLAGS_worker_address));
     return Status::OK();
+}
+
+Status WorkerWorkerOCServiceImpl::PrepareSingleGetObjectRemoteReq(const GetObjectRemoteReqPb &req,
+                                                                  BatchRh2dContext &transportContext)
+{
+    if (IsUrmaEnabled() && req.has_urma_info()) {
+        const auto &remoteAddress = req.urma_info().request_address();
+        auto admissionRc = CheckRemoteGetWriteTarget(ocClientWorkerSvc_->GetUbAdmission(),
+                                                     HostPort(remoteAddress.host(), remoteAddress.port()));
+        if (admissionRc.IsError()) {
+            if (!FLAGS_enable_transport_fallback) {
+                return admissionRc;
+            }
+            transportContext.urmaTransportMode = BatchRh2dContext::UrmaTransportMode::TCP_FALLBACK;
+            transportContext.urmaFallbackStatus = admissionRc;
+            transportContext.urmaFallbackName = "UrmaWriteAdmission";
+            return Status::OK();
+        }
+    }
+    auto connectionRc = CheckConnectionStable(req);
+    if (connectionRc.IsError()) {
+        VLOG(1) << "[REMOTE_GET_CONNECTION_CHECK_FAILED] method=GetObjectRemote"
+                << ", objectKey=" << req.object_key() << ", src=" << GetRemoteAddressForLog(req)
+                << ", dst=" << FLAGS_worker_address << ", status=" << connectionRc.ToString()
+                << ", willReturnViaBrpcSetFailed=true";
+    }
+    return connectionRc;
 }
 
 Status WorkerWorkerOCServiceImpl::SendGetObjectRemotePayload(
@@ -363,7 +395,9 @@ Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReq
 void WorkerWorkerOCServiceImpl::ApplyGatherWriteFailure(ParallelRes &result, uint64_t requestCount,
                                                         const Status &status)
 {
-    LOG_IF_ERROR(status, "GatherWrite failed, all objects will fallback to payload");
+    if (status.GetCode() != K_URMA_WORKER_UNAVAILABLE) {
+        LOG_IF_ERROR(status, "GatherWrite failed, all objects will fallback to payload");
+    }
     result.kps.emplace_back(result.subIndex,
                             std::make_pair(std::vector<uint64_t>(), std::vector<RpcMessage>()));
     for (uint64_t i = 0; i < requestCount; ++i) {
@@ -400,17 +434,20 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
         };
         auto *ubAdmission = ocClientWorkerSvc_->GetUbAdmission();
         const HostPort remotePeer(remoteSegInfo.host, remoteSegInfo.port);
-        auto lateCompletionContext =
-            ubAdmission == nullptr
-                ? std::nullopt
-                : ubAdmission->BuildLateCompletionContext(UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
-                                                          remotePeer);
-        if (sendLaneLease != nullptr) {
-            rc = UrmaGatherWriteWithLane(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys,
-                                         sendLaneLease, lateCompletionContext);
-        } else {
-            rc = UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys,
-                                 lateCompletionContext);
+        rc = CheckRemoteGetWriteTarget(ubAdmission, remotePeer);
+        if (rc.IsOk()) {
+            auto lateCompletionContext =
+                ubAdmission == nullptr
+                    ? std::nullopt
+                    : ubAdmission->BuildLateCompletionContext(UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                                                              remotePeer);
+            if (sendLaneLease != nullptr) {
+                rc = UrmaGatherWriteWithLane(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys,
+                                             sendLaneLease, lateCompletionContext);
+            } else {
+                rc = UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys,
+                                     lateCompletionContext);
+            }
         }
     } else if (IsUcpEnabled() && subReq->has_ucp_info()) {
         CHECK_FAIL_RETURN_STATUS(subReq->ucp_info().remote_buf() >= ocClientWorkerSvc_->GetMetadataSize(),
@@ -711,8 +748,8 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
 
     if (isFastTransportEnabled) {
         if (batchRh2dContext != nullptr && batchRh2dContext->IsUrmaTcpFallback()) {
-            fastTransportStatus = batchRh2dContext->urmaAcquireStatus;
-            fastTransportName = "UrmaSendLaneAcquire";
+            fastTransportStatus = batchRh2dContext->urmaFallbackStatus;
+            fastTransportName = batchRh2dContext->urmaFallbackName;
             RETURN_IF_NOT_OK(markFastTransferResult(fastTransportStatus));
         } else if (batchPtr) {
             batchPtr->localSgeInfos.emplace_back(
@@ -733,6 +770,12 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
             auto *ubAdmission = ocClientWorkerSvc_->GetUbAdmission();
             const auto &remoteAddress = req.urma_info().request_address();
             const HostPort remotePeer(remoteAddress.host(), remoteAddress.port());
+            auto writeTargetRc = CheckRemoteGetWriteTarget(ubAdmission, remotePeer);
+            if (writeTargetRc.IsError()) {
+                fastTransportStatus = writeTargetRc;
+                fastTransportName = "UrmaWriteAdmission";
+                return markFastTransferResult(writeTargetRc);
+            }
             auto lateCompletionContext =
                 ubAdmission == nullptr
                     ? std::nullopt
@@ -766,6 +809,15 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
         }
     }
     return Status::OK();
+}
+
+Status WorkerWorkerOCServiceImpl::CheckRemoteGetWriteTarget(PeerUbAdmission *ubAdmission,
+                                                            const HostPort &remotePeer)
+{
+    if (ubAdmission == nullptr) {
+        return Status::OK();
+    }
+    return ubAdmission->CheckWriteTarget(remotePeer, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK);
 }
 
 void WorkerWorkerOCServiceImpl::RecordProviderUbWriteFailure(const GetObjectRemoteReqPb &req, const Status &status,
@@ -845,7 +897,7 @@ Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
     // Use request-level isFastTransportEnabled, not worker-level IsFastTransportEnabled(). When URMA is globally
     // enabled but this request carries no urma_info, the global flag would skip TCP payload preparation while
     // data_size is nonzero, producing an empty payload.
-    if ((!isFastTransportEnabled || !blocking) && !skipTcpPayload) {
+    if ((!isFastTransportEnabled || !blocking || fastTransportStatus.IsError()) && !skipTcpPayload) {
         bool canPrepareFallbackPayload = true;
         if (FLAGS_enable_transport_fallback && (fastTransportStatus.IsError() || (!blocking && batchPtr == nullptr))
             && isUrmaFastTransport) {
@@ -1038,7 +1090,8 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
         FormatString("[Get/RemotePull] Receive, count: %d, remainingTime: %zu", req.requests_size(), realRemainingTime),
         callerAddress, FLAGS_worker_address);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    auto prepareRc = PrepareBatchGetObjectRemoteReq(req);
+    BatchRh2dContext batchTransportContext;
+    auto prepareRc = PrepareBatchGetObjectRemoteReq(req, batchTransportContext);
     if (prepareRc.IsError()) {
         LogBatchGetObjectRemotePrepareFailed(req, callerAddress, firstObjectKey, prepareRc);
         return prepareRc;
@@ -1048,7 +1101,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::DATA_REMOTEGET_START);
     }
-    RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload));
+    RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload, batchTransportContext));
     TryEncodeRemoteGetLatencySummary(config, traceEnabled, rsp);
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
@@ -1061,21 +1114,42 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::PrepareBatchGetObjectRemoteReq(BatchGetObjectRemoteReqPb &req)
+Status WorkerWorkerOCServiceImpl::PrepareBatchGetObjectRemoteReq(BatchGetObjectRemoteReqPb &req,
+                                                                 BatchRh2dContext &batchTransportContext)
 {
     CHECK_FAIL_RETURN_STATUS(req.requests_size() > 0, K_INVALID, "BatchGetObjectRemote request is empty");
     auto *singleReq = req.mutable_requests(0);
     *(singleReq->mutable_urma_instance_id()) = req.urma_instance_id();
+    if (IsUrmaEnabled()) {
+        for (const auto &subReq : req.requests()) {
+            if (!subReq.has_urma_info()) {
+                continue;
+            }
+            const auto &remoteAddress = subReq.urma_info().request_address();
+            auto admissionRc = CheckRemoteGetWriteTarget(ocClientWorkerSvc_->GetUbAdmission(),
+                                                         HostPort(remoteAddress.host(), remoteAddress.port()));
+            if (admissionRc.IsError()) {
+                if (!FLAGS_enable_transport_fallback) {
+                    return admissionRc;
+                }
+                batchTransportContext.urmaTransportMode = BatchRh2dContext::UrmaTransportMode::TCP_FALLBACK;
+                batchTransportContext.urmaFallbackStatus = admissionRc;
+                batchTransportContext.urmaFallbackName = "UrmaWriteAdmission";
+                return Status::OK();
+            }
+            break;
+        }
+    }
     return CheckConnectionStable(*singleReq);
 }
 
 Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteReqPb &req,
                                                            BatchGetObjectRemoteRspPb &rsp,
-                                                           std::vector<RpcMessage> &payload)
+                                                           std::vector<RpcMessage> &payload,
+                                                           BatchRh2dContext &batchTransportContext)
 {
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE);
-    BatchRh2dContext batchTransportContext;
-    if (IsUrmaEnabled()) {
+    if (IsUrmaEnabled() && !batchTransportContext.IsUrmaTcpFallback()) {
         for (const auto &subReq : req.requests()) {
             if (subReq.has_urma_info()) {
                 // Acquire before any sub-request starts. This is the only
@@ -1089,7 +1163,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
                     // Pin the whole RPC to TCP before object processing begins. Propagate the original acquire status
                     // through HandlePayloadFallback so existing fallback accounting and admission control still apply.
                     batchTransportContext.urmaTransportMode = BatchRh2dContext::UrmaTransportMode::TCP_FALLBACK;
-                    batchTransportContext.urmaAcquireStatus = acquireRc;
+                    batchTransportContext.urmaFallbackStatus = acquireRc;
                 } else {
                     return acquireRc;
                 }

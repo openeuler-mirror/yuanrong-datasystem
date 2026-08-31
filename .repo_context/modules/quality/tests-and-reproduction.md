@@ -407,13 +407,20 @@ DS_URMA_DEV_NAME=<device> \
     reaches the limiter's 1 MiB exclusive upper bound, and fallback-disabled repeated pool backpressure without object
     WR post or TCP success. The fallback-disabled KVClient assertion expects an eventual `K_URMA_TRY_AGAIN` error rather
     than TCP success; the dedicated status prevents replaying exhausted URMA lanes as generic application
-    `K_TRY_AGAIN`, while the manager fault UT checks the exact acquire error. The target also covers
+    `K_TRY_AGAIN`, while the manager fault UT checks the exact acquire error. Provider-side admission coverage injects
+    CQE status 9 on a real remote GET writeback, keeps the requester quarantined during the assertion window, and
+    verifies that subsequent ordinary and aggregate Batch Gets either carry the complete payload over TCP or return
+    `K_URMA_WORKER_UNAVAILABLE` when fallback is disabled, without acquiring an URMA send lane. The target also covers
     configured-capacity concurrent remote Get, a manual `LEVEL1_` 64 concurrently started Batch Get × 64 ordinary sub-object scenario with exactly 64 lane releases and zero
     observed pool exhaustion (without claiming all lanes were simultaneously held), recovery after an injected
     recoverable CQE retires a send Jetty, and `LEVEL1_ConcurrentBatchGetsRecoverFromInFlightTimeoutStorm`: timeout
     releases each sealed lane while retaining observer-backed write Events. The timeout-storm case pauses production
     CQE classification, verifies timed-out Events are not deleted before polling resumes, then observes their cleanup
     after the late CQEs and verifies the same lanes remain usable.
+  - `//tests/ut/worker:worker_oc_service_impl_test` drives the real single-object `GetObjectRemote(serverApi)` entry with
+    a non-writable requester summary. It verifies that admission bypasses the unstable-connection check, pins the
+    request to a complete TCP payload when fallback is enabled, and returns `K_URMA_WORKER_UNAVAILABLE` without an URMA
+    post when fallback is disabled.
   - `UrmaClientSenderRecoveryTest.LateCqe4AfterSetTimeoutQuarantinesSender` pauses a real client-side Set CQE, forces
     the foreground wait to time out, rewrites that same delayed CQE to status 4, and verifies the next Set fast-fails
     with `K_URMA_WORKER_UNAVAILABLE` without reaching another URMA write.

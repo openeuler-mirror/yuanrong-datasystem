@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <limits>
 #include <thread>
@@ -539,9 +540,13 @@ TEST(PeerUbAdmissionTest, GlobalSummaryLogsOnlyEffectiveOperationalTransitions)
 
     PeerUbAdmission admission;
     admission.SetSelfWorker(SELF);
+    const std::array<char, 16> binaryIncarnationBytes{
+        '\0', '\n', '\r', '\x1f', ' ', '\x7f', static_cast<char>(0x80), static_cast<char>(0xff),
+        '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07', '\x08'
+    };
     UbHealthSummary unavailable;
     unavailable.worker = PEER;
-    unavailable.incarnation = "worker-incarnation-old";
+    unavailable.incarnation.assign(binaryIncarnationBytes.data(), binaryIncarnationBytes.size());
     unavailable.writable = false;
     unavailable.state = UbAdmissionState::UNAVAILABLE;
     unavailable.reason = UbFailureClass::PORT_UNAVAILABLE_ERROR4;
@@ -553,7 +558,7 @@ TEST(PeerUbAdmissionTest, GlobalSummaryLogsOnlyEffectiveOperationalTransitions)
     EXPECT_NE(logs.find("receiver=" + SELF.ToString()), std::string::npos) << logs;
     EXPECT_NE(logs.find("target=" + PEER.ToString()), std::string::npos) << logs;
     EXPECT_NE(logs.find("transition=quarantine_applied"), std::string::npos) << logs;
-    EXPECT_NE(logs.find("incarnation_prefix=worker-incar"), std::string::npos) << logs;
+    EXPECT_NE(logs.find("incarnation_prefix=000a0d1f-207"), std::string::npos) << logs;
     EXPECT_NE(logs.find("epoch=8"), std::string::npos) << logs;
 
     logs = CaptureGlobalSummaryReplace(admission, { unavailable });
@@ -561,6 +566,13 @@ TEST(PeerUbAdmissionTest, GlobalSummaryLogsOnlyEffectiveOperationalTransitions)
 
     auto updated = unavailable;
     updated.epoch = 9;
+    updated.state = UbAdmissionState::PROBING;
+    updated.backoffLevel = 2;
+    updated.backoffDeadlineMs = 1'000;
+    logs = CaptureGlobalSummaryReplace(admission, { updated });
+    EXPECT_EQ(logs.find(GLOBAL_SUMMARY_LOG_MARKER), std::string::npos) << logs;
+
+    updated.lastStatusCode = K_RPC_DEADLINE_EXCEEDED;
     logs = CaptureGlobalSummaryReplace(admission, { updated });
     EXPECT_NE(logs.find("transition=quarantine_updated"), std::string::npos) << logs;
 
@@ -574,7 +586,7 @@ TEST(PeerUbAdmissionTest, GlobalSummaryLogsOnlyEffectiveOperationalTransitions)
     EXPECT_NE(logs.find("transition=recovery_applied"), std::string::npos) << logs;
 
     auto restarted = recovered;
-    restarted.incarnation = "worker-incarnation-new";
+    restarted.incarnation.assign(16, '\x11');
     restarted.epoch = 1;
     logs = CaptureGlobalSummaryReplace(admission, { restarted });
     EXPECT_NE(logs.find("transition=incarnation_replaced"), std::string::npos) << logs;

@@ -142,6 +142,7 @@ public:
     Status NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) override;
 
 private:
+    static Status CheckRemoteGetWriteTarget(PeerUbAdmission *ubAdmission, const HostPort &remotePeer);
     static void RecordProviderUbWriteFailure(const GetObjectRemoteReqPb &req, const Status &status,
                                              const HostPort &operatorWorker, GetObjectRemoteRspPb &rsp,
                                              const UrmaWriteFailure *failure = nullptr,
@@ -194,17 +195,24 @@ private:
 
         bool prepared = false;
         int32_t devId = -1;
-        // One worker-to-worker Batch Get RPC either owns one shared URMA lane or is pinned to TCP fallback before
-        // any sub-request starts. TCP_FALLBACK prevents per-object and aggregate paths from attempting URMA again.
+        // A remote Get RPC may be pinned to TCP before object processing. Batch Get may instead own one shared lane.
+        // TCP_FALLBACK prevents single, per-object, and aggregate paths from attempting URMA again.
         UrmaTransportMode urmaTransportMode = UrmaTransportMode::DEFAULT;
         std::shared_ptr<UrmaSendLaneLease> sendLaneLease;
-        Status urmaAcquireStatus;
+        Status urmaFallbackStatus;
+        const char *urmaFallbackName = "UrmaSendLaneAcquire";
 
         bool IsUrmaTcpFallback() const
         {
             return urmaTransportMode == UrmaTransportMode::TCP_FALLBACK;
         }
     };
+
+    Status ProcessSingleGetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
+                                        std::vector<RpcMessage> &payload, BatchRh2dContext *transportContext);
+
+    Status PrepareSingleGetObjectRemoteReq(const GetObjectRemoteReqPb &req,
+                                           BatchRh2dContext &transportContext);
 
     /**
      * @brief Load object data in remote get provider mode.
@@ -304,14 +312,16 @@ private:
      * @return Status of the call.
      */
     Status BatchGetObjectRemoteImpl(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
-                                    std::vector<RpcMessage> &payload);
+                                    std::vector<RpcMessage> &payload, BatchRh2dContext &batchTransportContext);
 
     /**
      * @brief Prepare and validate a batch remote get request before execution.
      * @param[in, out] req Remote get batch request.
+     * @param[out] batchTransportContext Request-level transport decision made before connection and lane acquisition.
      * @return Status of the call.
      */
-    Status PrepareBatchGetObjectRemoteReq(BatchGetObjectRemoteReqPb &req);
+    Status PrepareBatchGetObjectRemoteReq(BatchGetObjectRemoteReqPb &req,
+                                          BatchRh2dContext &batchTransportContext);
 
     /**
      * @brief Merge parallel batch get results to final response and payload.
