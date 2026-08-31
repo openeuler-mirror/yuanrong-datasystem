@@ -36,6 +36,9 @@ namespace {
 constexpr char LOCAL_ADDRESS[] = "127.0.0.1:30001";
 constexpr char TARGET_ADDRESS[] = "127.0.0.1:30002";
 constexpr char SURVIVOR_ADDRESS[] = "127.0.0.1:30003";
+constexpr uint64_t LOCATION_TOPOLOGY_VERSION = 11;
+constexpr size_t MEMBER_ID_SIZE = 16;
+constexpr size_t SHA256_HEX_SIZE = 64;
 
 class OCMetadataManagerTopologyTest : public ut::CommonTest {
 public:
@@ -95,6 +98,87 @@ public:
         migratingItems_.insert({ objectKey, true });
     }
 };
+
+std::shared_ptr<const cluster::TopologySnapshot> BuildLocationEvidenceSnapshot(bool includeTarget)
+{
+    cluster::TopologyState topology;
+    topology.version = LOCATION_TOPOLOGY_VERSION;
+    topology.clusterHasInit = true;
+    topology.members = {
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+    };
+    if (includeTarget) {
+        topology.members.emplace_back(cluster::Member{ { std::string(MEMBER_ID_SIZE, 'b'), TARGET_ADDRESS },
+                                                       cluster::MemberState::ACTIVE,
+                                                       { std::numeric_limits<uint32_t>::max() } });
+    }
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    EXPECT_TRUE(cluster::TopologySnapshot::Create(topology, LOCATION_TOPOLOGY_VERSION,
+                                                   std::string(SHA256_HEX_SIZE, 'a'), snapshot)
+                    .IsOk());
+    return snapshot;
+}
+
+void MakeTargetReadable(OCMetadataManager &manager, const std::string &objectKey)
+{
+    TbbMetaTable::accessor accessor;
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    bthread::RWLockWrGuard lock(shard.mutex);
+    (void)shard.table.insert(accessor, objectKey);
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(LOCAL_ADDRESS);
+    accessor->second.locations[LOCAL_ADDRESS] = AckState::ACK;
+    accessor->second.locations[TARGET_ADDRESS] = AckState::ACK;
+}
+
+TEST_F(OCMetadataManagerTopologyTest, PureQueryMetaUsesMembershipVersionThatContainsEveryReturnedLocation)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(BuildLocationEvidenceSnapshot(true), outcome));
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, &membership,
+                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    manager.notifyWorkerManager_ =
+        std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
+    const std::string objectKey = "pure-query-location-membership-evidence";
+    MakeTargetReadable(manager, objectKey);
+    PureQueryMetaReqPb request;
+    request.add_object_keys(objectKey);
+    request.set_address(LOCAL_ADDRESS);
+    PureQueryMetaRspPb response;
+
+    DS_ASSERT_OK(manager.PureQueryMeta(request, response));
+
+    ASSERT_EQ(response.query_metas_size(), 1);
+    EXPECT_EQ(response.query_metas(0).meta().primary_address(), LOCAL_ADDRESS);
+    EXPECT_EQ(response.query_metas(0).address(), TARGET_ADDRESS);
+    EXPECT_EQ(response.query_metas(0).topology_version(), LOCATION_TOPOLOGY_VERSION);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, PureQueryMetaWithholdsVersionWhenAnyReturnedLocationIsAbsent)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(BuildLocationEvidenceSnapshot(false), outcome));
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, &membership,
+                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    manager.notifyWorkerManager_ =
+        std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
+    const std::string objectKey = "pure-query-location-without-membership-evidence";
+    MakeTargetReadable(manager, objectKey);
+    PureQueryMetaReqPb request;
+    request.add_object_keys(objectKey);
+    request.set_address(LOCAL_ADDRESS);
+    PureQueryMetaRspPb response;
+
+    DS_ASSERT_OK(manager.PureQueryMeta(request, response));
+
+    ASSERT_EQ(response.query_metas_size(), 1);
+    EXPECT_EQ(response.query_metas(0).address(), TARGET_ADDRESS);
+    EXPECT_EQ(response.query_metas(0).topology_version(), 0U);
+}
 
 TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdinaryExitingRequestIsFenced)
 {

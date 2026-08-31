@@ -19,6 +19,7 @@
 #define DATASYSTEM_CLIENT_TRANSPORT_DATA_PLANE_DATA_PLANE_EXECUTOR_H
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -47,6 +48,9 @@ public:
      */
     Status Execute(const HostPort &workerAddr, const Operation &operation, bool traceEnabled = false);
 
+    Status ExecuteForDataLocation(const HostPort &workerAddr, uint64_t locationTopologyVersion,
+                                  const Operation &operation, bool traceEnabled = false);
+
 private:
     struct AttemptPlan {
         TransportHint hint;
@@ -61,11 +65,14 @@ private:
     };
 
     AttemptResult ExecuteAttempt(const HostPort &workerAddr, const Operation &operation, const AttemptPlan &plan,
-                                 TransportPhaseLatencyRecorder *recorder);
+                                 uint64_t locationTopologyVersion, TransportPhaseLatencyRecorder *recorder);
 
     Status ExecuteFallbacks(const HostPort &workerAddr, const Operation &operation,
-                            const std::vector<TransportHint> &fallbackHints,
+                            const std::vector<TransportHint> &fallbackHints, uint64_t locationTopologyVersion,
                             TransportPhaseLatencyRecorder *recorder);
+
+    Status ExecuteImpl(const HostPort &workerAddr, uint64_t locationTopologyVersion,
+                       const Operation &operation, bool traceEnabled);
 
     // Decide whether a failed operation should be retried after a transporter rebuild, perform the
     // rebuild pre-step (ResetDataPlane/Teardown), and set the retry hint. Returns false (no retry)

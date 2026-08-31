@@ -51,6 +51,7 @@ void FillLocation(const master::ObjectLocationInfoPb &source, QueryAndGetLocatio
 {
     target.set_object_key(source.object_key());
     target.set_object_size(source.object_size());
+    target.set_topology_version(source.topology_version());
     *target.mutable_object_locations() = source.object_locations();
 }
 }  // namespace

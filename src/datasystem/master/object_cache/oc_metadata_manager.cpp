@@ -120,6 +120,30 @@ static std::string TopologyOperationPrefix(const std::string &operationId)
     return operationId.substr(0, TOPOLOGY_OPERATION_DIAGNOSTIC_PREFIX_SIZE);
 }
 
+static bool ContainsLocation(const cluster::TopologySnapshot &snapshot, const std::string &address)
+{
+    if (address.empty()) {
+        return true;
+    }
+    const cluster::Member *member = nullptr;
+    return snapshot.FindMemberByAddress(address, member).IsOk();
+}
+
+static uint64_t GetLocationTopologyVersion(const std::shared_ptr<const cluster::TopologySnapshot> &snapshot,
+                                           const QueryMetaInfoPb &queryMeta)
+{
+    if (snapshot == nullptr) {
+        return 0;
+    }
+    const auto &primary = queryMeta.meta().primary_address();
+    const auto &selected = queryMeta.address();
+    if ((primary.empty() && selected.empty()) || !ContainsLocation(*snapshot, primary)
+        || !ContainsLocation(*snapshot, selected)) {
+        return 0;
+    }
+    return snapshot->Version();
+}
+
 static std::chrono::milliseconds GetClientIdRefMigrationRetryDelay(std::chrono::milliseconds remainingTime)
 {
     static thread_local RandomData randomData;
@@ -4891,6 +4915,10 @@ Status OCMetadataManager::PureQueryMeta(const PureQueryMetaReqPb &req, PureQuery
     // making this read safe for concurrent access without an external shard lock.
     Timer timer;
     GetMasterTimeCost().Append("PureQueryMeta get lock", timer.ElapsedMilliSecond());
+    std::shared_ptr<const cluster::TopologySnapshot> locationSnapshot;
+    if (topologyMembership_ != nullptr) {
+        (void)topologyMembership_->GetSnapshot(locationSnapshot);
+    }
     for (const auto &objectKey : notRedirectObjectKeys) {
         TbbMetaTable::const_accessor accessor;
         size_t shardIdx = GetShardIndex(objectKey);
@@ -4903,6 +4931,7 @@ Status OCMetadataManager::PureQueryMeta(const PureQueryMetaReqPb &req, PureQuery
                 queryMeta->set_single_copy(
                     accessor->second.IsPrimaryWithoutCopy(accessor->second.meta.primary_address()));
             }
+            queryMeta->set_topology_version(GetLocationTopologyVersion(locationSnapshot, *queryMeta));
         } else {
             LOG(WARNING) << FormatString("QueryMeta and not found: %s", objectKey);
         }

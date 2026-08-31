@@ -472,32 +472,46 @@
     CMake source lists under `src/datasystem/common/object_cache`
   - Bazel target `//bazel:datasystem_sdk` packages a C++ SDK directory tree at `bazel-bin/bazel/datasystem_sdk/cpp` and also outputs `bazel-bin/bazel/datasystem_sdk.tar`; headers are under `cpp/include/datasystem/`, and the shared library is `lib/libdatasystem.so`
 
-## Scale-Out Redirected Metadata Convergence
+## Scale-Out Location-Scoped Data-Plane Admission
 
-- Scope: `KVClient::Get` through the routed transport path when `enableLocalCache=false`; Set and ordinary data-plane
-  admission are unchanged.
-- Reproduction window: an old metadata owner redirects `QueryAndGet` to a newly added Worker after the server topology
-  has changed but before the Client's `WorkerSnapshot` contains that endpoint. The normal RPC lookup returns the narrow
-  stale-snapshot `K_NOT_READY` before the redirected metadata request is sent.
-- Selected behavior: only a server-provided redirect whose topology version is strictly newer than the Client's
-  atomically published redirect-admission snapshot may use a metadata-only RPC connection before snapshot convergence.
-  Version zero and redirects at or behind the Client snapshot retain the normal admission rejection. The check runs
-  before and after RPC-client creation so a concurrently published newer snapshot can revoke the exception. The
-  redirect chain also rejects any next-hop topology version below the preceding hop, preventing a newer redirect from
-  authorizing a later lookup against an older membership view. The stale-snapshot signal also requests an asynchronous
-  `Routing::ForceRefresh`. Any prepared TCP or UB inline-data
-  request is cleared before the redirected RPC, so the response resolves locations but does not transfer object bytes.
-- Safety boundary: SHM registration, UB establishment, TCP/UB object reads, Set, and initial metadata-owner routing remain
-  admitted by the latest transport snapshot. The metadata-only exception neither publishes the endpoint into the
-  snapshot nor creates a transporter.
-- Validation: first preserve a failing `ObjectMetadataClientTest` on the pre-fix branch under the URMA mock build, then
-  make it pass and add invariant tests proving that old/zero-version redirects are rejected, concurrent snapshot
-  publication revokes the exception, redirect chains cannot roll back topology versions, and the redirected RPC cache
-  does not admit the endpoint's data plane.
-  `KVClientTransportGetScaleOutRealUrmaTest.RedirectedMetadataOwnerPrecedesClientSnapshot` preserves the hardware-only
-  scale-out timing window and skips under `USE_URMA_MOCK`.
-- Rollback: revert the redirected metadata-only fallback. The previous fail-fast plus outer refresh behavior is restored;
-  no persisted state or wire-format migration is involved.
+- Scope: phase-two replica reads in routed `KVClient::Get` when `enableLocalCache=false`. The SDK sends `QueryAndGet` to
+  an already admitted Worker; that Worker resolves metadata locally or through its metadata redirect path and returns
+  the authoritative data locations. Set, initial metadata-owner routing, and the local-cache path are unchanged.
+- Reproduction window: `QueryAndGet` returns a new Worker's data location from topology version Vnew while the SDK's
+  atomically published `WorkerSnapshot` is still Vold and does not contain that Worker. Ordinary data-plane admission
+  rejects the location with `K_NOT_READY` before RPC-channel or URMA-transporter creation.
+- Provenance contract: the Master that actually reads each object's metadata loads one immutable membership snapshot,
+  verifies that every returned primary/selected data endpoint belongs to that snapshot, and places its version on the
+  per-result `QueryMetaInfoPb`. The Query Worker only propagates that evidence through the returned location; metadata-
+  owner route and redirect versions are not data-endpoint membership evidence. An unavailable snapshot, an endpoint
+  absent from it, or a missing field from an older peer yields zero and cannot authorize an exception.
+- Selected behavior: `ReplicaReader` supplies this version only to its location-directed data read. If the endpoint is
+  absent from the SDK snapshot, `DataPlaneManager` may create or reuse it only when the location version is strictly
+  newer than the snapshot ring version. It revalidates the exceptional case after endpoint construction: success is
+  retained if the new snapshot contains the endpoint, but a snapshot that has caught up without it revokes the
+  exception. The entry records the exceptional location version under its concurrent-map accessor, so an older pending
+  reconcile cannot tear it down after construction; a caught-up snapshot that still omits the endpoint may delete it.
+  When post-build revalidation rejects the exception, the manager conditionally detaches the same entry unless a newer
+  location evidence version has superseded it. Detach does not actively close shared transport state, so concurrent
+  holders keep their existing lifetime while the manager releases its rejected strong reference. Ordinary callers
+  remain protected by normal admission.
+- Safety and performance boundary: ordinary `GetOrCreate`, Set/Delete, metadata-owner routing, reconciliation, endpoint
+  deletion, and `enableLocalCache=true` retain their existing snapshot admission. `PureQueryMeta` adds one process-local
+  immutable snapshot load per request and at most two indexed membership lookups per returned object; there is no
+  topology RPC, cluster scan, new global lock, fixed wait, endpoint prewarming, Coordinator grace, or per-request heap
+  container. The SDK's already-admitted steady-state data-plane path is unchanged.
+- Compatibility and rollout: the protobuf changes are additive. Upgrade Workers before SDKs when the scale-out
+  guarantee is required: old SDKs ignore the field; new SDKs talking to old Workers receive zero and fail closed.
+- Validation anchors: `OCMetadataManagerTopologyTest` covers exact Master membership evidence and fail-closed stale
+  locations; `DataPlaneManagerTest` covers newer/old/equal versions, build-time snapshot advance, and rejected-entry
+  detachment;
+  `ObjectMetadataClientTest` covers field propagation; `ReplicaReaderTest` covers unary and shared-endpoint batch reads;
+  `WorkerOcServiceImplTest` covers direct and redirected Master-evidence propagation. A local-only Coordinator-backed scale-out ST pins
+  the reader to its old snapshot, writes data on the new Worker, and verifies non-inline `QueryAndGet` followed by the
+  new Worker's data RPC; it takes more than 8 seconds and is intentionally not committed. A real URMA load run is still
+  required before claiming the 5 ms SLO.
+- Rollback: revert the additive field propagation and location-directed admission entry points. No persisted state or
+  Coordinator protocol migration is involved.
 
 ## Review And Bugfix Notes
 
@@ -556,10 +570,11 @@
     lookup so delayed requests cannot recreate removed entries. A dedicated transport reconcile thread coalesces
     pending updates with latest-wins semantics, erases absent entries through TBB map accessors, and closes their data
     planes afterward. Shutdown stops and joins this reconcile thread before closing the manager.
-    Worker incarnation changes that reuse the same endpoint are intentionally outside this mechanism. The only
-    admission exception is a metadata-only RPC to an owner explicitly returned by a server redirect: it triggers a
-    forced ring refresh and clears any TCP/UB inline-data request before connecting. Data-plane creation, including
-    SHM and UB, remains snapshot-gated until the refreshed snapshot admits that endpoint.
+    Worker incarnation changes that reuse the same endpoint are intentionally outside this mechanism. A metadata-only
+    RPC to an owner explicitly returned by a server redirect triggers a forced ring refresh and clears any TCP/UB
+    inline-data request before connecting. Routed Get replica reads have the separate, version-fenced data-location
+    exception described in `Scale-Out Location-Scoped Data-Plane Admission`; every other data-plane creation remains
+    snapshot-gated.
   - transport RPC clients share a transport-owned `Signature` instance and sign each fully populated request immediately
     before sending it.
   - Set retries rebuild RPC or UB state once on the same worker inside `TransportLayer`. Cross-worker retry starts a

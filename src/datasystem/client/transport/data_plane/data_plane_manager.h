@@ -96,6 +96,10 @@ public:
     Status GetOrCreate(const HostPort &workerAddr, TransportHint hint, std::shared_ptr<IDataTransporter> &out,
                        TransportPhaseLatencyRecorder *recorder = nullptr);
 
+    Status GetOrCreateForDataLocation(const HostPort &workerAddr, TransportHint hint, uint64_t locationTopologyVersion,
+                                      std::shared_ptr<IDataTransporter> &out,
+                                      TransportPhaseLatencyRecorder *recorder = nullptr);
+
     /**
      * @brief Acquire an endpoint lease that prevents its data plane from being torn down.
      * @param[in] workerAddr Target worker address.
@@ -174,7 +178,7 @@ protected:
 private:
     friend class ObjectMetadataClient;
 
-    struct RedirectAdmissionSnapshot {
+    struct EndpointAdmissionSnapshot {
         uint64_t ringVersion;
         std::shared_ptr<const std::unordered_set<std::string>> liveWorkers;
     };
@@ -189,6 +193,8 @@ private:
         std::shared_ptr<IDataTransporter> transporter;
         AccessTransportKind kind = AccessTransportKind::TCP;
         bool shmDraining = false;
+        // Access under the EntryMap accessor so location admission is ordered with reconcile deletion.
+        uint64_t locationAdmissionVersion = 0;
     };
 
     using EntryMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerTransportEntry>>;
@@ -203,6 +209,13 @@ private:
     Status GetOrCreateEntry(const std::string &workerKey, std::shared_ptr<WorkerTransportEntry> &entry,
                             bool requireSnapshotAdmission = true);
 
+    Status GetOrCreateLocationEntry(const std::string &workerKey, uint64_t topologyVersion,
+                                    std::shared_ptr<WorkerTransportEntry> &entry);
+
+    void DetachRejectedLocationEntry(const std::string &workerKey,
+                                     const std::shared_ptr<WorkerTransportEntry> &entry,
+                                     uint64_t topologyVersion);
+
     Status GetOrCreateRpcClientImpl(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &out,
                                     bool requireSnapshotAdmission);
 
@@ -211,6 +224,9 @@ private:
 
     Status ValidateRedirectMetadataAdmission(const HostPort &workerAddr,
                                              uint64_t redirectTopologyVersion) const;
+
+    Status ValidateVersionedEndpointAdmission(const std::string &workerKey, uint64_t topologyVersion,
+                                              bool &bypassedSnapshot) const;
 
     Status GetOrBuildTransporter(const TransportBuildContext &context,
                                  const std::shared_ptr<WorkerTransportEntry> &entry,
@@ -227,7 +243,7 @@ private:
 
     EntryMap entries_;
     std::shared_ptr<const std::unordered_set<std::string>> liveWorkers_;
-    std::shared_ptr<const RedirectAdmissionSnapshot> redirectAdmissionSnapshot_;
+    std::shared_ptr<const EndpointAdmissionSnapshot> endpointAdmissionSnapshot_;
     bthread::Mutex probeMutex_;
     std::vector<std::string> writeProbeWorkers_;
     std::unordered_map<std::string, size_t> writeProbeWorkerIndices_;

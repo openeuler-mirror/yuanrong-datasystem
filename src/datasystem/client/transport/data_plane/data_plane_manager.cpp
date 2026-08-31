@@ -206,6 +206,34 @@ Status DataPlaneManager::GetOrCreate(const HostPort &workerAddr, TransportHint h
     return GetOrBuildTransporter(context, entry, out);
 }
 
+Status DataPlaneManager::GetOrCreateForDataLocation(const HostPort &workerAddr, TransportHint hint,
+                                                    uint64_t locationTopologyVersion,
+                                                    std::shared_ptr<IDataTransporter> &out,
+                                                    TransportPhaseLatencyRecorder *recorder)
+{
+    out.reset();
+    const std::string workerKey = workerAddr.ToString();
+    bool bypassedSnapshot = false;
+    if (hasWorkerSnapshot_.load(std::memory_order_acquire)) {
+        RETURN_IF_NOT_OK(ValidateVersionedEndpointAdmission(workerKey, locationTopologyVersion, bypassedSnapshot));
+    }
+    std::shared_ptr<WorkerTransportEntry> entry;
+    RETURN_IF_NOT_OK(bypassedSnapshot ? GetOrCreateLocationEntry(workerKey, locationTopologyVersion, entry)
+                                      : GetOrCreateEntry(workerKey, entry, false));
+    const TransportBuildContext context{ workerAddr, hint, KindForHint(hint), recorder };
+    RETURN_IF_NOT_OK(GetOrBuildTransporter(context, entry, out));
+    if (bypassedSnapshot) {
+        bool ignored = false;
+        Status rc = ValidateVersionedEndpointAdmission(workerKey, locationTopologyVersion, ignored);
+        if (rc.IsError()) {
+            out.reset();
+            DetachRejectedLocationEntry(workerKey, entry, locationTopologyVersion);
+            return rc;
+        }
+    }
+    return Status::OK();
+}
+
 Status DataPlaneManager::AcquireDataPlaneLease(const HostPort &workerAddr, TransportHint hint,
                                                std::unique_ptr<DataPlaneLease> &lease)
 {
@@ -264,16 +292,26 @@ Status DataPlaneManager::GetOrCreateRedirectMetadataRpcClient(const HostPort &wo
 Status DataPlaneManager::ValidateRedirectMetadataAdmission(const HostPort &workerAddr,
                                                            uint64_t redirectTopologyVersion) const
 {
-    auto snapshot = std::atomic_load(&redirectAdmissionSnapshot_);
+    bool bypassedSnapshot = false;
+    return ValidateVersionedEndpointAdmission(workerAddr.ToString(), redirectTopologyVersion, bypassedSnapshot);
+}
+
+Status DataPlaneManager::ValidateVersionedEndpointAdmission(const std::string &workerKey,
+                                                            uint64_t topologyVersion,
+                                                            bool &bypassedSnapshot) const
+{
+    bypassedSnapshot = false;
+    auto snapshot = std::atomic_load(&endpointAdmissionSnapshot_);
     CHECK_FAIL_RETURN_STATUS(snapshot != nullptr && snapshot->liveWorkers != nullptr, K_NOT_READY,
                              STALE_TRANSPORT_SNAPSHOT_MESSAGE);
-    if (snapshot->liveWorkers->find(workerAddr.ToString()) != snapshot->liveWorkers->end()) {
+    if (snapshot->liveWorkers->find(workerKey) != snapshot->liveWorkers->end()) {
         return Status::OK();
     }
-    CHECK_FAIL_RETURN_STATUS(redirectTopologyVersion > snapshot->ringVersion, K_NOT_READY,
-                             std::string(STALE_TRANSPORT_SNAPSHOT_MESSAGE) + ": redirect version "
-                                 + std::to_string(redirectTopologyVersion) + ", snapshot version "
+    CHECK_FAIL_RETURN_STATUS(topologyVersion > snapshot->ringVersion, K_NOT_READY,
+                             std::string(STALE_TRANSPORT_SNAPSHOT_MESSAGE) + ": observed version "
+                                 + std::to_string(topologyVersion) + ", snapshot version "
                                  + std::to_string(snapshot->ringVersion));
+    bypassedSnapshot = true;
     return Status::OK();
 }
 
@@ -443,6 +481,34 @@ Status DataPlaneManager::GetOrCreateEntry(const std::string &workerKey,
     }
     entry = accessor->second;
     return Status::OK();
+}
+
+Status DataPlaneManager::GetOrCreateLocationEntry(const std::string &workerKey, uint64_t topologyVersion,
+                                                  std::shared_ptr<WorkerTransportEntry> &entry)
+{
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "DataPlaneManager is shutting down");
+    EntryMap::accessor accessor;
+    (void)entries_.insert(accessor, workerKey);
+    if (accessor->second == nullptr) {
+        accessor->second = std::make_shared<WorkerTransportEntry>();
+    }
+    accessor->second->locationAdmissionVersion =
+        std::max(accessor->second->locationAdmissionVersion, topologyVersion);
+    entry = accessor->second;
+    return Status::OK();
+}
+
+void DataPlaneManager::DetachRejectedLocationEntry(const std::string &workerKey,
+                                                   const std::shared_ptr<WorkerTransportEntry> &entry,
+                                                   uint64_t topologyVersion)
+{
+    EntryMap::accessor accessor;
+    if (!entries_.find(accessor, workerKey) || accessor->second != entry
+        || entry->locationAdmissionVersion > topologyVersion) {
+        return;
+    }
+    entries_.erase(accessor);
 }
 
 Status DataPlaneManager::GetOrBuildTransporter(const TransportBuildContext &context,
@@ -617,9 +683,9 @@ Status DataPlaneManager::UpdateWorkerSnapshot(const WorkerSnapshot &snapshot)
                                  + std::to_string(workerSnapshotVersion_.load()) + " to "
                                  + std::to_string(snapshot.ringVersion));
     auto newLiveWorkers = std::make_shared<const std::unordered_set<std::string>>(std::move(liveWorkers));
-    auto redirectAdmission = std::make_shared<const RedirectAdmissionSnapshot>(
-        RedirectAdmissionSnapshot{ snapshot.ringVersion, newLiveWorkers });
-    std::atomic_store(&redirectAdmissionSnapshot_, std::move(redirectAdmission));
+    auto endpointAdmission = std::make_shared<const EndpointAdmissionSnapshot>(
+        EndpointAdmissionSnapshot{ snapshot.ringVersion, newLiveWorkers });
+    std::atomic_store(&endpointAdmissionSnapshot_, std::move(endpointAdmission));
     std::atomic_store(&liveWorkers_, newLiveWorkers);
     {
         std::lock_guard<bthread::Mutex> lock(probeMutex_);
@@ -663,6 +729,10 @@ void DataPlaneManager::ReconcileWithSnapshot(const WorkerSnapshot &snapshot)
     for (const auto &worker : goneWorkers) {
         EntryMap::accessor accessor;
         if (entries_.find(accessor, worker)) {
+            if (accessor->second != nullptr
+                && accessor->second->locationAdmissionVersion > snapshot.ringVersion) {
+                continue;
+            }
             if (accessor->second != nullptr) {
                 goneEntries.emplace_back(accessor->second);
             }

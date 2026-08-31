@@ -3082,6 +3082,7 @@ Status WorkerOcServiceGetImpl::QueryObjectLocations(
         master::ObjectLocationInfoPb location;
         location.set_object_key(meta.object_key());
         location.set_object_size(meta.data_size());
+        location.set_topology_version(queryMeta.topology_version());
         if (!meta.primary_address().empty()) {
             location.add_object_locations(meta.primary_address());
         }
@@ -3116,8 +3117,9 @@ Status WorkerOcServiceGetImpl::QueryPureMetadataGroup(const HostPort &masterAddr
         };
     auto rc = RedirectRetryWhenMetasMoving(request, response, query);
     RETURN_IF_NOT_OK(TranslateMetadataOwnerRpcFailure(workerMasterApi, rc, metadataRpcFailed));
-    queryMetas.insert(queryMetas.end(), response.mutable_query_metas()->begin(),
-                      response.mutable_query_metas()->end());
+    for (auto &queryMeta : *response.mutable_query_metas()) {
+        queryMetas.emplace_back(std::move(queryMeta));
+    }
     return QueryPureMetadataRedirects(response.info(), queryMetas);
 }
 
@@ -3147,8 +3149,9 @@ Status WorkerOcServiceGetImpl::QueryPureMetadataRedirects(
             };
         auto rc = RedirectRetryWhenMetasMoving(request, response, query);
         RETURN_IF_NOT_OK(TranslateMetadataOwnerRpcFailure(workerMasterApi, rc, metadataRpcFailed));
-        queryMetas.insert(queryMetas.end(), response.mutable_query_metas()->begin(),
-                          response.mutable_query_metas()->end());
+        for (auto &queryMeta : *response.mutable_query_metas()) {
+            queryMetas.emplace_back(std::move(queryMeta));
+        }
     }
     return Status::OK();
 }
