@@ -28,11 +28,16 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/timer.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
 namespace {
 
 constexpr size_t UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH = 12;
+constexpr size_t HEX_CHAR_COUNT_PER_BYTE = 2;
+constexpr size_t HEX_HIGH_NIBBLE_SHIFT = 4;
+constexpr uint8_t HEX_LOW_NIBBLE_MASK = 0x0f;
+constexpr char HEX_DIGITS[] = "0123456789abcdef";
 
 enum class GlobalSummaryTransition {
     QUARANTINE_APPLIED,
@@ -45,7 +50,8 @@ enum class GlobalSummaryTransition {
 struct GlobalSummaryChange {
     GlobalSummaryTransition transition;
     HostPort worker;
-    std::array<char, UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH + 1> incarnationPrefix;
+    std::array<uint8_t, UUID_SIZE> incarnationBytes;
+    size_t incarnationSize;
     uint64_t epoch;
     bool writable;
     UbAdmissionState state;
@@ -81,11 +87,10 @@ const char *GlobalSummaryTransitionName(GlobalSummaryTransition transition)
     return "unknown";
 }
 
-bool IsSameGlobalSummary(const UbHealthSummary &lhs, const UbHealthSummary &rhs)
+bool IsSameGlobalAdmissionView(const UbHealthSummary &lhs, const UbHealthSummary &rhs)
 {
-    return lhs.incarnation == rhs.incarnation && lhs.writable == rhs.writable && lhs.state == rhs.state
-           && lhs.reason == rhs.reason && lhs.lastStatusCode == rhs.lastStatusCode && lhs.epoch == rhs.epoch
-           && lhs.backoffLevel == rhs.backoffLevel && lhs.backoffDeadlineMs == rhs.backoffDeadlineMs;
+    return lhs.incarnation == rhs.incarnation && lhs.writable == rhs.writable && lhs.reason == rhs.reason
+           && lhs.lastStatusCode == rhs.lastStatusCode;
 }
 
 bool IsHardUnavailableFailure(UbFailureClass failureClass)
@@ -96,12 +101,36 @@ bool IsHardUnavailableFailure(UbFailureClass failureClass)
 
 GlobalSummaryChange CaptureGlobalSummaryChange(GlobalSummaryTransition transition, const UbHealthSummary &summary)
 {
-    std::array<char, UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH + 1> incarnationPrefix{};
-    std::copy_n(summary.incarnation.begin(),
-                std::min(summary.incarnation.size(), UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH),
-                incarnationPrefix.begin());
-    return GlobalSummaryChange{ transition, summary.worker, incarnationPrefix, summary.epoch, summary.writable,
-                                summary.state, summary.reason, summary.lastStatusCode };
+    std::array<uint8_t, UUID_SIZE> incarnationBytes{};
+    const auto capturedSize = std::min(summary.incarnation.size(), incarnationBytes.size());
+    std::copy_n(reinterpret_cast<const uint8_t *>(summary.incarnation.data()), capturedSize,
+                incarnationBytes.begin());
+    return GlobalSummaryChange{ transition, summary.worker, incarnationBytes, summary.incarnation.size(), summary.epoch,
+                                summary.writable, summary.state, summary.reason, summary.lastStatusCode };
+}
+
+std::array<char, UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH + 1> FormatIncarnationPrefix(
+    const GlobalSummaryChange &change)
+{
+    std::array<char, UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH + 1> prefix{};
+    if (change.incarnationSize == UUID_SIZE) {
+        std::array<char, UUID_STRING_BUFFER_SIZE> printableUuid{};
+        const auto rc = BytesUuidToString(change.incarnationBytes.data(), change.incarnationBytes.size(),
+                                          printableUuid.data(), printableUuid.size());
+        if (rc.IsOk()) {
+            std::copy_n(printableUuid.begin(), UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH, prefix.begin());
+            return prefix;
+        }
+    }
+
+    const auto bytesToEncode =
+        std::min(change.incarnationSize, (prefix.size() - 1) / HEX_CHAR_COUNT_PER_BYTE);
+    for (size_t i = 0; i < bytesToEncode; ++i) {
+        const auto outputOffset = i * HEX_CHAR_COUNT_PER_BYTE;
+        prefix[outputOffset] = HEX_DIGITS[change.incarnationBytes[i] >> HEX_HIGH_NIBBLE_SHIFT];
+        prefix[outputOffset + 1] = HEX_DIGITS[change.incarnationBytes[i] & HEX_LOW_NIBBLE_MASK];
+    }
+    return prefix;
 }
 
 }  // namespace
@@ -262,7 +291,7 @@ void PeerUbAdmission::ReplaceGlobalSummaries(const std::vector<UbHealthSummary> 
                     CaptureGlobalSummaryChange(GlobalSummaryTransition::QUARANTINE_APPLIED, summary));
             } else if (!current->second.writable && summary.writable) {
                 changes.emplace_back(CaptureGlobalSummaryChange(GlobalSummaryTransition::RECOVERY_APPLIED, summary));
-            } else if (!summary.writable && !IsSameGlobalSummary(current->second, summary)) {
+            } else if (!summary.writable && !IsSameGlobalAdmissionView(current->second, summary)) {
                 changes.emplace_back(CaptureGlobalSummaryChange(GlobalSummaryTransition::QUARANTINE_UPDATED, summary));
             }
         }
@@ -278,10 +307,11 @@ void PeerUbAdmission::ReplaceGlobalSummaries(const std::vector<UbHealthSummary> 
 
     const auto receiverForLog = receiver.Empty() ? std::string("unknown") : receiver.ToString();
     for (const auto &change : changes) {
+        const auto incarnationPrefix = FormatIncarnationPrefix(change);
         LOG(INFO) << "UB_HEALTH_SUMMARY action=global_summary_applied receiver=" << receiverForLog
                   << " target=" << change.worker
                   << " transition=" << GlobalSummaryTransitionName(change.transition)
-                  << " incarnation_prefix=" << change.incarnationPrefix.data() << " epoch=" << change.epoch
+                  << " incarnation_prefix=" << incarnationPrefix.data() << " epoch=" << change.epoch
                   << " writable=" << change.writable << " state_code=" << static_cast<int>(change.state)
                   << " reason_code=" << static_cast<int>(change.reason)
                   << " status_name=" << Status::StatusCodeName(change.lastStatusCode);

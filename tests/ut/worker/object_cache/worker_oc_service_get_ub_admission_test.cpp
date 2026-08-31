@@ -81,6 +81,28 @@ TEST(WorkerOcServiceGetUbAdmissionTest, UnavailableDataWorkerReadSourceFailsFast
     EXPECT_EQ(rc.GetCode(), StatusCode::K_URMA_DATA_WORKER_UNAVAILABLE);
 }
 
+TEST(WorkerOcServiceGetUbAdmissionTest, RemoteGetWritebackRejectsUnavailableTargetBeforeSend)
+{
+    PeerUbAdmission admission;
+    EXPECT_TRUE(WorkerWorkerOCServiceImpl::CheckRemoteGetWriteTarget(&admission, REMOTE_GET_ENDPOINT).IsOk());
+
+    UbHealthSummary summary;
+    summary.worker = REMOTE_GET_ENDPOINT;
+    summary.incarnation = "requester-incarnation";
+    summary.epoch = 1;
+    summary.writable = false;
+    summary.state = UbAdmissionState::UNAVAILABLE;
+    summary.reason = UbFailureClass::PORT_UNAVAILABLE_ERROR4;
+    summary.lastStatusCode = StatusCode::K_URMA_ERROR;
+    admission.ReplaceGlobalSummaries({ summary });
+
+    auto rc = WorkerWorkerOCServiceImpl::CheckRemoteGetWriteTarget(&admission, REMOTE_GET_ENDPOINT);
+
+    ASSERT_TRUE(rc.IsError());
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_URMA_WORKER_UNAVAILABLE);
+    EXPECT_TRUE(WorkerWorkerOCServiceImpl::CheckRemoteGetWriteTarget(nullptr, REMOTE_GET_ENDPOINT).IsOk());
+}
+
 TEST(WorkerOcServiceGetUbAdmissionTest, EmptyBatchResponsePreservesRequestError)
 {
     WorkerRequestManager requestManager;
