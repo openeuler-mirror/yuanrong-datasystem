@@ -222,17 +222,26 @@ def upload_launcher(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
 
 
 def start_procmon(pod, namespace, target_pid, remote_dir='/tmp',
-                  interval=1, timeout=30):
+                  interval=1, timeout=30, port=None):
     """Start procmon monitoring for a service process.
 
     Uses procmon.py --background for proper daemonization (os.fork +
     os.setsid). The parent prints the child PID to stdout and exits,
     so kubectl exec returns immediately. The child runs in a new session,
     fully detached from the kubectl exec session.
+
+    When ``port`` is set, procmon additionally monitors inbound/outbound
+    byte throughput on the service's listening port via ``ss -tin``
+    (aggregates bytes_sent/bytes_received across all ESTABLISHED sockets
+    on the port, diffs per sample → BytesIn/s + BytesOut/s). Useful for
+    coordinator monitoring where traffic on the listening port shows
+    worker connection activity.
     """
     cmd = (f'cd {remote_dir} && '
            f'python3 procmon.py --pid {target_pid} -i {interval} '
            f'--output resource_monitor.log --background')
+    if port:
+        cmd += f' --port {port}'
     try:
         result = kubectl_exec(pod['name'], namespace, cmd,
                               check=False, timeout=timeout)
@@ -458,7 +467,8 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
                 pid = find_pid_by_port(pod, namespace, port, process_name, timeout)
                 if pid:
                     procmon_pid = start_procmon(pod, namespace, pid,
-                                                procmon_remote_dir)
+                                                procmon_remote_dir,
+                                                port=port)
                     if procmon_pid:
                         log_info(f'  {pod_name} ({pod_ip}) -> procmon started '
                                  f'(pid={procmon_pid}, monitoring {process_name} '
@@ -482,11 +492,18 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
 
 
 def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
-                          remote_config_dir=None, timeout=DEFAULT_TIMEOUT):
+                          remote_config_dir=None, remote_dir=None,
+                          timeout=DEFAULT_TIMEOUT):
     """Collect log files from a single pod.
 
-    Also collects stdout.log from remote_config_dir if it exists
-    (standalone mode writes binary output to {remote_config_dir}/stdout.log).
+    Also collects stdout.log from ``remote_dir`` when that directory exists
+    (standalone mode writes the binary's combined stdout+stderr to
+    ``{remote_dir}/stdout.log``; ``start_service_standalone`` sets that
+    path explicitly, so ``remote_dir`` -- not ``remote_config_dir`` -- is
+    where the file actually lives). The directory-existence gate means
+    dscli-mode collects (which never create ``remote_dir``) skip stdout.log
+    silently without needing a ``--standalone`` flag: if the dir is absent
+    there is nothing to collect.
     """
     pod_name = pod['name']
     pod_ip = pod['ip']
@@ -553,20 +570,32 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
             except Exception:
                 pass
 
-        # Collect stdout.log from remote_config_dir (standalone mode writes
-        # binary output to {remote_config_dir}/stdout.log). Silently skip if
-        # not found — only exists when start_service_standalone was used.
-        if remote_config_dir:
-            stdout_path = f'{remote_config_dir}/stdout.log'
-            try:
-                result = kubectl_exec(pod_name, namespace,
-                                      f'base64 {stdout_path}', check=True, timeout=timeout)
-                content = base64.b64decode(result.stdout)
-                local_path = os.path.join(local_pod_dir, 'stdout.log')
-                with open(local_path, 'wb') as f:
-                    f.write(content)
-            except Exception:
-                pass
+        # Collect stdout.log from remote_dir (standalone mode writes the
+        # binary's combined stdout+stderr to {remote_dir}/stdout.log, NOT
+        # {remote_config_dir}/stdout.log -- start_service_standalone sets
+        # log_path = f'{remote_dir}/stdout.log' explicitly). Gate on
+        # `ls -d {remote_dir}` so a dscli-mode pod (which never creates
+        # remote_dir) skips silently instead of erroring; this is what
+        # lets the same `collect` subcommand serve both modes with no
+        # --standalone flag. If the dir exists but stdout.log is absent
+        # (binary hasn't written yet, or crashed before redirect), the
+        # base64 call fails and we skip silently too.
+        if remote_dir:
+            ls_remote = kubectl_exec(pod_name, namespace,
+                                     f'ls -d {remote_dir} 2>/dev/null',
+                                     check=False, timeout=timeout)
+            if ls_remote.returncode == 0:
+                stdout_path = f'{remote_dir}/stdout.log'
+                try:
+                    result = kubectl_exec(pod_name, namespace,
+                                          f'base64 {stdout_path}', check=True,
+                                          timeout=timeout)
+                    content = base64.b64decode(result.stdout)
+                    local_path = os.path.join(local_pod_dir, 'stdout.log')
+                    with open(local_path, 'wb') as f:
+                        f.write(content)
+                except Exception:
+                    pass
 
         return True
     except subprocess.TimeoutExpired:
@@ -578,8 +607,17 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
 
 
 def clean_pod(pod, namespace, log_dir, remote_config_dir, process_name,
-              timeout=DEFAULT_TIMEOUT):
-    """Kill the service process and clean logs in a single pod."""
+              remote_dir=None, timeout=DEFAULT_TIMEOUT):
+    """Kill the service process and clean logs in a single pod.
+
+    ``remote_dir`` (standalone mode only) holds the standalone binary,
+    ``lib/`` .so deps, and ``stdout.log``; when set it is removed entirely
+    so a subsequent deploy starts from a clean state instead of stacking
+    stale binaries, leftover .so variants, and appended stdout logs. When
+    ``None`` (dscli mode), only ``log_dir`` and ``resource_monitor.log`` are
+    touched -- the dscli install path installs into the package prefix, not
+    ``remote_dir``, so there is nothing of the deploy's own to remove.
+    """
     pod_name = pod['name']
     pod_ip = pod['ip']
     try:
@@ -591,6 +629,9 @@ def clean_pod(pod, namespace, log_dir, remote_config_dir, process_name,
         kubectl_exec(pod_name, namespace,
                      f'rm -f {remote_config_dir}/resource_monitor.log',
                      check=False, timeout=timeout)
+        if remote_dir:
+            kubectl_exec(pod_name, namespace, f'rm -rf {remote_dir}',
+                         check=False, timeout=timeout)
 
         log_info(f'  {pod_name} ({pod_ip}) -> OK')
         return True
@@ -750,8 +791,14 @@ def cmd_kill_impl(pods, namespace, process_name, label, timeout=DEFAULT_TIMEOUT)
 
 
 def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
-                     timeout=DEFAULT_TIMEOUT):
-    """Collect service logs from all pods."""
+                     remote_dir=None, timeout=DEFAULT_TIMEOUT):
+    """Collect service logs from all pods.
+
+    ``remote_dir`` (standalone mode) is where the binary's ``stdout.log``
+    lives; ``collect_logs_from_pod`` gates on its existence so a None value
+    (dscli mode, no ``--remote-dir`` passed) simply skips stdout.log
+    collection.
+    """
     log_dir, _ = read_remote_log_dir(namespace, pods, remote_config, timeout)
     if not log_dir:
         log_error('ERROR: log_dir not found in remote config')
@@ -764,19 +811,24 @@ def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
     def do_op(pod):
         return collect_logs_from_pod(pod, namespace, log_dir, local_dir,
                                      remote_config_dir=remote_config_dir,
-                                     timeout=timeout)
+                                     remote_dir=remote_dir, timeout=timeout)
     return do_for_all_pods(pods, do_op, f'Collecting {label}')
 
 
 def cmd_clean_impl(pods, namespace, remote_config, process_name, label,
-                   timeout=DEFAULT_TIMEOUT):
-    """Kill service processes and clean log directories across all pods."""
+                   remote_dir=None, timeout=DEFAULT_TIMEOUT):
+    """Kill service processes and clean log directories across all pods.
+
+    ``remote_dir`` (standalone mode) is removed entirely per pod to drop the
+    standalone binary, ``lib/`` .so deps, and ``stdout.log``. ``None`` keeps
+    the legacy dscli-mode behavior (clean only ``log_dir`` + resource_monitor.log).
+    """
     log_dir, _ = read_remote_log_dir(namespace, pods, remote_config, timeout)
     remote_config_dir = os.path.dirname(remote_config)
 
     def do_op(pod):
         return clean_pod(pod, namespace, log_dir, remote_config_dir,
-                         process_name, timeout=timeout)
+                         process_name, remote_dir=remote_dir, timeout=timeout)
     return do_for_all_pods(pods, do_op, f'Cleaning {label}')
 
 
@@ -953,7 +1005,8 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
     # Attach procmon (same logic as start_service dscli path)
     if enable_procmon:
         if upload_procmon(pod, namespace, procmon_remote_dir, timeout):
-            procmon_pid = start_procmon(pod, namespace, pid, procmon_remote_dir)
+            procmon_pid = start_procmon(pod, namespace, pid, procmon_remote_dir,
+                                        port=port)
             if procmon_pid:
                 log_info(f'  {name} ({pod_ip}) -> procmon started '
                          f'(pid={procmon_pid}, monitoring pid={pid})')
@@ -1103,15 +1156,39 @@ def cmd_exec_shared(args, pods, timeout=DEFAULT_TIMEOUT):
 
 
 def cmd_collect_shared(args, pods, label, timeout=DEFAULT_TIMEOUT):
-    """Collect service logs from pods."""
+    """Collect service logs from pods.
+
+    Forwards ``args.remote_dir`` (when present) so standalone-mode collects
+    pick up ``stdout.log`` from the binary's install dir; the role CLIs
+    default ``--remote-dir`` to the same value ``install`` / ``deploy``
+    use, so a collect after a default deploy needs no extra flags. Falls
+    back to ``None`` if the attr is missing (older callers, test stubs).
+    """
+    remote_dir = getattr(args, 'remote_dir', None)
     return cmd_collect_impl(pods, args.namespace, args.remote_config,
-                            args.output, label, timeout)
+                            args.output, label, remote_dir=remote_dir,
+                            timeout=timeout)
 
 
-def cmd_clean_shared(args, pods, process_name, label, timeout=DEFAULT_TIMEOUT):
-    """Kill service processes and clean log directories."""
+def cmd_clean_shared(args, pods, process_name, process_name_standalone, label,
+                    timeout=DEFAULT_TIMEOUT):
+    """Kill service processes and clean log directories.
+
+    Standalone mode (``--standalone``): kill ``process_name_standalone``
+    (e.g. ``worker_test`` / ``coordinator_test``) and remove
+    ``args.remote_dir`` so a re-deploy does not stack a new binary on top of
+    a running stale one. Non-standalone: kill ``process_name`` (e.g.
+    ``datasystem_worker``) and clean only ``log_dir`` + resource_monitor.log
+    (dscli installs into the package prefix, not ``remote_dir``).
+    """
+    if getattr(args, 'standalone', False):
+        proc = process_name_standalone
+        remote_dir = getattr(args, 'remote_dir', None)
+    else:
+        proc = process_name
+        remote_dir = None
     return cmd_clean_impl(pods, args.namespace, args.remote_config,
-                          process_name, label, timeout)
+                          proc, label, remote_dir=remote_dir, timeout=timeout)
 
 
 def cmd_kill_shared(args, pods, process_name_standalone, label,

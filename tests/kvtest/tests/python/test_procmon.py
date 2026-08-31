@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch, mock_open
 # Make procmon importable
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'tools'))
-from procmon import find_pid, read_proc_stat, read_proc_mem_breakdown, read_tcp_attempt_fails_stats, format_mb
+from procmon import find_pid, read_proc_stat, read_proc_mem_breakdown, read_tcp_attempt_fails_stats, read_port_traffic, format_mb
 
 
 class TestFindPid(unittest.TestCase):
@@ -176,6 +176,139 @@ class TestReadTcpAttemptFailsStats(unittest.TestCase):
         fails, opens = read_tcp_attempt_fails_stats()
         self.assertIsNone(fails)
         self.assertIsNone(opens)
+
+
+class TestReadPortTraffic(unittest.TestCase):
+    """read_port_traffic: parses `ss -tin` output, aggregates
+    bytes_sent/bytes_received across all sockets on the port.
+
+    The `ss -tin 'sport = :PORT'` output is multi-line per socket: a header
+    line (State/Recv-Q/Send-Q/Local/Peer) followed by indented TCP internal
+    info lines. Real iproute2 ``ss -ti`` uses ``key:value`` colon-separated
+    fields (e.g. ``bytes_sent:16703 bytes_received:1449``); the regex
+    ``[:\\s]+`` matches both colon and whitespace so the parser works on the
+    dominant colon format and is tolerant of whitespace-only variants.
+    """
+
+    # Realistic ss -tin output: two ESTAB sockets on port 31511, each with
+    # colon-separated key:value TCP internal fields. The LISTEN socket (if
+    # present) has no byte counters and is naturally excluded by the regex.
+    _SS_OUTPUT = (
+        "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port   Process\n"
+        "ESTAB  0      0      10.0.0.1:31511      10.0.0.2:54321\n"
+        "    cubic wscale:7,7 rto:204 rtt:0.1/0.05 mss:1448 pmtu:1500 rcvmss:1404\n"
+        "    bytes_sent:1048576 bytes_ack:1048576 bytes_received:524288 segs_out:1024 segs_in:512\n"
+        "    send 8388.6Kbps rcv_rtt:0.1ms rcv_space:14600\n"
+        "ESTAB  0      0      10.0.0.1:31511      10.0.0.3:54322\n"
+        "    cubic wscale:7,7 rto:204 rtt:0.1/0.05 mss:1448 pmtu:1500 rcvmss:1404\n"
+        "    bytes_sent:2097152 bytes_ack:2097152 bytes_received:131072 segs_out:2048 segs_in:128\n"
+    )
+
+    @patch('procmon.subprocess.run')
+    def test_aggregates_bytes_across_multiple_sockets(self, mock_run):
+        # Two ESTAB sockets: sent=1M+2M=3M, recv=512K+128K=640K.
+        mock_run.return_value = MagicMock(returncode=0, stdout=self._SS_OUTPUT)
+        sent, recv = read_port_traffic(31511)
+        self.assertEqual(sent, 1048576 + 2097152)
+        self.assertEqual(recv, 524288 + 131072)
+
+    @patch('procmon.subprocess.run')
+    def test_single_socket_colon_format(self, mock_run):
+        output = (
+            "ESTAB  0  0  10.0.0.1:31511  10.0.0.2:54321\n"
+            "    cubic rtt:0.1ms\n"
+            "    bytes_sent:100 bytes_received:200\n"
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=output)
+        sent, recv = read_port_traffic(31511)
+        self.assertEqual(sent, 100)
+        self.assertEqual(recv, 200)
+
+    @patch('procmon.subprocess.run')
+    def test_whitespace_format_also_supported(self, mock_run):
+        # Defensive: if some iproute2 build uses whitespace instead of colon,
+        # the parser must still work. This pins the [:\s]+ regex against
+        # regression to \s+ (which would silently no-op on real colon output).
+        output = (
+            "ESTAB  0  0  10.0.0.1:31511  10.0.0.2:54321\n"
+            "    bytes_sent 100 bytes_received 200\n"
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=output)
+        sent, recv = read_port_traffic(31511)
+        self.assertEqual(sent, 100)
+        self.assertEqual(recv, 200)
+
+    @patch('procmon.subprocess.run')
+    def test_no_sockets_returns_none(self, mock_run):
+        # Port filter matches zero sockets (server not listening, or no
+        # ESTAB connections yet). ss returns rc=0 but empty body (just the
+        # header line, no byte fields). Must return (None, None) so the
+        # caller skips the rate computation, not (0, 0) which would
+        # produce a misleading 0.0MB/s line.
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        sent, recv = read_port_traffic(31511)
+        self.assertIsNone(sent)
+        self.assertIsNone(recv)
+
+    @patch('procmon.subprocess.run')
+    def test_ss_missing_returns_none(self, mock_run):
+        # ss binary not installed in the container. FileNotFoundError is
+        # caught; returns (None, None) so procmon degrades to no-traffic
+        # mode without crashing the whole monitoring loop.
+        mock_run.side_effect = FileNotFoundError('ss')
+        sent, recv = read_port_traffic(31511)
+        self.assertIsNone(sent)
+        self.assertIsNone(recv)
+
+    @patch('procmon.subprocess.run')
+    def test_ss_nonzero_rc_returns_none(self, mock_run):
+        # ss exits non-zero (insufficient privileges, invalid port filter
+        # syntax, etc.). Treat as no data, not an error — procmon's
+        # sample loop must keep going so CPU/MEM/FD stats are not lost.
+        mock_run.return_value = MagicMock(returncode=1, stdout='', stderr='error')
+        sent, recv = read_port_traffic(31511)
+        self.assertIsNone(sent)
+        self.assertIsNone(recv)
+
+    @patch('procmon.subprocess.run')
+    def test_ss_timeout_returns_none(self, mock_run):
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=['ss'], timeout=5)
+        sent, recv = read_port_traffic(31511)
+        self.assertIsNone(sent)
+        self.assertIsNone(recv)
+
+    @patch('procmon.subprocess.run')
+    def test_listen_socket_without_counters_excluded(self, mock_run):
+        # The LISTEN socket appears in ss -tin output but has no
+        # bytes_sent/bytes_received (it never carries traffic, only
+        # accepts connections). The regex naturally excludes it because
+        # the field names are absent from the LISTEN socket's info lines.
+        # This test pins that behavior: only ESTAB sockets contribute.
+        output = (
+            "LISTEN 0  128  0.0.0.0:31511  0.0.0.0:*\n"
+            "    cubic\n"
+            "ESTAB  0  0  10.0.0.1:31511  10.0.0.2:54321\n"
+            "    bytes_sent:500 bytes_received:300\n"
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=output)
+        sent, recv = read_port_traffic(31511)
+        # Only the ESTAB socket's 500/300 counted; LISTEN socket ignored.
+        self.assertEqual(sent, 500)
+        self.assertEqual(recv, 300)
+
+    @patch('procmon.subprocess.run')
+    def test_passes_port_filter_to_ss(self, mock_run):
+        # Verify the ss command includes the port filter so the right
+        # sockets are selected. Pins the `ss -tin 'sport = :PORT'` form
+        # (same filter syntax as deploy_common.find_pid_by_port).
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        read_port_traffic(31511)
+        call_args = mock_run.call_args[0]
+        cmd = call_args[0]
+        self.assertEqual(cmd[0], 'ss')
+        self.assertIn('-tin', cmd)
+        self.assertIn('sport = :31511', cmd)
 
 
 class TestFormatMb(unittest.TestCase):

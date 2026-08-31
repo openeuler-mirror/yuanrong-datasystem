@@ -17,6 +17,7 @@ HTTP API:
 """
 import argparse
 import json
+import logging
 import os
 import signal
 import sys
@@ -25,6 +26,67 @@ import time
 from dataclasses import dataclass, field
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+
+
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+# Two-stream design mirrors deploy_common.py: stdout logger carries
+# request-level info lines (register/heartbeat/discover/...); stderr logger
+# carries startup failures (bind/fork) that must be visible to ``kubectl
+# exec`` BEFORE ``_daemonize`` redirects the fds. In ``--background`` mode,
+# ``_daemonize`` does ``os.dup2(log_fd, 1)`` and ``os.dup2(log_fd, 2)``, so
+# both streams land in the ``--log`` file in the child; the parent's stderr
+# stays the original terminal/pipe so kubectl exec sees bind/fork errors
+# directly. Format includes a timestamp (ISO8601, seconds) because this is a
+# long-running server log, not CLI output -- deploy_common uses bare
+# ``%(message)s`` for CLI greps, but a server log needs ordering evidence.
+
+_stdout_logger = logging.getLogger('jf_mock.stdout')
+_stderr_logger = logging.getLogger('jf_mock.stderr')
+for _lg in (_stdout_logger, _stderr_logger):
+    _lg.handlers = []
+    _lg.propagate = False
+
+_log_fmt = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%Y-%m-%dT%H:%M:%S')
+
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setFormatter(_log_fmt)
+_stdout_logger.addHandler(_stdout_handler)
+_stdout_logger.setLevel(logging.INFO)
+
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setFormatter(_log_fmt)
+_stderr_logger.addHandler(_stderr_handler)
+_stderr_logger.setLevel(logging.WARNING)
+
+
+def _log(msg, *args):
+    """Info-level log to stdout (redirected to ``--log`` file in background).
+
+    Drop-in for ``print(f'[{ts}] {msg}')``. Thread-safe: ``logging.Handler``
+    has its own lock, so the HTTP handler thread and the TTL sweeper thread
+    can call this concurrently without interleaving partial lines. The
+    registry lock is NOT held while logging (``_remove_expired_locked``
+    returns the expired list so callers log outside the lock).
+    """
+    if args:
+        _stdout_logger.info(msg, *args)
+    else:
+        _stdout_logger.info(msg)
+
+
+def _log_error(msg, *args):
+    """Error-level log to stderr (visible to ``kubectl exec`` before redirect).
+
+    Used for startup failures (bind/fork) that the caller must see to
+    understand why the server did not come up. After ``_daemonize`` redirects
+    fd 2, these also land in the ``--log`` file alongside ``_log`` lines.
+    """
+    if args:
+        _stderr_logger.error(msg, *args)
+    else:
+        _stderr_logger.error(msg)
 
 
 @dataclass
@@ -112,9 +174,13 @@ class JFRegistry:
 
     def discover(self, service):
         with self._lock:
-            self._remove_expired_locked()
+            expired = self._remove_expired_locked()
             instances = self._services.get(service, [])
-            return [inst.address for inst in instances if self._is_alive_locked(inst)]
+            alive = [inst.address for inst in instances if self._is_alive_locked(inst)]
+        for service_name, address, ttl in expired:
+            _log(f'expire service={service_name} address={address} '
+                 f'reason=ttl_expired({int(ttl)}s)')
+        return alive
 
     def get_events(self, service_filter=None):
         with self._lock:
@@ -134,7 +200,15 @@ class JFRegistry:
         return (time.time() - inst.last_heartbeat) <= inst.ttl_seconds
 
     def _remove_expired_locked(self):
+        """Drop expired instances, return [(service, address, ttl_seconds)].
+
+        Returns the expired list so the caller can ``_log`` each expiry
+        OUTSIDE the registry lock (``_log`` does I/O via ``print``; holding
+        the registry lock across I/O is fine for a mock but returning the
+        list keeps the locked section tight and the log path lock-free).
+        """
         now = time.time()
+        expired = []
         for service, instances in list(self._services.items()):
             alive = []
             for inst in instances:
@@ -143,15 +217,20 @@ class JFRegistry:
                         service, inst.address, "expire", now,
                         f"ttl_expired({int(inst.ttl_seconds)}s)"
                     ))
+                    expired.append((service, inst.address, inst.ttl_seconds))
                 else:
                     alive.append(inst)
             self._services[service] = alive
+        return expired
 
     def ttl_sweeper_loop(self):
         while self._running:
             time.sleep(1)
             with self._lock:
-                self._remove_expired_locked()
+                expired = self._remove_expired_locked()
+            for service_name, address, ttl in expired:
+                _log(f'expire service={service_name} address={address} '
+                     f'reason=ttl_expired({int(ttl)}s) (sweeper)')
 
     def stop(self):
         self._running = False
@@ -191,57 +270,79 @@ class Handler(BaseHTTPRequestHandler):
             ttl = body.get("ttl", None)
             if not service or port <= 0:
                 self._send_json(400, {"ok": False, "error": "service and port required"})
+                _log(f'register 400 from={client_ip} reason=missing_service_or_port '
+                     f'service={service!r} port={port}')
                 return
             gen = registry.register(service, client_ip, port, ttl)
             self._send_json(200, {"ok": True, "generation": gen})
+            _log(f'register 200 from={client_ip} service={service} port={port} '
+                 f'ttl={ttl} gen={gen}')
 
         elif path == "/heartbeat":
             service = body.get("service", "")
             port = int(body.get("port", 0))
             if not service or port <= 0:
                 self._send_json(400, {"ok": False, "error": "service and port required"})
+                _log(f'heartbeat 400 from={client_ip} reason=missing_service_or_port '
+                     f'service={service!r} port={port}')
                 return
             ok, result = registry.heartbeat(service, client_ip, port)
             if ok:
                 self._send_json(200, {"ok": True, **result})
+                _log(f'heartbeat 200 from={client_ip} service={service} port={port} '
+                     f'remaining_ttl={result.get("remaining_ttl")}')
             else:
                 self._send_json(404, {"ok": False, "error": result})
+                _log(f'heartbeat 404 from={client_ip} service={service} port={port} '
+                     f'reason={result}')
 
         elif path == "/unregister":
             service = body.get("service", "")
             port = int(body.get("port", 0))
             if not service or port <= 0:
                 self._send_json(400, {"ok": False, "error": "service and port required"})
+                _log(f'unregister 400 from={client_ip} reason=missing_service_or_port '
+                     f'service={service!r} port={port}')
                 return
-            registry.unregister(service, client_ip, port)
+            removed = registry.unregister(service, client_ip, port)
             self._send_json(200, {"ok": True})
+            _log(f'unregister 200 from={client_ip} service={service} port={port} '
+                 f'removed={removed}')
 
         else:
             self._send_json(404, {"ok": False, "error": "not found"})
+            _log(f'POST 404 from={client_ip} path={path} reason=unknown_endpoint')
 
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        client_ip = self.client_address[0]
 
         if path.startswith("/discover/"):
             service = path[len("/discover/"):]
             instances = registry.discover(service)
             self._send_json(200, {"instances": instances})
+            _log(f'discover 200 from={client_ip} service={service} '
+                 f'instances={len(instances)}')
 
         elif path == "/events":
             qs = parse_qs(parsed.query)
             svc = (qs.get("service") or [None])[0]
             events = registry.get_events(svc)
             self._send_json(200, events)
+            _log(f'events 200 from={client_ip} service_filter={svc} '
+                 f'count={len(events)}')
 
         elif path == "/health":
             self._send_json(200, {"ok": True})
+            _log(f'health 200 from={client_ip}')
 
         else:
             self._send_json(404, {"ok": False, "error": "not found"})
+            _log(f'GET 404 from={client_ip} path={path} reason=unknown_endpoint')
 
     def log_message(self, fmt, *args):
-        pass  # suppress default logging
+        pass  # suppress default BaseHTTPRequestHandler access logging; _log covers it
 
 
 def _daemonize(log_path=None):
@@ -264,11 +365,13 @@ def _daemonize(log_path=None):
         pid = os.fork()
     except OSError as e:
         os.close(devnull)
-        print(f'mock_jf_server: fork failed: {e}', file=sys.stderr, flush=True)
+        _log_error(f'mock_jf_server: fork failed: {e}')
         sys.exit(1)
 
     if pid > 0:
         # Parent: print PID and exit so kubectl exec returns immediately.
+        # This is a PROTOCOL output (deploy_jf._start_jf_mock parses it as
+        # the child PID), not a log -- must stay as bare print, not _log.
         print(pid, flush=True)
         os._exit(0)
 
@@ -316,8 +419,7 @@ def main():
     try:
         server = HTTPServer(("0.0.0.0", args.port), Handler)
     except OSError as e:
-        print(f"mock_jf_server: failed to bind port {args.port}: {e}",
-              file=sys.stderr, flush=True)
+        _log_error(f"mock_jf_server: failed to bind port {args.port}: {e}")
         sys.exit(1)
 
     if args.background:
@@ -329,9 +431,9 @@ def main():
     # must be started here, not before _daemonize().
     sweeper = threading.Thread(target=registry.ttl_sweeper_loop, daemon=True)
     sweeper.start()
+    _log(f'JF mock server listening on 0.0.0.0:{args.port} '
+         f'(ttl_default={args.ttl_default}) sweeper started')
 
-    print(f"JF mock server listening on 0.0.0.0:{args.port} "
-          f"(ttl_default={args.ttl_default})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -339,6 +441,7 @@ def main():
     finally:
         registry.stop()
         server.server_close()
+        _log('JF mock server stopped')
 
 
 if __name__ == "__main__":

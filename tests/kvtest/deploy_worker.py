@@ -268,8 +268,14 @@ def cmd_collect(args, pods):
 
 
 def cmd_clean(args, pods):
-    """Kill workers and clean log directories."""
-    return cmd_clean_shared(args, pods, PROCESS_NAME, 'worker logs', args.timeout)
+    """Kill workers and clean log directories.
+
+    Standalone mode: kill worker_test and rm -rf the remote_dir holding the
+    standalone binary + .so + stdout.log so a re-deploy starts clean instead
+    of stacking a new binary on a running stale one.
+    """
+    return cmd_clean_shared(args, pods, PROCESS_NAME, PROCESS_NAME_STANDALONE,
+                            'worker logs', args.timeout)
 
 
 def cmd_install(args, pods):
@@ -388,12 +394,22 @@ def main():
                                 help='Config path inside pod (default: /tmp/worker.config)')
     parser_collect.add_argument('-o', '--output', default='collected_worker_logs',
                                 help='Local output directory (default: collected_worker_logs)')
+    parser_collect.add_argument('--remote-dir', default='/tmp/ds_worker',
+                                help='Remote standalone-binary dir; stdout.log is '
+                                     'collected from here when the dir exists '
+                                     '(default: /tmp/ds_worker, must match install)')
 
     # Clean subcommand
     parser_clean = subparsers.add_parser('clean', parents=[parent_parser],
                                          help='Kill workers and clean log directories')
     parser_clean.add_argument('--remote-config', default='/tmp/worker.config',
                               help='Config path inside pod (default: /tmp/worker.config)')
+    parser_clean.add_argument('-S', '--standalone', action='store_true', default=False,
+                              help='Kill worker_test and remove --remote-dir '
+                                   '(standalone mode; must match install --remote-dir)')
+    parser_clean.add_argument('--remote-dir', default='/tmp/ds_worker',
+                              help='Remote directory holding the standalone binary '
+                                   '(default: /tmp/ds_worker, must match install)')
 
     # Install subcommand
     parser_install = subparsers.add_parser('install', parents=[parent_parser],

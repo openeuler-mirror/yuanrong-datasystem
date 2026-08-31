@@ -666,10 +666,13 @@ JF mock 运行在独立 pod 中，需在所有 Coordinator/Worker/Client 启动�
 
 | 命令 | 参数 | 行为 | 返回 |
 |---|---|---|---|
-| `start` | `--port 9999` `--ttl-default 30` `--namespace default` `--prefix jf-pod` | 创建/复用 pod，拷贝 `mock_jf_server.py`，`nohup python3 mock_jf_server.py --port 9999 &` | JF 地址 `pod_ip:9999` |
+| `start` | `--port 9999` `--ttl-default 30` `--namespace default` `--prefix jf-pod` | 创建/复用 pod，拷贝 `mock_jf_server.py`，`--background --log` 启动（端口先绑定后 fork，父进程打印 PID 退出） | JF 地址 `pod_ip:9999` |
 | `stop` | `--namespace` `--prefix` | `pkill -f mock_jf_server`，等待退出 | exit code |
 | `check` | `--namespace` `--prefix` | `pgrep -f mock_jf_server` | 存活/不存活 |
-| `clean` | `--namespace` `--prefix` | kill + 删除 pod 内 mock 文件 | -- |
+| `clean` | `--namespace` `--prefix` `--remote-dir /tmp/jf_mock` | kill + `rm -rf {remote_dir}` | -- |
+| `collect` | `--namespace` `--prefix` `--remote-dir /tmp/jf_mock` `-o collected_jf_logs` | `ls -d {remote_dir}` 存在性门控 → `ls *.log *.txt` → `base64` 每个文件到 `{output}/{pod}/`；目录不存在静默跳过 | exit code |
+
+> **jf_mock 日志可定位性**：`mock_jf_server.py` 在每个接口调用（register/heartbeat/unregister/discover/events/health/404）和 TTL 过期时通过 `_log` 写一行 `[ISO8601] <msg>` 到 stdout；`--background` 模式下 `_daemonize` 把 stdout 重定向到 `--log` 指定的 `jf_mock.log`，所以 `collect` 能把每次请求的审计行拉回本地排查。日志在 registry 锁外打印（`_remove_expired_locked` 返回过期列表，调用方在锁外 `_log`），保证 locked section 紧凑。
 
 **快速拉起流程**：
 

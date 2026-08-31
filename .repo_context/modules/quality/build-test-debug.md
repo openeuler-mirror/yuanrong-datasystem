@@ -344,6 +344,56 @@ Backed by `tests/kvtest/deploy_coordinator.py`, `deploy_worker.py`, `deploy_comm
   `enable_procmon` (fallback `False`, `gen-config` writes `False`); opt in explicitly with `--enable-procmon` /
   `"enable_procmon": true`. `deploy_common.discover_nodes` now sorts by node name so the same helper serves
   `deploy_pods` percentage distribution and `deploy_coordinator` round-robin spread deterministically.
+- `deploy_common.clean_pod` / `cmd_clean_impl` / `cmd_clean_shared` form the clean pipeline shared by
+  `deploy_worker.py cmd_clean` and `deploy_coordinator.py cmd_clean`. Both role CLIs now accept
+  `-S/--standalone` + `--remote-dir` on the `clean` subcommand; under `--standalone`, `cmd_clean_shared`
+  switches the kill target from the dscli binary name (`datasystem_worker` / `datasystem_coordinator`) to the
+  standalone test binary name (`worker_test` / `coordinator_test`) and passes `args.remote_dir` through so
+  `clean_pod` issues `rm -rf {remote_dir}` after the `log_dir` + `resource_monitor.log` cleanups. Without
+  `--standalone`, `remote_dir` is left `None` so dscli-mode clean does not touch the package prefix. This
+  closes the silent-staleness hole where a re-deploy stacked a new binary on a running stale one and
+  `find_pid_by_port` returned the old PID; the `--remote-dir` default matches `install` / `deploy` so a
+  clean after a default deploy needs no extra flags. Covered by `test_deploy_common.py`
+  (`TestCleanPod`, `TestCmdCleanShared`) and `test_deploy_worker.py` / `test_deploy_coordinator.py`
+  (`TestCmdClean` / `TestCmdWiring.test_cmd_clean_*`).
+- `deploy_common.collect_logs_from_pod` / `cmd_collect_impl` / `cmd_collect_shared` form the collect pipeline
+  shared by `deploy_worker.py cmd_collect` and `deploy_coordinator.py cmd_collect`. Both role CLIs now accept
+  `--remote-dir` on `collect` (no `-S` flag) defaulting to the role's install dir (`/tmp/ds_worker` /
+  `/tmp/ds_coordinator`); `collect_logs_from_pod` gates stdout.log collection on `ls -d {remote_dir}`
+  succeeding, so a dscli-mode pod (which never creates `remote_dir`) skips stdout.log silently while a
+  standalone-mode pod (where `start_service_standalone` writes `{remote_dir}/stdout.log`) gets it collected.
+  This fixes the prior bug where the code looked for `{remote_config_dir}/stdout.log` (= `/tmp/stdout.log`)
+  and never matched the path the launcher actually writes. `cmd_collect_shared` reads `args.remote_dir` via
+  `getattr` so older callers without the attr keep working. Covered by `test_deploy_common.py`
+  (`TestCollectLogsFromPod`, `TestCmdCollectShared`).
+- `deploy_jf.py` is the JF mock pod lifecycle CLI (deploy/start/stop/check/clean/collect). It is
+  self-contained (uses its own `_kubectl_exec`, not the shared `deploy_common` primitives) because the JF
+  mock is a single Python script (`mock_jf_server.py`) with no whl, no dscli, and no per-pod config file.
+  `cmd_collect` (new) mirrors `deploy_common.collect_logs_from_pod`'s existence-gate pattern: `ls -d
+  {remote_dir}` first, then `ls *.log *.txt`, then `base64` each file into `{output}/{pod_name}/`; skips
+  silently if the dir is absent (never deployed or already cleaned). Collects `jf_mock.log` (the
+  `--background --log` redirect target) and any `stdout.log` if present (parity with worker/coordinator
+  collect). Covered by `test_deploy_jf.py` (`TestCmdCollect`: files-present / dir-missing / no-files /
+  base64-failure-skip / no-pods).
+- `src/mock_jf_server.py` (the JF mock daemon) now emits one log line per API call into the `--log` file
+  (which `deploy_jf.py collect` ships back). Uses a two-stream ``logging`` setup mirroring
+  ``deploy_common.py``'s pattern: ``_stdout_logger`` (``jf_mock.stdout``) carries INFO-level request
+  logs to stdout (redirected to ``jf_mock.log`` by ``_daemonize``'s ``os.dup2`` on fd 1 in
+  ``--background`` mode); ``_stderr_logger`` (``jf_mock.stderr``) carries ERROR-level startup failures
+  (bind/fork) to stderr so ``kubectl exec`` sees them before the redirect. Format
+  ``[%(asctime)s] %(message)s`` (``datefmt='%Y-%m-%dT%H:%M:%S'``) includes a timestamp because this is
+  a long-running server log, not CLI output (deploy_common uses bare ``%(message)s`` for CLI greps).
+  ``_log(msg)`` is a drop-in for the old ``print(f'[{ts}] {msg}')``; ``_log_error(msg)`` replaces
+  ``print(..., file=sys.stderr, flush=True)``. The only remaining ``print`` is ``print(pid, flush=True)``
+  in ``_daemonize``'s parent path -- that is a PROTOCOL output parsed by ``deploy_jf._start_jf_mock``
+  as the child PID, so it must stay bare (a ``_log``-formatted line would not be a pure digit).
+  Logged endpoints: ``register`` (200 + gen, 400 missing field), ``heartbeat`` (200 + remaining_ttl,
+  404 not found/expired, 400 missing field), ``unregister`` (200 + removed count, 400), ``discover``
+  (200 + instance count), ``events`` (200 + count), ``health`` (200), unknown-path 404, and TTL expire
+  (service + address + reason). ``_remove_expired_locked`` returns the expired list so callers
+  (``discover``, ``ttl_sweeper_loop``) log outside the registry lock (keeps the locked section tight).
+  Covered by ``test_mock_jf_server.py`` (``TestRequestLogging``: integration test that starts the
+  server, hits each endpoint, reads the log, and substring-checks for each action keyword).
 
 ## Environment Notes
 
