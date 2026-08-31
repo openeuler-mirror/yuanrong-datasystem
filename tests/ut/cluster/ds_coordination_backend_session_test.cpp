@@ -802,8 +802,8 @@ TEST(DsCoordinationBackendSessionTest, ResetReplacesTheWholeCommittedBatch)
     backend.HandleWatchEvent(COORDINATOR_A, 1, std::move(reset));
 
     EXPECT_EQ(resetCount, 2);
-    EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_A, 1));
-    EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_A, 2));
+    EXPECT_FALSE(backend.OwnsWatchIdentity(COORDINATOR_A, 1));
+    EXPECT_FALSE(backend.OwnsWatchIdentity(COORDINATOR_A, 2));
     EXPECT_EQ(proxy.WatchCalls().size(), 2UL);
     proxy.SetPutCoordinatorId(COORDINATOR_A);
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
@@ -843,7 +843,7 @@ TEST(DsCoordinationBackendSessionTest, MembershipIdentityChangeRewatchesAndDrops
 
     ASSERT_EQ(membershipIds.size(), 1UL);
     EXPECT_EQ(membershipIds[0], COORDINATOR_B);
-    EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_A, 1));
+    EXPECT_FALSE(backend.OwnsWatchIdentity(COORDINATOR_A, 1));
     std::vector<std::pair<std::string, std::string>> entries;
     ASSERT_TRUE(backend.GetAll("/datasystem/c/topology", entries).IsOk());
     EXPECT_FALSE(backend.OwnsWatchIdentity(COORDINATOR_A, 1));
@@ -1967,6 +1967,8 @@ TEST(DsCoordinationBackendSessionTest, InvalidatedPlansRebuildOnTheNextExactRead
 
     workerBackend.InvalidateWatches();
     controllerBackend.InvalidateWatches();
+    EXPECT_FALSE(workerBackend.OwnsWatchIdentity(COORDINATOR_A, 1));
+    EXPECT_FALSE(controllerBackend.OwnsWatchIdentity(COORDINATOR_A, 3));
     std::vector<std::pair<std::string, std::string>> entries;
     ASSERT_TRUE(workerBackend.GetAll("/datasystem/c/topology", entries).IsOk());
     ASSERT_TRUE(controllerBackend.GetAll("/datasystem/c/topology", entries).IsOk());

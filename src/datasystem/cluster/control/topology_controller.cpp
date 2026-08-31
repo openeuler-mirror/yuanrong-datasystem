@@ -18,7 +18,6 @@
 
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
-#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/cluster/runtime/topology_role_watch_plan.h"
@@ -46,17 +45,6 @@ constexpr auto ACTIVE_FAILURE_DIRECT_PROBE_INTERVAL = std::chrono::milliseconds(
 constexpr uint32_t MIN_ACTIVE_FAILURE_UNREACHABLE_PROBES = 2;
 constexpr size_t MAX_ACTIVE_FAILURE_PROBES_PER_ROUND = 128;
 constexpr size_t TWO_WORKER_CLUSTER_SIZE = 2;
-
-Status BuildWatchedTopology(const CoordinationEvent &event, std::shared_ptr<const TopologySnapshot> &snapshot)
-{
-    TopologyState state;
-    RETURN_IF_NOT_OK(TopologyRepositoryCodec::DecodeTopology(event.value, state));
-    std::string canonical;
-    RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeTopology(state, canonical));
-    std::string digest;
-    RETURN_IF_NOT_OK(Hasher().GetSha256Hex(canonical, digest));
-    return TopologySnapshot::Create(std::move(state), event.revision, std::move(digest), snapshot);
-}
 
 void CollectTopologyMemberships(const std::vector<MembershipRecord> &memberships,
                                 const TopologySnapshot &topology,
@@ -537,7 +525,7 @@ Status TopologyController::ApplyExternalEvent(const CoordinationEvent &event)
             return Status::OK();
         }
         std::shared_ptr<const TopologySnapshot> candidate;
-        RETURN_IF_NOT_OK(BuildWatchedTopology(event, candidate));
+        RETURN_IF_NOT_OK(TopologyReader::BuildFromEncodedTopology(event.value, event.revision, candidate));
         RETURN_IF_NOT_OK(PublishExternalTopology(std::move(candidate), false));
         topologyEventRevision_ = event.revision;
         return Status::OK();

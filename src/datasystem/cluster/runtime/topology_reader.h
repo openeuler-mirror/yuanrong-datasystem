@@ -10,6 +10,7 @@
 #define DATASYSTEM_CLUSTER_RUNTIME_TOPOLOGY_READER_H
 
 #include <memory>
+#include <string>
 
 #include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/cluster/repository/topology_repository.h"
@@ -53,7 +54,20 @@ public:
     Status ReadIfChanged(int32_t timeoutMs, int64_t knownAuthorityRevision,
                          std::shared_ptr<const TopologySnapshot> &snapshot, bool &unchanged) const;
 
+    /**
+     * @brief Validate an encoded complete topology and build an immutable Snapshot.
+     * @param[in] value Complete encoded topology value.
+     * @param[in] authorityRevision Authority revision carried with the value.
+     * @param[out] snapshot Snapshot unchanged on failure.
+     * @return Decode, digest, or Snapshot validation status.
+     */
+    static Status BuildFromEncodedTopology(const std::string &value, int64_t authorityRevision,
+                                           std::shared_ptr<const TopologySnapshot> &snapshot);
+
 private:
+    static Status BuildFromState(TopologyState state, int64_t authorityRevision,
+                                 std::shared_ptr<const TopologySnapshot> &snapshot);
+
     TopologyRepository &repository_;
 };
 

@@ -318,6 +318,16 @@ public:
     bool OwnsWatchIdentity(const std::string &coordinatorId, int64_t watchId) const;
 
     /**
+     * @brief Commit one local update only while its Coordinator watch registration remains authoritative.
+     * @param[in] coordinatorId Coordinator process-lifetime identity.
+     * @param[in] watchId Watch identity within that Coordinator lifetime.
+     * @param[in] commit No-IO local commit run while watch invalidation is excluded.
+     * @return Commit status, or K_NOT_READY when the registration is no longer authoritative.
+     */
+    Status CommitIfCurrentWatch(const std::string &coordinatorId, int64_t watchId,
+                                const std::function<Status()> &commit);
+
+    /**
      * @brief Check whether a watch registration transaction is in progress.
      * @return True while an RPC may have created a channel not yet known by watch ID.
      */
@@ -595,6 +605,14 @@ private:
      * @return True when this backend instance subscribed to the key.
      */
     bool AcceptsWatchEvent(int64_t watchId, const std::string &key) const;
+
+    /**
+     * @brief Check one watch identity while watchMutex_ is held.
+     * @param[in] coordinatorId Coordinator process-lifetime identity.
+     * @param[in] watchId Watch identity within that Coordinator lifetime.
+     * @return True only while direct application remains authoritative.
+     */
+    bool OwnsWatchIdentityLocked(const std::string &coordinatorId, int64_t watchId) const;
 
     ICoordinatorServiceProxy *proxy_;
     std::string watcherAddr_;

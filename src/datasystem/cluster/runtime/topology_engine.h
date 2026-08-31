@@ -516,7 +516,16 @@ private:
      * @return Read, validation, publish, or evidence status.
      */
     Status ReloadTopology(bool fullRebuildAllowed);
-    void RestoreReadyAfterCoordinatorTopologyReload(const TopologySnapshot &snapshot) noexcept;
+    void RestoreReadyAfterCoordinatorTopologyUpdate(const TopologySnapshot &snapshot) noexcept;
+
+    /**
+     * @brief Validate and directly publish one authoritative Coordinator topology PUT.
+     * @param[in] event Exact topology event carrying a complete value.
+     * @return Decode, publish, or evidence status.
+     */
+    Status ApplyCoordinatorTopologyEvent(const CoordinationEvent &event);
+
+    Status FinalizeTopologyPublication(std::shared_ptr<const TopologySnapshot> previous, bool newlyPublished);
 
     /**
      * @brief Exact-read topology and the local notify, then admit referenced tasks.
@@ -533,8 +542,8 @@ private:
     Status GetRecoveryTopology(uint64_t &topologyVersion, std::string &canonicalTopology) const;
 
     /**
-     * @brief Publish identity-bound evidence after one successful exact read.
-     * @param[in] snapshot Exact-read authoritative Snapshot used to derive the evidence.
+     * @brief Publish identity-bound evidence after one authoritative topology update.
+     * @param[in] snapshot Authoritative Snapshot used to derive the evidence.
      * @return K_OK on success; an identity or Snapshot validation error otherwise.
      */
     Status PublishBackendEvidence(const TopologySnapshot &snapshot);

@@ -109,10 +109,16 @@
   Workers use the Worker-owned `EtcdStore` and one unified watch stream for exact topology/local notify plus membership;
   Engine routes physical-key events by role. Controller validates and applies ETCD topology/membership PUT values to its
   state-thread-owned fact cache; a membership DELETE exact-resyncs the complete prefix because the event carries no
-  replacement value and same-revision deletes are dispatched individually. Worker keeps topology/local notify as
-  exact-read doorbells. RESET, overflow, malformed payloads, revision gaps, and conflicts force Controller exact resync
-  while retaining last-good state. Coordinator Host keeps Store mutations as RESET doorbells, so its Controller continues
-  exact-reading Store facts. Observer watches exact topology only.
+  replacement value and same-revision deletes are dispatched individually. A Coordinator-mode Worker directly validates
+  and publishes a complete exact topology PUT only while its captured `CoordinatorId` and watch ID still own the current
+  registration, including canonical digest and authority revision. Invalidation immediately revokes direct-apply
+  ownership; after decode/hash, a narrow watch-state fence revalidates and linearizes only Snapshot publication before
+  finalize, RPC, and notification work continues outside the lock. A complete version gap atomically replaces the older
+  Snapshot. RESET, DELETE, empty or malformed payloads, stale authority identity, version rollback, and digest conflict
+  retain the last-good Snapshot and use the existing exact-read fallback, whose repeated conflict still isolates the
+  role. Unified ETCD Worker events and local notify events remain exact-read doorbells. Coordinator Host keeps Store
+  mutations as RESET doorbells, so its Controller continues exact-reading Store facts. Observer watches exact topology
+  only.
 - After a Worker has an authoritative topology Snapshot, subsequent exact reads send its `AuthorityRevision` as
   `known_mod_revision`. Coordinator compares that token with the topology key's modification revision and returns
   `unchanged=true` without the topology value when they match. Revision zero keeps exact and prefix Range behavior

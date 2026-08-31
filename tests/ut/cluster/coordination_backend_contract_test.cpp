@@ -215,10 +215,14 @@ TEST(CoordinationBackendContractTest, DsBackendPrefixWatchAcceptsCoordinatorChil
     DsCoordinationBackend backend(&proxy, "127.0.0.1:1");
     int eventCount = 0;
     std::string acceptedKey;
-    backend.SetEventHandler([&eventCount, &acceptedKey](CoordinationEvent &&event) {
+    std::string sourceAuthorityId;
+    int64_t sourceWatchId = 0;
+    backend.SetEventHandler([&](CoordinationEvent &&event) {
         if (event.type != CoordinationEventType::RESET) {
             ++eventCount;
             acceptedKey = event.key;
+            sourceAuthorityId = event.sourceAuthorityId;
+            sourceWatchId = event.sourceWatchId;
         }
     });
 
@@ -231,6 +235,8 @@ TEST(CoordinationBackendContractTest, DsBackendPrefixWatchAcceptsCoordinatorChil
     backend.HandleWatchEvent("coordinator-a", proxy.watchCalls_[0].watchId, std::move(accepted));
     EXPECT_EQ(eventCount, 1);
     EXPECT_EQ(acceptedKey, "/datasystem/c/tasks/migrate/task-1");
+    EXPECT_EQ(sourceAuthorityId, "coordinator-a");
+    EXPECT_EQ(sourceWatchId, proxy.watchCalls_[0].watchId);
 
     CoordinationEvent rejected{ CoordinationEventType::PUT, "/datasystem/c/tasks/delete/task-1", "value", 1, 3 };
     backend.HandleWatchEvent("coordinator-a", proxy.watchCalls_[0].watchId, std::move(rejected));
