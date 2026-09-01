@@ -147,6 +147,7 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 140, "coordinator_watch_probe_inflight_bytes", MetricType::GAUGE, "bytes" },
     { 141, "worker_to_client_get_shm_total_bytes", MetricType::COUNTER, "bytes" },
     { 142, "worker_to_client_get_urma_total_bytes", MetricType::COUNTER, "bytes" },
+    { 143, "worker_shm_ref_hard_reclaim_total", MetricType::COUNTER, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) <= static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
