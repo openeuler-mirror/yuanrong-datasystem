@@ -6,10 +6,14 @@
 #include <datasystem/utils/string_view.h>
 #include "data_pattern.h"
 #include <chrono>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
+
+void SetKvtestClientInitialized(bool initialized);
+bool IsKvtestClientInitialized();
 
 // Measure execution time of a function. Returns the Status produced by fn.
 inline datasystem::Status Measure(std::function<datasystem::Status()> fn, double &latencyMs) {

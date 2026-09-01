@@ -310,6 +310,7 @@ inline ResultMsg PhaseResultToMsg(const PhaseResult &result) {
 // --- Child process main entry point ---
 
 inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRole role) {
+    SetKvtestClientInitialized(false);
     // Ignore SIGINT/SIGPIPE — parent controls shutdown via CMD_EXIT
     signal(SIGINT, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
@@ -348,10 +349,10 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
         WriteExact(writeFd, &init, sizeof(init));
         _exit(1);
     }
+    SLOG_INFO("Child " << roleName << " KVClient initialized OK, waiting 3s for init to settle...");
+    SetKvtestClientInitialized(true);
     init.ok = 1;
     if (!WriteExact(writeFd, &init, sizeof(init))) _exit(1);
-
-    SLOG_INFO("Child " << roleName << " KVClient initialized OK, waiting 3s for init to settle...");
     std::this_thread::sleep_for(std::chrono::seconds(3));
 
     // 4. Prepare adapter and data

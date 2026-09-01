@@ -391,6 +391,7 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath)
 
 static int RunServerMode(const Config &cfg)
 {
+    SetKvtestClientInitialized(false);
     SLOG_INFO("kvtest v" << BUILD_VERSION << " (commit: " << BUILD_COMMIT << ")");
     SLOG_INFO("Output directory: " << cfg.outputDir);
 
@@ -445,6 +446,7 @@ static int RunServerMode(const Config &cfg)
         return 1;
     }
     SLOG_INFO("KVClient initialized");
+    SetKvtestClientInitialized(true);
 
     bool cacheMode = cfg.keyPoolSize > 0;
     MetricsCollector metrics(cfg.instanceId, cfg.metricsIntervalMs, cfg.outputDir, cacheMode, cfg.metricsFile);

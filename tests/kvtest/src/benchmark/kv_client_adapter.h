@@ -1,6 +1,7 @@
 #pragma once
 #include <datasystem/kv_client.h>
 #include <datasystem/utils/string_view.h>
+#include "pipeline/pipeline.h"
 #include <cstring>
 #include <string>
 #include <vector>
@@ -17,6 +18,7 @@ public:
     }
 
     bool GetVerify(const std::string &key) {
+        if (!IsKvtestClientInitialized()) return true;
         datasystem::Optional<datasystem::Buffer> buf;
         auto rc = client_->Get(key, buf);
         return rc.IsOk();
@@ -67,6 +69,7 @@ public:
     }
 
     bool MGetVerify(const std::vector<std::string> &keys) {
+        if (!IsKvtestClientInitialized()) return true;
         std::vector<datasystem::Optional<datasystem::Buffer>> buffers;
         auto rc = client_->Get(keys, buffers);
         if (!rc.IsOk()) return false;

@@ -168,7 +168,10 @@ const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COP
 const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
 const std::string DATASYSTEM_SET_MEMCOPY_THREAD_NUM_ENV = "DATASYSTEM_SET_MEMCOPY_THREAD_NUM";
 const std::string DATASYSTEM_SET_MEMCOPY_PARALLEL_THRESHOLD_ENV = "DATASYSTEM_SET_MEMCOPY_PARALLEL_THRESHOLD";
-static constexpr int SET_MEMCOPY_MAX_THREAD_NUM = 4;
+// Keep enough parallelism for the high-throughput SET path.  The value is also
+// the upper bound for DATASYSTEM_SET_MEMCOPY_THREAD_NUM so an explicit setting
+// cannot silently be clamped below the documented default.
+static constexpr int SET_MEMCOPY_MAX_THREAD_NUM = 8;
 static constexpr uint64_t SET_MEMCOPY_PARALLEL_THRESHOLD = 4 * datasystem::MB_TO_BYTES;
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
 

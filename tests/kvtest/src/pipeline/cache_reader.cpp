@@ -154,6 +154,10 @@ void CacheReader::ReaderLoop(int threadId) {
             kvtest::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
+        if (!IsKvtestClientInitialized()) {
+            kvtest::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
         uint64_t size = cfg_.dataSizes[sizeDist(rng)];
         CacheGetOrFill(key, size);
 
